@@ -142,6 +142,7 @@ done
 
 # Import our functions, needs to be done after parsing the command line arguments
 export SAN_BUILD
+export ROOT_DIR
 . ${ROOT_DIR}/scripts/common.rc
 
 function configure() {

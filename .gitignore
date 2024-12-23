@@ -6,3 +6,4 @@ resolved_deps.py
 compile_commands.json
 .devcontainer/devcontainer.json
 .devcontainer/._devcontainer.json
+.vscode/

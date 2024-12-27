@@ -1,8 +1,9 @@
-#ifndef _EXPR_VALUE_H
-#define _EXPR_VALUE_H
+#ifndef _VALKEYSEARCH_EXPR_VALUE_H
+#define _VALKEYSEARCH_EXPR_VALUE_H
 
 #include <compare>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -26,10 +27,13 @@ class Value {
   };
 
   Value() {}
+  explicit Value(Nil n) : value_(n) {}
   explicit Value(bool b) : value_(b) {}
+  explicit Value(int i) : value_(double(i)) {}
   explicit Value(double d);
   explicit Value(const absl::string_view s) : value_(s) {}
-  explicit Value(std::string&& s) : storage_(std::move(s)), value_(storage_) {}
+  explicit Value(const char *s) : value_(absl::string_view(s)) {}
+  explicit Value(std::string&& s) : value_(std::move(s)) {}
 
   // test for type of Value
   bool is_nil() const;
@@ -41,25 +45,28 @@ class Value {
   Nil get_nil() const;
   bool get_bool() const;
   double get_double() const;
-  const absl::string_view get_string() const;
+  absl::string_view get_string_view() const;
 
   // convert to type
   std::optional<Nil> as_nil() const;
   std::optional<bool> as_bool() const;
   std::optional<double> as_double() const;
-  std::optional<const absl::string_view> as_string() const;
+  std::optional<int64_t> as_integer() const;
+  absl::string_view as_string_view() const;
+  std::string as_string() const;
 
   friend std::ostream& operator<<(std::ostream& ios, const Value& v);
 
  private:
 
-  mutable std::string storage_;
+  mutable std::optional<std::string> storage_;
 
   std::variant<
     Nil,
     bool,
     double,
-    const absl::string_view
+    absl::string_view,
+    std::string
   > value_;
 };
 
@@ -110,10 +117,51 @@ bool operator>=(const Value& l, const Value& r) {
 
 
 // Dyadic Numerical Functions
-Value add(const Value& l, const Value& r);
-Value sub(const Value& l, const Value& r);
-Value mul(const Value& l, const Value& r);
-Value div(const Value& l, const Value& r);
+Value func_add(const Value& l, const Value& r);
+Value func_sub(const Value& l, const Value& r);
+Value func_mul(const Value& l, const Value& r);
+Value func_div(const Value& l, const Value& r);
+
+// Compare Functions
+Value func_gt(const Value& l, const Value& r);
+Value func_ge(const Value& l, const Value& r);
+Value func_eq(const Value& l, const Value& r);
+Value func_ne(const Value& l, const Value& r);
+Value func_lt(const Value& l, const Value& r);
+Value func_le(const Value& l, const Value& r);
+
+// Logical Functions
+Value func_lor(const Value& l, const Value& r);
+Value func_land(const Value&l, const Value& r);
+
+// Function Functions
+Value func_abs(const Value& o);
+Value func_ceil(const Value& o);
+Value func_exp(const Value& o);
+Value func_log(const Value& o);
+Value func_log2(const Value& o);
+Value func_floor(const Value& o);
+Value func_sqrt(const Value& o);
+
+
+Value func_lower(const Value& o);
+Value func_upper(const Value& o);
+Value func_strlen(const Value& o);
+Value func_contains(const Value &l, const Value& r);
+Value func_startswith(const Value& l, const Value &r);
+Value func_substr(const Value& l, const Value& m, const Value &r);
+
+Value func_timefmt(const Value& t, const Value& fmt);
+Value func_parsetime(const Value& t, const Value& fmt);
+Value func_day(const Value& t);
+Value func_hour(const Value& t);
+Value func_minute(const Value& t);
+Value func_month(const Value& t);
+Value func_dayofweek(const Value& t);
+Value func_dayofmonth(const Value& t);
+Value func_dayofyear(const Value& t);
+Value func_year(const Value& t);
+Value func_monthofyear(const Value& t);
 
 }
 }

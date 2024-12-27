@@ -72,3 +72,9 @@ cc_library(
     name = "intrusive_ref_count",
     hdrs = ["intrusive_ref_count.h"],
 )
+
+cc_library(
+    name = "scanner",
+    hdrs = ["scanner.h"],
+)
+

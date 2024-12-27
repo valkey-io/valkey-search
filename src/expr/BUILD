@@ -12,8 +12,27 @@ cc_library(
         "value.h",
     ],
     deps = [
+        "//src/utils:scanner",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
     ],
 )
+
+cc_library(
+    name = "expr",
+    srcs = ["expr.cc"] ,
+    hdrs = [
+        "expr.h",
+    ],
+    deps = [
+        ":value",
+        "//vmsdk/src/status:status_macros",
+        "//src/utils:scanner",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
 

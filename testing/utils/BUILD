@@ -75,3 +75,13 @@ redis_module_cc_test(
         "@com_google_googletest//:gtest_main",
     ],
 )
+
+redis_module_cc_test(
+    name = "scanner_test",
+    srcs = ["scanner_test.cc"],
+    deps = [
+        "//src/utils:scanner",
+        "//vmsdk/src/testing_infra:utils",
+        "@com_google_googletest//:gtest_main",
+    ],
+)

@@ -10,6 +10,17 @@ redis_module_cc_test(
     srcs = ["value_test.cc"],
     deps = [
         "//src/expr:value",
+        "//src/utils:scanner",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+redis_module_cc_test(
+    name = "expr_test",
+    srcs = ["expr_test.cc"],
+    deps = [
+        "//src/expr:value",
+        "//src/expr:expr",
         "@com_google_googletest//:gtest_main",
     ],
 )

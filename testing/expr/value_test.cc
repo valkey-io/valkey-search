@@ -1,4 +1,5 @@
 #include "src/expr/value.h"
+#include "src/utils/scanner.h"
 
 #include "gtest/gtest.h"
 
@@ -54,7 +55,7 @@ TEST_F(ValueTest, TypesTest) {
 TEST_F(ValueTest, SimpleAdd) {
   Value l(1.0);
   Value r(1.0);
-  Value res = add(l, r);
+  Value res = func_add(l, r);
   ASSERT_TRUE(res.is_double());
   EXPECT_EQ(res.as_double().value(), 2.0);
 }
@@ -185,20 +186,69 @@ TEST_F(ValueTest, add) {
   };
 
   for (auto& tc : test_cases) {
-    EXPECT_EQ(add(tc.l, tc.r), tc.result) << tc.l << '+' << tc.r;
-    EXPECT_EQ(add(tc.r, tc.l), tc.result) << tc.r << '+' << tc.l;
+    EXPECT_EQ(func_add(tc.l, tc.r), tc.result) << tc.l << '+' << tc.r;
+    EXPECT_EQ(func_add(tc.r, tc.l), tc.result) << tc.r << '+' << tc.l;
   }
 }
 
 TEST_F(ValueTest, math) {
-  EXPECT_EQ(sub(Value(1.0), Value(0.0)), Value(1.0));
-  EXPECT_EQ(mul(Value(1.0), Value(0.0)), Value(0.0));
-  EXPECT_EQ(div(Value(1.0), Value(2.0)), Value(0.5));
+  EXPECT_EQ(func_sub(Value(1.0), Value(0.0)), Value(1.0));
+  EXPECT_EQ(func_mul(Value(1.0), Value(0.0)), Value(0.0));
+  EXPECT_EQ(func_div(Value(1.0), Value(2.0)), Value(0.5));
 
-  EXPECT_EQ(div(Value(1.0), pos_zero), pos_inf);
-  EXPECT_EQ(div(Value(1.0), neg_zero), neg_inf);
+  EXPECT_EQ(func_div(Value(1.0), pos_zero), pos_inf);
+  EXPECT_EQ(func_div(Value(1.0), neg_zero), neg_inf);
 
-  EXPECT_EQ(div(Value(0.0), Value(0.0)), Value());
+  EXPECT_EQ(func_div(Value(0.0), Value(0.0)), Value());
 }
 
+/*
+// Too long to include in typical runs, here just to prove that Unicode strings compare > and < correctly.
+// This has been run.
+TEST_F(ValueTest, utf8_compare) {
+  std::string lstr;
+  std::string rstr;
+  for (utils::Scanner::Char l = 0; l <= utils::Scanner::MAX_CODEPOINT; l ++) {
+    for (utils::Scanner::Char r = l+1; r <= utils::Scanner::MAX_CODEPOINT; r ++) {
+      lstr.clear();
+      rstr.clear();
+      utils::Scanner::push_back_utf8(lstr, l);
+      utils::Scanner::push_back_utf8(rstr, r);
+      EXPECT_EQ(func_lt(Value(lstr), Value(rstr)), Value(true));
+    }
+  }
+}
+*/
+
+TEST_F(ValueTest, case_test) {
+  std::tuple<std::string, std::string, std::string> testcases[] = {
+    {"", "", ""},
+    {"a", "a", "A"},
+    {"aBc", "abc", "ABC"},
+    {"\xe2\x82\xac", "\xe2\x82\xac", "\xe2\x82\xac"},
+  };
+  for (auto& [in, lower, upper] : testcases) {
+    EXPECT_EQ(Value(lower), func_lower(Value(in)));
+    EXPECT_EQ(Value(upper), func_upper(Value(in)));
+  }
+}
+
+TEST_F(ValueTest, timetest) {
+  // 1739565015 corresponds to Fri Feb 14 2025 20:30:15 (GMT)
+  Value ts(double(1739565015));
+  EXPECT_EQ(func_year(ts), Value(2025));
+  EXPECT_EQ(func_dayofmonth(ts), Value(14));
+  EXPECT_EQ(func_dayofweek(ts), Value(5));
+  EXPECT_EQ(func_dayofyear(ts), Value(31+14-1));
+  EXPECT_EQ(func_monthofyear(ts), Value(1));
+
+  EXPECT_EQ(func_timefmt(ts,Value("%c")), Value("Fri Feb 14 20:30:15 2025"));
+
+  EXPECT_EQ(func_parsetime(Value("Fri Feb 14 20:30:15 2025"), Value("%c")), ts);
+
+  EXPECT_EQ(func_minute(ts), Value(1739565000));
+  EXPECT_EQ(func_hour(ts), Value(1739563200));
+  EXPECT_EQ(func_day(ts), Value(1739491200));
+  EXPECT_EQ(func_month(ts), Value(1738281600));
+}
 }  // namespace valkey_search::expr 

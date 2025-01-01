@@ -1,15 +1,11 @@
-#ifndef _VALKEYSEARCH_EXPR_VALUE_H
-#define _VALKEYSEARCH_EXPR_VALUE_H
+#ifndef VALKEYSEARCH_EXPR_VALUE_H
+#define VALKEYSEARCH_EXPR_VALUE_H
 
-#include <compare>
-#include <iostream>
-#include <map>
-#include <memory>
-#include <optional>
-#include <string>
 #include <variant>
+#include <iostream>
 
 #include "absl/strings/string_view.h"
+#include "absl/container/inlined_vector.h"
 
 namespace valkey_search {
 namespace expr {
@@ -21,12 +17,12 @@ class Value {
    public:
     Nil() : reason_("ctor") {}
     Nil(const char *reason) : reason_(reason) {}
-    const char *get_reason() const { return reason_; }
+    const char *GetReason() const { return reason_; }
    private:
       const char *reason_;
   };
 
-  Value() {}
+  Value() = default;
   explicit Value(Nil n) : value_(n) {}
   explicit Value(bool b) : value_(b) {}
   explicit Value(int i) : value_(double(i)) {}
@@ -36,26 +32,42 @@ class Value {
   explicit Value(std::string&& s) : value_(std::move(s)) {}
 
   // test for type of Value
-  bool is_nil() const;
-  bool is_bool() const;
-  bool is_double() const;
-  bool is_string() const;
+  bool IsNil() const;
+  bool IsBool() const;
+  bool IsDouble() const;
+  bool IsString() const;
 
   // When you already know the type, will assert if you're wrong
-  Nil get_nil() const;
-  bool get_bool() const;
-  double get_double() const;
-  absl::string_view get_string_view() const;
+  Nil GetNil() const;
+  bool GetBool() const;
+  double GetDouble() const;
+  absl::string_view GetStringView() const;
 
   // convert to type
-  std::optional<Nil> as_nil() const;
-  std::optional<bool> as_bool() const;
-  std::optional<double> as_double() const;
-  std::optional<int64_t> as_integer() const;
-  absl::string_view as_string_view() const;
-  std::string as_string() const;
+  std::optional<Nil> AsNil() const;
+  std::optional<bool> AsBool() const;
+  std::optional<double> AsDouble() const;
+  std::optional<int64_t> AsInteger() const;
+  absl::string_view AsStringView() const;
+  std::string AsString() const;
+
+  bool IsTrue() const {
+    auto r = AsBool();
+    return (r && *r);
+  }
 
   friend std::ostream& operator<<(std::ostream& ios, const Value& v);
+
+  template <typename H>
+  friend H AbslHashValue(H h, const Value& v) {
+    if (v.IsNil()) {
+      return H::combine(std::move(h), 0);
+    } else if (v.IsDouble()) {
+      return H::combine(std::move(h), *v.AsDouble());
+    } else {
+      return H::combine(std::move(h), v.AsString());
+    }
+  }
 
  private:
 
@@ -71,97 +83,98 @@ class Value {
 };
 
 enum Ordering {
-  LESS,
-  EQUAL,
-  GREATER,
-  UNORDERED
+  kLESS,
+  kEQUAL,
+  kGREATER,
+  kUNORDERED
 };
 
 std::ostream& operator<<(std::ostream& os, Ordering o) {
   switch(o) {
-    case Ordering::LESS: return os << "LESS";
-    case Ordering::EQUAL: return os << "EQUAL";
-    case Ordering::GREATER: return os << "GREATER";
-    case Ordering::UNORDERED: return os << "UNORDERED";
+    case Ordering::kLESS: return os << "LESS";
+    case Ordering::kEQUAL: return os << "EQUAL";
+    case Ordering::kGREATER: return os << "GREATER";
+    case Ordering::kUNORDERED: return os << "UNORDERED";
     default: return os << "?";
   }
 }
 
-Ordering compare(const Value& l, const Value& r);
+Ordering Compare(const Value& l, const Value& r);
 
 bool operator==(const Value& l, const Value& r) {
-  return compare(l, r) == Ordering::EQUAL;
+  return Compare(l, r) == Ordering::kEQUAL;
 }
 
 bool operator!=(const Value& l, const Value& r) {
-  return compare(l, r) != Ordering::EQUAL;
+  return Compare(l, r) != Ordering::kEQUAL;
 }
 
 bool operator<(const Value& l, const Value& r) {
-  return compare(l, r) == Ordering::LESS;
+  return Compare(l, r) == Ordering::kLESS;
 }
 
 bool operator<=(const Value& l, const Value& r) {
-  auto res = compare(l, r);
-  return res == Ordering::LESS || res == Ordering::EQUAL;
+  auto res = Compare(l, r);
+  return res == Ordering::kLESS || res == Ordering::kEQUAL;
 }
 
 bool operator>(const Value& l, const Value& r) {
-  return compare(l, r) == Ordering::GREATER;
+  return Compare(l, r) == Ordering::kGREATER;
 }
 
 bool operator>=(const Value& l, const Value& r) {
-  auto res = compare(l, r);
-  return res == Ordering::GREATER || res == Ordering::EQUAL;
+  auto res = Compare(l, r);
+  return res == Ordering::kGREATER || res == Ordering::kEQUAL;
 }
 
 
 // Dyadic Numerical Functions
-Value func_add(const Value& l, const Value& r);
-Value func_sub(const Value& l, const Value& r);
-Value func_mul(const Value& l, const Value& r);
-Value func_div(const Value& l, const Value& r);
+Value FuncAdd(const Value& l, const Value& r);
+Value FuncSub(const Value& l, const Value& r);
+Value FuncMul(const Value& l, const Value& r);
+Value FuncDiv(const Value& l, const Value& r);
 
 // Compare Functions
-Value func_gt(const Value& l, const Value& r);
-Value func_ge(const Value& l, const Value& r);
-Value func_eq(const Value& l, const Value& r);
-Value func_ne(const Value& l, const Value& r);
-Value func_lt(const Value& l, const Value& r);
-Value func_le(const Value& l, const Value& r);
+Value FuncGt(const Value& l, const Value& r);
+Value FuncGe(const Value& l, const Value& r);
+Value FuncEq(const Value& l, const Value& r);
+Value FuncNe(const Value& l, const Value& r);
+Value FuncLt(const Value& l, const Value& r);
+Value FuncLe(const Value& l, const Value& r);
 
 // Logical Functions
-Value func_lor(const Value& l, const Value& r);
-Value func_land(const Value&l, const Value& r);
+Value FuncLor(const Value& l, const Value& r);
+Value FuncLand(const Value&l, const Value& r);
 
 // Function Functions
-Value func_abs(const Value& o);
-Value func_ceil(const Value& o);
-Value func_exp(const Value& o);
-Value func_log(const Value& o);
-Value func_log2(const Value& o);
-Value func_floor(const Value& o);
-Value func_sqrt(const Value& o);
+Value FuncAbs(const Value& o);
+Value FuncCeil(const Value& o);
+Value FuncExp(const Value& o);
+Value FuncLog(const Value& o);
+Value FuncLog2(const Value& o);
+Value FuncFloor(const Value& o);
+Value FuncSqrt(const Value& o);
 
 
-Value func_lower(const Value& o);
-Value func_upper(const Value& o);
-Value func_strlen(const Value& o);
-Value func_contains(const Value &l, const Value& r);
-Value func_startswith(const Value& l, const Value &r);
-Value func_substr(const Value& l, const Value& m, const Value &r);
+Value FuncLower(const Value& o);
+Value FuncUpper(const Value& o);
+Value FuncStrlen(const Value& o);
+Value FuncContains(const Value &l, const Value& r);
+Value FuncStartswith(const Value& l, const Value &r);
+Value FuncSubstr(const Value& l, const Value& m, const Value &r);
+Value FuncConcat(const absl::InlinedVector<Value, 4>& values);
 
-Value func_timefmt(const Value& t, const Value& fmt);
-Value func_parsetime(const Value& t, const Value& fmt);
-Value func_day(const Value& t);
-Value func_hour(const Value& t);
-Value func_minute(const Value& t);
-Value func_month(const Value& t);
-Value func_dayofweek(const Value& t);
-Value func_dayofmonth(const Value& t);
-Value func_dayofyear(const Value& t);
-Value func_year(const Value& t);
-Value func_monthofyear(const Value& t);
+Value FuncTimefmt(const Value& t, const Value& fmt);
+Value FuncParsetime(const Value& t, const Value& fmt);
+Value FuncDay(const Value& t);
+Value FuncHour(const Value& t);
+Value FuncMinute(const Value& t);
+Value FuncMonth(const Value& t);
+Value FuncDayofweek(const Value& t);
+Value FuncDayofmonth(const Value& t);
+Value FuncDayofyear(const Value& t);
+Value FuncYear(const Value& t);
+Value FuncMonthofyear(const Value& t);
 
 }
 }

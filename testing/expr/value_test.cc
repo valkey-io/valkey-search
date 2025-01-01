@@ -45,22 +45,22 @@ TEST_F(ValueTest, TypesTest) {
   };
 
   for (auto& c : t) {
-    EXPECT_EQ(c.v.is_nil(), c.is_nil) << "Value is " << c.v;
-    EXPECT_EQ(c.v.is_bool(), c.is_bool) << "Value is " << c.v;
-    EXPECT_EQ(c.v.is_double(), c.is_double) << "Value is " << c.v;
-    EXPECT_EQ(c.v.is_string(), c.is_string) << "Value is " << c.v;
+    EXPECT_EQ(c.v.IsNil(), c.is_nil) << "Value is " << c.v;
+    EXPECT_EQ(c.v.IsBool(), c.is_bool) << "Value is " << c.v;
+    EXPECT_EQ(c.v.IsDouble(), c.is_double) << "Value is " << c.v;
+    EXPECT_EQ(c.v.IsString(), c.is_string) << "Value is " << c.v;
   };
 }
 
 TEST_F(ValueTest, SimpleAdd) {
   Value l(1.0);
   Value r(1.0);
-  Value res = func_add(l, r);
-  ASSERT_TRUE(res.is_double());
-  EXPECT_EQ(res.as_double().value(), 2.0);
+  Value res = FuncAdd(l, r);
+  ASSERT_TRUE(res.IsDouble());
+  EXPECT_EQ(res.AsDouble().value(), 2.0);
 }
 
-TEST_F(ValueTest, compare_test) {
+TEST_F(ValueTest, Compare_test) {
   struct Testcase {
     Value l;
     Value r;
@@ -68,48 +68,48 @@ TEST_F(ValueTest, compare_test) {
   };
 
   std::vector<Testcase> t{
-    { Value(), Value(), Ordering::EQUAL },
+    { Value(), Value(), Ordering::kEQUAL },
 
-    { Value(), Value(false), Ordering::UNORDERED },
-    { Value(), Value(true), Ordering::UNORDERED },
-    { Value(), Value(0.0), Ordering::UNORDERED },
-    { Value(), Value(std::string("")), Ordering::UNORDERED },
+    { Value(), Value(false), Ordering::kUNORDERED },
+    { Value(), Value(true), Ordering::kUNORDERED },
+    { Value(), Value(0.0), Ordering::kUNORDERED },
+    { Value(), Value(std::string("")), Ordering::kUNORDERED },
 
-    { Value(false), Value(false), Ordering::EQUAL },
-    { Value(false), Value(true), Ordering::LESS },
-    { Value(true), Value(false), Ordering::GREATER },
-    { Value(true), Value(true), Ordering::EQUAL },
+    { Value(false), Value(false), Ordering::kEQUAL },
+    { Value(false), Value(true), Ordering::kLESS },
+    { Value(true), Value(false), Ordering::kGREATER },
+    { Value(true), Value(true), Ordering::kEQUAL },
 
-    { Value(-1.0), Value(0.0), Ordering::LESS },
-    { Value(0.0), Value(0.0), Ordering::EQUAL },
-    { Value(1.0), Value(0.0), Ordering::GREATER },
+    { Value(-1.0), Value(0.0), Ordering::kLESS },
+    { Value(0.0), Value(0.0), Ordering::kEQUAL },
+    { Value(1.0), Value(0.0), Ordering::kGREATER },
 
-    { Value(0.0), Value(std::string("0.0")), Ordering::EQUAL},
-    { Value(0.0), Value(std::string("1.0")), Ordering::LESS},
-    { Value(0.0), Value(std::string("-1.0")), Ordering::GREATER},
+    { Value(0.0), Value(std::string("0.0")), Ordering::kEQUAL},
+    { Value(0.0), Value(std::string("1.0")), Ordering::kLESS},
+    { Value(0.0), Value(std::string("-1.0")), Ordering::kGREATER},
 
-    { Value(true), Value(std::string("0.0")), Ordering::GREATER}, 
-    { Value(std::string("a")), Value(std::string("b")), Ordering::LESS},
-    { Value(std::string("a")), Value(std::string("a")), Ordering::EQUAL},
-    { Value(std::string("a")), Value(std::string("aa")), Ordering::LESS},
-    { Value(std::string("0.0")), Value(std::string("0.00")), Ordering::LESS }
+    { Value(true), Value(std::string("0.0")), Ordering::kGREATER}, 
+    { Value(std::string("a")), Value(std::string("b")), Ordering::kLESS},
+    { Value(std::string("a")), Value(std::string("a")), Ordering::kEQUAL},
+    { Value(std::string("a")), Value(std::string("aa")), Ordering::kLESS},
+    { Value(std::string("0.0")), Value(std::string("0.00")), Ordering::kLESS }
   };
 
   for (auto& c : t) {
-    EXPECT_EQ(c.result, compare(c.l, c.r)) << "l = " << c.l << " r = " << c.r;
+    EXPECT_EQ(c.result, Compare(c.l, c.r)) << "l = " << c.l << " r = " << c.r;
     switch (c.result) {
-      case Ordering::UNORDERED: EXPECT_EQ(compare(c.r, c.l), Ordering::UNORDERED); break;
-      case Ordering::EQUAL:     EXPECT_EQ(compare(c.r, c.l), Ordering::EQUAL); break;
-      case Ordering::GREATER:   EXPECT_EQ(compare(c.r, c.l), Ordering::LESS); break;
-      case Ordering::LESS:      EXPECT_EQ(compare(c.r, c.l), Ordering::GREATER); break;
+      case Ordering::kUNORDERED: EXPECT_EQ(Compare(c.r, c.l), Ordering::kUNORDERED); break;
+      case Ordering::kEQUAL:     EXPECT_EQ(Compare(c.r, c.l), Ordering::kEQUAL); break;
+      case Ordering::kGREATER:   EXPECT_EQ(Compare(c.r, c.l), Ordering::kLESS); break;
+      case Ordering::kLESS:      EXPECT_EQ(Compare(c.r, c.l), Ordering::kGREATER); break;
       default: assert(false);
     }
   }
 }
 
-TEST_F(ValueTest, compare_floating_point) {
-  EXPECT_EQ(compare(pos_zero, neg_zero), Ordering::EQUAL);
-  EXPECT_EQ(compare(neg_zero, pos_zero), Ordering::EQUAL);
+TEST_F(ValueTest, Compare_floating_point) {
+  EXPECT_EQ(Compare(pos_zero, neg_zero), Ordering::kEQUAL);
+  EXPECT_EQ(Compare(neg_zero, pos_zero), Ordering::kEQUAL);
 
   std::vector<Value> number_lines[] = {
     {neg_inf, min_neg, max_neg, neg_zero, min_pos, max_pos, pos_inf },
@@ -118,7 +118,7 @@ TEST_F(ValueTest, compare_floating_point) {
 
   for (auto& number_line : number_lines) {
     for (auto i = 0; i < number_line.size(); ++i) {
-      EXPECT_EQ(compare(number_line[i], number_line[i]), Ordering::EQUAL);
+      EXPECT_EQ(Compare(number_line[i], number_line[i]), Ordering::kEQUAL);
       EXPECT_EQ(number_line[i], number_line[i]);
       EXPECT_TRUE(number_line[i] == number_line[i]);
       EXPECT_FALSE(number_line[i] != number_line[i]);
@@ -127,7 +127,7 @@ TEST_F(ValueTest, compare_floating_point) {
       EXPECT_FALSE(number_line[i] > number_line[i]);
       EXPECT_TRUE(number_line[i] >= number_line[i]);
       for (auto j = i+1; j < number_line.size(); ++j) {
-        EXPECT_EQ(compare(number_line[i], number_line[j]), Ordering::LESS);
+        EXPECT_EQ(Compare(number_line[i], number_line[j]), Ordering::kLESS);
         EXPECT_FALSE(number_line[i] == number_line[j]);
         EXPECT_TRUE (number_line[i] != number_line[j]);
         EXPECT_TRUE(number_line[i] < number_line[j]);
@@ -135,7 +135,7 @@ TEST_F(ValueTest, compare_floating_point) {
         EXPECT_FALSE(number_line[i] > number_line[j]);
         EXPECT_FALSE(number_line[i] >= number_line[j]);
 
-        EXPECT_EQ(compare(number_line[j], number_line[i]), Ordering::GREATER);
+        EXPECT_EQ(Compare(number_line[j], number_line[i]), Ordering::kGREATER);
         EXPECT_FALSE(number_line[j] == number_line[i]);
         EXPECT_TRUE (number_line[j] != number_line[i]);
         EXPECT_FALSE(number_line[j] < number_line[i]);
@@ -186,35 +186,35 @@ TEST_F(ValueTest, add) {
   };
 
   for (auto& tc : test_cases) {
-    EXPECT_EQ(func_add(tc.l, tc.r), tc.result) << tc.l << '+' << tc.r;
-    EXPECT_EQ(func_add(tc.r, tc.l), tc.result) << tc.r << '+' << tc.l;
+    EXPECT_EQ(FuncAdd(tc.l, tc.r), tc.result) << tc.l << '+' << tc.r;
+    EXPECT_EQ(FuncAdd(tc.r, tc.l), tc.result) << tc.r << '+' << tc.l;
   }
 }
 
 TEST_F(ValueTest, math) {
-  EXPECT_EQ(func_sub(Value(1.0), Value(0.0)), Value(1.0));
-  EXPECT_EQ(func_mul(Value(1.0), Value(0.0)), Value(0.0));
-  EXPECT_EQ(func_div(Value(1.0), Value(2.0)), Value(0.5));
+  EXPECT_EQ(FuncSub(Value(1.0), Value(0.0)), Value(1.0));
+  EXPECT_EQ(FuncMul(Value(1.0), Value(0.0)), Value(0.0));
+  EXPECT_EQ(FuncDiv(Value(1.0), Value(2.0)), Value(0.5));
 
-  EXPECT_EQ(func_div(Value(1.0), pos_zero), pos_inf);
-  EXPECT_EQ(func_div(Value(1.0), neg_zero), neg_inf);
+  EXPECT_EQ(FuncDiv(Value(1.0), pos_zero), pos_inf);
+  EXPECT_EQ(FuncDiv(Value(1.0), neg_zero), neg_inf);
 
-  EXPECT_EQ(func_div(Value(0.0), Value(0.0)), Value());
+  EXPECT_EQ(FuncDiv(Value(0.0), Value(0.0)), Value());
 }
 
 /*
-// Too long to include in typical runs, here just to prove that Unicode strings compare > and < correctly.
+// Too long to include in typical runs, here just to prove that Unicode strings Compare > and < correctly.
 // This has been run.
-TEST_F(ValueTest, utf8_compare) {
+TEST_F(ValueTest, utf8_Compare) {
   std::string lstr;
   std::string rstr;
-  for (utils::Scanner::Char l = 0; l <= utils::Scanner::MAX_CODEPOINT; l ++) {
-    for (utils::Scanner::Char r = l+1; r <= utils::Scanner::MAX_CODEPOINT; r ++) {
+  for (utils::Scanner::Char l = 0; l <= utils::Scanner::kMaxCodepoint; l ++) {
+    for (utils::Scanner::Char r = l+1; r <= utils::Scanner::kMaxCodepoint; r ++) {
       lstr.clear();
       rstr.clear();
-      utils::Scanner::push_back_utf8(lstr, l);
-      utils::Scanner::push_back_utf8(rstr, r);
-      EXPECT_EQ(func_lt(Value(lstr), Value(rstr)), Value(true));
+      utils::Scanner::PushBackUtf8(lstr, l);
+      utils::Scanner::PushBackUtf8(rstr, r);
+      EXPECT_EQ(FuncLt(Value(lstr), Value(rstr)), Value(true));
     }
   }
 }
@@ -228,27 +228,27 @@ TEST_F(ValueTest, case_test) {
     {"\xe2\x82\xac", "\xe2\x82\xac", "\xe2\x82\xac"},
   };
   for (auto& [in, lower, upper] : testcases) {
-    EXPECT_EQ(Value(lower), func_lower(Value(in)));
-    EXPECT_EQ(Value(upper), func_upper(Value(in)));
+    EXPECT_EQ(Value(lower), FuncLower(Value(in)));
+    EXPECT_EQ(Value(upper), FuncUpper(Value(in)));
   }
 }
 
 TEST_F(ValueTest, timetest) {
   // 1739565015 corresponds to Fri Feb 14 2025 20:30:15 (GMT)
   Value ts(double(1739565015));
-  EXPECT_EQ(func_year(ts), Value(2025));
-  EXPECT_EQ(func_dayofmonth(ts), Value(14));
-  EXPECT_EQ(func_dayofweek(ts), Value(5));
-  EXPECT_EQ(func_dayofyear(ts), Value(31+14-1));
-  EXPECT_EQ(func_monthofyear(ts), Value(1));
+  EXPECT_EQ(FuncYear(ts), Value(2025));
+  EXPECT_EQ(FuncDayofmonth(ts), Value(14));
+  EXPECT_EQ(FuncDayofweek(ts), Value(5));
+  EXPECT_EQ(FuncDayofyear(ts), Value(31+14-1));
+  EXPECT_EQ(FuncMonthofyear(ts), Value(1));
 
-  EXPECT_EQ(func_timefmt(ts,Value("%c")), Value("Fri Feb 14 20:30:15 2025"));
+  EXPECT_EQ(FuncTimefmt(ts,Value("%c")), Value("Fri Feb 14 20:30:15 2025"));
 
-  EXPECT_EQ(func_parsetime(Value("Fri Feb 14 20:30:15 2025"), Value("%c")), ts);
+  EXPECT_EQ(FuncParsetime(Value("Fri Feb 14 20:30:15 2025"), Value("%c")), ts);
 
-  EXPECT_EQ(func_minute(ts), Value(1739565000));
-  EXPECT_EQ(func_hour(ts), Value(1739563200));
-  EXPECT_EQ(func_day(ts), Value(1739491200));
-  EXPECT_EQ(func_month(ts), Value(1738281600));
+  EXPECT_EQ(FuncMinute(ts), Value(1739565000));
+  EXPECT_EQ(FuncHour(ts), Value(1739563200));
+  EXPECT_EQ(FuncDay(ts), Value(1739491200));
+  EXPECT_EQ(FuncMonth(ts), Value(1738281600));
 }
 }  // namespace valkey_search::expr 

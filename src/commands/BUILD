@@ -115,3 +115,84 @@ cc_library(
         "@com_google_absl//absl/strings:string_view",
     ],
 )
+
+cc_library(
+    name = "ft_aggregate_parser",
+    srcs = ["ft_aggregate_parser.cc"],
+    hdrs = [
+        "ft_aggregate_parser.h",
+        ],
+    deps = [
+        ":filter_parser",
+        "//src:index_schema",
+        "//src:metrics",
+        "//src:schema_manager",
+        "//src/indexes:index_base",
+        "//src/query:search",
+        "//src/expr:expr",
+        "//vmsdk/src:command_parser",
+        "//vmsdk/src:managed_pointers",
+        "//vmsdk/src:type_conversions",
+        "//vmsdk/src/status:status_macros",
+        "@com_google_absl//absl/container:inlined_vector",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
+    name = "ft_aggregate_exec",
+    srcs = ["ft_aggregate_exec.cc"],
+    hdrs = [
+        "ft_aggregate_exec.h",
+        ],
+    deps = [
+        ":filter_parser",
+        ":ft_aggregate_parser",
+        "//src:index_schema",
+        "//src:metrics",
+        "//src:schema_manager",
+        "//src/indexes:index_base",
+        "//src/query:search",
+        "//src/expr:expr",
+        "//vmsdk/src:command_parser",
+        "//vmsdk/src:managed_pointers",
+        "//vmsdk/src:type_conversions",
+        "//vmsdk/src/status:status_macros",
+        "@com_google_absl//absl/container:inlined_vector",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
+    name = "ft_aggregate",
+    srcs = ["ft_aggregate.cc"],
+    hdrs = [
+        "ft_aggregate.h",
+        ],
+    deps = [
+        ":filter_parser",
+        ":ft_aggregate_parser",
+        ":ft_aggregate_exec",
+        "//src:index_schema",
+        "//src:metrics",
+        "//src:schema_manager",
+        "//src/indexes:index_base",
+        "//src/query:search",
+        "//src/expr:expr",
+        "//vmsdk/src:command_parser",
+        "//vmsdk/src:managed_pointers",
+        "//vmsdk/src:type_conversions",
+        "//vmsdk/src/status:status_macros",
+        "@com_google_absl//absl/container:inlined_vector",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)

@@ -14,17 +14,17 @@ TEST_F(ScannerTest, ByteTest) {
         str.clear();
         str += char(i);
         Scanner s(str);
-        EXPECT_EQ(i, s.peek_byte());
-        EXPECT_EQ(i, s.next_byte());
-        EXPECT_EQ(Scanner::kEOF, s.peek_byte());
-        EXPECT_EQ(Scanner::kEOF, s.next_byte());
+        EXPECT_EQ(i, s.PeekByte());
+        EXPECT_EQ(i, s.NextByte());
+        EXPECT_EQ(Scanner::kEOF, s.PeekByte());
+        EXPECT_EQ(Scanner::kEOF, s.NextByte());
 
         str.clear();
         str += ' ';
         str += char(i);
         s = Scanner(str);
-        EXPECT_EQ(i, s.skip_whitespace_peek_byte());
-        EXPECT_EQ(i, s.skip_whitespace_next_byte());
+        EXPECT_EQ(i, s.SkipWhiteSpacePeekByte());
+        EXPECT_EQ(i, s.SkipWhiteSpaceNextByte());
 
 
         for (int j = 7; j < 0x100; j += 8) {
@@ -32,46 +32,49 @@ TEST_F(ScannerTest, ByteTest) {
             str += char(i);
             str += char(j);
             s = Scanner(str);
-            EXPECT_EQ(i, s.peek_byte());
-            EXPECT_EQ(i, s.next_byte());
-            EXPECT_EQ(j, s.peek_byte());
-            EXPECT_EQ(j, s.next_byte());
-            EXPECT_EQ(Scanner::kEOF, s.peek_byte());
-            EXPECT_EQ(Scanner::kEOF, s.next_byte());
+            EXPECT_EQ(i, s.PeekByte());
+            EXPECT_EQ(i, s.NextByte());
+            EXPECT_EQ(j, s.PeekByte());
+            EXPECT_EQ(j, s.NextByte());
+            EXPECT_EQ(Scanner::kEOF, s.PeekByte());
+            EXPECT_EQ(Scanner::kEOF, s.NextByte());
         }
     }
 }
 
 TEST_F(ScannerTest, utf_test) {
     std::string str;
-    Scanner::push_back_utf8(str, 0x20ac);
+    Scanner::PushBackUtf8(str, 0x20ac);
     EXPECT_EQ(str, "\xe2\x82\xac");
 
-    for (Scanner::Char i = 0; i <= Scanner::MAX_CODEPOINT; ++i) {
+    for (Scanner::Char i = 0; i <= Scanner::kMaxCodepoint; ++i) {
         str.clear();
-        Scanner::push_back_utf8(str, i);
+        Scanner::PushBackUtf8(str, i);
+        std::cout << "I: " << i << " ";
+        for (char c : str) std::cout << std::hex << (c & 0xFF) << " ";
+        std::cout << "\n";
         Scanner s(str);
-        EXPECT_EQ(s.next_utf8(), i);
-        EXPECT_EQ(s.next_utf8(), Scanner::kEOF);
+        EXPECT_EQ(s.NextUtf8(), i);
+        EXPECT_EQ(s.NextUtf8(), Scanner::kEOF);
         if (str.size() > 1) {
             str.pop_back();
             s = Scanner(str);
             if (i != 0xC3) {
-                EXPECT_NE(s.next_utf8(), i);
+                EXPECT_NE(s.NextUtf8(), i);
             } else {
-                EXPECT_EQ(s.next_utf8(), i);
+                EXPECT_EQ(s.NextUtf8(), i);
             }
-            EXPECT_EQ(s.get_invalid_utf_count(), 1) << " For " << std::hex << size_t(i) << "\n";
+            EXPECT_EQ(s.GetInvalidUtf8Count(), 1) << " For " << std::hex << size_t(i) << "\n";
             str.clear();
-            Scanner::push_back_utf8(str, i);
+            Scanner::PushBackUtf8(str, i);
             str = str.substr(1);
             s = Scanner(str);
             if (i >= 0x80 && i <= 0xBF) {
-                EXPECT_EQ(s.next_utf8(), i);
+                EXPECT_EQ(s.NextUtf8(), i);
             } else {
-                EXPECT_NE(s.next_utf8(), i);
+                EXPECT_NE(s.NextUtf8(), i);
             }
-            EXPECT_EQ(s.get_invalid_utf_count(), 1);
+            EXPECT_EQ(s.GetInvalidUtf8Count(), 1);
         }
     }
 }

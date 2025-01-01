@@ -471,3 +471,44 @@ redis_module_cc_test(
         "@com_google_googletest//:gtest_main",
     ],
 )
+
+redis_module_cc_test(
+    name = "ft_aggregate_parser_test",
+    srcs = ["ft_aggregate_parser_test.cc"],
+    deps = [
+        ":common",
+        "//src:index_schema_cc_proto",
+        "//src:schema_manager",
+        "//src/commands",
+        "//src/commands:ft_aggregate_parser",
+        "//src/commands:ft_aggregate_exec",
+        "//src/indexes:vector_flat",
+        "//vmsdk/src:managed_pointers",
+        "//vmsdk/src:type_conversions",
+        "//vmsdk/src/testing_infra:module",
+        "//vmsdk/src/testing_infra:utils",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+redis_module_cc_test(
+    name = "ft_aggregate_exec_test",
+    srcs = ["ft_aggregate_exec_test.cc"],
+    deps = [
+        ":common",
+        "//src:index_schema_cc_proto",
+        "//src:schema_manager",
+        "//src/commands",
+        "//src/commands:ft_aggregate_parser",
+        "//src/commands:ft_aggregate_exec",
+        "//src/indexes:vector_flat",
+        "//vmsdk/src:managed_pointers",
+        "//vmsdk/src:type_conversions",
+        "//vmsdk/src/testing_infra:module",
+        "//vmsdk/src/testing_infra:utils",
+        "@com_google_absl//absl/hash:hash_testing",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+    ],
+)

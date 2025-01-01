@@ -40,7 +40,7 @@ The query facility of the ```FT.SEARCH``` and ```FT.AGGREGATE``` commands is enh
 ### Tokenization process
 
 A tokenization process is applied to strings of text to produce a vector of terms.
-Tokensization is applied in two contexts. 
+Tokenization is applied in two contexts. 
 First as part of the ingestion process for text fields of keys.
 Second to process query string words and phrases.
 
@@ -64,16 +64,18 @@ The mapping structure is built from one or two prefix trees. When present, the s
 
 ### Search query operators
 
-Unlike the Vector, Tag and Numeric search operators the specification of a field is optional. If the field specification is omitted then a match is declared if any field matches the search operator.
+Unlike the Vector, Tag and Numeric search operators the specification of a field is optional for text search operators. If the field specification is omitted then a match is declared if any field matches the search operator.
 
 #### Term matching
 
-There are three types of term matching: exact, wildcard and fuzzy. Exact term matching is self-descriptive, i.e., only keys containing exactly the specified text are matched.
+There are three types of term matching: exact, wildcard and fuzzy. Exact matching is self-descriptive, i.e., only keys containing exactly the specified terms are matched. 
 
 Wildcard matching provides a subset of reg-ex style matching of terms.
 Initially, only a single wildcard specifier ```*``` is allowed which matches any number of characters in a term.
 The wildcard can be at any position within the term, providing prefix, suffix and infix style matching.
 Note, in this proposal, the second prefix tree is required to perform infix and suffix matching.
+
+Fuzzy matching is done using Levenshtein distances. A term enclosed in single percent signs ```%term%``` matches any term within a Levenshtein edit distance of one. Double percent signs ```%%term%%``` would match an edit distance of two, etc.
 
 #### Phrase matching
 
@@ -100,8 +102,7 @@ If supplied as part of an individual field declaration, i.e., after the ```SCHEM
 ```
 [PUNCTUATION <string>]
 ```
-The characters of this string are used to split the input string into words. Note, the splitting process allows escaping of input characters using the usual backslash notation. This string cannot be empty. Default value is: 
-
+The characters of this string are used to split the input string into words. Note, the splitting process allows escaping of input characters using the usual backslash notation. This string cannot be empty. Default value is: ```,.<>{}[]"\':;!@#$%^&*()-+=~```
 
 ```
 [WITHSUFFIXTRIE | NOSUFFIXTRIE]
@@ -165,9 +166,34 @@ To avoid combinatorial explosion certain operations have configurable limits app
 | max-fuzzy-distance | 2 | The maximum edit distance for a fuzzy search. |
 | max-wildcard-matches | 200 | Maximum number of words that a single wildcard match can generate |
 
-
-
-
-### Dependencies (Optional)
+### Dependencies
 
 snowball library https://snowballstem.org/ and https://github.com/snowballstem
+
+### Omissions from Redisearch
+
+Items not proposed to be supported by the FT.SEARCH and/or FT.AGGREGATE commands:
+
+* BM-25 scoring
+* Query attributes: Slop, Weight, Inorder, phonetic
+* WITHPAYLOADS
+* FILTER
+* GEOFILTER
+* INKEYS
+* INFIELDS
+* SUMMARIZE
+* HIGHLIGHT
+* SLOP
+* INORDER
+* EXPANDER
+* EXPLAINSCORE
+* PAYLOAD
+
+Items not proposed to be supported by the FT.CREATE commands:
+
+* SCORE
+* SCORE_FIELD
+* PAYLOAD_FIELD
+* NOFREQS
+* SKIPINITIALSCAN
+

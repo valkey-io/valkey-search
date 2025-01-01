@@ -3,20 +3,27 @@
 
 #include "gtest/gtest.h"
 
+#include "absl/container/flat_hash_map.h"
+
 #include <cmath>
 #include <map>
 #include <set>
 
 namespace valkey_search { namespace expr {
 
+ struct Record : public Expression::Record {
+  std::map<std::string, Value> attrs;
+ };
+
 class ExprTest : public testing::Test {
  protected:
 
  struct Ref : public Expression::AttributeReference {
-   Ref(const std::string& s) : name_(s) {}
+   Ref(const absl::string_view s) : name_(s) {}
    std::string name_;
-   virtual Value getValue(Expression::EvalContext &ctx, const Expression::AttrValueSet &the_attrs) const {
-    const Attrs& attrs = reinterpret_cast<const Attrs&>(the_attrs);
+   virtual void Dump(std::ostream& os) const override { os << name_; }
+   virtual Value GetValue(Expression::EvalContext &ctx, const Expression::Record &record) const override {
+    const Record& attrs = reinterpret_cast<const Record&>(record);
     auto itrs = attrs.attrs.find(name_);
     if (itrs != attrs.attrs.end()) {
       return itrs->second;
@@ -28,22 +35,32 @@ class ExprTest : public testing::Test {
 
  struct CompileContext : public Expression::CompileContext {
     std::set<std::string> known_attr{"one", "two", "notfound"};
-    virtual std::optional<std::unique_ptr<Expression::AttributeReference>> make_reference(const std::string& s) {
-      auto itr = known_attr.find(s);
+    absl::flat_hash_map<std::string, std::string> params{{"one","1"}, {"two", "2"}};
+    absl::StatusOr<std::unique_ptr<Expression::AttributeReference>> MakeReference(const absl::string_view s, bool create) override {
+      auto itr = known_attr.find(std::string(s));
       if (itr == known_attr.end()) {
-        return std::nullopt;
+        if (create) {
+          itr = known_attr.insert(std::string(s)).first;
+        } else {
+          return absl::NotFoundError("not found");
+        }
+      }
+      return std::make_unique<Ref>(s);
+    }
+    absl::StatusOr<Value> GetParam(const absl::string_view s) const override {
+      if (params.find(s) != params.end()) {
+        return Value(params.find(s)->second);
       } else {
-        return make_unique<Ref>(s);
+        return absl::NotFoundError("param not found");
       }
     }
  } cc;
- struct Attrs : public Expression::AttrValueSet {
-  std::map<std::string, Value> attrs;
- } attrs;
+ std::unique_ptr<Record> record_;
 
   void SetUp() override {
-    attrs.attrs["one"] = std::move(Value(1.0));
-    attrs.attrs["two"] = std::move(Value(2.0));
+    record_ = std::make_unique<Record>();
+    record_->attrs["one"] = Value(1.0);
+    record_->attrs["two"] = Value(2.0);
   }
   void TearDown() override { }
 
@@ -93,6 +110,18 @@ TEST_F(ExprTest, TypesTest) {
     {"contains('abcabc', 'abc')", Value(2.0)},
     {"strlen('')", Value(0.0) },
     {"strlen('a')", Value(1.0) },
+    {"concat()", Value("")},
+    {"concat('a')", Value("a")},
+    {"concat('b','')", Value("b")},
+    {"concat('a', 'b')", Value("ab")},
+    {"concat('ab', 'cd', 'ef')", Value("abcdef")},
+    {"!0", Value(1.0) },
+    {"!1", Value(0.0) },
+    {"!1+1", Value(1.0) },
+    {"!1!=1", Value(1.0) },
+    {"$one", Value("1")},
+    {"$one+1", Value(2.0)},
+
   };
   for (auto& c : x) {
     std::cout << "Doing expression: '" << c.first << "' => '";
@@ -101,17 +130,17 @@ TEST_F(ExprTest, TypesTest) {
     } else {
       std::cout << " Error\n";
     }
-    auto e = Expression::compile(cc, c.first);
+    auto e = Expression::Compile(cc, c.first);
     if (e.ok()) {
       std::cerr << "Compiled expression: " << c.first << " is: ";
-      (*e)->dump(std::cerr);
+      (*e)->Dump(std::cerr);
       std::cerr << std::endl;
       Expression::EvalContext ec;
-      auto v = (*e)->evaluate(ec, attrs);
+      auto v = (*e)->Evaluate(ec, *record_);
       ASSERT_TRUE(c.second);
       EXPECT_EQ(v, c.second);
     } else {
-      std::cout << "Failed to compile:" << e << "\n";
+      std::cout << "Failed to compile:" << e.status() << "\n";
       EXPECT_FALSE(c.second);
     }
   }

@@ -1,5 +1,5 @@
-#ifndef _VALKEYSEARCH_UTILS_SCANNER_H
-#define _VALKEYSEARCH_UtILS_SCANNER_H
+#ifndef VALKEYSEARCH_UTILS_SCANNER_H
+#define VALKEYSEARCH_UTILS_SCANNER_H
 
 #include "absl/strings/string_view.h"
 
@@ -12,63 +12,69 @@
 namespace valkey_search { namespace utils {
 
 class Scanner {
+ public:
+  using Char = u_int32_t;
+
+ private:
   enum {
-    START1_MASK  = 0b10000000,
-    START1_VALUE = 0b00000000,
-    START2_MASK  = 0b11100000,
-    START2_VALUE = 0b11000000,
-    START3_MASK  = 0b11110000,
-    START3_VALUE = 0b11100000,
-    START4_MASK  = 0b11111000,
-    START4_VALUE = 0b11110000,
-    MORE_MASK    = 0b11000000,
-    MORE_VALUE   = 0b10000000,
+    kStart1Mask  = 0b10000000,
+    kStart1Value = 0b00000000,
+    kStart2Mask  = 0b11100000,
+    kStart2Value = 0b11000000,
+    kStart3Mask  = 0b11110000,
+    kStart3Value = 0b11100000,
+    kStart4Mask  = 0b11111000,
+    kStart4Value = 0b11110000,
+    kMoreMask    = 0b11000000,
+    kMoreValue   = 0b10000000,
   };
 
-  bool is_start(size_t mask, size_t value) const {
-    return (sv_[pos_] & mask) == value;
+  Char GetByte(size_t pos) const {
+    return sv_[pos] & 0xFF;
   }
 
-  char32_t get_start(size_t mask) {
-    return sv_[pos_++] & ~mask;
+  bool IsStart(size_t mask, size_t value) const {
+    return (GetByte(pos_) & mask) == value;
   }
 
-  bool is_more(size_t pos) const {
-    return pos < sv_.size() && ((sv_[pos] & MORE_MASK) == MORE_VALUE);
+  Char GetStart(size_t mask) {
+    return GetByte(pos_++) & ~mask;
   }
 
-  char32_t get_more(char32_t result) {
-    return (result << 6) | (sv_[pos_++] & ~MORE_MASK);
+  bool IsMore(size_t pos) const {
+    return pos < sv_.size() && ((GetByte(pos) & kMoreMask) == kMoreValue);
+  }
+
+  Char GetMore(char32_t result) {
+    return (result << 6) | (GetByte(pos_++) & ~kMoreMask);
   }
 
  public:
   Scanner(absl::string_view sv) : sv_(sv) {}
-  size_t get_position() const { return pos_; }
-
-  typedef char32_t Char;
+  size_t GetPosition() const { return pos_; }
 
   static constexpr Char kEOF = (Char)-1;
-  static constexpr Char MAX_CODEPOINT = 0x10FFFF;
+  static constexpr Char kMaxCodepoint = 0x10FFFF;
 
-  Char peek_byte() {
+  Char PeekByte() {
     if (pos_ >= sv_.size()) {
       return kEOF;
     } else {
-      return sv_[pos_] & 0xFF;
+      return GetByte(pos_) & 0xFF;
     }
   }
 
-  Char next_byte() {
+  Char NextByte() {
     if (pos_ >= sv_.size()) {
       return kEOF;
     } else {
-      return sv_[pos_++] & 0xFF;
+      return GetByte(pos_++) & 0xFF;
     }
   }
 
-  bool pop_byte(Char c) {
+  bool PopByte(Char c) {
     assert(c != kEOF);
-    if (peek_byte() == c) {
+    if (PeekByte() == c) {
       pos_++;
       return true;
     } else {
@@ -76,54 +82,55 @@ class Scanner {
     }
   }
 
-  Char next_utf8() {
+  Char NextUtf8() {
     if (pos_ >= sv_.size()) {
       return kEOF;
     }
-    if (is_start(START1_MASK, START1_VALUE)) {
-      return get_start(START1_MASK);
-    } else if (is_start(START2_MASK, START2_VALUE) && is_more(pos_+1)) {
-        return get_more(get_start(START2_MASK));
-    } else if (is_start(START3_MASK, START3_VALUE) && is_more(pos_+1) && is_more(pos_+2)) {
-        return get_more(get_more(get_start(START3_MASK)));
-    } else if (is_start(START4_MASK, START4_VALUE) && is_more(pos_+1) && is_more(pos_+2) && is_more(pos_+3)) {
-      return get_more(get_more(get_more(get_start(START4_MASK))));
+    if (IsStart(kStart1Mask, kStart1Value)) {
+      return GetStart(kStart1Mask);
+    } else if (IsStart(kStart2Mask, kStart2Value) && IsMore(pos_+1)) {
+        return GetMore(GetStart(kStart2Mask));
+    } else if (IsStart(kStart3Mask, kStart3Value) && IsMore(pos_+1) && IsMore(pos_+2)) {
+        return GetMore(GetMore(GetStart(kStart3Mask)));
+    } else if (IsStart(kStart4Mask, kStart4Value) && IsMore(pos_+1) && IsMore(pos_+2) && IsMore(pos_+3)) {
+      return GetMore(GetMore(GetMore(GetStart(kStart4Mask))));
     }
-    invalid_utf_count++;
-    return sv_[pos_++] & 0xFF;
+    invalid_utf_count_++;
+    //std::cout << "Invalid utf8: " << std::hex << GetByte(pos_) << " position: " << pos_ << "\n";
+    return GetByte(pos_++) & 0xFF;
   }
 
-  Char peek_utf8() {
+  Char PeekUtf8() {
     size_t pos = pos_;
-    Char result = next_utf8();
+    Char result = NextUtf8();
     pos_ = pos;
     return result;
   }
 
-  void skip_whitespace() {
-    while (std::isspace(peek_byte())) { (void)next_byte(); }
+  void SkipWhiteSpace() {
+    while (std::isspace(PeekByte())) { (void)NextByte(); }
   }
 
   //
   // These routines transparently skip whitespace and automatically handle utf-8
   //
-  int skip_whitespace_peek_byte() {
+  int SkipWhiteSpacePeekByte() {
     size_t pos = pos_;
-    skip_whitespace();
-    auto result = peek_byte();
+    SkipWhiteSpace();
+    auto result = PeekByte();
     pos_ = pos;
     return result;
   }
 
-  int skip_whitespace_next_byte() {
-    skip_whitespace();
-    return next_byte();
+  int SkipWhiteSpaceNextByte() {
+    SkipWhiteSpace();
+    return NextByte();
   }
 
-  bool skip_whitespace_pop_byte(Char c) {
+  bool SkipWhiteSpacePopByte(Char c) {
     size_t pos = pos_;
-    skip_whitespace();
-    if (pop_byte(c)) {
+    SkipWhiteSpace();
+    if (PopByte(c)) {
       return true;
     } else {
       pos_ = pos;
@@ -131,11 +138,11 @@ class Scanner {
     }
   }
 
-  bool skip_whitespace_pop_word(absl::string_view word) {
+  bool SkipWhiteSpacePopWord(absl::string_view word) {
     size_t pos = pos_;
-    skip_whitespace();
+    SkipWhiteSpace();
     for (auto ch : word) {
-      if (next_byte() != ch) {
+      if (NextByte() != ch) {
         pos_ = pos;
         return false;
       }
@@ -143,11 +150,13 @@ class Scanner {
     return true;
   }
 
-  std::optional<double> pop_double() {
+  std::optional<double> PopDouble() {
     if (pos_ >= sv_.size()) {
       return std::nullopt;
     }
     double d = 0.0;
+    #if 0
+    // CLANG doesn't support from_chars for floating point types.
     auto [ptr, ec] = std::from_chars(&sv_[pos_], sv_.data() + sv_.size(), d);
     if (ec == std::errc::invalid_argument) {
       return std::nullopt;
@@ -155,51 +164,63 @@ class Scanner {
     assert(ec == std::errc());
     pos_ = ptr - sv_.data();
     assert(pos_ <= sv_.size());
+    #else
+    absl::string_view s(sv_);
+    s.remove_prefix(pos_);
+    std::string null_terminated(s);
+    char *scanned{nullptr};
+    d = std::strtod(null_terminated.data(), &scanned);
+    if (scanned == null_terminated.data()) {
+      return std::nullopt;
+    }
+    pos_ += scanned - null_terminated.data();
+    assert(pos_ <= sv_.size());
+    #endif
     return d;
   }
 
-  absl::string_view get_unscanned() const {
+  absl::string_view GetUnscanned() const {
     auto copy = sv_;
     copy.remove_prefix(pos_);
     return copy;
   }
 
-  absl::string_view get_scanned() const {
+  absl::string_view GetScanned() const {
     auto copy = sv_;
     copy.remove_prefix(sv_.size() - pos_);
     return copy;
   }
 
-  static std::string& push_back_utf8(std::string& s, Scanner::Char codepoint) {
+  static std::string& PushBackUtf8(std::string& s, Scanner::Char codepoint) {
     if (codepoint <= 0x7F) {
       s += char(codepoint);
     } else if (codepoint <= 0x7FF) {
-      s += char(START2_VALUE | (codepoint >> 6));
-      s += char(MORE_VALUE | (codepoint & ~MORE_MASK));
+      s += char(kStart2Value | (codepoint >> 6));
+      s += char(kMoreValue | (codepoint & ~kMoreMask));
     } else if (codepoint <= 0xFFFF) {
-      s += char(START3_VALUE | (codepoint >> 12));
-      s += char(MORE_VALUE | ((codepoint>>6) & ~MORE_MASK));
-      s += char(MORE_VALUE | (codepoint & ~MORE_MASK));
+      s += char(kStart3Value | (codepoint >> 12));
+      s += char(kMoreValue | ((codepoint>>6) & ~kMoreMask));
+      s += char(kMoreValue | (codepoint & ~kMoreMask));
     } else if (codepoint <= 0x10FFFF) {
-      s += char(START4_VALUE | (codepoint >> 18));
-      s += char(MORE_VALUE | ((codepoint>>12) & ~MORE_MASK));
-      s += char(MORE_VALUE | ((codepoint>>6) & ~MORE_MASK));
-      s += char(MORE_VALUE | (codepoint & ~MORE_MASK));
+      s += char(kStart4Value | (codepoint >> 18));
+      s += char(kMoreValue | ((codepoint>>12) & ~kMoreMask));
+      s += char(kMoreValue | ((codepoint>>6) & ~kMoreMask));
+      s += char(kMoreValue | (codepoint & ~kMoreMask));
     } else {
-      // DBG << "Found invalid codepoint " << std::hex << size_t(codepoint) << "\n";
+      //std::cerr << "Found invalid codepoint " << codepoint << "(" << std::hex << size_t(codepoint) << ")\n";
       assert(false);
     }
     return s;
   }
 
-  size_t get_invalid_utf_count() const { 
-    return invalid_utf_count;
+  size_t GetInvalidUtf8Count() const { 
+    return invalid_utf_count_;
   }
 
  private:
   absl::string_view sv_;
   size_t pos_{0};
-  size_t invalid_utf_count{0};
+  size_t invalid_utf_count_{0};
 
 };
 

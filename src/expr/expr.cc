@@ -4,39 +4,53 @@
 #include "absl/strings/str_cat.h"
 #include "vmsdk/src/status/status_macros.h"
 
+
+#include <map>
 #include <memory>
 #include <optional>
 #include <utility>
 #include <ctime>
 
-#define DBG std::cerr
-//#define DBG 0 && std::cerr
-
+//#define DBG std::cerr
+#define DBG 0 && std::cerr
 
 namespace valkey_search { namespace expr {
 
-typedef std::unique_ptr<Expression> ExprPtr;
+using ExprPtr = std::unique_ptr<Expression>;
 
 struct Constant : Expression {
     Constant(std::string constant) : constant_(std::move(constant)) {}
     Constant(double constant) : constant_(constant) {}
-    Value evaluate(EvalContext &ctx, const AttrValueSet &attrs) const {
+    Value Evaluate(EvalContext &ctx, const Record &record) const override {
         return constant_;
     }
-    void dump(std::ostream& os) const {
+    void Dump(std::ostream& os) const override {
         os << "Constant(" << constant_ << ")";
     }
   private:
     Value constant_;
 };
 
+struct Parameter : Expression {
+    Parameter(std::string&& name, Value&& value) : name_(std::move(name)), value_(std::move(value)) {}
+    Value Evaluate(EvalContext &ctx, const Record &record) const override {
+        return value_;
+    }
+    void Dump(std::ostream& os) const override {
+        os << "$" << name_ << "(" << value_ << ")";
+    }
+  private:
+    std::string name_;
+    Value value_;
+};
+
 struct AttributeValue : Expression {
     AttributeValue(std::string identifier, std::unique_ptr<AttributeReference> ref) 
         : identifier_(std::move(identifier)), ref_(std::move(ref)) {}
-    Value evaluate(EvalContext &ctx, const AttrValueSet &attrs) const {
-        return ref_->getValue(ctx, attrs);
+    Value Evaluate(EvalContext &ctx, const Record &record) const override {
+        return ref_->GetValue(ctx, record);
     }
-    void dump(std::ostream& os) const {
+    void Dump(std::ostream& os) const override {
         os << '@' << identifier_;
     }
   private:
@@ -44,82 +58,110 @@ struct AttributeValue : Expression {
     std::unique_ptr<AttributeReference> ref_;
 };
 
-struct FunctionCall : Expression {
-typedef Value (*Func)(EvalContext& ctx, const AttrValueSet &attrs, const std::vector<ExprPtr>& params);
-static absl::StatusOr<Func> lookup_and_validate(const std::string& name, const std::vector<ExprPtr>& params);
-    FunctionCall(std::string name, Func func, std::vector<ExprPtr> params) :
-        name_(std::move(name)), func_(func), params_(std::move(params)) {}
-    Value evaluate(EvalContext& ctx, const AttrValueSet &attrs) const {
-        return (*func_)(ctx, attrs, params_);
+struct Not : Expression {
+    Not(ExprPtr && p) : expr_(std::move(p)) {}
+    Value Evaluate(EvalContext &ctx, const Record& record) const override {
+        auto Primary = expr_->Evaluate(ctx, record).AsBool();
+        if (Primary) {
+            return Value(!*Primary);
+        } else {
+            return Value{};
+        }
     }
-    void dump(std::ostream& os) const {
+    void Dump(std::ostream& os) const override {
+        os << '!';
+        expr_->Dump(os);
+    }
+  private:
+    ExprPtr expr_;
+};
+
+struct FunctionCall : Expression {
+  using Func = Value (*)(EvalContext& ctx, const Record &record, const absl::InlinedVector<ExprPtr, 4>& params);
+  static absl::StatusOr<Func> LookUpAndValidate(const std::string& name, const absl::InlinedVector<ExprPtr, 4>& params);
+    FunctionCall(std::string name, Func func, absl::InlinedVector<ExprPtr, 4> params) :
+        name_(std::move(name)), func_(func), params_(std::move(params)) {}
+    Value Evaluate(EvalContext& ctx, const Record &record) const override {
+        return (*func_)(ctx, record, params_);
+    }
+    void Dump(std::ostream& os) const override {
         os << name_ << '(';
         for (auto& p : params_) {
             if (&p != &params_[0]) os << ',';
-            p->dump(os);
+            p->Dump(os);
         }
         os << ')';
     }
   private:
     std::string name_;
     Func func_;
-    std::vector<ExprPtr> params_;    
+    absl::InlinedVector<ExprPtr, 4> params_;    
 };
 
 template<Value (*func1)(const Value &o)> Value MonadicFunctionProxy(
   Expression::EvalContext& ctx,
-  const Expression::AttrValueSet& attrs,
-  const std::vector<expr::ExprPtr>& params) {
+  const Expression::Record& record,
+  const absl::InlinedVector<expr::ExprPtr, 4>& params) {
   assert(params.size() == 1);
-  return (*func1)(params[0]->evaluate(ctx, attrs));
+  return (*func1)(params[0]->Evaluate(ctx, record));
 };
 
 template<Value (*func2)(const Value &l, const Value &r)> Value DyadicFunctionProxy(
   Expression::EvalContext& ctx,
-  const Expression::AttrValueSet& attrs,
-  const std::vector<expr::ExprPtr>& params) {
+  const Expression::Record& record,
+  const absl::InlinedVector<expr::ExprPtr, 4>& params) {
   assert(params.size() == 2);
-  return (*func2)(params[0]->evaluate(ctx, attrs), params[1]->evaluate(ctx, attrs));
+  return (*func2)(params[0]->Evaluate(ctx, record), params[1]->Evaluate(ctx, record));
 };
 
 template<Value (*func3)(const Value &l, const Value &m, const Value &r)> Value TriadicFunctionProxy(
   Expression::EvalContext& ctx,
-  const Expression::AttrValueSet& attrs,
-  const std::vector<expr::ExprPtr>& params) {
+  const Expression::Record& record,
+  const absl::InlinedVector<expr::ExprPtr, 4>& params) {
   assert(params.size() == 3);
   return (*func3)(
-    params[0]->evaluate(ctx, attrs),
-    params[1]->evaluate(ctx, attrs),
-    params[2]->evaluate(ctx, attrs)
+    params[0]->Evaluate(ctx, record),
+    params[1]->Evaluate(ctx, record),
+    params[2]->Evaluate(ctx, record)
     );
 };
 
-typedef Value (*Func)(Expression::EvalContext& ctx, const Expression::AttrValueSet &attrs, const std::vector<ExprPtr>& params);
+using Func = Value (*)(Expression::EvalContext& ctx, const Expression::Record &record, const absl::InlinedVector<ExprPtr, 4>& params);
 
-Value func_exists(const Value &o) {
-    return Value(!o.is_nil());
+Value FuncExists(const Value &o) {
+    return Value(!o.IsNil());
 }
 
-Value proxy_timefmt(Expression::EvalContext& ctx,
-  const Expression::AttrValueSet& attrs,
-  const std::vector<expr::ExprPtr>& params) {
+Value ProxyConcat(Expression::EvalContext &ctx, 
+  const Expression::Record& record,
+  const absl::InlinedVector<expr::ExprPtr, 4>& params) {
+  absl::InlinedVector<Value, 4> values;
+  for (auto& p: params) {
+    values.emplace_back(p->Evaluate(ctx, record));
+  }
+  return FuncConcat(values);
+  }
+
+Value ProxyTimefmt(Expression::EvalContext& ctx,
+  const Expression::Record& record,
+  const absl::InlinedVector<expr::ExprPtr, 4>& params) {
   assert(!params.empty());
   Value fmt("%FT%TZ");
   if (params.size() > 1) {
-    fmt = params[1]->evaluate(ctx, attrs);
+    fmt = params[1]->Evaluate(ctx, record);
   }
-  return func_timefmt(params[0]->evaluate(ctx, attrs), fmt);
+  return FuncTimefmt(params[0]->Evaluate(ctx, record), fmt);
 }
 
-Value proxy_parsetime(Expression::EvalContext& ctx,
-  const Expression::AttrValueSet& attrs,
-  const std::vector<expr::ExprPtr>& params) {
+Value ProxyParsetime(Expression::EvalContext& ctx,
+  const Expression::Record& record,
+  const absl::InlinedVector<expr::ExprPtr, 4>& params) {
   assert(!params.empty());
   Value fmt("%FT%TZ");
   if (params.size() > 1) {
-    fmt = params[1]->evaluate(ctx, attrs);
+    fmt = params[1]->Evaluate(ctx, record);
   }
-  return func_parsetime(params[0]->evaluate(ctx, attrs), fmt);
+  return FuncParsetime(params[0]->Evaluate(ctx, record), fmt);
 }
 
 struct FunctionTableEntry {
@@ -129,38 +171,39 @@ struct FunctionTableEntry {
 };
 
 static std::map<std::string, FunctionTableEntry> function_table{
-  { "exists", { 1, 1, &MonadicFunctionProxy<func_exists> }},
+  { "exists", { 1, 1, &MonadicFunctionProxy<FuncExists> }},
 
-  { "abs", { 1, 1, &MonadicFunctionProxy<func_abs> }},
-  { "ceil", { 1, 1, &MonadicFunctionProxy<func_ceil> }},
-  { "exp", { 1, 1, &MonadicFunctionProxy<func_exp> }},
-  { "floor", { 1, 1, &MonadicFunctionProxy<func_floor> }},
-  { "log", { 1, 1, &MonadicFunctionProxy<func_log> }},
-  { "log2", { 1, 1, &MonadicFunctionProxy<func_log2> }},
-  { "sqrt", { 1, 1, &MonadicFunctionProxy<func_sqrt> }},
+  { "abs", { 1, 1, &MonadicFunctionProxy<FuncAbs> }},
+  { "ceil", { 1, 1, &MonadicFunctionProxy<FuncCeil> }},
+  { "exp", { 1, 1, &MonadicFunctionProxy<FuncExp> }},
+  { "floor", { 1, 1, &MonadicFunctionProxy<FuncFloor> }},
+  { "log", { 1, 1, &MonadicFunctionProxy<FuncLog> }},
+  { "log2", { 1, 1, &MonadicFunctionProxy<FuncLog2> }},
+  { "sqrt", { 1, 1, &MonadicFunctionProxy<FuncSqrt> }},
 
-  { "startswith", { 2, 2, &DyadicFunctionProxy<func_startswith> }},
-  { "lower", { 1, 1, &MonadicFunctionProxy<func_lower> }},
-  { "upper", { 1, 1, &MonadicFunctionProxy<func_upper> }},
-  { "strlen", { 1, 1, &MonadicFunctionProxy<func_strlen> }},
-  { "substr", { 3, 3, &TriadicFunctionProxy<func_substr> }},
-  { "contains", { 2, 2, &DyadicFunctionProxy<func_contains> }},
+  { "startswith", { 2, 2, &DyadicFunctionProxy<FuncStartswith> }},
+  { "lower", { 1, 1, &MonadicFunctionProxy<FuncLower> }},
+  { "upper", { 1, 1, &MonadicFunctionProxy<FuncUpper> }},
+  { "strlen", { 1, 1, &MonadicFunctionProxy<FuncStrlen> }},
+  { "substr", { 3, 3, &TriadicFunctionProxy<FuncSubstr> }},
+  { "contains", { 2, 2, &DyadicFunctionProxy<FuncContains> }},
+  { "concat", { 0, 50, &ProxyConcat}},
 
-  { "dayofweek", { 1, 1, &MonadicFunctionProxy<func_dayofweek>}},
-  { "dayofmonth", { 1, 1, &MonadicFunctionProxy<func_dayofmonth>}},
-  { "dayofyear", { 1, 1, &MonadicFunctionProxy<func_dayofyear>}},
-  { "monthofyear", { 1, 1, &MonadicFunctionProxy<func_monthofyear>}},
-  { "year", { 1, 1, &MonadicFunctionProxy<func_year>}},
-  { "minute", { 1, 1, &MonadicFunctionProxy<func_minute>}},
-  { "hour", { 1, 1, &MonadicFunctionProxy<func_hour>}},
-  { "day", { 1, 1, &MonadicFunctionProxy<func_day>}},
-  { "month", { 1, 1, &MonadicFunctionProxy<func_month>}},
+  { "dayofweek", { 1, 1, &MonadicFunctionProxy<FuncDayofweek>}},
+  { "dayofmonth", { 1, 1, &MonadicFunctionProxy<FuncDayofmonth>}},
+  { "dayofyear", { 1, 1, &MonadicFunctionProxy<FuncDayofyear>}},
+  { "monthofyear", { 1, 1, &MonadicFunctionProxy<FuncMonthofyear>}},
+  { "year", { 1, 1, &MonadicFunctionProxy<FuncYear>}},
+  { "minute", { 1, 1, &MonadicFunctionProxy<FuncMinute>}},
+  { "hour", { 1, 1, &MonadicFunctionProxy<FuncHour>}},
+  { "day", { 1, 1, &MonadicFunctionProxy<FuncDay>}},
+  { "month", { 1, 1, &MonadicFunctionProxy<FuncMonth>}},
 
-  { "timefmt", { 1, 2, &proxy_timefmt}},
-  { "parsetime", { 1, 2, &proxy_parsetime}},
+  { "timefmt", { 1, 2, &ProxyTimefmt}},
+  { "parsetime", { 1, 2, &ProxyParsetime}},
 };
 
-absl::StatusOr<Func> FunctionCall::lookup_and_validate(const std::string& name, const std::vector<ExprPtr>& params) {
+absl::StatusOr<Func> FunctionCall::LookUpAndValidate(const std::string& name, const absl::InlinedVector<ExprPtr, 4>& params) {
   auto it = function_table.find(name);
   if (it == function_table.end()) {
     return absl::NotFoundError(absl::StrCat("Function ", name, " is unknown"));
@@ -178,27 +221,27 @@ absl::StatusOr<Func> FunctionCall::lookup_and_validate(const std::string& name, 
 // Dyadic Operator Precedence
 //
 // Highest:
-//    mul_ops    *, /
-//    add_ops    +, -
-//    cmp_ops    >, >=, ==, !=, <, <=
-//    and_ops    &&
-//    lor_ops    ||
+//    MulOps    *, /
+//    AddOps    +, -
+//    CmpOps    >, >=, ==, !=, <, <=
+//    AndOps    &&
+//    LorOps    ||
 //
 
 struct Dyadic : Expression {
-    typedef Value (*ValueFunc)(const Value&, const Value&);
+    using ValueFunc = Value (*)(const Value&, const Value&);
     Dyadic(ExprPtr lexpr, ExprPtr rexpr, ValueFunc func, absl::string_view name) :
         lexpr_(std::move(lexpr)), rexpr_(std::move(rexpr)), func_(func), name_(name) {}
-    Value evaluate(EvalContext& ctx, const AttrValueSet& attrs) const {
-        auto lvalue = lexpr_->evaluate(ctx, attrs);
-        auto rvalue = rexpr_->evaluate(ctx, attrs);
+    Value Evaluate(EvalContext& ctx, const Record& record) const override {
+        auto lvalue = lexpr_->Evaluate(ctx, record);
+        auto rvalue = rexpr_->Evaluate(ctx, record);
         return (*func_)(lvalue, rvalue);
     }
-    void dump(std::ostream& os) const {
+    void Dump(std::ostream& os) const override {
         os << '(';
-        lexpr_->dump(os);
+        lexpr_->Dump(os);
         os << name_;
-        rexpr_->dump(os);
+        rexpr_->Dump(os);
         os << ')';
     }
   private:
@@ -208,7 +251,7 @@ struct Dyadic : Expression {
     absl::string_view name_;
 };
 
-bool is_identifier_char(int c) {
+bool IsIdentifierChar(int c) {
     return c != EOF && std::isalnum(c);
 }
 
@@ -216,12 +259,12 @@ struct Compiler {
     utils::Scanner s_;
     Compiler(absl::string_view sv) : s_(sv) {}
 
-    typedef Expression::CompileContext CompileContext;
+    using CompileContext = Expression::CompileContext;
 
-    typedef absl::StatusOr<ExprPtr> (Compiler::*ParseFunc)(CompileContext &ctx);
+    using ParseFunc = absl::StatusOr<ExprPtr> (Compiler::*)(CompileContext &ctx);
 
-    typedef std::pair<absl::string_view, Dyadic::ValueFunc> DyadicOp;
-    absl::StatusOr<ExprPtr> do_dyadic(
+    using DyadicOp = std::pair<absl::string_view, Dyadic::ValueFunc>;
+    absl::StatusOr<ExprPtr> DoDyadic(
         CompileContext &ctx,
         ParseFunc lfunc,
         ParseFunc rfunc,
@@ -236,17 +279,17 @@ struct Compiler {
         }
         s = s_;
         for (auto& op : ops) {
-            DBG << "Dyadic looking for " << op.first << " Remaining: " << s_.get_unscanned() << "\n";
-            if (s_.skip_whitespace_pop_word(op.first)) {
+            DBG << "Dyadic looking for " << op.first << " Remaining: " << s_.GetUnscanned() << "\n";
+            if (s_.SkipWhiteSpacePopWord(op.first)) {
                 DBG << "Found " << op.first << "\n";
                 VMSDK_ASSIGN_OR_RETURN(auto rvalue, (this->*rfunc)(ctx));
                 if (!rvalue) {
                     // Error.
                     return absl::InvalidArgumentError(
                         absl::StrCat("Invalid or missing expression after ", op.first, 
-                        " at or near position ", s_.get_position()));
+                        " at or near position ", s_.GetPosition()));
                 } else {
-                    return make_unique<Dyadic>(std::move(lvalue), std::move(rvalue), op.second, op.first);
+                    return std::make_unique<Dyadic>(std::move(lvalue), std::move(rvalue), op.second, op.first);
                 }
             }
         }
@@ -254,16 +297,32 @@ struct Compiler {
         return lvalue;
     }
 
-    absl::StatusOr<ExprPtr> primary(CompileContext &ctx) {
-        s_.skip_whitespace();
-        DBG << "Primary: '" << s_.get_unscanned() << "'\n";
-        switch (s_.peek_byte()) {
+    absl::StatusOr<ExprPtr> ParseParameter(CompileContext& ctx) {
+        assert(s_.PopByte('$'));
+        std::string param_name;
+        while (IsIdentifierChar(s_.PeekByte())) {
+            param_name += s_.NextByte();
+        }
+        VMSDK_ASSIGN_OR_RETURN(auto param_value, ctx.GetParam(param_name));
+        return std::make_unique<Parameter>(std::move(param_name), std::move(param_value));
+    }
+
+    absl::StatusOr<ExprPtr> Invert(CompileContext &ctx) {
+        assert(s_.PopByte('!'));
+        VMSDK_ASSIGN_OR_RETURN(auto expr, Primary(ctx));
+        return std::make_unique<Not>(std::move(expr));
+    }
+
+    absl::StatusOr<ExprPtr> Primary(CompileContext &ctx) {
+        s_.SkipWhiteSpace();
+        DBG << "Primary: '" << s_.GetUnscanned() << "'\n";
+        switch (s_.PeekByte()) {
             case '(': {
-                assert(s_.pop_byte('('));
-                auto result = lor_op(ctx);
-                if (!s_.skip_whitespace_pop_byte(')')) {
+                assert(s_.PopByte('('));
+                auto result = LorOp(ctx);
+                if (!s_.SkipWhiteSpacePopByte(')')) {
                     return absl::InvalidArgumentError(
-                        absl::StrCat("Expected ')' at or near position ", s_.get_position()));
+                        absl::StrCat("Expected ')' at or near position ", s_.GetPosition()));
                 } else {
                     return result;
                 }
@@ -273,84 +332,85 @@ struct Compiler {
             case '.':
             case '0': case '1': case '2': case '3': case '4':
             case '5': case '6': case '7': case '8': case '9': {
-                return number(ctx);
+                return Number(ctx);
             };
+            case '!':
+                return Invert(ctx);
             case '@':
-                return attribute(ctx);
+                return Attribute(ctx);
             case '\'': case '"':
-                return quoted_string(ctx);
-            case EOF:
+                return QuotedString(ctx);
+            case '$':
+                return ParseParameter(ctx);
+            case utils::Scanner::kEOF:
                 return nullptr;
             default: 
-                return function_call(ctx);
+                return ParseFunctionCall(ctx);
         }
     }
-    absl::StatusOr<ExprPtr> attribute(CompileContext &ctx) {
-        assert(s_.pop_byte('@'));
-        size_t pos = s_.get_position();
+    absl::StatusOr<ExprPtr> Attribute(CompileContext &ctx) {
+        assert(s_.PopByte('@'));
+        size_t pos = s_.GetPosition();
         std::string identifier;
-        while (is_identifier_char(s_.peek_utf8())) {
-            utils::Scanner::push_back_utf8(identifier, s_.next_utf8());
+        while (IsIdentifierChar(s_.PeekUtf8())) {
+            utils::Scanner::PushBackUtf8(identifier, s_.NextUtf8());
         }
-        DBG << "Identifier: " << identifier << " Remainer:" << s_.get_unscanned() << "\n";
-        auto ref = ctx.make_reference(identifier);
-        if (!ref) {
-            return absl::NotFoundError(
-                absl::StrCat("Attribute `", identifier, "` Unknown/Invalid near position ", pos));
-        }
-        return make_unique<AttributeValue>(identifier, std::move(*ref));
+        DBG << "Identifier: " << identifier << " Remainder:'" << s_.GetUnscanned() << "'\n";
+        VMSDK_ASSIGN_OR_RETURN(auto ref, ctx.MakeReference(identifier, false),
+           _ << " near position " << pos);
+        return std::make_unique<AttributeValue>(identifier, std::move(ref));
     }
-    absl::StatusOr<ExprPtr> function_call(CompileContext &ctx) {
+    absl::StatusOr<ExprPtr> ParseFunctionCall(CompileContext &ctx) {
         std::string name;
         utils::Scanner s = s_;
-        while (is_identifier_char(s_.peek_byte())) {
-            name.push_back(s_.next_byte());
+        while (IsIdentifierChar(s_.PeekByte())) {
+            name.push_back(s_.NextByte());
         }
         DBG << "Function Name: " << name << "\n";
-        if (!s_.skip_whitespace_pop_byte('(')) {
+        if (!s_.SkipWhiteSpacePopByte('(')) {
             s_ = s;
             return nullptr;
         }
-        std::vector<ExprPtr> params;
+        absl::InlinedVector<ExprPtr, 4> params;
         while (1) {
-            DBG << "Scanning for parameter " << params.size() << " : " << s_.get_unscanned() << "\n";
-            s_.skip_whitespace();
-            if (s_.pop_byte(')')) {
-                VMSDK_ASSIGN_OR_RETURN(auto func,FunctionCall::lookup_and_validate(name, params));
-                DBG << "After function call: '" << s_.get_unscanned() << "'\n";
-                return make_unique<FunctionCall>(std::move(name), *func, std::move(params));
-            } else if (!params.empty() && !s_.pop_byte(',')) {
+            DBG << "Scanning for Parameter " << params.size() << " : " << s_.GetUnscanned() << "\n";
+            s_.SkipWhiteSpace();
+            if (s_.PopByte(')')) {
+                VMSDK_ASSIGN_OR_RETURN(auto func,FunctionCall::LookUpAndValidate(name, params));
+                DBG << "After function call: '" << s_.GetUnscanned() << "'\n";
+                return std::make_unique<FunctionCall>(std::move(name), *func, std::move(params));
+            } else if (!params.empty() && !s_.PopByte(',')) {
                 DBG << "func_call found comma\n";
                 return absl::NotFoundError(
-                    absl::StrCat("Expected , or ) near position ", s_.get_position()));
+                    absl::StrCat("Expected , or ) near position ", s_.GetPosition()));
             } else {
-                DBG << "func_call scan for actual parameter: " << s_.get_unscanned() << "\n";
-                VMSDK_ASSIGN_OR_RETURN(auto param, expression(ctx));
+                DBG << "func_call scan for actual Parameter: " << s_.GetUnscanned() << "\n";
+                VMSDK_ASSIGN_OR_RETURN(auto param, Expression(ctx));
                 if (!param) {
                 return absl::InvalidArgumentError(
-                    absl::StrCat("Expected , or ) near position ", s_.get_position()));
+                    absl::StrCat("Expected , or ) near position ", s_.GetPosition()));
                 }
                 params.emplace_back(std::move(param));
             }
         }
     }
-    absl::StatusOr<ExprPtr> number(CompileContext &ctx) {
-        DBG << "Number Start: '" << s_.get_unscanned() << "'\n";
-        auto num = s_.pop_double();
+    absl::StatusOr<ExprPtr> Number(CompileContext &ctx) {
+        DBG << "Number Start: '" << s_.GetUnscanned() << "'\n";
+        auto num = s_.PopDouble();
         if (!num) {
             return nullptr;
         }
-        DBG << "Number End(" << (*num) << "): Remaining: '" << s_.get_unscanned() << "'\n";
+        DBG << "Number End(" << (*num) << "): Remaining: '" << s_.GetUnscanned() << "'\n";
         return std::make_unique<Constant>(*num);
     }
-    absl::StatusOr<ExprPtr> quoted_string(CompileContext& ctx) {
+    absl::StatusOr<ExprPtr> QuotedString(CompileContext& ctx) {
         std::string str;
-        int start_byte = s_.next_byte();
-        while (s_.peek_byte() != start_byte) {
-            int this_byte = s_.next_byte();
+        int start_byte = s_.NextByte();
+        while (s_.PeekByte() != start_byte) {
+            int this_byte = s_.NextByte();
             if (this_byte == '\\') {
                 // todo Parse Unicode escape sequence
-                this_byte = s_.next_byte();
+                this_byte = s_.NextByte();
             }
             if (this_byte == EOF) {
                 return absl::InvalidArgumentError(
@@ -358,66 +418,66 @@ struct Compiler {
             }
             str.push_back(char(this_byte));
         }
-        assert(s_.pop_byte(start_byte));
+        assert(s_.PopByte(start_byte));
         DBG << "Make constant ('" << str << "')\n";
         return std::make_unique<Constant>(std::move(str));
     }
-    absl::StatusOr<ExprPtr> lor_op(CompileContext &ctx) {
+    absl::StatusOr<ExprPtr> LorOp(CompileContext &ctx) {
         static std::vector<DyadicOp> ops{
-            {"||", &func_lor},
+            {"||", &FuncLor},
         };
-        return do_dyadic(ctx, &Compiler::and_op, &Compiler::lor_op, ops);
+        return DoDyadic(ctx, &Compiler::AndOp, &Compiler::LorOp, ops);
     }
-    absl::StatusOr<ExprPtr> and_op(CompileContext &ctx) {
+    absl::StatusOr<ExprPtr> AndOp(CompileContext &ctx) {
         static std::vector<DyadicOp> ops{
-            {"&&", &func_land},
+            {"&&", &FuncLand},
         };
-        return do_dyadic(ctx, &Compiler::cmp_op, &Compiler::and_op, ops);
+        return DoDyadic(ctx, &Compiler::CmpOp, &Compiler::AndOp, ops);
     }
-    absl::StatusOr<ExprPtr> cmp_op(CompileContext &ctx) {
+    absl::StatusOr<ExprPtr> CmpOp(CompileContext &ctx) {
         static std::vector<DyadicOp> ops{
-            {"<",  &func_lt},
-            {"<=", &func_le},
-            {"==", &func_eq},
-            {"!=", &func_ne},
-            {">",  &func_gt},
-            {">=", &func_ge}
+            {"<",  &FuncLt},
+            {"<=", &FuncLe},
+            {"==", &FuncEq},
+            {"!=", &FuncNe},
+            {">",  &FuncGt},
+            {">=", &FuncGe}
         };
-        return do_dyadic(ctx, &Compiler::add_op, &Compiler::cmp_op, ops);
+        return DoDyadic(ctx, &Compiler::AddOp, &Compiler::CmpOp, ops);
     }
-    absl::StatusOr<ExprPtr> add_op(CompileContext &ctx) {
+    absl::StatusOr<ExprPtr> AddOp(CompileContext &ctx) {
         static std::vector<DyadicOp> ops{
-            {"+", &func_add},
-            {"-", &func_sub}
+            {"+", &FuncAdd},
+            {"-", &FuncSub}
         };
-        return do_dyadic(ctx, &Compiler::mul_op, &Compiler::cmp_op, ops);
+        return DoDyadic(ctx, &Compiler::MulOp, &Compiler::CmpOp, ops);
     }
-    absl::StatusOr<ExprPtr> mul_op(CompileContext &ctx) {
+    absl::StatusOr<ExprPtr> MulOp(CompileContext &ctx) {
         static std::vector<DyadicOp> ops{
-            {"*", &func_mul},
-            {"/", &func_div}
+            {"*", &FuncMul},
+            {"/", &FuncDiv}
         };
-        return do_dyadic(ctx, &Compiler::primary, &Compiler::mul_op, ops);
+        return DoDyadic(ctx, &Compiler::Primary, &Compiler::MulOp, ops);
     }
 
-    absl::StatusOr<ExprPtr> expression(CompileContext& ctx) {
-        return lor_op(ctx);
+    absl::StatusOr<ExprPtr> Expression(CompileContext& ctx) {
+        return LorOp(ctx);
     }
 
-    absl::StatusOr<ExprPtr> compile(CompileContext &ctx) {
-        VMSDK_ASSIGN_OR_RETURN(auto result, expression(ctx));
-        if (s_.skip_whitespace_peek_byte() != EOF) {
+    absl::StatusOr<ExprPtr> Compile(CompileContext &ctx) {
+        VMSDK_ASSIGN_OR_RETURN(auto result, Expression(ctx));
+        if (s_.SkipWhiteSpacePeekByte() != EOF) {
             return absl::InvalidArgumentError(
-                absl::StrCat("Extra characters at or near position ", s_.get_position()));
+                absl::StrCat("Extra characters at or near position ", s_.GetPosition()));
         } else {
             return result;
         }
     }
 };
 
-absl::StatusOr<ExprPtr> Expression::compile(CompileContext &ctx, absl::string_view s) {
+absl::StatusOr<ExprPtr> Expression::Compile(CompileContext &ctx, absl::string_view s) {
     Compiler c(s);
-    return c.compile(ctx);
+    return c.Compile(ctx);
 }
 
 }}

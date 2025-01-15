@@ -4,7 +4,7 @@
 #include <charconv>
 #include <cmath>
 #include <algorithm>
-#include <time.h>
+#include <ctime>
 
 namespace valkey_search{
 namespace expr {

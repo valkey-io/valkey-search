@@ -29,17 +29,17 @@ struct FakeIndexInterface : public IndexInterface {
 };
 
 struct AggregateTest : public vmsdk::RedisTest {
-  void SetUp() {
-    fakeIndex.fields_ = {
+  void SetUp() override {
+    fake_index.fields_ = {
         { "n1", indexes::IndexerType::kNumeric},
         { "n2", indexes::IndexerType::kNumeric},
     };
     vmsdk::RedisTest::SetUp();
   }
-  void TearDown() {
+  void TearDown() override {
     vmsdk::RedisTest::TearDown();
   }
-  FakeIndexInterface fakeIndex;
+  FakeIndexInterface fake_index;
 };
 
 static struct TimeoutTestValue {
@@ -80,8 +80,8 @@ static struct LoadsTestValue {
   {"LOAD 2 x y", std::vector<std::string>{"x", "y"}},
 };
 
-static void do_preface_test_case(
-  FakeIndexInterface *fakeIndex,
+static void DoPrefaceTestCase(
+  FakeIndexInterface *fake_index,
   std::string test,
   TimeoutTestValue timeout_test,
   DialectTestValue dialect_test,
@@ -90,7 +90,7 @@ static void do_preface_test_case(
   auto argv = vmsdk::ToRedisStringVector(test);
   vmsdk::ArgsIterator itr(argv.data(), argv.size()); 
 
-  AggregateParameters params(fakeIndex);
+  AggregateParameters params(fake_index);
 
   auto parser = CreateAggregateParser();
 
@@ -137,7 +137,7 @@ TEST_F(AggregateTest, PrefaceParserTest) {
             test += " ";
             test += these_choices[0];
             ASSERT_EQ(these_choices.size(), 1);
-            do_preface_test_case(&fakeIndex, test, timeout_test, dialect_test, loads_test);
+            DoPrefaceTestCase(&fake_index, test, timeout_test, dialect_test, loads_test);
           }
         }
       }
@@ -145,11 +145,11 @@ TEST_F(AggregateTest, PrefaceParserTest) {
   }
 }
 
-struct teststage {
+struct TestStage {
   const char *stage_in_;
   const char *stage_out_;
 };
-static std::vector<teststage> teststages {
+static std::vector<TestStage> TestStages {
   {"bogus", nullptr},
   {"LiMiT", nullptr },
   {"LIMIT 10", nullptr },
@@ -187,19 +187,19 @@ static std::vector<teststage> teststages {
 };
 
 
-static void do_stage_test(FakeIndexInterface *fakeIndex, std::vector<size_t> indexes) {
+static void DoStageTest(FakeIndexInterface *fake_index, std::vector<size_t> indexes) {
   std::string text;
   bool any_bad = false;
   for (auto ix : indexes) {
     text += " ";
-    text += teststages[ix].stage_in_;
-    any_bad |= teststages[ix].stage_out_ == nullptr;
+    text += TestStages[ix].stage_in_;
+    any_bad |= TestStages[ix].stage_out_ == nullptr;
   }
   std::cout << "Doing case " << text << "\n";
   auto argv = vmsdk::ToRedisStringVector(text);
   vmsdk::ArgsIterator itr(argv.data(), argv.size()); 
 
-  AggregateParameters params(fakeIndex);
+  AggregateParameters params(fake_index);
 
   auto parser = CreateAggregateParser();
   auto result = parser.Parse(params, itr);
@@ -212,18 +212,18 @@ static void do_stage_test(FakeIndexInterface *fakeIndex, std::vector<size_t> ind
     for (auto i = 0; i < std::min(params.stages_.size(), indexes.size()); ++i) {
       std::ostringstream os;
       params.stages_[i]->Dump(os);
-      EXPECT_EQ(os.str(), teststages[indexes[i]].stage_out_);
+      EXPECT_EQ(os.str(), TestStages[indexes[i]].stage_out_);
     }
   }
 }
 
 TEST_F(AggregateTest, StageParserTest) {
-  for (size_t i = 0; i < teststages.size(); ++i) {
-    do_stage_test(&fakeIndex, std::vector<size_t>{i});
-    for (size_t j = 0; j < teststages.size(); ++j) {
-      do_stage_test(&fakeIndex, std::vector<size_t>{i, j});
-      for (size_t k = 0; k < teststages.size(); ++k) {
-        do_stage_test(&fakeIndex, std::vector<size_t>{i, j, k});
+  for (size_t i = 0; i < TestStages.size(); ++i) {
+    DoStageTest(&fake_index, std::vector<size_t>{i});
+    for (size_t j = 0; j < TestStages.size(); ++j) {
+      DoStageTest(&fake_index, std::vector<size_t>{i, j});
+      for (size_t k = 0; k < TestStages.size(); ++k) {
+        DoStageTest(&fake_index, std::vector<size_t>{i, j, k});
       }
     }
   }

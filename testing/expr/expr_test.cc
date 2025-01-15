@@ -21,14 +21,14 @@ class ExprTest : public testing::Test {
  struct Ref : public Expression::AttributeReference {
    Ref(const absl::string_view s) : name_(s) {}
    std::string name_;
-   virtual void Dump(std::ostream& os) const override { os << name_; }
-   virtual Value GetValue(Expression::EvalContext &ctx, const Expression::Record &record) const override {
+   void Dump(std::ostream& os) const override { os << name_; }
+   Value GetValue(Expression::EvalContext &ctx, const Expression::Record &record) const override {
     const Record& attrs = reinterpret_cast<const Record&>(record);
     auto itrs = attrs.attrs.find(name_);
     if (itrs != attrs.attrs.end()) {
       return itrs->second;
     } else {
-      return Value();
+      return Value{};
     }
    }
  };

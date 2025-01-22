@@ -1,13 +1,30 @@
 # Developer Guide
 
 
-## Build
+## Build Environment Setup
 
-ValkeySearch is built using the Bazel build system.
+For development purposes, it is recommended to use <b>VSCode</b>, which is already configured to run within a Docker container and is integrated with clang-tidy and clang-format. Follow these steps to set up the environment:
 
-### Installing Bazelisk as Bazel
+1. <b>Install VSCode Extensions:</b>
+    - Install the `Dev Containers` extension by Microsoft in VSCode.
+    - Note: Building the code may take some time, and it is important to use a host with decent CPU capacity. If you prefer, you can use a remote host. In that case, also install the following extensions:
+      - `Remote - SSH` by Microsoft
+      - `Remote Explorer` by Microsoft
+2. <b>Open the Repository in VSCode:</b>
+    - On your local machine, open the root directory of the cloned valkey-search repository in VSCode.
+    - If the repository is located on a remote host:
+      1. Press Ctrl+Shift+P (Windows/Linux) or Cmd+Shift+P (macOS) to open the Command Palette.
+      2. Type Remote-SSH: Connect to Host and select it.
+      3. Choose the appropriate host and provide any necessary authentication details.
+    
+       Once connected, VSCode will open the repository in the context of the remote host.
 
-It is recommended to use [Bazelisk](https://github.com/bazelbuild/bazelisk) installed as `bazel`, to avoid Bazel compatibility issues.
+
+## Manual Setup of Build Environment
+
+If you prefer to manually set up the development environment instead of using the dev container, follow these steps. However, if you have already set up your environment to use the dev container, there’s no need to follow this section.
+
+valkey-search is built using the Bazel build system. It is recommended to use [Bazelisk](https://github.com/bazelbuild/bazelisk) installed as `bazel`, to avoid Bazel compatibility issues.
 
 On Linux, run the following commands:
 

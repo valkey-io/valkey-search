@@ -27,10 +27,10 @@ jobs:
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
     - name: Run Tests
-      run: docker run --rm presubmit-image bazel test testing/...
+      run: docker run --rm  -v "$(pwd):/workspace" --user "$(id -u):$(id -g)" presubmit-image bazel test testing/...
 
     - name: Run vmsdk Tests 
-      run: docker run --rm presubmit-image bazel test vmsdk/testing/...
+      run: docker run --rm  -v "$(pwd):/workspace" --user "$(id -u):$(id -g)" presubmit-image bazel test vmsdk/testing/...
     
     - name: Run clang-tidy/format
-      run: docker run --rm presubmit-image ci/check_changes.sh main...HEAD
+      run: docker run --rm  -v "$(pwd):/workspace" --user "$(id -u):$(id -g)" presubmit-image ci/check_changes.sh main...HEAD

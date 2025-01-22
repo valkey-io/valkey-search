@@ -40,9 +40,9 @@ jobs:
 
     # Build the Docker image from the Dockerfile in your repo
     - name: Build Docker Image
-      run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
+      run: docker build -t clang-tidy-format-image -f .devcontainer/Dockerfile .
 
     - name: Run clang-tidy/format
       run: |
         git fetch origin main
-        docker run --rm  -v "$(pwd):/workspace" --user "$(id -u):$(id -g)" presubmit-image bash -c "bazel build //... && ci/check_changes.sh origin/main...HEAD"
+        docker run --rm  -v "$(pwd):/workspace" --user "$(id -u):$(id -g)" clang-tidy-format-image bash -c "bazel build //... && ci/check_changes.sh origin/main...HEAD"

@@ -43,4 +43,6 @@ jobs:
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
     - name: Run clang-tidy/format
-      run: docker run --rm  -v "$(pwd):/workspace" --user "$(id -u):$(id -g)" presubmit-image ci/check_changes.sh origin/main...HEAD
+      run: |
+        git fetch origin main
+        docker run --rm  -v "$(pwd):/workspace" --user "$(id -u):$(id -g)" presubmit-image bash -c "bazel build //... && ci/check_changes.sh origin/main...HEAD"

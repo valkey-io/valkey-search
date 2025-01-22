@@ -79,7 +79,6 @@
 namespace valkey_search {
 
 constexpr int kEncodingVersion = 0;
-
 LogLevel GetLogSeverity(bool ok) { return ok ? DEBUG : WARNING; }
 std::string IndexSchema::GetRedisKeyForIndexSchemaName(absl::string_view name) {
   return absl::StrCat(kIndexSchemaKeyPrefix, name);

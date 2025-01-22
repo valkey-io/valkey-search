@@ -3,3 +3,4 @@ __pycache__/
 MODULE.bazel.lock
 resolved_deps.py
 *.swp
+compile_commands.json

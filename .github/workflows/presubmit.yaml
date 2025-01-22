@@ -1,0 +1,36 @@
+name: presubmit
+
+on:
+  pull_request: # This triggers the workflow for pull requests
+    branches:
+      - main    # Run tests for pull requests targeting the "main" branch
+  push:
+    branches:
+      - main    # Optional: Run tests for direct pushes to "main"
+  workflow_dispatch: # allow manual triggering
+
+jobs:
+  bazel-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Checkout the code from the repository
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    # Set up Docker to build and run the container
+    - name: Set up Docker
+      uses: docker/setup-buildx-action@v2
+
+    # Build the Docker image from the Dockerfile in your repo
+    - name: Build Docker Image
+      run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
+
+    - name: Run Tests
+      run: docker run --rm  -v "$(pwd):/workspace" --user "$(id -u):$(id -g)" presubmit-image bazel test testing/...
+
+    - name: Run vmsdk Tests 
+      run: docker run --rm  -v "$(pwd):/workspace" --user "$(id -u):$(id -g)" presubmit-image bazel test vmsdk/testing/...
+    
+    - name: Run clang-tidy/format
+      run: docker run --rm  -v "$(pwd):/workspace" --user "$(id -u):$(id -g)" presubmit-image ci/check_changes.sh origin/main...HEAD

@@ -3,14 +3,14 @@ RFC: (PR number)
 Status: (Change to Proposed when it's ready for review)
 ---
 
-# Title (Required)
+# Title
 Text Searching
 
-## Abstract (Required)
+## Abstract
 
 The existing search platform is extended with a new field type, ```TEXT``` is defined. The query language is extended to support locating keys with text fields based on term, wildcard, fuzzy and exact phrase matching.
 
-## Motivation (Required)
+## Motivation
 
 Text searching is useful in many applications.
 
@@ -32,7 +32,7 @@ In the context of this RFC.
 | term | The output of stemming a word. |
 | prefix tree | A mapping from input string to an output object. Insert/delete operations are O(length(input)). Additional operations include the ability to iterate over the entries that share a common prefix in O(length(prefix)) time. |
 
-## Design considerations (Required)
+## Design considerations
 
 The text searching facility provides machinery that decomposes text fields into terms and field-indexes them.
 The query facility of the ```FT.SEARCH``` and ```FT.AGGREGATE``` commands is enhanced to select keys based on combinations of words, wildcard, fuzzy and phrase matching.
@@ -79,7 +79,7 @@ Note, in this proposal, the second prefix tree is required to perform infix and 
 
 Exact phrase matching is specified by enclosing a sequence of terms in double quotes ```"```. In order to perform phrase matching, the field-index must be configured to contain term-offsets.
 
-## Specification (Required)
+## Specification
 
 Each ```TEXT``` field has the a set of configurables some control the process to convert a string into a vector of terms, others control the contents of the generated index.
 
@@ -165,9 +165,6 @@ To avoid combinatorial explosion certain operations have configurable limits app
 | max-fuzzy-distance | 2 | The maximum edit distance for a fuzzy search. |
 | max-wildcard-matches | 200 | Maximum number of words that a single wildcard match can generate |
 
-
-
-
-### Dependencies (Optional)
+### Dependencies
 
 snowball library https://snowballstem.org/ and https://github.com/snowballstem

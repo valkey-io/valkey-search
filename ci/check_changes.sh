@@ -2,27 +2,21 @@
 
 bazel run @hedron_compile_commands//:refresh_all
 
-use_cache=false
-if [[ "$1" == "--cached" ]]; then
-  use_cache=true
-fi
-
+git_args=""
+for arg in "$@"; do
+  git_args+=" \"$arg\""
+done
 # Get the list of modified or new files
-if $use_cache; then
-  files=$(git diff --cached --name-only --diff-filter=AM | grep -E '\.cc$|\.h$')
-else
-  files=$(git diff --name-only --diff-filter=AM | grep -E '\.cc$|\.h$')
-fi
+files=$(eval "git diff --name-only --diff-filter=AM $git_args"| grep -E '\.cc$|\.h$')
 
 # Check if there are any files to process
 if [ -z "$files" ]; then
-  echo "No modified or new C++ files."
   exit 0
 fi
 
-# Run clang-tidy on the files
-echo "Running clang-tidy on modified/new files..."
 for file in $files; do
-  clang-tidy --quiet  -p compile_commands.json "$file"
+  #echo "file: $file"
+  clang-tidy --quiet  -p compile_commands.json "$file" 2>&1 | tail -n +3
+  ci/check_clang_format.sh "$file"
 done
 

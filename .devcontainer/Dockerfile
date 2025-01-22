@@ -10,10 +10,6 @@ RUN apt-get update && apt-get install -y \
 RUN add-apt-repository ppa:ubuntu-toolchain-r/test && apt update
 
 RUN apt-get install -y \
-    clang \
-    clangd \
-    clang-tidy \
-    clang-format \
     libc6-dev \
     libc++-dev \
     libc++abi-dev \
@@ -39,6 +35,8 @@ RUN update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/cl
     update-alternatives --set clang-format /usr/bin/clang-format-17
 RUN update-alternatives --install /usr/bin/clang clang /usr/bin/clang-17 100 && \
     update-alternatives --set clang /usr/bin/clang-17
+RUN update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-17 100 && \
+    update-alternatives --set clang++ /usr/bin/clang++-17    
 RUN update-alternatives --install /usr/bin/clang-cpp clang-cpp /usr/bin/clang-cpp-17 100 && \
     update-alternatives --set clang-cpp /usr/bin/clang-cpp-17
 RUN update-alternatives --install /usr/bin/clangd clangd /usr/bin/clangd-17 100 && \

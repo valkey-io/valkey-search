@@ -9,10 +9,11 @@ on:
       - 'testing/**'
       - 'vmsdk/src/**'
       - 'vmsdk/testing/**'
+
   push:
     branches:
       - main    # Optional: Run tests for direct pushes to "main"
-      paths:
+    paths:
       - 'src/**'
       - 'testing/**'
       - 'vmsdk/src/**'

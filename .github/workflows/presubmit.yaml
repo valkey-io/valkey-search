@@ -24,12 +24,13 @@ jobs:
 
     # Build the Docker image from the Dockerfile in your repo
     - name: Build Docker Image
-      run: docker build -t presubmit-image .devcontainer/
+      run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
-    # Run the Bazel tests (testing/...)
     - name: Run Tests
-      run: docker run --rm presubmit-image bash -c " cd /workspace/valkey-search && bazel test testing/... "
+      run: docker run --rm presubmit-image bazel test testing/...
 
-    # Run the Bazel tests (vmsdk/testing/...)
     - name: Run vmsdk Tests 
-      run: docker run --rm presubmit-image  bash -c " cd /workspace/valkey-search && bazel test vmsdk/testing/... "
+      run: docker run --rm presubmit-image bazel test vmsdk/testing/...
+    
+    - name: Run clang-tidy/format
+      run: docker run --rm presubmit-image ci/check_changes.sh main...HEAD

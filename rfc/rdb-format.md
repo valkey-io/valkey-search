@@ -103,7 +103,7 @@ The goal of breaking into sections is to support skipping optional sections if t
 
 #### Supplemental Contents
 
-In addition to the contents in the RDBSection, we may have contents that are too large to serialize into a protocol buffer in memory. Namely, this would be contents such as "key to ID mappings" for the index, or the index contents itself. To support similar forwards and backwards compatibility characteristics as the RDBSection, we will include a supplemental count in tthe RDBSection, and upon load, we will begin loading supplemental contents following the load of the RDBSection.
+In addition to the contents in the RDBSection, we may have contents that are too large to serialize into a protocol buffer in memory. Namely, this would be contents such as "key to ID mappings" for the index, or the index contents itself. To support similar forwards and backwards compatibility characteristics as the RDBSection, we will include a supplemental count in the RDBSection, and upon load, we will begin loading supplemental contents following the load of the RDBSection.
 
 Supplemental content is composed of a supplemental header (in protocol buffer format) and a raw binary dump of the supplemental contents. The supplemental content header will be represented by a proto similar to:
 
@@ -190,7 +190,7 @@ SupplementalContentHeader {
 <my_vector_index_contents>
 ```
 
-Suppose that the new version introduces a new field in VectoIndex - `bool quantize`. Protocol buffers initialize the default values to a "zero-like" value, so this will be `false` if not previously set. We could also add it as `optional bool quantize`, and specifically check if the VectorIndex proto has the `quantize` field set explicitly, or is not set explicitly. On the upgrade path - we will default initialize the value of `quantize` to false, and handle the default case as we see fit.
+Suppose that the new version introduces a new field in VectoIndex - `bool quantize`. Protocol buffers initialize the default values to a "zero-like" value, so this will be `false` if not previously set. We could also add it as `optional bool quantize`, and specifically check if the VectorIndex proto has the `quantize` field set explicitly. On the upgrade path - we will default initialize the value of `quantize` to false (or handle the default case as we see fit, if we use `optional`).
 
 Suppose now the user recreates the index with `quantize` set to true. If they then choose to downgrade back to the previous version, we will output an RDB that looks like:
 
@@ -246,7 +246,7 @@ SupplementalContentHeader {
 <my_quantized_vector_index_contents>
 ```
 
-On the new version, when the new feature `quantize` is used, we will bump the encoding version of both the RDBSection containing the index schema definition (it now contains the `quantize` field, which will be lost on downgrade). Similarly, we will also bump the encoding version of the SupplementalContentHeader for the index contents - as the format has changed in a way that will not be understood by older version. On loading this on the previous version, we will fail fast with a useful error message:
+On the new version, when the new feature `quantize` is used, we will bump the encoding version of the RDBSection containing the index schema definition (it now contains the `quantize` field, which will be lost on downgrade). Similarly, we will also bump the encoding version of the SupplementalContentHeader for the index contents - as the format has changed in a way that will not be understood by older version. On loading this on the previous version, we will fail fast with a useful error message:
 
 ```
 ValkeySearch RDB contents contain defintions for RDB sections that are not supported by this version. If you are downgrading, ensure all feature usage on the new version of ValkeySearch is supported by this version and retry.

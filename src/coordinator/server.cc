@@ -35,7 +35,6 @@
 #include <string>
 #include <utility>
 
-
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/time/time.h"
@@ -59,10 +58,10 @@
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::coordinator {
 
@@ -187,10 +186,8 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
   return reactor;
 }
 
-ServerImpl::ServerImpl(
-    std::unique_ptr<Service> coordinator_service,
-    std::unique_ptr<grpc::Server> server,
-    uint16_t port)
+ServerImpl::ServerImpl(std::unique_ptr<Service> coordinator_service,
+                       std::unique_ptr<grpc::Server> server, uint16_t port)
     : coordinator_service_(std::move(coordinator_service)),
       server_(std::move(server)),
       port_(port) {}

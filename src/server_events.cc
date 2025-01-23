@@ -27,50 +27,48 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #include "src/server_events.h"
 
 #include <cstdint>
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
+
+#include "src/coordinator/metadata_manager.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
-#include "src/coordinator/metadata_manager.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::server_events {
 
 void OnForkChildCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
-                                      uint64_t subevent, void *data) {
+                         uint64_t subevent, void *data) {
   ValkeySearch::Instance().OnForkChildCallback(ctx, eid, subevent, data);
 }
 
 void OnFlushDBCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
-                                    uint64_t subevent, void *data) {
+                       uint64_t subevent, void *data) {
   SchemaManager::Instance().OnFlushDBCallback(ctx, eid, subevent, data);
 }
 
-void OnPersistenceCallback(RedisModuleCtx *ctx,
-                                        RedisModuleEvent eid, uint64_t subevent,
-                                        void *data) {
+void OnPersistenceCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
+                           uint64_t subevent, void *data) {
   SchemaManager::Instance().OnPersistenceCallback(ctx, eid, subevent, data);
 }
 
 void OnLoadingCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
-                                    uint64_t subevent, void *data) {
+                       uint64_t subevent, void *data) {
   SchemaManager::Instance().OnLoadingCallback(ctx, eid, subevent, data);
   if (coordinator::MetadataManager::IsInitialized()) {
-    coordinator::MetadataManager::Instance().OnLoadingCallback(
-        ctx, eid, subevent, data);
+    coordinator::MetadataManager::Instance().OnLoadingCallback(ctx, eid,
+                                                               subevent, data);
   }
 }
 
 void OnSwapDBCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
-                                   uint64_t subevent, void *data) {
+                      uint64_t subevent, void *data) {
   SchemaManager::Instance().OnSwapDB((RedisModuleSwapDbInfo *)data);
 }
 
-void OnServerCronCallback(RedisModuleCtx *ctx,
-                                       RedisModuleEvent eid, uint64_t subevent,
-                                       void *data) {
+void OnServerCronCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
+                          uint64_t subevent, void *data) {
   ValkeySearch::Instance().OnServerCronCallback(ctx, eid, subevent, data);
   SchemaManager::Instance().OnServerCronCallback(ctx, eid, subevent, data);
   if (coordinator::MetadataManager::IsInitialized()) {
@@ -81,9 +79,7 @@ void OnServerCronCallback(RedisModuleCtx *ctx,
 
 void AtForkPrepare() { ValkeySearch::Instance().AtForkPrepare(); }
 
-void AfterForkParent() {
-  ValkeySearch::Instance().AfterForkParent();
-}
+void AfterForkParent() { ValkeySearch::Instance().AfterForkParent(); }
 
 void SubscribeToServerEvents() {
   // Note: all the events are subscribed to here. The engine only supports

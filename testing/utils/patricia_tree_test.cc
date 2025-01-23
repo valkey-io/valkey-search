@@ -34,7 +34,6 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
-
 namespace valkey_search {
 
 namespace {
@@ -197,4 +196,3 @@ TEST_F(PatriciaTreeSetTest, TriePathIterator) {
 }
 }  // namespace
 }  // namespace valkey_search
-

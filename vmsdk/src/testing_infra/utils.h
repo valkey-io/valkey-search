@@ -27,16 +27,15 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VMSDK_SRC_TESTING_INFRA_UTILS
 #define VMSDK_SRC_TESTING_INFRA_UTILS
 
 #include <string>
 #include <vector>
 
+#include "absl/strings/string_view.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "absl/strings/string_view.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 

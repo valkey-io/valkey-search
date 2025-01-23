@@ -50,7 +50,6 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
-#include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/numbers.h"
@@ -59,9 +58,6 @@
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
 #include "absl/synchronization/mutex.h"
-#include "third_party/hnswlib/hnswlib.h"
-#include "third_party/hnswlib/space_ip.h"
-#include "third_party/hnswlib/space_l2.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
@@ -71,11 +67,14 @@
 #include "src/rdb_io_stream.h"
 #include "src/utils/string_interning.h"
 #include "src/vector_externalizer.h"
+#include "third_party/hnswlib/hnswlib.h"
+#include "third_party/hnswlib/space_ip.h"
+#include "third_party/hnswlib/space_l2.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 constexpr float kDefaultMagnitude = -1.0f;

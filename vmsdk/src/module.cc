@@ -35,9 +35,9 @@
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
-#include "vmsdk/src/log.h"
 
 namespace vmsdk {
 namespace module {

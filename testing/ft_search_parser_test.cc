@@ -39,19 +39,19 @@
 #include <utility>
 #include <vector>
 
+#include "absl/strings/string_view.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/vector_flat.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "testing/common.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
@@ -144,7 +144,8 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
                    vector_index_proto, "attribute_identifier_1",
                    data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
                    .value();
-  VMSDK_EXPECT_OK(index_schema->AddIndex(test_case.attribute_alias, "id1", index));
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex(test_case.attribute_alias, "id1", index));
   EXPECT_CALL(*kMockRedisModule, ModuleTypeGetValue(testing::_))
       .WillRepeatedly(testing::Return(index_schema.get()));
   args.push_back(

@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VALKEYSEARCH_SRC_QUERY_SEARCH_H_
 #define VALKEYSEARCH_SRC_QUERY_SEARCH_H_
 
@@ -45,12 +44,12 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "third_party/hnswlib/hnswlib.h"
 #include "src/commands/filter_parser.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
+#include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/thread_pool.h"
 

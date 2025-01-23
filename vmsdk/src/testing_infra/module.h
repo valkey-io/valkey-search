@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VMSDK_SRC_TESTING_INFRA_MODULE
 #define VMSDK_SRC_TESTING_INFRA_MODULE
 
@@ -43,16 +42,16 @@
 #include <string>
 #include <vector>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/base/call_once.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/strings/str_format.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "vmsdk/src/log.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 class MockRedisModule {
  public:
@@ -619,8 +618,8 @@ inline int TestRedisModule_KeyExistsDefaultImpl(RedisModuleCtx *ctx,
 }
 
 inline int TestRedisModule_HashExternalizeDefaultImpl(
-    RedisModuleKey *key, RedisModuleString *field,
-    RedisModuleHashExternCB fn, void *privdata) {
+    RedisModuleKey *key, RedisModuleString *field, RedisModuleHashExternCB fn,
+    void *privdata) {
   return REDISMODULE_OK;
 }
 
@@ -644,9 +643,10 @@ inline RedisModuleKey *TestRedisModule_OpenKey(RedisModuleCtx *ctx,
   return kMockRedisModule->OpenKey(ctx, key, flags);
 }
 
-inline int TestRedisModule_HashExternalize(
-    RedisModuleKey *key, RedisModuleString *field,
-    RedisModuleHashExternCB fn, void *privdata) {
+inline int TestRedisModule_HashExternalize(RedisModuleKey *key,
+                                           RedisModuleString *field,
+                                           RedisModuleHashExternCB fn,
+                                           void *privdata) {
   return kMockRedisModule->HashExternalize(key, field, fn, privdata);
 }
 
@@ -1260,8 +1260,7 @@ inline void TestRedisModule_Init() {
       &TestRedisModule_SubscribeToKeyspaceEvents;
   RedisModule_KeyExists = &TestRedisModule_KeyExists;
   RedisModule_OpenKey = &TestRedisModule_OpenKey;
-  RedisModule_HashExternalize =
-      &TestRedisModule_HashExternalize;
+  RedisModule_HashExternalize = &TestRedisModule_HashExternalize;
   RedisModule_GetApi = &TestRedisModule_GetApi;
   RedisModule_HashGet = &TestRedisModule_HashGet;
   RedisModule_HashSet = &TestRedisModule_HashSet;
@@ -1379,8 +1378,8 @@ inline void TestRedisModule_Init() {
       .WillByDefault(TestRedisModule_DeleteKeyDefaultImpl);
   ON_CALL(*kMockRedisModule, KeyExists(testing::_, testing::_))
       .WillByDefault(TestRedisModule_KeyExistsDefaultImpl);
-  ON_CALL(*kMockRedisModule, HashExternalize(testing::_, testing::_,
-                                                        testing::_, testing::_))
+  ON_CALL(*kMockRedisModule,
+          HashExternalize(testing::_, testing::_, testing::_, testing::_))
       .WillByDefault(TestRedisModule_HashExternalizeDefaultImpl);
   ON_CALL(*kMockRedisModule, GetApi(testing::_, testing::_))
       .WillByDefault(TestRedisModule_GetApiDefaultImpl);

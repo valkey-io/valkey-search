@@ -33,8 +33,8 @@
 #include <string>
 #include <vector>
 
-#include "gtest/gtest.h"
 #include "absl/container/flat_hash_set.h"
+#include "gtest/gtest.h"
 #include "src/utils/intrusive_ref_count.h"
 #include "vmsdk/src/testing_infra/utils.h"
 

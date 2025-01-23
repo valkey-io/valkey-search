@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VMSDK_SRC_MODULE_H_
 #define VMSDK_SRC_MODULE_H_
 
@@ -38,8 +37,8 @@
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/utils.h"  // IWYU pragma: keep
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 #define VALKEY_MODULE(options)                                              \
   namespace {                                                               \

@@ -38,16 +38,16 @@
 #include <utility>
 #include <vector>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/log.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/substitute.h"
-#include "grpcpp/support/status.h"
+#include "gmock/gmock.h"
 #include "google/protobuf/text_format.h"
 #include "google/protobuf/util/message_differencer.h"
+#include "grpcpp/support/status.h"
+#include "gtest/gtest.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
@@ -57,9 +57,9 @@
 #include "src/valkey_search.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 namespace query {
@@ -391,8 +391,8 @@ INSTANTIATE_TEST_SUITE_P(
 TEST_P(FanoutTest, TestFanout) {
   auto params = GetParam();
   coordinator::SearchIndexPartitionRequest search_parameters;
-  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(params.parameters_pbtxt,
-                                                  &search_parameters));
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      params.parameters_pbtxt, &search_parameters));
   std::vector<fanout::FanoutSearchTarget> targets;
   for (const auto &target : params.targets) {
     targets.push_back(target.target);
@@ -469,8 +469,8 @@ TEST_P(FanoutTest, TestFanout) {
                   ElementsAreArray(params.expected_neighbors.value()));
     }
     auto grpc_request = coordinator::ParametersToGRPCSearchRequest(*parameters);
-    EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(*grpc_request,
-                                                         search_parameters));
+    EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
+        *grpc_request, search_parameters));
   };
   auto parameters = GRPCSearchRequestToParameters(search_parameters);
   VMSDK_EXPECT_OK(parameters);

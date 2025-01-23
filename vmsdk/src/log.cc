@@ -44,8 +44,8 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
 
@@ -67,8 +67,8 @@ static inline std::string DefaultSinkFormater(const absl::LogEntry& entry) {
   pthread_t thread_id = pthread_self();
   return absl::StrFormat(
       "[%s], tid: %lu, %s:%d: %s", ToStrLogLevel(entry.verbosity()),
-      static_cast<unsigned long>(thread_id),
-      entry.source_filename(), entry.source_line(), entry.text_message());
+      static_cast<unsigned long>(thread_id), entry.source_filename(),
+      entry.source_line(), entry.text_message());
 }
 
 struct SinkOptions {

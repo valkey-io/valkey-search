@@ -37,16 +37,14 @@
 #include <utility>
 #include <vector>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
-#include "third_party/hnswlib/space_ip.h"
-#include "third_party/hnswlib/space_l2.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
@@ -55,6 +53,8 @@
 #include "src/indexes/vector_hnsw.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
+#include "third_party/hnswlib/space_ip.h"
+#include "third_party/hnswlib/space_l2.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
 
@@ -71,8 +71,7 @@ const hnswlib::InnerProductSpace kInnerProductSpace{kDimensions};
 const hnswlib::L2Space kL2Space{kDimensions};
 const absl::flat_hash_map<data_model::DistanceMetric, std::string>
     kExpectedSpaces = {
-        {data_model::DISTANCE_METRIC_COSINE,
-         typeid(kInnerProductSpace).name()},
+        {data_model::DISTANCE_METRIC_COSINE, typeid(kInnerProductSpace).name()},
         {data_model::DISTANCE_METRIC_IP, typeid(kInnerProductSpace).name()},
         {data_model::DISTANCE_METRIC_L2, typeid(kL2Space).name()},
 };

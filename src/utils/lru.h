@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VALKEYSEARCH_SRC_UTILS_LRU_H_
 #define VALKEYSEARCH_SRC_UTILS_LRU_H_
 #include <cstddef>
@@ -39,7 +38,7 @@ namespace valkey_search {
 template <typename T>
 class LRU {
  public:
-  explicit LRU(size_t capacity) : capacity_(capacity) {};
+  explicit LRU(size_t capacity) : capacity_(capacity){};
   T *InsertAtTop(T *node);
   void Promote(T *node);
   void Remove(T *node);

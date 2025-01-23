@@ -30,8 +30,8 @@
 #ifndef VALKEYSEARCH_SRC_COMMANDS_COMMANDS_H_
 #define VALKEYSEARCH_SRC_COMMANDS_COMMANDS_H_
 
-#include "absl/strings/string_view.h"
 #include "absl/status/status.h"
+#include "absl/strings/string_view.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {

@@ -40,10 +40,9 @@
 namespace valkey_search {
 
 absl::Status FTListCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
-                             int argc) {
+                       int argc) {
   if (argc > 1) {
-    return absl::InvalidArgumentError(
-        vmsdk::WrongArity(kListCommand));
+    return absl::InvalidArgumentError(vmsdk::WrongArity(kListCommand));
   }
   absl::flat_hash_set<std::string> names =
       SchemaManager::Instance().GetIndexSchemasInDB(

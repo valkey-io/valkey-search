@@ -37,15 +37,15 @@
 #include <ostream>
 #include <string>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/log/log_entry.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/thread_pool.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
 
@@ -165,11 +165,10 @@ TEST_F(LogTest, WithoutInitValueConfigGetError) {
   EXPECT_CALL(*kMockRedisModule,
               Call(&ctx, testing::StrEq("CONFIG"), testing::StrEq("cc"),
                    testing::StrEq("GET"), testing::StrEq("loglevel")))
-      .WillOnce([](RedisModuleCtx* ctx, const char* cmd, const char* fmt,
-                   const char* arg1,
-                   const char* arg2) -> RedisModuleCallReply* {
-        return nullptr;
-      });
+      .WillOnce(
+          [](RedisModuleCtx* ctx, const char* cmd, const char* fmt,
+             const char* arg1,
+             const char* arg2) -> RedisModuleCallReply* { return nullptr; });
   VMSDK_EXPECT_OK(InitLogging(&ctx, std::nullopt));
   StreamMessageEvalCnt stream_eval_cnt("hello");
 

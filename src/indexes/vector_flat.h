@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VALKEYSEARCH_SRC_INDEXES_VECTOR_FLAT_H_
 #define VALKEYSEARCH_SRC_INDEXES_VECTOR_FLAT_H_
 
@@ -43,12 +42,12 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
-#include "third_party/hnswlib/bruteforce.h"
-#include "third_party/hnswlib/hnswlib.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/vector_base.h"
 #include "src/rdb_io_stream.h"
 #include "src/utils/string_interning.h"
+#include "third_party/hnswlib/bruteforce.h"
+#include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {

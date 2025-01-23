@@ -11,13 +11,12 @@
     "clangd.arguments": [
         "--clang-tidy",
         "--all-scopes-completion",
-        "--background-index"
+        "--background-index",
+        "--header-insertion=never",
+        "--compile-commands-dir=${workspaceFolder}/",
+        "--query-driver=**"
     ],
-    "C_Cpp.codeAnalysis.clangTidy.args": [
-        "-p",
-        "${workspaceFolder}"
-    ],
-    "bazel.buildifierFixOnFormat": true,
+    "bazel.buildifierFixOnFormat": false,
     "clangd.inactiveRegions.useBackgroundHighlight": true,
-    "clangd.enableCodeCompletion": true
+    "clangd.enableCodeCompletion": true,
 }

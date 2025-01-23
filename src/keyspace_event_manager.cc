@@ -38,10 +38,10 @@
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
 #include "src/vector_externalizer.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 static absl::NoDestructor<std::unique_ptr<KeyspaceEventManager>>

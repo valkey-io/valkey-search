@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VALKEYSEARCH_SRC_INDEXES_TAG_H_
 #define VALKEYSEARCH_SRC_INDEXES_TAG_H_
 #include <cstddef>
@@ -126,7 +125,7 @@ class Tag : public IndexBase {
           size_(size),
           entries_(entries),
           negate_(negate),
-          untracked_keys_(untracked_keys) {};
+          untracked_keys_(untracked_keys){};
     size_t Size() const override;
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 

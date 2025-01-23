@@ -36,14 +36,14 @@
 #include <utility>
 #include <vector>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "gmock/gmock.h"
 #include "google/protobuf/text_format.h"
 #include "google/protobuf/util/message_differencer.h"
+#include "gtest/gtest.h"
 #include "src/coordinator/client.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
@@ -51,9 +51,9 @@
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::coordinator {
 
@@ -542,7 +542,7 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
                                          existing_metadata.SerializeAsString()};
       });
   VMSDK_EXPECT_OK(test_metadata_manager_->AuxLoad(fake_rdb_io, 0,
-                                            REDISMODULE_AUX_AFTER_RDB));
+                                                  REDISMODULE_AUX_AFTER_RDB));
   test_metadata_manager_->OnLoadingEnded(&fake_ctx_);
   EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
       *test_metadata_manager_->GetGlobalMetadata(), existing_metadata));
@@ -634,8 +634,8 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
                                      test_case.expected_callbacks.end()));
 
   auto actual_metadata = test_metadata_manager_->GetGlobalMetadata();
-  EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(*actual_metadata,
-                                                       expected_metadata));
+  EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
+      *actual_metadata, expected_metadata));
 }
 
 static constexpr absl::string_view kV1Metadata = R"(
@@ -1599,8 +1599,8 @@ class MetadataManagerTest : public vmsdk::RedisTest {
 
 TEST_F(MetadataManagerTest, TestBroadcastMetadata) {
   GlobalMetadata existing_metadata;
-  ASSERT_TRUE(
-      google::protobuf::TextFormat::ParseFromString(kV1Metadata, &existing_metadata));
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      kV1Metadata, &existing_metadata));
   existing_metadata.mutable_version_header()->set_top_level_fingerprint(
       MetadataManager::ComputeTopLevelFingerprint(
           existing_metadata.type_namespace_map()));
@@ -1612,7 +1612,7 @@ TEST_F(MetadataManagerTest, TestBroadcastMetadata) {
                                          existing_metadata.SerializeAsString()};
       });
   VMSDK_EXPECT_OK(test_metadata_manager_->AuxLoad(fake_rdb_io, 0,
-                                            REDISMODULE_AUX_AFTER_RDB));
+                                                  REDISMODULE_AUX_AFTER_RDB));
   test_metadata_manager_->OnLoadingEnded(fake_ctx);
 
   std::string version_header_str =
@@ -1632,7 +1632,7 @@ TEST_F(MetadataManagerTest, TestAuxLoadWrongTimeIsNoOp) {
   auto fake_rdb_io = reinterpret_cast<RedisModuleIO*>(0xBADF00D1);
   EXPECT_CALL(*kMockRedisModule, LoadString(fake_rdb_io)).Times(0);
   VMSDK_EXPECT_OK(test_metadata_manager_->AuxLoad(fake_rdb_io, 0,
-                                            REDISMODULE_AUX_BEFORE_RDB));
+                                                  REDISMODULE_AUX_BEFORE_RDB));
 }
 
 TEST_F(MetadataManagerTest, TestAuxLoadWrongFormat) {
@@ -1640,15 +1640,17 @@ TEST_F(MetadataManagerTest, TestAuxLoadWrongFormat) {
   EXPECT_CALL(*kMockRedisModule, LoadString(fake_rdb_io)).WillOnce([]() {
     return new RedisModuleString{.data = "this will not work"};
   });
-  EXPECT_EQ(test_metadata_manager_->AuxLoad(fake_rdb_io, 0,
-                                              REDISMODULE_AUX_AFTER_RDB).code(),
-              absl::StatusCode::kInternal);
+  EXPECT_EQ(
+      test_metadata_manager_->AuxLoad(fake_rdb_io, 0, REDISMODULE_AUX_AFTER_RDB)
+          .code(),
+      absl::StatusCode::kInternal);
 }
 
 TEST_F(MetadataManagerTest, TestAuxLoadStagesChanges) {
   auto fake_rdb_io = reinterpret_cast<RedisModuleIO*>(0xBADF00D1);
   GlobalMetadata new_metadata;
-  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(kV1Metadata, &new_metadata));
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(kV1Metadata,
+                                                            &new_metadata));
   new_metadata.mutable_version_header()->set_top_level_fingerprint(
       MetadataManager::ComputeTopLevelFingerprint(
           new_metadata.type_namespace_map()));
@@ -1658,7 +1660,7 @@ TEST_F(MetadataManagerTest, TestAuxLoadStagesChanges) {
       });
   test_metadata_manager_->OnReplicationLoadStart(fake_ctx);
   VMSDK_EXPECT_OK(test_metadata_manager_->AuxLoad(fake_rdb_io, 0,
-                                            REDISMODULE_AUX_AFTER_RDB));
+                                                  REDISMODULE_AUX_AFTER_RDB));
 
   // Should still be empty
   EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
@@ -1673,7 +1675,8 @@ TEST_F(MetadataManagerTest, TestAuxLoadStagesChanges) {
 TEST_F(MetadataManagerTest, TestAuxLoadNotStagedChanges) {
   auto fake_rdb_io = reinterpret_cast<RedisModuleIO*>(0xBADF00D1);
   GlobalMetadata new_metadata;
-  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(kV1Metadata, &new_metadata));
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(kV1Metadata,
+                                                            &new_metadata));
   new_metadata.mutable_version_header()->set_top_level_fingerprint(
       MetadataManager::ComputeTopLevelFingerprint(
           new_metadata.type_namespace_map()));
@@ -1682,7 +1685,7 @@ TEST_F(MetadataManagerTest, TestAuxLoadNotStagedChanges) {
         return new RedisModuleString{.data = new_metadata.SerializeAsString()};
       });
   VMSDK_EXPECT_OK(test_metadata_manager_->AuxLoad(fake_rdb_io, 0,
-                                            REDISMODULE_AUX_AFTER_RDB));
+                                                  REDISMODULE_AUX_AFTER_RDB));
   EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
       *test_metadata_manager_->GetGlobalMetadata(), new_metadata));
 
@@ -1695,7 +1698,8 @@ TEST_F(MetadataManagerTest, TestAuxLoadNotStagedChanges) {
 TEST_F(MetadataManagerTest, TestAuxLoadRecomputesFingerprint) {
   auto fake_rdb_io = reinterpret_cast<RedisModuleIO*>(0xBADF00D1);
   GlobalMetadata new_metadata;
-  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(kV1Metadata, &new_metadata));
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(kV1Metadata,
+                                                            &new_metadata));
   new_metadata.mutable_version_header()->set_top_level_fingerprint(20241023);
   EXPECT_CALL(*kMockRedisModule, LoadString(fake_rdb_io))
       .WillOnce([new_metadata]() {
@@ -1703,10 +1707,10 @@ TEST_F(MetadataManagerTest, TestAuxLoadRecomputesFingerprint) {
       });
   test_metadata_manager_->OnReplicationLoadStart(fake_ctx);
   VMSDK_EXPECT_OK(test_metadata_manager_->AuxLoad(fake_rdb_io, 0,
-                                            REDISMODULE_AUX_AFTER_RDB));
+                                                  REDISMODULE_AUX_AFTER_RDB));
 
   // Should still be empty
-EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
+  EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
       *test_metadata_manager_->GetGlobalMetadata(), GlobalMetadata()));
   // Now load and validate it is as expected
   test_metadata_manager_->OnLoadingEnded(fake_ctx);
@@ -1726,8 +1730,8 @@ TEST_F(MetadataManagerTest, TestAuxLoadWithExistingState) {
 
   // Load the existing metadata with two entries.
   GlobalMetadata existing_metadata;
-  ASSERT_TRUE(
-      google::protobuf::TextFormat::ParseFromString(kV1Metadata, &existing_metadata));
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      kV1Metadata, &existing_metadata));
   auto initial_entries =
       (*existing_metadata.mutable_type_namespace_map())["my_type"]
           .mutable_entries();
@@ -1741,12 +1745,13 @@ TEST_F(MetadataManagerTest, TestAuxLoadWithExistingState) {
                                          existing_metadata.SerializeAsString()};
       });
   VMSDK_EXPECT_OK(test_metadata_manager_->AuxLoad(fake_rdb_io, 0,
-                                            REDISMODULE_AUX_AFTER_RDB));
+                                                  REDISMODULE_AUX_AFTER_RDB));
   test_metadata_manager_->OnLoadingEnded(fake_ctx);
 
   // We set the new metadata to replace one entry, and add a new one.
   GlobalMetadata new_metadata;
-  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(kV2Metadata, &new_metadata));
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(kV2Metadata,
+                                                            &new_metadata));
   auto new_entries =
       (*new_metadata.mutable_type_namespace_map())["my_type"].mutable_entries();
   (*new_entries)["my_id_3"] = (*new_entries)["my_id"];
@@ -1756,8 +1761,8 @@ TEST_F(MetadataManagerTest, TestAuxLoadWithExistingState) {
 
   // We expect the new metadata to be a merge of the two, with a new version.
   GlobalMetadata expected_metadata;
-  ASSERT_TRUE(
-      google::protobuf::TextFormat::ParseFromString(kV2Metadata, &expected_metadata));
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      kV2Metadata, &expected_metadata));
   auto expected_entries =
       (*expected_metadata.mutable_type_namespace_map())["my_type"]
           .mutable_entries();
@@ -1773,7 +1778,7 @@ TEST_F(MetadataManagerTest, TestAuxLoadWithExistingState) {
         return new RedisModuleString{.data = new_metadata.SerializeAsString()};
       });
   VMSDK_EXPECT_OK(test_metadata_manager_->AuxLoad(fake_rdb_io, 0,
-                                            REDISMODULE_AUX_AFTER_RDB));
+                                                  REDISMODULE_AUX_AFTER_RDB));
   test_metadata_manager_->OnLoadingEnded(fake_ctx);
   EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
       *test_metadata_manager_->GetGlobalMetadata(), expected_metadata));
@@ -1781,8 +1786,8 @@ TEST_F(MetadataManagerTest, TestAuxLoadWithExistingState) {
 
 TEST_F(MetadataManagerTest, TestAuxSave) {
   GlobalMetadata existing_metadata;
-  ASSERT_TRUE(
-      google::protobuf::TextFormat::ParseFromString(kV1Metadata, &existing_metadata));
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      kV1Metadata, &existing_metadata));
   existing_metadata.mutable_version_header()->set_top_level_fingerprint(
       MetadataManager::ComputeTopLevelFingerprint(
           existing_metadata.type_namespace_map()));
@@ -1794,7 +1799,7 @@ TEST_F(MetadataManagerTest, TestAuxSave) {
                                          existing_metadata.SerializeAsString()};
       });
   VMSDK_EXPECT_OK(test_metadata_manager_->AuxLoad(fake_rdb_io, 0,
-                                            REDISMODULE_AUX_AFTER_RDB));
+                                                  REDISMODULE_AUX_AFTER_RDB));
   test_metadata_manager_->OnLoadingEnded(fake_ctx);
 
   EXPECT_CALL(

@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VALKEYSEARCH_SRC_KEYSPACE_EVENT_MANAGER_H_
 #define VALKEYSEARCH_SRC_KEYSPACE_EVENT_MANAGER_H_
 
@@ -40,8 +39,8 @@
 #include "absl/log/log.h"
 #include "src/attribute_data_type.h"
 #include "src/utils/patricia_tree.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 using StartSubscriptionFunction =

@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VALKEYSEARCH_SRC_INDEXES_VECTOR_BASE_H_
 #define VALKEYSEARCH_SRC_INDEXES_VECTOR_BASE_H_
 
@@ -51,8 +50,6 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
-#include "third_party/hnswlib/hnswlib.h"
-#include "third_party/hnswlib/iostream.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
@@ -61,6 +58,8 @@
 #include "src/utils/allocator.h"
 #include "src/utils/intrusive_ref_count.h"
 #include "src/utils/string_interning.h"
+#include "third_party/hnswlib/hnswlib.h"
+#include "third_party/hnswlib/iostream.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 

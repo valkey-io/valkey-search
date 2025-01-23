@@ -57,8 +57,8 @@
 #include "src/rdb_io_stream.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/log.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 // Note that the ordering matters here - we want to minimize the memory
 // overrides to just the hnswlib code.

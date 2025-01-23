@@ -56,9 +56,9 @@
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
@@ -253,8 +253,7 @@ absl::Status FTSearchCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
     };
 
     if (ValkeySearch::Instance().UsingCoordinator() &&
-        ValkeySearch::Instance().IsCluster() &&
-        !parameters->local_only) {
+        ValkeySearch::Instance().IsCluster() && !parameters->local_only) {
       auto search_targets = query::fanout::GetSearchTargetsForFanout(ctx);
       return query::fanout::PerformSearchFanoutAsync(
           ctx, search_targets,

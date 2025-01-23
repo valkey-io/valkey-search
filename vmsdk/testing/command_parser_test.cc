@@ -34,14 +34,14 @@
 #include <string>
 #include <vector>
 
-#include "gtest/gtest.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "gtest/gtest.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
 
@@ -88,7 +88,6 @@ struct KeyValueParseTestCase {
   absl::string_view string_param;
   std::string expected_err_msg;
 };
-
 
 class CBTestCommandParser {
  public:

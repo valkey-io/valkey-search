@@ -27,12 +27,10 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VALKEYSEARCH_SRC_UTILS_ALLOCATOR_H_
 #define VALKEYSEARCH_SRC_UTILS_ALLOCATOR_H_
 
 #include <cstddef>
-
 #include <memory>
 #include <stack>
 

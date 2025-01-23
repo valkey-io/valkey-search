@@ -49,8 +49,8 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/grpc_suspender.h"
 #include "src/metrics.h"
-#include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/latency_sampler.h"
+#include "vmsdk/src/managed_pointers.h"
 
 namespace valkey_search::coordinator {
 

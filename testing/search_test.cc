@@ -41,8 +41,6 @@
 #include <utility>
 #include <vector>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
@@ -50,6 +48,8 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/filter_parser.h"
 #include "src/index_schema.pb.h"
@@ -215,7 +215,7 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
   auto tag_index_100_15 = std::make_shared<MockTag>(tag_index_proto);
 
   VMSDK_EXPECT_OK(index_schema->AddIndex("tag_index_100_15", "tag_index_100_15",
-                                   tag_index_100_15));
+                                         tag_index_100_15));
   PatriciaTree<InternedStringPtr, InternedStringPtrHash, InternedStringPtrEqual>
       tree(false);
   absl::flat_hash_set<PatriciaNode<InternedStringPtr, InternedStringPtrHash,
@@ -359,8 +359,8 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
             data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
             .value();
   }
-  VMSDK_EXPECT_OK(index_schema->AddIndex(kVectorAttributeAlias, kVectorAttributeAlias,
-                                   vector_index));
+  VMSDK_EXPECT_OK(index_schema->AddIndex(kVectorAttributeAlias,
+                                         kVectorAttributeAlias, vector_index));
 
   // Add numeric index
   data_model::NumericIndex numeric_index_proto;

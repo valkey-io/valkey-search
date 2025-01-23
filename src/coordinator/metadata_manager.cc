@@ -36,7 +36,6 @@
 #include <utility>
 #include <vector>
 
-#include "google/protobuf/any.pb.h"
 #include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/functional/any_invocable.h"
@@ -46,6 +45,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "google/protobuf/any.pb.h"
 #include "grpcpp/support/status.h"
 #include "highwayhash/arch_specific.h"
 #include "highwayhash/highwayhash.h"
@@ -572,10 +572,10 @@ int MetadataManagerAuxLoad(RedisModuleIO *rdb, int encver, int when) {
 }
 
 void MetadataManagerOnClusterMessageCallback(RedisModuleCtx *ctx,
-                                              const char *sender_id,
-                                              uint8_t type,
-                                              const unsigned char *payload,
-                                              uint32_t len) {
+                                             const char *sender_id,
+                                             uint8_t type,
+                                             const unsigned char *payload,
+                                             uint32_t len) {
   MetadataManager::Instance().HandleClusterMessage(ctx, sender_id, type,
                                                    payload, len);
 }

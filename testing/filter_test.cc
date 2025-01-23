@@ -73,9 +73,9 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
   VMSDK_EXPECT_OK(numeric_index_1_5->AddRecord("key1", "1.5"));
   VMSDK_EXPECT_OK(numeric_index_2_0->AddRecord("key1", "2.0"));
   VMSDK_EXPECT_OK(index_schema->AddIndex("num_field_1.5", "num_field_1.5",
-                                   numeric_index_1_5));
+                                         numeric_index_1_5));
   VMSDK_EXPECT_OK(index_schema->AddIndex("num_field_2.0", "num_field_2.0",
-                                   numeric_index_2_0));
+                                         numeric_index_2_0));
 
   data_model::TagIndex tag_index_proto;
   tag_index_proto.set_separator(",");
@@ -84,7 +84,8 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
       std::make_shared<IndexTeser<indexes::Tag, data_model::TagIndex>>(
           tag_index_proto);
   VMSDK_EXPECT_OK(tag_index_1->AddRecord("key1", "tag1"));
-  VMSDK_EXPECT_OK(index_schema->AddIndex("tag_field_1", "tag_field_1", tag_index_1));
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("tag_field_1", "tag_field_1", tag_index_1));
   auto tag_index_1_2 =
       std::make_shared<IndexTeser<indexes::Tag, data_model::TagIndex>>(
           tag_index_proto);
@@ -106,8 +107,8 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
           tag_case_insensitive_proto);
   VMSDK_EXPECT_OK(tag_field_case_insensitive->AddRecord("key1", "tag1"));
   VMSDK_EXPECT_OK(index_schema->AddIndex("tag_field_case_insensitive",
-                                   "tag_field_case_insensitive",
-                                   tag_field_case_insensitive));
+                                         "tag_field_case_insensitive",
+                                         tag_field_case_insensitive));
 }
 
 TEST_P(FilterTest, ParseParams) {

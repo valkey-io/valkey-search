@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_
 #define VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_
 
@@ -35,8 +34,8 @@
 #include <cstdint>
 #include <memory>
 
-#include "src/query/search.h"
 #include "absl/status/statusor.h"
+#include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 

@@ -36,15 +36,15 @@
 #include <mutex>  // NOLINT(build/c++11)
 #include <vector>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/synchronization/notification.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
-#include "vmsdk/src/utils.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/utils.h"
 
 namespace vmsdk {
 

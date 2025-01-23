@@ -11,7 +11,10 @@ on:
     paths:
       - '**/*.cc'
       - '**/*.h'
-
+  workflow_dispatch: # allow manual triggering
+concurrency:
+  group: clang-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 jobs:
   process-files:
     runs-on: ubuntu-latest

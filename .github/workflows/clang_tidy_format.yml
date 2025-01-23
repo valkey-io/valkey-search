@@ -34,7 +34,7 @@ jobs:
         run: |
           # If it's a pull request, compare against the base branch.
           # If it's a push to main, compare against the previous commit.
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          if [[ "${{ github.ref }}" != "refs/heads/main" ]]; then
             echo "BASE_BRANCH=${{ github.base_ref }}" >> $GITHUB_ENV
           else
             echo "BASE_BRANCH=$(git rev-parse HEAD~1)" >> $GITHUB_ENV

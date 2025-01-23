@@ -5,12 +5,16 @@ on:
     branches:
       - main
     paths:
-      - '**/*.cc'
-      - '**/*.h'
+      - 'src/**'
+      - 'testing/**'
+      - 'vmsdk/src/**'
+      - 'vmsdk/testing/**'
   pull_request:
     paths:
-      - '**/*.cc'
-      - '**/*.h'
+      - 'src/**'
+      - 'testing/**'
+      - 'vmsdk/src/**'
+      - 'vmsdk/testing/**'
   workflow_dispatch: # allow manual triggering
 concurrency:
   group: clang-${{ github.head_ref || github.ref }}
@@ -25,7 +29,7 @@ jobs:
 
       - name: Set up Docker
         uses: docker/setup-buildx-action@v2
-      
+
       - name: Build Docker Image
         run: docker build -t clang-tidy-format-image --build-arg ENABLE_COMP_DB_REFRESH=false -f .devcontainer/Dockerfile .
 

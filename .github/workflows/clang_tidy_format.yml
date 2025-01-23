@@ -45,4 +45,4 @@ jobs:
     - name: Run clang-tidy/format
       run: |
         git fetch origin main
-        docker run --rm  -v "$(pwd):/workspace" --user "$(id -u):$(id -g)" clang-tidy-format-image bash -c "bazel build //... && ci/check_changes.sh origin/main...HEAD"
+        docker run --rm  -v "$(pwd):/workspace" --user "$(id -u):$(id -g)" clang-tidy-format-image bash -c "bazel build //... && ci/check_changes.sh origin/main"

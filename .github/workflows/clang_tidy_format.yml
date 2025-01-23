@@ -48,7 +48,7 @@ jobs:
             -v "$(pwd):/workspace" \
             --user "$(id -u):$(id -g)" \
             clang-tidy-format-image \
-            bazel run @hedron_compile_commands//:refresh_all
+            bash -c "bazel build //... && bazel run @hedron_compile_commands//:refresh_all"
 
       - name: Find and process modified files
         run: |

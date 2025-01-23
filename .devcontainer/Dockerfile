@@ -38,7 +38,7 @@ RUN update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/cl
 RUN update-alternatives --install /usr/bin/clang clang /usr/bin/clang-17 100 && \
     update-alternatives --set clang /usr/bin/clang-17
 RUN update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-17 100 && \
-    update-alternatives --set clang++ /usr/bin/clang++-17    
+    update-alternatives --set clang++ /usr/bin/clang++-17
 RUN update-alternatives --install /usr/bin/clang-cpp clang-cpp /usr/bin/clang-cpp-17 100 && \
     update-alternatives --set clang-cpp /usr/bin/clang-cpp-17
 RUN update-alternatives --install /usr/bin/clangd clangd /usr/bin/clangd-17 100 && \
@@ -79,6 +79,16 @@ USER vscode
 
 # Add an alias for 'vi' to point to 'vim' if 'vi' doesn't exist
 RUN echo 'if ! command -v vi &> /dev/null; then alias vi="vim"; fi' >> /home/vscode/.bashrc
+
+
+ARG ENABLE_COMP_DB_REFRESH=true
+ENV ENABLE_COMP_DB_REFRESH=${ENABLE_COMP_DB_REFRESH}
+
+# Example: Conditionally install a package
+RUN if [ "$ENABLE_COMP_DB_REFRESH" = "true" ]; then \
+        echo 'refresh_comp_db.sh &> /dev/null &' >> /home/vscode/.bashrc \
+    fi
+
 RUN echo 'refresh_comp_db.sh &> /dev/null &' >> /home/vscode/.bashrc
 # Ensure the history file exists and configure permissions
 RUN touch  /home/vscode/.bash_history && chmod 600  /home/vscode/.bash_history

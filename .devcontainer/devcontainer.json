@@ -23,6 +23,6 @@
       ]
     }
   },
-  "postCreateCommand": "bazel build //... && bazel run @hedron_compile_commands//:refresh_all ",
-  "remoteUser": "vscode"
+  "remoteUser": "vscode",
+  "postCreateCommand": "./ci/entrypoint.sh && /bin/bash"
 }

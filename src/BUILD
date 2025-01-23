@@ -11,7 +11,7 @@ package(
 )
 
 # To include the symbol table, specific parameters are required:
-#    --strip=never --config=online_debug_backtraces
+#    --strip=never    --config=online_debug_backtraces
 # For a release build, add the following parameter: --config=release
 redis_module_library(
     name = "valkeysearch",

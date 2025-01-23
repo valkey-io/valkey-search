@@ -16,7 +16,7 @@
         "--compile-commands-dir=${workspaceFolder}/",
         "--query-driver=**"
     ],
-    "bazel.buildifierFixOnFormat": true,
+    "bazel.buildifierFixOnFormat": false,
     "clangd.inactiveRegions.useBackgroundHighlight": true,
-    "clangd.enableCodeCompletion": true
+    "clangd.enableCodeCompletion": true,
 }

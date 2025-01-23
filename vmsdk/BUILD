@@ -8,7 +8,7 @@ package(
 
 license(
     name = "license",
-    package_name = "vmsdk",
+    package_name = "vmsdk ",
 )
 
 licenses(["notice"])

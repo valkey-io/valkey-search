@@ -11,13 +11,23 @@ To support rolling upgrade and downgrade, ValkeySearch needs to start with a rob
 
 ## Motivation
 
-Our existing RDB format is a good start, but it also is fairly rigid, not supporting new types of data being stored in the RDB other than index definitions and index contents.
+Our existing RDB format is a good start, but it also is fairly rigid and won't work for the foreseeable future. Here are some examples of cases which would be difficult to implement with forwards and backwards compatibility in the current format:
+
+ * Saving in-flight operations on index serialization
+ * Saving non-vector contents (Tag, Numeric)
+ * Saving "externalized" vector contents (those shared with the engine)
+ * Supporting changes to the serialized index contents
+ * Supporting new, large payloads alongside existing index payloads (i.e. chunked/streamed reading from RDB)
 
 ## Design considerations
 
 - If no new features are used, we should support full forwards compatibility
-- If new features are used, we should ensure this lack of compatibility is understood on previous versions, and fast fail the RDB load
+  - If we cannot support full forwards compatibility, we will need to bump the major version in order to follow semantic versioning
+  - Downgrade across semantic versions should be supported, but may require index rebuild
+- If new features are used or the encoding of the index has changed, we should ensure this lack of compatibility is understood on previous versions, and fast fail the RDB load
+  - A configuration should be exposed to toggle marking index contents as required in order to support downgrade-with-rebuild
 - For upgrade, we need full backwards compatibility in all situations
+- Large payloads that may not fit in memory need to be supported via chunking the contents into the RDB
 
 ## Specification
 
@@ -25,9 +35,7 @@ Our existing RDB format is a good start, but it also is fairly rigid, not suppor
 
  - We will store all module data in aux metadata to prevent leaking indexes into the keyspace
  - We will use `aux_save2` style callbacks, so that if the module is completely unused, the RDB can be loaded on a Valkey server that has no ValkeySearch module installed.
- - We will generally store the aux metadata in the "after" section. This can be reversed at a later point if a requirement is found for "before"
  - We will store all schema contents in a single piece of aux metadata for the module type "SchMgr-VS".
- - Additional metadata can be stored in new Aux metadata conforming to the same RDB design (e.g. MetadataManager is stored in "MtdMgr-VS").
 
 ### RDB Payload
 
@@ -92,7 +100,7 @@ message RDBSection {
    bool required;
    uint32 encoding_version;
    oneof contents {
-      IndexSchema index_schema_contents = 2;
+      IndexSchema index_schema_definition = 2;
       ...
    };
    uint32 supplemental_count = 3;
@@ -149,7 +157,24 @@ message SupplementalContentChunk {
 
 To support previous version's ability to skip binary contents contained in supplemental content sections, the end of a binary dump is marked by a single SupplementalContentChunk that has no data. This will signal EOF, and the loading procedure will know that the next item is either the next SupplementalContentHeader, or the next RDBSection if no more SupplementalContentHeaders exist for the current RDBSection.
 
-#### Example: Adding Vector Quantization
+
+### Semantic Versioning and Downgrade
+
+Whenever the contents of the RDB are changed in a manner that an RDB could be produced on the new release that the immediate previous release could not load, we will need to bump the major version and add this to our release notes.
+
+To support downgrade even if the index contents encoding has changed, we will support a configuration:
+
+```
+CONFIG SET valkeysearch-allow-downgrade-with-rebuild yes
+```
+
+When this configuration is provided, the produced dump will mark all index contents as not required. By default, the configuration will be set to `no`. When set to `no`, the RDB loading process will output the following error when the requried contents can not be loaded:
+
+```
+ValkeySearch RDB contents contain defintions for RDB sections that are not supported by this version. If you are downgrading, ensure all feature usage on the new version of ValkeySearch is supported by this version and retry. If you are okay with forcing a rebuild on downgrade, set "valkeysearch-allow-downgrade-with-rebuild" to "yes" on the process running the new ValkeySearch version and retrigger the RDB save.
+```
+
+### Example: Adding Vector Quantization
 
 With the above design, suppose that we are substantially changing the index to support a vector quantization option on `FT.CREATE`. For simplicity, suppose this is just a boolean "on" or "off" flag.
 
@@ -304,11 +329,7 @@ SupplementalContentChunk {
 }
 ```
 
-On the new version, when the new feature `quantize` is used, we will bump the encoding version of the RDBSection containing the index schema definition (it now contains the `quantize` field, which will be lost on downgrade). Similarly, we will also bump the encoding version of the SupplementalContentHeader for the index contents - as the format has changed in a way that will not be understood by older versions. On loading this on the previous version, we will fail fast with a useful error message:
-
-```
-ValkeySearch RDB contents contain defintions for RDB sections that are not supported by this version. If you are downgrading, ensure all feature usage on the new version of ValkeySearch is supported by this version and retry.
-```
+On the new version, when the new feature `quantize` is used, we will bump the encoding version of the RDBSection containing the index schema definition (it now contains the `quantize` field, which will be lost on downgrade). Similarly, we will also bump the encoding version of the SupplementalContentHeader for the index contents - as the format has changed in a way that will not be understood by older versions. On loading this on the previous version, we will fail fast with a useful error message (documented above).
 
 Upon reading this message, the user might recreate the index with `quantize` set to false. In this case, we will output the following RDB contents:
 

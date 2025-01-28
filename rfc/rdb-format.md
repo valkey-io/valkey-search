@@ -107,15 +107,17 @@ message RDBSection {
 }
 ```
 
-`message IndexSchema` follows from the existing definition in src/index_schema.proto.
+(`message IndexSchema` follows from the existing definition in src/index_schema.proto)
+
+Before the `RDBSection`s, a single integer will be emitted using `ValekyModule_SaveUnsigned` to denote the number of `RDBSection`s emitted. Each `RDBSection` is then saved into the RDB using a single `ValkeyModule_SaveString` API call.
 
 The goal of breaking into sections is to support skipping optional sections if they are not understood. New sections should be introduced in a manner where failure to understand the new section will generally load fine without loss. Any time that failure to load the section would result in some form of lossiness or inconsistency, we will mark `required` as true and it will result in a downgrade failure. This would only be desired in cases where operators have used new features, and need to think about the downgrade more critically, potentially removing (or, once supported, altering) indexes that will not downgrade gracefully. Similarly, for section types that would like to introduce new required fields, we will include an encoding version, which is conditionally bumped when these new fields are written.
 
 #### Supplemental Contents
 
-In addition to the contents in the RDBSection, we may have contents that are too large to serialize into a protocol buffer in memory. Namely, this would be contents such as "key to ID mappings" for the index, or the index contents itself. To support similar forwards and backwards compatibility characteristics as the RDBSection, we will include a supplemental count in the RDBSection, and upon load, we will begin loading supplemental contents following the load of the RDBSection.
+In addition to the contents in the `RDBSection`, we may have contents that are too large to serialize into a protocol buffer in memory. Namely, this would be contents such as "key to ID mappings" for the index, or the index contents itself. To support similar forwards and backwards compatibility characteristics as the RDBSection, we will include a supplemental count in the `RDBSection`, and upon load, we will begin loading supplemental contents following the load of the `RDBSection`.
 
-Supplemental content is composed of a supplemental header (in protocol buffer format) and a raw binary dump of the supplemental contents. The supplemental content header will be represented by a proto similar to:
+Supplemental content is composed of a supplemental header (in protocol buffer format) and a raw chunked binary dump of the supplemental contents. The supplemental content header will be represented by a proto similar to:
 
 ```
 enum SupplementalContentType {
@@ -139,9 +141,11 @@ message SupplementalContentHeader {
 }
 ```
 
+Each `SupplementalContentHeader` will be emitted using a single `ValkeyModule_SaveString` call, similar to the `RDBSection` proto above. Following the `SupplementalContentHeader`, the binary payload will be emitted in a chunked manner, each individually saved with a call to `ValkeyModule_SaveString`, terminated with an EOF marker. See below for more details on the dump format.
+
 The supplemental header will allow differing versions of the module to identify if this supplemental content is understood, and if not, whether that is okay. This is done through exposing a type (similar to RDBSection), an encoding version, and a `required` flag. There may be additional header contents needed by different supplemental content types as well, e.g. for index contents, we will need to know which attribute the index is corresponding to (represeneted by `IndexContentHeader` above).
 
-When loading supplemental content, the content will be ignored if the type is unknown, or the encoding version is higher than we understand, and `required` is not true. If `required` is true, we will have to return an error if we can't understand the contents.
+When loading supplemental content, the content will be ignored iff `required` is false and either the type is unknown or the encoding version is higher than we understand.
 
 #### Binary Dump
 
@@ -155,7 +159,9 @@ message SupplementalContentChunk {
 }
 ```
 
-To support previous version's ability to skip binary contents contained in supplemental content sections, the end of a binary dump is marked by a single SupplementalContentChunk that has no data. This will signal EOF, and the loading procedure will know that the next item is either the next SupplementalContentHeader, or the next RDBSection if no more SupplementalContentHeaders exist for the current RDBSection.
+Many `SupplementalContentChunk`s will follow a single `SupplementalContentHeader`. Each chunk will be emitted with a single call `ValkeyModule_SaveString`. Finally, after all `SupplementalContentChunk`s are written for the header, a single empty `SupplementalContentChunk` is emitted to denote EOF. We choose an EOF marker instead of a prefixed length, since precomputing the number of chunks for a large data type is difficult.
+
+When a previous version sees a `SupplementalContentHeader` it doesn't understand and is optional, it will call `ValkeyModule_LoadString` and deserialize into a `SupplementalContentChunk`. The loading process can check the length of the content of the chunk and identify the EOF without understanding the contents of the dump itself. After EOF, the next item is either the next `SupplementalContentHeader`, or the next RDBSection if no more `SupplementalContentHeader`s exist for the current `RDBSection`.
 
 
 ### Semantic Versioning and Downgrade

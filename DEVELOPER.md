@@ -10,13 +10,20 @@ For development purposes, it is recommended to use <b>VSCode</b>, which is alrea
     - Note: Building the code may take some time, and it is important to use a host with decent CPU capacity. If you prefer, you can use a remote host. In that case, also install the following extensions:
       - `Remote - SSH` by Microsoft
       - `Remote Explorer` by Microsoft
-2. <b>Open the Repository in VSCode:</b>
+
+2. <b>Run the dev container setup script</b>
+    - Issue the following command from the cloned repo root directory:
+        ```bash
+        .devcontainer/setup.sh
+        ```
+
+3. <b>Open the Repository in VSCode:</b>
     - On your local machine, open the root directory of the cloned valkey-search repository in VSCode.
     - If the repository is located on a remote host:
       1. Press Ctrl+Shift+P (Windows/Linux) or Cmd+Shift+P (macOS) to open the Command Palette.
       2. Type Remote-SSH: Connect to Host and select it.
       3. Choose the appropriate host and provide any necessary authentication details.
-    
+
        Once connected, VSCode will open the repository in the context of the remote host.
 
 

@@ -4,3 +4,4 @@ MODULE.bazel.lock
 resolved_deps.py
 *.swp
 compile_commands.json
+.devcontainer/devcontainer.json

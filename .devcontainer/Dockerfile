@@ -52,48 +52,35 @@ RUN wget -O /usr/local/bin/buildifier https://github.com/bazelbuild/buildtools/r
 
 # Add bazel/buildifier to PATH
 ENV PATH="/usr/local/bin:$PATH"
-RUN echo '#!/bin/bash\n\
-    set +e\n\
-    LOCKFILE="/tmp/rebuild_comp_db.lock"\n\
-    if [ -e "$LOCKFILE" ] && kill -0 "$(cat "$LOCKFILE")" 2>/dev/null; then\n\
-    echo "Script is already running. Exiting."\n\
-    exit 1\n\
-    fi\n\
-    echo $$ > "$LOCKFILE"\n\
-    trap "rm -f $LOCKFILE" EXIT\n\
-    if [ ! -d "/workspaces/valkey-search" ]; then\n\
-    echo "Error: Directory /workspaces/valkey-search does not exist."\n\
-    exit 1\n\
-    fi\n\
-    cd /workspaces/valkey-search\n\
-    while sleep 1; do\n\
-    find src testing vmsdk/src vmsdk/testing -type f \\( -iname \\*.cc -o -iname \\*.h -o -iname BUILD \\) | entr -d bazel run @hedron_compile_commands//:refresh_all &> /dev/null\n\
-    done' > /usr/local/bin/refresh_comp_db.sh && chmod +x /usr/local/bin/refresh_comp_db.sh
+
 # Set working directory
 WORKDIR /workspace
 
-# Add non-root user for development
-RUN useradd -m vscode && echo "vscode ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+ARG USERNAME=ubuntu
+ENV USERNAME=${USERNAME}
+ARG USER_UID=1000
+ENV USER_UID=${USER_UID}
+ARG USER_GID=1000
+ENV USER_GID=${USER_GID}
 
-USER vscode
+RUN groupadd -g $USER_GID $USERNAME || true; \
+    useradd -ms /bin/bash -u $USER_UID -g $USER_GID $USERNAME || true; \
+    echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers || true; 
+
+USER $USERNAME
 
 # Add an alias for 'vi' to point to 'vim' if 'vi' doesn't exist
-RUN echo 'if ! command -v vi &> /dev/null; then alias vi="vim"; fi' >> /home/vscode/.bashrc
-
+RUN echo 'if ! command -v vi &> /dev/null; then alias vi="vim"; fi' >> /home/$USERNAME/.bashrc
 
 ARG ENABLE_COMP_DB_REFRESH=true
 ENV ENABLE_COMP_DB_REFRESH=${ENABLE_COMP_DB_REFRESH}
 
-RUN if [ "$ENABLE_COMP_DB_REFRESH" = "true" ]; then \
-    echo 'refresh_comp_db.sh &> /dev/null &' >> /home/vscode/.bashrc; \
-    fi
-
 # Ensure the history file exists and configure permissions
-RUN touch  /home/vscode/.bash_history && chmod 600  /home/vscode/.bash_history
+RUN touch /home/$USERNAME/.bash_history && \
+    chmod 600 /home/$USERNAME/.bash_history
 
 ENV CC=clang
 ENV CXX=clang++
-
 
 # Default shell
 SHELL ["/bin/bash", "-c"]

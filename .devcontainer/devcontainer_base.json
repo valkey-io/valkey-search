@@ -2,7 +2,12 @@
   "name": "ValkeySearch Development Environment",
   "build": {
     "dockerfile": "Dockerfile",
-    "context": "."
+    "context": ".",
+    "args": {
+      "USERNAME": "ubuntu",
+      "USER_UID": "1000",
+      "USER_GID": "1000"
+    }
   },
   "customizations": {
     "vscode": {
@@ -24,6 +29,6 @@
       ]
     }
   },
-  "remoteUser": "vscode",
-  "postCreateCommand": "./ci/entrypoint.sh && /bin/bash"
+  "remoteUser": "ubuntu",
+  "postCreateCommand": "export USER=ubuntu && ./ci/entrypoint.sh && /bin/bash"
 }

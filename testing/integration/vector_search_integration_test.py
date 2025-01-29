@@ -1,7 +1,6 @@
 import difflib
 import os
 import pprint
-import sys
 import time
 from typing import Any, List
 
@@ -114,7 +113,7 @@ class VectorSearchIntegrationTest(VSSTestCase):
                 "required"
             )
 
-        cls.valkey_server = utils.start_valkey_cluster(
+        cls.valkey_cluster_under_test = utils.start_valkey_cluster(
             FLAGS.valkey_server_path,
             FLAGS.valkey_cli_path,
             [6379, 6380, 6381],
@@ -153,37 +152,42 @@ class VectorSearchIntegrationTest(VSSTestCase):
         self.valkey_conn.execute_command(
             "FLUSHDB", target_nodes=self.valkey_conn.ALL_NODES
         )
-        for port, process in self.valkey_server.items():
-            if process.poll():
-                self.fail("a process died during test, port: %d", port)
-            try:
-                valkey.Valkey(port=port).ping()
-            except Exception as e:  # pylint: disable=broad-except
-                self.fail(f"Failed to ping valkey on port {port}: {e}")
-
+        terminated = self.valkey_cluster_under_test.get_terminated_servers()
+        if terminated:
+            self.fail(f"Valkey servers terminated during test, ports: {terminated}")
+        try:
+            self.valkey_cluster_under_test.ping_all()
+        except Exception as e:  # pylint: disable=broad-except
+            self.fail(f"Failed to ping all servers in cluster: {e}")
         super().tearDown()
 
     def test_create_and_drop_index(self):
         self.assertEqual(
             b"OK",
-            utils.create_hnsw_index(
+            utils.create_index(
                 self.valkey_conn,
                 "test_index",
-                100,
-                "embedding",
+                attributes={
+                    "embedding": utils.HNSWVectorDefinition(
+                        vector_dimensions=100
+                    )
+                },
                 target_nodes=valkey.ValkeyCluster.RANDOM,
             ),
         )
         time.sleep(1)
 
         with self.assertRaises(valkey.exceptions.ResponseError) as e:
-            utils.create_hnsw_index(
+            utils.create_index(
                 self.valkey_conn,
                 "test_index",
-                100,
-                "embedding",
+                attributes={
+                    "embedding": utils.HNSWVectorDefinition(
+                        vector_dimensions=100
+                    )
+                },
                 target_nodes=valkey.ValkeyCluster.RANDOM,
-            )
+            ),
         self.assertEqual(
             "Index test_index already exists.",
             e.exception.args[0],
@@ -433,11 +437,14 @@ class VectorSearchIntegrationTest(VSSTestCase):
         dimensions = 100
         self.assertEqual(
             b"OK",
-            utils.create_hnsw_index(
+            utils.create_index(
                 self.valkey_conn,
                 config["index_name"],
-                dimensions,
-                config["vector_attribute_name"],
+                attributes={
+                    config["vector_attribute_name"]: utils.HNSWVectorDefinition(
+                        vector_dimensions=dimensions
+                    )
+                },
             ),
         )
         time.sleep(1)

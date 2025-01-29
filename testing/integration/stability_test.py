@@ -25,12 +25,11 @@ class StabilityTests(parameterized.TestCase):
             format="%(asctime)s - %(levelname)s - %(message)s",
             level=logging.DEBUG,
         )
-        self.valkey_server = None
+        self.valkey_cluster_under_test = None
 
     def tearDown(self):
-        if self.valkey_server:
-            for _, process in self.valkey_server.items():
-                process.terminate()
+        if self.valkey_cluster_under_test:
+            self.valkey_cluster_under_test.terminate()
         super().tearDown()
 
     @parameterized.named_parameters(
@@ -299,7 +298,7 @@ class StabilityTests(parameterized.TestCase):
         )
         config = config._replace(memtier_path=FLAGS.memtier_path)
 
-        self.valkey_server = utils.start_valkey_cluster(
+        self.valkey_cluster_under_test = utils.start_valkey_cluster(
             FLAGS.valkey_server_path,
             FLAGS.valkey_cli_path,
             config.ports,
@@ -344,9 +343,9 @@ class StabilityTests(parameterized.TestCase):
         if results is None:
             self.fail("Failed to run stability test")
 
-        for port, process in self.valkey_server.items():
-            if process.poll():
-                self.fail("a process died during test, port: %d", port)
+        terminated = self.valkey_cluster_under_test.get_terminated_servers()
+        if (terminated):
+            self.fail(f"Valkey servers died during test, ports: {terminated}")
 
         self.assertTrue(
             results.successful_run,

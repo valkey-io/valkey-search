@@ -90,7 +90,7 @@ class StabilityRunner:
           ValueError:
         """
         try:
-            r = valkey.ValkeyCluster(
+            client = valkey.ValkeyCluster(
                 host="localhost",
                 port=self.config.ports[0],
                 startup_nodes=[
@@ -109,22 +109,31 @@ class StabilityRunner:
             )
 
         try:
-            utils.drop_index(r=r, index_name=self.config.index_name)
+            utils.drop_index(client=client, index_name=self.config.index_name)
         except valkey.exceptions.ValkeyError:
             pass
 
+        attributes = {
+            "tag": utils.TagDefinition(),
+            "numeric": utils.NumericDefinition(),
+        }
         if self.config.index_type == "HNSW":
-            utils.create_hnsw_index(
-                r=r,
-                index_name=self.config.index_name,
-                vector_dimensions=self.config.vector_dimensions,
-            )
+            attributes.update({
+                "embedding": utils.HNSWVectorDefinition(
+                    vector_dimensions=self.config.vector_dimensions
+                )
+            })
         else:
-            utils.create_flat_index(
-                r=r,
-                index_name=self.config.index_name,
-                vector_dimensions=self.config.vector_dimensions,
-            )
+            attributes.update({
+                "embedding": utils.HNSWVectorDefinition(
+                    vector_dimensions=self.config.vector_dimensions
+                ),
+            })
+        utils.create_index(
+            client=client,
+            index_name=self.config.index_name,
+            attributes=attributes,
+        )
 
         threads: list[utils.RandomIntervalTask] = []
         index_state = utils.IndexState(
@@ -133,7 +142,7 @@ class StabilityRunner:
         if self.config.bgsave_interval_sec != 0:
             threads.append(
                 utils.periodic_bgsave(
-                    r,
+                    client,
                     self.config.bgsave_interval_sec,
                     self.config.randomize_bg_job_intervals,
                 )
@@ -142,12 +151,12 @@ class StabilityRunner:
         if self.config.ftcreate_interval_sec != 0:
             threads.append(
                 utils.periodic_ftcreate(
-                    r,
+                    client,
                     self.config.ftcreate_interval_sec,
                     self.config.randomize_bg_job_intervals,
                     self.config.index_name,
                     self.config.vector_dimensions,
-                    self.config.index_type == "HNSW",
+                    attributes,
                     index_state,
                 )
             )
@@ -155,7 +164,7 @@ class StabilityRunner:
         if self.config.ftdropindex_interval_sec != 0:
             threads.append(
                 utils.periodic_ftdrop(
-                    r,
+                    client,
                     self.config.ftdropindex_interval_sec,
                     self.config.randomize_bg_job_intervals,
                     self.config.index_name,
@@ -166,7 +175,7 @@ class StabilityRunner:
         if self.config.flushdb_interval_sec != 0:
             threads.append(
                 utils.periodic_flushdb(
-                    r,
+                    client,
                     self.config.flushdb_interval_sec,
                     self.config.randomize_bg_job_intervals,
                     index_state,

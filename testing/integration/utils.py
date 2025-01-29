@@ -1,5 +1,6 @@
 """Utilities for ValkeySearch testing."""
 
+from abc import abstractmethod
 import fcntl
 import logging
 import os
@@ -14,6 +15,21 @@ import valkey
 import valkey.exceptions
 
 
+class ValkeyServerUnderTest:
+    def __init__(self, process_handle: subprocess.Popen[Any], port: int):
+        self.process_handle = process_handle
+        self.port = port
+
+    def terminate(self):
+        self.process_handle.terminate()
+
+    def terminated(self):
+        return self.process_handle.poll()
+
+    def ping(self) -> Any:
+        return valkey.Valkey(port=self.port).ping()
+
+
 def start_valkey_process(
     valkey_server_path: str,
     port: int,
@@ -22,7 +38,7 @@ def start_valkey_process(
     args: dict[str, str],
     modules: dict[str, str],
     password: str | None = None,
-) -> subprocess.Popen[Any]:
+) -> ValkeyServerUnderTest:
     command = f"{valkey_server_path} --port {port} --dir {directory}"
     modules_args = [f'"--loadmodule {k} {v}"' for k, v in modules.items()]
     args_str = " ".join([f"--{k} {v}" for k, v in args.items()] + modules_args)
@@ -61,7 +77,29 @@ def start_valkey_process(
         )
     logging.info("Attempting to connect to Valkey: OK")
 
-    return process
+    return ValkeyServerUnderTest(process, port)
+
+
+class ValkeyClusterUnderTest:
+    def __init__(self, servers: List[ValkeyServerUnderTest]):
+        self.servers = servers
+
+    def terminate(self):
+        for server in self.servers:
+            server.terminate()
+
+    def get_terminated_servers(self) -> List[int]:
+        result = []
+        for server in self.servers:
+            if server.terminated():
+                result.append(server.port)
+        return result
+
+    def ping_all(self):
+        result = []
+        for server in self.servers:
+            result.append(server.ping())
+        return result
 
 
 def start_valkey_cluster(
@@ -91,7 +129,7 @@ def start_valkey_cluster(
       Dictionary of port to valkey process.
     """
     cluster_args = dict(args)
-    processes = {}
+    processes = []
 
     for port in ports:
         stdout_path = os.path.join(stdout_directory, f"{port}_stdout.txt")
@@ -103,7 +141,7 @@ def start_valkey_cluster(
         )
         cluster_args["cluster-node-timeout"] = "10000"
         os.mkdir(node_dir)
-        processes[port] = start_valkey_process(
+        processes.append(start_valkey_process(
             valkey_server_path,
             port,
             node_dir,
@@ -111,7 +149,7 @@ def start_valkey_cluster(
             cluster_args,
             modules,
             password,
-        )
+        ))
 
     cli_stdout_path = os.path.join(stdout_directory, "valkey_cli_stdout.txt")
     cli_stdout_file = open(cli_stdout_path, "w")
@@ -144,20 +182,105 @@ def start_valkey_cluster(
     # too early, even after checking with ping.
     time.sleep(10)
 
-    return processes
+    return ValkeyClusterUnderTest(processes)
 
 
-def create_hnsw_index(
-    r: valkey.ValkeyCluster,
+class AttributeDefinition:
+    @abstractmethod
+    def to_arguments(self) -> List[Any]:
+        pass
+
+
+class HNSWVectorDefinition(AttributeDefinition):
+    def __init__(
+        self,
+        vector_dimensions: int,
+        m=10,
+        vector_type="FLOAT32",
+        distance_metric="COSINE",
+        ef_construction=5,
+        ef_runtime=10,
+    ):
+        self.vector_dimensions = vector_dimensions
+        self.m = m
+        self.vector_type = vector_type
+        self.distance_metric = distance_metric
+        self.ef_construction = ef_construction
+        self.ef_runtime = ef_runtime
+
+    def to_arguments(self) -> List[Any]:
+        return [
+            "VECTOR",
+            "HNSW",
+            12,
+            "M",
+            self.m,
+            "TYPE",
+            self.vector_type,
+            "DIM",
+            self.vector_dimensions,
+            "DISTANCE_METRIC",
+            self.distance_metric,
+            "EF_CONSTRUCTION",
+            self.ef_construction,
+            "EF_RUNTIME",
+            self.ef_runtime,
+        ]
+
+
+class FlatVectorDefinition(AttributeDefinition):
+    def __init__(
+        self,
+        vector_dimensions: int,
+        vector_type="FLOAT32",
+        distance_metric="COSINE",
+    ):
+        self.vector_dimensions = vector_dimensions
+        self.vector_type = vector_type
+        self.distance_metric = distance_metric
+
+    def to_arguments(self) -> List[Any]:
+        return [
+            "FLAT",
+            "6",
+            "TYPE",
+            self.vector_type,
+            "DIM",
+            self.vector_dimensions,
+            "DISTANCE_METRIC",
+            self.distance_metric,
+        ]
+
+
+class TagDefinition(AttributeDefinition):
+    def __init__(self, separator=","):
+        self.separator = separator
+
+    def to_arguments(self) -> List[Any]:
+        return [
+            "TAG",
+            "SEPARATOR",
+            self.separator,
+        ]
+
+
+class NumericDefinition(AttributeDefinition):
+    def to_arguments(self) -> List[Any]:
+        return [
+            "NUMERIC",
+        ]
+
+
+def create_index(
+    client: valkey.ValkeyCluster,
     index_name: str,
-    vector_dimensions: int,
-    vector_attribute_name="embedding",
+    attributes: Dict[str, AttributeDefinition],
     target_nodes=valkey.ValkeyCluster.DEFAULT_NODE,
 ):
     """Creates a new HNSW index.
 
     Args:
-      r:
+      client:
       index_name:
       vector_dimensions:
     """
@@ -165,87 +288,28 @@ def create_hnsw_index(
         "FT.CREATE",
         index_name,
         "SCHEMA",
-        vector_attribute_name,
-        "VECTOR",
-        "HNSW",
-        "12",  # number of remaining arguments
-        "M",
-        100,
-        "TYPE",
-        "FLOAT32",
-        "DIM",
-        vector_dimensions,
-        "DISTANCE_METRIC",
-        "COSINE",
-        "EF_CONSTRUCTION",
-        5,
-        "EF_RUNTIME",
-        10,
-        "tag",
-        "TAG",
-        "SEPARATOR",
-        ",",
-        "numeric",
-        "NUMERIC",
-        #    "INITIAL_CAP",
-        #    15000,
     ]
-    return r.execute_command(*args, target_nodes=target_nodes)
+    for name, definition in attributes.items():
+        args.append(name)
+        args.extend(definition.to_arguments())
+
+    return client.execute_command(*args, target_nodes=target_nodes)
 
 
-def create_flat_index(
-    r: valkey.ValkeyCluster, index_name: str, vector_dimensions: int
-):
-    """Creates a new FLAT index.
-
-    Args:
-      r:
-      index_name:
-      vector_dimensions:
-    """
-    args = [
-        "FT.CREATE",
-        index_name,
-        "SCHEMA",
-        "embedding",
-        "VECTOR",
-        "FLAT",
-        "6",  # number of remaining arguments
-        "TYPE",
-        "FLOAT32",
-        "DIM",
-        vector_dimensions,
-        "DISTANCE_METRIC",
-        "COSINE",
-        "tag",
-        "TAG",
-        "SEPARATOR",
-        ",",
-        "numeric",
-        "NUMERIC",
-    ]
-    r.execute_command(*args)
-
-
-def drop_index(r: valkey.ValkeyCluster, index_name: str):
+def drop_index(client: valkey.ValkeyCluster, index_name: str):
     args = [
         "FT.DROPINDEX",
         index_name,
     ]
-    r.execute_command(*args)
+    client.execute_command(*args)
 
 
-def fetch_ft_info(r: valkey.ValkeyCluster, index_name: str):
+def fetch_ft_info(client: valkey.ValkeyCluster, index_name: str):
     args = [
         "FT.INFO",
         index_name,
     ]
-    return r.execute_command(*args, target_nodes=r.ALL_NODES)
-
-
-def flushdb(r: valkey.ValkeyCluster):
-    args = ["FLUSHDB", "SYNC"]
-    r.execute_command(*args)
+    return client.execute_command(*args, target_nodes=client.ALL_NODES)
 
 
 def generate_deterministic_data(vector_dimensions: int, seed: int):
@@ -257,10 +321,10 @@ def generate_deterministic_data(vector_dimensions: int, seed: int):
 
 
 def insert_vector(
-    r: valkey.ValkeyCluster, key: str, vector_dimensions: int, seed: int
+    client: valkey.ValkeyCluster, key: str, vector_dimensions: int, seed: int
 ):
     vector = generate_deterministic_data(vector_dimensions, seed)
-    return r.hset(
+    return client.hset(
         key,
         {
             "embedding": vector,
@@ -277,10 +341,10 @@ def insert_vectors_thread(
     port: int,
     seed: int,
 ):
-    r = valkey.Valkey(host=host, port=port)
+    client = valkey.Valkey(host=host, port=port)
     for i in range(1, num_vectors):
         insert_vector(
-            r=r,
+            client=client,
             key=(key_prefix + "_" + str(seed) + "_" + str(i)),
             vector_dimensions=vector_dimensions,
             seed=(i + seed * num_vectors),
@@ -322,17 +386,20 @@ def insert_vectors(
     return threads
 
 
-def delete_vector(r: valkey.ValkeyCluster, key: str):
-    return r.delete(key)
+def delete_vector(client: valkey.ValkeyCluster, key: str):
+    return client.delete(key)
 
 
 def knn_search(
-    r: valkey.ValkeyCluster, index_name: str, vector_dimensions: int, seed: int
+    client: valkey.ValkeyCluster,
+    index_name: str,
+    vector_dimensions: int,
+    seed: int,
 ):
     """KNN searches the index.
 
     Args:
-      r:
+      client:
       index_name:
       vector_dimensions:
       seed:
@@ -351,11 +418,11 @@ def knn_search(
         "DIALECT",
         2,
     ]
-    return r.execute_command(*args, target_nodes=r.RANDOM)
+    return client.execute_command(*args, target_nodes=client.RANDOM)
 
 
-def writer_queue_size(r: valkey.ValkeyCluster, index_name: str):
-    out = fetch_ft_info(r, index_name)
+def writer_queue_size(client: valkey.ValkeyCluster, index_name: str):
+    out = fetch_ft_info(client, index_name)
     for index, item in enumerate(out):
         if "mutation_queue_size" in str(item):
             return int(str(out[index + 1])[2:-1])
@@ -364,19 +431,19 @@ def writer_queue_size(r: valkey.ValkeyCluster, index_name: str):
 
 
 def wait_for_empty_writer_queue_size(
-    r: valkey.ValkeyCluster, index_name: str, timeout=0
+    client: valkey.ValkeyCluster, index_name: str, timeout=0
 ):
     """Wait for the writer queue size to hit zero.
 
     Args:
-      r:
+      client:
       index_name:
       timeout:
     """
     start = time.time()
     while True:
         try:
-            queue_size = writer_queue_size(r=r, index_name=index_name)
+            queue_size = writer_queue_size(client=client, index_name=index_name)
             if queue_size == 0:
                 return
             logging.info(
@@ -459,11 +526,11 @@ class RandomIntervalTask:
 
 
 def periodic_bgsave_task(
-    r: valkey.ValkeyCluster,
+    client: valkey.ValkeyCluster,
 ) -> bool:
     try:
         logging.info("<BGSAVE> Invoking background save")
-        r.bgsave(target_nodes=r.ALL_NODES)
+        client.bgsave(target_nodes=client.ALL_NODES)
     except (
         valkey.exceptions.ConnectionError,
         valkey.exceptions.ResponseError,
@@ -474,12 +541,12 @@ def periodic_bgsave_task(
 
 
 def periodic_bgsave(
-    r: valkey.ValkeyCluster,
+    client: valkey.ValkeyCluster,
     interval_sec: int,
     randomize: bool,
 ) -> RandomIntervalTask:
     thread = RandomIntervalTask(
-        "BGSAVE", interval_sec, randomize, lambda: periodic_bgsave_task(r)
+        "BGSAVE", interval_sec, randomize, lambda: periodic_bgsave_task(client)
     )
     thread.run()
     return thread
@@ -493,14 +560,14 @@ class IndexState:
 
 
 def periodic_ftdrop_task(
-    r: valkey.ValkeyCluster,
+    client: valkey.ValkeyCluster,
     index_name: str,
     index_state: IndexState,
 ) -> bool:
     with index_state.index_lock:
         logging.info("<FT.DROPINDEX> Invoking index drop")
         try:
-            drop_index(r, index_name)
+            drop_index(client, index_name)
             index_state.ft_created = False
         except (
             valkey.exceptions.ConnectionError,
@@ -515,7 +582,7 @@ def periodic_ftdrop_task(
 
 
 def periodic_ftdrop(
-    r: valkey.ValkeyCluster,
+    client: valkey.ValkeyCluster,
     interval_sec: int,
     random_interval: bool,
     index_name: str,
@@ -525,26 +592,25 @@ def periodic_ftdrop(
         "FT.DROPINDEX",
         interval_sec,
         random_interval,
-        lambda: periodic_ftdrop_task(r, index_name, index_state),
+        lambda: periodic_ftdrop_task(client, index_name, index_state),
     )
     thread.run()
     return thread
 
 
 def periodic_ftcreate_task(
-    r: valkey.ValkeyCluster,
+    client: valkey.ValkeyCluster,
     index_name: str,
     dimensions: int,
-    hnsw: bool,
+    attributes: Dict[str, AttributeDefinition],
     index_state: IndexState,
 ) -> bool:
     with index_state.index_lock:
         try:
             logging.info("<FT.CREATE> Invoking index creation")
-            if hnsw:
-                create_hnsw_index(r, index_name, dimensions)
-            else:
-                create_flat_index(r, index_name, dimensions)
+            create_index(
+                client=client, index_name=index_name, attributes=attributes
+            )
             index_state.ft_created = True
         except (
             valkey.exceptions.ConnectionError,
@@ -559,12 +625,12 @@ def periodic_ftcreate_task(
 
 
 def periodic_ftcreate(
-    r: valkey.ValkeyCluster,
+    client: valkey.ValkeyCluster,
     interval_sec: int,
     random_interval: bool,
     index_name: str,
     dimensions: int,
-    hnsw: bool,
+    attributes: Dict[str, AttributeDefinition],
     index_state: IndexState,
 ) -> RandomIntervalTask:
     thread = RandomIntervalTask(
@@ -572,7 +638,7 @@ def periodic_ftcreate(
         interval_sec,
         random_interval,
         lambda: periodic_ftcreate_task(
-            r, index_name, dimensions, hnsw, index_state
+            client, index_name, dimensions, attributes, index_state
         ),
     )
     thread.run()
@@ -580,14 +646,14 @@ def periodic_ftcreate(
 
 
 def periodic_flushdb_task(
-    r: valkey.ValkeyCluster,
+    client: valkey.ValkeyCluster,
     index_state: IndexState,
     use_coordinator: bool,
 ) -> bool:
     with index_state.index_lock:
         logging.info("<FLUSHDB> Invoking flush DB")
         try:
-            flushdb(r)
+            client.flushdb()
             if not use_coordinator:
                 index_state.ft_created = False
         except (
@@ -602,7 +668,7 @@ def periodic_flushdb_task(
 
 
 def periodic_flushdb(
-    r: valkey.ValkeyCluster,
+    client: valkey.ValkeyCluster,
     interval_sec: int,
     random_interval: bool,
     index_state: IndexState,
@@ -612,7 +678,7 @@ def periodic_flushdb(
         "FLUSHDB",
         interval_sec,
         random_interval,
-        lambda: periodic_flushdb_task(r, index_state, use_coordinator),
+        lambda: periodic_flushdb_task(client, index_state, use_coordinator),
     )
     thread.run()
     return thread

@@ -135,10 +135,10 @@ auto IndexToKey = [](int i) {
 void VerifyResult(const absl::StatusOr<bool>& res,
                   ExpectedResults expected_result) {
   if (expected_result == ExpectedResults::kSuccess) {
-    VMSDK_EXPECT_OK(res.status());
+    VMSDK_EXPECT_OK(res);
     EXPECT_TRUE(res.value());
   } else if (expected_result == ExpectedResults::kSkipped) {
-    VMSDK_EXPECT_OK(res.status());
+    VMSDK_EXPECT_OK(res);
     EXPECT_FALSE(res.value());
   } else {
     EXPECT_FALSE(res.status().ok());

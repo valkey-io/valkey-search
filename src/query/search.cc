@@ -98,7 +98,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
     auto vector_hnsw = dynamic_cast<indexes::VectorHNSW<float> *>(vector_index);
 
     auto latency_sample = SAMPLE_EVERY_N(100);
-    auto res = vector_hnsw->Search(parameters.query, parameters.k.value(),
+    auto res = vector_hnsw->Search(parameters.query, parameters.k,
                                    std::move(inline_filter), parameters.ef);
     Metrics::GetStats().hnsw_vector_index_search_latency.SubmitSample(
         std::move(latency_sample));
@@ -107,7 +107,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
   if (vector_index->GetIndexerType() == indexes::IndexerType::kFlat) {
     auto vector_flat = dynamic_cast<indexes::VectorFlat<float> *>(vector_index);
     auto latency_sample = SAMPLE_EVERY_N(100);
-    auto res = vector_flat->Search(parameters.query, parameters.k.value(),
+    auto res = vector_flat->Search(parameters.query, parameters.k,
                                    std::move(inline_filter));
     Metrics::GetStats().flat_vector_index_search_latency.SubmitSample(
         std::move(latency_sample));
@@ -217,8 +217,8 @@ CalcBestMatchingPrefiltereddKeys(
       // TODO: yairg - add bloom filter to ensure distinct keys are processed
       // just once.
       if (evaluator.Evaluate(*predicate, *key)) {
-        vector_index->AddPrefilteredKey(parameters.query, parameters.k.value(),
-                                        *key, results, top_keys);
+        vector_index->AddPrefilteredKey(parameters.query, parameters.k, *key,
+                                        results, top_keys);
       }
       iterator->Next();
     }

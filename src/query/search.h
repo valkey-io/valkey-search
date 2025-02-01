@@ -76,13 +76,27 @@ struct VectorSearchParameters {
   std::string query;
   uint32_t dialect{2};
   bool local_only{false};
-  std::optional<int> k;
-  std::optional<uint64_t> ef;
+  int k;
+  std::optional<unsigned> ef;
   LimitParameter limit;
   uint64_t timeout_ms{kTimeoutMS};
   bool no_content{false};
   FilterParseResults filter_parse_results;
   std::vector<ReturnAttribute> return_attributes;
+  struct ParseTimeVariables {
+    // Members of this struct are only valid during the parsing of
+    // VectorSearchParameters on the mainthread. They get cleared
+    // at the end of the parse to ensure no dangling pointers.
+    absl::string_view query_string;
+    absl::string_view score_as_string;
+    absl::flat_hash_map<absl::string_view, std::pair<int, absl::string_view>>
+        params;
+    void ClearAtEndOfParse() {
+      query_string = absl::string_view();
+      score_as_string = absl::string_view();
+      assert(params.empty());
+    }
+  } parse_vars;
 };
 
 // Callback to be called when the search is done.

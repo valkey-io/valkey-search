@@ -69,19 +69,18 @@ void ReplyAvailNeighbors(RedisModuleCtx *ctx,
                          const std::deque<indexes::Neighbor> &neighbors,
                          const query::VectorSearchParameters &parameters) {
   RedisModule_ReplyWithLongLong(
-      ctx,
-      std::min(neighbors.size(), static_cast<size_t>(parameters.k.value())));
+      ctx, std::min(neighbors.size(), static_cast<size_t>(parameters.k)));
 }
 
 size_t CalcEndIndex(const std::deque<indexes::Neighbor> &neighbors,
                     const query::VectorSearchParameters &parameters) {
-  return std::min(static_cast<size_t>(parameters.k.value()),
+  return std::min(static_cast<size_t>(parameters.k),
                   std::min(parameters.limit.number, neighbors.size()));
 }
 
 size_t CalcStartIndex(const std::deque<indexes::Neighbor> &neighbors,
                       const query::VectorSearchParameters &parameters) {
-  CHECK_GT(parameters.k.value(), parameters.limit.first_index);
+  CHECK_GT(parameters.k, parameters.limit.first_index);
   if (neighbors.size() <= parameters.limit.first_index) {
     return neighbors.size();
   }
@@ -112,8 +111,7 @@ void ReplyScore(RedisModuleCtx *ctx, RedisModuleString &score_as,
 void SerializeNeighbors(RedisModuleCtx *ctx,
                         const std::deque<indexes::Neighbor> &neighbors,
                         const query::VectorSearchParameters &parameters) {
-  CHECK_GT(static_cast<size_t>(parameters.k.value()),
-           parameters.limit.first_index);
+  CHECK_GT(static_cast<size_t>(parameters.k), parameters.limit.first_index);
   const size_t start_index = CalcStartIndex(neighbors, parameters);
   const size_t end_index = start_index + CalcEndIndex(neighbors, parameters);
   RedisModule_ReplyWithArray(ctx, 2 * (end_index - start_index) + 1);
@@ -169,8 +167,7 @@ void SendReply(RedisModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
                const query::VectorSearchParameters &parameters) {
   // Increment success counter.
   ++Metrics::GetStats().query_successful_requests_cnt;
-  if (parameters.limit.first_index >=
-          static_cast<uint64_t>(parameters.k.value()) ||
+  if (parameters.limit.first_index >= static_cast<uint64_t>(parameters.k) ||
       parameters.limit.number == 0) {
     RedisModule_ReplyWithArray(ctx, 1);
     RedisModule_ReplyWithLongLong(ctx, neighbors.size());

@@ -43,6 +43,19 @@ using ::testing::TestWithParam;
 
 #define VMSDK_EXPECT_OK(status) EXPECT_TRUE((status).ok())
 
+#define VMSDK_EXPECT_OK_STATUS(expr)                                         \
+  {                                                                          \
+    auto __status = expr;                                                    \
+    EXPECT_TRUE(__status.ok()) << " Failure Message:" << __status.message(); \
+  }
+
+#define VMSDK_EXPECT_OK_STATUSOR(expr)                         \
+  {                                                            \
+    auto __status = expr;                                      \
+    EXPECT_TRUE(__status.ok())                                 \
+        << " Failure Message:" << __status.status().message(); \
+  }
+
 namespace vmsdk {
 
 class RedisTest : public testing::Test {

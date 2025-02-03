@@ -1,4 +1,5 @@
-
+#ifndef _VALKEY_SEARCH_INDEXES_TEXT_LEXER_H_
+#define _VALKEY_SEARCH_INDEXES_TEXT_LEXER_H_
 
 /*
 
@@ -75,3 +76,5 @@ struct LexerOutput {
 }
 
 }  // namespace valkey_search::text
+
+#endif

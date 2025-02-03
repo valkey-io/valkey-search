@@ -1,37 +1,48 @@
-#ifndef VALKEY_SEARCH_INDEXES_TREE_H_
-#define VALKEY_SEARCH_INDEXES_TREE_H_
+#ifndef VALKEY_SEARCH_INDEXES_TREE_WILDCARD_ITERATOR_H_
+#define VALKEY_SEARCH_INDEXES_TREE_WILDCARD_ITERATOR_H_
 
 /*
 
-The WildCard iterator provides an iterator to words (and their postings) that match any pattern
-with a single wildcard, i.e., pattern*, *pattern, or pat*tern.
+The WildCard iterator provides an iterator to words (and their postings) that
+match any pattern with a single wildcard, i.e., pattern*, *pattern, or pat*tern.
 
 Words are iterated in lexical order.
 
+The Wildcard iterator has two underlying algorithms and it selects between the
+two algorithms based on the constructor form used and/or run-time sizing
+information.
+
+Algorithm 1: Is used when there is no suffix tree OR the number of
+prefix-matching words is small (below a fixed threshold).
+
+This algorithm iterates over a candidate list defined only by the prefix. As
+each candidate is visited, the suffix is compared.
+
+Algorithm 2: Is used when a suffix tree is present and the number of
+suffix-matching words is a substantially less than the number of prefix-matching
+words.
+
+This algorithm operates by constructing a temporary Art into which all
+suffix-matching candidates are inserted. Then the prefix-matching candidates of
+the temporary Art is used. This solves the problem that the suffix-matching
+candidates must be visited in lexical order.
+
 */
 
-#include "src/text/text.h"
 #include "absl/string/string_view.h"
+#include "src/text/text.h"
 
 namespace valkey_search {
 namespace text {
 
 struct WildCardIterator {
-  // Use this form when there's no suffix tree available. It's slower because it may crawl over 
-  // a lot of unused words
-  WildCardIterator(
-    absl::string_view prefix,
-    absl::string_view suffix,
-    const Art& prefix_tree,
-  );
+  // Use this form when there's no suffix tree available.
+  WildCardIterator(absl::string_view prefix, absl::string_view suffix,
+                   const Art& prefix_tree, );
 
   // Use this form when a suffix tree IS available.
-  WildCardIterator(
-    absl::string_view prefix,
-    absl::string_view suffix,
-    const Art& prefix_tree,
-    const Art& suffix_tree,
-  );
+  WildCardIterator(absl::string_view prefix, absl::string_view suffix,
+                   const Art& prefix_tree, const Art& suffix_tree, );
 
   // Points to valid element
   bool IsValid() const;
@@ -47,10 +58,12 @@ struct WildCardIterator {
   const Posting& GetPosting() const;
   const std::string& GetWord() const;
 
+ private:
+  std::shared_ptr<Art> art_;
+  ArtIterator itr_;
 };
 
-
-}
-}
+}  // namespace text
+}  // namespace valkey_search
 
 #endif

@@ -1,3 +1,6 @@
+#ifndef _VALKEY_SEARCH_INDEXES_TEXT_POSTING_H_
+#define _VALKEY_SEARCH_INDEXES_TEXT_POSTING_H_
+
 /*
 
 For each entry in the inverted term index, there is shared_ptr to an instance of
@@ -27,8 +30,6 @@ while (itr.IsValid()) {
 }
 
 */
-
-#include <span>
 
 #include "src/indexes/text/lexer.h"
 #include "src/text/text.h"
@@ -104,3 +105,5 @@ struct PostingsIterator {
 };
 
 }  // namespace valkey_search::text
+
+#endif

@@ -3,15 +3,19 @@
 
 /*
 
-A Trie provides a mapping from a string to a postings object (a shared
-pointer).
+Adaptive Radix Tree => Art. A radix tree, but with path compression. This data
+structure is functionally similar to a BTree but more space and time efficient
+when the keys have identical prefixes, which happens a lot in many languages.
 
 In addition to normal insert/delete operations on a word basis, the Trie
 supports iteration across multiple word entries that share a common prefix.
-Iteration is always done in lexical order.
+Iteration is done in lexical order.
+
+Another feature of ART is the ability to provide a count of the entries that
+have a common prefix in O(len(prefix)) time. This is useful in query planning.
 
 TODO: Need to think through the locking semantics of updates to the Trie and
-Suffix Trie
+Postings.
 
 */
 
@@ -20,9 +24,9 @@ Suffix Trie
 #include "absl/strings/string_view.h"
 #include "src/text/text.h"
 
-struct TrieIterator;
+struct ArtIterator;
 
-struct Trie {
+struct Art : public std::enable_shared_from_this<Art> {
   // Map a word into a posting. Create a new posting if the word doesn't exist.
   std::shared_ptr<Posting> FindPosting(absl::string_view word);
 
@@ -37,63 +41,34 @@ struct Trie {
   // Create an Iterator over the sequence of words that start with the prefix.
   // The iterator will automatically be positioned to the lexically smallest
   // word and will end with the last word that shares the suffix.
-  TrieIterator GetIterator(absl::string_view prefix) const;
+  ArtIterator GetIterator(absl::string_view prefix) const;
 };
 
 //
 // The Trie iterator is constructed to sequence over the subset of entries in
-// the Trie that share the same prefix (or suffix for reverse Tries).
-struct TrieIterator {
+// the Trie that share a common prefix.
+
+struct ArtIterator {
   // Does Iterator point to a Valid Posting
   bool IsValid() const;
 
-  // Advance to next posting within the current prefix
-  void Next();
+  // Advance to next word in lexical order
+  void NextWord();
 
-  // Advance to the specified word, or if that word doesn't exist advance to the
-  // next word that's greater than the specified word. It's permitted that the
-  // specified word be beyond the current prefix range. In which case the
-  // iterator becomes Invalid. The return boolean indicates if the landing spot
+  // Seek to the next word that's greater or equal to the specified word.
+  // If the prefix of this word doesn't match the prefix that created this
+  // iterator, then it immediately becomes invalid.
+  // The return boolean indicates if the landing spot
   // is equal to the specified word (true) or greater (false).
-  bool Next(absl::string_view word);
+  bool Seek(absl::string_view word);
 
-  // Get the current word. Asserts if !IsValid()
-  const std::string& GetWord() const;
-
-  // Get the posting for the current word. Asserts if !IsValid()
-  std::shared_ptr<Posting> Get() const;
+  // Get the current Posting. Asserts if !IsValid()
+  const Posting& GetPosting() const;
 
  private:
-  // The trie for this iterator
-  std::shared_ptr<Trie> trie_;
-};
-
-//
-// The suffix trie is conceptually a trie implemented on the characters
-// which are a reversal of the prefix trie. This allows efficient iteration over
-// all words with a common suffix. However, that iteration is not performed in
-// lexical order, so it's not a natural fit into the iteration hierarchy. So
-// when creating an iterator over a prefix of the suffix trie, we construct a
-// temporary Trie with the words and shared postings.
-//
-struct SuffixTrie {
-  // Map a word into a posting. Create a new posting if the word doesn't exist.
-  std::shared_ptr<Posting> FindPosting(absl::string_view word);
-
-  // Remove a word from the index. If the posting for this word isn't empty, it
-  // will assert.
-  void RemovePosting(absl::string_view word);
-
-  // Get the number of words that have the specified suffix in O(len(prefix))
-  // time.
-  size_t CountPostings(absl::string_view suffix) const;
-
-  // Create an Iterator over the sequence of words that end with the specified
-  // suffix. The words are filtered by the specified prefix and inserted into a
-  // new Trie which is attached to the resulting interator. When that iterator
-  // is destroyed the new Trie will also be destroyed.
-  TrieIterator GetIterator(absl::string_view prefix,
-                           absl::string_view suffix) const;
+  friend class Art;
+  ArtIterator(std::shared_ptr<Art> art);
+  std::shared_ptr<Art> art_;
 };
 
 #endif

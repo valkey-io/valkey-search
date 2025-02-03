@@ -35,17 +35,25 @@ while (itr.IsValid()) {
 
 namespace valkey_search::text {
 
-struct PostingIterator;
+struct PostingsIterator;
 
-struct Posting : public std::enable_shared_from_this<Posting> {
+struct Posting {
+  const Key& key_;
+  Position position_;
+}
+
+struct Postings : public std::enable_shared_from_this<Postings> {
   // Construct a posting. If save_positions is off, then any keys that
   // are inserted have an assumed single position of 0.
-  Posting(bool save_positions);
+  Postings(bool save_positions);
+
+  // Are there any postings in this object?
+  bool IsEmpty() const;
 
   // Add a posting
-  void Add(const Key& key, size_t position);
+  void Add(const Posting& posting);
 
-  // Remove a key and all postings for it
+  // Remove a key and all positions for it
   void RemoveKey(const Key& key);
 
   // Total number of postings
@@ -56,20 +64,13 @@ struct Posting : public std::enable_shared_from_this<Posting> {
 
   // Get an iterator. At construction this will point to
   // the first entry in the posting sequence.
-  PostingIterator GetIterator() const;
-
-  // Get an iterator that's pre-seeked to a specific key.
-  std::pair<PostingIterator, bool> GetIteratorByKey(const Key& key) const {
-    auto itr = GetIterator();
-    bool seek_result = itr.seek(key);
-    return std::make_pair(itr, seek_result);
-  }
+  PostingsIterator GetIterator() const;
 };
 
 //
 // The Posting Iterator.
 //
-struct PostingIterator {
+struct PostingsIterator {
   // Indicates that the iterator points to a valid place in the sequence.
   // Generally, processing continues while this is true and terminates if
   // it becomes false;
@@ -92,13 +93,14 @@ struct PostingIterator {
   // positioned to the next lexically large key.
   bool Seek(const Key& k);
 
-  // Fetch the key at the current location.
-  const Key& GetKey() const;
-
-  // Fetch the position at the current location.
-  size_t GetPosition() const;
+  // Fetch the Posting at the current location.
+  const Posting& GetPositing() const;
 
  private:
+  friend class Postings;
+  PostingsInterator(std::shard_ptr<Postings> postings);
+
+  std::shared_ptr<Postings> postings_;
 };
 
 }  // namespace valkey_search::text

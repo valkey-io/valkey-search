@@ -1,0 +1,56 @@
+# See https://github.com/crate-ci/typos/blob/master/docs/reference.md to configure typos
+
+[files]
+extend-exclude = [
+]
+
+
+[type.c]
+extend-ignore-re = [
+    "baNAna",
+    "D4C4DAA4", # sha1.c
+    "Georg Nees",
+    "\\[l\\]ist", # eval.c
+    '"LKE"', # test_rax.c
+]
+
+[type.tcl]
+extend-ignore-re = [
+    "DUMPed",
+]
+
+[type.c.extend-identifiers]
+advices = "advices"
+clen = "clen"
+fle = "fle"
+nd = "nd"
+ot = "ot"
+
+[type.tcl.extend-identifiers]
+oll = "oll"
+stressers = "stressers"
+
+[type.sv.extend-identifiers]
+# sv = .h
+fo = "fo"
+
+[type.sv.extend-words]
+# sv = .h
+seeked = "seeked"
+
+[type.c.extend-words]
+arange = "arange"
+fo = "fo"
+frst = "frst"
+limite = "limite"
+pn = "pn"
+seeked = "seeked"
+tre = "tre"
+
+[type.systemd.extend-words]
+# systemd = .conf
+ake = "ake"
+
+[type.tcl.extend-words]
+fo = "fo"
+tre = "tre"

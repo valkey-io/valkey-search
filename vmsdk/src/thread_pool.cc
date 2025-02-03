@@ -72,7 +72,7 @@ bool ThreadPool::Schedule(absl::AnyInvocable<void()> task, Priority priority) {
   if (stop_mode_.has_value()) {
     return false;
   }
-  auto &tasks_queue = GetProrityTasksQueue(priority);
+  auto &tasks_queue = GetPriorityTasksQueue(priority);
   tasks_queue.emplace(std::move(task));
   condition_.Signal();
   return true;

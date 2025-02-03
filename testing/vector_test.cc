@@ -378,7 +378,7 @@ TEST_F(VectorIndexTest, ResizeFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   }
 }
 
-float CalcRecal(VectorFlat<float>* flat_index, VectorHNSW<float>* hsw_index,
+float CalcRecall(VectorFlat<float>* flat_index, VectorHNSW<float>* hsw_index,
                 uint64_t k, int dimensions, std::optional<size_t> ef_runtime) {
   auto search_vectors = DeterministicallyGenerateVectors(50, dimensions, 1.5);
   int cnt = 0;
@@ -422,11 +422,11 @@ TEST_F(VectorIndexTest, EfRuntimeRecall) {
       VerifyAdd(index_flat->get(), vectors, i, ExpectedResults::kSuccess);
     }
     uint64_t k = 10;
-    auto no_ef_runtime_recall = CalcRecal(index_flat->get(), index_hnsw->get(),
+    auto no_ef_runtime_recall = CalcRecall(index_flat->get(), index_hnsw->get(),
                                           k, kDimensions, std::nullopt);
-    auto default_ef_runtime_recall = CalcRecal(
+    auto default_ef_runtime_recall = CalcRecall(
         index_flat->get(), index_hnsw->get(), k, kDimensions, kEFRuntime);
-    auto ef_runtime_recall = CalcRecal(index_flat->get(), index_hnsw->get(), k,
+    auto ef_runtime_recall = CalcRecall(index_flat->get(), index_hnsw->get(), k,
                                        kDimensions, kEFRuntime * 8);
     EXPECT_LE(no_ef_runtime_recall, ef_runtime_recall);
     EXPECT_GE(ef_runtime_recall, 0.96f);
@@ -480,7 +480,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
                   ExpectedResults::kSuccess);
       }
       auto default_ef_runtime_recall =
-          CalcRecal(index_flat->get(), loaded_index_hnsw->get(), k, kDimensions,
+          CalcRecall(index_flat->get(), loaded_index_hnsw->get(), k, kDimensions,
                     kEFRuntime);
       EXPECT_GE(default_ef_runtime_recall, 0.96f);
       VMSDK_EXPECT_OK((*loaded_index_hnsw)->SaveIndex(rdb_stream));
@@ -494,7 +494,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
           "attribute_identifier_4");
       VMSDK_EXPECT_OK(loaded_index_hnsw);
       auto default_ef_runtime_recall =
-          CalcRecal(index_flat->get(), loaded_index_hnsw->get(), k, kDimensions,
+          CalcRecall(index_flat->get(), loaded_index_hnsw->get(), k, kDimensions,
                     kEFRuntime);
       EXPECT_GE(default_ef_runtime_recall, 0.96f);
     }
@@ -546,7 +546,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnswTrackedKeysNotInProto) {
                   ExpectedResults::kSuccess);
       }
       auto default_ef_runtime_recall =
-          CalcRecal(index_flat->get(), loaded_index_hnsw->get(), k, kDimensions,
+          CalcRecall(index_flat->get(), loaded_index_hnsw->get(), k, kDimensions,
                     kEFRuntime);
       EXPECT_GE(default_ef_runtime_recall, 0.96f);
       VMSDK_EXPECT_OK((*loaded_index_hnsw)->SaveIndex(rdb_stream));
@@ -561,7 +561,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnswTrackedKeysNotInProto) {
           "attribute_identifier_3");
       VMSDK_EXPECT_OK(loaded_index_hnsw);
       auto default_ef_runtime_recall =
-          CalcRecal(index_flat->get(), loaded_index_hnsw->get(), k, kDimensions,
+          CalcRecall(index_flat->get(), loaded_index_hnsw->get(), k, kDimensions,
                     kEFRuntime);
       EXPECT_GE(default_ef_runtime_recall, 0.96f);
       auto new_proto = (*loaded_index_hnsw)->ToProto()->vector_index();

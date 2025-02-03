@@ -58,7 +58,7 @@ class ValkeySearch {
   ValkeySearch() = default;
   virtual ~ValkeySearch() = default;
 
-  bool SupportParralelQueries() const {
+  bool SupportParallelQueries() const {
     return reader_thread_pool_ && reader_thread_pool_->Size() > 0;
   }
 

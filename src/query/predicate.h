@@ -66,7 +66,7 @@ class Evaluator {
 };
 
 class Predicate;
-struct EstimatedQualifiedEnteries {
+struct EstimatedQualifiedEntries {
   size_t estimated_qualified_entries;
   std::vector<Predicate*> predicates;
 };

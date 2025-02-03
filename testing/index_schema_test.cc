@@ -1105,7 +1105,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
 // Load rdb file containing a vector index which was created with a package name
 // redis_query
-TEST_F(IndexSchemaRDBTest, LoadCompatability) ABSL_NO_THREAD_SAFETY_ANALYSIS {
+TEST_F(IndexSchemaRDBTest, LoadCompatibility) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   std::vector<absl::string_view> key_prefixes = {"prefix1", "prefix2"};
   std::string index_schema_name_str("index_schema_name");
   int dimensions = 100;

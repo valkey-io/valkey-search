@@ -60,7 +60,7 @@ namespace {
 constexpr absl::string_view kInitialCapParam{"INITIAL_CAP"};
 constexpr absl::string_view kBlockSizeParam{"BLOCK_SIZE"};
 constexpr absl::string_view kMParam{"M"};
-constexpr absl::string_view kEfContructionParam{"EF_CONSTRUCTION"};
+constexpr absl::string_view kEfConstructionParam{"EF_CONSTRUCTION"};
 constexpr absl::string_view kEfRuntimeParam{"EF_RUNTIME"};
 constexpr absl::string_view kDimensionsParam{"DIM"};
 constexpr absl::string_view kDistanceMetricParam{"DISTANCE_METRIC"};
@@ -158,7 +158,7 @@ vmsdk::KeyValueParser<HNSWParameters> CreateHNSWParser() {
   parser.AddParamParser(kInitialCapParam,
                         GENERATE_VALUE_PARSER(HNSWParameters, initial_cap));
   parser.AddParamParser(kMParam, GENERATE_VALUE_PARSER(HNSWParameters, m));
-  parser.AddParamParser(kEfContructionParam,
+  parser.AddParamParser(kEfConstructionParam,
                         GENERATE_VALUE_PARSER(HNSWParameters, ef_construction));
   parser.AddParamParser(kEfRuntimeParam,
                         GENERATE_VALUE_PARSER(HNSWParameters, ef_runtime));
@@ -399,7 +399,7 @@ absl::Status HNSWParameters::Verify() const {
   }
   if (ef_construction <= 0 || ef_construction > kMaxEfConstruction) {
     return absl::InvalidArgumentError(
-        absl::StrCat(kEfContructionParam,
+        absl::StrCat(kEfConstructionParam,
                      " must be a positive integer greater than 0 "
                      "and cannot exceed ",
                      kMaxEfConstruction, "."));

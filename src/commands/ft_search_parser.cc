@@ -206,7 +206,7 @@ absl::Status Verify(query::VectorSearchParameters &parameters) {
 }
 
 std::unique_ptr<vmsdk::ParamParser<query::VectorSearchParameters>>
-ConstuctLimitParser() {
+ConstructLimitParser() {
   return std::make_unique<vmsdk::ParamParser<query::VectorSearchParameters>>(
       [](query::VectorSearchParameters &parameters,
          vmsdk::ArgsIterator &itr) -> absl::Status {
@@ -276,7 +276,7 @@ absl::Status HandlePrepareParseParam(
 }
 
 std::unique_ptr<vmsdk::ParamParser<query::VectorSearchParameters>>
-ConstuctParamsParser(const ParamVariables &param_variables) {
+ConstructParamsParser(const ParamVariables &param_variables) {
   return std::make_unique<vmsdk::ParamParser<query::VectorSearchParameters>>(
       [&param_variables](query::VectorSearchParameters &parameters,
                          vmsdk::ArgsIterator &itr) -> absl::Status {
@@ -307,7 +307,7 @@ ConstuctParamsParser(const ParamVariables &param_variables) {
 }
 
 std::unique_ptr<vmsdk::ParamParser<query::VectorSearchParameters>>
-ConstuctReturnParser() {
+ConstructReturnParser() {
   return std::make_unique<vmsdk::ParamParser<query::VectorSearchParameters>>(
       [](query::VectorSearchParameters &parameters,
          vmsdk::ArgsIterator &itr) -> absl::Status {
@@ -348,12 +348,12 @@ vmsdk::KeyValueParser<query::VectorSearchParameters> CreateKeyValueParser(
   parser.AddParamParser(
       kTimeoutParam,
       GENERATE_VALUE_PARSER(query::VectorSearchParameters, timeout_ms));
-  parser.AddParamParser(kLimitParam, ConstuctLimitParser());
+  parser.AddParamParser(kLimitParam, ConstructLimitParser());
   parser.AddParamParser(
       kNoContentParam,
       GENERATE_FLAG_PARSER(query::VectorSearchParameters, no_content));
-  parser.AddParamParser(kReturnParam, ConstuctReturnParser());
-  parser.AddParamParser(kParamsParam, ConstuctParamsParser(param_variables));
+  parser.AddParamParser(kReturnParam, ConstructReturnParser());
+  parser.AddParamParser(kParamsParam, ConstructParamsParser(param_variables));
   return parser;
 }
 }  // namespace

@@ -573,7 +573,7 @@ INSTANTIATE_TEST_SUITE_P(
                          }}},
         },
         {
-            .test_name = "invalid_seperator",
+            .test_name = "invalid_separator",
             .success = false,
             .command_str =
                 " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "

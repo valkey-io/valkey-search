@@ -83,7 +83,7 @@ class AttributeDataType {
   virtual data_model::AttributeDataType ToProto() const = 0;
   virtual std::string ToString() const = 0;
   virtual bool IsProperType(RedisModuleKey *key) const = 0;
-  // This provides indication wether the fetched content need special
+  // This provides indication whether the fetched content need special
   // normalization.
   virtual bool RecordsProvidedAsString() const = 0;
 };

@@ -94,16 +94,16 @@ TEST_F(LogTest, WithInitValue) {
   EXPECT_EQ(stream_eval_cnt.cnt_, 6);
 }
 std::atomic<int> custom_formatter_used;
-std::string CustomSinkFormater(const absl::LogEntry& entry) {
+std::string CustomSinkFormatter(const absl::LogEntry& entry) {
   ++custom_formatter_used;
   EXPECT_EQ(entry.verbosity(), static_cast<int>(LogLevel::kNotice));
-  return std::string("CustomSinkFormater");
+  return std::string("CustomSinkFormatter");
 }
 
 TEST_F(LogTest, SinkOptions) {
   RedisModuleCtx ctx;
   VMSDK_EXPECT_OK(InitLogging(&ctx, "DEBUG"));
-  SetSinkFormatter(CustomSinkFormater);
+  SetSinkFormatter(CustomSinkFormatter);
   {
     ThreadPool thread_pool("test-pool-", 5);
     thread_pool.StartWorkers();

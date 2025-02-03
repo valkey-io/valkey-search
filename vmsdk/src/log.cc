@@ -63,7 +63,7 @@ const char* ToStrLogLevel(int log_level) {
   CHECK(false);
 }
 
-static inline std::string DefaultSinkFormater(const absl::LogEntry& entry) {
+static inline std::string DefaultSinkFormatter(const absl::LogEntry& entry) {
   pthread_t thread_id = pthread_self();
   return absl::StrFormat(
       "[%s], tid: %lu, %s:%d: %s", ToStrLogLevel(entry.verbosity()),
@@ -72,7 +72,7 @@ static inline std::string DefaultSinkFormater(const absl::LogEntry& entry) {
 }
 
 struct SinkOptions {
-  LogFormatterFunc formatter{DefaultSinkFormater};
+  LogFormatterFunc formatter{DefaultSinkFormatter};
   bool log_level_specified{false};
 };
 
@@ -83,7 +83,7 @@ void SetSinkFormatter(LogFormatterFunc formatter) {
   if (formatter) {
     sink_options.formatter = formatter;
   } else {
-    sink_options.formatter = DefaultSinkFormater;
+    sink_options.formatter = DefaultSinkFormatter;
   }
 }
 
@@ -147,7 +147,7 @@ absl::Status InitLogging(RedisModuleCtx* ctx,
   auto itr = kLogLevelMap.find(absl::AsciiStrToLower(log_level_str.value()));
   if (itr == kLogLevelMap.end()) {
     return absl::InvalidArgumentError(
-        absl::StrCat("Unknown sevirity `", log_level_str.value(), "`"));
+        absl::StrCat("Unknown severity `", log_level_str.value(), "`"));
   }
   absl::SetGlobalVLogLevel(static_cast<int>(itr->second));
 

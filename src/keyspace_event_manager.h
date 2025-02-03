@@ -87,7 +87,7 @@ class KeyspaceEventManager {
   static KeyspaceEventManager &Instance();
 
  private:
-  absl::Status StartRedisSubscribtionIfNeeded(RedisModuleCtx *ctx, int types);
+  absl::Status StartRedisSubscriptionIfNeeded(RedisModuleCtx *ctx, int types);
 
   static inline int OnRedisKeyspaceNotification(RedisModuleCtx *ctx, int type,
                                                 const char *event,

@@ -236,16 +236,16 @@ TEST_P(EvaluateFilterAsPrimaryTest, ParseParams) {
   InitIndexSchema(index_schema.get());
   FilterParser parser(*index_schema, test_case.filter);
   auto filter_parse_results = parser.Parse();
-  std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> enteries_fetchers;
+  std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   EXPECT_EQ(
       EvaluateFilterAsPrimary(filter_parse_results.value().root_predicate.get(),
-                              enteries_fetchers, false),
+                              entries_fetchers, false),
       test_case.evaluate_size);
 
-  EXPECT_EQ(enteries_fetchers.size(), test_case.fetcher_ids.size());
-  while (!enteries_fetchers.empty()) {
-    auto entry_fetcher = std::move(enteries_fetchers.front());
-    enteries_fetchers.pop();
+  EXPECT_EQ(entries_fetchers.size(), test_case.fetcher_ids.size());
+  while (!entries_fetchers.empty()) {
+    auto entry_fetcher = std::move(entries_fetchers.front());
+    entries_fetchers.pop();
     auto numeric_fetcher =
         dynamic_cast<const TestedNumericEntriesFetcher *>(entry_fetcher.get());
     if (numeric_fetcher) {
@@ -499,14 +499,14 @@ TEST_P(FetchFilteredKeysTest, ParseParams) {
   FilterParser parser(*index_schema, test_case.filter);
   params.filter_parse_results = std::move(parser.Parse().value());
   params.k = 100;
-  std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> enteries_fetchers;
+  std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   indexes::Numeric::EntriesRange entries_range;
   for (auto key_range : test_case.fetched_key_ranges) {
-    enteries_fetchers.push(std::make_unique<TestedNumericEntriesFetcher>(
+    entries_fetchers.push(std::make_unique<TestedNumericEntriesFetcher>(
         entries_range, std::make_pair(key_range.first, key_range.second)));
   }
   auto results =
-      CalcBestMatchingPrefiltereddKeys(params, enteries_fetchers, vector_index);
+      CalcBestMatchingPrefiltereddKeys(params, entries_fetchers, vector_index);
   auto neighbors = vector_index->CreateReply(results).value();
   EXPECT_EQ(neighbors.size(), test_case.expected_keys.size());
   for (auto it = neighbors.begin(); it != neighbors.end(); ++it) {

@@ -988,7 +988,7 @@ SIMSIMD_PUBLIC void simsimd_vdot_f32c_haswell(simsimd_f32_t const* a, simsimd_f3
 SIMSIMD_PUBLIC void simsimd_dot_f16c_haswell(simsimd_f16_t const* a, simsimd_f16_t const* b, simsimd_size_t n,
                                              simsimd_distance_t* results) {
     // Ideally the implementation would load 256 bits worth of vector data at a time,
-    // shuffle those within a register, split in halfs, and only then upcast.
+    // shuffle those within a register, split in halves, and only then upcast.
     // That way, we are stepping through 32x 16-bit vector components at a time, or 16 dimensions.
     // Sadly, shuffling 16-bit entries in a YMM register is hard to implement efficiently.
     //

@@ -84,7 +84,7 @@ class ThreadPool {
     }
     return stop_mode_.has_value() || suspend_workers_;
   }
-  inline std::queue<absl::AnyInvocable<void()>>& GetProrityTasksQueue(
+  inline std::queue<absl::AnyInvocable<void()>>& GetPriorityTasksQueue(
       Priority priority) ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_) {
     return priority_tasks_[static_cast<int>(priority)];
   }

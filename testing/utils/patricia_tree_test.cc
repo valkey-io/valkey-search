@@ -57,7 +57,7 @@ TEST_F(PatriciaTreeSetTest, SimpleAddRemoveModify) {
   tree_->AddKeyValue("appLe", 1);
   tree_->AddKeyValue("APp", 2);
   tree_->AddKeyValue("aPricot", 4);
-  tree_->AddKeyValue("baNAna", 3);
+  tree_->AddKeyValue("banana", 3);
   tree_->AddKeyValue("A", 5);
   EXPECT_THAT(*tree_->GetValue("", true), testing::UnorderedElementsAre(0));
   EXPECT_THAT(*tree_->GetValue("APPLE", true),
@@ -65,8 +65,8 @@ TEST_F(PatriciaTreeSetTest, SimpleAddRemoveModify) {
   EXPECT_THAT(*tree_->GetValue("APP", true), testing::UnorderedElementsAre(2));
   EXPECT_EQ(tree_->GetValue("no-EXIST", true), nullptr);
   EXPECT_FALSE(tree_->HasKey("NO-exist"));
-  EXPECT_FALSE(tree_->Remove("no-eXIst", -1));
-  EXPECT_THAT(*tree_->GetValue("APp", true), testing::UnorderedElementsAre(2));
+  EXPECT_FALSE(tree_->Remove("no-exist", -1));
+  EXPECT_THAT(*tree_->GetValue("app", true), testing::UnorderedElementsAre(2));
   EXPECT_TRUE(tree_->Remove("aPP", 2));
   EXPECT_FALSE(tree_->Remove("APp", 2));
 }

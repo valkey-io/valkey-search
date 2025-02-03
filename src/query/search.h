@@ -105,7 +105,7 @@ class Predicate;
 // Defined in the header to support testing
 size_t EvaluateFilterAsPrimary(
     const Predicate* predicate,
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& enteries_fetchers,
+    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
     bool negate);
 
 // Defined in the header to support testing
@@ -116,7 +116,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefiltereddKeys(
     const VectorSearchParameters& parameters,
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& enteries_fetchers,
+    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
     indexes::VectorBase* vector_index);
 
 }  // namespace valkey_search::query

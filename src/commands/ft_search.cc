@@ -233,7 +233,7 @@ absl::Status FTSearchCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
     parameters->index_schema->ProcessMultiQueue();
     bool inside_multi =
         (RedisModule_GetContextFlags(ctx) & REDISMODULE_CTX_FLAGS_MULTI) != 0;
-    if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParralelQueries() ||
+    if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
                            inside_multi)) {
       VMSDK_ASSIGN_OR_RETURN(auto neighbors, query::Search(*parameters, true));
       SendReply(ctx, neighbors, *parameters);

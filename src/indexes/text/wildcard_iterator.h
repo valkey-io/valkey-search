@@ -22,10 +22,11 @@ Algorithm 2: Is used when a suffix tree is present and the number of
 suffix-matching words is a substantially less than the number of prefix-matching
 words.
 
-This algorithm operates by constructing a temporary Art into which all
-suffix-matching candidates are inserted. Then the prefix-matching candidates of
-the temporary Art is used. This solves the problem that the suffix-matching
-candidates must be visited in lexical order.
+This algorithm operates by constructing a temporary Art. The suffix art is used
+to generate suffix-matching candidates. These candidates are filtered by their
+prefix with the survivors being inserted into the temporary Art which
+essentially serves to sort them since the suffix-matching candidates won't be
+iterated in lexical order.
 
 */
 

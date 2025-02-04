@@ -9,10 +9,17 @@ when the keys have identical prefixes, which happens a lot in many languages.
 
 In addition to normal insert/delete operations on a word basis, the Trie
 supports iteration across multiple word entries that share a common prefix.
-Iteration is done in lexical order.
+Iteration is always done in lexical order.
 
 Another feature of ART is the ability to provide a count of the entries that
 have a common prefix in O(len(prefix)) time. This is useful in query planning.
+
+Even though the description of the Art consistently refers to prefixes, this
+implementation also supports a suffix Art. A suffix Art is simply an Art built
+by reversing the order of the characters in a string. For suffix Arts, the
+external interface for the strings is the same, i.e., it is the responsibilty of
+this object to perform any reverse ordering that might be required, clients of
+this interface need not reverse their strings.
 
 TODO: Need to think through the locking semantics of updates to the Trie and
 Postings.
@@ -27,6 +34,9 @@ Postings.
 struct ArtIterator;
 
 struct Art : public std::enable_shared_from_this<Art> {
+  // Construct an Art. Use either prefix or suffix
+  Art(bool suffix_ordered);
+
   // Map a word into a posting. Create a new posting if the word doesn't exist.
   std::shared_ptr<Posting> FindPosting(absl::string_view word);
 

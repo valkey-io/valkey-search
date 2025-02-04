@@ -40,12 +40,12 @@
 #include <variant>
 #include <vector>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_hnsw.h"
@@ -53,11 +53,11 @@
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 

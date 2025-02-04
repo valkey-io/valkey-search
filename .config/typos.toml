@@ -1,0 +1,12 @@
+# See https://github.com/crate-ci/typos/blob/master/docs/reference.md to configure typos
+
+[files]
+extend-exclude = [
+]
+
+
+[type.cpp]
+extend-ignore-re = [
+    "baNAna",
+    "eXIst",
+]

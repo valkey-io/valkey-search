@@ -70,7 +70,7 @@ absl::StatusOr<bool> Numeric::AddRecord(const InternedStringPtr& key,
   auto value = ParseNumber(data);
   absl::MutexLock lock(&index_mutex_);
   if (!value.has_value()) {
-     untracked_keys_.insert(key);
+    untracked_keys_.insert(key);
     return false;
   }
   auto [_, succ] = tracked_keys_.insert({key, *value});

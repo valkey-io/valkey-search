@@ -64,10 +64,10 @@
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/memory_allocation.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
@@ -378,7 +378,7 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx) const {
 // writer thread pool during full sync. The writer thread pool resumes once the
 // child process dies or suspension time exceeds 60 seconds. Suspending the
 // workers guarantees that no thread is mutating the index while the fork is
-// happenning. For more details see:
+// happening. For more details see:
 // https://pubs.opengroup.org/onlinepubs/009695399/functions/pthread_atfork.html
 void ValkeySearch::AtForkPrepare() {
   Metrics::GetStats().worker_thread_pool_suspend_cnt++;

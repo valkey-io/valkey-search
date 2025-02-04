@@ -39,9 +39,9 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 absl::StatusOr<vmsdk::UniqueRedisString> HashAttributeDataType::GetRecord(

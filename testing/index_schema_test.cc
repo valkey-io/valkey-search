@@ -39,8 +39,6 @@
 #include <utility>
 #include <vector>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/functional/any_invocable.h"
@@ -49,8 +47,8 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/optional.h"
-#include "third_party/hnswlib/hnswlib.h"  // IWYU pragma: keep
-#include "third_party/hnswlib/space_ip.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
@@ -61,12 +59,14 @@
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
 #include "testing/proto_package_rename_compatibility.h"
+#include "third_party/hnswlib/hnswlib.h"  // IWYU pragma: keep
+#include "third_party/hnswlib/space_ip.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
@@ -124,8 +124,8 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
     EXPECT_TRUE(
         KeyspaceEventManager::Instance().HasSubscription(index_schema.get()));
     auto mock_index = std::make_shared<MockIndex>();
-    VMSDK_EXPECT_OK(index_schema->AddIndex("attribute_name", test_case.hash_field,
-                                     mock_index));
+    VMSDK_EXPECT_OK(index_schema->AddIndex("attribute_name",
+                                           test_case.hash_field, mock_index));
 
     auto key = StringInternStore::Intern("key");
     auto key_redis_str = vmsdk::MakeUniqueRedisString(key->Str().data());
@@ -441,7 +441,8 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
     EXPECT_TRUE(
         KeyspaceEventManager::Instance().HasSubscription(index_schema.get()));
     auto mock_index = std::make_shared<MockIndex>();
-    VMSDK_EXPECT_OK(index_schema->AddIndex("attribute_name", "vector", mock_index));
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex("attribute_name", "vector", mock_index));
 
     auto key = StringInternStore::Intern("key");
     auto key_redis_str = vmsdk::MakeUniqueRedisString(key->Str().data());
@@ -1003,7 +1004,7 @@ class IndexSchemaRDBTest : public ValkeySearchTest {
   RedisModuleType *fake_type_ = (RedisModuleType *)0xBADF00D1;
 };
 
-TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS{
+TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   std::vector<absl::string_view> key_prefixes = {"prefix1", "prefix2"};
   std::string index_schema_name_str("index_schema_name");
   int dimensions = 100;
@@ -1032,7 +1033,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS{
             data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
             .value();
     VMSDK_EXPECT_OK(index_schema->AddIndex("hnsw_attribute", "hnsw_identifier",
-                                     hnsw_index));
+                                           hnsw_index));
     auto itr = index_schema->attributes_.find("hnsw_attribute");
 
     EXPECT_FALSE(itr == index_schema->attributes_.end());
@@ -1055,7 +1056,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS{
             data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
             .value();
     VMSDK_EXPECT_OK(index_schema->AddIndex("flat_attribute", "flat_identifier",
-                                     flat_index));
+                                           flat_index));
 
     VMSDK_EXPECT_OK(index_schema->RDBSave(rdb_stream));
   }
@@ -1104,7 +1105,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS{
 
 // Load rdb file containing a vector index which was created with a package name
 // redis_query
-TEST_F(IndexSchemaRDBTest, LoadCompatability) ABSL_NO_THREAD_SAFETY_ANALYSIS{
+TEST_F(IndexSchemaRDBTest, LoadCompatibility) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   std::vector<absl::string_view> key_prefixes = {"prefix1", "prefix2"};
   std::string index_schema_name_str("index_schema_name");
   int dimensions = 100;
@@ -1184,7 +1185,8 @@ TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
             use_thread_pool ? &mutations_thread_pool : nullptr)
             .value();
 
-    VMSDK_EXPECT_OK(index_schema->AddIndex("attribute", "identifier", mock_index));
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex("attribute", "identifier", mock_index));
     EXPECT_CALL(*kMockRedisModule, SelectDb(testing::_, testing::_))
         .WillRepeatedly(Return(1));  // So backfill job can be created.
     EXPECT_CALL(*kMockRedisModule, SelectDb(&fake_ctx_, 0)).WillOnce(Return(1));
@@ -1233,8 +1235,8 @@ class IndexSchemaFriendTest : public ValkeySearchTest {
             attribute_identifier,
             data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
             .value();
-    VMSDK_EXPECT_OK(index_schema->AddIndex(attribute_identifier, "hnsw_identifier",
-                                     hnsw_index));
+    VMSDK_EXPECT_OK(index_schema->AddIndex(attribute_identifier,
+                                           "hnsw_identifier", hnsw_index));
     VMSDK_EXPECT_OK(SchemaManager::Instance().ImportIndexSchema(index_schema));
   }
   void TearDown() override {

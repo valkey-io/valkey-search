@@ -1,0 +1,35 @@
+{
+    // Version of the setting file.  Always 0.2
+    "version": "0.2",
+    // language - current active spelling language
+    "language": "en",
+    "ignorePaths": [
+        ".devcontainer/*",
+        "valkey_module.h",
+        "BUILD",
+        "*.yml"
+    ],
+    "allowCompoundWords": true,
+    // words - list of words to be always considered correct
+    "words": [
+        "absl",
+        "vmsdk",
+        "redis",
+        "Valkey",
+        "nonexistentkey",
+        "valkeysearch",
+        "hnsw",
+        "hnswlib",
+        "MRMW",
+        "Externalizer",
+        "highwayhash",
+        "mstime",
+        "NOLINTNEXTLINE",
+        "synchronistically",
+        "bazel",
+    ],
+    // flagWords - list of words to be always considered incorrect
+    // This is useful for offensive words and common spelling errors.
+    // For example "hte" should be "the"
+    "flagWords": []
+}

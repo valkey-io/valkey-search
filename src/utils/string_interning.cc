@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #include "src/utils/string_interning.h"
 
 #include <cstring>

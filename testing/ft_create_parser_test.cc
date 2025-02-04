@@ -35,10 +35,10 @@
 #include <string>
 #include <vector>
 
-#include "gtest/gtest.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -99,8 +99,8 @@ TEST_P(FTCreateParserTest, ParseParams) {
   if (test_case.too_many_attributes) {
     for (int i = 0; i < 50; ++i) {
       absl::StrAppend(&command_str, " hash_field", std::to_string(i + 2),
-                                  " vector hnsw 6 TYPE FLOAT32 DIM 3 "
-                                  "DISTANCE_METRIC IP ");
+                      " vector hnsw 6 TYPE FLOAT32 DIM 3 "
+                      "DISTANCE_METRIC IP ");
     }
   }
   auto args = vmsdk::ToRedisStringVector(command_str);
@@ -573,7 +573,7 @@ INSTANTIATE_TEST_SUITE_P(
                          }}},
         },
         {
-            .test_name = "invalid_seperator",
+            .test_name = "invalid_separator",
             .success = false,
             .command_str =
                 " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "

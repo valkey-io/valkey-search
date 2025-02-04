@@ -113,7 +113,7 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
         case data_model::VectorIndex::kHnswAlgorithm: {
           switch (index.vector_index().vector_data_type()) {
             case data_model::VECTOR_DATA_TYPE_FLOAT32: {
-              // TODO(sumish): Create an empty index in case of an error
+              // TODO: Create an empty index in case of an error
               // loading the index contents from RDB.
               VMSDK_ASSIGN_OR_RETURN(
                   auto index,
@@ -138,7 +138,7 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
         case data_model::VectorIndex::kFlatAlgorithm: {
           switch (index.vector_index().vector_data_type()) {
             case data_model::VECTOR_DATA_TYPE_FLOAT32: {
-              // TODO(sumish): Create an empty index in case of an error
+              // TODO: Create an empty index in case of an error
               // loading the index contents from RDB.
               VMSDK_ASSIGN_OR_RETURN(
                   auto index,
@@ -850,8 +850,8 @@ absl::Status IndexSchema::RDBSave(RDBOutputStream &rdb_stream) const {
       << index_schema_name << " to RDB";
 
   for (auto &attribute : attributes_) {
-    // Note that the serialised attribute proto is also stored as part of the
-    // serialised index schema proto above. We store here again to avoid any
+    // Note that the serialized attribute proto is also stored as part of the
+    // serialized index schema proto above. We store here again to avoid any
     // dependencies on the ordering of multiple attributes.
     // We could remove the duplication in the future.
     auto attribute_alias = attribute.first.data();

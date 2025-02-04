@@ -50,8 +50,8 @@
 #include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
 
@@ -133,7 +133,7 @@ absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
 
 absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
                                        absl::string_view data) {
-  // TODO(@himanshushahu): implement operator [] in patriciatree.
+  // TODO: implement operator [] in patriciatree.
   auto interned_data = StringInternStore::Intern(data);
   auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
   if (new_parsed_tags.empty()) {
@@ -252,8 +252,7 @@ Tag::EntriesFetcherIterator::EntriesFetcherIterator(
     : tree_iter_(tree.RootIterator()),
       entries_(entries),
       untracked_keys_(untracked_keys),
-      negate_(negate) {
-}
+      negate_(negate) {}
 
 bool Tag::EntriesFetcherIterator::Done() const {
   if (negate_) {
@@ -370,7 +369,7 @@ vmsdk::UniqueRedisString Tag::NormalizeStringRecord(
 
 std::unique_ptr<EntriesFetcherIteratorBase> Tag::EntriesFetcher::Begin() {
   auto itr = std::make_unique<EntriesFetcherIterator>(tree_, entries_,
-                                                  untracked_keys_, negate_);
+                                                      untracked_keys_, negate_);
   itr->Next();
   return itr;
 }

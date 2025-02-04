@@ -81,7 +81,7 @@ class MainThreadAccessGuard {
  public:
   MainThreadAccessGuard() = default;
   MainThreadAccessGuard(const T &var) : var_(var) {}
-  MainThreadAccessGuard(T&& var) noexcept : var_(std::move(var)) {}
+  MainThreadAccessGuard(T &&var) noexcept : var_(std::move(var)) {}
   MainThreadAccessGuard &operator=(MainThreadAccessGuard<T> const &other) {
     VerifyMainThread();
     var_ = other.var_;

@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VALKEYSEARCH_TESTING_COMMON_H_
 #define VALKEYSEARCH_TESTING_COMMON_H_
 
@@ -43,14 +42,13 @@
 #include <variant>
 #include <vector>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
-#include "third_party/hnswlib/iostream.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/metadata_manager.h"
@@ -65,12 +63,13 @@
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "src/vector_externalizer.h"
+#include "third_party/hnswlib/iostream.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/thread_pool.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 template <typename T, typename K>
@@ -445,7 +444,7 @@ class ValkeySearchTestWithParam : public vmsdk::RedisTestWithParam<T> {
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() { server_events::SubscribeToServerEvents(); }, nullptr,
         false));
-      ON_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(testing::_))
+    ON_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(testing::_))
         .WillByDefault([&](RedisModuleCtx* ctx) {
           return ctx == &registry_ctx_ ? ctx : nullptr;
         });

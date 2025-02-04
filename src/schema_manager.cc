@@ -60,9 +60,9 @@
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
@@ -279,7 +279,7 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
   // Note that serialization is non-deterministic.
   // https://protobuf.dev/programming-guides/serialization-not-canonical/
   // However, it should be good enough for us assuming the same version of the
-  // module is deployed fleetwide. When different versions are deployed,
+  // module is deployed fleet wide. When different versions are deployed,
   // metadata with the latest encoding version is guaranteed to be prioritized
   // by the metadata manager
   std::string serialized_entry;
@@ -798,7 +798,7 @@ absl::StatusOr<void *> SchemaManager::IndexSchemaRDBLoad(RedisModuleIO *rdb,
 }
 
 void *SchemaManagerIndexSchemaRDBLoad(RedisModuleIO *rdb,
-                                       int encoding_version) {
+                                      int encoding_version) {
   auto res =
       SchemaManager::Instance().IndexSchemaRDBLoad(rdb, encoding_version);
   if (!res.ok()) {

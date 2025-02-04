@@ -33,13 +33,13 @@
 #include <cstdint>
 #include <iostream>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/random/random.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/notification.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/utils.h"

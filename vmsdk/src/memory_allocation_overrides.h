@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_
 #define VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_
 
@@ -90,42 +89,30 @@ void* __wrap_valloc(size_t size) noexcept;
 // NOLINTNEXTLINE
 #define valloc(...) __wrap_valloc(__VA_ARGS__)
 
-// NOLINTNEXTLINE
-void* operator new(size_t __sz) noexcept(false);
+void* operator new(size_t size) noexcept(false);
 void operator delete(void* p) noexcept;
-// NOLINTNEXTLINE
-void operator delete(void* p, size_t __sz) noexcept;
-// NOLINTNEXTLINE
-void* operator new[](size_t __sz) noexcept(false);
+void operator delete(void* p, size_t size) noexcept;
+void* operator new[](size_t size) noexcept(false);
 void operator delete[](void* p) noexcept;
-// NOLINTNEXTLINE
-void operator delete[](void* p, size_t __sz) noexcept;
-// NOLINTNEXTLINE
-void* operator new(size_t __sz, const std::nothrow_t& nt) noexcept;
-// NOLINTNEXTLINE
-void* operator new[](size_t __sz, const std::nothrow_t& nt) noexcept;
+void operator delete[](void* p, size_t size) noexcept;
+void* operator new(size_t size, const std::nothrow_t& nt) noexcept;
+void* operator new[](size_t size, const std::nothrow_t& nt) noexcept;
 void operator delete(void* p, const std::nothrow_t& nt) noexcept;
 void operator delete[](void* p, const std::nothrow_t& nt) noexcept;
-// NOLINTNEXTLINE
-void* operator new(size_t __sz, std::align_val_t alignment) noexcept(false);
-// NOLINTNEXTLINE
-void* operator new(size_t __sz, std::align_val_t alignment,
+void* operator new(size_t size, std::align_val_t alignment) noexcept(false);
+void* operator new(size_t size, std::align_val_t alignment,
                    const std::nothrow_t&) noexcept;
 void operator delete(void* p, std::align_val_t alignment) noexcept;
 void operator delete(void* p, std::align_val_t alignment,
                      const std::nothrow_t&) noexcept;
-// NOLINTNEXTLINE
-void operator delete(void* p, size_t __sz, std::align_val_t alignment) noexcept;
-// NOLINTNEXTLINE
-void* operator new[](size_t __sz, std::align_val_t alignment) noexcept(false);
-// NOLINTNEXTLINE
-void* operator new[](size_t __sz, std::align_val_t alignment,
+void operator delete(void* p, size_t size, std::align_val_t alignment) noexcept;
+void* operator new[](size_t size, std::align_val_t alignment) noexcept(false);
+void* operator new[](size_t size, std::align_val_t alignment,
                      const std::nothrow_t&) noexcept;
 void operator delete[](void* p, std::align_val_t alignment) noexcept;
 void operator delete[](void* p, std::align_val_t alignment,
                        const std::nothrow_t&) noexcept;
-// NOLINTNEXTLINE
-void operator delete[](void* p, size_t __sz,
+void operator delete[](void* p, size_t size,
                        std::align_val_t alignment) noexcept;
 
 inline void SetRealAllocators(void* (*malloc_fn)(size_t),

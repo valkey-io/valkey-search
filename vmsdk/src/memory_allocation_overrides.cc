@@ -82,17 +82,18 @@ class SystemAllocTracker {
   // infinite recursion when tracking pointers.
   template <typename T>
   struct RawSystemAllocator {
+    // NOLINTNEXTLINE
     typedef T value_type;
 
-    RawSystemAllocator() noexcept {}
+    RawSystemAllocator() = default;
     template <typename U>
     constexpr RawSystemAllocator(const RawSystemAllocator<U>&) noexcept {}
-
+    // NOLINTNEXTLINE
     T* allocate(std::size_t n) {
       ReportAllocMemorySize(n * sizeof(T));
       return static_cast<T*>(__real_malloc(n * sizeof(T)));
     }
-
+    // NOLINTNEXTLINE
     void deallocate(T* p, std::size_t) {
       ReportFreeMemorySize(sizeof(T));
       __real_free(p);
@@ -157,9 +158,19 @@ void* PerformAndTrackAlignedAlloc(size_t align, size_t size,
 extern "C" {
 // Our allocator doesn't support tracking system memory size, so we just
 // return 0.
-__attribute__((weak)) size_t empty_usable_size(void* ptr) noexcept {
-  return 0;
+__attribute__((weak)) size_t empty_usable_size(void* ptr) noexcept { return 0; }
+
+// For Valkey allocation - we need to ensure alignment by taking advantage of
+// jemalloc alignment properties, as there is no aligned malloc module
+// function.
+//
+// "... Chunks are always aligned to multiples of the chunk size..."
+//
+// See https://linux.die.net/man/3/jemalloc
+size_t AlignSize(size_t size, int alignment = 16) {
+  return (size + alignment - 1) & ~(alignment - 1);
 }
+
 void* __wrap_malloc(size_t size) noexcept {
   if (!vmsdk::IsUsingValkeyAlloc()) {
     auto ptr =
@@ -167,7 +178,9 @@ void* __wrap_malloc(size_t size) noexcept {
     vmsdk::SystemAllocTracker::GetInstance().TrackPointer(ptr);
     return ptr;
   }
-  return vmsdk::PerformAndTrackMalloc(size, RedisModule_Alloc,
+  // Forcing 16-byte alignment in Valkey, which may otherwise return 8-byte
+  // aligned memory.
+  return vmsdk::PerformAndTrackMalloc(AlignSize(size), RedisModule_Alloc,
                                       RedisModule_MallocUsableSize);
 }
 void __wrap_free(void* ptr) noexcept {
@@ -187,6 +200,7 @@ void __wrap_free(void* ptr) noexcept {
                                RedisModule_MallocUsableSize);
   }
 }
+// NOLINTNEXTLINE
 void* __wrap_calloc(size_t __nmemb, size_t size) noexcept {
   if (!vmsdk::IsUsingValkeyAlloc()) {
     auto ptr = vmsdk::PerformAndTrackCalloc(__nmemb, size, __real_calloc,
@@ -197,13 +211,17 @@ void* __wrap_calloc(size_t __nmemb, size_t size) noexcept {
   return vmsdk::PerformAndTrackCalloc(__nmemb, size, RedisModule_Calloc,
                                       RedisModule_MallocUsableSize);
 }
+
 void* __wrap_realloc(void* ptr, size_t size) noexcept {
   bool was_tracked = false;
   if (ptr != nullptr) {
     was_tracked = vmsdk::SystemAllocTracker::GetInstance().UntrackPointer(ptr);
   }
   if (vmsdk::IsUsingValkeyAlloc() && !was_tracked) {
-    return vmsdk::PerformAndTrackRealloc(ptr, size, RedisModule_Realloc,
+    // Forcing 16-byte alignment in Valkey, which may otherwise return 8-byte
+    // aligned memory.
+    return vmsdk::PerformAndTrackRealloc(ptr, AlignSize(size),
+                                         RedisModule_Realloc,
                                          RedisModule_MallocUsableSize);
   } else {
     auto new_ptr = vmsdk::PerformAndTrackRealloc(ptr, size, __real_realloc,
@@ -212,6 +230,7 @@ void* __wrap_realloc(void* ptr, size_t size) noexcept {
     return new_ptr;
   }
 }
+// NOLINTNEXTLINE
 void* __wrap_aligned_alloc(size_t __alignment, size_t __size) noexcept {
   if (!vmsdk::IsUsingValkeyAlloc()) {
     auto ptr = vmsdk::PerformAndTrackAlignedAlloc(
@@ -220,25 +239,19 @@ void* __wrap_aligned_alloc(size_t __alignment, size_t __size) noexcept {
     return ptr;
   }
 
-  // For Valkey allocation - we need to ensure alignment by taking advantage of
-  // jemalloc alignment properties, as there is no aligned malloc module
-  // function.
-  //
-  // "... Chunks are always aligned to multiples of the chunk size..."
-  //
-  // See https://linux.die.net/man/3/jemalloc
-  size_t new_size = (__size + __alignment - 1) & ~(__alignment - 1);
-  return vmsdk::PerformAndTrackMalloc(new_size, RedisModule_Alloc,
+  return vmsdk::PerformAndTrackMalloc(AlignSize(__size, __alignment),
+                                      RedisModule_Alloc,
                                       RedisModule_MallocUsableSize);
 }
+
 int __wrap_malloc_usable_size(void* ptr) noexcept {
   if (vmsdk::SystemAllocTracker::GetInstance().IsTracked(ptr)) {
     return empty_usable_size(ptr);
   }
   return RedisModule_MallocUsableSize(ptr);
 }
-int __wrap_posix_memalign(void** r, size_t __alignment,
-                          size_t __size) {
+// NOLINTNEXTLINE
+int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size) {
   *r = __wrap_aligned_alloc(__alignment, __size);
   return 0;
 }
@@ -248,28 +261,35 @@ void* __wrap_valloc(size_t size) noexcept {
 
 }  // extern "C"
 
-size_t get_new_alloc_size(size_t __sz) {
-  if (__sz == 0) return 1;
-  return __sz;
+size_t GetNewAllocSize(size_t size) {
+  if (size == 0) {
+    return 1;
+  }
+  return size;
 }
 
-void* operator new(size_t __sz) noexcept(false) {
-  return __wrap_malloc(get_new_alloc_size(__sz));
+void* operator new(size_t size) noexcept(false) {
+  return __wrap_malloc(GetNewAllocSize(size));
 }
 void operator delete(void* p) noexcept { __wrap_free(p); }
-void operator delete(void* p, size_t __sz) noexcept { __wrap_free(p); }
-void* operator new[](size_t __sz) noexcept(false) {
+void operator delete(void* p, size_t size) noexcept { __wrap_free(p); }
+void* operator new[](size_t size) noexcept(false) {
   // A non-null pointer is expected to be returned even if size = 0.
-  if (__sz == 0) __sz++;
-  return __wrap_malloc(__sz);
+  if (size == 0) {
+    size++;
+  }
+  return __wrap_malloc(size);
 }
 void operator delete[](void* p) noexcept { __wrap_free(p); }
-void operator delete[](void* p, size_t __sz) noexcept { __wrap_free(p); }
-void* operator new(size_t __sz, const std::nothrow_t& nt) noexcept {
-  return __wrap_malloc(get_new_alloc_size(__sz));
+// NOLINTNEXTLINE
+void operator delete[](void* p, size_t size) noexcept { __wrap_free(p); }
+// NOLINTNEXTLINE
+void* operator new(size_t size, const std::nothrow_t& nt) noexcept {
+  return __wrap_malloc(GetNewAllocSize(size));
 }
-void* operator new[](size_t __sz, const std::nothrow_t& nt) noexcept {
-  return __wrap_malloc(get_new_alloc_size(__sz));
+// NOLINTNEXTLINE
+void* operator new[](size_t size, const std::nothrow_t& nt) noexcept {
+  return __wrap_malloc(GetNewAllocSize(size));
 }
 void operator delete(void* p, const std::nothrow_t& nt) noexcept {
   __wrap_free(p);
@@ -277,14 +297,14 @@ void operator delete(void* p, const std::nothrow_t& nt) noexcept {
 void operator delete[](void* p, const std::nothrow_t& nt) noexcept {
   __wrap_free(p);
 }
-void* operator new(size_t __sz, std::align_val_t alignment) noexcept(false) {
+void* operator new(size_t size, std::align_val_t alignment) noexcept(false) {
   return __wrap_aligned_alloc(static_cast<size_t>(alignment),
-                              get_new_alloc_size(__sz));
+                              GetNewAllocSize(size));
 }
-void* operator new(size_t __sz, std::align_val_t alignment,
+void* operator new(size_t size, std::align_val_t alignment,
                    const std::nothrow_t&) noexcept {
   return __wrap_aligned_alloc(static_cast<size_t>(alignment),
-                              get_new_alloc_size(__sz));
+                              GetNewAllocSize(size));
 }
 void operator delete(void* p, std::align_val_t alignment) noexcept {
   __wrap_free(p);
@@ -293,18 +313,18 @@ void operator delete(void* p, std::align_val_t alignment,
                      const std::nothrow_t&) noexcept {
   __wrap_free(p);
 }
-void operator delete(void* p, size_t __sz,
+void operator delete(void* p, size_t size,
                      std::align_val_t alignment) noexcept {
   __wrap_free(p);
 }
-void* operator new[](size_t __sz, std::align_val_t alignment) noexcept(false) {
+void* operator new[](size_t size, std::align_val_t alignment) noexcept(false) {
   return __wrap_aligned_alloc(static_cast<size_t>(alignment),
-                              get_new_alloc_size(__sz));
+                              GetNewAllocSize(size));
 }
-void* operator new[](size_t __sz, std::align_val_t alignment,
+void* operator new[](size_t size, std::align_val_t alignment,
                      const std::nothrow_t&) noexcept {
   return __wrap_aligned_alloc(static_cast<size_t>(alignment),
-                              get_new_alloc_size(__sz));
+                              GetNewAllocSize(size));
 }
 void operator delete[](void* p, std::align_val_t alignment) noexcept {
   __wrap_free(p);
@@ -313,7 +333,7 @@ void operator delete[](void* p, std::align_val_t alignment,
                        const std::nothrow_t&) noexcept {
   __wrap_free(p);
 }
-void operator delete[](void* p, size_t __sz,
+void operator delete[](void* p, size_t size,
                        std::align_val_t alignment) noexcept {
   __wrap_free(p);
 }

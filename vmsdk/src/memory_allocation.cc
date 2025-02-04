@@ -86,4 +86,3 @@ void ReportFreeMemorySize(uint64_t size) {
 }
 
 }  // namespace vmsdk
-

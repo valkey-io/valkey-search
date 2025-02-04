@@ -40,8 +40,8 @@
 #include "src/schema_manager.h"
 #include "testing/common.h"
 #include "vmsdk/src/module.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/testing_infra/module.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 

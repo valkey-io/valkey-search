@@ -43,7 +43,6 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
-#include "third_party/hnswlib/hnswlib.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
@@ -54,14 +53,15 @@
 #include "src/metrics.h"
 #include "src/query/planner.h"
 #include "src/query/predicate.h"
+#include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::query {
 
@@ -141,41 +141,41 @@ inline PredicateType EvaluateAsComposedPredicate(
 
 size_t EvaluateFilterAsPrimary(
     const Predicate *predicate,
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &enteries_fetchers,
+    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     bool negate) {
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {
     auto composed_predicate =
         dynamic_cast<const ComposedPredicate *>(predicate);
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>
-        lhs_enteries_fetchers;
+        lhs_entries_fetchers;
     auto lhs_predicate = composed_predicate->GetLhsPredicate();
     auto lhs =
-        EvaluateFilterAsPrimary(lhs_predicate, lhs_enteries_fetchers, negate);
+        EvaluateFilterAsPrimary(lhs_predicate, lhs_entries_fetchers, negate);
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>
-        rhs_enteries_fetchers;
+        rhs_entries_fetchers;
     auto rhs_predicate = composed_predicate->GetRhsPredicate();
     auto rhs =
-        EvaluateFilterAsPrimary(rhs_predicate, rhs_enteries_fetchers, negate);
+        EvaluateFilterAsPrimary(rhs_predicate, rhs_entries_fetchers, negate);
     auto predicate_type =
         EvaluateAsComposedPredicate(composed_predicate, negate);
     if (predicate_type == PredicateType::kComposedAnd) {
       if (lhs < rhs) {
-        AppendQueue(enteries_fetchers, lhs_enteries_fetchers);
+        AppendQueue(entries_fetchers, lhs_entries_fetchers);
         return lhs;
       }
-      AppendQueue(enteries_fetchers, rhs_enteries_fetchers);
+      AppendQueue(entries_fetchers, rhs_entries_fetchers);
       return rhs;
     }
-    AppendQueue(enteries_fetchers, lhs_enteries_fetchers);
-    AppendQueue(enteries_fetchers, rhs_enteries_fetchers);
+    AppendQueue(entries_fetchers, lhs_entries_fetchers);
+    AppendQueue(entries_fetchers, rhs_entries_fetchers);
     return lhs + rhs;
   }
   if (predicate->GetType() == PredicateType::kTag) {
     auto tag_predicate = dynamic_cast<const TagPredicate *>(predicate);
     auto fetcher = tag_predicate->GetIndex()->Search(*tag_predicate, negate);
     size_t size = fetcher->Size();
-    enteries_fetchers.push(std::move(fetcher));
+    entries_fetchers.push(std::move(fetcher));
     return size;
   }
   if (predicate->GetType() == PredicateType::kNumeric) {
@@ -183,13 +183,13 @@ size_t EvaluateFilterAsPrimary(
     auto fetcher =
         numeric_predicate->GetIndex()->Search(*numeric_predicate, negate);
     size_t size = fetcher->Size();
-    enteries_fetchers.push(std::move(fetcher));
+    entries_fetchers.push(std::move(fetcher));
     return size;
   }
   if (predicate->GetType() == PredicateType::kNegate) {
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
     return EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
-                                   enteries_fetchers, !negate);
+                                   entries_fetchers, !negate);
   }
   CHECK(false);
 }
@@ -202,15 +202,15 @@ struct PrefilteredKey {
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefiltereddKeys(
     const VectorSearchParameters &parameters,
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &enteries_fetchers,
+    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index) {
   std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
   absl::flat_hash_set<hnswlib::labeltype> top_keys;
   auto predicate = parameters.filter_parse_results.root_predicate.get();
   indexes::InlineVectorEvaluator evaluator;
-  while (!enteries_fetchers.empty()) {
-    auto fetcher = std::move(enteries_fetchers.front());
-    enteries_fetchers.pop();
+  while (!entries_fetchers.empty()) {
+    auto fetcher = std::move(entries_fetchers.front());
+    entries_fetchers.pop();
     auto iterator = fetcher->Begin();
     while (!iterator->Done()) {
       const auto &key = *iterator;
@@ -337,19 +337,19 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
     return MaybeAddIndexedContent(PerformVectorSearch(vector_index, parameters),
                                   parameters);
   }
-  std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> enteries_fetchers;
-  size_t qualified_enteries = EvaluateFilterAsPrimary(
-      parameters.filter_parse_results.root_predicate.get(), enteries_fetchers,
+  std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
+  size_t qualified_entries = EvaluateFilterAsPrimary(
+      parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
       false);
 
   // Query planner makes the decision for pre-filtering vs inline-filtering.
-  if (UsePreFiltering(qualified_enteries, vector_index)) {
+  if (UsePreFiltering(qualified_entries, vector_index)) {
     VMSDK_LOG(DEBUG, nullptr)
-        << "Using pre-filter query execution, qualified enteries="
-        << qualified_enteries;
+        << "Using pre-filter query execution, qualified entries="
+        << qualified_entries;
     // Do an exact nearest neighbour search on the reduced search space.
     auto results = CalcBestMatchingPrefiltereddKeys(
-        parameters, enteries_fetchers, vector_index);
+        parameters, entries_fetchers, vector_index);
     return vector_index->CreateReply(results);
   }
   if (is_local_search) {

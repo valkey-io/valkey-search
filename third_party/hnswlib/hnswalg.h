@@ -493,15 +493,15 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         while (queue_closest.size()) {
             if (return_list.size() >= M)
                 break;
-            std::pair<dist_t, tableint> curent_pair = queue_closest.top();
-            dist_t dist_to_query = -curent_pair.first;
+            std::pair<dist_t, tableint> current_pair = queue_closest.top();
+            dist_t dist_to_query = -current_pair.first;
             queue_closest.pop();
             bool good = true;
 
             for (std::pair<dist_t, tableint> second_pair : return_list) {
                 dist_t curdist =
                         fstdistfunc_(getDataByInternalId(second_pair.second),
-                                        getDataByInternalId(curent_pair.second),
+                                        getDataByInternalId(current_pair.second),
                                         dist_func_param_);
                 if (curdist < dist_to_query) {
                     good = false;
@@ -509,12 +509,12 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 }
             }
             if (good) {
-                return_list.push_back(curent_pair);
+                return_list.push_back(current_pair);
             }
         }
 
-        for (std::pair<dist_t, tableint> curent_pair : return_list) {
-            top_candidates.emplace(-curent_pair.first, curent_pair.second);
+        for (std::pair<dist_t, tableint> current_pair : return_list) {
+            top_candidates.emplace(-current_pair.first, current_pair.second);
         }
     }
 

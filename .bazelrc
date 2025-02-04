@@ -29,7 +29,9 @@ build --copt=-mfma
 build --copt=-ffp-contract=off
 build --copt=-flax-vector-conversions
 
-build -c opt
+build:debug --copt=-O0 --copt=-fno-omit-frame-pointer --copt=-DNDEBUG
+
+#build -c opt
 test --copt=-O1
 test --compilation_mode=fastbuild
 

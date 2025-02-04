@@ -1,13 +1,13 @@
 module(
-    name = "com_google_valkeysearch",
+    name = "io_valkey_valkeysearch",
     version = "1.0.0",
 )
 bazel_dep(name = "rules_cc", version = "0.0.16")
 bazel_dep(name = "abseil-cpp", version = "20240722.0.bcr.1", repo_name = "com_google_absl")
 bazel_dep(name = "protobuf", version = "29.2", repo_name = "com_google_protobuf")
 bazel_dep(name = "boringssl", version = "0.20241024.0")
-bazel_dep(name = "grpc", version = "1.68.0", repo_name = "com_github_grpc_grpc")
-bazel_dep(name = "re2", version = "2024-07-02", repo_name = "com_googlesource_code_re2") # rename to com_google_re2
+bazel_dep(name = "grpc", version = "1.69.0", repo_name = "com_github_grpc_grpc")
+bazel_dep(name = "re2", version = "2024-07-02", repo_name = "com_googlesource_code_re2")  # rename to com_google_re2
 bazel_dep(name = "rules_proto", version = "7.1.0")
 bazel_dep(name = "googletest", version = "1.15.2", dev_dependency = True, repo_name = "com_google_googletest")
 bazel_dep(name = "riegeli", version = "0.0.0-20240927-cdfb25a", repo_name = "com_google_riegeli")  # intrinsic:*:strip
@@ -18,10 +18,11 @@ bazel_dep(name = "bazel_skylib", version = "1.7.1")
 bazel_dep(name = "rules_android", version = "0.6.0")
 
 bazel_dep(name = "toolchains_llvm", version = "1.2.0")
+
 # Configure and register the toolchain.
 llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")
 llvm.toolchain(
-   llvm_version = "17.0.6",
+    llvm_version = "17.0.6",
 )
 use_repo(llvm, "llvm_toolchain")
 register_toolchains("@llvm_toolchain//:all")
@@ -32,7 +33,7 @@ bazel_dep(name = "hedron_compile_commands", dev_dependency = True)
 git_override(
     module_name = "hedron_compile_commands",
     remote = "https://github.com/hedronvision/bazel-compile-commands-extractor.git",
-    commit = "0e990032f3c5a866e72615cf67e5ce22186dcb97",
+    commit = "6d29d97b4a40143104cce158b0da848db72cb769",
     # Replace the commit hash (above) with the latest (https://github.com/hedronvision/bazel-compile-commands-extractor/commits/main).
     # Even better, set up Renovate and let it do the work for you (see "Suggestion: Updates" in the README).
 )

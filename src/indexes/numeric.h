@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VALKEYSEARCH_SRC_INDEXES_NUMERIC_H_
 #define VALKEYSEARCH_SRC_INDEXES_NUMERIC_H_
 #include <cstddef>
@@ -39,7 +38,6 @@
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/btree_map.h"
-#include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/hash/hash.h"
@@ -58,10 +56,10 @@
 namespace valkey_search::indexes {
 
 template <typename T, typename Hasher = absl::Hash<T>,
-          typename Equaler = std::equal_to<T>>
+          typename Equalizer = std::equal_to<T>>
 class BTreeNumeric {
  public:
-  using SetType = absl::flat_hash_set<T, Hasher, Equaler>;
+  using SetType = absl::flat_hash_set<T, Hasher, Equalizer>;
   using ConstIterator =
       typename absl::btree_map<double, SetType>::const_iterator;
 

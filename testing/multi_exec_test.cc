@@ -34,20 +34,20 @@
 #include <string>
 #include <vector>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/base/thread_annotations.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "src/commands/commands.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "testing/common.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/thread_pool.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 namespace valkey_search {
 
 namespace {
@@ -66,7 +66,8 @@ class MulriExecTest : public ValkeySearchTest {
     VMSDK_EXPECT_OK(index_schema->Register(&fake_ctx_));
     mock_index = std::make_shared<MockIndex>();
     const char *identifier = "test_identifier";
-    VMSDK_EXPECT_OK(index_schema->AddIndex("attribute_name", identifier, mock_index));
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex("attribute_name", identifier, mock_index));
     EXPECT_CALL(*mock_index, IsTracked(testing::_))
         .WillRepeatedly(testing::Return(false));
     EXPECT_CALL(*kMockRedisModule, KeyType(testing::_))
@@ -259,7 +260,8 @@ TEST_F(MulriExecTest, TrackMutationOverride) {
 TEST_F(MulriExecTest, FtSearchMulti) {
   EXPECT_CALL(*kMockRedisModule, EventLoopAddOneShot(testing::_, testing::_))
       .Times(0);
-  VMSDK_EXPECT_OK(ValkeySearch::Instance().GetReaderThreadPool()->SuspendWorkers());
+  VMSDK_EXPECT_OK(
+      ValkeySearch::Instance().GetReaderThreadPool()->SuspendWorkers());
   EXPECT_CALL(
       *kMockRedisModule,
       OpenKey(&fake_ctx_, testing::An<RedisModuleString *>(), testing::_))

@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VMSDK_SRC_MANAGED_POINTERS_H_
 #define VMSDK_SRC_MANAGED_POINTERS_H_
 
@@ -36,8 +35,8 @@
 #include <utility>
 
 #include "absl/strings/string_view.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
 

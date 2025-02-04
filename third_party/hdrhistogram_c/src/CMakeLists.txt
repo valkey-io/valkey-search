@@ -1,33 +1,19 @@
-FILE(GLOB histogram_files "*.c")
-FILE(GLOB HEADER "*.h")
+set(SRCS_HDRHISTOGRAM_C
+    ${CMAKE_CURRENT_LIST_DIR}/hdr_encoding.c
+    ${CMAKE_CURRENT_LIST_DIR}/hdr_histogram.c
+    ${CMAKE_CURRENT_LIST_DIR}/hdr_interval_recorder.c
+    ${CMAKE_CURRENT_LIST_DIR}/hdr_thread.c
+    ${CMAKE_CURRENT_LIST_DIR}/hdr_time.c
+    ${CMAKE_CURRENT_LIST_DIR}/hdr_writer_reader_phaser.c
+    ${CMAKE_CURRENT_LIST_DIR}/hdr_atomic.h
+    ${CMAKE_CURRENT_LIST_DIR}/hdr_encoding.h
+    ${CMAKE_CURRENT_LIST_DIR}/hdr_endian.h
+    ${CMAKE_CURRENT_LIST_DIR}/hdr_histogram.h
+    ${CMAKE_CURRENT_LIST_DIR}/hdr_interval_recorder.h
+    ${CMAKE_CURRENT_LIST_DIR}/hdr_tests.h
+    ${CMAKE_CURRENT_LIST_DIR}/hdr_thread.h
+    ${CMAKE_CURRENT_LIST_DIR}/hdr_time.h
+    ${CMAKE_CURRENT_LIST_DIR}/hdr_writer_reader_phaser.h)
 
-option(HDR_HISTOGRAM_BUILD_STATIC "Build static library" ON)
-option(HDR_HISTOGRAM_BUILD_SHARED "Build shared library" ON)
-
-if (HDR_HISTOGRAM_BUILD_SHARED)
-    add_library(hdr_histogram SHARED ${histogram_files} ${HEADER})
-    if (WIN32)
-        set_target_properties(hdr_histogram PROPERTIES VERSION ${HDR_VERSION})
-        target_link_libraries(hdr_histogram ws2_32)
-    else ()
-        target_link_libraries(hdr_histogram m)
-        set_target_properties(hdr_histogram PROPERTIES VERSION ${HDR_VERSION} SOVERSION ${HDR_SOVERSION})
-    endif ()
-    target_link_libraries(hdr_histogram ${ZLIB_LIBRARIES})
-    target_include_directories(hdr_histogram SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${ZLIB_INCLUDE_DIRS})
-    install(TARGETS hdr_histogram DESTINATION lib${LIB_SUFFIX})
-endif (HDR_HISTOGRAM_BUILD_SHARED)
-
-if (HDR_HISTOGRAM_BUILD_STATIC)
-    add_library(hdr_histogram_static STATIC ${histogram_files} ${HEADER})
-    if (WIN32)
-        target_link_libraries(hdr_histogram_static ws2_32)
-    else ()
-        target_link_libraries(hdr_histogram_static m)
-    endif ()
-    target_link_libraries(hdr_histogram_static ${ZLIB_LIBRARIES})
-    target_include_directories(hdr_histogram_static SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${ZLIB_INCLUDE_DIRS})
-    install(TARGETS hdr_histogram_static DESTINATION lib${LIB_SUFFIX})
-endif (HDR_HISTOGRAM_BUILD_STATIC)
-
-install(FILES hdr_histogram.h hdr_histogram_log.h hdr_time.h hdr_writer_reader_phaser.h hdr_interval_recorder.h hdr_thread.h DESTINATION include/hdr)
+add_library(hdrhistogram_c STATIC ${SRCS_HDRHISTOGRAM_C})
+target_include_directories(hdrhistogram_c PUBLIC ${CMAKE_CURRENT_LIST_DIR})

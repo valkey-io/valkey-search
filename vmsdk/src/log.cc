@@ -67,7 +67,7 @@ static inline std::string DefaultSinkFormatter(const absl::LogEntry& entry) {
   pthread_t thread_id = pthread_self();
   return absl::StrFormat(
       "[%s], tid: %lu, %s:%d: %s", ToStrLogLevel(entry.verbosity()),
-      static_cast<unsigned long>(thread_id), entry.source_filename(),
+      reinterpret_cast<unsigned long>(thread_id), entry.source_filename(),
       entry.source_line(), entry.text_message());
 }
 

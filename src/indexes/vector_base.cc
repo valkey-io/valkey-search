@@ -457,7 +457,8 @@ absl::Status VectorBase::LoadTrackedKeys(
           .magnitude = tracked_key_metadata.magnitude()}});
     key_by_internal_id_.insert(
         {tracked_key_metadata.internal_id(), interned_key});
-    inc_id_ = std::max(inc_id_, tracked_key_metadata.internal_id());
+    inc_id_ = std::max(
+        inc_id_, static_cast<uint64_t>(tracked_key_metadata.internal_id()));
     ExternalizeVector(ctx, attribute_data_type, tracked_key_metadata.key(),
                       attribute_identifier_);
   }
@@ -503,7 +504,7 @@ absl::Status VectorBase::LoadKeysAndInternalIds(
           // contents from the main dictionary if specified in the query RETURN.
           .magnitude =
               normalize_ ? std::numeric_limits<float>::lowest() : -1.0f}});
-    inc_id_ = std::max(inc_id_, id);
+    inc_id_ = std::max(inc_id_, static_cast<uint64_t>(id));
     ExternalizeVector(ctx, attribute_data_type, interned_key->Str(),
                       attribute_identifier_);
   }

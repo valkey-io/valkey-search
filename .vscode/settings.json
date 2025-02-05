@@ -19,8 +19,4 @@
     "bazel.buildifierFixOnFormat": false,
     "clangd.inactiveRegions.useBackgroundHighlight": true,
     "clangd.enableCodeCompletion": true,
-    "files.associations": {
-        "*.cc": "cpp",
-        "*.inc": "cpp"
-    },
 }

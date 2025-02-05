@@ -260,12 +260,12 @@ ConstructParamsParser() {
           itr.Next();
           absl::string_view key = vmsdk::ToStringView(key_str);
           absl::string_view value = vmsdk::ToStringView(value_str);
-          if (parameters.parse_vars.params.find(key) !=
-              parameters.parse_vars.params.end()) {
+          auto [_, inserted] = parameters.parse_vars.params.insert(
+              std::make_pair(key, std::make_pair(0, value)));
+          if (!inserted) {
             return absl::InvalidArgumentError(
                 absl::StrCat("Parameter ", key, " is already defined."));
           }
-          parameters.parse_vars.params[key] = std::make_pair(0, value);
           count -= 2;
         }
         return absl::OkStatus();
@@ -318,11 +318,7 @@ vmsdk::KeyValueParser<query::VectorSearchParameters> CreateSearchParser() {
       kNoContentParam,
       GENERATE_FLAG_PARSER(query::VectorSearchParameters, no_content));
   parser.AddParamParser(kReturnParam, ConstructReturnParser());
-<<<<<<< HEAD
-  parser.AddParamParser(kParamsParam, ConstructParamsParser(param_variables));
-=======
   parser.AddParamParser(kParamsParam, ConstructParamsParser());
->>>>>>> 31e4fe6 (Redesign FT.SEARCH command line parsing in anticipation of merging with)
   return parser;
 }
 

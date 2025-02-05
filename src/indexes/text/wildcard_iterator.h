@@ -36,14 +36,16 @@ iterated in lexical order.
 namespace valkey_search {
 namespace text {
 
+template <Posting>
 struct WildCardIterator {
   // Use this form when there's no suffix tree available.
   WildCardIterator(absl::string_view prefix, absl::string_view suffix,
-                   const Art& prefix_tree, );
+                   const Art<Posting>& prefix_tree, );
 
   // Use this form when a suffix tree IS available.
   WildCardIterator(absl::string_view prefix, absl::string_view suffix,
-                   const Art& prefix_tree, const Art& suffix_tree, );
+                   const Art<Posting>& prefix_tree,
+                   const Art<Posting>& suffix_tree, );
 
   // Points to valid element
   bool IsValid() const;
@@ -56,12 +58,15 @@ struct WildCardIterator {
   bool Seek(absl::string_view word);
 
   // Access the iterator, will assert if !IsValid()
-  const Posting& GetPosting() const;
-  const std::string& GetWord() const;
+  absl::string_view GetWord() const;
+  Posting& operator*() const;
+  Posting* operator->() const;
 
  private:
-  std::shared_ptr<Art> art_;
-  ArtIterator itr_;
+  absl::string_view prefix_;
+  absl::string_view suffix_;
+  std::shared_ptr<Art<Posting>> art_;
+  ArtIterator<Posting> itr_;
 };
 
 }  // namespace text

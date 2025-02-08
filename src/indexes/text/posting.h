@@ -3,7 +3,7 @@
 
 /*
 
-For each entry in the inverted term index, there is shared_ptr to an instance of
+For each entry in the inverted term index, there is an instance of
 this structure which is used to contain the key/position information for each
 word. It is expected that there will be a very large number of these objects
 most of which will have only a small nmber of key/position entries. However,
@@ -15,19 +15,11 @@ is hidden from view.
 This object is NOT multi-thread safe, it's expected that the caller performs
 locking for mutation operations.
 
-Conceptually, this object is an ordered sequence of pairs: (Key, Position).
-Where the ordering is lexical for keys followed by numeric for positions with
-the same key. To read the contents of a posting, an iterator is used. The
-general usage pattern for the iterator is:
+Conceptually, this object holds an ordered list of Keys and for each Key there is
+an ordered list of Positions.
 
-auto itr = porting.GetIterator(); // Or GetIteratorByKey
-...
-while (itr.IsValid()) {
-  ...
-  ...itr.Get().xxx
-  ...
-  itr.Next();  // Or Seek, Or NextKey, or NextPositionInKey etc.
-}
+A KeyIterator is provided to iterate over the keys within this object.
+A PositionIterator is provided to iterate over the positions of an individual Key.
 
 */
 
@@ -36,14 +28,9 @@ while (itr.IsValid()) {
 
 namespace valkey_search::text {
 
-struct PostingsIterator;
-
-struct Posting {
-  const Key& key_;
-  Position position_;
-}
-
 struct Postings : public std::enable_shared_from_this<Postings> {
+  struct KeyIterator;
+  struct PositionIterator;
   // Construct a posting. If save_positions is off, then any keys that
   // are inserted have an assumed single position of 0.
   Postings(bool save_positions);
@@ -52,56 +39,55 @@ struct Postings : public std::enable_shared_from_this<Postings> {
   bool IsEmpty() const;
 
   // Add a posting
-  void Add(const Posting& posting);
+  void SetKey(const Key& key, std::span<Position> positions);
 
   // Remove a key and all positions for it
   void RemoveKey(const Key& key);
 
-  // Total number of postings
-  size_t GetPostingCount() const;
-
-  // Total number of unique keys
+  // Total number of keys
   size_t GetKeyCount() const;
 
-  // Get an iterator. At construction this will point to
-  // the first entry in the posting sequence.
-  PostingsIterator GetIterator() const;
-};
+  // Total number of postings for all keys
+  size_t GetPostingCount() const;
 
-//
-// The Posting Iterator.
-//
-struct PostingsIterator {
-  // Indicates that the iterator points to a valid place in the sequence.
-  // Generally, processing continues while this is true and terminates if
-  // it becomes false;
-  bool IsValid() const;
+  // Get a Key iterator. 
+  KeyIterator GetKeyIterator() const;
 
-  // Advance to the next position of the sequence.
-  void Next();
+  // The Key Iterator
+  struct KeyIterator {
+    // Is valid?
+    bool IsValid() const;
 
-  // Advance to the next position within the same key. If there are no
-  // more positions within this key, then become invalid.
-  void NextPositionInKey();
+    // Advance to next key
+    void NextKey();
 
-  // Advance to the first position of the next key. If there are
-  // no more unique keys, then becom invalid.
-  void NextKey();
+    // Skip forward to next key that is equal to or greater than.
+    // return true if it lands on an equal key, false otherwise.
+    bool SkipForwardKey(const Key& key);
 
-  // Seek to the first key that's equal or greater than the provided key.
-  // returns true if the provided key was found.
-  // returns false if the provided key was NOT found and the iterator is
-  // positioned to the next lexically large key.
-  bool Seek(const Key& k);
+    // Get Current key
+    const Key& GetKey() const;
 
-  // Fetch the Posting at the current location.
-  const Posting& GetPositing() const;
+    // Get Position Iterator
+    PositionIterator GetPositionIterator() const;
+  };
 
- private:
-  friend class Postings;
-  PostingsInterator(std::shard_ptr<Postings> postings);
+  // The Position Iterator
+  struct KeyIterator {
+    // Is valid?
+    bool IsValid() const;
 
-  std::shared_ptr<Postings> postings_;
+    // Advance to next key
+    void NextPosition();
+
+    // Skip forward to next position that is equal to or greater than.
+    // return true if it lands on an equal position, false otherwise.
+    bool SkipForwardPosition(const Position& position);
+
+    // Get Current Position
+    const Position& GetPosition() const;
+  };
+
 };
 
 }  // namespace valkey_search::text

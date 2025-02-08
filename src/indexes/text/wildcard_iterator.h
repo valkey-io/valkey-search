@@ -13,13 +13,16 @@ two algorithms based on the constructor form used and/or run-time sizing
 information.
 
 Algorithm 1: Is used when there is no suffix tree OR the number of
-prefix-matching words is small (below a fixed threshold).
+prefix-matching words is small (exact algo here is TBD, probably some ratio w.r.t. 
+the size of the suffix tree).
 
 This algorithm iterates over a candidate list defined only by the prefix. As
-each candidate is visited, the suffix is compared.
+each candidate is visited, the suffix is compared and if not present, the iterator
+advances until the next valid suffix is found. This algorithm operates in time
+O(#PrefixMatches)
 
 Algorithm 2: Is used when a suffix tree is present and the number of
-suffix-matching words is a substantially less than the number of prefix-matching
+suffix-matching words is a less than the number of prefix-matching
 words.
 
 This algorithm operates by constructing a temporary Art. The suffix art is used
@@ -27,6 +30,8 @@ to generate suffix-matching candidates. These candidates are filtered by their
 prefix with the survivors being inserted into the temporary Art which
 essentially serves to sort them since the suffix-matching candidates won't be
 iterated in lexical order.
+
+This algorithm operates in time O(#SuffixMatches)
 
 */
 
@@ -36,37 +41,39 @@ iterated in lexical order.
 namespace valkey_search {
 namespace text {
 
-template <Posting>
-struct WildCardIterator {
+struct WildCardIterator : public WordIterator {
+  using Posting = typename Postings::Posting;
   // Use this form when there's no suffix tree available.
   WildCardIterator(absl::string_view prefix, absl::string_view suffix,
-                   const Art<Posting>& prefix_tree, );
+                   const RadixTree<Postings>& prefix_tree, );
 
   // Use this form when a suffix tree IS available.
   WildCardIterator(absl::string_view prefix, absl::string_view suffix,
-                   const Art<Posting>& prefix_tree,
-                   const Art<Posting>& suffix_tree, );
+                   const RadixTree<Postings>& prefix_tree,
+                   const RadixTree<Postings>& suffix_tree, );
 
-  // Points to valid element
-  bool IsValid() const;
+  // Points to valid Word?
+  bool Done() const override;
 
   // Go to next word
-  void NextWord();
+  void Next() override;
 
-  // Seek to word that's equal or greater
+  // Seek forward to word that's equal or greater
   // returns true => found equal word, false => didn't find equal word
-  bool Seek(absl::string_view word);
+  bool SeekForward(absl::string_view word);
 
   // Access the iterator, will assert if !IsValid()
-  absl::string_view GetWord() const;
-  Posting& operator*() const;
-  Posting* operator->() const;
+  absl::string_view GetWord() const override;
+  Posting& GetPosting() const;
+
+  absl::string_view GetPrefix() const { return prefix_; }
+  absl::string_view GetSuffix() const { return suffix_; }
 
  private:
   absl::string_view prefix_;
   absl::string_view suffix_;
-  std::shared_ptr<Art<Posting>> art_;
-  ArtIterator<Posting> itr_;
+  std::shared_ptr<RadixTree<Postings>> art_;
+  WordIterator<Postings> itr_;
 };
 
 }  // namespace text

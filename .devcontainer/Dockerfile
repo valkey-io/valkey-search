@@ -56,28 +56,55 @@ ENV PATH="/usr/local/bin:$PATH"
 # Set working directory
 WORKDIR /workspace
 
-ARG USERNAME=ubuntu
-ENV USERNAME=${USERNAME}
+
 ARG USER_UID=1000
 ENV USER_UID=${USER_UID}
+ARG USER_NAME=ubuntu
+ENV USER_NAME=${USER_NAME}
 ARG USER_GID=1000
 ENV USER_GID=${USER_GID}
+ARG USER_GNAME=ubuntu
+ENV USER_GNAME=${USER_GNAME}
 
-RUN groupadd -g $USER_GID $USERNAME || groupmod -n $USER_UID "$(getent group $USER_GID | cut -d: -f1)" || true; \
-    useradd -ms /bin/bash -u $USER_UID -g $USER_GID $USERNAME || usermod -l $USERNAME -g $USER_GID -d /home/$USERNAME -m "$(getent passwd $USER_UID | cut -d: -f1)" || true ;
-RUN echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers || true;
+RUN if getent group $USER_GID > /dev/null; then \
+    CURRENT_GROUP_NAME=$(getent group $USER_GID | cut -d: -f1); \
+    if [ "$CURRENT_GROUP_NAME" != "$USER_GNAME" ]; then \
+    groupmod -n $USER_GNAME $CURRENT_GROUP_NAME; \
+    fi; \
+    elif getent group $USER_GNAME > /dev/null; then \
+    GROUP_CURRENT_GID=$(getent group $USER_GNAME | cut -d: -f3); \
+    if [ "$GROUP_CURRENT_GID" != "$USER_GID" ]; then \
+    groupmod -g $USER_GID $USER_GNAME; \
+    fi; \
+    else \
+    groupadd -g $USER_GID $USER_GNAME; \
+    fi
+RUN if getent passwd $USER_UID > /dev/null; then \
+    CURRENT_USER_NAME=$(getent passwd $USER_UID | cut -d: -f1); \
+    if [ "$CURRENT_USER_NAME" != "$USER_NAME" ]; then \
+    rm -rf /home/$USER_NAME || true; \
+    usermod -l $USER_NAME -g $USER_GID -d /home/$USER_NAME -m $USER_UID; \
+    fi; \
+    elif getent passwd $USER_NAME > /dev/null; then \
+    CURRENT_USER_ID=$(getent passwd $USER_NAME | cut -d: -f3); \
+    if [ "$CURRENT_USER_ID" != "$USER_UID" ]; then \
+    rm -rf /home/$USER_NAME || true; \
+    usermod -u $USER_UID -d /home/$USER_NAME $USER_NAME; \
+    fi; \
+    else \
+    useradd -ms /bin/bash -u $USER_UID -g $USER_GID $USER_NAME; \
+    fi
+RUN echo "$USER_NAME ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers || true;
 
-USER $USERNAME
+USER $USER_NAME
+ENV HOME=/home/$USER_NAME
 
 # Add an alias for 'vi' to point to 'vim' if 'vi' doesn't exist
-RUN echo 'if ! command -v vi &> /dev/null; then alias vi="vim"; fi' >> /home/$USERNAME/.bashrc
-
-ARG ENABLE_COMP_DB_REFRESH=true
-ENV ENABLE_COMP_DB_REFRESH=${ENABLE_COMP_DB_REFRESH}
+RUN echo 'if ! command -v vi &> /dev/null; then alias vi="vim"; fi' >> /home/$USER_NAME/.bashrc
 
 # Ensure the history file exists and configure permissions
-RUN touch /home/$USERNAME/.bash_history && \
-    chmod 600 /home/$USERNAME/.bash_history
+RUN touch /home/$USER_NAME/.bash_history && \
+    chmod 600 /home/$USER_NAME/.bash_history
 
 ENV CC=clang
 ENV CXX=clang++

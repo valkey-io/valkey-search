@@ -4,15 +4,15 @@
     "dockerfile": "Dockerfile",
     "context": ".",
     "args": {
-      "USERNAME": "ubuntu",
       "USER_UID": "1000",
-      "USER_GID": "1000"
+      "USER_NAME": "ubuntu",
+      "USER_GID": "1000",
+      "USER_GNAME": "ubuntu"
     }
   },
   "customizations": {
     "vscode": {
       "settings": {
-        "terminal.integrated.shell.linux": "/bin/bash",
         "bazel.buildifierFixOnFormat": true
       },
       "extensions": [

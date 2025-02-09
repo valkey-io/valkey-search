@@ -27,11 +27,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up Docker
-        uses: docker/setup-buildx-action@v2
-
+      # Build the Docker image from the Dockerfile in your repo
       - name: Build Docker Image
-        run: docker build -t clang-tidy-format-image --build-arg ENABLE_COMP_DB_REFRESH=false -f .devcontainer/Dockerfile .
+        run: .devcontainer/setup.sh && docker build -t presubmit-image -f .devcontainer/Dockerfile .
+
+      - name: Build Comp Database
+        id: build-comp-db
+        run: |
+          echo "Building CompDB"
+          docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image bash -c "sudo su ubuntu && export USERNAME='ubuntu' && sudo chown -R ubuntu:ubuntu /workspace && export HOME='/home/ubuntu'  && export USERNAME='ubuntu' && bazel build  //... && ls -la && bazel run @hedron_compile_commands//:refresh_all "
 
       - name: Determine base branch
         id: determine-base
@@ -43,16 +47,6 @@ jobs:
           else
             echo "BASE_BRANCH=$(git rev-parse HEAD~1)" >> $GITHUB_ENV
           fi
-
-      - name: Build Comp Database
-        id: build-comp-db
-        run: |
-          echo "Building CompDB"
-          docker run --rm \
-            -v "$(pwd):/workspace" \
-            --user "ubuntu:ubuntu" \
-            clang-tidy-format-image \
-            bash -c "bazel build //... && bazel run @hedron_compile_commands//:refresh_all"
 
       - name: Find and process modified files
         run: |
@@ -69,11 +63,8 @@ jobs:
 
           for FILE in $MODIFIED_FILES; do
             echo "Running script on $FILE"
-            docker run --rm \
-              -v "$(pwd):/workspace" \
-              --user "ubuntu:ubuntu" \
-              clang-tidy-format-image \
-              bash -c "clang-tidy --quiet -p compile_commands.json "$FILE" 2>&1 | tail -n +3 && ci/check_clang_format.sh "$FILE""
+            docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" clang-tidy-format-image \
+            bash -c ' clang-tidy --quiet -p compile_commands.json "$FILE" 2>&1 | tail -n +3 && ci/check_clang_format.sh "$FILE"'
           done
 
       - name: Ensure script execution success

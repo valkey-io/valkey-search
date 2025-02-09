@@ -28,3 +28,6 @@ In other words, for each user-declared TEXT field there will be one text index c
 
 As it turns out, this secondary per-key index is also useful to support generic index maintenance. One major design problem for text indexing is how to remove enries in an index when a key is overwritten or deleted. What's needed is a list of the words that are contained in that key and the secondary per-key index has exactly that information in it. This usage is what drives the need to have a version of the Prefix tree and Postings object that are space-optimized AND have a small number of entries.
 
+## Defrag
+
+The Postings object at the leaves of the prefix/suffix tree will likely vary substantially in size over time. This will create the opportunity for a lot of memory fragmentation. Implementating defrag is done by using the PathIterator to visit each node and defrag it.

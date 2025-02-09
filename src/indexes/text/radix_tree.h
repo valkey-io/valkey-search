@@ -132,6 +132,9 @@ struct RadixTree {
     // Get Postings for this word, will assert if !IsWord()
     Postings& GetPostings() const;
 
+    // Defrag the current Node and then defrag the Postings if this points to one.
+    void Defrag();
+
   }
 };
 

@@ -28,7 +28,7 @@ A PositionIterator is provided to iterate over the positions of an individual Ke
 
 namespace valkey_search::text {
 
-struct Postings : public std::enable_shared_from_this<Postings> {
+struct Postings {
   struct KeyIterator;
   struct PositionIterator;
   // Construct a posting. If save_positions is off, then any keys that
@@ -49,6 +49,9 @@ struct Postings : public std::enable_shared_from_this<Postings> {
 
   // Total number of postings for all keys
   size_t GetPostingCount() const;
+
+  // Defrag this contents of this object. Returns the updated "this" pointer.
+  Postings *Defrag();
 
   // Get a Key iterator. 
   KeyIterator GetKeyIterator() const;

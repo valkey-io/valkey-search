@@ -19,7 +19,7 @@ target_link_libraries(coordinator_grpc_proto coordinator_cc_proto)
 set(SRCS_SERVER ${CMAKE_CURRENT_LIST_DIR}/server.cc
                 ${CMAKE_CURRENT_LIST_DIR}/server.h)
 
-add_library(server STATIC ${SRCS_SERVER})
+valkey_search_add_static_library(server ${SRCS_SERVER})
 target_include_directories(server PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_include_directories(server PRIVATE ${CMAKE_BINARY_DIR})
 target_link_libraries(server PUBLIC coordinator_cc_proto)
@@ -48,7 +48,7 @@ endif()
 set(SRCS_CLIENT ${CMAKE_CURRENT_LIST_DIR}/client.cc
                 ${CMAKE_CURRENT_LIST_DIR}/client.h)
 
-add_library(client STATIC ${SRCS_CLIENT})
+valkey_search_add_static_library(client ${SRCS_CLIENT})
 target_include_directories(client PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_include_directories(client PRIVATE ${CMAKE_BINARY_DIR})
 target_link_libraries(client PUBLIC coordinator_cc_proto)
@@ -78,7 +78,7 @@ target_include_directories(util INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 set(SRCS_METADATA_MANAGER ${CMAKE_CURRENT_LIST_DIR}/metadata_manager.cc
                           ${CMAKE_CURRENT_LIST_DIR}/metadata_manager.h)
 
-add_library(metadata_manager STATIC ${SRCS_METADATA_MANAGER})
+valkey_search_add_static_library(metadata_manager ${SRCS_METADATA_MANAGER})
 target_include_directories(metadata_manager PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(metadata_manager PUBLIC client_pool)
 target_link_libraries(metadata_manager PUBLIC coordinator_cc_proto)
@@ -95,7 +95,7 @@ target_link_libraries(metadata_manager PUBLIC highwayhash)
 set(SRCS_SEARCH_CONVERTER ${CMAKE_CURRENT_LIST_DIR}/search_converter.cc
                           ${CMAKE_CURRENT_LIST_DIR}/search_converter.h)
 
-add_library(search_converter STATIC ${SRCS_SEARCH_CONVERTER})
+valkey_search_add_static_library(search_converter ${SRCS_SEARCH_CONVERTER})
 target_include_directories(search_converter PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(search_converter PUBLIC coordinator_cc_proto)
 target_link_libraries(search_converter PUBLIC index_schema)
@@ -112,7 +112,7 @@ target_link_libraries(search_converter PUBLIC status_macros)
 set(SRCS_GRPC_SUSPENDER ${CMAKE_CURRENT_LIST_DIR}/grpc_suspender.cc
                         ${CMAKE_CURRENT_LIST_DIR}/grpc_suspender.h)
 
-add_library(grpc_suspender STATIC ${SRCS_GRPC_SUSPENDER})
+valkey_search_add_static_library(grpc_suspender ${SRCS_GRPC_SUSPENDER})
 target_include_directories(grpc_suspender PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 if(APPLE)
   target_link_libraries(grpc_suspender PUBLIC absl::base)

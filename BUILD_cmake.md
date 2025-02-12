@@ -54,7 +54,7 @@ Restart your IDE and voila
 
 ## Loading the module
 
-After a successfull build, the module is placed under `build-debug/lib/valkeysearch.so` (assuming your build folder is `build-debug`),
+After a successful build, the module is placed under `build-debug/lib/valkeysearch.so` (assuming your build folder is `build-debug`),
 to load it into `valkey-server`, you can use this command:
 
 ```bash

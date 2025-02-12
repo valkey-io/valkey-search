@@ -15,5 +15,5 @@ set(SRCS_HDRHISTOGRAM_C
     ${CMAKE_CURRENT_LIST_DIR}/hdr_time.h
     ${CMAKE_CURRENT_LIST_DIR}/hdr_writer_reader_phaser.h)
 
-add_library(hdrhistogram_c STATIC ${SRCS_HDRHISTOGRAM_C})
+valkey_search_add_static_library(hdrhistogram_c ${SRCS_HDRHISTOGRAM_C})
 target_include_directories(hdrhistogram_c PUBLIC ${CMAKE_CURRENT_LIST_DIR})

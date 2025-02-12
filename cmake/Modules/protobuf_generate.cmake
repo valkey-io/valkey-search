@@ -222,6 +222,12 @@ function(create_proto_library PROTO_FILE_SRC_DIR PROTO_BASE_FILE_NAME
   set(__LIB_SRCS "${PROTO_OUT_DIR}/${PROTO_BASE_FILE_NAME}.pb.h"
                  "${PROTO_OUT_DIR}/${PROTO_BASE_FILE_NAME}.pb.cc")
   add_library(${OUT_LIBNAME} STATIC ${__LIB_SRCS})
+  if(VALKEY_SEARCH_RELEASE_BUILD)
+    message(STATUS "Enabling LTO for target ${OUT_LIBNAME}")
+    set_property(TARGET ${OUT_LIBNAME} PROPERTY INTERPROCEDURAL_OPTIMIZATION
+                                                TRUE)
+  endif()
+  valkey_search_target_update_compile_flags(${OUT_LIBNAME})
   target_link_libraries(${OUT_LIBNAME} PUBLIC ${Protobuf_LIBRARIES})
   target_include_directories(${OUT_LIBNAME} PUBLIC ${CMAKE_BINARY_DIR})
   target_include_directories(${OUT_LIBNAME} PUBLIC ${PROTO_OUT_DIR})

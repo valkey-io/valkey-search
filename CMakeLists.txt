@@ -15,8 +15,15 @@ include_directories(${CMAKE_SOURCE_DIR})
 include_directories(${CMAKE_BINARY_DIR}/.deps/install/include)
 
 add_subdirectory(submodules)
-include(linux_utils)
+include(valkey_search)
 
 add_subdirectory(vmsdk)
 add_subdirectory(third_party)
 add_subdirectory(src)
+
+# Create a symbolic link to the root directory for compile_commands.json
+execute_process(
+  COMMAND
+    ${CMAKE_COMMAND} -E create_symlink
+    ${CMAKE_BINARY_DIR}/compile_commands.json
+    ${CMAKE_SOURCE_DIR}/compile_commands.json)

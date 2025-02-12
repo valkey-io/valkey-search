@@ -1,7 +1,7 @@
 set(SRCS_PREDICATE ${CMAKE_CURRENT_LIST_DIR}/predicate.cc
                    ${CMAKE_CURRENT_LIST_DIR}/predicate.h)
 
-add_library(predicate STATIC ${SRCS_PREDICATE})
+valkey_search_add_static_library(predicate ${SRCS_PREDICATE})
 target_include_directories(predicate PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(predicate PUBLIC numeric)
 target_link_libraries(predicate PUBLIC tag)
@@ -19,7 +19,7 @@ target_link_libraries(predicate_header INTERFACE type_conversions)
 set(SRCS_SEARCH ${CMAKE_CURRENT_LIST_DIR}/search.cc
                 ${CMAKE_CURRENT_LIST_DIR}/search.h)
 
-add_library(search STATIC ${SRCS_SEARCH})
+valkey_search_add_static_library(search ${SRCS_SEARCH})
 target_include_directories(search PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(search PUBLIC planner)
 target_link_libraries(search PUBLIC predicate)
@@ -59,7 +59,7 @@ target_link_libraries(search_header INTERFACE thread_pool)
 set(SRCS_FANOUT ${CMAKE_CURRENT_LIST_DIR}/fanout.cc
                 ${CMAKE_CURRENT_LIST_DIR}/fanout.h)
 
-add_library(fanout STATIC ${SRCS_FANOUT})
+valkey_search_add_static_library(fanout ${SRCS_FANOUT})
 target_include_directories(fanout PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(fanout PUBLIC search)
 target_link_libraries(fanout PUBLIC attribute_data_type)
@@ -80,7 +80,7 @@ target_link_libraries(fanout PUBLIC valkey_module)
 set(SRCS_RESPONSE_GENERATOR ${CMAKE_CURRENT_LIST_DIR}/response_generator.cc
                             ${CMAKE_CURRENT_LIST_DIR}/response_generator.h)
 
-add_library(response_generator STATIC ${SRCS_RESPONSE_GENERATOR})
+valkey_search_add_static_library(response_generator ${SRCS_RESPONSE_GENERATOR})
 target_include_directories(response_generator PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(response_generator PUBLIC predicate_header)
 target_link_libraries(response_generator PUBLIC search_header)
@@ -96,7 +96,7 @@ target_link_libraries(response_generator PUBLIC valkey_module)
 set(SRCS_PLANNER ${CMAKE_CURRENT_LIST_DIR}/planner.cc
                  ${CMAKE_CURRENT_LIST_DIR}/planner.h)
 
-add_library(planner STATIC ${SRCS_PLANNER})
+valkey_search_add_static_library(planner ${SRCS_PLANNER})
 target_include_directories(planner PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(planner PUBLIC index_base)
 target_link_libraries(planner PUBLIC vector_base)

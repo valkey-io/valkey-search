@@ -1,5 +1,3 @@
-include(protobuf_generate)
-
 set(MODULE_BASE_DIR "${CMAKE_BINARY_DIR}/.deps")
 set(MODULES_BIN_DIR "${MODULE_BASE_DIR}/install/bin")
 set(MODULES_LIB_DIR "${CMAKE_BINARY_DIR}/.deps/install/lib")

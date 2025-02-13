@@ -5,7 +5,7 @@ set(SRCS_COMMANDS
     ${CMAKE_CURRENT_LIST_DIR}/ft_search.cc ${CMAKE_CURRENT_LIST_DIR}/commands.h
     ${CMAKE_CURRENT_LIST_DIR}/ft_search.h)
 
-valkey_search_add_static_library(commands ${SRCS_COMMANDS})
+valkey_search_add_static_library(commands "${SRCS_COMMANDS}")
 target_include_directories(commands PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(commands PUBLIC ft_create_parser)
 target_link_libraries(commands PUBLIC ft_search_parser)
@@ -28,7 +28,7 @@ target_link_libraries(commands PUBLIC valkey_module)
 set(SRCS_FT_SEARCH_PARSER ${CMAKE_CURRENT_LIST_DIR}/ft_search_parser.cc
                           ${CMAKE_CURRENT_LIST_DIR}/ft_search_parser.h)
 
-valkey_search_add_static_library(ft_search_parser ${SRCS_FT_SEARCH_PARSER})
+valkey_search_add_static_library(ft_search_parser "${SRCS_FT_SEARCH_PARSER}")
 target_include_directories(ft_search_parser PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(ft_search_parser PUBLIC filter_parser)
 target_link_libraries(ft_search_parser PUBLIC index_schema)
@@ -45,7 +45,7 @@ target_link_libraries(ft_search_parser PUBLIC valkey_module)
 set(SRCS_FT_CREATE_PARSER ${CMAKE_CURRENT_LIST_DIR}/ft_create_parser.cc
                           ${CMAKE_CURRENT_LIST_DIR}/ft_create_parser.h)
 
-valkey_search_add_static_library(ft_create_parser ${SRCS_FT_CREATE_PARSER})
+valkey_search_add_static_library(ft_create_parser "${SRCS_FT_CREATE_PARSER}")
 target_include_directories(ft_create_parser PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(ft_create_parser PUBLIC attribute_data_type)
 target_link_libraries(ft_create_parser PUBLIC index_schema_cc_proto)
@@ -59,7 +59,7 @@ target_link_libraries(ft_create_parser PUBLIC valkey_module)
 set(SRCS_FILTER_PARSER ${CMAKE_CURRENT_LIST_DIR}/filter_parser.cc
                        ${CMAKE_CURRENT_LIST_DIR}/filter_parser.h)
 
-valkey_search_add_static_library(filter_parser ${SRCS_FILTER_PARSER})
+valkey_search_add_static_library(filter_parser "${SRCS_FILTER_PARSER}")
 target_include_directories(filter_parser PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(filter_parser PUBLIC index_schema)
 target_link_libraries(filter_parser PUBLIC index_base)

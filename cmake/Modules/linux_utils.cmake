@@ -194,6 +194,20 @@ foreach(LIBNAME ${UTF8_LIBS_NAMES})
   unset(__LIB CACHE)
 endforeach()
 
+set(GTEST_LIBS_NAME gtest gtest_main gmock)
+message(STATUS "Collecting GTest libs")
+set(GTEST_LIBS "")
+foreach(LIBNAME ${GTEST_LIBS_NAME})
+  find_library(
+    __LIB ${LIBNAME} REQUIRED
+    PATHS ${MODULES_LIB_DIR}
+    NO_DEFAULT_PATH)
+  list(APPEND GTEST_LIBS ${__LIB})
+  message(STATUS "  Found library ${__LIB}")
+  unset(__LIB CACHE)
+endforeach()
+
+
 find_library(
   LIBZ z REQUIRED
   PATHS ${MODULES_LIB_DIR}

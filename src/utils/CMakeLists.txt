@@ -11,14 +11,14 @@ target_include_directories(segment_tree INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 set(SRCS_STRING_INTERNING ${CMAKE_CURRENT_LIST_DIR}/string_interning.cc
                           ${CMAKE_CURRENT_LIST_DIR}/string_interning.h)
 
-valkey_search_add_static_library(string_interning ${SRCS_STRING_INTERNING})
+valkey_search_add_static_library(string_interning "${SRCS_STRING_INTERNING}")
 target_include_directories(string_interning PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(string_interning PUBLIC allocator)
 
 set(SRCS_ALLOCATOR ${CMAKE_CURRENT_LIST_DIR}/allocator.cc
                    ${CMAKE_CURRENT_LIST_DIR}/allocator.h)
 
-valkey_search_add_static_library(allocator ${SRCS_ALLOCATOR})
+valkey_search_add_static_library(allocator "${SRCS_ALLOCATOR}")
 target_include_directories(allocator PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(allocator PUBLIC intrusive_list)
 target_link_libraries(allocator PUBLIC intrusive_ref_count)

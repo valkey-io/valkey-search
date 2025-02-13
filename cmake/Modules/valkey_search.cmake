@@ -12,7 +12,6 @@ endif()
 # A wrapper around "add_library" (STATIC) that enables the
 # INTERPROCEDURAL_OPTIMIZATION property for release builds ("lto")
 function(valkey_search_add_static_library name sources)
-  message(STATUS "Adding static library ${name}")
   add_library(${name} STATIC ${sources})
   if(VALKEY_SEARCH_RELEASE_BUILD)
     set_property(TARGET ${name} PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)

@@ -33,7 +33,7 @@ void match_one_word_combination(words) {
     }
    }
 }
-
+// Need to handle the fields, this is a bit mask on the positions iterator
 void process_one_key(KeyIterators[*]) {
   PositionIterators[*] = KeyIterators[*].GetPositionIterators();
   while (! Any PositionIterators.Done()) {
@@ -52,7 +52,6 @@ struct PhraseIterator : public indexes::EntriesFetcherIteratorBase {
   virtual bool Done() const override;
   virtual void Next() = override;
   virtual const Key& operator*() const override;
-  virtual std::unique_ptr<WordIterator> clone() const override;
 
 };
 

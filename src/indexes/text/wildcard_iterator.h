@@ -25,9 +25,9 @@ Algorithm 2: Is used when a suffix tree is present and the number of
 suffix-matching words is a less than the number of prefix-matching
 words.
 
-This algorithm operates by constructing a temporary Art. The suffix art is used
+This algorithm operates by constructing a temporary RadixTree. The suffix RadixTree is used
 to generate suffix-matching candidates. These candidates are filtered by their
-prefix with the survivors being inserted into the temporary Art which
+prefix with the survivors being inserted into the temporary RadixTree which
 essentially serves to sort them since the suffix-matching candidates won't be
 iterated in lexical order.
 
@@ -72,8 +72,8 @@ struct WildCardIterator : public WordIterator {
  private:
   absl::string_view prefix_;
   absl::string_view suffix_;
-  std::shared_ptr<RadixTree<Postings>> art_;
-  WordIterator<Postings> itr_;
+  // the one to iterator over, could be temporary or not....
+  std::shared_ptr<RadixTree<Postings *>> radix_tree_;
 };
 
 }  // namespace text

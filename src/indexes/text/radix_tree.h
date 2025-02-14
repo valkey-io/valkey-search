@@ -17,7 +17,7 @@ Iteration is always done in lexical order.
 A Path iterator is provided that operates at the path level. It provides iteration
 capabilities for interior sub-trees of the RadixTree. Functionally, the Path iterator
 is provided a prefix which identifies the sub-tree to be iterated over. The 
-iteration is over the set of next valid characters present in the subtree.
+iteration is over the set of next valid characters present in the subtree in lexical order.
 This iterator can be used to visit all words with a common prefix while intelligently skipping 
 subsets (subtrees) of words -- ideal for fuzzy matching.
 
@@ -28,14 +28,17 @@ Even though the description of the RadixTree consistently refers to prefixes, th
 implementation also supports a suffix RadixTree. A suffix RadixTree is simply a RadixTree built
 by reversing the order of the characters in a string. For suffix RadixTrees, the
 external interface for the strings is the same, i.e., it is the responsibilty of
-the RadixTree object to perform any reverse ordering that might be required, clients
+the RadixTree object itself to perform any reverse ordering that might be required, clients
 of this interface need not reverse their strings.
 
 Note that unlike most other search objects, this object is explicitly multi-thread aware.
-The multi-thread usage of this object is designed to match the time-sliced muted, in other words
-during write operations, only a small subset of the functions are allowed. External iterators are
+The multi-thread usage of this object is designed to match the time-sliced mutex, in other words,
+during write operations, only a small subset of the methods are allowed. External iterators are
 not valid across a write operation. Conversely, during the read cycle, all non-mutation operations
 are allowed and don't require any locking.
+
+Ideally, detection of mutation violations, stale iterators, etc. would be built into the codebase
+efficiently enough to be deployed in production code.
 
 */
 

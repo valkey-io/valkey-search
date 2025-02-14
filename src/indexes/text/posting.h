@@ -4,19 +4,19 @@
 /*
 
 For each entry in the inverted term index, there is an instance of
-this structure which is used to contain the key/position information for each
+this structure which is used to contain the key/field/position information for each
 word. It is expected that there will be a very large number of these objects
-most of which will have only a small nmber of key/position entries. However,
-there will be a small number of instances where the number of key/position
+most of which will have only a small nmber of key/field/position entries. However,
+there will be a small number of instances where the number of key/field/position
 entries is quite large. Thus it's likely that the fully optimized version of
 this object will have two or more encodings for its contents. This optimization
-is hidden from view.
+is hidden from external view.
 
 This object is NOT multi-thread safe, it's expected that the caller performs
 locking for mutation operations.
 
 Conceptually, this object holds an ordered list of Keys and for each Key there is
-an ordered list of Positions.
+an ordered list of Positions. Each position is tagged with a bitmask of fields.
 
 A KeyIterator is provided to iterate over the keys within this object.
 A PositionIterator is provided to iterate over the positions of an individual Key.
@@ -28,12 +28,23 @@ A PositionIterator is provided to iterate over the positions of an individual Ke
 
 namespace valkey_search::text {
 
+//
+// this is the logical view of a posting. 
+//
+struct Posting {
+  const Key& GetKey() const;
+  uint64_t GetFieldMask() const;
+  uint32_t GetPosition() const;
+};
+
 struct Postings {
   struct KeyIterator;
   struct PositionIterator;
   // Construct a posting. If save_positions is off, then any keys that
   // are inserted have an assumed single position of 0.
-  Postings(bool save_positions);
+  // The "num_text_fields" entry identifies how many bits of the field-mask are required
+  // and is used to select the representation.
+  Postings(bool save_positions, size_t num_text_fields);
 
   // Are there any postings in this object?
   bool IsEmpty() const;

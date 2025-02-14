@@ -2,6 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import time
+import redis
 
 # -------------------------------------------------------------------
 # A simple Radix Tree implementation
@@ -76,6 +77,12 @@ def fetch_random_wikipedia_page_text():
     page_text = re.sub(r"\s+", " ", page_text).strip()
     return page_text
 
+client = redis.Redis(host='localhost', port=6379, decoded_responses=True)
+
+def memory_usage():
+    x = client.execute_command("memory stats")
+    return int(x["total.allocated"])
+
 # -------------------------------------------------------------------
 # Main script to scrape, build tree, and show statistics
 # -------------------------------------------------------------------
@@ -92,6 +99,12 @@ def main():
     NUM_PAGES = 10000
     NUM_STATS = 100
     tree = RadixTree()
+
+    client.execute_command("flushall sync")
+    client.execute_command("ft.create x on hash schema x text")
+
+    start_usage = memory_usage()
+    print("At startup memory = ", start_usage)
     
     stop_words = {"a":0, "is":0, "the":0, "an":0, "and":0, "are":0, "as":0, "at":0, "be":0, "but":0, "by":0, "for":0, "if":0, "in":0, "into":0, "it":0, "no":0, "not":0, "of":0, "on":0, "or":0, "such":0, "that":0, "their":0, "then":0, "there":0, "these":0, "they":0, "this":0, "to":0, "was":0, "will":0, "with":0}
 
@@ -107,6 +120,7 @@ def main():
         
         for sentence in sentences:
             # Further split into words (again naive)
+            client.hset(str(key_count), {"x":sentence})
             words = re.split(r'\W+', sentence)
             words = [w.lower() for w in words if w]  # remove empty strings, to lower
             key_count = key_count + 1
@@ -138,8 +152,10 @@ def main():
                 (key_count * 4)
                 
             space44 = space4 - (word_nodes * 4)
+
+            redis_usage = memory_usage() - start_usage
                 
-            print(f"Keys:{key_count} AvgKeySize:{key_size/key_count:.1f} Words:{word_count}/{stop_word_count} AvgWord:{word_size/word_count:.1f} Postings_space:{postings_space8//1024}/{postings_space4//1024}KB Space:{space8//1024}/{space4//1024}/{space44//1024}KB Space/Word:{space8/word_count:.1f}/{space4/word_count:.1f} Space/Corpus:{space8/key_size:.1f}/{space4/key_size:.1f}/{space44/key_size:.1f}" )
+            print(f"Keys:{key_count} AvgKeySize:{key_size/key_count:.1f} Words:{word_count}/{stop_word_count} AvgWord:{word_size/word_count:.1f} Postings_space:{postings_space8//1024}/{postings_space4//1024}KB Space:{space8//1024}/{space4//1024}/{space44//1024}KB Space/Word:{space8/word_count:.1f}/{space4/word_count:.1f} Space/Corpus:{space8/key_size:.1f}/{space4/key_size:.1f}/{space44/key_size:.1f} Redis:{redis_usage//1024}KB /Key:{redis_usage//key_count} /Word:{redis_usage//word_count} Ratio:{space8/redis_usage:.1f}/{space4/redis_usage:.1f}" )
 
 if __name__ == "__main__":
     main()

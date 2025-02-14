@@ -18,19 +18,24 @@ A Path iterator is provided that operates at the path level. It provides iterati
 capabilities for interior sub-trees of the RadixTree. Functionally, the Path iterator
 is provided a prefix which identifies the sub-tree to be iterated over. The 
 iteration is over the set of next valid characters present in the subtree.
+This iterator can be used to visit all words with a common prefix while intelligently skipping 
+subsets (subtrees) of words -- ideal for fuzzy matching.
 
-Another feature of ART is the ability to provide a count of the entries that
+Another feature of a RadixTree is the ability to provide a count of the entries that
 have a common prefix in O(len(prefix)) time. This is useful in query planning.
 
 Even though the description of the RadixTree consistently refers to prefixes, this
-implementation also supports a suffix RadixTree. A suffix RadixTree is simply an RadixTree built
+implementation also supports a suffix RadixTree. A suffix RadixTree is simply a RadixTree built
 by reversing the order of the characters in a string. For suffix RadixTrees, the
 external interface for the strings is the same, i.e., it is the responsibilty of
 the RadixTree object to perform any reverse ordering that might be required, clients
 of this interface need not reverse their strings.
 
-Note that unlike may other objects, this object is multi-thread aware. In particular
-the mutation primitives AddKey and RemoveKey collapse the 
+Note that unlike most other search objects, this object is explicitly multi-thread aware.
+The multi-thread usage of this object is designed to match the time-sliced muted, in other words
+during write operations, only a small subset of the functions are allowed. External iterators are
+not valid across a write operation. Conversely, during the read cycle, all non-mutation operations
+are allowed and don't require any locking.
 
 */
 
@@ -40,26 +45,28 @@ the mutation primitives AddKey and RemoveKey collapse the
 #include "absl/strings/string_view.h"
 #include "src/text/text.h"
 
+template<typename Target, bool reverse>
 struct RadixTree {
   struct WordIterator;
   struct PathIterator;
-  // Construct an RadixTree. Use either prefix or suffix ordering
-  RadixTree(bool suffix_ordered);
+  RadixTree();
 
-  // If the desginated word doesn't exist in the RadixTree it is created with an empty
-  // Postings object.
+  //
+  // This function is the only way to mutate the RadixTree, all other functions are read-only.
+  // This function is explicitly multi-thread safe and is designed to allow other mutations to
+  // be performed on other words and targets simultaneously, with minimal collisions.
+  //
+  // In all cases, the mutate function is invoked once under the locking provided by the RadixTree
+  // itself, so if the target objects are disjoint (which is normal) then no locking is required
+  // within the mutate function itself.
+  //
+  // The input parameter to the mutate function will be nullopt if there is no entry for this word.
+  // Otherwise it will contain the value for this word.
+  // The return value of the mutate function is the new value for this word. if the return
+  // value is nullopt then this word is deleted from the RadixTree.
   // 
-  // The mutate function is called with the Postings object for this word.
   //
-  // This function is mutation multi-thread safe both for mutations of the RadixTree 
-  // as well as mutations of the target Postings object. 
-  //
-  void AddPostings(absl::string_view word, absl::invokeable<void (Postings&)> mutate);
-
-  // Similar to AddPostings, this is multi-thread safe. Except that if the word doesn't exist
-  // then it will assert out. The return value of the mutate function indicates whether
-  // the Postings object has become empty and thus the word & Postings object should be deleted.
-  void RemovePostings(absl::string_view word, absl::invokeable<bool (Postings&)> mutate);
+  void Mutate(absl::string_view word, absl::invokeable<std::option<Target>> (std::option<Target>)> mutate);
 
   // Get the number of words that have the specified prefix in O(len(prefix))
   // time.
@@ -137,7 +144,5 @@ struct RadixTree {
 
   }
 };
-
-
 
 #endif

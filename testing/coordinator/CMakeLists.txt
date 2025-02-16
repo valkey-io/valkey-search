@@ -15,7 +15,7 @@ target_link_libraries(metadata_manager_test PUBLIC managed_pointers)
 target_link_libraries(metadata_manager_test PUBLIC module)
 target_link_libraries(metadata_manager_test PUBLIC utils)
 target_link_libraries(metadata_manager_test PUBLIC valkey_module)
-finalize_test_link(metadata_manager_test)
+finalize_test_flags(metadata_manager_test)
 
 set(SRCS_COMMON ${CMAKE_CURRENT_LIST_DIR}/common.h)
 

@@ -69,7 +69,7 @@ void* __wrap_aligned_alloc(size_t __alignment, size_t __size) noexcept;
 // NOLINTNEXTLINE
 int __wrap_malloc_usable_size(void* ptr) noexcept;
 // NOLINTNEXTLINE
-int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size);
+int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size) __THROW;
 // NOLINTNEXTLINE
 void* __wrap_valloc(size_t size) noexcept;
 }  // extern "C"

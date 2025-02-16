@@ -37,6 +37,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <thread>
 
 #include "absl/base/no_destructor.h"
 #include "absl/functional/any_invocable.h"
@@ -85,8 +86,8 @@ constexpr absl::string_view kUseCoordinator{"--use-coordinator"};
 constexpr absl::string_view kLogLevel{"--log-level"};
 
 struct Parameters {
-  int reader_threads{10};
-  int writer_threads{30};
+  int reader_threads{static_cast<int>(std::thread::hardware_concurrency())};
+  int writer_threads{static_cast<int>(std::thread::hardware_concurrency())};
   std::optional<int> threads;
   bool use_coordinator{false};
   std::optional<std::string> log_level;

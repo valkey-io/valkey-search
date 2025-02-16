@@ -250,11 +250,13 @@ int __wrap_malloc_usable_size(void* ptr) noexcept {
   }
   return RedisModule_MallocUsableSize(ptr);
 }
+
 // NOLINTNEXTLINE
-int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size) {
+int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size) PMES {
   *r = __wrap_aligned_alloc(__alignment, __size);
   return 0;
 }
+
 void* __wrap_valloc(size_t size) noexcept {
   return __wrap_aligned_alloc(sysconf(_SC_PAGESIZE), size);
 }

@@ -1,4 +1,3 @@
-# We need protobuf
 create_proto_library("src" "index_schema" "index_schema_cc_proto")
 message(STATUS "Created proto library index_schema_cc_proto")
 

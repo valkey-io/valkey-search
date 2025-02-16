@@ -19,11 +19,10 @@ target_link_libraries(valkeysearch PUBLIC server_events)
 list(APPEND THIRD_PARTY_LIBS coordinator_grpc_proto)
 list(APPEND THIRD_PARTY_LIBS coordinator_cc_proto)
 
-# The amount of static libraries is insane (especially Abseil / Protobuf). To
-# avoid linking hell (order of libraries), we use gcc's `-Wl,--start-group` to
-# avoid ordering issues
-target_link_libraries(valkeysearch
-                      PRIVATE "$<LINK_GROUP:RESCAN,${THIRD_PARTY_LIBS}>")
+# Wrap ${THIRD_PARTY_LIBS} with "--start/--end group"
+target_link_options(valkeysearch PRIVATE -Wl,--start-group)
+target_link_libraries(valkeysearch PRIVATE ${THIRD_PARTY_LIBS})
+target_link_libraries(valkeysearch PRIVATE -Wl,--end-group)
 
 # Remove the "lib" prefix from the module
 set_target_properties(valkeysearch PROPERTIES PREFIX "")

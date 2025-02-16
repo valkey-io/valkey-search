@@ -2,7 +2,7 @@
 
 If you wish to work with `Bazel` instead of `CMake`, follow this [guide instead][1]
 
-Note: the below was tested on Ubuntu Linux, it might not work on other Linux distros
+Note: the below was tested on `Ubuntu Linux`, it might not work on other Linux distros
 
 
 ## Install basic tools
@@ -20,45 +20,30 @@ sudo apt install -y clangd          \
 
 ## Build the module
 
+For your convenience, we provide a `build.sh` script. First, clone the code:
+
 ```bash
-git clone git@github.com:valkey-io/valkey-search.git
+git clone https://github.com/valkey-io/valkey-search.git
 cd valkey-search
-git submodule update --remote --init --recursive --depth 1
-mkdir build-debug
-cd $_
-cmake ..
-make -j$(nproc)
 ```
 
-## Integration with IDE
-
-During the `CMake` stage of the build, `CMake` generates a JSON file named `compile_commands.json` and places it under the
-build folder. This file is used by many IDEs and text editors for providing code completion (via `clangd`).
-
-A small caveat is that these tools will look for `compile_commands.json` under the workspace root folder.
-A common workaround is to create a symbolic link to it:
+Next, build the module for the `release` configuration by typing this into your terminal:
 
 ```bash
-cd /path/to/valkey/
-# We assume here that your build folder is `build-debug`
-ln -sf $(pwd)/build-debug/compile_commands.json $(pwd)/compile_commands.json
+./build.sh --run-tests=all
 ```
 
-Another option, is to instruct `clangd` where to search for the `compile_commands.json` by using the `--compile-commands-dir` option:
+Once the build the completed, all build generated output can be found in `.build-release/` folder.
 
-```bash
-clangd --compile-commands-dir=/path/to/compile_commands.json
-```
-
-Restart your IDE and voila
+Tip: use `./build.sh --help` to see more build options
 
 ## Loading the module
 
-After a successful build, the module is placed under `build-debug/lib/valkeysearch.so` (assuming your build folder is `build-debug`),
-to load it into `valkey-server`, you can use this command:
+After a successful build, the module is placed under `.build-release/valkeysearch.so`.
+to load it into `valkey-server`, use the following command:
 
 ```bash
-valkey-server --loadmodule build-debug/lib/valkeysearch.so
+valkey-server --loadmodule .build-release/valkeysearch.so
 ```
 
 

@@ -2,17 +2,9 @@ set(MODULE_BASE_DIR "${CMAKE_BINARY_DIR}/.deps")
 set(MODULES_BIN_DIR "${MODULE_BASE_DIR}/install/bin")
 set(MODULES_LIB_DIR "${CMAKE_BINARY_DIR}/.deps/install/lib")
 
+# Protobuf C++ plugin (needed by coordinator)
 set(grpc_cpp_plugin_location ${MODULES_BIN_DIR}/grpc_cpp_plugin)
-set(Protobuf_PROTOC_EXECUTABLE ${MODULES_BIN_DIR}/protoc)
-
 message(STATUS "gRPC C++ plugin: ${grpc_cpp_plugin_location}")
-message(STATUS "protoc: ${Protobuf_PROTOC_EXECUTABLE}")
-
-# Protobuf compiler and library
-set(protobuf_generate_PROTOC_EXE ${Protobuf_PROTOC_EXECUTABLE})
-message(
-  STATUS
-    "protobuf_generate_PROTOC_EXE is set to ${protobuf_generate_PROTOC_EXE}")
 
 find_library(
   PROTOBUF_LIBS protobuf
@@ -206,7 +198,6 @@ foreach(LIBNAME ${GTEST_LIBS_NAME})
   message(STATUS "  Found library ${__LIB}")
   unset(__LIB CACHE)
 endforeach()
-
 
 find_library(
   LIBZ z REQUIRED

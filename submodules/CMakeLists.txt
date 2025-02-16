@@ -42,22 +42,27 @@ function(checkout_submodule_branch MODULE_NAME GIT_URL GIT_BRANCH)
 endfunction()
 
 # Helper method: build the submodule and install it
-function(build_submodule MODULE_NAME MODULE_CMAKE_ARGS)
-  file(MAKE_DIRECTORY ${MODULES_DIR}/${MODULE_NAME}/build-release)
-  execute_process(
-    COMMAND sh -c "${CMAKE_COMMAND} .. ${MODULE_CMAKE_ARGS}"
-    WORKING_DIRECTORY ${MODULES_DIR}/${MODULE_NAME}/build-release
-    RESULT_VARIABLE _PROC_RES)
-  if(NOT _PROC_RES EQUAL 0)
-    message(FATAL_ERROR "CMake configure error")
-  endif()
-  execute_process(
-    COMMAND sh -c
-            "${CMAKE_COMMAND} --build . -j ${PROCESSOR_COUNT} --target install"
-    WORKING_DIRECTORY ${MODULES_DIR}/${MODULE_NAME}/build-release
-    RESULT_VARIABLE _PROC_RES)
-  if(NOT _PROC_RES EQUAL 0)
-    message(FATAL_ERROR "Install error")
+function(build_submodule MODULE_NAME MODULE_CMAKE_ARGS HINT_FILE)
+  if(NOT EXISTS "${HINT_FILE}")
+    file(MAKE_DIRECTORY ${MODULES_DIR}/${MODULE_NAME}/build-release)
+    execute_process(
+      COMMAND sh -c "${CMAKE_COMMAND} .. ${MODULE_CMAKE_ARGS}"
+      WORKING_DIRECTORY ${MODULES_DIR}/${MODULE_NAME}/build-release
+      RESULT_VARIABLE _PROC_RES)
+    if(NOT _PROC_RES EQUAL 0)
+      message(FATAL_ERROR "CMake configure error")
+    endif()
+    execute_process(
+      COMMAND
+        sh -c
+        "${CMAKE_COMMAND} --build . -j ${PROCESSOR_COUNT} --target install"
+      WORKING_DIRECTORY ${MODULES_DIR}/${MODULE_NAME}/build-release
+      RESULT_VARIABLE _PROC_RES)
+    if(NOT _PROC_RES EQUAL 0)
+      message(FATAL_ERROR "Install error")
+    endif()
+  else()
+    message(STATUS "Submodule ${MODULE_NAME} is already built and installed")
   endif()
 endfunction()
 
@@ -79,7 +84,9 @@ set(GRPC_CMAKE_ARGS
     "${MODULES_COMMON_CMAKE_ARGS} -DSKIP_INSTALL_ALL=ON -DgRPC_INSTALL=ON -DgRPC_BUILD_TESTS=OFF -DgRPC_SSL_PROVIDER=package"
 )
 
-build_submodule(${MODULE_GOOGLE_TEST} "${GOOGLE_TEST_CMAKE_ARGS}")
-build_submodule(${MODULE_GRPC} "${GRPC_CMAKE_ARGS}")
+build_submodule(${MODULE_GOOGLE_TEST} "${GOOGLE_TEST_CMAKE_ARGS}"
+                "${MODULES_INSTALL_PREFIX}/include/gtest/gtest.h")
+build_submodule(${MODULE_GRPC} "${GRPC_CMAKE_ARGS}"
+                "${MODULES_INSTALL_PREFIX}/include/absl/base/options.h")
 
 add_subdirectory(${MODULES_DIR}/highwayhash ${CMAKE_BINARY_DIR}/highwayhash)

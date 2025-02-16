@@ -1,15 +1,3 @@
-set(TESTING_LIBS_EXTRA ${THIRD_PARTY_LIBS})
-list(APPEND TESTING_LIBS_EXTRA ${GTEST_LIBS})
-
-macro(finalize_test_link __TARGET)
-  # Note that we only add "--start-group" and not "--end-group". "ld" will add
-  # it as last parameter in the command line. If we add it explicitly, it will
-  # be added somewhere in the middle
-  target_link_options(${__TARGET} PRIVATE "-Wl,--start-group"
-                      "${TESTING_LIBS_EXTRA}")
-  target_link_options(${__TARGET} PRIVATE "-Wl,--allow-multiple-definition")
-endmacro()
-
 add_subdirectory(coordinator)
 add_subdirectory(utils)
 add_subdirectory(query)
@@ -31,7 +19,7 @@ target_link_libraries(valkey_search_test PRIVATE thread_pool)
 target_link_libraries(valkey_search_test PRIVATE module)
 target_link_libraries(valkey_search_test PRIVATE utils)
 target_link_libraries(valkey_search_test PRIVATE valkey_module)
-finalize_test_link(valkey_search_test)
+finalize_test_flags(valkey_search_test)
 
 set(SRCS_FT_CREATE_PARSER_TEST
     ${CMAKE_CURRENT_LIST_DIR}/ft_create_parser_test.cc)
@@ -46,7 +34,7 @@ target_link_libraries(ft_create_parser_test PUBLIC log)
 target_link_libraries(ft_create_parser_test PUBLIC module)
 target_link_libraries(ft_create_parser_test PUBLIC utils)
 target_link_libraries(ft_create_parser_test PUBLIC vmsdk_testing_infra)
-finalize_test_link(ft_create_parser_test)
+finalize_test_flags(ft_create_parser_test)
 
 set(SRCS_FT_SEARCH_PARSER_TEST
     ${CMAKE_CURRENT_LIST_DIR}/ft_search_parser_test.cc)
@@ -65,7 +53,7 @@ target_link_libraries(ft_search_parser_test PUBLIC type_conversions)
 target_link_libraries(ft_search_parser_test PUBLIC module)
 target_link_libraries(ft_search_parser_test PUBLIC utils)
 target_link_libraries(ft_search_parser_test PUBLIC valkey_module)
-finalize_test_link(ft_search_parser_test)
+finalize_test_flags(ft_search_parser_test)
 
 set(SRCS_FT_SEARCH_TEST ${CMAKE_CURRENT_LIST_DIR}/ft_search_test.cc)
 
@@ -89,7 +77,7 @@ target_link_libraries(ft_search_test PUBLIC thread_pool)
 target_link_libraries(ft_search_test PUBLIC module)
 target_link_libraries(ft_search_test PUBLIC utils)
 target_link_libraries(ft_search_test PUBLIC valkey_module)
-finalize_test_link(ft_search_test)
+finalize_test_flags(ft_search_test)
 
 set(SRCS_KEYSPACE_EVENT_MANAGER_TEST
     ${CMAKE_CURRENT_LIST_DIR}/keyspace_event_manager_test.cc)
@@ -103,7 +91,7 @@ target_link_libraries(keyspace_event_manager_test PUBLIC index_base)
 target_link_libraries(keyspace_event_manager_test PUBLIC module)
 target_link_libraries(keyspace_event_manager_test PUBLIC utils)
 target_link_libraries(keyspace_event_manager_test PUBLIC valkey_module)
-finalize_test_link(keyspace_event_manager_test)
+finalize_test_flags(keyspace_event_manager_test)
 
 set(SRCS_INDEX_SCHEMA_TEST ${CMAKE_CURRENT_LIST_DIR}/index_schema_test.cc)
 
@@ -128,7 +116,7 @@ target_link_libraries(index_schema_test PUBLIC type_conversions)
 target_link_libraries(index_schema_test PUBLIC module)
 target_link_libraries(index_schema_test PUBLIC utils)
 target_link_libraries(index_schema_test PUBLIC valkey_module)
-finalize_test_link(index_schema_test)
+finalize_test_flags(index_schema_test)
 
 set(SRCS_FT_DROPINDEX_TEST ${CMAKE_CURRENT_LIST_DIR}/ft_dropindex_test.cc)
 
@@ -142,7 +130,7 @@ target_link_libraries(ft_dropindex_test PUBLIC commands)
 target_link_libraries(ft_dropindex_test PUBLIC thread_pool)
 target_link_libraries(ft_dropindex_test PUBLIC module)
 target_link_libraries(ft_dropindex_test PUBLIC valkey_module)
-finalize_test_link(ft_dropindex_test)
+finalize_test_flags(ft_dropindex_test)
 
 set(SRCS_COMMON ${CMAKE_CURRENT_LIST_DIR}/common.cc
                 ${CMAKE_CURRENT_LIST_DIR}/common.h)
@@ -198,7 +186,7 @@ target_link_libraries(vss_vector_test PUBLIC string_interning)
 target_link_libraries(vss_vector_test PUBLIC hnswlib_vmsdk)
 target_link_libraries(vss_vector_test PUBLIC managed_pointers)
 target_link_libraries(vss_vector_test PUBLIC type_conversions)
-finalize_test_link(vss_vector_test)
+finalize_test_flags(vss_vector_test)
 
 set(SRCS_FT_LIST_TEST ${CMAKE_CURRENT_LIST_DIR}/ft_list_test.cc)
 
@@ -211,7 +199,7 @@ target_link_libraries(ft_list_test PUBLIC commands)
 target_link_libraries(ft_list_test PUBLIC thread_pool)
 target_link_libraries(ft_list_test PUBLIC module)
 target_link_libraries(ft_list_test PUBLIC valkey_module)
-finalize_test_link(ft_list_test)
+finalize_test_flags(ft_list_test)
 
 set(SRCS_FT_INFO_TEST ${CMAKE_CURRENT_LIST_DIR}/ft_info_test.cc)
 
@@ -225,7 +213,7 @@ target_link_libraries(ft_info_test PUBLIC module)
 target_link_libraries(ft_info_test PUBLIC thread_pool)
 target_link_libraries(ft_info_test PUBLIC module)
 target_link_libraries(ft_info_test PUBLIC valkey_module)
-finalize_test_link(ft_info_test)
+finalize_test_flags(ft_info_test)
 
 set(SRCS_FT_CREATE_TEST ${CMAKE_CURRENT_LIST_DIR}/ft_create_test.cc)
 
@@ -238,7 +226,7 @@ target_link_libraries(ft_create_test PUBLIC index_base)
 target_link_libraries(ft_create_test PUBLIC module)
 target_link_libraries(ft_create_test PUBLIC module)
 target_link_libraries(ft_create_test PUBLIC valkey_module)
-finalize_test_link(ft_create_test)
+finalize_test_flags(ft_create_test)
 
 set(SRCS_RDB_IO_STREAM_TEST ${CMAKE_CURRENT_LIST_DIR}/rdb_io_stream_test.cc)
 
@@ -249,7 +237,7 @@ target_link_libraries(rdb_io_stream_test PUBLIC rdb_io_stream)
 target_link_libraries(rdb_io_stream_test PUBLIC iostream)
 target_link_libraries(rdb_io_stream_test PUBLIC module)
 target_link_libraries(rdb_io_stream_test PUBLIC valkey_module)
-finalize_test_link(rdb_io_stream_test)
+finalize_test_flags(rdb_io_stream_test)
 
 set(SRCS_FILTER_TEST ${CMAKE_CURRENT_LIST_DIR}/filter_test.cc)
 
@@ -262,7 +250,7 @@ target_link_libraries(filter_test PUBLIC tag)
 target_link_libraries(filter_test PUBLIC vector_base)
 target_link_libraries(filter_test PUBLIC predicate)
 target_link_libraries(filter_test PUBLIC string_interning)
-finalize_test_link(filter_test)
+finalize_test_flags(filter_test)
 
 set(SRCS_NUMERIC_INDEX_TEST ${CMAKE_CURRENT_LIST_DIR}/numeric_index_test.cc)
 
@@ -273,7 +261,7 @@ target_link_libraries(numeric_index_test PUBLIC index_base)
 target_link_libraries(numeric_index_test PUBLIC numeric)
 target_link_libraries(numeric_index_test PUBLIC predicate)
 target_link_libraries(numeric_index_test PUBLIC utils)
-finalize_test_link(numeric_index_test)
+finalize_test_flags(numeric_index_test)
 
 set(SRCS_TAG_INDEX_TEST ${CMAKE_CURRENT_LIST_DIR}/tag_index_test.cc)
 
@@ -284,7 +272,7 @@ target_link_libraries(tag_index_test PUBLIC index_base)
 target_link_libraries(tag_index_test PUBLIC tag)
 target_link_libraries(tag_index_test PUBLIC predicate)
 target_link_libraries(tag_index_test PUBLIC utils)
-finalize_test_link(tag_index_test)
+finalize_test_flags(tag_index_test)
 
 set(SRCS_SEARCH_TEST ${CMAKE_CURRENT_LIST_DIR}/search_test.cc)
 
@@ -306,7 +294,7 @@ target_link_libraries(search_test PUBLIC patricia_tree)
 target_link_libraries(search_test PUBLIC string_interning)
 target_link_libraries(search_test PUBLIC managed_pointers)
 target_link_libraries(search_test PUBLIC type_conversions)
-finalize_test_link(search_test)
+finalize_test_flags(search_test)
 
 set(SRCS_SCHEMA_MANAGER_TEST ${CMAKE_CURRENT_LIST_DIR}/schema_manager_test.cc)
 
@@ -318,7 +306,7 @@ target_link_libraries(schema_manager_test PUBLIC metadata_manager)
 target_link_libraries(schema_manager_test PUBLIC coordinator_common)
 target_link_libraries(schema_manager_test PUBLIC module)
 target_link_libraries(schema_manager_test PUBLIC valkey_module)
-finalize_test_link(schema_manager_test)
+finalize_test_flags(schema_manager_test)
 
 set(SRCS_SERVER_EVENTS_TEST ${CMAKE_CURRENT_LIST_DIR}/server_events_test.cc)
 
@@ -329,7 +317,7 @@ target_link_libraries(server_events_test PUBLIC server_events)
 target_link_libraries(server_events_test PUBLIC module)
 target_link_libraries(server_events_test PUBLIC utils)
 target_link_libraries(server_events_test PUBLIC valkey_module)
-finalize_test_link(server_events_test)
+finalize_test_flags(server_events_test)
 
 set(SRCS_ATTRIBUTE_DATA_TYPE_TEST
     ${CMAKE_CURRENT_LIST_DIR}/attribute_data_type_test.cc)
@@ -343,7 +331,7 @@ target_link_libraries(attribute_data_type_test PUBLIC managed_pointers)
 target_link_libraries(attribute_data_type_test PUBLIC type_conversions)
 target_link_libraries(attribute_data_type_test PUBLIC module)
 target_link_libraries(attribute_data_type_test PUBLIC valkey_module)
-finalize_test_link(attribute_data_type_test)
+finalize_test_flags(attribute_data_type_test)
 
 set(SRCS_MULTI_EXEC_TEST ${CMAKE_CURRENT_LIST_DIR}/multi_exec_test.cc)
 
@@ -357,7 +345,7 @@ target_link_libraries(multi_exec_test PUBLIC managed_pointers)
 target_link_libraries(multi_exec_test PUBLIC thread_pool)
 target_link_libraries(multi_exec_test PUBLIC module)
 target_link_libraries(multi_exec_test PUBLIC valkey_module)
-finalize_test_link(multi_exec_test)
+finalize_test_flags(multi_exec_test)
 
 set(SRCS_VECTOR_EXTERNALIZER_TEST
     ${CMAKE_CURRENT_LIST_DIR}/vector_externalizer_test.cc)
@@ -374,4 +362,4 @@ target_link_libraries(vector_externalizer_test PUBLIC string_interning)
 target_link_libraries(vector_externalizer_test PUBLIC type_conversions)
 target_link_libraries(vector_externalizer_test PUBLIC module)
 target_link_libraries(vector_externalizer_test PUBLIC valkey_module)
-finalize_test_link(vector_externalizer_test)
+finalize_test_flags(vector_externalizer_test)

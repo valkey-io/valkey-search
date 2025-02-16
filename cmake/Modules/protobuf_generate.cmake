@@ -1,3 +1,6 @@
+set(MODULE_BASE_DIR "${CMAKE_BINARY_DIR}/.deps")
+set(MODULES_BIN_DIR "${MODULE_BASE_DIR}/install/bin")
+
 function(protobuf_generate)
   include(CMakeParseArguments)
 
@@ -100,14 +103,8 @@ function(protobuf_generate)
     endforeach()
   endif()
 
-  find_program(protobuf_generate_PROTOC_EXE protoc HINTS /usr/local/bin
-                                                         /usr/bin)
-  if(NOT protobuf_generate_PROTOC_EXE)
-    # Default to using the CMake executable
-    message(WARNING "Using default protobuf::protoc")
-    set(protobuf_generate_PROTOC_EXE protobuf::protoc)
-  endif()
-
+  set(protobuf_generate_PROTOC_EXE ${MODULES_BIN_DIR}/protoc)
+  message(STATUS "Using protoc => ${protobuf_generate_PROTOC_EXE}")
   foreach(DIR ${protobuf_generate_IMPORT_DIRS})
     get_filename_component(ABS_PATH ${DIR} ABSOLUTE)
     list(FIND _protobuf_include_path ${ABS_PATH} _contains_already)
@@ -205,28 +202,13 @@ endfunction()
 # extension). "OUT_LIBNAME" is the user provided target name to create
 function(create_proto_library PROTO_FILE_SRC_DIR PROTO_BASE_FILE_NAME
          OUT_LIBNAME)
-  set(PROTO_OUT_DIR ${CMAKE_BINARY_DIR}/${PROTO_FILE_SRC_DIR})
   set(PROTO_IN_DIR ${CMAKE_SOURCE_DIR}/${PROTO_FILE_SRC_DIR})
-  file(MAKE_DIRECTORY ${PROTO_OUT_DIR})
-  if(NOT EXISTS ${PROTO_OUT}/${PROTO_BASE_FILE_NAME}.pb.h
-     OR NOT EXISTS ${PROTO_OUT_DIR}/${PROTO_BASE_FILE_NAME}.pb.cc)
-    execute_process(
-      COMMAND
-        ${Protobuf_PROTOC_EXECUTABLE} --cpp_out=${PROTO_OUT_DIR}
-        --proto_path=${PROTO_IN_DIR}
-        ${PROTO_IN_DIR}/${PROTO_BASE_FILE_NAME}.proto
-      OUTPUT_VARIABLE PROTOC_OUTPUT
-      OUTPUT_STRIP_TRAILING_WHITESPACE)
-  endif()
+  set(PROTO_OUT_DIR ${CMAKE_BINARY_DIR}/${PROTO_FILE_SRC_DIR})
+  add_library(${OUT_LIBNAME} STATIC
+              "${PROTO_IN_DIR}/${PROTO_BASE_FILE_NAME}.proto")
+  protobuf_generate(TARGET ${OUT_LIBNAME} IMPORT_DIRS "${PROTO_IN_DIR}"
+                    PROTOC_OUT_DIR "${PROTO_OUT_DIR}")
   message(STATUS "Creating target ${OUT_LIBNAME}")
-  set(__LIB_SRCS "${PROTO_OUT_DIR}/${PROTO_BASE_FILE_NAME}.pb.h"
-                 "${PROTO_OUT_DIR}/${PROTO_BASE_FILE_NAME}.pb.cc")
-  add_library(${OUT_LIBNAME} STATIC ${__LIB_SRCS})
-  if(VALKEY_SEARCH_RELEASE_BUILD)
-    message(STATUS "Enabling LTO for target ${OUT_LIBNAME}")
-    set_property(TARGET ${OUT_LIBNAME} PROPERTY INTERPROCEDURAL_OPTIMIZATION
-                                                TRUE)
-  endif()
   valkey_search_target_update_compile_flags(${OUT_LIBNAME})
   target_link_libraries(${OUT_LIBNAME} PUBLIC ${Protobuf_LIBRARIES})
   target_include_directories(${OUT_LIBNAME} PUBLIC ${CMAKE_BINARY_DIR})
@@ -234,5 +216,4 @@ function(create_proto_library PROTO_FILE_SRC_DIR PROTO_BASE_FILE_NAME
   target_include_directories(${OUT_LIBNAME} PUBLIC ${Protobuf_INCLUDE_DIRS})
   unset(PROTO_OUT_DIR CACHE)
   unset(PROTO_IN_DIR CACHE)
-  unset(__LIB_SRCS CACHE)
 endfunction()

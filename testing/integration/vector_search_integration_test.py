@@ -213,7 +213,7 @@ class VectorSearchIntegrationTest(VSSTestCase):
 
     @parameterized.named_parameters(
         dict(
-            testcase_name="index_not_exixts_no_content",
+            testcase_name="index_not_exists_no_content",
             config=dict(
                 index_name="test_index",
                 vector_attribute_name="embedding",
@@ -230,7 +230,7 @@ class VectorSearchIntegrationTest(VSSTestCase):
             ),
         ),
         dict(
-            testcase_name="attribute_not_exixts_no_content",
+            testcase_name="attribute_not_exists_no_content",
             config=dict(
                 index_name="test_index",
                 vector_attribute_name="embedding",
@@ -247,7 +247,7 @@ class VectorSearchIntegrationTest(VSSTestCase):
             ),
         ),
         dict(
-            testcase_name="index_not_exixts",
+            testcase_name="index_not_exists",
             config=dict(
                 index_name="test_index",
                 vector_attribute_name="embedding",
@@ -264,7 +264,7 @@ class VectorSearchIntegrationTest(VSSTestCase):
             ),
         ),
         dict(
-            testcase_name="attribute_not_exixts",
+            testcase_name="attribute_not_exists",
             config=dict(
                 index_name="test_index",
                 vector_attribute_name="embedding",

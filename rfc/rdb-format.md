@@ -42,47 +42,47 @@ Our existing RDB format is a good start, but it also is fairly rigid and won't w
 Below is a diagram of the proposed payload design:
 
 ```
-                                                                                           Example Binary Dump
-                                                                                          ┌─────────────────────────────────────┐
-                       Example Header                                                     │ Chunk 1  Chunk 2  Chunk 3  EOF      │
-             ┌───────────────────────────────────────────┐                                │┌───────┐┌───────┐┌───────┐┌────────┐│
-Unknown types│   Type   Required  Enc.    Header         │                                ││...    ││...    ││...    ││        ││
- are skipped │  (enum)           Version  Content        │                     ┌──────────│└───────┘└───────┘└───────┘└────────┘│
-     │       │ ┌───────┐┌──────┐┌───────┐┌──────────────┐│                     │          └─────────────────────────────────────┘
-     │       │ │ Index ││      ││       ││E.g, attribute││                     │
-     └───────┼►│Content││ True ││   1   ││name...       ││  ┌──────────────────┼────────────────────────────┐
-             │ └───────┘└──────┘└───────┘└──────────────┘│  │ Header    Binary │     Header    Binary       │
-             └─────────────────────┬─────────────────────┘  │ Proto 1   Dump 1 ▼     Proto 2   Dump 2       │
-                                   │                        │┌────────┐┌───────────┐┌────────┐┌───────────┐ │
-                                   └────────────────────────►│        ││ ...       ││        ││ ...       │ │
-                                                            │└────────┘└───────────┘└────────┘└───────────┘ │
-                                                            └───────────────────────────────────────────────┘
-                                                            Example Supplemental Content
-                       RDB Aux Section                                │
-                  ┌───────────────────────────────────────────────────┼────────────────────────────────────────────────────────┐
-                  │ Module Type OpCode When Private Module Data       │                                                        │
-                  │┌───────────┐┌────┐┌────┐┌─────────────────────────┼───────────────────────────────────────────────────────┐│
-                  ││           ││    ││    ││Section  VSRDBSection    │  Supplemental      VSRDBSection       Supplemental    ││
-                  ││           ││    ││    ││ Count  Proto Payload 1  │ Content for #1    Proto Payload 2    Content for #2   ││
-                  ││"SchMgr-VS"││ 2  ││ 2  ││┌─────┐┌───────────────┐┌▼─────────────────┐┌───────────────┐┌──────────────────┐││
-                  ││           ││    ││    │││  2  ││               ││                  ││               ││                  │││
-                  ││           ││    ││    ││└─────┘└──────▲────────┘└──────────────────┘└───────────────┘└──────────────────┘││
-                  │└───────────┘└────┘└────┘└──────────────┼──────────────────────────────────────────────────────────────────┘│
-                  └────────────────────────────────────────┼───────────────────────────────────────────────────────────────────┘
-                                                           │
-                                                           │
-                                                           │
-                                                       Example VSRDBSection
-                                                     ┌───────────────────────────────────────────────────┐
-                                                     │    Type   Required Enc.              Supplemental │
-                                                     │   (enum)           Version               Count    │
-                                                     │ ┌────────┐┌──────┐┌──────┐┌─────────┐┌──────────┐ │
-                                                   ┌─┼─► Schema ││ True ││  1   ││<content>││    2     │ │
-                                                   │ │ └────────┘└──────┘└──────┘└─────────┘└──────────┘ │
-                                                   │ └───────────────────────────────────────────────────┘
-                                                   │
-                                                 Unknown types
-                                                  are skipped
+                                                                            Example Binary Dump
+                                                                           ┌─────────────────────────────────────┐
+                       Example Header                                      │ Chunk 1  Chunk 2  Chunk 3  EOF      │
+             ┌──────────────────────────┐                                  │┌───────┐┌───────┐┌───────┐┌────────┐│
+Unknown types│   Type    Header         │                                  ││...    ││...    ││...    ││        ││
+ are skipped │  (enum)   Content        │                       ┌──────────│└───────┘└───────┘└───────┘└────────┘│
+     │       │ ┌───────┐┌──────────────┐│                       │          └─────────────────────────────────────┘
+     │       │ │ Index ││E.g, attribute││                       │
+     └───────┼►│Content││name...       ││    ┌──────────────────┼────────────────────────────┐
+             │ └───────┘└──────────────┘│    │ Header    Binary │     Header    Binary       │
+             └──────────────────────────┘    │ Proto 1   Dump 1 ▼     Proto 2   Dump 2       │
+                                   │         │┌────────┐┌───────────┐┌────────┐┌───────────┐ │
+                                   └─────────►│        ││ ...       ││        ││ ...       │ │
+                                             │└────────┘└───────────┘└────────┘└───────────┘ │
+                                             └───────────────────────────────────────────────┘
+                                                                Example Supplemental Content
+                       RDB Aux Section                                          │
+                  ┌─────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────┐
+                  │ Module Type OpCode When Private Module Data                 │                                                        │
+                  │┌───────────┐┌────┐┌────┐┌───────────────────────────────────┼───────────────────────────────────────────────────────┐│
+                  ││           ││    ││    ││ Min. Sem. Section  VSRDBSection   │  Supplemental      VSRDBSection       Supplemental    ││
+                  ││           ││    ││    ││ Version    Count  Proto Payload 1 │ Content for #1    Proto Payload 2    Content for #2   ││
+                  ││"SchMgr-VS"││ 2  ││ 2  ││┌────────┐┌─────┐┌───────────────┐┌▼─────────────────┐┌───────────────┐┌──────────────────┐││
+                  ││           ││    ││    │││  1.0.0 ││  2  ││               ││                  ││               ││                  │││
+                  ││           ││    ││    ││└────────┘└─────┘└──────▲────────┘└──────────────────┘└───────────────┘└──────────────────┘││
+                  │└───────────┘└────┘└────┘└────────────────────────┼──────────────────────────────────────────────────────────────────┘│
+                  └──────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────────┘
+                                                                     │
+                                                                     │
+                                                                     │
+                                                                 Example VSRDBSection
+                                                               ┌───────────────────────────────────┐
+                                                               │    Type              Supplemental │
+                                                               │   (enum)                 Count    │
+                                                               │ ┌────────┐┌─────────┐┌──────────┐ │
+                                                             ┌─┼─► Schema ││<content>││    2     │ │
+                                                             │ │ └────────┘└─────────┘└──────────┘ │
+                                                             │ └───────────────────────────────────┘
+                                                             │
+                                                           Unknown types
+                                                            are skipped
 ```
 
 #### RDBSection
@@ -97,8 +97,6 @@ enum RDBSectionType {
 
 message RDBSection {
    RDBSectionType type = 1;
-   bool required;
-   uint32 encoding_version;
    oneof contents {
       IndexSchema index_schema_definition = 2;
       ...
@@ -111,7 +109,7 @@ message RDBSection {
 
 Before the `RDBSection`s, a single integer will be emitted using `ValekyModule_SaveUnsigned` to denote the number of `RDBSection`s emitted. Each `RDBSection` is then saved into the RDB using a single `ValkeyModule_SaveString` API call.
 
-The goal of breaking into sections is to support skipping optional sections if they are not understood. New sections should be introduced in a manner where failure to understand the new section will generally load fine without loss. Any time that failure to load the section would result in some form of lossiness or inconsistency, we will mark `required` as true and it will result in a downgrade failure. This would only be desired in cases where operators have used new features, and need to think about the downgrade more critically, potentially removing (or, once supported, altering) indexes that will not downgrade gracefully. Similarly, for section types that would like to introduce new required fields, we will include an encoding version, which is conditionally bumped when these new fields are written.
+The goal of breaking into sections is to support skipping optional sections if they are not understood. New sections should be introduced in a manner where failure to understand the new section will generally load fine without loss. Any time that failure to load the section would result in some form of lossiness or inconsistency, we will need to bump the minimum semantic version to the minimum version that will be capable of reading it. When loading an RDB, if the semantic version is greater than our version, we can fail fast with a message. This would be desired in cases where operators have used new features and therefore need to think about the downgrade more critically, potentially removing (or, once supported, altering) indexes that will not downgrade gracefully.
 
 #### Supplemental Contents
 
@@ -132,10 +130,8 @@ message IndexContentHeader {
 
 message SupplementalContentHeader {
    SupplementalContentType type = 1;
-   bool required = 2;
-   uint32 encoding_version = 3;
    oneof header {
-      IndexContentHeader index_content_header = 4;
+      IndexContentHeader index_content_header = 2;
       ...
    };
 }
@@ -143,9 +139,7 @@ message SupplementalContentHeader {
 
 Each `SupplementalContentHeader` will be emitted using a single `ValkeyModule_SaveString` call, similar to the `RDBSection` proto above. Following the `SupplementalContentHeader`, the binary payload will be emitted in a chunked manner, each individually saved with a call to `ValkeyModule_SaveString`, terminated with an EOF marker. See below for more details on the dump format.
 
-The supplemental header will allow differing versions of the module to identify if this supplemental content is understood, and if not, whether that is okay. This is done through exposing a type (similar to RDBSection), an encoding version, and a `required` flag. There may be additional header contents needed by different supplemental content types as well, e.g. for index contents, we will need to know which attribute the index is corresponding to (represeneted by `IndexContentHeader` above).
-
-When loading supplemental content, the content will be ignored iff `required` is false and either the type is unknown or the encoding version is higher than we understand.
+There may be additional non-chunked header contents needed by different supplemental content types as well, e.g. for index contents, we will need to know which attribute the index is corresponding to (represented by `IndexContentHeader` above).
 
 #### Binary Dump
 
@@ -168,251 +162,102 @@ When a previous version sees a `SupplementalContentHeader` it doesn't understand
 
 Whenever the contents of the RDB are changed in a manner that an RDB could be produced on the new release that the immediate previous release could not load, we will need to bump the major version and add this to our release notes.
 
-To support downgrade even if the index contents encoding has changed, we will support a configuration:
+When we dump our RDB payload, we will also compute the minimum semantic version required to understand it. Typically, this will be a function of the feature usage and what version those features are introduced in. But it also leaves open the possibility to change the RDB format over time, either by breaking downgrade, or by employing strategies like skip versions (i.e. version 4.X.X may not understand 6.X.X, but 5.X.X can understand 6.X.X and output to 4.X.X).
+
+If an RDB is loaded with a semantic version that is higher than the current version, the following log would be emitted and loading will fail:
 
 ```
-CONFIG SET valkeysearch-allow-downgrade-with-rebuild yes
+ValkeySearch RDB contents require minimum version X.X.X. If you are downgrading, ensure all feature usage on the new version of ValkeySearch is supported by this version and retry.
 ```
 
-When this configuration is provided, the produced dump will mark all index contents as not required. By default, the configuration will be set to `no`. When set to `no`, the RDB loading process will output the following error when the requried contents can not be loaded:
+### Coding Interface
+
+#### SupplementalRDBWriter
+
+The `SupplementalRDBWriter` interface provides methods to write and flush data.
+
+##### `void setChunkSize(size_t chunk_size)`
+
+Sets the default chunk size (i.e. chunk size if no calls to flush are made).
+
+- **Parameters:**
+  - `chunk_size` (`size_t`): The size of the chunk, or if not specified, defaults to 1MiB.
+
+##### `void write(absl::string_view buf)`
+
+Writes a chunk of data.
+
+- **Parameters:**
+  - `buf` (`absl::string_view`): The data buffer to write.
+- **Behavior:**
+  - The function copies the provided buffer, and might flush it to the RDB.
+
+##### `void flush()`
+
+Flushes any buffered data.
+
+- **Behavior:**
+  - Ensures that all written data is committed to the RDB.
+  - Contents are automatically flushed on destruction.
+
+##### `void close()`
+
+Closes the writer.
+
+- **Behavior:**
+  - Emit an EOF marker to the RDB
+  - Also called implicitly on destruction
+
+#### SupplementalRDBReader
+
+The `SupplementalRDBReader` interface provides a method to read chunks of data.
+
+##### `std::string read()`
+
+Reads a chunk of data.
+
+- **Returns:**
+  - `std::string`: A chunk of data that is read from the RDB.
+- **Behavior:**
+  - Returns the next available chunk of data.
+  - If no data is available, the return value may be an empty `std::string`.
+
+#### Example Usage
 
 ```
-ValkeySearch RDB contents contain defintions for RDB sections that are not supported by this version. If you are downgrading, ensure all feature usage on the new version of ValkeySearch is supported by this version and retry. If you are okay with forcing a rebuild on downgrade, set "valkeysearch-allow-downgrade-with-rebuild" to "yes" on the process running the new ValkeySearch version and retrigger the RDB save.
-```
 
-### Example: Adding Vector Quantization
+void IndexSchema::RDBSave() {
+   data_model::RDBSection section;
+   section.set_type(RdbSectionType::RDB_SECTION_INDEX_SCHEMA);
+   section.set_index_schema_definition(this->ToProto());
+   section.set_supplemental_count(this->GetAttributeCount() * 2);
+   ValkeyModule_RDBSaveString(section.SerializeAsString());
 
-With the above design, suppose that we are substantially changing the index to support a vector quantization option on `FT.CREATE`. For simplicity, suppose this is just a boolean "on" or "off" flag.
+   for (auto &attribute : attributes_) {
+      data_model::SuplementalContent index_content;
+      index_content.set_type(SUPPLEMENTAL_CONTENT_INDEX_CONTENT);
+      data_model::IndexContentHeader index_content_header;
+      index_content_header.set_attribute(attribute.second.ToProto());
+      index_content.set_index_content_header(index_content_header);
+      ValkeyModule_RDBSaveString(index_content.SerializeAsString());
 
-On the old version, in the RDB, we would output something like the following:
+      auto index_writer = std::make_unique<SupplementalRDBWriter>();
+      attribute.second.GetIndex()->SaveIndex(std::move(index_writer));
+      /* SaveIndex writes all index contents as binary, then the writer is destructed once done */
 
-```
-RDBSection {
-   type: RDB_SECTION_INDEX_SCHEMA,
-   required: true,
-   encoding_version: 1,
-   index_schema_contents: {
-      name: "my_index",
-      attributes: [
-         {
-            identifier: "my_vector",
-            index: {
-               VectorIndex {
-                  dimension_count: 100,
-                  algorithm: {
-                     HNSWAlgorithm {
-                        ...
-                     }
-                  }
-                  ...
-               }
-            }
-         },
-         {
-            identifier: "my_tag",
-            index: {
-               TagIndex {
-                  ...
-               }
-            }
-         }
-      ],
-   }
-   supplemental_count: 2,
-}
-SupplementalContentHeader {
-   type: SUPPLEMENTAL_KEY_TO_ID,
-   required: true,
-   enc_version: 1,
-   key_to_id_header: {
-      attribute_name: "my_vector"
-   }
-}
-SupplementalContentChunk {
-   contents: <key_to_id_dump_1>
-}
-SupplementalContentChunk {
-   contents: <key_to_id_dump_2>
-}
-...
-SupplementalContentChunk {
-   contents: ""
-}
-SupplementalContentHeader {
-   type: SUPPLEMENTAL_INDEX_CONTENTS,
-   required: true,
-   enc_version: 1,
-   index_contents_header {
-      attribute_name: "my_vector",
-   }
-}
-SupplementalContentChunk {
-   contents: <my_vector_contents_1>
-}
-SupplementalContentChunk {
-   contents: <my_vector_contents_2>
-}
-...
-SupplementalContentChunk {
-   contents: ""
-}
-```
+      data_model::SuplementalContent key_mapping;
+      key_mapping.set_type(SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP);
+      data_model::KeyToIdHeader key_to_id_header;
+      key_to_id_header.set_attribute(attribute.second.ToProto());
+      key_mapping.set_key_to_id_header(key_to_id_header);
+      ValkeyModule_RDBSaveString(key_mapping.SerializeAsString());
 
-Suppose that the new version introduces a new field in VectoIndex - `bool quantize`. Protocol buffers initialize the default values to a "zero-like" value, so this will be `false` if not previously set. We could also add it as `optional bool quantize`, and specifically check if the VectorIndex proto has the `quantize` field set explicitly. On the upgrade path - we will default initialize the value of `quantize` to false (or handle the default case as we see fit, if we use `optional`).
-
-Suppose now the user recreates the index with `quantize` set to true. If they then choose to downgrade back to the previous version, we will output an RDB that looks like:
-
-```
-RDBSection {
-   type: RDB_SECTION_INDEX_SCHEMA,
-   required: true,
-   enc_version: 2,
-   index_schema_contents: {
-      name: "my_index",
-      attributes: [
-         {
-            identifier: "my_vector",
-            index: {
-               VectorIndex {
-                  dimension_count: 100,
-                  algorithm: {
-                     HNSWAlgorithm {
-                        ...
-                     }
-                  }
-                  quantize: true
-                  ...
-               }
-            }
-         },
-         {
-            identifier: "my_tag",
-            index: {
-               TagIndex {
-                  ...
-               }
-            }
-         }
-      ],
-   }
-   supplemental_count: 2,
-}
-SupplementalContentHeader {
-   type: SUPPLEMENTAL_KEY_TO_ID,
-   required: true,
-   enc_version: 1,
-   key_to_id_header: {
-      attribute_name: "my_vector"
+      auto key_to_id_writer = std::make_unique<SupplementalRDBWriter>();
+      attribute.second.GetIndex()->SaveMapping(std::move(index_writer));
+      /* SaveMapping writes all key to id mappings as binary, then the writer is destructed once done */
    }
 }
-SupplementalContentChunk {
-   contents: <key_to_id_dump_1>
-}
-SupplementalContentChunk {
-   contents: <key_to_id_dump_2>
-}
-...
-SupplementalContentChunk {
-   contents: ""
-}
-SupplementalContentHeader {
-   type: SUPPLEMENTAL_INDEX_CONTENTS,
-   required: true,
-   enc_version: 2,
-   index_contents_header {
-      attribute_name: "my_vector",
-   }
-}
-SupplementalContentChunk {
-   contents: <my_vector_contents_1>
-}
-SupplementalContentChunk {
-   contents: <my_vector_contents_2>
-}
-...
-SupplementalContentChunk {
-   contents: ""
-}
 ```
-
-On the new version, when the new feature `quantize` is used, we will bump the encoding version of the RDBSection containing the index schema definition (it now contains the `quantize` field, which will be lost on downgrade). Similarly, we will also bump the encoding version of the SupplementalContentHeader for the index contents - as the format has changed in a way that will not be understood by older versions. On loading this on the previous version, we will fail fast with a useful error message (documented above).
-
-Upon reading this message, the user might recreate the index with `quantize` set to false. In this case, we will output the following RDB contents:
-
-```
-RDBSection {
-   type: RDB_SECTION_INDEX_SCHEMA,
-   required: true,
-   enc_version: 1,
-   index_schema_contents: {
-      name: "my_index",
-      attributes: [
-         {
-            identifier: "my_vector",
-            index: {
-               VectorIndex {
-                  dimension_count: 100,
-                  algorithm: {
-                     HNSWAlgorithm {
-                        ...
-                     }
-                  }
-                  quantize: false
-                  ...
-               }
-            }
-         },
-         {
-            identifier: "my_tag",
-            index: {
-               TagIndex {
-                  ...
-               }
-            }
-         }
-      ],
-   }
-   supplemental_count: 2,
-}
-SupplementalContentHeader {
-   type: SUPPLEMENTAL_KEY_TO_ID,
-   required: true,
-   enc_version: 1,
-   key_to_id_header: {
-      attribute_name: "my_vector"
-   }
-}
-SupplementalContentChunk {
-   contents: <key_to_id_dump_1>
-}
-SupplementalContentChunk {
-   contents: <key_to_id_dump_2>
-}
-...
-SupplementalContentChunk {
-   contents: ""
-}
-SupplementalContentHeader {
-   type: SUPPLEMENTAL_INDEX_CONTENTS,
-   required: true,
-   enc_version: 1,
-   index_contents_header {
-      attribute_name: "my_vector",
-   }
-}
-SupplementalContentChunk {
-   contents: <my_vector_contents_1>
-}
-SupplementalContentChunk {
-   contents: <my_vector_contents_2>
-}
-...
-SupplementalContentChunk {
-   contents: ""
-}
-```
-
-Upon retry, the RDB load will succeed.
 
 ### Testing
 

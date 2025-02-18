@@ -2,6 +2,8 @@ module(
     name = "io_valkey_valkeysearch",
     version = "1.0.0",
 )
+
+bazel_dep(name = "protoc-gen-validate", version = "1.0.4.bcr.2")
 bazel_dep(name = "rules_cc", version = "0.0.16")
 bazel_dep(name = "abseil-cpp", version = "20240722.0.bcr.1", repo_name = "com_google_absl")
 bazel_dep(name = "protobuf", version = "29.2", repo_name = "com_google_protobuf")
@@ -37,3 +39,20 @@ git_override(
     # Replace the commit hash (above) with the latest (https://github.com/hedronvision/bazel-compile-commands-extractor/commits/main).
     # Even better, set up Renovate and let it do the work for you (see "Suggestion: Updates" in the README).
 )
+
+# Integration test dependencies
+bazel_dep(name = "rules_python", version = "0.40.0", dev_dependency = True)
+python = use_extension(
+    "@rules_python//python/extensions:python.bzl",
+    "python",
+    dev_dependency = True
+)
+python.toolchain(python_version = "3.12", is_default=True)
+
+pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip", dev_dependency = True)
+pip.parse(
+    hub_name = "pip",
+    requirements_lock = "//testing/integration:requirements.txt",
+    python_version = "3.12"
+)
+use_repo(pip, "pip")

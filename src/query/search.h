@@ -56,7 +56,8 @@
 namespace valkey_search::query {
 
 constexpr int64_t kTimeoutMS{50000};
-const size_t kMaxTimeoutMs{60000};
+constexpr size_t kMaxTimeoutMs{60000};
+constexpr uint32_t kDialect{2};
 
 struct LimitParameter {
   uint64_t first_index{0};
@@ -74,7 +75,7 @@ struct VectorSearchParameters {
   std::string attribute_alias;
   vmsdk::UniqueRedisString score_as;
   std::string query;
-  uint32_t dialect{2};
+  uint32_t dialect{kDialect};
   bool local_only{false};
   int k;
   std::optional<unsigned> ef;
@@ -89,7 +90,12 @@ struct VectorSearchParameters {
     // at the end of the parse to ensure no dangling pointers.
     absl::string_view query_string;
     absl::string_view score_as_string;
-    absl::flat_hash_map<absl::string_view, std::pair<int, absl::string_view>>
+    //
+    // A Map of param names to values. The target of the map is a pair
+    // that is the string of the value AND a reference count so that we can
+    // detect unused parameters.
+    // Marked mutable so that const parsing functions can bump the ref-count
+    mutable absl::flat_hash_map<absl::string_view, std::pair<int, absl::string_view>>
         params;
     void ClearAtEndOfParse() {
       query_string = absl::string_view();

@@ -3,7 +3,7 @@
 
 #include "src/expr/value.h"
 #include "src/expr/expr.h"
-
+#include "src/query/search.h"
 #include "src/index_schema.h"
 #include "src/schema_manager.h"
 
@@ -21,27 +21,14 @@ class Record;
 class RecordSet;
 class Stage;
 
-constexpr size_t kTimeoutMin = 0;
-constexpr size_t kTimeoutDefault = 60000;
-constexpr size_t kTimeoutMax = 60000;
-
-constexpr size_t kDialectMin = 3;
-constexpr size_t kDialectDefault = 3;
-constexpr size_t kDialectMax = 3;
-
 struct IndexInterface {
   virtual absl::StatusOr<indexes::IndexerType> GetFieldType(absl::string_view s) const = 0;
 };
 
 struct AggregateParameters : public expr::Expression::CompileContext {
-  std::string index_schema_name_;
-  std::string query_;
-  // convert these strings to UniqueRedisStrings
-  absl::flat_hash_map<std::string, std::string> params_;
+  query::VectorSearchParameters common_;
   bool loadall_{false};
   std::vector<vmsdk::UniqueRedisString> loads_;
-  size_t timeout_ms_{kTimeoutDefault};
-  size_t dialect_{kDialectDefault};
   bool addscores_{false};
   std::vector<std::unique_ptr<Stage>> stages_;
 
@@ -49,20 +36,34 @@ struct AggregateParameters : public expr::Expression::CompileContext {
     MakeReference(const absl::string_view s, bool create) override;
 
   absl::StatusOr<expr::Value> GetParam(const absl::string_view s) const override {
-    auto it = params_.find(s);
-    if (it != params_.end()) {
-      return expr::Value(it->second);
+    auto it = common_.parse_vars.params.find(s);
+    if (it != common_.parse_vars.params.end()) {
+      it->second.first++;
+      return expr::Value(it->second.second);
     } else {
       return absl::NotFoundError(absl::StrCat(
         "parameter ", s, " not found."));
     }
   }
 
-  IndexInterface* index_interface_;
   absl::flat_hash_map<std::string, size_t> attr_record_indexes_;
+  
+  struct {
+    // Variables here are only used during parsing and are cleared at the end.
+  
+    // For testing
+    IndexInterface *index_interface_;
 
-  AggregateParameters(IndexInterface* index_interface) :
-    expr::Expression::CompileContext(), index_interface_(index_interface) {}
+    void ClearAtEndOfParse() {
+      index_interface_ = nullptr;
+    }
+  } parse_vars_;
+
+
+  AggregateParameters(IndexInterface *index_interface) {
+    parse_vars_.index_interface_ = index_interface;
+  }
+
 };
 
 class Stage {

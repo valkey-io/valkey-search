@@ -47,6 +47,7 @@ class Expression {
   //
   class CompileContext {
    public:
+    virtual ~CompileContext() = default;
     virtual absl::StatusOr<std::unique_ptr<AttributeReference>> MakeReference(const absl::string_view s, bool create) = 0;
     virtual absl::StatusOr<Value> GetParam(const absl::string_view s) const = 0;
   };

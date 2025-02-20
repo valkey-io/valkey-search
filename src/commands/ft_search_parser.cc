@@ -205,12 +205,12 @@ absl::Status Verify(query::VectorSearchParameters &parameters) {
   if (parameters.k <= 0) {
     return absl::InvalidArgumentError("k must be positive");
   }
-  if (parameters.timeout_ms > kMaxTimeoutMs) {
+  if (parameters.timeout_ms > query::kMaxTimeoutMs) {
     return absl::InvalidArgumentError(
         absl::StrCat(kTimeoutParam,
                      " must be a positive integer greater than 0 and "
                      "cannot exceed ",
-                     kMaxTimeoutMs, "."));
+                     query::kMaxTimeoutMs, "."));
   }
   if (parameters.dialect < 2 || parameters.dialect > 4) {
     return absl::InvalidArgumentError(

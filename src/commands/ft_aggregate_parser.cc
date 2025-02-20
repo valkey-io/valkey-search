@@ -117,7 +117,7 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructParamsParser()
                 "Parameter name `", vmsdk::ToStringView(name), "` contains an invalid character."));
             }
           }
-          parameters.params_[vmsdk::ToStringView(name)] = vmsdk::ToStringView(value);
+          parameters.common_.parse_vars.params[vmsdk::ToStringView(name)] = std::make_pair(0, vmsdk::ToStringView(value));
         }
         return absl::OkStatus();
       });
@@ -223,10 +223,10 @@ vmsdk::KeyValueParser<AggregateParameters> CreateAggregateParser() {
   vmsdk::KeyValueParser<AggregateParameters> parser;
   parser.AddParamParser(
       kDialectParam,
-      GENERATE_VALUE_PARSER(AggregateParameters, dialect_));
+      GENERATE_VALUE_PARSER(AggregateParameters, common_.dialect));
   parser.AddParamParser(
       kTimeoutParam,
-      GENERATE_VALUE_PARSER(AggregateParameters, timeout_ms_));
+      GENERATE_VALUE_PARSER(AggregateParameters, common_.timeout_ms));
   parser.AddParamParser(
       kAddScoresParam,
       GENERATE_FLAG_PARSER(AggregateParameters, addscores_));
@@ -247,8 +247,7 @@ absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
     return std::make_unique<Attribute>(s, it->second);
   } else {
     if (!create) {
-      indexes::IndexerType fieldType;
-      VMSDK_ASSIGN_OR_RETURN(fieldType, index_interface_->GetFieldType(s));
+      VMSDK_ASSIGN_OR_RETURN(auto fieldType, parse_vars_.index_interface_->GetFieldType(s));
       switch (fieldType) {
         case indexes::IndexerType::kTag:
         case indexes::IndexerType::kNumeric:

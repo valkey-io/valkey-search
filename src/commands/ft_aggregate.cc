@@ -13,25 +13,15 @@ namespace valkey_search {
 namespace aggregate {
 
 struct RealIndexInterface : public IndexInterface {
-  IndexSchema *schema_;
-  absl::StatusOr<indexes::IndexerType> GetFieldType(absl::string_view s) const {
-    assert(false);
-  }
-  RealIndexInterface(IndexSchema *schema) : schema_(schema) {}
-};
-
-struct Command {
-  Command(std::shared_ptr<IndexSchema> schema) : schema_(schema), index_interface_(schema.get()), params_(&index_interface_) {}
   std::shared_ptr<IndexSchema> schema_;
-  RealIndexInterface index_interface_;
-  AggregateParameters params_;
+  absl::StatusOr<indexes::IndexerType> GetFieldType(absl::string_view s) const {
+    VMSDK_ASSIGN_OR_RETURN(auto indexer, schema_->GetIndex(s));
+    return indexer->GetIndexerType();
+  }
+  RealIndexInterface(std::shared_ptr<IndexSchema> schema) : schema_(schema) {}
 };
 
-absl::Status Verify(AggregateParameters& p) {
-  return absl::OkStatus();
-}
-
-absl::StatusOr<std::unique_ptr<Command>>
+absl::StatusOr<std::unique_ptr<AggregateParameters>>
 parseCommand(RedisModuleCtx *ctx, RedisModuleString **argv,
                             int argc, const SchemaManager &schema_manager) {
 static vmsdk::KeyValueParser<AggregateParameters> parser =
@@ -41,15 +31,18 @@ static vmsdk::KeyValueParser<AggregateParameters> parser =
   VMSDK_RETURN_IF_ERROR(
       vmsdk::ParseParamValue(itr, index_schema_name));
   VMSDK_ASSIGN_OR_RETURN(
-      auto index_schema_,
+      auto index_schema,
       SchemaManager::Instance().GetIndexSchema(RedisModule_GetSelectedDb(ctx),
                                                index_schema_name));
-  auto command = std::make_unique<Command>(index_schema_);                                                
-  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, command->params_.query_));
+  RealIndexInterface index_interface(index_schema);                                               
+  auto params = std::make_unique<AggregateParameters>(&index_interface);
+  params.common_.index_schema_name = std::move(index_schema_name);
+  params.common_.index_schema = std::move(index_schema);
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, params.common_.query));
 
-  VMSDK_RETURN_IF_ERROR(parser.Parse(command->params_, itr, false));
-  VMSDK_RETURN_IF_ERROR(Verify(command->params_));
-  return command;
+  VMSDK_RETURN_IF_ERROR(parser.Parse(params, itr, false));
+  params.parse_vars.ClearAtEndOfParse();
+  return std::move(params);
 }
 
 absl::Status FTAggregateCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
@@ -57,18 +50,18 @@ absl::Status FTAggregateCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
   auto status = [&]() {
     auto &schema_manager = SchemaManager::Instance();
     VMSDK_ASSIGN_OR_RETURN(
-        auto command,
+        auto parameters,
         parseCommand(ctx, argv + 1, argc - 1, schema_manager));
-/*
     parameters->index_schema_->ProcessMultiQueue();
     bool inside_multi =
         (RedisModule_GetContextFlags(ctx) & REDISMODULE_CTX_FLAGS_MULTI) != 0;
-    if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParralelQueries() ||
+    if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
                            inside_multi)) {
-      VMSDK_ASSIGN_OR_RETURN(auto neighbors, query::Search(*parameters, true));
-      SendReply(ctx, neighbors, *parameters);
+      VMSDK_ASSIGN_OR_RETURN(auto neighbors, query::Search(parameters->common_, true));
+      SendReply(ctx, neighbors, parameters->common_);
       return absl::OkStatus();
     }
+/*
 
     vmsdk::BlockedClient blocked_client(ctx, async::Reply, async::Timeout,
                                         async::Free, 0);

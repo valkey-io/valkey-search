@@ -46,7 +46,7 @@ static struct TimeoutTestValue {
   std::string text_;
   std::optional<size_t> value_;
 } TimeoutCases[] {
-  {"", kTimeoutDefault },
+  {"", query::kTimeoutMS },
   {"TIMEOUT", std::nullopt}, 
   {"TimeOut 1", 1},
   {"Timeout 0", 0},
@@ -59,7 +59,7 @@ static struct DialectTestValue {
   std::string text_;
   std::optional<size_t> value_;
 } DialectCases[] {
-  {"", kDialectDefault },
+  {"", query::kDialect },
   {"DIALecT", std::nullopt},
   {"Dialect 0", 0},
   {"Dialect 3", 3},
@@ -97,8 +97,8 @@ static void DoPrefaceTestCase(
   auto result = parser.Parse(params, itr);
   if (timeout_test.value_ && dialect_test.value_ && loads_test.value_) {
     EXPECT_TRUE(result.ok()) << " Status: " << result;
-    EXPECT_EQ(params.timeout_ms_, *timeout_test.value_);
-    EXPECT_EQ(params.dialect_, *dialect_test.value_);
+    EXPECT_EQ(params.common_.timeout_ms, *timeout_test.value_);
+    EXPECT_EQ(params.common_.dialect, *dialect_test.value_);
     EXPECT_TRUE(loads_test.value_);
     if (loads_test.value_ == std::vector<std::string>{"*"}) {
       EXPECT_TRUE(params.loadall_);
@@ -112,10 +112,10 @@ static void DoPrefaceTestCase(
     }
   } else {
     if (!timeout_test.value_) {
-      EXPECT_EQ(params.timeout_ms_, kTimeoutDefault);
+      EXPECT_EQ(params.common_.timeout_ms, query::kTimeoutMS);
     }
     if (!dialect_test.value_) {
-      EXPECT_EQ(params.dialect_, kDialectDefault);
+      EXPECT_EQ(params.common_.dialect, query::kDialect);
     }
   }
 }

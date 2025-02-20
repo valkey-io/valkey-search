@@ -259,7 +259,7 @@ Value FuncDiv(const Value& l, const Value& r) {
   if (lv && rv) {
     return Value(lv.value() / rv.value());
   } else {
-    return Value(Value::Nil("Divide requires numberic operands"));
+    return Value(Value::Nil("Divide requires numeric operands"));
   }
 }
 

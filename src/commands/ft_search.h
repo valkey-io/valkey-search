@@ -51,6 +51,9 @@ struct Result {
   std::unique_ptr<query::VectorSearchParameters> parameters;
 };
 
+int Timeout(RedisModuleCtx *ctx, [[maybe_unused]] RedisModuleString **argv,
+            [[maybe_unused]] int argc);
+
 int Reply(RedisModuleCtx *ctx, [[maybe_unused]] RedisModuleString **argv,
           [[maybe_unused]] int argc);
 

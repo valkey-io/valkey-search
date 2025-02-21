@@ -47,6 +47,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
+#include "src/commands/ft_aggregate.h"
 #include "src/commands/ft_search_parser.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
@@ -165,6 +166,10 @@ void SerializeNeighbors(RedisModuleCtx *ctx,
 // SendReply respects the Limit, see https://redis.io/commands/ft.search/
 void SendReply(RedisModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
                const query::VectorSearchParameters &parameters) {
+  if (auto agg =
+          dynamic_cast<const aggregate::AggregateParameters *>(&parameters)) {
+    aggregate::SendReply(ctx, neighbors, *agg);
+  }
   // Increment success counter.
   ++Metrics::GetStats().query_successful_requests_cnt;
   if (parameters.limit.first_index >= static_cast<uint64_t>(parameters.k) ||

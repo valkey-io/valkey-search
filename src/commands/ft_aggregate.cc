@@ -7,7 +7,9 @@
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/metrics.h"
+#include "src/query/fanout.h"
 #include "src/schema_manager.h"
+#include "src/valkey_search.h"
 
 namespace valkey_search {
 namespace aggregate {
@@ -38,10 +40,10 @@ absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
   auto params = std::make_unique<AggregateParameters>(&index_interface);
   params->index_schema_name = std::move(index_schema_name);
   params->index_schema = std::move(index_schema);
-  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, params.query));
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, params->query));
 
   VMSDK_RETURN_IF_ERROR(parser.Parse(*params, itr, false));
-  params.parse_vars.ClearAtEndOfParse();
+  params->parse_vars.ClearAtEndOfParse();
   return std::move(params);
 }
 
@@ -57,43 +59,44 @@ absl::Status FTAggregateCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
     if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
                            inside_multi)) {
       VMSDK_ASSIGN_OR_RETURN(auto neighbors, query::Search(*parameters, true));
-      parameters->SendReply(ctx, neighbors);
+      SendReply(ctx, neighbors, *parameters);
       return absl::OkStatus();
     }
-    /*
+    vmsdk::BlockedClient blocked_client(ctx, async::Reply, async::Timeout,
+                                        async::Free, 0);
+    blocked_client.MeasureTimeStart();
+    auto on_done_callback = [blocked_client = std::move(blocked_client)](
+                                auto &neighbors, auto parameters) mutable {
+      auto result = std::make_unique<async::Result>(async::Result{
+          .neighbors = std::move(neighbors),
+          .parameters = std::move(parameters),
+      });
+      blocked_client.SetReplyPrivateData(result.release());
+    };
 
-        vmsdk::BlockedClient blocked_client(ctx, async::Reply, async::Timeout,
-                                            async::Free, 0);
-        blocked_client.MeasureTimeStart();
-        auto on_done_callback = [blocked_client = std::move(blocked_client)](
-                                    auto &neighbors, auto parameters) mutable {
-          auto result = std::make_unique<async::Result>(async::Result{
-              .neighbors = std::move(neighbors),
-              .parameters = std::move(parameters),
-          });
-          blocked_client.SetReplyPrivateData(result.release());
-        };
-
-        if (ValkeySearch::Instance().UsingCoordinator() &&
-            ValkeySearch::Instance().IsCluster() && !parameters->local_only) {
-          auto search_targets = query::fanout::GetSearchTargetsForFanout(ctx);
-          return query::fanout::PerformSearchFanoutAsync(
-              ctx, search_targets,
-              ValkeySearch::Instance().GetCoordinatorClientPool(),
-              std::move(parameters),
-       ValkeySearch::Instance().GetReaderThreadPool(),
-              std::move(on_done_callback));
-        }
-        return query::SearchAsync(std::move(parameters),
-                                  ValkeySearch::Instance().GetReaderThreadPool(),
-                                  std::move(on_done_callback), true);
-    */
+    if (ValkeySearch::Instance().UsingCoordinator() &&
+        ValkeySearch::Instance().IsCluster() && !parameters->local_only) {
+      auto search_targets = query::fanout::GetSearchTargetsForFanout(ctx);
+      return query::fanout::PerformSearchFanoutAsync(
+          ctx, search_targets,
+          ValkeySearch::Instance().GetCoordinatorClientPool(),
+          std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),
+          std::move(on_done_callback));
+    }
+    return query::SearchAsync(std::move(parameters),
+                              ValkeySearch::Instance().GetReaderThreadPool(),
+                              std::move(on_done_callback), true);
     assert(false);
   }();
   if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
   }
   return status;
+}
+
+void SendReply(RedisModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
+               const AggregateParameters &parameters) {
+  assert(false);
 }
 
 }  // namespace aggregate

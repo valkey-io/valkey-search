@@ -11,10 +11,12 @@ cc_library(
         "ft_info.cc",
         "ft_list.cc",
         "ft_search.cc",
+        "ft_aggregate.cc",
     ],
     hdrs = [
         "commands.h",
         "ft_search.h",
+        "ft_aggregate.h",
     ],
     linkopts = [
         # The Redis module SDK defines many global variables in the header file
@@ -25,6 +27,8 @@ cc_library(
     deps = [
         ":ft_create_parser",
         ":ft_search_parser",
+        ":ft_aggregate_exec",
+        ":ft_aggregate_parser",
         "//src:index_schema",
         "//src:index_schema_cc_proto",
         "//src:metrics",
@@ -169,30 +173,30 @@ cc_library(
     ],
 )
 
-cc_library(
-    name = "ft_aggregate",
-    srcs = ["ft_aggregate.cc"],
-    hdrs = [
-        "ft_aggregate.h",
-        ],
-    deps = [
-        ":filter_parser",
-        ":ft_aggregate_parser",
-        ":ft_aggregate_exec",
-        "//src:index_schema",
-        "//src:metrics",
-        "//src:schema_manager",
-        "//src/indexes:index_base",
-        "//src/query:search",
-        "//src/expr:expr",
-        "//vmsdk/src:command_parser",
-        "//vmsdk/src:managed_pointers",
-        "//vmsdk/src:type_conversions",
-        "//vmsdk/src/status:status_macros",
-        "@com_google_absl//absl/container:inlined_vector",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:string_view",
-    ],
-)
+#cc_library(
+#    name = "ft_aggregate",
+#    srcs = ["ft_aggregate.cc"],
+#    hdrs = [
+#        "ft_aggregate.h",
+#        ],
+#    deps = [
+#        ":filter_parser",
+#        ":ft_aggregate_parser",
+#        ":ft_aggregate_exec",
+#        "//src:index_schema",
+#        "//src:metrics",
+#        "//src:schema_manager",
+#        "//src/indexes:index_base",
+#        "//src/query:search",
+#        "//src/expr:expr",
+#        "//vmsdk/src:command_parser",
+#        "//vmsdk/src:managed_pointers",
+#        "//vmsdk/src:type_conversions",
+#        "//vmsdk/src/status:status_macros",
+#        "@com_google_absl//absl/container:inlined_vector",
+#        "@com_google_absl//absl/status",
+#        "@com_google_absl//absl/status:statusor",
+#        "@com_google_absl//absl/strings",
+#        "@com_google_absl//absl/strings:string_view",
+#    ],
+#)

@@ -95,7 +95,8 @@ struct VectorSearchParameters {
     // that is the string of the value AND a reference count so that we can
     // detect unused parameters.
     // Marked mutable so that const parsing functions can bump the ref-count
-    mutable absl::flat_hash_map<absl::string_view, std::pair<int, absl::string_view>>
+    mutable absl::flat_hash_map<absl::string_view,
+                                std::pair<int, absl::string_view>>
         params;
     void ClearAtEndOfParse() {
       query_string = absl::string_view();

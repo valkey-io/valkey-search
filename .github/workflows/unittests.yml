@@ -31,7 +31,7 @@ jobs:
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
     - name: Run Tests
-      run: docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image bazel test --jobs=4 testing/...
+      run: docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image bazel test --jobs=4 testing/... --deleted_packages testing/integration/...
 
-    - name: Run vmsdk Tests 
+    - name: Run vmsdk Tests
       run: docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image bazel test --jobs=4 vmsdk/testing/...

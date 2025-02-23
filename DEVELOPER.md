@@ -167,6 +167,22 @@ you can run the test with `--strategy=TestRunner=local`, e.g.:
 bazel test //testing:ft_search_test --strategy=TestRunner=local --run_under=/some/path/foobar.sh
 ```
 
+### Integration Testing
+
+To run any integration tests, you will need to have a local build of both valkey-server and valkey-cli. You can retrieve these by downloading the [Valkey source code and building it locally](https://github.com/valkey-io/valkey/).
+
+Once you have downloaded and built Valkey, you can run the integration tests:
+
+```
+bazel test //testing/integration:vector_search_integration_test --test_arg=--valkey_server_path=/path/to/valkey-server --test_arg=--valkey_cli_path=/path/to/valkey-cli
+```
+
+Additionally, it is recommended to run the stability test suite, which requires a local build of [Memtier](https://github.com/RedisLabs/memtier_benchmark):
+
+```
+bazel test //testing/integration:stability_test --test_arg=--valkey_server_path=/path/to/valkey-server --test_arg=--valkey_cli_path=/path/to/valkey-cli --test_arg=--memtier_path=/path/to/memtier_benchmark --test_output=streamed
+```
+
 ## Loading
 
 ValkeySearch is compatible with any version of Valkey and can also be loaded into Redis versions 7.0 and 7.2. To load the module, execute the following command:

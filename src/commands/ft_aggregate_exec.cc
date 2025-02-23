@@ -1,23 +1,23 @@
 #include "src/commands/ft_aggregate_exec.h"
-#include "src/commands/ft_aggregate_parser.h"
-
-#include "absl/status/status.h"
-#include "absl/container/flat_hash_map.h"
 
 #include <algorithm>
 #include <limits>
 #include <queue>
 
-//#define DBG std::cerr
+#include "absl/container/flat_hash_map.h"
+#include "absl/status/status.h"
+#include "src/commands/ft_aggregate_parser.h"
+
+// #define DBG std::cerr
 #define DBG 0 && std::cerr
 
 namespace valkey_search {
 namespace aggregate {
 
-expr::Value Attribute::GetValue(expr::Expression::EvalContext &ctx,
-  const expr::Expression::Record &record) const {
-  auto rec = reinterpret_cast<const Record&>(record);    
-  return rec.referenced_.at(record_index_);
+expr::Value Attribute::GetValue(expr::Expression::EvalContext& ctx,
+                                const expr::Expression::Record& record) const {
+  auto rec = reinterpret_cast<const Record&>(record);
+  return rec.fields_.at(record_index_);
 };
 
 expr::Expression::EvalContext ctx;
@@ -33,10 +33,10 @@ absl::Status Limit::Execute(RecordSet& records) const {
 }
 
 void SetField(Record& record, Attribute& dest, expr::Value value) {
-  if (record.referenced_.size() <= dest.record_index_) {
-    record.referenced_.resize(dest.record_index_+1);
+  if (record.fields_.size() <= dest.record_index_) {
+    record.fields_.resize(dest.record_index_ + 1);
   }
-  record.referenced_[dest.record_index_] = value;
+  record.fields_[dest.record_index_] = value;
 }
 
 absl::Status Apply::Execute(RecordSet& records) const {
@@ -59,8 +59,9 @@ absl::Status Filter::Execute(RecordSet& records) const {
   return absl::OkStatus();
 }
 
-template<typename T> struct SortFunctor {
-  const absl::InlinedVector<SortBy::SortKey, 4> *sortkeys_;
+template <typename T>
+struct SortFunctor {
+  const absl::InlinedVector<SortBy::SortKey, 4>* sortkeys_;
   bool operator()(const T& l, const T& r) const {
     for (auto& sk : *sortkeys_) {
       auto lvalue = sk.expr_->Evaluate(ctx, *l);
@@ -82,15 +83,17 @@ template<typename T> struct SortFunctor {
 
 absl::Status SortBy::Execute(RecordSet& records) const {
   if (max_ && records.size() > *max_) {
-    // Sadly std::priority_queue can't operate on unique_ptr's. so we need an extra cop
-    SortFunctor<Record *> sorter{&sortkeys_};
-    std::priority_queue<Record *, std::vector<Record *>, SortFunctor<Record *>> heap(sorter);
+    // Sadly std::priority_queue can't operate on unique_ptr's. so we need an
+    // extra cop
+    SortFunctor<Record*> sorter{&sortkeys_};
+    std::priority_queue<Record*, std::vector<Record*>, SortFunctor<Record*>>
+        heap(sorter);
     for (auto i = 0; i < *max_; ++i) {
       heap.push(records.pop_front().release());
     }
     while (!records.empty()) {
       heap.push(records.pop_front().release());
-      auto top = RecordPtr(heap.top()); // no leak....
+      auto top = RecordPtr(heap.top());  // no leak....
       heap.pop();
     }
     while (!heap.empty()) {
@@ -105,7 +108,9 @@ absl::Status SortBy::Execute(RecordSet& records) const {
 }
 
 absl::Status GroupBy::Execute(RecordSet& records) const {
-  absl::flat_hash_map<GroupKey, absl::InlinedVector<std::unique_ptr<ReducerInstance>, 4>> groups;
+  absl::flat_hash_map<GroupKey,
+                      absl::InlinedVector<std::unique_ptr<ReducerInstance>, 4>>
+      groups;
   while (!records.empty()) {
     auto record = records.pop_front();
     GroupKey k;
@@ -122,15 +127,16 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
     }
     for (auto i = 0; i < reducers_.size(); ++i) {
       absl::InlinedVector<expr::Value, 4> args;
-      for (auto& nargs: reducers_[i].args_) {
+      for (auto& nargs : reducers_[i].args_) {
         args.emplace_back(nargs->Evaluate(ctx, *record));
       }
       group_it->second[i]->ProcessRecord(args);
     }
   }
-  for (auto &group : groups) {
+  for (auto& group : groups) {
     DBG << "Making record for group " << group.first << "\n";
-    RecordPtr record = std::make_unique<Record>(groups.size() + reducers_.size());
+    RecordPtr record =
+        std::make_unique<Record>(groups.size() + reducers_.size());
     assert(groups_.size() == group.first.keys_.size());
     for (auto i = 0; i < groups_.size(); ++i) {
       SetField(*record, *groups_[i], group.first.keys_[i]);
@@ -148,41 +154,39 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
 class Count : public GroupBy::ReducerInstance {
   size_t count_{0};
   void ProcessRecord(absl::InlinedVector<expr::Value, 4>& values) override {
-    count_ ++;
+    count_++;
   }
-  expr::Value GetResult() const override {
-    return expr::Value(double(count_));
-  }
+  expr::Value GetResult() const override { return expr::Value(double(count_)); }
 };
 
 class Min : public GroupBy::ReducerInstance {
   expr::Value min_{expr::Value(std::numeric_limits<double>::infinity())};
   void ProcessRecord(absl::InlinedVector<expr::Value, 4>& values) override {
-    if (values[0].IsNil()) { return; }
+    if (values[0].IsNil()) {
+      return;
+    }
     if (min_.IsNil()) {
       min_ = values[0];
     } else if (min_ > values[0]) {
       min_ = values[0];
     }
   }
-  expr::Value GetResult() const override {
-    return min_;
-  }
+  expr::Value GetResult() const override { return min_; }
 };
 
 class Max : public GroupBy::ReducerInstance {
   expr::Value max_{expr::Value(-std::numeric_limits<double>::infinity())};
   void ProcessRecord(absl::InlinedVector<expr::Value, 4>& values) override {
-    if (values[0].IsNil()) { return; }
+    if (values[0].IsNil()) {
+      return;
+    }
     if (max_.IsNil()) {
       max_ = values[0];
     } else if (max_ < values[0]) {
       max_ = values[0];
     }
   }
-  expr::Value GetResult() const override {
-    return max_;
-  }
+  expr::Value GetResult() const override { return max_; }
 };
 
 class Sum : public GroupBy::ReducerInstance {
@@ -190,12 +194,10 @@ class Sum : public GroupBy::ReducerInstance {
   void ProcessRecord(absl::InlinedVector<expr::Value, 4>& values) override {
     auto val = values[0].AsDouble();
     if (val) {
-      sum_ += *val; 
+      sum_ += *val;
     }
   }
-  expr::Value GetResult() const override {
-    return expr::Value(sum_);
-  }
+  expr::Value GetResult() const override { return expr::Value(sum_); }
 };
 
 class Avg : public GroupBy::ReducerInstance {
@@ -209,7 +211,7 @@ class Avg : public GroupBy::ReducerInstance {
     }
   }
   expr::Value GetResult() const override {
-    return expr::Value(count_ ? sum_/count_ : 0.0);
+    return expr::Value(count_ ? sum_ / count_ : 0.0);
   }
 };
 
@@ -247,19 +249,21 @@ class CountDistinct : public GroupBy::ReducerInstance {
   }
 };
 
-template<typename T> std::unique_ptr<GroupBy::ReducerInstance> MakeReducer() {
+template <typename T>
+std::unique_ptr<GroupBy::ReducerInstance> MakeReducer() {
   return std::unique_ptr<GroupBy::ReducerInstance>(std::make_unique<T>());
 }
 
-absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable {
-  {"AVG",    GroupBy::ReducerInfo{"AVG",    1, 1, &MakeReducer<Avg>}},
-  {"COUNT",  GroupBy::ReducerInfo{"COUNT",  0, 0, &MakeReducer<Count>}},
-  {"COUNT_DISTINCT", GroupBy::ReducerInfo{"COUNT_DISTINCT", 1, 1, &MakeReducer<CountDistinct>}},
-  {"MIN",    GroupBy::ReducerInfo{"MIN",    1, 1, &MakeReducer<Min>}},
-  {"MAX",    GroupBy::ReducerInfo{"MAX",    1, 1, &MakeReducer<Max>}},
-  {"STDDEV", GroupBy::ReducerInfo{"STDDEV", 1, 1, &MakeReducer<Stddev>}},
-  {"SUM",    GroupBy::ReducerInfo{"SUM",    1, 1, &MakeReducer<Sum>}},
+absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
+    {"AVG", GroupBy::ReducerInfo{"AVG", 1, 1, &MakeReducer<Avg>}},
+    {"COUNT", GroupBy::ReducerInfo{"COUNT", 0, 0, &MakeReducer<Count>}},
+    {"COUNT_DISTINCT",
+     GroupBy::ReducerInfo{"COUNT_DISTINCT", 1, 1, &MakeReducer<CountDistinct>}},
+    {"MIN", GroupBy::ReducerInfo{"MIN", 1, 1, &MakeReducer<Min>}},
+    {"MAX", GroupBy::ReducerInfo{"MAX", 1, 1, &MakeReducer<Max>}},
+    {"STDDEV", GroupBy::ReducerInfo{"STDDEV", 1, 1, &MakeReducer<Stddev>}},
+    {"SUM", GroupBy::ReducerInfo{"SUM", 1, 1, &MakeReducer<Sum>}},
 };
 
-}
-}
+}  // namespace aggregate
+}  // namespace valkey_search

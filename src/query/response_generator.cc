@@ -41,7 +41,6 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
-#include "src/coordinator/coordinator.pb.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"

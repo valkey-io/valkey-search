@@ -6,7 +6,6 @@
 #include "absl/status/status.h"
 #include "src/expr/expr.h"
 #include "src/expr/value.h"
-#include "src/index_schema.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "vmsdk/src/command_parser.h"
@@ -47,6 +46,21 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   }
 
   absl::flat_hash_map<std::string, size_t> attr_record_indexes_;
+  std::vector<std::string> attr_record_names_;
+  static constexpr size_t kKeyIndex = 0;
+  static constexpr size_t kScoreIndex = 1;
+
+  size_t AddRecordAttribute(absl::string_view attr) {
+    size_t new_index = attr_record_names_.size();
+    auto [itr, inserted] =
+        attr_record_indexes_.try_emplace(std::string(attr), new_index);
+    if (!inserted) {
+      return itr->second;
+    } else {
+      attr_record_names_.push_back(std::string(attr));
+      return new_index;
+    }
+  }
 
   struct {
     // Variables here are only used during parsing and are cleared at the end.

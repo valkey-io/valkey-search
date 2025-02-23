@@ -3,7 +3,6 @@
 #include "absl/hash/hash_testing.h"
 #include "gtest/gtest.h"
 #include "src/commands/ft_aggregate_parser.h"
-#include "testing/common.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search {
@@ -12,7 +11,7 @@ namespace aggregate {
 struct FakeIndexInterface : public IndexInterface {
   std::map<std::string, indexes::IndexerType> fields_;
   absl::StatusOr<indexes::IndexerType> GetFieldType(
-      absl::string_view fld_name) const {
+      absl::string_view fld_name) const override {
     std::string field_name(fld_name);
     std::cout << "Fake make reference " << field_name << "\n";
     auto itr = fields_.find(field_name);
@@ -27,8 +26,8 @@ struct FakeIndexInterface : public IndexInterface {
 
 static std::unique_ptr<Record> RecordNOfM(size_t n, size_t m) {
   auto rec = std::make_unique<Record>(2);
-  rec->referenced_[0] = expr::Value(double(n));
-  rec->referenced_[1] = expr::Value(double(m));
+  rec->fields_[0] = expr::Value(double(n));
+  rec->fields_[1] = expr::Value(double(m));
   return rec;
 }
 
@@ -114,11 +113,11 @@ TEST_F(AggregateExecTest, ApplyTest) {
     std::cerr << *r << "\n";
   }
   auto r0 = RecordNOfM(0, 2);
-  r0->referenced_.resize(3);
-  r0->referenced_[2] = expr::Value(double(1.0));
+  r0->fields_.resize(3);
+  r0->fields_[2] = expr::Value(double(1.0));
   auto r1 = RecordNOfM(1, 2);
-  r1->referenced_.resize(3);
-  r1->referenced_[2] = expr::Value(double(2.0));
+  r1->fields_.resize(3);
+  r1->fields_[2] = expr::Value(double(2.0));
   EXPECT_EQ(*records[0], *r0);
   EXPECT_EQ(*records[1], *r1);
 }
@@ -231,9 +230,8 @@ TEST_F(AggregateExecTest, ReducerTest) {
     auto record = records.pop_front();
     std::cerr << "Result: " << *record << "\n";
     for (auto i = 0; i < tc.values_.size(); ++i) {
-      EXPECT_TRUE(record->referenced_.at(i + 2).IsDouble());
-      EXPECT_NEAR(*(record->referenced_.at(i + 2).AsDouble()), tc.values_[i],
-                  .001);
+      EXPECT_TRUE(record->fields_.at(i + 2).IsDouble());
+      EXPECT_NEAR(*(record->fields_.at(i + 2).AsDouble()), tc.values_[i], .001);
     }
   }
 }

@@ -73,7 +73,7 @@ struct VectorSearchParameters {
   virtual ~VectorSearchParameters() = default;
   std::shared_ptr<IndexSchema> index_schema;
   std::string index_schema_name;
-  std::string attribute_alias;
+  std::string attribute_alias;  // Name of the vector field for the search.
   vmsdk::UniqueRedisString score_as;
   std::string query;
   uint32_t dialect{kDialect};

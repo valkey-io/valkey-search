@@ -1,44 +1,41 @@
 #ifndef VALKEYSEARCH_COMMANDS_FT_AGGREGATE_EXEC
 #define VALKEYSEARCH_COMMANDS_FT_AGGREGATE_EXEC
 
-#include "src/expr/value.h"
-#include "src/expr/expr.h"
-
-#include "absl/container/flat_hash_map.h"
-#include "absl/container/inlined_vector.h"
-#include "absl/hash/hash.h"
-
-#include <compare>
 #include <deque>
+
+#include "absl/container/inlined_vector.h"
+#include "src/expr/expr.h"
+#include "src/expr/value.h"
 
 namespace valkey_search {
 namespace aggregate {
 
 class Record : public expr::Expression::Record {
-  public:
-    Record(size_t referenced) : referenced_(referenced) {}
-    std::vector<expr::Value> referenced_;
-    std::vector<std::pair<std::string, expr::Value>> unreferenced_;
-    bool operator==(const Record& r) const { 
-      return referenced_ == r.referenced_ && unreferenced_ == r.unreferenced_;
-    }
+ public:
+  Record(size_t fields) : fields_(fields) {}
+  std::vector<expr::Value> fields_;
+  std::vector<std::pair<std::string, expr::Value>> extra_fields_;
+  bool operator==(const Record& r) const {
+    return fields_ == r.fields_ && extra_fields_ == r.extra_fields_;
+  }
 };
 
 using RecordPtr = std::unique_ptr<Record>;
 
 class RecordSet : public std::deque<RecordPtr> {
-  public:
-  RecordPtr pop_front() { // NOLINT: needs to follow STL naming convention
+ public:
+  RecordPtr pop_front() {  // NOLINT: needs to follow STL naming convention
     auto p = this->front().release();
     this->std::deque<RecordPtr>::pop_front();
     return RecordPtr(p);
   }
-  RecordPtr pop_back() { // NOLINT: needs to follow the STL naming convention
+  RecordPtr pop_back() {  // NOLINT: needs to follow the STL naming convention
     auto p = this->back().release();
     this->std::deque<RecordPtr>::pop_back();
     return RecordPtr(p);
   }
-  void push_back(RecordPtr&& p) { // NOLINT: needs to follow the STL naming convention
+  void push_back(
+      RecordPtr&& p) {  // NOLINT: needs to follow the STL naming convention
     this->deque<RecordPtr>::emplace_back(std::move(p));
   }
 };
@@ -64,16 +61,16 @@ struct GroupKey {
 };
 
 std::ostream& operator<<(std::ostream& os, const Record& r) {
-  for (auto& f : r.referenced_) {
-    if (&f != &r.referenced_[0]) {
+  for (auto& f : r.fields_) {
+    if (&f != &r.fields_[0]) {
       os << ',';
     }
     os << f;
   }
-  if (!r.unreferenced_.empty()) {
+  if (!r.extra_fields_.empty()) {
     os << " : ";
-    for (auto& p : r.unreferenced_) {
-      if (&p != &r.unreferenced_[0]) {
+    for (auto& p : r.extra_fields_) {
+      if (&p != &r.extra_fields_[0]) {
         os << ',';
       }
       os << p.first << ":" << p.second;
@@ -82,10 +79,12 @@ std::ostream& operator<<(std::ostream& os, const Record& r) {
   return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const Record *r) { return os << *r; }
-std::ostream& operator<<(std::ostream& os, std::unique_ptr<Record> r) { return os << r.get(); }
+std::ostream& operator<<(std::ostream& os, const Record* r) { return os << *r; }
+std::ostream& operator<<(std::ostream& os, std::unique_ptr<Record> r) {
+  return os << r.get();
+}
 
-}
-}
+}  // namespace aggregate
+}  // namespace valkey_search
 
 #endif

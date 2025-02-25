@@ -261,6 +261,7 @@ class MockRedisModule {
   MOCK_METHOD(int, RdbSave,
               (RedisModuleCtx * ctx, RedisModuleRdbStream *stream, int flags));
   MOCK_METHOD(void, RdbStreamFree, (RedisModuleRdbStream * stream));
+  MOCK_METHOD(RedisModuleString *, GetCurrentUserName, (RedisModuleCtx * ctx));
 };
 
 // Global kMockRedisModule is a fake Redis module used for static wrappers
@@ -437,7 +438,6 @@ struct RegisteredKey {
   std::string key;
   void *data;
   RedisModuleType *module_type;
-
   bool operator==(const RegisteredKey &other) const {
     return key == other.key && data == other.data &&
            module_type == other.module_type;
@@ -1171,6 +1171,9 @@ inline RedisModuleCallReply *TestRedisModule_Call(RedisModuleCtx *ctx,
     auto ret = kMockRedisModule->Call(ctx, cmdname, fmt, arg1, arg2);
     return ret;
   }
+  if (format == "cs3") {
+    return nullptr;
+  }
   CHECK(false && "Unsupported format specifier");
   return nullptr;
 }
@@ -1222,6 +1225,11 @@ inline int TestRedisModule_CallReplyType(RedisModuleCallReply *reply) {
 inline RedisModuleString *TestRedisModule_CreateStringFromCallReply(
     RedisModuleCallReply *reply) {
   return kMockRedisModule->CreateStringFromCallReply(reply);
+}
+
+inline RedisModuleString *TestRedisModule_GetCurrentUserName(
+    RedisModuleCtx *ctx) {
+  return new RedisModuleString{std::string("default")};
 }
 
 // TestRedisModule_Init initializes the module API function table with mock
@@ -1357,6 +1365,7 @@ inline void TestRedisModule_Init() {
   RedisModule_RdbStreamFree = &TestRedisModule_RdbStreamFree;
   RedisModule_RdbSave = &TestRedisModule_RdbSave;
   RedisModule_RdbLoad = &TestRedisModule_RdbLoad;
+  RedisModule_GetCurrentUserName = &TestRedisModule_GetCurrentUserName;
   kMockRedisModule = new testing::NiceMock<MockRedisModule>();
 
   // Implement basic key registration functions with simple implementations by

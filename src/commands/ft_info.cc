@@ -29,6 +29,7 @@
 
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
+#include "src/acl.h"
 #include "src/commands/commands.h"
 #include "src/schema_manager.h"
 #include "vmsdk/src/command_parser.h"
@@ -55,6 +56,8 @@ absl::Status FTInfoCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
       SchemaManager::Instance().GetIndexSchema(RedisModule_GetSelectedDb(ctx),
                                                index_schema_name));
 
+  VMSDK_RETURN_IF_ERROR(AclManager::Instance().AclPrefixCheck(
+      ctx, kCommandCategories.at(kInfo), index_schema->GetKeyPrefixes()));
   index_schema->RespondWithInfo(ctx);
 
   return absl::OkStatus();

@@ -502,6 +502,7 @@ redis_module_cc_test(
         "//src/commands",
         "//src/commands:ft_aggregate_parser",
         "//src/commands:ft_aggregate_exec",
+        "//src/commands:ft_search_parser",
         "//src/indexes:vector_flat",
         "//vmsdk/src:managed_pointers",
         "//vmsdk/src:type_conversions",

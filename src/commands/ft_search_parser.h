@@ -46,6 +46,9 @@ struct LimitParameter {
   uint64_t number{10};
 };
 
+absl::Status PreParseQueryString(query::VectorSearchParameters &parameters);
+absl::Status PostParseQueryString(query::VectorSearchParameters &parameters);
+
 absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
 ParseVectorSearchParameters(RedisModuleCtx *ctx, RedisModuleString **argv,
                             int argc, const SchemaManager &schema_manager);

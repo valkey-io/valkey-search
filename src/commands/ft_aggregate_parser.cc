@@ -5,7 +5,6 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
-#include "src/schema_manager.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -65,15 +64,13 @@ ConstructApplyParser() {
           return absl::InvalidArgumentError(
               "`AS` argument to APPLY clause is missing/invalid");
         }
-        std::cerr << "APPLY past expr\n";
         VMSDK_ASSIGN_OR_RETURN(auto name_string, itr.PopNext());
-        std::cerr << "APPLY past name\n";
         VMSDK_ASSIGN_OR_RETURN(
             auto name,
             parameters.MakeReference(vmsdk::ToStringView(name_string), true));
         apply->name_ = std::unique_ptr<Attribute>(
             dynamic_cast<Attribute *>(name.release()));
-        std::cerr << "APPLY OK\n";
+        std::cerr << *apply << "\n";
         parameters.stages_.emplace_back(std::move(apply));
         return absl::OkStatus();
       });
@@ -114,7 +111,7 @@ ConstructParamsParser() {
          vmsdk::ArgsIterator &itr) -> absl::Status {
         uint32_t cnt{0};
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
-        for (auto i = 0; i < cnt; ++i) {
+        for (auto i = 0; i < cnt; i += 2) {
           VMSDK_ASSIGN_OR_RETURN(auto name, itr.PopNext());
           VMSDK_ASSIGN_OR_RETURN(auto value, itr.PopNext());
           for (auto c : vmsdk::ToStringView(name)) {
@@ -127,6 +124,7 @@ ConstructParamsParser() {
           parameters.parse_vars.params[vmsdk::ToStringView(name)] =
               std::make_pair(0, vmsdk::ToStringView(value));
         }
+        std::cerr << "After params: " << parameters << "\n";
         return absl::OkStatus();
       });
 }
@@ -139,9 +137,12 @@ ConstructSortByParser() {
         auto sortby = std::make_unique<SortBy>();
         uint32_t cnt{0};
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
+        std::cerr << "Parsing sortby " << cnt << "\n";
         for (auto i = 0; i < cnt; ++i) {
           VMSDK_ASSIGN_OR_RETURN(auto expr_string, itr.PopNext(),
-                                 _ << " in SORTYBY stage");
+                                 _ << " in SORTBY stage");
+          std::cerr << "Parsing field " << vmsdk::ToStringView(expr_string)
+                    << "\n";
           VMSDK_ASSIGN_OR_RETURN(
               auto expr,
               expr::Expression::Compile(parameters,
@@ -155,6 +156,7 @@ ConstructSortByParser() {
             direction = SortBy::Direction::kDESC;
             i++;
           }
+          std::cerr << "Got Sortby field: " << *expr << "\n";
           sortby->sortkeys_.emplace_back(
               SortBy::SortKey{direction, std::move(expr)});
         }
@@ -164,6 +166,7 @@ ConstructSortByParser() {
           sortby->max_ = max;
         }
         parameters.stages_.emplace_back(std::move(sortby));
+        std::cerr << "After sortby: " << parameters << "\n";
         return absl::OkStatus();
       });
 }
@@ -239,6 +242,7 @@ ConstructGroupByParser() {
           groupby->reducers_.emplace_back(std::move(r));
         }
         parameters.stages_.emplace_back(std::move(groupby));
+        std::cerr << "After groupby: " << parameters << "\n";
         return absl::OkStatus();
       });
 }
@@ -263,6 +267,7 @@ vmsdk::KeyValueParser<AggregateParameters> CreateAggregateParser() {
 
 absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
 AggregateParameters::MakeReference(const absl::string_view s, bool create) {
+  std::cerr << "MakeReference : " << s << " Create:" << create << "\n";
   auto it = attr_record_indexes_.find(s);
   if (it != attr_record_indexes_.end()) {
     return std::make_unique<Attribute>(s, it->second);
@@ -283,6 +288,18 @@ AggregateParameters::MakeReference(const absl::string_view s, bool create) {
     attr_record_indexes_[s] = new_index;
     return std::make_unique<Attribute>(s, new_index);
   }
+}
+
+std::ostream &operator<<(std::ostream &os, const AggregateParameters &agg) {
+  os << "\nAggregate command: " << "\n";
+  for (const auto &[key, value] : agg.parse_vars.params) {
+    std::cerr << "Parameter " << key << " And Value: " << value.first << ":"
+              << value.second << "\n";
+  }
+  for (const auto &c : agg.stages_) {
+    os << *c << "\n";
+  }
+  return os;
 }
 
 }  // namespace aggregate

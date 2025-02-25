@@ -76,5 +76,8 @@ cc_library(
 cc_library(
     name = "scanner",
     hdrs = ["scanner.h"],
+    deps = [
+        "//vmsdk/src/valkey_module_api:valkey_module",
+    ]
 )
 

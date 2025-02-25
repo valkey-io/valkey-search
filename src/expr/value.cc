@@ -1,12 +1,11 @@
 #include "src/expr/value.h"
-#include "src/utils/scanner.h"
 
-#include <charconv>
 #include <cmath>
-#include <algorithm>
 #include <ctime>
 
-namespace valkey_search{
+#include "src/utils/scanner.h"
+
+namespace valkey_search {
 namespace expr {
 
 // -ffast-math disables std::is_nan and std::is_inf
@@ -14,9 +13,10 @@ static const uint64_t kSignBitMask = 0x8000000000000000ull;
 static const uint64_t kExponentMask = 0x7FF0000000000000ull;
 static const uint64_t kMantissaMask = 0x000FFFFFFFFFFFFFull;
 
-// Built-in isnan doesn't work when compiling with fast-math, which is what we want to do.
+// Built-in isnan doesn't work when compiling with fast-math, which is what we
+// want to do.
 static bool IsNan(double& d) {
-  uint64_t v = *(uint64_t *)&d;
+  uint64_t v = *(uint64_t*)&d;
   return ((v & kExponentMask) == kExponentMask) && ((v & kMantissaMask) != 0);
 }
 
@@ -28,33 +28,22 @@ Value::Value(double d) {
   }
 }
 
-bool Value::IsNil() const {
-  return std::get_if<Nil>(&value_);
-}
+bool Value::IsNil() const { return std::get_if<Nil>(&value_); }
 
-bool Value::IsBool() const {
-  return std::get_if<bool>(&value_);
-}
+bool Value::IsBool() const { return std::get_if<bool>(&value_); }
 
-bool Value::IsDouble() const {
-  return std::get_if<double>(&value_);
-}
+bool Value::IsDouble() const { return std::get_if<double>(&value_); }
 
 bool Value::IsString() const {
-  return std::get_if<absl::string_view>(&value_) || std::get_if<std::string>(&value_);
+  return std::get_if<absl::string_view>(&value_) ||
+         std::get_if<std::string>(&value_);
 }
 
-Value::Nil Value::GetNil() const {
-  return std::get<Nil>(value_);
-}
+Value::Nil Value::GetNil() const { return std::get<Nil>(value_); }
 
-bool Value::GetBool() const {
-  return std::get<bool>(value_);
-}
+bool Value::GetBool() const { return std::get<bool>(value_); }
 
-double Value::GetDouble() const {
-  return std::get<double>(value_);
-}
+double Value::GetDouble() const { return std::get<double>(value_); }
 
 absl::string_view Value::GetStringView() const {
   if (auto result = std::get_if<std::string>(&value_)) {
@@ -99,7 +88,7 @@ std::optional<double> Value::AsDouble() const {
   } else {
     return std::nullopt;
   }
-  char *end{nullptr};
+  char* end{nullptr};
   double val = std::strtod(sv.begin(), &end);
   if (end != sv.end() || IsNan(val)) {
     return std::nullopt;
@@ -129,7 +118,7 @@ absl::string_view Value::AsStringView() const {
   } else if (auto result = std::get_if<std::string>(&value_)) {
     return *result;
   } else {
-    assert(false);
+    RedisModule_Assert(false);
   }
 }
 
@@ -143,7 +132,7 @@ std::string Value::AsString() const {
   } else if (auto result = std::get_if<std::string>(&value_)) {
     return *result;
   } else {
-    assert(false);
+    RedisModule_Assert(false);
   }
 }
 
@@ -157,48 +146,54 @@ std::ostream& operator<<(std::ostream& os, const Value& v) {
   } else if (v.IsString()) {
     return os << "'" << v.AsStringView() << "'";
   }
-  assert(false);
+  RedisModule_Assert(false);
 }
 
 static Ordering CompareDoubles(double l, double r) {
-    // -ffast-math doesn't handle compares correctly with infinities, we do it integer.
-    union {
-      double d;
-      int64_t i;
-      uint64_t u;
-    } ld, rd;
-    ld.d = l;
-    rd.d = r;
-    // Kill negative zero
-    if (ld.u == kSignBitMask) { ld.u = 0; }
-    if (rd.u == kSignBitMask) { rd.u = 0; }
-    if ((ld.i ^ rd.i) < 0) {
-      // Signs differ. this is the easy case.
-      return (ld.i < 0) ? Ordering::kLESS : Ordering::kGREATER;
-    } if (ld.i < 0) {
-      // Signs Same and Negative, convert to 2's complement
-      ld.u = -ld.u;
-      rd.u = -rd.u;
-    }
-    return ld.u == rd.u ? Ordering::kEQUAL :
-      (ld.u < rd.u ? Ordering::kLESS : Ordering::kGREATER);
+  // -ffast-math doesn't handle compares correctly with infinities, we do it
+  // integer.
+  union {
+    double d;
+    int64_t i;
+    uint64_t u;
+  } ld, rd;
+  ld.d = l;
+  rd.d = r;
+  // Kill negative zero
+  if (ld.u == kSignBitMask) {
+    ld.u = 0;
+  }
+  if (rd.u == kSignBitMask) {
+    rd.u = 0;
+  }
+  if ((ld.i ^ rd.i) < 0) {
+    // Signs differ. this is the easy case.
+    return (ld.i < 0) ? Ordering::kLESS : Ordering::kGREATER;
+  }
+  if (ld.i < 0) {
+    // Signs Same and Negative, convert to 2's complement
+    ld.u = -ld.u;
+    rd.u = -rd.u;
+  }
+  return ld.u == rd.u ? Ordering::kEQUAL
+                      : (ld.u < rd.u ? Ordering::kLESS : Ordering::kGREATER);
 }
 
 // Todo, does this handle UTF-8 Correctly?
-static Ordering CompareStrings(const absl::string_view l, const absl::string_view r) {
-    if (l < r) {
-      return Ordering::kLESS;
-    } else if (l == r) {
-      return Ordering::kEQUAL;
-    } else {
-      return Ordering::kGREATER;
-    }
+static Ordering CompareStrings(const absl::string_view l,
+                               const absl::string_view r) {
+  if (l < r) {
+    return Ordering::kLESS;
+  } else if (l == r) {
+    return Ordering::kEQUAL;
+  } else {
+    return Ordering::kGREATER;
+  }
 }
 
 Ordering Compare(const Value& l, const Value& r) {
-
   // First equvalent types
-  
+
   if (l.IsNil() || r.IsNil()) {
     return (l.IsNil() && r.IsNil()) ? Ordering::kEQUAL : Ordering::kUNORDERED;
   }
@@ -263,31 +258,19 @@ Value FuncDiv(const Value& l, const Value& r) {
   }
 }
 
-Value FuncLt(const Value& l, const Value& r) {
-  return Value(l < r);
-}
+Value FuncLt(const Value& l, const Value& r) { return Value(l < r); }
 
-Value FuncLe(const Value& l, const Value& r) {
-  return Value(l <= r);
-}
+Value FuncLe(const Value& l, const Value& r) { return Value(l <= r); }
 
-Value FuncEq(const Value& l, const Value& r) {
-  return Value(l == r);
-}
+Value FuncEq(const Value& l, const Value& r) { return Value(l == r); }
 
-Value FuncNe(const Value& l, const Value& r) {
-  return Value(l != r);
-}
+Value FuncNe(const Value& l, const Value& r) { return Value(l != r); }
 
-Value FuncGt(const Value& l, const Value& r) {
-  return Value(l > r);
-}
+Value FuncGt(const Value& l, const Value& r) { return Value(l > r); }
 
-Value FuncGe(const Value& l, const Value& r) {
-  return Value(l >= r);
-}
+Value FuncGe(const Value& l, const Value& r) { return Value(l >= r); }
 
-Value FuncLor(const Value&l, const Value& r) {
+Value FuncLor(const Value& l, const Value& r) {
   auto lv = l.AsBool();
   auto rv = r.AsBool();
   if (lv && rv) {
@@ -297,7 +280,7 @@ Value FuncLor(const Value&l, const Value& r) {
   }
 }
 
-Value FuncLand(const Value&l, const Value& r) {
+Value FuncLand(const Value& l, const Value& r) {
   auto lv = l.AsBool();
   auto rv = r.AsBool();
   if (lv && rv) {
@@ -307,49 +290,63 @@ Value FuncLand(const Value&l, const Value& r) {
   }
 }
 
-Value FuncFloor(const Value &o) {
+Value FuncFloor(const Value& o) {
   auto d = o.AsDouble();
-  if (!d) { return Value(Value::Nil("floor couldn't convert to a double")); }
+  if (!d) {
+    return Value(Value::Nil("floor couldn't convert to a double"));
+  }
   return Value(std::floor(*d));
 }
 
-Value FuncCeil(const Value &o) {
+Value FuncCeil(const Value& o) {
   auto d = o.AsDouble();
-  if (!d) { return Value(Value::Nil("ceil couldn't convert to a double")); }
+  if (!d) {
+    return Value(Value::Nil("ceil couldn't convert to a double"));
+  }
   return Value(std::ceil(*d));
 }
 
-Value FuncAbs(const Value &o) {
+Value FuncAbs(const Value& o) {
   auto d = o.AsDouble();
-  if (!d) { return Value(Value::Nil("abs couldn't convert to a double")); }
+  if (!d) {
+    return Value(Value::Nil("abs couldn't convert to a double"));
+  }
   return Value(std::abs(*d));
 }
 
-Value FuncLog(const Value &o) {
+Value FuncLog(const Value& o) {
   auto d = o.AsDouble();
-  if (!d) { return Value(Value::Nil("log couldn't convert to a double")); }
+  if (!d) {
+    return Value(Value::Nil("log couldn't convert to a double"));
+  }
   return Value(std::log(*d));
 }
 
-Value FuncLog2(const Value &o) {
+Value FuncLog2(const Value& o) {
   auto d = o.AsDouble();
-  if (!d) { return Value(Value::Nil("log2 couldn't convert to a double")); }
+  if (!d) {
+    return Value(Value::Nil("log2 couldn't convert to a double"));
+  }
   return Value(std::log2(*d));
 }
 
-Value FuncExp(const Value &o) {
+Value FuncExp(const Value& o) {
   auto d = o.AsDouble();
-  if (!d) { return Value(Value::Nil("exp couldn't convert to a double")); }
+  if (!d) {
+    return Value(Value::Nil("exp couldn't convert to a double"));
+  }
   return Value(std::exp(*d));
 }
 
-Value FuncSqrt(const Value &o) {
+Value FuncSqrt(const Value& o) {
   auto d = o.AsDouble();
-  if (!d) { return Value(Value::Nil("sqrt couldn't convert to a double")); }
+  if (!d) {
+    return Value(Value::Nil("sqrt couldn't convert to a double"));
+  }
   return Value(std::sqrt(*d));
 }
 
-Value FuncStrlen(const Value &o) {
+Value FuncStrlen(const Value& o) {
   return Value(double(o.AsStringView().size()));
 }
 
@@ -369,7 +366,7 @@ Value FuncContains(const Value& l, const Value& r) {
   size_t count = 0;
   size_t pos = 0;
   if (rs.size() == 0) {
-    return Value(double(ls.size()+1));
+    return Value(double(ls.size() + 1));
   } else {
     while ((pos = ls.find(rs, pos)) != std::string::npos) {
       count++;
@@ -401,8 +398,11 @@ Value FuncLower(const Value& o) {
   std::string result;
   result.reserve(os.size());
   utils::Scanner in(os);
-  for (auto utf8 = in.NextUtf8(); utf8 != utils::Scanner::kEOF; utf8 = in.NextUtf8()) {
-    if (utf8 < 0x80) utf8 = std::tolower(utf8);
+  for (auto utf8 = in.NextUtf8(); utf8 != utils::Scanner::kEOF;
+       utf8 = in.NextUtf8()) {
+    if (utf8 < 0x80) {
+      utf8 = std::tolower(utf8);
+    }
     utils::Scanner::PushBackUtf8(result, utf8);
   }
   return Value(std::move(result));
@@ -413,8 +413,11 @@ Value FuncUpper(const Value& o) {
   std::string result;
   result.reserve(os.size());
   utils::Scanner in(os);
-  for (auto utf8 = in.NextUtf8(); utf8 != utils::Scanner::kEOF; utf8 = in.NextUtf8()) {
-    if (utf8 < 0x80) utf8 = std::toupper(utf8);
+  for (auto utf8 = in.NextUtf8(); utf8 != utils::Scanner::kEOF;
+       utf8 = in.NextUtf8()) {
+    if (utf8 < 0x80) {
+      utf8 = std::toupper(utf8);
+    }
     utils::Scanner::PushBackUtf8(result, utf8);
   }
   return Value(std::move(result));
@@ -422,23 +425,23 @@ Value FuncUpper(const Value& o) {
 
 Value FuncConcat(const absl::InlinedVector<Value, 4>& values) {
   std::string result;
-  for (auto& v: values) {
+  for (auto& v : values) {
     result.append(v.AsStringView());
   }
   return Value(std::move(result));
 }
 
-#define TIME_FUNCTION(funcname, field, adjustment) \
-Value funcname(const Value& timestamp) { \
-    auto ts = timestamp.AsDouble(); \
-    if (!ts) { \
+#define TIME_FUNCTION(funcname, field, adjustment)        \
+  Value funcname(const Value& timestamp) {                \
+    auto ts = timestamp.AsDouble();                       \
+    if (!ts) {                                            \
       return Value(Value::Nil("timestamp not a number")); \
-    } \
-    time_t time = (time_t) *ts; \
-    struct ::tm tm; \
-    gmtime_r(&time, &tm); \
-    return Value(double(tm.field + (adjustment))); \
-}
+    }                                                     \
+    time_t time = (time_t) * ts;                          \
+    struct ::tm tm;                                       \
+    gmtime_r(&time, &tm);                                 \
+    return Value(double(tm.field + (adjustment)));        \
+  }
 
 TIME_FUNCTION(FuncDayofweek, tm_wday, 0)
 TIME_FUNCTION(FuncDayofmonth, tm_mday, 0)
@@ -452,13 +455,14 @@ Value FuncTimefmt(const Value& ts, const Value& fmt) {
     return Value(Value::Nil("timefmt: timestamp was not a number"));
   }
   struct tm tm;
-  time_t timestamp = (time_t) *timestampd;
+  time_t timestamp = (time_t)*timestampd;
   ::gmtime_r(&timestamp, &tm);
 
   std::string result;
   result.resize(100);
   size_t result_bytes = 0;
-  while ((result_bytes = strftime(result.data(), result.size(), fmt.AsStringView().data(), &tm)) == 0) {
+  while ((result_bytes = strftime(result.data(), result.size(),
+                                  fmt.AsStringView().data(), &tm)) == 0) {
     result.resize(result.size() * 2);
   }
   result.resize(result_bytes);
@@ -466,39 +470,39 @@ Value FuncTimefmt(const Value& ts, const Value& fmt) {
 }
 
 Value FuncParsetime(const Value& str, const Value& fmt) {
-  auto timestr = str.AsString(); // Ensure 0 terminated
+  auto timestr = str.AsString();  // Ensure 0 terminated
   auto fmtstr = fmt.AsString();
   struct tm tm;
   ::strptime(timestr.data(), fmtstr.data(), &tm);
   return Value(double(::mktime(&tm)));
 }
 
-#define TIME_ROUND(func, zero_day, zero_hour, zero_minute) \
-Value func(const Value& o) { \
-  auto tsd = o.AsDouble(); \
-  if (!tsd) { \
-    return Value(Value::Nil(#func ": timestamp not a number")); \
-  } \
-  time_t ts = (time_t)(*tsd); \
-  struct tm tm; \
-  gmtime_r(&ts, &tm); \
-  tm.tm_sec = 0; \
-  if (zero_day) { \
-    tm.tm_mday = 0; \
-  } \
-  if (zero_hour) { \
-    tm.tm_hour = 0; \
-  } \
-  if (zero_minute) { \
-    tm.tm_min = 0; \
-  } \
-  return Value(double(::mktime(&tm))); \
-}
+#define TIME_ROUND(func, zero_day, zero_hour, zero_minute)        \
+  Value func(const Value& o) {                                    \
+    auto tsd = o.AsDouble();                                      \
+    if (!tsd) {                                                   \
+      return Value(Value::Nil(#func ": timestamp not a number")); \
+    }                                                             \
+    time_t ts = (time_t)(*tsd);                                   \
+    struct tm tm;                                                 \
+    gmtime_r(&ts, &tm);                                           \
+    tm.tm_sec = 0;                                                \
+    if (zero_day) {                                               \
+      tm.tm_mday = 0;                                             \
+    }                                                             \
+    if (zero_hour) {                                              \
+      tm.tm_hour = 0;                                             \
+    }                                                             \
+    if (zero_minute) {                                            \
+      tm.tm_min = 0;                                              \
+    }                                                             \
+    return Value(double(::mktime(&tm)));                          \
+  }
 
 TIME_ROUND(FuncMonth, true, true, true)
 TIME_ROUND(FuncDay, false, true, true)
 TIME_ROUND(FuncHour, false, false, true)
 TIME_ROUND(FuncMinute, false, false, false)
 
-} // valkey_search::expr
-} // valkey_search
+}  // namespace expr
+}  // namespace valkey_search

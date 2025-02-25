@@ -34,7 +34,6 @@
 #include <memory>
 
 #include "absl/status/statusor.h"
-#include "src/index_schema.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/search.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -44,6 +43,7 @@ class ValkeySearch;
 // Declared here to support testing
 void SendReply(RedisModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
                const query::VectorSearchParameters &parameters);
+
 namespace async {
 
 struct Result {

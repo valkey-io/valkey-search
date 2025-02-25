@@ -77,6 +77,9 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   AggregateParameters(IndexInterface* index_interface) {
     parse_vars_.index_interface_ = index_interface;
   }
+
+  friend std::ostream& operator<<(std::ostream& os,
+                                  const AggregateParameters& agg);
 };
 
 class Stage {
@@ -211,7 +214,7 @@ class SortBy : public Stage {
           os << " DESC:";
           break;
         default:
-          assert(false);
+          RedisModule_Assert(false);
       }
       os << k.expr_.get();
     }

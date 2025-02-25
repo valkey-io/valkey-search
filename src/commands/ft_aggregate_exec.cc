@@ -137,11 +137,11 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
     DBG << "Making record for group " << group.first << "\n";
     RecordPtr record =
         std::make_unique<Record>(groups.size() + reducers_.size());
-    assert(groups_.size() == group.first.keys_.size());
+    RedisModule_Assert(groups_.size() == group.first.keys_.size());
     for (auto i = 0; i < groups_.size(); ++i) {
       SetField(*record, *groups_[i], group.first.keys_[i]);
     }
-    assert(reducers_.size() == group.second.size());
+    RedisModule_Assert(reducers_.size() == group.second.size());
     for (auto i = 0; i < reducers_.size(); ++i) {
       SetField(*record, *reducers_[i].output_, group.second[i]->GetResult());
     }

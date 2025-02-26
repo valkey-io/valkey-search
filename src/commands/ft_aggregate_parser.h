@@ -27,7 +27,8 @@ struct IndexInterface {
 struct AggregateParameters : public expr::Expression::CompileContext,
                              public query::VectorSearchParameters {
   bool loadall_{false};
-  std::vector<vmsdk::UniqueRedisString> loads_;
+  std::vector<std::string> loads_;
+  bool load_key{false};
   bool addscores_{false};
   std::vector<std::unique_ptr<Stage>> stages_;
 
@@ -47,8 +48,6 @@ struct AggregateParameters : public expr::Expression::CompileContext,
 
   absl::flat_hash_map<std::string, size_t> attr_record_indexes_;
   std::vector<std::string> attr_record_names_;
-  static constexpr size_t kKeyIndex = 0;
-  static constexpr size_t kScoreIndex = 1;
 
   size_t AddRecordAttribute(absl::string_view attr) {
     size_t new_index = attr_record_names_.size();

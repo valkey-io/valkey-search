@@ -32,7 +32,7 @@ static std::unique_ptr<Record> RecordNOfM(size_t n, size_t m) {
 }
 
 static RecordSet MakeData(size_t m) {
-  RecordSet result;
+  RecordSet result(nullptr);
   for (auto i = 0; i < m; ++i) {
     result.emplace_back(RecordNOfM(i, m));
   }

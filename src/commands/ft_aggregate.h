@@ -12,7 +12,7 @@ absl::Status FTAggregateCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
 
 struct AggregateParameters;
 void SendReply(RedisModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
-               const AggregateParameters &parameters);
+               AggregateParameters &parameters);
 
 }  // namespace aggregate
 };  // namespace valkey_search

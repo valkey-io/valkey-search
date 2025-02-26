@@ -11,8 +11,12 @@
 #include "src/indexes/index_base.h"
 #include "src/metrics.h"
 #include "src/query/fanout.h"
+#include "src/query/response_generator.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
+
+// #define DBG std::cerr
+#define DBG 0 && std::cerr
 
 namespace valkey_search {
 namespace aggregate {
@@ -32,15 +36,29 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   // operation. And modify the common search returns list accordingly
   RedisModule_Assert(!params.no_content);
   if (params.loadall_) {
+    DBG << "**LOADALL**\n";
     RedisModule_Assert(params.return_attributes.empty());
   } else {
-    while (!params.loads_.empty()) {
-      vmsdk::UniqueRedisString id;
-      std::swap(params.loads_.back(), id);
-      params.loads_.pop_back();
+    DBG << "LOADING: ";
+    for (const auto &load : params.loads_) {
+      DBG << " " << load;
+      //
+      // Skip loading of the score and the key, we always get those...
+      //
+      if (load == "__key") {
+        DBG << "*skipped*";
+        params.load_key = true;
+        continue;
+      }
+      if (load == vmsdk::ToStringView(params.score_as.get())) {
+        DBG << "*skipped*";
+        continue;
+      }
       params.return_attributes.emplace_back(query::ReturnAttribute{
-          .identifier = std::move(id), .alias = nullptr});
+          .identifier = vmsdk::MakeUniqueRedisString(load),
+          .alias = vmsdk::MakeUniqueRedisString(load)});
     }
+    DBG << "\n";
   }
   return absl::OkStatus();
 }
@@ -66,12 +84,8 @@ absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
       vmsdk::ParseParamValue(itr, params->parse_vars.query_string));
   VMSDK_RETURN_IF_ERROR(PreParseQueryString(*params));
 
-  RedisModule_Assert(params->AddRecordAttribute("__key") ==
-                     AggregateParameters::kKeyIndex);
-  RedisModule_Assert(!params->parse_vars.score_as_string.empty());
-  RedisModule_Assert(
-      params->AddRecordAttribute(params->parse_vars.score_as_string) ==
-      AggregateParameters::kScoreIndex);
+  // Ensure that key is first value if it gets included...
+  RedisModule_Assert(params->AddRecordAttribute("__key") == 0);
 
   VMSDK_RETURN_IF_ERROR(parser.Parse(*params, itr, true));
   if (itr.DistanceEnd() > 0) {
@@ -83,31 +97,73 @@ absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
   VMSDK_RETURN_IF_ERROR(PostParseQueryString(*params));
   VMSDK_RETURN_IF_ERROR(ManipulateReturnsClause(*params));
 
-  std::cerr << "At end of parse: " << *params << "\n";
+  DBG << "At end of parse: " << *params << "\n";
   params->parse_vars.ClearAtEndOfParse();
   return std::move(params);
 }
 
+bool ReplyWithValue(RedisModuleCtx *ctx, absl::string_view name,
+                    const expr::Value &value) {
+  if (value.IsNil()) {
+    return false;
+  } else {
+    RedisModule_ReplyWithSimpleString(ctx, name.data());
+    DBG << " " << name << ":";
+    if (value.IsBool()) {
+      DBG << *value.AsBool();
+      RedisModule_ReplyWithBool(ctx, *value.AsBool());
+    } else if (value.IsDouble()) {
+      DBG << *value.AsDouble();
+      RedisModule_ReplyWithDouble(ctx, *value.AsDouble());
+    } else {
+      auto value_sv = value.AsStringView();
+      RedisModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
+      DBG << value_sv;
+    }
+    return true;
+  }
+}
+
 absl::Status SendReplyInner(RedisModuleCtx *ctx,
                             std::deque<indexes::Neighbor> &neighbors,
-                            const AggregateParameters &parameters) {
+                            AggregateParameters &parameters) {
+  auto identifier =
+      parameters.index_schema->GetIdentifier(parameters.attribute_alias);
+  if (!identifier.ok()) {
+    ++Metrics::GetStats().query_failed_requests_cnt;
+    return identifier.status();
+  }
+  query::ProcessNeighborsForReply(
+      ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
+      parameters, identifier.value());
+
+  size_t key_index = 0, scores_index = 0;
+  if (parameters.load_key) {
+    key_index = parameters.AddRecordAttribute("__key");
+  }
+  if (parameters.addscores_) {
+    scores_index = parameters.AddRecordAttribute(
+        vmsdk::ToStringView(parameters.score_as.get()));
+  }
   //
   //  1. Process the collected Neighbors into Aggregate Records.
   //
-  RecordSet records;
+  RecordSet records(&parameters);
   for (auto &n : neighbors) {
+    DBG << "Neighbor: " << n << "\n";
     auto rec = std::make_unique<Record>(parameters.attr_record_indexes_.size());
-    // Set the key
-    rec->fields_[AggregateParameters::kKeyIndex] =
-        expr::Value(n.external_id.get());
-    // Set the distance/score parameter
-    rec->fields_[AggregateParameters::kScoreIndex] = expr::Value(n.distance);
-
+    if (parameters.load_key) {
+      rec->fields_[key_index] = expr::Value(n.external_id.get()->Str());
+    }
+    if (parameters.addscores_) {
+      rec->fields_[scores_index] = expr::Value(n.distance);
+    }
     // For the fields that were fetched, stash them into the RecordSet
-    if (n.attribute_contents) {
+    if (n.attribute_contents.has_value()) {
       for (auto &[name, records_map_value] : *n.attribute_contents) {
         auto value =
-            expr::Value(vmsdk::ToStringView(records_map_value.GetIdentifier()));
+            expr::Value(vmsdk::ToStringView(records_map_value.value.get()));
+        DBG << "Attribute_contents: " << name << " : " << value << "\n";
         auto ref = parameters.attr_record_indexes_.find(name);
         if (ref != parameters.attr_record_indexes_.end()) {
           rec->fields_[ref->second] = value;
@@ -119,6 +175,7 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
     }
     records.push_back(std::move(rec));
   }
+  DBG << "After Record Fetch\n" << records << "\n";
   //
   //  2. Perform the aggregation stages
   //
@@ -126,7 +183,7 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
     // Todo Check for timeout
     VMSDK_RETURN_IF_ERROR(stage->Execute(records));
   }
-  std::cerr << "Finished stages, size " << records.size() << "\n";
+  DBG << ">> Finished stages\n" << records;
 
   //
   //  3. Generate the result
@@ -139,17 +196,11 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
     //
     // First the referenced fields
     //
-    std::cerr << "Starting row:";
+    DBG << "Starting row:";
     size_t array_count = 0;
     for (size_t i = 0; i < rec->fields_.size(); ++i) {
-      const auto &value = rec->fields_[i];
-      if (!value.IsNil()) {
-        RedisModule_ReplyWithSimpleString(
-            ctx, parameters.attr_record_names_[i].data());
-        auto value_sv = value.AsStringView();
-        RedisModule_ReplyWithStringBuffer(ctx, value_sv.data(),
-                                          value_sv.size());
-        std::cerr << " " << parameters.attr_record_names_[i] << ":" << value_sv;
+      if (ReplyWithValue(ctx, parameters.attr_record_names_[i],
+                         rec->fields_[i])) {
         array_count += 2;
       }
     }
@@ -160,10 +211,10 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
       RedisModule_ReplyWithSimpleString(ctx, name.data());
       auto value_sv = value.AsStringView();
       RedisModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
-      std::cerr << " " << name << ":" << value_sv;
+      DBG << " " << name << ":" << value_sv;
       array_count += 2;
     }
-    std::cerr << " (Total length) " << array_count << "\n";
+    DBG << " (Total length) " << array_count << "\n";
     RedisModule_ReplySetArrayLength(ctx, array_count);
   }
 
@@ -171,7 +222,9 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
 }
 
 void SendReply(RedisModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
-               const AggregateParameters &parameters) {
+               AggregateParameters &parameters) {
+  auto identifier =
+      parameters.index_schema->GetIdentifier(parameters.attribute_alias);
   auto result = SendReplyInner(ctx, neighbors, parameters);
   if (!result.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;

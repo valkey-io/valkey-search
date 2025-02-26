@@ -22,6 +22,39 @@ expr::Value Attribute::GetValue(expr::Expression::EvalContext& ctx,
 
 expr::Expression::EvalContext ctx;
 
+std::ostream& operator<<(std::ostream& os, const RecordSet& rs) {
+  os << "<RecordSet> " << rs.size() << "\n";
+  for (size_t i = 0; i < rs.size(); ++i) {
+    os << i << ": ";
+    rs[i]->Dump(os, rs.agg_params_);
+    os << "\n";
+  }
+  os << "</RecordSet>\n";
+  return os;
+}
+
+void Record::Dump(std::ostream& os,
+                  const AggregateParameters* agg_params) const {
+  os << '[';
+  for (size_t i = 0; i < fields_.size(); ++i) {
+    if (i != 0) {
+      os << ',';
+    }
+    if (agg_params) {
+      os << agg_params->attr_record_names_[i] << ':';
+    } else {
+      os << '?' << i << '?';
+    }
+    os << fields_[i];
+  }
+  if (!extra_fields_.empty()) {
+    os << '[' << extra_fields_.size() << ']';
+    for (const auto& [field, value] : extra_fields_) {
+      os << " " << field << ":" << value;
+    }
+  }
+}
+
 absl::Status Limit::Execute(RecordSet& records) const {
   for (auto i = 0; i < offset_ && !records.empty(); ++i) {
     records.pop_front();
@@ -47,7 +80,7 @@ absl::Status Apply::Execute(RecordSet& records) const {
 }
 
 absl::Status Filter::Execute(RecordSet& records) const {
-  RecordSet filtered;
+  RecordSet filtered(records.agg_params_);
   while (!records.empty()) {
     auto r = records.pop_front();
     auto result = expr_->Evaluate(ctx, *r);
@@ -114,6 +147,8 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
   while (!records.empty()) {
     auto record = records.pop_front();
     GroupKey k;
+    // todo: How do we handle keys that have a missing attribute in the key??
+    // Skip them?
     for (auto& g : groups_) {
       k.keys_.emplace_back(g->GetValue(ctx, *record));
     }

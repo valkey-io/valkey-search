@@ -69,6 +69,14 @@ struct ReturnAttribute {
   vmsdk::UniqueRedisString alias;
 };
 
+std::ostream& operator<<(std::ostream& os, const ReturnAttribute& r) {
+  os << vmsdk::ToStringView(r.identifier.get());
+  if (r.alias) {
+    os << "[alias: " << vmsdk::ToStringView(r.alias.get()) << ']';
+  }
+  return os;
+}
+
 struct VectorSearchParameters {
   virtual ~VectorSearchParameters() = default;
   std::shared_ptr<IndexSchema> index_schema;

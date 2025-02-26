@@ -165,9 +165,8 @@ void SerializeNeighbors(RedisModuleCtx *ctx,
 //      4. The vector value
 // SendReply respects the Limit, see https://redis.io/commands/ft.search/
 void SendReply(RedisModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
-               const query::VectorSearchParameters &parameters) {
-  if (auto agg =
-          dynamic_cast<const aggregate::AggregateParameters *>(&parameters)) {
+               query::VectorSearchParameters &parameters) {
+  if (auto agg = dynamic_cast<aggregate::AggregateParameters *>(&parameters)) {
     aggregate::SendReply(ctx, neighbors, *agg);
   }
   // Increment success counter.

@@ -4,6 +4,7 @@
 #include <deque>
 
 #include "absl/container/inlined_vector.h"
+#include "src/commands/ft_aggregate_parser.h"
 #include "src/expr/expr.h"
 #include "src/expr/value.h"
 
@@ -18,12 +19,14 @@ class Record : public expr::Expression::Record {
   bool operator==(const Record& r) const {
     return fields_ == r.fields_ && extra_fields_ == r.extra_fields_;
   }
+  void Dump(std::ostream& os, const AggregateParameters* agg_params) const;
 };
 
 using RecordPtr = std::unique_ptr<Record>;
 
 class RecordSet : public std::deque<RecordPtr> {
  public:
+  RecordSet(const AggregateParameters* agg_params) : agg_params_(agg_params) {}
   RecordPtr pop_front() {  // NOLINT: needs to follow STL naming convention
     auto p = this->front().release();
     this->std::deque<RecordPtr>::pop_front();
@@ -38,6 +41,9 @@ class RecordSet : public std::deque<RecordPtr> {
       RecordPtr&& p) {  // NOLINT: needs to follow the STL naming convention
     this->deque<RecordPtr>::emplace_back(std::move(p));
   }
+  friend std::ostream& operator<<(std::ostream& os, const RecordSet& rs);
+
+  const AggregateParameters* agg_params_;
 };
 
 struct GroupKey {

@@ -10,6 +10,9 @@
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 
+// #define DBG std::cerr
+#define DBG 0 && std::cerr
+
 namespace valkey_search {
 namespace aggregate {
 
@@ -41,9 +44,17 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
           uint32_t cnt{0};
           VMSDK_ASSIGN_OR_RETURN(cnt, vmsdk::To<uint32_t>(count_string));
           for (uint32_t i = 0; i < cnt; ++i) {
-            vmsdk::UniqueRedisString identifier;
-            VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, identifier));
-            parameters.loads_.emplace_back(std::move(identifier));
+            std::string load;
+            VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, load));
+            if (load.empty() || load == "@") {
+              return absl::InvalidArgumentError(
+                  "Empty argument in LOAD clause not allowed");
+            }
+            if (load[0] == '@') {
+              parameters.loads_.emplace_back(load.substr(1));
+            } else {
+              parameters.loads_.emplace_back(std::move(load));
+            }
           }
         }
         return absl::OkStatus();
@@ -70,7 +81,7 @@ ConstructApplyParser() {
             parameters.MakeReference(vmsdk::ToStringView(name_string), true));
         apply->name_ = std::unique_ptr<Attribute>(
             dynamic_cast<Attribute *>(name.release()));
-        std::cerr << *apply << "\n";
+        DBG << *apply << "\n";
         parameters.stages_.emplace_back(std::move(apply));
         return absl::OkStatus();
       });
@@ -124,7 +135,7 @@ ConstructParamsParser() {
           parameters.parse_vars.params[vmsdk::ToStringView(name)] =
               std::make_pair(0, vmsdk::ToStringView(value));
         }
-        std::cerr << "After params: " << parameters << "\n";
+        DBG << "After params: " << parameters << "\n";
         return absl::OkStatus();
       });
 }
@@ -137,12 +148,11 @@ ConstructSortByParser() {
         auto sortby = std::make_unique<SortBy>();
         uint32_t cnt{0};
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
-        std::cerr << "Parsing sortby " << cnt << "\n";
+        DBG << "Parsing sortby " << cnt << "\n";
         for (auto i = 0; i < cnt; ++i) {
           VMSDK_ASSIGN_OR_RETURN(auto expr_string, itr.PopNext(),
                                  _ << " in SORTBY stage");
-          std::cerr << "Parsing field " << vmsdk::ToStringView(expr_string)
-                    << "\n";
+          DBG << "Parsing field " << vmsdk::ToStringView(expr_string) << "\n";
           VMSDK_ASSIGN_OR_RETURN(
               auto expr,
               expr::Expression::Compile(parameters,
@@ -156,7 +166,7 @@ ConstructSortByParser() {
             direction = SortBy::Direction::kDESC;
             i++;
           }
-          std::cerr << "Got Sortby field: " << *expr << "\n";
+          DBG << "Got Sortby field: " << *expr << "\n";
           sortby->sortkeys_.emplace_back(
               SortBy::SortKey{direction, std::move(expr)});
         }
@@ -166,7 +176,7 @@ ConstructSortByParser() {
           sortby->max_ = max;
         }
         parameters.stages_.emplace_back(std::move(sortby));
-        std::cerr << "After sortby: " << parameters << "\n";
+        DBG << "After sortby: " << parameters << "\n";
         return absl::OkStatus();
       });
 }
@@ -242,7 +252,7 @@ ConstructGroupByParser() {
           groupby->reducers_.emplace_back(std::move(r));
         }
         parameters.stages_.emplace_back(std::move(groupby));
-        std::cerr << "After groupby: " << parameters << "\n";
+        DBG << "After groupby: " << parameters << "\n";
         return absl::OkStatus();
       });
 }
@@ -267,7 +277,7 @@ vmsdk::KeyValueParser<AggregateParameters> CreateAggregateParser() {
 
 absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
 AggregateParameters::MakeReference(const absl::string_view s, bool create) {
-  std::cerr << "MakeReference : " << s << " Create:" << create << "\n";
+  DBG << "MakeReference : " << s << " Create:" << create << "\n";
   auto it = attr_record_indexes_.find(s);
   if (it != attr_record_indexes_.end()) {
     return std::make_unique<Attribute>(s, it->second);
@@ -278,14 +288,16 @@ AggregateParameters::MakeReference(const absl::string_view s, bool create) {
       switch (fieldType) {
         case indexes::IndexerType::kTag:
         case indexes::IndexerType::kNumeric:
+        case indexes::IndexerType::kVector:
+        case indexes::IndexerType::kFlat:
+        case indexes::IndexerType::kHNSW:
           break;
         default:
           return absl::InvalidArgumentError(
               absl::StrCat("Invalid data type for @", s));
       }
     }
-    size_t new_index = attr_record_indexes_.size();
-    attr_record_indexes_[s] = new_index;
+    size_t new_index = AddRecordAttribute(s);
     return std::make_unique<Attribute>(s, new_index);
   }
 }
@@ -293,8 +305,8 @@ AggregateParameters::MakeReference(const absl::string_view s, bool create) {
 std::ostream &operator<<(std::ostream &os, const AggregateParameters &agg) {
   os << "\nAggregate command: " << "\n";
   for (const auto &[key, value] : agg.parse_vars.params) {
-    std::cerr << "Parameter " << key << " And Value: " << value.first << ":"
-              << value.second << "\n";
+    DBG << "Parameter " << key << " And Value: " << value.first << ":"
+        << value.second << "\n";
   }
   for (const auto &c : agg.stages_) {
     os << *c << "\n";

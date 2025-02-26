@@ -55,8 +55,10 @@ struct AggregateExecTest : public vmsdk::RedisTest {
     vmsdk::ArgsIterator itr(argv.data(), argv.size());
 
     auto params = std::make_unique<AggregateParameters>(&fakeIndex);
-    params->attr_record_indexes_["n1"] = 0;
-    params->attr_record_indexes_["n2"] = 1;
+    EXPECT_EQ(params->AddRecordAttribute("n1"), 0);
+    EXPECT_EQ(params->AddRecordAttribute("n2"), 1);
+    // params->attr_record_indexes_["n1"] = 0;
+    // params->attr_record_indexes_["n2"] = 1;
 
     auto parser = CreateAggregateParser();
 
@@ -100,7 +102,7 @@ TEST_F(AggregateExecTest, FilterTest) {
 }
 
 TEST_F(AggregateExecTest, ApplyTest) {
-  std::cerr << "FilterTest\n";
+  std::cerr << "ApplyTest\n";
   auto param = MakeStages("APPLY @n1+1 as fred");
   auto records = MakeData(2);
   for (auto& r : records) {

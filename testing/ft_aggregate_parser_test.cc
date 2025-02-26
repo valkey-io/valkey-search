@@ -97,8 +97,7 @@ static void DoPrefaceTestCase(FakeIndexInterface *fake_index, std::string test,
       EXPECT_FALSE(params.loadall_);
       EXPECT_EQ(params.loads_.size(), loads_test.value_->size());
       for (auto i = 0; i < loads_test.value_->size(); ++i) {
-        EXPECT_EQ(loads_test.value_->at(i),
-                  vmsdk::ToStringView(params.loads_[i].get()));
+        EXPECT_EQ(loads_test.value_->at(i), params.loads_[i]);
       }
     }
   } else {

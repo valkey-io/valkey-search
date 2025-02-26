@@ -42,7 +42,7 @@ namespace valkey_search {
 class ValkeySearch;
 // Declared here to support testing
 void SendReply(RedisModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
-               const query::VectorSearchParameters &parameters);
+               query::VectorSearchParameters &parameters);
 
 namespace async {
 

@@ -19,6 +19,36 @@ else()
   set(VALKEY_SEARCH_IS_X86 0)
 endif()
 
+# Check for compiler compatibility
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  # We require GCC v12 and later
+  string(REGEX MATCH "^([0-9]+)\\.([0-9]+)\\.([0-9]+)" GCC_VERSION_MATCH
+               ${CMAKE_CXX_COMPILER_VERSION})
+  set(GCC_MAJOR_VERSION ${CMAKE_MATCH_1})
+  if(GCC_MAJOR_VERSION LESS 12)
+    message(
+      FATAL_ERROR
+        "Minimum GCC required is 12 and later. Your GCC version is ${CMAKE_CXX_COMPILER_VERSION}"
+    )
+  endif()
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+  # We require Clang v16 and later
+  string(REGEX MATCH "^([0-9]+)\\.([0-9]+)\\.([0-9]+)" CLANG_VERSION_MATCH
+               ${CMAKE_CXX_COMPILER_VERSION})
+  set(CLANG_MAJOR_VERSION ${CMAKE_MATCH_1})
+  if(CLANG_MAJOR_VERSION LESS 16)
+    message(
+      FATAL_ERROR
+        "Minimum Clang required is 16 and later. Your Clang version is ${CMAKE_CXX_COMPILER_VERSION}"
+    )
+  endif()
+else()
+  message(
+    WARN
+    "Using unknown compiler ${CMAKE_CXX_COMPILER_ID}. Version: ${CMAKE_CXX_COMPILER_VERSION}"
+  )
+endif()
+
 # A wrapper around "add_library" (STATIC) that enables the various build flags
 function(valkey_search_add_static_library name sources)
   message(STATUS "Adding static library ${name}")

@@ -103,7 +103,7 @@ bazel build //src:valkeysearch
 For an optimized binary, suitable for production or benchmarking, use:
 
 ```bash
-bazel build -c opt config=lto //src:valkeysearch
+bazel build -c opt --config=lto //src:valkeysearch
 ```
 
 To include the symbol table:

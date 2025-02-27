@@ -2,6 +2,8 @@
 
 #include <cmath>
 #include <ctime>
+#include <iomanip>
+#include <sstream>
 
 #include "src/utils/scanner.h"
 
@@ -60,6 +62,12 @@ std::optional<Value::Nil> Value::AsNil() const {
   return std::nullopt;
 }
 
+std::string FormatDouble(double d) {
+  std::ostringstream os;
+  os << std::setprecision(11) << d;
+  return os.str();
+}
+
 std::optional<bool> Value::AsBool() const {
   if (auto result = std::get_if<bool>(&value_)) {
     return *result;
@@ -110,7 +118,7 @@ absl::string_view Value::AsStringView() const {
     return *result ? "1" : "0";
   } else if (auto result = std::get_if<double>(&value_)) {
     if (!storage_) {
-      storage_ = std::to_string(*result);
+      storage_ = FormatDouble(*result);
     }
     return *storage_;
   } else if (auto result = std::get_if<absl::string_view>(&value_)) {
@@ -126,7 +134,7 @@ std::string Value::AsString() const {
   if (auto result = std::get_if<bool>(&value_)) {
     return *result ? "1" : "0";
   } else if (auto result = std::get_if<double>(&value_)) {
-    return std::to_string(*result);
+    return FormatDouble(*result);
   } else if (auto result = std::get_if<absl::string_view>(&value_)) {
     return std::string(*result);
   } else if (auto result = std::get_if<std::string>(&value_)) {
@@ -142,7 +150,7 @@ std::ostream& operator<<(std::ostream& os, const Value& v) {
   } else if (v.IsBool()) {
     return os << std::boolalpha << v.AsBool().value();
   } else if (v.IsDouble()) {
-    return os << v.AsDouble().value();
+    return os << std::setprecision(10) << v.AsDouble().value();
   } else if (v.IsString()) {
     return os << "'" << v.AsStringView() << "'";
   }

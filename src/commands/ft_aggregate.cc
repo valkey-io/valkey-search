@@ -112,9 +112,9 @@ bool ReplyWithValue(RedisModuleCtx *ctx, absl::string_view name,
     if (value.IsBool()) {
       DBG << *value.AsBool();
       RedisModule_ReplyWithBool(ctx, *value.AsBool());
-    } else if (value.IsDouble()) {
-      DBG << *value.AsDouble();
-      RedisModule_ReplyWithDouble(ctx, *value.AsDouble());
+      //} else if (value.IsDouble()) {
+      //  DBG << *value.AsDouble();
+      //  RedisModule_ReplyWithDouble(ctx, *value.AsDouble());
     } else {
       auto value_sv = value.AsStringView();
       RedisModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
@@ -141,10 +141,13 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
   if (parameters.load_key) {
     key_index = parameters.AddRecordAttribute("__key");
   }
-  if (parameters.addscores_) {
+  // Include scores? The presence of a vector serch implies yes, so when vector
+  // search becomes optional this will need to change: todo:
+  if (/* parameters.addscores_ */ true) {
     scores_index = parameters.AddRecordAttribute(
         vmsdk::ToStringView(parameters.score_as.get()));
   }
+
   //
   //  1. Process the collected Neighbors into Aggregate Records.
   //
@@ -155,21 +158,40 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
     if (parameters.load_key) {
       rec->fields_[key_index] = expr::Value(n.external_id.get()->Str());
     }
-    if (parameters.addscores_) {
+    if (/* todo: parameters.addscores_ */ true) {
       rec->fields_[scores_index] = expr::Value(n.distance);
     }
     // For the fields that were fetched, stash them into the RecordSet
     if (n.attribute_contents.has_value()) {
       for (auto &[name, records_map_value] : *n.attribute_contents) {
-        auto value =
-            expr::Value(vmsdk::ToStringView(records_map_value.value.get()));
+        auto value = vmsdk::ToStringView(records_map_value.value.get());
         DBG << "Attribute_contents: " << name << " : " << value << "\n";
         auto ref = parameters.attr_record_indexes_.find(name);
         if (ref != parameters.attr_record_indexes_.end()) {
-          rec->fields_[ref->second] = value;
+          // Need to find the field type
+          indexes::IndexerType field_type = indexes::IndexerType::kNone;
+          auto indexer = parameters.index_schema->GetIndex(name);
+          if (indexer.ok()) {
+            field_type = (*indexer)->GetIndexerType();
+          }
+          switch (field_type) {
+            case indexes::IndexerType::kNumeric: {
+              auto numeric_value = vmsdk::To<double>(value);
+              if (numeric_value.ok()) {
+                rec->fields_[ref->second] = expr::Value(numeric_value.value());
+              } else {
+                // Skip this field, it contains an invalid number....
+                // todo Prove that skipping this field is the right thing to do
+              }
+              break;
+            }
+            default:
+              rec->fields_[ref->second] = expr::Value(value);
+              break;
+          }
         } else {
           rec->extra_fields_.push_back(
-              std::make_pair(std::string(name), value));
+              std::make_pair(std::string(name), expr::Value(value)));
         }
       }
     }

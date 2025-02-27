@@ -6,7 +6,6 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "vmsdk/src/command_parser.h"
-#include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 

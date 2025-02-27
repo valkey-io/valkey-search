@@ -262,11 +262,10 @@ class Stddev : public GroupBy::ReducerInstance {
     }
   }
   expr::Value GetResult() const override {
-    if (count_ == 0) {
+    if (count_ <= 1) {
       return expr::Value(0.0);
     } else {
-      double mean = sum_ / count_;
-      double variance = (sq_sum_ / count_) - (mean * mean);
+      double variance = (sq_sum_ - (sum_ * sum_) / count_) / (count_ - 1);
       return expr::Value(std::sqrt(variance));
     }
   }

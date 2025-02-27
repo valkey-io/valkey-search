@@ -3,7 +3,6 @@
 #include <map>
 
 #include "gtest/gtest.h"
-#include "testing/common.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 std::ostream &operator<<(std::ostream &os, RedisModuleString *s) {
@@ -16,7 +15,7 @@ namespace aggregate {
 struct FakeIndexInterface : public IndexInterface {
   std::map<std::string, indexes::IndexerType> fields_;
   absl::StatusOr<indexes::IndexerType> GetFieldType(
-      absl::string_view fld_name) const {
+      absl::string_view fld_name) const override {
     std::string field_name(fld_name);
     std::cout << "Fake make reference " << field_name << "\n";
     auto itr = fields_.find(field_name);

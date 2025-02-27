@@ -9,7 +9,6 @@
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "vmsdk/src/command_parser.h"
-#include "vmsdk/src/managed_pointers.h"
 
 namespace valkey_search {
 namespace aggregate {

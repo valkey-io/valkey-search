@@ -99,10 +99,11 @@ TEST_F(ExprTest, TypesTest) {
       {"substr('abc', 1, 1)", Value("b")},
       {"substr('abc', -1, 1)", Value("c")},
       {"substr('abc', 1, 2)", Value("bc")},
-      {"substr('abc', -1, 2)", Value()},
+      {"substr('abc', -1, 2)", Value("c")},
       {"substr('abc', -2, 2)", Value("bc")},
       {"substr('abc', 3, 0)", Value("")},
-      {"substr('abc', 3, 1)", Value()},
+      {"substr('abc', 3, 1)", Value("")},
+      {"substr('abc', 2, 10)", Value("c")},
       {"lower('A')", Value("a")},
       {"upper('a')", Value("A")},
       {"contains('abc', '')", Value(4.0)},
@@ -121,6 +122,10 @@ TEST_F(ExprTest, TypesTest) {
       {"!1!=1", Value(1.0)},
       {"$one", Value("1")},
       {"$one+1", Value(2.0)},
+      {"1>2", Value(0.0)},
+      {"1<2", Value(1.0)},
+      {"1>=2", Value(0.0)},
+      {"1<=2", Value(1.0)},
 
   };
   for (auto& c : x) {

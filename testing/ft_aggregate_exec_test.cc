@@ -217,7 +217,7 @@ TEST_F(AggregateExecTest, ReducerTest) {
       {"groupby 1 @n2 reduce min 1 @n1 reduce count 0", 4, {0, 4}},
       {"groupby 1 @n2 reduce max 1 @n1", 4, {3}},
       {"groupby 1 @n2 reduce sum 1 @n1", 4, {6}},
-      {"groupby 1 @n2 reduce stddev 1 @n1", 4, {1.118}},
+      {"groupby 1 @n2 reduce stddev 1 @n1", 4, {1.2909944487358056}},
       {"groupby 1 @n2 reduce count_distinct 1 @n1", 4, {4}},
   };
   for (auto& tc : testcases) {

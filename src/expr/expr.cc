@@ -469,9 +469,9 @@ struct Compiler {
     return DoDyadic(ctx, &Compiler::CmpOp, &Compiler::AndOp, ops);
   }
   absl::StatusOr<ExprPtr> CmpOp(CompileContext& ctx) {
-    static std::vector<DyadicOp> ops{{"<", &FuncLt},  {"<=", &FuncLe},
+    static std::vector<DyadicOp> ops{{"<=", &FuncLe}, {"<", &FuncLt},
                                      {"==", &FuncEq}, {"!=", &FuncNe},
-                                     {">", &FuncGt},  {">=", &FuncGe}};
+                                     {">=", &FuncGe}, {">", &FuncGt}};
     return DoDyadic(ctx, &Compiler::AddOp, &Compiler::CmpOp, ops);
   }
   absl::StatusOr<ExprPtr> AddOp(CompileContext& ctx) {

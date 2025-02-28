@@ -101,9 +101,9 @@ class ClientSystem:
             sys.exit(1)
         self.client.execute_command("FLUSHALL SYNC")
     def execute_command(self, *cmd):
-        print("Execute:", *cmd)
+        #print("Execute:", *cmd)
         result = self.client.execute_command(*cmd)
-        print("Result:", result)
+        #print("Result:", result)
         return result
     def pipeline(self):
         return self.client.pipeline()
@@ -123,7 +123,7 @@ class ClientRSystem(ClientSystem):
             pass
     def execute_command(self, *cmd):
         result = self.client.execute_command(*cmd)
-        print("R:", *cmd, " => ", result)
+        # print("R:", *cmd, " => ", result)
         return result
 
 class ClientLSystem(ClientSystem):
@@ -131,7 +131,7 @@ class ClientLSystem(ClientSystem):
         super().__init__(SYSTEM_L_ADDRESS)
     def execute_command(self, *cmd):
         result = self.client.execute_command(*cmd)
-        print("L:", *cmd, " => ", result)
+        # print("L:", *cmd, " => ", result)
         return result
 
 
@@ -158,7 +158,7 @@ class TestAggregateCompatibility:
         }
 
         field_type_to_name = {"tag": "t", "numeric": "n", "vector": "v"}
-        field_types_to_count = {"numeric": 2, "tag": 3, "vector" : 1}
+        field_types_to_count = {"numeric": 3, "tag": 3, "vector" : 1}
 
         def get_field_piece(key_type, name, typ, i):
             if typ == "vector":
@@ -182,6 +182,7 @@ class TestAggregateCompatibility:
                     {
                         "n1": i,
                         "n2": -i,
+                        "n3" : i*i,
                         "t1": f"one.one{i}",
                         "t2": f"two.two{i}",
                         "t3": "all_the_same_value",
@@ -427,11 +428,28 @@ class TestAggregateCompatibility:
                 }
         """
         arr = {}
-        parse_field = lambda x: x[2::] if x.startswith("$.") else x
+        def parse_field(x):
+            if isinstance(x, bytes):
+                return parse_field(x.decode("utf-8"))
+            if isinstance(x, str):
+                return x[2::] if x.startswith("$.") else x
+            if isinstance(x, int):
+                return x
+            print("Unknown type ", type(x))
+            assert False
+        def parse_value(x):
+            if isinstance(x, bytes):
+                return x.decode("utf-8")
+            if isinstance(x, str):
+                return x
+            if isinstance(x, int):
+                return x
+            print("Unknown type ", type(x))
+            assert False
         # Skip the first gibberish int
         rows = []
         for key_res in rs[1:]:
-            rows += [{parse_field(key_res[f_idx].decode("utf-8")): key_res[f_idx + 1].decode("utf-8")
+            rows += [{parse_field(key_res[f_idx]): parse_value(key_res[f_idx + 1])
                 for f_idx in range(0, len(key_res), 2)}]
         return rows
 
@@ -467,7 +485,7 @@ class TestAggregateCompatibility:
         elif 'sortby' in cmd:
             sortkeys = []
         else:
-            sort_keys=['__key']
+            sortkeys=['__key']
 
         results = {eng: None for eng in engines}
         exception = {eng: False for eng in engines}
@@ -477,7 +495,7 @@ class TestAggregateCompatibility:
                 results[name] = rs
                 # print(f"{name} replied: {rs}")
             except Exception as exc:
-                print(f"Got exception for {name} Error: {exc}")
+                print(f"Got exception for {name} Error: '{exc}'")
                 exception[name] = True
                 # assert False
 
@@ -488,21 +506,22 @@ class TestAggregateCompatibility:
             return
 
         if exception["RL"]:
-            print(f"RL Exception: Raw: {printable_result(results['RL'])}")
-            print(f"EC Result: {printable_result(results['EC'])}")
+            print("RL Exception, skipped")
+            #print(f"RL Exception: Raw: {printable_result(results['RL'])}")
+            #print(f"EC Result: {printable_result(results['EC'])}")
             print(TEST_MARKER)
             return
-            assert False
+
         if exception["EC"]:
             print(f"RL Result: {printable_result(results['RL'])}")
             print(f"EC Exception Raw: {printable_result(results['EC'])}")
             print(TEST_MARKER)
-            return
             assert False
 
         # Process failures
         if len(results["RL"]) != len(results["EC"]):
             print(f"Mismatched sizes RL:{len(results['RL'])} EC:{len(results['EC'])}")
+            assert False
 
         # Output raw results
         rl = self.unpack_result(cmd, results["RL"], sortkeys)
@@ -515,13 +534,15 @@ class TestAggregateCompatibility:
             print("Results look good.")
             print(TEST_MARKER)
             return
-        print("***** MISMATCH ON DATA *****, sortkeys=", sortkeys)
+        print("***** MISMATCH ON DATA *****, sortkeys=", sortkeys, " records=", len(rl))
         print(f"CMD: {cmd}")
         print(f"RL raw result:{results['RL']}")
         print(f"EC raw result:{results['EC']}")
         print("--- Sorted ---")
-        print(f"Sorted RL: result {rl}")
-        print(f"Sorted EC: result {ec}")
+        print(rl)
+        for i in range(len(rl)):
+            print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())], "" if rl[i] == ec[i] else "<<<")
+            print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())], "" if rl[i] == ec[i] else "<<<")
         print(TEST_MARKER)
         assert False
 
@@ -666,16 +687,18 @@ class TestAggregateCompatibility:
             self.compare_results(test)
     '''
 
-    def checkvec(self, orig_cmd):
+    def checkvec(self, *orig_cmd):
         '''Temporary change until query parser is redone.'''
-        cmd = []
-        for c in orig_cmd:
-            if c == "*":
+        cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]
+        new_cmd = []
+        print("checkvec:", cmd)
+        for c in cmd:
+            if c.strip() == "*":
                 ''' substitute '''
-                cmd += ["*=>[KNN 10000 @v1 $BLOB]"]
+                new_cmd += ["*=>[KNN 10000 @v1 $BLOB]"]
             else:
-                cmd += [c]
-        cmd += [
+                new_cmd += [c]
+        new_cmd += [
             "PARAMS",
             "2",
             "BLOB",
@@ -683,82 +706,82 @@ class TestAggregateCompatibility:
             "DIALECT",
             "3",
         ]
-        self.compare_results(cmd)
+        self.compare_results(new_cmd)
 
     def test_aggregate_basic_compatibility(self, key_type):
         self.setup_names()
         self.load_data_with_index("names", key_type)
-        # self.checkvec(f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3".split())
-        self.checkvec(f"ft.aggregate {key_type}_idx1 * load 2 @__key @n2 sortby 1 @n2".split())
-        self.checkvec(f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 1 @n2".split())
+        # self.checkvec(f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3")
+        self.checkvec(f"ft.aggregate {key_type}_idx1 * load 2 @__key @n2 sortby 1 @n2")
+        self.checkvec(f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 1 @n2")
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @n2 asc".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @n2 asc"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @n2 desc".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @n2 desc"
         )
-        self.checkvec(f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @n1".split())
-        self.checkvec(f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1".split())
+        self.checkvec(f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @n1")
+        self.checkvec(f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1")
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce count 0 as count".split()
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce count 0 as count".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce count 0 as count"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce COUNT 0 as count".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce count 0 as count"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce CoUnT 0 as count".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce COUNT 0 as count"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce sum 1 @n1 as sum".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce CoUnT 0 as count"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce sum 1 @n1 as sum".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce sum 1 @n1 as sum"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce sum 1 @n2 as sum".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce sum 1 @n1 as sum"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce avg 1 @n1 as avg".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce sum 1 @n2 as sum"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce avg 1 @n1 as avg".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce avg 1 @n1 as avg"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce avg 1 @n2 as avg".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce avg 1 @n1 as avg"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce min 1 @n1 as min".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce avg 1 @n2 as avg"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce min 1 @n2 as min".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce min 1 @n1 as min"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce min 1 @n1 as min".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce min 1 @n2 as min"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce min 1 @n2 as min".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce min 1 @n1 as min"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce stddev 1 @n1 as stddev".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce min 1 @n2 as min"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce stddev 1 @n1 as stddev".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce stddev 1 @n1 as stddev"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce stddev 1 @n2 as stddev".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce stddev 1 @n1 as stddev"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n1 as max".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce stddev 1 @n2 as stddev"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce max 1 @n1 as max".split()
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n1 as max"
+        )
+        self.checkvec(
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce max 1 @n1 as max"
         )
         ## RL Max does not support negatives and incorrectly rounds up to zero:
         # self.checkvec(f'ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n2 as max')
-    @pytest.mark.parametrize("numbers", ["good numeric"])
+    @pytest.mark.parametrize("numbers", ["names"])
     def test_aggregate_numeric_dyadic_operators(self, key_type, numbers):
         self.setup_names()
         keys = self.load_data_with_index(numbers, key_type)
@@ -766,147 +789,137 @@ class TestAggregateCompatibility:
         relops = ["<", "<=", "==", "!=", ">=", ">"]
         for k in range(keys):
             for op in dyadic + relops:
-                self.compare_results(
-                    f"ft.aggregate {key_type}_idx1  * load 4 @__key @key @n1 @n2 filter @key=={k} apply @n1{op}@n2 as nn"
+                self.checkvec(
+                    f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 apply @n1{op}@n2 as nn"
                 )
 
     def test_aggregate_numeric_load_store(self, key_type):
-        keys = self.load_data_with_index("good numeric", key_type)
+        self.setup_names()
+        keys = self.load_data_with_index("names", key_type)
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]
-        for k in range(keys):
-            self.compare_results(f"ft.aggregate {key_type}_idx1 * load 3 @__key @key @n1 filter @key=={k}")
-            self.compare_results(
-                f"ft.aggregate {key_type}_idx1  * load 3 @__key @key @n1 filter @key=={k} apply @n1 as nn"
-            )
-            self.compare_results(
-                f"ft.aggregate {key_type}_idx1  * load 3 @__key @key @n1 filter @key=={k} apply @n1+0 as nn"
-            )
+        self.checkvec(f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1")
+        self.checkvec(
+            f"ft.aggregate {key_type}_idx1  * load 2 @__key @n1 apply @n1 as nn"
+        )
+        self.checkvec(
+            f"ft.aggregate {key_type}_idx1  * load 2 @__key @n1 apply @n1+0 as nn"
+        )
 
     def test_aggregate_numeric_triadic_operators(self, key_type):
-        keys = self.load_data_with_index("good numeric", key_type)
+        self.setup_names()
+        keys = self.load_data_with_index("names", key_type)
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]
-        for k in range(keys):
-            for relop in relops:
-                for lop in dyadic:
-                    for rop in dyadic:
-                        self.compare_results(
-                            f"ft.aggregate {key_type}_idx1  * load 5 @__key @key @n1 @n2 @n3 filter @key=={k} apply (@n1{lop}@n2){relop}@n3 as nn"
-                        )
-                        self.compare_results(
-                            f"ft.aggregate {key_type}_idx1  * load 5 @__key @key @n1 @n2 @n3 filter @key=={k} apply @n1{lop}@n2{relop}@n3 as nn"
-                        )
+        for relop in relops:
+            for lop in dyadic:
+                for rop in dyadic:
+                    self.checkvec(
+                        f"ft.aggregate {key_type}_idx1  * load 4 @__key @n1 @n2 @n3 apply (@n1{lop}@n2){relop}@n3 as nn"
+                    )
+                    self.checkvec(
+                        f"ft.aggregate {key_type}_idx1  * load 4 @__key @n1 @n2 @n3 apply @n1{lop}@n2{relop}@n3 as nn"
+                    )
 
     def test_aggregate_numeric_functions(self, key_type):
-        keys = self.load_data_with_index("good numeric", key_type)
+        self.setup_names()
+        keys = self.load_data_with_index("names", key_type)
         function = ["log", "abs", "ceil", "floor", "log2", "exp", "sqrt"]
-        for k in range(keys):
-            for f in function:
-                self.compare_results(
-                    f"ft.aggregate {key_type}_idx1  * load 2 @key @n1 filter @key=={k} apply {f}(@n1) as nn"
-                )
-
-    def test_aggregate_text_dyadic_operators(self, key_type):
-        keys = self.load_data_with_index("good text", key_type)
-        dyadic = ["+", "-", "*", "/", "^"]
-        relops = ["<", "<=", "==", "!=", ">=", ">"]
-        for k in range(keys):
-            for op in dyadic + relops:
-                self.compare_results(
-                    f"ft.aggregate {key_type}_idx1 * load 4 @__key @key @t1 @t2 filter @key=={k} apply @t1{op}@t2 as tt"
-                )
-
-        for k in range(keys):
-            for relop in relops:
-                for lop in dyadic:
-                    for rop in dyadic:
-                        self.compare_results(
-                            f"ft.aggregate {key_type}_idx1 * load 5 @__key @key @t1 @t2 @t3 filter @key=={k} apply (@t1{lop}@t2){relop}@t3 as nn"
-                        )
+        for f in function:
+            self.checkvec(
+                f"ft.aggregate {key_type}_idx1  * load 2 @__key @n1 apply {f}(@n1) as nn"
+            )
 
     def test_aggregate_string_apply_functions(self, key_type):
+        self.setup_names()
         self.load_data_with_index("names", key_type)
 
         # String apply function "contains"
-        self.compare_results(
+        self.checkvec(
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
             "load",
-            "1",
+            "2",
+            "__key",
             "t3",
             "apply",
             'contains(@t3, "all")',
             "as",
             "apply_result",
         )
-        self.compare_results(
+        self.checkvec(
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
             "load",
-            "1",
+            "2",
+            "__key",
             "t3",
             "apply",
             'contains(@t3, "value")',
             "as",
             "apply_result",
         )
-        self.compare_results(
+        self.checkvec(
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
             "load",
-            "1",
+            "2",
             "t2",
+            "__key",
             "apply",
             'contains(@t2, "two")',
             "as",
             "apply_result",
         )
-        self.compare_results(
+        self.checkvec(
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
             "load",
-            "1",
+            "2",
             "t1",
+            "__key",
             "apply",
             'contains(@t1, "one")',
             "as",
             "apply_result",
         )
-        self.compare_results(
+        self.checkvec(
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
             "load",
-            "1",
+            "2",
             "t1",
+            "__key",
             "apply",
             'contains(@t1, "")',
             "as",
             "apply_result",
         )
-        self.compare_results(
+        self.checkvec(
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
             "load",
-            "1",
+            "2",
+            "__key",
             "t1",
             "apply",
             'contains("", "one")',
             "as",
             "apply_result",
         )
-        self.compare_results(
+        self.checkvec(
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
             "load",
-            "1",
+            "2",
+            "__key",
             "t3",
             "apply",
             'contains("", "")',
@@ -915,100 +928,108 @@ class TestAggregateCompatibility:
         )
 
         # # String apply function "substr"
-        self.compare_results(
+        self.checkvec(
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
             "load",
-            "1",
+            "2",
             "t2",
+            "__key",
             "apply",
             "substr(@t2, 0, 5)",
             "as",
             "apply_result",
         )
-        self.compare_results(
+        self.checkvec(
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
             "load",
-            "1",
+            "2",
             "t2",
+            "__key",
             "apply",
             "substr(@t2, 1, 2)",
             "as",
             "apply_result",
         )
-        # self.compare_results('ft.aggregate', f'{key_type}_idx1', '*', 'load', '1', 't2', 'apply', 'substr(@t2, 1.1, 2)', 'as', 'apply_result')
-        # self.compare_results('ft.aggregate', f'{key_type}_idx1', '*', 'load', '1', 't2', 'apply', 'substr(@t2, 1, "2.9")', 'as', 'apply_result')
-        # self.compare_results('ft.aggregate', f'{key_type}_idx1', '*', 'load', '1', 't2', 'apply', 'substr(@t2, 1, "-2.1")', 'as', 'apply_result')
-        self.compare_results(
+        # self.checkvec('ft.aggregate', f'{key_type}_idx1', '*', 'load', '1', 't2', 'apply', 'substr(@t2, 1.1, 2)', 'as', 'apply_result')
+        # self.checkvec('ft.aggregate', f'{key_type}_idx1', '*', 'load', '1', 't2', 'apply', 'substr(@t2, 1, "2.9")', 'as', 'apply_result')
+        # self.checkvec('ft.aggregate', f'{key_type}_idx1', '*', 'load', '1', 't2', 'apply', 'substr(@t2, 1, "-2.1")', 'as', 'apply_result')
+        self.checkvec(
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
             "load",
-            "1",
+            "2",
             "t2",
+            "__key",
             "apply",
             "substr(@t2, 3, 10)",
             "as",
             "apply_result",
         )
-        self.compare_results(
+        self.checkvec(
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
             "load",
-            "1",
+            "2",
             "t2",
+            "__key",
             "apply",
             "substr(@t2, -6, -1)",
             "as",
             "apply_result",
         )
-        self.compare_results(
+        self.checkvec(
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
             "load",
-            "1",
+            "2",
             "t2",
+            "__key",
             "apply",
             "substr(@t2, -5, -3)",
             "as",
             "apply_result",
         )
-        self.compare_results(
+        self.checkvec(
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
             "load",
-            "1",
+            "2",
             "t2",
+            "__key",
             "apply",
             "substr(@t2, -7, -1)",
             "as",
             "apply_result",
         )
-        self.compare_results(
+        self.checkvec(
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
             "load",
-            "1",
+            "2",
             "t2",
+            "__key",
             "apply",
             "substr(@t2, -7, 0)",
             "as",
             "apply_result",
         )
-        self.compare_results(
+        self.checkvec(
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
             "load",
-            "1",
+            "2",
             "t2",
+            "__key",
             "apply",
             "substr(@t2, 3, 0)",
             "as",

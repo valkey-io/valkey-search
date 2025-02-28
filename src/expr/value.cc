@@ -260,7 +260,11 @@ Value FuncDiv(const Value& l, const Value& r) {
   auto lv = l.AsDouble();
   auto rv = r.AsDouble();
   if (lv && rv) {
-    return Value(lv.value() / rv.value());
+    if (rv.value() == 0.0 && lv.value() == 0.0) {
+      return Value("nan");
+    } else {
+      return Value(lv.value() / rv.value());
+    }
   } else {
     return Value(Value::Nil("Divide requires numeric operands"));
   }
@@ -390,11 +394,13 @@ Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
   auto rd = r.AsDouble();
   if (md && rd) {
     size_t offset = *md >= 0 ? size_t(*md) : (size_t(*md) + ls.size());
-    size_t length = *rd >= 0 ? size_t(*rd) : ls.size();
-    if (offset > ls.size() || (offset + length) > ls.size()) {
-      return Value(Value::Nil("Substr position or length out of range"));
+    size_t length = *rd >= 0 ? size_t(*rd) : 0;
+    if (offset > ls.size()) {
+      return Value(Value::Nil("Substr position out of range"));
     } else {
-      return Value(std::string(ls.substr(offset, length)));
+      size_t len = std::min(length, ls.size() - offset);
+      assert(offset + len <= ls.size());
+      return Value(std::string(ls.substr(offset, len)));
     }
   } else {
     return Value(Value::Nil("substr requires numbers for offset and length"));

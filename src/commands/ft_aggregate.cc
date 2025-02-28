@@ -108,20 +108,11 @@ bool ReplyWithValue(RedisModuleCtx *ctx, absl::string_view name,
     return false;
   } else {
     RedisModule_ReplyWithSimpleString(ctx, name.data());
-    DBG << " " << name << ":";
-    if (value.IsBool()) {
-      DBG << *value.AsBool();
-      RedisModule_ReplyWithBool(ctx, *value.AsBool());
-      //} else if (value.IsDouble()) {
-      //  DBG << *value.AsDouble();
-      //  RedisModule_ReplyWithDouble(ctx, *value.AsDouble());
-    } else {
-      auto value_sv = value.AsStringView();
-      RedisModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
-      DBG << value_sv;
-    }
-    return true;
+    auto value_sv = value.AsStringView();
+    RedisModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
+    DBG << " " << name << ":" << value_sv;
   }
+  return true;
 }
 
 absl::Status SendReplyInner(RedisModuleCtx *ctx,

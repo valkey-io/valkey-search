@@ -51,7 +51,7 @@ using ::testing::TestWithParam;
 
 #define VMSDK_EXPECT_OK_STATUSOR(expr)                         \
   {                                                            \
-    auto __status = expr;                                      \
+    auto &__status = expr;                                     \
     EXPECT_TRUE(__status.ok())                                 \
         << " Failure Message:" << __status.status().message(); \
   }

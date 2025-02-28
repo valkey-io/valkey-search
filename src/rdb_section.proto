@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+import "src/index_schema.proto";
+import "src/coordinator/coordinator.proto";
+
+package valkey_search.data_model;
+
+// The ValkeySearch RDB format is split into a series of protocol buffers that
+// are dumped to the RDB aux section. The beginning of the RDB format is marked
+// by a minimum semantic version and a count of RDBSection protos. Following
+// this, we have each RDBSection which each can be followed by any number of
+// supplemental content sections. A supplemental content section allows for
+// storing chunked data to the RDB without needing to serialize it in memory
+// first. Supplemental content begins with a SupplementalContentHeader, and is
+// followed by any number of SupplementalContentChunks, terminated by an empty
+// SupplementalContentChunk.
+//
+// See rfc/rdb-format.md for more details.
+//
+// To add a new RDBSection, add the type to the RDBSectionType enum and add the
+// content to RDBSection contents field. SupplementalContent can be added in a
+// similar fashion.
+
+enum RDBSectionType {
+  RDB_SECTION_UNSET = 0;
+  RDB_SECTION_INDEX_SCHEMA = 1;
+  RDB_SECTION_GLOBAL_METADATA = 2;
+}
+
+message RDBSection {
+  RDBSectionType type = 1;
+  uint32 supplemental_count = 2;
+  oneof contents {
+    IndexSchema index_schema_contents = 3;
+    coordinator.GlobalMetadata global_metadata_contents = 4;
+  }
+}
+
+enum SupplementalContentType {
+  SUPPLEMENTAL_CONTENT_UNSPECIFIED = 0;
+  SUPPLEMENTAL_CONTENT_INDEX_CONTENT = 1;
+  SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP = 2;
+}
+
+message IndexContentHeader {
+  Attribute attribute = 1;
+}
+
+message KeyToIDMappingHeader {
+  Attribute attribute = 1;
+}
+
+message SupplementalContentHeader {
+  SupplementalContentType type = 1;
+  oneof header {
+    IndexContentHeader index_content_header = 2;
+    KeyToIDMappingHeader key_to_id_map_header = 3;
+  };
+}
+
+message SupplementalContentChunk {
+  // When not present, indicates EOF for this SupplementalContent
+  optional bytes binary_content = 1;
+}

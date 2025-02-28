@@ -41,7 +41,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
-#include "src/rdb_io_stream.h"
+#include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -77,7 +77,7 @@ class IndexBase {
   virtual int RespondWithInfo(RedisModuleCtx* ctx) const = 0;
   virtual bool IsTracked(const InternedStringPtr& key) const = 0;
   IndexerType GetIndexerType() const { return indexer_type_; }
-  virtual absl::Status SaveIndex(RDBOutputStream& rdb_stream) const = 0;
+  virtual absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const = 0;
 
   virtual std::unique_ptr<data_model::Index> ToProto() const = 0;
   virtual void ForEachTrackedKey(

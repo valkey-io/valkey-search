@@ -10,4 +10,5 @@ compile_commands.json
 .cache/
 build-*
 *.workspace
-
+build/
+.build-*

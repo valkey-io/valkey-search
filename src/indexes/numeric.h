@@ -48,7 +48,7 @@
 #include "absl/synchronization/mutex.h"
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
-#include "src/rdb_io_stream.h"
+#include "src/rdb_serialization.h"
 #include "src/utils/segment_tree.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -116,7 +116,7 @@ class Numeric : public IndexBase {
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   int RespondWithInfo(RedisModuleCtx* ctx) const override;
   bool IsTracked(const InternedStringPtr& key) const override;
-  absl::Status SaveIndex(RDBOutputStream& rdb_stream) const override {
+  absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
     return absl::OkStatus();
   }
   inline void ForEachTrackedKey(

@@ -270,6 +270,16 @@ Value FuncDiv(const Value& l, const Value& r) {
   }
 }
 
+Value FuncPower(const Value& l, const Value& r) {
+  auto lv = l.AsDouble();
+  auto rv = r.AsDouble();
+  if (lv && rv) {
+    return Value(std::pow(lv.value(), rv.value()));
+  } else {
+    return Value(Value::Nil("Power requires numeric operands"));
+  }
+}
+
 Value FuncLt(const Value& l, const Value& r) { return Value(l < r); }
 
 Value FuncLe(const Value& l, const Value& r) { return Value(l <= r); }
@@ -390,17 +400,23 @@ Value FuncContains(const Value& l, const Value& r) {
 
 Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
   auto ls = l.AsStringView();
-  auto md = m.AsDouble();
-  auto rd = r.AsDouble();
-  if (md && rd) {
-    size_t offset = *md >= 0 ? size_t(*md) : (size_t(*md) + ls.size());
-    size_t length = *rd >= 0 ? size_t(*rd) : size_t(-*rd);
-    if (offset > ls.size()) {
-      return Value(Value::Nil("Substr position out of range"));
+  auto offset_p = m.AsInteger();
+  auto length_p = r.AsInteger();
+  if (offset_p && length_p) {
+    int64_t offset = *offset_p >= 0 ? *offset_p : *offset_p + ls.size();
+    if (offset > ls.size() || offset < 0 || *length_p == 0) {
+      return Value("");
     } else {
-      size_t len = std::min(length, ls.size() - offset);
-      assert(offset + len <= ls.size());
-      return Value(std::string(ls.substr(offset, len)));
+      if (*length_p >= 0) {
+        return Value(std::string(ls.substr(offset, *length_p)));
+      } else {
+        int64_t len = (ls.size() - offset) + *length_p;
+        if (len < 0) {
+          return Value("");
+        } else {
+          return Value(std::string(ls.substr(offset, len)));
+        }
+      }
     }
   } else {
     return Value(Value::Nil("substr requires numbers for offset and length"));

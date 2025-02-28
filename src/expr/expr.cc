@@ -479,7 +479,8 @@ struct Compiler {
     return DoDyadic(ctx, &Compiler::MulOp, &Compiler::CmpOp, ops);
   }
   absl::StatusOr<ExprPtr> MulOp(CompileContext& ctx) {
-    static std::vector<DyadicOp> ops{{"*", &FuncMul}, {"/", &FuncDiv}};
+    static std::vector<DyadicOp> ops{
+        {"*", &FuncMul}, {"/", &FuncDiv}, {"^", &FuncPower}};
     return DoDyadic(ctx, &Compiler::Primary, &Compiler::MulOp, ops);
   }
 

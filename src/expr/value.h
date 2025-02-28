@@ -1,25 +1,25 @@
 #ifndef VALKEYSEARCH_EXPR_VALUE_H
 #define VALKEYSEARCH_EXPR_VALUE_H
 
-#include <variant>
 #include <iostream>
+#include <variant>
 
-#include "absl/strings/string_view.h"
 #include "absl/container/inlined_vector.h"
+#include "absl/strings/string_view.h"
 
 namespace valkey_search {
 namespace expr {
 
 class Value {
  public:
-
   class Nil {
    public:
     Nil() : reason_("ctor") {}
-    Nil(const char *reason) : reason_(reason) {}
-    const char *GetReason() const { return reason_; }
+    Nil(const char* reason) : reason_(reason) {}
+    const char* GetReason() const { return reason_; }
+
    private:
-      const char *reason_;
+    const char* reason_;
   };
 
   Value() = default;
@@ -28,7 +28,7 @@ class Value {
   explicit Value(int i) : value_(double(i)) {}
   explicit Value(double d);
   explicit Value(const absl::string_view s) : value_(s) {}
-  explicit Value(const char *s) : value_(absl::string_view(s)) {}
+  explicit Value(const char* s) : value_(absl::string_view(s)) {}
   explicit Value(std::string&& s) : value_(std::move(s)) {}
 
   // test for type of Value
@@ -70,32 +70,25 @@ class Value {
   }
 
  private:
-
   mutable std::optional<std::string> storage_;
 
-  std::variant<
-    Nil,
-    bool,
-    double,
-    absl::string_view,
-    std::string
-  > value_;
+  std::variant<Nil, bool, double, absl::string_view, std::string> value_;
 };
 
-enum Ordering {
-  kLESS,
-  kEQUAL,
-  kGREATER,
-  kUNORDERED
-};
+enum Ordering { kLESS, kEQUAL, kGREATER, kUNORDERED };
 
 std::ostream& operator<<(std::ostream& os, Ordering o) {
-  switch(o) {
-    case Ordering::kLESS: return os << "LESS";
-    case Ordering::kEQUAL: return os << "EQUAL";
-    case Ordering::kGREATER: return os << "GREATER";
-    case Ordering::kUNORDERED: return os << "UNORDERED";
-    default: return os << "?";
+  switch (o) {
+    case Ordering::kLESS:
+      return os << "LESS";
+    case Ordering::kEQUAL:
+      return os << "EQUAL";
+    case Ordering::kGREATER:
+      return os << "GREATER";
+    case Ordering::kUNORDERED:
+      return os << "UNORDERED";
+    default:
+      return os << "?";
   }
 }
 
@@ -127,12 +120,12 @@ bool operator>=(const Value& l, const Value& r) {
   return res == Ordering::kGREATER || res == Ordering::kEQUAL;
 }
 
-
 // Dyadic Numerical Functions
 Value FuncAdd(const Value& l, const Value& r);
 Value FuncSub(const Value& l, const Value& r);
 Value FuncMul(const Value& l, const Value& r);
 Value FuncDiv(const Value& l, const Value& r);
+Value FuncPower(const Value& l, const Value& r);
 
 // Compare Functions
 Value FuncGt(const Value& l, const Value& r);
@@ -144,7 +137,7 @@ Value FuncLe(const Value& l, const Value& r);
 
 // Logical Functions
 Value FuncLor(const Value& l, const Value& r);
-Value FuncLand(const Value&l, const Value& r);
+Value FuncLand(const Value& l, const Value& r);
 
 // Function Functions
 Value FuncAbs(const Value& o);
@@ -155,13 +148,12 @@ Value FuncLog2(const Value& o);
 Value FuncFloor(const Value& o);
 Value FuncSqrt(const Value& o);
 
-
 Value FuncLower(const Value& o);
 Value FuncUpper(const Value& o);
 Value FuncStrlen(const Value& o);
-Value FuncContains(const Value &l, const Value& r);
-Value FuncStartswith(const Value& l, const Value &r);
-Value FuncSubstr(const Value& l, const Value& m, const Value &r);
+Value FuncContains(const Value& l, const Value& r);
+Value FuncStartswith(const Value& l, const Value& r);
+Value FuncSubstr(const Value& l, const Value& m, const Value& r);
 Value FuncConcat(const absl::InlinedVector<Value, 4>& values);
 
 Value FuncTimefmt(const Value& t, const Value& fmt);
@@ -176,7 +168,7 @@ Value FuncDayofyear(const Value& t);
 Value FuncYear(const Value& t);
 Value FuncMonthofyear(const Value& t);
 
-}
-}
+}  // namespace expr
+}  // namespace valkey_search
 
 #endif

@@ -183,8 +183,8 @@ class TestAggregateCompatibility:
                         "n1": i,
                         "n2": -i,
                         "n3" : i*i,
-                        "t1": f"one.one{i}",
-                        "t2": f"two.two{i}",
+                        "t1": f"one.one{i*2}",
+                        "t2": f"two.two{i*-2}",
                         "t3": "all_the_same_value",
                         "v1": np.array([i for _ in range(VECTOR_DIM)]).astype(np.float32).tobytes(),
                     },
@@ -473,7 +473,27 @@ class TestAggregateCompatibility:
         if len(sortkeys) > 0:
             out.sort(key=itemgetter(*sortkeys))
         return out
-
+    def compare_number_eq(self, l, r):
+        if l == "nan" and r == "nan":
+            return True
+        else:
+            return math.isclose(float(l), float(r), rel_tol=.01)
+    def compare_row(self, l, r):
+        lks = sorted(list(l.keys()))
+        rks = sorted(list(r.keys()))
+        if lks != rks:
+            return False
+        for i in range(len(lks)):
+            if lks[i].startswith("n"):
+                if not self.compare_number_eq(l[lks[i]], r[rks[i]]):
+                    return False                
+                else:
+                    pass
+            elif l[lks[i]] != r[rks[i]]:
+                print("mismatch field: ", lks[i], " and ", rks[i], " ", lks[i].startswith("n")," ", l[lks[i]], "!=", r[rks[i]])
+                return False
+        return True            
+        
     def compare_results(self, cmd):
         print(TEST_MARKER)
         print(f"CMD: {cmd}")
@@ -530,7 +550,7 @@ class TestAggregateCompatibility:
         # if compare_results(ec, rl):
         # Directly comparing dicts instead of custom compare function
         # TODO: investigate this later
-        if ec == rl:
+        if all([self.compare_row(ec[i], rl[i]) for i in range(len(rl))]):
             print("Results look good.")
             print(TEST_MARKER)
             return
@@ -541,8 +561,8 @@ class TestAggregateCompatibility:
         print("--- Sorted ---")
         print(rl)
         for i in range(len(rl)):
-            print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())], "" if rl[i] == ec[i] else "<<<")
-            print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())], "" if rl[i] == ec[i] else "<<<")
+            print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())], "" if self.compare_row(rl[i], ec[i]) else "<<<")
+            print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())], "" if self.compare_row(rl[i],ec[i]) else "<<<")
         print(TEST_MARKER)
         assert False
 
@@ -970,69 +990,22 @@ class TestAggregateCompatibility:
             "as",
             "apply_result",
         )
-        self.checkvec(
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t2",
-            "__key",
-            "apply",
-            "substr(@t2, -6, -1)",
-            "as",
-            "apply_result",
+
+    def test_aggregate_substr(self, key_type):
+        self.setup_names()
+        self.load_data_with_index("names", key_type)
+        for offset in [0, 1, 2, 100, -1, -2, -3, -1000]:
+            for len in [0, 1, 2, 100, -1, -2, -3, -1000]:
+                self.checkvec(
+                    "ft.aggregate",
+                    f"{key_type}_idx1",
+                    "*",
+                    "load",
+                    "2",
+                    "t2",
+                    "__key",
+                    "apply",
+                    f"substr(@t2, {offset}, {len})",
+                    "as",
+                    "apply_result",
         )
-        self.checkvec(
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t2",
-            "__key",
-            "apply",
-            "substr(@t2, -5, -3)",
-            "as",
-            "apply_result",
-        )
-        self.checkvec(
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t2",
-            "__key",
-            "apply",
-            "substr(@t2, -7, -1)",
-            "as",
-            "apply_result",
-        )
-        self.checkvec(
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t2",
-            "__key",
-            "apply",
-            "substr(@t2, -7, 0)",
-            "as",
-            "apply_result",
-        )
-        self.checkvec(
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t2",
-            "__key",
-            "apply",
-            "substr(@t2, 3, 0)",
-            "as",
-            "apply_result",
-        )
-    

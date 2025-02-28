@@ -394,7 +394,7 @@ Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
   auto rd = r.AsDouble();
   if (md && rd) {
     size_t offset = *md >= 0 ? size_t(*md) : (size_t(*md) + ls.size());
-    size_t length = *rd >= 0 ? size_t(*rd) : 0;
+    size_t length = *rd >= 0 ? size_t(*rd) : size_t(-*rd);
     if (offset > ls.size()) {
       return Value(Value::Nil("Substr position out of range"));
     } else {

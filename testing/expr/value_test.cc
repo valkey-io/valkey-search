@@ -3,7 +3,6 @@
 #include <cmath>
 
 #include "gtest/gtest.h"
-#include "src/utils/scanner.h"
 
 namespace valkey_search::expr {
 

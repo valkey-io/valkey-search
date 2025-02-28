@@ -122,10 +122,13 @@ include(linux_utils)
 set(TESTING_LIBS_EXTRA ${THIRD_PARTY_LIBS})
 list(APPEND TESTING_LIBS_EXTRA ${GTEST_LIBS})
 
+# HACK: in order to force CMake to put "-Wl,--end-group" as the last argument we
+# use a fake library "lib_to_add_end_group_flag"
+add_library(lib_to_add_end_group_flag INTERFACE "")
+target_link_libraries(lib_to_add_end_group_flag INTERFACE "-Wl,--end-group")
+
 macro(finalize_test_flags __TARGET)
-  # Note that we only add "--start-group" and not "--end-group". "ld" will add
-  # it as last parameter in the command line. If we add it explicitly, it will
-  # be added somewhere in the middle
+  # --end-group will added by our fake target "lib_to_add_end_group_flag"
   target_link_options(${__TARGET} PRIVATE "LINKER:--start-group"
                       "${TESTING_LIBS_EXTRA}")
   target_link_options(${__TARGET} PRIVATE "LINKER:--allow-multiple-definition")
@@ -134,4 +137,5 @@ macro(finalize_test_flags __TARGET)
   valkey_search_target_update_compile_flags(${__TARGET})
   set_target_properties(${__TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
                                                "${CMAKE_BINARY_DIR}/tests")
+  target_link_libraries(${__TARGET} PRIVATE lib_to_add_end_group_flag)
 endmacro()

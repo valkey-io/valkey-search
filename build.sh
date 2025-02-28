@@ -7,6 +7,14 @@ VERBOSE_ARGS=""
 CMAKE_TARGET=""
 RUN_TEST=""
 
+# Constants
+BOLD_PINK='\e[35;1m'
+RESET='\e[0m'
+GRAY='\e[38:5:243;1m'
+GREEN='\e[32;1m'
+RED='\e[31;1m'
+BLUE='\e[34;1m'
+
 echo "Root directory: ${ROOT_DIR}"
 
 function print_usage() {
@@ -32,11 +40,12 @@ EOF
 }
 
 function configure() {
+    printf "${BOLD_PINK}Running cmake...${RESET}\n"
     mkdir -p ${ROOT_DIR}/.build-${BUILD_CONFIG}
     cd $_
     local BUILD_TYPE=$(echo ${BUILD_CONFIG^})
     rm -f CMakeCache.txt
-    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev
+    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -GNinja
     cd ${ROOT_DIR}
 }
 
@@ -45,8 +54,9 @@ function build() {
     if [ ! -d "${ROOT_DIR}/.build-${BUILD_CONFIG}" ]; then
         configure
     fi
+    printf "${BOLD_PINK}Building${RESET}\n"
     cd ${ROOT_DIR}/.build-${BUILD_CONFIG}
-    make -j$(nproc) ${VERBOSE_ARGS} ${CMAKE_TARGET}
+    ninja ${VERBOSE_ARGS} ${CMAKE_TARGET}
     cd ${ROOT_DIR}
 }
 
@@ -96,9 +106,43 @@ do
     esac
 done
 
-function PRINT_TEST_NAME() {
-    echo -e "\e[35;1m-- Running: $1 \e[0m"
+
+
+function print_test_prefix() {
+    printf "${BOLD_PINK}Running:${RESET} $1"
 }
+
+function print_test_ok() {
+    printf "${GRAY}...${GREEN}ok${RESET}\n"
+}
+
+function print_test_summary() {
+    printf "${BLUE}Test output can be found here:${RESET} ${TEST_OUTPUT_FILE}\n"
+}
+
+function print_test_error_and_exit() {
+    printf "${GRAY}...${RED}failed${RESET}\n"
+    print_test_summary
+    exit 1
+}
+
+function check_tool() {
+    local tool_name=$1
+    local message=$2
+    printf "Checking for ${tool_name}${GRAY}...${RESET}"
+    command -v ${tool_name} > /dev/null || \
+        (printf "${RED}failed${RESET}.\n${RED}ERROR${RESET} - could not locate tool '${tool_name}'. ${message}\n" && exit 1)
+    printf "${GREEN}ok${RESET}\n"
+}
+
+function check_tools() {
+    local tools="cmake g++ gcc ninja"
+    for tool in $tools; do
+        check_tool ${tool}
+    done
+}
+
+check_tools
 
 START_TIME=`date +%s`
 if [[ "${RUN_CMAKE}" == "yes" ]]; then
@@ -110,17 +154,27 @@ BUILD_RUNTIME=$((END_TIME - START_TIME))
 
 START_TIME=`date +%s`
 TESTS_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}/tests
+TEST_OUTPUT_FILE=${ROOT_DIR}/.build-${BUILD_CONFIG}/tests.out
+
 if [[ "${RUN_TEST}" == "all" ]]; then
+    rm -f ${TEST_OUTPUT_FILE}
     TESTS=$(ls ${TESTS_DIR}/*_test)
     for test in $TESTS; do
-        PRINT_TEST_NAME "${test}"
-        ${test} --gtest_color=yes
+        echo "==> Running executable: ${test}" >> ${TEST_OUTPUT_FILE}
+        echo "" >> ${TEST_OUTPUT_FILE}
+        print_test_prefix "${test}"
+        ${test} >> ${TEST_OUTPUT_FILE} 2>&1 || print_test_error_and_exit
+        print_test_ok
     done
+    print_test_summary
 elif [ ! -z "${RUN_TEST}" ]; then
-    PRINT_TEST_NAME "${TESTS_DIR}/${RUN_TEST}"
-    ${TESTS_DIR}/${RUN_TEST} --gtest_color=yes
+    rm -f ${TEST_OUTPUT_FILE}
+    echo "==> Running executable: ${TESTS_DIR}/${RUN_TEST}" >> ${TEST_OUTPUT_FILE}
+    echo "" >> ${TEST_OUTPUT_FILE}
+    print_test_prefix "${TESTS_DIR}/${RUN_TEST}"
+    ${TESTS_DIR}/${RUN_TEST} >> ${TEST_OUTPUT_FILE} 2>&1 || print_test_error_and_exit
+    print_test_ok
+    print_test_summary
 fi
 END_TIME=`date +%s`
 TEST_RUNTIME=$((END_TIME - START_TIME))
-
-echo -e "\e[38:5:243;1m== Build time: ${BUILD_RUNTIME} seconds, Tests time: ${TEST_RUNTIME} seconds ==\e[0m "

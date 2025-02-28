@@ -6,10 +6,6 @@ Note: the below was tested on `Ubuntu Linux`, it might not work on other Linux d
 
 ## Install basic tools
 
-**NOTE**: building `valkey-search` requires GCC version 12 and later or Clang version 16 and later.
-
-### `Ubuntu 24.04`
-
 ```bash
 sudo apt update
 sudo apt install -y clangd          \
@@ -17,28 +13,15 @@ sudo apt install -y clangd          \
                     g++             \
                     cmake           \
                     libgtest-dev    \
+                    ninja-build     \
                     libssl-dev
 ```
 
-### `Ubuntu 22.04`
-
-`Ubuntu` 22.04 comes with gcc 11 by default - which does not meet the minimum required, to fix this, we install `gcc-12` & `g++-12` and we override the defaults using `update-alternatives`:
+**IMPORTANT**: building `valkey-search` requires GCC version 12 or higher, or Clang version 16 or higher. For Debian/Ubuntu, in case a lower version of GCC is installed, you may upgrade to gcc/g++ 12 with:
 
 ```bash
 sudo apt update
-sudo apt install -y clangd          \
-                    build-essential \
-                    g++             \
-                    gcc-12          \
-                    g++-12          \
-                    cmake           \
-                    libgtest-dev    \
-                    libssl-dev
-```
-
-Update the `gcc` & `g++` to point to version 12:
-
-```bash
+sudo apt install -y gcc-12 g++-12
 sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 90
 sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 90
 ```

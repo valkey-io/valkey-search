@@ -54,10 +54,9 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/keyspace_event_manager.h"
-#include "src/rdb_io_stream.h"
+#include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/module_type.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/utils.h"
@@ -65,14 +64,10 @@
 
 namespace valkey_search {
 
-constexpr absl::string_view kIndexSchemaModuleTypeName{"IndxSc-RQ"};
-constexpr absl::string_view kIndexSchemaKeyPrefix{"redis-query-index-schema:"};
-
 using RDBLoadFunc = void *(*)(RedisModuleIO *, int);
 using FreeFunc = void (*)(void *);
 
-class IndexSchema : public vmsdk::ModuleType,
-                    public KeyspaceEventSubscription,
+class IndexSchema : public KeyspaceEventSubscription,
                     public std::enable_shared_from_this<IndexSchema> {
  public:
   struct Stats {
@@ -93,15 +88,11 @@ class IndexSchema : public vmsdk::ModuleType,
   };
   std::shared_ptr<IndexSchema> GetSharedPtr() { return shared_from_this(); }
   std::weak_ptr<IndexSchema> GetWeakPtr() { return weak_from_this(); }
-  static std::string GetRedisKeyForIndexSchemaName(absl::string_view name);
 
   static absl::StatusOr<std::shared_ptr<IndexSchema>> Create(
-      RedisModuleCtx *ctx, const data_model::IndexSchema &index_schema,
-      RedisModuleType *module_type, vmsdk::ThreadPool *mutations_thread_pool,
-      std::unique_ptr<data_model::IndexSchema_Stats> stats = nullptr);
+      RedisModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto,
+      vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes = false);
   ~IndexSchema() override;
-  static absl::StatusOr<RedisModuleType *> CreateModuleType(
-      RedisModuleCtx *ctx, RDBLoadFunc rdb_load_func);
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
       absl::string_view attribute_alias) const;
   virtual absl::StatusOr<std::string> GetIdentifier(
@@ -123,7 +114,6 @@ class IndexSchema : public vmsdk::ModuleType,
   }
 
   inline const std::string &GetName() const { return name_; }
-  inline const std::string &GetKey() const { return key_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
 
   void OnKeyspaceNotification(RedisModuleCtx *ctx, int type, const char *event,
@@ -142,12 +132,12 @@ class IndexSchema : public vmsdk::ModuleType,
 
   int GetAttributeCount() const { return attributes_.size(); }
 
-  virtual absl::Status RDBSave(RDBOutputStream &rdb_stream) const;
+  virtual absl::Status RDBSave(SafeRDB *rdb) const;
 
   static absl::StatusOr<std::shared_ptr<IndexSchema>> LoadFromRDB(
-      RDBInputStream &rdb_stream, RedisModuleCtx *ctx,
-      RedisModuleType *module_type, vmsdk::ThreadPool *mutations_thread_pool,
-      int encoding_version);
+      RedisModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,
+      std::unique_ptr<data_model::IndexSchema> index_schema_proto,
+      SupplementalContentIter &&supplemental_iter);
 
   bool IsInCurrentDB(RedisModuleCtx *ctx) const;
 
@@ -183,12 +173,11 @@ class IndexSchema : public vmsdk::ModuleType,
   IndexSchema(RedisModuleCtx *ctx,
               const data_model::IndexSchema &index_schema_proto,
               std::unique_ptr<AttributeDataType> attribute_data_type,
-              RedisModuleType *module_type,
-              vmsdk::ThreadPool *mutations_thread_pool,
-              std::unique_ptr<data_model::IndexSchema_Stats> stats = nullptr);
+              vmsdk::ThreadPool *mutations_thread_pool);
   absl::Status Init(RedisModuleCtx *ctx);
 
  private:
+  vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx_;
   absl::flat_hash_map<std::string, Attribute> attributes_;
   KeyspaceEventManager *keyspace_event_manager_;
   std::vector<std::string> subscribed_key_prefixes_;

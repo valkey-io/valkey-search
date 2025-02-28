@@ -205,7 +205,6 @@ class AlgorithmInterface {
     virtual std::vector<std::pair<dist_t, labeltype>>
         searchKnnCloserFirst(const void* query_data, size_t k, BaseFilterFunctor* isIdAllowed = nullptr) const;
 
-    virtual void SaveIndex(const std::string &location) = 0;
     virtual absl::Status SaveIndex(OutputStream& output) = 0;
     virtual ~AlgorithmInterface(){
     }

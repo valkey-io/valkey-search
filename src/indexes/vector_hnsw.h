@@ -43,7 +43,7 @@
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/vector_base.h"
-#include "src/rdb_io_stream.h"
+#include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "third_party/hnswlib/hnswalg.h"
 #include "third_party/hnswlib/hnswlib.h"
@@ -62,8 +62,8 @@ class VectorHNSW : public VectorBase {
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> LoadFromRDB(
       RedisModuleCtx* ctx, const AttributeDataType* attribute_data_type,
       const data_model::VectorIndex& vector_index_proto,
-      RDBInputStream& rdb_stream,
-      absl::string_view attribute_identifier) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      absl::string_view attribute_identifier,
+      SupplementalContentChunkIter&& iter) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorHNSW() override = default;
   size_t GetDataTypeSize() const override { return sizeof(T); }
 
@@ -106,7 +106,7 @@ class VectorHNSW : public VectorBase {
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   void ToProtoImpl(data_model::VectorIndex* vector_index_proto) const override;
   int RespondWithInfoImpl(RedisModuleCtx* ctx) const override;
-  absl::Status SaveIndexImpl(RDBOutputStream& rdb_stream) const override;
+  absl::Status SaveIndexImpl(RDBChunkOutputStream chunked_out) const override;
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecordImpl(uint64_t internal_id, absl::string_view query)
       const override ABSL_NO_THREAD_SAFETY_ANALYSIS;

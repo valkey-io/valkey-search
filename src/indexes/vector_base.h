@@ -54,7 +54,7 @@
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
-#include "src/rdb_io_stream.h"
+#include "src/rdb_serialization.h"
 #include "src/utils/allocator.h"
 #include "src/utils/intrusive_ref_count.h"
 #include "src/utils/string_interning.h"
@@ -140,8 +140,12 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   virtual size_t GetCapacity() const = 0;
   bool GetNormalize() const { return normalize_; }
   std::unique_ptr<data_model::Index> ToProto() const override;
-  absl::Status SaveIndex(RDBOutputStream& rdb_stream) const override
+  absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override;
+  absl::Status SaveTrackedKeys(RDBChunkOutputStream chunked_out) const
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+  absl::Status LoadTrackedKeys(RedisModuleCtx* ctx,
+                               const AttributeDataType* attribute_data_type,
+                               SupplementalContentChunkIter&& iter);
   void ForEachTrackedKey(
       absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override {
     absl::MutexLock lock(&key_to_metadata_mutex_);
@@ -199,21 +203,12 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   virtual size_t GetDataTypeSize() const = 0;
   virtual void ToProtoImpl(
       data_model::VectorIndex* vector_index_proto) const = 0;
-  virtual absl::Status SaveIndexImpl(RDBOutputStream& rdb_stream) const = 0;
+  virtual absl::Status SaveIndexImpl(
+      RDBChunkOutputStream chunked_out) const = 0;
   void ExternalizeVector(RedisModuleCtx* ctx,
                          const AttributeDataType* attribute_data_type,
                          absl::string_view key_cstr,
                          absl::string_view attribute_identifier);
-  absl::Status LoadTrackedKeys(RedisModuleCtx* ctx,
-                               const AttributeDataType* attribute_data_type,
-                               const data_model::TrackedKeys& tracked_keys);
-  // Used for backwards compatibility.
-  // TODO(b/) remove after rollout.
-  absl::Status ConsumeKeysAndInternalIdsForBackCompat(
-      RDBInputStream& rdb_stream);
-  absl::Status LoadKeysAndInternalIds(
-      RedisModuleCtx* ctx, const AttributeDataType* attribute_data_type,
-      RDBInputStream& rdb_stream);
   virtual char* GetValueImpl(uint64_t internal_id) const = 0;
 
   int dimensions_;

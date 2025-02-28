@@ -15,14 +15,15 @@
 #include <unordered_set>
 #include <vector>
 
-#include "hnswlib.h"
-#include "iostream.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
-#include "vmsdk/src/status/status_macros.h"
+#include "hnswlib.h"
+#include "iostream.h"
+#include "third_party/hnswlib/index.pb.h"
 #include "visited_list_pool.h"
+#include "vmsdk/src/status/status_macros.h"
 
 #ifdef VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES
   #include "vmsdk/src/memory_allocation_overrides.h" // IWYU pragma: keep
@@ -713,23 +714,31 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     }
 
     absl::Status SaveIndex(OutputStream &output) {
-      VMSDK_RETURN_IF_ERROR(output.SaveUnsigned(ENCODING_VERSION));
-      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(offsetLevel0_));
-      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(max_elements_));
-      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(cur_element_count_));
-      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(serialize_size_data_per_element_));
-      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(label_offset_));
-      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(offsetData_));
-      VMSDK_RETURN_IF_ERROR(output.SaveSigned(maxlevel_));
-      VMSDK_RETURN_IF_ERROR(output.SaveUnsigned(enterpoint_node_));
-      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(maxM_));
+      data_model::HNSWIndexHeader header;
+      header.set_offset_level_0(offsetLevel0_);
+      header.set_max_elements(max_elements_);
+      header.set_curr_element_count(cur_element_count_);
+      header.set_serialize_size_data_per_element(
+          serialize_size_data_per_element_);
+      header.set_label_offset(label_offset_);
+      header.set_offset_data(offsetData_);
+      header.set_max_level(maxlevel_);
+      header.set_enterpoint_node(enterpoint_node_);
+      header.set_max_m(maxM_);
+      header.set_max_m_0(maxM0_);
+      header.set_m(M_);
+      header.set_mult(mult_);
+      header.set_ef_construction(ef_construction_);
+      std::string serialized;
+      if (!header.SerializeToString(&serialized)) {
+        return absl::InternalError("Could not serialize HNSW header");
+      }
+      VMSDK_RETURN_IF_ERROR(
+          output.SaveChunk(serialized.data(), serialized.size()));
 
-      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(maxM0_));
-      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(M_));
-      VMSDK_RETURN_IF_ERROR(output.SaveDouble(mult_));
-      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(ef_construction_));
-
-      if (cur_element_count_ == 0) return absl::OkStatus();
+      if (cur_element_count_ == 0) {
+        return absl::OkStatus();
+      }
 
       // Resize internal data structures to match the true max elements so
       // that the saved index is self-consistent.
@@ -740,106 +749,83 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       for (int i = 0; i < cur_element_count_; i++) {
         memcpy(buf.data(), (*data_level0_memory_)[i], size_links_level0_);
         memcpy(buf.data() + size_links_level0_,
-               *(char **)((*data_level0_memory_)[i] + offsetData_),
-                 vector_size_);
+              *(char **)((*data_level0_memory_)[i] + offsetData_), vector_size_);
         memcpy(buf.data() + size_links_level0_ + vector_size_,
-               (*data_level0_memory_)[i] + label_offset_, sizeof(labeltype));
-        VMSDK_RETURN_IF_ERROR(output.SaveStringBuffer(
-                buf.data(),
-                serialize_size_data_per_element_));
+              (*data_level0_memory_)[i] + label_offset_, sizeof(labeltype));
+        VMSDK_RETURN_IF_ERROR(
+            output.SaveChunk(buf.data(), serialize_size_data_per_element_));
       };
 
       for (size_t i = 0; i < cur_element_count_; i++) {
         unsigned int linkListSize =
-            element_levels_[i] > 0
-                ? size_links_per_element_ * element_levels_[i]
-                : 0;
-        VMSDK_RETURN_IF_ERROR(output.SaveUnsigned(linkListSize));
+            element_levels_[i] > 0 ? size_links_per_element_ * element_levels_[i]
+                                  : 0;
+        size_t size_to_serialize = htole64(static_cast<size_t>(linkListSize));
+        VMSDK_RETURN_IF_ERROR(output.SaveChunk(
+            reinterpret_cast<const char *>(&size_to_serialize), sizeof(size_t)));
         if (linkListSize) {
-          VMSDK_RETURN_IF_ERROR(output.SaveStringBuffer(
-                  *reinterpret_cast<char**>((*linkLists_)[i]),
-                  linkListSize));
+          VMSDK_RETURN_IF_ERROR(output.SaveChunk(
+              *reinterpret_cast<char **>((*linkLists_)[i]), linkListSize));
         }
       }
       return absl::OkStatus();
     }
 
-    void SaveIndex(const std::string &location) {
-      absl::StatusOr<std::unique_ptr<FileOutputStream>> output_or =
-          FileOutputStream::Create(location);
-      if (!output_or.ok()) {
-        throw std::runtime_error(
-            absl::StrCat("Error instantiating FileOutputStream ",
-                         output_or.status().message()));
-      }
-      absl::Status status = SaveIndex(*output_or.value());
-      if (!status.ok()) {
-        throw std::runtime_error(
-            absl::StrCat("Error saving index ", status.message()));
-      }
-    }
-
     absl::Status LoadIndex(InputStream &input, SpaceInterface<dist_t> *s,
-                           size_t max_elements_i,
-                           VectorTracker* vector_tracker) {
+                          size_t max_elements_i, VectorTracker *vector_tracker) {
       clear();
 
-      unsigned int encoding_version;
-      VMSDK_RETURN_IF_ERROR(input.LoadUnsigned(encoding_version));
-      if (encoding_version != ENCODING_VERSION) {
-        return absl::InvalidArgumentError(absl::StrCat(
-            "Unsupported HNSW index encoding version ", encoding_version));
+      VMSDK_ASSIGN_OR_RETURN(auto serialized_header, input.LoadChunk());
+      auto header = std::make_unique<data_model::HNSWIndexHeader>();
+      if (!header->ParseFromString(*serialized_header)) {
+        return absl::InternalError("Could not deserialize HNSW header");
       }
-      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(offsetLevel0_));
-      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(max_elements_));
 
-      size_t temp_cur_element_count;
-      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(temp_cur_element_count));
-      cur_element_count_ = temp_cur_element_count;
+      offsetLevel0_ = header->offset_level_0();
+      max_elements_ = header->max_elements();
+      cur_element_count_ = header->curr_element_count();
+      serialize_size_data_per_element_ =
+          header->serialize_size_data_per_element();
+      label_offset_ = header->label_offset();
+      offsetData_ = header->offset_data();
+      maxlevel_ = header->max_level();
+      enterpoint_node_ = header->enterpoint_node();
+      maxM_ = header->max_m();
+      maxM0_ = header->max_m_0();
+      M_ = header->m();
+      mult_ = header->mult();
+      ef_construction_ = header->ef_construction();
 
       size_t max_elements = max_elements_i;
-      if (max_elements < cur_element_count_) max_elements = max_elements_;
+      if (max_elements < cur_element_count_) {
+        max_elements = max_elements_;
+      }
       max_elements_ = max_elements;
-      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(serialize_size_data_per_element_));
-      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(label_offset_));
-      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(offsetData_));
-      VMSDK_RETURN_IF_ERROR(input.LoadSigned(maxlevel_));
-      VMSDK_RETURN_IF_ERROR(input.LoadUnsigned(enterpoint_node_));
-
-      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(maxM_));
-      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(maxM0_));
-      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(M_));
-      VMSDK_RETURN_IF_ERROR(input.LoadDouble(mult_));
-      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(ef_construction_));
 
       size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
 
       vector_size_ = s->get_data_size();
       size_data_per_element_ =
-              size_links_level0_ +  sizeof(char*) + sizeof(labeltype);
-        label_offset_ = size_links_level0_ + sizeof(char *);
+          size_links_level0_ + sizeof(char *) + sizeof(labeltype);
+      label_offset_ = size_links_level0_ + sizeof(char *);
 
       fstdistfunc_ = s->get_dist_func();
       dist_func_param_ = s->get_dist_func_param();
 
       data_level0_memory_ = std::make_unique<ChunkedArray>(
-              size_data_per_element_,
-              k_elements_per_chunk,
-              max_elements);
+          size_data_per_element_, k_elements_per_chunk, max_elements);
 
       for (size_t i = 0; i < cur_element_count_; i++) {
-        VMSDK_ASSIGN_OR_RETURN(
-                StringBufferUniquePtr buf,
-                input.LoadStringBuffer(serialize_size_data_per_element_));
-        memcpy((*data_level0_memory_)[i], buf.get(), size_links_level0_);
+        VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());
+        memcpy((*data_level0_memory_)[i], chunk->data(), size_links_level0_);
         labeltype id;
-        memcpy((char *)&id,
-          buf.get() + offsetData_ + vector_size_, sizeof(labeltype));
+        memcpy((char *)&id, chunk->data() + offsetData_ + vector_size_,
+              sizeof(labeltype));
         *(char **)((*data_level0_memory_)[i] + offsetData_) =
-                vector_tracker->TrackVector(id, buf.get() + offsetData_,
-                                            vector_size_);
-        memcpy((*data_level0_memory_)[i] + label_offset_,
-               (char *)&id, sizeof(labeltype));
+            vector_tracker->TrackVector(id, chunk->data() + offsetData_,
+                                        vector_size_);
+        memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
+              sizeof(labeltype));
       }
 
       size_links_per_element_ =
@@ -848,54 +834,42 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       std::vector<std::mutex>(max_elements).swap(link_list_locks_);
       std::vector<std::mutex>(MAX_LABEL_OPERATION_LOCKS).swap(label_op_locks_);
 
-      visited_list_pool_.reset(new VisitedListPool(1, max_elements));
+      visited_list_pool_ = std::make_unique<VisitedListPool>(1, max_elements);
 
       linkLists_ = std::make_unique<ChunkedArray>(
-              sizeof(void *),
-              k_elements_per_chunk,
-              max_elements);
+          sizeof(void *), k_elements_per_chunk, max_elements);
 
       element_levels_ = std::vector<int>(max_elements);
       revSize_ = 1.0 / mult_;
       ef_ = 10;
       for (size_t i = 0; i < cur_element_count_; i++) {
         label_lookup_[getExternalLabel(i)] = i;
-        unsigned int linkListSize;
-        VMSDK_RETURN_IF_ERROR(input.LoadUnsigned(linkListSize));
+        size_t linkListSize;
+        VMSDK_ASSIGN_OR_RETURN(auto size_chunk, input.LoadChunk());
+        memcpy(&linkListSize, size_chunk->data(), sizeof(size_t));
+        linkListSize = le64toh(linkListSize);
         if (linkListSize == 0) {
           element_levels_[i] = 0;
-          *reinterpret_cast<char**>((*linkLists_)[i]) = nullptr;
+          *reinterpret_cast<char **>((*linkLists_)[i]) = nullptr;
         } else {
           element_levels_[i] = linkListSize / size_links_per_element_;
-          VMSDK_ASSIGN_OR_RETURN(StringBufferUniquePtr buf,
-                                 input.LoadStringBuffer(linkListSize));
-          *reinterpret_cast<char**>((*linkLists_)[i]) = buf.release();
+          VMSDK_ASSIGN_OR_RETURN(auto link_list_chunk, input.LoadChunk());
+          *reinterpret_cast<char **>((*linkLists_)[i]) =
+              new char[link_list_chunk->size()];
+          memcpy(*reinterpret_cast<char **>((*linkLists_)[i]),
+                link_list_chunk->data(), link_list_chunk->size());
         }
       }
 
       for (size_t i = 0; i < cur_element_count_; i++) {
         if (isMarkedDeleted(i)) {
           num_deleted_ += 1;
-          if (allow_replace_deleted_) deleted_elements.insert(i);
+          if (allow_replace_deleted_) {
+            deleted_elements.insert(i);
+          }
         }
       }
       return absl::OkStatus();
-    }
-
-    void LoadIndex(const std::string &location, SpaceInterface<dist_t> *s,
-                   size_t max_elements_i = 0) {
-      absl::StatusOr<std::unique_ptr<FileInputStream>> input_or =
-          FileInputStream::Create(location);
-      if (!input_or.ok()) {
-        throw std::runtime_error(
-            absl::StrCat("Error instantiating FileInputStream ",
-                         input_or.status().message()));
-      }
-      absl::Status status = LoadIndex(*input_or.value(), s, max_elements_i);
-      if (!status.ok()) {
-        throw std::runtime_error(
-            absl::StrCat("Error loading index ", status.message()));
-      }
     }
 
     char *getPoint(labeltype label) const {

@@ -36,6 +36,7 @@ target_link_libraries(ft_create_parser_test PUBLIC log)
 target_link_libraries(ft_create_parser_test PUBLIC module)
 target_link_libraries(ft_create_parser_test PUBLIC utils)
 target_link_libraries(ft_create_parser_test PUBLIC vmsdk_testing_infra)
+target_link_libraries(ft_create_parser_test PUBLIC latency_sampler)
 finalize_test_flags(ft_create_parser_test)
 
 set(SRCS_FT_SEARCH_PARSER_TEST
@@ -100,8 +101,6 @@ set(SRCS_INDEX_SCHEMA_TEST ${CMAKE_CURRENT_LIST_DIR}/index_schema_test.cc)
 add_executable(index_schema_test ${SRCS_INDEX_SCHEMA_TEST})
 target_include_directories(index_schema_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(index_schema_test PUBLIC testing_common)
-target_link_libraries(index_schema_test
-                      PUBLIC proto_package_rename_compatibility)
 target_link_libraries(index_schema_test PUBLIC attribute_data_type)
 target_link_libraries(index_schema_test PUBLIC index_schema)
 target_link_libraries(index_schema_test PUBLIC index_schema_cc_proto)
@@ -142,7 +141,7 @@ target_include_directories(testing_common PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(testing_common PUBLIC attribute_data_type)
 target_link_libraries(testing_common PUBLIC index_schema)
 target_link_libraries(testing_common PUBLIC keyspace_event_manager)
-target_link_libraries(testing_common PUBLIC rdb_io_stream)
+target_link_libraries(testing_common PUBLIC rdb_serialization)
 target_link_libraries(testing_common PUBLIC schema_manager)
 target_link_libraries(testing_common PUBLIC server_events)
 target_link_libraries(testing_common PUBLIC valkey_search)
@@ -164,14 +163,6 @@ target_link_libraries(testing_common PUBLIC utils)
 target_link_libraries(testing_common PUBLIC valkey_module)
 target_link_libraries(testing_common PUBLIC vmsdk_testing_infra)
 
-set(SRCS_PROTO_PACKAGE_RENAME_COMPATIBILITY
-    ${CMAKE_CURRENT_LIST_DIR}/proto_package_rename_compatibility.cc
-    ${CMAKE_CURRENT_LIST_DIR}/proto_package_rename_compatibility.h)
-
-add_library(proto_package_rename_compatibility STATIC
-            ${SRCS_PROTO_PACKAGE_RENAME_COMPATIBILITY})
-target_include_directories(proto_package_rename_compatibility
-                           PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 
 set(SRCS_VECTOR_TEST ${CMAKE_CURRENT_LIST_DIR}/vector_test.cc)
 
@@ -230,16 +221,16 @@ target_link_libraries(ft_create_test PUBLIC module)
 target_link_libraries(ft_create_test PUBLIC valkey_module)
 finalize_test_flags(ft_create_test)
 
-set(SRCS_RDB_IO_STREAM_TEST ${CMAKE_CURRENT_LIST_DIR}/rdb_io_stream_test.cc)
+set(SRCS_RDB_SERIALIZATION_TEST ${CMAKE_CURRENT_LIST_DIR}/rdb_serialization_test.cc)
 
-add_executable(rdb_io_stream_test ${SRCS_RDB_IO_STREAM_TEST})
-target_include_directories(rdb_io_stream_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(rdb_io_stream_test PUBLIC testing_common)
-target_link_libraries(rdb_io_stream_test PUBLIC rdb_io_stream)
-target_link_libraries(rdb_io_stream_test PUBLIC iostream)
-target_link_libraries(rdb_io_stream_test PUBLIC module)
-target_link_libraries(rdb_io_stream_test PUBLIC valkey_module)
-finalize_test_flags(rdb_io_stream_test)
+add_executable(rdb_serialization_test ${SRCS_RDB_SERIALIZATION_TEST})
+target_include_directories(rdb_serialization_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(rdb_serialization_test PUBLIC testing_common)
+target_link_libraries(rdb_serialization_test PUBLIC rdb_serialization)
+target_link_libraries(rdb_serialization_test PUBLIC iostream)
+target_link_libraries(rdb_serialization_test PUBLIC module)
+target_link_libraries(rdb_serialization_test PUBLIC valkey_module)
+finalize_test_flags(rdb_serialization_test)
 
 set(SRCS_FILTER_TEST ${CMAKE_CURRENT_LIST_DIR}/filter_test.cc)
 

@@ -8,6 +8,7 @@ compile_commands.json
 .devcontainer/._devcontainer.json
 .codelite/
 .cache/
-.build-*
+build-*
 *.workspace
-
+build/
+.build-*

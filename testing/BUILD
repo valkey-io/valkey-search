@@ -134,7 +134,6 @@ redis_module_cc_test(
     srcs = ["index_schema_test.cc"],
     deps = [
         ":common",
-        ":proto_package_rename_compatibility",
         "//src:attribute_data_type",
         "//src:index_schema",
         "//src:index_schema_cc_proto",
@@ -191,7 +190,7 @@ cc_library(
         "//src:attribute_data_type",
         "//src:index_schema",
         "//src:keyspace_event_manager",
-        "//src:rdb_io_stream",
+        "//src:rdb_serialization",
         "//src:schema_manager",
         "//src:server_events",
         "//src:valkey_search",
@@ -219,13 +218,6 @@ cc_library(
         "@com_google_absl//absl/synchronization",
         "@com_google_googletest//:gtest",
     ],
-)
-
-cc_library(
-    name = "proto_package_rename_compatibility",
-    testonly = True,
-    srcs = ["proto_package_rename_compatibility.cc"],
-    hdrs = ["proto_package_rename_compatibility.h"],
 )
 
 redis_module_cc_test(
@@ -304,11 +296,11 @@ redis_module_cc_test(
 )
 
 redis_module_cc_test(
-    name = "rdb_io_stream_test",
-    srcs = ["rdb_io_stream_test.cc"],
+    name = "rdb_serialization_test",
+    srcs = ["rdb_serialization_test.cc"],
     deps = [
         ":common",
-        "//src:rdb_io_stream",
+        "//src:rdb_serialization",
         "//third_party/hnswlib:iostream",
         "//vmsdk/src/testing_infra:module",
         "//vmsdk/src/valkey_module_api:valkey_module",

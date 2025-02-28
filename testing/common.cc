@@ -125,14 +125,12 @@ absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateIndexSchema(
       .WillByDefault(testing::Return(index_schema_db_num));
   EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(testing::_))
       .WillRepeatedly(testing::Return(fake_ctx));
-  auto *fake_module_type =
-      TestableSchemaManager::GetFakeIndexSchemaModuleType();
   VMSDK_ASSIGN_OR_RETURN(
       auto test_index_schema,
       valkey_search::MockIndexSchema::Create(
           fake_ctx, index_schema_key, *key_prefixes,
           std::make_unique<valkey_search::HashAttributeDataType>(),
-          fake_module_type, writer_thread_pool));
+          writer_thread_pool));
   VMSDK_RETURN_IF_ERROR(
       SchemaManager::Instance().ImportIndexSchema(test_index_schema));
   return test_index_schema;

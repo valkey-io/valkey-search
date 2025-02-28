@@ -64,7 +64,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
-#include "src/rdb_io_stream.h"
+#include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/vector_externalizer.h"
 #include "third_party/hnswlib/hnswlib.h"
@@ -405,16 +405,23 @@ int VectorBase::RespondWithInfo(RedisModuleCtx *ctx) const {
   return 4;
 }
 
-absl::Status VectorBase::SaveIndex(RDBOutputStream &rdb_stream) const {
-  VMSDK_RETURN_IF_ERROR(SaveIndexImpl(rdb_stream));
+absl::Status VectorBase::SaveIndex(RDBChunkOutputStream chunked_out) const {
+  VMSDK_RETURN_IF_ERROR(SaveIndexImpl(std::move(chunked_out)));
+  return absl::OkStatus();
+}
+
+absl::Status VectorBase::SaveTrackedKeys(
+    RDBChunkOutputStream chunked_out) const {
   absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
-  VMSDK_RETURN_IF_ERROR(rdb_stream.SaveSizeT(key_by_internal_id_.size()))
-      << "Error saving key_by_internal_id_ size";
-  for (const auto &[id, key] : key_by_internal_id_) {
-    VMSDK_RETURN_IF_ERROR(rdb_stream.SaveSizeT(id)) << "Error saving id";
+  for (const auto &[key, metadata] : tracked_metadata_by_key_) {
+    data_model::TrackedKeyMetadata metadata_pb;
+    metadata_pb.set_key(key->Str());
+    metadata_pb.set_internal_id(metadata.internal_id);
+    metadata_pb.set_magnitude(metadata.magnitude);
+    auto metadata_pb_str = metadata_pb.SerializeAsString();
     VMSDK_RETURN_IF_ERROR(
-        rdb_stream.SaveStringBuffer(key->Str().data(), key->Str().size()))
-        << "Error saving key";
+        chunked_out.SaveChunk(metadata_pb_str.data(), metadata_pb_str.size()))
+        << "Error saving key_by_internal_id_ entry";
   }
   return absl::OkStatus();
 }
@@ -447,9 +454,15 @@ void VectorBase::ExternalizeVector(RedisModuleCtx *ctx,
 
 absl::Status VectorBase::LoadTrackedKeys(
     RedisModuleCtx *ctx, const AttributeDataType *attribute_data_type,
-    const data_model::TrackedKeys &tracked_keys) {
+    SupplementalContentChunkIter &&iter) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
-  for (const auto &tracked_key_metadata : tracked_keys.tracked_key_metadata()) {
+  while (iter.HasNext()) {
+    VMSDK_ASSIGN_OR_RETURN(auto metadata_str, iter.Next(),
+                           _ << "Error loading metadata");
+    data_model::TrackedKeyMetadata tracked_key_metadata;
+    if (!tracked_key_metadata.ParseFromString(metadata_str->binary_content())) {
+      return absl::InvalidArgumentError("Error parsing metadata from proto");
+    }
     auto interned_key = StringInternStore::Intern(tracked_key_metadata.key());
     tracked_metadata_by_key_.insert(
         {interned_key,
@@ -466,52 +479,6 @@ absl::Status VectorBase::LoadTrackedKeys(
   return absl::OkStatus();
 }
 
-/* Simply consumes the RDB stream and does not save anything. */
-absl::Status VectorBase::ConsumeKeysAndInternalIdsForBackCompat(
-    RDBInputStream &rdb_stream) {
-  size_t keys_count;
-  VMSDK_RETURN_IF_ERROR(rdb_stream.LoadSizeT(keys_count))
-      << "Error loading keys count";
-  for (int i = 0; i < keys_count; ++i) {
-    size_t id;
-    VMSDK_RETURN_IF_ERROR(rdb_stream.LoadSizeT(id)) << "Error loading id";
-    VMSDK_ASSIGN_OR_RETURN(auto key, rdb_stream.LoadString(),
-                           _ << "Error loading key");
-  }
-  return absl::OkStatus();
-}
-
-absl::Status VectorBase::LoadKeysAndInternalIds(
-    RedisModuleCtx *ctx, const AttributeDataType *attribute_data_type,
-    RDBInputStream &rdb_stream) {
-  absl::WriterMutexLock lock(&key_to_metadata_mutex_);
-  size_t keys_count;
-  VMSDK_RETURN_IF_ERROR(rdb_stream.LoadSizeT(keys_count))
-      << "Error loading keys count";
-  for (size_t i = 0; i < keys_count; ++i) {
-    size_t id;
-    VMSDK_RETURN_IF_ERROR(rdb_stream.LoadSizeT(id)) << "Error loading id";
-    VMSDK_ASSIGN_OR_RETURN(auto key, rdb_stream.LoadString(),
-                           _ << "Error loading key");
-    auto interned_key =
-        StringInternStore::Intern(vmsdk::ToStringView(key.get()));
-    key_by_internal_id_.insert({id, interned_key});
-    tracked_metadata_by_key_.insert(
-        {interned_key,
-         {.internal_id = id,
-          // Use negative infinity as a placeholder for magnitude. It will be
-          // updated on backfill. In the meantime, we will need to fetch vector
-          // contents from the main dictionary if specified in the query RETURN.
-          .magnitude =
-              normalize_ ? std::numeric_limits<float>::lowest() : -1.0f}});
-    inc_id_ = std::max(inc_id_, static_cast<uint64_t>(id));
-    ExternalizeVector(ctx, attribute_data_type, interned_key->Str(),
-                      attribute_identifier_);
-  }
-  ++inc_id_;
-  return absl::OkStatus();
-}
-
 std::unique_ptr<data_model::Index> VectorBase::ToProto() const {
   absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
   auto index_proto = std::make_unique<data_model::Index>();
@@ -521,15 +488,6 @@ std::unique_ptr<data_model::Index> VectorBase::ToProto() const {
   vector_index->set_dimension_count(dimensions_);
   vector_index->set_initial_cap(GetCapacity());
   ToProtoImpl(vector_index.get());
-  vector_index->mutable_tracked_keys()->mutable_tracked_key_metadata()->Reserve(
-      tracked_metadata_by_key_.size());
-  for (const auto &[key, metadata] : tracked_metadata_by_key_) {
-    auto tracked_key_metadata =
-        vector_index->mutable_tracked_keys()->add_tracked_key_metadata();
-    tracked_key_metadata->set_key(*key);
-    tracked_key_metadata->set_internal_id(metadata.internal_id);
-    tracked_key_metadata->set_magnitude(metadata.magnitude);
-  }
   index_proto->set_allocated_vector_index(vector_index.release());
   return index_proto;
 }

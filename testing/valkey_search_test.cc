@@ -210,6 +210,11 @@ TEST_P(LoadTest, load) {
   auto args = vmsdk::ToRedisStringVector(test_case.args);
   ON_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&fake_ctx_))
       .WillByDefault(testing::Return(&fake_ctx_));
+  EXPECT_CALL(
+      *kMockRedisModule,
+      CreateDataType(&fake_ctx_, testing::StrEq(kValkeySearchModuleTypeName),
+                     testing::_, testing::_))
+      .WillOnce(testing::Return((RedisModuleType *)0xBADF00D));
   if (test_case.expected_load_ret == 0) {
     EXPECT_CALL(*kMockRedisModule,
                 Call(testing::_, testing::StrEq(kJsonCmd), testing::StrEq("cc"),
@@ -217,23 +222,11 @@ TEST_P(LoadTest, load) {
         .WillOnce(testing::Return(nullptr));
     EXPECT_CALL(
         *kMockRedisModule,
-        CreateDataType(&fake_ctx_, testing::StrEq(kIndexSchemaModuleTypeName),
-                       testing::_, testing::_))
-        .WillOnce(testing::Return(
-            TestableSchemaManager::GetFakeIndexSchemaModuleType()));
-    EXPECT_CALL(
-        *kMockRedisModule,
         SetModuleOptions(&fake_ctx_,
                          REDISMODULE_OPTIONS_HANDLE_IO_ERRORS |
                              REDISMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD |
                              REDISMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED))
         .Times(1);
-    EXPECT_CALL(
-        *kMockRedisModule,
-        CreateDataType(&fake_ctx_, testing::StrEq(kSchemaManagerModuleTypeName),
-                       testing::_, testing::_))
-        .WillOnce(testing::Return(
-            TestableSchemaManager::GetFakeSchemaManagerModuleType()));
   }
   std::string port_str;
   if (test_case.use_coordinator) {
@@ -265,13 +258,6 @@ TEST_P(LoadTest, load) {
   if (test_case.cluster_mode) {
     EXPECT_CALL(*kMockRedisModule, GetContextFlags(&fake_ctx_))
         .WillRepeatedly(testing::Return(REDISMODULE_CTX_FLAGS_CLUSTER));
-    EXPECT_CALL(*kMockRedisModule,
-                CreateDataType(
-                    &fake_ctx_,
-                    testing::StrEq(coordinator::kMetadataManagerModuleTypeName),
-                    testing::_, testing::_))
-        .WillOnce(testing::Return(
-            TestableMetadataManager::GetFakeMetadataManagerModuleType()));
     EXPECT_CALL(
         *kMockRedisModule,
         RegisterClusterMessageReceiver(

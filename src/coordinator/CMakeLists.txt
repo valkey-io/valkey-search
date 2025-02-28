@@ -13,7 +13,7 @@ protobuf_generate(
   "protoc-gen-grpc=${grpc_cpp_plugin_location}")
 
 # Create the proto code (no grpc)
-create_proto_library("src/coordinator" "coordinator" "coordinator_cc_proto")
+create_proto_library("src/coordinator/coordinator.proto" "coordinator_cc_proto")
 target_link_libraries(coordinator_grpc_proto coordinator_cc_proto)
 
 set(SRCS_SERVER ${CMAKE_CURRENT_LIST_DIR}/server.cc
@@ -83,7 +83,7 @@ target_include_directories(metadata_manager PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(metadata_manager PUBLIC client_pool)
 target_link_libraries(metadata_manager PUBLIC coordinator_cc_proto)
 target_link_libraries(metadata_manager PUBLIC util)
-target_link_libraries(metadata_manager PUBLIC rdb_io_stream)
+target_link_libraries(metadata_manager PUBLIC rdb_serialization)
 target_link_libraries(metadata_manager PUBLIC log)
 target_link_libraries(metadata_manager PUBLIC managed_pointers)
 target_link_libraries(metadata_manager PUBLIC type_conversions)

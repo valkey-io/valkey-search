@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package hnswlib.data_model;
+
+
+message BruteForceIndexHeader {
+    uint64 max_elements = 1;
+    uint64 size_per_element = 2;
+    uint64 curr_element_count = 3;
+}
+
+message HNSWIndexHeader {
+    uint64 offset_level_0 = 1;
+    uint64 max_elements = 2;
+    uint64 curr_element_count = 3;
+    uint64 serialize_size_data_per_element = 4;
+    uint64 label_offset = 5;
+    uint64 offset_data = 6;
+    int32 max_level = 7;
+    uint32 enterpoint_node = 8;
+    uint64 max_M = 9;
+    uint64 max_M_0 = 10;
+    uint64 M = 11;
+    double mult = 12;
+    uint64 ef_construction = 13;
+}

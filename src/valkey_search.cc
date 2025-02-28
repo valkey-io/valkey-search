@@ -56,6 +56,7 @@
 #include "src/coordinator/util.h"
 #include "src/index_schema.h"
 #include "src/metrics.h"
+#include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "src/vector_externalizer.h"
@@ -480,8 +481,6 @@ absl::Status ValkeySearch::LoadOptions(RedisModuleCtx *ctx,
         vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx));
     coordinator::MetadataManager::InitInstance(
         std::make_unique<coordinator::MetadataManager>(ctx, *client_pool_));
-    VMSDK_RETURN_IF_ERROR(
-        coordinator::MetadataManager::Instance().RegisterModuleType(ctx));
     coordinator::MetadataManager::Instance().RegisterForClusterMessages(ctx);
   }
   SchemaManager::InitInstance(std::make_unique<SchemaManager>(
@@ -496,7 +495,6 @@ absl::Status ValkeySearch::LoadOptions(RedisModuleCtx *ctx,
       return absl::InternalError("Failed to create coordinator server");
     }
   }
-  VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().RegisterModuleType(ctx));
   return absl::OkStatus();
 }
 
@@ -526,6 +524,9 @@ void ValkeySearch::ResumeWriterThreadPool(RedisModuleCtx *ctx,
 absl::Status ValkeySearch::OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv,
                                   int argc) {
   ctx_ = RedisModule_GetDetachedThreadSafeContext(ctx);
+
+  // Register a single module type for Aux load/save callbacks.
+  VMSDK_RETURN_IF_ERROR(RegisterModuleType(ctx));
 
   VMSDK_RETURN_IF_ERROR(LoadOptions(ctx, argv, argc));
 

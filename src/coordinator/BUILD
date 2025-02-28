@@ -106,7 +106,7 @@ cc_library(
         ":client_pool",
         ":coordinator_cc_proto",
         ":util",
-        "//src:rdb_io_stream",
+        "//src:rdb_serialization",
         "//vmsdk/src:log",
         "//vmsdk/src:managed_pointers",
         "//vmsdk/src:type_conversions",

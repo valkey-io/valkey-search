@@ -39,7 +39,7 @@ TEST_F(ValueTest, TypesTest) {
        false},
       {Value(-std::numeric_limits<double>::infinity()), false, false, true,
        false},
-      {Value(std::nan("a nan")), true, false, false, false},
+      {Value(std::nan("a nan")), false, false, true, false},
       {Value(std::string("")), false, false, false, true},
       {Value(std::string("a")), false, false, false, true},
       {Value(std::string("nan")), false, false, false, true}};
@@ -170,7 +170,7 @@ TEST_F(ValueTest, add) {
       {neg_inf, pos_zero, neg_inf},
       {neg_inf, min_pos, neg_inf},
       {neg_inf, max_pos, neg_inf},
-      {neg_inf, pos_inf, Value()},
+      {neg_inf, pos_inf, Value(-std::nan("a nan"))},
 
       {pos_inf, min_neg, pos_inf},
       {pos_inf, max_neg, pos_inf},

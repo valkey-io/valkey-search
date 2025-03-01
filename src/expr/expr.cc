@@ -11,8 +11,8 @@
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
-// #define DBG std::cerr
-#define DBG 0 && std::cerr
+#define DBG std::cerr
+// #define DBG 0 && std::cerr
 
 namespace valkey_search {
 namespace expr {
@@ -283,35 +283,80 @@ struct Compiler {
   using ParseFunc = absl::StatusOr<ExprPtr> (Compiler::*)(CompileContext& ctx);
 
   using DyadicOp = std::pair<absl::string_view, Dyadic::ValueFunc>;
-  absl::StatusOr<ExprPtr> DoDyadic(CompileContext& ctx, ParseFunc lfunc,
-                                   ParseFunc rfunc,
-                                   const std::vector<DyadicOp>& ops) {
+  // For Right associative, lfunc == next highest precenence and
+  // rfunc == yourself
+  absl::StatusOr<ExprPtr> DoRightAssociative(CompileContext& ctx,
+                                             ParseFunc lfunc, ParseFunc rfunc,
+                                             const std::vector<DyadicOp>& ops) {
     utils::Scanner s = s_;
-    DBG << "Start Dyadic: " << ops[0].first << "\n";
+    DBG << "Start DyadicRight: " << ops[0].first << " Remaining: '"
+        << s_.GetUnscanned() << "'\n";
     VMSDK_ASSIGN_OR_RETURN(auto lvalue, (this->*lfunc)(ctx));
     if (!lvalue) {
-      DBG << "Dyadic Failed first: " << ops[0].first << "\n";
+      DBG << "DyadicRight Failed first: " << ops[0].first << "\n";
       return nullptr;
     }
     s = s_;
     for (auto& op : ops) {
-      DBG << "Dyadic looking for " << op.first
+      DBG << "DyadicRight looking for " << op.first
           << " Remaining: " << s_.GetUnscanned() << "\n";
       if (s_.SkipWhiteSpacePopWord(op.first)) {
         DBG << "Found " << op.first << "\n";
         VMSDK_ASSIGN_OR_RETURN(auto rvalue, (this->*rfunc)(ctx));
         if (!rvalue) {
           // Error.
-          return absl::InvalidArgumentError(
-              absl::StrCat("Invalid or missing expression after ", op.first,
-                           " at or near position ", s_.GetPosition()));
+          return absl::InvalidArgumentError("Invalid or missing expression");
         } else {
+          DBG << "DyadicRight: " << lvalue << ' ' << op.first << ' ' << rvalue
+              << " Remaining: '" << s_.GetUnscanned() << "'\n";
           return std::make_unique<Dyadic>(std::move(lvalue), std::move(rvalue),
                                           op.second, op.first);
         }
       }
     }
     s_ = s;
+    return lvalue;
+  }
+
+  // For a left associative, you pass in the next highest precedence operator
+  absl::StatusOr<ExprPtr> DoLeftAssociative(CompileContext& ctx, ParseFunc func,
+                                            const std::vector<DyadicOp>& ops) {
+    utils::Scanner s = s_;
+    DBG << "Start DyadicLeft: " << ops[0].first << " Remaining: '"
+        << s_.GetUnscanned() << "'\n";
+    VMSDK_ASSIGN_OR_RETURN(auto lvalue, (this->*func)(ctx));
+    if (!lvalue) {
+      DBG << "DyadicLeft Failed first: " << ops[0].first << "\n";
+      return nullptr;
+    }
+    while (s_.SkipWhiteSpacePeekByte() != EOF) {
+      s = s_;
+      bool found = false;
+      for (auto& op : ops) {
+        DBG << "DyadicLeft looking for " << op.first
+            << " Remaining: " << s_.GetUnscanned() << "\n";
+        if (s_.SkipWhiteSpacePopWord(op.first)) {
+          DBG << "Found " << op.first << "\n";
+          VMSDK_ASSIGN_OR_RETURN(auto rvalue, (this->*func)(ctx));
+          if (!rvalue) {
+            // Error.
+            return absl::InvalidArgumentError("Invalid or missing expression");
+          } else {
+            DBG << "Dyadic: " << lvalue << ' ' << op.first << ' ' << rvalue
+                << " Remaining: '" << s_.GetUnscanned() << "'\n";
+            lvalue = std::make_unique<Dyadic>(
+                std::move(lvalue), std::move(rvalue), op.second, op.first);
+            s = s_;
+            found = true;
+            continue;
+          }
+        }
+      }
+      if (!found) {
+        DBG << "DyadicLeft Not Found\n";
+        break;
+      }
+    }
     return lvalue;
   }
 
@@ -453,38 +498,54 @@ struct Compiler {
       str.push_back(char(this_byte));
     }
     RedisModule_Assert(s_.PopByte(start_byte));
-    DBG << "Make constant ('" << str << "')\n";
+    DBG << "QuotedString('" << str << "'): Remaining:'" << s_.GetUnscanned()
+        << "'\n";
     return std::make_unique<Constant>(std::move(str));
   }
+  //
+  // The recursive descent parser
+  //
+  // The precendence ordering is (highest to lowest) with the associativity
+  //
+  //  Primary
+  //  MulOp     left associative
+  //  AddOp     left associative
+  //  CmpOp
+  //  AndOp
+  //  OrOp
+  //
   absl::StatusOr<ExprPtr> LorOp(CompileContext& ctx) {
     static std::vector<DyadicOp> ops{
         {"||", &FuncLor},
     };
-    return DoDyadic(ctx, &Compiler::AndOp, &Compiler::LorOp, ops);
+    return DoLeftAssociative(ctx, &Compiler::AndOp, ops);
   }
   absl::StatusOr<ExprPtr> AndOp(CompileContext& ctx) {
     static std::vector<DyadicOp> ops{
         {"&&", &FuncLand},
     };
-    return DoDyadic(ctx, &Compiler::CmpOp, &Compiler::AndOp, ops);
+    return DoLeftAssociative(ctx, &Compiler::CmpOp, ops);
   }
   absl::StatusOr<ExprPtr> CmpOp(CompileContext& ctx) {
     static std::vector<DyadicOp> ops{{"<=", &FuncLe}, {"<", &FuncLt},
                                      {"==", &FuncEq}, {"!=", &FuncNe},
                                      {">=", &FuncGe}, {">", &FuncGt}};
-    return DoDyadic(ctx, &Compiler::AddOp, &Compiler::CmpOp, ops);
+    return DoLeftAssociative(ctx, &Compiler::AddOp, ops);
   }
   absl::StatusOr<ExprPtr> AddOp(CompileContext& ctx) {
     static std::vector<DyadicOp> ops{{"+", &FuncAdd}, {"-", &FuncSub}};
-    return DoDyadic(ctx, &Compiler::MulOp, &Compiler::CmpOp, ops);
+    return DoLeftAssociative(ctx, &Compiler::MulOp, ops);
   }
   absl::StatusOr<ExprPtr> MulOp(CompileContext& ctx) {
     static std::vector<DyadicOp> ops{
         {"*", &FuncMul}, {"/", &FuncDiv}, {"^", &FuncPower}};
-    return DoDyadic(ctx, &Compiler::Primary, &Compiler::MulOp, ops);
+    return DoRightAssociative(ctx, &Compiler::Primary, &Compiler::MulOp, ops);
   }
 
-  absl::StatusOr<ExprPtr> Expression(CompileContext& ctx) { return LorOp(ctx); }
+  absl::StatusOr<ExprPtr> Expression(CompileContext& ctx) {
+    DBG << "Start Expression: '" << s_.GetUnscanned() << "'\n";
+    return LorOp(ctx);
+  }
 
   absl::StatusOr<ExprPtr> Compile(CompileContext& ctx) {
     VMSDK_ASSIGN_OR_RETURN(auto result, Expression(ctx));

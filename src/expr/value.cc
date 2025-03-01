@@ -22,13 +22,7 @@ static bool IsNan(double& d) {
   return ((v & kExponentMask) == kExponentMask) && ((v & kMantissaMask) != 0);
 }
 
-Value::Value(double d) {
-  if (IsNan(d)) {
-    value_ = Nil("Computation was not a number");
-  } else {
-    value_ = d;
-  }
-}
+Value::Value(double d) { value_ = d; }
 
 bool Value::IsNil() const { return std::get_if<Nil>(&value_); }
 
@@ -63,9 +57,13 @@ std::optional<Value::Nil> Value::AsNil() const {
 }
 
 std::string FormatDouble(double d) {
-  std::ostringstream os;
-  os << std::setprecision(11) << d;
-  return os.str();
+  if (IsNan(d)) {
+    return "nan";
+  } else {
+    std::ostringstream os;
+    os << std::setprecision(11) << d;
+    return os.str();
+  }
 }
 
 std::optional<bool> Value::AsBool() const {
@@ -260,8 +258,14 @@ Value FuncDiv(const Value& l, const Value& r) {
   auto lv = l.AsDouble();
   auto rv = r.AsDouble();
   if (lv && rv) {
-    if (rv.value() == 0.0 && lv.value() == 0.0) {
-      return Value("nan");
+    if (rv.value() == 0) {
+      if (lv.value() == 0) {
+        return Value(std::nan("nan"));
+      } else if (std::signbit(rv.value()) ^ std::signbit(lv.value())) {
+        return Value(-std::numeric_limits<double>::infinity());
+      } else {
+        return Value(std::numeric_limits<double>::infinity());
+      }
     } else {
       return Value(lv.value() / rv.value());
     }

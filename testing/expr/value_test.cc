@@ -29,20 +29,19 @@ TEST_F(ValueTest, TypesTest) {
     bool is_string;
   };
 
-  std::vector<Testcase> t{
-      {Value(), true, false, false, false},
-      {Value(false), false, true, false, false},
-      {Value(true), false, true, false, false},
-      {Value(0.0), false, false, true, false},
-      {Value(1.0), false, false, true, false},
-      {Value(std::numeric_limits<double>::infinity()), false, false, true,
-       false},
-      {Value(-std::numeric_limits<double>::infinity()), false, false, true,
-       false},
-      {Value(std::nan("a nan")), false, false, true, false},
-      {Value(std::string("")), false, false, false, true},
-      {Value(std::string("a")), false, false, false, true},
-      {Value(std::string("nan")), false, false, false, true}};
+  std::vector<Testcase> t{{Value(), true, false, false, false},
+                          {Value(false), false, true, false, false},
+                          {Value(true), false, true, false, false},
+                          {Value(0.0), false, false, true, false},
+                          {Value(1.0), false, false, true, false},
+                          {Value(std::numeric_limits<double>::infinity()),
+                           false, false, true, false},
+                          {Value(-std::numeric_limits<double>::infinity()),
+                           false, false, true, false},
+                          {Value(std::nan("a nan")), false, false, true, false},
+                          {Value(std::string("")), false, false, false, true},
+                          {Value(std::string("a")), false, false, false, true},
+                          {Value(std::nan("nan")), false, false, false, true}};
 
   for (auto& c : t) {
     EXPECT_EQ(c.v.IsNil(), c.is_nil) << "Value is " << c.v;
@@ -204,10 +203,10 @@ TEST_F(ValueTest, math) {
   EXPECT_EQ(FuncMul(Value(1.0), Value(0.0)), Value(0.0));
   EXPECT_EQ(FuncDiv(Value(1.0), Value(2.0)), Value(0.5));
 
-  EXPECT_EQ(FuncDiv(Value(1.0), pos_zero), pos_inf);
-  EXPECT_EQ(FuncDiv(Value(1.0), neg_zero), neg_inf);
+  EXPECT_EQ(FuncDiv(Value(1.0), pos_zero), Value(std::nan("nan")));
+  EXPECT_EQ(FuncDiv(Value(1.0), neg_zero), Value(std::nan("nan")));
 
-  EXPECT_EQ(FuncDiv(Value(0.0), Value(0.0)), Value("nan"));
+  EXPECT_EQ(FuncDiv(Value(0.0), Value(0.0)), Value(std::nan("nan")));
 }
 
 /*

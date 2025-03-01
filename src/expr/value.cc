@@ -58,7 +58,7 @@ std::optional<Value::Nil> Value::AsNil() const {
 
 std::string FormatDouble(double d) {
   if (IsNan(d)) {
-    return "nan";
+    return "-nan";
   } else {
     std::ostringstream os;
     os << std::setprecision(11) << d;
@@ -156,8 +156,11 @@ std::ostream& operator<<(std::ostream& os, const Value& v) {
 }
 
 static Ordering CompareDoubles(double l, double r) {
-  // -ffast-math doesn't handle compares correctly with infinities, we do it
-  // integer.
+  // -ffast-math doesn't handle compares correctly with infinities or nans, we
+  // do it integer.
+  if (IsNan(l) || IsNan(r)) {
+    return Ordering::kUNORDERED;
+  }
   union {
     double d;
     int64_t i;
@@ -259,12 +262,10 @@ Value FuncDiv(const Value& l, const Value& r) {
   auto rv = r.AsDouble();
   if (lv && rv) {
     if (rv.value() == 0) {
-      if (lv.value() == 0) {
-        return Value(std::nan("nan"));
-      } else if (std::signbit(rv.value()) ^ std::signbit(lv.value())) {
-        return Value(-std::numeric_limits<double>::infinity());
+      if (std::signbit(rv.value())) {
+        return Value(-std::abs(std::nan("")));
       } else {
-        return Value(std::numeric_limits<double>::infinity());
+        return Value(std::nan("nan"));
       }
     } else {
       return Value(lv.value() / rv.value());

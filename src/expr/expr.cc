@@ -11,8 +11,8 @@
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
-#define DBG std::cerr
-// #define DBG 0 && std::cerr
+// #define DBG std::cerr
+#define DBG 0 && std::cerr
 
 namespace valkey_search {
 namespace expr {
@@ -348,7 +348,7 @@ struct Compiler {
                 std::move(lvalue), std::move(rvalue), op.second, op.first);
             s = s_;
             found = true;
-            continue;
+            break;
           }
         }
       }
@@ -539,7 +539,7 @@ struct Compiler {
   absl::StatusOr<ExprPtr> MulOp(CompileContext& ctx) {
     static std::vector<DyadicOp> ops{
         {"*", &FuncMul}, {"/", &FuncDiv}, {"^", &FuncPower}};
-    return DoRightAssociative(ctx, &Compiler::Primary, &Compiler::MulOp, ops);
+    return DoLeftAssociative(ctx, &Compiler::Primary, ops);
   }
 
   absl::StatusOr<ExprPtr> Expression(CompileContext& ctx) {

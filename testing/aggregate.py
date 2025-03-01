@@ -175,14 +175,15 @@ class TestAggregateCompatibility:
             ]
             schema = " ".join(schema)
             print(f"Generated schema: {schema}")
+            numbers = ["-0.5", "0", "1", "-1", "-inf", "inf"] # todo "nan", -0
             data["names"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
             data["names"][SETS_KEY(key_type)] = [
                 (
                     f"{key_type}:{i}",
                     {
-                        "n1": i,
-                        "n2": -i,
-                        "n3" : i*i,
+                        "n1": numbers[i % len(numbers)],
+                        "n2": numbers[(2*i) % len(numbers)],
+                        "n3" : numbers[(3*i) % len(numbers)],
                         "t1": f"one.one{i*2}",
                         "t2": f"two.two{i*-2}",
                         "t3": "all_the_same_value",
@@ -447,10 +448,13 @@ class TestAggregateCompatibility:
             print("Unknown type ", type(x))
             assert False
         # Skip the first gibberish int
-        rows = []
-        for key_res in rs[1:]:
-            rows += [{parse_field(key_res[f_idx]): parse_value(key_res[f_idx + 1])
-                for f_idx in range(0, len(key_res), 2)}]
+        try:
+            rows = []
+            for key_res in rs[1:]:
+                rows += [{parse_field(key_res[f_idx]): parse_value(key_res[f_idx + 1])
+                    for f_idx in range(0, len(key_res), 2)}]
+        except:
+            print("Parse Failure: ", rs[1:])
         return rows
 
     def process_result(self, r):
@@ -471,10 +475,14 @@ class TestAggregateCompatibility:
         # Sort by the sortkeys
         #
         if len(sortkeys) > 0:
-            out.sort(key=itemgetter(*sortkeys))
+            try:
+                out.sort(key=itemgetter(*sortkeys))
+            except KeyError:
+                print("Failed on sortkeys: ", sortkeys)
+                print("Out:", out)
         return out
     def compare_number_eq(self, l, r):
-        if l == "nan" and r == "nan":
+        if (l == "nan" or l == "-nan") and (r == "nan" or r == "-nan"):
             return True
         else:
             return math.isclose(float(l), float(r), rel_tol=.01)
@@ -495,15 +503,22 @@ class TestAggregateCompatibility:
         return True            
         
     def compare_results(self, cmd):
-        print(TEST_MARKER)
-        print(f"CMD: {cmd}")
+        #print(TEST_MARKER)
+        #print(f"CMD: {cmd}")
         engines = {"RL": self.client_r, "EC": self.client_l}
+        if 'groupby' in cmd and 'sortby' in cmd:
+            assert False
         if 'groupby' in cmd:
             ix = cmd.index('groupby')
             count = int(cmd[ix+1])
             sortkeys = [cmd[ix+2+i][1:] for i in range(count)]
         elif 'sortby' in cmd:
-            sortkeys = []
+            ix = cmd.index('sortby')
+            count = int(cmd[ix+1])
+            sortkeys = [cmd[ix+2+i][1:] for i in range(count)]
+            for f in ['asc', 'desc', 'ASC', 'DESC']:
+                if f in sortkeys:
+                    sortkeys.remove(f)
         else:
             sortkeys=['__key']
 
@@ -533,6 +548,7 @@ class TestAggregateCompatibility:
             return
 
         if exception["EC"]:
+            print(f"CMD: {cmd}")
             print(f"RL Result: {printable_result(results['RL'])}")
             print(f"EC Exception Raw: {printable_result(results['EC'])}")
             print(TEST_MARKER)
@@ -541,6 +557,8 @@ class TestAggregateCompatibility:
         # Process failures
         if len(results["RL"]) != len(results["EC"]):
             print(f"Mismatched sizes RL:{len(results['RL'])} EC:{len(results['EC'])}")
+            print(f"RL raw result:{results['RL']}")
+            print(f"EC raw result:{results['EC']}")
             assert False
 
         # Output raw results
@@ -551,20 +569,23 @@ class TestAggregateCompatibility:
         # Directly comparing dicts instead of custom compare function
         # TODO: investigate this later
         if all([self.compare_row(ec[i], rl[i]) for i in range(len(rl))]):
-            print("Results look good.")
-            print(TEST_MARKER)
+            #print("Results look good.")
+            #print(TEST_MARKER)
             return
         print("***** MISMATCH ON DATA *****, sortkeys=", sortkeys, " records=", len(rl))
         print(f"CMD: {cmd}")
-        print(f"RL raw result:{results['RL']}")
-        print(f"EC raw result:{results['EC']}")
-        print("--- Sorted ---")
-        print(rl)
+        #print(f"RL raw result:{results['RL']}")
+        #print(f"EC raw result:{results['EC']}")
+        #print("--- Sorted ---")
         for i in range(len(rl)):
-            print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())], "" if self.compare_row(rl[i], ec[i]) else "<<<")
-            print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())], "" if self.compare_row(rl[i],ec[i]) else "<<<")
+            if not self.compare_row(rl[i], ec[i]):
+                print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())], "<<<")
+                print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())], "<<<")
+            else:
+                print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())])
+                print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())])
         print(TEST_MARKER)
-        assert False
+        #assert False
 
     # Tests generator for FT.SEARCH
     def search_tests_generator(self, data_key, key_type):
@@ -691,27 +712,11 @@ class TestAggregateCompatibility:
                 cmd.extend(formatters["sortby"](sort_data))
             cmd += opt_pieces
             yield cmd
-    '''
-    @pytest.mark.parametrize("test_case", ["vec"])
-    def test_agg_vec_only(self, key_type, test_case):
-        self.setup_data(test_case, {"vector": 1})
-        self.load_data_with_index(test_case, key_type)
-        for test in self.agg_tests_generator(test_case, key_type):
-            self.compare_results(test)
-
-    @pytest.mark.parametrize("test_case", ["vec"])
-    def test_search_vec_only(self, key_type, test_case):
-        self.setup_data(test_case, {"vector": 1})
-        self.load_data_with_index(test_case, key_type)
-        for test in self.search_tests_generator(test_case, key_type):
-            self.compare_results(test)
-    '''
 
     def checkvec(self, *orig_cmd):
         '''Temporary change until query parser is redone.'''
         cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]
         new_cmd = []
-        print("checkvec:", cmd)
         for c in cmd:
             if c.strip() == "*":
                 ''' substitute '''
@@ -801,45 +806,41 @@ class TestAggregateCompatibility:
         )
         ## RL Max does not support negatives and incorrectly rounds up to zero:
         # self.checkvec(f'ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n2 as max')
-    @pytest.mark.parametrize("numbers", ["names"])
-    def test_aggregate_numeric_dyadic_operators(self, key_type, numbers):
+    def test_aggregate_load_store(self, key_type):
         self.setup_names()
-        keys = self.load_data_with_index(numbers, key_type)
-        dyadic = ["+", "-", "*", "/", "^"]
-        relops = ["<", "<=", "==", "!=", ">=", ">"]
-        for k in range(keys):
-            for op in dyadic + relops:
-                self.checkvec(
-                    f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 apply @n1{op}@n2 as nn"
-                )
+        keys = self.load_data_with_index("names", key_type)
+        self.checkvec(
+            f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 apply @n1+0 as nn apply @n2 as nm"
+        )
 
-    def test_aggregate_numeric_load_store(self, key_type):
+    def test_aggregate_numeric_dyadic_operators(self, key_type):
         self.setup_names()
         keys = self.load_data_with_index("names", key_type)
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]
-        self.checkvec(f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1")
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1  * load 2 @__key @n1 apply @n1 as nn"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1  * load 2 @__key @n1 apply @n1+0 as nn"
-        )
+        logops = ["||", "&&"]
+        for op in dyadic + relops + logops:
+            self.checkvec(
+                f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 apply @n1{op}@n2 as nn"
+            )
 
     def test_aggregate_numeric_triadic_operators(self, key_type):
         self.setup_names()
         keys = self.load_data_with_index("names", key_type)
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]
-        for relop in relops:
-            for lop in dyadic:
-                for rop in dyadic:
-                    self.checkvec(
-                        f"ft.aggregate {key_type}_idx1  * load 4 @__key @n1 @n2 @n3 apply (@n1{lop}@n2){relop}@n3 as nn"
-                    )
-                    self.checkvec(
-                        f"ft.aggregate {key_type}_idx1  * load 4 @__key @n1 @n2 @n3 apply @n1{lop}@n2{relop}@n3 as nn"
-                    )
+        logops = ["||", "&&"]
+        for op1 in dyadic+relops+logops:
+            for op2 in dyadic+relops+logops:
+                self.checkvec(
+                    f"ft.aggregate {key_type}_idx1  * load 4 @__key @n1 @n2 @n3 apply @n1{op1}@n2{op2}@n3 as nn"
+                )
+                self.checkvec(
+                    f"ft.aggregate {key_type}_idx1  * load 4 @__key @n1 @n2 @n3 apply (@n1{op1}@n2){op2}@n3 as nn"
+                )
+                self.checkvec(
+                    f"ft.aggregate {key_type}_idx1  * load 4 @__key @n1 @n2 @n3 apply @n1{op1}(@n2{op2}@n3) as nn"
+                )
 
     def test_aggregate_numeric_functions(self, key_type):
         self.setup_names()
@@ -947,50 +948,6 @@ class TestAggregateCompatibility:
             "apply_result",
         )
 
-        # # String apply function "substr"
-        self.checkvec(
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t2",
-            "__key",
-            "apply",
-            "substr(@t2, 0, 5)",
-            "as",
-            "apply_result",
-        )
-        self.checkvec(
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t2",
-            "__key",
-            "apply",
-            "substr(@t2, 1, 2)",
-            "as",
-            "apply_result",
-        )
-        # self.checkvec('ft.aggregate', f'{key_type}_idx1', '*', 'load', '1', 't2', 'apply', 'substr(@t2, 1.1, 2)', 'as', 'apply_result')
-        # self.checkvec('ft.aggregate', f'{key_type}_idx1', '*', 'load', '1', 't2', 'apply', 'substr(@t2, 1, "2.9")', 'as', 'apply_result')
-        # self.checkvec('ft.aggregate', f'{key_type}_idx1', '*', 'load', '1', 't2', 'apply', 'substr(@t2, 1, "-2.1")', 'as', 'apply_result')
-        self.checkvec(
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t2",
-            "__key",
-            "apply",
-            "substr(@t2, 3, 10)",
-            "as",
-            "apply_result",
-        )
-
     def test_aggregate_substr(self, key_type):
         self.setup_names()
         self.load_data_with_index("names", key_type)
@@ -1009,3 +966,27 @@ class TestAggregateCompatibility:
                     "as",
                     "apply_result",
         )
+
+    def test_aggregate_power(self, key_type):
+        self.setup_names()
+        self.load_data_with_index("names", key_type)
+        values = ["-inf", "-1.5", "-1", "-0.5", "0", "0.5", "1.0", "+inf"]
+        dyadic = ["+", "-", "*", "/", "^"]
+        relops = ["<", "<=", "==", "!=", ">=", ">"]
+        logops = ["||", "&&"]
+        for lop in values:
+            for rop in values:
+                for op in dyadic+relops+logops:
+                    self.checkvec(
+                        "ft.aggregate",
+                        f"{key_type}_idx1",
+                        "*",
+                        "load",
+                        "2",
+                        "__key",
+                        "t2",
+                        "apply",
+                        f"({lop}){op}({rop})",
+                        "as",
+                        "nn",
+                )

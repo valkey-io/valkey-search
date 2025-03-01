@@ -68,6 +68,10 @@ class ExprTest : public testing::Test {
 
 TEST_F(ExprTest, TypesTest) {
   std::vector<std::pair<std::string, std::optional<Value>>> x = {
+      {"1<=2<=3", Value(1.0)},
+      {"1==2==3", Value(0.0)},
+      {"1>=2>=3", Value(0.0)},
+      {"1!=2!=3", Value(1.0)},
       {"1--1-1", Value(1.0)},
       {"1--1+1", Value(3.0)},
       {"1+-1<1", Value(1.0)},

@@ -94,12 +94,17 @@ std::ostream& operator<<(std::ostream& os, Ordering o) {
 
 Ordering Compare(const Value& l, const Value& r);
 
+//
+// These orderings aren't IEEE compatible, but they match the legacy
+//
 bool operator==(const Value& l, const Value& r) {
-  return Compare(l, r) == Ordering::kEQUAL;
+  auto res = Compare(l, r);
+  return res == Ordering::kEQUAL || res == Ordering::kUNORDERED;
 }
 
 bool operator!=(const Value& l, const Value& r) {
-  return Compare(l, r) != Ordering::kEQUAL;
+  auto res = Compare(l, r);
+  return res == Ordering::kLESS || res == Ordering::kGREATER;
 }
 
 bool operator<(const Value& l, const Value& r) {
@@ -108,7 +113,7 @@ bool operator<(const Value& l, const Value& r) {
 
 bool operator<=(const Value& l, const Value& r) {
   auto res = Compare(l, r);
-  return res == Ordering::kLESS || res == Ordering::kEQUAL;
+  return res != Ordering::kGREATER;
 }
 
 bool operator>(const Value& l, const Value& r) {
@@ -117,7 +122,7 @@ bool operator>(const Value& l, const Value& r) {
 
 bool operator>=(const Value& l, const Value& r) {
   auto res = Compare(l, r);
-  return res == Ordering::kGREATER || res == Ordering::kEQUAL;
+  return res != Ordering::kLESS;
 }
 
 // Dyadic Numerical Functions

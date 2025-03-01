@@ -58,7 +58,11 @@ std::optional<Value::Nil> Value::AsNil() const {
 
 std::string FormatDouble(double d) {
   if (IsNan(d)) {
-    return "-nan";
+    if (std::signbit(d)) {
+      return "-nan";
+    } else {
+      return "nan";
+    }
   } else {
     std::ostringstream os;
     os << std::setprecision(11) << d;
@@ -262,11 +266,11 @@ Value FuncDiv(const Value& l, const Value& r) {
   auto rv = r.AsDouble();
   if (lv && rv) {
     if (rv.value() == 0) {
-      if (std::signbit(rv.value())) {
-        return Value(-std::abs(std::nan("")));
-      } else {
-        return Value(std::nan("nan"));
-      }
+      // if (std::signbit(lv.value())) {
+      return Value(std::nan(""));
+      //} else {
+      //  return Value(-std::abs(std::nan("nan")));
+      //}
     } else {
       return Value(lv.value() / rv.value());
     }

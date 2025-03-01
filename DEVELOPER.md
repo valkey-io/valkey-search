@@ -244,5 +244,5 @@ Alternatively
 ```bash
 ci/check_changes.sh --from <git-commit or branch>
 ```
-Thie form checks the files that have been comitted from the specified commit or main through HEAD.
+This form checks the files that have been committed from the specified commit or main through HEAD.
 

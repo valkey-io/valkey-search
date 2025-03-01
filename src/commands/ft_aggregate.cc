@@ -132,7 +132,7 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
   if (parameters.load_key) {
     key_index = parameters.AddRecordAttribute("__key");
   }
-  // Include scores? The presence of a vector serch implies yes, so when vector
+  // Include scores? The presence of a vector search implies yes, so when vector
   // search becomes optional this will need to change: todo:
   if (/* parameters.addscores_ */ true) {
     scores_index = parameters.AddRecordAttribute(

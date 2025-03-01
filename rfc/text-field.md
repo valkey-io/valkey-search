@@ -89,7 +89,7 @@ Each ```TEXT``` field has the a set of configurables some control the process to
 | --- | --- | --- | --- |
 | Punctuation | vector<character> | Characters that separate words during the tokenization process. |  
 | Stop Words | vector<String> | List of stop words to be removed during decomposition |
-| Stemming Language | Enumeration | Snowball stemming library lanugage control |
+| Stemming Language | Enumeration | Snowball stemming library language control |
 | Suffix Tree | Boolean | Controls the presence/absence of a suffix tree. |
 | Word Offsets | Boolean | Indicates if the postings for a word contain word offsets or just a count. |
 

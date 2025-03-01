@@ -201,7 +201,7 @@ static Ordering CompareStrings(const absl::string_view l,
 }
 
 Ordering Compare(const Value& l, const Value& r) {
-  // First equvalent types
+  // First equivalent types
 
   if (l.IsNil() || r.IsNil()) {
     return (l.IsNil() && r.IsNil()) ? Ordering::kEQUAL : Ordering::kUNORDERED;

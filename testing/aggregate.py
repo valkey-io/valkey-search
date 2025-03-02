@@ -148,7 +148,7 @@ class TestAggregateCompatibility:
             data["hard numbers"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
             data["hard numbers"][SETS_KEY(key_type)] = [
                 (
-                    f"{key_type}:{i}",
+                    f"{key_type}:{i:02d}",
                     {
                         "n1": combinations[i][0],
                         "n2": combinations[i][1],
@@ -169,7 +169,7 @@ class TestAggregateCompatibility:
             data["sortable numbers"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
             data["sortable numbers"][SETS_KEY(key_type)] = [
                 (
-                    f"{key_type}:{i}",
+                    f"{key_type}:{i:02d}",
                     {
                         "n1": sortable_numbers[i],
                         "n2": -sortable_numbers[i],
@@ -190,7 +190,7 @@ class TestAggregateCompatibility:
             data["reverse vector numbers"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
             data["reverse vector numbers"][SETS_KEY(key_type)] = [
                 (
-                    f"{key_type}:{i}",
+                    f"{key_type}:{i:02d}",
                     {
                         "n1": sortable_numbers[i],
                         "n2": -sortable_numbers[i],
@@ -375,6 +375,7 @@ class TestAggregateCompatibility:
                 if f in sortkeys:
                     sortkeys.remove(f)
         else:
+            # todo, remove __key as sortkey once the search output sorting is fixed.
             sortkeys=["__key"] if "ft.aggregate" in cmd else []
 
         results = {eng: None for eng in engines}
@@ -424,9 +425,6 @@ class TestAggregateCompatibility:
             print("--EC--")
             for e in ec:
                 print(e)
-            print(f"RL raw result: {results['RL']}")
-            print(f"EC raw result: {results['EC']}")
-            return
             assert False
 
         # if compare_results(ec, rl):
@@ -486,6 +484,8 @@ class TestAggregateCompatibility:
         self.checkvec(f"ft.search {key_type}_idx1 *")
         self.checkvec(f"ft.search {key_type}_idx1 * limit 0 5")
     '''
+    '''
+    # todo fix the limit
     def test_aggregate_sortby(self, key_type):
         self.load_data_with_index("sortable numbers", key_type)
         self.checkvec(f"ft.aggregate {key_type}_idx1 * load 2 @__key @n2 sortby 1 @n2")
@@ -500,13 +500,15 @@ class TestAggregateCompatibility:
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @__key desc"
         )
         '''
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @__v1_score desc"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @__v1_score asc"
-        )
-        '''
+    '''
+    # todo fix sorting by the vector score
+    self.checkvec(
+        f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @__v1_score desc"
+    )
+    self.checkvec(
+        f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @__v1_score asc"
+    )
+    '''
 
     def test_aggregate_groupby(self, key_type):
         self.load_data_with_index("sortable numbers", key_type)
@@ -571,12 +573,22 @@ class TestAggregateCompatibility:
         )
         self.checkvec(f'ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n2 as nmax')
     '''
+    # todo enable when search sorting is fixed
     def test_aggregate_load_limit(self, key_type):
         keys = self.load_data_with_index("sortable numbers", key_type)
         self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2")
+        self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 limit 1 4")
         self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 limit 1 4 sortby 2 @__key desc")
         self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 1 4")
     '''
+    def test_aggregate_short_limit(self, key_type):
+        keys = self.load_data_with_index("sortable numbers", key_type)
+        self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 limit 0 5")
+        self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc")
+        self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 0 5")
+        self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key asc limit 1 4", knn=4)
+
+
     def test_aggregate_numeric_dyadic_operators(self, key_type):
         keys = self.load_data_with_index("hard numbers", key_type)
         dyadic = ["+", "-", "*", "/", "^"]

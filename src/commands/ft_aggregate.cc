@@ -1,6 +1,7 @@
 #include "src/commands/ft_aggregate.h"
 
 #include <algorithm>
+#include <ranges>
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -143,7 +144,8 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
   //  1. Process the collected Neighbors into Aggregate Records.
   //
   RecordSet records(&parameters);
-  for (auto &n : neighbors) {
+  // Todo: fix this  for (auto &n : neighbors) {
+  for (auto &n : std::ranges::reverse_view(neighbors)) {
     DBG << "Neighbor: " << n << "\n";
     auto rec = std::make_unique<Record>(parameters.attr_record_indexes_.size());
     if (parameters.load_key) {
@@ -192,9 +194,17 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
   //
   //  2. Perform the aggregation stages
   //
+  bool is_limited = false;
   for (auto &stage : parameters.stages_) {
     // Todo Check for timeout
     VMSDK_RETURN_IF_ERROR(stage->Execute(records));
+    is_limited |= stage->IsLimiter();
+  }
+  if (!is_limited) {
+    Limit limiter;
+    limiter.offset_ = 0;
+    limiter.limit_ = 10;
+    VMSDK_RETURN_IF_ERROR(limiter.Execute(records));
   }
   DBG << ">> Finished stages\n" << records;
 

@@ -109,5 +109,10 @@ int RunByMain(absl::AnyInvocable<void()> fn, bool force_async = false);
 
 std::string WrongArity(absl::string_view cmd);
 
+//
+// Parse out a hash tag from a string view
+//
+std::optional<absl::string_view> ParseHashTag(absl::string_view);
+
 }  // namespace vmsdk
 #endif  // VMSDK_SRC_UTILS_H_

@@ -53,6 +53,7 @@
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
@@ -97,13 +98,17 @@ absl::Status ParsePrefixes(vmsdk::ArgsIterator &itr,
   if (!res) {
     return absl::OkStatus();
   }
-  if (prefixes_cnt >= (uint32_t)itr.DistanceEnd()) {
+  if (prefixes_cnt > (uint32_t)itr.DistanceEnd()) {
     return absl::InvalidArgumentError(
         absl::StrCat("Bad arguments for PREFIX: `", prefixes_cnt,
                      "` is outside acceptable bounds"));
   }
   for (uint32_t i = 0; i < prefixes_cnt; ++i) {
     VMSDK_ASSIGN_OR_RETURN(auto itr_arg, itr.Get());
+    if (vmsdk::ParseHashTag(vmsdk::ToStringView(itr_arg))) {
+      return absl::InvalidArgumentError(
+          "PREFIX argument(s) must not contain a hash tag");
+    }
     index_schema_proto.add_subscribed_key_prefixes(
         std::string(vmsdk::ToStringView(itr_arg)));
     itr.Next();
@@ -292,6 +297,9 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   vmsdk::ArgsIterator itr{argv, argc};
   VMSDK_RETURN_IF_ERROR(
       vmsdk::ParseParamValue(itr, *index_schema_proto.mutable_name()));
+  if (vmsdk::ParseHashTag(index_schema_proto.name())) {
+    return absl::InvalidArgumentError("Index name must not contain a hash tag");
+  }
   data_model::AttributeDataType on_data_type{
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH};
   VMSDK_ASSIGN_OR_RETURN(auto res, ParseParam(kOnParam, false, itr,

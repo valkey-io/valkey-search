@@ -92,4 +92,22 @@ int RunByMain(absl::AnyInvocable<void()> fn, bool force_async) {
 std::string WrongArity(absl::string_view cmd) {
   return absl::StrCat("ERR wrong number of arguments for ", cmd, " command");
 }
+
+std::optional<absl::string_view> ParseHashTag(absl::string_view s) {
+  auto start = s.find('{');
+  // Does a left bracket exist and is NOT the last character
+  if (start == absl::string_view::npos || (start + 1) == s.size()) {
+    return std::nullopt;
+  }
+  auto end = s.find('}', start + 1);
+  if (end == absl::string_view::npos) {
+    return std::nullopt;
+  }
+  auto tag_size = end - (start + 1);
+  if (tag_size == 0) {
+    return std::nullopt;
+  } else {
+    return s.substr(start + 1, tag_size);
+  }
+}
 }  // namespace vmsdk

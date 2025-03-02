@@ -386,7 +386,7 @@ class TestAggregateCompatibility:
                 results[name] = rs
                 # print(f"{name} replied: {rs}")
             except Exception as exc:
-                print(f"Got exception for {name} Error: '{exc}'")
+                print(f"Got exception for {name} Error: '{exc}', Cmd:{cmd}")
                 exception[name] = True
                 assert False
 
@@ -454,14 +454,14 @@ class TestAggregateCompatibility:
         print(TEST_MARKER)
         assert False
 
-    def checkvec(self, *orig_cmd, knn=10000):
+    def checkvec(self, *orig_cmd, knn=10000, score_as=""):
         '''Temporary change until query parser is redone.'''
         cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]
         new_cmd = []
         for c in cmd:
             if c.strip() == "*":
                 ''' substitute '''
-                new_cmd += [f"*=>[KNN {knn} @v1 $BLOB]"]
+                new_cmd += [f"*=>[KNN {knn} @v1 $BLOB {score_as}]"]
             else:
                 new_cmd += [c]
         new_cmd += [
@@ -484,8 +484,7 @@ class TestAggregateCompatibility:
         self.checkvec(f"ft.search {key_type}_idx1 *")
         self.checkvec(f"ft.search {key_type}_idx1 * limit 0 5")
     '''
-    '''
-    # todo fix the limit
+
     def test_aggregate_sortby(self, key_type):
         self.load_data_with_index("sortable numbers", key_type)
         self.checkvec(f"ft.aggregate {key_type}_idx1 * load 2 @__key @n2 sortby 1 @n2")
@@ -499,16 +498,12 @@ class TestAggregateCompatibility:
         self.checkvec(
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @__key desc"
         )
-        '''
-    '''
-    # todo fix sorting by the vector score
-    self.checkvec(
-        f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @__v1_score desc"
-    )
-    self.checkvec(
-        f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @__v1_score asc"
-    )
-    '''
+        self.checkvec(
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 VECTORDISTANCE sortby 2 @VECTORDISTANCE desc"
+        , score_as="AS VECTORDISTANCE")
+        self.checkvec(
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @__v1_score asc"
+        )
 
     def test_aggregate_groupby(self, key_type):
         self.load_data_with_index("sortable numbers", key_type)

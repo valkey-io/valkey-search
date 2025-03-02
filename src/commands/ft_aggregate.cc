@@ -87,8 +87,8 @@ absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
 
   // Ensure that key is first value if it gets included...
   RedisModule_Assert(params->AddRecordAttribute("__key") == 0);
-  RedisModule_Assert(
-      params->AddRecordAttribute(params->parse_vars.score_as_string) == 1);
+  RedisModule_Assert(params->AddRecordAttribute(
+                         vmsdk::ToStringView(params->score_as.get())) == 1);
 
   VMSDK_RETURN_IF_ERROR(parser.Parse(*params, itr, true));
   if (itr.DistanceEnd() > 0) {

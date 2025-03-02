@@ -39,6 +39,10 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   if (params.loadall_) {
     DBG << "**LOADALL**\n";
     RedisModule_Assert(params.return_attributes.empty());
+  } else if (params.loads_.empty()) {
+    // Nothing, don't load anything
+    params.no_content = true;
+    ;
   } else {
     DBG << "LOADING: ";
     for (const auto &load : params.loads_) {
@@ -135,8 +139,8 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
   if (parameters.load_key) {
     key_index = parameters.AddRecordAttribute("__key");
   }
-  // Include scores? The presence of a vector search implies yes, so when vector
-  // search becomes optional this will need to change: todo:
+  // Include scores? The presence of a vector search implies yes, so when
+  // vector search becomes optional this will need to change: todo:
   if (/* parameters.addscores_ */ true) {
     scores_index = parameters.AddRecordAttribute(
         vmsdk::ToStringView(parameters.score_as.get()));
@@ -157,7 +161,7 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
       rec->fields_[scores_index] = expr::Value(n.distance);
     }
     // For the fields that were fetched, stash them into the RecordSet
-    if (n.attribute_contents.has_value()) {
+    if (n.attribute_contents.has_value() && !parameters.no_content) {
       for (auto &[name, records_map_value] : *n.attribute_contents) {
         auto value = vmsdk::ToStringView(records_map_value.value.get());
         DBG << "Attribute_contents: " << name << " : " << value << "\n";
@@ -176,7 +180,8 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
                 rec->fields_[ref->second] = expr::Value(numeric_value.value());
               } else {
                 // Skip this field, it contains an invalid number....
-                // todo Prove that skipping this field is the right thing to do
+                // todo Prove that skipping this field is the right thing to
+                // do
               }
               break;
             }
@@ -196,7 +201,8 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
   //
   //  2. Perform the aggregation stages
   //
-  bool is_limited = false;
+  bool is_limited =
+      parameters.loads_.empty();  // Empty loads clause is limiting too.
   for (auto &stage : parameters.stages_) {
     // Todo Check for timeout
     VMSDK_RETURN_IF_ERROR(stage->Execute(records));

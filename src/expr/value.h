@@ -1,3 +1,9 @@
+/*
+ * Copyright Valkey Contributors.
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ */
+
 #ifndef VALKEYSEARCH_EXPR_VALUE_H
 #define VALKEYSEARCH_EXPR_VALUE_H
 

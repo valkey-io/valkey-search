@@ -1,3 +1,9 @@
+/*
+ * Copyright Valkey Contributors.
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ */
+
 #ifndef VALKEYSEARCH_COMMANDS_FT_AGGREGATE_EXEC
 #define VALKEYSEARCH_COMMANDS_FT_AGGREGATE_EXEC
 

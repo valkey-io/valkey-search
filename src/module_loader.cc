@@ -68,6 +68,12 @@ vmsdk::module::Options options = {
                 .permissions = "readonly",
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTSearchCmd>,
             },
+            {
+                .cmd_name = valkey_search::kAggregateCommand,
+                .permissions = "readonly",
+                .cmd_func =
+                    &vmsdk::CreateCommand<valkey_search::FTAggregateCmd>,
+            },
         },
     .on_load =
         [](RedisModuleCtx *ctx, RedisModuleString **argv, int argc,

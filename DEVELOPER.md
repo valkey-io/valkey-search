@@ -239,3 +239,10 @@ ci/check_changes.sh --cached
 ```
 
 - `--cached` is an optional parameter which direct the script to check the staged files, i.e., the files that have been added to the staging area (via git add) but not yet committed.
+
+Alternatively
+```bash
+ci/check_changes.sh --from <git-commit or branch>
+```
+This form checks the files that have been committed from the specified commit or main through HEAD.
+

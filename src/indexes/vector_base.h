@@ -93,6 +93,15 @@ struct Neighbor {
     }
     return *this;
   }
+  friend std::ostream& operator<<(std::ostream& os, const Neighbor& n) {
+    os << "Key: " << n.external_id->Str() << " Dist: " << n.distance;
+    if (n.attribute_contents.has_value()) {
+      os << ' ' << *n.attribute_contents;
+    } else {
+      os << " [NoContents]";
+    }
+    return os;
+  }
 };
 
 const absl::NoDestructor<absl::flat_hash_map<

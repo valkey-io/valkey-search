@@ -41,13 +41,13 @@
 
 namespace valkey_search {
 
-constexpr int64_t kTimeoutMS{50000};
-const size_t kMaxTimeoutMs{60000};
-
 struct LimitParameter {
   uint64_t first_index{0};
   uint64_t number{10};
 };
+
+absl::Status PreParseQueryString(query::VectorSearchParameters &parameters);
+absl::Status PostParseQueryString(query::VectorSearchParameters &parameters);
 
 absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
 ParseVectorSearchParameters(RedisModuleCtx *ctx, RedisModuleString **argv,

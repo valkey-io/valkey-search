@@ -243,9 +243,10 @@ absl::StatusOr<std::deque<Neighbor>> VectorFlat<T>::Search(
       -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
     absl::ReaderMutexLock lock(&resize_mutex_);
     try {
-      return algo_->searchKnn((T *)query.data(),
-                              std::min(count, algo_->cur_element_count_),
-                              filter.get());
+      return algo_->searchKnn(
+          (T *)query.data(),
+          std::min(count, static_cast<uint64_t>(algo_->cur_element_count_)),
+          filter.get());
     } catch (const std::exception &e) {
       Metrics::GetStats().flat_search_exceptions_cnt.fetch_add(
           1, std::memory_order_relaxed);

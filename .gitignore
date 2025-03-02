@@ -7,3 +7,7 @@ compile_commands.json
 .devcontainer/devcontainer.json
 .devcontainer/._devcontainer.json
 .vscode/
+.codelite/
+.cache/
+build-*
+*.workspace

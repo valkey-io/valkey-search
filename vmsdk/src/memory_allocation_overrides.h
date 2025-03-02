@@ -54,6 +54,13 @@ void* (*__real_valloc)(size_t) = valloc;
 __attribute__((weak)) size_t empty_usable_size(void* ptr) noexcept;
 }  // extern "C"
 
+// Different exception specifier between CLANG & GCC
+#ifdef __clang__
+#define PMES
+#else
+#define PMES noexcept
+#endif
+
 extern "C" {
 // See https://www.gnu.org/software/libc/manual/html_node/Replacing-malloc.html
 // NOLINTNEXTLINE
@@ -69,7 +76,7 @@ void* __wrap_aligned_alloc(size_t __alignment, size_t __size) noexcept;
 // NOLINTNEXTLINE
 int __wrap_malloc_usable_size(void* ptr) noexcept;
 // NOLINTNEXTLINE
-int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size);
+int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size) PMES;
 // NOLINTNEXTLINE
 void* __wrap_valloc(size_t size) noexcept;
 }  // extern "C"

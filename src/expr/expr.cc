@@ -472,18 +472,18 @@ struct Compiler {
   //
   // The precedence ordering is (highest to lowest)
   //
-  //  Primary
-  //  MulOp
-  //  AddOp
-  //  CmpOp
-  //  AndOp
-  //  OrOp
+  //  Primary: Number, Field, ()
+  //  MulOp: * / ^
+  //  AddOp: + -
+  //  CmpOp: < <= == != > >=
+  //  LogOp: || &&
   //
   absl::StatusOr<ExprPtr> LorOp(CompileContext& ctx) {
     static std::vector<DyadicOp> ops{
         {"||", &FuncLor},
+        {"&&", &FuncLand},
     };
-    return DoDyadic(ctx, &Compiler::AndOp, ops);
+    return DoDyadic(ctx, &Compiler::CmpOp, ops);
   }
   absl::StatusOr<ExprPtr> AndOp(CompileContext& ctx) {
     static std::vector<DyadicOp> ops{

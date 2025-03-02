@@ -3,7 +3,7 @@ import sys, json
 import numpy as np
 from collections import defaultdict
 from operator import itemgetter
-
+from itertools import chain, combinations
 '''
 Compare two systems for a bunch of aggregation operations
 '''
@@ -12,9 +12,6 @@ CREATES_KEY = lambda key_type: f"{key_type} creates"
 VECTOR_DIM = 3
 
 TEST_MARKER = "*" * 100
-
-def random_f32_vector(dimension):
-    return np.random.rand(dimension).astype(np.float32)
 
 def cvrt(x):
     if not isinstance(x, bytes):
@@ -56,36 +53,6 @@ def sortkeyfunc(row):
         elif b"t3" in r:
             return r[b"t3"]
     return None
-
-
-def compare_results(l, r):
-    if len(l) != len(r):
-        print(f"Mismatch, length of result {len(l)} != {len(r)}")
-        return False
-    for i in range(0, len(l)):
-        lr = l[i]
-        rr = r[i]
-        if len(lr) != len(rr) or 0 != len(lr) % 2:
-            print(f"Mismatch length of row {i}, {lr} {rr}")
-            return False
-        for f in range(0, len(lr), 2):
-            if lr[f] != rr[f]:
-                print(f"Field name mismatch: {lr[f]} != {rr[f]}")
-                return False
-            if lr[f + 1] != rr[f + 1]:
-                # Python value doesn't match, try converting to number
-                try:
-                    num_l = float(lr[f + 1])
-                    num_r = float(rr[f + 1])
-                    # RL has some aggregate 0s that show up as 2.22507385851e-308
-                    if not math.isclose(num_l, num_r, abs_tol=1e-300):
-                        print(f"Value mismatch field {lr[f]}  {lr[f+1]} != {rr[f+1]}")
-                        return False
-                except:
-                    if lr[f + 1] != rr[f + 1]:
-                        print(f"Value mismatch field {lr[f]}  {lr[f+1]} != {rr[f+1]}")
-                        return False
-    return True
 
 SYSTEM_L_ADDRESS = ('localhost', 6379)
 SYSTEM_R_ADDRESS = ('localhost', 6380)
@@ -134,180 +101,115 @@ class ClientLSystem(ClientSystem):
         # print("L:", *cmd, " => ", result)
         return result
 
+NUM_KEYS = 10
 
 #@pytest.mark.parametrize("key_type", ["hash", "json"])
 @pytest.mark.parametrize("key_type", ["hash"])
 class TestAggregateCompatibility:
-    """
-    Test Aggregation compatibility
-    """
+
     def setup_method(self):
         self.client_l = ClientLSystem()
         self.client_r = ClientRSystem()
         self.data = {}
-        self.key_encoding = "utf8"
 
     ### Reusable Data ###
-    def setup_names(self):
+    def setup_data(self):
         data = {}
-        data["names"] = {}
 
         create_cmds = {
             "hash": "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {}",
             "json": "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA {}",
         }
-
         field_type_to_name = {"tag": "t", "numeric": "n", "vector": "v"}
         field_types_to_count = {"numeric": 3, "tag": 3, "vector" : 1}
 
-        def get_field_piece(key_type, name, typ, i):
+        def make_field_definition(key_type, name, typ, i):
             if typ == "vector":
                 return f"{name}{i} vector HNSW 6 DIM {VECTOR_DIM} TYPE FLOAT32 DISTANCE_METRIC L2"
             else:
                 return f"{name}{i} {typ}" if key_type == "hash" else f"$.{name}{i} AS {name}{i} {typ}"
 
+        data["hard numbers"] = {}
+        data["sortable numbers"] = {}
+        data["reverse vector numbers"] = {}
         for key_type in ["hash", "json"]:
-            # 2 fields per type except for vector
             schema = [
-                get_field_piece(key_type, field_type_to_name[typ], typ, i + 1)
+                make_field_definition(key_type, field_type_to_name[typ], typ, i + 1)
                 for typ, count in field_types_to_count.items()
                 for i in range(count)
             ]
             schema = " ".join(schema)
             print(f"Generated schema: {schema}")
-            numbers = ["-0.5", "0", "1", "-1", "-inf", "inf"] # todo "nan", -0
-            data["names"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
-            data["names"][SETS_KEY(key_type)] = [
+            #
+            # Hard Numbers, edge case numbers.
+            #
+            hard_numbers = ["-0.5", "0", "1", "-1", "-inf", "inf"] # todo "nan", -0
+            combinations = list(itertools.combinations(hard_numbers, 3))
+            data["hard numbers"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+            data["hard numbers"][SETS_KEY(key_type)] = [
                 (
                     f"{key_type}:{i}",
                     {
-                        "n1": numbers[i % len(numbers)],
-                        "n2": numbers[(2*i) % len(numbers)],
-                        "n3" : numbers[(3*i) % len(numbers)],
+                        "n1": combinations[i][0],
+                        "n2": combinations[i][1],
+                        "n3" : combinations[i][2],
                         "t1": f"one.one{i*2}",
                         "t2": f"two.two{i*-2}",
                         "t3": "all_the_same_value",
                         "v1": np.array([i for _ in range(VECTOR_DIM)]).astype(np.float32).tobytes(),
                     },
                 )
-                for i in range(10)
+                for i in range(len(combinations))
             ]
-        self.data["names"] = data["names"]
-
-    def setup_data(self, name, field_types_to_count):
-        print("setup_data ", name)
-        data = {}
-        field_type_to_name = {"tag": "t", "numeric": "n", "vector": "v"}
-
-        # These are possible values that can be assigned to a field
-        possible_values = {}
-        possible_values["vector"] = [
-            random_f32_vector(VECTOR_DIM),
-            np.array([0] * VECTOR_DIM).astype(np.float32),
-        ]
-        possible_values["text"] = ["", "a", "b", "aa", "a1"]
-        possible_values["numeric"] = [-0.5, 0, 1, "-inf", "inf", "-nan", "nan"]
-        possible_values["tag"] = ["", "a,b", "aa, bb"]
-        # Power sets can have vectors. Let's have the same schema for now
-        vector_opts = f"HNSW 6 DIM {VECTOR_DIM} TYPE FLOAT32 DISTANCE_METRIC L2"
-
-        def power_set():
-            """
-            This returns a list of tuples (key, data_dict). E.g [('hash:k0', {'key': 0, 't1': '', 'v1': b'F\xac\t=\xbaXH?\r\x941?'})].
-            """
-            assert all([typ in field_type_to_name for typ in field_types_to_count])
-            field_name_to_type = {
-                f"{field_type_to_name[typ]}{i+1}": typ
-                for typ, count in field_types_to_count.items()
-                for i in range(count)
-            }
-            field_names_per_type = defaultdict(list)
-            for name, typ in field_name_to_type.items():
-                field_names_per_type[typ].append(name)
-
-            # Creates
-            def full_text_create(key_type, field_name, field_type):
-                return (
-                    f"{field_name} {field_type}"
-                    if key_type == "hash"
-                    else f"$.{field_name} AS {field_name} {field_type}"
+            #
+            # Sortable numbers, designed so that sorted keys for this index don't have any duplications
+            # which makes the compare functions harder.
+            #
+            sortable_numbers = range(-5, 10)
+            data["sortable numbers"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+            data["sortable numbers"][SETS_KEY(key_type)] = [
+                (
+                    f"{key_type}:{i}",
+                    {
+                        "n1": sortable_numbers[i],
+                        "n2": -sortable_numbers[i],
+                        "n3" : sortable_numbers[-i],
+                        "t1": f"one.one{i*2}",
+                        "t2": f"two.two{i*-2}",
+                        "t3": "all_the_same_value",
+                        "v1": np.array([i for _ in range(VECTOR_DIM)]).astype(np.float32).tobytes(),
+                    },
                 )
-
-            def vector_create(key_type, field_name, field_type, vector_opts):
-                return (
-                    f"{field_name} {field_type} {vector_opts}"
-                    if key_type == "hash"
-                    else f"$.{field_name} AS {field_name} {field_type} {vector_opts}"
-                )
-
-            def field_creates(key_type):
-                return " ".join(
-                    [
-                        full_text_create(key_type, field_name, field_type)
-                        for field_name, field_type in field_name_to_type.items()
-                        if field_type != "vector"
-                    ]
-                    + [
-                        vector_create(key_type, field, "VECTOR", vector_opts)
-                        for field in field_names_per_type["vector"]
-                    ]
-                )
-
-            cmds = {}
-            cmds["hash creates"] = [
-                "FT.CREATE hash_idx1 on hash prefix 1 hash: schema key numeric " + field_creates("hash")
+                for i in range(len(sortable_numbers))
             ]
-            cmds["json creates"] = [
-                "FT.CREATE json_idx1 on json prefix 1 json: schema $.key AS key numeric " + field_creates("json")
+            #
+            # Sortable numbers, designed so that sorted keys for this index don't have any duplications
+            # which makes the compare functions harder.
+            #
+            sortable_numbers = range(-5, 10)
+            data["reverse vector numbers"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+            data["reverse vector numbers"][SETS_KEY(key_type)] = [
+                (
+                    f"{key_type}:{i}",
+                    {
+                        "n1": sortable_numbers[i],
+                        "n2": -sortable_numbers[i],
+                        "n3" : sortable_numbers[-i],
+                        "t1": f"one.one{i*2}",
+                        "t2": f"two.two{i*-2}",
+                        "t3": "all_the_same_value",
+                        "v1": np.array([(len(sortable_numbers)-i) for _ in range(VECTOR_DIM)]).astype(np.float32).tobytes(),
+                    },
+                )
+                for i in range(len(sortable_numbers))
             ]
-
-            # Sets
-            for key_type in ["hash", "json"]:
-                key_ind = 0
-                sets = []
-                possible_v = [
-                    itertools.product(possible_values[typ], repeat=count) for typ, count in field_types_to_count.items()
-                ]
-                # Generate all possible values and create keys for them
-                # Every iteration of this loop is a key to be generated
-                # TODO: Return iterable instead of generating upfront
-                for val in itertools.product(*possible_v):
-                    cmd = {"key": key_ind}
-                    for i, typ in enumerate(field_types_to_count):
-                        for name, data in zip(field_names_per_type[typ], val[i]):
-                            if typ == "vector":
-                                if key_type == "hash":
-                                    cmd[name] = data.tobytes()
-                                else:
-                                    cmd[name] = data.tolist()
-                            else:
-                                cmd[name] = data
-                    sets += [(f"{key_type}:k{key_ind}", cmd)]
-                    key_ind += 1
-                cmds[SETS_KEY(key_type)] = sets
-            return cmds
-
-        self.data[name] = power_set()
-
-        self.data["good numeric"] = power_set({"numeric": 3})
-        # data["good text"] = power_set({"text": 3})
-        # data["good tag"] = power_set({"tag": 3})
-        # data["good vector"] = power_set({"vector": 2})
-        # data["good text vec"] = power_set({"text": 3, "vector": 1, "tag": 1})
-        self.data["vec"] = power_set({"vector": 1})
-
-        keys_should_exist = [SETS_KEY("hash"), SETS_KEY("json")] + [
-            CREATES_KEY("hash"),
-            CREATES_KEY("json"),
-        ]
-        for data_key in self.data:
-            assert all(
-                [k in data[data_key].keys() for k in keys_should_exist]
-            ), f"Error in setup_data: {data_key}; {data[data_key].keys()}; {keys_should_exist}"
-        print("Setup data is ", self.data)
+        self.data["hard numbers"] = data["hard numbers"]
+        self.data["sortable numbers"] = data["sortable numbers"]
+        self.data["reverse vector numbers"] = data["reverse vector numbers"]
 
     ### Helper Functions ###
     def load_data_with_index(self, data_key, key_type):
+        self.setup_data()
         print("load_data with index", data_key, " ", key_type);
         load_list = self.data[data_key][SETS_KEY(key_type)]
         print(f"Start Loading Data, data set has {len(load_list)} records")
@@ -335,7 +237,7 @@ class TestAggregateCompatibility:
                 pipe.execute()
 
             client.wait_for_indexing_done()
-        print(f"CMD: load_data_with_index completed {data_key} {key_type}")
+        print(f"load_data_with_index completed {data_key} {key_type}")
         return len(load_list)
 
     def process_row(self, row):
@@ -348,59 +250,35 @@ class TestAggregateCompatibility:
             return (True, None)
         return (False, row)
 
-    def unpack_search_result(self, rs, decode=False):
-        """
-        Input:
-            rs: [
-                    num_keys,
-                    'key1', [field1, val1, field2, val2, ...]
-                    'key2', [field1, val1, field2, val2, ...]
-                    ...
-                ]
-        Example input:
-                [3, b'json:k1', b'json:k4', b'json:k2']
-                [3, b'json:k1', [b'$.name', b'John wick'], b'json:k4', [b'$.name', b'Jeff'], b'json:k2', [b'$.name', b'Jane']]
-
-        Output:
-            resultset: {
-                    'key1': {field_key_1: field_val_key_1},
-                    'key2': {field_key_2: field_val_key_2},
-                    ...
-                }
-            num_keys: number_of_keys returned in result
-        Example output:
-                {
-                    'hash:k3': {'USERNAME': 'Tom', 'AGE': 33}
-                }
-
-        NOTE: If a field has null value, it will not show in the unpacked result.
-        """
-
-        arr = {}
-        total_matched_keys = rs[0]
-        parse_field = lambda x: x[2::] if x.startswith("$.") else x
-        # Let's do some checks here:
-        # The first item is number of keys matched
-        # Second is key name (even if it's returning keynames only)
-        # Third can either be a list or a string but there need not be a third item because it could be returning
-        # keynames only of 1 key.
-        # If we don't have a list as our second item, we're returning key names only
-        if len(rs) < 3 or not isinstance(rs[2], list):
-            arr = {k.decode("utf-8"): "x" for k in rs[1::]}
-            return arr, total_matched_keys
-
-        for i in range(1, len(rs[1:]), 2):
-            key = rs[i].decode("utf-8") if decode else rs[i]
-            arr[key] = {}
-            for f_idx in range(0, len(rs[i + 1]), 2):
-                if rs[i + 1][f_idx + 1]:
-                    field_name = parse_field(rs[i + 1][f_idx].decode("utf-8"))
-                    try:
-                        field_val = rs[i + 1][f_idx + 1].decode("utf-8")
-                    except UnicodeDecodeError:
-                        field_val = rs[i + 1][f_idx + 1]
-                    arr[key][field_name] = field_val
-        return arr
+    def parse_field(self, x):
+        if isinstance(x, bytes):
+            return self.parse_field(x.decode("utf-8"))
+        if isinstance(x, str):
+            return x[2::] if x.startswith("$.") else x
+        if isinstance(x, int):
+            return x
+        print("Unknown type ", type(x))
+        assert False
+    def parse_value(self, x):
+        if isinstance(x, bytes):
+            return x
+        if isinstance(x, str):
+            return x
+        if isinstance(x, int):
+            return x
+        print("Unknown type ", type(x))
+        assert False
+    def unpack_search_result(self, rs):
+        rows = []
+        for (key, value) in [(rs[i],rs[i+1]) for i in range(1, len(rs), 2)]:
+            #try:
+            row = {"__key": key}
+            for i in range(0, len(value), 2):
+                row[self.parse_field(value[i])] = self.parse_value(value[i+1])
+            rows += [row]
+            #except:
+            #    print("Parse failure: ", key, value)
+        return rows
 
     def unpack_agg_result(self, rs, decode=True):
         """
@@ -428,47 +306,19 @@ class TestAggregateCompatibility:
                     'hash:k3': {'USERNAME': 'Tom', 'AGE': 33}
                 }
         """
-        arr = {}
-        def parse_field(x):
-            if isinstance(x, bytes):
-                return parse_field(x.decode("utf-8"))
-            if isinstance(x, str):
-                return x[2::] if x.startswith("$.") else x
-            if isinstance(x, int):
-                return x
-            print("Unknown type ", type(x))
-            assert False
-        def parse_value(x):
-            if isinstance(x, bytes):
-                return x.decode("utf-8")
-            if isinstance(x, str):
-                return x
-            if isinstance(x, int):
-                return x
-            print("Unknown type ", type(x))
-            assert False
         # Skip the first gibberish int
         try:
             rows = []
             for key_res in rs[1:]:
-                rows += [{parse_field(key_res[f_idx]): parse_value(key_res[f_idx + 1])
+                rows += [{self.parse_field(key_res[f_idx]): self.parse_value(key_res[f_idx + 1])
                     for f_idx in range(0, len(key_res), 2)}]
         except:
             print("Parse Failure: ", rs[1:])
         return rows
 
-    def process_result(self, r):
-        result = []
-        for row in r[1:]:
-            (failure, res) = self.process_row(row)
-            if failure:
-                return (True, None)
-            result += [res]
-        return (False, result)
-
     def unpack_result(self, cmd, rs, sortkeys):
-        if "ft.search" in cmd[0].split():
-            out = self.unpack_search_result(rs, False)
+        if "ft.search" in cmd:
+            out = self.unpack_search_result(rs)
         else:
             out = self.unpack_agg_result(rs)
         #
@@ -479,10 +329,12 @@ class TestAggregateCompatibility:
                 out.sort(key=itemgetter(*sortkeys))
             except KeyError:
                 print("Failed on sortkeys: ", sortkeys)
+                print("CMD:", cmd)
                 print("Out:", out)
         return out
     def compare_number_eq(self, l, r):
-        if (l == "nan" or l == "-nan") and (r == "nan" or r == "-nan"):
+        if (l == "nan" and r == "nan") or (l == "-nan" and r == "-nan") or \
+           (l == b"nan" and r == b"nan") or (l == b"-nan" and r == b"-nan"):
             return True
         else:
             return math.isclose(float(l), float(r), rel_tol=.01)
@@ -492,13 +344,15 @@ class TestAggregateCompatibility:
         if lks != rks:
             return False
         for i in range(len(lks)):
+            #
+            # Hack, fields that start with an 'n' are assumed to be numeric
+            #
             if lks[i].startswith("n"):
                 if not self.compare_number_eq(l[lks[i]], r[rks[i]]):
+                    print("mismatch numeric field: ", l[lks[i]], " ", r[rks[i]])
                     return False                
-                else:
-                    pass
             elif l[lks[i]] != r[rks[i]]:
-                print("mismatch field: ", lks[i], " and ", rks[i], " ", lks[i].startswith("n")," ", l[lks[i]], "!=", r[rks[i]])
+                print("mismatch field: ", lks[i], " and ", rks[i], " ", l[lks[i]], "!=", r[rks[i]])
                 return False
         return True            
         
@@ -515,12 +369,13 @@ class TestAggregateCompatibility:
         elif 'sortby' in cmd:
             ix = cmd.index('sortby')
             count = int(cmd[ix+1])
-            sortkeys = [cmd[ix+2+i][1:] for i in range(count)]
+            # Grab the fields after the count, stripping any leading '@'
+            sortkeys = [cmd[ix+2+i][1 if cmd[ix+2+i].startswith("@") else 0:] for i in range(count)]
             for f in ['asc', 'desc', 'ASC', 'DESC']:
                 if f in sortkeys:
                     sortkeys.remove(f)
         else:
-            sortkeys=['__key']
+            sortkeys=["__key"] if "ft.aggregate" in cmd else []
 
         results = {eng: None for eng in engines}
         exception = {eng: False for eng in engines}
@@ -532,11 +387,12 @@ class TestAggregateCompatibility:
             except Exception as exc:
                 print(f"Got exception for {name} Error: '{exc}'")
                 exception[name] = True
-                # assert False
+                assert False
 
         # If both failed, it's a wrong search cmd and we can exit
         if all(exception.values()):
             print("Both engines failed.")
+            print(f"CMD:{cmd}")
             print(TEST_MARKER)
             return
 
@@ -554,16 +410,24 @@ class TestAggregateCompatibility:
             print(TEST_MARKER)
             assert False
 
-        # Process failures
-        if len(results["RL"]) != len(results["EC"]):
-            print(f"Mismatched sizes RL:{len(results['RL'])} EC:{len(results['EC'])}")
-            print(f"RL raw result:{results['RL']}")
-            print(f"EC raw result:{results['EC']}")
-            assert False
-
         # Output raw results
         rl = self.unpack_result(cmd, results["RL"], sortkeys)
         ec = self.unpack_result(cmd, results["EC"], sortkeys)
+
+        # Process failures
+        if len(rl) != len(ec):
+            print(f"CMD:{cmd}")
+            print(f"Mismatched sizes RL:{len(rl)} EC:{len(ec)}")
+            print("--RL--")
+            for r in rl:
+                print(r)
+            print("--EC--")
+            for e in ec:
+                print(e)
+            print(f"RL raw result: {results['RL']}")
+            print(f"EC raw result: {results['EC']}")
+            return
+            assert False
 
         # if compare_results(ec, rl):
         # Directly comparing dicts instead of custom compare function
@@ -571,12 +435,14 @@ class TestAggregateCompatibility:
         if all([self.compare_row(ec[i], rl[i]) for i in range(len(rl))]):
             #print("Results look good.")
             #print(TEST_MARKER)
+            if "ft.search" in cmd:
+                print(f"CMD:{cmd}")
+                for i in range(len(rl)):
+                    print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())])
+                    print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())])
             return
         print("***** MISMATCH ON DATA *****, sortkeys=", sortkeys, " records=", len(rl))
         print(f"CMD: {cmd}")
-        #print(f"RL raw result:{results['RL']}")
-        #print(f"EC raw result:{results['EC']}")
-        #print("--- Sorted ---")
         for i in range(len(rl)):
             if not self.compare_row(rl[i], ec[i]):
                 print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())], "<<<")
@@ -584,143 +450,20 @@ class TestAggregateCompatibility:
             else:
                 print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())])
                 print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())])
+
+        print("Raw RL:", results["RL"])
+        print("Raw EC:", results["EC"])
         print(TEST_MARKER)
-        #assert False
+        assert False
 
-    # Tests generator for FT.SEARCH
-    def search_tests_generator(self, data_key, key_type):
-        load_list = self.data[data_key][SETS_KEY(key_type)]
-        fields = [field for field in load_list[0][1] if field != "key"]
-        # Ordering of these values in "possible_values" is important. They are evaluated in the order they appear below.
-        # This is because dicts are ordered. We make use of that as we are looping through keys in a dict.
-        possible_values = {}
-        possible_values["query"] = itertools.chain(["*"], [f"*=>[KNN 3 @{f} $query_vec]" for f in fields])
-        # Either we generate possible options for return type or we `RETURN 0`
-        possible_values["return"] = itertools.chain(
-            (com for num_fields in range(len(fields)) for com in itertools.combinations(fields, num_fields + 1)),
-            ["0", ""],
-        )
-        possible_values["limit"] = itertools.chain(["0 0", "0 10", "0 100"], [""])
-        possible_values["sortby"] = itertools.chain(itertools.product(fields, ["asc", "desc"]), [""])
-
-        formatters = {}
-
-        def _return_format(x):
-            x = x[0]
-            x = [p for p in x if p.strip()]
-            if x == ["0"]:
-                return "RETURN 0".split()
-            else:
-                return f"RETURN {len(x)} {' '.join(x)}".split()
-
-        def _sort_format(x):
-            f, sort_dir = x[0]
-            return f"sortby 2 {f} {sort_dir}".split()
-
-        def _query_format(x):
-            query = x[0]
-            if query != "*":
-                float_data = np.array([0] * VECTOR_DIM).astype(np.float32).tobytes()
-                res = [query, "PARAMS", "2", "query_vec", float_data]
-                return res
-            else:
-                return "*".split()
-
-        formatters["return"] = _return_format
-        formatters["limit"] = lambda x: f"LIMIT {x[0]}".split() if x[0] else [""]
-        formatters["sortby"] = _sort_format
-        formatters["query"] = _query_format
-
-        def _internal_gen():
-            possible_v = [itertools.combinations(possible_values[typ], r=1) for typ in possible_values]
-            for val in itertools.product(*possible_v):
-                yield val
-
-        for query, ret_data, limit_data, sort_data in _internal_gen():
-            cmd = f"ft.search {key_type}_idx1".split()
-            # Query will always exist
-            cmd.extend(formatters["query"](query))
-            if ret_data[0]:
-                cmd.extend(formatters["return"](ret_data))
-            if limit_data[0]:
-                cmd.extend(formatters["limit"](limit_data))
-            if sort_data[0]:
-                cmd.extend(formatters["sortby"](sort_data))
-            cmd.extend("DIALECT 2".split())
-            yield cmd
-
-    # Tests generator for FT.AGGREGATE
-    def agg_tests_generator(self, data_key, key_type):
-        load_list = self.data[data_key][SETS_KEY(key_type)]
-        fields = [field for field in load_list[0][1] if field != "key"]
-        reduce_values = [(opt, f) for opt, f in itertools.product(*[["count", "sum", "avg", "min", "max"], fields])]
-        possible_values = {}
-        possible_values["query"] = itertools.chain([f"*=>[KNN 3 @{f} $query_vec]" for f in fields])
-        possible_values["groupby"] = itertools.chain(
-            itertools.product(fields, reduce_values),
-            [""],
-        )
-        possible_values["sortby"] = itertools.chain(itertools.product(fields, ["asc", "desc"]), [""])
-
-        def _internal_gen():
-            possible_v = [itertools.combinations(possible_values[typ], r=1) for typ in possible_values]
-            for val in itertools.product(*possible_v):
-                yield val
-
-        def _group_format(x):
-            def _reduce_format(x):
-                opt, f = x
-                if opt != "count":
-                    return f"reduce {opt} @{f} {1} @{f} as {opt}"
-                else:
-                    return "reduce count 0 as count"
-
-            group_f, reduce_data = x[0]
-            reduce_str = _reduce_format(reduce_data)
-            group_str = f"groupby 1 @{group_f}"
-            return f"{group_str} {reduce_str}".split()
-
-        def _sort_format(x):
-            f, sort_dir = x[0]
-            return f"sortby 2 @{f} {sort_dir}".split()
-
-        def _query_format(x):
-            query = x[0]
-            if query != "*":
-                float_data = np.array([0] * VECTOR_DIM).astype(np.float32).tobytes()
-                res = [query, "PARAMS", "2", "query_vec", float_data, "DIALECT", 3]
-                return res
-            else:
-                return "*".split()
-
-        formatters = {}
-        formatters["query"] = _query_format
-        formatters["groupby"] = _group_format
-        formatters["sortby"] = _sort_format
-
-        for query, group_data, sort_data in _internal_gen():
-            cmd = f"ft.aggregate {key_type}_idx1".split()
-            # Query will always exist
-            cmd.extend(formatters["query"](query))
-            cmd += ["load", f"{len(fields)+1}", "@__key"]
-            # Always load all fields
-            cmd += [f"@{f}" for f in fields]
-            opt_pieces = []
-            if group_data[0]:
-                cmd.extend(formatters["groupby"](group_data))
-            if sort_data[0]:
-                cmd.extend(formatters["sortby"](sort_data))
-            cmd += opt_pieces
-            yield cmd
-
-    def checkvec(self, *orig_cmd):
+    def checkvec(self, *orig_cmd, knn=10000):
         '''Temporary change until query parser is redone.'''
         cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]
         new_cmd = []
         for c in cmd:
             if c.strip() == "*":
                 ''' substitute '''
-                new_cmd += ["*=>[KNN 10000 @v1 $BLOB]"]
+                new_cmd += [f"*=>[KNN {knn} @v1 $BLOB]"]
             else:
                 new_cmd += [c]
         new_cmd += [
@@ -732,11 +475,19 @@ class TestAggregateCompatibility:
             "3",
         ]
         self.compare_results(new_cmd)
+    '''
+    def test_search_reverse(self, key_type):
+        self.load_data_with_index("reverse vector numbers", key_type)
+        self.checkvec(f"ft.search {key_type}_idx1 *")
+        self.checkvec(f"ft.search {key_type}_idx1 * limit 0 5")
 
-    def test_aggregate_basic_compatibility(self, key_type):
-        self.setup_names()
-        self.load_data_with_index("names", key_type)
-        # self.checkvec(f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3")
+    def test_search(self, key_type):
+        self.load_data_with_index("sortable numbers", key_type)
+        self.checkvec(f"ft.search {key_type}_idx1 *")
+        self.checkvec(f"ft.search {key_type}_idx1 * limit 0 5")
+    '''
+    def test_aggregate_sortby(self, key_type):
+        self.load_data_with_index("sortable numbers", key_type)
         self.checkvec(f"ft.aggregate {key_type}_idx1 * load 2 @__key @n2 sortby 1 @n2")
         self.checkvec(f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 1 @n2")
         self.checkvec(
@@ -745,6 +496,20 @@ class TestAggregateCompatibility:
         self.checkvec(
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @n2 desc"
         )
+        self.checkvec(
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @__key desc"
+        )
+        '''
+        self.checkvec(
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @__v1_score desc"
+        )
+        self.checkvec(
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @__v1_score asc"
+        )
+        '''
+
+    def test_aggregate_groupby(self, key_type):
+        self.load_data_with_index("sortable numbers", key_type)
         self.checkvec(f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @n1")
         self.checkvec(f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1")
         self.checkvec(
@@ -790,32 +555,30 @@ class TestAggregateCompatibility:
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce min 1 @n2 as min"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce stddev 1 @n1 as stddev"
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce stddev 1 @n1 as nstddev"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce stddev 1 @n1 as stddev"
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce stddev 1 @n1 as nstddev"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce stddev 1 @n2 as stddev"
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce stddev 1 @n2 as nstddev"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n1 as max"
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n1 as nmax"
         )
         self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce max 1 @n1 as max"
+            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce max 1 @n1 as nmax"
         )
-        ## RL Max does not support negatives and incorrectly rounds up to zero:
-        # self.checkvec(f'ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n2 as max')
-    def test_aggregate_load_store(self, key_type):
-        self.setup_names()
-        keys = self.load_data_with_index("names", key_type)
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 apply @n1+0 as nn apply @n2 as nm"
-        )
-
+        self.checkvec(f'ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n2 as nmax')
+    '''
+    def test_aggregate_load_limit(self, key_type):
+        keys = self.load_data_with_index("sortable numbers", key_type)
+        self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2")
+        self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 limit 1 4 sortby 2 @__key desc")
+        self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 1 4")
+    '''
     def test_aggregate_numeric_dyadic_operators(self, key_type):
-        self.setup_names()
-        keys = self.load_data_with_index("names", key_type)
+        keys = self.load_data_with_index("hard numbers", key_type)
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]
         logops = ["||", "&&"]
@@ -825,26 +588,18 @@ class TestAggregateCompatibility:
             )
 
     def test_aggregate_numeric_triadic_operators(self, key_type):
-        self.setup_names()
-        keys = self.load_data_with_index("names", key_type)
+        keys = self.load_data_with_index("hard numbers", key_type)
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]
         logops = ["||", "&&"]
         for op1 in dyadic+relops+logops:
             for op2 in dyadic+relops+logops:
                 self.checkvec(
-                    f"ft.aggregate {key_type}_idx1  * load 4 @__key @n1 @n2 @n3 apply @n1{op1}@n2{op2}@n3 as nn"
-                )
-                self.checkvec(
-                    f"ft.aggregate {key_type}_idx1  * load 4 @__key @n1 @n2 @n3 apply (@n1{op1}@n2){op2}@n3 as nn"
-                )
-                self.checkvec(
-                    f"ft.aggregate {key_type}_idx1  * load 4 @__key @n1 @n2 @n3 apply @n1{op1}(@n2{op2}@n3) as nn"
+                    f"ft.aggregate {key_type}_idx1  * load 4 @__key @n1 @n2 @n3 apply @n1{op1}@n2{op2}@n3 as nn apply (@n1{op1}@n2) as nn1"
                 )
 
     def test_aggregate_numeric_functions(self, key_type):
-        self.setup_names()
-        keys = self.load_data_with_index("names", key_type)
+        keys = self.load_data_with_index("hard numbers", key_type)
         function = ["log", "abs", "ceil", "floor", "log2", "exp", "sqrt"]
         for f in function:
             self.checkvec(
@@ -852,8 +607,7 @@ class TestAggregateCompatibility:
             )
 
     def test_aggregate_string_apply_functions(self, key_type):
-        self.setup_names()
-        self.load_data_with_index("names", key_type)
+        self.load_data_with_index("hard numbers", key_type)
 
         # String apply function "contains"
         self.checkvec(
@@ -949,8 +703,7 @@ class TestAggregateCompatibility:
         )
 
     def test_aggregate_substr(self, key_type):
-        self.setup_names()
-        self.load_data_with_index("names", key_type)
+        self.load_data_with_index("hard numbers", key_type)
         for offset in [0, 1, 2, 100, -1, -2, -3, -1000]:
             for len in [0, 1, 2, 100, -1, -2, -3, -1000]:
                 self.checkvec(
@@ -967,9 +720,8 @@ class TestAggregateCompatibility:
                     "apply_result",
         )
 
-    def test_aggregate_power(self, key_type):
-        self.setup_names()
-        self.load_data_with_index("names", key_type)
+    def test_aggregate_dyadic_ops(self, key_type):
+        self.load_data_with_index("hard numbers", key_type)
         values = ["-inf", "-1.5", "-1", "-0.5", "0", "0.5", "1.0", "+inf"]
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]

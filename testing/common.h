@@ -49,6 +49,7 @@
 #include "absl/strings/string_view.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "src/acl.h"
 #include "src/attribute_data_type.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/metadata_manager.h"
@@ -355,6 +356,25 @@ class TestableKeyspaceEventManager : public KeyspaceEventManager {
   TestableKeyspaceEventManager() = default;
 };
 
+class TestableAclManager : public AclManager {
+ public:
+  void SetAclViews(std::vector<acl::ValkeyAclGetUserReplyView>* acl_views) {
+    acl_views_ = acl_views;
+  }
+  absl::StatusOr<std::vector<acl::ValkeyAclGetUserReplyView>>
+  GetAclViewFromCallReply(RedisModuleCallReply* reply) override {
+    if (acl_views_ == nullptr) {
+      return std::vector<acl::ValkeyAclGetUserReplyView>{kDefaultView};
+    }
+    return *acl_views_;
+  }
+
+ private:
+  static constexpr acl::ValkeyAclGetUserReplyView kDefaultView = {
+      .cmds = "+@all", .keys = "~*"};
+  std::vector<acl::ValkeyAclGetUserReplyView>* acl_views_ = nullptr;
+};
+
 class MockThreadPool : public vmsdk::ThreadPool {
  public:
   MockThreadPool(const std::string& name, size_t num_threads)
@@ -382,6 +402,7 @@ class ValkeySearchTest : public vmsdk::RedisTest {
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() { server_events::SubscribeToServerEvents(); }, nullptr,
         false));
+    AclManager::InitInstance(std::make_unique<TestableAclManager>());
     ON_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(testing::_))
         .WillByDefault([&](RedisModuleCtx* ctx) {
           return ctx == &registry_ctx_ ? ctx : nullptr;
@@ -392,6 +413,7 @@ class ValkeySearchTest : public vmsdk::RedisTest {
     SchemaManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
+    AclManager::InitInstance(nullptr);
     VectorExternalizer::Instance().Reset();
     RedisTest::TearDown();
   }
@@ -444,6 +466,7 @@ class ValkeySearchTestWithParam : public vmsdk::RedisTestWithParam<T> {
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() { server_events::SubscribeToServerEvents(); }, nullptr,
         false));
+    AclManager::InitInstance(std::make_unique<TestableAclManager>());
     ON_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(testing::_))
         .WillByDefault([&](RedisModuleCtx* ctx) {
           return ctx == &registry_ctx_ ? ctx : nullptr;
@@ -454,6 +477,7 @@ class ValkeySearchTestWithParam : public vmsdk::RedisTestWithParam<T> {
     SchemaManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
+    AclManager::InitInstance(nullptr);
     VectorExternalizer::Instance().Reset();
     vmsdk::RedisTestWithParam<T>::TearDown();
   }

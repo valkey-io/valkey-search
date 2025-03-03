@@ -33,6 +33,17 @@ redis_module_cc_test(
 )
 
 redis_module_cc_test(
+    name = "acl_test",
+    srcs = ["acl_test.cc"],
+    deps = [
+        ":common",
+        "//src:acl",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+redis_module_cc_test(
     name = "ft_create_parser_test",
     srcs = ["ft_create_parser_test.cc"],
     deps = [
@@ -176,6 +187,7 @@ cc_library(
     srcs = ["common.cc"],
     hdrs = ["common.h"],
     deps = [
+        "//src:acl",
         "//src:attribute_data_type",
         "//src:index_schema",
         "//src:keyspace_event_manager",

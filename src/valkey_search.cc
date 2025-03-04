@@ -60,6 +60,7 @@
 #include "src/utils/string_interning.h"
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/command_parser.h"
+#include "vmsdk/src/concurrency.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -85,8 +86,8 @@ constexpr absl::string_view kUseCoordinator{"--use-coordinator"};
 constexpr absl::string_view kLogLevel{"--log-level"};
 
 struct Parameters {
-  int reader_threads{10};
-  int writer_threads{30};
+  int reader_threads{static_cast<int>(vmsdk::GetPhysicalCPUCoresCount())};
+  int writer_threads{static_cast<int>(vmsdk::GetPhysicalCPUCoresCount())};
   std::optional<int> threads;
   bool use_coordinator{false};
   std::optional<std::string> log_level;

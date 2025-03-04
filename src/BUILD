@@ -63,6 +63,7 @@ cc_library(
         "//src/coordinator:util",
         "//src/utils:string_interning",
         "//vmsdk/src:command_parser",
+        "//vmsdk/src:concurrency",
         "//vmsdk/src:latency_sampler",
         "//vmsdk/src:log",
         "//vmsdk/src:managed_pointers",

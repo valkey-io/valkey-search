@@ -30,7 +30,6 @@
 
 #include <sys/types.h>
 
-#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -290,6 +289,18 @@ absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
   attribute_proto->set_allocated_index(index_proto.release());
   return attribute_proto;
 }
+
+bool HasVectorIndex(const data_model::IndexSchema &index_schema_proto) {
+  for (const auto &attribute : index_schema_proto.attributes()) {
+    const auto &index = attribute.index();
+    if (index.index_type_case() ==
+        data_model::Index::IndexTypeCase::kVectorIndex) {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
@@ -352,6 +363,10 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
                        kMaxAttributes, "."));
     }
     identifier_names.insert(attribute->identifier());
+  }
+  if (!HasVectorIndex(index_schema_proto)) {
+    return absl::InvalidArgumentError(
+        "At least one attribute must be indexed as a vector");
   }
   return index_schema_proto;
 }

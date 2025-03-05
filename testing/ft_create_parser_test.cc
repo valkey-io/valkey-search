@@ -573,6 +573,14 @@ INSTANTIATE_TEST_SUITE_P(
                           }}},
          },
          {
+             .test_name = "missing_vector_index",
+             .success = false,
+             .command_str = "idx1 on HASH SChema hash_field1 as "
+                            "hash_field11 numeric ",
+             .expected_error_message =
+                 "At least one attribute must be indexed as a vector",
+         },
+         {
              .test_name = "invalid_separator",
              .success = false,
              .command_str =

@@ -118,7 +118,8 @@ absl::StatusOr<double> FilterParser::ParseNumber() {
   while (!IsEnd() && (std::isdigit(Peek()) || Peek() == '.')) {
     number_str += expression_[pos_++];
   }
-  if (absl::SimpleAtod(number_str, &value)) {
+  if (absl::AsciiStrToLower(number_str) != "nan" &&
+      absl::SimpleAtod(number_str, &value)) {
     return value * multiplier;
   }
   return absl::InvalidArgumentError(

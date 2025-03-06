@@ -101,7 +101,7 @@ static inline absl::StatusOr<T> ToNumeric(absl::string_view str) {
 template <>
 inline absl::StatusOr<float> To(absl::string_view str) {
   float value;
-  if (!absl::SimpleAtof(str, &value)) {
+  if (absl::AsciiStrToLower(str) == "nan" || !absl::SimpleAtof(str, &value)) {
     return absl::InvalidArgumentError(
         absl::StrCat(str, " is not a valid float"));
   }
@@ -140,7 +140,7 @@ inline absl::StatusOr<uint64_t> To(absl::string_view str) {
 template <>
 inline absl::StatusOr<double> To(absl::string_view str) {
   double value;
-  if (!absl::SimpleAtod(str, &value)) {
+  if (absl::AsciiStrToLower(str) == "nan" || !absl::SimpleAtod(str, &value)) {
     return absl::InvalidArgumentError(
         absl::StrCat(str, " is not a valid double"));
   }

@@ -112,6 +112,16 @@ cc_library(
 )
 
 cc_library(
+    name = "concurrency",
+    srcs = [
+        "concurrency.cc",
+    ],
+    hdrs = [
+        "concurrency.h",
+    ],
+)
+
+cc_library(
     name = "module",
     srcs = ["module.cc"],
     hdrs = ["module.h"],

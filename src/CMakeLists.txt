@@ -22,7 +22,6 @@ list(APPEND THIRD_PARTY_LIBS coordinator_cc_proto)
 # Wrap ${THIRD_PARTY_LIBS} with "--start/--end group"
 target_link_options(valkeysearch PRIVATE -Wl,--start-group)
 target_link_libraries(valkeysearch PRIVATE ${THIRD_PARTY_LIBS})
-target_link_libraries(valkeysearch PRIVATE -Wl,--end-group)
 
 # Remove the "lib" prefix from the module
 set_target_properties(valkeysearch PROPERTIES PREFIX "")
@@ -30,6 +29,9 @@ set_target_properties(valkeysearch PROPERTIES PREFIX "")
 if(UNIX AND NOT APPLE)
   target_link_options(valkeysearch PRIVATE -Wl,--allow-multiple-definition)
 endif()
+
+# Append -Wl,--end-group as the LAST argument
+target_link_libraries(valkeysearch PRIVATE lib_to_add_end_group_flag)
 
 set(SRCS_VALKEY_SEARCH ${CMAKE_CURRENT_LIST_DIR}/valkey_search.cc
                        ${CMAKE_CURRENT_LIST_DIR}/valkey_search.h)

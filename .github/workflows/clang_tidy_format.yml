@@ -35,7 +35,7 @@ jobs:
         id: build-comp-db
         run: |
           echo "Building CompDB"
-          docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image bash -c "sudo su ubuntu && export USERNAME='ubuntu' && sudo chown -R ubuntu:ubuntu /workspace && export HOME='/home/ubuntu'  && export USERNAME='ubuntu' && bazel build  //... && ls -la && bazel run @hedron_compile_commands//:refresh_all "
+          docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image bash -c "sudo su ubuntu && export USERNAME='ubuntu' && sudo chown -R ubuntu:ubuntu /workspace && export HOME='/home/ubuntu'  && export USERNAME='ubuntu' && ci/refresh_comp_db.sh "
 
       - name: Determine base branch
         id: determine-base

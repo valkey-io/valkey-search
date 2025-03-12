@@ -6,11 +6,11 @@ ROOT_DIR=$(readlink -f $(dirname $0))
 VERBOSE_ARGS=""
 CMAKE_TARGET=""
 RUN_TEST=""
+RUN_BUILD="yes"
 
 # Constants
 BOLD_PINK='\e[35;1m'
 RESET='\e[0m'
-GRAY='\e[38:5:243;1m'
 GREEN='\e[32;1m'
 RED='\e[31;1m'
 BLUE='\e[34;1m'
@@ -27,6 +27,7 @@ Usage: build.sh [options...]
     --debug             Build for debug version
     --clean             Clean the current build configuration (debug or release)
     --run-tests         Run all tests. Optionally, pass a test name to run: "--run-tests=<test-name>"
+    --no-build          By default, build.sh always triggers a build. This option disables this behavior
 
 Example usage:
 
@@ -80,6 +81,11 @@ do
         RUN_CMAKE="yes"
         echo "Running cmake: true"
         ;;
+    --no-build)
+        shift || true
+        RUN_BUILD="no"
+        echo "Running build: no"
+        ;;
     --run-tests)
         RUN_TEST="all"
         shift || true
@@ -92,7 +98,7 @@ do
         ;;
     --verbose|-v)
         shift || true
-        VERBOSE_ARGS="VERBOSE=1"
+        VERBOSE_ARGS="-v"
         echo "Verbose build: true"
         ;;
     --help|-h)
@@ -113,7 +119,7 @@ function print_test_prefix() {
 }
 
 function print_test_ok() {
-    printf "${GRAY}...${GREEN}ok${RESET}\n"
+    printf "...${GREEN}ok${RESET}\n"
 }
 
 function print_test_summary() {
@@ -121,7 +127,7 @@ function print_test_summary() {
 }
 
 function print_test_error_and_exit() {
-    printf "${GRAY}...${RED}failed${RESET}\n"
+    printf "...${RED}failed${RESET}\n"
     print_test_summary
     exit 1
 }
@@ -129,7 +135,7 @@ function print_test_error_and_exit() {
 function check_tool() {
     local tool_name=$1
     local message=$2
-    printf "Checking for ${tool_name}${GRAY}...${RESET}"
+    printf "Checking for ${tool_name}..."
     command -v ${tool_name} > /dev/null || \
         (printf "${RED}failed${RESET}.\n${RED}ERROR${RESET} - could not locate tool '${tool_name}'. ${message}\n" && exit 1)
     printf "${GREEN}ok${RESET}\n"
@@ -148,7 +154,11 @@ START_TIME=`date +%s`
 if [[ "${RUN_CMAKE}" == "yes" ]]; then
     configure
 fi
-build
+
+if [[ "${RUN_BUILD}" == "yes" ]]; then
+    build
+fi
+
 END_TIME=`date +%s`
 BUILD_RUNTIME=$((END_TIME - START_TIME))
 

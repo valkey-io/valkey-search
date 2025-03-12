@@ -12,12 +12,15 @@ RUN add-apt-repository ppa:ubuntu-toolchain-r/test && apt update
 RUN apt-get install -y \
     libc6-dev \
     libc++-dev \
+    libssl-dev \
     libc++abi-dev \
     build-essential \
     wget \
     git \
     vim \
     bash \
+    cmake \
+    ninja-build \
     bash-completion \
     entr \
     coreutils \
@@ -25,11 +28,7 @@ RUN apt-get install -y \
 
 RUN rm -rf /var/lib/apt/lists/*
 
-RUN wget https://apt.llvm.org/llvm.sh
-RUN chmod +x llvm.sh
-RUN ./llvm.sh 17
-RUN rm -f llvm.sh
-RUN apt-get update && apt-get install -y clang-tidy-17 clang-format-17  && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y clang-tidy-17 clang-format-17 clangd-17 && rm -rf /var/lib/apt/lists/*
 
 RUN update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-17 100 && \
     update-alternatives --set clang-tidy /usr/bin/clang-tidy-17
@@ -46,11 +45,7 @@ RUN update-alternatives --install /usr/bin/clangd clangd /usr/bin/clangd-17 100 
 
 RUN update-ca-certificates
 
-# Install Bazel/Buildifier
-RUN wget -O /usr/local/bin/bazel https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-$([ $(uname -m) = "aarch64" ] && echo "arm64" || echo "amd64") && chmod +x /usr/local/bin/bazel
-RUN wget -O /usr/local/bin/buildifier https://github.com/bazelbuild/buildtools/releases/download/v8.0.1/buildifier-linux-$([ $(uname -m) = "aarch64" ] && echo "arm64" || echo "amd64") && chmod +x /usr/local/bin/buildifier
-
-# Add bazel/buildifier to PATH
+# /usr/local/bin should always come before /usr/bin in the PATH
 ENV PATH="/usr/local/bin:$PATH"
 
 # Set working directory
@@ -105,9 +100,6 @@ RUN echo 'if ! command -v vi &> /dev/null; then alias vi="vim"; fi' >> /home/$US
 # Ensure the history file exists and configure permissions
 RUN touch /home/$USER_NAME/.bash_history && \
     chmod 600 /home/$USER_NAME/.bash_history
-
-ENV CC=clang
-ENV CXX=clang++
 
 # Default shell
 SHELL ["/bin/bash", "-c"]

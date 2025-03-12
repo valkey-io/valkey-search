@@ -27,16 +27,28 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef VMSDK_SRC_CONCURRENCY_H_
-#define VMSDK_SRC_CONCURRENCY_H_
+#ifndef VMSDK_CONCURRENCY_H_
+#define VMSDK_CONCURRENCY_H_
 
-#include <cstddef>  // For size_t
+#include <cstddef>
+#include <istream>
+#include <string>
 
 namespace vmsdk {
 
-// Returns the number of physical CPU cores
+// Returns the number of physical CPU cores.
 size_t GetPhysicalCPUCoresCount();
+
+namespace helper {
+
+// Parses /proc/cpuinfo content and extracts the number of physical cores.
+size_t ParseCPUInfo(std::istream& cpuinfo);
+
+// Extracts an integer value from a formatted key-value string.
+int ExtractInteger(const std::string& line);
+
+}  // namespace helper
 
 }  // namespace vmsdk
 
-#endif  // VMSDK_SRC_CONCURRENCY_H_
+#endif  // VMSDK_CONCURRENCY_H_

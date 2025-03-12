@@ -27,8 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef VMSDK_CONCURRENCY_H_
-#define VMSDK_CONCURRENCY_H_
+#ifndef VMSDK_SRC_CONCURRENCY_H_
+#define VMSDK_SRC_CONCURRENCY_H_
 
 #include <cstddef>
 #include <istream>
@@ -51,4 +51,4 @@ int ExtractInteger(const std::string& line);
 
 }  // namespace vmsdk
 
-#endif  // VMSDK_CONCURRENCY_H_
+#endif  // VMSDK_SRC_CONCURRENCY_H_

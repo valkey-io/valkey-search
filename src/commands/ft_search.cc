@@ -231,9 +231,9 @@ absl::Status FTSearchCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
         auto parameters,
         ParseVectorSearchParameters(ctx, argv + 1, argc - 1, schema_manager));
 
-    VMSDK_RETURN_IF_ERROR(AclManager::Instance().AclPrefixCheck(
-        ctx, kCommandCategories.at(kSearch),
-        parameters->index_schema->GetKeyPrefixes()));
+    VMSDK_RETURN_IF_ERROR(
+        AclPrefixCheck(ctx, kCommandCategories.at(kSearch),
+                       parameters->index_schema->GetKeyPrefixes()));
     parameters->index_schema->ProcessMultiQueue();
     bool inside_multi =
         (RedisModule_GetContextFlags(ctx) & REDISMODULE_CTX_FLAGS_MULTI) != 0;

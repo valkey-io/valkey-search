@@ -41,8 +41,8 @@ absl::Status FTCreateCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
                          int argc) {
   VMSDK_ASSIGN_OR_RETURN(auto index_schema_proto,
                          ParseFTCreateArgs(ctx, argv + 1, argc - 1));
-  VMSDK_RETURN_IF_ERROR(AclManager::Instance().AclPrefixCheck(
-      ctx, kCommandCategories.at(kCreate), index_schema_proto));
+  VMSDK_RETURN_IF_ERROR(
+      AclPrefixCheck(ctx, kCommandCategories.at(kCreate), index_schema_proto));
   VMSDK_RETURN_IF_ERROR(
       SchemaManager::Instance().CreateIndexSchema(ctx, index_schema_proto));
 

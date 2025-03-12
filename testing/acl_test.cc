@@ -2,6 +2,7 @@
 
 #include "src/acl.h"
 
+#include "absl/log/log.h"
 #include "gtest/gtest.h"
 #include "testing/common.h"
 
@@ -10,6 +11,30 @@ namespace valkey_search::acl {
 namespace {
 using testing::TestParamInfo;
 using testing::ValuesIn;
+
+class AclPrefixCheckFuzzTest : public ValkeySearchTest {};
+
+// This test is copied from valkey-io/valkey/blob/unstable/src/util.c
+TEST_F(AclPrefixCheckFuzzTest, AclPrefixCheckTests) {
+  char str[32];
+  char pat[32];
+  int cycles = 10000000;
+  int total_matches = 0;
+  while (cycles--) {
+    int strlen = rand() % sizeof(str);
+    int patlen = rand() % sizeof(pat);
+    for (int j = 0; j < strlen; j++) {
+      str[j] = rand() % 128;
+    }
+    for (int j = 0; j < patlen; j++) {
+      pat[j] = rand() % 128;
+    }
+    total_matches += StringEndsWithWildCardMatch(pat, patlen, str, strlen);
+  }
+
+  LOG(INFO) << "AclPrefixCheck total matches: " << total_matches;
+  // OK if not crashed
+}
 
 struct ValkeyAclGetUserOutput {
   std::string cmds;
@@ -27,31 +52,57 @@ struct AclPrefixCheckTestCase {
 class AclPrefixCheckTest
     : public ValkeySearchTestWithParam<AclPrefixCheckTestCase> {};
 
-std::vector<ValkeyAclGetUserReplyView> GetAclViewsFromTest(
-    const AclPrefixCheckTestCase &test_case) {
-  std::vector<ValkeyAclGetUserReplyView> views;
-
-  views.reserve(test_case.acls.size());
-  for (const auto &acl : test_case.acls) {
-    views.emplace_back(ValkeyAclGetUserReplyView{
-        .cmds = absl::string_view(acl.cmds),
-        .keys = absl::string_view(acl.keys),
-    });
-  }
-  return views;
-}
+RedisModuleCtx fake_ctx;
 
 TEST_P(AclPrefixCheckTest, AclPrefixCheckTests) {
   const AclPrefixCheckTestCase &test_case = GetParam();
-  auto acl = std::make_unique<TestableAclManager>();
-  auto acl_views = GetAclViewsFromTest(test_case);
-  acl->SetAclViews(&acl_views);
-  AclManager::InitInstance(std::move(acl));
 
-  EXPECT_EQ(
-      test_case.expected_return,
-      AclManager::Instance().AclPrefixCheck(
-          &fake_ctx_, test_case.module_allowed_commands, test_case.prefixes));
+  EXPECT_CALL(*kMockRedisModule, GetCurrentUserName(testing::_))
+      .WillOnce([](RedisModuleCtx *ctx) {
+        return new RedisModuleString(std::string("alice"));
+      });
+
+  CallReplyMap reply_map;
+
+  CallReplyArray flags;
+  flags.emplace_back(CreateRedisModuleCallReply("on"));
+  AddElementToCallReplyMap(reply_map, "flags", std::move(flags));
+
+  CallReplyArray pass;
+  pass.emplace_back(CreateRedisModuleCallReply("pass"));
+  AddElementToCallReplyMap(reply_map, "passwords", std::move(pass));
+
+  AddElementToCallReplyMap(reply_map, "commands", test_case.acls[0].cmds);
+  AddElementToCallReplyMap(reply_map, "keys", test_case.acls[0].keys);
+
+  AddElementToCallReplyMap(reply_map, "channels", "&");
+
+  if (test_case.acls.size() > 1) {
+    CallReplyArray selectors;
+    for (int i = 1; i < test_case.acls.size(); i++) {
+      CallReplyMap selector;
+      AddElementToCallReplyMap(selector, "commands", test_case.acls[i].cmds);
+      AddElementToCallReplyMap(selector, "keys", test_case.acls[i].keys);
+      AddElementToCallReplyMap(selector, "channels", "&");
+      selectors.emplace_back(CreateRedisModuleCallReply(std::move(selector)));
+    }
+    AddElementToCallReplyMap(reply_map, "selectors", std::move(selectors));
+  } else {
+    AddElementToCallReplyMap(reply_map, "selectors", nullptr);
+  }
+  std::unique_ptr<RedisModuleCallReply> reply =
+      CreateRedisModuleCallReply(std::move(reply_map));
+
+  EXPECT_CALL(*kMockRedisModule,
+              Call(testing::_, testing::StrEq(std::string("ACL")),
+                   testing::StrEq("cs3"), testing::StrEq("GETUSER"),
+                   testing::StrEq("alice")))
+      .WillOnce([&reply](RedisModuleCtx *ctx, const char *cmd, const char *fmt,
+                         const char *arg1,
+                         const char *arg2) { return (reply.get()); });
+  EXPECT_EQ(test_case.expected_return,
+            AclPrefixCheck(&fake_ctx_, test_case.module_allowed_commands,
+                           test_case.prefixes));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -61,10 +112,13 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "all_key",
             .module_allowed_commands = {"@search"},
             .prefixes = {},
-            .acls = {{
-                .cmds = "+@all",
-                .keys = "~*",
-            }},
+            .acls =
+                {
+                    {
+                        .cmds = "+@all",
+                        .keys = "~*",
+                    },
+                },
             .expected_return = absl::OkStatus(),
         },
         {

@@ -234,7 +234,10 @@ class MockRedisModule {
               (RedisModuleCtx * ctx, const char *cmd, const char *fmt,
                const char *arg1, const char *arg2));
   MOCK_METHOD(RedisModuleCallReply *, CallReplyArrayElement,
-              (RedisModuleCallReply * reply, int index));
+              (RedisModuleCallReply * reply, size_t index));
+  MOCK_METHOD(int, CallReplyMapElement,
+              (RedisModuleCallReply * reply, size_t index,
+               RedisModuleCallReply **key, RedisModuleCallReply **val));
   MOCK_METHOD(const char *, CallReplyStringPtr,
               (RedisModuleCallReply * reply, size_t *len));
   MOCK_METHOD(void, FreeCallReply, (RedisModuleCallReply * reply));
@@ -263,10 +266,10 @@ class MockRedisModule {
   MOCK_METHOD(void, RdbStreamFree, (RedisModuleRdbStream * stream));
   MOCK_METHOD(RedisModuleString *, GetCurrentUserName, (RedisModuleCtx * ctx));
 };
-
+// NOLINTBEGIN(readability-identifier-naming)
 // Global kMockRedisModule is a fake Redis module used for static wrappers
 // around MockRedisModule methods.
-MockRedisModule *kMockRedisModule;  // NOLINT
+MockRedisModule *kMockRedisModule;
 
 inline void TestRedisModule_Log(RedisModuleCtx *ctx [[maybe_unused]],
                                 const char *levelstr [[maybe_unused]],
@@ -456,17 +459,19 @@ class InfoCapture {
   void InfoAddSection(const char *str) { info_ << str << std::endl; }
   void InfoAddFieldLongLong(const char *str, long long field,  // NOLINT
                             int in_dict_field) {
-    if (in_dict_field)
+    if (in_dict_field) {
       info_ << str << "=" << field << ",";
-    else
+    } else {
       info_ << str << ": " << field << std::endl;
+    }
   }
   void InfoAddFieldCString(const char *str, const char *field,
                            int in_dict_field) {
-    if (in_dict_field)
+    if (in_dict_field) {
       info_ << str << "=" << field << ",";
-    else
+    } else {
       info_ << str << ": '" << field << "'" << std::endl;
+    }
   }
   void InfoEndDictField() {
     if (!info_.str().empty() && info_.str().back() == ',') {
@@ -475,7 +480,9 @@ class InfoCapture {
     info_ << std::endl;
   }
   void InfoBeginDictField(const char *str, int in_dict_field) {
-    if (in_dict_field) InfoEndDictField();
+    if (in_dict_field) {
+      InfoEndDictField();
+    }
     info_ << str << ":";
   }
   std::string GetInfo() const { return info_.str(); }
@@ -496,7 +503,9 @@ struct RedisModuleKey {
 
 inline const char *TestRedisModule_StringPtrLen(const RedisModuleString *str,
                                                 size_t *len) {
-  if (len != nullptr) *len = str->data.size();
+  if (len != nullptr) {
+    *len = str->data.size();
+  }
   return str->data.c_str();
 }
 
@@ -1155,9 +1164,63 @@ inline int TestRedisModule_RdbLoad(RedisModuleCtx *ctx,
   return kMockRedisModule->RdbLoad(ctx, stream, flags);
 }
 
+/* The same order as the reply types in valkey_module.h */
+using CallReplyString = std::string;
+using CallReplyInteger = long long;
+using CallReplyArray = std::vector<std::unique_ptr<RedisModuleCallReply>>;
+using CallReplyNull = void *;
+using CallReplyMap =
+    std::vector<std::pair<std::unique_ptr<RedisModuleCallReply>,
+                          std::unique_ptr<RedisModuleCallReply>>>;
+using CallReplyDouble = double;
+
+using CallReplyVariant =
+    std::variant<CallReplyString, CallReplyInteger, CallReplyArray,
+                 CallReplyNull, CallReplyMap, CallReplyDouble>;
+
 struct RedisModuleCallReply {
+  int type = REDISMODULE_REPLY_UNKNOWN;
+  CallReplyVariant val;
   std::string msg;
 };
+std::unique_ptr<RedisModuleCallReply> default_reply;
+
+std::unique_ptr<RedisModuleCallReply> CreateRedisModuleCallReply(
+    CallReplyVariant value) {
+  std::unique_ptr<RedisModuleCallReply> reply{new RedisModuleCallReply{
+      .type = std::visit(
+          [&](auto &value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, CallReplyString>) {
+              return REDISMODULE_REPLY_STRING;
+            } else if constexpr (std::is_same_v<T, CallReplyInteger>) {
+              return REDISMODULE_REPLY_INTEGER;
+            } else if constexpr (std::is_same_v<T, CallReplyArray>) {
+              return REDISMODULE_REPLY_ARRAY;
+            } else if constexpr (std::is_same_v<T, CallReplyNull>) {
+              return REDISMODULE_REPLY_NULL;
+            } else if constexpr (std::is_same_v<T, CallReplyMap>) {
+              return REDISMODULE_REPLY_MAP;
+            } else if constexpr (std::is_same_v<T, CallReplyDouble>) {
+              return REDISMODULE_REPLY_DOUBLE;
+            }
+            return REDISMODULE_REPLY_UNKNOWN;
+          },
+          value),
+      .val = std::move(value)}};
+  return reply;
+}
+
+void AddElementToCallReplyMap(CallReplyMap &map, CallReplyVariant key,
+                              CallReplyVariant val) {
+  std::unique_ptr<RedisModuleCallReply> k =
+      CreateRedisModuleCallReply(std::move(key));
+  std::unique_ptr<RedisModuleCallReply> v =
+      CreateRedisModuleCallReply(std::move(val));
+  map.emplace_back(std::pair<std::unique_ptr<RedisModuleCallReply>,
+                             std::unique_ptr<RedisModuleCallReply>>(
+      std::move(k), std::move(v)));
+}
 
 inline RedisModuleCallReply *TestRedisModule_Call(RedisModuleCtx *ctx,
                                                   const char *cmdname,
@@ -1172,7 +1235,20 @@ inline RedisModuleCallReply *TestRedisModule_Call(RedisModuleCtx *ctx,
     return ret;
   }
   if (format == "cs3") {
-    return nullptr;
+    const char *arg1 = va_arg(args, const char *);
+    std::string sub_command(arg1);
+    const RedisModuleString *arg2 = va_arg(args, RedisModuleString *);
+    std::string maybe_username(arg2->data);
+    if (sub_command == "GETUSER" && maybe_username == "default") {
+      CallReplyMap reply_map;
+      AddElementToCallReplyMap(reply_map, "commands", "+@all");
+      AddElementToCallReplyMap(reply_map, "keys", "~*");
+      default_reply = CreateRedisModuleCallReply(std::move(reply_map));
+      return default_reply.get();
+    }
+    auto ret =
+        kMockRedisModule->Call(ctx, cmdname, fmt, arg1, arg2->data.c_str());
+    return ret;
   }
   CHECK(false && "Unsupported format specifier");
   return nullptr;
@@ -1182,10 +1258,60 @@ inline RedisModuleCallReply *TestRedisModule_CallReplyArrayElement(
     RedisModuleCallReply *reply, size_t idx) {
   return kMockRedisModule->CallReplyArrayElement(reply, idx);
 }
+inline RedisModuleCallReply *TestRedisModule_CallReplyArrayElementImpl(
+    RedisModuleCallReply *reply, size_t idx) {
+  if (reply == nullptr || reply->type != REDISMODULE_REPLY_ARRAY) {
+    return nullptr;
+  }
+  CHECK(std::holds_alternative<CallReplyArray>(reply->val));
+  auto &list = std::get<CallReplyArray>(reply->val);
+  if (list.size() <= idx) {
+    return nullptr;
+  }
+  return list[idx].get();
+}
+
+inline int TestRedisModule_CallReplyMapElement(RedisModuleCallReply *reply,
+                                               size_t idx,
+                                               RedisModuleCallReply **key,
+                                               RedisModuleCallReply **val) {
+  return kMockRedisModule->CallReplyMapElement(reply, idx, key, val);
+}
+inline int TestRedisModule_CallReplyMapElementImpl(RedisModuleCallReply *reply,
+                                                   size_t idx,
+                                                   RedisModuleCallReply **key,
+                                                   RedisModuleCallReply **val) {
+  if (reply == nullptr || reply->type != REDISMODULE_REPLY_MAP) {
+    return REDISMODULE_ERR;
+  }
+  CHECK(std::holds_alternative<CallReplyMap>(reply->val));
+  auto &map = std::get<CallReplyMap>(reply->val);
+  if (map.size() <= idx) {
+    return REDISMODULE_ERR;
+  }
+
+  if (key != nullptr) {
+    *key = map[idx].first.get();
+  }
+  if (val != nullptr) {
+    *val = map[idx].second.get();
+  }
+  return REDISMODULE_OK;
+}
 
 inline const char *TestRedisModule_CallReplyStringPtr(
     RedisModuleCallReply *reply, size_t *len) {
   return kMockRedisModule->CallReplyStringPtr(reply, len);
+}
+inline const char *TestRedisModule_CallReplyStringPtrImpl(
+    RedisModuleCallReply *reply, size_t *len) {
+  if (reply == nullptr || reply->type != REDISMODULE_REPLY_STRING) {
+    return nullptr;
+  }
+  CHECK(std::holds_alternative<std::string>(reply->val));
+  auto &s = std::get<std::string>(reply->val);
+  *len = s.size();
+  return s.c_str();
 }
 
 inline void TestRedisModule_FreeCallReply(RedisModuleCallReply *reply) {
@@ -1221,6 +1347,9 @@ inline void TestRedisModule_FreeClusterNodesList(char **ids) {
 inline int TestRedisModule_CallReplyType(RedisModuleCallReply *reply) {
   return kMockRedisModule->CallReplyType(reply);
 }
+inline int TestRedisModule_CallReplyTypeImpl(RedisModuleCallReply *reply) {
+  return reply->type;
+}
 
 inline RedisModuleString *TestRedisModule_CreateStringFromCallReply(
     RedisModuleCallReply *reply) {
@@ -1228,6 +1357,11 @@ inline RedisModuleString *TestRedisModule_CreateStringFromCallReply(
 }
 
 inline RedisModuleString *TestRedisModule_GetCurrentUserName(
+    RedisModuleCtx *ctx) {
+  return kMockRedisModule->GetCurrentUserName(ctx);
+}
+
+inline RedisModuleString *TestRedisModule_GetCurrentUserNameImpl(
     RedisModuleCtx *ctx) {
   return new RedisModuleString{std::string("default")};
 }
@@ -1346,6 +1480,7 @@ inline void TestRedisModule_Init() {
   RedisModule_GetClusterSize = &TestRedisModule_GetClusterSize;
   RedisModule_Call = &TestRedisModule_Call;
   RedisModule_CallReplyArrayElement = &TestRedisModule_CallReplyArrayElement;
+  RedisModule_CallReplyMapElement = &TestRedisModule_CallReplyMapElement;
   RedisModule_CallReplyStringPtr = &TestRedisModule_CallReplyStringPtr;
   RedisModule_FreeCallReply = &TestRedisModule_FreeCallReply;
   RedisModule_RegisterClusterMessageReceiver =
@@ -1392,6 +1527,19 @@ inline void TestRedisModule_Init() {
       .WillByDefault(TestRedisModule_HashExternalizeDefaultImpl);
   ON_CALL(*kMockRedisModule, GetApi(testing::_, testing::_))
       .WillByDefault(TestRedisModule_GetApiDefaultImpl);
+
+  ON_CALL(*kMockRedisModule, GetCurrentUserName(testing::_))
+      .WillByDefault(TestRedisModule_GetCurrentUserNameImpl);
+
+  ON_CALL(*kMockRedisModule, CallReplyType(testing::_))
+      .WillByDefault(TestRedisModule_CallReplyTypeImpl);
+  ON_CALL(*kMockRedisModule, CallReplyStringPtr(testing::_, testing::_))
+      .WillByDefault(TestRedisModule_CallReplyStringPtrImpl);
+  ON_CALL(*kMockRedisModule, CallReplyArrayElement(testing::_, testing::_))
+      .WillByDefault(TestRedisModule_CallReplyArrayElementImpl);
+  ON_CALL(*kMockRedisModule,
+          CallReplyMapElement(testing::_, testing::_, testing::_, testing::_))
+      .WillByDefault(TestRedisModule_CallReplyMapElementImpl);
   static absl::once_flag flag;
   absl::call_once(flag, []() { vmsdk::TrackCurrentAsMainThread(); });
   CHECK(vmsdk::InitLogging(nullptr, "debug").ok());
@@ -1399,4 +1547,5 @@ inline void TestRedisModule_Init() {
 
 inline void TestRedisModule_Teardown() { delete kMockRedisModule; }
 
+// NOLINTEND(readability-identifier-naming)
 #endif  // VMSDK_SRC_TESTING_INFRA_MODULE

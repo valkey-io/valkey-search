@@ -50,8 +50,8 @@ absl::Status FTDropIndexCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
       auto index_schema,
       SchemaManager::Instance().GetIndexSchema(RedisModule_GetSelectedDb(ctx),
                                                index_schema_name));
-  VMSDK_RETURN_IF_ERROR(AclManager::Instance().AclPrefixCheck(
-      ctx, kCommandCategories.at(kDropIndex), index_schema->GetKeyPrefixes()));
+  VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, kCommandCategories.at(kDropIndex),
+                                       index_schema->GetKeyPrefixes()));
 
   VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().RemoveIndexSchema(
       RedisModule_GetSelectedDb(ctx), index_schema_name));

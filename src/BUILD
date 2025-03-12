@@ -46,6 +46,7 @@ cc_library(
     ],
     deps = [
         "//src:index_schema_cc_proto",
+        "//vmsdk/src:managed_pointers",
         "//vmsdk/src/status:status_macros",
         "//vmsdk/src/valkey_module_api:valkey_module",
         "@com_google_absl//absl/status",

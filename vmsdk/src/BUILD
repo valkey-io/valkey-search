@@ -119,6 +119,9 @@ cc_library(
     hdrs = [
         "concurrency.h",
     ],
+    deps = [
+        ":log",
+    ],
 )
 
 cc_library(

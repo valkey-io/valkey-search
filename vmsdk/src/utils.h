@@ -31,6 +31,7 @@
 #ifndef VMSDK_SRC_UTILS_H_
 #define VMSDK_SRC_UTILS_H_
 #include <cassert>
+#include <optional>
 #include <string>
 #include <utility>
 

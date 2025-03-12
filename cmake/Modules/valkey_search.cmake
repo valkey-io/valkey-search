@@ -138,4 +138,7 @@ macro(finalize_test_flags __TARGET)
   set_target_properties(${__TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
                                                "${CMAKE_BINARY_DIR}/tests")
   target_link_libraries(${__TARGET} PRIVATE lib_to_add_end_group_flag)
+  if (VALKEY_SEARCH_IS_ARM)
+    target_link_libraries(${__TARGET} PRIVATE pthread)
+  endif()
 endmacro()

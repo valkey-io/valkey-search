@@ -29,9 +29,7 @@
 
 #include "vmsdk/src/concurrency.h"
 
-#include <cctype>  // for std::isdigit
 #include <fstream>
-#include <iostream>
 #include <sstream>
 #include <string>
 #include <thread>

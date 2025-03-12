@@ -3,24 +3,16 @@
 #include <ranges>
 #include <vector>
 
-#include "absl/cleanup/cleanup.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/match.h"
+#include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
-static absl::NoDestructor<std::unique_ptr<AclManager>> acl_instance;
 
-AclManager &AclManager::Instance() { return **acl_instance; };
-
-void AclManager::InitInstance(std::unique_ptr<AclManager> instance) {
-  *acl_instance = std::move(instance);
-}
-
-namespace {
-
+namespace acl {
 /* This pattern matching code mostly came from valkey/src/util.c,
  with some modifications for a pattern-to-pattern match, not a pattern-to-string
  match. It returns true when (1) the pattern matches the string, AND (2) the
@@ -32,21 +24,21 @@ bool StringEndsWithWildCardMatch(const char *pattern, int pattern_len,
   while (pattern_len && string_len) {
     switch (pattern[0]) {
       case '*':
-        while (pattern_len && pattern[1] == '*') {
+        while (pattern_len >= 2 && pattern[1] == '*') {
           pattern++;
           pattern_len--;
         }
         if (pattern_len == 1) {
-          return 1; /* match */
+          return true; /* match */
         }
         while (string_len) {
           if (StringEndsWithWildCardMatch(pattern + 1, pattern_len - 1, string,
                                           string_len, nocase,
                                           skip_longer_matches)) {
-            return 1; /* match */
+            return true; /* match */
           }
           if (*skip_longer_matches) {
-            return 0; /* no match */
+            return false; /* no match */
           }
           string++;
           string_len--;
@@ -62,29 +54,36 @@ bool StringEndsWithWildCardMatch(const char *pattern, int pattern_len,
          * of the pattern starting from anywhere in the current
          * string. */
         *skip_longer_matches = true;
-        return 0; /* no match */
+        return false; /* no match */
         break;
       case '?':
         string++;
         string_len--;
         break;
       case '[': {
-        int negate, match;
+        bool negate, match;
+
+        match = false;
+        if (pattern_len == 1) {
+          break;
+        }
 
         pattern++;
         pattern_len--;
         negate = pattern[0] == '^';
         if (negate) {
+          if (pattern_len == 1) { /* [^$ is invalid syntax */
+            return false;
+          }
           pattern++;
           pattern_len--;
         }
-        match = 0;
         while (1) {
-          if (pattern[0] == '\\' && pattern_len >= 2) {
+          if (pattern_len >= 2 && pattern[0] == '\\') {
             pattern++;
             pattern_len--;
             if (pattern[0] == string[0]) {
-              match = 1;
+              match = true;
             }
           } else if (pattern[0] == ']') {
             break;
@@ -109,16 +108,16 @@ bool StringEndsWithWildCardMatch(const char *pattern, int pattern_len,
             pattern += 2;
             pattern_len -= 2;
             if (c >= start && c <= end) {
-              match = 1;
+              match = true;
             }
           } else {
             if (!nocase) {
               if (pattern[0] == string[0]) {
-                match = 1;
+                match = true;
               }
             } else {
               if (tolower((int)pattern[0]) == tolower((int)string[0])) {
-                match = 1;
+                match = true;
               }
             }
           }
@@ -129,7 +128,7 @@ bool StringEndsWithWildCardMatch(const char *pattern, int pattern_len,
           match = !match;
         }
         if (!match) {
-          return 0; /* no match */
+          return false; /* no match */
         }
         string++;
         string_len--;
@@ -144,11 +143,11 @@ bool StringEndsWithWildCardMatch(const char *pattern, int pattern_len,
       default:
         if (!nocase) {
           if (pattern[0] != string[0]) {
-            return 0; /* no match */
+            return false; /* no match */
           }
         } else {
           if (tolower((int)pattern[0]) != tolower((int)string[0])) {
-            return 0; /* no match */
+            return false; /* no match */
           }
         }
         string++;
@@ -161,13 +160,13 @@ bool StringEndsWithWildCardMatch(const char *pattern, int pattern_len,
   if (string_len == 0 && pattern_len > 0) {
     while (*pattern == '*') {
       if (pattern_len == 1) {
-        return 1;
+        return true;
       }
       pattern++;
       pattern_len--;
     }
   }
-  return 0;
+  return false;
 }
 
 bool StringEndsWithWildCardMatch(const char *pattern, int pattern_len,
@@ -176,6 +175,10 @@ bool StringEndsWithWildCardMatch(const char *pattern, int pattern_len,
   return StringEndsWithWildCardMatch(pattern, pattern_len, string, string_len,
                                      false, &skip_longer_matches);
 }
+
+}  // namespace acl
+
+namespace {
 
 bool IsAllowedCommands(
     const std::unordered_set<absl::string_view> &module_allowed_cmds,
@@ -199,7 +202,7 @@ bool IsAllowedCommands(
       } else {
         // This should not happen. All ACL command expression starts with +, -,
         // or all/no command alias.
-        abort();
+        CHECK(false);
       }
     }
   }
@@ -257,7 +260,7 @@ bool IsPrefixAllowed(const absl::string_view &module_prefix,
       continue;
     } else {
       int offset = acl_key.find('~') + 1;  // either one of ~, %R~, and %RW~
-      result = result || StringEndsWithWildCardMatch(
+      result = result || acl::StringEndsWithWildCardMatch(
                              acl_key.data() + offset, acl_key.length() - offset,
                              module_prefix.data(), module_prefix.length());
     }
@@ -278,7 +281,7 @@ void GetAclViewFromCallReplyImpl(
   while (RedisModule_CallReplyMapElement(reply, idx, &map_key, &map_val) ==
          REDISMODULE_OK) {
     if (map_key &&
-        RedisModule_CallReplyType(map_key) == REDISMODULE_ARG_TYPE_STRING) {
+        RedisModule_CallReplyType(map_key) == REDISMODULE_REPLY_STRING) {
       absl::string_view key = CallReplyStringToStringView(map_key);
 
       if (absl::EqualsIgnoreCase(key, "commands")) {
@@ -302,7 +305,7 @@ void GetAclViewFromCallReplyImpl(
 }  // namespace
 
 absl::StatusOr<std::vector<acl::ValkeyAclGetUserReplyView>>
-AclManager::GetAclViewFromCallReply(RedisModuleCallReply *reply) {
+GetAclViewFromCallReply(RedisModuleCallReply *reply) {
   if (!reply || RedisModule_CallReplyType(reply) != REDISMODULE_REPLY_MAP) {
     return absl::FailedPreconditionError(
         "Cannot get an ACL from the server, got an invalid response");
@@ -313,18 +316,14 @@ AclManager::GetAclViewFromCallReply(RedisModuleCallReply *reply) {
   return acl_views;
 }
 
-absl::Status AclManager::AclPrefixCheck(
+absl::Status AclPrefixCheck(
     RedisModuleCtx *ctx,
     const std::unordered_set<absl::string_view> &module_allowed_cmds,
     const std::vector<std::string> &module_prefixes) {
-  RedisModuleString *username = RedisModule_GetCurrentUserName(ctx);
-  RedisModuleCallReply *reply =
-      RedisModule_Call(ctx, "ACL", "cs3", "GETUSER", username);
-  RedisModule_FreeString(ctx, username);
-  absl::Cleanup free_call_reply = [reply]() {
-    RedisModule_FreeCallReply(reply);
-  };
-  VMSDK_ASSIGN_OR_RETURN(auto acl_views, GetAclViewFromCallReply(reply));
+  auto username = vmsdk::UniqueRedisString(RedisModule_GetCurrentUserName(ctx));
+  auto reply = vmsdk::UniquePtrRedisCallReply(
+      RedisModule_Call(ctx, "ACL", "cs3", "GETUSER", username.get()));
+  VMSDK_ASSIGN_OR_RETURN(auto acl_views, GetAclViewFromCallReply(reply.get()));
 
   auto acl_keys = GetKeysWithAllowedCommands(module_allowed_cmds, acl_views);
 
@@ -332,18 +331,18 @@ absl::Status AclManager::AclPrefixCheck(
   // to access ALL keys.
   if (module_prefixes.empty() && IsPrefixAllowed("", acl_keys)) {
     return absl::OkStatus();
-  } else {
-    for (const auto &module_prefix : module_prefixes) {
-      if (IsPrefixAllowed(module_prefix, acl_keys)) {
-        return absl::OkStatus();
-      }
+  }
+
+  for (const auto &module_prefix : module_prefixes) {
+    if (IsPrefixAllowed(module_prefix, acl_keys)) {
+      return absl::OkStatus();
     }
   }
   return absl::PermissionDeniedError(
       "The user doesn't have a permission to execute a command");
 }
 
-absl::Status AclManager::AclPrefixCheck(
+absl::Status AclPrefixCheck(
     RedisModuleCtx *ctx,
     const std::unordered_set<absl::string_view> &module_allowed_cmds,
     const data_model::IndexSchema &index_schema_proto) {

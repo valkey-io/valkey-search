@@ -56,7 +56,6 @@
 #include "src/coordinator/util.h"
 #include "src/index_schema.h"
 #include "src/metrics.h"
-#include "src/acl.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "src/vector_externalizer.h"
@@ -495,7 +494,6 @@ absl::Status ValkeySearch::LoadOptions(RedisModuleCtx *ctx,
     }
   }
   VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().RegisterModuleType(ctx));
-  AclManager::InitInstance(std::make_unique<AclManager>());
   return absl::OkStatus();
 }
 

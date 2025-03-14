@@ -20,6 +20,15 @@ cc_test(
 )
 
 cc_test(
+    name = "concurrency_test",
+    srcs = ["concurrency_test.cc"],
+    deps = [
+        "//vmsdk/src:concurrency",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "module_type_test",
     srcs = ["module_type_test.cc"],
     deps = [

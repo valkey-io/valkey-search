@@ -1,11 +1,12 @@
 #include "src/acl.h"
 
-#include <ranges>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/match.h"
+#include "absl/strings/str_split.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -181,11 +182,11 @@ bool StringEndsWithWildCardMatch(const char *pattern, int pattern_len,
 namespace {
 
 bool IsAllowedCommands(
-    const std::unordered_set<absl::string_view> &module_allowed_cmds,
+    const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
     absl::string_view acl_cmds) {
   bool allowed = false;
 
-  for (const auto acl_cmd : std::views::split(acl_cmds, ' ')) {
+  for (const auto acl_cmd : absl::StrSplit(acl_cmds, ' ', absl::SkipEmpty())) {
     auto cmd = absl::string_view(acl_cmd.data(), acl_cmd.size());
     if (absl::EqualsIgnoreCase(cmd, "+@all") ||
         absl::EqualsIgnoreCase(cmd, "allcommands")) {
@@ -193,7 +194,8 @@ bool IsAllowedCommands(
     } else if (absl::EqualsIgnoreCase(cmd, "-@all") ||
                absl::EqualsIgnoreCase(cmd, "nocommands")) {
       allowed = false;
-    } else if (module_allowed_cmds.contains(
+    } else if (!acl_cmd.empty() &&
+               module_allowed_cmds.contains(
                    absl::string_view(acl_cmd.data() + 1, acl_cmd.size() - 1))) {
       if (cmd.starts_with('+')) {
         allowed = true;
@@ -222,12 +224,13 @@ against the key patterns. We only need the key patterns that the corresponding
 commands matches our module commands.
 */
 std::vector<absl::string_view> GetKeysWithAllowedCommands(
-    const std::unordered_set<absl::string_view> &module_allowed_cmds,
+    const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
     const std::vector<acl::ValkeyAclGetUserReplyView> &acl_views) {
   std::vector<absl::string_view> keys;
   for (const auto &acl_view : acl_views) {
     if (IsAllowedCommands(module_allowed_cmds, acl_view.cmds)) {
-      for (const auto acl_key : std::views::split(acl_view.keys, ' ')) {
+      for (const auto acl_key :
+           absl::StrSplit(acl_view.keys, ' ', absl::SkipEmpty())) {
         keys.insert(keys.end(),
                     absl::string_view(acl_key.data(), acl_key.size()));
       }
@@ -259,7 +262,12 @@ bool IsPrefixAllowed(const absl::string_view &module_prefix,
     } else if (acl_key.starts_with("%W")) {
       continue;
     } else {
-      int offset = acl_key.find('~') + 1;  // either one of ~, %R~, and %RW~
+      int pos = acl_key.find('~');
+      /* This should not happen assuming Valkey server generated output is
+       * always valid */
+      CHECK(pos != absl::string_view::npos);
+      int offset = pos + 1; /* either one of ~, %R~, and %RW~ */
+      CHECK(acl_key.length() - offset > 0);
       result = result || acl::StringEndsWithWildCardMatch(
                              acl_key.data() + offset, acl_key.length() - offset,
                              module_prefix.data(), module_prefix.length());
@@ -318,7 +326,7 @@ GetAclViewFromCallReply(RedisModuleCallReply *reply) {
 
 absl::Status AclPrefixCheck(
     RedisModuleCtx *ctx,
-    const std::unordered_set<absl::string_view> &module_allowed_cmds,
+    const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
     const std::vector<std::string> &module_prefixes) {
   auto username = vmsdk::UniqueRedisString(RedisModule_GetCurrentUserName(ctx));
   auto reply = vmsdk::UniquePtrRedisCallReply(
@@ -344,7 +352,7 @@ absl::Status AclPrefixCheck(
 
 absl::Status AclPrefixCheck(
     RedisModuleCtx *ctx,
-    const std::unordered_set<absl::string_view> &module_allowed_cmds,
+    const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
     const data_model::IndexSchema &index_schema_proto) {
   std::vector<std::string> module_prefixes;
   module_prefixes.reserve(index_schema_proto.subscribed_key_prefixes_size());

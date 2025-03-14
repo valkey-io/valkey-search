@@ -2,6 +2,7 @@
 
 #include "src/acl.h"
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/log/log.h"
 #include "gtest/gtest.h"
 #include "testing/common.h"
@@ -43,7 +44,7 @@ struct ValkeyAclGetUserOutput {
 
 struct AclPrefixCheckTestCase {
   std::string test_name;
-  std::unordered_set<absl::string_view> module_allowed_commands;
+  absl::flat_hash_set<absl::string_view> module_allowed_commands;
   std::vector<std::string> prefixes;
   std::vector<ValkeyAclGetUserOutput> acls;
   absl::Status expected_return;

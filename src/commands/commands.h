@@ -30,8 +30,8 @@
 #ifndef VALKEYSEARCH_SRC_COMMANDS_COMMANDS_H_
 #define VALKEYSEARCH_SRC_COMMANDS_COMMANDS_H_
 
-#include <unordered_set>
-
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -58,7 +58,8 @@ constexpr absl::string_view kInfoCommand{"FT.INFO"};
 constexpr absl::string_view kListCommand{"FT._LIST"};
 constexpr absl::string_view kSearchCommand{"FT.SEARCH"};
 
-const std::unordered_map<FTCommand, const std::unordered_set<absl::string_view>>
+const absl::flat_hash_map<FTCommand,
+                          const absl::flat_hash_set<absl::string_view>>
     kCommandCategories = {
         {kCreate,
          {kSearchCategory, kWriteCategory, kFastCategory, kCreateCommand}},
@@ -78,4 +79,5 @@ absl::Status FTListCmd(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
 absl::Status FTSearchCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
                          int argc);
 }  // namespace valkey_search
+
 #endif  // VALKEYSEARCH_SRC_COMMANDS_COMMANDS_H_

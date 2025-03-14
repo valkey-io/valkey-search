@@ -1,6 +1,7 @@
 #ifndef VALKEYSEARCH_SRC_COMMANDS_ACL_H_
 #define VALKEYSEARCH_SRC_COMMANDS_ACL_H_
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "src/index_schema.pb.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -29,12 +30,12 @@ Check if
 */
 absl::Status AclPrefixCheck(
     RedisModuleCtx *ctx,
-    const std::unordered_set<absl::string_view> &module_allowed_cmds,
+    const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
     const std::vector<std::string> &module_prefixes);
 
 absl::Status AclPrefixCheck(
     RedisModuleCtx *ctx,
-    const std::unordered_set<absl::string_view> &module_allowed_cmds,
+    const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
     const data_model::IndexSchema &index_schema_proto);
 
 }  // namespace valkey_search

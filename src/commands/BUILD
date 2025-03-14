@@ -25,6 +25,7 @@ cc_library(
     deps = [
         ":ft_create_parser",
         ":ft_search_parser",
+        "//src:acl",
         "//src:index_schema",
         "//src:index_schema_cc_proto",
         "//src:metrics",

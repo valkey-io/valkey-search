@@ -32,7 +32,6 @@
 #include <strings.h>
 
 #include <algorithm>
-#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -47,6 +46,8 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
+#include "src/acl.h"
+#include "src/commands/commands.h"
 #include "src/commands/ft_search_parser.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
@@ -221,12 +222,15 @@ int Timeout(RedisModuleCtx *ctx, [[maybe_unused]] RedisModuleString **argv,
 
 absl::Status FTSearchCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
                          int argc) {
-  auto status = [&]() {
+  auto status = [&]() -> absl::Status {
     auto &schema_manager = SchemaManager::Instance();
     VMSDK_ASSIGN_OR_RETURN(
         auto parameters,
         ParseVectorSearchParameters(ctx, argv + 1, argc - 1, schema_manager));
 
+    VMSDK_RETURN_IF_ERROR(
+        AclPrefixCheck(ctx, kCommandCategories.at(kSearch),
+                       parameters->index_schema->GetKeyPrefixes()));
     parameters->index_schema->ProcessMultiQueue();
     bool inside_multi =
         (RedisModule_GetContextFlags(ctx) & REDISMODULE_CTX_FLAGS_MULTI) != 0;

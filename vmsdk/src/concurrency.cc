@@ -35,6 +35,9 @@
 #include <thread>
 #include <unordered_map>
 
+#include "absl/algorithm/container.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/strings/ascii.h"
 #include "vmsdk/src/log.h"
 
 namespace vmsdk {
@@ -51,12 +54,10 @@ int ExtractInteger(const std::string& line) {
   std::string value = line.substr(pos + 1);
 
   // Trim leading/trailing spaces
-  value.erase(0, value.find_first_not_of(" \t"));
-  value.erase(value.find_last_not_of(" \t") + 1);
+  value = absl::StripAsciiWhitespace(value);
 
   // Ensure the value contains only digits
-  if (value.empty() ||
-      value.find_first_not_of("0123456789") != std::string::npos) {
+  if (value.empty() || !absl::c_all_of(value, ::isdigit)) {
     return -1;  // Invalid number
   }
 
@@ -67,7 +68,7 @@ size_t ParseCPUInfo(std::istream& cpuinfo) {
   std::string line;
   int physical_id = -1;
   int cores_per_cpu = -1;
-  std::unordered_map<int, int> physical_cpu_cores;
+  absl::flat_hash_map<int, int> physical_cpu_cores;
   size_t total_physical_cores = 0;
 
   while (std::getline(cpuinfo, line)) {
@@ -78,6 +79,7 @@ size_t ParseCPUInfo(std::istream& cpuinfo) {
 
       if (physical_id != -1 && cores_per_cpu > 0) {
         physical_cpu_cores[physical_id] = cores_per_cpu;
+        physical_id = -1;  // Resetting here
       }
     }
   }

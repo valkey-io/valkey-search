@@ -121,6 +121,8 @@ cc_library(
     ],
     deps = [
         ":log",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings",
     ],
 )
 

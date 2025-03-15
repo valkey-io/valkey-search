@@ -24,6 +24,7 @@ RUN apt-get install -y \
     bash-completion \
     entr \
     coreutils \
+    libsystemd-dev \
     sudo
 
 RUN rm -rf /var/lib/apt/lists/*

@@ -6,6 +6,8 @@ Note: the below was tested on `Ubuntu Linux`, it might not work on other Linux d
 
 ## Install basic tools
 
+### Ubuntu / Debian
+
 ```bash
 sudo apt update
 sudo apt install -y clangd          \
@@ -14,8 +16,10 @@ sudo apt install -y clangd          \
                     cmake           \
                     libgtest-dev    \
                     ninja-build     \
-                    libssl-dev
+                    libssl-dev      \
+                    libsystemd-dev
 ```
+
 
 **IMPORTANT**: building `valkey-search` requires GCC version 12 or higher, or Clang version 16 or higher. For Debian/Ubuntu, in case a lower version of GCC is installed, you may upgrade to gcc/g++ 12 with:
 
@@ -24,6 +28,17 @@ sudo apt update
 sudo apt install -y gcc-12 g++-12
 sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 90
 sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 90
+```
+
+### RedHat / CentOS / Amazon Linux
+
+```bash
+sudo yum update
+sudo yum install -y gcc             \
+                    gcc-c++         \
+                    cmake           \
+                    ninja-build     \
+                    systemd-devel
 ```
 
 ## Build the module

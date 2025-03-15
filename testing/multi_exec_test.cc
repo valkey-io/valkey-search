@@ -63,7 +63,6 @@ class MulriExecTest : public ValkeySearchTest {
     index_schema = CreateVectorHNSWSchema(index_schema_name_str, &fake_ctx_,
                                           mutations_thread_pool)
                        .value();
-    VMSDK_EXPECT_OK(index_schema->Register(&fake_ctx_));
     mock_index = std::make_shared<MockIndex>();
     const char *identifier = "test_identifier";
     VMSDK_EXPECT_OK(
@@ -266,8 +265,6 @@ TEST_F(MulriExecTest, FtSearchMulti) {
       *kMockRedisModule,
       OpenKey(&fake_ctx_, testing::An<RedisModuleString *>(), testing::_))
       .WillRepeatedly(TestRedisModule_OpenKeyDefaultImpl);
-  EXPECT_CALL(*kMockRedisModule, ModuleTypeGetValue(testing::_))
-      .WillRepeatedly(testing::Return(index_schema.get()));
 
   EXPECT_CALL(*kMockRedisModule, GetContextFlags(testing::_))
       .WillRepeatedly(testing::Return(REDISMODULE_CTX_FLAGS_MULTI));

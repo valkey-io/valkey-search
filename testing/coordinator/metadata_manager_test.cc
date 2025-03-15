@@ -535,14 +535,14 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
       MetadataManager::ComputeTopLevelFingerprint(
           expected_metadata.type_namespace_map()));
 
-  auto fake_rdb_io = reinterpret_cast<RedisModuleIO*>(0xBADF00D1);
-  EXPECT_CALL(*kMockRedisModule, LoadString(fake_rdb_io))
-      .WillOnce([existing_metadata]() {
-        return new RedisModuleString{.data =
-                                         existing_metadata.SerializeAsString()};
-      });
-  VMSDK_EXPECT_OK(test_metadata_manager_->AuxLoad(fake_rdb_io, 0,
-                                                  REDISMODULE_AUX_AFTER_RDB));
+  FakeSafeRDB fake_rdb;
+  auto section = std::make_unique<data_model::RDBSection>();
+  section->set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
+  section->mutable_global_metadata_contents()->CopyFrom(existing_metadata);
+  section->set_supplemental_count(0);
+  VMSDK_EXPECT_OK(test_metadata_manager_->LoadMetadata(
+      &fake_ctx_, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
+
   test_metadata_manager_->OnLoadingEnded(&fake_ctx_);
   EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
       *test_metadata_manager_->GetGlobalMetadata(), existing_metadata));
@@ -1605,14 +1605,14 @@ TEST_F(MetadataManagerTest, TestBroadcastMetadata) {
       MetadataManager::ComputeTopLevelFingerprint(
           existing_metadata.type_namespace_map()));
 
-  auto fake_rdb_io = reinterpret_cast<RedisModuleIO*>(0xBADF00D1);
-  EXPECT_CALL(*kMockRedisModule, LoadString(fake_rdb_io))
-      .WillOnce([existing_metadata]() {
-        return new RedisModuleString{.data =
-                                         existing_metadata.SerializeAsString()};
-      });
-  VMSDK_EXPECT_OK(test_metadata_manager_->AuxLoad(fake_rdb_io, 0,
-                                                  REDISMODULE_AUX_AFTER_RDB));
+  FakeSafeRDB fake_rdb;
+  auto section = std::make_unique<data_model::RDBSection>();
+  section->set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
+  section->mutable_global_metadata_contents()->CopyFrom(existing_metadata);
+  section->set_supplemental_count(0);
+  VMSDK_EXPECT_OK(test_metadata_manager_->LoadMetadata(
+      fake_ctx, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
+
   test_metadata_manager_->OnLoadingEnded(fake_ctx);
 
   std::string version_header_str =
@@ -1628,39 +1628,23 @@ TEST_F(MetadataManagerTest, TestBroadcastMetadata) {
   test_metadata_manager_->BroadcastMetadata(fake_ctx);
 }
 
-TEST_F(MetadataManagerTest, TestAuxLoadWrongTimeIsNoOp) {
-  auto fake_rdb_io = reinterpret_cast<RedisModuleIO*>(0xBADF00D1);
-  EXPECT_CALL(*kMockRedisModule, LoadString(fake_rdb_io)).Times(0);
-  VMSDK_EXPECT_OK(test_metadata_manager_->AuxLoad(fake_rdb_io, 0,
-                                                  REDISMODULE_AUX_BEFORE_RDB));
-}
-
-TEST_F(MetadataManagerTest, TestAuxLoadWrongFormat) {
-  auto fake_rdb_io = reinterpret_cast<RedisModuleIO*>(0xBADF00D1);
-  EXPECT_CALL(*kMockRedisModule, LoadString(fake_rdb_io)).WillOnce([]() {
-    return new RedisModuleString{.data = "this will not work"};
-  });
-  EXPECT_EQ(
-      test_metadata_manager_->AuxLoad(fake_rdb_io, 0, REDISMODULE_AUX_AFTER_RDB)
-          .code(),
-      absl::StatusCode::kInternal);
-}
-
-TEST_F(MetadataManagerTest, TestAuxLoadStagesChanges) {
-  auto fake_rdb_io = reinterpret_cast<RedisModuleIO*>(0xBADF00D1);
+TEST_F(MetadataManagerTest, TestLoadMetadataDuringReplicationStagesChanges) {
+  FakeSafeRDB fake_rdb;
   GlobalMetadata new_metadata;
+
+  test_metadata_manager_->OnReplicationLoadStart(fake_ctx);
+
   ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(kV1Metadata,
                                                             &new_metadata));
   new_metadata.mutable_version_header()->set_top_level_fingerprint(
       MetadataManager::ComputeTopLevelFingerprint(
           new_metadata.type_namespace_map()));
-  EXPECT_CALL(*kMockRedisModule, LoadString(fake_rdb_io))
-      .WillOnce([new_metadata]() {
-        return new RedisModuleString{.data = new_metadata.SerializeAsString()};
-      });
-  test_metadata_manager_->OnReplicationLoadStart(fake_ctx);
-  VMSDK_EXPECT_OK(test_metadata_manager_->AuxLoad(fake_rdb_io, 0,
-                                                  REDISMODULE_AUX_AFTER_RDB));
+  auto section = std::make_unique<data_model::RDBSection>();
+  section->set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
+  section->mutable_global_metadata_contents()->CopyFrom(new_metadata);
+  section->set_supplemental_count(0);
+  VMSDK_EXPECT_OK(test_metadata_manager_->LoadMetadata(
+      fake_ctx, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
 
   // Should still be empty
   EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
@@ -1672,20 +1656,21 @@ TEST_F(MetadataManagerTest, TestAuxLoadStagesChanges) {
       *test_metadata_manager_->GetGlobalMetadata(), new_metadata));
 }
 
-TEST_F(MetadataManagerTest, TestAuxLoadNotStagedChanges) {
-  auto fake_rdb_io = reinterpret_cast<RedisModuleIO*>(0xBADF00D1);
+TEST_F(MetadataManagerTest, TestLoadMetadataNoReplicationDoesNotStageChanges) {
+  FakeSafeRDB fake_rdb;
   GlobalMetadata new_metadata;
   ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(kV1Metadata,
                                                             &new_metadata));
   new_metadata.mutable_version_header()->set_top_level_fingerprint(
       MetadataManager::ComputeTopLevelFingerprint(
           new_metadata.type_namespace_map()));
-  EXPECT_CALL(*kMockRedisModule, LoadString(fake_rdb_io))
-      .WillOnce([new_metadata]() {
-        return new RedisModuleString{.data = new_metadata.SerializeAsString()};
-      });
-  VMSDK_EXPECT_OK(test_metadata_manager_->AuxLoad(fake_rdb_io, 0,
-                                                  REDISMODULE_AUX_AFTER_RDB));
+  auto section = std::make_unique<data_model::RDBSection>();
+  section->set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
+  section->mutable_global_metadata_contents()->CopyFrom(new_metadata);
+  section->set_supplemental_count(0);
+  VMSDK_EXPECT_OK(test_metadata_manager_->LoadMetadata(
+      fake_ctx, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
+
   EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
       *test_metadata_manager_->GetGlobalMetadata(), new_metadata));
 
@@ -1695,19 +1680,20 @@ TEST_F(MetadataManagerTest, TestAuxLoadNotStagedChanges) {
       *test_metadata_manager_->GetGlobalMetadata(), new_metadata));
 }
 
-TEST_F(MetadataManagerTest, TestAuxLoadRecomputesFingerprint) {
-  auto fake_rdb_io = reinterpret_cast<RedisModuleIO*>(0xBADF00D1);
+TEST_F(MetadataManagerTest, TestLoadRecomputesFingerprint) {
+  FakeSafeRDB fake_rdb;
   GlobalMetadata new_metadata;
   ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(kV1Metadata,
                                                             &new_metadata));
   new_metadata.mutable_version_header()->set_top_level_fingerprint(20241023);
-  EXPECT_CALL(*kMockRedisModule, LoadString(fake_rdb_io))
-      .WillOnce([new_metadata]() {
-        return new RedisModuleString{.data = new_metadata.SerializeAsString()};
-      });
   test_metadata_manager_->OnReplicationLoadStart(fake_ctx);
-  VMSDK_EXPECT_OK(test_metadata_manager_->AuxLoad(fake_rdb_io, 0,
-                                                  REDISMODULE_AUX_AFTER_RDB));
+
+  auto section = std::make_unique<data_model::RDBSection>();
+  section->set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
+  section->mutable_global_metadata_contents()->CopyFrom(new_metadata);
+  section->set_supplemental_count(0);
+  VMSDK_EXPECT_OK(test_metadata_manager_->LoadMetadata(
+      fake_ctx, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
 
   // Should still be empty
   EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
@@ -1725,8 +1711,8 @@ TEST_F(MetadataManagerTest, TestAuxLoadRecomputesFingerprint) {
       *test_metadata_manager_->GetGlobalMetadata(), new_metadata));
 }
 
-TEST_F(MetadataManagerTest, TestAuxLoadWithExistingState) {
-  auto fake_rdb_io = reinterpret_cast<RedisModuleIO*>(0xBADF00D1);
+TEST_F(MetadataManagerTest, TestLoadWithExistingState) {
+  FakeSafeRDB fake_rdb;
 
   // Load the existing metadata with two entries.
   GlobalMetadata existing_metadata;
@@ -1739,13 +1725,12 @@ TEST_F(MetadataManagerTest, TestAuxLoadWithExistingState) {
   existing_metadata.mutable_version_header()->set_top_level_fingerprint(
       MetadataManager::ComputeTopLevelFingerprint(
           existing_metadata.type_namespace_map()));
-  EXPECT_CALL(*kMockRedisModule, LoadString(fake_rdb_io))
-      .WillOnce([existing_metadata]() {
-        return new RedisModuleString{.data =
-                                         existing_metadata.SerializeAsString()};
-      });
-  VMSDK_EXPECT_OK(test_metadata_manager_->AuxLoad(fake_rdb_io, 0,
-                                                  REDISMODULE_AUX_AFTER_RDB));
+  auto section = std::make_unique<data_model::RDBSection>();
+  section->set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
+  section->mutable_global_metadata_contents()->CopyFrom(existing_metadata);
+  section->set_supplemental_count(0);
+  VMSDK_EXPECT_OK(test_metadata_manager_->LoadMetadata(
+      fake_ctx, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
   test_metadata_manager_->OnLoadingEnded(fake_ctx);
 
   // We set the new metadata to replace one entry, and add a new one.
@@ -1773,18 +1758,18 @@ TEST_F(MetadataManagerTest, TestAuxLoadWithExistingState) {
           expected_metadata.type_namespace_map()));
   expected_metadata.mutable_version_header()->set_top_level_version(3);
 
-  EXPECT_CALL(*kMockRedisModule, LoadString(fake_rdb_io))
-      .WillOnce([new_metadata]() {
-        return new RedisModuleString{.data = new_metadata.SerializeAsString()};
-      });
-  VMSDK_EXPECT_OK(test_metadata_manager_->AuxLoad(fake_rdb_io, 0,
-                                                  REDISMODULE_AUX_AFTER_RDB));
+  auto new_section = std::make_unique<data_model::RDBSection>();
+  new_section->set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
+  new_section->mutable_global_metadata_contents()->CopyFrom(new_metadata);
+  new_section->set_supplemental_count(0);
+  VMSDK_EXPECT_OK(test_metadata_manager_->LoadMetadata(
+      fake_ctx, std::move(new_section), SupplementalContentIter(&fake_rdb, 0)));
   test_metadata_manager_->OnLoadingEnded(fake_ctx);
   EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
       *test_metadata_manager_->GetGlobalMetadata(), expected_metadata));
 }
 
-TEST_F(MetadataManagerTest, TestAuxSave) {
+TEST_F(MetadataManagerTest, TestSave) {
   GlobalMetadata existing_metadata;
   ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
       kV1Metadata, &existing_metadata));
@@ -1793,30 +1778,36 @@ TEST_F(MetadataManagerTest, TestAuxSave) {
           existing_metadata.type_namespace_map()));
 
   auto fake_rdb_io = reinterpret_cast<RedisModuleIO*>(0xBADF00D1);
-  EXPECT_CALL(*kMockRedisModule, LoadString(fake_rdb_io))
-      .WillOnce([existing_metadata]() {
-        return new RedisModuleString{.data =
-                                         existing_metadata.SerializeAsString()};
-      });
-  VMSDK_EXPECT_OK(test_metadata_manager_->AuxLoad(fake_rdb_io, 0,
-                                                  REDISMODULE_AUX_AFTER_RDB));
+  SafeRDB fake_rdb(fake_rdb_io);
+  auto section = std::make_unique<data_model::RDBSection>();
+  section->set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
+  section->mutable_global_metadata_contents()->CopyFrom(existing_metadata);
+  section->set_supplemental_count(0);
+  data_model::RDBSection expected_section;
+  expected_section.CopyFrom(*section);
+  VMSDK_EXPECT_OK(test_metadata_manager_->LoadMetadata(
+      fake_ctx, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
   test_metadata_manager_->OnLoadingEnded(fake_ctx);
 
   EXPECT_CALL(
       *kMockRedisModule,
       SaveStringBuffer(fake_rdb_io,
-                       testing::StrEq(existing_metadata.SerializeAsString()),
-                       existing_metadata.SerializeAsString().size()))
+                       testing::StrEq(expected_section.SerializeAsString()),
+                       expected_section.SerializeAsString().size()))
       .Times(1);
-  test_metadata_manager_->AuxSave(fake_rdb_io, REDISMODULE_AUX_AFTER_RDB);
+  VMSDK_EXPECT_OK(test_metadata_manager_->SaveMetadata(
+      fake_ctx, &fake_rdb, REDISMODULE_AUX_AFTER_RDB));
 }
 
-TEST_F(MetadataManagerTest, TestAuxSaveWrongTimeIsNoOp) {
+TEST_F(MetadataManagerTest, TestSaveWrongTimeIsNoOp) {
   auto fake_rdb_io = reinterpret_cast<RedisModuleIO*>(0xBADF00D1);
   EXPECT_CALL(*kMockRedisModule,
               SaveStringBuffer(fake_rdb_io, testing::_, testing::_))
       .Times(0);
-  test_metadata_manager_->AuxSave(fake_rdb_io, REDISMODULE_AUX_BEFORE_RDB);
+  SafeRDB fake_rdb(fake_rdb_io);
+
+  VMSDK_EXPECT_OK(test_metadata_manager_->SaveMetadata(
+      fake_ctx, &fake_rdb, REDISMODULE_AUX_BEFORE_RDB));
 }
 
 }  // namespace valkey_search::coordinator

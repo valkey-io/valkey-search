@@ -36,6 +36,7 @@ cc_library(
         "@com_google_absl//absl/strings",
         "//vmsdk/src:memory_allocation_overrides",
         "//vmsdk/src/status:status_macros",
+        ":index_cc_proto"
     ],
 )
 
@@ -59,4 +60,14 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
     ],
+)
+
+proto_library(
+    name = "index_proto",
+    srcs = ["index.proto"],
+)
+
+cc_proto_library(
+    name = "index_cc_proto",
+    deps = [":index_proto"],
 )

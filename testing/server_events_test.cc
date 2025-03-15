@@ -89,12 +89,6 @@ TEST_F(ServerEventsTest, SubscribesToServerEvents) {
           testing::_, vmsdk::IsRedisModuleEvent(RedisModuleEvent_FlushDB),
           testing::_))
       .WillOnce(testing::Return(1));
-  EXPECT_CALL(
-      *kMockRedisModule,
-      SubscribeToServerEvent(
-          testing::_, vmsdk::IsRedisModuleEvent(RedisModuleEvent_Persistence),
-          testing::_))
-      .WillOnce(testing::Return(1));
   SubscribeToServerEvents();
 }
 

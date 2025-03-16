@@ -18,6 +18,8 @@ target_link_libraries(valkey_search_test PRIVATE module)
 target_link_libraries(valkey_search_test PRIVATE thread_pool)
 target_link_libraries(valkey_search_test PRIVATE module)
 target_link_libraries(valkey_search_test PRIVATE utils)
+target_link_libraries(valkey_search_test PRIVATE concurrency)
+
 target_link_libraries(valkey_search_test PRIVATE valkey_module)
 finalize_test_flags(valkey_search_test)
 

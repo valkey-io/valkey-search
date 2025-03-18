@@ -246,7 +246,7 @@ The prefix, for example `abc:`, is logically the same as `~abc:*` with an ACL
 glob expression. This function finds if the given prefix, `~abc:*` is a subset
 of ANY one of acl patterns (i.e. `allkeys` or `~ab*`)
 
-%RW flags are differnet from @read or @write, and they are key level flags
+%RW flags are different from @read or @write, and they are key level flags
 permit read and write operations. Vector Search only read the keys with given
 prefixes and never writes, so in here we assume that we need %R permission is
 required, not %W.

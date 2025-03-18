@@ -1545,7 +1545,11 @@ inline void TestRedisModule_Init() {
   CHECK(vmsdk::InitLogging(nullptr, "debug").ok());
 }
 
-inline void TestRedisModule_Teardown() { delete kMockRedisModule; }
+inline void TestRedisModule_Teardown() {
+  delete kMockRedisModule;
+  // Explicitly delete any remaining reference pointer from `default_reply`
+  default_reply.reset();
+}
 
 // NOLINTEND(readability-identifier-naming)
 #endif  // VMSDK_SRC_TESTING_INFRA_MODULE

@@ -24,7 +24,7 @@ Check if
     * the user behind the connection in the context `ctx`,
     * can run a command with command categories defined in
 `module_allowed_cmds`, which are composed of commands and commands categories,
-    * against ALL POSSBILE keys with key prefixes, defined as
+    * against ALL POSSIBLE keys with key prefixes, defined as
 `module_prefixes`,
     * according to the ACL rules defined in the server.
 */

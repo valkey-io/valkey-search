@@ -58,6 +58,7 @@ target_link_libraries(valkey_search PUBLIC thread_pool)
 target_link_libraries(valkey_search PUBLIC utils)
 target_link_libraries(valkey_search PUBLIC status_macros)
 target_link_libraries(valkey_search PUBLIC valkey_module)
+target_link_libraries(valkey_search PUBLIC acl)
 
 set(SRCS_KEYSPACE_EVENT_MANAGER
     ${CMAKE_CURRENT_LIST_DIR}/keyspace_event_manager.cc
@@ -181,3 +182,8 @@ target_link_libraries(vector_externalizer PUBLIC string_interning)
 target_link_libraries(vector_externalizer PUBLIC managed_pointers)
 target_link_libraries(vector_externalizer PUBLIC utils)
 target_link_libraries(vector_externalizer PUBLIC valkey_module)
+
+set(SRCS_ACL ${CMAKE_CURRENT_LIST_DIR}/acl.cc ${CMAKE_CURRENT_LIST_DIR}/acl.h)
+valkey_search_add_static_library(acl "${SRCS_ACL}")
+target_include_directories(acl PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(acl PUBLIC index_schema_cc_proto)

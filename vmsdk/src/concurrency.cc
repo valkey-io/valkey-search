@@ -30,10 +30,7 @@
 #include "vmsdk/src/concurrency.h"
 
 #include <fstream>
-#include <sstream>
-#include <string>
 #include <thread>
-#include <unordered_map>
 
 #include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_map.h"

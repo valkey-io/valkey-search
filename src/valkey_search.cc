@@ -86,8 +86,8 @@ constexpr absl::string_view kUseCoordinator{"--use-coordinator"};
 constexpr absl::string_view kLogLevel{"--log-level"};
 
 struct Parameters {
-  int reader_threads{static_cast<int>(vmsdk::GetPhysicalCPUCoresCount())};
-  int writer_threads{static_cast<int>(vmsdk::GetPhysicalCPUCoresCount())};
+  size_t reader_threads{vmsdk::GetPhysicalCPUCoresCount()};
+  size_t writer_threads{vmsdk::GetPhysicalCPUCoresCount()};
   std::optional<int> threads;
   bool use_coordinator{false};
   std::optional<std::string> log_level;

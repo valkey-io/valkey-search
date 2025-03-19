@@ -111,9 +111,11 @@ function configure() {
 
 function build() {
     printf "${BOLD_PINK}Building${RESET}\n"
-    cd ${BUILD_DIR}
-    ${NINJA_TOOL} ${VERBOSE_ARGS} ${CMAKE_TARGET}
-    cd ${ROOT_DIR}
+    if [ -d ${BUILD_DIR} ]; then
+        cd ${BUILD_DIR}
+        ${NINJA_TOOL} ${VERBOSE_ARGS} ${CMAKE_TARGET}
+        cd ${ROOT_DIR}
+    fi
 }
 
 function print_test_prefix() {
@@ -121,7 +123,7 @@ function print_test_prefix() {
 }
 
 function print_test_ok() {
-    printf "...${GREEN}ok${RESET}\n"
+    printf " ... ${GREEN}ok${RESET}\n"
 }
 
 function print_test_summary() {
@@ -129,7 +131,7 @@ function print_test_summary() {
 }
 
 function print_test_error_and_exit() {
-    printf "...${RED}failed${RESET}\n"
+    printf " ... ${RED}failed${RESET}\n"
     if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
         cat ${TEST_OUTPUT_FILE}
     fi

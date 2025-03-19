@@ -8,6 +8,7 @@ set(SRCS_MODULE_LOADER ${CMAKE_CURRENT_LIST_DIR}/module_loader.cc)
 # This is the module target
 valkey_search_add_shared_library(valkeysearch ${SRCS_MODULE_LOADER})
 target_include_directories(valkeysearch PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_options(valkeysearch PRIVATE "LINKER:--version-script=${CMAKE_SOURCE_DIR}/vmsdk/versionscript.lds")
 
 target_link_libraries(valkeysearch PUBLIC keyspace_event_manager)
 target_link_libraries(valkeysearch PUBLIC valkey_search)

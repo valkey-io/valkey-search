@@ -191,7 +191,7 @@ cc_library(
         "//src:attribute_data_type",
         "//src:index_schema",
         "//src:keyspace_event_manager",
-        "//src:rdb_io_stream",
+        "//src:rdb_serialization",
         "//src:schema_manager",
         "//src:server_events",
         "//src:valkey_search",
@@ -304,11 +304,11 @@ redis_module_cc_test(
 )
 
 redis_module_cc_test(
-    name = "rdb_io_stream_test",
-    srcs = ["rdb_io_stream_test.cc"],
+    name = "rdb_serialization_test",
+    srcs = ["rdb_serialization_test.cc"],
     deps = [
         ":common",
-        "//src:rdb_io_stream",
+        "//src:rdb_serialization",
         "//third_party/hnswlib:iostream",
         "//vmsdk/src/testing_infra:module",
         "//vmsdk/src/valkey_module_api:valkey_module",

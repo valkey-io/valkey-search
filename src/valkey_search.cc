@@ -120,10 +120,8 @@ absl::StatusOr<Parameters> Load(RedisModuleString **argv, int argc) {
         "and writer thread pools are either enabled or disabled "
         "simultaneously");
   }
-  VMSDK_LOG(WARNING, nullptr)
-      << "reader_threads: " << parameters.reader_threads;
-  VMSDK_LOG(WARNING, nullptr)
-      << "writer_threads: " << parameters.writer_threads;
+  VMSDK_LOG(NOTICE, nullptr) << "reader_threads: " << parameters.reader_threads;
+  VMSDK_LOG(NOTICE, nullptr) << "writer_threads: " << parameters.writer_threads;
   return parameters;
 }
 }  // namespace options

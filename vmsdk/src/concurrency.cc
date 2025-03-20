@@ -94,7 +94,7 @@ size_t GetPhysicalCPUCoresCount() {
 #ifdef __linux__
   std::ifstream cpuinfo("/proc/cpuinfo");
   if (!cpuinfo.is_open()) {
-    VMSDK_LOG(WARNING, nullptr)
+    VMSDK_LOG(NOTICE, nullptr)
         << "Could not read /proc/cpuinfo. Returning value from "
            "std::thread::hardware_concurrency()";
     return std::thread::hardware_concurrency();

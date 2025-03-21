@@ -531,7 +531,7 @@ absl::Status ValkeySearch::OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv,
                REDISMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD |
                REDISMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED);
   if (!IsJsonModuleLoaded(ctx)) {
-    VMSDK_LOG(WARNING, ctx) << "Json module is not loaded ";
+    VMSDK_LOG(NOTICE, ctx) << "Json module is not loaded ";
   }
   VectorExternalizer::Instance().Init(ctx_);
   return absl::OkStatus();

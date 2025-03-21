@@ -282,9 +282,9 @@ TEST_P(LoadTest, load) {
         .WillRepeatedly(testing::Return(0));
   }
   vmsdk::module::Options options;
-  EXPECT_EQ(vmsdk::module::LogOnLoad(ValkeySearch::Instance().OnLoad(
-                                         &fake_ctx_, args.data(), args.size()),
-                                     &fake_ctx_, options),
+  EXPECT_EQ(vmsdk::module::OnLoadDone(ValkeySearch::Instance().OnLoad(
+                                          &fake_ctx_, args.data(), args.size()),
+                                      &fake_ctx_, options),
             test_case.expected_load_ret);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   auto reader_thread_pool = ValkeySearch::Instance().GetReaderThreadPool();

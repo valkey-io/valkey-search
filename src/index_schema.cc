@@ -617,10 +617,11 @@ void IndexSchema::ScheduleMutation(bool from_backfill,
       priority);
 }
 
-inline bool ShouldBlockClient([[maybe_unused]] bool inside_multi_exec,
+inline bool ShouldBlockClient([[maybe_unused]] RedisModuleCtx *ctx,
+                              [[maybe_unused]] bool inside_multi_exec,
                               [[maybe_unused]] bool from_backfill) {
 #ifdef BLOCK_CLIENT_ON_MUTATION
-  return !inside_multi_exec && !from_backfill;
+  return !inside_multi_exec && !from_backfill && !vmsdk::IsFakeClient(ctx);
 #else
   return false;
 #endif
@@ -635,12 +636,12 @@ void IndexSchema::ProcessMutation(RedisModuleCtx *ctx,
     SyncProcessMutation(ctx, mutated_attributes, interned_key);
     return;
   }
-  const bool inside_multi_exec =
-      (RedisModule_GetContextFlags(ctx) & REDISMODULE_CTX_FLAGS_MULTI) != 0;
+  const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);
   if (ABSL_PREDICT_FALSE(inside_multi_exec)) {
     EnqueueMultiMutation(interned_key);
   }
-  const bool block_client = ShouldBlockClient(inside_multi_exec, from_backfill);
+  const bool block_client =
+      ShouldBlockClient(ctx, inside_multi_exec, from_backfill);
   if (ABSL_PREDICT_FALSE(!TrackMutatedRecord(ctx, interned_key,
                                              std::move(mutated_attributes),
                                              from_backfill, block_client)) ||

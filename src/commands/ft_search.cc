@@ -232,10 +232,10 @@ absl::Status FTSearchCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
         AclPrefixCheck(ctx, kCommandCategories.at(kSearch),
                        parameters->index_schema->GetKeyPrefixes()));
     parameters->index_schema->ProcessMultiQueue();
-    bool inside_multi =
-        (RedisModule_GetContextFlags(ctx) & REDISMODULE_CTX_FLAGS_MULTI) != 0;
+
+    const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);
     if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
-                           inside_multi)) {
+                           inside_multi_exec)) {
       VMSDK_ASSIGN_OR_RETURN(auto neighbors, query::Search(*parameters, true));
       SendReply(ctx, neighbors, *parameters);
       return absl::OkStatus();

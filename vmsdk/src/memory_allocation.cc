@@ -29,7 +29,6 @@
 
 #include "vmsdk/src/memory_allocation.h"
 
-#include <stdlib.h>
 #include <unistd.h>
 
 #include <atomic>

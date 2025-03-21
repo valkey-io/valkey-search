@@ -9,6 +9,7 @@ RUN_TEST=""
 RUN_BUILD="yes"
 DUMP_TEST_ERRORS_STDOUT="no"
 NINJA_TOOL="ninja"
+INTEGRETION_TEST="no"
 
 # Constants
 BOLD_PINK='\e[35;1m'
@@ -23,14 +24,15 @@ function print_usage() {
 cat<<EOF
 Usage: build.sh [options...]
 
-    --help | -h          Print this help message and exit.
-    --configure          Run cmake stage (aka configure stage).
-    --verbose | -v       Run verbose build.
-    --debug              Build for debug version.
-    --clean              Clean the current build configuration (debug or release).
-    --run-tests          Run all tests. Optionally, pass a test name to run: "--run-tests=<test-name>".
-    --no-build           By default, build.sh always triggers a build. This option disables this behavior.
-    --test-errors-stdout When a test fails, dump the captured tests output to stdout.
+    --help | -h               Print this help message and exit.
+    --configure               Run cmake stage (aka configure stage).
+    --verbose | -v            Run verbose build.
+    --debug                   Build for debug version.
+    --clean                   Clean the current build configuration (debug or release).
+    --run-tests               Run all tests. Optionally, pass a test name to run: "--run-tests=<test-name>".
+    --no-build                By default, build.sh always triggers a build. This option disables this behavior.
+    --test-errors-stdout      When a test fails, dump the captured tests output to stdout.
+    --run-integration-tests   Run integration tests.
 
 Example usage:
 
@@ -77,6 +79,11 @@ do
         RUN_TEST=${1#*=}
         shift || true
         echo "Running test ${RUN_TEST}"
+        ;;
+    --run-integration-tests)
+        INTEGRETION_TEST="yes"
+        shift || true
+        echo "Running integration tests"
         ;;
     --test-errors-stdout)
         DUMP_TEST_ERRORS_STDOUT="yes"
@@ -190,6 +197,28 @@ function is_configure_required() {
     done
     echo "no"
 }
+
+
+cleanup() {
+  cd ${ROOT_DIR}
+}
+
+# Ensure cleanup runs on exit
+trap cleanup EXIT
+
+if [[ "${INTEGRETION_TEST}" == "yes" ]]; then
+    cd testing/integration
+    params=""
+    if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
+        params=" --test-errors-stdout"
+    fi
+    if [[ "${BUILD_CONFIG}" == "debug" ]]; then
+        params="${params} --debug"
+    fi
+    ./run.sh ${params}
+    exit 0
+fi
+
 
 BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
 TESTS_DIR=${BUILD_DIR}/tests

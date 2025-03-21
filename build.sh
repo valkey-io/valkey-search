@@ -7,6 +7,8 @@ VERBOSE_ARGS=""
 CMAKE_TARGET=""
 RUN_TEST=""
 RUN_BUILD="yes"
+DUMP_TEST_ERRORS_STDOUT="no"
+NINJA_TOOL="ninja"
 
 # Constants
 BOLD_PINK='\e[35;1m'
@@ -21,13 +23,14 @@ function print_usage() {
 cat<<EOF
 Usage: build.sh [options...]
 
-    --help | -h         Print this help message and exit
-    --configure         Run cmake stage (aka configure stage)
-    --verbose | -v      Run verbose build
-    --debug             Build for debug version
-    --clean             Clean the current build configuration (debug or release)
-    --run-tests         Run all tests. Optionally, pass a test name to run: "--run-tests=<test-name>"
-    --no-build          By default, build.sh always triggers a build. This option disables this behavior
+    --help | -h          Print this help message and exit.
+    --configure          Run cmake stage (aka configure stage).
+    --verbose | -v       Run verbose build.
+    --debug              Build for debug version.
+    --clean              Clean the current build configuration (debug or release).
+    --run-tests          Run all tests. Optionally, pass a test name to run: "--run-tests=<test-name>".
+    --no-build           By default, build.sh always triggers a build. This option disables this behavior.
+    --test-errors-stdout When a test fails, dump the captured tests output to stdout.
 
 Example usage:
 
@@ -38,27 +41,6 @@ Example usage:
     build.sh --configure --debug
 
 EOF
-}
-
-function configure() {
-    printf "${BOLD_PINK}Running cmake...${RESET}\n"
-    mkdir -p ${ROOT_DIR}/.build-${BUILD_CONFIG}
-    cd $_
-    local BUILD_TYPE=$(echo ${BUILD_CONFIG^})
-    rm -f CMakeCache.txt
-    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -GNinja
-    cd ${ROOT_DIR}
-}
-
-function build() {
-    # If the build folder does not exist, run cmake
-    if [ ! -d "${ROOT_DIR}/.build-${BUILD_CONFIG}" ]; then
-        configure
-    fi
-    printf "${BOLD_PINK}Building${RESET}\n"
-    cd ${ROOT_DIR}/.build-${BUILD_CONFIG}
-    ninja ${VERBOSE_ARGS} ${CMAKE_TARGET}
-    cd ${ROOT_DIR}
 }
 
 ## Parse command line arguments
@@ -96,6 +78,11 @@ do
         shift || true
         echo "Running test ${RUN_TEST}"
         ;;
+    --test-errors-stdout)
+        DUMP_TEST_ERRORS_STDOUT="yes"
+        shift || true
+        echo "Write test errors to stdout on failure"
+        ;;
     --verbose|-v)
         shift || true
         VERBOSE_ARGS="-v"
@@ -112,14 +99,31 @@ do
     esac
 done
 
+function configure() {
+    printf "${BOLD_PINK}Running cmake...${RESET}\n"
+    mkdir -p ${BUILD_DIR}
+    cd $_
+    local BUILD_TYPE=$(echo ${BUILD_CONFIG^})
+    rm -f CMakeCache.txt
+    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -GNinja
+    cd ${ROOT_DIR}
+}
 
+function build() {
+    printf "${BOLD_PINK}Building${RESET}\n"
+    if [ -d ${BUILD_DIR} ]; then
+        cd ${BUILD_DIR}
+        ${NINJA_TOOL} ${VERBOSE_ARGS} ${CMAKE_TARGET}
+        cd ${ROOT_DIR}
+    fi
+}
 
 function print_test_prefix() {
     printf "${BOLD_PINK}Running:${RESET} $1"
 }
 
 function print_test_ok() {
-    printf "...${GREEN}ok${RESET}\n"
+    printf " ... ${GREEN}ok${RESET}\n"
 }
 
 function print_test_summary() {
@@ -127,7 +131,10 @@ function print_test_summary() {
 }
 
 function print_test_error_and_exit() {
-    printf "...${RED}failed${RESET}\n"
+    printf " ... ${RED}failed${RESET}\n"
+    if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
+        cat ${TEST_OUTPUT_FILE}
+    fi
     print_test_summary
     exit 1
 }
@@ -142,16 +149,59 @@ function check_tool() {
 }
 
 function check_tools() {
-    local tools="cmake g++ gcc ninja"
+    local tools="cmake g++ gcc"
     for tool in $tools; do
         check_tool ${tool}
     done
+
+    # Check for ninja. On RedHat based Linux, it is called ninja-build, while on Debian based Linux, it is simply ninja
+    # Ubuntu / Mint et al will report "ID_LIKE=debian"
+    local debian_output=$(cat /etc/*-release|grep -i debian|wc -l)
+    if [ ${debian_output} -gt 0 ]; then
+        NINJA_TOOL="ninja"
+    else
+        NINJA_TOOL="ninja-build"
+    fi
+    check_tool ${NINJA_TOOL}
 }
 
+# If any of the CMake files is newer than our "build.ninja" file, force "cmake" before building
+function is_configure_required() {
+    local ninja_build_file=${BUILD_DIR}/build.ninja
+    if [[ "${RUN_CMAKE}" == "yes" ]]; then
+        # User asked for configure
+        echo "yes"
+        return
+    fi
+
+    if [ ! -f ${ninja_build_file} ] || [ ! -f ${BUILD_DIR}/CMakeCache.txt ]; then
+        # No ninja build file
+        echo "yes"
+        return
+    fi
+    local build_file_lastmodified=$(stat --printf "%Y" ${ninja_build_file})
+    local cmake_files=$(find ${ROOT_DIR} -name "CMakeLists.txt" -o -name "*.cmake"| grep -v ".build-release" | grep -v ".build-debug")
+    for cmake_file in ${cmake_files}; do
+        local cmake_file_modified=$(stat --printf "%Y" ${cmake_file})
+        if [ ${cmake_file_modified} -gt ${build_file_lastmodified} ]; then
+            echo "yes"
+            return
+        fi
+    done
+    echo "no"
+}
+
+BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
+TESTS_DIR=${BUILD_DIR}/tests
+TEST_OUTPUT_FILE=${BUILD_DIR}/tests.out
+
+printf "Checking if configure is required..."
+FORCE_CMAKE=$(is_configure_required)
+printf "${GREEN}${FORCE_CMAKE}${RESET}\n"
 check_tools
 
 START_TIME=`date +%s`
-if [[ "${RUN_CMAKE}" == "yes" ]]; then
+if [[ "${RUN_CMAKE}" == "yes" ]] || [[ "${FORCE_CMAKE}" == "yes" ]]; then
     configure
 fi
 
@@ -163,8 +213,6 @@ END_TIME=`date +%s`
 BUILD_RUNTIME=$((END_TIME - START_TIME))
 
 START_TIME=`date +%s`
-TESTS_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}/tests
-TEST_OUTPUT_FILE=${ROOT_DIR}/.build-${BUILD_CONFIG}/tests.out
 
 if [[ "${RUN_TEST}" == "all" ]]; then
     rm -f ${TEST_OUTPUT_FILE}

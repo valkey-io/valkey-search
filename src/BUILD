@@ -37,6 +37,26 @@ cc_library(
 )
 
 cc_library(
+    name = "acl",
+    srcs = [
+        "acl.cc",
+    ],
+    hdrs = [
+        "acl.h",
+    ],
+    deps = [
+        "//src:index_schema_cc_proto",
+        "//vmsdk/src:managed_pointers",
+        "//vmsdk/src/status:status_macros",
+        "//vmsdk/src/valkey_module_api:valkey_module",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
     name = "valkey_search",
     srcs = [
         "valkey_search.cc",
@@ -51,6 +71,7 @@ cc_library(
         "-z muldefs",
     ],
     deps = [
+        ":acl",
         ":attribute_data_type",
         ":index_schema",
         ":metrics",

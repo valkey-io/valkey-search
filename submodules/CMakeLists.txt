@@ -16,8 +16,14 @@ find_program(_GIT_EXE git REQUIRED)
 
 # Helper method: checkout submodule for a given branch/tag and place it under
 # the ".deps" folder
-function(checkout_submodule_branch MODULE_NAME GIT_URL GIT_BRANCH)
-  if(NOT EXISTS "${MODULES_DIR}/${MODULE_NAME}")
+function(checkout_submodule_branch MODULE_NAME GIT_URL GIT_BRANCH HINT_PATH)
+  # If ${HINT_PATH} does not exist, perform checkout
+  if(NOT EXISTS "${HINT_PATH}")
+    message(
+      STATUS
+        "Removing old directory ${MODULES_DIR}/${MODULE_NAME} before checking out"
+    )
+    file(REMOVE_RECURSE "${MODULES_DIR}/${MODULE_NAME}")
     message(
       STATUS
         "Fetching content ${MODULE_NAME} version ${GIT_BRANCH} - this may take a while, be patient"
@@ -71,13 +77,15 @@ endfunction()
 
 # Pull submodules with a given branch / tag and build them
 checkout_submodule_branch(${MODULE_GRPC} "https://github.com/grpc/grpc"
-                          "v1.70.1")
+                          "v1.70.1" "${MODULES_DIR}/grpc/build-release")
 
-checkout_submodule_branch(${MODULE_HIGHWAYHASH}
-                          "https://github.com/google/highwayhash.git" "master")
+checkout_submodule_branch(
+  ${MODULE_HIGHWAYHASH} "https://github.com/google/highwayhash.git" "master"
+  "${MODULES_DIR}/highwayhash")
 
-checkout_submodule_branch(${MODULE_GOOGLE_TEST}
-                          "https://github.com/google/googletest.git" "main")
+checkout_submodule_branch(
+  ${MODULE_GOOGLE_TEST} "https://github.com/google/googletest.git" "main"
+  "${MODULES_DIR}/googletest/build-release")
 
 set(MODULES_COMMON_CMAKE_ARGS
     "-DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_INSTALL_PREFIX=${MODULES_INSTALL_PREFIX} -DCMAKE_CXX_STANDARD=20"

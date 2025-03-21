@@ -60,6 +60,7 @@
 #include "src/utils/string_interning.h"
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/command_parser.h"
+#include "vmsdk/src/concurrency.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -85,8 +86,8 @@ constexpr absl::string_view kUseCoordinator{"--use-coordinator"};
 constexpr absl::string_view kLogLevel{"--log-level"};
 
 struct Parameters {
-  int reader_threads{10};
-  int writer_threads{30};
+  size_t reader_threads{vmsdk::GetPhysicalCPUCoresCount()};
+  size_t writer_threads{vmsdk::GetPhysicalCPUCoresCount()};
   std::optional<int> threads;
   bool use_coordinator{false};
   std::optional<std::string> log_level;
@@ -119,6 +120,8 @@ absl::StatusOr<Parameters> Load(RedisModuleString **argv, int argc) {
         "and writer thread pools are either enabled or disabled "
         "simultaneously");
   }
+  VMSDK_LOG(NOTICE, nullptr) << "reader_threads: " << parameters.reader_threads;
+  VMSDK_LOG(NOTICE, nullptr) << "writer_threads: " << parameters.writer_threads;
   return parameters;
 }
 }  // namespace options

@@ -42,19 +42,6 @@
 namespace vmsdk {
 namespace module {
 
-int LogOnLoad(absl::Status status, RedisModuleCtx *ctx,
-              const Options &options) {
-  if (status.ok()) {
-    RedisModule_Log(
-        ctx, REDISMODULE_LOGLEVEL_NOTICE, "%s",
-        absl::StrCat(options.name, " module was successfully loaded!").c_str());
-    return REDISMODULE_OK;
-  }
-  RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_WARNING, "%s",
-                  status.message().data());
-  return REDISMODULE_ERR;
-}
-
 absl::Status RegisterInfo(RedisModuleCtx *ctx, RedisModuleInfoFunc info) {
   if (info == nullptr) {
     return absl::OkStatus();
@@ -86,7 +73,6 @@ int OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
     RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_WARNING, "Failed to init module");
     return REDISMODULE_ERR;
   }
-  UseValkeyAlloc();
   auto status = vmsdk::InitLogging(ctx);
   if (!status.ok()) {
     RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_WARNING,
@@ -105,6 +91,18 @@ int OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
     return REDISMODULE_ERR;
   }
   return REDISMODULE_OK;
+}
+
+int OnLoadDone(absl::Status status, RedisModuleCtx *ctx,
+               const Options &options) {
+  if (status.ok()) {
+    VMSDK_LOG(NOTICE, ctx) << options.name
+                           << " module was successfully loaded!";
+    vmsdk::UseValkeyAlloc();
+    return REDISMODULE_OK;
+  }
+  VMSDK_LOG(WARNING, ctx) << status.message().data();
+  return REDISMODULE_ERR;
 }
 }  // namespace module
 }  // namespace vmsdk

@@ -9,13 +9,11 @@ RUN apt-get update && apt-get install -y \
     software-properties-common
 RUN add-apt-repository ppa:ubuntu-toolchain-r/test && apt update
 
-RUN apt-get install -y \
-    libc6-dev \
-    libc++-dev \
+RUN apt update && apt-get install -y \
     libssl-dev \
-    libc++abi-dev \
     build-essential \
     wget \
+    curl \
     git \
     vim \
     bash \
@@ -25,9 +23,16 @@ RUN apt-get install -y \
     entr \
     coreutils \
     libsystemd-dev \
+    python3-pip \
+    python3.12-venv \
+    locales-all \
+    locales \
     sudo
 
-RUN rm -rf /var/lib/apt/lists/*
+RUN apt install lsb-release curl gpg
+RUN curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
+RUN echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
+RUN apt update && apt-get install -y memtier-benchmark
 
 RUN apt-get update && apt-get install -y clang-tidy-17 clang-format-17 clangd-17 && rm -rf /var/lib/apt/lists/*
 
@@ -45,6 +50,8 @@ RUN update-alternatives --install /usr/bin/clangd clangd /usr/bin/clangd-17 100 
     update-alternatives --set clangd /usr/bin/clangd-17
 
 RUN update-ca-certificates
+
+RUN rm -rf /var/lib/apt/lists/*
 
 # /usr/local/bin should always come before /usr/bin in the PATH
 ENV PATH="/usr/local/bin:$PATH"

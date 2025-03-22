@@ -7,7 +7,7 @@ import threading
 import time
 from typing import NamedTuple
 import valkey
-from testing.integration import utils
+import utils
 
 
 class MemtierProcessRunResult(NamedTuple):

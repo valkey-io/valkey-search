@@ -58,6 +58,7 @@
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
@@ -208,8 +209,8 @@ std::unique_ptr<Server> ServerImpl::Create(
   builder.AddChannelArgument(GRPC_ARG_TCP_TX_ZEROCOPY_ENABLED, 1);
   auto server = builder.BuildAndStart();
   if (server == nullptr) {
-    VMSDK_LOG(NOTICE, ctx) << "Failed to start Coordinator Server on "
-                           << server_address;
+    VMSDK_LOG(WARNING, ctx)
+        << "Failed to start Coordinator Server on " << server_address;
     return nullptr;
   }
   VMSDK_LOG(NOTICE, ctx) << "Coordinator Server listening on "

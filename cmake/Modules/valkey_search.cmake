@@ -112,9 +112,11 @@ function(valkey_search_target_update_compile_flags TARGET)
   endif()
   target_compile_options(${TARGET} PRIVATE -Wno-sign-compare)
   target_compile_options(${TARGET} PRIVATE -Wno-uninitialized)
+  target_compile_options(${TARGET} PRIVATE -g)
 endfunction()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-missing-requires")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g")
 
 include(protobuf_generate)
 include(linux_utils)

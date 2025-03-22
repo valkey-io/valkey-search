@@ -8,16 +8,9 @@ import numpy as np
 import valkey
 import valkey.cluster
 
-from absl import flags
 from absl.testing import absltest
 from absl.testing import parameterized
-from testing.integration import utils
-
-
-FLAGS = flags.FLAGS
-flags.DEFINE_string("valkey_server_path", None, "Path to the Valkey server")
-flags.DEFINE_string("valkey_cli_path", None, "Path to the Valkey CLI")
-
+import utils
 
 def generate_test_vector(dimensions: int, data: int):
     vector = np.zeros(dimensions).astype(np.float32)
@@ -101,21 +94,13 @@ class VectorSearchIntegrationTest(VSSTestCase):
     def setUpClass(cls):
         super().setUpClass()
         valkey_server_stdout_dir = os.environ["TEST_UNDECLARED_OUTPUTS_DIR"]
-
-        if FLAGS.valkey_server_path is None:
-            raise ValueError(
-                "--test_arg=--valkey_server_path=/path/to/valkey_server "
-                "is required"
-            )
-        if FLAGS.valkey_cli_path is None:
-            raise ValueError(
-                "--test_arg=--valkey_cli_path=/path/to/valkey_cli is "
-                "required"
-            )
-
+        valkey_server_path = os.environ["VALKEY_SERVER_PATH"]
+        valkey_cli_path = os.environ["VALKEY_CLI_PATH"]
+        valkey_search_path = os.environ["VALKEY_SEARCH_PATH"]
+      
         cls.valkey_cluster_under_test = utils.start_valkey_cluster(
-            FLAGS.valkey_server_path,
-            FLAGS.valkey_cli_path,
+            valkey_server_path,
+            valkey_cli_path,
             [6379, 6380, 6381],
             os.environ["TEST_TMPDIR"],
             valkey_server_stdout_dir,
@@ -127,7 +112,7 @@ class VectorSearchIntegrationTest(VSSTestCase):
                 "cluster-node-timeout": "45000",
             },
             {
-                f"{os.path.join(os.environ['PWD'], 'src/libvalkeysearch.so')}": "--threads 2 --log-level notice --use-coordinator",
+                f"{valkey_search_path}": "--threads 2 --log-level notice --use-coordinator",
             },
             0,
         )

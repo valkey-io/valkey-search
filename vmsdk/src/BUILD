@@ -112,6 +112,21 @@ cc_library(
 )
 
 cc_library(
+    name = "concurrency",
+    srcs = [
+        "concurrency.cc",
+    ],
+    hdrs = [
+        "concurrency.h",
+    ],
+    deps = [
+        ":log",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_library(
     name = "module",
     srcs = ["module.cc"],
     hdrs = ["module.h"],

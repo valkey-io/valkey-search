@@ -10,6 +10,17 @@ target_link_libraries(log PUBLIC managed_pointers)
 target_link_libraries(log PUBLIC status_macros)
 target_link_libraries(log PUBLIC valkey_module)
 
+set(SRCS_CONCURRENCY ${CMAKE_CURRENT_LIST_DIR}/concurrency.cc ${CMAKE_CURRENT_LIST_DIR}/concurrency.h)
+
+valkey_search_add_static_library(concurrency "${SRCS_CONCURRENCY}")
+target_include_directories(concurrency PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(concurrency PUBLIC valkey_module)
+if(APPLE)
+  target_link_libraries(concurrency PUBLIC absl::core_headers)
+else()
+  target_link_libraries(concurrency PUBLIC ${GRPC_LIB})
+endif()
+
 set(SRCS_UTILS ${CMAKE_CURRENT_LIST_DIR}/utils.cc
                ${CMAKE_CURRENT_LIST_DIR}/utils.h)
 

@@ -44,7 +44,6 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
@@ -113,7 +112,7 @@ absl::StatusOr<std::string> FetchEngineLogLevel(RedisModuleCtx* ctx) {
   RedisModuleCallReply* loglevel_reply =
       RedisModule_CallReplyArrayElement(reply.get(), 1);
 
-  if (loglevel_reply == NULL ||
+  if (loglevel_reply == nullptr ||
       RedisModule_CallReplyType(loglevel_reply) != REDISMODULE_REPLY_STRING) {
     return absl::NotFoundError(
         absl::StrCat("Log level value is missing or not a string."));

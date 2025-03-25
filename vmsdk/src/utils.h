@@ -30,7 +30,6 @@
 
 #ifndef VMSDK_SRC_UTILS_H_
 #define VMSDK_SRC_UTILS_H_
-#include <cassert>
 #include <optional>
 #include <string>
 #include <utility>
@@ -115,5 +114,7 @@ std::string WrongArity(absl::string_view cmd);
 //
 std::optional<absl::string_view> ParseHashTag(absl::string_view);
 
+bool IsRealUserClient(RedisModuleCtx *ctx);
+bool MultiOrLua(RedisModuleCtx *ctx);
 }  // namespace vmsdk
 #endif  // VMSDK_SRC_UTILS_H_

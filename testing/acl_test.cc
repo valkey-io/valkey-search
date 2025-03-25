@@ -63,6 +63,9 @@ TEST_P(AclPrefixCheckTest, AclPrefixCheckTests) {
         return new RedisModuleString(std::string("alice"));
       });
 
+  EXPECT_CALL(*kMockRedisModule, GetClientId(testing::_))
+      .WillOnce([](RedisModuleCtx *ctx) { return 3; });
+
   CallReplyMap reply_map;
 
   CallReplyArray flags;

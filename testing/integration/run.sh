@@ -118,7 +118,7 @@ function configure() {
         rm -rf ${VALKEY_SERVER_DIR}
         git clone --branch ${VALKEY_VERSION} --single-branch https://github.com/valkey-io/valkey.git ${VALKEY_SERVER_DIR}
         cd ${VALKEY_SERVER_DIR}
-        make
+        make -j$(nproc)
         cd ${ROOT_DIR}
     fi
 

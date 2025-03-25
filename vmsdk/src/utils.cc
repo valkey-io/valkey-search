@@ -93,18 +93,18 @@ std::string WrongArity(absl::string_view cmd) {
   return absl::StrCat("ERR wrong number of arguments for ", cmd, " command");
 }
 
-bool IsFakeClient(RedisModuleCtx *ctx) {
+bool IsRealUserClient(RedisModuleCtx *ctx) {
   auto client_id = RedisModule_GetClientId(ctx);
   if (client_id == 0) {
-    return true;
+    return false;
   }
   if (RedisModule_IsAOFClient(client_id)) {
-    return true;
+    return false;
   }
   if ((RedisModule_GetContextFlags(ctx) & REDISMODULE_CTX_FLAGS_REPLICATED)) {
-    return true;
+    return false;
   }
-  return false;
+  return true;
 }
 
 bool MultiOrLua(RedisModuleCtx *ctx) {

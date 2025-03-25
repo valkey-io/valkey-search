@@ -114,7 +114,7 @@ std::string WrongArity(absl::string_view cmd);
 //
 std::optional<absl::string_view> ParseHashTag(absl::string_view);
 
-bool IsFakeClient(RedisModuleCtx *ctx);
+bool IsRealUserClient(RedisModuleCtx *ctx);
 bool MultiOrLua(RedisModuleCtx *ctx);
 }  // namespace vmsdk
 #endif  // VMSDK_SRC_UTILS_H_

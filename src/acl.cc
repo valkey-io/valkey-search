@@ -328,7 +328,7 @@ absl::Status AclPrefixCheck(
     RedisModuleCtx *ctx,
     const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
     const std::vector<std::string> &module_prefixes) {
-  if (vmsdk::IsFakeClient(ctx)) {
+  if (!vmsdk::IsRealUserClient(ctx)) {
     return absl::OkStatus();
   }
   auto username = vmsdk::UniqueRedisString(RedisModule_GetCurrentUserName(ctx));

@@ -33,27 +33,22 @@ if(NOT EXISTS "${VENV_DIR}")
 endif()
 
 # Set paths to virtual environment executables
-if(WIN32)
-    set(PYTHON_VENV_EXECUTABLE "${VENV_DIR}/Scripts/python")
-    set(PIP_VENV_EXECUTABLE "${VENV_DIR}/Scripts/pip")
-else()
-    set(PYTHON_VENV_EXECUTABLE "${VENV_DIR}/bin/python")
-    set(PIP_VENV_EXECUTABLE "${VENV_DIR}/bin/pip")
-endif()
+set(PYTHON_VENV_EXECUTABLE "${VENV_DIR}/bin/python")
+set(PIP_VENV_EXECUTABLE "${VENV_DIR}/bin/pip")
 
 # Step 2: Install dependencies from requirements.txt
-if(EXISTS "${CMAKE_SOURCE_DIR}/requirements.txt")
-    message(STATUS "Installing dependencies in virtual environment...")
-    execute_process(
-        COMMAND ${PYTHON_VENV_EXECUTABLE} -m pip install -r ${CMAKE_SOURCE_DIR}/requirements.txt
-        RESULT_VARIABLE PIP_RESULT
-        OUTPUT_QUIET ERROR_QUIET
-    )
-    if(NOT PIP_RESULT EQUAL 0)
-        message(FATAL_ERROR "Failed to install dependencies from requirements.txt")
-    endif()
-else()
-    message(WARNING "requirements.txt not found! Python dependencies may be missing.")
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/requirements.txt")
+    message(FATAL_ERROR "requirements.txt not found! Python dependencies may be missing.")
+endif()
+
+message(STATUS "Installing dependencies in virtual environment...")
+execute_process(
+    COMMAND ${PYTHON_VENV_EXECUTABLE} -m pip install -r ${CMAKE_SOURCE_DIR}/requirements.txt
+    RESULT_VARIABLE PIP_RESULT
+    OUTPUT_QUIET ERROR_QUIET
+)
+if(NOT PIP_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to install dependencies from requirements.txt")
 endif()
 
 include(CTest)  # Enables test support

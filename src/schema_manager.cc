@@ -687,11 +687,22 @@ absl::Status SchemaManager::LoadIndicesFromAux(RedisModuleCtx *ctx,
   return absl::OkStatus();
 }
 
+absl::StatusOr<vmsdk::UniqueRedisDetachedThreadSafeContext>
+CreateRDBDetachedContext(RedisModuleCtx *ctx, RedisModuleIO *rdb) {
+  int db_num = RedisModule_GetDbIdFromIO(rdb);
+  auto rdb_load_ctx = vmsdk::MakeUniqueRedisDetachedThreadSafeContext(
+      RedisModule_GetDetachedThreadSafeContext(ctx));
+  if (RedisModule_SelectDb(rdb_load_ctx.get(), db_num) != REDISMODULE_OK) {
+    return absl::InternalError(absl::StrCat("Failed to select DB ", db_num,
+                                            " for index schema RDB load"));
+  }
+  return rdb_load_ctx;
+}
+
 absl::Status SchemaManager::AuxLoad(RedisModuleIO *rdb, int encver, int when) {
   if (when == REDISMODULE_AUX_BEFORE_RDB) {
     return absl::OkStatus();
   }
-  auto ctx = RedisModule_GetContextFromIO(rdb);
 
   auto aux_index_schema_count = RedisModule_LoadUnsigned(rdb);
   if (aux_index_schema_count > 0) {
@@ -699,12 +710,15 @@ absl::Status SchemaManager::AuxLoad(RedisModuleIO *rdb, int encver, int when) {
     // ended callback.
     SubscribeToServerEventsIfNeeded();
   }
+  VMSDK_ASSIGN_OR_RETURN(
+      auto rdb_load_ctx,
+      CreateRDBDetachedContext(RedisModule_GetContextFromIO(rdb), rdb));
   if (staging_indices_due_to_repl_load_.Get()) {
-    VMSDK_RETURN_IF_ERROR(
-        StageIndicesFromAux(ctx, aux_index_schema_count, rdb, encver));
+    VMSDK_RETURN_IF_ERROR(StageIndicesFromAux(
+        rdb_load_ctx.get(), aux_index_schema_count, rdb, encver));
   } else {
-    VMSDK_RETURN_IF_ERROR(
-        LoadIndicesFromAux(ctx, aux_index_schema_count, rdb, encver));
+    VMSDK_RETURN_IF_ERROR(LoadIndicesFromAux(
+        rdb_load_ctx.get(), aux_index_schema_count, rdb, encver));
   }
 
   return absl::OkStatus();
@@ -770,23 +784,18 @@ int SchemaManager::OnAuxLoadCallback(RedisModuleIO *rdb, int encver, int when) {
 absl::StatusOr<void *> SchemaManager::IndexSchemaRDBLoad(RedisModuleIO *rdb,
                                                          int encoding_version) {
   // Make sure we create the index schema in the right DB.
-  int db_num = RedisModule_GetDbIdFromIO(rdb);
-  RedisModuleCtx *rdb_load_ctx =
-      RedisModule_GetDetachedThreadSafeContext(detached_ctx_.get());
-  if (RedisModule_SelectDb(rdb_load_ctx, db_num) != REDISMODULE_OK) {
-    return absl::InternalError(absl::StrCat("Failed to select DB ", db_num,
-                                            " for index schema RDB load"));
-  }
+  VMSDK_ASSIGN_OR_RETURN(auto rdb_load_ctx,
+                         CreateRDBDetachedContext(detached_ctx_.get(), rdb));
 
   IndexSchema *index_schema_ptr = nullptr;
   if (staging_indices_due_to_repl_load_.Get()) {
     VMSDK_ASSIGN_OR_RETURN(
         index_schema_ptr,
-        StageIndexFromRDB(rdb_load_ctx, rdb, encoding_version));
+        StageIndexFromRDB(rdb_load_ctx.get(), rdb, encoding_version));
   } else {
     VMSDK_ASSIGN_OR_RETURN(
         index_schema_ptr,
-        LoadIndexFromRDB(rdb_load_ctx, rdb, encoding_version));
+        LoadIndexFromRDB(rdb_load_ctx.get(), rdb, encoding_version));
   }
 
   // Note that we need to subscribe now, so that we can get the loading ended

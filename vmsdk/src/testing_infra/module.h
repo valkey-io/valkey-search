@@ -250,6 +250,7 @@ class MockRedisModule {
   MOCK_METHOD(char **, GetClusterNodesList,
               (RedisModuleCtx * ctx, size_t *numnodes));
   MOCK_METHOD(RedisModuleCtx *, GetContextFromIO, (RedisModuleIO * rdb));
+  MOCK_METHOD(int, GetDbIdFromIO, (RedisModuleIO * rdb));
   MOCK_METHOD(void, FreeClusterNodesList, (char **ids));
   MOCK_METHOD(int, CallReplyType, (RedisModuleCallReply * reply));
   MOCK_METHOD(RedisModuleString *, CreateStringFromCallReply,
@@ -1340,6 +1341,10 @@ inline RedisModuleCtx *TestRedisModule_GetContextFromIO(RedisModuleIO *rdb) {
   return kMockRedisModule->GetContextFromIO(rdb);
 }
 
+inline int TestRedisModule_GetDbIdFromIO(RedisModuleIO *rdb) {
+  return kMockRedisModule->GetDbIdFromIO(rdb);
+}
+
 inline void TestRedisModule_FreeClusterNodesList(char **ids) {
   return kMockRedisModule->FreeClusterNodesList(ids);
 }
@@ -1488,6 +1493,7 @@ inline void TestRedisModule_Init() {
   RedisModule_SendClusterMessage = &TestRedisModule_SendClusterMessage;
   RedisModule_GetClusterNodesList = &TestRedisModule_GetClusterNodesList;
   RedisModule_GetContextFromIO = &TestRedisModule_GetContextFromIO;
+  RedisModule_GetDbIdFromIO = &TestRedisModule_GetDbIdFromIO;
   RedisModule_FreeClusterNodesList = &TestRedisModule_FreeClusterNodesList;
   RedisModule_CallReplyType = &TestRedisModule_CallReplyType;
   RedisModule_CreateStringFromCallReply =

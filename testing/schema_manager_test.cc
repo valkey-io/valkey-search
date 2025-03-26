@@ -360,9 +360,18 @@ TEST_F(SchemaManagerTest, TestEmptyAuxLoadAfterRDBReplication) {
       &fake_ctx_, eid, REDISMODULE_SUBEVENT_LOADING_REPL_START, nullptr);
   ON_CALL(*kMockRedisModule, GetContextFromIO(testing::_))
       .WillByDefault(testing::Return(&fake_ctx_));
+  ON_CALL(*kMockRedisModule, GetDbIdFromIO(testing::_))
+      .WillByDefault(testing::Return(db_num_));
+  ON_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(testing::_))
+      .WillByDefault(testing::Return(&fake_ctx_));
+  ON_CALL(*kMockRedisModule, SelectDb(&fake_ctx_, db_num_))
+      .WillByDefault(testing::Return(REDISMODULE_OK));
+  ON_CALL(*kMockRedisModule, FreeThreadSafeContext(testing::_))
+      .WillByDefault(testing::Return());
   RedisModuleIO *fake_rdb = reinterpret_cast<RedisModuleIO *>(0xDEADBEEF);
   EXPECT_CALL(*kMockRedisModule, LoadUnsigned(fake_rdb))
       .WillOnce(testing::Return(0));
+
   VMSDK_EXPECT_OK(SchemaManager::Instance().AuxLoad(fake_rdb, 0,
                                                     REDISMODULE_AUX_AFTER_RDB));
 

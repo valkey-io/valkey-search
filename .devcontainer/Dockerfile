@@ -17,6 +17,7 @@ RUN apt update && apt-get install -y \
     git \
     vim \
     bash \
+    gdb \
     cmake \
     ninja-build \
     bash-completion \

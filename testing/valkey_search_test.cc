@@ -49,6 +49,7 @@
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
+#include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -282,10 +283,11 @@ TEST_P(LoadTest, load) {
         .WillRepeatedly(testing::Return(0));
   }
   vmsdk::module::Options options;
-  EXPECT_EQ(vmsdk::module::OnLoadDone(ValkeySearch::Instance().OnLoad(
-                                          &fake_ctx_, args.data(), args.size()),
-                                      &fake_ctx_, options),
-            test_case.expected_load_ret);
+  auto load_res = vmsdk::module::OnLoadDone(
+      ValkeySearch::Instance().OnLoad(&fake_ctx_, args.data(), args.size()),
+      &fake_ctx_, options);
+  vmsdk::ResetValkeyAlloc();
+  EXPECT_EQ(load_res, test_case.expected_load_ret);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   auto reader_thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
   if (test_case.expect_thread_pool_started) {

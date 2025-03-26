@@ -87,23 +87,6 @@ class VSSTestCase(parameterized.TestCase):
             )
             self.fail(f"VSSOutput not equal: {diff_msg}")
 
-    def tearDown(self):
-        super().tearDown()
-        print("In tearDown\n")
-        if any(error for (_, error) in self._outcome.errors if error):
-            print("Found at least one test failure\n")
-            valkey_server_stdout_dir = os.environ["TEST_UNDECLARED_OUTPUTS_DIR"]
-            for file in os.listdir(valkey_server_stdout_dir):
-                file_path = os.path.join(valkey_server_stdout_dir, file)
-                print(f"=== {file_path} ===\n")
-                if os.path.isfile(file_path):  # Ensure it's a file, not a directory
-                    with open(file_path, 'r') as f:
-                        print(f.read())
-                        print("\n")
-        else:
-            print("All tests passed\n")
-
-
 
 class VectorSearchIntegrationTest(VSSTestCase):
     # Start the valkey cluster once for all tests.

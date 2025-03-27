@@ -130,7 +130,7 @@ valkey-server --loadmodule /path/to/valkeysearch.so --loadmodule /path/to/libjso
 For optimal performance, Valkey-Search will match the number of worker threads to the number of CPU cores on the host. You can override this with:
 
 ```sh
-valkey-server --loadmodule /path/to/valkeysearch.so --reader-threads 64 --writer-threads 64
+valkey-server "--loadmodule /path/to/valkeysearch.so --reader-threads 64 --writer-threads 64"
 ```
 
 ## Developer Guide

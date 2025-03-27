@@ -2,7 +2,7 @@
 
 **Valkey-Search** (BSD-3-Clause), provided as a Valkey module, is a high-performance Vector Similarity Search engine optimized for AI-driven workloads. It delivers single-digit millisecond latency and high QPS, capable of handling billions of vectors with over 99% recall.
 
-Valkey-Search allows users to create indexes and perform similarity searches, incorporating complex filters. It supports Approximate Nearest Neighbor (ANN) search with HNSW and exact matching using K-Nearest Neighbors (KNN). Users can index data using either **Valkey Hash** or **Valkey-JSON** data types ([Valkey-JSON](https://github.com/valkey-io/valkey-json)).
+Valkey-Search allows users to create indexes and perform similarity searches, incorporating complex filters. It supports Approximate Nearest Neighbor (ANN) search with HNSW and exact matching using K-Nearest Neighbors (KNN). Users can index data using either **Valkey Hash** or **[Valkey-JSON](https://github.com/valkey-io/valkey-json)** data types.
 
 While Valkey-Search currently focuses on Vector Search, its goal is to extend Valkey into a full-fledged search engine, supporting Full Text Search and additional indexing options.
 
@@ -30,7 +30,7 @@ If replica lag is acceptable, users can achieve horizontal query scaling by dire
 
 Valkey-Search achieves high performance by storing vectors in-memory and applying optimizations throughout the stack to efficiently use host resources, such as:
 
-- **Parallelism:** Optimized threading model to reduce contention, especially in the read path.
+- **Parallelism:**  Threading model that enables lock-free execution in the read path.
 - **CPU Cache Efficiency:** Designed to promote efficient use of CPU cache.
 - **SIMD Optimizations:** Leveraging SIMD (Single Instruction, Multiple Data) for enhanced vector processing.
 
@@ -86,6 +86,8 @@ sudo yum install -y gcc             \
                     ninja-build     \
                     systemd-devel
 ```
+
+### Build the module
 
 Valkey-Search uses **CMake** for its build system. To simplify, a build script is provided. To build the module, run:
 

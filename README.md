@@ -50,6 +50,43 @@ Valkey-Search uses a **hybrid approach** with a query planner that selects the m
 
 ## Build Instructions
 
+### Install basic tools
+
+#### Ubuntu / Debian
+
+```sh
+sudo apt update
+sudo apt install -y clangd          \
+                    build-essential \
+                    g++             \
+                    cmake           \
+                    libgtest-dev    \
+                    ninja-build     \
+                    libssl-dev      \
+                    libsystemd-dev
+```
+
+
+**IMPORTANT**: building `valkey-search` requires GCC version 12 or higher, or Clang version 16 or higher. For Debian/Ubuntu, in case a lower version of GCC is installed, you may upgrade to gcc/g++ 12 with:
+
+```sh
+sudo apt update
+sudo apt install -y gcc-12 g++-12
+sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 90
+sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 90
+```
+
+#### RedHat / CentOS / Amazon Linux
+
+```sh
+sudo yum update
+sudo yum install -y gcc             \
+                    gcc-c++         \
+                    cmake           \
+                    ninja-build     \
+                    systemd-devel
+```
+
 Valkey-Search uses **CMake** for its build system. To simplify, a build script is provided. To build the module, run:
 
 ```sh

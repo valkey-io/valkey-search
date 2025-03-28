@@ -28,7 +28,7 @@ If replica lag is acceptable, users can achieve horizontal query scaling by dire
 
 ## Performance
 
-Valkey-Search achieves high performance by storing vectors in-memory and applying optimizations throughout the stack to efficiently use host resources, such as:
+Valkey-Search achieves high performance by storing vectors in-memory and applying optimizations throughout the stack to efficiently utilize the host resources, such as:
 
 - **Parallelism:**  Threading model that enables lock-free execution in the read path.
 - **CPU Cache Efficiency:** Designed to promote efficient use of CPU cache.
@@ -63,6 +63,8 @@ sudo apt install -y clangd          \
                     libgtest-dev    \
                     ninja-build     \
                     libssl-dev      \
+                    clang-tidy      \
+                    clang-format    \
                     libsystemd-dev
 ```
 
@@ -83,7 +85,12 @@ sudo yum update
 sudo yum install -y gcc             \
                     gcc-c++         \
                     cmake           \
+                    gtest           \
+                    gtest-devel     \
                     ninja-build     \
+                    openssl-devel   \
+                    clang-tidy      \
+                    clang-format    \
                     systemd-devel
 ```
 
@@ -107,7 +114,29 @@ Run unit tests with:
 ./build.sh --run-tests
 ```
 
-Run integration tests with:
+#### Integration Tests
+
+Install required dependencies (Ubuntu / Debian):
+
+```sh
+sudo apt update
+sudo apt install -y lsb-release      \
+                     curl            \
+                     coreutils       \
+                     libsystemd-dev  \
+                     python3-pip     \
+                     python3.12-venv \
+                     locales-all     \
+                     locales         \
+                     gpg
+
+curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
+sudo apt update
+sudo apt-get install -y memtier-benchmark
+```
+
+Run the integration tests with:
 
 ```sh
 ./build.sh --run-integration-tests
@@ -133,6 +162,28 @@ For optimal performance, Valkey-Search will match the number of worker threads t
 valkey-server "--loadmodule /path/to/libsearch.so --reader-threads 64 --writer-threads 64"
 ```
 
-## Developer Guide
+## Development Environment
 
-For detailed development instructions, please refer to the [Developer Guide](DEVELOPER.md).
+For development purposes, it is recommended to use <b>VSCode</b>, which is already configured to run within a Docker container and is integrated with clang-tidy and clang-format. Follow these steps to set up your environment:
+
+1. <b>Install VSCode Extensions:</b>
+    - Install the `Dev Containers` extension by Microsoft in VSCode.
+    - Note: Building the code may take some time, and it is important to use a host with decent CPU capacity. If you prefer, you can use a remote host. In that case, also install the following extensions:
+      - `Remote - SSH` by Microsoft
+      - `Remote Explorer` by Microsoft
+
+2. <b>Run the dev container setup script</b>
+    - Issue the following command from the cloned repo root directory:
+        ```sh
+        .devcontainer/setup.sh
+        ```
+
+3. <b>Open the Repository in VSCode:</b>
+    - On your local machine, open the root directory of the cloned valkey-search repository in VSCode.
+    - If the repository is located on a remote host:
+      1. Press Ctrl+Shift+P (Windows/Linux) or Cmd+Shift+P (macOS) to open the Command Palette.
+      2. Type Remote-SSH: Connect to Host and select it.
+      3. Choose the appropriate host and provide any necessary authentication details.
+
+       Once connected, VSCode will open the repository in the context of the remote host.
+

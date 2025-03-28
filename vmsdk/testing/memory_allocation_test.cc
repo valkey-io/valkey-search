@@ -61,7 +61,7 @@ MockSystemAlloc* kMockSystemAlloc;
 namespace vmsdk {
 
 namespace {
-#ifndef BAZEL_BUILD
+#ifndef TESTING_TMP_DISABLED
 class MemoryAllocationTest : public RedisTest {
  protected:
   void SetUp() override {
@@ -425,7 +425,7 @@ TEST_F(MemoryAllocationTest, VallocOverride) {
   EXPECT_EQ(__wrap_valloc(size), test_ptr);
   __wrap_free(test_ptr);
 }
-#endif  // BAZEL_BUILD
+#endif  // TESTING_TMP_DISABLED
 }  // namespace
 
 }  // namespace vmsdk

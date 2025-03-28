@@ -871,14 +871,13 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
   } else {
     VMSDK_EXPECT_OK(test_case.expected_output);
     EXPECT_EQ(got->size(), test_case.expected_output->size());
-#ifndef BAZEL_BUILD
-    // Fails on bazel with clang.
+#ifndef TESTING_TMP_DISABLED
     for (size_t i = 0; i < got->size(); ++i) {
       EXPECT_EQ(IndexedContentTestCase::TestNeighbor::FromIndexesNeighbor(
                     got.value()[i]),
                 test_case.expected_output.value()[i]);
     }
-#endif  // BAZEL_BUILD
+#endif  // TESTING_TMP_DISABLED
   }
 }
 

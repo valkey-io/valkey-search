@@ -400,7 +400,7 @@ TEST_F(ValkeySearchTest, Info) {
   EXPECT_EQ(std::string(*interned_key_1), "key1");
   RedisModuleInfoCtx fake_info_ctx;
   ValkeySearch::Instance().Info(&fake_info_ctx);
-#ifndef BAZEL_BUILD
+#ifndef TESTING_TMP_DISABLED
   EXPECT_EQ(
       fake_info_ctx.info_capture.GetInfo(),
       "memory\nused_memory_bytes: 0\nused_memory_human: "

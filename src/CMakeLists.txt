@@ -6,16 +6,16 @@ add_subdirectory(indexes)
 set(SRCS_MODULE_LOADER ${CMAKE_CURRENT_LIST_DIR}/module_loader.cc)
 
 # This is the module target
-valkey_search_add_shared_library(valkeysearch ${SRCS_MODULE_LOADER})
-target_include_directories(valkeysearch PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_options(valkeysearch PRIVATE "LINKER:--version-script=${CMAKE_SOURCE_DIR}/vmsdk/versionscript.lds")
+valkey_search_add_shared_library(libsearch ${SRCS_MODULE_LOADER})
+target_include_directories(libsearch PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_options(libsearch PRIVATE "LINKER:--version-script=${CMAKE_SOURCE_DIR}/vmsdk/versionscript.lds")
 
-target_link_libraries(valkeysearch PUBLIC keyspace_event_manager)
-target_link_libraries(valkeysearch PUBLIC valkey_search)
-target_link_libraries(valkeysearch PUBLIC commands)
-target_link_libraries(valkeysearch PUBLIC module)
-target_link_libraries(valkeysearch PUBLIC valkey_module)
-target_link_libraries(valkeysearch PUBLIC server_events)
+target_link_libraries(libsearch PUBLIC keyspace_event_manager)
+target_link_libraries(libsearch PUBLIC valkey_search)
+target_link_libraries(libsearch PUBLIC commands)
+target_link_libraries(libsearch PUBLIC module)
+target_link_libraries(libsearch PUBLIC valkey_module)
+target_link_libraries(libsearch PUBLIC server_events)
 
 list(APPEND THIRD_PARTY_LIBS coordinator_grpc_proto)
 list(APPEND THIRD_PARTY_LIBS coordinator_cc_proto)
@@ -26,18 +26,18 @@ target_link_libraries(rdb_section_cc_proto PUBLIC coordinator_cc_proto)
 message(STATUS "Created proto library rdb_section_cc_proto")
 
 # Wrap ${THIRD_PARTY_LIBS} with "--start/--end group"
-target_link_options(valkeysearch PRIVATE -Wl,--start-group)
-target_link_libraries(valkeysearch PRIVATE ${THIRD_PARTY_LIBS})
+target_link_options(libsearch PRIVATE -Wl,--start-group)
+target_link_libraries(libsearch PRIVATE ${THIRD_PARTY_LIBS})
 
 # Remove the "lib" prefix from the module
-set_target_properties(valkeysearch PROPERTIES PREFIX "")
+set_target_properties(libsearch PROPERTIES PREFIX "")
 
 if(UNIX AND NOT APPLE)
-  target_link_options(valkeysearch PRIVATE -Wl,--allow-multiple-definition)
+  target_link_options(libsearch PRIVATE -Wl,--allow-multiple-definition)
 endif()
 
 # Append -Wl,--end-group as the LAST argument
-target_link_libraries(valkeysearch PRIVATE lib_to_add_end_group_flag)
+target_link_libraries(libsearch PRIVATE lib_to_add_end_group_flag)
 
 set(SRCS_VALKEY_SEARCH ${CMAKE_CURRENT_LIST_DIR}/valkey_search.cc
                        ${CMAKE_CURRENT_LIST_DIR}/valkey_search.h)

@@ -5,14 +5,14 @@ Follow these steps to set up, build, and run the Valkey server with vector searc
 ## Step 1: Install Valkey and ValkeySearch
 
 1. Build Valkey from source by following the instructions [here](https://github.com/valkey-io/valkey?tab=readme-ov-file#building-valkey-using-makefile). Make sure to use Valkey version 7.2.6 or later as the previous versions have Valkey module API bugs.
-2. Build ValkeySearch module from source by following the instructions [here](https://github.com/valkey-io/valkey-search/blob/main/DEVELOPER.md#manual-setup-of-build-environment).
+2. Build ValkeySearch module from source by following the instructions [here](https://github.com/valkey-io/valkey-search/tree/main?tab=readme-ov-file#build-instructions).
 
 ## Step 2: Run the Valkey Server
 
 Once ValkeySearch is built, run the Valkey server with the ValkeySearch module loaded:
 
 ```bash
-./valkey-server "--loadmodule libvalkeysearch.so  --reader-threads 64 --writer-threads 64"
+./valkey-server "--loadmodule libsearch.so  --reader-threads 64 --writer-threads 64"
 ```
 
 You should see the Valkey server start, and it will be ready to accept commands.

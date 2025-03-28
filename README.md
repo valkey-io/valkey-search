@@ -118,19 +118,19 @@ Run integration tests with:
 To start Valkey with the module, use the `--loadmodule` option:
 
 ```sh
-valkey-server --loadmodule /path/to/valkeysearch.so
+valkey-server --loadmodule /path/to/libsearch.so
 ```
 
 To enable JSON support, load the JSON module as well:
 
 ```sh
-valkey-server --loadmodule /path/to/valkeysearch.so --loadmodule /path/to/libjson.so
+valkey-server --loadmodule /path/to/libsearch.so --loadmodule /path/to/libjson.so
 ```
 
 For optimal performance, Valkey-Search will match the number of worker threads to the number of CPU cores on the host. You can override this with:
 
 ```sh
-valkey-server "--loadmodule /path/to/valkeysearch.so --reader-threads 64 --writer-threads 64"
+valkey-server "--loadmodule /path/to/libsearch.so --reader-threads 64 --writer-threads 64"
 ```
 
 ## Developer Guide

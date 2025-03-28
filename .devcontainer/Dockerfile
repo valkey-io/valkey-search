@@ -12,8 +12,6 @@ RUN add-apt-repository ppa:ubuntu-toolchain-r/test && apt update
 RUN apt update && apt-get install -y \
     libssl-dev \
     build-essential \
-    wget \
-    curl \
     git \
     vim \
     bash \
@@ -28,27 +26,15 @@ RUN apt update && apt-get install -y \
     python3.12-venv \
     locales-all \
     locales \
+    clang-tidy \
+    clang-format \
+    clangd \
     sudo
 
-RUN apt install lsb-release curl gpg
+RUN apt install -y lsb-release curl gpg
 RUN curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
 RUN echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
 RUN apt update && apt-get install -y memtier-benchmark
-
-RUN apt-get update && apt-get install -y clang-tidy-17 clang-format-17 clangd-17 && rm -rf /var/lib/apt/lists/*
-
-RUN update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-17 100 && \
-    update-alternatives --set clang-tidy /usr/bin/clang-tidy-17
-RUN update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-17 100 && \
-    update-alternatives --set clang-format /usr/bin/clang-format-17
-RUN update-alternatives --install /usr/bin/clang clang /usr/bin/clang-17 100 && \
-    update-alternatives --set clang /usr/bin/clang-17
-RUN update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-17 100 && \
-    update-alternatives --set clang++ /usr/bin/clang++-17
-RUN update-alternatives --install /usr/bin/clang-cpp clang-cpp /usr/bin/clang-cpp-17 100 && \
-    update-alternatives --set clang-cpp /usr/bin/clang-cpp-17
-RUN update-alternatives --install /usr/bin/clangd clangd /usr/bin/clangd-17 100 && \
-    update-alternatives --set clangd /usr/bin/clangd-17
 
 RUN update-ca-certificates
 
@@ -59,7 +45,6 @@ ENV PATH="/usr/local/bin:$PATH"
 
 # Set working directory
 WORKDIR /workspace
-
 
 ARG USER_UID=1000
 ENV USER_UID=${USER_UID}

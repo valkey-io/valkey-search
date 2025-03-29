@@ -44,7 +44,6 @@
 // We put this at the end since it will otherwise mangle the malloc symbols in
 // the dependencies.
 #include "vmsdk/src/memory_allocation_overrides.h"
-// clang-format on
 
 namespace vmsdk {
 
@@ -158,6 +157,7 @@ void* PerformAndTrackAlignedAlloc(size_t align, size_t size,
 extern "C" {
 // Our allocator doesn't support tracking system memory size, so we just
 // return 0.
+// NOLINTNEXTLINE
 __attribute__((weak)) size_t empty_usable_size(void* ptr) noexcept { return 0; }
 
 // For Valkey allocation - we need to ensure alignment by taking advantage of
@@ -208,7 +208,7 @@ void* __wrap_calloc(size_t __nmemb, size_t size) noexcept {
     vmsdk::SystemAllocTracker::GetInstance().TrackPointer(ptr);
     return ptr;
   }
-  return vmsdk::PerformAndTrackCalloc(__nmemb, size, RedisModule_Calloc,
+  return vmsdk::PerformAndTrackCalloc(__nmemb, AlignSize(size), RedisModule_Calloc,
                                       RedisModule_MallocUsableSize);
 }
 
@@ -250,11 +250,13 @@ int __wrap_malloc_usable_size(void* ptr) noexcept {
   }
   return RedisModule_MallocUsableSize(ptr);
 }
+
 // NOLINTNEXTLINE
-int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size) {
+int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size) PMES {
   *r = __wrap_aligned_alloc(__alignment, __size);
   return 0;
 }
+
 void* __wrap_valloc(size_t size) noexcept {
   return __wrap_aligned_alloc(sysconf(_SC_PAGESIZE), size);
 }

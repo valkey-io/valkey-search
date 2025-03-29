@@ -38,6 +38,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "absl/strings/strip.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
@@ -113,6 +114,30 @@ absl::StatusOr<RecordsMap> HashAttributeDataType::FetchAllRecords(
   return std::move(callback_data.key_value_content);
 }
 
+absl::string_view TrimBrackets(absl::string_view record) {
+  if (absl::ConsumePrefix(&record, "[")) {
+    absl::ConsumeSuffix(&record, "]");
+  }
+  return record;
+}
+
+absl::StatusOr<vmsdk::UniqueRedisString> NormalizeJsonRecord(
+    absl::string_view record) {
+  if (!record.empty() && record[0] != '[') {
+    return absl::NotFoundError("Invalid record");
+  }
+  if (absl::ConsumePrefix(&record, "[")) {
+    absl::ConsumeSuffix(&record, "]");
+    if (absl::ConsumePrefix(&record, "\"")) {
+      absl::ConsumeSuffix(&record, "\"");
+    }
+  }
+  if (record.empty()) {
+    return absl::NotFoundError("Empty record");
+  }
+  return vmsdk::MakeUniqueRedisString(record);
+}
+
 absl::StatusOr<vmsdk::UniqueRedisString> JsonAttributeDataType::GetRecord(
     RedisModuleCtx *ctx, [[maybe_unused]] RedisModuleKey *open_key,
     absl::string_view key, absl::string_view identifier) const {
@@ -126,8 +151,9 @@ absl::StatusOr<vmsdk::UniqueRedisString> JsonAttributeDataType::GetRecord(
   }
   auto reply_type = RedisModule_CallReplyType(reply.get());
   if (reply_type == REDISMODULE_REPLY_STRING) {
-    return vmsdk::UniqueRedisString(
+    auto reply_str = vmsdk::UniqueRedisString(
         RedisModule_CreateStringFromCallReply(reply.get()));
+    return NormalizeJsonRecord(vmsdk::ToStringView(reply_str.get()));
   }
   return absl::NotFoundError("Json.get returned a non string value");
 }

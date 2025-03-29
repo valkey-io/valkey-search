@@ -36,7 +36,6 @@
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
-#include "absl/log/log.h"
 #include "src/attribute_data_type.h"
 #include "src/utils/patricia_tree.h"
 #include "vmsdk/src/utils.h"
@@ -87,7 +86,7 @@ class KeyspaceEventManager {
   static KeyspaceEventManager &Instance();
 
  private:
-  absl::Status StartRedisSubscribtionIfNeeded(RedisModuleCtx *ctx, int types);
+  absl::Status StartRedisSubscriptionIfNeeded(RedisModuleCtx *ctx, int types);
 
   static inline int OnRedisKeyspaceNotification(RedisModuleCtx *ctx, int type,
                                                 const char *event,

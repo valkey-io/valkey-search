@@ -337,7 +337,7 @@ void CheckJsonGetRecord(
 
 TEST_F(JsonAttributeDataTypeTest, JsonGetRecord) {
   absl::flat_hash_map<std::string, std::string> json_path_results{
-      {"$", "res0"},
+      {"$", "[res0]"},
       {"json_path_results1", "res1"},
       {"json_path_results2", "res2"}};
   absl::flat_hash_set<std::string> identifiers{"$", "false"};
@@ -353,7 +353,7 @@ TEST_F(JsonAttributeDataTypeTest, JsonGetRecord) {
         EXPECT_TRUE(json_path_results.contains(identifier));
         EXPECT_EQ(module_reply_type, REDISMODULE_REPLY_STRING);
         EXPECT_EQ(vmsdk::ToStringView(record.value().get()),
-                  json_path_results[identifier]);
+                  TrimBrackets(json_path_results[identifier]));
       } else {
         EXPECT_FALSE(json_path_results.contains(identifier) &&
                      module_reply_type == REDISMODULE_REPLY_STRING);
@@ -365,9 +365,9 @@ TEST_F(JsonAttributeDataTypeTest, JsonGetRecord) {
 
 TEST_P(JsonAttributeDataTypeTest, JsonFetchAllRecords) {
   absl::flat_hash_map<std::string, std::string> json_path_results{
-      {"$", "res0"},
-      {"json_path_results1", "res1"},
-      {"json_path_results2", "res2"}};
+      {"$", "[res0]"},
+      {"json_path_results1", "[res1]"},
+      {"json_path_results2", "[res2]"}};
   RedisModuleCallReply reply;
   auto &params = GetParam();
   auto expect_exists_key = std::get<0>(params);

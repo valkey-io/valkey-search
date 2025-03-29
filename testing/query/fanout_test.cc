@@ -445,12 +445,12 @@ TEST_P(FanoutTest, TestFanout) {
                   if (!neighbor.attribute_contents.has_value()) {
                     continue;
                   }
-                  for (const auto &[alias, content] :
+                  for (const auto &[identifier, record] :
                        neighbor.attribute_contents.value()) {
                     auto *attribute_content =
                         response_neighbor->add_attribute_contents();
-                    attribute_content->set_attribute_alias(alias);
-                    attribute_content->set_content(content);
+                    attribute_content->set_identifier(identifier);
+                    attribute_content->set_content(record);
                   }
                 }
                 callback(grpc::Status::OK, response);

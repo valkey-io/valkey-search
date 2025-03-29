@@ -51,12 +51,12 @@
 #include "highwayhash/arch_specific.h"
 #include "highwayhash/hh_types.h"
 #include "highwayhash/highwayhash.h"
-#include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/metrics.h"
-#include "src/rdb_io_stream.h"
+#include "src/rdb_section.pb.h"
+#include "src/rdb_serialization.h"
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -88,6 +88,24 @@ SchemaManager::SchemaManager(
       mutations_thread_pool_(mutations_thread_pool),
       detached_ctx_(vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx)),
       coordinator_enabled_(coordinator_enabled) {
+  RegisterRDBCallback(
+      data_model::RDB_SECTION_INDEX_SCHEMA,
+      RDBSectionCallbacks{
+          .load = [this](RedisModuleCtx *ctx,
+                         std::unique_ptr<data_model::RDBSection> section,
+                         SupplementalContentIter &&iter) -> absl::Status {
+            return LoadIndex(ctx, std::move(section), std::move(iter));
+          },
+
+          .save = [this](RedisModuleCtx *ctx, SafeRDB *rdb, int when)
+              -> absl::Status { return SaveIndexes(ctx, rdb, when); },
+
+          .section_count = [this](RedisModuleCtx *ctx, int when) -> int {
+            return this->GetNumberOfIndexSchemas();
+          },
+          .minimum_semantic_version = [](RedisModuleCtx *ctx, int when) -> int {
+            return 0x010000;  // Always use 1.0.0 for now
+          }});
   if (coordinator_enabled) {
     coordinator::MetadataManager::Instance().RegisterType(
         kSchemaManagerMetadataTypeName, kMetadataEncodingVersion,
@@ -97,7 +115,6 @@ SchemaManager::SchemaManager(
   }
 }
 
-constexpr int kEncodingVersion = 0;
 constexpr uint32_t kIndexSchemaBackfillBatchSize{10240};
 
 absl::Status GenerateIndexNotFoundError(absl::string_view name) {
@@ -160,8 +177,7 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
 
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,
-      IndexSchema::Create(ctx, index_schema_proto, index_schema_module_type_,
-                          mutations_thread_pool_));
+      IndexSchema::Create(ctx, index_schema_proto, mutations_thread_pool_));
 
   db_to_index_schemas_[db_num][name] = std::move(index_schema);
 
@@ -177,8 +193,8 @@ absl::Status SchemaManager::CreateIndexSchema(
   if (coordinator_enabled_) {
     CHECK(index_schema_proto.db_num() == 0)
         << "In cluster mode, we only support DB 0";
-    // In coordinated mode, use the metadata_manager as the source of truth. It
-    // will callback into us with the update.
+    // In coordinated mode, use the metadata_manager as the source of truth.
+    // It will callback into us with the update.
     if (coordinator::MetadataManager::Instance()
             .GetEntry(kSchemaManagerMetadataTypeName, index_schema_proto.name())
             .ok()) {
@@ -218,9 +234,9 @@ SchemaManager::RemoveIndexSchemaInternal(uint32_t db_num,
   if (db_to_index_schemas_[db_num].empty()) {
     db_to_index_schemas_.erase(db_num);
   }
-  // Mark the index schema as lame duck. Otherwise, if there is a large backlog
-  // of mutations, they can keep the index schema alive and cause unnecessary
-  // CPU and memory usage.
+  // Mark the index schema as lame duck. Otherwise, if there is a large
+  // backlog of mutations, they can keep the index schema alive and cause
+  // unnecessary CPU and memory usage.
   result->MarkAsDestructing();
   return result;
 }
@@ -229,8 +245,8 @@ absl::Status SchemaManager::RemoveIndexSchema(uint32_t db_num,
                                               absl::string_view name) {
   if (coordinator_enabled_) {
     CHECK(db_num == 0) << "In cluster mode, we only support DB 0";
-    // In coordinated mode, use the metadata_manager as the source of truth. It
-    // will callback into us with the update.
+    // In coordinated mode, use the metadata_manager as the source of truth.
+    // It will callback into us with the update.
     auto status = coordinator::MetadataManager::Instance().DeleteEntry(
         kSchemaManagerMetadataTypeName, name);
     if (status.ok()) {
@@ -249,8 +265,8 @@ absl::Status SchemaManager::RemoveIndexSchema(uint32_t db_num,
 
 absl::flat_hash_set<std::string> SchemaManager::GetIndexSchemasInDBInternal(
     uint32_t db_num) const {
-  // Copy out the state at the time of the call. Due to the copy - this should
-  // not be used in performance critical paths like FT.SEARCH.
+  // Copy out the state at the time of the call. Due to the copy - this
+  // should not be used in performance critical paths like FT.SEARCH.
   absl::flat_hash_set<std::string> names;
   auto db_itr = db_to_index_schemas_.find(db_num);
   if (db_itr == db_to_index_schemas_.end()) {
@@ -273,15 +289,16 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
   auto unpacked = std::make_unique<data_model::IndexSchema>();
   if (!metadata.UnpackTo(unpacked.get())) {
     return absl::InternalError(
-        "Unable to unpack metadata for index schema fingerprint calculation");
+        "Unable to unpack metadata for index schema fingerprint "
+        "calculation");
   }
 
   // Note that serialization is non-deterministic.
   // https://protobuf.dev/programming-guides/serialization-not-canonical/
-  // However, it should be good enough for us assuming the same version of the
-  // module is deployed fleetwide. When different versions are deployed,
-  // metadata with the latest encoding version is guaranteed to be prioritized
-  // by the metadata manager
+  // However, it should be good enough for us assuming the same version of
+  // the module is deployed fleet wide. When different versions are
+  // deployed, metadata with the latest encoding version is guaranteed to be
+  // prioritized by the metadata manager
   std::string serialized_entry;
   if (!unpacked->SerializeToString(&serialized_entry)) {
     return absl::InternalError(
@@ -400,7 +417,9 @@ void SchemaManager::OnFlushDBEnded(RedisModuleCtx *ctx) {
       continue;
     }
     if (coordinator_enabled_) {
-      // In coordinated mode - we recreate the indices.
+      // In coordinated mode - we recreate the indices, since they are a
+      // cluster-level construct, not a node-level construct. To delete,
+      // FT.DROPINDEX must be done explicitly.
       auto to_add = old_schema.value()->ToProto();
       VMSDK_LOG(NOTICE, ctx) << "Recreating index schema " << name
                              << " on FLUSHDB of DB " << selected_db;
@@ -439,79 +458,15 @@ void SchemaManager::OnSwapDB(RedisModuleSwapDbInfo *swap_db_info) {
   }
 }
 
-void SchemaManager::AddSchemasToKeyspace(RedisModuleCtx *ctx) {
-  absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
-    if (RedisModule_SelectDb(ctx, db_num) != REDISMODULE_OK) {
-      VMSDK_LOG(WARNING, ctx) << "Unable to select DB " << db_num
-                              << " for schema registration, skipping all "
-                              << inner_map.size() << " keys in map";
-      continue;
-    }
-    for (const auto &[name, schema] : inner_map) {
-      VMSDK_LOG(NOTICE, ctx) << "Registering index schema " << name << " in DB "
-                             << db_num << " before save";
-      auto status = schema->Register(ctx);
-      if (!status.ok()) {
-        VMSDK_LOG(WARNING, ctx)
-            << "Unable to register index schema " << name << " in DB " << db_num
-            << " prior to RDB save: " << status.message();
-      }
-    }
-  }
-}
-
-void SchemaManager::OnSavingStarted(RedisModuleCtx *ctx) {
-  if (coordinator_enabled_) {
-    return;
-  }
-
-  // TODO(b/349436336) Remove this section when standalone moves to AUX-based
-  // RDB save.
-  AddSchemasToKeyspace(ctx);
-}
-
-void SchemaManager::DeleteSchemasFromKeyspace(RedisModuleCtx *ctx) {
-  for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
-    if (RedisModule_SelectDb(ctx, db_num) != REDISMODULE_OK) {
-      VMSDK_LOG(WARNING, ctx) << "Unable to select DB " << db_num
-                              << " for schema deregistration, skipping all "
-                              << inner_map.size() << " keys in map";
-      continue;
-    }
-    for (const auto &[name, schema] : inner_map) {
-      // First check if it was registered, if not ignore it.
-      auto key_name = vmsdk::MakeUniqueRedisString(schema->GetKey());
-      auto open_key = vmsdk::MakeUniqueRedisOpenKey(
-          ctx, key_name.get(), REDISMODULE_OPEN_KEY_NOTOUCH);
-      if (!open_key) {
-        continue;
-      }
-      VMSDK_LOG(NOTICE, ctx) << "Deregistering index schema " << name
-                             << " in DB " << db_num << " after save";
-      auto status = schema->Deregister(ctx);
-      if (!status.ok()) {
-        VMSDK_LOG(WARNING, ctx)
-            << "Unable to deregister index schema " << name << " in DB "
-            << db_num << " after RDB save: " << status.message();
-      }
-    }
-  }
-}
-
-void SchemaManager::OnSavingEnded(RedisModuleCtx *ctx) {
-  if (coordinator_enabled_) {
-    return;
-  }
-
-  // TODO(b/349436336) Remove this section when standalone moves to AUX-based
-  // RDB save.
-  absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  DeleteSchemasFromKeyspace(ctx);
-}
-
 void SchemaManager::OnReplicationLoadStart(RedisModuleCtx *ctx) {
-  // Only in replication do we stage the changes first, before applying them.
+  // Only in replication do we stage the changes first, before applying
+  // them.
+  //
+  // Note that we do staging for all replication - even if it isn't diskless. It
+  // is effectively the same performance since for disk-based sync, we will
+  // first have flushed the DB, so there should be no additional memory
+  // pressure, and the final swap from the staging schema set to the live schema
+  // set is very cheap.
   VMSDK_LOG(NOTICE, ctx) << "Staging indices during RDB load due to "
                             "replication, will apply on loading finished";
   staging_indices_due_to_repl_load_ = true;
@@ -520,16 +475,16 @@ void SchemaManager::OnReplicationLoadStart(RedisModuleCtx *ctx) {
 void SchemaManager::OnLoadingEnded(RedisModuleCtx *ctx) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   if (staging_indices_due_to_repl_load_.Get()) {
-    // Perform swap of staged schemas to main schemas. Note that no merge occurs
-    // here, since for RDB load we are guaranteed that the new state is not
-    // applied incrementally.
+    // Perform swap of staged schemas to main schemas. Note that no merge
+    // occurs here, since for RDB load we are guaranteed that the new state
+    // is not applied incrementally.
     VMSDK_LOG(NOTICE, ctx)
         << "Applying staged indices at the end of RDB loading";
     auto status = RemoveAll();
     if (!status.ok()) {
-      VMSDK_LOG(WARNING, ctx)
-          << "Failed to remove contents of existing schemas on loading end: "
-          << status.message();
+      VMSDK_LOG(WARNING, ctx) << "Failed to remove contents of existing "
+                                 "schemas on loading end: "
+                              << status.message();
     }
     db_to_index_schemas_ = staged_db_to_index_schemas_.Get();
     staged_db_to_index_schemas_ = absl::flat_hash_map<
@@ -537,9 +492,6 @@ void SchemaManager::OnLoadingEnded(RedisModuleCtx *ctx) {
         absl::flat_hash_map<std::string, std::shared_ptr<IndexSchema>>>();
     staging_indices_due_to_repl_load_ = false;
   }
-
-  // Ensure that all the swapped in schemas are not in the keyspace.
-  DeleteSchemasFromKeyspace(ctx);
 
   for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
     for (const auto &[name, schema] : inner_map) {
@@ -550,7 +502,8 @@ void SchemaManager::OnLoadingEnded(RedisModuleCtx *ctx) {
 }
 
 void SchemaManager::PerformBackfill(RedisModuleCtx *ctx, uint32_t batch_size) {
-  // TODO(b/323954093): Address fairness of index backfill/mutation processing.
+  // TODO(b/323954093): Address fairness of index backfill/mutation
+  // processing.
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   uint32_t remaining_count = batch_size;
   for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
@@ -560,36 +513,29 @@ void SchemaManager::PerformBackfill(RedisModuleCtx *ctx, uint32_t batch_size) {
   }
 }
 
-void SchemaManager::AuxSave(RedisModuleIO *rdb, int when) {
+absl::Status SchemaManager::SaveIndexes(RedisModuleCtx *ctx, SafeRDB *rdb,
+                                        int when) {
   if (when == REDISMODULE_AUX_BEFORE_RDB) {
-    return;
+    return absl::OkStatus();
   }
-  auto ctx = RedisModule_GetContextFromIO(rdb);
-
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   if (db_to_index_schemas_.empty()) {
-    // Auxsave2 will ensure nothing is written to the aux section if we write
-    // nothing.
-    RedisModule_Log(
-        detached_ctx_.get(), REDISMODULE_LOGLEVEL_NOTICE,
-        "Skipping aux metadata for SchemaManager since there is no content");
-    return;
+    // Auxsave2 will ensure nothing is written to the aux section if we
+    // write nothing.
+    RedisModule_Log(detached_ctx_.get(), REDISMODULE_LOGLEVEL_NOTICE,
+                    "Skipping aux metadata for SchemaManager since there "
+                    "is no content");
+    return absl::OkStatus();
   }
 
   RedisModule_Log(detached_ctx_.get(), REDISMODULE_LOGLEVEL_NOTICE,
                   "Saving aux metadata for SchemaManager to aux RDB");
-  auto rdb_os = RDBOutputStream(rdb);
-  RedisModule_SaveUnsigned(rdb, db_to_index_schemas_.size());
   for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
     for (const auto &[name, schema] : inner_map) {
-      auto status = schema->RDBSave(rdb_os);
-      if (!status.ok()) {
-        VMSDK_LOG(WARNING, ctx)
-            << "Unable to save index schema " << name << " in DB " << db_num
-            << " to RDB aux: " << status.message();
-      }
+      VMSDK_RETURN_IF_ERROR(schema->RDBSave(rdb));
     }
   }
+  return absl::OkStatus();
 }
 
 absl::Status SchemaManager::RemoveAll() {
@@ -608,56 +554,53 @@ absl::Status SchemaManager::RemoveAll() {
   return absl::OkStatus();
 }
 
-absl::StatusOr<IndexSchema *> SchemaManager::StageIndexFromRDB(
-    RedisModuleCtx *ctx, RedisModuleIO *rdb, int encver) {
-  auto rdb_is = RDBInputStream(rdb);
-  VMSDK_ASSIGN_OR_RETURN(
-      auto index_schema,
-      IndexSchema::LoadFromRDB(rdb_is, ctx, index_schema_module_type_,
-                               mutations_thread_pool_, encver),
-      _ << "Failed to load index schema from RDB!");
-  uint32_t db_num = index_schema->GetDBNum();
-  const std::string &name = index_schema->GetName();
-  IndexSchema *index_schema_ptr = index_schema.get();
-  VMSDK_LOG(NOTICE, ctx) << "Staging index from RDB: " << name << " (in db "
-                         << db_num << ")";
-  staged_db_to_index_schemas_.Get()[db_num][name] = std::move(index_schema);
-  return index_schema_ptr;
-}
+absl::Status SchemaManager::LoadIndex(
+    RedisModuleCtx *ctx, std::unique_ptr<data_model::RDBSection> section,
+    SupplementalContentIter &&supplemental_iter) {
+  // If not subscribed, we need to subscribe now so that we can get the loading
+  // ended callback.
+  SubscribeToServerEventsIfNeeded();
 
-absl::Status SchemaManager::StageIndicesFromAux(RedisModuleCtx *ctx,
-                                                int aux_index_schema_count,
-                                                RedisModuleIO *rdb,
-                                                int encver) {
-  DCHECK(staged_db_to_index_schemas_.Get().empty());
-  VMSDK_LOG(NOTICE, ctx) << "Staging " << aux_index_schema_count
-                         << " indices from aux section of RDB.";
-  for (int i = 0; i < aux_index_schema_count; ++i) {
-    VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto _,
-                           StageIndexFromRDB(ctx, rdb, encver));
+  if (section->type() != data_model::RDB_SECTION_INDEX_SCHEMA) {
+    return absl::InternalError(
+        "Unexpected RDB section type passed to SchemaManager");
   }
-  return absl::OkStatus();
-}
 
-absl::StatusOr<IndexSchema *> SchemaManager::LoadIndexFromRDB(
-    RedisModuleCtx *ctx, RedisModuleIO *rdb, int encver) {
-  auto rdb_is = RDBInputStream(rdb);
-  VMSDK_ASSIGN_OR_RETURN(
-      auto index_schema,
-      IndexSchema::LoadFromRDB(rdb_is, ctx, index_schema_module_type_,
-                               mutations_thread_pool_, encver),
-      _ << "Failed to load index schema from RDB!");
+  // Load the index schema into memory
+  auto index_schema_pb = std::unique_ptr<data_model::IndexSchema>(
+      section->release_index_schema_contents());
+  VMSDK_ASSIGN_OR_RETURN(auto index_schema,
+                         IndexSchema::LoadFromRDB(ctx, mutations_thread_pool_,
+                                                  std::move(index_schema_pb),
+                                                  std::move(supplemental_iter)),
+                         _ << "Failed to load index schema from RDB!");
   uint32_t db_num = index_schema->GetDBNum();
   const std::string &name = index_schema->GetName();
-  IndexSchema *index_schema_ptr = index_schema.get();
+
+  // Select the DB number in the context for subsequent usage.
+  if (RedisModule_SelectDb(ctx, db_num) != REDISMODULE_OK) {
+    return absl::InternalError(
+        absl::StrFormat("Unable to select DB %d for loading of index schema %s",
+                        db_num, name.c_str()));
+  }
+
+  // In diskless load scenarios, we stage the index to allow serving from
+  // the existing index schemas. The loading ended callback will swap these
+  // atomically.
+  if (staging_indices_due_to_repl_load_.Get()) {
+    VMSDK_LOG(NOTICE, ctx) << "Staging index from RDB: " << name << " (in db "
+                           << db_num << ")";
+    staged_db_to_index_schemas_.Get()[db_num][name] = std::move(index_schema);
+    return absl::OkStatus();
+  }
+
+  // If not staging, we first attempt to remove any existing indices, in
+  // case we are loading on top of an existing index schema set. This
+  // happens for example when a module triggers RDB load on a running
+  // server. In this case, we may have existing indices when we load the DB.
   VMSDK_LOG(NOTICE, detached_ctx_.get())
       << "Loading index from RDB: " << name << " (in db " << db_num << ")";
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-
-  // We attempt to remove any existing indices, in case we are loading on top
-  // of an existing index schema set. This happens for example when a module
-  // triggers RDB load on a running server. In this case, we may have existing
-  // indices when we load the DB.
   auto remove_existing_status = RemoveIndexSchemaInternal(db_num, name);
   if (remove_existing_status.ok()) {
     RedisModule_Log(detached_ctx_.get(), REDISMODULE_LOGLEVEL_NOTICE,
@@ -672,42 +615,6 @@ absl::StatusOr<IndexSchema *> SchemaManager::LoadIndexFromRDB(
   }
 
   db_to_index_schemas_[db_num][name] = std::move(index_schema);
-  return index_schema_ptr;
-}
-
-absl::Status SchemaManager::LoadIndicesFromAux(RedisModuleCtx *ctx,
-                                               int aux_index_schema_count,
-                                               RedisModuleIO *rdb, int encver) {
-  VMSDK_LOG(NOTICE, ctx) << "Loading " << aux_index_schema_count
-                         << " indices from aux section of RDB.";
-  for (int i = 0; i < aux_index_schema_count; ++i) {
-    VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto _,
-                           LoadIndexFromRDB(ctx, rdb, encver));
-  }
-  VectorExternalizer::Instance().ProcessEngineUpdateQueue();
-  return absl::OkStatus();
-}
-
-absl::Status SchemaManager::AuxLoad(RedisModuleIO *rdb, int encver, int when) {
-  if (when == REDISMODULE_AUX_BEFORE_RDB) {
-    return absl::OkStatus();
-  }
-  auto ctx = RedisModule_GetContextFromIO(rdb);
-
-  auto aux_index_schema_count = RedisModule_LoadUnsigned(rdb);
-  if (aux_index_schema_count > 0) {
-    // Note that we need to subscribe now, so that we can get the loading
-    // ended callback.
-    SubscribeToServerEventsIfNeeded();
-  }
-  if (staging_indices_due_to_repl_load_.Get()) {
-    VMSDK_RETURN_IF_ERROR(
-        StageIndicesFromAux(ctx, aux_index_schema_count, rdb, encver));
-  } else {
-    VMSDK_RETURN_IF_ERROR(
-        LoadIndicesFromAux(ctx, aux_index_schema_count, rdb, encver));
-  }
-
   return absl::OkStatus();
 }
 
@@ -715,18 +622,6 @@ void SchemaManager::OnFlushDBCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
                                       uint64_t subevent, void *data) {
   if (subevent & REDISMODULE_SUBEVENT_FLUSHDB_END) {
     SchemaManager::Instance().OnFlushDBEnded(ctx);
-  }
-}
-
-void SchemaManager::OnPersistenceCallback(RedisModuleCtx *ctx,
-                                          RedisModuleEvent eid,
-                                          uint64_t subevent, void *data) {
-  if (subevent == REDISMODULE_SUBEVENT_PERSISTENCE_RDB_START ||
-      subevent == REDISMODULE_SUBEVENT_PERSISTENCE_SYNC_RDB_START) {
-    SchemaManager::Instance().OnSavingStarted(ctx);
-  } else if (subevent == REDISMODULE_SUBEVENT_PERSISTENCE_ENDED ||
-             subevent == REDISMODULE_SUBEVENT_PERSISTENCE_FAILED) {
-    SchemaManager::Instance().OnSavingEnded(ctx);
   }
 }
 
@@ -747,113 +642,6 @@ void SchemaManager::OnServerCronCallback(RedisModuleCtx *ctx,
                                          [[maybe_unused]] uint64_t subevent,
                                          [[maybe_unused]] void *data) {
   SchemaManager::Instance().PerformBackfill(ctx, kIndexSchemaBackfillBatchSize);
-}
-
-void SchemaManagerOnAuxSaveCallback(RedisModuleIO *rdb, int when) {
-  SchemaManager::Instance().AuxSave(rdb, when);
-}
-
-int SchemaManagerOnAuxLoadCallback(RedisModuleIO *rdb, int encver, int when) {
-  return SchemaManager::Instance().OnAuxLoadCallback(rdb, encver, when);
-}
-
-int SchemaManager::OnAuxLoadCallback(RedisModuleIO *rdb, int encver, int when) {
-  auto status = SchemaManager::Instance().AuxLoad(rdb, encver, when);
-  if (status.ok()) {
-    return REDISMODULE_OK;
-  }
-  VMSDK_LOG(WARNING, nullptr)
-      << "Failed to load Schema Manager aux data from RDB: "
-      << status.message();
-  return REDISMODULE_ERR;
-}
-
-absl::StatusOr<void *> SchemaManager::IndexSchemaRDBLoad(RedisModuleIO *rdb,
-                                                         int encoding_version) {
-  // Make sure we create the index schema in the right DB.
-  int db_num = RedisModule_GetDbIdFromIO(rdb);
-  RedisModuleCtx *rdb_load_ctx =
-      RedisModule_GetDetachedThreadSafeContext(detached_ctx_.get());
-  if (RedisModule_SelectDb(rdb_load_ctx, db_num) != REDISMODULE_OK) {
-    return absl::InternalError(absl::StrCat("Failed to select DB ", db_num,
-                                            " for index schema RDB load"));
-  }
-
-  IndexSchema *index_schema_ptr = nullptr;
-  if (staging_indices_due_to_repl_load_.Get()) {
-    VMSDK_ASSIGN_OR_RETURN(
-        index_schema_ptr,
-        StageIndexFromRDB(rdb_load_ctx, rdb, encoding_version));
-  } else {
-    VMSDK_ASSIGN_OR_RETURN(
-        index_schema_ptr,
-        LoadIndexFromRDB(rdb_load_ctx, rdb, encoding_version));
-  }
-
-  // Note that we need to subscribe now, so that we can get the loading ended
-  // callback.
-  SubscribeToServerEventsIfNeeded();
-
-  return index_schema_ptr;
-}
-
-void *SchemaManagerIndexSchemaRDBLoad(RedisModuleIO *rdb,
-                                      int encoding_version) {
-  auto res =
-      SchemaManager::Instance().IndexSchemaRDBLoad(rdb, encoding_version);
-  if (!res.ok()) {
-    Metrics::GetStats().rdb_load_failure_cnt++;
-    VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 0.1)
-        << "Failed to load index schema from RDB: " << res.status().message();
-    return nullptr;
-  }
-  Metrics::GetStats().rdb_load_success_cnt++;
-  return *res;
-}
-
-// This module type is used purely to get aux callbacks.
-absl::Status SchemaManager::RegisterModuleType(RedisModuleCtx *ctx) {
-  VMSDK_ASSIGN_OR_RETURN(
-      index_schema_module_type_,
-      IndexSchema::CreateModuleType(ctx, SchemaManagerIndexSchemaRDBLoad));
-  static RedisModuleTypeMethods tm = {
-      .version = REDISMODULE_TYPE_METHOD_VERSION,
-      .rdb_load = [](RedisModuleIO *io, int encver) -> void * {
-        DCHECK(false) << "Attempt to load SchemaManager from RDB";
-        return nullptr;
-      },
-      .rdb_save =
-          [](RedisModuleIO *io, void *value) {
-            DCHECK(false) << "Attempt to save SchemaManager to RDB";
-          },
-      .aof_rewrite =
-          [](RedisModuleIO *aof, RedisModuleString *key, void *value) {
-            DCHECK(false) << "Attempt to rewrite SchemaManager to AOF";
-          },
-      .free =
-          [](void *value) {
-            DCHECK(false) << "Attempt to free SchemaManager object";
-          },
-      .aux_load = SchemaManagerOnAuxLoadCallback,
-      // We want to save/load the metadata after the RDB.
-      .aux_save_triggers = REDISMODULE_AUX_AFTER_RDB,
-      // TODO(b/349436336) On Cluster mode, we don't need to maintain
-      // backwards & forwards compatibility with previous versions, so we can
-      // do the RDB aux save. For standalone, we can't save it or rollback
-      // would fail, as the previous version doesn't know how to process it.
-      // Once we have rolled out support fleetwide, we can switch to aux for
-      // both.
-      .aux_save2 =
-          coordinator_enabled_ ? SchemaManagerOnAuxSaveCallback : nullptr,
-  };
-
-  auto schema_manager_module_type_ = RedisModule_CreateDataType(
-      ctx, kSchemaManagerModuleTypeName.data(), kEncodingVersion, &tm);
-  if (!schema_manager_module_type_) {
-    return absl::InternalError(absl::StrCat(
-        "failed to create ", kSchemaManagerModuleTypeName, " type"));
-  }
-  return absl::OkStatus();
 }
 
 }  // namespace valkey_search

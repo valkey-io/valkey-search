@@ -53,9 +53,6 @@
 
 namespace valkey_search {
 
-using AuxSaveCallback = void (*)(RedisModuleIO *rdb, int when);
-using AuxLoadCallback = int (*)(RedisModuleIO *rdb, int encver, int when);
-constexpr absl::string_view kSchemaManagerModuleTypeName{"SchMgr-VS"};
 constexpr absl::string_view kSchemaManagerMetadataTypeName{"vs_index_schema"};
 constexpr uint32_t kMetadataEncodingVersion = 1;
 
@@ -93,9 +90,6 @@ class SchemaManager {
 
   void OnFlushDBEnded(RedisModuleCtx *ctx);
   void OnSwapDB(RedisModuleSwapDbInfo *swap_db_info);
-  void AuxSave(RedisModuleIO *rdb, int when);
-  absl::Status AuxLoad(RedisModuleIO *rdb, int encver, int when);
-  absl::Status RegisterModuleType(RedisModuleCtx *ctx);
 
   // These functions provide cross-compatibility with prior versions
   // TODO(b/349436336) Remove after rolled out.
@@ -114,25 +108,19 @@ class SchemaManager {
                          uint64_t subevent, void *data)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
 
-  void OnPersistenceCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
-                             uint64_t subevent, void *data);
-
   void OnLoadingCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
                          uint64_t subevent, void *data);
 
   void OnServerCronCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
                             uint64_t subevent, void *data);
 
-  int OnAuxLoadCallback(RedisModuleIO *rdb, int encver, int when);
-  absl::StatusOr<void *> IndexSchemaRDBLoad(RedisModuleIO *rdb,
-                                            int encoding_version);
-
   static void InitInstance(std::unique_ptr<SchemaManager> instance);
   static SchemaManager &Instance();
 
- protected:
-  RedisModuleType *schema_manager_module_type_;
-  RedisModuleType *index_schema_module_type_;
+  absl::Status LoadIndex(RedisModuleCtx *ctx,
+                         std::unique_ptr<data_model::RDBSection> section,
+                         SupplementalContentIter &&supplemental_iter);
+  absl::Status SaveIndexes(RedisModuleCtx *ctx, SafeRDB *rdb, int when);
 
  private:
   absl::Status RemoveAll()
@@ -155,34 +143,15 @@ class SchemaManager {
       uint32_t db_num, absl::string_view name)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
 
-  absl::StatusOr<IndexSchema *> StageIndexFromRDB(RedisModuleCtx *ctx,
-                                                  RedisModuleIO *rdb,
-                                                  int encver);
-  absl::Status StageIndicesFromAux(RedisModuleCtx *ctx,
-                                   int aux_index_schema_count,
-                                   RedisModuleIO *rdb, int encver);
-
-  absl::StatusOr<IndexSchema *> LoadIndexFromRDB(RedisModuleCtx *ctx,
-                                                 RedisModuleIO *rdb, int encver)
-      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
-  absl::Status LoadIndicesFromAux(RedisModuleCtx *ctx,
-                                  int aux_index_schema_count,
-                                  RedisModuleIO *rdb, int encver)
-      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
-
   void SubscribeToServerEventsIfNeeded();
 
-  // GetIndexSchemasInDBInternal returns a set of strings representing the names
-  // of the index schemas in the given DB. Note that the set of strings is
-  // created through copying out the state at the time of the call. Due to this
-  // copy - this should not be used in performance critical paths like
+  // GetIndexSchemasInDBInternal returns a set of strings representing the
+  // names of the index schemas in the given DB. Note that the set of strings
+  // is created through copying out the state at the time of the call. Due to
+  // this copy - this should not be used in performance critical paths like
   // FT.SEARCH.
   absl::flat_hash_set<std::string> GetIndexSchemasInDBInternal(uint32_t db_num)
       const ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
-  void AddSchemasToKeyspace(RedisModuleCtx *ctx)
-      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
-  void DeleteSchemasFromKeyspace(RedisModuleCtx *ctx)
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
 
   mutable absl::Mutex db_to_index_schemas_mutex_;
   absl::flat_hash_map<

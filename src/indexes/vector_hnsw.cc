@@ -55,7 +55,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
-#include "src/rdb_io_stream.h"
+#include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -151,7 +151,8 @@ template <typename T>
 absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     RedisModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     const data_model::VectorIndex &vector_index_proto,
-    RDBInputStream &rdb_stream, absl::string_view attribute_identifier) {
+    absl::string_view attribute_identifier,
+    SupplementalContentChunkIter &&iter) {
   try {
     auto index = std::shared_ptr<VectorHNSW<T>>(new VectorHNSW<T>(
         vector_index_proto.dimension_count(), attribute_identifier,
@@ -163,8 +164,10 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
         std::make_unique<hnswlib::HierarchicalNSW<T>>(index->space_.get());
     // initial_cap needs to be provided to retain the original initial_cap if
     // the index being loaded is empty.
+
+    RDBChunkInputStream input(std::move(iter));
     VMSDK_RETURN_IF_ERROR(
-        index->algo_->LoadIndex(rdb_stream, index->space_.get(),
+        index->algo_->LoadIndex(input, index->space_.get(),
                                 vector_index_proto.initial_cap(), index.get()));
     // ef_runtime is not persisted in the index contents
     index->algo_->setEf(vector_index_proto.hnsw_algorithm().ef_runtime());
@@ -172,16 +175,6 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     // 1. Not allowing replace delete is aligned with RediSearch
     // 2. Consider making allow_replace_deleted_ configurable
     index->algo_->allow_replace_deleted_ = false;
-    if (vector_index_proto.has_tracked_keys()) {
-      VMSDK_RETURN_IF_ERROR(index->LoadTrackedKeys(
-          ctx, attribute_data_type, vector_index_proto.tracked_keys()));
-      VMSDK_RETURN_IF_ERROR(
-          index->ConsumeKeysAndInternalIdsForBackCompat(rdb_stream));
-    } else {
-      // Previous versions stored tracked keys in the index contents.
-      VMSDK_RETURN_IF_ERROR(
-          index->LoadKeysAndInternalIds(ctx, attribute_data_type, rdb_stream));
-    }
     return index;
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_create_exceptions_cnt;
@@ -252,9 +245,10 @@ int VectorHNSW<T>::RespondWithInfoImpl(RedisModuleCtx *ctx) const {
 }
 
 template <typename T>
-absl::Status VectorHNSW<T>::SaveIndexImpl(RDBOutputStream &rdb_stream) const {
+absl::Status VectorHNSW<T>::SaveIndexImpl(
+    RDBChunkOutputStream chunked_out) const {
   absl::ReaderMutexLock lock(&resize_mutex_);
-  return algo_->SaveIndex(rdb_stream);
+  return algo_->SaveIndex(chunked_out);
 }
 
 template <typename T>

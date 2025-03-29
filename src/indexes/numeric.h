@@ -38,7 +38,6 @@
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/btree_map.h"
-#include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/hash/hash.h"
@@ -49,7 +48,7 @@
 #include "absl/synchronization/mutex.h"
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
-#include "src/rdb_io_stream.h"
+#include "src/rdb_serialization.h"
 #include "src/utils/segment_tree.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -57,10 +56,10 @@
 namespace valkey_search::indexes {
 
 template <typename T, typename Hasher = absl::Hash<T>,
-          typename Equaler = std::equal_to<T>>
+          typename Equalizer = std::equal_to<T>>
 class BTreeNumeric {
  public:
-  using SetType = absl::flat_hash_set<T, Hasher, Equaler>;
+  using SetType = absl::flat_hash_set<T, Hasher, Equalizer>;
   using ConstIterator =
       typename absl::btree_map<double, SetType>::const_iterator;
 
@@ -117,7 +116,7 @@ class Numeric : public IndexBase {
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   int RespondWithInfo(RedisModuleCtx* ctx) const override;
   bool IsTracked(const InternedStringPtr& key) const override;
-  absl::Status SaveIndex(RDBOutputStream& rdb_stream) const override {
+  absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
     return absl::OkStatus();
   }
   inline void ForEachTrackedKey(

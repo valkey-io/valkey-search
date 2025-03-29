@@ -53,7 +53,7 @@ namespace valkey_search::indexes {
 namespace {
 std::optional<double> ParseNumber(absl::string_view data) {
   double value;
-  if (!absl::SimpleAtod(data, &value)) {
+  if (absl::AsciiStrToLower(data) == "nan" || !absl::SimpleAtod(data, &value)) {
     return std::nullopt;
   }
   return value;

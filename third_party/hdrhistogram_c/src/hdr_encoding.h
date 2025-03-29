@@ -65,7 +65,7 @@ size_t hdr_base64_decoded_len(size_t encoded_size);
  * Decode from base64.
  *
  * @param input the base64 encoded data
- * @param input_len the size in bytes of the endcoded data
+ * @param input_len the size in bytes of the encoded data
  * @param output the buffer to write the decoded data to
  * @param output_len the number of bytes to write to the output data
  */

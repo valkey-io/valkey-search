@@ -44,6 +44,7 @@
 #include "highwayhash/hh_types.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
+#include "src/rdb_serialization.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -57,7 +58,6 @@ using MetadataUpdateCallback = absl::AnyInvocable<absl::Status(
 using AuxSaveCallback = void (*)(RedisModuleIO *rdb, int when);
 using AuxLoadCallback = int (*)(RedisModuleIO *rdb, int encver, int when);
 static constexpr int kEncodingVersion = 0;
-static constexpr absl::string_view kMetadataManagerModuleTypeName{"MtdMgr-VS"};
 static constexpr uint8_t kMetadataBroadcastClusterMessageReceiverId = 0x00;
 
 // Randomly generated 32 bit key for fingerprinting the metadata.
@@ -69,7 +69,27 @@ class MetadataManager {
  public:
   MetadataManager(RedisModuleCtx *ctx, ClientPool &client_pool)
       : client_pool_(client_pool),
-        detached_ctx_(vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx)) {}
+        detached_ctx_(vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx)) {
+    RegisterRDBCallback(
+        data_model::RDB_SECTION_GLOBAL_METADATA,
+        RDBSectionCallbacks{
+            .load = [this](RedisModuleCtx *ctx,
+                           std::unique_ptr<data_model::RDBSection> section,
+                           SupplementalContentIter &&iter) -> absl::Status {
+              return LoadMetadata(ctx, std::move(section), std::move(iter));
+            },
+
+            .save = [this](RedisModuleCtx *ctx, SafeRDB *rdb, int when)
+                -> absl::Status { return SaveMetadata(ctx, rdb, when); },
+
+            .section_count = [](RedisModuleCtx *ctx, int when) -> int {
+              return 1;
+            },
+            .minimum_semantic_version = [](RedisModuleCtx *ctx,
+                                           int when) -> int {
+              return 0x010000;  // Always use 1.0.0 for now
+            }});
+  }
 
   static uint64_t ComputeTopLevelFingerprint(
       const google::protobuf::Map<std::string, GlobalMetadataEntryMap>
@@ -129,18 +149,15 @@ class MetadataManager {
   void OnReplicationLoadStart(RedisModuleCtx *ctx);
   void OnLoadingCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
                          uint64_t subevent, void *data);
-
-  void AuxSave(RedisModuleIO *rdb, int when);
-  absl::Status AuxLoad(RedisModuleIO *rdb, int encver, int when);
-  absl::Status RegisterModuleType(RedisModuleCtx *ctx);
+  absl::Status SaveMetadata(RedisModuleCtx *ctx, SafeRDB *rdb, int when);
+  absl::Status LoadMetadata(RedisModuleCtx *ctx,
+                            std::unique_ptr<data_model::RDBSection> section,
+                            SupplementalContentIter &&supplemental_iter);
   void RegisterForClusterMessages(RedisModuleCtx *ctx);
 
   static bool IsInitialized();
   static void InitInstance(std::unique_ptr<MetadataManager> instance);
   static MetadataManager &Instance();
-
- protected:
-  RedisModuleType *module_type_;
 
  private:
   struct RegisteredType {

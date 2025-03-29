@@ -54,7 +54,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
-#include "src/rdb_io_stream.h"
+#include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -111,7 +111,8 @@ template <typename T>
 absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     RedisModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     const data_model::VectorIndex &vector_index_proto,
-    RDBInputStream &rdb_stream, absl::string_view attribute_identifier) {
+    absl::string_view attribute_identifier,
+    SupplementalContentChunkIter &&iter) {
   try {
     auto index = std::shared_ptr<VectorFlat<T>>(new VectorFlat<T>(
         vector_index_proto.dimension_count(),
@@ -122,18 +123,9 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
                 vector_index_proto.distance_metric(), index->space_);
     index->algo_ =
         std::make_unique<hnswlib::BruteforceSearch<T>>(index->space_.get());
+    RDBChunkInputStream input(std::move(iter));
     VMSDK_RETURN_IF_ERROR(
-        index->algo_->LoadIndex(rdb_stream, index->space_.get(), index.get()));
-    if (vector_index_proto.has_tracked_keys()) {
-      VMSDK_RETURN_IF_ERROR(index->LoadTrackedKeys(
-          ctx, attribute_data_type, vector_index_proto.tracked_keys()));
-      VMSDK_RETURN_IF_ERROR(
-          index->ConsumeKeysAndInternalIdsForBackCompat(rdb_stream));
-    } else {
-      // Previous versions stored tracked keys in the index contents.
-      VMSDK_RETURN_IF_ERROR(
-          index->LoadKeysAndInternalIds(ctx, attribute_data_type, rdb_stream));
-    }
+        index->algo_->LoadIndex(input, index->space_.get(), index.get()));
     return index;
   } catch (const std::exception &e) {
     ++Metrics::GetStats().flat_create_exceptions_cnt;
@@ -243,9 +235,10 @@ absl::StatusOr<std::deque<Neighbor>> VectorFlat<T>::Search(
       -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
     absl::ReaderMutexLock lock(&resize_mutex_);
     try {
-      return algo_->searchKnn((T *)query.data(),
-                              std::min(count, algo_->cur_element_count_),
-                              filter.get());
+      return algo_->searchKnn(
+          (T *)query.data(),
+          std::min(count, static_cast<uint64_t>(algo_->cur_element_count_)),
+          filter.get());
     } catch (const std::exception &e) {
       Metrics::GetStats().flat_search_exceptions_cnt.fetch_add(
           1, std::memory_order_relaxed);
@@ -326,9 +319,10 @@ int VectorFlat<T>::RespondWithInfoImpl(RedisModuleCtx *ctx) const {
 }
 
 template <typename T>
-absl::Status VectorFlat<T>::SaveIndexImpl(RDBOutputStream &rdb_stream) const {
+absl::Status VectorFlat<T>::SaveIndexImpl(
+    RDBChunkOutputStream chunked_out) const {
   absl::ReaderMutexLock lock(&resize_mutex_);
-  return algo_->SaveIndex(rdb_stream);
+  return algo_->SaveIndex(chunked_out);
 }
 
 template class VectorFlat<float>;

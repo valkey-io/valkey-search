@@ -63,7 +63,9 @@ void ThreadPool::StartWorkers() {
   started_ = true;
   for (size_t i = 0; i < threads_.size(); ++i) {
     pthread_create(&threads_[i], nullptr, RunWorkerThread, this);
+#ifndef __APPLE__
     pthread_setname_np(threads_[i], (name_prefix_ + std::to_string(i)).c_str());
+#endif
   }
 }
 
@@ -72,7 +74,7 @@ bool ThreadPool::Schedule(absl::AnyInvocable<void()> task, Priority priority) {
   if (stop_mode_.has_value()) {
     return false;
   }
-  auto &tasks_queue = GetProrityTasksQueue(priority);
+  auto &tasks_queue = GetPriorityTasksQueue(priority);
   tasks_queue.emplace(std::move(task));
   condition_.Signal();
   return true;

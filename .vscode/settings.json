@@ -1,7 +1,7 @@
 {
     "C_Cpp.default.compileCommands": "compile_commands.json",
-    "terminal.integrated.defaultProfile.linux": "bash", // Set default profile to bash
-    "terminal.integrated.defaultProfile.osx": "bash", // Set default profile to bash
+    "terminal.integrated.defaultProfile.linux": "bash",
+    "terminal.integrated.defaultProfile.osx": "bash",
     "clangd.path": "/usr/bin/clangd",
     "C_Cpp.codeAnalysis.runAutomatically": true,
     "editor.formatOnSave": true,
@@ -16,7 +16,6 @@
         "--compile-commands-dir=${workspaceFolder}/",
         "--query-driver=**"
     ],
-    "bazel.buildifierFixOnFormat": false,
     "clangd.inactiveRegions.useBackgroundHighlight": true,
-    "clangd.enableCodeCompletion": true,
+    "clangd.enableCodeCompletion": true
 }

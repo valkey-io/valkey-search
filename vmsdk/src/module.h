@@ -52,10 +52,10 @@
     }                                                                       \
                                                                             \
     if (options.on_load.has_value()) {                                      \
-      return vmsdk::module::LogOnLoad(                                      \
+      return vmsdk::module::OnLoadDone(                                     \
           options.on_load.value()(ctx, argv, argc, options), ctx, options); \
     }                                                                       \
-    return vmsdk::module::LogOnLoad(absl::OkStatus(), ctx, options);        \
+    return vmsdk::module::OnLoadDone(absl::OkStatus(), ctx, options);       \
   }                                                                         \
   int RedisModule_OnUnload(RedisModuleCtx *ctx) {                           \
     if (options.on_unload.has_value()) {                                    \
@@ -92,11 +92,10 @@ struct Options {
   OnUnload on_unload;
 };
 
-int LogOnLoad(absl::Status status, RedisModuleCtx *ctx, const Options &options);
-
 int OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
            const Options &options);
-
+int OnLoadDone(absl::Status status, RedisModuleCtx *ctx,
+               const Options &options);
 absl::Status RegisterInfo(RedisModuleCtx *ctx, RedisModuleInfoFunc info);
 
 }  // namespace module

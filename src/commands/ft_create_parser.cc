@@ -30,7 +30,6 @@
 
 #include <sys/types.h>
 
-#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -53,6 +52,7 @@
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
@@ -60,7 +60,7 @@ namespace {
 constexpr absl::string_view kInitialCapParam{"INITIAL_CAP"};
 constexpr absl::string_view kBlockSizeParam{"BLOCK_SIZE"};
 constexpr absl::string_view kMParam{"M"};
-constexpr absl::string_view kEfContructionParam{"EF_CONSTRUCTION"};
+constexpr absl::string_view kEfConstructionParam{"EF_CONSTRUCTION"};
 constexpr absl::string_view kEfRuntimeParam{"EF_RUNTIME"};
 constexpr absl::string_view kDimensionsParam{"DIM"};
 constexpr absl::string_view kDistanceMetricParam{"DISTANCE_METRIC"};
@@ -97,13 +97,17 @@ absl::Status ParsePrefixes(vmsdk::ArgsIterator &itr,
   if (!res) {
     return absl::OkStatus();
   }
-  if (prefixes_cnt >= (uint32_t)itr.DistanceEnd()) {
+  if (prefixes_cnt > (uint32_t)itr.DistanceEnd()) {
     return absl::InvalidArgumentError(
         absl::StrCat("Bad arguments for PREFIX: `", prefixes_cnt,
                      "` is outside acceptable bounds"));
   }
   for (uint32_t i = 0; i < prefixes_cnt; ++i) {
     VMSDK_ASSIGN_OR_RETURN(auto itr_arg, itr.Get());
+    if (vmsdk::ParseHashTag(vmsdk::ToStringView(itr_arg))) {
+      return absl::InvalidArgumentError(
+          "PREFIX argument(s) must not contain a hash tag");
+    }
     index_schema_proto.add_subscribed_key_prefixes(
         std::string(vmsdk::ToStringView(itr_arg)));
     itr.Next();
@@ -158,7 +162,7 @@ vmsdk::KeyValueParser<HNSWParameters> CreateHNSWParser() {
   parser.AddParamParser(kInitialCapParam,
                         GENERATE_VALUE_PARSER(HNSWParameters, initial_cap));
   parser.AddParamParser(kMParam, GENERATE_VALUE_PARSER(HNSWParameters, m));
-  parser.AddParamParser(kEfContructionParam,
+  parser.AddParamParser(kEfConstructionParam,
                         GENERATE_VALUE_PARSER(HNSWParameters, ef_construction));
   parser.AddParamParser(kEfRuntimeParam,
                         GENERATE_VALUE_PARSER(HNSWParameters, ef_runtime));
@@ -285,6 +289,18 @@ absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
   attribute_proto->set_allocated_index(index_proto.release());
   return attribute_proto;
 }
+
+bool HasVectorIndex(const data_model::IndexSchema &index_schema_proto) {
+  for (const auto &attribute : index_schema_proto.attributes()) {
+    const auto &index = attribute.index();
+    if (index.index_type_case() ==
+        data_model::Index::IndexTypeCase::kVectorIndex) {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
@@ -292,6 +308,9 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   vmsdk::ArgsIterator itr{argv, argc};
   VMSDK_RETURN_IF_ERROR(
       vmsdk::ParseParamValue(itr, *index_schema_proto.mutable_name()));
+  if (vmsdk::ParseHashTag(index_schema_proto.name())) {
+    return absl::InvalidArgumentError("Index name must not contain a hash tag");
+  }
   data_model::AttributeDataType on_data_type{
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH};
   VMSDK_ASSIGN_OR_RETURN(auto res, ParseParam(kOnParam, false, itr,
@@ -344,6 +363,10 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
                        kMaxAttributes, "."));
     }
     identifier_names.insert(attribute->identifier());
+  }
+  if (!HasVectorIndex(index_schema_proto)) {
+    return absl::InvalidArgumentError(
+        "At least one attribute must be indexed as a vector");
   }
   return index_schema_proto;
 }
@@ -399,7 +422,7 @@ absl::Status HNSWParameters::Verify() const {
   }
   if (ef_construction <= 0 || ef_construction > kMaxEfConstruction) {
     return absl::InvalidArgumentError(
-        absl::StrCat(kEfContructionParam,
+        absl::StrCat(kEfConstructionParam,
                      " must be a positive integer greater than 0 "
                      "and cannot exceed ",
                      kMaxEfConstruction, "."));

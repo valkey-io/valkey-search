@@ -44,7 +44,6 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
@@ -63,16 +62,16 @@ const char* ToStrLogLevel(int log_level) {
   CHECK(false);
 }
 
-static inline std::string DefaultSinkFormater(const absl::LogEntry& entry) {
+static inline std::string DefaultSinkFormatter(const absl::LogEntry& entry) {
   pthread_t thread_id = pthread_self();
   return absl::StrFormat(
       "[%s], tid: %lu, %s:%d: %s", ToStrLogLevel(entry.verbosity()),
-      static_cast<unsigned long>(thread_id), entry.source_filename(),
+      reinterpret_cast<unsigned long>(thread_id), entry.source_filename(),
       entry.source_line(), entry.text_message());
 }
 
 struct SinkOptions {
-  LogFormatterFunc formatter{DefaultSinkFormater};
+  LogFormatterFunc formatter{DefaultSinkFormatter};
   bool log_level_specified{false};
 };
 
@@ -83,7 +82,7 @@ void SetSinkFormatter(LogFormatterFunc formatter) {
   if (formatter) {
     sink_options.formatter = formatter;
   } else {
-    sink_options.formatter = DefaultSinkFormater;
+    sink_options.formatter = DefaultSinkFormatter;
   }
 }
 
@@ -113,7 +112,7 @@ absl::StatusOr<std::string> FetchEngineLogLevel(RedisModuleCtx* ctx) {
   RedisModuleCallReply* loglevel_reply =
       RedisModule_CallReplyArrayElement(reply.get(), 1);
 
-  if (loglevel_reply == NULL ||
+  if (loglevel_reply == nullptr ||
       RedisModule_CallReplyType(loglevel_reply) != REDISMODULE_REPLY_STRING) {
     return absl::NotFoundError(
         absl::StrCat("Log level value is missing or not a string."));
@@ -147,7 +146,7 @@ absl::Status InitLogging(RedisModuleCtx* ctx,
   auto itr = kLogLevelMap.find(absl::AsciiStrToLower(log_level_str.value()));
   if (itr == kLogLevelMap.end()) {
     return absl::InvalidArgumentError(
-        absl::StrCat("Unknown sevirity `", log_level_str.value(), "`"));
+        absl::StrCat("Unknown severity `", log_level_str.value(), "`"));
   }
   absl::SetGlobalVLogLevel(static_cast<int>(itr->second));
 

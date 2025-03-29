@@ -49,6 +49,7 @@
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
+#include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -209,6 +210,11 @@ TEST_P(LoadTest, load) {
   auto args = vmsdk::ToRedisStringVector(test_case.args);
   ON_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&fake_ctx_))
       .WillByDefault(testing::Return(&fake_ctx_));
+  EXPECT_CALL(
+      *kMockRedisModule,
+      CreateDataType(&fake_ctx_, testing::StrEq(kValkeySearchModuleTypeName),
+                     testing::_, testing::_))
+      .WillOnce(testing::Return((RedisModuleType *)0xBADF00D));
   if (test_case.expected_load_ret == 0) {
     EXPECT_CALL(*kMockRedisModule,
                 Call(testing::_, testing::StrEq(kJsonCmd), testing::StrEq("cc"),
@@ -216,23 +222,11 @@ TEST_P(LoadTest, load) {
         .WillOnce(testing::Return(nullptr));
     EXPECT_CALL(
         *kMockRedisModule,
-        CreateDataType(&fake_ctx_, testing::StrEq(kIndexSchemaModuleTypeName),
-                       testing::_, testing::_))
-        .WillOnce(testing::Return(
-            TestableSchemaManager::GetFakeIndexSchemaModuleType()));
-    EXPECT_CALL(
-        *kMockRedisModule,
         SetModuleOptions(&fake_ctx_,
                          REDISMODULE_OPTIONS_HANDLE_IO_ERRORS |
                              REDISMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD |
                              REDISMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED))
         .Times(1);
-    EXPECT_CALL(
-        *kMockRedisModule,
-        CreateDataType(&fake_ctx_, testing::StrEq(kSchemaManagerModuleTypeName),
-                       testing::_, testing::_))
-        .WillOnce(testing::Return(
-            TestableSchemaManager::GetFakeSchemaManagerModuleType()));
   }
   std::string port_str;
   if (test_case.use_coordinator) {
@@ -264,13 +258,6 @@ TEST_P(LoadTest, load) {
   if (test_case.cluster_mode) {
     EXPECT_CALL(*kMockRedisModule, GetContextFlags(&fake_ctx_))
         .WillRepeatedly(testing::Return(REDISMODULE_CTX_FLAGS_CLUSTER));
-    EXPECT_CALL(*kMockRedisModule,
-                CreateDataType(
-                    &fake_ctx_,
-                    testing::StrEq(coordinator::kMetadataManagerModuleTypeName),
-                    testing::_, testing::_))
-        .WillOnce(testing::Return(
-            TestableMetadataManager::GetFakeMetadataManagerModuleType()));
     EXPECT_CALL(
         *kMockRedisModule,
         RegisterClusterMessageReceiver(
@@ -282,10 +269,11 @@ TEST_P(LoadTest, load) {
         .WillRepeatedly(testing::Return(0));
   }
   vmsdk::module::Options options;
-  EXPECT_EQ(vmsdk::module::LogOnLoad(ValkeySearch::Instance().OnLoad(
-                                         &fake_ctx_, args.data(), args.size()),
-                                     &fake_ctx_, options),
-            test_case.expected_load_ret);
+  auto load_res = vmsdk::module::OnLoadDone(
+      ValkeySearch::Instance().OnLoad(&fake_ctx_, args.data(), args.size()),
+      &fake_ctx_, options);
+  vmsdk::ResetValkeyAlloc();
+  EXPECT_EQ(load_res, test_case.expected_load_ret);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   auto reader_thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
   if (test_case.expect_thread_pool_started) {
@@ -412,7 +400,7 @@ TEST_F(ValkeySearchTest, Info) {
   EXPECT_EQ(std::string(*interned_key_1), "key1");
   RedisModuleInfoCtx fake_info_ctx;
   ValkeySearch::Instance().Info(&fake_info_ctx);
-#ifndef BAZEL_BUILD
+#ifndef TESTING_TMP_DISABLED
   EXPECT_EQ(
       fake_info_ctx.info_capture.GetInfo(),
       "memory\nused_memory_bytes: 0\nused_memory_human: "

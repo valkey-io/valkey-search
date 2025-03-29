@@ -86,10 +86,10 @@ static bool AVXCapable() {
     cpuid(cpuInfo, 1, 0);
 
     bool osUsesXSAVE_XRSTORE = (cpuInfo[2] & (1 << 27)) != 0;
-    bool cpuAVXSuport = (cpuInfo[2] & (1 << 28)) != 0;
+    bool cpuAVXSupport = (cpuInfo[2] & (1 << 28)) != 0;
 
     bool avxSupported = false;
-    if (osUsesXSAVE_XRSTORE && cpuAVXSuport) {
+    if (osUsesXSAVE_XRSTORE && cpuAVXSupport) {
         uint64_t xcrFeatureMask = xgetbv(_XCR_XFEATURE_ENABLED_MASK);
         avxSupported = (xcrFeatureMask & 0x6) == 0x6;
     }
@@ -115,10 +115,10 @@ static bool AVX512Capable() {
     cpuid(cpuInfo, 1, 0);
 
     bool osUsesXSAVE_XRSTORE = (cpuInfo[2] & (1 << 27)) != 0;
-    bool cpuAVXSuport = (cpuInfo[2] & (1 << 28)) != 0;
+    bool cpuAVXSupport = (cpuInfo[2] & (1 << 28)) != 0;
 
     bool avx512Supported = false;
-    if (osUsesXSAVE_XRSTORE && cpuAVXSuport) {
+    if (osUsesXSAVE_XRSTORE && cpuAVXSupport) {
         uint64_t xcrFeatureMask = xgetbv(_XCR_XFEATURE_ENABLED_MASK);
         avx512Supported = (xcrFeatureMask & 0xe6) == 0xe6;
     }
@@ -205,7 +205,6 @@ class AlgorithmInterface {
     virtual std::vector<std::pair<dist_t, labeltype>>
         searchKnnCloserFirst(const void* query_data, size_t k, BaseFilterFunctor* isIdAllowed = nullptr) const;
 
-    virtual void SaveIndex(const std::string &location) = 0;
     virtual absl::Status SaveIndex(OutputStream& output) = 0;
     virtual ~AlgorithmInterface(){
     }

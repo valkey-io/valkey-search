@@ -87,6 +87,23 @@ TEST_F(UtilsTest, RunByMainWhileInMain) {
   EXPECT_TRUE(run);
 }
 
+TEST_F(UtilsTest, ParseTag) {
+  struct {
+    std::string str;
+    std::optional<absl::string_view> expected;
+  } test_cases[] = {
+      {"", std::nullopt},   {"{", std::nullopt},    {"}", std::nullopt},
+      {"{{", std::nullopt}, {"{a", std::nullopt},   {"{a}", "a"},
+      {"a{b}", "b"},        {"}{", std::nullopt},   {"}{a}", "a"},
+      {"{}", std::nullopt}, {"abc{cde}xyz", "cde"}, {"ab{c}{d}{e}", "c"},
+
+  };
+  for (auto &tc : test_cases) {
+    auto actual = ParseHashTag(tc.str);
+    EXPECT_EQ(actual, tc.expected);
+  }
+}
+
 }  // namespace
 
 }  // namespace vmsdk

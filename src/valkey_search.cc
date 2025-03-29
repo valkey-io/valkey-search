@@ -56,10 +56,12 @@
 #include "src/coordinator/util.h"
 #include "src/index_schema.h"
 #include "src/metrics.h"
+#include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/command_parser.h"
+#include "vmsdk/src/concurrency.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -85,8 +87,8 @@ constexpr absl::string_view kUseCoordinator{"--use-coordinator"};
 constexpr absl::string_view kLogLevel{"--log-level"};
 
 struct Parameters {
-  int reader_threads{10};
-  int writer_threads{30};
+  size_t reader_threads{vmsdk::GetPhysicalCPUCoresCount()};
+  size_t writer_threads{vmsdk::GetPhysicalCPUCoresCount()};
   std::optional<int> threads;
   bool use_coordinator{false};
   std::optional<std::string> log_level;
@@ -119,6 +121,8 @@ absl::StatusOr<Parameters> Load(RedisModuleString **argv, int argc) {
         "and writer thread pools are either enabled or disabled "
         "simultaneously");
   }
+  VMSDK_LOG(NOTICE, nullptr) << "reader_threads: " << parameters.reader_threads;
+  VMSDK_LOG(NOTICE, nullptr) << "writer_threads: " << parameters.writer_threads;
   return parameters;
 }
 }  // namespace options
@@ -378,7 +382,7 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx) const {
 // writer thread pool during full sync. The writer thread pool resumes once the
 // child process dies or suspension time exceeds 60 seconds. Suspending the
 // workers guarantees that no thread is mutating the index while the fork is
-// happenning. For more details see:
+// happening. For more details see:
 // https://pubs.opengroup.org/onlinepubs/009695399/functions/pthread_atfork.html
 void ValkeySearch::AtForkPrepare() {
   Metrics::GetStats().worker_thread_pool_suspend_cnt++;
@@ -477,8 +481,6 @@ absl::Status ValkeySearch::LoadOptions(RedisModuleCtx *ctx,
         vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx));
     coordinator::MetadataManager::InitInstance(
         std::make_unique<coordinator::MetadataManager>(ctx, *client_pool_));
-    VMSDK_RETURN_IF_ERROR(
-        coordinator::MetadataManager::Instance().RegisterModuleType(ctx));
     coordinator::MetadataManager::Instance().RegisterForClusterMessages(ctx);
   }
   SchemaManager::InitInstance(std::make_unique<SchemaManager>(
@@ -493,7 +495,6 @@ absl::Status ValkeySearch::LoadOptions(RedisModuleCtx *ctx,
       return absl::InternalError("Failed to create coordinator server");
     }
   }
-  VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().RegisterModuleType(ctx));
   return absl::OkStatus();
 }
 
@@ -524,6 +525,9 @@ absl::Status ValkeySearch::OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv,
                                   int argc) {
   ctx_ = RedisModule_GetDetachedThreadSafeContext(ctx);
 
+  // Register a single module type for Aux load/save callbacks.
+  VMSDK_RETURN_IF_ERROR(RegisterModuleType(ctx));
+
   VMSDK_RETURN_IF_ERROR(LoadOptions(ctx, argv, argc));
 
   RedisModule_SetModuleOptions(
@@ -531,7 +535,7 @@ absl::Status ValkeySearch::OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv,
                REDISMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD |
                REDISMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED);
   if (!IsJsonModuleLoaded(ctx)) {
-    VMSDK_LOG(WARNING, ctx) << "Json module is not loaded ";
+    VMSDK_LOG(NOTICE, ctx) << "Json module is not loaded ";
   }
   VectorExternalizer::Instance().Init(ctx_);
   return absl::OkStatus();

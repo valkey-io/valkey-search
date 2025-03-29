@@ -14,7 +14,7 @@ def redis_module_library(name, deps, additional_link_opts = [], **kwargs):
         name = name,
         # TODO(b/317402988) Investigate remaining dynamic linkages.
         user_link_flags = [
-            # Prevent accidental symbol collisions by only exporting necesasry
+            # Prevent accidental symbol collisions by only exporting necessary
             # symbols. See yaqs.corp.google.com/eng/q/3879504732816932864.
             "-Wl,--version-script=$(location //vmsdk:versionscript.lds)",
         ] + additional_link_opts,

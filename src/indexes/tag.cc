@@ -43,7 +43,6 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
-#include "absl/strings/strip.h"
 #include "absl/synchronization/mutex.h"
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
@@ -133,7 +132,7 @@ absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
 
 absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
                                        absl::string_view data) {
-  // TODO(@himanshushahu): implement operator [] in patriciatree.
+  // TODO: implement operator [] in patriciatree.
   auto interned_data = StringInternStore::Intern(data);
   auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
   if (new_parsed_tags.empty()) {
@@ -356,15 +355,6 @@ std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
   }
   return std::make_unique<Tag::EntriesFetcher>(tree_, entries, size, negate,
                                                untracked_keys_);
-}
-
-vmsdk::UniqueRedisString Tag::NormalizeStringRecord(
-    vmsdk::UniqueRedisString input) const {
-  auto input_str = vmsdk::ToStringView(input.get());
-  if (absl::ConsumePrefix(&input_str, "[")) {
-    absl::ConsumeSuffix(&input_str, "]");
-  }
-  return vmsdk::MakeUniqueRedisString(input_str);
 }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Tag::EntriesFetcher::Begin() {

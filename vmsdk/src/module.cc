@@ -68,7 +68,7 @@ absl::Status RegisterCommands(RedisModuleCtx *ctx,
 
 int OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
            const Options &options) {
-  if (RedisModule_Init(ctx, options.name.c_str(), 1, REDISMODULE_APIVER_1) ==
+  if (RedisModule_Init(ctx, options.name.c_str(), options.version, REDISMODULE_APIVER_1) ==
       REDISMODULE_ERR) {
     RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_WARNING, "Failed to init module");
     return REDISMODULE_ERR;

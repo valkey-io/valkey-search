@@ -1,0 +1,11 @@
+Hello! This file is just a placeholder, since this branch is where all the development happens.
+
+There is no release notes for this branch, it gets forked into another branch every time there
+is a partial feature freeze in order to eventually create a new stable release.
+
+Usually this branch is stable enough for you to use it in development environments.
+However you should never use it in production environments.
+
+More information is available at https://valkey.io
+
+Happy hacking!

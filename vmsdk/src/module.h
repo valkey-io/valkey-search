@@ -81,6 +81,7 @@ struct CommandOptions {
 
 struct Options {
   std::string name;
+  int version;
   RedisModuleInfoFunc info{nullptr};
   std::list<CommandOptions> commands;
   using OnLoad = std::optional<absl::AnyInvocable<absl::Status(

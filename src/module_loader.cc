@@ -35,10 +35,18 @@
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
+#define MODULE_VERSION 10000
+/* The release stage is used in order to provide release status information.
+ * In unstable branch the status is always "dev".
+ * During release process the status will be set to rc1,rc2...rcN.
+ * When the version is released the status will be "ga". */
+#define MODULE_RELEASE_STAGE "rc1"
+
 namespace {
 
 vmsdk::module::Options options = {
     .name = "search",
+    .version = MODULE_VERSION,
     .info = valkey_search::ModuleInfo,
     .commands =
         {

@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
-project(VSS)
+
+# Project definition
+project(ValkeySearch VERSION 1.0.0 LANGUAGES C CXX)
 
 # Options
 option(BUILD_TESTS "Build valkey-search tests" ON)

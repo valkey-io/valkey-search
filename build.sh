@@ -124,11 +124,11 @@ function build() {
         cd ${ROOT_DIR}
 
         printf "\n${GREEN}Build Successful!${RESET}\n\n"
-        printf "${BOLD_PINK}Module path:${RESET} .build_${BUILD_CONFIG}/libsearch.so\n\n"
+        printf "${BOLD_PINK}Module path:${RESET} .build-${BUILD_CONFIG}/libsearch.so\n\n"
         printf "You may want to run the unit tests by executing:\n"
         printf "    ./build.sh --run-tests\n\n"
         printf "To load the module, execute the following command:\n"
-        printf "    valkey-server --loadmodule %s/.build_${BUILD_CONFIG}/libsearch.so\n\n" "$PWD"
+        printf "    valkey-server --loadmodule %s/.build-${BUILD_CONFIG}/libsearch.so\n\n" "$PWD"
     fi
 }
 

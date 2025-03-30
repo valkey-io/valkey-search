@@ -137,6 +137,7 @@ set(SRCS_COMMON ${CMAKE_CURRENT_LIST_DIR}/common.cc
                 ${CMAKE_CURRENT_LIST_DIR}/common.h)
 
 add_library(testing_common STATIC ${SRCS_COMMON})
+target_include_directories(testing_common PUBLIC ${HIGHWAY_HASH_INCLUDE_PATH})
 target_include_directories(testing_common PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(testing_common PUBLIC attribute_data_type)
 target_link_libraries(testing_common PUBLIC index_schema)

@@ -3,10 +3,18 @@ cmake_minimum_required(VERSION 3.16)
 # Project definition
 project(ValkeySearch VERSION 99.99.99 LANGUAGES C CXX) # Version is 99.99.99 for main development branch
 
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/Modules/")
+
 # Options
 option(BUILD_TESTS "Build valkey-search tests" ON)
+option(WITH_SUBMODULES_SYSTEM "Use system submodules" OFF)
 
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
+# Initialise submodules (gRPC, Protobuf, GTest & Abseil)
+add_subdirectory(submodules)
+
+message(STATUS "GRPC_CPP_PLUGIN_PATH is set to ${GRPC_CPP_PLUGIN_PATH}")
+message(STATUS "protoc_EXE is set to ${protoc_EXE}")
+message(STATUS "highwayhash include path: ${HIGHWAY_HASH_INCLUDE_PATH}")
 
 set(CMAKE_CXX_STANDARD 20 REQUIRED)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -15,7 +23,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include_directories(${CMAKE_SOURCE_DIR})
 include_directories(${CMAKE_BINARY_DIR}/.deps/install/include)
 
-add_subdirectory(submodules)
 include(valkey_search)
 
 add_subdirectory(vmsdk)

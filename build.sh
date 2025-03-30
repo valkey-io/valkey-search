@@ -5,6 +5,7 @@ RUN_CMAKE="no"
 ROOT_DIR=$(readlink -f $(dirname $0))
 VERBOSE_ARGS=""
 CMAKE_TARGET=""
+CMAKE_EXTRA_ARGS=""
 RUN_TEST=""
 RUN_BUILD="yes"
 DUMP_TEST_ERRORS_STDOUT="no"
@@ -33,6 +34,7 @@ Usage: build.sh [options...]
     --no-build                By default, build.sh always triggers a build. This option disables this behavior.
     --test-errors-stdout      When a test fails, dump the captured tests output to stdout.
     --run-integration-tests   Run integration tests.
+    --use-system-modules      Use system's installed gRPC, Protobuf & Abseil dependencies.
 
 Example usage:
 
@@ -90,6 +92,11 @@ do
         shift || true
         echo "Write test errors to stdout on failure"
         ;;
+    --use-system-modules)
+        CMAKE_EXTRA_ARGS="-DWITH_SUBMODULES_SYSTEM=ON"
+        shift || true
+        echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
+        ;;
     --verbose|-v)
         shift || true
         VERBOSE_ARGS="-v"
@@ -112,7 +119,8 @@ function configure() {
     cd $_
     local BUILD_TYPE=$(echo ${BUILD_CONFIG^})
     rm -f CMakeCache.txt
-    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -GNinja
+    printf "Running: cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -GNinja ${CMAKE_EXTRA_ARGS}\n"
+    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -GNinja ${CMAKE_EXTRA_ARGS}
     cd ${ROOT_DIR}
 }
 
@@ -213,20 +221,6 @@ cleanup() {
 # Ensure cleanup runs on exit
 trap cleanup EXIT
 
-if [[ "${INTEGRETION_TEST}" == "yes" ]]; then
-    cd testing/integration
-    params=""
-    if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
-        params=" --test-errors-stdout"
-    fi
-    if [[ "${BUILD_CONFIG}" == "debug" ]]; then
-        params="${params} --debug"
-    fi
-    ./run.sh ${params}
-    exit 0
-fi
-
-
 BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
 TESTS_DIR=${BUILD_DIR}/tests
 TEST_OUTPUT_FILE=${BUILD_DIR}/tests.out
@@ -269,6 +263,17 @@ elif [ ! -z "${RUN_TEST}" ]; then
     ${TESTS_DIR}/${RUN_TEST} >> ${TEST_OUTPUT_FILE} 2>&1 || print_test_error_and_exit
     print_test_ok
     print_test_summary
+elif [[ "${INTEGRETION_TEST}" == "yes" ]]; then
+    cd testing/integration
+    params=""
+    if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
+        params=" --test-errors-stdout"
+    fi
+    if [[ "${BUILD_CONFIG}" == "debug" ]]; then
+        params="${params} --debug"
+    fi
+    ./run.sh ${params}
 fi
+
 END_TIME=`date +%s`
 TEST_RUNTIME=$((END_TIME - START_TIME))

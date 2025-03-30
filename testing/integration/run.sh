@@ -40,7 +40,7 @@ while [[ $# -gt 0 ]]; do
     --test)
         TEST="$2"
         shift 2
-        ;;      
+        ;;
    --debug)
         shift || true
         BUILD_CONFIG="debug"
@@ -114,7 +114,7 @@ function configure() {
     printf "${GREEN}${BUILD_SERVER}${RESET}\n"
      if [[ "${BUILD_SERVER}" == "yes" ]]; then
         printf "${BOLD_PINK}Building valkey-server...${RESET}\n"
-        
+
         rm -rf ${VALKEY_SERVER_DIR}
         git clone --branch ${VALKEY_VERSION} --single-branch https://github.com/valkey-io/valkey.git ${VALKEY_SERVER_DIR}
         cd ${VALKEY_SERVER_DIR}
@@ -141,6 +141,7 @@ function build() {
 BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
 VALKEY_SERVER_DIR=${BUILD_DIR}/valkey-${VALKEY_VERSION}
 VALKEY_SERVER_PATH=${VALKEY_SERVER_DIR}/src/valkey-server
+echo " VALKEY_SERVER_DIR is set to ${VALKEY_SERVER_DIR}"
 
 if [[ "${CLEAN}" == "yes" ]]; then
     rm -rf ${BUILD_DIR}

@@ -1,13 +1,12 @@
 include(FetchContent)
 include(ProcessorCount)
-
 ProcessorCount(PROCESSOR_COUNT)
 
 set(MODULES_DIR "${CMAKE_BINARY_DIR}/.deps")
 file(MAKE_DIRECTORY "${MODULES_DIR}")
 
-set(MODULE_GRPC "grpc")
 set(MODULE_HIGHWAYHASH "highwayhash")
+set(MODULE_GRPC "grpc")
 set(MODULE_GOOGLE_TEST "googletest")
 
 set(MODULES_INSTALL_PREFIX "${MODULES_DIR}/install")
@@ -75,29 +74,85 @@ function(build_submodule MODULE_NAME MODULE_CMAKE_ARGS HINT_FILE)
   endif()
 endfunction()
 
-# Pull submodules with a given branch / tag and build them
-checkout_submodule_branch(${MODULE_GRPC} "https://github.com/grpc/grpc"
-                          "v1.70.1" "${MODULES_DIR}/grpc/build-release")
+if(WITH_SUBMODULES_SYSTEM)
+  message(STATUS "Checking for system provided grpc_cpp_plugin")
+  find_program(GRPC_CPP_PLUGIN_PATH_EXE grpc_cpp_plugin REQUIRED)
+  message(STATUS "Found ${GRPC_CPP_PLUGIN_PATH_EXE}")
+  set(GRPC_CPP_PLUGIN_PATH
+      "${GRPC_CPP_PLUGIN_PATH_EXE}"
+      PARENT_SCOPE)
+  find_program(PROTOC_sys_EXE protoc REQUIRED)
+  set(protoc_EXE
+      "${PROTOC_sys_EXE}"
+      PARENT_SCOPE)
 
-checkout_submodule_branch(
-  ${MODULE_HIGHWAYHASH} "https://github.com/google/highwayhash.git" "master"
-  "${MODULES_DIR}/highwayhash")
+  # Use system provided libhighwayhash
+  find_path(LIBHIGHWAYHASH_LIBDIR libhighwayhash.a REQUIRED PATH_SUFFIXES lib)
+  find_path(LIBHIGHWAYHASH_INCLUDE highwayhash/highwayhash.h REQUIRED)
+  set(LIBHIGHWAYHASH "${LIBHIGHWAYHASH_LIBDIR}/libhighwayhash.a")
 
-checkout_submodule_branch(
-  ${MODULE_GOOGLE_TEST} "https://github.com/google/googletest.git" "main"
-  "${MODULES_DIR}/googletest/build-release")
+  add_library(highwayhash STATIC IMPORTED GLOBAL)
+  set_target_properties(
+    highwayhash PROPERTIES IMPORTED_LOCATION "${LIBHIGHWAYHASH}"
+                           INCLUDE_DIRECTORIES "${LIBHIGHWAYHASH_INCLUDE}")
 
-set(MODULES_COMMON_CMAKE_ARGS
-    "-DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_INSTALL_PREFIX=${MODULES_INSTALL_PREFIX} -DCMAKE_CXX_STANDARD=20"
-)
-set(GOOGLE_TEST_CMAKE_ARGS "${MODULES_COMMON_CMAKE_ARGS}")
-set(GRPC_CMAKE_ARGS
-    "${MODULES_COMMON_CMAKE_ARGS} -DSKIP_INSTALL_ALL=ON -DgRPC_INSTALL=ON -DgRPC_BUILD_TESTS=OFF -DgRPC_SSL_PROVIDER=package"
-)
+  set(HIGHWAY_HASH_INCLUDE_PATH
+      "${LIBHIGHWAYHASH_INCLUDE}"
+      PARENT_SCOPE)
+  message(STATUS "libhighwayhash.a found: ${LIBHIGHWAYHASH}")
+  message(STATUS "highwayhash include path: ${LIBHIGHWAYHASH_INCLUDE}")
+else()
+  # Pull submodules with a given branch / tag and build them
+  checkout_submodule_branch(${MODULE_GRPC} "https://github.com/grpc/grpc"
+                            "v1.70.1" "${MODULES_DIR}/grpc/build-release")
 
-build_submodule(${MODULE_GOOGLE_TEST} "${GOOGLE_TEST_CMAKE_ARGS}"
-                "${MODULES_INSTALL_PREFIX}/include/gtest/gtest.h")
-build_submodule(${MODULE_GRPC} "${GRPC_CMAKE_ARGS}"
-                "${MODULES_INSTALL_PREFIX}/include/absl/base/options.h")
+  checkout_submodule_branch(
+    ${MODULE_HIGHWAYHASH} "https://github.com/google/highwayhash.git" "master"
+    "${MODULES_DIR}/highwayhash")
 
-add_subdirectory(${MODULES_DIR}/highwayhash ${CMAKE_BINARY_DIR}/highwayhash)
+  checkout_submodule_branch(
+    ${MODULE_GOOGLE_TEST} "https://github.com/google/googletest.git" "main"
+    "${MODULES_DIR}/googletest/build-release")
+
+  set(MODULES_COMMON_CMAKE_ARGS
+      "-DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_INSTALL_PREFIX=${MODULES_INSTALL_PREFIX} -DCMAKE_CXX_STANDARD=20"
+  )
+  set(GOOGLE_TEST_CMAKE_ARGS "${MODULES_COMMON_CMAKE_ARGS}")
+  set(GRPC_CMAKE_ARGS
+      "${MODULES_COMMON_CMAKE_ARGS} -DSKIP_INSTALL_ALL=ON -DgRPC_INSTALL=ON -DgRPC_BUILD_TESTS=OFF -DgRPC_SSL_PROVIDER=package"
+  )
+
+  add_subdirectory(${MODULES_DIR}/highwayhash ${CMAKE_BINARY_DIR}/highwayhash)
+  build_submodule(${MODULE_GOOGLE_TEST} "${GOOGLE_TEST_CMAKE_ARGS}"
+                  "${MODULES_INSTALL_PREFIX}/include/gtest/gtest.h")
+  build_submodule(${MODULE_GRPC} "${GRPC_CMAKE_ARGS}"
+                  "${MODULES_INSTALL_PREFIX}/include/absl/base/options.h")
+
+  set(HIGHWAY_HASH_INCLUDE_PATH
+      "${MODULES_DIR}/highwayhash"
+      PARENT_SCOPE)
+  set(GRPC_CPP_PLUGIN_PATH
+      "${CMAKE_BINARY_DIR}/.deps/install/bin/grpc_cpp_plugin"
+      PARENT_SCOPE)
+  set(protoc_EXE
+      "${CMAKE_BINARY_DIR}/.deps/install/bin/protoc"
+      PARENT_SCOPE)
+
+  include_directories("${CMAKE_BINARY_DIR}/.deps/install/include")
+  # Make sure that find_package will find our installed submodules
+  set(__CMAKE_PREFIX_PATH
+      "${__CMAKE_PREFIX_PATH}:${CMAKE_BINARY_DIR}/.deps/install/lib/cmake/absl")
+  set(__CMAKE_PREFIX_PATH
+      "${__CMAKE_PREFIX_PATH}:${CMAKE_BINARY_DIR}/.deps/install/lib/cmake/GTest"
+  )
+  set(__CMAKE_PREFIX_PATH
+      "${__CMAKE_PREFIX_PATH}:${CMAKE_BINARY_DIR}/.deps/install/lib/cmake/grpc")
+  set(__CMAKE_PREFIX_PATH
+      "${__CMAKE_PREFIX_PATH}:${CMAKE_BINARY_DIR}/.deps/install/lib/cmake/protobuf"
+  )
+  set(__CMAKE_PREFIX_PATH
+      "${__CMAKE_PREFIX_PATH}:${CMAKE_BINARY_DIR}/.deps/install/lib/cmake/utf8_range"
+  )
+  set(ENV{CMAKE_PREFIX_PATH} "${__CMAKE_PREFIX_PATH}")
+  message(STATUS "CMAKE_PREFIX_PATH=${__CMAKE_PREFIX_PATH}")
+endif()

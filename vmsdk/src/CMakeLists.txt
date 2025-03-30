@@ -10,7 +10,8 @@ target_link_libraries(log PUBLIC managed_pointers)
 target_link_libraries(log PUBLIC status_macros)
 target_link_libraries(log PUBLIC valkey_module)
 
-set(SRCS_CONCURRENCY ${CMAKE_CURRENT_LIST_DIR}/concurrency.cc ${CMAKE_CURRENT_LIST_DIR}/concurrency.h)
+set(SRCS_CONCURRENCY ${CMAKE_CURRENT_LIST_DIR}/concurrency.cc
+                     ${CMAKE_CURRENT_LIST_DIR}/concurrency.h)
 
 valkey_search_add_static_library(concurrency "${SRCS_CONCURRENCY}")
 target_include_directories(concurrency PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -85,7 +86,6 @@ set(SRCS_MODULE ${CMAKE_CURRENT_LIST_DIR}/module.cc
 valkey_search_add_static_library(module "${SRCS_MODULE}")
 target_include_directories(module PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(module PUBLIC log)
-# target_link_libraries(module PUBLIC memory_allocation)
 target_link_libraries(module PUBLIC utils)
 target_link_libraries(module PUBLIC valkey_module)
 
@@ -93,8 +93,8 @@ set(SRCS_MEMORY_ALLOCATION_OVERRIDES
     ${CMAKE_CURRENT_LIST_DIR}/memory_allocation_overrides.cc
     ${CMAKE_CURRENT_LIST_DIR}/memory_allocation_overrides.h)
 
-add_library(memory_allocation_overrides STATIC
-            ${SRCS_MEMORY_ALLOCATION_OVERRIDES})
+valkey_search_add_static_library(memory_allocation_overrides
+                                 ${SRCS_MEMORY_ALLOCATION_OVERRIDES})
 target_include_directories(memory_allocation_overrides
                            PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(memory_allocation_overrides PUBLIC memory_allocation)

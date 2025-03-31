@@ -11,7 +11,7 @@ finalize_test_flags(command_parser_test)
 
 set(SRCS_CONCURRENCY_TEST ${CMAKE_CURRENT_LIST_DIR}/concurrency_test.cc)
 add_executable(concurrency_test ${SRCS_CONCURRENCY_TEST})
-target_include_directories(concurrency_test PUBLIC ${SRCS_CONCURRENCY_TEST})
+target_include_directories(concurrency_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(concurrency_test PUBLIC concurrency)
 target_link_libraries(concurrency_test PUBLIC log)
 target_link_libraries(concurrency_test PUBLIC vmsdk_testing_infra)

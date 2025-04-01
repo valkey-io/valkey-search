@@ -80,6 +80,8 @@ target_link_libraries(command_parser INTERFACE status_macros)
 target_link_libraries(command_parser INTERFACE valkey_module)
 
 set(SRCS_MODULE ${CMAKE_CURRENT_LIST_DIR}/module.cc
+                ${CMAKE_CURRENT_LIST_DIR}/configurable.cc
+                ${CMAKE_CURRENT_LIST_DIR}/configurable.h
                 ${CMAKE_CURRENT_LIST_DIR}/module.h)
 
 valkey_search_add_static_library(module "${SRCS_MODULE}")

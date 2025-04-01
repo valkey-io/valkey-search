@@ -181,6 +181,17 @@ class MockRedisModule {
                long long field));  // NOLINT
   MOCK_METHOD(int, InfoAddFieldCString,
               (RedisModuleInfoCtx * ctx, const char *str, const char *field));
+  MOCK_METHOD(int, RegisterNumericConfig,
+              (RedisModuleCtx * ctx, const char *name, long long default_val,
+               unsigned int flags, long long min_value, long long max_value,
+               RedisModuleConfigGetNumericFunc getfn,
+               RedisModuleConfigSetNumericFunc setfn,
+               RedisModuleConfigApplyFunc applyfn, void *privdata));
+  MOCK_METHOD(int, RegisterBoolConfig,
+              (RedisModuleCtx * ctx, const char *name, int default_val,
+               unsigned int flags, RedisModuleConfigGetBoolFunc getfn,
+               RedisModuleConfigSetBoolFunc setfn,
+               RedisModuleConfigApplyFunc applyfn, void *privdata));
   MOCK_METHOD(int, RegisterStringConfig,
               (RedisModuleCtx * ctx, const char *name, const char *default_val,
                unsigned int flags, RedisModuleConfigGetStringFunc getfn,
@@ -979,6 +990,25 @@ inline int TestRedisModule_RegisterStringConfig(
       ctx, name, default_val, flags, getfn, setfn, applyfn, privdata);
 }
 
+inline int TestRedisModule_RegisterBoolConfig(
+    RedisModuleCtx *ctx, const char *name, int default_val, unsigned int flags,
+    RedisModuleConfigGetBoolFunc getfn, RedisModuleConfigSetBoolFunc setfn,
+    RedisModuleConfigApplyFunc applyfn, void *privdata) {
+  return kMockRedisModule->RegisterBoolConfig(ctx, name, default_val, flags,
+                                              getfn, setfn, applyfn, privdata);
+}
+
+inline int TestRedisModule_RegisterNumericConfig(
+    RedisModuleCtx *ctx, const char *name, long long default_val,
+    unsigned int flags, long long min_value, long long max_value,
+    RedisModuleConfigGetNumericFunc getfn,
+    RedisModuleConfigSetNumericFunc setfn, RedisModuleConfigApplyFunc applyfn,
+    void *privdata) {
+  return kMockRedisModule->RegisterNumericConfig(ctx, name, default_val, flags,
+                                                 min_value, max_value, getfn,
+                                                 setfn, applyfn, privdata);
+}
+
 inline int TestRedisModule_RegisterEnumConfig(
     RedisModuleCtx *ctx, const char *name, int default_val, unsigned int flags,
     const char **enum_values, const int *int_values, int num_enum_vals,
@@ -1448,6 +1478,8 @@ inline void TestRedisModule_Init() {
   RedisModule_InfoEndDictField = &TestRedisModule_InfoEndDictField;
   RedisModule_RegisterStringConfig = &TestRedisModule_RegisterStringConfig;
   RedisModule_RegisterEnumConfig = &TestRedisModule_RegisterEnumConfig;
+  RedisModule_RegisterNumericConfig = &TestRedisModule_RegisterNumericConfig;
+  RedisModule_RegisterBoolConfig = &TestRedisModule_RegisterBoolConfig;
   RedisModule_LoadConfigs = &TestRedisModule_LoadConfigs;
   RedisModule_SetConnectionProperties =
       &TestRedisModule_SetConnectionProperties;

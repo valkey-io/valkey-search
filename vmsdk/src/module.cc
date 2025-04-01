@@ -35,6 +35,7 @@
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "vmsdk/src/configurable.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -77,6 +78,13 @@ int OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
   if (!status.ok()) {
     RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_WARNING,
                     "Failed to init logging, %s", status.message().data());
+    return REDISMODULE_ERR;
+  }
+  if (auto status = vmsdk::config::ConfigurableBase::OnStartup(ctx);
+      !status.ok()) {
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_WARNING,
+                    "Failed to initialize configurables: %s",
+                    status.message().data());
     return REDISMODULE_ERR;
   }
   if (auto status = RegisterCommands(ctx, options.commands); !status.ok()) {

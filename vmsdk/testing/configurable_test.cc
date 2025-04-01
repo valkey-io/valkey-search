@@ -1,4 +1,10 @@
-
+/*
+ * Copyright Valkey Contributors.
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ *
+ */
+ 
 #include "vmsdk/src/configurable.h"
 
 #include "gmock/gmock.h"

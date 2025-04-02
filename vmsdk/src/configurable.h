@@ -14,6 +14,9 @@
 #include <string>
 
 #include "absl/log/check.h"
+#include "absl/strings/ascii.h"
+#include "status_macros.h"
+#include "type_conversions.h"
 #include "vmsdk/src/log.h"
 
 namespace vmsdk {
@@ -48,6 +51,8 @@ class ConfigurableBase {
   //
   static absl::Status OnStartup(RedisModuleCtx*);
 
+  static absl::Status ParseCommandLine(RedisModuleString** argv, int argc);
+
   // Debug/Diagnostics functions
   static void DumpAll(std::ostream& os);
   static std::map<std::string, std::pair<std::string, std::string>>
@@ -58,9 +63,11 @@ class ConfigurableBase {
   Flags GetFlags() const { return flags_; }
 
   virtual std::string ToString() const = 0;
+  virtual absl::Status FromRedisString(RedisModuleString* str) = 0;
 
  protected:
-  ConfigurableBase(const char* name, Flags flags) : name_(name), flags_(flags) {
+  ConfigurableBase(const char* name, Flags flags)
+      : name_(absl::AsciiStrToLower(name)), flags_(flags) {
     if (!bases) {
       //
       // Doing manual creation of the this map eliminates any dependency on link
@@ -80,15 +87,6 @@ class ConfigurableBase {
   virtual void SetDefault() = 0;
 
   static bool Initialized;
-
-  // For debug/unit testing
-  enum Type {
-    kNumeric,
-    kString,
-    kBoolean,
-    kEnum,
-  };
-  virtual Type GetType() const = 0;
 
  private:
   const std::string name_;
@@ -173,7 +171,17 @@ class Number : public Configurable<long long, long long> {
   }
 
   std::string ToString() const override { return std::to_string(c_value_); }
-  Type GetType() const override { return Type::kNumeric; }
+  absl::Status FromRedisString(RedisModuleString* str) override {
+    long long value;
+    VMSDK_ASSIGN_OR_RETURN(value, vmsdk::To<long long>(str));
+    if (value < min_value_ || value > max_value_) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "For parameter:", GetName(), " Value:", value,
+          " is out of the valid range:[", min_value_, ":", max_value_, "]"));
+    }
+    CHECK(SetFunction(value, nullptr) == REDISMODULE_OK);
+    return absl::OkStatus();
+  }
 
   int SetFunction(long long new_value, RedisModuleString** error) override {
     valkey_value_ = c_value_ = new_value;
@@ -206,7 +214,12 @@ class Boolean : public Configurable<bool, int> {
   }
 
   std::string ToString() const override { return c_value_ ? "On" : "Off"; }
-  Type GetType() const override { return Type::kBoolean; }
+  absl::Status FromRedisString(RedisModuleString* str) override {
+    bool value;
+    VMSDK_ASSIGN_OR_RETURN(value, vmsdk::To<bool>(str));
+    CHECK(SetFunction(value ? 1 : 0, nullptr) == REDISMODULE_OK);
+    return absl::OkStatus();
+  }
 
   int SetFunction(int new_value, RedisModuleString** error) override {
     valkey_value_ = new_value;
@@ -229,7 +242,10 @@ class String : public Configurable<std::string, RedisModuleString*> {
   std::string default_value_;
 
   std::string ToString() const override { return c_value_; }
-  Type GetType() const override { return Type::kString; }
+  absl::Status FromRedisString(RedisModuleString* str) override {
+    CHECK(SetFunction(str, nullptr) == REDISMODULE_OK);
+    return absl::OkStatus();
+  }
 
   void SetDefault() override {
     c_value_ = default_value_;
@@ -293,7 +309,7 @@ class Enum : public Configurable<int, int> {
     c_value_ = valkey_value_ = new_value;
     return REDISMODULE_OK;
   }
-  Type GetType() const override { return Type::kEnum; }
+  absl::Status FromRedisString(RedisModuleString*) override;
 
   std::string ToString() const override;
 };

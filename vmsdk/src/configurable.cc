@@ -8,6 +8,7 @@
 #include "vmsdk/src/configurable.h"
 
 #include "absl/strings/str_cat.h"
+#include "command_parser.h"
 
 namespace vmsdk::config {
 
@@ -53,6 +54,26 @@ absl::Status ConfigurableBase::OnStartup(RedisModuleCtx *ctx) {
   return (result == REDISMODULE_OK)
              ? absl::OkStatus()
              : absl::InvalidArgumentError(std::to_string(result));
+}
+
+absl::Status ConfigurableBase::ParseCommandLine(RedisModuleString **argv,
+                                                int argc) {
+  vmsdk::ArgsIterator itr{argv, argc};
+  while (itr.DistanceEnd() > 0) {
+    VMSDK_ASSIGN_OR_RETURN(auto param_rs, itr.Get());
+    auto param = absl::AsciiStrToLower(vmsdk::ToStringView(param_rs));
+    auto base_itr = bases->find(param);
+    if (base_itr == bases->end()) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Unexpected argument `", vmsdk::ToStringView(param_rs), "`"));
+    }
+    itr.Next();
+    VMSDK_ASSIGN_OR_RETURN(auto value_rs, itr.Get());
+    VMSDK_RETURN_IF_ERROR(base_itr->second->FromRedisString(value_rs));
+    itr.Next();
+  }
+
+  return absl::OkStatus();
 }
 
 static std::string FlagsToString(Flags flags) {
@@ -114,6 +135,22 @@ std::string Enum::ToString() const {
   }
 }
 
+absl::Status Enum::FromRedisString(RedisModuleString *str) {
+  if (GetFlags() & Flags::kBitFlags) {
+    return absl::UnimplementedError("BitFlags enums not yet supported");
+  }
+  absl::string_view sv = vmsdk::ToStringView(str);
+  std::string val = absl::AsciiStrToLower(sv);
+  for (size_t i = 0; i < names_.size(); ++i) {
+    if (val == absl::AsciiStrToLower(names_[i])) {
+      CHECK(SetFunction(values_.at(i), nullptr) == REDISMODULE_OK);
+      return absl::OkStatus();
+    }
+  }
+  return absl::InvalidArgumentError(absl::StrCat(
+      "Parameter ", GetName(), " doesn't recognize the value `", sv, "`"));
+}
+
 static const char *redacted = "**__redacted__**";
 
 void ConfigurableBase::DumpAll(std::ostream &os) {
@@ -144,5 +181,4 @@ ConfigurableBase::GetAllAsMap() {
   }
   return result;
 }
-
 };  // namespace vmsdk::config

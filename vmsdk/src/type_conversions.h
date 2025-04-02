@@ -138,6 +138,11 @@ inline absl::StatusOr<uint64_t> To(absl::string_view str) {
 }
 
 template <>
+inline absl::StatusOr<long long> To(absl::string_view str) {
+  return ToNumeric<long long>(str);
+}
+
+template <>
 inline absl::StatusOr<double> To(absl::string_view str) {
   double value;
   if (absl::AsciiStrToLower(str) == "nan" || !absl::SimpleAtod(str, &value)) {

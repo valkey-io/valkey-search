@@ -61,7 +61,12 @@ absl::Status ConfigurableBase::ParseCommandLine(RedisModuleString **argv,
   vmsdk::ArgsIterator itr{argv, argc};
   while (itr.DistanceEnd() > 0) {
     VMSDK_ASSIGN_OR_RETURN(auto param_rs, itr.Get());
-    auto param = absl::AsciiStrToLower(vmsdk::ToStringView(param_rs));
+    auto full_param = absl::AsciiStrToLower(vmsdk::ToStringView(param_rs));
+    if (full_param.size() < 3 || full_param[0] != '-' || full_param[1] != '-') {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Unrecognized parameter name: `", full_param, "`"));
+    }
+    auto param = full_param.substr(2);
     auto base_itr = bases->find(param);
     if (base_itr == bases->end()) {
       return absl::InvalidArgumentError(absl::StrCat(

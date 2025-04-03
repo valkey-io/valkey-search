@@ -213,7 +213,7 @@ TEST_F(ConfigurableStringTest, CommandLine) {
   DO_GOOD("--Number 11");
   EXPECT_EQ(number_.Get(), 11);
   DO_GOOD("--boolean yes");
-  // EXPECT_EQ(boolean_.Get(), true);
+  EXPECT_EQ(boolean_.Get(), true);
   DO_GOOD("--Boolean no");
   EXPECT_EQ(boolean_.Get(), false);
   DO_GOOD("--string test");

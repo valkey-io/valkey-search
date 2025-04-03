@@ -81,6 +81,21 @@ absl::Status ConfigurableBase::ParseCommandLine(RedisModuleString **argv,
   return absl::OkStatus();
 }
 
+absl::Status Boolean::FromRedisString(RedisModuleString *str) {
+  auto lc_str = absl::AsciiStrToLower(vmsdk::ToStringView(str));
+  bool value;
+  if (lc_str == "on" || lc_str == "yes" || lc_str == "true") {
+    value = true;
+  } else if (lc_str == "off" || lc_str == "no" || lc_str == "false") {
+    value = false;
+  } else {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Invalid value for parameter ", GetName()));
+  }
+  CHECK(SetFunction(value ? 1 : 0, nullptr) == REDISMODULE_OK);
+  return absl::OkStatus();
+}
+
 static std::string FlagsToString(Flags flags) {
   std::string result;
   if (flags != Flags::kDefault) {

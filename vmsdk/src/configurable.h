@@ -214,12 +214,7 @@ class Boolean : public Configurable<bool, int> {
   }
 
   std::string ToString() const override { return c_value_ ? "On" : "Off"; }
-  absl::Status FromRedisString(RedisModuleString* str) override {
-    bool value;
-    VMSDK_ASSIGN_OR_RETURN(value, vmsdk::To<bool>(str));
-    CHECK(SetFunction(value ? 1 : 0, nullptr) == REDISMODULE_OK);
-    return absl::OkStatus();
-  }
+  absl::Status FromRedisString(RedisModuleString* str) override;
 
   int SetFunction(int new_value, RedisModuleString** error) override {
     valkey_value_ = new_value;

@@ -29,6 +29,54 @@ L2Sqr(const void *pVect1v, const void *pVect2v, const void *qty_ptr) {
     return (res);
 }
 
+#if defined(__aarch64__)
+#include <arm_neon.h>
+
+
+#define LOAD_AND_ACCUM(VEC_IDX, OFFSET)                                  \
+    float32x4_t a##VEC_IDX = vld1q_f32(pVect1 + i + OFFSET);             \
+    float32x4_t b##VEC_IDX = vld1q_f32(pVect2 + i + OFFSET);             \
+    float32x4_t d##VEC_IDX = vsubq_f32(a##VEC_IDX, b##VEC_IDX);          \
+    sum##VEC_IDX = vmlaq_f32(sum##VEC_IDX, d##VEC_IDX, d##VEC_IDX);
+
+float L2Sqr_neon(const void *pVect1v, const void *pVect2v, const void *qty_ptr) {
+    const float *pVect1 = (const float *)pVect1v;
+    const float *pVect2 = (const float *)pVect2v;
+    const size_t qty = *((const size_t *)qty_ptr);
+
+    float32x4_t sum0 = vdupq_n_f32(0);
+    float32x4_t sum1 = vdupq_n_f32(0);
+    float32x4_t sum2 = vdupq_n_f32(0);
+    float32x4_t sum3 = vdupq_n_f32(0);
+
+    gsize_t i = 0;
+
+    const size_t prefetch_offset = 64; 
+    
+    for (; i + 15 < qty; i += 16) {
+        __builtin_prefetch(pVect1 + i + prefetch_offset);
+        __builtin_prefetch(pVect2 + i + prefetch_offset);
+
+        LOAD_AND_ACCUM(0, 0);
+        LOAD_AND_ACCUM(1, 4);
+        LOAD_AND_ACCUM(2, 8);
+        LOAD_AND_ACCUM(3, 12);
+    }
+
+    float32x4_t sum = vaddq_f32(vaddq_f32(sum0, sum1), vaddq_f32(sum2, sum3));
+    float res = vaddvq_f32(sum);
+
+    for (; i < qty; i++) {
+        float diff = pVect1[i] - pVect2[i];
+        res = fmaf(diff, diff, res);
+    }
+
+    return res;
+}
+
+#endif
+
+
 #if defined(USE_AVX512)
 
 // Favor using AVX512 if available.
@@ -245,6 +293,10 @@ class L2Space : public SpaceInterface<float> {
             fstdistfunc_ = L2SqrSIMD16ExtResiduals;
         else if (dim > 4)
             fstdistfunc_ = L2SqrSIMD4ExtResiduals;
+#endif
+#if defined(__aarch64__)
+        if (dim > 16)
+            fstdistfunc_= L2Sqr_neon;
 #endif
 #endif
         dim_ = dim;

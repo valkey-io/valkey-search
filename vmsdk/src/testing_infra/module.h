@@ -233,6 +233,9 @@ class MockRedisModule {
   MOCK_METHOD(RedisModuleCallReply *, Call,
               (RedisModuleCtx * ctx, const char *cmd, const char *fmt,
                const char *arg1, const char *arg2));
+  MOCK_METHOD(RedisModuleCallReply *, Call,
+              (RedisModuleCtx * ctx, const char *cmd, const char *fmt,
+               const char *arg1));
   MOCK_METHOD(RedisModuleCallReply *, CallReplyArrayElement,
               (RedisModuleCallReply * reply, size_t index));
   MOCK_METHOD(int, CallReplyMapElement,
@@ -253,6 +256,7 @@ class MockRedisModule {
   MOCK_METHOD(int, GetDbIdFromIO, (RedisModuleIO * rdb));
   MOCK_METHOD(void, FreeClusterNodesList, (char **ids));
   MOCK_METHOD(int, CallReplyType, (RedisModuleCallReply * reply));
+  MOCK_METHOD(size_t, CallReplyLength, (RedisModuleCallReply * reply));
   MOCK_METHOD(RedisModuleString *, CreateStringFromCallReply,
               (RedisModuleCallReply * reply));
   MOCK_METHOD(int, WrongArity, (RedisModuleCtx * ctx));
@@ -1229,6 +1233,11 @@ inline RedisModuleCallReply *TestRedisModule_Call(RedisModuleCtx *ctx,
   va_list args;
   va_start(args, fmt);
   std::string format(fmt);
+  if (format == "c") {
+    const char *arg1 = va_arg(args, const char *);
+    auto ret = kMockRedisModule->Call(ctx, cmdname, fmt, arg1);
+    return ret;
+  }
   if (format == "cc") {
     const char *arg1 = va_arg(args, const char *);
     const char *arg2 = va_arg(args, const char *);
@@ -1352,6 +1361,11 @@ inline void TestRedisModule_FreeClusterNodesList(char **ids) {
 inline int TestRedisModule_CallReplyType(RedisModuleCallReply *reply) {
   return kMockRedisModule->CallReplyType(reply);
 }
+
+inline size_t TestRedisModule_CallReplyLength(RedisModuleCallReply *reply) {
+  return kMockRedisModule->CallReplyLength(reply);
+}
+
 inline int TestRedisModule_CallReplyTypeImpl(RedisModuleCallReply *reply) {
   return reply->type;
 }
@@ -1496,6 +1510,7 @@ inline void TestRedisModule_Init() {
   RedisModule_GetDbIdFromIO = &TestRedisModule_GetDbIdFromIO;
   RedisModule_FreeClusterNodesList = &TestRedisModule_FreeClusterNodesList;
   RedisModule_CallReplyType = &TestRedisModule_CallReplyType;
+  RedisModule_CallReplyLength = &TestRedisModule_CallReplyLength;
   RedisModule_CreateStringFromCallReply =
       &TestRedisModule_CreateStringFromCallReply;
   RedisModule_WrongArity = &TestRedisModule_WrongArity;

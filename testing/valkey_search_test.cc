@@ -217,8 +217,8 @@ TEST_P(LoadTest, load) {
       .WillOnce(testing::Return((RedisModuleType *)0xBADF00D));
   if (test_case.expected_load_ret == 0) {
     EXPECT_CALL(*kMockRedisModule,
-                Call(testing::_, testing::StrEq(kJsonCmd), testing::StrEq("cc"),
-                     testing::StrEq("nonexistentkey"), testing::StrEq(".")))
+                Call(testing::_, testing::StrEq("MODULE"), testing::StrEq("c"),
+                     testing::StrEq("LIST")))
         .WillOnce(testing::Return(nullptr));
     EXPECT_CALL(
         *kMockRedisModule,

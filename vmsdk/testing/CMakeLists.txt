@@ -26,6 +26,18 @@ target_link_libraries(module_type_test PUBLIC utils)
 target_link_libraries(module_type_test PUBLIC valkey_module)
 finalize_test_flags(module_type_test)
 
+set(SRCS_MODULE_TEST ${CMAKE_CURRENT_LIST_DIR}/module_test.cc)
+add_executable(module_test ${SRCS_MODULE_TEST})
+target_include_directories(module_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(module_test PUBLIC module)
+target_link_libraries(module_type_test PUBLIC module_type)
+target_link_libraries(module_test PUBLIC utils)
+target_link_libraries(module_test PUBLIC valkey_module)
+target_link_libraries(module_test PUBLIC memory_allocation)
+target_link_libraries(module_test PUBLIC memory_allocation_overrides)
+finalize_test_flags(module_test)
+
+
 set(SRCS_THREAD_POOL_TEST ${CMAKE_CURRENT_LIST_DIR}/thread_pool_test.cc)
 add_executable(thread_pool_test ${SRCS_THREAD_POOL_TEST})
 target_include_directories(thread_pool_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})

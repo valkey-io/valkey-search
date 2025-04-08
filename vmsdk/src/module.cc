@@ -32,10 +32,12 @@
 #include <list>
 #include <string>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "vmsdk/src/log.h"
+#include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -68,8 +70,8 @@ absl::Status RegisterCommands(RedisModuleCtx *ctx,
 
 int OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
            const Options &options) {
-  if (RedisModule_Init(ctx, options.name.c_str(), options.version, REDISMODULE_APIVER_1) ==
-      REDISMODULE_ERR) {
+  if (RedisModule_Init(ctx, options.name.c_str(), options.version,
+                       REDISMODULE_APIVER_1) == REDISMODULE_ERR) {
     RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_WARNING, "Failed to init module");
     return REDISMODULE_ERR;
   }
@@ -105,4 +107,49 @@ int OnLoadDone(absl::Status status, RedisModuleCtx *ctx,
   return REDISMODULE_ERR;
 }
 }  // namespace module
+
+bool IsModuleLoaded(RedisModuleCtx *ctx, const std::string &name) {
+  static absl::flat_hash_set<std::string> loaded_modules;
+  if (loaded_modules.contains(name)) {
+    return true;
+  }
+
+  auto reply =
+      UniquePtrRedisCallReply(RedisModule_Call(ctx, "MODULE", "c", "LIST"));
+  if (!reply ||
+      RedisModule_CallReplyType(reply.get()) != REDISMODULE_REPLY_ARRAY) {
+    return false;
+  }
+
+  size_t num_modules = RedisModule_CallReplyLength(reply.get());
+  for (size_t i = 0; i < num_modules; ++i) {
+    RedisModuleCallReply *mod_info =
+        RedisModule_CallReplyArrayElement(reply.get(), i);
+    if (!mod_info ||
+        RedisModule_CallReplyType(mod_info) != REDISMODULE_REPLY_ARRAY) {
+      continue;
+    }
+
+    size_t len = RedisModule_CallReplyLength(mod_info);
+
+    for (size_t j = 0; j + 1 < len; j += 2) {
+      RedisModuleCallReply *key =
+          RedisModule_CallReplyArrayElement(mod_info, j);
+      RedisModuleCallReply *val =
+          RedisModule_CallReplyArrayElement(mod_info, j + 1);
+
+      size_t key_len, val_len;
+      const char *key_str = RedisModule_CallReplyStringPtr(key, &key_len);
+      const char *val_str = RedisModule_CallReplyStringPtr(val, &val_len);
+      if (strncmp(key_str, "name", key_len) == 0 &&
+          strncasecmp(val_str, name.c_str(), val_len) == 0) {
+        loaded_modules.insert(name);
+
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
 }  // namespace vmsdk

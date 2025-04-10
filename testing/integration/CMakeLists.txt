@@ -8,7 +8,6 @@ find_package(Python REQUIRED COMPONENTS Interpreter)
 execute_process(
     COMMAND ${Python_EXECUTABLE} -m pip --version
     RESULT_VARIABLE PIP_CHECK
-    OUTPUT_QUIET ERROR_QUIET
 )
 
 # Install pip if missing
@@ -25,7 +24,6 @@ if(NOT EXISTS "${VENV_DIR}")
     execute_process(
         COMMAND ${Python_EXECUTABLE} -m venv ${VENV_DIR}
         RESULT_VARIABLE VENV_RESULT
-        OUTPUT_QUIET ERROR_QUIET
     )
     if(NOT VENV_RESULT EQUAL 0)
         message(FATAL_ERROR "Failed to create virtual environment.")
@@ -45,7 +43,6 @@ message(STATUS "Installing dependencies in virtual environment...")
 execute_process(
     COMMAND ${PYTHON_VENV_EXECUTABLE} -m pip install -r ${CMAKE_SOURCE_DIR}/requirements.txt
     RESULT_VARIABLE PIP_RESULT
-    OUTPUT_QUIET ERROR_QUIET
 )
 if(NOT PIP_RESULT EQUAL 0)
     message(FATAL_ERROR "Failed to install dependencies from requirements.txt")

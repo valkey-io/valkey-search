@@ -9,7 +9,7 @@ Geospatial Indexing
 
 ## Abstract
 
-This proposal introduces a new field type, `GEO`, into the Valkey Search module. This enhancement enables efficient indexing and querying of geospatial data, supporting operations such as finding keys within a specified radius or bounding box. The geospatial indexing leverages Boost.Geometry's R-tree implementation to ensure high performance and scalability.
+This proposal introduces a new field types, `GEO` and `GEOSHAPE`, into the Valkey Search module. This enhancement enables efficient indexing and querying of geospatial data, supporting operations such as finding keys within a specified radius or bounding box. The geospatial indexing leverages Boost.Geometry's R-tree implementation to ensure high performance and scalability.
 
 ## Motivation
 
@@ -30,11 +30,14 @@ In the context of this RFC:
 
 ### Field Type
 
-A new field type, `GEO`, is introduced to represent geospatial data. This field type indexes geographic coordinates (latitude and longitude) and supports efficient spatial queries.
+Two new field types, `GEO` and `GEOSHAPE`, are introduced to represent geospatial data:
+
+- **`GEO`**: This field type indexes geographic coordinates (latitude and longitude) and supports efficient spatial queries, such as radius searches and bounding box searches.
+- **`GEOSHAPE`**: This field type is designed for indexing and querying complex geospatial shapes, such as polygons and multi-polygons. It supports advanced spatial queries like containment, intersection, and proximity. The `GEOSHAPE` field type can use either `FLAT` (Cartesian coordinates) or `SPHERICAL` (geographical coordinates), making it suitable for applications like mapping city boundaries or regions with flexible coordinate systems.
 
 ### Indexing
 
-The `GEO` field utilizes Boost.Geometry's R-tree implementation for spatial indexing. The R-tree is a self-balanced data structure that organizes spatial data in a way that minimizes the number of nodes traversed during searches, optimizing query performance.
+The `GEO` and `GEOSHAPE` fields utilize Boost.Geometry's R-tree implementation for spatial indexing. The R-tree is a self-balanced data structure that organizes spatial data in a way that minimizes the number of nodes traversed during searches, optimizing query performance.
 
 ### Packing Algorithms
 
@@ -49,7 +52,7 @@ By selecting different algorithms, this option provides flexibility to optimize 
 
 ### Querying
 
-The `GEO` field supports the following query operations:
+The `GEO` and `GEOSHAPE` fields support the following query operations:
 
 - **Radius Search**: Finds keys within a specified radius from a given point.
 - **Bounding Box Search**: Finds keys within a specified rectangular area.
@@ -57,29 +60,31 @@ The `GEO` field supports the following query operations:
 
 These operations allow efficient retrieval of geospatial data based on proximity and spatial relationships.
 
-## Query Language Extensions
-
-To support geospatial queries, the query language is extended with new predicates:
-
-- `GEO_RADIUS(lat, lon, radius)`: Matches keys within the given radius (in meters) from the specified latitude and longitude.
-- `GEO_BOUNDING_BOX(min_lat, min_lon, max_lat, max_lon)`: Matches keys within the specified bounding box.
-
-These predicates can be combined with existing query constructs to perform complex geospatial queries.
-
 ## Commands
 
 ### FT.CREATE
 
-The `FT.CREATE` command is extended to support the `GEO` field type and the optional optimization parameter:
+The `FT.CREATE` command is extended to support the `GEO` and `GEOSHAPE` field types, along with the optional optimization parameter:
 
 ```
-FT.CREATE <index_name> ON <data_type> PREFIX <prefix_count> <prefix> SCHEMA <field_name> GEO [OPTIMIZED_FOR SEARCH|MUTATION]
+FT.CREATE <index_name> ON <data_type> PREFIX <prefix_count> <prefix> SCHEMA <field_name> GEO [OPTIMIZED_FOR SEARCH | MUTATION]
+FT.CREATE <index_name> ON <data_type> PREFIX <prefix_count> <prefix> SCHEMA <field_name> GEOSHAPE [FLAT | SPHERICAL] [OPTIMIZED_FOR SEARCH | MUTATION]
 ```
 
-Example:
+The `GEO` field type is used for indexing geographic coordinates (latitude and longitude), while the `GEOSHAPE` field type is designed for indexing and querying complex geospatial shapes, such as polygons and multi-polygons. Both field types leverage Boost.Geometry's R-tree implementation for efficient spatial indexing.
+
+The `GEOSHAPE` field type supports both `FLAT` (Cartesian coordinates) and `SPHERICAL` (geographical coordinates) options, making it suitable for applications like mapping city boundaries or regions with flexible coordinate systems.
+
+#### Example with GEO:
 
 ```
-FT.CREATE places_idx ON HASH PREFIX 1 \"place:\" SCHEMA location GEO OPTIMIZED_FOR SEARCH
+FT.CREATE places_idx ON HASH PREFIX 1 "place:" SCHEMA location GEO OPTIMIZED_FOR SEARCH
+```
+
+#### Example with GEOSHAPE:
+
+```
+FT.CREATE regions_idx ON HASH PREFIX 1 "region:" SCHEMA boundary GEOSHAPE FLAT OPTIMIZED_FOR SEARCH
 ```
 
 ### FT.SEARCH
@@ -87,25 +92,32 @@ FT.CREATE places_idx ON HASH PREFIX 1 \"place:\" SCHEMA location GEO OPTIMIZED_F
 The `FT.SEARCH` command is extended to support geospatial queries:
 
 ```
-FT.SEARCH <index_name> <query> [GEO_RADIUS <lat> <lon> <radius>] [GEO_BOUNDING_BOX <min_lat> <min_lon> <max_lat> <max_lon>]
+FT.SEARCH <index_name> <GEO:[lon lat radius unit]>
+FT.SEARCH <index_name> <GEOSHAPE:[{WITHIN | CONTAINS | INTERSECTS | DISJOINT} SHAPE]>
 ```
 
-Example:
+#### Example with GEO:
 
 ```
-FT.SEARCH places_idx "*" GEO_RADIUS 40.7128 -74.0060 5000
+FT.SEARCH idx:pizza "@store_location:[-1.2568 30.624 10 mi]"
+```
+
+#### Example with GEOSHAPE:
+
+```
+FT.SEARCH idx:pizza "@store_zone:[WITHIN $zone] PARAMS 2 zone "POLYGON((-16 25, 35 39, 38 67, -24 60, -23 36))"
 ```
 
 ## Implementation Details
 
 - **Boost.Geometry Integration**: Utilizes the R-tree implementation from Boost.Geometry for efficient spatial indexing.
 - **Packing Algorithms**: Provides flexibility to select packing algorithms optimized either for search performance or data modifications.
-- **Data Storage**: Geospatial data is stored in fields designated as `GEO` type, with the indexing mechanism parsing these fields to extract coordinates.
+- **Data Storage**: Geospatial data is stored in fields designated as `GEO` type or `GEOSHAPE` type, with the indexing mechanism parsing these fields to extract coordinates.
 - **Performance Considerations**: Ensures efficient insertions, deletions, and queries, even with large datasets.
 
 ## Backward Compatibility
 
-The introduction of the `GEO` field type and associated commands is backward compatible. Existing functionality remains unchanged, and the new features are additive.
+The introduction of the `GEO` and `GEOSHAPE` field types and associated commands is backward compatible. Existing functionality remains unchanged, and the new features are additive.
 
 ## Open Questions
 

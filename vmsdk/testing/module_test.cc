@@ -40,14 +40,19 @@
 namespace vmsdk {
 
 namespace {
+#define INSTALLED_MODULES 3
 
 class ModuleTest : public vmsdk::RedisTest {
  protected:
+  RedisModuleCtx fake_ctx;
+  RedisModuleCallReply json_key;
+  RedisModuleCallReply json_value;
+  RedisModuleCallReply some_key;
+  RedisModuleCallReply reply_internal[INSTALLED_MODULES];
+  void InstallCheckers();
 };
 
-void InstallCheckers(RedisModuleCtx& fake_ctx) {
-  const size_t modules = 3;
-  RedisModuleCallReply reply_internal[modules];
+void ModuleTest::InstallCheckers() {
   auto reply = new RedisModuleCallReply;
   EXPECT_CALL(*kMockRedisModule,
               Call(&fake_ctx, testing::StrEq("MODULE"), testing::StrEq("c"),
@@ -64,15 +69,14 @@ void InstallCheckers(RedisModuleCtx& fake_ctx) {
   EXPECT_CALL(*kMockRedisModule, CallReplyLength(testing::_))
       .WillRepeatedly([reply](RedisModuleCallReply* in_reply) -> size_t {
         if (reply == in_reply) {
-          return modules;
+          return INSTALLED_MODULES;
         }
         return 10;
       });
-  RedisModuleCallReply json_key;
-  RedisModuleCallReply json_value;
-  RedisModuleCallReply some_key;
+
   EXPECT_CALL(*kMockRedisModule, CallReplyArrayElement(testing::_, testing::_))
-      .WillRepeatedly([&](RedisModuleCallReply* in_reply, size_t indx) {
+      .WillRepeatedly([reply, this](RedisModuleCallReply* in_reply,
+                                    size_t indx) -> RedisModuleCallReply* {
         if (reply == in_reply) {
           return &reply_internal[indx];
         }
@@ -106,10 +110,14 @@ void InstallCheckers(RedisModuleCtx& fake_ctx) {
 }
 
 TEST_F(ModuleTest, ModuleLoaded) {
-  RedisModuleCtx fake_ctx;
-  InstallCheckers(fake_ctx);
+  InstallCheckers();
   EXPECT_TRUE(vmsdk::IsModuleLoaded(&fake_ctx, "json"));
   EXPECT_TRUE(vmsdk::IsModuleLoaded(&fake_ctx, "json"));
+}
+
+TEST_F(ModuleTest, ModuleNotLoaded) {
+  InstallCheckers();
+  EXPECT_FALSE(vmsdk::IsModuleLoaded(&fake_ctx, "json11"));
 }
 
 }  // namespace

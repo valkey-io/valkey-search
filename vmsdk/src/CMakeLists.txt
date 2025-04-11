@@ -87,7 +87,7 @@ valkey_search_add_static_library(module "${SRCS_MODULE}")
 target_include_directories(module PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(module PUBLIC log)
 target_link_libraries(module PUBLIC utils)
-target_link_libraries(module PUBLIC valkey_module)
+target_link_libraries(module PUBLIC memory_allocation_overrides)
 
 set(SRCS_MEMORY_ALLOCATION_OVERRIDES
     ${CMAKE_CURRENT_LIST_DIR}/memory_allocation_overrides.cc

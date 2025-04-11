@@ -141,15 +141,15 @@ bool IsModuleLoaded(RedisModuleCtx *ctx, const std::string &name) {
       size_t key_len, val_len;
       const char *key_str = RedisModule_CallReplyStringPtr(key, &key_len);
       const char *val_str = RedisModule_CallReplyStringPtr(val, &val_len);
-      if (strncmp(key_str, "name", key_len) == 0 &&
-          strncasecmp(val_str, name.c_str(), val_len) == 0) {
-        loaded_modules.insert(name);
+      absl::string_view module_key{key_str, key_len};
+      absl::string_view module_value{val_str, val_len};
 
+      if (module_key == "name" && module_value == name) {
+        loaded_modules.insert(name);
         return true;
       }
     }
   }
-
   return false;
 }
 }  // namespace vmsdk

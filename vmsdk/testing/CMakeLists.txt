@@ -34,7 +34,6 @@ target_link_libraries(module_type_test PUBLIC module_type)
 target_link_libraries(module_test PUBLIC utils)
 target_link_libraries(module_test PUBLIC valkey_module)
 target_link_libraries(module_test PUBLIC memory_allocation)
-target_link_libraries(module_test PUBLIC memory_allocation_overrides)
 finalize_test_flags(module_test)
 
 

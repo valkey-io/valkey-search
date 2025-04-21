@@ -11,6 +11,7 @@ RUN_BUILD="yes"
 DUMP_TEST_ERRORS_STDOUT="no"
 NINJA_TOOL="ninja"
 INTEGRETION_TEST="no"
+ASAN_BUILD="no"
 
 # Constants
 BOLD_PINK='\e[35;1m'
@@ -35,6 +36,7 @@ Usage: build.sh [options...]
     --test-errors-stdout      When a test fails, dump the captured tests output to stdout.
     --run-integration-tests   Run integration tests.
     --use-system-modules      Use system's installed gRPC, Protobuf & Abseil dependencies.
+    --asan                    Build with address sanitizer enabled.
 
 Example usage:
 
@@ -93,7 +95,13 @@ do
         echo "Write test errors to stdout on failure"
         ;;
     --use-system-modules)
-        CMAKE_EXTRA_ARGS="-DWITH_SUBMODULES_SYSTEM=ON"
+        CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DWITH_SUBMODULES_SYSTEM=ON"
+        shift || true
+        echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
+        ;;
+    --asan)
+        CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DASAN_BUILD=ON"
+        ASAN_BUILD="yes"
         shift || true
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
@@ -222,6 +230,11 @@ cleanup() {
 trap cleanup EXIT
 
 BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
+if [[ "${ASAN_BUILD}" == "yes" ]]; then
+    printf "${BOLD_PINK}ASAN build is enabled${RESET}\n"
+    BUILD_DIR=${BUILD_DIR}-asan
+fi
+
 TESTS_DIR=${BUILD_DIR}/tests
 TEST_OUTPUT_FILE=${BUILD_DIR}/tests.out
 
@@ -243,6 +256,10 @@ END_TIME=`date +%s`
 BUILD_RUNTIME=$((END_TIME - START_TIME))
 
 START_TIME=`date +%s`
+
+if [[ "${ASAN_BUILD}" == "yes" ]]; then
+    export ASAN_OPTIONS="detect_odr_violation=0"
+fi
 
 if [[ "${RUN_TEST}" == "all" ]]; then
     rm -f ${TEST_OUTPUT_FILE}

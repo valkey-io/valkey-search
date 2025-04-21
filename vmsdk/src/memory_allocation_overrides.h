@@ -96,6 +96,8 @@ void* __wrap_valloc(size_t size) noexcept;
 // NOLINTNEXTLINE
 #define valloc(...) __wrap_valloc(__VA_ARGS__)
 
+#ifndef ASAN_BUILD
+
 void* operator new(size_t size) noexcept(false);
 void operator delete(void* p) noexcept;
 void operator delete(void* p, size_t size) noexcept;
@@ -121,4 +123,5 @@ void operator delete[](void* p, std::align_val_t alignment,
                        const std::nothrow_t&) noexcept;
 void operator delete[](void* p, size_t size,
                        std::align_val_t alignment) noexcept;
+#endif
 #endif  // VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_

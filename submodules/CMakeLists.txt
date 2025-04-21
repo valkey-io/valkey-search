@@ -50,9 +50,19 @@ endfunction()
 function(build_submodule MODULE_NAME MODULE_CMAKE_ARGS HINT_FILE)
   if(NOT EXISTS "${HINT_FILE}")
     file(MAKE_DIRECTORY ${MODULES_DIR}/${MODULE_NAME}/build-release)
-    set(ENV{CXXFLAGS}
+    set(CXX_FLAGS
         "-Wno-missing-requires -Wno-attributes -Wno-deprecated -Wno-return-type -Wno-stringop-overflow -Wno-deprecated-declarations"
     )
+    set(C_FLAGS "")
+    set(LD_FLAGS "")
+    if(ASAN_BUILD)
+      set(CXX_FLAGS "-fsanitize=address ${CXX_FLAGS}")
+      set(C_FLAGS "-fsanitize=address")
+      set(LD_FLAGS "-fsanitize=address")
+    endif()
+    set(ENV{CXXFLAGS} ${CXX_FLAGS})
+    set(ENV{CFLAGS} ${C_FLAGS})
+    set(ENV{LDFLAGS} ${LD_FLAGS})
     execute_process(
       COMMAND sh -c "${CMAKE_COMMAND} .. ${MODULE_CMAKE_ARGS}"
       WORKING_DIRECTORY ${MODULES_DIR}/${MODULE_NAME}/build-release

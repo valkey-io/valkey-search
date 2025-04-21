@@ -270,6 +270,7 @@ size_t GetNewAllocSize(size_t size) {
   return size;
 }
 
+#ifndef ASAN_BUILD
 void* operator new(size_t size) noexcept(false) {
   return __wrap_malloc(GetNewAllocSize(size));
 }
@@ -339,3 +340,4 @@ void operator delete[](void* p, size_t size,
                        std::align_val_t alignment) noexcept {
   __wrap_free(p);
 }
+#endif // !ASAN_BUILD

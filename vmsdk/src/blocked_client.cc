@@ -60,13 +60,12 @@ BlockedClient::BlockedClient(RedisModuleCtx *ctx,
     gBlockedClients[ctx] = {1, blocked_client_};
     return;
   }
-  CHECK(reply_callback == nullptr && timeout_callback == nullptr &&
-        free_privdata == nullptr && timeout_ms == 0)
-      << "block client parameters must be empty when multiple calls with the "
-         "same ctx";
-  blocked_client_ = it->second.blocked_client;
-  auto &cnt = it->second.cnt;
-  ++cnt;
+  if (reply_callback == nullptr && timeout_callback == nullptr &&
+      free_privdata == nullptr && timeout_ms == 0) {
+    blocked_client_ = it->second.blocked_client;
+    auto &cnt = it->second.cnt;
+    ++cnt;
+  }
 }
 
 BlockedClient &BlockedClient::operator=(BlockedClient &&other) noexcept {

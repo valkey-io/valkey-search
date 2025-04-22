@@ -45,8 +45,6 @@ TrackedBlockedClients() {
 
 BlockedClient::BlockedClient(RedisModuleCtx *ctx, bool handle_duplication) {
   if (handle_duplication) {
-    blocked_client_ =
-        RedisModule_BlockClient(ctx, nullptr, nullptr, nullptr, 0);
     unsigned long long tracked_client_id = RedisModule_GetClientId(ctx);
     if (tracked_client_id != 0) {
       absl::MutexLock lock(&blocked_clients_mutex);
@@ -61,6 +59,7 @@ BlockedClient::BlockedClient(RedisModuleCtx *ctx, bool handle_duplication) {
         gBlockedClients[tracked_client_id_] = {1, blocked_client_};
         return;
       }
+      tracked_client_id_ = tracked_client_id;
       blocked_client_ = it->second.blocked_client;
       auto &cnt = it->second.cnt;
       ++cnt;

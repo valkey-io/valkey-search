@@ -58,9 +58,8 @@ std::vector<size_t> FetchTrackedBlockedClients() {
 
 TEST_P(BlockedClientTest, EngineVersion) {
   const BlockedClientTestCase &test_case = GetParam();
-  const std::vector<size_t> empty;
   RedisModuleCtx fake_ctx;
-  EXPECT_EQ(FetchTrackedBlockedClients(), empty);
+  EXPECT_TRUE(FetchTrackedBlockedClients().empty());
   std::vector<unsigned long long> client_ids(test_case.client_id_cnt);
   std::vector<RedisModuleBlockedClient> bc_ptr(test_case.client_id_cnt);
   {
@@ -108,8 +107,7 @@ TEST_P(BlockedClientTest, EngineVersion) {
     auto tracked_bc_cnt = FetchTrackedBlockedClients();
     EXPECT_EQ(tracked_bc_cnt, test_case.tracked_blocked_clients);
   }
-
-  EXPECT_EQ(FetchTrackedBlockedClients(), empty);
+  EXPECT_TRUE(FetchTrackedBlockedClients().empty());
 }
 
 INSTANTIATE_TEST_SUITE_P(

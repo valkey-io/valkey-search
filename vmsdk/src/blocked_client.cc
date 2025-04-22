@@ -60,7 +60,7 @@ BlockedClient::BlockedClient(RedisModuleCtx *ctx,
   }
   CHECK(reply_callback == nullptr && timeout_callback == nullptr &&
         free_privdata == nullptr && timeout_ms == 0)
-      << "block client paramters must be empty when multiple calls with the "
+      << "block client parameters must be empty when multiple calls with the "
          "same ctx";
   blocked_client_ = it->second.blocked_client;
   auto &cnt = it->second.cnt;

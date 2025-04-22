@@ -38,9 +38,9 @@ namespace vmsdk {
 namespace {
 struct BlockedClientTestCase {
   std::string test_name;
-  size_t ctx_cnt;
+  size_t client_id_cnt;
   std::vector<size_t> tracked_blocked_clients;
-  bool use_same_ctx{false};
+  bool use_same_client_id{false};
 };
 
 class BlockedClientTest
@@ -59,33 +59,41 @@ std::vector<size_t> FetchTrackedBlockedClients() {
 TEST_P(BlockedClientTest, EngineVersion) {
   const BlockedClientTestCase &test_case = GetParam();
   const std::vector<size_t> empty;
+  RedisModuleCtx fake_ctx;
   EXPECT_EQ(FetchTrackedBlockedClients(), empty);
-  std::vector<RedisModuleCtx> ctxes(test_case.ctx_cnt);
-  std::vector<RedisModuleBlockedClient> bc_ptr(test_case.ctx_cnt);
+  std::vector<unsigned long long> client_ids(test_case.client_id_cnt);
+  std::vector<RedisModuleBlockedClient> bc_ptr(test_case.client_id_cnt);
   {
     std::vector<BlockedClient> blocked_clients;
     if (test_case.tracked_blocked_clients.empty()) {
       EXPECT_CALL(*kMockRedisModule, UnblockClient(testing::_, nullptr))
           .Times(0);
     } else {
-      for (size_t i = 0; i < test_case.ctx_cnt; ++i) {
-        if (i == 0 || !test_case.use_same_ctx) {
+      for (size_t i = 0; i < test_case.client_id_cnt; ++i) {
+        if (i == 0 || !test_case.use_same_client_id) {
           EXPECT_CALL(*kMockRedisModule, UnblockClient(&bc_ptr[i], nullptr))
               .Times(1);
         }
       }
     }
-    for (size_t i = 0; i < test_case.ctx_cnt; ++i) {
-      auto ctx = test_case.use_same_ctx ? &ctxes[0] : &ctxes[i];
+    for (size_t i = 0; i < test_case.client_id_cnt; ++i) {
+      auto ctx = test_case.use_same_client_id ? &client_ids[0] : &client_ids[i];
       if (test_case.tracked_blocked_clients.empty()) {
         EXPECT_CALL(*kMockRedisModule,
-                    BlockClient(ctx, nullptr, nullptr, nullptr, 0))
+                    BlockClient(&fake_ctx, nullptr, nullptr, nullptr, 0))
             .Times(0);
 
       } else {
-        if (i == 0 || !test_case.use_same_ctx) {
+        if (test_case.use_same_client_id) {
+          EXPECT_CALL(*kMockRedisModule, GetClientId(&fake_ctx))
+              .WillOnce(testing::Return(1));
+        } else {
+          EXPECT_CALL(*kMockRedisModule, GetClientId(&fake_ctx))
+              .WillOnce(testing::Return(i + 1));
+        }
+        if (i == 0 || !test_case.use_same_client_id) {
           EXPECT_CALL(*kMockRedisModule,
-                      BlockClient(ctx, nullptr, nullptr, nullptr, 0))
+                      BlockClient(&fake_ctx, nullptr, nullptr, nullptr, 0))
               .WillOnce(
                   [&bc_ptr, i](RedisModuleCtx *ctx,
                                RedisModuleCmdFunc reply_callback,
@@ -94,7 +102,7 @@ TEST_P(BlockedClientTest, EngineVersion) {
                                long long timeout_ms) { return &bc_ptr[i]; });
         }
       }
-      BlockedClient bc(ctx);
+      BlockedClient bc(&fake_ctx, true);
       blocked_clients.emplace_back(std::move(bc));
     }
     auto tracked_bc_cnt = FetchTrackedBlockedClients();
@@ -109,27 +117,27 @@ INSTANTIATE_TEST_SUITE_P(
     testing::ValuesIn<BlockedClientTestCase>(
         {{
              .test_name = "happy_path_1",
-             .ctx_cnt = 1,
+             .client_id_cnt = 1,
              .tracked_blocked_clients = {1},
 
          },
          {
              .test_name = "happy_path_2",
-             .ctx_cnt = 1,
+             .client_id_cnt = 1,
              .tracked_blocked_clients = {1},
 
          },
          {
              .test_name = "two_blocked_clients",
-             .ctx_cnt = 2,
+             .client_id_cnt = 2,
              .tracked_blocked_clients = {1, 1},
 
          },
          {
              .test_name = "two_blocked_clients_same",
-             .ctx_cnt = 2,
+             .client_id_cnt = 2,
              .tracked_blocked_clients = {2},
-             .use_same_ctx = true,
+             .use_same_client_id = true,
 
          }}),
     [](const testing::TestParamInfo<BlockedClientTestCase> &info) {

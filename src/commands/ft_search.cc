@@ -243,7 +243,7 @@ absl::Status FTSearchCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
     }
 
     vmsdk::BlockedClient blocked_client(ctx, async::Reply, async::Timeout,
-                                        async::Free, 0);
+                                        async::Free, parameters->timeout_ms);
     blocked_client.MeasureTimeStart();
     auto on_done_callback = [blocked_client = std::move(blocked_client)](
                                 auto &neighbors, auto parameters) mutable {

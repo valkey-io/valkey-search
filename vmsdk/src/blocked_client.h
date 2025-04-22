@@ -39,6 +39,7 @@ namespace vmsdk {
 
 class BlockedClient {
  public:
+  BlockedClient(RedisModuleCtx *ctx, bool handle_duplication);
   BlockedClient(RedisModuleCtx *ctx,
                 RedisModuleCmdFunc reply_callback = nullptr,
                 RedisModuleCmdFunc timeout_callback = nullptr,
@@ -47,7 +48,7 @@ class BlockedClient {
   BlockedClient(BlockedClient &&other) noexcept
       : blocked_client_(std::exchange(other.blocked_client_, nullptr)),
         private_data_(std::exchange(other.private_data_, nullptr)),
-        tracked_ctx_(std::exchange(other.tracked_ctx_, nullptr)),
+        tracked_client_id_(std::exchange(other.tracked_client_id_, 0)),
         time_measurement_ongoing_(
             std::exchange(other.time_measurement_ongoing_, false)) {}
 
@@ -67,14 +68,14 @@ class BlockedClient {
   RedisModuleBlockedClient *blocked_client_{nullptr};
   void *private_data_{nullptr};
   bool time_measurement_ongoing_{false};
-  RedisModuleCtx *tracked_ctx_{nullptr};
+  unsigned long long tracked_client_id_{0};
 };
 
 struct BlockedClientEntry {
   size_t cnt{0};
   RedisModuleBlockedClient *blocked_client{nullptr};
 };
-absl::flat_hash_map<RedisModuleCtx *, BlockedClientEntry> &
+absl::flat_hash_map<unsigned long long, BlockedClientEntry> &
 TrackedBlockedClients();
 }  // namespace vmsdk
 #endif  // VMSDK_SRC_BLOCKED_CLIENT_H_

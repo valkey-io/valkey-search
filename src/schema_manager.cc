@@ -115,8 +115,6 @@ SchemaManager::SchemaManager(
   }
 }
 
-constexpr uint32_t kIndexSchemaBackfillBatchSize{10240};
-
 absl::Status GenerateIndexNotFoundError(absl::string_view name) {
   return absl::NotFoundError(
       absl::StrFormat("Index with name '%s' not found", name));

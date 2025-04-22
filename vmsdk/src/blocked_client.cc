@@ -31,10 +31,11 @@
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
+#include "absl/synchronization/mutex.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
-
+absl::Mutex blocked_clients_mutex;
 absl::flat_hash_map<RedisModuleCtx *, BlockedClientEntry> gBlockedClients;
 // Used for testing
 absl::flat_hash_map<RedisModuleCtx *, BlockedClientEntry> &
@@ -48,6 +49,7 @@ BlockedClient::BlockedClient(RedisModuleCtx *ctx,
                              void (*free_privdata)(RedisModuleCtx *, void *),
                              long long timeout_ms) {
   tracked_ctx_ = ctx;
+  absl::MutexLock lock(&blocked_clients_mutex);
   auto it = gBlockedClients.find(ctx);
   if (it == gBlockedClients.end()) {
     blocked_client_ = RedisModule_BlockClient(
@@ -91,6 +93,7 @@ void BlockedClient::UnblockClient() {
   auto private_data = std::exchange(private_data_, nullptr);
   auto tracked_ctx = std::exchange(tracked_ctx_, nullptr);
   if (tracked_ctx) {
+    absl::MutexLock lock(&blocked_clients_mutex);
     auto itr = gBlockedClients.find(tracked_ctx);
     CHECK(itr != gBlockedClients.end());
     auto &cnt = itr->second.cnt;

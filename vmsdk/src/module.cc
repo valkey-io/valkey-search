@@ -152,4 +152,23 @@ bool IsModuleLoaded(RedisModuleCtx *ctx, const std::string &name) {
   }
   return false;
 }
+
+std::string EngineVersion(RedisModuleCtx *ctx) {
+  auto reply =
+      UniquePtrRedisCallReply(RedisModule_Call(ctx, "INFO", "c", "server"));
+  if (!reply ||
+      RedisModule_CallReplyType(reply.get()) != REDISMODULE_REPLY_STRING) {
+    CHECK(false) << "ERR could not get INFO server";
+  }
+
+  size_t len;
+  const char *info = RedisModule_CallReplyStringPtr(reply.get(), &len);
+  const char *ver_str = strstr(info, "valkey_version:");
+  if (ver_str) {
+    char version[64];
+    sscanf(ver_str, "valkey_version:%63s", version);
+    return version;
+  }
+  CHECK(false) << "ERR version not found, info: " << info;
+}
 }  // namespace vmsdk

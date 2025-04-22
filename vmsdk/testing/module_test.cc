@@ -120,6 +120,13 @@ TEST_F(ModuleTest, ModuleNotLoaded) {
   EXPECT_FALSE(vmsdk::IsModuleLoaded(&fake_ctx, "json11"));
 }
 
+TEST_F(ModuleTest, EngineVersion) {
+  std::string version = "255.255.255";
+  std::string info = "valkey_version:" + version;
+  InitEngineVersionMocks(&fake_ctx, info, version);
+  EXPECT_EQ(EngineVersion(&fake_ctx), version);
+}
+
 }  // namespace
 
 }  // namespace vmsdk

@@ -144,8 +144,8 @@ TEST_F(MulriExecTest, Basic) {
     absl::MutexLock lock(&mutex);
     EXPECT_TRUE(added_keys.empty());
   }
-  for (size_t i = 0; i < expected_keys.size(); ++i) {
-    auto key_redis_str = vmsdk::MakeUniqueRedisString(expected_keys[i]);
+  for (const auto &expected_key : expected_keys) {
+    auto key_redis_str = vmsdk::MakeUniqueRedisString(expected_key);
     index_schema->OnKeyspaceNotification(&fake_ctx_, REDISMODULE_NOTIFY_HASH,
                                          "event", key_redis_str.get());
   }
@@ -170,9 +170,8 @@ TEST_F(MulriExecTest, Basic) {
     added_keys.clear();
 
     EXPECT_CALL(*kMockRedisModule, GetContextFlags(testing::_))
-        .WillOnce(testing::Return(0));
+        .WillRepeatedly(testing::Return(0));
     auto key_redis_str = vmsdk::MakeUniqueRedisString("key3");
-#ifdef BLOCK_CLIENT_ON_MUTATION
     EXPECT_CALL(
         *kMockRedisModule,
         BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
@@ -180,7 +179,6 @@ TEST_F(MulriExecTest, Basic) {
     EXPECT_CALL(*kMockRedisModule,
                 UnblockClient((RedisModuleBlockedClient *)1, testing::_))
         .WillOnce(testing::Return(REDISMODULE_OK));
-#endif
     index_schema->OnKeyspaceNotification(&fake_ctx_, REDISMODULE_NOTIFY_HASH,
                                          "event", key_redis_str.get());
   }
@@ -200,17 +198,6 @@ TEST_F(MulriExecTest, TrackMutationOverride) {
         cb_data = data;
         return REDISMODULE_OK;
       });
-#ifdef BLOCK_CLIENT_ON_MUTATION
-  EXPECT_CALL(*kMockRedisModule, BlockClient(testing::_, testing::_, testing::_,
-                                             testing::_, testing::_))
-      .Times(2)
-      .WillRepeatedly(testing::Return((RedisModuleBlockedClient *)1));
-
-  EXPECT_CALL(*kMockRedisModule,
-              UnblockClient((RedisModuleBlockedClient *)1, testing::_))
-      .Times(2)
-      .WillRepeatedly(testing::Return(REDISMODULE_OK));
-#endif
   auto key_redis_str = vmsdk::MakeUniqueRedisString(key_prefix + "0");
   index_schema->OnKeyspaceNotification(&fake_ctx_, REDISMODULE_NOTIFY_HASH,
                                        "event", key_redis_str.get());
@@ -236,7 +223,7 @@ TEST_F(MulriExecTest, TrackMutationOverride) {
     EXPECT_TRUE(added_keys.empty());
   }
   EXPECT_CALL(*kMockRedisModule, GetContextFlags(testing::_))
-      .WillOnce(testing::Return(0));
+      .WillRepeatedly(testing::Return(0));
   key_redis_str = vmsdk::MakeUniqueRedisString(key_prefix + "1");
   VMSDK_EXPECT_OK(mutations_thread_pool->ResumeWorkers());
   index_schema->OnKeyspaceNotification(&fake_ctx_, REDISMODULE_NOTIFY_HASH,

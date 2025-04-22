@@ -51,7 +51,7 @@ using ::testing::TestWithParam;
 
 #define VMSDK_EXPECT_OK_STATUSOR(expr)                         \
   {                                                            \
-    auto &__status = expr;                                     \
+    auto& __status = expr;                                     \
     EXPECT_TRUE(__status.ok())                                 \
         << " Failure Message:" << __status.status().message(); \
   }
@@ -73,25 +73,48 @@ class RedisTestWithParam : public TestWithParam<T> {
   void TearDown() override { TestRedisModule_Teardown(); }
 };
 
-std::vector<RedisModuleString *> ToRedisStringVector(
+std::vector<RedisModuleString*> ToRedisStringVector(
     absl::string_view params_str, absl::string_view exclude = "");
 
 MATCHER_P(RedisModuleStringEq, value, "") {
-  return *((std::string *)arg) == *((std::string *)value);
+  return *((std::string*)arg) == *((std::string*)value);
 }
 
 MATCHER_P(RedisModuleStringValueEq, value, "") {
-  *result_listener << "where the string is " << *((std::string *)arg);
-  return *((std::string *)arg) == value;
+  *result_listener << "where the string is " << *((std::string*)arg);
+  return *((std::string*)arg) == value;
 }
 
 MATCHER_P(RedisModuleKeyIsForString, value, "") {
-  *result_listener << "where the key is " << ((RedisModuleKey *)arg)->key;
-  return ((RedisModuleKey *)arg)->key == value;
+  *result_listener << "where the key is " << ((RedisModuleKey*)arg)->key;
+  return ((RedisModuleKey*)arg)->key == value;
 }
 
 MATCHER_P(IsRedisModuleEvent, expected, "") {
   return arg.id == expected.id && arg.dataver == expected.dataver;
+}
+
+void InitEngineVersionMocks(RedisModuleCtx* ctx, const std::string& info,
+                            const std::string& version) {
+  auto reply = new RedisModuleCallReply;
+  EXPECT_CALL(*kMockRedisModule,
+              Call(ctx, testing::StrEq("INFO"), testing::StrEq("c"),
+                   testing::StrEq("server")))
+      .WillRepeatedly(
+          [reply](RedisModuleCtx* ctx, const char* cmd, const char* fmt,
+                  const char* arg1) -> RedisModuleCallReply* { return reply; });
+  EXPECT_CALL(*kMockRedisModule, FreeCallReply(reply))
+      .WillRepeatedly([](RedisModuleCallReply* reply) { delete reply; });
+
+  EXPECT_CALL(*kMockRedisModule, CallReplyType(testing::_))
+      .WillRepeatedly(
+          [](RedisModuleCallReply* reply) { return REDISMODULE_REPLY_STRING; });
+  EXPECT_CALL(*kMockRedisModule, CallReplyStringPtr(testing::_, testing::_))
+      .WillRepeatedly(
+          [&info](RedisModuleCallReply* reply, size_t* len) -> const char* {
+            *len = info.length();
+            return info.c_str();
+          });
 }
 
 }  // namespace vmsdk

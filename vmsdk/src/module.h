@@ -111,6 +111,7 @@ int CreateCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   return REDISMODULE_OK;
 }
 bool IsModuleLoaded(RedisModuleCtx *ctx, const std::string &name);
+std::string EngineVersion(RedisModuleCtx *ctx);
 }  // namespace vmsdk
 
 #endif  // VMSDK_SRC_MODULE_H_

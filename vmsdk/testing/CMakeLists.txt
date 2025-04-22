@@ -1,3 +1,11 @@
+set(SRCS_BLOCKED_CLIENT_TEST ${CMAKE_CURRENT_LIST_DIR}/blocked_client_test.cc)
+add_executable(blocked_client_test ${SRCS_BLOCKED_CLIENT_TEST})
+target_include_directories(blocked_client_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(blocked_client_test PUBLIC blocked_client)
+target_link_libraries(blocked_client_test PUBLIC vmsdk_testing_infra)
+target_link_libraries(blocked_client_test PUBLIC module_type)
+finalize_test_flags(blocked_client_test)
+
 set(SRCS_COMMAND_PARSER_TEST ${CMAKE_CURRENT_LIST_DIR}/command_parser_test.cc)
 add_executable(command_parser_test ${SRCS_COMMAND_PARSER_TEST})
 target_include_directories(command_parser_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})

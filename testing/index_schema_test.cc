@@ -450,13 +450,6 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
                 KeyType(vmsdk::RedisModuleKeyIsForString(key->Str())))
         .WillRepeatedly(Return(REDISMODULE_KEYTYPE_HASH));
 
-#ifdef BLOCK_CLIENT_ON_MUTATION
-    EXPECT_CALL(
-        *kMockRedisModule,
-        BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
-        .WillOnce(Return((RedisModuleBlockedClient *)1));
-#endif
-
     const char *field = "vector";
     const char *value = "vector_buffer";
     RedisModuleString *value_redis_str =
@@ -475,11 +468,6 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
 
     index_schema->OnKeyspaceNotification(&fake_ctx_, REDISMODULE_NOTIFY_HASH,
                                          "event", key_redis_str.get());
-#ifdef BLOCK_CLIENT_ON_MUTATION
-    EXPECT_CALL(*kMockRedisModule,
-                UnblockClient((RedisModuleBlockedClient *)1, nullptr))
-        .WillOnce(Return(1));
-#endif
   }
   EXPECT_EQ(mutations_thread_pool.QueueSize(), 1);
   VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());

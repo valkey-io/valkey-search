@@ -109,8 +109,8 @@ void ThreadPool::JoinWorkers() {
   if (!started_) {
     return;
   }
-  for (size_t i = 0; i < threads_.size(); ++i) {
-    pthread_join(threads_[i], nullptr);
+  for (auto thread : threads_) {
+    pthread_join(thread, nullptr);
   }
   started_ = false;
 }

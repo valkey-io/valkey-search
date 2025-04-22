@@ -117,3 +117,14 @@ add_library(managed_pointers INTERFACE ${SRCS_MANAGED_POINTERS})
 target_include_directories(managed_pointers INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(managed_pointers INTERFACE utils)
 target_link_libraries(managed_pointers INTERFACE valkey_module)
+
+set(SRCS_BLOCKED_CLIENT ${CMAKE_CURRENT_LIST_DIR}/blocked_client.cc
+                           ${CMAKE_CURRENT_LIST_DIR}/blocked_client.h)
+
+valkey_search_add_static_library(blocked_client
+                          ${SRCS_BLOCKED_CLIENT})
+target_include_directories(blocked_client INTERFACE ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(blocked_client PUBLIC utils)
+target_link_libraries(blocked_client PUBLIC module)
+target_link_libraries(blocked_client PUBLIC log)
+target_link_libraries(blocked_client PUBLIC valkey_module)

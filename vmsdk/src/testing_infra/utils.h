@@ -94,29 +94,6 @@ MATCHER_P(IsRedisModuleEvent, expected, "") {
   return arg.id == expected.id && arg.dataver == expected.dataver;
 }
 
-void InitEngineVersionMocks(RedisModuleCtx* ctx, const std::string& info,
-                            const std::string& version) {
-  auto reply = new RedisModuleCallReply;
-  EXPECT_CALL(*kMockRedisModule,
-              Call(ctx, testing::StrEq("INFO"), testing::StrEq("c"),
-                   testing::StrEq("server")))
-      .WillRepeatedly(
-          [reply](RedisModuleCtx* ctx, const char* cmd, const char* fmt,
-                  const char* arg1) -> RedisModuleCallReply* { return reply; });
-  EXPECT_CALL(*kMockRedisModule, FreeCallReply(reply))
-      .WillRepeatedly([](RedisModuleCallReply* reply) { delete reply; });
-
-  EXPECT_CALL(*kMockRedisModule, CallReplyType(testing::_))
-      .WillRepeatedly(
-          [](RedisModuleCallReply* reply) { return REDISMODULE_REPLY_STRING; });
-  EXPECT_CALL(*kMockRedisModule, CallReplyStringPtr(testing::_, testing::_))
-      .WillRepeatedly(
-          [&info](RedisModuleCallReply* reply, size_t* len) -> const char* {
-            *len = info.length();
-            return info.c_str();
-          });
-}
-
 }  // namespace vmsdk
 
 #endif  // VMSDK_SRC_TESTING_INFRA_UTILS

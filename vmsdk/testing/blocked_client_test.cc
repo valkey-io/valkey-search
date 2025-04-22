@@ -38,7 +38,6 @@ namespace vmsdk {
 namespace {
 struct BlockedClientTestCase {
   std::string test_name;
-  std::string version;
   size_t ctx_cnt;
   std::vector<size_t> tracked_blocked_clients;
   bool use_same_ctx{false};
@@ -59,7 +58,6 @@ std::vector<size_t> FetchTrackedBlockedClients() {
 
 TEST_P(BlockedClientTest, EngineVersion) {
   const BlockedClientTestCase &test_case = GetParam();
-  ResetCachedAllowBlockClientOnMutation();
   const std::vector<size_t> empty;
   EXPECT_EQ(FetchTrackedBlockedClients(), empty);
   std::vector<RedisModuleCtx> ctxes(test_case.ctx_cnt);
@@ -96,9 +94,7 @@ TEST_P(BlockedClientTest, EngineVersion) {
                                long long timeout_ms) { return &bc_ptr[i]; });
         }
       }
-      std::string info = "valkey_version:" + test_case.version;
-      InitEngineVersionMocks(ctx, info, test_case.version);
-      BlockedClient bc(ctx, true);
+      BlockedClient bc(ctx);
       blocked_clients.emplace_back(std::move(bc));
     }
     auto tracked_bc_cnt = FetchTrackedBlockedClients();
@@ -113,35 +109,24 @@ INSTANTIATE_TEST_SUITE_P(
     testing::ValuesIn<BlockedClientTestCase>(
         {{
              .test_name = "happy_path_1",
-             .version = "255.255.255",
              .ctx_cnt = 1,
              .tracked_blocked_clients = {1},
 
          },
          {
              .test_name = "happy_path_2",
-             .version = "8.1.1",
              .ctx_cnt = 1,
              .tracked_blocked_clients = {1},
 
          },
          {
-             .test_name = "engine_not_supported",
-             .version = "8.1.0",
-             .ctx_cnt = 1,
-             .tracked_blocked_clients = {},
-
-         },
-         {
              .test_name = "two_blocked_clients",
-             .version = "8.1.1",
              .ctx_cnt = 2,
              .tracked_blocked_clients = {1, 1},
 
          },
          {
              .test_name = "two_blocked_clients_same",
-             .version = "8.1.1",
              .ctx_cnt = 2,
              .tracked_blocked_clients = {2},
              .use_same_ctx = true,

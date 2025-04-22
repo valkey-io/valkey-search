@@ -44,6 +44,7 @@
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "testing/common.h"
+#include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/thread_pool.h"
@@ -172,6 +173,8 @@ TEST_F(MulriExecTest, Basic) {
     EXPECT_CALL(*kMockRedisModule, GetContextFlags(testing::_))
         .WillRepeatedly(testing::Return(0));
     auto key_redis_str = vmsdk::MakeUniqueRedisString("key3");
+    EXPECT_CALL(*kMockRedisModule, GetClientId(&fake_ctx_))
+        .WillRepeatedly(testing::Return(1));
     EXPECT_CALL(
         *kMockRedisModule,
         BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
@@ -198,6 +201,19 @@ TEST_F(MulriExecTest, TrackMutationOverride) {
         cb_data = data;
         return REDISMODULE_OK;
       });
+  EXPECT_CALL(*kMockRedisModule, GetContextFlags(testing::_))
+      .WillRepeatedly(testing::Return(0));
+  EXPECT_CALL(*kMockRedisModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly(testing::Return(1));
+  EXPECT_CALL(*kMockRedisModule, BlockClient(testing::_, testing::_, testing::_,
+                                             testing::_, testing::_))
+      .Times(1)
+      .WillRepeatedly(testing::Return((RedisModuleBlockedClient *)1));
+
+  EXPECT_CALL(*kMockRedisModule,
+              UnblockClient((RedisModuleBlockedClient *)1, testing::_))
+      .Times(1)
+      .WillRepeatedly(testing::Return(REDISMODULE_OK));
   auto key_redis_str = vmsdk::MakeUniqueRedisString(key_prefix + "0");
   index_schema->OnKeyspaceNotification(&fake_ctx_, REDISMODULE_NOTIFY_HASH,
                                        "event", key_redis_str.get());
@@ -224,6 +240,8 @@ TEST_F(MulriExecTest, TrackMutationOverride) {
   }
   EXPECT_CALL(*kMockRedisModule, GetContextFlags(testing::_))
       .WillRepeatedly(testing::Return(0));
+  EXPECT_CALL(*kMockRedisModule, GetClientId(&fake_ctx_))
+      .WillRepeatedly(testing::Return(1));
   key_redis_str = vmsdk::MakeUniqueRedisString(key_prefix + "1");
   VMSDK_EXPECT_OK(mutations_thread_pool->ResumeWorkers());
   index_schema->OnKeyspaceNotification(&fake_ctx_, REDISMODULE_NOTIFY_HASH,
@@ -240,6 +258,7 @@ TEST_F(MulriExecTest, TrackMutationOverride) {
         std::string(record_value_) + "3"};
     EXPECT_THAT(expected_keys, testing::UnorderedElementsAreArray(added_keys));
   }
+  EXPECT_TRUE(vmsdk::TrackedBlockedClients().empty());
   index_schema = nullptr;
 }
 

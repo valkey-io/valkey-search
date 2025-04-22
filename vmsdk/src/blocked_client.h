@@ -39,9 +39,8 @@ namespace vmsdk {
 
 class BlockedClient {
  public:
-  explicit BlockedClient(RedisModuleCtx *ctx,
-                         bool keyspace_notification = false);
-  BlockedClient(RedisModuleCtx *ctx, RedisModuleCmdFunc reply_callback,
+  BlockedClient(RedisModuleCtx *ctx,
+                RedisModuleCmdFunc reply_callback = nullptr,
                 RedisModuleCmdFunc timeout_callback = nullptr,
                 void (*free_privdata)(RedisModuleCtx *, void *) = nullptr,
                 long long timeout_ms = 0);
@@ -77,6 +76,5 @@ struct BlockedClientEntry {
 };
 absl::flat_hash_map<RedisModuleCtx *, BlockedClientEntry> &
 TrackedBlockedClients();
-void ResetCachedAllowBlockClientOnMutation();
 }  // namespace vmsdk
 #endif  // VMSDK_SRC_BLOCKED_CLIENT_H_

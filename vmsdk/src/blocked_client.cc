@@ -29,50 +29,11 @@
 
 #include "vmsdk/src/blocked_client.h"
 
-#include <array>
-
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
-#include "absl/strings/str_split.h"
-#include "vmsdk/src/log.h"
-#include "vmsdk/src/module.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
-std::optional<bool> gCachedAllowBlockClientOnMutation;
-void ResetCachedAllowBlockClientOnMutation() {
-  gCachedAllowBlockClientOnMutation = std::nullopt;
-}
-
-bool EngineSupported(RedisModuleCtx *ctx) {
-#ifdef BLOCK_CLIENT_ON_MUTATION
-  return true;
-#endif
-
-  if (gCachedAllowBlockClientOnMutation.has_value()) {
-    return gCachedAllowBlockClientOnMutation.value();
-  }
-  auto engine_version_str = EngineVersion(ctx);
-  std::vector<std::string> engine_version_arr =
-      absl::StrSplit(engine_version_str, '.');
-  CHECK(engine_version_arr.size() == 3);
-  std::array<uint32_t, 3> min_version{8, 1, 1};
-  for (auto i = 0; i < engine_version_arr.size(); ++i) {
-    auto part = std::atoi(engine_version_arr[i].c_str());
-    if (part < min_version[i]) {
-      VMSDK_LOG(NOTICE, ctx)
-          << "Engine version, " << engine_version_str
-          << " , does NOT support client blocking on keyspace notification.";
-      gCachedAllowBlockClientOnMutation = false;
-      return false;
-    }
-  }
-  VMSDK_LOG(NOTICE, ctx)
-      << "Engine version, " << engine_version_str
-      << " , supports client blocking on keyspace notification.";
-  gCachedAllowBlockClientOnMutation = true;
-  return true;
-}
 
 absl::flat_hash_map<RedisModuleCtx *, BlockedClientEntry> gBlockedClients;
 // Used for testing
@@ -81,33 +42,29 @@ TrackedBlockedClients() {
   return gBlockedClients;
 }
 
-BlockedClient::BlockedClient(RedisModuleCtx *ctx, bool keyspace_notification) {
-  if (keyspace_notification && !EngineSupported(ctx)) {
-    return;
-  }
+BlockedClient::BlockedClient(RedisModuleCtx *ctx,
+                             RedisModuleCmdFunc reply_callback,
+                             RedisModuleCmdFunc timeout_callback,
+                             void (*free_privdata)(RedisModuleCtx *, void *),
+                             long long timeout_ms) {
   tracked_ctx_ = ctx;
   auto it = gBlockedClients.find(ctx);
   if (it == gBlockedClients.end()) {
-    blocked_client_ =
-        RedisModule_BlockClient(ctx, nullptr, nullptr, nullptr, 0);
+    blocked_client_ = RedisModule_BlockClient(
+        ctx, reply_callback, timeout_callback, free_privdata, timeout_ms);
     if (!blocked_client_) {
       return;
     }
     gBlockedClients[ctx] = {1, blocked_client_};
     return;
   }
+  CHECK(reply_callback == nullptr && timeout_callback == nullptr &&
+        free_privdata == nullptr && timeout_ms == 0)
+      << "block client paramters must be empty when multiple calls with the "
+         "same ctx";
   blocked_client_ = it->second.blocked_client;
   auto &cnt = it->second.cnt;
   ++cnt;
-}
-
-BlockedClient::BlockedClient(RedisModuleCtx *ctx,
-                             RedisModuleCmdFunc reply_callback,
-                             RedisModuleCmdFunc timeout_callback,
-                             void (*free_privdata)(RedisModuleCtx *, void *),
-                             long long timeout_ms) {
-  blocked_client_ = RedisModule_BlockClient(
-      ctx, reply_callback, timeout_callback, free_privdata, timeout_ms);
 }
 
 BlockedClient &BlockedClient::operator=(BlockedClient &&other) noexcept {

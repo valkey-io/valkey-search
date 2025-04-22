@@ -525,9 +525,8 @@ void IndexSchema::ScheduleMutation(bool from_backfill,
       priority);
 }
 
-inline bool ShouldBlockClient([[maybe_unused]] RedisModuleCtx *ctx,
-                              [[maybe_unused]] bool inside_multi_exec,
-                              [[maybe_unused]] bool from_backfill) {
+bool ShouldBlockClient(RedisModuleCtx *ctx, bool inside_multi_exec,
+                       bool from_backfill) {
   return !inside_multi_exec && !from_backfill && vmsdk::IsRealUserClient(ctx);
 }
 
@@ -941,7 +940,7 @@ bool IndexSchema::TrackMutatedRecord(RedisModuleCtx *ctx,
     itr->second.attributes.value() = std::move(mutated_attributes);
     itr->second.from_backfill = from_backfill;
     if (ABSL_PREDICT_TRUE(block_client)) {
-      vmsdk::BlockedClient blocked_client(ctx, true);
+      vmsdk::BlockedClient blocked_client(ctx);
       blocked_client.MeasureTimeStart();
       itr->second.blocked_clients.emplace_back(std::move(blocked_client));
     }
@@ -955,7 +954,7 @@ bool IndexSchema::TrackMutatedRecord(RedisModuleCtx *ctx,
         std::move(mutated_attribute.second);
   }
   if (ABSL_PREDICT_TRUE(block_client)) {
-    vmsdk::BlockedClient blocked_client(ctx, true);
+    vmsdk::BlockedClient blocked_client(ctx);
     blocked_client.MeasureTimeStart();
     itr->second.blocked_clients.emplace_back(std::move(blocked_client));
   }

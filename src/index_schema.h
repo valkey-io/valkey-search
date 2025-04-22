@@ -64,6 +64,8 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
+bool ShouldBlockClient(RedisModuleCtx *ctx, bool inside_multi_exec,
+                       bool from_backfill);
 
 using RDBLoadFunc = void *(*)(RedisModuleIO *, int);
 using FreeFunc = void (*)(void *);

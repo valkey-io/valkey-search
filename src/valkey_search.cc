@@ -158,29 +158,37 @@ void AddLatencyStat(RedisModuleInfoCtx *ctx, absl::string_view stat_name,
                                     sampler.GetStatsString().c_str());
   }
 }
-
+/* Note: ValkeySearch::Info may be invoked during a crashdump by the engine.
+ * In such cases, any section deemed unsafe is skipped.
+ * A section is considered unsafe if it involves any of the following:
+ *   1. Acquiring locks
+ *   2. Performing heap allocations
+ *   3. Requiring execution on the main thread
+ */
 void ValkeySearch::Info(RedisModuleInfoCtx *ctx) const {
   RedisModule_InfoAddSection(ctx, "memory");
   RedisModule_InfoAddFieldLongLong(ctx, "used_memory_bytes",
                                    vmsdk::GetUsedMemoryCnt());
   RedisModule_InfoAddFieldCString(
       ctx, "used_memory_human", ConvertToMB(vmsdk::GetUsedMemoryCnt()).c_str());
-  RedisModule_InfoAddSection(ctx, "index_stats");
-  RedisModule_InfoAddFieldLongLong(
-      ctx, "number_of_indexes",
-      SchemaManager::Instance().GetNumberOfIndexSchemas());
-  RedisModule_InfoAddFieldLongLong(
-      ctx, "number_of_attributes",
-      SchemaManager::Instance().GetNumberOfAttributes());
-  RedisModule_InfoAddFieldLongLong(
-      ctx, "total_indexed_hash_keys",
-      SchemaManager::Instance().GetTotalIndexedHashKeys());
+  if (vmsdk::IsMainThread()) {
+    RedisModule_InfoAddSection(ctx, "index_stats");
+    RedisModule_InfoAddFieldLongLong(
+        ctx, "number_of_indexes",
+        SchemaManager::Instance().GetNumberOfIndexSchemas());
+    RedisModule_InfoAddFieldLongLong(
+        ctx, "number_of_attributes",
+        SchemaManager::Instance().GetNumberOfAttributes());
+    RedisModule_InfoAddFieldLongLong(
+        ctx, "total_indexed_hash_keys",
+        SchemaManager::Instance().GetTotalIndexedHashKeys());
 
-  RedisModule_InfoAddSection(ctx, "ingestion");
-  RedisModule_InfoAddFieldCString(
-      ctx, "background_indexing_status",
-      SchemaManager::Instance().IsIndexingInProgress() ? "IN_PROGRESS"
-                                                       : "NO_ACTIVITY");
+    RedisModule_InfoAddSection(ctx, "ingestion");
+    RedisModule_InfoAddFieldCString(
+        ctx, "background_indexing_status",
+        SchemaManager::Instance().IsIndexingInProgress() ? "IN_PROGRESS"
+                                                         : "NO_ACTIVITY");
+  }
   RedisModule_InfoAddSection(ctx, "thread-pool");
   RedisModule_InfoAddFieldLongLong(ctx, "query_queue_size",
                                    reader_thread_pool_->QueueSize());
@@ -223,45 +231,43 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx) const {
       ctx, "inline_filtering_requests_count",
       Metrics::GetStats().query_inline_filtering_requests_cnt);
 
-  auto InfoResultCnt = [ctx](IndexSchema::Stats::ResultCnt<uint64_t> stat,
-                             std::string section_name) {
-    std::string successful_count_str =
-        section_name + "_" + std::string("successful_count");
-    std::string failure_count_str =
-        section_name + "_" + std::string("failure_count");
-    std::string skipped_count_str =
-        section_name + "_" + std::string("skipped_count");
+  if (vmsdk::IsMainThread()) {
+    auto InfoResultCnt = [ctx](IndexSchema::Stats::ResultCnt<uint64_t> stat,
+                               std::string section_name) {
+      std::string successful_count_str =
+          section_name + "_" + std::string("successful_count");
+      std::string failure_count_str =
+          section_name + "_" + std::string("failure_count");
+      std::string skipped_count_str =
+          section_name + "_" + std::string("skipped_count");
 
-    RedisModule_InfoAddFieldLongLong(ctx, successful_count_str.c_str(),
-                                     stat.success_cnt);
-    RedisModule_InfoAddFieldLongLong(ctx, failure_count_str.c_str(),
-                                     stat.failure_cnt);
-    RedisModule_InfoAddFieldLongLong(ctx, skipped_count_str.c_str(),
-                                     stat.skipped_cnt);
-  };
-  RedisModule_InfoAddSection(ctx, "subscription");
-  InfoResultCnt(
-      SchemaManager::Instance().AccumulateIndexSchemaResults(
-          [](const IndexSchema::Stats &stats)
-              -> const IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>> & {
-            return stats.subscription_add;
-          }),
-      "add_subscription");
-  InfoResultCnt(
-      SchemaManager::Instance().AccumulateIndexSchemaResults(
-          [](const IndexSchema::Stats &stats)
-              -> const IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>> & {
-            return stats.subscription_modify;
-          }),
-      "modify_subscription");
-  InfoResultCnt(
-      SchemaManager::Instance().AccumulateIndexSchemaResults(
-          [](const IndexSchema::Stats &stats)
-              -> const IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>> & {
-            return stats.subscription_remove;
-          }),
-      "remove_subscription");
-
+      RedisModule_InfoAddFieldLongLong(ctx, successful_count_str.c_str(),
+                                       stat.success_cnt);
+      RedisModule_InfoAddFieldLongLong(ctx, failure_count_str.c_str(),
+                                       stat.failure_cnt);
+      RedisModule_InfoAddFieldLongLong(ctx, skipped_count_str.c_str(),
+                                       stat.skipped_cnt);
+    };
+    RedisModule_InfoAddSection(ctx, "subscription");
+    InfoResultCnt(
+        SchemaManager::Instance().AccumulateIndexSchemaResults(
+            [](const IndexSchema::Stats &stats)
+                -> const IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>>
+                    & { return stats.subscription_add; }),
+        "add_subscription");
+    InfoResultCnt(
+        SchemaManager::Instance().AccumulateIndexSchemaResults(
+            [](const IndexSchema::Stats &stats)
+                -> const IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>>
+                    & { return stats.subscription_modify; }),
+        "modify_subscription");
+    InfoResultCnt(
+        SchemaManager::Instance().AccumulateIndexSchemaResults(
+            [](const IndexSchema::Stats &stats)
+                -> const IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>>
+                    & { return stats.subscription_remove; }),
+        "remove_subscription");
+  }
   RedisModule_InfoAddSection(ctx, "hnswlib");
   RedisModule_InfoAddFieldLongLong(ctx, "hnsw_add_exceptions_count",
                                    Metrics::GetStats().hnsw_add_exceptions_cnt);
@@ -347,31 +353,27 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx) const {
         Metrics::GetStats()
             .coordinator_server_search_index_partition_failure_latency);
   }
-  RedisModule_InfoAddSection(ctx, "string_interning");
-  RedisModule_InfoAddFieldLongLong(ctx, "string_interning_store_size",
-                                   StringInternStore::Instance().Size());
-  /*
-   size_t vector_externing_num_lru_entries{0};
-    size_t vector_externing_hash_extern_errors{0};
-    size_t vector_externing_lru_promote_cnt{0};
-    size_t vector_externing_entry_cnt{0};
-    size_t vector_externing_deferred_entry_cnt{0};
-    size_t vector_externing_generated_value_cnt{0};
-  */
-  RedisModule_InfoAddSection(ctx, "vector_externing");
-  auto vector_externing_stats = VectorExternalizer::Instance().GetStats();
-  RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_entry_count",
-                                   vector_externing_stats.entry_cnt);
-  RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_hash_extern_errors",
-                                   vector_externing_stats.hash_extern_errors);
-  RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_generated_value_cnt",
-                                   vector_externing_stats.generated_value_cnt);
-  RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_num_lru_entries",
-                                   vector_externing_stats.num_lru_entries);
-  RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_lru_promote_cnt",
-                                   vector_externing_stats.lru_promote_cnt);
-  RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_deferred_entry_cnt",
-                                   vector_externing_stats.deferred_entry_cnt);
+  if (vmsdk::IsMainThread()) {
+    RedisModule_InfoAddSection(ctx, "string_interning");
+    RedisModule_InfoAddFieldLongLong(ctx, "string_interning_store_size",
+                                     StringInternStore::Instance().Size());
+
+    RedisModule_InfoAddSection(ctx, "vector_externing");
+    auto vector_externing_stats = VectorExternalizer::Instance().GetStats();
+    RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_entry_count",
+                                     vector_externing_stats.entry_cnt);
+    RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_hash_extern_errors",
+                                     vector_externing_stats.hash_extern_errors);
+    RedisModule_InfoAddFieldLongLong(
+        ctx, "vector_externing_generated_value_cnt",
+        vector_externing_stats.generated_value_cnt);
+    RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_num_lru_entries",
+                                     vector_externing_stats.num_lru_entries);
+    RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_lru_promote_cnt",
+                                     vector_externing_stats.lru_promote_cnt);
+    RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_deferred_entry_cnt",
+                                     vector_externing_stats.deferred_entry_cnt);
+  }
 }
 
 // Beside the thread which initiates the fork, no other threads are present

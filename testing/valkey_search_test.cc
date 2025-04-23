@@ -399,7 +399,7 @@ TEST_F(ValkeySearchTest, Info) {
   auto interned_key_1 = StringInternStore::Intern("key1");
   EXPECT_EQ(std::string(*interned_key_1), "key1");
   RedisModuleInfoCtx fake_info_ctx;
-  ValkeySearch::Instance().Info(&fake_info_ctx);
+  ValkeySearch::Instance().Info(&fake_info_ctx, false);
 #ifndef TESTING_TMP_DISABLED
   EXPECT_EQ(
       fake_info_ctx.info_capture.GetInfo(),

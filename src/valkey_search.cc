@@ -144,9 +144,8 @@ static std::string ConvertToMB(double bytes_value) {
   return absl::StrCat(converted_mb, "M");
 }
 
-void ModuleInfo(RedisModuleInfoCtx *ctx,
-                [[maybe_unused]] int for_crash_report) {
-  ValkeySearch::Instance().Info(ctx);
+void ModuleInfo(RedisModuleInfoCtx *ctx, int for_crash_report) {
+  ValkeySearch::Instance().Info(ctx, for_crash_report);
 }
 
 void AddLatencyStat(RedisModuleInfoCtx *ctx, absl::string_view stat_name,
@@ -165,13 +164,13 @@ void AddLatencyStat(RedisModuleInfoCtx *ctx, absl::string_view stat_name,
  *   2. Performing heap allocations
  *   3. Requiring execution on the main thread
  */
-void ValkeySearch::Info(RedisModuleInfoCtx *ctx) const {
+void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
   RedisModule_InfoAddSection(ctx, "memory");
   RedisModule_InfoAddFieldLongLong(ctx, "used_memory_bytes",
                                    vmsdk::GetUsedMemoryCnt());
   RedisModule_InfoAddFieldCString(
       ctx, "used_memory_human", ConvertToMB(vmsdk::GetUsedMemoryCnt()).c_str());
-  if (vmsdk::IsMainThread()) {
+  if (!for_crash_report) {
     RedisModule_InfoAddSection(ctx, "index_stats");
     RedisModule_InfoAddFieldLongLong(
         ctx, "number_of_indexes",
@@ -231,7 +230,7 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx) const {
       ctx, "inline_filtering_requests_count",
       Metrics::GetStats().query_inline_filtering_requests_cnt);
 
-  if (vmsdk::IsMainThread()) {
+  if (!for_crash_report) {
     auto InfoResultCnt = [ctx](IndexSchema::Stats::ResultCnt<uint64_t> stat,
                                std::string section_name) {
       std::string successful_count_str =
@@ -353,7 +352,7 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx) const {
         Metrics::GetStats()
             .coordinator_server_search_index_partition_failure_latency);
   }
-  if (vmsdk::IsMainThread()) {
+  if (!for_crash_report) {
     RedisModule_InfoAddSection(ctx, "string_interning");
     RedisModule_InfoAddFieldLongLong(ctx, "string_interning_store_size",
                                      StringInternStore::Instance().Size());

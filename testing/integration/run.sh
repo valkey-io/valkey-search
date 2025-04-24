@@ -4,7 +4,7 @@ ROOT_DIR=$(readlink -f $(dirname $0))
 BUILD_CONFIG=release
 TEST=all
 CLEAN="no"
-#VALKEY_VERSION="8.0.0"
+VALKEY_VERSION="8.1.1"
 VALKEY_JSON_VERSION="1.0.0"
 MODULE_ROOT=${ROOT_DIR}/../..
 DUMP_TEST_ERRORS_STDOUT="no"
@@ -117,8 +117,7 @@ function configure() {
         printf "${BOLD_PINK}Building valkey-server...${RESET}\n"
 
         rm -rf ${VALKEY_SERVER_DIR}
-        git clone --single-branch https://github.com/valkey-io/valkey.git ${VALKEY_SERVER_DIR}
-       # git clone --branch ${VALKEY_VERSION} --single-branch https://github.com/valkey-io/valkey.git ${VALKEY_SERVER_DIR}
+        git clone --branch ${VALKEY_VERSION} --single-branch https://github.com/valkey-io/valkey.git ${VALKEY_SERVER_DIR}
         cd ${VALKEY_SERVER_DIR}
         make -j$(nproc)
         cd ${ROOT_DIR}
@@ -134,8 +133,7 @@ function configure() {
         git clone --branch ${VALKEY_JSON_VERSION} --single-branch https://github.com/valkey-io/valkey-json.git ${VALKEY_JSON_DIR}
         cd ${VALKEY_JSON_DIR}
         set +e
-        #SERVER_VERSION=$VALKEY_VERSION ./build.sh
-        ./build.sh
+        SERVER_VERSION=$VALKEY_VERSION ./build.sh
         set -e
         #mkdir build
         #cd build
@@ -161,8 +159,7 @@ function build() {
 
 
 BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
-#VALKEY_SERVER_DIR=${BUILD_DIR}/valkey-${VALKEY_VERSION}
-VALKEY_SERVER_DIR=${BUILD_DIR}/valkey
+VALKEY_SERVER_DIR=${BUILD_DIR}/valkey-${VALKEY_VERSION}
 VALKEY_SERVER_PATH=${VALKEY_SERVER_DIR}/src/valkey-server
 VALKEY_JSON_DIR=${BUILD_DIR}/valkey-json-${VALKEY_JSON_VERSION}
 VALKEY_JSON_PATH=${VALKEY_JSON_DIR}/build/src/libjson.so

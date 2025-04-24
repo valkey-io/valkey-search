@@ -38,6 +38,7 @@
 #include "src/utils/intrusive_ref_count.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
+#ifndef ASAN_BUILD
 namespace valkey_search {
 
 namespace {
@@ -239,3 +240,4 @@ INSTANTIATE_TEST_SUITE_P(AllocatorTests, AllocatorTest,
 }  // namespace
 
 }  // namespace valkey_search
+#endif

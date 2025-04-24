@@ -105,6 +105,7 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
         indexes::Neighbor(string_interned_external_id, 0));
   }
   std::vector<RecordsMap> expected_contents;
+  expected_contents.reserve(params.expected_contents.size());
   for (const auto &expected_content : params.expected_contents) {
     expected_contents.push_back(ToRecordsMap(expected_content));
   }

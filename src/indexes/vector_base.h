@@ -179,9 +179,14 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       : IndexBase(indexer_type),
         dimensions_(dimensions),
         attribute_identifier_(attribute_identifier),
-        attribute_data_type_(attribute_data_type),
+        attribute_data_type_(attribute_data_type)
+#ifndef ASAN_BUILD
+        ,
         vector_allocator_(CREATE_UNIQUE_PTR(
-            FixedSizeAllocator, dimensions * sizeof(float) + 1, true)) {}
+            FixedSizeAllocator, dimensions * sizeof(float) + 1, true))
+#endif  // !ASAN_BUILD
+  {
+  }
 
   bool IsValidSizeVector(absl::string_view record) {
     const auto data_type_size = GetDataTypeSize();
@@ -255,7 +260,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecord(const InternedStringPtr& key,
                             absl::string_view query) const;
-  UniqueFixedSizeAllocatorPtr vector_allocator_;
+  UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
 };
 
 class InlineVectorEvaluator : public query::Evaluator {

@@ -12,6 +12,7 @@ DUMP_TEST_ERRORS_STDOUT="no"
 NINJA_TOOL="ninja"
 INTEGRETION_TEST="no"
 ASAN_BUILD="no"
+ARGV=$@
 
 # Constants
 BOLD_PINK='\e[35;1m'
@@ -140,11 +141,15 @@ function build() {
         cd ${ROOT_DIR}
 
         printf "\n${GREEN}Build Successful!${RESET}\n\n"
-        printf "${BOLD_PINK}Module path:${RESET} .build-${BUILD_CONFIG}/libsearch.so\n\n"
-        printf "You may want to run the unit tests by executing:\n"
-        printf "    ./build.sh --run-tests\n\n"
+        printf "${BOLD_PINK}Module path:${RESET} ${BUILD_DIR}/libsearch.so\n\n"
+
+        if [ -z "${RUN_TEST}" ]; then
+            printf "You may want to run the unit tests by executing:\n"
+            printf "    ./build.sh ${ARGV} --run-tests\n\n"
+        fi
+
         printf "To load the module, execute the following command:\n"
-        printf "    valkey-server --loadmodule %s/.build-${BUILD_CONFIG}/libsearch.so\n\n" "$PWD"
+        printf "    valkey-server --loadmodule ${BUILD_DIR}/libsearch.so\n\n"
     fi
 }
 
@@ -165,8 +170,13 @@ function print_test_error_and_exit() {
     if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
         cat ${TEST_OUTPUT_FILE}
     fi
-    print_test_summary
-    exit 1
+
+    # When running tests with ASan enabled, do not terminate the execution after the first failure continue
+    # running the remainder of the tests
+    if [[ "${ASAN_BUILD}" == "no" ]]; then
+        print_test_summary
+        exit 1
+    fi
 }
 
 function check_tool() {
@@ -268,8 +278,7 @@ if [[ "${RUN_TEST}" == "all" ]]; then
         echo "==> Running executable: ${test}" >> ${TEST_OUTPUT_FILE}
         echo "" >> ${TEST_OUTPUT_FILE}
         print_test_prefix "${test}"
-        ${test} >> ${TEST_OUTPUT_FILE} 2>&1 || print_test_error_and_exit
-        print_test_ok
+        (${test} >> ${TEST_OUTPUT_FILE} 2>&1 && print_test_ok) || print_test_error_and_exit
     done
     print_test_summary
 elif [ ! -z "${RUN_TEST}" ]; then
@@ -277,8 +286,7 @@ elif [ ! -z "${RUN_TEST}" ]; then
     echo "==> Running executable: ${TESTS_DIR}/${RUN_TEST}" >> ${TEST_OUTPUT_FILE}
     echo "" >> ${TEST_OUTPUT_FILE}
     print_test_prefix "${TESTS_DIR}/${RUN_TEST}"
-    ${TESTS_DIR}/${RUN_TEST} >> ${TEST_OUTPUT_FILE} 2>&1 || print_test_error_and_exit
-    print_test_ok
+    (${TESTS_DIR}/${RUN_TEST} && print_test_ok) || print_test_error_and_exit
     print_test_summary
 elif [[ "${INTEGRETION_TEST}" == "yes" ]]; then
     cd testing/integration

@@ -85,7 +85,7 @@ constexpr absl::string_view kReaderThreadsParam{"--reader-threads"};
 constexpr absl::string_view kWriterThreadsParam{"--writer-threads"};
 constexpr absl::string_view kUseCoordinator{"--use-coordinator"};
 constexpr absl::string_view kLogLevel{"--log-level"};
-constexpr absl::string_view kResizeBlockSize{"--resize-block-size"};
+constexpr absl::string_view kBlockSize{"--block-size"};
 
 struct Parameters {
   size_t reader_threads{vmsdk::GetPhysicalCPUCoresCount()};
@@ -93,7 +93,7 @@ struct Parameters {
   std::optional<int> threads;
   bool use_coordinator{false};
   std::optional<std::string> log_level;
-  uint32_t resize_backfill_block{10240};
+  uint32_t block_size{10240};
 };
 
 absl::StatusOr<Parameters> Load(RedisModuleString **argv, int argc) {
@@ -109,8 +109,8 @@ absl::StatusOr<Parameters> Load(RedisModuleString **argv, int argc) {
                         GENERATE_FLAG_PARSER(Parameters, use_coordinator));
   parser.AddParamParser(kLogLevel,
                         GENERATE_VALUE_PARSER(Parameters, log_level));
-  parser.AddParamParser(kResizeBlockSize,
-                        GENERATE_VALUE_PARSER(Parameters, resize_backfill_block));
+  parser.AddParamParser(kBlockSize,
+                        GENERATE_VALUE_PARSER(Parameters, block_size));
   vmsdk::ArgsIterator itr{argv, argc};
   VMSDK_RETURN_IF_ERROR(parser.Parse(parameters, itr));
   if (parameters.threads.has_value()) {
@@ -474,9 +474,9 @@ absl::Status ValkeySearch::LoadOptions(RedisModuleCtx *ctx,
       "write-worker-", options.writer_threads);
   writer_thread_pool_->StartWorkers();
 
-  if (options.resize_backfill_block > 10240) {
-    kIndexSchemaBackfillBatchSize = options.resize_backfill_block;
-    valkey_search::indexes::kHNSWBlockSize = options.resize_backfill_block;
+  if (options.block_size > 10240) {
+    kIndexSchemaBackfillBatchSize = options.block_size;
+    valkey_search::indexes::kHNSWBlockSize = options.block_size;
   }
 
   if (options.log_level) {

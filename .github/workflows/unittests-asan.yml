@@ -1,4 +1,4 @@
-name: unittests
+name: unittests-asan
 
 on:
   pull_request: # This triggers the workflow for pull requests
@@ -10,7 +10,7 @@ on:
   workflow_dispatch: # allow manual triggering
 
 concurrency:
-  group: unittests-${{ github.head_ref || github.ref }}
+  group: unittests-asan-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -30,6 +30,5 @@ jobs:
     - name: Build Docker Image
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
-    - name: Run Tests
-      run: docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image sudo ci/build_ubuntu.sh --run-tests
-    
+    - name: Run Tests ASAN
+      run: docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image sudo ci/build_ubuntu.sh --run-tests --asan

@@ -297,37 +297,7 @@ absl::Status VectorHNSW<T>::ResizeIfFull() {
   }
   return absl::OkStatus();
 }
-/*
-template <typename T>
-absl::StatusOr<bool> VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
-                                                     absl::string_view record) {
-  absl::ReaderMutexLock lock(&resize_mutex_);
-  {
-    std::unique_lock<std::mutex> lock_label(
-        algo_->getLabelOpMutex(internal_id));
-    auto id = hnswlib_helpers::GetInternalId(algo_.get(), internal_id);
-    if (!id.has_value()) {
-      return absl::InternalError(
-          absl::StrCat("Couldn't find internal id: ", internal_id));
-    }
-    if (hnswlib_helpers::IsDataMatched(algo_.get(), *id, record)) {
-      return false;
-    }
-  }
-  try {
-    // TODO - an alternative approach is to call HierarchicalNSW::updatePoint.
-    // The concern with calling updatePoint is that it might have implications
-    // on the search accuracy. Need to revisit this in the future.
-    algo_->markDelete(internal_id);
-    algo_->addPoint((T *)record.data(), internal_id);
-  } catch (const std::exception &e) {
-    ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
-    return absl::InternalError(
-        absl::StrCat("Error while modifying a record: ", e.what()));
-  }
-  return true;
-}
-  */
+
 template <typename T>
 absl::Status VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
                                              absl::string_view record) {

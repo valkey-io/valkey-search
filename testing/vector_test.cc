@@ -429,8 +429,8 @@ TEST_F(VectorIndexTest, EfRuntimeRecall) {
     auto ef_runtime_recall = CalcRecall(index_flat->get(), index_hnsw->get(), k,
                                         kDimensions, kEFRuntime * 8);
     EXPECT_LE(no_ef_runtime_recall, ef_runtime_recall);
-    EXPECT_EQ(default_ef_runtime_recall, no_ef_runtime_recall);
     EXPECT_GE(ef_runtime_recall, 0.96f);
+    EXPECT_EQ(default_ef_runtime_recall, no_ef_runtime_recall);
   }
 }
 

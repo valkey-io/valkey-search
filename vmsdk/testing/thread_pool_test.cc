@@ -263,7 +263,7 @@ TEST_P(ThreadPoolTest, ConcurrentWorkers) {
 }
 TEST_F(ThreadPoolTest, priority) {
   // Test that high priority tasks are executed before low priority tasks
-  ThreadPool thread_pool("test-pool", 1);
+  ThreadPool thread_pool("test-pool", 5);
   thread_pool.StartWorkers();
   const size_t tasks = thread_pool.Size() * 2;
   std::atomic<int> pending_run_low_priority = tasks;

@@ -60,6 +60,18 @@ function(valkey_search_add_static_library name sources)
   target_link_libraries(${name} PRIVATE GTest::gtest)
 endfunction()
 
+function(valkey_search_target_update_asan_flags TARGET)
+  if(ASAN_BUILD)
+    # For ASAN build, it is recommended to have at least -O1 and enable
+    # fno-omit-frame-pointer to get nicer stack traces
+    target_compile_options(${TARGET} PRIVATE -O1)
+    target_compile_options(${TARGET} PRIVATE -fno-omit-frame-pointer)
+    target_compile_options(${TARGET} PRIVATE -fsanitize=address)
+    target_compile_options(${TARGET} PRIVATE -fno-lto)
+    target_compile_definitions(${TARGET} PRIVATE ASAN_BUILD=1)
+  endif()
+endfunction()
+
 # A wrapper around "add_library" (SHARED) that enables the various build flags
 function(valkey_search_add_shared_library name sources)
   message(STATUS "Adding shared library ${name}")
@@ -111,13 +123,7 @@ function(valkey_search_target_update_compile_flags TARGET)
   target_compile_options(${TARGET} PRIVATE -fPIC)
   target_compile_definitions(${TARGET} PRIVATE TESTING_TMP_DISABLED)
   if(ASAN_BUILD)
-    # For ASAN build, it is recommended to have at least -O1 and enable
-    # fno-omit-frame-pointer to get nicer stack traces
-    target_compile_options(${TARGET} PRIVATE -O1)
-    target_compile_options(${TARGET} PRIVATE -fno-omit-frame-pointer)
-    target_compile_options(${TARGET} PRIVATE -fsanitize=address)
-    target_compile_options(${TARGET} PRIVATE -fno-lto)
-    target_compile_definitions(${TARGET} PRIVATE ASAN_BUILD=1)
+    valkey_search_target_update_asan_flags(${TARGET})
   elseif(VALKEY_SEARCH_DEBUG_BUILD)
     target_compile_options(${TARGET} PRIVATE -O0)
     target_compile_options(${TARGET} PRIVATE -fno-omit-frame-pointer)
@@ -158,7 +164,7 @@ macro(finalize_test_flags __TARGET)
   endforeach()
 
   target_link_options(${__TARGET} PRIVATE "LINKER:--allow-multiple-definition")
-  if (NOT ASAN_BUILD)
+  if(NOT ASAN_BUILD)
     target_link_options(${__TARGET} PRIVATE "LINKER:-S")
   endif()
   target_compile_options(${__TARGET} PRIVATE -O1)

@@ -62,10 +62,10 @@
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
 #include "src/keyspace_event_manager.h"
-#include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/vector_externalizer.h"
+#include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -525,14 +525,9 @@ void IndexSchema::ScheduleMutation(bool from_backfill,
       priority);
 }
 
-inline bool ShouldBlockClient([[maybe_unused]] RedisModuleCtx *ctx,
-                              [[maybe_unused]] bool inside_multi_exec,
-                              [[maybe_unused]] bool from_backfill) {
-#ifdef BLOCK_CLIENT_ON_MUTATION
-  return !inside_multi_exec && !from_backfill && !vmsdk::IsFakeClient(ctx);
-#else
-  return false;
-#endif
+bool ShouldBlockClient(RedisModuleCtx *ctx, bool inside_multi_exec,
+                       bool from_backfill) {
+  return !inside_multi_exec && !from_backfill && vmsdk::IsRealUserClient(ctx);
 }
 
 void IndexSchema::ProcessMutation(RedisModuleCtx *ctx,
@@ -945,7 +940,7 @@ bool IndexSchema::TrackMutatedRecord(RedisModuleCtx *ctx,
     itr->second.attributes.value() = std::move(mutated_attributes);
     itr->second.from_backfill = from_backfill;
     if (ABSL_PREDICT_TRUE(block_client)) {
-      vmsdk::BlockedClient blocked_client(ctx);
+      vmsdk::BlockedClient blocked_client(ctx, true);
       blocked_client.MeasureTimeStart();
       itr->second.blocked_clients.emplace_back(std::move(blocked_client));
     }
@@ -959,7 +954,7 @@ bool IndexSchema::TrackMutatedRecord(RedisModuleCtx *ctx,
         std::move(mutated_attribute.second);
   }
   if (ABSL_PREDICT_TRUE(block_client)) {
-    vmsdk::BlockedClient blocked_client(ctx);
+    vmsdk::BlockedClient blocked_client(ctx, true);
     blocked_client.MeasureTimeStart();
     itr->second.blocked_clients.emplace_back(std::move(blocked_client));
   }

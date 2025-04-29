@@ -125,9 +125,8 @@ std::optional<absl::string_view> ParseHashTag(absl::string_view s) {
   auto tag_size = end - (start + 1);
   if (tag_size == 0) {
     return std::nullopt;
-  } else {
-    return s.substr(start + 1, tag_size);
   }
+  return s.substr(start + 1, tag_size);
 }
 
 }  // namespace vmsdk

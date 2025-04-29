@@ -94,11 +94,10 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
 }
 
 template <typename T>
-char *VectorFlat<T>::TrackVector(uint64_t internal_id,
-                                 const InternedStringPtr &vector) {
+void VectorFlat<T>::TrackVector(uint64_t internal_id,
+                                const InternedStringPtr &vector) {
   absl::MutexLock lock(&tracked_vectors_mutex_);
   tracked_vectors_[internal_id] = vector;
-  return (char *)vector->Str().data();
 }
 
 template <typename T>

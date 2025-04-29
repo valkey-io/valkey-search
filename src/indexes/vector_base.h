@@ -224,8 +224,8 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   virtual absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecordImpl(uint64_t internal_id,
                                 absl::string_view query) const = 0;
-  virtual char* TrackVector(uint64_t internal_id,
-                            const InternedStringPtr& vector) = 0;
+  virtual void TrackVector(uint64_t internal_id,
+                           const InternedStringPtr& vector) = 0;
   virtual bool IsVectorMatch(uint64_t internal_id,
                              const InternedStringPtr& vector) = 0;
   virtual void UnTrackVector(uint64_t internal_id) = 0;

@@ -102,8 +102,8 @@ class VectorFlat : public VectorBase {
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->getPoint(internal_id);
   }
-  char* TrackVector(uint64_t internal_id,
-                    const InternedStringPtr& vector) override
+  void TrackVector(uint64_t internal_id,
+                   const InternedStringPtr& vector) override
       ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
   bool IsVectorMatch(uint64_t internal_id,
                      const InternedStringPtr& vector) override

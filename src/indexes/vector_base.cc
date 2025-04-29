@@ -345,7 +345,7 @@ absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
 char *VectorBase::TrackVector(uint64_t internal_id, char *vector, size_t len) {
   auto interned_vector = StringInternStore::Intern(
       absl::string_view(vector, len), vector_allocator_.get());
-  CHECK(TrackVector(internal_id, interned_vector));
+  TrackVector(internal_id, interned_vector);
   return (char *)interned_vector->Str().data();
 }
 

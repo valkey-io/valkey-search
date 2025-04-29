@@ -117,8 +117,8 @@ class VectorHNSW : public VectorBase {
   bool IsVectorMatch(uint64_t internal_id,
                      const InternedStringPtr& vector) override
       ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
-  char* TrackVector(uint64_t internal_id,
-                    const InternedStringPtr& vector) override
+  void TrackVector(uint64_t internal_id,
+                   const InternedStringPtr& vector) override
       ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
   void UnTrackVector(uint64_t internal_id) override
       ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);

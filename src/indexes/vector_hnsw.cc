@@ -128,11 +128,10 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
 }
 
 template <typename T>
-char *VectorHNSW<T>::TrackVector(uint64_t internal_id,
-                                 const InternedStringPtr &vector) {
+void VectorHNSW<T>::TrackVector(uint64_t internal_id,
+                                const InternedStringPtr &vector) {
   absl::MutexLock lock(&tracked_vectors_mutex_);
   tracked_vectors_.push_back(vector);
-  return (char *)vector->Str().data();
 }
 
 template <typename T>
@@ -152,7 +151,8 @@ bool VectorHNSW<T>::IsVectorMatch(uint64_t internal_id,
     return vector->Str() == record;
   }
 }
-
+// UnTrackVector does not delete the vector in VectorHNSW, as vectors are never
+// physically removed from the graph—only marked as deleted.
 template <typename T>
 void VectorHNSW<T>::UnTrackVector(uint64_t internal_id) {}
 

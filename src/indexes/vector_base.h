@@ -56,7 +56,6 @@
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/allocator.h"
-#include "src/utils/intrusive_ref_count.h"
 #include "src/utils/string_interning.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "third_party/hnswlib/iostream.h"

@@ -86,6 +86,15 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
   query::Predicate *filter_predicate_;
   indexes::VectorBase *vector_index_;
 };
+
+// Heuristic to decide whether to sort search results by descending or ascending distance
+bool ShouldSortDescending(const std::deque<indexes::Neighbor> &results) {
+  if (results.empty()) {
+    return true;
+  }
+  return results.front().distance > 0;
+}
+
 absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase *vector_index,
     const VectorSearchParameters &parameters) {
@@ -95,27 +104,37 @@ absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
         parameters.filter_parse_results.root_predicate.get(), vector_index);
     VMSDK_LOG(DEBUG, nullptr) << "Performing vector search with inline filter";
   }
+  std::deque<indexes::Neighbor> search_results;
   if (vector_index->GetIndexerType() == indexes::IndexerType::kHNSW) {
     auto vector_hnsw = dynamic_cast<indexes::VectorHNSW<float> *>(vector_index);
 
     auto latency_sample = SAMPLE_EVERY_N(100);
-    auto res = vector_hnsw->Search(parameters.query, parameters.k,
-                                   std::move(inline_filter), parameters.ef);
+    VMSDK_ASSIGN_OR_RETURN(auto search_results,
+    vector_hnsw->Search(parameters.query, parameters.k,
+                        std::move(inline_filter), parameters.ef));
     Metrics::GetStats().hnsw_vector_index_search_latency.SubmitSample(
         std::move(latency_sample));
-    return res;
   }
-  if (vector_index->GetIndexerType() == indexes::IndexerType::kFlat) {
+  else if (vector_index->GetIndexerType() == indexes::IndexerType::kFlat) {
     auto vector_flat = dynamic_cast<indexes::VectorFlat<float> *>(vector_index);
     auto latency_sample = SAMPLE_EVERY_N(100);
-    auto res = vector_flat->Search(parameters.query, parameters.k,
-                                   std::move(inline_filter));
+    VMSDK_ASSIGN_OR_RETURN(auto search_results,
+      vector_flat->Search(parameters.query, parameters.k,
+                          std::move(inline_filter)));
     Metrics::GetStats().flat_vector_index_search_latency.SubmitSample(
         std::move(latency_sample));
-    return res;
   }
-  CHECK(false) << "Unsupported indexer type: "
-               << (int)vector_index->GetIndexerType();
+  else {
+    CHECK(false) << "Unsupported indexer type: "
+                << (int)vector_index->GetIndexerType();
+  }
+  bool sort_descending = ShouldSortDescending(search_results);
+  std::sort(search_results.begin(), search_results.end(),
+            [sort_descending](const indexes::Neighbor &a, const indexes::Neighbor &b) {
+              return sort_descending ? (a.distance > b.distance)
+                                    : (a.distance < b.distance);
+            });
+  return search_results;
 }
 
 void AppendQueue(

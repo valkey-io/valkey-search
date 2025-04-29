@@ -430,9 +430,7 @@ TEST_F(VectorIndexTest, EfRuntimeRecall) {
                                         kDimensions, kEFRuntime * 8);
     EXPECT_LE(no_ef_runtime_recall, ef_runtime_recall);
     EXPECT_EQ(default_ef_runtime_recall, no_ef_runtime_recall);
-#ifndef ASAN_BUILD
     EXPECT_GE(ef_runtime_recall, 0.96f);
-#endif
   }
 }
 

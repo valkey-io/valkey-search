@@ -68,7 +68,7 @@ class ValkeySearch {
   vmsdk::ThreadPool *GetWriterThreadPool() const {
     return writer_thread_pool_.get();
   }
-  void Info(RedisModuleInfoCtx *ctx) const;
+  void Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const;
 
   IndexSchema::Stats::ResultCnt<uint64_t> AccumulateIndexSchemaResults(
       absl::AnyInvocable<const IndexSchema::Stats::ResultCnt<

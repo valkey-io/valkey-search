@@ -76,6 +76,8 @@ namespace valkey_search {
 static absl::NoDestructor<std::unique_ptr<ValkeySearch>> valkey_search_instance;
 constexpr size_t kMaxWorkerThreadPoolSuspensionSec{60};
 
+static uint32_t current_block_size{10240};
+
 namespace options {
 
 // Maintaining the parameter `--threads` for backward compatibility. Safe to
@@ -85,7 +87,7 @@ constexpr absl::string_view kReaderThreadsParam{"--reader-threads"};
 constexpr absl::string_view kWriterThreadsParam{"--writer-threads"};
 constexpr absl::string_view kUseCoordinator{"--use-coordinator"};
 constexpr absl::string_view kLogLevel{"--log-level"};
-constexpr absl::string_view kBlockSize{"--block-size"};
+constexpr absl::string_view kBlockSize{"--vs-block-size"};
 
 struct Parameters {
   size_t reader_threads{vmsdk::GetPhysicalCPUCoresCount()};
@@ -474,9 +476,17 @@ absl::Status ValkeySearch::LoadOptions(RedisModuleCtx *ctx,
       "write-worker-", options.writer_threads);
   writer_thread_pool_->StartWorkers();
 
-  if (options.block_size > 10240) {
-    kIndexSchemaBackfillBatchSize = options.block_size;
-    valkey_search::indexes::kHNSWBlockSize = options.block_size;
+  if (options.block_size >= 10240) {
+    RedisModuleString *err = nullptr;
+    if (BlockSizeSetConfig("vs-block-size", options.block_size, nullptr,
+                           &err) != REDISMODULE_OK) {
+      std::string error_msg =
+          err ? RedisModule_StringPtrLen(err, nullptr) : "Unknown error";
+      RedisModule_FreeString(nullptr, err);
+      return absl::InternalError(absl::StrFormat(
+          "Failed to set vs-block-size config from command-line: %s",
+          error_msg));
+    }
   }
 
   if (options.log_level) {
@@ -530,12 +540,57 @@ void ValkeySearch::ResumeWriterThreadPool(RedisModuleCtx *ctx,
   writer_thread_pool_suspend_watch_ = std::nullopt;
 }
 
+long long ValkeySearch::BlockSizeGetConfig(
+    [[maybe_unused]] const char *config_name,
+    [[maybe_unused]] void *priv_data) {
+  return current_block_size;
+}
+
+int ValkeySearch::BlockSizeSetConfig([[maybe_unused]] const char *config_name,
+                                     long long value,
+                                     [[maybe_unused]] void *priv_data,
+                                     RedisModuleString **err) {
+  if (value < 10240 || value > UINT32_MAX) {
+    if (err) {
+      *err = RedisModule_CreateStringPrintf(
+          nullptr, "Block size must be between 10240 and %u", UINT32_MAX);
+    }
+    return REDISMODULE_ERR;
+  }
+  current_block_size = static_cast<uint32_t>(value);
+  g_index_schema_backfill_batch_size = current_block_size;
+  indexes::g_hnsw_block_size = current_block_size;
+  return REDISMODULE_OK;
+}
+
 absl::Status ValkeySearch::OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv,
                                   int argc) {
   ctx_ = RedisModule_GetDetachedThreadSafeContext(ctx);
 
   // Register a single module type for Aux load/save callbacks.
   VMSDK_RETURN_IF_ERROR(RegisterModuleType(ctx));
+
+  // Register vs-block-size configuration
+  if (RedisModule_RegisterNumericConfig(
+          ctx,
+          "vs-block-size",             // Name
+          10240,                       // Default value
+          REDISMODULE_CONFIG_DEFAULT,  // Flags (mutable, can be changed via
+                                       // CONFIG SET)
+          10240,                       // Minimum value
+          UINT32_MAX,                  // Maximum value
+          BlockSizeGetConfig,          // Get callback
+          BlockSizeSetConfig,          // Set callback
+          nullptr,                     // Apply callback (optional)
+          nullptr                      // privdata (not used here)
+          ) != REDISMODULE_OK) {
+    return absl::InternalError("Failed to register vs-block-size config");
+  }
+
+  // Load configurations to initialize registered configs
+  if (RedisModule_LoadConfigs(ctx) != REDISMODULE_OK) {
+    return absl::InternalError("Failed to load configurations");
+  }
 
   VMSDK_RETURN_IF_ERROR(LoadOptions(ctx, argv, argc));
 

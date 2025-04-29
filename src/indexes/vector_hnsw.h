@@ -126,7 +126,7 @@ class VectorHNSW : public VectorBase {
   std::unique_ptr<hnswlib::HierarchicalNSW<T>> algo_
       ABSL_GUARDED_BY(resize_mutex_);
   std::unique_ptr<hnswlib::SpaceInterface<T>> space_;
-  uint32_t block_size_{kHNSWBlockSize};
+  uint32_t block_size_{g_hnsw_block_size};
   mutable absl::Mutex resize_mutex_;
   mutable absl::Mutex tracked_vectors_mutex_;
   std::deque<InternedStringPtr> tracked_vectors_

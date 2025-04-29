@@ -55,7 +55,7 @@ namespace valkey_search {
 
 constexpr absl::string_view kSchemaManagerMetadataTypeName{"vs_index_schema"};
 constexpr uint32_t kMetadataEncodingVersion = 1;
-uint32_t kIndexSchemaBackfillBatchSize{10240};
+uint32_t g_index_schema_backfill_batch_size{10240};
 
 class SchemaManager {
  public:

@@ -639,7 +639,8 @@ void SchemaManager::OnServerCronCallback(RedisModuleCtx *ctx,
                                          [[maybe_unused]] RedisModuleEvent eid,
                                          [[maybe_unused]] uint64_t subevent,
                                          [[maybe_unused]] void *data) {
-  SchemaManager::Instance().PerformBackfill(ctx, kIndexSchemaBackfillBatchSize);
+  SchemaManager::Instance().PerformBackfill(ctx,
+                                            g_index_schema_backfill_batch_size);
 }
 
 }  // namespace valkey_search

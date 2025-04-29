@@ -101,8 +101,8 @@ class VectorHNSW : public VectorBase {
 
   absl::Status RemoveRecordImpl(uint64_t internal_id) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  absl::StatusOr<bool> ModifyRecordImpl(uint64_t internal_id,
-                                        absl::string_view record) override
+  absl::Status ModifyRecordImpl(uint64_t internal_id,
+                                absl::string_view record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   void ToProtoImpl(data_model::VectorIndex* vector_index_proto) const override;
   int RespondWithInfoImpl(RedisModuleCtx* ctx) const override;
@@ -114,6 +114,9 @@ class VectorHNSW : public VectorBase {
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->getPoint(internal_id);
   }
+  bool IsVectorMatch(uint64_t internal_id,
+                     const InternedStringPtr& vector) override
+      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
   char* TrackVector(uint64_t internal_id,
                     const InternedStringPtr& vector) override
       ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);

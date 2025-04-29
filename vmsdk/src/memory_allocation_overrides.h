@@ -81,6 +81,7 @@ int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size) PMES;
 void* __wrap_valloc(size_t size) noexcept;
 }  // extern "C"
 
+#ifndef ASAN_BUILD
 // NOLINTNEXTLINE
 #define malloc(...) __wrap_malloc(__VA_ARGS__)
 // NOLINTNEXTLINE
@@ -95,8 +96,6 @@ void* __wrap_valloc(size_t size) noexcept;
 #define posix_memalign(...) __wrap_posix_memalign(__VA_ARGS__)
 // NOLINTNEXTLINE
 #define valloc(...) __wrap_valloc(__VA_ARGS__)
-
-#ifndef ASAN_BUILD
 
 void* operator new(size_t size) noexcept(false);
 void operator delete(void* p) noexcept;
@@ -123,5 +122,5 @@ void operator delete[](void* p, std::align_val_t alignment,
                        const std::nothrow_t&) noexcept;
 void operator delete[](void* p, size_t size,
                        std::align_val_t alignment) noexcept;
-#endif
+#endif  // !ASAN_BUILD
 #endif  // VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_

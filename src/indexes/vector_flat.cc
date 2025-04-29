@@ -102,6 +102,17 @@ char *VectorFlat<T>::TrackVector(uint64_t internal_id,
 }
 
 template <typename T>
+bool VectorFlat<T>::IsVectorMatch(uint64_t internal_id,
+                                  const InternedStringPtr &vector) {
+  absl::MutexLock lock(&tracked_vectors_mutex_);
+  auto it = tracked_vectors_.find(internal_id);
+  if (it == tracked_vectors_.end()) {
+    return false;
+  }
+  return it->second->Str() == vector->Str();
+}
+
+template <typename T>
 void VectorFlat<T>::UnTrackVector(uint64_t internal_id) {
   absl::MutexLock lock(&tracked_vectors_mutex_);
   tracked_vectors_.erase(internal_id);
@@ -187,8 +198,8 @@ absl::Status VectorFlat<T>::AddRecordImpl(uint64_t internal_id,
 }
 
 template <typename T>
-absl::StatusOr<bool> VectorFlat<T>::ModifyRecordImpl(uint64_t internal_id,
-                                                     absl::string_view record) {
+absl::Status VectorFlat<T>::ModifyRecordImpl(uint64_t internal_id,
+                                             absl::string_view record) {
   absl::ReaderMutexLock lock(&resize_mutex_);
   std::unique_lock<std::mutex> index_lock(algo_->index_lock);
   auto found = algo_->dict_external_to_internal.find(internal_id);
@@ -196,18 +207,13 @@ absl::StatusOr<bool> VectorFlat<T>::ModifyRecordImpl(uint64_t internal_id,
     return absl::InternalError(
         absl::StrCat("Couldn't find internal id: ", internal_id));
   }
-  absl::string_view saved_record(*(char **)(*algo_->data_)[found->second],
-                                 dimensions_ * sizeof(T));
-  if (saved_record == record) {
-    return false;
-  }
+
   memcpy((*algo_->data_)[found->second] + algo_->data_ptr_size_, &internal_id,
          sizeof(hnswlib::labeltype));
   *(char **)((*algo_->data_)[found->second]) = (char *)record.data();
 
-  return true;
+  return absl::OkStatus();
 }
-
 template <typename T>
 absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
   try {

@@ -156,15 +156,6 @@ TEST_F(HashAttributeDataTypeTest, HashGetRecord) {
   }
 }
 
-std::unordered_map<std::string, std::string> StringMap(const RecordsMap &map) {
-  std::unordered_map<std::string, std::string> result;
-  for (const auto &itr : map) {
-    result[std::string(itr.first)] =
-        vmsdk::ToStringView(itr.second.value.get());
-  }
-  return result;
-}
-
 absl::flat_hash_set<absl::string_view> ToStringViewSet(
     const absl::flat_hash_set<std::string> &identifiers) {
   absl::flat_hash_set<absl::string_view> identifiers_view;
@@ -249,7 +240,7 @@ TEST_P(HashAttributeDataTypeTest, HashFetchAllRecords) {
   if (expect_exists_key && expect_exists_identifier) {
     VMSDK_EXPECT_OK(records);
     if (records.ok()) {
-      EXPECT_EQ(StringMap(records.value()), test_case.expected_records_map);
+      EXPECT_EQ(ToStringMap(records.value()), test_case.expected_records_map);
     }
   } else {
     EXPECT_EQ(records.status().code(), absl::StatusCode::kNotFound);
@@ -427,7 +418,7 @@ TEST_P(JsonAttributeDataTypeTest, JsonFetchAllRecords) {
         &fake_ctx, query_attribute_name, "key", identifiers);
     if (records.ok()) {
       EXPECT_EQ(module_reply_type, REDISMODULE_REPLY_STRING);
-      EXPECT_EQ(StringMap(records.value()), test_case.expected_records_map);
+      EXPECT_EQ(ToStringMap(records.value()), test_case.expected_records_map);
     } else {
       EXPECT_FALSE(expect_exists_key &&
                    module_reply_type == REDISMODULE_REPLY_STRING);

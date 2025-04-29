@@ -93,23 +93,20 @@ absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateVectorHNSWSchema(
     vmsdk::ThreadPool *writer_thread_pool,
     const std::vector<absl::string_view> *key_prefixes,
     int32_t index_schema_db_num) {
-  /*
-VMSDK_ASSIGN_OR_RETURN(
- auto test_index_schema,
- CreateIndexSchema(index_schema_key, fake_ctx, writer_thread_pool,
-                   key_prefixes, index_schema_db_num));
+  VMSDK_ASSIGN_OR_RETURN(
+      auto test_index_schema,
+      CreateIndexSchema(index_schema_key, fake_ctx, writer_thread_pool,
+                        key_prefixes, index_schema_db_num));
 
-auto dimensions = 100;
-auto index = indexes::VectorHNSW<float>::Create(
-CreateHNSWVectorIndexProto(dimensions, data_model::DISTANCE_METRIC_COSINE,
-      1000, 10, 300, 30),
-"vector_identifier",
-data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
-VMSDK_EXPECT_OK(index);
-VMSDK_EXPECT_OK(test_index_schema->AddIndex("vector", "vector", *index));
-return test_index_schema;
-*/
-  return nullptr;
+  auto dimensions = 100;
+  auto index = indexes::VectorHNSW<float>::Create(
+      CreateHNSWVectorIndexProto(dimensions, data_model::DISTANCE_METRIC_COSINE,
+                                 1000, 10, 300, 30),
+      "vector_identifier",
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
+  VMSDK_EXPECT_OK(index);
+  VMSDK_EXPECT_OK(test_index_schema->AddIndex("vector", "vector", *index));
+  return test_index_schema;
 }
 
 absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateIndexSchema(
@@ -125,7 +122,6 @@ absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateIndexSchema(
   if (key_prefixes == nullptr) {
     key_prefixes = &local_key_prefixes;
   }
-  /*
   ON_CALL(*kMockRedisModule, GetSelectedDb(fake_ctx))
       .WillByDefault(testing::Return(index_schema_db_num));
   EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(testing::_))
@@ -138,9 +134,7 @@ absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateIndexSchema(
           writer_thread_pool));
   VMSDK_RETURN_IF_ERROR(
       SchemaManager::Instance().ImportIndexSchema(test_index_schema));
-       return test_index_schema;
-      */
-  return nullptr;
+  return test_index_schema;
 }
 
 data_model::VectorIndex CreateHNSWVectorIndexProto(
@@ -307,13 +301,13 @@ RespReply ParseRespReply(absl::string_view input) {
   return ParseRespReply(input, pos);
 }
 
-void WaitWorkerTasksAreCompleted(vmsdk::ThreadPool &mutations_thread_pool) {
+void WaitWorkerTasksAreCompleted(vmsdk::ThreadPool &thread_pool) {
   auto mutex = std::make_shared<absl::Mutex>();
   auto is_completed = std::make_shared<bool>();
   auto blocking_refcount =
-      std::make_shared<absl::BlockingCounter>(mutations_thread_pool.Size());
-  for (size_t i = 0; i < mutations_thread_pool.Size(); ++i) {
-    mutations_thread_pool.Schedule(
+      std::make_shared<absl::BlockingCounter>(thread_pool.Size());
+  for (size_t i = 0; i < thread_pool.Size(); ++i) {
+    thread_pool.Schedule(
         [blocking_refcount = blocking_refcount, mutex = mutex,
          is_completed = is_completed]() {
           blocking_refcount->DecrementCount();

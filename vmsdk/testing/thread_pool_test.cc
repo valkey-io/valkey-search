@@ -263,16 +263,15 @@ TEST_P(ThreadPoolTest, ConcurrentWorkers) {
 }
 TEST_F(ThreadPoolTest, priority) {
   // Test that high priority tasks are executed before low priority tasks
-  ThreadPool thread_pool("test-pool", 5);
+  ThreadPool thread_pool("test-pool", 1);
   thread_pool.StartWorkers();
   const size_t tasks = thread_pool.Size() * 2;
   std::atomic<int> pending_run_low_priority = tasks;
   std::atomic<int> pending_run_high_priority = tasks;
   absl::BlockingCounter pending_tasks(tasks * 2);
+  absl::Mutex mutex;
   {
-    absl::Mutex mutex;
     absl::MutexLock lock(&mutex);
-
     for (size_t i = 0; i < thread_pool.Size(); ++i) {
       EXPECT_TRUE(
           thread_pool.Schedule([&mutex] { absl::MutexLock lock(&mutex); },

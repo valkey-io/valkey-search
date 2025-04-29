@@ -201,8 +201,8 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
                                      absl::string_view record) = 0;
 
   virtual absl::Status RemoveRecordImpl(uint64_t internal_id) = 0;
-  virtual absl::StatusOr<bool> ModifyRecordImpl(uint64_t internal_id,
-                                                absl::string_view record) = 0;
+  virtual absl::Status ModifyRecordImpl(uint64_t internal_id,
+                                        absl::string_view record) = 0;
   virtual int RespondWithInfoImpl(RedisModuleCtx* ctx) const = 0;
 
   virtual size_t GetDataTypeSize() const = 0;
@@ -226,6 +226,8 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
                                 absl::string_view query) const = 0;
   virtual char* TrackVector(uint64_t internal_id,
                             const InternedStringPtr& vector) = 0;
+  virtual bool IsVectorMatch(uint64_t internal_id,
+                             const InternedStringPtr& vector) = 0;
   virtual void UnTrackVector(uint64_t internal_id) = 0;
 
  private:
@@ -235,8 +237,9 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<std::optional<uint64_t>> UnTrackKey(
       const InternedStringPtr& key) ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
-  absl::Status UpdateMetadata(const InternedStringPtr& key, float magnitude,
-                              const InternedStringPtr& vector)
+  absl::StatusOr<bool> UpdateMetadata(const InternedStringPtr& key,
+                                      float magnitude,
+                                      const InternedStringPtr& vector)
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<uint64_t> GetInternalId(const InternedStringPtr& key) const
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);

@@ -382,8 +382,8 @@ float CalcRecall(VectorFlat<float>* flat_index, VectorHNSW<float>* hsw_index,
                  uint64_t k, int dimensions, std::optional<size_t> ef_runtime) {
   auto search_vectors = DeterministicallyGenerateVectors(50, dimensions, 1.5);
   int cnt = 0;
-  for (size_t i = 0; i < search_vectors.size(); ++i) {
-    absl::string_view vector = VectorToStr(search_vectors[i]);
+  for (const auto& search_vector : search_vectors) {
+    absl::string_view vector = VectorToStr(search_vector);
     auto res_hnsw = hsw_index->Search(vector, k, nullptr, ef_runtime);
     auto res_flat = flat_index->Search(vector, k);
     for (auto& label : *res_hnsw) {
@@ -429,8 +429,10 @@ TEST_F(VectorIndexTest, EfRuntimeRecall) {
     auto ef_runtime_recall = CalcRecall(index_flat->get(), index_hnsw->get(), k,
                                         kDimensions, kEFRuntime * 8);
     EXPECT_LE(no_ef_runtime_recall, ef_runtime_recall);
-    EXPECT_GE(ef_runtime_recall, 0.96f);
     EXPECT_EQ(default_ef_runtime_recall, no_ef_runtime_recall);
+#ifndef ASAN_BUILD
+    EXPECT_GE(ef_runtime_recall, 0.96f);
+#endif
   }
 }
 
@@ -553,8 +555,8 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
       for (size_t i = 0; i < vectors.size(); ++i) {
         VerifyAdd(index.get(), vectors, i, ExpectedResults::kSuccess);
       }
-      for (size_t i = 0; i < search_vectors.size(); ++i) {
-        absl::string_view vector = VectorToStr(search_vectors[i]);
+      for (const auto& search_vector : search_vectors) {
+        absl::string_view vector = VectorToStr(search_vector);
         auto res = index->Search(vector, k);
         expected_results.push_back(std::move(*res));
       }

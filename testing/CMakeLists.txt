@@ -139,6 +139,8 @@ set(SRCS_COMMON ${CMAKE_CURRENT_LIST_DIR}/common.cc
                 ${CMAKE_CURRENT_LIST_DIR}/common.h)
 
 add_library(testing_common STATIC ${SRCS_COMMON})
+valkey_search_target_update_asan_flags(testing_common)
+
 target_include_directories(testing_common PUBLIC ${HIGHWAY_HASH_INCLUDE_PATH})
 target_include_directories(testing_common PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(testing_common PUBLIC attribute_data_type)
@@ -165,7 +167,6 @@ target_link_libraries(testing_common PUBLIC module)
 target_link_libraries(testing_common PUBLIC utils)
 target_link_libraries(testing_common PUBLIC valkey_module)
 target_link_libraries(testing_common PUBLIC vmsdk_testing_infra)
-
 
 set(SRCS_VECTOR_TEST ${CMAKE_CURRENT_LIST_DIR}/vector_test.cc)
 
@@ -224,10 +225,12 @@ target_link_libraries(ft_create_test PUBLIC module)
 target_link_libraries(ft_create_test PUBLIC valkey_module)
 finalize_test_flags(ft_create_test)
 
-set(SRCS_RDB_SERIALIZATION_TEST ${CMAKE_CURRENT_LIST_DIR}/rdb_serialization_test.cc)
+set(SRCS_RDB_SERIALIZATION_TEST
+    ${CMAKE_CURRENT_LIST_DIR}/rdb_serialization_test.cc)
 
 add_executable(rdb_serialization_test ${SRCS_RDB_SERIALIZATION_TEST})
-target_include_directories(rdb_serialization_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_include_directories(rdb_serialization_test
+                           PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(rdb_serialization_test PUBLIC testing_common)
 target_link_libraries(rdb_serialization_test PUBLIC rdb_serialization)
 target_link_libraries(rdb_serialization_test PUBLIC iostream)

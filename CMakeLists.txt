@@ -1,16 +1,24 @@
 cmake_minimum_required(VERSION 3.16)
 
 # Project definition
-project(ValkeySearch VERSION 99.99.99 LANGUAGES C CXX) # Version is 99.99.99 for main development branch
+project(
+  ValkeySearch
+  VERSION 99.99.99
+  LANGUAGES C CXX) # Version is 99.99.99 for main development branch
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 
 # Options
 option(BUILD_TESTS "Build valkey-search tests" ON)
 option(WITH_SUBMODULES_SYSTEM "Use system submodules" OFF)
+option(ASAN_BUILD "Enable address sanitizer build" OFF)
 
 # Initialise submodules (gRPC, Protobuf, GTest & Abseil)
 add_subdirectory(submodules)
+
+if(ASAN_BUILD)
+    message(STATUS "Address sanitizer is enabled")
+endif()
 
 message(STATUS "GRPC_CPP_PLUGIN_PATH is set to ${GRPC_CPP_PLUGIN_PATH}")
 message(STATUS "protoc_EXE is set to ${protoc_EXE}")

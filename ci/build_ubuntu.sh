@@ -2,7 +2,7 @@
 
 CI_DIR=$(readlink -f $(dirname $0))
 ROOT_DIR=$(readlink -f ${CI_DIR}/..)
-BUILD_SH_ARGS=""
+BUILD_SH_ARGS=$@
 
 # Constants
 RESET='\e[0m'
@@ -16,28 +16,6 @@ function LOG_INFO() {
 function LOG_ERROR() {
     printf "${RED}ERROR${RESET} $1\n"
 }
-
-## Parse command line arguments
-while [ $# -gt 0 ]
-do
-    arg=$1
-    case $arg in
-    --run-integration-tests)
-        shift || true
-        BUILD_SH_ARGS="${BUILD_SH_ARGS} --run-integration-tests"
-        LOG_INFO "BUILD_SH_ARGS=${BUILD_SH_ARGS}"
-        ;;
-    --run-tests)
-        shift || true
-        BUILD_SH_ARGS="${BUILD_SH_ARGS} --run-tests"
-        LOG_INFO "BUILD_SH_ARGS=${BUILD_SH_ARGS}"
-        ;;
-    *)
-        LOG_ERROR "Invalid command line argument: $arg"
-        exit 1
-        ;;
-    esac
-done
 
 function get_deb_suffix() {
     local ARCH=""
@@ -63,9 +41,11 @@ function get_deb_suffix() {
 
 # Prepare the environment before getting started
 function prepare_env() {
-    local deb_package=$(get_deb_suffix)
-    LOG_INFO "Installing ${ROOT_DIR}/debs/${deb_package}"
-    sudo dpkg -i ${ROOT_DIR}/debs/${deb_package}
+    if [ ! -d /opt/valkey-search-deps/ ]; then
+        local deb_package=$(get_deb_suffix)
+        LOG_INFO "Installing ${ROOT_DIR}/debs/${deb_package}"
+        sudo dpkg -i ${ROOT_DIR}/debs/${deb_package}
+    fi
 }
 
 function cleanup() {

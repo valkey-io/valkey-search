@@ -95,15 +95,6 @@ std::optional<hnswlib::tableint> GetInternalIdDuringSearch(
     hnswlib::HierarchicalNSW<T> *algo, uint64_t internal_id) {
   return GetInternalIdLockFree(algo, internal_id);
 }
-
-template <typename T>
-bool IsDataMatched(hnswlib::HierarchicalNSW<T> *algo,
-                   hnswlib::tableint internal_id, absl::string_view in_record) {
-  char *data_ptrv = algo->getDataByInternalId(internal_id);
-  size_t dim = *((size_t *)algo->dist_func_param_);
-  absl::string_view record(data_ptrv, dim * sizeof(T));
-  return in_record == record;
-}
 }  // namespace hnswlib_helpers
 
 namespace valkey_search::indexes {
@@ -152,8 +143,13 @@ bool VectorHNSW<T>::IsVectorMatch(uint64_t internal_id,
     std::unique_lock<std::mutex> lock_label(
         algo_->getLabelOpMutex(internal_id));
     auto id = hnswlib_helpers::GetInternalId(algo_.get(), internal_id);
-    return (id.has_value() &&
-            hnswlib_helpers::IsDataMatched(algo_.get(), *id, vector->Str()));
+    if (!id.has_value()) {
+      return false;
+    }
+    char *data_ptrv = algo_->getDataByInternalId(*id);
+    size_t dim = *((size_t *)algo_->dist_func_param_);
+    absl::string_view record(data_ptrv, dim * sizeof(T));
+    return vector->Str() == record;
   }
 }
 

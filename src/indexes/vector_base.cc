@@ -368,7 +368,9 @@ absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
   key_by_internal_id_.insert({id, key});
   return id;
 }
-
+// Return an error if the key is empty or not being tracked.
+// Return false if the tracked vector matches the input vector.
+// Otherwise, track the new vector and return true.
 absl::StatusOr<bool> VectorBase::UpdateMetadata(
     const InternedStringPtr &key, float magnitude,
     const InternedStringPtr &vector) {

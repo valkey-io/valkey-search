@@ -917,11 +917,11 @@ void IndexSchema::OnLoadingEnded(RedisModuleCtx *ctx) {
     });
     VMSDK_LOG(NOTICE, ctx) << "Deleting " << stale_entries
                            << " stale entries of " << key_size
-                           << " total keys for " << "{Index: " << name_
+                           << " total keys for {Index: " << name_
                            << ", Attribute: " << attribute.first << "}";
   }
   VMSDK_LOG(NOTICE, ctx) << "Deleting " << deletion_attributes.size()
-                         << " stale entries for " << "{Index: " << name_ << "}";
+                         << " stale entries for {Index: " << name_ << "}";
 
   for (auto &[key, attributes] : deletion_attributes) {
     auto interned_key = std::make_shared<InternedString>(key);

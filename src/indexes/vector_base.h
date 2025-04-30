@@ -65,8 +65,6 @@
 
 namespace valkey_search::indexes {
 
-uint32_t g_hnsw_block_size{1024 * 10};
-
 std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
                                      float* magnitude = nullptr);
 

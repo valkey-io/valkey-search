@@ -75,8 +75,7 @@ namespace valkey_search {
 
 static absl::NoDestructor<std::unique_ptr<ValkeySearch>> valkey_search_instance;
 constexpr size_t kMaxWorkerThreadPoolSuspensionSec{60};
-
-static uint32_t current_block_size{10240};
+std::atomic<uint32_t> ValkeySearch::block_size_{10240};
 
 namespace options {
 
@@ -476,7 +475,7 @@ absl::Status ValkeySearch::LoadOptions(RedisModuleCtx *ctx,
       "write-worker-", options.writer_threads);
   writer_thread_pool_->StartWorkers();
 
-  if (options.block_size >= 10240) {
+  if (options.block_size) {
     RedisModuleString *err = nullptr;
     if (BlockSizeSetConfig("vs-block-size", options.block_size, nullptr,
                            &err) != REDISMODULE_OK) {
@@ -543,23 +542,21 @@ void ValkeySearch::ResumeWriterThreadPool(RedisModuleCtx *ctx,
 long long ValkeySearch::BlockSizeGetConfig(
     [[maybe_unused]] const char *config_name,
     [[maybe_unused]] void *priv_data) {
-  return current_block_size;
+  return block_size_.load();
 }
 
 int ValkeySearch::BlockSizeSetConfig([[maybe_unused]] const char *config_name,
                                      long long value,
                                      [[maybe_unused]] void *priv_data,
                                      RedisModuleString **err) {
-  if (value < 10240 || value > UINT32_MAX) {
+  if (value > UINT32_MAX) {
     if (err) {
       *err = RedisModule_CreateStringPrintf(
           nullptr, "Block size must be between 10240 and %u", UINT32_MAX);
     }
     return REDISMODULE_ERR;
   }
-  current_block_size = static_cast<uint32_t>(value);
-  g_index_schema_backfill_batch_size = current_block_size;
-  indexes::g_hnsw_block_size = current_block_size;
+  block_size_ = static_cast<uint32_t>(value);
   return REDISMODULE_OK;
 }
 

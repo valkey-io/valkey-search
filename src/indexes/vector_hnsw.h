@@ -85,8 +85,7 @@ class VectorHNSW : public VectorBase {
   size_t GetEfRuntime() const ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
     return algo_->ef_;
   }
-  // Used just for testing
-  void SetBlockSize(uint32_t block_size) { block_size_ = block_size; }
+
   absl::StatusOr<std::deque<Neighbor>> Search(
       absl::string_view query, uint64_t count,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
@@ -126,7 +125,6 @@ class VectorHNSW : public VectorBase {
   std::unique_ptr<hnswlib::HierarchicalNSW<T>> algo_
       ABSL_GUARDED_BY(resize_mutex_);
   std::unique_ptr<hnswlib::SpaceInterface<T>> space_;
-  uint32_t block_size_{g_hnsw_block_size};
   mutable absl::Mutex resize_mutex_;
   mutable absl::Mutex tracked_vectors_mutex_;
   std::deque<InternedStringPtr> tracked_vectors_

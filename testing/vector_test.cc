@@ -325,8 +325,15 @@ TEST_F(VectorIndexTest, ResizeHNSW) ABSL_NO_THREAD_SAFETY_ANALYSIS {
                                    kM, kEFConstruction, kEFRuntime),
         "attribute_identifier_1",
         data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
-    const uint32_t block_size = 1024;
-    index.value()->SetBlockSize(block_size);
+    RedisModuleString* err = nullptr;
+    EXPECT_EQ(
+        ValkeySearch::BlockSizeSetConfig("vs-block-size", 1024, nullptr, &err),
+        REDISMODULE_OK);
+    if (err) {
+      RedisModule_FreeString(nullptr, err);
+      err = nullptr;
+    }
+    uint32_t block_size = ValkeySearch::Instance().GetDefaultBlockSize();
     EXPECT_EQ(index.value()->GetCapacity(), initial_cap);
     auto vectors = DeterministicallyGenerateVectors(
         initial_cap + block_size + 100, kDimensions, 10.0);

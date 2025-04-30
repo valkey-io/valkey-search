@@ -57,6 +57,7 @@
 #include "src/metrics.h"
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
+#include "src/valkey_search.h"
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -639,8 +640,10 @@ void SchemaManager::OnServerCronCallback(RedisModuleCtx *ctx,
                                          [[maybe_unused]] RedisModuleEvent eid,
                                          [[maybe_unused]] uint64_t subevent,
                                          [[maybe_unused]] void *data) {
+  auto index_schema_backfill_batch_size =
+      ValkeySearch::Instance().GetDefaultBlockSize();
   SchemaManager::Instance().PerformBackfill(ctx,
-                                            g_index_schema_backfill_batch_size);
+                                            index_schema_backfill_batch_size);
 }
 
 }  // namespace valkey_search

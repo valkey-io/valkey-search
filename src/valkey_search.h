@@ -70,6 +70,13 @@ class ValkeySearch {
   }
   void Info(RedisModuleInfoCtx *ctx) const;
 
+  static long long BlockSizeGetConfig([[maybe_unused]] const char *cofig_name,
+                                      [[maybe_unused]] void *priv_data);
+  static int BlockSizeSetConfig([[maybe_unused]] const char *cofig_name,
+                                long long value,
+                                [[maybe_unused]] void *priv_data,
+                                [[maybe_unused]] RedisModuleString **err);
+
   IndexSchema::Stats::ResultCnt<uint64_t> AccumulateIndexSchemaResults(
       absl::AnyInvocable<const IndexSchema::Stats::ResultCnt<
           std::atomic<uint64_t>> &(const IndexSchema::Stats &) const>
@@ -115,6 +122,8 @@ class ValkeySearch {
   // of the program.
   RedisModuleCtx *GetBackgroundCtx() const { return ctx_; }
 
+  uint32_t GetDefaultBlockSize() const { return block_size_.load(); }
+
  protected:
   std::unique_ptr<vmsdk::ThreadPool> reader_thread_pool_;
   std::unique_ptr<vmsdk::ThreadPool> writer_thread_pool_;
@@ -127,14 +136,6 @@ class ValkeySearch {
   static void FreeIndexSchema(void *value);
   static bool IsChildProcess();
   void ProcessIndexSchemaBackfill(RedisModuleCtx *ctx, uint32_t batch_size);
-
-  static long long BlockSizeGetConfig([[maybe_unused]] const char *cofig_name,
-                                      [[maybe_unused]] void *priv_data);
-  static int BlockSizeSetConfig([[maybe_unused]] const char *cofig_name,
-                                long long value,
-                                [[maybe_unused]] void *priv_data,
-                                [[maybe_unused]] RedisModuleString **err);
-
   void ResumeWriterThreadPool(RedisModuleCtx *ctx, bool is_expired);
 
   uint64_t inc_id_{0};
@@ -143,6 +144,8 @@ class ValkeySearch {
 
   std::unique_ptr<coordinator::Server> coordinator_;
   std::unique_ptr<coordinator::ClientPool> client_pool_;
+
+  static std::atomic<uint32_t> block_size_;
 };
 void ModuleInfo(RedisModuleInfoCtx *ctx, int for_crash_report);
 }  // namespace valkey_search

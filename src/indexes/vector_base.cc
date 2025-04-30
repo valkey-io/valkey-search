@@ -271,7 +271,15 @@ absl::StatusOr<std::deque<Neighbor>> VectorBase::CreateReply(
       knn_res.pop();
       continue;
     }
-    ret.emplace_front(Neighbor{vector_key.value(), ele.first});
+    // Sorting based on distance metric
+    if (distance_metric_ == data_model::DistanceMetric::DISTANCE_METRIC_COSINE ||
+        distance_metric_ == data_model::DistanceMetric::DISTANCE_METRIC_IP) {
+      // In case of cosine / IP, for similarity, a higher score is better.
+      ret.emplace_back(Neighbor{vector_key.value(), ele.first});
+    } else {
+      // In case of L2, for distance, a lower score is better.
+      ret.emplace_front(Neighbor{vector_key.value(), ele.first});
+    }
     knn_res.pop();
   }
   return ret;

@@ -116,6 +116,8 @@ SchemaManager::SchemaManager(
   }
 }
 
+constexpr uint32_t kIndexSchemaBackfillBatchSize{10240};
+
 absl::Status GenerateIndexNotFoundError(absl::string_view name) {
   return absl::NotFoundError(
       absl::StrFormat("Index with name '%s' not found", name));
@@ -640,10 +642,7 @@ void SchemaManager::OnServerCronCallback(RedisModuleCtx *ctx,
                                          [[maybe_unused]] RedisModuleEvent eid,
                                          [[maybe_unused]] uint64_t subevent,
                                          [[maybe_unused]] void *data) {
-  auto index_schema_backfill_batch_size =
-      ValkeySearch::Instance().GetDefaultBlockSize();
-  SchemaManager::Instance().PerformBackfill(ctx,
-                                            index_schema_backfill_batch_size);
+  SchemaManager::Instance().PerformBackfill(ctx, kIndexSchemaBackfillBatchSize);
 }
 
 }  // namespace valkey_search

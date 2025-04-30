@@ -122,7 +122,7 @@ class ValkeySearch {
   // of the program.
   RedisModuleCtx *GetBackgroundCtx() const { return ctx_; }
 
-  uint32_t GetDefaultBlockSize() const { return block_size_.load(); }
+  uint32_t GetHNSWBlockSize() const { return hnsw_block_size_.load(); }
 
  protected:
   std::unique_ptr<vmsdk::ThreadPool> reader_thread_pool_;
@@ -145,7 +145,7 @@ class ValkeySearch {
   std::unique_ptr<coordinator::Server> coordinator_;
   std::unique_ptr<coordinator::ClientPool> client_pool_;
 
-  static std::atomic<uint32_t> block_size_;
+  static std::atomic<uint32_t> hnsw_block_size_;
 };
 void ModuleInfo(RedisModuleInfoCtx *ctx, int for_crash_report);
 }  // namespace valkey_search

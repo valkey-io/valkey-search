@@ -326,14 +326,13 @@ TEST_F(VectorIndexTest, ResizeHNSW) ABSL_NO_THREAD_SAFETY_ANALYSIS {
         "attribute_identifier_1",
         data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
     RedisModuleString* err = nullptr;
-    EXPECT_EQ(
-        ValkeySearch::BlockSizeSetConfig("vs-block-size", 1024, nullptr, &err),
-        REDISMODULE_OK);
+    EXPECT_EQ(ValkeySearch::BlockSizeSetConfig(NULL, 1024, nullptr, &err),
+              REDISMODULE_OK);
     if (err) {
       RedisModule_FreeString(nullptr, err);
       err = nullptr;
     }
-    uint32_t block_size = ValkeySearch::Instance().GetDefaultBlockSize();
+    uint32_t block_size = ValkeySearch::Instance().GetHNSWBlockSize();
     EXPECT_EQ(index.value()->GetCapacity(), initial_cap);
     auto vectors = DeterministicallyGenerateVectors(
         initial_cap + block_size + 100, kDimensions, 10.0);

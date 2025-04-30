@@ -272,7 +272,7 @@ absl::Status VectorHNSW<T>::ResizeIfFull() {
       // it was expanded.
       // 2. Once multithreaded is supported we'll have to make sure that no
       // thread is reading/writing during resize
-      auto block_size = ValkeySearch::Instance().GetDefaultBlockSize();
+      auto block_size = ValkeySearch::Instance().GetHNSWBlockSize();
       algo_->resizeIndex(algo_->getMaxElements() + block_size);
       VMSDK_LOG(WARNING, nullptr)
           << "Resizing HNSW Index, current size: " << max_elements

@@ -75,7 +75,8 @@ namespace valkey_search {
 
 static absl::NoDestructor<std::unique_ptr<ValkeySearch>> valkey_search_instance;
 constexpr size_t kMaxWorkerThreadPoolSuspensionSec{60};
-std::atomic<uint32_t> ValkeySearch::block_size_{10240};
+std::atomic<uint32_t> ValkeySearch::hnsw_block_size_{10240};
+const absl::string_view kHNSWBlockSizeConfig{"vs-hnsw-block-size"};
 
 namespace options {
 
@@ -86,7 +87,7 @@ constexpr absl::string_view kReaderThreadsParam{"--reader-threads"};
 constexpr absl::string_view kWriterThreadsParam{"--writer-threads"};
 constexpr absl::string_view kUseCoordinator{"--use-coordinator"};
 constexpr absl::string_view kLogLevel{"--log-level"};
-constexpr absl::string_view kBlockSize{"--vs-block-size"};
+constexpr absl::string_view kHNSWBlockSize{"--vs-hnsw-block-size"};
 
 struct Parameters {
   size_t reader_threads{vmsdk::GetPhysicalCPUCoresCount()};
@@ -94,7 +95,7 @@ struct Parameters {
   std::optional<int> threads;
   bool use_coordinator{false};
   std::optional<std::string> log_level;
-  uint32_t block_size{10240};
+  uint32_t hnsw_block_size{10240};
 };
 
 absl::StatusOr<Parameters> Load(RedisModuleString **argv, int argc) {
@@ -110,8 +111,8 @@ absl::StatusOr<Parameters> Load(RedisModuleString **argv, int argc) {
                         GENERATE_FLAG_PARSER(Parameters, use_coordinator));
   parser.AddParamParser(kLogLevel,
                         GENERATE_VALUE_PARSER(Parameters, log_level));
-  parser.AddParamParser(kBlockSize,
-                        GENERATE_VALUE_PARSER(Parameters, block_size));
+  parser.AddParamParser(kHNSWBlockSize,
+                        GENERATE_VALUE_PARSER(Parameters, hnsw_block_size));
   vmsdk::ArgsIterator itr{argv, argc};
   VMSDK_RETURN_IF_ERROR(parser.Parse(parameters, itr));
   if (parameters.threads.has_value()) {
@@ -475,15 +476,15 @@ absl::Status ValkeySearch::LoadOptions(RedisModuleCtx *ctx,
       "write-worker-", options.writer_threads);
   writer_thread_pool_->StartWorkers();
 
-  if (options.block_size) {
+  if (options.hnsw_block_size) {
     RedisModuleString *err = nullptr;
-    if (BlockSizeSetConfig("vs-block-size", options.block_size, nullptr,
-                           &err) != REDISMODULE_OK) {
+    if (BlockSizeSetConfig(kHNSWBlockSizeConfig.data(), options.hnsw_block_size,
+                           nullptr, &err) != REDISMODULE_OK) {
       std::string error_msg =
           err ? RedisModule_StringPtrLen(err, nullptr) : "Unknown error";
       RedisModule_FreeString(nullptr, err);
       return absl::InternalError(absl::StrFormat(
-          "Failed to set vs-block-size config from command-line: %s",
+          "Failed to set vs-hnsw-block-size config from command-line: %s",
           error_msg));
     }
   }
@@ -542,21 +543,21 @@ void ValkeySearch::ResumeWriterThreadPool(RedisModuleCtx *ctx,
 long long ValkeySearch::BlockSizeGetConfig(
     [[maybe_unused]] const char *config_name,
     [[maybe_unused]] void *priv_data) {
-  return block_size_.load();
+  return hnsw_block_size_.load();
 }
 
 int ValkeySearch::BlockSizeSetConfig([[maybe_unused]] const char *config_name,
                                      long long value,
                                      [[maybe_unused]] void *priv_data,
                                      RedisModuleString **err) {
-  if (value > UINT32_MAX) {
+  if (value < 0 || value > UINT32_MAX) {
     if (err) {
       *err = RedisModule_CreateStringPrintf(
           nullptr, "Block size must be between 10240 and %u", UINT32_MAX);
     }
     return REDISMODULE_ERR;
   }
-  block_size_ = static_cast<uint32_t>(value);
+  hnsw_block_size_ = static_cast<uint32_t>(value);
   return REDISMODULE_OK;
 }
 
@@ -570,16 +571,16 @@ absl::Status ValkeySearch::OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv,
   // Register vs-block-size configuration
   if (RedisModule_RegisterNumericConfig(
           ctx,
-          "vs-block-size",             // Name
-          10240,                       // Default value
-          REDISMODULE_CONFIG_DEFAULT,  // Flags (mutable, can be changed via
-                                       // CONFIG SET)
-          10240,                       // Minimum value
-          UINT32_MAX,                  // Maximum value
-          BlockSizeGetConfig,          // Get callback
-          BlockSizeSetConfig,          // Set callback
-          nullptr,                     // Apply callback (optional)
-          nullptr                      // privdata (not used here)
+          kHNSWBlockSizeConfig.data(),  // Name
+          10240,                        // Default value
+          REDISMODULE_CONFIG_DEFAULT,   // Flags (mutable, can be changed via
+                                        // CONFIG SET)
+          10240,                        // Minimum value
+          UINT32_MAX,                   // Maximum value
+          BlockSizeGetConfig,           // Get callback
+          BlockSizeSetConfig,           // Set callback
+          nullptr,                      // Apply callback (optional)
+          nullptr                       // privdata (not used here)
           ) != REDISMODULE_OK) {
     return absl::InternalError("Failed to register vs-block-size config");
   }

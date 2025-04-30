@@ -271,7 +271,7 @@ absl::StatusOr<std::deque<Neighbor>> VectorBase::CreateReply(
       knn_res.pop();
       continue;
     }
-    ret.emplace_back(Neighbor{vector_key.value(), ele.first});
+    ret.emplace_front(Neighbor{vector_key.value(), ele.first});
     knn_res.pop();
   }
   return ret;

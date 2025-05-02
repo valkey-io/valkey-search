@@ -70,9 +70,9 @@ class ValkeySearch {
   }
   void Info(RedisModuleInfoCtx *ctx) const;
 
-  static long long BlockSizeGetConfig([[maybe_unused]] const char *cofig_name,
+  static long long BlockSizeGetConfig([[maybe_unused]] const char *config_name,
                                       [[maybe_unused]] void *priv_data);
-  static int BlockSizeSetConfig([[maybe_unused]] const char *cofig_name,
+  static int BlockSizeSetConfig([[maybe_unused]] const char *config_name,
                                 long long value,
                                 [[maybe_unused]] void *priv_data,
                                 [[maybe_unused]] RedisModuleString **err);
@@ -93,6 +93,7 @@ class ValkeySearch {
   void AfterForkParent();
   static ValkeySearch &Instance();
   static void InitInstance(std::unique_ptr<ValkeySearch> instance);
+  uint32_t GetHNSWBlockSize() const;
 
   absl::Status OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
   void OnUnload(RedisModuleCtx *ctx);
@@ -122,8 +123,6 @@ class ValkeySearch {
   // of the program.
   RedisModuleCtx *GetBackgroundCtx() const { return ctx_; }
 
-  uint32_t GetHNSWBlockSize() const { return hnsw_block_size_.load(); }
-
  protected:
   std::unique_ptr<vmsdk::ThreadPool> reader_thread_pool_;
   std::unique_ptr<vmsdk::ThreadPool> writer_thread_pool_;
@@ -144,8 +143,6 @@ class ValkeySearch {
 
   std::unique_ptr<coordinator::Server> coordinator_;
   std::unique_ptr<coordinator::ClientPool> client_pool_;
-
-  static std::atomic<uint32_t> hnsw_block_size_;
 };
 void ModuleInfo(RedisModuleInfoCtx *ctx, int for_crash_report);
 }  // namespace valkey_search

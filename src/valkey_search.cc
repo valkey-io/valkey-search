@@ -75,7 +75,7 @@ namespace valkey_search {
 
 static absl::NoDestructor<std::unique_ptr<ValkeySearch>> valkey_search_instance;
 constexpr size_t kMaxWorkerThreadPoolSuspensionSec{60};
-std::atomic<uint32_t> ValkeySearch::hnsw_block_size_{10240};
+static std::atomic<uint32_t> hnsw_block_size{10240};
 const absl::string_view kHNSWBlockSizeConfig{"vs-hnsw-block-size"};
 
 namespace options {
@@ -141,6 +141,10 @@ ValkeySearch &ValkeySearch::Instance() { return **valkey_search_instance; };
 
 void ValkeySearch::InitInstance(std::unique_ptr<ValkeySearch> instance) {
   *valkey_search_instance = std::move(instance);
+}
+
+uint32_t ValkeySearch::GetHNSWBlockSize() const {
+  return hnsw_block_size.load();
 }
 
 static std::string ConvertToMB(double bytes_value) {
@@ -543,7 +547,7 @@ void ValkeySearch::ResumeWriterThreadPool(RedisModuleCtx *ctx,
 long long ValkeySearch::BlockSizeGetConfig(
     [[maybe_unused]] const char *config_name,
     [[maybe_unused]] void *priv_data) {
-  return hnsw_block_size_.load();
+  return hnsw_block_size.load();
 }
 
 int ValkeySearch::BlockSizeSetConfig([[maybe_unused]] const char *config_name,
@@ -557,7 +561,7 @@ int ValkeySearch::BlockSizeSetConfig([[maybe_unused]] const char *config_name,
     }
     return REDISMODULE_ERR;
   }
-  hnsw_block_size_ = static_cast<uint32_t>(value);
+  hnsw_block_size = static_cast<uint32_t>(value);
   return REDISMODULE_OK;
 }
 

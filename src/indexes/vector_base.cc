@@ -128,10 +128,7 @@ T CopyAndNormalizeEmbedding(T *dst, T *src, size_t size) {
     magnitude += src[i] * src[i];
   }
   magnitude = std::sqrt(magnitude);
-  if (magnitude == 0.0f) {
-    return magnitude;
-  }
-  T norm = 1.0f / (magnitude);
+  T norm = (magnitude == 0.0f) ? 1.0f: (1.0f / magnitude);
   for (size_t i = 0; i < size; i++) {
     dst[i] = norm * src[i];
   }
@@ -275,7 +272,8 @@ absl::StatusOr<std::deque<Neighbor>> VectorBase::CreateReply(
       knn_res.pop();
       continue;
     }
-    ret.emplace_back(Neighbor{vector_key.value(), ele.first});
+    // Sorting in asc order.
+    ret.emplace_front(Neighbor{vector_key.value(), ele.first});
     knn_res.pop();
   }
   return ret;

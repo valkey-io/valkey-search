@@ -129,10 +129,10 @@ T CopyAndNormalizeEmbedding(T *dst, T *src, size_t size) {
     magnitude += src[i] * src[i];
   }
   magnitude = std::sqrt(magnitude);
-  if (magnitude == 0.0f) {
-    return magnitude;
+  T norm = 1.0f;
+  if (magnitude != 0.0f) {
+    norm /= magnitude;
   }
-  T norm = 1.0f / (magnitude);
   for (size_t i = 0; i < size; i++) {
     dst[i] = norm * src[i];
   }
@@ -271,15 +271,8 @@ absl::StatusOr<std::deque<Neighbor>> VectorBase::CreateReply(
       knn_res.pop();
       continue;
     }
-    // Sorting based on distance metric
-    if (distance_metric_ == data_model::DistanceMetric::DISTANCE_METRIC_COSINE ||
-        distance_metric_ == data_model::DistanceMetric::DISTANCE_METRIC_IP) {
-      // In case of cosine / IP, for similarity, a higher score is better.
-      ret.emplace_back(Neighbor{vector_key.value(), ele.first});
-    } else {
-      // In case of L2, for distance, a lower score is better.
-      ret.emplace_front(Neighbor{vector_key.value(), ele.first});
-    }
+    // Sorting in asc order.
+    ret.emplace_front(Neighbor{vector_key.value(), ele.first});
     knn_res.pop();
   }
   return ret;

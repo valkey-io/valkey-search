@@ -76,7 +76,7 @@ namespace valkey_search {
 static absl::NoDestructor<std::unique_ptr<ValkeySearch>> valkey_search_instance;
 constexpr size_t kMaxWorkerThreadPoolSuspensionSec{60};
 static std::atomic<uint32_t> hnsw_block_size{10240};
-const absl::string_view kHNSWBlockSizeConfig{"vs-hnsw-block-size"};
+const absl::string_view kHNSWBlockSizeConfig{"hnsw-block-size"};
 
 namespace options {
 
@@ -87,7 +87,7 @@ constexpr absl::string_view kReaderThreadsParam{"--reader-threads"};
 constexpr absl::string_view kWriterThreadsParam{"--writer-threads"};
 constexpr absl::string_view kUseCoordinator{"--use-coordinator"};
 constexpr absl::string_view kLogLevel{"--log-level"};
-constexpr absl::string_view kHNSWBlockSize{"--vs-hnsw-block-size"};
+constexpr absl::string_view kHNSWBlockSize{"--hnsw-block-size"};
 
 struct Parameters {
   size_t reader_threads{vmsdk::GetPhysicalCPUCoresCount()};
@@ -554,7 +554,7 @@ int ValkeySearch::BlockSizeSetConfig([[maybe_unused]] const char *config_name,
                                      long long value,
                                      [[maybe_unused]] void *priv_data,
                                      RedisModuleString **err) {
-  if (value < 0 || value > UINT32_MAX) {
+  if (value <= 0 || value > UINT32_MAX) {
     if (err) {
       *err = RedisModule_CreateStringPrintf(
           nullptr, "Block size must be between 10240 and %u", UINT32_MAX);

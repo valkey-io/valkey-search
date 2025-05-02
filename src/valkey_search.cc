@@ -144,7 +144,7 @@ void ValkeySearch::InitInstance(std::unique_ptr<ValkeySearch> instance) {
 }
 
 uint32_t ValkeySearch::GetHNSWBlockSize() const {
-  return hnsw_block_size.load();
+  return hnsw_block_size.load(std::memory_order_relaxed);
 }
 
 static std::string ConvertToMB(double bytes_value) {
@@ -547,7 +547,7 @@ void ValkeySearch::ResumeWriterThreadPool(RedisModuleCtx *ctx,
 long long ValkeySearch::BlockSizeGetConfig(
     [[maybe_unused]] const char *config_name,
     [[maybe_unused]] void *priv_data) {
-  return hnsw_block_size.load();
+  return hnsw_block_size.load(std::memory_order_relaxed);
 }
 
 int ValkeySearch::BlockSizeSetConfig([[maybe_unused]] const char *config_name,
@@ -561,7 +561,8 @@ int ValkeySearch::BlockSizeSetConfig([[maybe_unused]] const char *config_name,
     }
     return REDISMODULE_ERR;
   }
-  hnsw_block_size = static_cast<uint32_t>(value);
+  hnsw_block_size.store(static_cast<uint32_t>(value),
+                        std::memory_order_relaxed);
   return REDISMODULE_OK;
 }
 

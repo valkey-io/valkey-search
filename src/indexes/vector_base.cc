@@ -129,10 +129,7 @@ T CopyAndNormalizeEmbedding(T *dst, T *src, size_t size) {
     magnitude += src[i] * src[i];
   }
   magnitude = std::sqrt(magnitude);
-  T norm = 1.0f;
-  if (magnitude != 0.0f) {
-    norm /= magnitude;
-  }
+  T norm = (magnitude == 0.0f) ? 1.0f: (1.0f / magnitude);
   for (size_t i = 0; i < size; i++) {
     dst[i] = norm * src[i];
   }

@@ -57,6 +57,7 @@
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -280,10 +281,11 @@ absl::Status VectorHNSW<T>::ResizeIfFull() {
       // it was expanded.
       // 2. Once multithreaded is supported we'll have to make sure that no
       // thread is reading/writing during resize
-      algo_->resizeIndex(algo_->getMaxElements() + block_size_);
+      auto block_size = ValkeySearch::Instance().GetHNSWBlockSize();
+      algo_->resizeIndex(algo_->getMaxElements() + block_size);
       VMSDK_LOG(WARNING, nullptr)
           << "Resizing HNSW Index, current size: " << max_elements
-          << ", expand by: " << block_size_ << ", resize time took: "
+          << ", expand by: " << block_size << ", resize time took: "
           << absl::FormatDuration(stop_watch.Duration());
     }
   } catch (const std::exception &e) {

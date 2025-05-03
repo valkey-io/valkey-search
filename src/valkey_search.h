@@ -70,6 +70,13 @@ class ValkeySearch {
   }
   void Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const;
 
+  static long long BlockSizeGetConfig([[maybe_unused]] const char *config_name,
+                                      [[maybe_unused]] void *priv_data);
+  static int BlockSizeSetConfig([[maybe_unused]] const char *config_name,
+                                long long value,
+                                [[maybe_unused]] void *priv_data,
+                                [[maybe_unused]] RedisModuleString **err);
+
   IndexSchema::Stats::ResultCnt<uint64_t> AccumulateIndexSchemaResults(
       absl::AnyInvocable<const IndexSchema::Stats::ResultCnt<
           std::atomic<uint64_t>> &(const IndexSchema::Stats &) const>
@@ -86,6 +93,7 @@ class ValkeySearch {
   void AfterForkParent();
   static ValkeySearch &Instance();
   static void InitInstance(std::unique_ptr<ValkeySearch> instance);
+  uint32_t GetHNSWBlockSize() const;
 
   absl::Status OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
   void OnUnload(RedisModuleCtx *ctx);
@@ -127,7 +135,6 @@ class ValkeySearch {
   static void FreeIndexSchema(void *value);
   static bool IsChildProcess();
   void ProcessIndexSchemaBackfill(RedisModuleCtx *ctx, uint32_t batch_size);
-
   void ResumeWriterThreadPool(RedisModuleCtx *ctx, bool is_expired);
 
   uint64_t inc_id_{0};

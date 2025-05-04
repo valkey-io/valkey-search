@@ -44,11 +44,14 @@ namespace helper {
 // Parses /proc/cpuinfo content and extracts the number of physical cores.
 size_t ParseCPUInfo(std::istream& cpuinfo);
 
+// Parses the output of the command `lscpu` and return the number of physical
+// cores.
+size_t ParseLscpuOutput(const std::string& lscpu_output);
+
 // Extracts an integer value from a formatted key-value string.
 int ExtractInteger(const std::string& line);
 
 }  // namespace helper
-
 }  // namespace vmsdk
 
 #endif  // VMSDK_SRC_CONCURRENCY_H_

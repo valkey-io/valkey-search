@@ -396,6 +396,11 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
 // happening. For more details see:
 // https://pubs.opengroup.org/onlinepubs/009695399/functions/pthread_atfork.html
 void ValkeySearch::AtForkPrepare() {
+  // Sanity: fork can occur (by example: calling to "popen") before the thread
+  // pool is initialized
+  if (writer_thread_pool_ == nullptr || reader_thread_pool_ == nullptr) {
+    return;
+  }
   Metrics::GetStats().worker_thread_pool_suspend_cnt++;
   auto status = writer_thread_pool_->SuspendWorkers();
   VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend writer "
@@ -412,6 +417,11 @@ void ValkeySearch::AtForkPrepare() {
 }
 
 void ValkeySearch::AfterForkParent() {
+  // Sanity: fork can occur (by example: calling to "popen") before the thread
+  // pool is initialized
+  if (reader_thread_pool_ == nullptr) {
+    return;
+  }
   auto status = reader_thread_pool_->ResumeWorkers();
   Metrics::GetStats().reader_worker_thread_pool_resumed_cnt++;
   VMSDK_LOG(WARNING, nullptr) << "After fork parent callback, resume reader "

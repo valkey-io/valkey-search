@@ -247,6 +247,7 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
       RedisModule_InfoAddFieldLongLong(ctx, skipped_count_str.c_str(),
                                        stat.skipped_cnt);
     };
+#ifdef VERBOSE_INFO
     RedisModule_InfoAddSection(ctx, "subscription");
     InfoResultCnt(
         SchemaManager::Instance().AccumulateIndexSchemaResults(
@@ -266,6 +267,7 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
                 -> const IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>>
                     & { return stats.subscription_remove; }),
         "remove_subscription");
+#endif
   }
   RedisModule_InfoAddSection(ctx, "hnswlib");
   RedisModule_InfoAddFieldLongLong(ctx, "hnsw_add_exceptions_count",

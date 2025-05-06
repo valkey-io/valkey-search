@@ -12,14 +12,6 @@ user_name=$(whoami)
 group_id=$(id -g)
 group_name=$(id -gn)
 
-# Check for potential GID/GName conflicts (e.g., with 'staff' GID 50)
-if [[ "$group_id" == "50" ]] || [[ "$group_name" == "staff" ]]; then
-    printf "\n${BLUE}Detected host GID ($group_id) or GName ($group_name) potentially conflicts with system groups (e.g., staff)."
-    printf "\nUsing GID=1000 and GName=ubuntu inside the container instead.${RESET}\n"
-    group_id="1000"
-    group_name="ubuntu"
-fi
-
 # Define source and destination file paths
 source_file=".devcontainer/devcontainer_base.json"
 destination_file=".devcontainer/devcontainer.json"

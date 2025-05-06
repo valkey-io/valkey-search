@@ -164,9 +164,6 @@ macro(finalize_test_flags __TARGET)
   endforeach()
 
   target_link_options(${__TARGET} PRIVATE "LINKER:--allow-multiple-definition")
-  if(NOT ASAN_BUILD)
-    target_link_options(${__TARGET} PRIVATE "LINKER:-S")
-  endif()
   target_compile_options(${__TARGET} PRIVATE -O1)
   valkey_search_target_update_compile_flags(${__TARGET})
   set_target_properties(${__TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY

@@ -64,8 +64,6 @@
 
 namespace valkey_search::indexes {
 
-inline constexpr uint32_t kHNSWBlockSize = 1024 * 10;
-
 std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
                                      float* magnitude = nullptr);
 

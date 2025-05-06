@@ -57,6 +57,7 @@
 #include "src/metrics.h"
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
+#include "src/valkey_search.h"
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"

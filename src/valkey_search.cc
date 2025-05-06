@@ -247,7 +247,7 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
       RedisModule_InfoAddFieldLongLong(ctx, skipped_count_str.c_str(),
                                        stat.skipped_cnt);
     };
-#ifdef VERBOSE_INFO
+#ifdef DEBUG_INFO
     RedisModule_InfoAddSection(ctx, "subscription");
     InfoResultCnt(
         SchemaManager::Instance().AccumulateIndexSchemaResults(

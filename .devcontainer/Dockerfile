@@ -55,6 +55,13 @@ ENV USER_GID=${USER_GID}
 ARG USER_GNAME=ubuntu
 ENV USER_GNAME=${USER_GNAME}
 
+# Check if the target group name exists and has a different GID. If so, delete it.
+RUN EXISTING_GID=$(getent group $USER_GNAME | cut -d: -f3 || true); \
+    if [ ! -z "$EXISTING_GID" ] && [ "$EXISTING_GID" != "$USER_GID" ]; then \
+    echo "Deleting existing group '$USER_GNAME' (GID $EXISTING_GID) to avoid conflict with target GID $USER_GID."; \
+    groupdel $USER_GNAME; \
+    fi
+
 RUN if getent group $USER_GID > /dev/null; then \
     CURRENT_GROUP_NAME=$(getent group $USER_GID | cut -d: -f1); \
     if [ "$CURRENT_GROUP_NAME" != "$USER_GNAME" ]; then \

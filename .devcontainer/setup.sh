@@ -41,7 +41,7 @@ if [[ $? -eq 0 ]]; then
     echo "  USER_UID: $user_id"
     echo "  USER_UNAME: $user_name"
     echo "  USER_GID: $group_id"
-    echo "  USER_GNAME: $user_name"
+    echo "  USER_GNAME: $group_name"
 else
     printf "\n${RED}Failed to create the file ${destination_file}.${RESET}\n\n" >&2
     exit 1

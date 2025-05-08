@@ -37,7 +37,9 @@ Two new field types, `GEO` and `GEOSHAPE`, are introduced to represent geospatia
 
 ### Indexing
 
-The `GEO` and `GEOSHAPE` fields utilize Boost.Geometry's R-tree implementation for spatial indexing. The R-tree is a self-balanced data structure that organizes spatial data in a way that minimizes the number of nodes traversed during searches, optimizing query performance.
+The `GEO` field leverages Valkey's native geospatial indexing capabilities, which are optimized for point-based location data.
+
+The `GEOSHAPE` field utilizes Boost.Geometry's R-tree implementation for spatial indexing. The R-tree is a self-balanced data structure that organizes spatial data in a way that minimizes the number of nodes traversed during searches, optimizing query performance.
 
 ### Packing Algorithms
 

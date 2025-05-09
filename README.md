@@ -1,10 +1,10 @@
-# ValkeySearch
+# valkey-search
 
-**ValkeySearch** (BSD-3-Clause), provided as a Valkey module, is a high-performance Vector Similarity Search engine optimized for AI-driven workloads. It delivers single-digit millisecond latency and high QPS, capable of handling billions of vectors with over 99% recall.
+**valkey-search** (BSD-3-Clause), provided as a Valkey module, is a high-performance Vector Similarity Search engine optimized for AI-driven workloads. It delivers single-digit millisecond latency and high QPS, capable of handling billions of vectors with over 99% recall.
 
-ValkeySearch allows users to create indexes and perform similarity searches, incorporating complex filters. It supports Approximate Nearest Neighbor (ANN) search with HNSW and exact matching using K-Nearest Neighbors (KNN). Users can index data using either **Valkey Hash** or **[Valkey-JSON](https://github.com/valkey-io/valkey-json)** data types.
+valkey-search allows users to create indexes and perform similarity searches, incorporating complex filters. It supports Approximate Nearest Neighbor (ANN) search with HNSW and exact matching using K-Nearest Neighbors (KNN). Users can index data using either **Valkey Hash** or **[Valkey-JSON](https://github.com/valkey-io/valkey-json)** data types.
 
-While ValkeySearch currently focuses on Vector Search, its goal is to extend Valkey into a full-fledged search engine, supporting Full Text Search and additional indexing options.
+While valkey-search currently focuses on Vector Search, its goal is to extend Valkey into a full-fledged search engine, supporting Full Text Search and additional indexing options.
 
 ## Supported Commands
 
@@ -22,13 +22,13 @@ For comprehensive examples, refer to the [Quick Start Guide](https://github.com/
 
 ## Scaling
 
-ValkeySearch supports both **Standalone** and **Cluster** modes. Query processing and ingestion scale linearly with CPU cores in both modes. For large storage requirements, users can leverage Cluster mode for horizontal scaling of the keyspace.
+valkey-search supports both **Standalone** and **Cluster** modes. Query processing and ingestion scale linearly with CPU cores in both modes. For large storage requirements, users can leverage Cluster mode for horizontal scaling of the keyspace.
 
 If replica lag is acceptable, users can achieve horizontal query scaling by directing clients to read from replicas.
 
 ## Performance
 
-ValkeySearch achieves high performance by storing vectors in-memory and applying optimizations throughout the stack to efficiently utilize the host resources, such as:
+valkey-search achieves high performance by storing vectors in-memory and applying optimizations throughout the stack to efficiently utilize the host resources, such as:
 
 - **Parallelism:**  Threading model that enables lock-free execution in the read path.
 - **CPU Cache Efficiency:** Designed to promote efficient use of CPU cache.
@@ -36,14 +36,14 @@ ValkeySearch achieves high performance by storing vectors in-memory and applying
 
 ## Hybrid Queries
 
-ValkeySearch supports hybrid queries, combining Vector Similarity Search with filtering on indexed fields, such as **Numeric** and **Tag indexes**.
+valkey-search supports hybrid queries, combining Vector Similarity Search with filtering on indexed fields, such as **Numeric** and **Tag indexes**.
 
 There are two primary approaches to hybrid queries:
 
 - **Pre-filtering:** Begin by filtering the dataset and then perform an exact similarity search. This works well when the filtered result set is small but can be costly with larger datasets.
 - **Post-filtering:** Perform the similarity search first, then filter the results. This is suitable when the filter-qualified result set is large but may lead to empty or lower than expected amount of results.
 
-ValkeySearch uses a **hybrid approach** with a query planner that selects the most efficient query execution path between:
+valkey-search uses a **hybrid approach** with a query planner that selects the most efficient query execution path between:
 
 - **Pre-filtering**
 - **Inline-filtering:** Filters results during the similarity search process.
@@ -69,7 +69,7 @@ sudo apt install -y clangd          \
 ```
 
 
-**IMPORTANT**: building ValkeySearch requires GCC version 12 or higher, or Clang version 16 or higher. For Debian/Ubuntu, in case a lower version of GCC is installed, you may upgrade to gcc/g++ 12 with:
+**IMPORTANT**: building valkey-search requires GCC version 12 or higher, or Clang version 16 or higher. For Debian/Ubuntu, in case a lower version of GCC is installed, you may upgrade to gcc/g++ 12 with:
 
 ```sh
 sudo apt update
@@ -96,7 +96,7 @@ sudo yum install -y gcc             \
 
 ### Build the module
 
-ValkeySearch uses **CMake** for its build system. To simplify, a build script is provided. To build the module, run:
+valkey-search uses **CMake** for its build system. To simplify, a build script is provided. To build the module, run:
 
 ```sh
 ./build.sh
@@ -156,7 +156,7 @@ To enable JSON support, load the JSON module as well:
 valkey-server --loadmodule /path/to/libsearch.so --loadmodule /path/to/libjson.so
 ```
 
-For optimal performance, ValkeySearch will match the number of worker threads to the number of CPU cores on the host. You can override this with:
+For optimal performance, valkey-search will match the number of worker threads to the number of CPU cores on the host. You can override this with:
 
 ```sh
 valkey-server "--loadmodule /path/to/libsearch.so --reader-threads 64 --writer-threads 64"
@@ -179,7 +179,7 @@ For development purposes, it is recommended to use <b>VSCode</b>, which is alrea
         ```
 
 3. <b>Open the Repository in VSCode:</b>
-    - On your local machine, open the root directory of the cloned ValkeySearch repository in VSCode.
+    - On your local machine, open the root directory of the cloned valkey-search repository in VSCode.
     - If the repository is located on a remote host:
       1. Press Ctrl+Shift+P (Windows/Linux) or Cmd+Shift+P (macOS) to open the Command Palette.
       2. Type Remote-SSH: Connect to Host and select it.

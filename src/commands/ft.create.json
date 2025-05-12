@@ -1,0 +1,14 @@
+{
+  "FT.CREATE": {
+    "acl_categories": [
+      "SLOW",
+      "WRITE",
+      "SEARCH"
+    ],
+    "arguments": [],
+    "complexity": "Construction time O(N log N), where N is the number of indexed items",
+    "group": "search",
+    "module_since": "1.0.0",
+    "summary": "Creates an empty search index and initiates the backfill process"
+  }
+}

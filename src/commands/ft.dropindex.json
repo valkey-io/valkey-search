@@ -1,0 +1,21 @@
+{
+  "FT.DROPINDEX": {
+    "acl_categories": [
+      "SLOW",
+      "WRITE",
+      "SEARCH"
+    ],
+    "arguments": [
+      {
+        "key_spec_index": 0,
+        "name": "key",
+        "type": "key"
+      }
+    ],
+    "arity": 2,
+    "complexity": "O(N)",
+    "group": "search",
+    "module_since": "1.0.0",
+    "summary": "Drop the index created by FT.CREATE command. It is an error if the index doesn't exist"
+  }
+}

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -124,7 +124,7 @@ class Tag : public IndexBase {
           size_(size),
           entries_(entries),
           negate_(negate),
-          untracked_keys_(untracked_keys) {};
+          untracked_keys_(untracked_keys){};
     size_t Size() const override;
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 

@@ -35,13 +35,12 @@
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
-/* In development branch the module version is always "999999". */
-#define MODULE_VERSION 999999
+#define MODULE_VERSION 10000
 /* The release stage is used in order to provide release status information.
- * In development branch the status is always "dev".
+ * In unstable branch the status is always "dev".
  * During release process the status will be set to rc1,rc2...rcN.
  * When the version is released the status will be "ga". */
-#define MODULE_RELEASE_STAGE "dev"
+#define MODULE_RELEASE_STAGE "rc1"
 
 namespace {
 

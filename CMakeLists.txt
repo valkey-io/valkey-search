@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 
 # Project definition
 project(
-  ValkeySearch
+  valkey-search
   VERSION 99.99.99
   LANGUAGES C CXX) # Version is 99.99.99 for main development branch
 

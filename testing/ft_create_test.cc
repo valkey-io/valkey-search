@@ -29,7 +29,6 @@
 
 #include <algorithm>
 #include <iterator>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -68,7 +67,7 @@ class FTCreateTest : public ValkeySearchTestWithParam<FTCreateTestCase> {};
 
 TEST_P(FTCreateTest, FTCreateTests) {
   const FTCreateTestCase& test_case = GetParam();
-  int db_num = 0;
+  int db_num = 1;
   ON_CALL(*kMockRedisModule, GetSelectedDb(&fake_ctx_))
       .WillByDefault(testing::Return(db_num));
 

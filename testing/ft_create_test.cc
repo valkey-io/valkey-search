@@ -62,7 +62,6 @@ struct FTCreateTestCase {
   int expected_run_return;
   std::string expected_reply_message;
   std::vector<ExpectedIndex> expected_indexes;
-  int db_num{0};
 };
 
 class FTCreateTest : public ValkeySearchTestWithParam<FTCreateTestCase> {};

@@ -1,11 +1,38 @@
-Hello! This file is just a placeholder, since this branch is where all the development happens.
+Valkey Search 1.0.0 release notes
+=================================
 
-There is no release notes for this branch, it gets forked into another branch every time there
-is a partial feature freeze in order to eventually create a new stable release.
+================================================================================
+Valkey Search 1.0.0 RC1 - Released Fri 28 Mar 2025
+================================================================================
+This is the first release candidate of valkey-search 1.0 that is a high-performance Vector Similarity Search engine optimized for AI-driven workloads. It delivers single-digit millisecond latency and high QPS, capable of handling billions of vectors with over 99% recall.
 
-Usually this branch is stable enough for you to use it in development environments.
-However you should never use it in production environments.
+Valkey-Search allows users to create indexes and perform similarity searches, incorporating complex filters. It supports Approximate Nearest Neighbor (ANN) search with HNSW and exact matching using K-Nearest Neighbors (KNN). Users can index data using either Valkey Hash or Valkey-JSON data types.
 
-More information is available at https://valkey.io
+Major API and Functionality
+=========================
+* Add the search module data type which can handle RDB load, RDB save, free, and memory usage
+* Add the following search module commands: 
+    ** FT.CREATE
+    ** FT.DROPINDEX
+    ** FT.INFO
+    ** FT._LIST
+    ** FT.SEARCH
+* Supported indexes
+    ** Vector: HNSW and Flat
+    ** Non-vector: Numeric and Tag
+* Index data types include Valkey Hash and Valkey JSON.
+* Cluster support
+* Linear scaling of keyspace and compute
+* ACL support
+* RDB serialization of metadata including the search index
+* Hybrid queries combining vector and non vector indexes
+* Handle key space events for data mutation
+* Expose statistics and reporting memory usage to the core valkey engine
 
-Happy hacking!
+New configurations
+===========================
+* Add support for the following configurations: reader-threads, writer-threads, use-coordinator, log-level
+
+We appreciate the efforts of all who contributed code to this release!
+
+Yair Gottdenker (yairgott), Allen Samuels (allenss-amazon), Eran Ifrah (eifrah-aws), Jacob Murphy (murphyjacob4), Chanil Jeon (jeon1226), Qu Chen (QuChen88), DP (dpbnasika)

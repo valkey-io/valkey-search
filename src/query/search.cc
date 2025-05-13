@@ -229,7 +229,7 @@ CalcBestMatchingPrefiltereddKeys(
 
 std::string StringFormatVector(std::vector<char> vector) {
   if (vector.size() % sizeof(float) != 0) {
-    return std::string(vector.data(), vector.size());
+    return {vector.data(), vector.size()};
   }
 
   std::vector<std::string> float_strings;

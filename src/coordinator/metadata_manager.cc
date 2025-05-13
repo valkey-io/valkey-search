@@ -55,7 +55,6 @@
 #include "src/rdb_serialization.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
-#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 

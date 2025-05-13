@@ -32,7 +32,6 @@
 #include <cstddef>
 #include <cstdlib>
 
-#include "absl/algorithm/algorithm.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -41,7 +40,6 @@
 #include "absl/strings/string_view.h"
 #include "src/metrics.h"
 #include "src/rdb_section.pb.h"
-#include "third_party/hnswlib/iostream.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"

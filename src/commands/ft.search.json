@@ -1,0 +1,26 @@
+{
+  "FT.SEARCH": {
+    "acl_categories": [
+      "READ",
+      "SLOW",
+      "SEARCH"
+    ],
+    "arguments": [
+      {
+        "key_spec_index": 0,
+        "name": "index",
+        "type": "key"
+      },
+      {
+        "key_spec_index": 1,
+        "name": "query",
+        "type": "string"
+      }
+    ],
+    "arity": -3,
+    "complexity": "O(log N)",
+    "group": "search",
+    "module_since": "1.0.0",
+    "summary": "Performs a search of the specified index. The keys which match the query expression are returned"
+  }
+}

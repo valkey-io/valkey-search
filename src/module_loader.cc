@@ -68,7 +68,7 @@ vmsdk::module::Options options = {
             },
             {
                 .cmd_name = valkey_search::kListCommand,
-                .permissions = "readonly",
+                .permissions = "readonly @search @read @fast",
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTListCmd>,
             },
             {
@@ -76,7 +76,8 @@ vmsdk::module::Options options = {
                 .permissions = "readonly",
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTSearchCmd>,
             },
-        },
+        }  // namespace
+    ,
     .on_load =
         [](RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
            [[maybe_unused]] const vmsdk::module::Options &options) {

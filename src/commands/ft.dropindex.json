@@ -1,7 +1,7 @@
 {
   "FT.DROPINDEX": {
     "acl_categories": [
-      "SLOW",
+      "FAST",
       "WRITE",
       "SEARCH"
     ],

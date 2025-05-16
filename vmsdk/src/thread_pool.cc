@@ -33,6 +33,7 @@
 #include <cstddef>
 #include <memory>
 #include <numeric>
+#include <ranges>
 #include <string>
 #include <utility>
 
@@ -44,9 +45,24 @@
 #include "absl/synchronization/mutex.h"
 namespace {
 
+class ThreadRunContext {
+ public:
+  ThreadRunContext(vmsdk::ThreadPool *pool,
+                   std::shared_ptr<vmsdk::ThreadPool::Thread> data)
+      : pool_{pool}, thread_{data} {}
+
+  vmsdk::ThreadPool *GetPool() { return pool_; }
+  std::shared_ptr<vmsdk::ThreadPool::Thread> GetThread() { return thread_; }
+
+ private:
+  vmsdk::ThreadPool *pool_ = nullptr;
+  std::shared_ptr<vmsdk::ThreadPool::Thread> thread_ = nullptr;
+};
+
 void *RunWorkerThread(void *arg) {
-  vmsdk::ThreadPool *pool = static_cast<vmsdk::ThreadPool *>(arg);
-  pool->WorkerThread();
+  ThreadRunContext *ctx = static_cast<ThreadRunContext *>(arg);
+  ctx->GetPool()->WorkerThread(ctx->GetThread());
+  delete ctx;  // shallow delete
   return nullptr;
 }
 }  // namespace
@@ -54,19 +70,14 @@ void *RunWorkerThread(void *arg) {
 namespace vmsdk {
 
 ThreadPool::ThreadPool(const std::string &name_prefix, size_t num_threads)
-    : threads_(num_threads),
+    : initial_thread_count_(num_threads),
       priority_tasks_(static_cast<int>(ThreadPool::Priority::kMax) + 1),
       name_prefix_(name_prefix) {}
 
 void ThreadPool::StartWorkers() {
   CHECK(!started_);
   started_ = true;
-  for (size_t i = 0; i < threads_.size(); ++i) {
-    pthread_create(&threads_[i], nullptr, RunWorkerThread, this);
-#ifndef __APPLE__
-    pthread_setname_np(threads_[i], (name_prefix_ + std::to_string(i)).c_str());
-#endif
-  }
+  IncrThreadCountBy(initial_thread_count_);
 }
 
 bool ThreadPool::Schedule(absl::AnyInvocable<void()> task, Priority priority) {
@@ -106,13 +117,17 @@ void ThreadPool::JoinWorkers() {
     }
     suspend_workers_ = false;
   }
-  if (!started_) {
-    return;
-  }
-  for (auto thread : threads_) {
-    pthread_join(thread, nullptr);
-  }
+
+  threads_.ClearWithCallback(
+      [](auto thread) { pthread_join(thread->thread_id, nullptr); });
   started_ = false;
+
+  JoinTerminatedWorkers();
+}
+
+void ThreadPool::JoinTerminatedWorkers() {
+  pending_join_threads_.ClearWithCallback(
+      [](auto thread) { pthread_join(thread->thread_id, nullptr); });
 }
 
 absl::Status ThreadPool::SuspendWorkers() {
@@ -132,7 +147,7 @@ absl::Status ThreadPool::SuspendWorkers() {
     }
     suspend_workers_ = true;
     blocking_refcount_ =
-        std::make_unique<absl::BlockingCounter>(threads_.size());
+        std::make_unique<absl::BlockingCounter>(threads_.Size());
     condition_.SignalAll();
   }
   blocking_refcount_->Wait();
@@ -154,7 +169,7 @@ absl::Status ThreadPool::ResumeWorkers() {
     }
     suspend_workers_ = false;
     blocking_refcount_ =
-        std::make_unique<absl::BlockingCounter>(threads_.size());
+        std::make_unique<absl::BlockingCounter>(threads_.Size());
   }
 
   blocking_refcount_->Wait();
@@ -176,7 +191,7 @@ void ThreadPool::AwaitSuspensionCleared()
   }
 }
 
-void ThreadPool::WorkerThread() {
+void ThreadPool::WorkerThread(std::shared_ptr<Thread> thread) {
   while (true) {
     absl::AnyInvocable<void()> task;
     {
@@ -184,7 +199,17 @@ void ThreadPool::WorkerThread() {
       AwaitSuspensionCleared();
       auto condition = absl::Condition(this, &ThreadPool::QueueReady);
       while (!condition.Eval()) {
-        condition_.Wait(&queue_mutex_);
+        condition_.WaitWithTimeout(&queue_mutex_, absl::Seconds(1));
+        if (thread->IsShutdown()) {
+          thread->InvokeShutdownCallback();
+          // remove this thread from the threads list and place it in the
+          // pending join list
+          threads_.PopIf([thread](std::shared_ptr<Thread> t) {
+            return t->thread_id == thread->thread_id;
+          });
+          pending_join_threads_.Add(thread);
+          return;
+        }
       }
       if (stop_mode_.has_value() &&
           (stop_mode_.value() == StopMode::kAbrupt ||
@@ -195,11 +220,11 @@ void ThreadPool::WorkerThread() {
       if (suspend_workers_) {
         continue;
       }
-      for (auto it = priority_tasks_.rbegin(); it != priority_tasks_.rend();
-           ++it) {
-        if (!it->empty()) {
-          task = std::move(it->front());
-          it->pop();
+
+      for (auto &tasks : priority_tasks_ | std::views::reverse) {
+        if (!tasks.empty()) {
+          task = std::move(tasks.front());
+          tasks.pop();
           break;
         }
       }
@@ -215,4 +240,48 @@ size_t ThreadPool::QueueSize() const {
       [](size_t sum, const auto &tasks) { return sum + tasks.size(); });
 }
 
+void ThreadPool::IncrThreadCountBy(size_t count) {
+  for (size_t i = 0; i < count; ++i) {
+    std::shared_ptr<Thread> thread_ptr = std::make_shared<Thread>();
+    ThreadRunContext *context = new ThreadRunContext{this, thread_ptr};
+    pthread_create(&thread_ptr->thread_id, nullptr, RunWorkerThread, context);
+#ifndef __APPLE__
+    size_t thread_num = threads_.Size();
+    pthread_setname_np(thread_ptr->thread_id,
+                       (name_prefix_ + std::to_string(thread_num)).c_str());
+#endif
+    threads_.Add(thread_ptr);
+  }
+}
+
+void ThreadPool::DecrThreadCountBy(size_t count, bool sync) {
+  auto threads = threads_.PopBackMulti(count);
+  absl::BlockingCounter counter{static_cast<int>(threads.size())};
+  for (const auto &thread : threads) {
+    if (sync) {
+      thread->Shutdown([&counter]() {
+        counter.DecrementCount();
+      });  // signal the thread to exit
+    } else {
+      thread->Shutdown();
+    }
+  }
+
+  if (sync) {
+    counter.Wait();
+  }
+}
+
+void ThreadPool::Resize(size_t count, bool wait_for_resize) {
+  size_t current_size = Size();
+  if (count == current_size) {
+    return;
+  } else if (count > current_size) {
+    // We need to add more threads
+    IncrThreadCountBy(count - current_size);
+  } else {
+    // Shutdown "current_size - count" threads
+    DecrThreadCountBy(current_size - count, wait_for_resize);
+  }
+}
 }  // namespace vmsdk

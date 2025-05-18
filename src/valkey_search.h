@@ -43,6 +43,7 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/server.h"
 #include "src/index_schema.h"
+#include "valkey_search_config.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -70,13 +71,6 @@ class ValkeySearch {
   }
   void Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const;
 
-  static long long BlockSizeGetConfig([[maybe_unused]] const char *config_name,
-                                      [[maybe_unused]] void *priv_data);
-  static int BlockSizeSetConfig([[maybe_unused]] const char *config_name,
-                                long long value,
-                                [[maybe_unused]] void *priv_data,
-                                [[maybe_unused]] RedisModuleString **err);
-
   IndexSchema::Stats::ResultCnt<uint64_t> AccumulateIndexSchemaResults(
       absl::AnyInvocable<const IndexSchema::Stats::ResultCnt<
           std::atomic<uint64_t>> &(const IndexSchema::Stats &) const>
@@ -93,7 +87,9 @@ class ValkeySearch {
   void AfterForkParent();
   static ValkeySearch &Instance();
   static void InitInstance(std::unique_ptr<ValkeySearch> instance);
+
   uint32_t GetHNSWBlockSize() const;
+  void SetHNSWBlockSize(uint32_t block_size);
 
   absl::Status OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
   void OnUnload(RedisModuleCtx *ctx);
@@ -123,6 +119,8 @@ class ValkeySearch {
   // of the program.
   RedisModuleCtx *GetBackgroundCtx() const { return ctx_; }
 
+  const ValkeySearchConfig *GetConfig() const { return &config_; }
+
  protected:
   std::unique_ptr<vmsdk::ThreadPool> reader_thread_pool_;
   std::unique_ptr<vmsdk::ThreadPool> writer_thread_pool_;
@@ -143,6 +141,9 @@ class ValkeySearch {
 
   std::unique_ptr<coordinator::Server> coordinator_;
   std::unique_ptr<coordinator::ClientPool> client_pool_;
+  ValkeySearchConfig config_;
+  std::shared_ptr<std::atomic_int64_t> hnsw_block_size_{
+      std::make_shared<std::atomic_int64_t>(10240)};
 };
 void ModuleInfo(RedisModuleInfoCtx *ctx, int for_crash_report);
 }  // namespace valkey_search

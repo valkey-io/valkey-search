@@ -62,6 +62,7 @@
 #include "src/server_events.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
+#include "src/valkey_search_config.h"
 #include "src/vector_externalizer.h"
 #include "third_party/hnswlib/iostream.h"
 #include "vmsdk/src/managed_pointers.h"

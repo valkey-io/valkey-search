@@ -45,7 +45,7 @@
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
 #include "gtest/gtest_prod.h"
-#include "vector.h"
+#include "vmsdk/src/thread_safe_vector.h"
 
 namespace vmsdk {
 // Note google3/thread can't be used as it's not open source
@@ -133,8 +133,8 @@ class ThreadPool {
     return priority_tasks_[static_cast<int>(priority)];
   }
   size_t initial_thread_count_ = 0;
-  Vector<std::shared_ptr<Thread>> threads_;
-  Vector<std::shared_ptr<Thread>> pending_join_threads_;
+  ThreadSafeVector<std::shared_ptr<Thread>> threads_;
+  ThreadSafeVector<std::shared_ptr<Thread>> pending_join_threads_;
   mutable absl::Mutex queue_mutex_;
   absl::CondVar condition_ ABSL_GUARDED_BY(queue_mutex_);
   std::vector<std::queue<absl::AnyInvocable<void()>>> priority_tasks_

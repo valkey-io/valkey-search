@@ -48,8 +48,8 @@ namespace {
 class ThreadRunContext {
  public:
   ThreadRunContext(vmsdk::ThreadPool *pool,
-                   std::shared_ptr<vmsdk::ThreadPool::Thread> data)
-      : pool_{pool}, thread_{data} {}
+                   std::shared_ptr<vmsdk::ThreadPool::Thread> thread)
+      : pool_{pool}, thread_{thread} {}
 
   vmsdk::ThreadPool *GetPool() { return pool_; }
   std::shared_ptr<vmsdk::ThreadPool::Thread> GetThread() { return thread_; }

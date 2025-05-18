@@ -12,12 +12,12 @@
 /// A thread safe vector protected by a mutex
 namespace vmsdk {
 template <typename T>
-class Vector {
+class ThreadSafeVector {
  public:
   // This type is neither copyable nor assignable.
-  Vector(const Vector&) = delete;
-  Vector& operator=(const Vector&) = delete;
-  Vector() = default;
+  ThreadSafeVector(const ThreadSafeVector&) = delete;
+  ThreadSafeVector& operator=(const ThreadSafeVector&) = delete;
+  ThreadSafeVector() = default;
 
   size_t Size() const { return vec_.size(); }
   bool IsEmpty() const { return Size() == 0; }

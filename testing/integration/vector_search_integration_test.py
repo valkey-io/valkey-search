@@ -21,7 +21,7 @@ def generate_test_vector(dimensions: int, data: int):
     vector[0] = np.float32(1)
     vector[1] = np.float32(data)
     return vector
-    
+
 
 def generate_test_cases_basic(test_name):
     test_cases = []
@@ -32,7 +32,7 @@ def generate_test_cases_basic(test_name):
                     store_data_type = store_data_type.name,
                     vector_index_type = vector_index_type.name
                     ))
-                    
+
     return test_cases
 
 
@@ -266,7 +266,7 @@ def generate_test_cases():
                 test_case_new["config"]["vector_index_type"] = vector_index_type.name
                 test_case_new["testcase_name"] += "_" + store_data_type.name + "_" +vector_index_type.name
                 test_cases.append(test_case_new)
-                    
+
     return test_cases
 
 
@@ -286,7 +286,7 @@ class VSSOutput:
             for i in range(1, len(output)):
                 self.keys[utils.to_str(output[i])] = dict()
             return
-       
+
         for i in range(1, len(output), 2):
             attrs = output[i + 1]
             attrs_map = dict()
@@ -386,7 +386,7 @@ class VectorSearchIntegrationTest(VSSTestCase):
         valkey_server_path = os.environ["VALKEY_SERVER_PATH"]
         valkey_cli_path = os.environ["VALKEY_CLI_PATH"]
         valkey_search_path = os.environ["VALKEY_SEARCH_PATH"]
-      
+
         cls.valkey_cluster_under_test = utils.start_valkey_cluster(
             valkey_server_path,
             valkey_cli_path,
@@ -435,6 +435,37 @@ class VectorSearchIntegrationTest(VSSTestCase):
             self.fail(f"Failed to ping all servers in cluster: {e}")
         super().tearDown()
 
+    def test_changing_thread_count(self):
+        # Check the default values & existence of the configuration variable
+        # search.reader-threads & search.writer-threads
+        core_count = self.valkey_conn.config_get("search.reader-threads")[
+            "search.reader-threads"
+        ]
+
+        self.assertTrue(core_count is not None, "search.reader-threads does not exist!")
+        self.assertEqual(
+            self.valkey_conn.config_get("search.writer-threads")[
+                "search.writer-threads"
+            ],
+            core_count,
+        )
+
+        # Modify and confirm change
+        self.assertTrue(self.valkey_conn.config_set("search.writer-threads", 1))
+        self.assertTrue(self.valkey_conn.config_set("search.reader-threads", 1))
+
+        self.assertEqual(
+            self.valkey_conn.config_get("search.reader-threads")[
+                "search.reader-threads"
+            ],
+            "1",
+        )
+        self.assertEqual(
+            self.valkey_conn.config_get("search.writer-threads")[
+                "search.writer-threads"
+            ],
+            "1",
+        )
 
     @parameterized.named_parameters(generate_test_cases_basic("test_create_and_drop_index"))
     def test_create_and_drop_index(self, store_data_type, vector_index_type):
@@ -468,7 +499,7 @@ class VectorSearchIntegrationTest(VSSTestCase):
                 },
                 target_nodes=valkey.ValkeyCluster.RANDOM,
             )
-            
+
         self.assertEqual(
             "Index test_index already exists.",
             e.exception.args[0],
@@ -492,7 +523,7 @@ class VectorSearchIntegrationTest(VSSTestCase):
                 e.exception.args[0],
             )
 
-    
+
     @parameterized.named_parameters(generate_test_cases())
     def test_vector_search(self, config):
         self.maxDiff = None
@@ -500,7 +531,7 @@ class VectorSearchIntegrationTest(VSSTestCase):
         vector_definitions = utils.HNSWVectorDefinition(vector_dimensions=dimensions) \
             if config["vector_index_type"] == utils.VectorIndexType.HNSW.name \
             else utils.FlatVectorDefinition(vector_dimensions=dimensions)
-       
+
         self.assertEqual(
             b"OK",
             utils.create_index(
@@ -569,7 +600,7 @@ class VectorSearchIntegrationTest(VSSTestCase):
         else:
             args_str = ""
             for arg in args:
-                args_str += str(utils.to_str(arg)) + " " 
+                args_str += str(utils.to_str(arg)) + " "
             got = VSSOutput(
                 self.valkey_conn.execute_command(
                     *args, target_nodes=self.valkey_conn.RANDOM

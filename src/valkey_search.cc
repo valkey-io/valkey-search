@@ -30,7 +30,6 @@
 #include "src/valkey_search.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -65,17 +64,73 @@
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
-
 namespace valkey_search {
 
 static absl::NoDestructor<std::unique_ptr<ValkeySearch>> valkey_search_instance;
+
 constexpr size_t kMaxWorkerThreadPoolSuspensionSec{60};
-static std::atomic<uint32_t> hnsw_block_size{10240};
+constexpr uint32_t kHNSWDefaultBlockSize{10240};
+constexpr uint32_t kMaxThreadsCount{1024};
+
 const absl::string_view kHNSWBlockSizeConfig{"hnsw-block-size"};
+const absl::string_view kReaderThreadsConfig{"reader-threads"};
+const absl::string_view kWriterThreadsConfig{"writer-threads"};
+
+static const int64_t kDefaultThreadsCount = vmsdk::GetPhysicalCPUCoresCount();
+
+namespace {
+/// Check that the new value for configuration item `hnsw-block-size` confirms
+/// to the allowed values.
+bool ValidateHNSWBlockSize(long long new_value, RedisModuleString **err) {
+  if (new_value < kHNSWDefaultBlockSize || new_value > UINT32_MAX) {
+    if (err) {
+      *err = RedisModule_CreateStringPrintf(
+          nullptr, "Block size must be between %u and %u",
+          kHNSWDefaultBlockSize, UINT32_MAX);
+    }
+    return false;
+  }
+  return true;
+}
+
+/// Resize `pool` to match its new value
+void UpdateThreadPoolCount(vmsdk::config::EntryBase *entry,
+                           vmsdk::ThreadPool *pool) {
+  if (!pool || !entry) {
+    return;
+  }
+  auto number = dynamic_cast<vmsdk::config::Number *>(entry);
+  pool->Resize(number->GetValue());
+}
+}  // namespace
+
+// Configuration entries
+
+// Controls the HNSW resize increments
+static vmsdk::config::Number hnsw_block_size{kHNSWBlockSizeConfig,
+                                             kHNSWDefaultBlockSize,
+                                             kHNSWDefaultBlockSize, UINT_MAX};
+
+// Controls the number of reader threads
+static vmsdk::config::Number reader_threads_count{
+    kReaderThreadsConfig, kDefaultThreadsCount, 1, kMaxThreadsCount,
+    [](vmsdk::config::EntryBase *entry) {
+      UpdateThreadPoolCount(entry,
+                            ValkeySearch::Instance().GetReaderThreadPool());
+    }};
+
+// Controls the number of writer threads
+static vmsdk::config::Number writer_threads_count{
+    kWriterThreadsConfig, kDefaultThreadsCount, 1, kMaxThreadsCount,
+    [](vmsdk::config::EntryBase *entry) {
+      UpdateThreadPoolCount(entry,
+                            ValkeySearch::Instance().GetWriterThreadPool());
+    }};
 
 namespace options {
 
@@ -94,7 +149,7 @@ struct Parameters {
   std::optional<int> threads;
   bool use_coordinator{false};
   std::optional<std::string> log_level;
-  uint32_t hnsw_block_size{10240};
+  uint32_t hnsw_block_size{kHNSWDefaultBlockSize};
 };
 
 absl::StatusOr<Parameters> Load(RedisModuleString **argv, int argc) {
@@ -143,7 +198,11 @@ void ValkeySearch::InitInstance(std::unique_ptr<ValkeySearch> instance) {
 }
 
 uint32_t ValkeySearch::GetHNSWBlockSize() const {
-  return hnsw_block_size.load(std::memory_order_relaxed);
+  return hnsw_block_size.GetValue();
+}
+
+void ValkeySearch::SetHNSWBlockSize(uint32_t block_size) {
+  hnsw_block_size.SetValue(block_size);
 }
 
 static std::string ConvertToMB(double bytes_value) {
@@ -439,6 +498,13 @@ void ValkeySearch::OnServerCronCallback(RedisModuleCtx *ctx,
                                         [[maybe_unused]] RedisModuleEvent eid,
                                         [[maybe_unused]] uint64_t subevent,
                                         [[maybe_unused]] void *data) {
+  // Clean-up after threads that exited without being "joined"
+  if (writer_thread_pool_) {
+    writer_thread_pool_->JoinTerminatedWorkers();
+  }
+  if (reader_thread_pool_) {
+    reader_thread_pool_->JoinTerminatedWorkers();
+  }
   // Resume worker thread pool if suspension time exceeds the max allowed
   // duration
   if (writer_thread_pool_suspend_watch_.has_value() &&
@@ -493,16 +559,12 @@ absl::Status ValkeySearch::LoadOptions(RedisModuleCtx *ctx,
   writer_thread_pool_->StartWorkers();
 
   if (options.hnsw_block_size) {
-    RedisModuleString *err = nullptr;
-    if (BlockSizeSetConfig(kHNSWBlockSizeConfig.data(), options.hnsw_block_size,
-                           nullptr, &err) != REDISMODULE_OK) {
-      std::string error_msg =
-          err ? RedisModule_StringPtrLen(err, nullptr) : "Unknown error";
-      RedisModule_FreeString(nullptr, err);
-      return absl::InternalError(absl::StrFormat(
-          "Failed to set vs-hnsw-block-size config from command-line: %s",
-          error_msg));
+    if (!ValidateHNSWBlockSize(options.hnsw_block_size, nullptr)) {
+      return absl::InvalidArgumentError(
+          absl::StrFormat("Could not set %s. Invalid value: %u",
+                          kHNSWBlockSizeConfig, options.hnsw_block_size));
     }
+    hnsw_block_size.SetValue(options.hnsw_block_size);
   }
 
   if (options.log_level) {
@@ -556,28 +618,6 @@ void ValkeySearch::ResumeWriterThreadPool(RedisModuleCtx *ctx,
   writer_thread_pool_suspend_watch_ = std::nullopt;
 }
 
-long long ValkeySearch::BlockSizeGetConfig(
-    [[maybe_unused]] const char *config_name,
-    [[maybe_unused]] void *priv_data) {
-  return hnsw_block_size.load(std::memory_order_relaxed);
-}
-
-int ValkeySearch::BlockSizeSetConfig([[maybe_unused]] const char *config_name,
-                                     long long value,
-                                     [[maybe_unused]] void *priv_data,
-                                     RedisModuleString **err) {
-  if (value <= 0 || value > UINT32_MAX) {
-    if (err) {
-      *err = RedisModule_CreateStringPrintf(
-          nullptr, "Block size must be between 10240 and %u", UINT32_MAX);
-    }
-    return REDISMODULE_ERR;
-  }
-  hnsw_block_size.store(static_cast<uint32_t>(value),
-                        std::memory_order_relaxed);
-  return REDISMODULE_OK;
-}
-
 absl::Status ValkeySearch::OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv,
                                   int argc) {
   ctx_ = RedisModule_GetDetachedThreadSafeContext(ctx);
@@ -585,22 +625,9 @@ absl::Status ValkeySearch::OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv,
   // Register a single module type for Aux load/save callbacks.
   VMSDK_RETURN_IF_ERROR(RegisterModuleType(ctx));
 
-  // Register vs-block-size configuration
-  if (RedisModule_RegisterNumericConfig(
-          ctx,
-          kHNSWBlockSizeConfig.data(),  // Name
-          10240,                        // Default value
-          REDISMODULE_CONFIG_DEFAULT,   // Flags (mutable, can be changed via
-                                        // CONFIG SET)
-          10240,                        // Minimum value
-          UINT32_MAX,                   // Maximum value
-          BlockSizeGetConfig,           // Get callback
-          BlockSizeSetConfig,           // Set callback
-          nullptr,                      // Apply callback (optional)
-          nullptr                       // privdata (not used here)
-          ) != REDISMODULE_OK) {
-    return absl::InternalError("Failed to register vs-block-size config");
-  }
+  // Register all global configuration variables
+  VMSDK_RETURN_IF_ERROR(
+      vmsdk::config::ModuleConfigManager::Instance().Init(ctx));
 
   // Load configurations to initialize registered configs
   if (RedisModule_LoadConfigs(ctx) != REDISMODULE_OK) {

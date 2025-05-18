@@ -65,6 +65,7 @@
 #include "src/vector_externalizer.h"
 #include "third_party/hnswlib/iostream.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"

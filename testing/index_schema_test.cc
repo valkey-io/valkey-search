@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -449,14 +449,12 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
     EXPECT_CALL(*kMockRedisModule,
                 KeyType(vmsdk::RedisModuleKeyIsForString(key->Str())))
         .WillRepeatedly(Return(REDISMODULE_KEYTYPE_HASH));
-
-#ifdef BLOCK_CLIENT_ON_MUTATION
+    EXPECT_CALL(*kMockRedisModule, GetClientId(testing::_))
+        .WillRepeatedly(testing::Return(1));
     EXPECT_CALL(
         *kMockRedisModule,
         BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
         .WillOnce(Return((RedisModuleBlockedClient *)1));
-#endif
-
     const char *field = "vector";
     const char *value = "vector_buffer";
     RedisModuleString *value_redis_str =
@@ -475,15 +473,14 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
 
     index_schema->OnKeyspaceNotification(&fake_ctx_, REDISMODULE_NOTIFY_HASH,
                                          "event", key_redis_str.get());
-#ifdef BLOCK_CLIENT_ON_MUTATION
     EXPECT_CALL(*kMockRedisModule,
                 UnblockClient((RedisModuleBlockedClient *)1, nullptr))
         .WillOnce(Return(1));
-#endif
   }
   EXPECT_EQ(mutations_thread_pool.QueueSize(), 1);
   VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
+  EXPECT_TRUE(vmsdk::TrackedBlockedClients().empty());
 }
 
 TEST_P(IndexSchemaSubscriptionSimpleTest, EmptyKeyPrefixesTest) {
@@ -1388,5 +1385,24 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
   EXPECT_EQ(stats.subscription_add.failure_cnt, 0);
   EXPECT_EQ(stats.subscription_remove.failure_cnt, 0);
   EXPECT_EQ(stats.subscription_modify.failure_cnt, 0);
+}
+
+class IndexSchemaTest : public vmsdk::RedisTest {};
+
+TEST_F(IndexSchemaTest, ShouldBlockClient) {
+  RedisModuleCtx fake_ctx;
+  {
+    EXPECT_CALL(*kMockRedisModule, GetClientId(&fake_ctx))
+        .WillOnce(testing::Return(1));
+    EXPECT_TRUE(ShouldBlockClient(&fake_ctx, false, false));
+  }
+  {
+    EXPECT_CALL(*kMockRedisModule, GetClientId(&fake_ctx))
+        .WillOnce(testing::Return(0));
+    EXPECT_FALSE(ShouldBlockClient(&fake_ctx, false, false));
+  }
+  EXPECT_FALSE(ShouldBlockClient(&fake_ctx, true, false));
+  EXPECT_FALSE(ShouldBlockClient(&fake_ctx, false, true));
+  EXPECT_FALSE(ShouldBlockClient(&fake_ctx, true, true));
 }
 }  // namespace valkey_search

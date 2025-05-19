@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -54,6 +54,8 @@ class MockTask {
  public:
   MOCK_METHOD(void, Execute, ());
 };
+
+}  // namespace
 
 class ThreadPoolTest : public ::testing::TestWithParam<ThreadPool::Priority> {};
 INSTANTIATE_TEST_SUITE_P(
@@ -261,19 +263,19 @@ TEST_P(ThreadPoolTest, ConcurrentWorkers) {
   std::unique_lock<std::mutex> lock(mutex);
   condition.wait(lock, [&] { return last_task == 0; });
 }
+
 TEST_F(ThreadPoolTest, priority) {
   // Test that high priority tasks are executed before low priority tasks
-  ThreadPool thread_pool("test-pool", 5);
-  thread_pool.StartWorkers();
-  const size_t tasks = thread_pool.Size() * 2;
+  const size_t thread_count = 5;
+  ThreadPool thread_pool("test-pool", thread_count);
+  const size_t tasks = thread_count * 2;
   std::atomic<int> pending_run_low_priority = tasks;
   std::atomic<int> pending_run_high_priority = tasks;
   absl::BlockingCounter pending_tasks(tasks * 2);
+  absl::Mutex mutex;
   {
-    absl::Mutex mutex;
     absl::MutexLock lock(&mutex);
-
-    for (size_t i = 0; i < thread_pool.Size(); ++i) {
+    for (size_t i = 0; i < thread_count; ++i) {
       EXPECT_TRUE(
           thread_pool.Schedule([&mutex] { absl::MutexLock lock(&mutex); },
                                ThreadPool::Priority::kHigh));
@@ -282,7 +284,7 @@ TEST_F(ThreadPoolTest, priority) {
     for (size_t i = 0; i < tasks; ++i) {
       EXPECT_TRUE(thread_pool.Schedule(
           [&pending_run_low_priority, &pending_run_high_priority,
-           &pending_tasks, &mutex] {
+           &pending_tasks, &mutex]() {
             absl::MutexLock lock(&mutex);
             // Making sure that all high priority tasks were executed before any
             // low priority
@@ -295,7 +297,7 @@ TEST_F(ThreadPoolTest, priority) {
     for (size_t i = 0; i < tasks; ++i) {
       EXPECT_TRUE(thread_pool.Schedule(
           [&pending_run_low_priority, &pending_run_high_priority, &tasks,
-           &pending_tasks, &mutex] {
+           &pending_tasks, &mutex]() {
             absl::MutexLock lock(&mutex);
             // Making sure that no low priority tasks were executed before
             // high priority tasks
@@ -307,11 +309,33 @@ TEST_F(ThreadPoolTest, priority) {
     }
     EXPECT_GE(thread_pool.QueueSize(), tasks * 2);
   }
+  // Now that tasks have been loaded to the thread pool, start the workers
+  thread_pool.StartWorkers();
   // wait for all tasks to finish
   pending_tasks.Wait();
   // EXPECT_EQ(thread_pool.QueueSize(), 0);
 }
 
-}  // namespace
+TEST_F(ThreadPoolTest, DynamicSizing) {
+  const size_t thread_count = 10;
+  ThreadPool thread_pool("test-pool", thread_count);
+  thread_pool.StartWorkers();
+  EXPECT_EQ(thread_pool.Size(), thread_count);
+
+  thread_pool.Resize(5, true);
+  EXPECT_EQ(thread_pool.Size(), 5);
+
+  thread_pool.JoinTerminatedWorkers();
+  EXPECT_EQ(thread_pool.pending_join_threads_.Size(), 0);
+
+  EXPECT_EQ(thread_pool.Size(), 5);
+  thread_pool.Resize(15, true);
+
+  EXPECT_EQ(thread_pool.Size(), 15);
+  thread_pool.JoinWorkers();
+
+  EXPECT_EQ(thread_pool.threads_.Size(), 0);
+  EXPECT_EQ(thread_pool.pending_join_threads_.Size(), 0);
+}
 
 }  // namespace vmsdk

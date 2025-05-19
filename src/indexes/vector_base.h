@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -56,7 +56,6 @@
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/allocator.h"
-#include "src/utils/intrusive_ref_count.h"
 #include "src/utils/string_interning.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "third_party/hnswlib/iostream.h"
@@ -64,8 +63,6 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
-
-inline constexpr uint32_t kHNSWBlockSize = 1024 * 10;
 
 std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
                                      float* magnitude = nullptr);
@@ -179,9 +176,14 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       : IndexBase(indexer_type),
         dimensions_(dimensions),
         attribute_identifier_(attribute_identifier),
-        attribute_data_type_(attribute_data_type),
+        attribute_data_type_(attribute_data_type)
+#ifndef ASAN_BUILD
+        ,
         vector_allocator_(CREATE_UNIQUE_PTR(
-            FixedSizeAllocator, dimensions * sizeof(float) + 1, true)) {}
+            FixedSizeAllocator, dimensions * sizeof(float) + 1, true))
+#endif  // !ASAN_BUILD
+  {
+  }
 
   bool IsValidSizeVector(absl::string_view record) {
     const auto data_type_size = GetDataTypeSize();
@@ -196,8 +198,8 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
                                      absl::string_view record) = 0;
 
   virtual absl::Status RemoveRecordImpl(uint64_t internal_id) = 0;
-  virtual absl::StatusOr<bool> ModifyRecordImpl(uint64_t internal_id,
-                                                absl::string_view record) = 0;
+  virtual absl::Status ModifyRecordImpl(uint64_t internal_id,
+                                        absl::string_view record) = 0;
   virtual int RespondWithInfoImpl(RedisModuleCtx* ctx) const = 0;
 
   virtual size_t GetDataTypeSize() const = 0;
@@ -219,8 +221,10 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   virtual absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecordImpl(uint64_t internal_id,
                                 absl::string_view query) const = 0;
-  virtual char* TrackVector(uint64_t internal_id,
-                            const InternedStringPtr& vector) = 0;
+  virtual void TrackVector(uint64_t internal_id,
+                           const InternedStringPtr& vector) = 0;
+  virtual bool IsVectorMatch(uint64_t internal_id,
+                             const InternedStringPtr& vector) = 0;
   virtual void UnTrackVector(uint64_t internal_id) = 0;
 
  private:
@@ -230,8 +234,9 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<std::optional<uint64_t>> UnTrackKey(
       const InternedStringPtr& key) ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
-  absl::Status UpdateMetadata(const InternedStringPtr& key, float magnitude,
-                              const InternedStringPtr& vector)
+  absl::StatusOr<bool> UpdateMetadata(const InternedStringPtr& key,
+                                      float magnitude,
+                                      const InternedStringPtr& vector)
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<uint64_t> GetInternalId(const InternedStringPtr& key) const
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
@@ -255,7 +260,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecord(const InternedStringPtr& key,
                             absl::string_view query) const;
-  UniqueFixedSizeAllocatorPtr vector_allocator_;
+  UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
 };
 
 class InlineVectorEvaluator : public query::Evaluator {

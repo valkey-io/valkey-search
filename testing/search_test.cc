@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -499,6 +499,9 @@ TEST_P(FetchFilteredKeysTest, ParseParams) {
   FilterParser parser(*index_schema, test_case.filter);
   params.filter_parse_results = std::move(parser.Parse().value());
   params.k = 100;
+  auto vectors = DeterministicallyGenerateVectors(1, kVectorDimensions, 10.0);
+  params.query =
+      std::string((char *)vectors[0].data(), vectors[0].size() * sizeof(float));
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   indexes::Numeric::EntriesRange entries_range;
   for (auto key_range : test_case.fetched_key_ranges) {

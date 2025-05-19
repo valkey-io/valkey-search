@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -81,6 +81,7 @@ struct CommandOptions {
 
 struct Options {
   std::string name;
+  int version;
   RedisModuleInfoFunc info{nullptr};
   std::list<CommandOptions> commands;
   using OnLoad = std::optional<absl::AnyInvocable<absl::Status(
@@ -109,6 +110,7 @@ int CreateCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   }
   return REDISMODULE_OK;
 }
+bool IsModuleLoaded(RedisModuleCtx *ctx, const std::string &name);
 }  // namespace vmsdk
 
 #endif  // VMSDK_SRC_MODULE_H_

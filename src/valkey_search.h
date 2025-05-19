@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -68,7 +68,14 @@ class ValkeySearch {
   vmsdk::ThreadPool *GetWriterThreadPool() const {
     return writer_thread_pool_.get();
   }
-  void Info(RedisModuleInfoCtx *ctx) const;
+  void Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const;
+
+  static long long BlockSizeGetConfig([[maybe_unused]] const char *config_name,
+                                      [[maybe_unused]] void *priv_data);
+  static int BlockSizeSetConfig([[maybe_unused]] const char *config_name,
+                                long long value,
+                                [[maybe_unused]] void *priv_data,
+                                [[maybe_unused]] RedisModuleString **err);
 
   IndexSchema::Stats::ResultCnt<uint64_t> AccumulateIndexSchemaResults(
       absl::AnyInvocable<const IndexSchema::Stats::ResultCnt<
@@ -86,6 +93,7 @@ class ValkeySearch {
   void AfterForkParent();
   static ValkeySearch &Instance();
   static void InitInstance(std::unique_ptr<ValkeySearch> instance);
+  uint32_t GetHNSWBlockSize() const;
 
   absl::Status OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
   void OnUnload(RedisModuleCtx *ctx);
@@ -127,7 +135,6 @@ class ValkeySearch {
   static void FreeIndexSchema(void *value);
   static bool IsChildProcess();
   void ProcessIndexSchemaBackfill(RedisModuleCtx *ctx, uint32_t batch_size);
-
   void ResumeWriterThreadPool(RedisModuleCtx *ctx, bool is_expired);
 
   uint64_t inc_id_{0};

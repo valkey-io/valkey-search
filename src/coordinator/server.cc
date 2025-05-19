@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -37,7 +37,6 @@
 
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
-#include "absl/time/time.h"
 #include "grpc/grpc.h"
 #include "grpcpp/completion_queue.h"
 #include "grpcpp/health_check_service_interface.h"
@@ -58,7 +57,6 @@
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"

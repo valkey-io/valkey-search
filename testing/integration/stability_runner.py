@@ -125,13 +125,14 @@ class StabilityRunner:
             })
         else:
             attributes.update({
-                "embedding": utils.HNSWVectorDefinition(
+                "embedding": utils.FlatVectorDefinition(
                     vector_dimensions=self.config.vector_dimensions
                 ),
             })
         utils.create_index(
             client=client,
             index_name=self.config.index_name,
+            store_data_type=utils.StoreDataType.HASH.name,
             attributes=attributes,
         )
 
@@ -155,7 +156,6 @@ class StabilityRunner:
                     self.config.ftcreate_interval_sec,
                     self.config.randomize_bg_job_intervals,
                     self.config.index_name,
-                    self.config.vector_dimensions,
                     attributes,
                     index_state,
                 )

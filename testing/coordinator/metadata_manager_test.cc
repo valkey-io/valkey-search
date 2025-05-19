@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -581,6 +581,8 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
   }
 
   std::string sender_id = "fake_sender";
+  // Pad the sender id to meet to expected node id length
+  sender_id += std::string(REDISMODULE_NODE_ID_LEN - sender_id.length(), 'a');
   std::string sender_ip = "127.0.0.1";
   int sender_port = 1234;
   int sender_coordinator_port = sender_port + 20294;

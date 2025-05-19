@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -54,7 +54,6 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
-#include "src/metrics.h"
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
 #include "src/vector_externalizer.h"

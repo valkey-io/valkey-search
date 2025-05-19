@@ -2,14 +2,14 @@
 
 Follow these steps to set up, build, and run the Valkey server with vector search capabilities. This guide will walk you through creating a vector index, inserting vectors, and issuing queries.
 
-## Step 1: Install Valkey and ValkeySearch
+## Step 1: Install Valkey and valkey-search
 
 1. Build Valkey from source by following the instructions [here](https://github.com/valkey-io/valkey?tab=readme-ov-file#building-valkey-using-makefile). Make sure to use Valkey version 7.2.6 or later as the previous versions have Valkey module API bugs.
-2. Build ValkeySearch module from source by following the instructions [here](https://github.com/valkey-io/valkey-search/tree/main?tab=readme-ov-file#build-instructions).
+2. Build valkey-search module from source by following the instructions [here](https://github.com/valkey-io/valkey-search/tree/main?tab=readme-ov-file#build-instructions).
 
 ## Step 2: Run the Valkey Server
 
-Once ValkeySearch is built, run the Valkey server with the ValkeySearch module loaded:
+Once valkey-search is built, run the Valkey server with the valkey-search module loaded:
 
 ```bash
 ./valkey-server "--loadmodule libsearch.so  --reader-threads 64 --writer-threads 64"

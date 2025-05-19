@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -591,8 +591,8 @@ static const RedisModuleEvent
     RedisModuleEvent_LoadingProgress = {REDISMODULE_EVENT_LOADING_PROGRESS, 1},
     RedisModuleEvent_SwapDB = {REDISMODULE_EVENT_SWAPDB, 1},
     /* Deprecated since Redis 7.0, not used anymore. */
-    __attribute__((deprecated))
-    RedisModuleEvent_ReplBackup = {REDISMODULE_EVENT_REPL_BACKUP, 1},
+    __attribute__((deprecated)) RedisModuleEvent_ReplBackup =
+        {REDISMODULE_EVENT_REPL_BACKUP, 1},
     RedisModuleEvent_ReplAsyncLoad = {REDISMODULE_EVENT_REPL_ASYNC_LOAD, 1},
     RedisModuleEvent_ForkChild = {REDISMODULE_EVENT_FORK_CHILD, 1},
     RedisModuleEvent_EventLoop = {REDISMODULE_EVENT_EVENTLOOP, 1},

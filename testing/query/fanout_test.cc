@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,6 @@
 #include "src/query/fanout.h"
 
 #include <algorithm>
-#include <cstddef>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -39,7 +38,6 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
-#include "absl/log/log.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/substitute.h"
@@ -389,14 +387,17 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 TEST_P(FanoutTest, TestFanout) {
-  auto params = GetParam();
+  auto &params = GetParam();
+
   coordinator::SearchIndexPartitionRequest search_parameters;
   ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
       params.parameters_pbtxt, &search_parameters));
   std::vector<fanout::FanoutSearchTarget> targets;
+  targets.reserve(params.targets.size());
   for (const auto &target : params.targets) {
     targets.push_back(target.target);
   }
+
   auto schema = CreateVectorHNSWSchema("test_index", &fake_ctx_);
   VMSDK_EXPECT_OK(schema);
 
@@ -415,6 +416,7 @@ TEST_P(FanoutTest, TestFanout) {
       std::make_unique<coordinator::MockClientPool>();
   absl::flat_hash_map<std::string, std::shared_ptr<coordinator::MockClient>>
       mock_coordinator_clients;
+
   for (const auto &target : params.targets) {
     auto mock_client = std::make_shared<coordinator::MockClient>();
     mock_coordinator_clients[target.target.address] = mock_client;
@@ -457,6 +459,7 @@ TEST_P(FanoutTest, TestFanout) {
               }));
     }
   }
+
   auto callback = [params, search_parameters](auto &neighbors,
                                               auto parameters) {
     EXPECT_EQ(neighbors.ok(), params.expected_neighbors.ok());
@@ -480,7 +483,6 @@ TEST_P(FanoutTest, TestFanout) {
       std::move(callback)));
   ValkeySearch::Instance().GetReaderThreadPool()->JoinWorkers();
 }
-
 struct GetTargetsTestNode {
   std::string node_id;
   std::string ip;
@@ -891,6 +893,7 @@ TEST_P(GetTargetsTest, TestGetTargets) {
   // lists.
   std::vector<testing::Matcher<const fanout::FanoutSearchTarget &>>
       target_matchers;
+  target_matchers.reserve(params.possible_expected_targets.size());
   for (const auto &possible_target_list : params.possible_expected_targets) {
     target_matchers.push_back(testing::AnyOfArray(possible_target_list));
   }

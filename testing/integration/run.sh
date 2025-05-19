@@ -4,7 +4,8 @@ ROOT_DIR=$(readlink -f $(dirname $0))
 BUILD_CONFIG=release
 TEST=all
 CLEAN="no"
-VALKEY_VERSION="7.2.7"
+VALKEY_VERSION="8.1.1"
+VALKEY_JSON_VERSION="1.0.0"
 MODULE_ROOT=${ROOT_DIR}/../..
 DUMP_TEST_ERRORS_STDOUT="no"
 
@@ -40,7 +41,7 @@ while [[ $# -gt 0 ]]; do
     --test)
         TEST="$2"
         shift 2
-        ;;      
+        ;;
    --debug)
         shift || true
         BUILD_CONFIG="debug"
@@ -83,8 +84,8 @@ function is_cmake_required() {
 }
 
 
-function is_server_build_required() {
-    if [ ! -f ${VALKEY_SERVER_PATH} ]; then
+function is_build_required() {
+    if [ ! -f ${1} ]; then
         echo "yes"
         return
     fi
@@ -110,15 +111,34 @@ function configure() {
     fi
 
     printf "Checking if valkey-server build is required..."
-    BUILD_SERVER=$(is_server_build_required)
-    printf "${GREEN}${BUILD_SERVER}${RESET}\n"
+    BUILD_SERVER=$(is_build_required ${VALKEY_SERVER_PATH})
+    printf "${BUILD_SERVER}\n"
      if [[ "${BUILD_SERVER}" == "yes" ]]; then
         printf "${BOLD_PINK}Building valkey-server...${RESET}\n"
-        
+
         rm -rf ${VALKEY_SERVER_DIR}
         git clone --branch ${VALKEY_VERSION} --single-branch https://github.com/valkey-io/valkey.git ${VALKEY_SERVER_DIR}
         cd ${VALKEY_SERVER_DIR}
         make -j$(nproc)
+        cd ${ROOT_DIR}
+    fi
+
+    printf "Checking if valkey-json build is required..."
+    BUILD_JSON=$(is_build_required ${VALKEY_JSON_PATH})
+    printf "${BUILD_JSON}\n"
+     if [[ "${BUILD_JSON}" == "yes" ]]; then
+        printf "${BOLD_PINK}Building valkey-json...${RESET}\n"
+
+        rm -rf ${VALKEY_JSON_DIR}
+        git clone --branch ${VALKEY_JSON_VERSION} --single-branch https://github.com/valkey-io/valkey-json.git ${VALKEY_JSON_DIR}
+        cd ${VALKEY_JSON_DIR}
+        set +e
+        SERVER_VERSION=$VALKEY_VERSION ./build.sh
+        set -e
+        #mkdir build
+        #cd build
+        #cmake .. -DVALKEY_VERSION=${VALKEY_VERSION}
+        #make -j$(nproc)
         cd ${ROOT_DIR}
     fi
 
@@ -141,6 +161,9 @@ function build() {
 BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
 VALKEY_SERVER_DIR=${BUILD_DIR}/valkey-${VALKEY_VERSION}
 VALKEY_SERVER_PATH=${VALKEY_SERVER_DIR}/src/valkey-server
+VALKEY_JSON_DIR=${BUILD_DIR}/valkey-json-${VALKEY_JSON_VERSION}
+VALKEY_JSON_PATH=${VALKEY_JSON_DIR}/build/src/libjson.so
+echo " VALKEY_SERVER_DIR is set to ${VALKEY_SERVER_DIR}"
 
 if [[ "${CLEAN}" == "yes" ]]; then
     rm -rf ${BUILD_DIR}
@@ -166,6 +189,7 @@ export VALKEY_SERVER_PATH="$VALKEY_SERVER_PATH"
 export VALKEY_CLI_PATH=${VALKEY_SERVER_DIR}/src/valkey-cli
 export MEMTIER_PATH=memtier_benchmark
 export VALKEY_SEARCH_PATH=${MODULE_ROOT}/.build-${BUILD_CONFIG}/libsearch.so
+export VALKEY_JSON_PATH="${VALKEY_JSON_PATH}"
 export TEST_UNDECLARED_OUTPUTS_DIR="$BUILD_DIR/output"
 rm -rf $TEST_UNDECLARED_OUTPUTS_DIR
 mkdir -p $TEST_UNDECLARED_OUTPUTS_DIR

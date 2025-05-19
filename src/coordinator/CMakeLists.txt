@@ -10,10 +10,11 @@ protobuf_generate(
   .grpc.pb.h
   .grpc.pb.cc
   PLUGIN
-  "protoc-gen-grpc=${grpc_cpp_plugin_location}")
+  "protoc-gen-grpc=${GRPC_CPP_PLUGIN_PATH}")
 
 # Create the proto code (no grpc)
-create_proto_library("src/coordinator/coordinator.proto" "coordinator_cc_proto")
+valkey_search_create_proto_library("src/coordinator/coordinator.proto"
+                                   "coordinator_cc_proto")
 target_link_libraries(coordinator_grpc_proto coordinator_cc_proto)
 
 set(SRCS_SERVER ${CMAKE_CURRENT_LIST_DIR}/server.cc

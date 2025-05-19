@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -55,7 +55,6 @@
 #include "src/rdb_serialization.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
-#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -321,12 +320,13 @@ void MetadataManager::HandleBroadcastedMetadata(
   if (header->top_level_version() < top_level_version) {
     return;
   }
+  std::string sender_id_str(sender_id, REDISMODULE_NODE_ID_LEN);
   if (header->top_level_version() == top_level_version) {
     if (header->top_level_fingerprint() == top_level_fingerprint) {
       return;
     }
     VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
-        << "Got conflicting contents from " << sender_id << " for version "
+        << "Got conflicting contents from " << sender_id_str << " for version "
         << top_level_version
         << ": have "
            "fingerprint "
@@ -336,13 +336,12 @@ void MetadataManager::HandleBroadcastedMetadata(
            "GlobalMetadata.";
   } else {
     VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 1)
-        << "Got newer version from " << sender_id << ": have "
+        << "Got newer version from " << sender_id_str << ": have "
         << top_level_version << ", got " << header->top_level_version()
         << ". Retrieving full GlobalMetadata.";
   }
   // sender_id isn't NULL terminated, so we copy to a std::string to make sure
   // it is properly NULL terminated
-  std::string sender_id_str(sender_id, REDISMODULE_NODE_ID_LEN);
   char node_ip[REDISMODULE_NODE_ID_LEN];
   int node_port;
   if (RedisModule_GetClusterNodeInfo(ctx, sender_id_str.c_str(), node_ip,

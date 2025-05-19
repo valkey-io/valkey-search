@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -81,6 +81,7 @@ int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size) PMES;
 void* __wrap_valloc(size_t size) noexcept;
 }  // extern "C"
 
+#ifndef ASAN_BUILD
 // NOLINTNEXTLINE
 #define malloc(...) __wrap_malloc(__VA_ARGS__)
 // NOLINTNEXTLINE
@@ -121,4 +122,5 @@ void operator delete[](void* p, std::align_val_t alignment,
                        const std::nothrow_t&) noexcept;
 void operator delete[](void* p, size_t size,
                        std::align_val_t alignment) noexcept;
+#endif  // !ASAN_BUILD
 #endif  // VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_

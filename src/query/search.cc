@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -229,7 +229,7 @@ CalcBestMatchingPrefiltereddKeys(
 
 std::string StringFormatVector(std::vector<char> vector) {
   if (vector.size() % sizeof(float) != 0) {
-    return std::string(vector.data(), vector.size());
+    return {vector.data(), vector.size()};
   }
 
   std::vector<std::string> float_strings;

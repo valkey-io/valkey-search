@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -41,6 +41,7 @@ absl::Status FTCreateCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
                          int argc) {
   VMSDK_ASSIGN_OR_RETURN(auto index_schema_proto,
                          ParseFTCreateArgs(ctx, argv + 1, argc - 1));
+  index_schema_proto.set_db_num(RedisModule_GetSelectedDb(ctx));
   VMSDK_RETURN_IF_ERROR(
       AclPrefixCheck(ctx, kCommandCategories.at(kCreate), index_schema_proto));
   VMSDK_RETURN_IF_ERROR(

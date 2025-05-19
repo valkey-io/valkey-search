@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -47,7 +47,6 @@
 #include "src/rdb_serialization.h"
 #include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
-#include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
@@ -124,7 +123,7 @@ class Tag : public IndexBase {
           size_(size),
           entries_(entries),
           negate_(negate),
-          untracked_keys_(untracked_keys) {};
+          untracked_keys_(untracked_keys){};
     size_t Size() const override;
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 

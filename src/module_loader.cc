@@ -29,6 +29,7 @@
 
 #include <memory>
 
+#include "absl/strings/str_join.h"
 #include "src/commands/commands.h"
 #include "src/keyspace_event_manager.h"
 #include "src/valkey_search.h"
@@ -44,36 +45,67 @@
 
 namespace {
 
+// Format the input permission to prefix ACL format by:
+// 1. Split the input string into words using space as a delimiter,
+//    skipping any empty words that might result from multiple spaces.
+// 2. Iterate through each 'word' (represented as an absl::string_view):
+//    a. If the 'word' is exactly "readonly", add "read" to the list of
+//    processed words. b. Otherwise, add "@" followed by the 'word' to the list
+//    of processed words.
+// 3. Join all collected processed words back into a single string, separated by
+// spaces.
+inline std::string ACLPermissionFormater(
+    const absl::flat_hash_set<absl::string_view> &cmd_permissions) {
+  std::vector<absl::string_view> permissions;
+  for (auto permission : cmd_permissions) {
+    CHECK(permission[0] == '@');
+    permissions.push_back(permission.substr(1));
+  }
+  return absl::StrJoin(permissions, " ");
+}
+
 vmsdk::module::Options options = {
     .name = "search",
+    .acl_categories =
+        {
+            "search",
+        },
     .version = MODULE_VERSION,
     .info = valkey_search::ModuleInfo,
     .commands =
         {
             {
                 .cmd_name = valkey_search::kCreateCommand,
-                .permissions = "write deny-oom",
+                .permissions =
+                    ACLPermissionFormater(valkey_search::kCreateCmdPermissions),
+                .deny_oom = true,
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTCreateCmd>,
             },
             {
                 .cmd_name = valkey_search::kDropIndexCommand,
-                .permissions = "write",
+                .permissions = ACLPermissionFormater(
+                    valkey_search::kDropIndexCmdPermissions),
                 .cmd_func =
                     &vmsdk::CreateCommand<valkey_search::FTDropIndexCmd>,
             },
             {
                 .cmd_name = valkey_search::kInfoCommand,
-                .permissions = "readonly",
+                .permissions =
+                    ACLPermissionFormater(valkey_search::kInfoCmdPermissions),
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTInfoCmd>,
             },
             {
                 .cmd_name = valkey_search::kListCommand,
-                .permissions = "readonly @search @read @fast",
+                .permissions =
+                    ACLPermissionFormater(valkey_search::kLISTCmdPermissions),
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTListCmd>,
             },
             {
                 .cmd_name = valkey_search::kSearchCommand,
-                .permissions = "readonly",
+                .permissions =
+                    ACLPermissionFormater(valkey_search::kSearchCmdPermissions),
+                .deny_oom = true,
+
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTSearchCmd>,
             },
         }  // namespace

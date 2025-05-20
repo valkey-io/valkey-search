@@ -1055,6 +1055,10 @@ REDISMODULE_API int (*RedisModule_CreateCommand)(RedisModuleCtx *ctx,
                                                  const char *strflags,
                                                  int firstkey, int lastkey,
                                                  int keystep) REDISMODULE_ATTR;
+REDISMODULE_API int (*RedisModule_AddACLCategory)(
+    RedisModuleCtx *ctx, const char *name) REDISMODULE_ATTR;
+REDISMODULE_API int (*RedisModule_SetCommandACLCategories)(
+    RedisModuleCommand *command, const char *aclflags) REDISMODULE_ATTR;
 REDISMODULE_API RedisModuleCommand *(*RedisModule_GetCommand)(
     RedisModuleCtx *ctx, const char *name)REDISMODULE_ATTR;
 REDISMODULE_API int (*RedisModule_CreateSubcommand)(
@@ -2068,6 +2072,10 @@ static int RedisModule_Init(RedisModuleCtx *ctx, const char *name, int ver,
   REDISMODULE_GET_API(DictCompare);
   REDISMODULE_GET_API(DictCompareC);
   REDISMODULE_GET_API(RegisterInfoFunc);
+  REDISMODULE_GET_API(AddACLCategory);
+  REDISMODULE_GET_API(SetCommandACLCategories);
+
+  REDISMODULE_GET_API(SetCommandACLCategories);
   REDISMODULE_GET_API(RegisterAuthCallback);
   REDISMODULE_GET_API(InfoAddSection);
   REDISMODULE_GET_API(InfoBeginDictField);

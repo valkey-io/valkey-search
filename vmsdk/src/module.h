@@ -72,6 +72,7 @@ namespace module {
 struct CommandOptions {
   absl::string_view cmd_name;
   std::string permissions;
+  bool deny_oom{false};
   RedisModuleCmdFunc cmd_func{nullptr};
   // By default - assume no keys.
   int first_key{0};
@@ -81,6 +82,7 @@ struct CommandOptions {
 
 struct Options {
   std::string name;
+  std::list<std::string> acl_categories;
   int version;
   RedisModuleInfoFunc info{nullptr};
   std::list<CommandOptions> commands;

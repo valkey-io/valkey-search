@@ -98,7 +98,6 @@ vmsdk::module::Options options = {
                 .permissions = ACLPermissionFormatter(
                     valkey_search::kSearchCmdPermissions),
                 .deny_oom = true,
-
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTSearchCmd>,
             },
         }  // namespace

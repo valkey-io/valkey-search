@@ -45,15 +45,8 @@
 
 namespace {
 
-// Format the input permission to prefix ACL format by:
-// 1. Split the input string into words using space as a delimiter,
-//    skipping any empty words that might result from multiple spaces.
-// 2. Iterate through each 'word' (represented as an absl::string_view):
-//    a. If the 'word' is exactly "readonly", add "read" to the list of
-//    processed words. b. Otherwise, add "@" followed by the 'word' to the list
-//    of processed words.
-// 3. Join all collected processed words back into a single string, separated by
-// spaces.
+// Strip the '@' prefix from command categories (e.g., @read)
+// to format them for Valkey Search's prefix ACL rules (e.g., read).
 inline std::string ACLPermissionFormatter(
     const absl::flat_hash_set<absl::string_view> &cmd_permissions) {
   std::vector<absl::string_view> permissions;

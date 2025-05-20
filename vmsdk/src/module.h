@@ -69,10 +69,12 @@
 namespace vmsdk {
 namespace module {
 
+constexpr absl::string_view kDenyOOMFlag{"deny-oom"};
+
 struct CommandOptions {
   absl::string_view cmd_name;
-  std::string permissions;
-  bool deny_oom{false};
+  std::list<absl::string_view> permissions;
+  std::list<absl::string_view> flags;
   RedisModuleCmdFunc cmd_func{nullptr};
   // By default - assume no keys.
   int first_key{0};
@@ -82,7 +84,7 @@ struct CommandOptions {
 
 struct Options {
   std::string name;
-  std::list<std::string> acl_categories;
+  std::list<absl::string_view> acl_categories;
   int version;
   RedisModuleInfoFunc info{nullptr};
   std::list<CommandOptions> commands;

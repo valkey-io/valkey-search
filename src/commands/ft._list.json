@@ -1,7 +1,8 @@
 {
   "FT._LIST": {
     "acl_categories": [
-      "FAST",
+      "ADMIN",
+      "SLOW",
       "READ",
       "SEARCH"
     ],

@@ -35,6 +35,7 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -54,12 +55,12 @@ absl::Status RegisterInfo(RedisModuleCtx *ctx, RedisModuleInfoFunc info) {
   return absl::OkStatus();
 }
 
-absl::Status AddACLCategories(RedisModuleCtx *ctx,
-                              const std::list<std::string> &acl_categories) {
+absl::Status AddACLCategories(
+    RedisModuleCtx *ctx, const std::list<absl::string_view> &acl_categories) {
   for (auto &category : acl_categories) {
-    if (RedisModule_AddACLCategory(ctx, category.c_str()) == REDISMODULE_ERR) {
+    if (RedisModule_AddACLCategory(ctx, category.data()) == REDISMODULE_ERR) {
       return absl::InternalError(absl::StrCat(
-          "Failed to create a command ACL category: ", category.c_str()));
+          "Failed to create a command ACL category: ", category.data()));
     }
   }
   return absl::OkStatus();
@@ -68,9 +69,9 @@ absl::Status AddACLCategories(RedisModuleCtx *ctx,
 absl::Status RegisterCommands(RedisModuleCtx *ctx,
                               const std::list<CommandOptions> &commands) {
   for (auto &command : commands) {
-    const char *permissions = command.deny_oom ? "deny-oom" : nullptr;
+    auto flags = absl::StrJoin(command.flags, " ");
     if (RedisModule_CreateCommand(ctx, command.cmd_name.data(),
-                                  command.cmd_func, permissions,
+                                  command.cmd_func, flags.c_str(),
                                   command.first_key, command.last_key,
                                   command.key_step) == REDISMODULE_ERR) {
       return absl::InternalError(
@@ -78,11 +79,12 @@ absl::Status RegisterCommands(RedisModuleCtx *ctx,
     }
     RedisModuleCommand *cmd =
         RedisModule_GetCommand(ctx, command.cmd_name.data());
-    if (RedisModule_SetCommandACLCategories(cmd, command.permissions.data()) ==
+    auto permissions = absl::StrJoin(command.permissions, " ");
+    if (RedisModule_SetCommandACLCategories(cmd, permissions.c_str()) ==
         REDISMODULE_ERR) {
-      return absl::InternalError(absl::StrCat(
-          "Failed to set ACL categories `", command.permissions.data(),
-          "` for the command: ", command.cmd_name.data()));
+      return absl::InternalError(
+          absl::StrCat("Failed to set ACL categories `", permissions,
+                       "` for the command: ", command.cmd_name.data()));
     }
   }
   return absl::OkStatus();

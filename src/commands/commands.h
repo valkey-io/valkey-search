@@ -66,7 +66,7 @@ const absl::flat_hash_set<absl::string_view> kSearchCmdPermissions{
     kSearchCategory, kReadCategory, kSlowCategory};
 const absl::flat_hash_set<absl::string_view> kInfoCmdPermissions{
     kSearchCategory, kReadCategory, kFastCategory};
-const absl::flat_hash_set<absl::string_view> kLISTCmdPermissions{
+const absl::flat_hash_set<absl::string_view> kListCmdPermissions{
     kSearchCategory, kReadCategory, kSlowCategory, kAdminCategory};
 
 inline absl::flat_hash_set<absl::string_view> PrefixACLPermissions(

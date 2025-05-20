@@ -2074,7 +2074,6 @@ static int RedisModule_Init(RedisModuleCtx *ctx, const char *name, int ver,
   REDISMODULE_GET_API(RegisterInfoFunc);
   REDISMODULE_GET_API(AddACLCategory);
   REDISMODULE_GET_API(SetCommandACLCategories);
-
   REDISMODULE_GET_API(SetCommandACLCategories);
   REDISMODULE_GET_API(RegisterAuthCallback);
   REDISMODULE_GET_API(InfoAddSection);

@@ -60,7 +60,69 @@ TEST_F(ConfigTest, registration) {
               RegisterBoolConfig(&fake_ctx, StrEq("boolean"), Eq(1), _, _, _, _,
                                  Eq(&boolean)))
       .Times(testing::AtLeast(1));
-  vmsdk::config::ModuleConfigManager::Instance().Init(&fake_ctx).IgnoreError();
+  vmsdk::config::ModuleConfigManager::Instance()
+      .RegisterAll(&fake_ctx)
+      .IgnoreError();
+}
+
+TEST(Builder, WithModifyCallback) {
+  size_t num_modify_calls = 0;
+  auto num_modify_cb = [&num_modify_calls]([[maybe_unused]] int64_t new_value) {
+    num_modify_calls++;
+  };
+  auto number_config =
+      config::Builder<config::Number, long long>("number", 42, 0, 1024)
+          .WithModifyCallback(num_modify_cb)
+          .Build();
+
+  EXPECT_EQ(42, number_config->GetValue());
+  number_config->SetValue(41);
+  EXPECT_EQ(41, number_config->GetValue());
+  EXPECT_EQ(1, num_modify_calls);
+}
+
+TEST(Builder, WithModifyAndValidationCallbackAndFlags) {
+  size_t num_modify_calls = 0;
+  size_t num_valid_calls = 0;
+  auto num_modify_cb =
+      [&num_modify_calls]([[maybe_unused]] long long new_value) {
+        num_modify_calls++;
+      };
+  auto validation_cb =
+      [&num_valid_calls]([[maybe_unused]] long long new_value) -> bool {
+    num_valid_calls++;
+    return true;
+  };
+  auto number_config =
+      config::Builder<config::Number, long long>("number", 42, 0, 1024)
+          .WithModifyCallback(num_modify_cb)
+          .WithValidationCallback(validation_cb)
+          .WithFlags(config::Flags::kDefault)
+          .Build();
+
+  EXPECT_EQ(42, number_config->GetValue());
+  number_config->SetValue(41);
+
+  EXPECT_EQ(41, number_config->GetValue());
+
+  // Make sure that both callbacks were called
+  EXPECT_EQ(1, num_modify_calls);
+  EXPECT_EQ(1, num_valid_calls);
+}
+
+TEST(Config, VetoChanges) {
+  auto validation_cb = []([[maybe_unused]] long long new_value) -> bool {
+    return false;
+  };
+  auto number_config =
+      config::Builder<config::Number, long long>("number", 42, 0, 1024)
+          .WithValidationCallback(validation_cb)
+          .Build();
+
+  EXPECT_EQ(42, number_config->GetValue());
+  number_config->SetValue(41);
+  // Change was vetoed, so it should still be 41
+  EXPECT_EQ(42, number_config->GetValue());
 }
 
 }  // namespace

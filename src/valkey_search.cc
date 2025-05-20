@@ -99,38 +99,52 @@ bool ValidateHNSWBlockSize(long long new_value, RedisModuleString **err) {
 }
 
 /// Resize `pool` to match its new value
-void UpdateThreadPoolCount(vmsdk::config::EntryBase *entry,
-                           vmsdk::ThreadPool *pool) {
-  if (!pool || !entry) {
+void UpdateThreadPoolCount(vmsdk::ThreadPool *pool, long long new_value) {
+  if (!pool) {
     return;
   }
-  auto number = dynamic_cast<vmsdk::config::Number *>(entry);
-  pool->Resize(number->GetValue());
+  pool->Resize(new_value);
 }
 }  // namespace
 
 // Configuration entries
+namespace config = vmsdk::config;
 
 // Controls the HNSW resize increments
-static vmsdk::config::Number hnsw_block_size{kHNSWBlockSizeConfig,
-                                             kHNSWDefaultBlockSize,
-                                             kHNSWDefaultBlockSize, UINT_MAX};
+static auto hnsw_block_size = config::Builder<config::Number, long long>(
+                                  kHNSWBlockSizeConfig,   // name
+                                  kHNSWDefaultBlockSize,  // default size
+                                  kHNSWDefaultBlockSize,  // min size
+                                  UINT_MAX)               // max size
+                                  .Build();
 
 // Controls the number of reader threads
-static vmsdk::config::Number reader_threads_count{
-    kReaderThreadsConfig, kDefaultThreadsCount, 1, kMaxThreadsCount,
-    [](vmsdk::config::EntryBase *entry) {
-      UpdateThreadPoolCount(entry,
-                            ValkeySearch::Instance().GetReaderThreadPool());
-    }};
+static auto reader_threads_count =
+    config::Builder<config::Number, long long>(
+        kReaderThreadsConfig,  // name
+        kDefaultThreadsCount,  // default size
+        1,                     // min size
+        kMaxThreadsCount)      // max size
+        .WithModifyCallback(   // set an "On-Modify" callback
+            [](long long new_value) {
+              UpdateThreadPoolCount(
+                  ValkeySearch::Instance().GetReaderThreadPool(), new_value);
+            })
+        .Build();
 
 // Controls the number of writer threads
-static vmsdk::config::Number writer_threads_count{
-    kWriterThreadsConfig, kDefaultThreadsCount, 1, kMaxThreadsCount,
-    [](vmsdk::config::EntryBase *entry) {
-      UpdateThreadPoolCount(entry,
-                            ValkeySearch::Instance().GetWriterThreadPool());
-    }};
+static auto writer_threads_count =
+    config::Builder<config::Number, long long>(
+        kWriterThreadsConfig,  // name
+        kDefaultThreadsCount,  // default size
+        1,                     // min size
+        kMaxThreadsCount)      // max size
+        .WithModifyCallback(   // set an "On-Modify" callback
+            [](long long new_value) {
+              UpdateThreadPoolCount(
+                  ValkeySearch::Instance().GetWriterThreadPool(), new_value);
+            })
+        .Build();
 
 namespace options {
 
@@ -198,11 +212,11 @@ void ValkeySearch::InitInstance(std::unique_ptr<ValkeySearch> instance) {
 }
 
 uint32_t ValkeySearch::GetHNSWBlockSize() const {
-  return hnsw_block_size.GetValue();
+  return hnsw_block_size->GetValue();
 }
 
 void ValkeySearch::SetHNSWBlockSize(uint32_t block_size) {
-  hnsw_block_size.SetValue(block_size);
+  hnsw_block_size->SetValue(block_size);
 }
 
 static std::string ConvertToMB(double bytes_value) {
@@ -564,7 +578,7 @@ absl::Status ValkeySearch::LoadOptions(RedisModuleCtx *ctx,
           absl::StrFormat("Could not set %s. Invalid value: %u",
                           kHNSWBlockSizeConfig, options.hnsw_block_size));
     }
-    hnsw_block_size.SetValue(options.hnsw_block_size);
+    hnsw_block_size->SetValue(options.hnsw_block_size);
   }
 
   if (options.log_level) {
@@ -627,7 +641,7 @@ absl::Status ValkeySearch::OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv,
 
   // Register all global configuration variables
   VMSDK_RETURN_IF_ERROR(
-      vmsdk::config::ModuleConfigManager::Instance().Init(ctx));
+      vmsdk::config::ModuleConfigManager::Instance().RegisterAll(ctx));
 
   // Load configurations to initialize registered configs
   if (RedisModule_LoadConfigs(ctx) != REDISMODULE_OK) {

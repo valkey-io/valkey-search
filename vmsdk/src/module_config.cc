@@ -31,118 +31,95 @@
 #include <absl/log/check.h>
 #include <absl/strings/str_cat.h>
 
-#include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 
 namespace vmsdk {
 namespace config {
 
-EntryBase::EntryBase(std::string_view name, OnModifyCB modify_callback)
-    : name_(name), modify_callback_(std::move(modify_callback)) {
-  ModuleConfigManager::Instance().Register(this);
-}
-
-Number::Number(std::string_view name, int64_t default_value, int64_t min_value,
-               int64_t max_value, OnModifyCB modify_callback)
-    : EntryBase(name, std::move(modify_callback)),
-      default_value_(default_value),
-      min_value_(min_value),
-      max_value_(max_value),
-      current_value_(default_value) {}
-
-absl::Status Number::Register(RedisModuleCtx *ctx) {
-  if (RedisModule_RegisterNumericConfig(
-          ctx,
-          name_.data(),                // Name
-          default_value_,              // Default value
-          REDISMODULE_CONFIG_DEFAULT,  // Flags (mutable, can be changed via
-                                       // CONFIG SET)
-          min_value_,                  // Minimum value
-          max_value_,                  // Maximum value
-          Number::OnGetNumericConfig,  // Get callback
-          Number::OnSetNumericConfig,  // Set callback
-          nullptr,                     // Apply callback (optional)
-          this                         // privdata
-          ) != REDISMODULE_OK) {
-    return absl::InternalError(absl::StrCat(
-        "Failed to register numeric configuration entry: ", name_));
-  }
-  return absl::OkStatus();
-}
-
-long long Number::OnGetNumericConfig(const char *config_name, void *priv_data) {
-  auto entry = reinterpret_cast<Number *>(priv_data);
-  CHECK(entry) << "null private data for Number configuration entry.";
-  return entry->GetValue();
-}
-
-int Number::OnSetNumericConfig(const char *config_name, long long value,
-                               void *priv_data, RedisModuleString **err) {
-  auto entry = reinterpret_cast<Number *>(priv_data);
-  CHECK(entry) << "null private data for configuration Number entry.";
-  entry->SetValue(value);
-  entry->NotifyChanged();
-  VMSDK_LOG(NOTICE, nullptr) << "configuration item: " << entry->name_
-                             << " is set to " << entry->GetValue();
-  return REDISMODULE_OK;
-}
-
-Boolean::Boolean(std::string_view name, bool default_value,
-                 OnModifyCB modify_callback)
-    : EntryBase(name, std::move(modify_callback)),
-      default_value_(default_value),
-      current_value_(default_value) {}
-
-absl::Status Boolean::Register(RedisModuleCtx *ctx) {
-  if (RedisModule_RegisterBoolConfig(
-          ctx,
-          name_.data(),                // Name
-          default_value_,              // Default value
-          REDISMODULE_CONFIG_DEFAULT,  // Flags (mutable, can be changed via
-                                       // CONFIG SET)
-          Boolean::OnGetBoolConfig,    // Get callback
-          Boolean::OnSetBoolConfig,    // Set callback
-          nullptr,                     // Apply callback (optional)
-          this                         // privdata
-          ) != REDISMODULE_OK) {
-    return absl::InternalError(absl::StrCat(
-        "Failed to register boolean configuration entry: ", name_));
-  }
-  return absl::OkStatus();
-}
-
-int Boolean::OnGetBoolConfig(const char *config_name, void *priv_data) {
-  auto entry = reinterpret_cast<Boolean *>(priv_data);
+namespace {
+template <typename T>
+static T OnGetConfig(const char *config_name, void *priv_data) {
+  auto entry = static_cast<ConfigBase<T> *>(priv_data);
   CHECK(entry) << "null private data for Boolean configuration entry.";
   return static_cast<int>(entry->GetValue());
 }
 
-int Boolean::OnSetBoolConfig(const char *config_name, int value,
-                             void *priv_data, RedisModuleString **err) {
-  auto entry = reinterpret_cast<Boolean *>(priv_data);
-  CHECK(entry) << "null private data for configuration Boolean entry.";
-  entry->SetValue(static_cast<bool>(value));
+template <typename T>
+static int OnSetConfig(const char *config_name, T value, void *priv_data,
+                       RedisModuleString **err) {
+  auto entry = static_cast<ConfigBase<T> *>(priv_data);
+  CHECK(entry) << "null private data for configuration Number entry.";
+  if (!entry->Validate(value)) {
+    return REDISMODULE_ERR;
+  }
+  entry->SetValue(value);
   entry->NotifyChanged();
-  VMSDK_LOG(NOTICE, nullptr) << "configuration item: " << entry->name_
-                             << " is set to " << entry->GetValue();
   return REDISMODULE_OK;
 }
+}  // namespace
 
 ModuleConfigManager &ModuleConfigManager::Instance() {
   static ModuleConfigManager manager;
   return manager;
 }
 
-void ModuleConfigManager::Register(EntryBase *config_item) {
+void ModuleConfigManager::RegisterConfig(Registerable *config_item) {
   entries_.push_back(config_item);
 }
 
-absl::Status ModuleConfigManager::Init(RedisModuleCtx *ctx) {
+absl::Status ModuleConfigManager::RegisterAll(RedisModuleCtx *ctx) {
   for (auto entry : entries_) {
     VMSDK_RETURN_IF_ERROR(entry->Register(ctx));
   }
   // once registered, clear the list
   entries_.clear();
+  return absl::OkStatus();
+}
+
+Number::Number(std::string_view name, int64_t default_value, int64_t min_value,
+               int64_t max_value)
+    : ConfigBase(name),
+      default_value_(default_value),
+      min_value_(min_value),
+      max_value_(max_value),
+      current_value_(default_value) {}
+
+absl::Status Number::Register(RedisModuleCtx *ctx) {
+  if (RedisModule_RegisterNumericConfig(ctx,
+                                        name_.data(),    // Name
+                                        default_value_,  // Default value
+                                        flags_,          // Flags
+                                        min_value_,      // Minimum value
+                                        max_value_,      // Maximum value
+                                        OnGetConfig<long long>,  // Get callback
+                                        OnSetConfig<long long>,  // Set callback
+                                        nullptr,  // Apply callback (optional)
+                                        this      // privdata
+                                        ) != REDISMODULE_OK) {
+    return absl::InternalError(absl::StrCat(
+        "Failed to register numeric configuration entry: ", name_));
+  }
+  return absl::OkStatus();
+}
+
+Boolean::Boolean(std::string_view name, bool default_value)
+    : ConfigBase(name),
+      default_value_(default_value),
+      current_value_(default_value) {}
+
+absl::Status Boolean::Register(RedisModuleCtx *ctx) {
+  if (RedisModule_RegisterBoolConfig(ctx,
+                                     name_.data(),      // Name
+                                     default_value_,    // Default value
+                                     flags_,            // Flags
+                                     OnGetConfig<int>,  // Get callback
+                                     OnSetConfig<int>,  // Set callback
+                                     nullptr,  // Apply callback (optional)
+                                     this      // privdata
+                                     ) != REDISMODULE_OK) {
+    return absl::InternalError(absl::StrCat(
+        "Failed to register boolean configuration entry: ", name_));
+  }
   return absl::OkStatus();
 }
 

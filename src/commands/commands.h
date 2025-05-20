@@ -72,10 +72,7 @@ const absl::flat_hash_set<absl::string_view> kLISTCmdPermissions{
 inline absl::flat_hash_set<absl::string_view> PrefixACLPermissions(
     const absl::flat_hash_set<absl::string_view> &cmd_permissions,
     absl::string_view command) {
-  absl::flat_hash_set<absl::string_view> ret;
-  for (const auto &permission : cmd_permissions) {
-    ret.insert(permission);
-  }
+  absl::flat_hash_set<absl::string_view> ret = cmd_permissions;
   ret.insert(command);
   return ret;
 }

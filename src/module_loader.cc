@@ -54,7 +54,7 @@ namespace {
 //    of processed words.
 // 3. Join all collected processed words back into a single string, separated by
 // spaces.
-inline std::string ACLPermissionFormater(
+inline std::string ACLPermissionFormatter(
     const absl::flat_hash_set<absl::string_view> &cmd_permissions) {
   std::vector<absl::string_view> permissions;
   for (auto permission : cmd_permissions) {
@@ -76,14 +76,14 @@ vmsdk::module::Options options = {
         {
             {
                 .cmd_name = valkey_search::kCreateCommand,
-                .permissions =
-                    ACLPermissionFormater(valkey_search::kCreateCmdPermissions),
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kCreateCmdPermissions),
                 .deny_oom = true,
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTCreateCmd>,
             },
             {
                 .cmd_name = valkey_search::kDropIndexCommand,
-                .permissions = ACLPermissionFormater(
+                .permissions = ACLPermissionFormatter(
                     valkey_search::kDropIndexCmdPermissions),
                 .cmd_func =
                     &vmsdk::CreateCommand<valkey_search::FTDropIndexCmd>,
@@ -91,19 +91,19 @@ vmsdk::module::Options options = {
             {
                 .cmd_name = valkey_search::kInfoCommand,
                 .permissions =
-                    ACLPermissionFormater(valkey_search::kInfoCmdPermissions),
+                    ACLPermissionFormatter(valkey_search::kInfoCmdPermissions),
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTInfoCmd>,
             },
             {
                 .cmd_name = valkey_search::kListCommand,
                 .permissions =
-                    ACLPermissionFormater(valkey_search::kLISTCmdPermissions),
+                    ACLPermissionFormatter(valkey_search::kLISTCmdPermissions),
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTListCmd>,
             },
             {
                 .cmd_name = valkey_search::kSearchCommand,
-                .permissions =
-                    ACLPermissionFormater(valkey_search::kSearchCmdPermissions),
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kSearchCmdPermissions),
                 .deny_oom = true,
 
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTSearchCmd>,

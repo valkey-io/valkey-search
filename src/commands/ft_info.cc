@@ -55,9 +55,10 @@ absl::Status FTInfoCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
       auto index_schema,
       SchemaManager::Instance().GetIndexSchema(RedisModule_GetSelectedDb(ctx),
                                                index_schema_name));
-
-  VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, kCommandCategories.at(kInfo),
-                                       index_schema->GetKeyPrefixes()));
+  static const auto permissions =
+      PrefixACLPermissions(kInfoCmdPermissions, kInfoCommand);
+  VMSDK_RETURN_IF_ERROR(
+      AclPrefixCheck(ctx, permissions, index_schema->GetKeyPrefixes()));
   index_schema->RespondWithInfo(ctx);
 
   return absl::OkStatus();

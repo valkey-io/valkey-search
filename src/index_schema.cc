@@ -696,7 +696,6 @@ void IndexSchema::RespondWithInfo(RedisModuleCtx *ctx) const {
   RedisModule_ReplyWithCString(ctx,
                                std::to_string(stats_.document_cnt).c_str());
   // hard-code num_terms to 0 as it's related to fulltext indexes:
-  // https://screenshot.googleplex.com/ARnMzcxVyqWfP6r
   RedisModule_ReplyWithSimpleString(ctx, "num_terms");
   RedisModule_ReplyWithCString(ctx, "0");
   RedisModule_ReplyWithSimpleString(ctx, "num_records");

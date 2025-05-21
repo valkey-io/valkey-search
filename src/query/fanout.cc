@@ -241,7 +241,7 @@ absl::Status PerformSearchFanoutAsync(
   return absl::OkStatus();
 }
 
-// TODO(b/351726622) See if caching this improves performance.
+// TODO See if caching this improves performance.
 std::vector<FanoutSearchTarget> GetSearchTargetsForFanout(RedisModuleCtx *ctx) {
   size_t num_nodes;
   auto nodes = vmsdk::MakeUniqueRedisClusterNodesList(ctx, &num_nodes);

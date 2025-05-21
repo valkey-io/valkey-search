@@ -95,7 +95,7 @@ class BTreeNumeric {
   // Note on overhead: SegmentTree is roughly 80 bytes per entry (40 B per node,
   // 2x nodes per entries with a balanced tree).
   //
-  // TODO(b/373427882): Consider using a single data structure to maintain both
+  // TODO: Consider using a single data structure to maintain both
   // the keys and the count.
   absl::btree_map<double, SetType> btree_;
   utils::SegmentTree segment_tree_;

@@ -662,9 +662,11 @@ struct IndexSchemaBackfillTestCase {
   uint64_t db_size;
   std::vector<std::string> keys_to_return_in_scan;
   bool return_wrong_types;
+  int context_flags = 0;
   uint32_t expected_keys_scanned;
   std::vector<std::string> expected_keys_processed;
   float expected_backfill_percent;
+  std::string expected_state;
 };
 
 class IndexSchemaBackfillTest
@@ -691,6 +693,10 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
   RedisModuleCtx scan_ctx;
   EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&parent_ctx))
       .WillRepeatedly(Return(&scan_ctx));
+  EXPECT_CALL(*kMockRedisModule, GetContextFlags(&parent_ctx))
+      .WillRepeatedly(Return(test_case.context_flags));
+  EXPECT_CALL(*kMockRedisModule, GetContextFlags(&scan_ctx))
+      .WillRepeatedly(Return(0));
   auto index_schema =
       MockIndexSchema::Create(&parent_ctx, index_schema_name_str, key_prefixes,
                               std::make_unique<HashAttributeDataType>(),
@@ -779,6 +785,7 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
               test_case.expected_backfill_percent != 1.0);
     EXPECT_EQ(index_schema->GetBackfillPercent(),
               test_case.expected_backfill_percent);
+    EXPECT_EQ(index_schema->GetStateForInfo(), test_case.expected_state);
   } else {
     EXPECT_CALL(thread_pool,
                 Schedule(testing::_, vmsdk::ThreadPool::Priority::kLow))
@@ -915,6 +922,7 @@ INSTANTIATE_TEST_SUITE_P(
                                                 "prefix1:key3", "prefix1:key4",
                                                 "prefix1:key5"},
                     .expected_backfill_percent = 1.0,
+                    .expected_state = "ready",
                 },
                 {
                     .test_name = "not_all_match",
@@ -928,6 +936,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .expected_keys_processed = {"prefix1:key1", "prefix1:key3",
                                                 "prefix1:key5"},
                     .expected_backfill_percent = 1.0,
+                    .expected_state = "ready",
                 },
                 {
                     .test_name = "smaller_scan_batch_size_than_available",
@@ -941,6 +950,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .expected_keys_processed = {"prefix1:key1", "prefix1:key2",
                                                 "prefix1:key3"},
                     .expected_backfill_percent = 0.6,
+                    .expected_state = "backfill_in_progress",
                 },
                 {
                     .test_name = "bigger_scan_batch_size_than_available",
@@ -955,6 +965,7 @@ INSTANTIATE_TEST_SUITE_P(
                                                 "prefix1:key3", "prefix1:key4",
                                                 "prefix1:key5"},
                     .expected_backfill_percent = 1.0,
+                    .expected_state = "ready",
                 },
                 {
                     .test_name = "no_backfill",
@@ -965,6 +976,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .expected_keys_scanned = 0,
                     .expected_keys_processed = {},
                     .expected_backfill_percent = 1.0,
+                    .expected_state = "ready",
                 },
                 {
                     .test_name = "wrong_types_not_added",
@@ -976,6 +988,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .expected_keys_scanned = 1,
                     .expected_keys_processed = {},
                     .expected_backfill_percent = 1.0,
+                    .expected_state = "ready",
                 },
                 {
                     .test_name = "dbsize_shrunk",
@@ -989,6 +1002,19 @@ INSTANTIATE_TEST_SUITE_P(
                     .expected_keys_processed = {"prefix1:key1", "prefix1:key2",
                                                 "prefix1:key3"},
                     .expected_backfill_percent = 0.99,
+                    .expected_state = "backfill_in_progress",
+                },
+                {
+                    .test_name = "oom",
+                    .scan_batch_size = 100,
+                    .key_prefixes = {"prefix1:"},
+                    .db_size = 100,
+                    .keys_to_return_in_scan = {},
+                    .context_flags = REDISMODULE_CTX_FLAGS_OOM,
+                    .expected_keys_scanned = 0,
+                    .expected_keys_processed = {},
+                    .expected_backfill_percent = 0.0,
+                    .expected_state = "backfill_paused_by_oom",
                 },
             })),
     [](const TestParamInfo<::testing::tuple<bool, IndexSchemaBackfillTestCase>>

@@ -188,7 +188,7 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
         ctx, "number_of_attributes",
         SchemaManager::Instance().GetNumberOfAttributes());
     RedisModule_InfoAddFieldLongLong(
-        ctx, "total_indexed_hash_documents",
+        ctx, "total_indexed_documents",
         SchemaManager::Instance().GetTotalIndexedDocuments());
 
     RedisModule_InfoAddSection(ctx, "ingestion");

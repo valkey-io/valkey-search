@@ -405,7 +405,7 @@ TEST_F(ValkeySearchTest, Info) {
       fake_info_ctx.info_capture.GetInfo(),
       "memory\nused_memory_bytes: 0\nused_memory_human: "
       "'0.00M'\nindex_stats\nnumber_of_indexes: 1\nnumber_of_attributes: "
-      "1\ntotal_indexed_hash_documents: "
+      "1\ntotal_indexed_documents: "
       "4\ningestion\nbackground_indexing_status: "
       "'IN_PROGRESS'\nthread-pool\nquery_queue_size: 10\nwriter_queue_size: "
       "5\nworker_pool_suspend_cnt: 13\nwriter_resumed_cnt: "

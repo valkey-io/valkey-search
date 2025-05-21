@@ -74,6 +74,7 @@
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search {
 
@@ -184,6 +185,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
   auto res = std::shared_ptr<IndexSchema>(
       new IndexSchema(ctx, index_schema_proto, std::move(attribute_data_type),
                       mutations_thread_pool));
+  
+  MemoryTrackingScope scope(res->GetMemoryStats());
+
   VMSDK_RETURN_IF_ERROR(res->Init(ctx));
   if (!skip_attributes) {
     for (const auto &attribute : index_schema_proto.attributes()) {
@@ -398,6 +402,9 @@ bool IndexSchema::IsTrackedByAnyIndex(const InternedStringPtr &key) const {
 void IndexSchema::SyncProcessMutation(RedisModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
                                       const InternedStringPtr &key) {
+  MemoryTrackingScope scope(&memory_stats_);
+
+  bool is_delete = mutated_attributes.empty();
   vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
   for (auto &attribute_data_itr : mutated_attributes) {
     const auto itr = attributes_.find(attribute_data_itr.first);
@@ -599,6 +606,7 @@ void IndexSchema::BackfillScanCallback(RedisModuleCtx *ctx,
 
 uint32_t IndexSchema::PerformBackfill(RedisModuleCtx *ctx,
                                       uint32_t batch_size) {
+  MemoryTrackingScope scope(&memory_stats_);
   auto &backfill_job = backfill_job_.Get();
   if (!backfill_job.has_value() || backfill_job->IsScanDone()) {
     return 0;
@@ -663,6 +671,7 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(RedisModuleCtx *ctx) const {
+  // RedisModule_ReplyWithArray(ctx, 26);
   RedisModule_ReplyWithArray(ctx, 24);
   RedisModule_ReplyWithSimpleString(ctx, "index_name");
   RedisModule_ReplyWithSimpleString(ctx, name_.data());
@@ -722,6 +731,8 @@ void IndexSchema::RespondWithInfo(RedisModuleCtx *ctx) const {
                                                  absl::Seconds(1)
                                            : 0))
                .c_str());
+  // RedisModule_ReplyWithSimpleString(ctx, "allocated_bytes");
+  // RedisModule_ReplyWithLongLong(ctx, memory_stats_.GetAllocatedBytes());
 }
 
 bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {
@@ -825,6 +836,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
       auto index_schema,
       IndexSchema::Create(ctx, *index_schema_proto, mutations_thread_pool,
                           /*skip_attributes=*/true));
+
+  // Added MemoryTrackingScope for RDB loading part
+  MemoryTrackingScope scope(index_schema->GetMemoryStats());
 
   // Supplemental content will include indices and any content for them
   while (supplemental_iter.HasNext()) {

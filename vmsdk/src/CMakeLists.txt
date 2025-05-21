@@ -105,6 +105,7 @@ set(SRCS_MEMORY_ALLOCATION ${CMAKE_CURRENT_LIST_DIR}/memory_allocation.cc
 
 valkey_search_add_static_library(memory_allocation "${SRCS_MEMORY_ALLOCATION}")
 target_include_directories(memory_allocation PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(memory_allocation PUBLIC vmsdk_memory_tracker)
 
 set(SRCS_TYPE_CONVERSIONS ${CMAKE_CURRENT_LIST_DIR}/type_conversions.h)
 
@@ -128,3 +129,10 @@ target_link_libraries(blocked_client PUBLIC utils)
 target_link_libraries(blocked_client PUBLIC module)
 target_link_libraries(blocked_client PUBLIC log)
 target_link_libraries(blocked_client PUBLIC valkey_module)
+
+set(SRCS_VMSDK_MEMORY_TRACKER 
+    ${CMAKE_CURRENT_LIST_DIR}/memory_tracker.cc
+    ${CMAKE_CURRENT_LIST_DIR}/memory_tracker.h
+    ${CMAKE_CURRENT_LIST_DIR}/memory_stats.h)
+valkey_search_add_static_library(vmsdk_memory_tracker "${SRCS_VMSDK_MEMORY_TRACKER}")
+target_include_directories(vmsdk_memory_tracker PUBLIC ${CMAKE_CURRENT_LIST_DIR})

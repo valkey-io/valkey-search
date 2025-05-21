@@ -28,6 +28,8 @@
  */
 
 #include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/memory_tracker.h"
+#include "vmsdk/src/memory_stats.h"
 
 #include <unistd.h>
 
@@ -75,12 +77,29 @@ uint64_t GetUsedMemoryCnt() { return used_memory_bytes; }
 
 void ReportAllocMemorySize(uint64_t size) {
   vmsdk::used_memory_bytes.fetch_add(size, std::memory_order_relaxed);
+
+  MemoryTrackingScope* current_scope = MemoryTrackingScope::GetCurrentScope();
+  if (current_scope != nullptr) {
+    MemoryStats* current_memory_stats = current_scope->GetStats();
+    if (current_memory_stats != nullptr) {
+        current_memory_stats->RecordAllocation(size);
+    }
+  }
 }
+
 void ReportFreeMemorySize(uint64_t size) {
   if (size > used_memory_bytes) {
     vmsdk::used_memory_bytes.store(0, std::memory_order_relaxed);
   } else {
     vmsdk::used_memory_bytes.fetch_sub(size, std::memory_order_relaxed);
+  }
+
+  MemoryTrackingScope* current_scope = MemoryTrackingScope::GetCurrentScope();
+  if (current_scope != nullptr) {
+    MemoryStats* current_memory_stats = current_scope->GetStats();
+    if (current_memory_stats != nullptr) {
+      current_memory_stats->RecordDeallocation(size);
+    }
   }
 }
 

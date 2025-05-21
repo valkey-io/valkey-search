@@ -131,6 +131,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   }
 
   float GetBackfillPercent() const;
+  absl::string_view GetStateForInfo() const;
   uint64_t CountRecords() const;
 
   int GetAttributeCount() const { return attributes_.size(); }
@@ -207,6 +208,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     uint64_t scanned_key_count{0};
     uint64_t db_size;
     vmsdk::StopWatch stopwatch;
+    bool paused_by_oom{false};
   };
 
   vmsdk::MainThreadAccessGuard<std::optional<BackfillJob>> backfill_job_;

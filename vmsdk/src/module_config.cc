@@ -28,15 +28,22 @@
  */
 #include "vmsdk/src/module_config.h"
 
-#include <absl/log/check.h>
-#include <absl/strings/str_cat.h>
+#include <absl/base/no_destructor.h>
 
+#include "absl/log/check.h"
+#include "absl/strings/ascii.h"
+#include "absl/strings/str_cat.h"
+#include "vmsdk/src/command_parser.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 
 namespace vmsdk {
 namespace config {
 
 namespace {
+
+constexpr absl::string_view kUseCoordinator = "--use-coordinator";
+
 template <typename T>
 static T OnGetConfig(const char *config_name, void *priv_data) {
   auto entry = static_cast<ConfigBase<T> *>(priv_data);
@@ -49,30 +56,111 @@ static int OnSetConfig(const char *config_name, T value, void *priv_data,
                        RedisModuleString **err) {
   auto entry = static_cast<ConfigBase<T> *>(priv_data);
   CHECK(entry) << "null private data for configuration Number entry.";
-  if (!entry->Validate(value)) {
+  auto res = entry->SetValue(value);  // Calls "Validate" internally
+  if (!res.ok()) {
+    if (err) {
+      *err =
+          RedisModule_CreateStringPrintf(nullptr, "%s", res.message().data());
+    }
     return REDISMODULE_ERR;
   }
-  entry->SetValue(value);
+
   entry->NotifyChanged();
   return REDISMODULE_OK;
 }
+
+/// Convert `vector<string>` -> `vector<const char*>`
+/// IMPORTANT: `vec` must outlive the returned value
+std::vector<const char *> ToCharPtrPtrVec(const std::vector<std::string> &vec) {
+  std::vector<const char *> arrptr;
+  arrptr.reserve(vec.size());
+  for (const auto &item : vec) {
+    arrptr.push_back(item.c_str());
+  }
+  return arrptr;
+}
 }  // namespace
 
+static std::unique_ptr<ModuleConfigManager> module_config_manager;
+
+void ModuleConfigManager::InitInstance(
+    std::unique_ptr<ModuleConfigManager> instance) {
+  module_config_manager = std::move(instance);
+}
+
 ModuleConfigManager &ModuleConfigManager::Instance() {
-  static ModuleConfigManager manager;
-  return manager;
+  CHECK(module_config_manager)
+      << "Did you forget to call ModuleConfigManager::InitInstance()?";
+  return *module_config_manager;
 }
 
 void ModuleConfigManager::RegisterConfig(Registerable *config_item) {
-  entries_.push_back(config_item);
+  entries_.emplace(config_item->GetName(), config_item);
 }
 
-absl::Status ModuleConfigManager::RegisterAll(RedisModuleCtx *ctx) {
-  for (auto entry : entries_) {
+void ModuleConfigManager::Reset() { entries_.clear(); }
+
+absl::Status ModuleConfigManager::Init(RedisModuleCtx *ctx) {
+  for (const auto &[_, entry] : entries_) {
+    if (entry->IsHidden()) {
+      continue;
+    }
     VMSDK_RETURN_IF_ERROR(entry->Register(ctx));
   }
-  // once registered, clear the list
-  entries_.clear();
+  return absl::OkStatus();
+}
+
+absl::Status ModuleConfigManager::ParseAndLoadArgv(RedisModuleCtx *ctx,
+                                                   RedisModuleString **argv,
+                                                   int argc) {
+  vmsdk::ArgsIterator iter{argv, argc};
+  while (iter.HasNext()) {
+    VMSDK_ASSIGN_OR_RETURN(auto key, iter.Get());
+    auto sv_key = vmsdk::ToStringView(key);
+    iter.Next();  // skip the key
+
+    absl::string_view sv_val;
+    if (sv_key == kUseCoordinator) {
+      // All keys must accept values. Unless it is `--use-coordinator` (we
+      // keep this option for backward compatibility)
+      sv_val = "yes";
+      VMSDK_RETURN_IF_ERROR(UpdateConfigFromKeyVal(ctx, sv_key, sv_val));
+    } else {
+      // Read the value
+      if (!iter.HasNext()) {
+        return absl::NotFoundError(absl::StrFormat(
+            "Command line argument `%s` is missing a value", sv_key));
+      } else {
+        VMSDK_ASSIGN_OR_RETURN(auto val, iter.Get());
+        iter.Next();  // skip the value
+
+        sv_val = vmsdk::ToStringView(val);
+        VMSDK_RETURN_IF_ERROR(UpdateConfigFromKeyVal(ctx, sv_key, sv_val));
+      }
+    }
+  }
+  return absl::OkStatus();
+}
+
+absl::Status ModuleConfigManager::UpdateConfigFromKeyVal(
+    RedisModuleCtx *ctx, std::string_view key, std::string_view value) {
+  if (!key.starts_with("--")) {
+    return absl::InvalidArgumentError(absl::StrFormat(
+        "Command line argument: '%s' must start with '--'", key));
+  }
+
+  // Locate the configuration entry that matches this switch
+  // remove the "--"
+  key = key.substr(2);
+  auto where = entries_.find(key);
+  if (where == entries_.end()) {
+    return absl::UnknownError(
+        absl::StrFormat("Unknown command line argument: `%s`", key));
+  }
+  // update the configuration entry
+  VMSDK_LOG(NOTICE, ctx) << "Parsed command line argument: " << key << " -> "
+                         << value;
+  VMSDK_RETURN_IF_ERROR(where->second->FromString(value));
   return absl::OkStatus();
 }
 
@@ -102,6 +190,74 @@ absl::Status Number::Register(RedisModuleCtx *ctx) {
   return absl::OkStatus();
 }
 
+absl::Status Number::FromString(std::string_view value) {
+  if (!absl::SimpleAtoi(value, &default_value_)) {
+    return absl::InvalidArgumentError(
+        absl::StrFormat("Failed to convert '%s' into a number", value));
+  }
+  SetValue(default_value_).IgnoreError();
+  return absl::OkStatus();
+}
+
+Enum::Enum(std::string_view name, int default_value,
+           const std::vector<std::string_view> &names,
+           const std::vector<int> &values)
+    : ConfigBase(name),
+      default_value_(default_value),
+      values_(values),
+      current_value_(default_value) {
+  // Convert all names into lower-case
+  names_.reserve(names.size());
+  for (auto name : names) {
+    auto lower_case_name = absl::AsciiStrToLower(name);
+    names_.push_back(lower_case_name);
+  }
+
+  // Validate the values
+  CHECK(values_.size() == names_.size());
+  CHECK(std::find_if(values_.begin(), values_.end(), [&default_value](int v) {
+          return default_value == v;
+        }) != values_.end());
+}
+
+absl::Status Enum::Register(RedisModuleCtx *ctx) {
+  auto names_array = ToCharPtrPtrVec(names_);
+  if (RedisModule_RegisterEnumConfig(ctx,
+                                     name_.data(),        // Name
+                                     default_value_,      // Default value
+                                     flags_,              // Flags
+                                     names_array.data(),  // enumerator names
+                                     values_.data(),      // enumerator values
+                                     names_.size(),     // number of enumerators
+                                     OnGetConfig<int>,  // Get callback
+                                     OnSetConfig<int>,  // Set callback
+                                     nullptr,  // Apply callback (optional)
+                                     this      // privdata
+                                     ) != REDISMODULE_OK) {
+    return absl::InternalError(absl::StrCat(
+        "Failed to register enumerator configuration entry: ", name_));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status Enum::FromString(std::string_view value) {
+  auto where = std::find_if(
+      names_.begin(), names_.end(), [&value](const std::string &name) {
+        return value == name || absl::AsciiStrToLower(value) == name;
+      });
+  if (where == names_.end()) {
+    return absl::InvalidArgumentError(
+        absl::StrFormat("Invalid enum value: '%s'", value));
+  }
+
+  size_t enumerator_index = std::distance(names_.begin(), where);
+  default_value_ = values_[enumerator_index];
+
+  // update the current value, skip the validation as we just did that
+  SetValue(default_value_).IgnoreError();
+  return absl::OkStatus();
+}
+
 Boolean::Boolean(std::string_view name, bool default_value)
     : ConfigBase(name),
       default_value_(default_value),
@@ -119,6 +275,23 @@ absl::Status Boolean::Register(RedisModuleCtx *ctx) {
                                      ) != REDISMODULE_OK) {
     return absl::InternalError(absl::StrCat(
         "Failed to register boolean configuration entry: ", name_));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status Boolean::FromString(std::string_view value) {
+  auto value_lowercase = absl::AsciiStrToLower(value);
+  if (value_lowercase == "yes" || value_lowercase == "on" ||
+      value_lowercase == "true") {
+    default_value_ = true;
+    SetValue(default_value_).IgnoreError();
+  } else if (value_lowercase == "no" || value_lowercase == "off" ||
+             value_lowercase == "false") {
+    default_value_ = false;
+    SetValue(default_value_).IgnoreError();
+  } else {
+    return absl::InvalidArgumentError(
+        absl::StrFormat("Invalid boolean value: '%s'", value));
   }
   return absl::OkStatus();
 }

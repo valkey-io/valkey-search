@@ -42,8 +42,11 @@ endif()
 # Append -Wl,--end-group as the LAST argument
 target_link_libraries(libsearch PRIVATE lib_to_add_end_group_flag)
 
-set(SRCS_VALKEY_SEARCH ${CMAKE_CURRENT_LIST_DIR}/valkey_search.cc
-                       ${CMAKE_CURRENT_LIST_DIR}/valkey_search.h)
+set(SRCS_VALKEY_SEARCH
+    ${CMAKE_CURRENT_LIST_DIR}/valkey_search.cc
+    ${CMAKE_CURRENT_LIST_DIR}/valkey_search.h
+    ${CMAKE_CURRENT_LIST_DIR}/valkey_search_options.cc
+    ${CMAKE_CURRENT_LIST_DIR}/valkey_search_options.h)
 
 valkey_search_add_static_library(valkey_search "${SRCS_VALKEY_SEARCH}")
 target_include_directories(valkey_search PUBLIC ${CMAKE_CURRENT_LIST_DIR})

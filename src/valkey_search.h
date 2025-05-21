@@ -124,8 +124,10 @@ class ValkeySearch {
   virtual size_t GetMaxWorkerThreadPoolSuspensionSec() const;
 
  private:
-  absl::Status LoadOptions(RedisModuleCtx *ctx, RedisModuleString **argv,
-                           int argc);
+  absl::Status Startup(RedisModuleCtx *ctx);
+  absl::Status LoadAndParseArgv(RedisModuleCtx *ctx, RedisModuleString **argv,
+                                int argc);
+
   static void *RDBLoad(RedisModuleIO *rdb, int encoding_version);
   static void FreeIndexSchema(void *value);
   static bool IsChildProcess();

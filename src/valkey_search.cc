@@ -57,6 +57,7 @@
 #include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/concurrency.h"
@@ -69,137 +70,15 @@
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+
 namespace valkey_search {
+
+using valkey_search::options::Options;
+using vmsdk::config::ModuleConfigManager;
 
 static absl::NoDestructor<std::unique_ptr<ValkeySearch>> valkey_search_instance;
 
 constexpr size_t kMaxWorkerThreadPoolSuspensionSec{60};
-constexpr uint32_t kHNSWDefaultBlockSize{10240};
-constexpr uint32_t kMaxThreadsCount{1024};
-
-const absl::string_view kHNSWBlockSizeConfig{"hnsw-block-size"};
-const absl::string_view kReaderThreadsConfig{"reader-threads"};
-const absl::string_view kWriterThreadsConfig{"writer-threads"};
-
-static const int64_t kDefaultThreadsCount = vmsdk::GetPhysicalCPUCoresCount();
-
-namespace {
-/// Check that the new value for configuration item `hnsw-block-size` confirms
-/// to the allowed values.
-bool ValidateHNSWBlockSize(long long new_value, RedisModuleString **err) {
-  if (new_value < kHNSWDefaultBlockSize || new_value > UINT32_MAX) {
-    if (err) {
-      *err = RedisModule_CreateStringPrintf(
-          nullptr, "Block size must be between %u and %u",
-          kHNSWDefaultBlockSize, UINT32_MAX);
-    }
-    return false;
-  }
-  return true;
-}
-
-/// Resize `pool` to match its new value
-void UpdateThreadPoolCount(vmsdk::ThreadPool *pool, long long new_value) {
-  if (!pool) {
-    return;
-  }
-  pool->Resize(new_value);
-}
-}  // namespace
-
-// Configuration entries
-namespace config = vmsdk::config;
-
-// Controls the HNSW resize increments
-static auto hnsw_block_size = config::Builder<config::Number, long long>(
-                                  kHNSWBlockSizeConfig,   // name
-                                  kHNSWDefaultBlockSize,  // default size
-                                  kHNSWDefaultBlockSize,  // min size
-                                  UINT_MAX)               // max size
-                                  .Build();
-
-// Controls the number of reader threads
-static auto reader_threads_count =
-    config::Builder<config::Number, long long>(
-        kReaderThreadsConfig,  // name
-        kDefaultThreadsCount,  // default size
-        1,                     // min size
-        kMaxThreadsCount)      // max size
-        .WithModifyCallback(   // set an "On-Modify" callback
-            [](long long new_value) {
-              UpdateThreadPoolCount(
-                  ValkeySearch::Instance().GetReaderThreadPool(), new_value);
-            })
-        .Build();
-
-// Controls the number of writer threads
-static auto writer_threads_count =
-    config::Builder<config::Number, long long>(
-        kWriterThreadsConfig,  // name
-        kDefaultThreadsCount,  // default size
-        1,                     // min size
-        kMaxThreadsCount)      // max size
-        .WithModifyCallback(   // set an "On-Modify" callback
-            [](long long new_value) {
-              UpdateThreadPoolCount(
-                  ValkeySearch::Instance().GetWriterThreadPool(), new_value);
-            })
-        .Build();
-
-namespace options {
-
-// Maintaining the parameter `--threads` for backward compatibility. Safe to
-// remove it post GA.
-constexpr absl::string_view kThreadsParam{"--threads"};
-constexpr absl::string_view kReaderThreadsParam{"--reader-threads"};
-constexpr absl::string_view kWriterThreadsParam{"--writer-threads"};
-constexpr absl::string_view kUseCoordinator{"--use-coordinator"};
-constexpr absl::string_view kLogLevel{"--log-level"};
-constexpr absl::string_view kHNSWBlockSize{"--hnsw-block-size"};
-
-struct Parameters {
-  size_t reader_threads{vmsdk::GetPhysicalCPUCoresCount()};
-  size_t writer_threads{vmsdk::GetPhysicalCPUCoresCount()};
-  std::optional<int> threads;
-  bool use_coordinator{false};
-  std::optional<std::string> log_level;
-  uint32_t hnsw_block_size{kHNSWDefaultBlockSize};
-};
-
-absl::StatusOr<Parameters> Load(RedisModuleString **argv, int argc) {
-  Parameters parameters;
-  vmsdk::KeyValueParser<Parameters> parser;
-  parser.AddParamParser(kReaderThreadsParam,
-                        GENERATE_VALUE_PARSER(Parameters, reader_threads));
-  parser.AddParamParser(kWriterThreadsParam,
-                        GENERATE_VALUE_PARSER(Parameters, writer_threads));
-  parser.AddParamParser(kThreadsParam,
-                        GENERATE_VALUE_PARSER(Parameters, threads));
-  parser.AddParamParser(kUseCoordinator,
-                        GENERATE_FLAG_PARSER(Parameters, use_coordinator));
-  parser.AddParamParser(kLogLevel,
-                        GENERATE_VALUE_PARSER(Parameters, log_level));
-  parser.AddParamParser(kHNSWBlockSize,
-                        GENERATE_VALUE_PARSER(Parameters, hnsw_block_size));
-  vmsdk::ArgsIterator itr{argv, argc};
-  VMSDK_RETURN_IF_ERROR(parser.Parse(parameters, itr));
-  if (parameters.threads.has_value()) {
-    parameters.reader_threads = std::max(1, parameters.threads.value());
-    parameters.writer_threads =
-        std::max(1, static_cast<int>(parameters.threads.value() * 2.5));
-  }
-  if ((parameters.reader_threads == 0 && parameters.writer_threads != 0) ||
-      (parameters.reader_threads != 0 && parameters.writer_threads == 0)) {
-    return absl::InvalidArgumentError(
-        "Maintaining query integrity is only supported when both the reader "
-        "and writer thread pools are either enabled or disabled "
-        "simultaneously");
-  }
-  VMSDK_LOG(NOTICE, nullptr) << "reader_threads: " << parameters.reader_threads;
-  VMSDK_LOG(NOTICE, nullptr) << "writer_threads: " << parameters.writer_threads;
-  return parameters;
-}
-}  // namespace options
 
 size_t ValkeySearch::GetMaxWorkerThreadPoolSuspensionSec() const {
   return kMaxWorkerThreadPoolSuspensionSec;
@@ -212,11 +91,11 @@ void ValkeySearch::InitInstance(std::unique_ptr<ValkeySearch> instance) {
 }
 
 uint32_t ValkeySearch::GetHNSWBlockSize() const {
-  return hnsw_block_size->GetValue();
+  return Options::Instance().GetHNSWBlockSize().GetValue();
 }
 
 void ValkeySearch::SetHNSWBlockSize(uint32_t block_size) {
-  hnsw_block_size->SetValue(block_size);
+  Options::Instance().GetHNSWBlockSize().SetValue(block_size).IgnoreError();
 }
 
 static std::string ConvertToMB(double bytes_value) {
@@ -562,32 +441,24 @@ absl::StatusOr<int> GetRedisLocalPort(RedisModuleCtx *ctx) {
   return port;
 }
 
-absl::Status ValkeySearch::LoadOptions(RedisModuleCtx *ctx,
-                                       RedisModuleString **argv, int argc) {
-  VMSDK_ASSIGN_OR_RETURN(auto options, options::Load(argv, argc));
+absl::Status ValkeySearch::Startup(RedisModuleCtx *ctx) {
   reader_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
-      "read-worker-", options.reader_threads);
+      "read-worker-", Options::Instance().GetReaderThreadCount().GetValue());
   reader_thread_pool_->StartWorkers();
   writer_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
-      "write-worker-", options.writer_threads);
+      "write-worker-", Options::Instance().GetWriterThreadCount().GetValue());
   writer_thread_pool_->StartWorkers();
 
-  if (options.hnsw_block_size) {
-    if (!ValidateHNSWBlockSize(options.hnsw_block_size, nullptr)) {
-      return absl::InvalidArgumentError(
-          absl::StrFormat("Could not set %s. Invalid value: %u",
-                          kHNSWBlockSizeConfig, options.hnsw_block_size));
-    }
-    hnsw_block_size->SetValue(options.hnsw_block_size);
-  }
+  VMSDK_LOG(NOTICE, ctx) << "use_coordinator: "
+                         << Options::Instance().GetUseCoordinator().GetValue()
+                         << ", IsCluster: " << IsCluster();
 
-  if (options.log_level) {
-    VMSDK_RETURN_IF_ERROR(vmsdk::InitLogging(ctx, options.log_level));
-  }
-  VMSDK_LOG(NOTICE, ctx) << "options.use_coordinator: "
-                         << options.use_coordinator
-                         << " IsCluster: " << IsCluster();
-  if (options.use_coordinator && IsCluster()) {
+  VMSDK_LOG(NOTICE, ctx) << "Reader workers count: "
+                         << reader_thread_pool_->Size();
+  VMSDK_LOG(NOTICE, ctx) << "Writer workers count: "
+                         << writer_thread_pool_->Size();
+
+  if (Options::Instance().GetUseCoordinator().GetValue() && IsCluster()) {
     client_pool_ = std::make_unique<coordinator::ClientPool>(
         vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx));
     coordinator::MetadataManager::InitInstance(
@@ -596,8 +467,8 @@ absl::Status ValkeySearch::LoadOptions(RedisModuleCtx *ctx,
   }
   SchemaManager::InitInstance(std::make_unique<SchemaManager>(
       ctx, server_events::SubscribeToServerEvents, writer_thread_pool_.get(),
-      options.use_coordinator && IsCluster()));
-  if (options.use_coordinator) {
+      Options::Instance().GetUseCoordinator().GetValue() && IsCluster()));
+  if (Options::Instance().GetUseCoordinator().GetValue()) {
     VMSDK_ASSIGN_OR_RETURN(auto redis_port, GetRedisLocalPort(ctx));
     auto coordinator_port = coordinator::GetCoordinatorPort(redis_port);
     coordinator_ = coordinator::ServerImpl::Create(
@@ -639,16 +510,20 @@ absl::Status ValkeySearch::OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv,
   // Register a single module type for Aux load/save callbacks.
   VMSDK_RETURN_IF_ERROR(RegisterModuleType(ctx));
 
+  /// Initialize the options
+  Options::InitInstance(std::make_unique<Options>());
+
   // Register all global configuration variables
-  VMSDK_RETURN_IF_ERROR(
-      vmsdk::config::ModuleConfigManager::Instance().RegisterAll(ctx));
+  VMSDK_RETURN_IF_ERROR(ModuleConfigManager::Instance().Init(ctx));
 
   // Load configurations to initialize registered configs
   if (RedisModule_LoadConfigs(ctx) != REDISMODULE_OK) {
     return absl::InternalError("Failed to load configurations");
   }
 
-  VMSDK_RETURN_IF_ERROR(LoadOptions(ctx, argv, argc));
+  // Apply command line arguments and initialize the module
+  VMSDK_RETURN_IF_ERROR(LoadAndParseArgv(ctx, argv, argc));
+  VMSDK_RETURN_IF_ERROR(Startup(ctx));
 
   RedisModule_SetModuleOptions(
       ctx, REDISMODULE_OPTIONS_HANDLE_IO_ERRORS |
@@ -658,6 +533,26 @@ absl::Status ValkeySearch::OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv,
                          << (IsJsonModuleLoaded(ctx) ? "" : "not ")
                          << "loaded!";
   VectorExternalizer::Instance().Init(ctx_);
+  VMSDK_LOG(DEBUG, ctx) << "Search module completed initialization!";
+  return absl::OkStatus();
+}
+
+absl::Status ValkeySearch::LoadAndParseArgv(RedisModuleCtx *ctx,
+                                            RedisModuleString **argv,
+                                            int argc) {
+  VMSDK_RETURN_IF_ERROR(
+      vmsdk::config::ModuleConfigManager::Instance().ParseAndLoadArgv(ctx, argv,
+                                                                      argc));
+  // Sanity check
+  if ((Options::Instance().GetReaderThreadCount().GetValue() == 0 &&
+       Options::Instance().GetWriterThreadCount().GetValue() != 0) ||
+      (Options::Instance().GetWriterThreadCount().GetValue() == 0 &&
+       Options::Instance().GetReaderThreadCount().GetValue() != 0)) {
+    return absl::InvalidArgumentError(
+        "Maintaining query integrity is only supported when both the reader "
+        "and writer thread pools are either enabled or disabled "
+        "simultaneously");
+  }
   return absl::OkStatus();
 }
 

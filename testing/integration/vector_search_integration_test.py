@@ -401,7 +401,7 @@ class VectorSearchIntegrationTest(VSSTestCase):
                 "cluster-node-timeout": "45000",
             },
             {
-                f"{valkey_search_path}": "--threads 2 --log-level notice --use-coordinator",
+                f"{valkey_search_path}": "--reader-threads 2 --writer-threads 5 --log-level notice --use-coordinator",
             },
             0,
         )
@@ -435,37 +435,59 @@ class VectorSearchIntegrationTest(VSSTestCase):
             self.fail(f"Failed to ping all servers in cluster: {e}")
         super().tearDown()
 
+    def _set_config(self, name: str, value: str) -> bool:
+        name = f"search.{name}"
+        try:
+            return self.valkey_conn.config_set(name, value)
+        except Exception:  # pylint: disable=broad-except
+            return False
+
+    def _get_config(self, name: str) -> str:
+        name = f"search.{name}"
+        val = self.valkey_conn.config_get(name)[name]
+        return val
+
     def test_changing_thread_count(self):
         # Check the default values & existence of the configuration variable
         # search.reader-threads & search.writer-threads
-        core_count = self.valkey_conn.config_get("search.reader-threads")[
-            "search.reader-threads"
-        ]
+        r_core_count = self._get_config("reader-threads")
+        self.assertTrue(
+            r_core_count is not None, "reader-threads does not exist!"
+        )
 
-        self.assertTrue(core_count is not None, "search.reader-threads does not exist!")
-        self.assertEqual(
-            self.valkey_conn.config_get("search.writer-threads")[
-                "search.writer-threads"
-            ],
-            core_count,
+        w_core_count = self._get_config("writer-threads")
+        self.assertTrue(
+            w_core_count is not None, "writer-threads does not exist!"
         )
 
         # Modify and confirm change
-        self.assertTrue(self.valkey_conn.config_set("search.writer-threads", 1))
-        self.assertTrue(self.valkey_conn.config_set("search.reader-threads", 1))
+        self.assertTrue(self._set_config("writer-threads", "1"))
+        self.assertTrue(self._set_config("reader-threads", "1"))
 
-        self.assertEqual(
-            self.valkey_conn.config_get("search.reader-threads")[
-                "search.reader-threads"
-            ],
-            "1",
-        )
-        self.assertEqual(
-            self.valkey_conn.config_get("search.writer-threads")[
-                "search.writer-threads"
-            ],
-            "1",
-        )
+        self.assertEqual(self._get_config("reader-threads"), "1")
+        self.assertEqual(self._get_config("writer-threads"), "1")
+
+    def test_changing_debug_level(self):
+        # Check the default values & existence of the configuration variable
+        # search.reader-threads & search.writer-threads
+        current_log_level = self._get_config("log-level")
+        self.assertTrue(
+            current_log_level is not None, "log-level does not exist!")
+        # Check bad values are not accepted
+        self.assertFalse(self._set_config("log-level", "no-such-level"))
+
+        # Check valid values
+        self.assertTrue(self._set_config("log-level", "debug"))
+        self.assertEqual(self._get_config("log-level"), "debug")
+
+        self.assertTrue(self._set_config("log-level", "verbose"))
+        self.assertEqual(self._get_config("log-level"), "verbose")
+
+        self.assertTrue(self._set_config("log-level", "notice"))
+        self.assertEqual(self._get_config("log-level"), "notice")
+
+        self.assertTrue(self._set_config("log-level", "warning"))
+        self.assertEqual(self._get_config("log-level"), "warning")
 
     @parameterized.named_parameters(generate_test_cases_basic("test_create_and_drop_index"))
     def test_create_and_drop_index(self, store_data_type, vector_index_type):

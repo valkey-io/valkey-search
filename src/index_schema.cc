@@ -404,7 +404,6 @@ void IndexSchema::SyncProcessMutation(RedisModuleCtx *ctx,
                                       const InternedStringPtr &key) {
   MemoryTrackingScope scope(&memory_stats_);
 
-  bool is_delete = mutated_attributes.empty();
   vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
   for (auto &attribute_data_itr : mutated_attributes) {
     const auto itr = attributes_.find(attribute_data_itr.first);
@@ -671,8 +670,7 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(RedisModuleCtx *ctx) const {
-  // RedisModule_ReplyWithArray(ctx, 26);
-  RedisModule_ReplyWithArray(ctx, 24);
+  RedisModule_ReplyWithArray(ctx, 26);
   RedisModule_ReplyWithSimpleString(ctx, "index_name");
   RedisModule_ReplyWithSimpleString(ctx, name_.data());
   RedisModule_ReplyWithSimpleString(ctx, "index_options");
@@ -731,8 +729,8 @@ void IndexSchema::RespondWithInfo(RedisModuleCtx *ctx) const {
                                                  absl::Seconds(1)
                                            : 0))
                .c_str());
-  // RedisModule_ReplyWithSimpleString(ctx, "allocated_bytes");
-  // RedisModule_ReplyWithLongLong(ctx, memory_stats_.GetAllocatedBytes());
+  RedisModule_ReplyWithSimpleString(ctx, "index_size_mb");
+  RedisModule_ReplyWithLongLong(ctx, memory_stats_.GetAllocatedBytes() / 1024 / 1024);
 }
 
 bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {
@@ -837,7 +835,6 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
       IndexSchema::Create(ctx, *index_schema_proto, mutations_thread_pool,
                           /*skip_attributes=*/true));
 
-  // Added MemoryTrackingScope for RDB loading part
   MemoryTrackingScope scope(index_schema->GetMemoryStats());
 
   // Supplemental content will include indices and any content for them

@@ -677,7 +677,7 @@ INSTANTIATE_TEST_SUITE_P(
                  .k = 5,
                  .expected_keys = {"4"},
              },
-             // TODO(b/358524398): Add tests where vector, numeric and tag
+             // TODO: Add tests where vector, numeric and tag
              // indexes are not aligned.
              {
                  .test_name = "numeric_negate_filter",

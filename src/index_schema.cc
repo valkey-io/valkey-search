@@ -604,6 +604,8 @@ uint32_t IndexSchema::PerformBackfill(RedisModuleCtx *ctx,
     return 0;
   }
 
+  backfill_job->paused_by_oom = false;
+
   // We need to ensure the DB size is monotonically increasing, since it could
   // change during the backfill, in which case we may show incorrect progress.
   backfill_job->db_size =
@@ -613,6 +615,12 @@ uint32_t IndexSchema::PerformBackfill(RedisModuleCtx *ctx,
   uint64_t start_scan_count = backfill_job->scanned_key_count;
   uint64_t &current_scan_count = backfill_job->scanned_key_count;
   while (current_scan_count - start_scan_count < batch_size) {
+    auto ctx_flags = RedisModule_GetContextFlags(ctx);
+    if (ctx_flags & REDISMODULE_CTX_FLAGS_OOM) {
+      backfill_job->paused_by_oom = true;
+      return 0;
+    }
+
     // Scan will return zero if there are no more keys to scan. This could be
     // the case either if there are no keys at all or if we have reached the
     // end of the current iteration. Because of this, we use the scanned key
@@ -654,6 +662,18 @@ float IndexSchema::GetBackfillPercent() const {
   return (float)processed_keys / backfill_job->db_size;
 }
 
+absl::string_view IndexSchema::GetStateForInfo() const {
+  if (!IsBackfillInProgress()) {
+    return "ready";
+  } else {
+    if (backfill_job_.Get()->paused_by_oom) {
+      return "backfill_paused_by_oom";
+    } else {
+      return "backfill_in_progress";
+    }
+  }
+}
+
 uint64_t IndexSchema::CountRecords() const {
   uint64_t record_cnt = 0;
   for (const auto &attribute : attributes_) {
@@ -663,7 +683,7 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(RedisModuleCtx *ctx) const {
-  RedisModule_ReplyWithArray(ctx, 24);
+  RedisModule_ReplyWithArray(ctx, 26);
   RedisModule_ReplyWithSimpleString(ctx, "index_name");
   RedisModule_ReplyWithSimpleString(ctx, name_.data());
   RedisModule_ReplyWithSimpleString(ctx, "index_options");
@@ -696,7 +716,6 @@ void IndexSchema::RespondWithInfo(RedisModuleCtx *ctx) const {
   RedisModule_ReplyWithCString(ctx,
                                std::to_string(stats_.document_cnt).c_str());
   // hard-code num_terms to 0 as it's related to fulltext indexes:
-  // https://screenshot.googleplex.com/ARnMzcxVyqWfP6r
   RedisModule_ReplyWithSimpleString(ctx, "num_terms");
   RedisModule_ReplyWithCString(ctx, "0");
   RedisModule_ReplyWithSimpleString(ctx, "num_records");
@@ -722,6 +741,8 @@ void IndexSchema::RespondWithInfo(RedisModuleCtx *ctx) const {
                                                  absl::Seconds(1)
                                            : 0))
                .c_str());
+  RedisModule_ReplyWithSimpleString(ctx, "state");
+  RedisModule_ReplyWithSimpleString(ctx, GetStateForInfo().data());
 }
 
 bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -38,7 +38,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -129,10 +128,7 @@ T CopyAndNormalizeEmbedding(T *dst, T *src, size_t size) {
     magnitude += src[i] * src[i];
   }
   magnitude = std::sqrt(magnitude);
-  if (magnitude == 0.0f) {
-    return magnitude;
-  }
-  T norm = 1.0f / (magnitude);
+  T norm = (magnitude == 0.0f) ? 1.0f : (1.0f / magnitude);
   for (size_t i = 0; i < size; i++) {
     dst[i] = norm * src[i];
   }
@@ -245,8 +241,13 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
     return false;
   }
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalId(key));
-  VMSDK_RETURN_IF_ERROR(UpdateMetadata(
-      key, magnitude.value_or(kDefaultMagnitude), interned_vector));
+  VMSDK_ASSIGN_OR_RETURN(
+      bool res, UpdateMetadata(key, magnitude.value_or(kDefaultMagnitude),
+                               interned_vector));
+  if (!res) {
+    return false;
+  }
+
   auto modify_result = ModifyRecordImpl(internal_id, interned_vector->Str());
   if (!modify_result.ok()) {
     auto untrack_result = UnTrackKey(key);
@@ -257,7 +258,7 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
           << untrack_result.status().message();
     }
   }
-  return modify_result;
+  return true;
 }
 
 template <typename T>
@@ -271,7 +272,8 @@ absl::StatusOr<std::deque<Neighbor>> VectorBase::CreateReply(
       knn_res.pop();
       continue;
     }
-    ret.emplace_back(Neighbor{vector_key.value(), ele.first});
+    // Sorting in asc order.
+    ret.emplace_front(Neighbor{vector_key.value(), ele.first});
     knn_res.pop();
   }
   return ret;
@@ -340,7 +342,8 @@ absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
 char *VectorBase::TrackVector(uint64_t internal_id, char *vector, size_t len) {
   auto interned_vector = StringInternStore::Intern(
       absl::string_view(vector, len), vector_allocator_.get());
-  return TrackVector(internal_id, interned_vector);
+  TrackVector(internal_id, interned_vector);
+  return (char *)interned_vector->Str().data();
 }
 
 absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
@@ -353,30 +356,40 @@ absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
   auto id = inc_id_++;
   auto [_, succ] = tracked_metadata_by_key_.insert(
       {key, {.internal_id = id, .magnitude = magnitude}});
-  TrackVector(id, vector);
+
   if (!succ) {
     return absl::InvalidArgumentError(
         absl::StrCat("Embedding id already exists: ", key->Str()));
   }
+  TrackVector(id, vector);
   key_by_internal_id_.insert({id, key});
   return id;
 }
-
-absl::Status VectorBase::UpdateMetadata(const InternedStringPtr &key,
-                                        float magnitude,
-                                        const InternedStringPtr &vector) {
+// Return an error if the key is empty or not being tracked.
+// Return false if the tracked vector matches the input vector.
+// Otherwise, track the new vector and return true.
+absl::StatusOr<bool> VectorBase::UpdateMetadata(
+    const InternedStringPtr &key, float magnitude,
+    const InternedStringPtr &vector) {
   if (key->Str().empty()) {
     return absl::InvalidArgumentError("key can't be empty");
   }
-  absl::WriterMutexLock lock(&key_to_metadata_mutex_);
-  auto it = tracked_metadata_by_key_.find(key);
-  if (it == tracked_metadata_by_key_.end()) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Embedding id not found: ", key->Str()));
+  uint64_t internal_id;
+  {
+    absl::WriterMutexLock lock(&key_to_metadata_mutex_);
+    auto it = tracked_metadata_by_key_.find(key);
+    if (it == tracked_metadata_by_key_.end()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Embedding id not found: ", key->Str()));
+    }
+    it->second.magnitude = magnitude;
+    internal_id = it->second.internal_id;
   }
-  it->second.magnitude = magnitude;
-  TrackVector(it->second.internal_id, vector);
-  return absl::OkStatus();
+  if (IsVectorMatch(internal_id, vector)) {
+    return false;
+  }
+  TrackVector(internal_id, vector);
+  return true;
 }
 
 int VectorBase::RespondWithInfo(RedisModuleCtx *ctx) const {

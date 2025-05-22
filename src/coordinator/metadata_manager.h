@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -82,8 +82,8 @@ class MetadataManager {
             .save = [this](RedisModuleCtx *ctx, SafeRDB *rdb, int when)
                 -> absl::Status { return SaveMetadata(ctx, rdb, when); },
 
-            .section_count = [](RedisModuleCtx *ctx, int when) -> int {
-              return 1;
+            .section_count = [this](RedisModuleCtx *ctx, int when) -> int {
+              return GetSectionsCount();
             },
             .minimum_semantic_version = [](RedisModuleCtx *ctx,
                                            int when) -> int {
@@ -168,6 +168,7 @@ class MetadataManager {
   absl::StatusOr<uint64_t> ComputeFingerprint(
       absl::string_view type_name, const google::protobuf::Any &contents,
       absl::flat_hash_map<std::string, RegisteredType> &registered_types);
+  int GetSectionsCount() const;
   vmsdk::MainThreadAccessGuard<GlobalMetadata> metadata_;
   vmsdk::MainThreadAccessGuard<GlobalMetadata> staged_metadata_;
   vmsdk::MainThreadAccessGuard<bool> staging_metadata_due_to_repl_load_ = false;

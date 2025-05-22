@@ -49,11 +49,27 @@ else()
   )
 endif()
 
+find_package(GTest CONFIG REQUIRED)
+
 # A wrapper around "add_library" (STATIC) that enables the various build flags
 function(valkey_search_add_static_library name sources)
   message(STATUS "Adding static library ${name}")
   add_library(${name} STATIC ${sources})
   valkey_search_target_update_compile_flags(${name})
+  # Needed for gtest_prod.h
+  target_link_libraries(${name} PRIVATE GTest::gtest)
+endfunction()
+
+function(valkey_search_target_update_asan_flags TARGET)
+  if(ASAN_BUILD)
+    # For ASAN build, it is recommended to have at least -O1 and enable
+    # fno-omit-frame-pointer to get nicer stack traces
+    target_compile_options(${TARGET} PRIVATE -O1)
+    target_compile_options(${TARGET} PRIVATE -fno-omit-frame-pointer)
+    target_compile_options(${TARGET} PRIVATE -fsanitize=address)
+    target_compile_options(${TARGET} PRIVATE -fno-lto)
+    target_compile_definitions(${TARGET} PRIVATE ASAN_BUILD=1)
+  endif()
 endfunction()
 
 # A wrapper around "add_library" (SHARED) that enables the various build flags
@@ -67,6 +83,11 @@ function(valkey_search_add_shared_library name sources)
   valkey_search_target_update_compile_flags(${name})
   set_target_properties(${name} PROPERTIES LIBRARY_OUTPUT_DIRECTORY
                                            "${CMAKE_BINARY_DIR}")
+  # Needed for gtest_prod.h
+  target_link_libraries(${name} PRIVATE GTest::gtest)
+  if(ASAN_BUILD)
+    target_link_options(${name} PRIVATE -fsanitize=address)
+  endif()
 endfunction()
 
 # Setup global compile flags
@@ -101,7 +122,9 @@ function(valkey_search_target_update_compile_flags TARGET)
   target_compile_options(${TARGET} PRIVATE -Wno-unknown-pragmas)
   target_compile_options(${TARGET} PRIVATE -fPIC)
   target_compile_definitions(${TARGET} PRIVATE TESTING_TMP_DISABLED)
-  if(VALKEY_SEARCH_DEBUG_BUILD)
+  if(ASAN_BUILD)
+    valkey_search_target_update_asan_flags(${TARGET})
+  elseif(VALKEY_SEARCH_DEBUG_BUILD)
     target_compile_options(${TARGET} PRIVATE -O0)
     target_compile_options(${TARGET} PRIVATE -fno-omit-frame-pointer)
     target_compile_definitions(${TARGET} PRIVATE NDEBUG)
@@ -112,15 +135,21 @@ function(valkey_search_target_update_compile_flags TARGET)
   endif()
   target_compile_options(${TARGET} PRIVATE -Wno-sign-compare)
   target_compile_options(${TARGET} PRIVATE -Wno-uninitialized)
+  if(ABSL_INCLUDE_PATH)
+    target_include_directories(${TARGET} PRIVATE ${ABSL_INCLUDE_PATH})
+  endif()
+  if(PROTOBUF_INCLUDE_PATH)
+    target_include_directories(${TARGET} PRIVATE ${PROTOBUF_INCLUDE_PATH})
+  endif()
+  if(HIGHWAY_HASH_INCLUDE_PATH)
+    target_include_directories(${TARGET} PRIVATE ${HIGHWAY_HASH_INCLUDE_PATH})
+  endif()
 endfunction()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-missing-requires")
 
 include(protobuf_generate)
 include(linux_utils)
-
-set(TESTING_LIBS_EXTRA ${THIRD_PARTY_LIBS})
-list(APPEND TESTING_LIBS_EXTRA ${GTEST_LIBS})
 
 # HACK: in order to force CMake to put "-Wl,--end-group" as the last argument we
 # use a fake library "lib_to_add_end_group_flag"
@@ -129,16 +158,23 @@ target_link_libraries(lib_to_add_end_group_flag INTERFACE "-Wl,--end-group")
 
 macro(finalize_test_flags __TARGET)
   # --end-group will added by our fake target "lib_to_add_end_group_flag"
-  target_link_options(${__TARGET} PRIVATE "LINKER:--start-group"
-                      "${TESTING_LIBS_EXTRA}")
+  target_link_options(${__TARGET} PRIVATE "LINKER:--start-group")
+  foreach(__lib ${THIRD_PARTY_LIBS})
+    target_link_libraries(${__TARGET} PRIVATE ${__lib})
+  endforeach()
+
   target_link_options(${__TARGET} PRIVATE "LINKER:--allow-multiple-definition")
-  target_link_options(${__TARGET} PRIVATE "LINKER:-S")
   target_compile_options(${__TARGET} PRIVATE -O1)
   valkey_search_target_update_compile_flags(${__TARGET})
   set_target_properties(${__TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
                                                "${CMAKE_BINARY_DIR}/tests")
   target_link_libraries(${__TARGET} PRIVATE lib_to_add_end_group_flag)
-  if (VALKEY_SEARCH_IS_ARM)
+  if(VALKEY_SEARCH_IS_ARM)
     target_link_libraries(${__TARGET} PRIVATE pthread)
+  endif()
+  target_link_libraries(${__TARGET} PRIVATE GTest::gtest GTest::gtest_main
+                                            GTest::gmock)
+  if(ASAN_BUILD)
+    target_link_options(${__TARGET} PRIVATE -fsanitize=address)
   endif()
 endmacro()

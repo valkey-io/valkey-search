@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -193,6 +193,12 @@ class MockRedisModule {
                RedisModuleConfigGetEnumFunc getfn,
                RedisModuleConfigSetEnumFunc setfn,
                RedisModuleConfigApplyFunc applyfn, void *privdata));
+  MOCK_METHOD(int, RegisterNumericConfig,
+              (RedisModuleCtx * ctx, const char *name, long long default_val,
+               unsigned int flags, long long min, long long max,
+               RedisModuleConfigGetNumericFunc getfn,
+               RedisModuleConfigSetNumericFunc setfn,
+               RedisModuleConfigApplyFunc applyfn, void *privdata));
   MOCK_METHOD(int, LoadConfigs, (RedisModuleCtx * ctx));
   MOCK_METHOD(int, SetConnectionProperties,
               (const RedisModuleConnectionProperty *properties, int length));
@@ -233,6 +239,9 @@ class MockRedisModule {
   MOCK_METHOD(RedisModuleCallReply *, Call,
               (RedisModuleCtx * ctx, const char *cmd, const char *fmt,
                const char *arg1, const char *arg2));
+  MOCK_METHOD(RedisModuleCallReply *, Call,
+              (RedisModuleCtx * ctx, const char *cmd, const char *fmt,
+               const char *arg1));
   MOCK_METHOD(RedisModuleCallReply *, CallReplyArrayElement,
               (RedisModuleCallReply * reply, size_t index));
   MOCK_METHOD(int, CallReplyMapElement,
@@ -253,6 +262,7 @@ class MockRedisModule {
   MOCK_METHOD(int, GetDbIdFromIO, (RedisModuleIO * rdb));
   MOCK_METHOD(void, FreeClusterNodesList, (char **ids));
   MOCK_METHOD(int, CallReplyType, (RedisModuleCallReply * reply));
+  MOCK_METHOD(size_t, CallReplyLength, (RedisModuleCallReply * reply));
   MOCK_METHOD(RedisModuleString *, CreateStringFromCallReply,
               (RedisModuleCallReply * reply));
   MOCK_METHOD(int, WrongArity, (RedisModuleCtx * ctx));
@@ -989,6 +999,16 @@ inline int TestRedisModule_RegisterEnumConfig(
       getfn, setfn, applyfn, privdata);
 }
 
+inline int TestRedisModule_RegisterNumericConfig(
+    RedisModuleCtx *ctx, const char *name, long long default_val,
+    unsigned int flags, long long min, long long max,
+    RedisModuleConfigGetNumericFunc getfn,
+    RedisModuleConfigSetNumericFunc setfn, RedisModuleConfigApplyFunc applyfn,
+    void *privdata) {
+  return kMockRedisModule->RegisterNumericConfig(
+      ctx, name, default_val, flags, min, max, getfn, setfn, applyfn, privdata);
+}
+
 inline int TestRedisModule_LoadConfigs(RedisModuleCtx *ctx) {
   return kMockRedisModule->LoadConfigs(ctx);
 }
@@ -1229,6 +1249,11 @@ inline RedisModuleCallReply *TestRedisModule_Call(RedisModuleCtx *ctx,
   va_list args;
   va_start(args, fmt);
   std::string format(fmt);
+  if (format == "c") {
+    const char *arg1 = va_arg(args, const char *);
+    auto ret = kMockRedisModule->Call(ctx, cmdname, fmt, arg1);
+    return ret;
+  }
   if (format == "cc") {
     const char *arg1 = va_arg(args, const char *);
     const char *arg2 = va_arg(args, const char *);
@@ -1352,6 +1377,11 @@ inline void TestRedisModule_FreeClusterNodesList(char **ids) {
 inline int TestRedisModule_CallReplyType(RedisModuleCallReply *reply) {
   return kMockRedisModule->CallReplyType(reply);
 }
+
+inline size_t TestRedisModule_CallReplyLength(RedisModuleCallReply *reply) {
+  return kMockRedisModule->CallReplyLength(reply);
+}
+
 inline int TestRedisModule_CallReplyTypeImpl(RedisModuleCallReply *reply) {
   return reply->type;
 }
@@ -1496,6 +1526,7 @@ inline void TestRedisModule_Init() {
   RedisModule_GetDbIdFromIO = &TestRedisModule_GetDbIdFromIO;
   RedisModule_FreeClusterNodesList = &TestRedisModule_FreeClusterNodesList;
   RedisModule_CallReplyType = &TestRedisModule_CallReplyType;
+  RedisModule_CallReplyLength = &TestRedisModule_CallReplyLength;
   RedisModule_CreateStringFromCallReply =
       &TestRedisModule_CreateStringFromCallReply;
   RedisModule_WrongArity = &TestRedisModule_WrongArity;
@@ -1507,6 +1538,8 @@ inline void TestRedisModule_Init() {
   RedisModule_RdbSave = &TestRedisModule_RdbSave;
   RedisModule_RdbLoad = &TestRedisModule_RdbLoad;
   RedisModule_GetCurrentUserName = &TestRedisModule_GetCurrentUserName;
+  RedisModule_RegisterNumericConfig = &TestRedisModule_RegisterNumericConfig;
+
   kMockRedisModule = new testing::NiceMock<MockRedisModule>();
 
   // Implement basic key registration functions with simple implementations by

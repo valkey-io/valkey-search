@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -35,7 +35,6 @@
 #include <vector>
 
 #include "absl/status/status.h"
-#include "gmock/gmock.h"
 #include "google/protobuf/text_format.h"
 #include "gtest/gtest.h"
 #include "src/commands/commands.h"

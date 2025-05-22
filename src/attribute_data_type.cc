@@ -29,7 +29,6 @@
 
 #include "src/attribute_data_type.h"
 
-#include <optional>
 #include <string>
 #include <utility>
 
@@ -40,6 +39,7 @@
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -186,16 +186,6 @@ absl::StatusOr<RecordsMap> JsonAttributeDataType::FetchAllRecords(
 }
 
 bool IsJsonModuleLoaded(RedisModuleCtx *ctx) {
-  static std::optional<bool> json_module_loaded;
-  if (!json_module_loaded.has_value() ||
-      (!json_module_loaded.value() && vmsdk::IsMainThread())) {
-    vmsdk::VerifyMainThread();
-    auto reply = vmsdk::UniquePtrRedisCallReply(
-        RedisModule_Call(ctx, kJsonCmd.data(), "cc", "nonexistentkey", "."));
-    json_module_loaded =
-        (reply != nullptr &&
-         RedisModule_CallReplyType(reply.get()) != REDISMODULE_REPLY_ERROR);
-  }
-  return json_module_loaded.value();
+  return vmsdk::IsModuleLoaded(ctx, "json");
 }
 }  // namespace valkey_search

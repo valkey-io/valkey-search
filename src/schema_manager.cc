@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -54,7 +54,6 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
-#include "src/metrics.h"
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
 #include "src/vector_externalizer.h"
@@ -357,7 +356,7 @@ uint64_t SchemaManager::GetNumberOfAttributes() const {
   }
   return num_attributes;
 }
-uint64_t SchemaManager::GetTotalIndexedHashKeys() const {
+uint64_t SchemaManager::GetTotalIndexedDocuments() const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto num_hash_keys = 0;
   for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
@@ -502,7 +501,7 @@ void SchemaManager::OnLoadingEnded(RedisModuleCtx *ctx) {
 }
 
 void SchemaManager::PerformBackfill(RedisModuleCtx *ctx, uint32_t batch_size) {
-  // TODO(b/323954093): Address fairness of index backfill/mutation
+  // TODO: Address fairness of index backfill/mutation
   // processing.
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   uint32_t remaining_count = batch_size;

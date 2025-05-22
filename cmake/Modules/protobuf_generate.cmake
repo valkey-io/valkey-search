@@ -4,6 +4,10 @@ set(MODULES_BIN_DIR "${MODULE_BASE_DIR}/install/bin")
 function(protobuf_generate)
   include(CMakeParseArguments)
 
+  if(NOT EXISTS "${protoc_EXE}")
+    message(FATAL_ERROR "Could not locate 'protoc' executable")
+  endif()
+
   set(_options APPEND_PATH)
   set(_singleargs
       LANGUAGE
@@ -103,8 +107,6 @@ function(protobuf_generate)
     endforeach()
   endif()
 
-  set(protobuf_generate_PROTOC_EXE ${MODULES_BIN_DIR}/protoc)
-  message(STATUS "Using protoc => ${protobuf_generate_PROTOC_EXE}")
   foreach(DIR ${protobuf_generate_IMPORT_DIRS})
     get_filename_component(ABS_PATH ${DIR} ABSOLUTE)
     list(FIND _protobuf_include_path ${ABS_PATH} _contains_already)
@@ -171,10 +173,14 @@ function(protobuf_generate)
       set(_comment "${_comment}, plugin-options: ${_plugin_options}")
     endif()
 
+    message(
+      STATUS
+        "Running: ${protoc_EXE} ARGS ${protobuf_generate_PROTOC_OPTIONS} --${protobuf_generate_LANGUAGE}_out ${_plugin_options}:${protobuf_generate_PROTOC_OUT_DIR} ${_plugin} ${_protobuf_include_path} ${_abs_file}"
+    )
     add_custom_command(
       OUTPUT ${_generated_srcs}
       COMMAND
-        ${protobuf_generate_PROTOC_EXE} ARGS ${protobuf_generate_PROTOC_OPTIONS}
+        ${protoc_EXE} ARGS ${protobuf_generate_PROTOC_OPTIONS}
         --${protobuf_generate_LANGUAGE}_out
         ${_plugin_options}:${protobuf_generate_PROTOC_OUT_DIR} ${_plugin}
         ${_protobuf_include_path} ${_abs_file}
@@ -196,16 +202,13 @@ function(protobuf_generate)
 
 endfunction()
 
-# Helper method: create static library from a single proto file.
-# "PROTO_PATH" contains the relative path to the proto file from
-# top level source directory. "OUT_LIBNAME" is the user provided
-# target name to create
-function(create_proto_library PROTO_PATH
-         OUT_LIBNAME)
-  GET_FILENAME_COMPONENT(PROTO_DIR "${PROTO_PATH}" PATH)
+# Helper method: create static library from a single proto file. "PROTO_PATH"
+# contains the relative path to the proto file from top level source directory.
+# "OUT_LIBNAME" is the user provided target name to create
+function(valkey_search_create_proto_library PROTO_PATH OUT_LIBNAME)
+  get_filename_component(PROTO_DIR "${PROTO_PATH}" PATH)
   set(PROTO_OUT_DIR ${CMAKE_BINARY_DIR})
-  add_library(${OUT_LIBNAME} STATIC
-              "${CMAKE_SOURCE_DIR}/${PROTO_PATH}")
+  add_library(${OUT_LIBNAME} STATIC "${CMAKE_SOURCE_DIR}/${PROTO_PATH}")
   protobuf_generate(TARGET ${OUT_LIBNAME} IMPORT_DIRS "${CMAKE_SOURCE_DIR}"
                     PROTOC_OUT_DIR "${PROTO_OUT_DIR}")
   message(STATUS "Creating target ${OUT_LIBNAME}")

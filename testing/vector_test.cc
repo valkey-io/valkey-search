@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -325,8 +325,14 @@ TEST_F(VectorIndexTest, ResizeHNSW) ABSL_NO_THREAD_SAFETY_ANALYSIS {
                                    kM, kEFConstruction, kEFRuntime),
         "attribute_identifier_1",
         data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
-    const uint32_t block_size = 1024;
-    index.value()->SetBlockSize(block_size);
+    RedisModuleString* err = nullptr;
+    EXPECT_EQ(ValkeySearch::BlockSizeSetConfig(NULL, 1024, nullptr, &err),
+              REDISMODULE_OK);
+    if (err) {
+      RedisModule_FreeString(nullptr, err);
+      err = nullptr;
+    }
+    uint32_t block_size = ValkeySearch::Instance().GetHNSWBlockSize();
     EXPECT_EQ(index.value()->GetCapacity(), initial_cap);
     auto vectors = DeterministicallyGenerateVectors(
         initial_cap + block_size + 100, kDimensions, 10.0);
@@ -382,8 +388,8 @@ float CalcRecall(VectorFlat<float>* flat_index, VectorHNSW<float>* hsw_index,
                  uint64_t k, int dimensions, std::optional<size_t> ef_runtime) {
   auto search_vectors = DeterministicallyGenerateVectors(50, dimensions, 1.5);
   int cnt = 0;
-  for (size_t i = 0; i < search_vectors.size(); ++i) {
-    absl::string_view vector = VectorToStr(search_vectors[i]);
+  for (const auto& search_vector : search_vectors) {
+    absl::string_view vector = VectorToStr(search_vector);
     auto res_hnsw = hsw_index->Search(vector, k, nullptr, ef_runtime);
     auto res_flat = flat_index->Search(vector, k);
     for (auto& label : *res_hnsw) {
@@ -553,8 +559,8 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
       for (size_t i = 0; i < vectors.size(); ++i) {
         VerifyAdd(index.get(), vectors, i, ExpectedResults::kSuccess);
       }
-      for (size_t i = 0; i < search_vectors.size(); ++i) {
-        absl::string_view vector = VectorToStr(search_vectors[i]);
+      for (const auto& search_vector : search_vectors) {
+        absl::string_view vector = VectorToStr(search_vector);
         auto res = index->Search(vector, k);
         expected_results.push_back(std::move(*res));
       }

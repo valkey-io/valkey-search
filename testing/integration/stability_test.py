@@ -28,7 +28,7 @@ class StabilityTests(parameterized.TestCase):
 
 
     @parameterized.named_parameters(
-       
+
         dict(
             testcase_name="flat_with_backfill_coordinator",
             config=stability_runner.StabilityTestConfig(

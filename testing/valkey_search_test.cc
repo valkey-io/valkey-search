@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -217,8 +217,8 @@ TEST_P(LoadTest, load) {
       .WillOnce(testing::Return((RedisModuleType *)0xBADF00D));
   if (test_case.expected_load_ret == 0) {
     EXPECT_CALL(*kMockRedisModule,
-                Call(testing::_, testing::StrEq(kJsonCmd), testing::StrEq("cc"),
-                     testing::StrEq("nonexistentkey"), testing::StrEq(".")))
+                Call(testing::_, testing::StrEq("MODULE"), testing::StrEq("c"),
+                     testing::StrEq("LIST")))
         .WillOnce(testing::Return(nullptr));
     EXPECT_CALL(
         *kMockRedisModule,
@@ -399,13 +399,14 @@ TEST_F(ValkeySearchTest, Info) {
   auto interned_key_1 = StringInternStore::Intern("key1");
   EXPECT_EQ(std::string(*interned_key_1), "key1");
   RedisModuleInfoCtx fake_info_ctx;
-  ValkeySearch::Instance().Info(&fake_info_ctx);
+  ValkeySearch::Instance().Info(&fake_info_ctx, false);
 #ifndef TESTING_TMP_DISABLED
   EXPECT_EQ(
       fake_info_ctx.info_capture.GetInfo(),
       "memory\nused_memory_bytes: 0\nused_memory_human: "
       "'0.00M'\nindex_stats\nnumber_of_indexes: 1\nnumber_of_attributes: "
-      "1\ntotal_indexed_hash_keys: 4\ningestion\nbackground_indexing_status: "
+      "1\ntotal_indexed_documents: "
+      "4\ningestion\nbackground_indexing_status: "
       "'IN_PROGRESS'\nthread-pool\nquery_queue_size: 10\nwriter_queue_size: "
       "5\nworker_pool_suspend_cnt: 13\nwriter_resumed_cnt: "
       "14\nreader_resumed_cnt: 15\nwriter_suspension_expired_cnt: "

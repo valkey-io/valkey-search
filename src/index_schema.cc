@@ -62,10 +62,10 @@
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
 #include "src/keyspace_event_manager.h"
-#include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/vector_externalizer.h"
+#include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -525,14 +525,9 @@ void IndexSchema::ScheduleMutation(bool from_backfill,
       priority);
 }
 
-inline bool ShouldBlockClient([[maybe_unused]] RedisModuleCtx *ctx,
-                              [[maybe_unused]] bool inside_multi_exec,
-                              [[maybe_unused]] bool from_backfill) {
-#ifdef BLOCK_CLIENT_ON_MUTATION
-  return !inside_multi_exec && !from_backfill && !vmsdk::IsFakeClient(ctx);
-#else
-  return false;
-#endif
+bool ShouldBlockClient(RedisModuleCtx *ctx, bool inside_multi_exec,
+                       bool from_backfill) {
+  return !inside_multi_exec && !from_backfill && vmsdk::IsRealUserClient(ctx);
 }
 
 void IndexSchema::ProcessMutation(RedisModuleCtx *ctx,
@@ -609,6 +604,8 @@ uint32_t IndexSchema::PerformBackfill(RedisModuleCtx *ctx,
     return 0;
   }
 
+  backfill_job->paused_by_oom = false;
+
   // We need to ensure the DB size is monotonically increasing, since it could
   // change during the backfill, in which case we may show incorrect progress.
   backfill_job->db_size =
@@ -618,6 +615,12 @@ uint32_t IndexSchema::PerformBackfill(RedisModuleCtx *ctx,
   uint64_t start_scan_count = backfill_job->scanned_key_count;
   uint64_t &current_scan_count = backfill_job->scanned_key_count;
   while (current_scan_count - start_scan_count < batch_size) {
+    auto ctx_flags = RedisModule_GetContextFlags(ctx);
+    if (ctx_flags & REDISMODULE_CTX_FLAGS_OOM) {
+      backfill_job->paused_by_oom = true;
+      return 0;
+    }
+
     // Scan will return zero if there are no more keys to scan. This could be
     // the case either if there are no keys at all or if we have reached the
     // end of the current iteration. Because of this, we use the scanned key
@@ -659,6 +662,18 @@ float IndexSchema::GetBackfillPercent() const {
   return (float)processed_keys / backfill_job->db_size;
 }
 
+absl::string_view IndexSchema::GetStateForInfo() const {
+  if (!IsBackfillInProgress()) {
+    return "ready";
+  } else {
+    if (backfill_job_.Get()->paused_by_oom) {
+      return "backfill_paused_by_oom";
+    } else {
+      return "backfill_in_progress";
+    }
+  }
+}
+
 uint64_t IndexSchema::CountRecords() const {
   uint64_t record_cnt = 0;
   for (const auto &attribute : attributes_) {
@@ -668,7 +683,7 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(RedisModuleCtx *ctx) const {
-  RedisModule_ReplyWithArray(ctx, 24);
+  RedisModule_ReplyWithArray(ctx, 26);
   RedisModule_ReplyWithSimpleString(ctx, "index_name");
   RedisModule_ReplyWithSimpleString(ctx, name_.data());
   RedisModule_ReplyWithSimpleString(ctx, "index_options");
@@ -701,7 +716,6 @@ void IndexSchema::RespondWithInfo(RedisModuleCtx *ctx) const {
   RedisModule_ReplyWithCString(ctx,
                                std::to_string(stats_.document_cnt).c_str());
   // hard-code num_terms to 0 as it's related to fulltext indexes:
-  // https://screenshot.googleplex.com/ARnMzcxVyqWfP6r
   RedisModule_ReplyWithSimpleString(ctx, "num_terms");
   RedisModule_ReplyWithCString(ctx, "0");
   RedisModule_ReplyWithSimpleString(ctx, "num_records");
@@ -727,6 +741,8 @@ void IndexSchema::RespondWithInfo(RedisModuleCtx *ctx) const {
                                                  absl::Seconds(1)
                                            : 0))
                .c_str());
+  RedisModule_ReplyWithSimpleString(ctx, "state");
+  RedisModule_ReplyWithSimpleString(ctx, GetStateForInfo().data());
 }
 
 bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {
@@ -917,13 +933,11 @@ void IndexSchema::OnLoadingEnded(RedisModuleCtx *ctx) {
     });
     VMSDK_LOG(NOTICE, ctx) << "Deleting " << stale_entries
                            << " stale entries of " << key_size
-                           << " total keys for "
-                           << "{Index: " << name_
+                           << " total keys for {Index: " << name_
                            << ", Attribute: " << attribute.first << "}";
   }
   VMSDK_LOG(NOTICE, ctx) << "Deleting " << deletion_attributes.size()
-                         << " stale entries for "
-                         << "{Index: " << name_ << "}";
+                         << " stale entries for {Index: " << name_ << "}";
 
   for (auto &[key, attributes] : deletion_attributes) {
     auto interned_key = std::make_shared<InternedString>(key);
@@ -947,7 +961,7 @@ bool IndexSchema::TrackMutatedRecord(RedisModuleCtx *ctx,
     itr->second.attributes.value() = std::move(mutated_attributes);
     itr->second.from_backfill = from_backfill;
     if (ABSL_PREDICT_TRUE(block_client)) {
-      vmsdk::BlockedClient blocked_client(ctx);
+      vmsdk::BlockedClient blocked_client(ctx, true);
       blocked_client.MeasureTimeStart();
       itr->second.blocked_clients.emplace_back(std::move(blocked_client));
     }
@@ -961,7 +975,7 @@ bool IndexSchema::TrackMutatedRecord(RedisModuleCtx *ctx,
         std::move(mutated_attribute.second);
   }
   if (ABSL_PREDICT_TRUE(block_client)) {
-    vmsdk::BlockedClient blocked_client(ctx);
+    vmsdk::BlockedClient blocked_client(ctx, true);
     blocked_client.MeasureTimeStart();
     itr->second.blocked_clients.emplace_back(std::move(blocked_client));
   }

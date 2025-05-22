@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -56,6 +56,7 @@
 #include "src/keyspace_event_manager.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
+#include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
@@ -63,6 +64,8 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
+bool ShouldBlockClient(RedisModuleCtx *ctx, bool inside_multi_exec,
+                       bool from_backfill);
 
 using RDBLoadFunc = void *(*)(RedisModuleIO *, int);
 using FreeFunc = void (*)(void *);
@@ -128,6 +131,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   }
 
   float GetBackfillPercent() const;
+  absl::string_view GetStateForInfo() const;
   uint64_t CountRecords() const;
 
   int GetAttributeCount() const { return attributes_.size(); }
@@ -204,6 +208,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     uint64_t scanned_key_count{0};
     uint64_t db_size;
     vmsdk::StopWatch stopwatch;
+    bool paused_by_oom{false};
   };
 
   vmsdk::MainThreadAccessGuard<std::optional<BackfillJob>> backfill_job_;

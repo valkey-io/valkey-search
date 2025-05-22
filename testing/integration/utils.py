@@ -9,10 +9,31 @@ import re
 import subprocess
 import threading
 import time
-from typing import Any, Callable, Dict, List, NamedTuple, TextIO
+from typing import Any, Callable, Dict, List, NamedTuple, TextIO, Union
+import json
 import numpy as np
+from enum import Enum
 import valkey
 import valkey.exceptions
+
+
+class StoreDataType(Enum):
+    HASH = 1
+    JSON = 2
+
+
+class VectorIndexType(Enum):
+    FLAT = 1
+    HNSW = 2
+
+
+def to_str(val):
+    if isinstance(val, bytes):
+        try:
+            return val.decode("utf-8")
+        except UnicodeDecodeError:
+            return val.hex()  # fallback: show as hex
+    return str(val)
 
 
 class ValkeyServerUnderTest:
@@ -42,6 +63,7 @@ def start_valkey_process(
     command = f"{valkey_server_path} --port {port} --dir {directory}"
     modules_args = [f'"--loadmodule {k} {v}"' for k, v in modules.items()]
     args_str = " ".join([f"--{k} {v}" for k, v in args.items()] + modules_args)
+    command += " --loadmodule " + os.environ["VALKEY_JSON_PATH"]
     command += " " + args_str
     command = "ulimit -c unlimited && " + command
     logging.info("Starting valkey process with command: %s", command)
@@ -241,6 +263,7 @@ class FlatVectorDefinition(AttributeDefinition):
 
     def to_arguments(self) -> List[Any]:
         return [
+            "VECTOR",
             "FLAT",
             "6",
             "TYPE",
@@ -274,26 +297,76 @@ class NumericDefinition(AttributeDefinition):
 def create_index(
     client: valkey.ValkeyCluster,
     index_name: str,
+    store_data_type: str,
     attributes: Dict[str, AttributeDefinition],
     target_nodes=valkey.ValkeyCluster.DEFAULT_NODE,
 ):
-    """Creates a new HNSW index.
+    """Creates a new Vector index.
 
     Args:
       client:
       index_name:
-      vector_dimensions:
+      store_data_type:
+      attributes:
+      target_nodes:
     """
     args = [
         "FT.CREATE",
         index_name,
+        "ON",
+        store_data_type,
         "SCHEMA",
     ]
     for name, definition in attributes.items():
+        
+        if store_data_type == StoreDataType.JSON.name:
+            args.append("$." + name)
+            args.append("AS")
+          
         args.append(name)
         args.extend(definition.to_arguments())
 
     return client.execute_command(*args, target_nodes=target_nodes)
+
+
+def convert_bytes(value):
+    if isinstance(value, np.ndarray):
+        return value.tobytes().decode('latin1')
+    return value
+
+
+def to_json_string(my_dict):
+    converted_dict = {key: convert_bytes(value) for key, value in my_dict.items()}
+    return json.dumps(converted_dict)
+
+
+def store_entry(
+    client: valkey.ValkeyCluster,
+    store_data_type: str,
+    key: str,
+    mapping
+):
+    """Store entry.
+
+    Args:
+      client:
+      store_data_type:
+      key:
+      mapping:
+    """
+    if store_data_type == StoreDataType.HASH.name:
+        return client.hset(key, mapping=mapping)
+    
+    args = [
+        "JSON.SET",
+        key,
+        "$",
+        to_json_string(mapping),
+    ]
+    response = client.execute_command(*args)
+    if response == 'OK' or response == b'OK':
+        return 4
+    return response
 
 
 def drop_index(client: valkey.ValkeyCluster, index_name: str):
@@ -601,7 +674,6 @@ def periodic_ftdrop(
 def periodic_ftcreate_task(
     client: valkey.ValkeyCluster,
     index_name: str,
-    dimensions: int,
     attributes: Dict[str, AttributeDefinition],
     index_state: IndexState,
 ) -> bool:
@@ -609,7 +681,7 @@ def periodic_ftcreate_task(
         try:
             logging.info("<FT.CREATE> Invoking index creation")
             create_index(
-                client=client, index_name=index_name, attributes=attributes
+                client=client, store_data_type=StoreDataType.HASH.name, index_name=index_name, attributes=attributes
             )
             index_state.ft_created = True
         except (
@@ -629,7 +701,6 @@ def periodic_ftcreate(
     interval_sec: int,
     random_interval: bool,
     index_name: str,
-    dimensions: int,
     attributes: Dict[str, AttributeDefinition],
     index_state: IndexState,
 ) -> RandomIntervalTask:
@@ -638,7 +709,7 @@ def periodic_ftcreate(
         interval_sec,
         random_interval,
         lambda: periodic_ftcreate_task(
-            client, index_name, dimensions, attributes, index_state
+            client, index_name, attributes, index_state
         ),
     )
     thread.run()

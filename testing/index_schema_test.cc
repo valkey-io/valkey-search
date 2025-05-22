@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -449,14 +449,12 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
     EXPECT_CALL(*kMockRedisModule,
                 KeyType(vmsdk::RedisModuleKeyIsForString(key->Str())))
         .WillRepeatedly(Return(REDISMODULE_KEYTYPE_HASH));
-
-#ifdef BLOCK_CLIENT_ON_MUTATION
+    EXPECT_CALL(*kMockRedisModule, GetClientId(testing::_))
+        .WillRepeatedly(testing::Return(1));
     EXPECT_CALL(
         *kMockRedisModule,
         BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
         .WillOnce(Return((RedisModuleBlockedClient *)1));
-#endif
-
     const char *field = "vector";
     const char *value = "vector_buffer";
     RedisModuleString *value_redis_str =
@@ -475,15 +473,14 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
 
     index_schema->OnKeyspaceNotification(&fake_ctx_, REDISMODULE_NOTIFY_HASH,
                                          "event", key_redis_str.get());
-#ifdef BLOCK_CLIENT_ON_MUTATION
     EXPECT_CALL(*kMockRedisModule,
                 UnblockClient((RedisModuleBlockedClient *)1, nullptr))
         .WillOnce(Return(1));
-#endif
   }
   EXPECT_EQ(mutations_thread_pool.QueueSize(), 1);
   VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
+  EXPECT_TRUE(vmsdk::TrackedBlockedClients().empty());
 }
 
 TEST_P(IndexSchemaSubscriptionSimpleTest, EmptyKeyPrefixesTest) {
@@ -663,9 +660,11 @@ struct IndexSchemaBackfillTestCase {
   uint64_t db_size;
   std::vector<std::string> keys_to_return_in_scan;
   bool return_wrong_types;
+  int context_flags = 0;
   uint32_t expected_keys_scanned;
   std::vector<std::string> expected_keys_processed;
   float expected_backfill_percent;
+  std::string expected_state;
 };
 
 class IndexSchemaBackfillTest
@@ -692,6 +691,10 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
   RedisModuleCtx scan_ctx;
   EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&parent_ctx))
       .WillRepeatedly(Return(&scan_ctx));
+  EXPECT_CALL(*kMockRedisModule, GetContextFlags(&parent_ctx))
+      .WillRepeatedly(Return(test_case.context_flags));
+  EXPECT_CALL(*kMockRedisModule, GetContextFlags(&scan_ctx))
+      .WillRepeatedly(Return(0));
   auto index_schema =
       MockIndexSchema::Create(&parent_ctx, index_schema_name_str, key_prefixes,
                               std::make_unique<HashAttributeDataType>(),
@@ -780,6 +783,7 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
               test_case.expected_backfill_percent != 1.0);
     EXPECT_EQ(index_schema->GetBackfillPercent(),
               test_case.expected_backfill_percent);
+    EXPECT_EQ(index_schema->GetStateForInfo(), test_case.expected_state);
   } else {
     EXPECT_CALL(thread_pool,
                 Schedule(testing::_, vmsdk::ThreadPool::Priority::kLow))
@@ -873,6 +877,7 @@ INSTANTIATE_TEST_SUITE_P(
                                                 "prefix1:key3", "prefix1:key4",
                                                 "prefix1:key5"},
                     .expected_backfill_percent = 1.0,
+                    .expected_state = "ready",
                 },
                 {
                     .test_name = "not_all_match",
@@ -886,6 +891,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .expected_keys_processed = {"prefix1:key1", "prefix1:key3",
                                                 "prefix1:key5"},
                     .expected_backfill_percent = 1.0,
+                    .expected_state = "ready",
                 },
                 {
                     .test_name = "smaller_scan_batch_size_than_available",
@@ -899,6 +905,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .expected_keys_processed = {"prefix1:key1", "prefix1:key2",
                                                 "prefix1:key3"},
                     .expected_backfill_percent = 0.6,
+                    .expected_state = "backfill_in_progress",
                 },
                 {
                     .test_name = "bigger_scan_batch_size_than_available",
@@ -913,6 +920,7 @@ INSTANTIATE_TEST_SUITE_P(
                                                 "prefix1:key3", "prefix1:key4",
                                                 "prefix1:key5"},
                     .expected_backfill_percent = 1.0,
+                    .expected_state = "ready",
                 },
                 {
                     .test_name = "no_backfill",
@@ -923,6 +931,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .expected_keys_scanned = 0,
                     .expected_keys_processed = {},
                     .expected_backfill_percent = 1.0,
+                    .expected_state = "ready",
                 },
                 {
                     .test_name = "wrong_types_not_added",
@@ -934,6 +943,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .expected_keys_scanned = 1,
                     .expected_keys_processed = {},
                     .expected_backfill_percent = 1.0,
+                    .expected_state = "ready",
                 },
                 {
                     .test_name = "dbsize_shrunk",
@@ -947,6 +957,19 @@ INSTANTIATE_TEST_SUITE_P(
                     .expected_keys_processed = {"prefix1:key1", "prefix1:key2",
                                                 "prefix1:key3"},
                     .expected_backfill_percent = 0.99,
+                    .expected_state = "backfill_in_progress",
+                },
+                {
+                    .test_name = "oom",
+                    .scan_batch_size = 100,
+                    .key_prefixes = {"prefix1:"},
+                    .db_size = 100,
+                    .keys_to_return_in_scan = {},
+                    .context_flags = REDISMODULE_CTX_FLAGS_OOM,
+                    .expected_keys_scanned = 0,
+                    .expected_keys_processed = {},
+                    .expected_backfill_percent = 0.0,
+                    .expected_state = "backfill_paused_by_oom",
                 },
             })),
     [](const TestParamInfo<::testing::tuple<bool, IndexSchemaBackfillTestCase>>
@@ -1388,5 +1411,24 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
   EXPECT_EQ(stats.subscription_add.failure_cnt, 0);
   EXPECT_EQ(stats.subscription_remove.failure_cnt, 0);
   EXPECT_EQ(stats.subscription_modify.failure_cnt, 0);
+}
+
+class IndexSchemaTest : public vmsdk::RedisTest {};
+
+TEST_F(IndexSchemaTest, ShouldBlockClient) {
+  RedisModuleCtx fake_ctx;
+  {
+    EXPECT_CALL(*kMockRedisModule, GetClientId(&fake_ctx))
+        .WillOnce(testing::Return(1));
+    EXPECT_TRUE(ShouldBlockClient(&fake_ctx, false, false));
+  }
+  {
+    EXPECT_CALL(*kMockRedisModule, GetClientId(&fake_ctx))
+        .WillOnce(testing::Return(0));
+    EXPECT_FALSE(ShouldBlockClient(&fake_ctx, false, false));
+  }
+  EXPECT_FALSE(ShouldBlockClient(&fake_ctx, true, false));
+  EXPECT_FALSE(ShouldBlockClient(&fake_ctx, false, true));
+  EXPECT_FALSE(ShouldBlockClient(&fake_ctx, true, true));
 }
 }  // namespace valkey_search

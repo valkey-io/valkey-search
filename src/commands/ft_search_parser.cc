@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -182,6 +182,9 @@ absl::StatusOr<FilterParseResults> ParsePreFilter(
 
 absl::Status ParseKNN(query::VectorSearchParameters &parameters,
                       absl::string_view filter_str) {
+  if (filter_str.empty()) {
+    return absl::InvalidArgumentError("Vector query clause is missing");
+  }
   VMSDK_ASSIGN_OR_RETURN(auto close_position,
                          FindCloseSquareBracket(filter_str));
   size_t position = 0;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -77,11 +77,11 @@ class SchemaManager {
       uint32_t db_num, absl::string_view name) const
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   absl::flat_hash_set<std::string> GetIndexSchemasInDB(uint32_t db_num) const;
-  // TODO(b/350755299) Investigate storing aggregated counters to optimize stats
+  // TODO Investigate storing aggregated counters to optimize stats
   // generation.
   uint64_t GetNumberOfIndexSchemas() const;
   uint64_t GetNumberOfAttributes() const;
-  uint64_t GetTotalIndexedHashKeys() const;
+  uint64_t GetTotalIndexedDocuments() const;
   bool IsIndexingInProgress() const;
   IndexSchema::Stats::ResultCnt<uint64_t> AccumulateIndexSchemaResults(
       absl::AnyInvocable<const IndexSchema::Stats::ResultCnt<
@@ -91,12 +91,6 @@ class SchemaManager {
   void OnFlushDBEnded(RedisModuleCtx *ctx);
   void OnSwapDB(RedisModuleSwapDbInfo *swap_db_info);
 
-  // These functions provide cross-compatibility with prior versions
-  // TODO(b/349436336) Remove after rolled out.
-  void OnSavingStarted(RedisModuleCtx *ctx)
-      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
-  void OnSavingEnded(RedisModuleCtx *ctx)
-      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   void OnLoadingEnded(RedisModuleCtx *ctx)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   void OnReplicationLoadStart(RedisModuleCtx *ctx);

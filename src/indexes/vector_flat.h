@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -90,8 +90,8 @@ class VectorFlat : public VectorBase {
 
   absl::Status RemoveRecordImpl(uint64_t internal_id) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  absl::StatusOr<bool> ModifyRecordImpl(uint64_t internal_id,
-                                        absl::string_view record) override;
+  absl::Status ModifyRecordImpl(uint64_t internal_id,
+                                absl::string_view record) override;
   void ToProtoImpl(data_model::VectorIndex* vector_index_proto) const override;
   int RespondWithInfoImpl(RedisModuleCtx* ctx) const override;
   absl::Status SaveIndexImpl(RDBChunkOutputStream chunked_out) const override;
@@ -102,8 +102,11 @@ class VectorFlat : public VectorBase {
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->getPoint(internal_id);
   }
-  char* TrackVector(uint64_t internal_id,
-                    const InternedStringPtr& vector) override
+  void TrackVector(uint64_t internal_id,
+                   const InternedStringPtr& vector) override
+      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
+  bool IsVectorMatch(uint64_t internal_id,
+                     const InternedStringPtr& vector) override
       ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
   void UnTrackVector(uint64_t internal_id) override
       ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);

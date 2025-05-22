@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -57,6 +57,7 @@
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -95,15 +96,6 @@ std::optional<hnswlib::tableint> GetInternalIdDuringSearch(
     hnswlib::HierarchicalNSW<T> *algo, uint64_t internal_id) {
   return GetInternalIdLockFree(algo, internal_id);
 }
-
-template <typename T>
-bool IsDataMatched(hnswlib::HierarchicalNSW<T> *algo,
-                   hnswlib::tableint internal_id, absl::string_view in_record) {
-  char *data_ptrv = algo->getDataByInternalId(internal_id);
-  size_t dim = *((size_t *)algo->dist_func_param_);
-  absl::string_view record(data_ptrv, dim * sizeof(T));
-  return in_record == record;
-}
 }  // namespace hnswlib_helpers
 
 namespace valkey_search::indexes {
@@ -137,13 +129,31 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
 }
 
 template <typename T>
-char *VectorHNSW<T>::TrackVector(uint64_t internal_id,
-                                 const InternedStringPtr &vector) {
+void VectorHNSW<T>::TrackVector(uint64_t internal_id,
+                                const InternedStringPtr &vector) {
   absl::MutexLock lock(&tracked_vectors_mutex_);
   tracked_vectors_.push_back(vector);
-  return (char *)vector->Str().data();
 }
 
+template <typename T>
+bool VectorHNSW<T>::IsVectorMatch(uint64_t internal_id,
+                                  const InternedStringPtr &vector) {
+  absl::ReaderMutexLock lock(&resize_mutex_);
+  {
+    std::unique_lock<std::mutex> lock_label(
+        algo_->getLabelOpMutex(internal_id));
+    auto id = hnswlib_helpers::GetInternalId(algo_.get(), internal_id);
+    if (!id.has_value()) {
+      return false;
+    }
+    char *data_ptrv = algo_->getDataByInternalId(*id);
+    size_t dim = *((size_t *)algo_->dist_func_param_);
+    absl::string_view record(data_ptrv, dim * sizeof(T));
+    return vector->Str() == record;
+  }
+}
+// UnTrackVector does not delete the vector in VectorHNSW, as vectors are never
+// physically removed from the graph—only marked as deleted.
 template <typename T>
 void VectorHNSW<T>::UnTrackVector(uint64_t internal_id) {}
 
@@ -271,10 +281,11 @@ absl::Status VectorHNSW<T>::ResizeIfFull() {
       // it was expanded.
       // 2. Once multithreaded is supported we'll have to make sure that no
       // thread is reading/writing during resize
-      algo_->resizeIndex(algo_->getMaxElements() + block_size_);
+      auto block_size = ValkeySearch::Instance().GetHNSWBlockSize();
+      algo_->resizeIndex(algo_->getMaxElements() + block_size);
       VMSDK_LOG(WARNING, nullptr)
           << "Resizing HNSW Index, current size: " << max_elements
-          << ", expand by: " << block_size_ << ", resize time took: "
+          << ", expand by: " << block_size << ", resize time took: "
           << absl::FormatDuration(stop_watch.Duration());
     }
   } catch (const std::exception &e) {
@@ -286,22 +297,10 @@ absl::Status VectorHNSW<T>::ResizeIfFull() {
 }
 
 template <typename T>
-absl::StatusOr<bool> VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
-                                                     absl::string_view record) {
-  absl::ReaderMutexLock lock(&resize_mutex_);
-  {
-    std::unique_lock<std::mutex> lock_label(
-        algo_->getLabelOpMutex(internal_id));
-    auto id = hnswlib_helpers::GetInternalId(algo_.get(), internal_id);
-    if (!id.has_value()) {
-      return absl::InternalError(
-          absl::StrCat("Couldn't find internal id: ", internal_id));
-    }
-    if (hnswlib_helpers::IsDataMatched(algo_.get(), *id, record)) {
-      return false;
-    }
-  }
+absl::Status VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
+                                             absl::string_view record) {
   try {
+    absl::ReaderMutexLock lock(&resize_mutex_);
     // TODO - an alternative approach is to call HierarchicalNSW::updatePoint.
     // The concern with calling updatePoint is that it might have implications
     // on the search accuracy. Need to revisit this in the future.
@@ -312,7 +311,7 @@ absl::StatusOr<bool> VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
     return absl::InternalError(
         absl::StrCat("Error while modifying a record: ", e.what()));
   }
-  return true;
+  return absl::OkStatus();
 }
 
 template <typename T>

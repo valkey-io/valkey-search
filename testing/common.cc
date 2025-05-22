@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -97,6 +97,7 @@ absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateVectorHNSWSchema(
       auto test_index_schema,
       CreateIndexSchema(index_schema_key, fake_ctx, writer_thread_pool,
                         key_prefixes, index_schema_db_num));
+
   auto dimensions = 100;
   auto index = indexes::VectorHNSW<float>::Create(
       CreateHNSWVectorIndexProto(dimensions, data_model::DISTANCE_METRIC_COSINE,
@@ -212,8 +213,9 @@ query::ReturnAttribute ToReturnAttribute(
 std::unordered_map<std::string, std::string> ToStringMap(
     const RecordsMap &map) {
   std::unordered_map<std::string, std::string> result;
-  for (const auto &[key, value] : map) {
-    result[std::string(key)] = vmsdk::ToStringView(value.value.get());
+  for (const auto &itr : map) {
+    result[std::string(itr.first)] =
+        vmsdk::ToStringView(itr.second.value.get());
   }
   return result;
 }
@@ -299,13 +301,13 @@ RespReply ParseRespReply(absl::string_view input) {
   return ParseRespReply(input, pos);
 }
 
-void WaitWorkerTasksAreCompleted(vmsdk::ThreadPool &mutations_thread_pool) {
+void WaitWorkerTasksAreCompleted(vmsdk::ThreadPool &thread_pool) {
   auto mutex = std::make_shared<absl::Mutex>();
   auto is_completed = std::make_shared<bool>();
   auto blocking_refcount =
-      std::make_shared<absl::BlockingCounter>(mutations_thread_pool.Size());
-  for (size_t i = 0; i < mutations_thread_pool.Size(); ++i) {
-    mutations_thread_pool.Schedule(
+      std::make_shared<absl::BlockingCounter>(thread_pool.Size());
+  for (size_t i = 0; i < thread_pool.Size(); ++i) {
+    thread_pool.Schedule(
         [blocking_refcount = blocking_refcount, mutex = mutex,
          is_completed = is_completed]() {
           blocking_refcount->DecrementCount();

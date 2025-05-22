@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -310,9 +310,7 @@ TEST_F(SegmentTreeTest, AddSameValue) {
   EXPECT_EQ(tree_->GetHeight(), 0);
 }
 
-TEST_F(SegmentTreeTest, RemoveEmpty) {
-  EXPECT_FALSE(tree_->Remove(0.0));
-}
+TEST_F(SegmentTreeTest, RemoveEmpty) { EXPECT_FALSE(tree_->Remove(0.0)); }
 
 TEST_F(SegmentTreeTest, RemoveNotAdded) {
   tree_->Add(0.0);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -59,10 +59,10 @@
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::query::fanout {
 
@@ -100,14 +100,13 @@ struct SearchPartitionResultsTracker {
       RecordsMap attribute_contents;
       for (const auto &attribute_content :
            neighbor_entry->attribute_contents()) {
-        auto attribute_alias =
-            vmsdk::MakeUniqueRedisString(attribute_content.attribute_alias());
-        auto attribute_alias_view = vmsdk::ToStringView(attribute_alias.get());
+        auto identifier =
+            vmsdk::MakeUniqueRedisString(attribute_content.identifier());
+        auto identifier_view = vmsdk::ToStringView(identifier.get());
         attribute_contents.emplace(
-            attribute_alias_view,
-            RecordsMapValue(
-                std::move(attribute_alias),
-                vmsdk::MakeUniqueRedisString(attribute_content.content())));
+            identifier_view, RecordsMapValue(std::move(identifier),
+                                             vmsdk::MakeUniqueRedisString(
+                                                 attribute_content.content())));
       }
       indexes::Neighbor neighbor{
           std::make_shared<InternedString>(neighbor_entry->key()),
@@ -192,9 +191,9 @@ absl::Status PerformSearchFanoutAsync(
   // There should be no limit for the fanout search, so put some safe values,
   // so that the default values are not used during the local search.
   request->mutable_limit()->set_first_index(0);
-  request->mutable_limit()->set_number(parameters->k.value());
+  request->mutable_limit()->set_number(parameters->k);
   auto tracker = std::make_shared<SearchPartitionResultsTracker>(
-      search_targets.size(), parameters->k.value(), std::move(callback),
+      search_targets.size(), parameters->k, std::move(callback),
       std::move(parameters));
   bool has_local_target = false;
   for (auto &node : search_targets) {
@@ -242,7 +241,7 @@ absl::Status PerformSearchFanoutAsync(
   return absl::OkStatus();
 }
 
-// TODO(b/351726622) See if caching this improves performance.
+// TODO See if caching this improves performance.
 std::vector<FanoutSearchTarget> GetSearchTargetsForFanout(RedisModuleCtx *ctx) {
   size_t num_nodes;
   auto nodes = vmsdk::MakeUniqueRedisClusterNodesList(ctx, &num_nodes);

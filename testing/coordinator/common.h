@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,8 +33,8 @@
 #include <cstdint>
 #include <memory>
 
-#include "gmock/gmock.h"
 #include "absl/strings/string_view.h"
+#include "gmock/gmock.h"
 #include "src/coordinator/client.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/server.h"

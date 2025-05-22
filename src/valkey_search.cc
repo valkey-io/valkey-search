@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -39,7 +39,6 @@
 #include <utility>
 
 #include "absl/base/no_destructor.h"
-#include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -56,23 +55,27 @@
 #include "src/coordinator/util.h"
 #include "src/index_schema.h"
 #include "src/metrics.h"
+#include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/command_parser.h"
+#include "vmsdk/src/concurrency.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/memory_allocation.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
 static absl::NoDestructor<std::unique_ptr<ValkeySearch>> valkey_search_instance;
 constexpr size_t kMaxWorkerThreadPoolSuspensionSec{60};
+static std::atomic<uint32_t> hnsw_block_size{10240};
+const absl::string_view kHNSWBlockSizeConfig{"hnsw-block-size"};
 
 namespace options {
 
@@ -83,13 +86,15 @@ constexpr absl::string_view kReaderThreadsParam{"--reader-threads"};
 constexpr absl::string_view kWriterThreadsParam{"--writer-threads"};
 constexpr absl::string_view kUseCoordinator{"--use-coordinator"};
 constexpr absl::string_view kLogLevel{"--log-level"};
+constexpr absl::string_view kHNSWBlockSize{"--hnsw-block-size"};
 
 struct Parameters {
-  int reader_threads{10};
-  int writer_threads{30};
+  size_t reader_threads{vmsdk::GetPhysicalCPUCoresCount()};
+  size_t writer_threads{vmsdk::GetPhysicalCPUCoresCount()};
   std::optional<int> threads;
   bool use_coordinator{false};
   std::optional<std::string> log_level;
+  uint32_t hnsw_block_size{10240};
 };
 
 absl::StatusOr<Parameters> Load(RedisModuleString **argv, int argc) {
@@ -105,6 +110,8 @@ absl::StatusOr<Parameters> Load(RedisModuleString **argv, int argc) {
                         GENERATE_FLAG_PARSER(Parameters, use_coordinator));
   parser.AddParamParser(kLogLevel,
                         GENERATE_VALUE_PARSER(Parameters, log_level));
+  parser.AddParamParser(kHNSWBlockSize,
+                        GENERATE_VALUE_PARSER(Parameters, hnsw_block_size));
   vmsdk::ArgsIterator itr{argv, argc};
   VMSDK_RETURN_IF_ERROR(parser.Parse(parameters, itr));
   if (parameters.threads.has_value()) {
@@ -119,6 +126,8 @@ absl::StatusOr<Parameters> Load(RedisModuleString **argv, int argc) {
         "and writer thread pools are either enabled or disabled "
         "simultaneously");
   }
+  VMSDK_LOG(NOTICE, nullptr) << "reader_threads: " << parameters.reader_threads;
+  VMSDK_LOG(NOTICE, nullptr) << "writer_threads: " << parameters.writer_threads;
   return parameters;
 }
 }  // namespace options
@@ -133,6 +142,10 @@ void ValkeySearch::InitInstance(std::unique_ptr<ValkeySearch> instance) {
   *valkey_search_instance = std::move(instance);
 }
 
+uint32_t ValkeySearch::GetHNSWBlockSize() const {
+  return hnsw_block_size.load(std::memory_order_relaxed);
+}
+
 static std::string ConvertToMB(double bytes_value) {
   const double CONVERSION_VALUE = 1024 * 1024;
   double mb_value = bytes_value / CONVERSION_VALUE;
@@ -140,9 +153,8 @@ static std::string ConvertToMB(double bytes_value) {
   return absl::StrCat(converted_mb, "M");
 }
 
-void ModuleInfo(RedisModuleInfoCtx *ctx,
-                [[maybe_unused]] int for_crash_report) {
-  ValkeySearch::Instance().Info(ctx);
+void ModuleInfo(RedisModuleInfoCtx *ctx, int for_crash_report) {
+  ValkeySearch::Instance().Info(ctx, for_crash_report);
 }
 
 void AddLatencyStat(RedisModuleInfoCtx *ctx, absl::string_view stat_name,
@@ -154,29 +166,37 @@ void AddLatencyStat(RedisModuleInfoCtx *ctx, absl::string_view stat_name,
                                     sampler.GetStatsString().c_str());
   }
 }
-
-void ValkeySearch::Info(RedisModuleInfoCtx *ctx) const {
+/* Note: ValkeySearch::Info may be invoked during a crashdump by the engine.
+ * In such cases, any section deemed unsafe is skipped.
+ * A section is considered unsafe if it involves any of the following:
+ *   1. Acquiring locks
+ *   2. Performing heap allocations
+ *   3. Requiring execution on the main thread
+ */
+void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
   RedisModule_InfoAddSection(ctx, "memory");
   RedisModule_InfoAddFieldLongLong(ctx, "used_memory_bytes",
                                    vmsdk::GetUsedMemoryCnt());
   RedisModule_InfoAddFieldCString(
       ctx, "used_memory_human", ConvertToMB(vmsdk::GetUsedMemoryCnt()).c_str());
-  RedisModule_InfoAddSection(ctx, "index_stats");
-  RedisModule_InfoAddFieldLongLong(
-      ctx, "number_of_indexes",
-      SchemaManager::Instance().GetNumberOfIndexSchemas());
-  RedisModule_InfoAddFieldLongLong(
-      ctx, "number_of_attributes",
-      SchemaManager::Instance().GetNumberOfAttributes());
-  RedisModule_InfoAddFieldLongLong(
-      ctx, "total_indexed_hash_keys",
-      SchemaManager::Instance().GetTotalIndexedHashKeys());
+  if (!for_crash_report) {
+    RedisModule_InfoAddSection(ctx, "index_stats");
+    RedisModule_InfoAddFieldLongLong(
+        ctx, "number_of_indexes",
+        SchemaManager::Instance().GetNumberOfIndexSchemas());
+    RedisModule_InfoAddFieldLongLong(
+        ctx, "number_of_attributes",
+        SchemaManager::Instance().GetNumberOfAttributes());
+    RedisModule_InfoAddFieldLongLong(
+        ctx, "total_indexed_documents",
+        SchemaManager::Instance().GetTotalIndexedDocuments());
 
-  RedisModule_InfoAddSection(ctx, "ingestion");
-  RedisModule_InfoAddFieldCString(
-      ctx, "background_indexing_status",
-      SchemaManager::Instance().IsIndexingInProgress() ? "IN_PROGRESS"
-                                                       : "NO_ACTIVITY");
+    RedisModule_InfoAddSection(ctx, "ingestion");
+    RedisModule_InfoAddFieldCString(
+        ctx, "background_indexing_status",
+        SchemaManager::Instance().IsIndexingInProgress() ? "IN_PROGRESS"
+                                                         : "NO_ACTIVITY");
+  }
   RedisModule_InfoAddSection(ctx, "thread-pool");
   RedisModule_InfoAddFieldLongLong(ctx, "query_queue_size",
                                    reader_thread_pool_->QueueSize());
@@ -219,45 +239,45 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx) const {
       ctx, "inline_filtering_requests_count",
       Metrics::GetStats().query_inline_filtering_requests_cnt);
 
-  auto InfoResultCnt = [ctx](IndexSchema::Stats::ResultCnt<uint64_t> stat,
-                             std::string section_name) {
-    std::string successful_count_str =
-        section_name + "_" + std::string("successful_count");
-    std::string failure_count_str =
-        section_name + "_" + std::string("failure_count");
-    std::string skipped_count_str =
-        section_name + "_" + std::string("skipped_count");
+  if (!for_crash_report) {
+    auto InfoResultCnt = [ctx](IndexSchema::Stats::ResultCnt<uint64_t> stat,
+                               std::string section_name) {
+      std::string successful_count_str =
+          section_name + "_" + std::string("successful_count");
+      std::string failure_count_str =
+          section_name + "_" + std::string("failure_count");
+      std::string skipped_count_str =
+          section_name + "_" + std::string("skipped_count");
 
-    RedisModule_InfoAddFieldLongLong(ctx, successful_count_str.c_str(),
-                                     stat.success_cnt);
-    RedisModule_InfoAddFieldLongLong(ctx, failure_count_str.c_str(),
-                                     stat.failure_cnt);
-    RedisModule_InfoAddFieldLongLong(ctx, skipped_count_str.c_str(),
-                                     stat.skipped_cnt);
-  };
-  RedisModule_InfoAddSection(ctx, "subscription");
-  InfoResultCnt(
-      SchemaManager::Instance().AccumulateIndexSchemaResults(
-          [](const IndexSchema::Stats &stats)
-              -> const IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>> & {
-            return stats.subscription_add;
-          }),
-      "add_subscription");
-  InfoResultCnt(
-      SchemaManager::Instance().AccumulateIndexSchemaResults(
-          [](const IndexSchema::Stats &stats)
-              -> const IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>> & {
-            return stats.subscription_modify;
-          }),
-      "modify_subscription");
-  InfoResultCnt(
-      SchemaManager::Instance().AccumulateIndexSchemaResults(
-          [](const IndexSchema::Stats &stats)
-              -> const IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>> & {
-            return stats.subscription_remove;
-          }),
-      "remove_subscription");
-
+      RedisModule_InfoAddFieldLongLong(ctx, successful_count_str.c_str(),
+                                       stat.success_cnt);
+      RedisModule_InfoAddFieldLongLong(ctx, failure_count_str.c_str(),
+                                       stat.failure_cnt);
+      RedisModule_InfoAddFieldLongLong(ctx, skipped_count_str.c_str(),
+                                       stat.skipped_cnt);
+    };
+#ifdef DEBUG_INFO
+    RedisModule_InfoAddSection(ctx, "subscription");
+    InfoResultCnt(
+        SchemaManager::Instance().AccumulateIndexSchemaResults(
+            [](const IndexSchema::Stats &stats)
+                -> const IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>>
+                    & { return stats.subscription_add; }),
+        "add_subscription");
+    InfoResultCnt(
+        SchemaManager::Instance().AccumulateIndexSchemaResults(
+            [](const IndexSchema::Stats &stats)
+                -> const IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>>
+                    & { return stats.subscription_modify; }),
+        "modify_subscription");
+    InfoResultCnt(
+        SchemaManager::Instance().AccumulateIndexSchemaResults(
+            [](const IndexSchema::Stats &stats)
+                -> const IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>>
+                    & { return stats.subscription_remove; }),
+        "remove_subscription");
+#endif
+  }
   RedisModule_InfoAddSection(ctx, "hnswlib");
   RedisModule_InfoAddFieldLongLong(ctx, "hnsw_add_exceptions_count",
                                    Metrics::GetStats().hnsw_add_exceptions_cnt);
@@ -343,31 +363,27 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx) const {
         Metrics::GetStats()
             .coordinator_server_search_index_partition_failure_latency);
   }
-  RedisModule_InfoAddSection(ctx, "string_interning");
-  RedisModule_InfoAddFieldLongLong(ctx, "string_interning_store_size",
-                                   StringInternStore::Instance().Size());
-  /*
-   size_t vector_externing_num_lru_entries{0};
-    size_t vector_externing_hash_extern_errors{0};
-    size_t vector_externing_lru_promote_cnt{0};
-    size_t vector_externing_entry_cnt{0};
-    size_t vector_externing_deferred_entry_cnt{0};
-    size_t vector_externing_generated_value_cnt{0};
-  */
-  RedisModule_InfoAddSection(ctx, "vector_externing");
-  auto vector_externing_stats = VectorExternalizer::Instance().GetStats();
-  RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_entry_count",
-                                   vector_externing_stats.entry_cnt);
-  RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_hash_extern_errors",
-                                   vector_externing_stats.hash_extern_errors);
-  RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_generated_value_cnt",
-                                   vector_externing_stats.generated_value_cnt);
-  RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_num_lru_entries",
-                                   vector_externing_stats.num_lru_entries);
-  RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_lru_promote_cnt",
-                                   vector_externing_stats.lru_promote_cnt);
-  RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_deferred_entry_cnt",
-                                   vector_externing_stats.deferred_entry_cnt);
+  if (!for_crash_report) {
+    RedisModule_InfoAddSection(ctx, "string_interning");
+    RedisModule_InfoAddFieldLongLong(ctx, "string_interning_store_size",
+                                     StringInternStore::Instance().Size());
+
+    RedisModule_InfoAddSection(ctx, "vector_externing");
+    auto vector_externing_stats = VectorExternalizer::Instance().GetStats();
+    RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_entry_count",
+                                     vector_externing_stats.entry_cnt);
+    RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_hash_extern_errors",
+                                     vector_externing_stats.hash_extern_errors);
+    RedisModule_InfoAddFieldLongLong(
+        ctx, "vector_externing_generated_value_cnt",
+        vector_externing_stats.generated_value_cnt);
+    RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_num_lru_entries",
+                                     vector_externing_stats.num_lru_entries);
+    RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_lru_promote_cnt",
+                                     vector_externing_stats.lru_promote_cnt);
+    RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_deferred_entry_cnt",
+                                     vector_externing_stats.deferred_entry_cnt);
+  }
 }
 
 // Beside the thread which initiates the fork, no other threads are present
@@ -378,9 +394,14 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx) const {
 // writer thread pool during full sync. The writer thread pool resumes once the
 // child process dies or suspension time exceeds 60 seconds. Suspending the
 // workers guarantees that no thread is mutating the index while the fork is
-// happenning. For more details see:
+// happening. For more details see:
 // https://pubs.opengroup.org/onlinepubs/009695399/functions/pthread_atfork.html
 void ValkeySearch::AtForkPrepare() {
+  // Sanity: fork can occur (by example: calling to "popen") before the thread
+  // pool is initialized
+  if (writer_thread_pool_ == nullptr || reader_thread_pool_ == nullptr) {
+    return;
+  }
   Metrics::GetStats().worker_thread_pool_suspend_cnt++;
   auto status = writer_thread_pool_->SuspendWorkers();
   VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend writer "
@@ -397,6 +418,11 @@ void ValkeySearch::AtForkPrepare() {
 }
 
 void ValkeySearch::AfterForkParent() {
+  // Sanity: fork can occur (by example: calling to "popen") before the thread
+  // pool is initialized
+  if (reader_thread_pool_ == nullptr) {
+    return;
+  }
   auto status = reader_thread_pool_->ResumeWorkers();
   Metrics::GetStats().reader_worker_thread_pool_resumed_cnt++;
   VMSDK_LOG(WARNING, nullptr) << "After fork parent callback, resume reader "
@@ -466,6 +492,19 @@ absl::Status ValkeySearch::LoadOptions(RedisModuleCtx *ctx,
       "write-worker-", options.writer_threads);
   writer_thread_pool_->StartWorkers();
 
+  if (options.hnsw_block_size) {
+    RedisModuleString *err = nullptr;
+    if (BlockSizeSetConfig(kHNSWBlockSizeConfig.data(), options.hnsw_block_size,
+                           nullptr, &err) != REDISMODULE_OK) {
+      std::string error_msg =
+          err ? RedisModule_StringPtrLen(err, nullptr) : "Unknown error";
+      RedisModule_FreeString(nullptr, err);
+      return absl::InternalError(absl::StrFormat(
+          "Failed to set vs-hnsw-block-size config from command-line: %s",
+          error_msg));
+    }
+  }
+
   if (options.log_level) {
     VMSDK_RETURN_IF_ERROR(vmsdk::InitLogging(ctx, options.log_level));
   }
@@ -477,8 +516,6 @@ absl::Status ValkeySearch::LoadOptions(RedisModuleCtx *ctx,
         vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx));
     coordinator::MetadataManager::InitInstance(
         std::make_unique<coordinator::MetadataManager>(ctx, *client_pool_));
-    VMSDK_RETURN_IF_ERROR(
-        coordinator::MetadataManager::Instance().RegisterModuleType(ctx));
     coordinator::MetadataManager::Instance().RegisterForClusterMessages(ctx);
   }
   SchemaManager::InitInstance(std::make_unique<SchemaManager>(
@@ -493,7 +530,6 @@ absl::Status ValkeySearch::LoadOptions(RedisModuleCtx *ctx,
       return absl::InternalError("Failed to create coordinator server");
     }
   }
-  VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().RegisterModuleType(ctx));
   return absl::OkStatus();
 }
 
@@ -520,9 +556,56 @@ void ValkeySearch::ResumeWriterThreadPool(RedisModuleCtx *ctx,
   writer_thread_pool_suspend_watch_ = std::nullopt;
 }
 
+long long ValkeySearch::BlockSizeGetConfig(
+    [[maybe_unused]] const char *config_name,
+    [[maybe_unused]] void *priv_data) {
+  return hnsw_block_size.load(std::memory_order_relaxed);
+}
+
+int ValkeySearch::BlockSizeSetConfig([[maybe_unused]] const char *config_name,
+                                     long long value,
+                                     [[maybe_unused]] void *priv_data,
+                                     RedisModuleString **err) {
+  if (value <= 0 || value > UINT32_MAX) {
+    if (err) {
+      *err = RedisModule_CreateStringPrintf(
+          nullptr, "Block size must be between 10240 and %u", UINT32_MAX);
+    }
+    return REDISMODULE_ERR;
+  }
+  hnsw_block_size.store(static_cast<uint32_t>(value),
+                        std::memory_order_relaxed);
+  return REDISMODULE_OK;
+}
+
 absl::Status ValkeySearch::OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv,
                                   int argc) {
   ctx_ = RedisModule_GetDetachedThreadSafeContext(ctx);
+
+  // Register a single module type for Aux load/save callbacks.
+  VMSDK_RETURN_IF_ERROR(RegisterModuleType(ctx));
+
+  // Register vs-block-size configuration
+  if (RedisModule_RegisterNumericConfig(
+          ctx,
+          kHNSWBlockSizeConfig.data(),  // Name
+          10240,                        // Default value
+          REDISMODULE_CONFIG_DEFAULT,   // Flags (mutable, can be changed via
+                                        // CONFIG SET)
+          10240,                        // Minimum value
+          UINT32_MAX,                   // Maximum value
+          BlockSizeGetConfig,           // Get callback
+          BlockSizeSetConfig,           // Set callback
+          nullptr,                      // Apply callback (optional)
+          nullptr                       // privdata (not used here)
+          ) != REDISMODULE_OK) {
+    return absl::InternalError("Failed to register vs-block-size config");
+  }
+
+  // Load configurations to initialize registered configs
+  if (RedisModule_LoadConfigs(ctx) != REDISMODULE_OK) {
+    return absl::InternalError("Failed to load configurations");
+  }
 
   VMSDK_RETURN_IF_ERROR(LoadOptions(ctx, argv, argc));
 
@@ -530,9 +613,9 @@ absl::Status ValkeySearch::OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv,
       ctx, REDISMODULE_OPTIONS_HANDLE_IO_ERRORS |
                REDISMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD |
                REDISMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED);
-  if (!IsJsonModuleLoaded(ctx)) {
-    VMSDK_LOG(WARNING, ctx) << "Json module is not loaded ";
-  }
+  VMSDK_LOG(NOTICE, ctx) << "Json module is "
+                         << (IsJsonModuleLoaded(ctx) ? "" : "not ")
+                         << "loaded!";
   VectorExternalizer::Instance().Init(ctx_);
   return absl::OkStatus();
 }

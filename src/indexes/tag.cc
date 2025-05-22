@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -43,15 +43,12 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
-#include "absl/strings/strip.h"
 #include "absl/synchronization/mutex.h"
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
 #include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
-#include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
-#include "vmsdk/src/type_conversions.h"
 
 namespace valkey_search::indexes {
 
@@ -133,7 +130,7 @@ absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
 
 absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
                                        absl::string_view data) {
-  // TODO(@himanshushahu): implement operator [] in patriciatree.
+  // TODO: implement operator [] in patriciatree.
   auto interned_data = StringInternStore::Intern(data);
   auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
   if (new_parsed_tags.empty()) {
@@ -252,8 +249,7 @@ Tag::EntriesFetcherIterator::EntriesFetcherIterator(
     : tree_iter_(tree.RootIterator()),
       entries_(entries),
       untracked_keys_(untracked_keys),
-      negate_(negate) {
-}
+      negate_(negate) {}
 
 bool Tag::EntriesFetcherIterator::Done() const {
   if (negate_) {
@@ -359,18 +355,9 @@ std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
                                                untracked_keys_);
 }
 
-vmsdk::UniqueRedisString Tag::NormalizeStringRecord(
-    vmsdk::UniqueRedisString input) const {
-  auto input_str = vmsdk::ToStringView(input.get());
-  if (absl::ConsumePrefix(&input_str, "[")) {
-    absl::ConsumeSuffix(&input_str, "]");
-  }
-  return vmsdk::MakeUniqueRedisString(input_str);
-}
-
 std::unique_ptr<EntriesFetcherIteratorBase> Tag::EntriesFetcher::Begin() {
   auto itr = std::make_unique<EntriesFetcherIterator>(tree_, entries_,
-                                                  untracked_keys_, negate_);
+                                                      untracked_keys_, negate_);
   itr->Next();
   return itr;
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -40,12 +40,12 @@
 #include <variant>
 #include <vector>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_hnsw.h"
@@ -53,11 +53,11 @@
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
@@ -97,6 +97,7 @@ absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateVectorHNSWSchema(
       auto test_index_schema,
       CreateIndexSchema(index_schema_key, fake_ctx, writer_thread_pool,
                         key_prefixes, index_schema_db_num));
+
   auto dimensions = 100;
   auto index = indexes::VectorHNSW<float>::Create(
       CreateHNSWVectorIndexProto(dimensions, data_model::DISTANCE_METRIC_COSINE,
@@ -125,14 +126,12 @@ absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateIndexSchema(
       .WillByDefault(testing::Return(index_schema_db_num));
   EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(testing::_))
       .WillRepeatedly(testing::Return(fake_ctx));
-  auto *fake_module_type =
-      TestableSchemaManager::GetFakeIndexSchemaModuleType();
   VMSDK_ASSIGN_OR_RETURN(
       auto test_index_schema,
       valkey_search::MockIndexSchema::Create(
           fake_ctx, index_schema_key, *key_prefixes,
           std::make_unique<valkey_search::HashAttributeDataType>(),
-          fake_module_type, writer_thread_pool));
+          writer_thread_pool));
   VMSDK_RETURN_IF_ERROR(
       SchemaManager::Instance().ImportIndexSchema(test_index_schema));
   return test_index_schema;
@@ -214,8 +213,9 @@ query::ReturnAttribute ToReturnAttribute(
 std::unordered_map<std::string, std::string> ToStringMap(
     const RecordsMap &map) {
   std::unordered_map<std::string, std::string> result;
-  for (const auto &[key, value] : map) {
-    result[std::string(key)] = vmsdk::ToStringView(value.value.get());
+  for (const auto &itr : map) {
+    result[std::string(itr.first)] =
+        vmsdk::ToStringView(itr.second.value.get());
   }
   return result;
 }
@@ -301,13 +301,13 @@ RespReply ParseRespReply(absl::string_view input) {
   return ParseRespReply(input, pos);
 }
 
-void WaitWorkerTasksAreCompleted(vmsdk::ThreadPool &mutations_thread_pool) {
+void WaitWorkerTasksAreCompleted(vmsdk::ThreadPool &thread_pool) {
   auto mutex = std::make_shared<absl::Mutex>();
   auto is_completed = std::make_shared<bool>();
   auto blocking_refcount =
-      std::make_shared<absl::BlockingCounter>(mutations_thread_pool.Size());
-  for (size_t i = 0; i < mutations_thread_pool.Size(); ++i) {
-    mutations_thread_pool.Schedule(
+      std::make_shared<absl::BlockingCounter>(thread_pool.Size());
+  for (size_t i = 0; i < thread_pool.Size(); ++i) {
+    thread_pool.Schedule(
         [blocking_refcount = blocking_refcount, mutex = mutex,
          is_completed = is_completed]() {
           blocking_refcount->DecrementCount();

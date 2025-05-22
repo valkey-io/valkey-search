@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -250,9 +250,7 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   request->set_score_as(vmsdk::ToStringView(parameters.score_as.get()));
   request->set_query(parameters.query);
   request->set_dialect(parameters.dialect);
-  if (parameters.k.has_value()) {
-    request->set_k(parameters.k.value());
-  }
+  request->set_k(parameters.k);
   if (parameters.ef.has_value()) {
     request->set_ef(parameters.ef.value());
   }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,7 +32,6 @@
 #include <strings.h>
 
 #include <algorithm>
-#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -47,6 +46,8 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
+#include "src/acl.h"
+#include "src/commands/commands.h"
 #include "src/commands/ft_search_parser.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
@@ -55,10 +56,11 @@
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
+#include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
@@ -69,19 +71,18 @@ void ReplyAvailNeighbors(RedisModuleCtx *ctx,
                          const std::deque<indexes::Neighbor> &neighbors,
                          const query::VectorSearchParameters &parameters) {
   RedisModule_ReplyWithLongLong(
-      ctx,
-      std::min(neighbors.size(), static_cast<size_t>(parameters.k.value())));
+      ctx, std::min(neighbors.size(), static_cast<size_t>(parameters.k)));
 }
 
 size_t CalcEndIndex(const std::deque<indexes::Neighbor> &neighbors,
                     const query::VectorSearchParameters &parameters) {
-  return std::min(static_cast<size_t>(parameters.k.value()),
+  return std::min(static_cast<size_t>(parameters.k),
                   std::min(parameters.limit.number, neighbors.size()));
 }
 
 size_t CalcStartIndex(const std::deque<indexes::Neighbor> &neighbors,
                       const query::VectorSearchParameters &parameters) {
-  CHECK_GT(parameters.k.value(), parameters.limit.first_index);
+  CHECK_GT(parameters.k, parameters.limit.first_index);
   if (neighbors.size() <= parameters.limit.first_index) {
     return neighbors.size();
   }
@@ -112,8 +113,7 @@ void ReplyScore(RedisModuleCtx *ctx, RedisModuleString &score_as,
 void SerializeNeighbors(RedisModuleCtx *ctx,
                         const std::deque<indexes::Neighbor> &neighbors,
                         const query::VectorSearchParameters &parameters) {
-  CHECK_GT(static_cast<size_t>(parameters.k.value()),
-           parameters.limit.first_index);
+  CHECK_GT(static_cast<size_t>(parameters.k), parameters.limit.first_index);
   const size_t start_index = CalcStartIndex(neighbors, parameters);
   const size_t end_index = start_index + CalcEndIndex(neighbors, parameters);
   RedisModule_ReplyWithArray(ctx, 2 * (end_index - start_index) + 1);
@@ -169,8 +169,7 @@ void SendReply(RedisModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
                const query::VectorSearchParameters &parameters) {
   // Increment success counter.
   ++Metrics::GetStats().query_successful_requests_cnt;
-  if (parameters.limit.first_index >=
-          static_cast<uint64_t>(parameters.k.value()) ||
+  if (parameters.limit.first_index >= static_cast<uint64_t>(parameters.k) ||
       parameters.limit.number == 0) {
     RedisModule_ReplyWithArray(ctx, 1);
     RedisModule_ReplyWithLongLong(ctx, neighbors.size());
@@ -224,24 +223,29 @@ int Timeout(RedisModuleCtx *ctx, [[maybe_unused]] RedisModuleString **argv,
 
 absl::Status FTSearchCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
                          int argc) {
-  auto status = [&]() {
+  auto status = [&]() -> absl::Status {
     auto &schema_manager = SchemaManager::Instance();
     VMSDK_ASSIGN_OR_RETURN(
         auto parameters,
         ParseVectorSearchParameters(ctx, argv + 1, argc - 1, schema_manager));
 
+    static const auto permissions =
+        PrefixACLPermissions(kSearchCmdPermissions, kSearchCommand);
+    VMSDK_RETURN_IF_ERROR(AclPrefixCheck(
+        ctx, permissions, parameters->index_schema->GetKeyPrefixes()));
+
     parameters->index_schema->ProcessMultiQueue();
-    bool inside_multi =
-        (RedisModule_GetContextFlags(ctx) & REDISMODULE_CTX_FLAGS_MULTI) != 0;
-    if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParralelQueries() ||
-                           inside_multi)) {
+
+    const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);
+    if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
+                           inside_multi_exec)) {
       VMSDK_ASSIGN_OR_RETURN(auto neighbors, query::Search(*parameters, true));
       SendReply(ctx, neighbors, *parameters);
       return absl::OkStatus();
     }
 
     vmsdk::BlockedClient blocked_client(ctx, async::Reply, async::Timeout,
-                                        async::Free, 0);
+                                        async::Free, parameters->timeout_ms);
     blocked_client.MeasureTimeStart();
     auto on_done_callback = [blocked_client = std::move(blocked_client)](
                                 auto &neighbors, auto parameters) mutable {
@@ -253,8 +257,7 @@ absl::Status FTSearchCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
     };
 
     if (ValkeySearch::Instance().UsingCoordinator() &&
-        ValkeySearch::Instance().IsCluster() &&
-        !parameters->local_only) {
+        ValkeySearch::Instance().IsCluster() && !parameters->local_only) {
       auto search_targets = query::fanout::GetSearchTargetsForFanout(ctx);
       return query::fanout::PerformSearchFanoutAsync(
           ctx, search_targets,

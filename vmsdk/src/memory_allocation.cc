@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,7 +29,6 @@
 
 #include "vmsdk/src/memory_allocation.h"
 
-#include <stdlib.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -86,4 +85,3 @@ void ReportFreeMemorySize(uint64_t size) {
 }
 
 }  // namespace vmsdk
-

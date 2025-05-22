@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,6 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
 
 #ifndef VMSDK_SRC_STATUS_SOURCE_LOCATION_H_
 #define VMSDK_SRC_STATUS_SOURCE_LOCATION_H_
@@ -84,6 +83,5 @@ class SourceLocation {
   vmsdk::SourceLocation::DoNotInvokeDirectly(__LINE__, __FILE__)
 
 #define VMSDK_LOC_CURRENT_DEFAULT_ARG = vmsdk::SourceLocation::current()
-
 
 #endif  // VMSDK_SRC_STATUS_SOURCE_LOCATION_H_

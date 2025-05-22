@@ -1,0 +1,71 @@
+name: Clang Tidy and Format
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'testing/**'
+      - 'vmsdk/src/**'
+      - 'vmsdk/testing/**'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'testing/**'
+      - 'vmsdk/src/**'
+      - 'vmsdk/testing/**'
+  workflow_dispatch: # allow manual triggering
+concurrency:
+  group: clang-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+jobs:
+  process-files:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Build the Docker image from the Dockerfile in your repo
+      - name: Build Docker Image
+        run: .devcontainer/setup.sh && docker build -t presubmit-image -f .devcontainer/Dockerfile .
+
+      - name: Build Comp Database
+        id: build-comp-db
+        run: |
+          echo "Building CompDB"
+          docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image bash -c "sudo su ubuntu && export USERNAME='ubuntu' && sudo chown -R ubuntu:ubuntu /workspace && export HOME='/home/ubuntu'  && export USERNAME='ubuntu' && ci/refresh_comp_db.sh "
+
+      - name: Determine base branch
+        id: determine-base
+        run: |
+          # If it's a pull request, compare against the base branch.
+          # If it's a push to main, compare against the previous commit.
+          if [[ "${{ github.ref }}" != "refs/heads/main" ]]; then
+            echo "BASE_BRANCH=${{ github.base_ref }}" >> $GITHUB_ENV
+          else
+            echo "BASE_BRANCH=$(git rev-parse HEAD~1)" >> $GITHUB_ENV
+          fi
+
+      - name: Find and process modified files
+        run: |
+          echo "Finding modified or added .cc and .h files..."
+          MODIFIED_FILES=$(git diff --name-only --diff-filter=AM $BASE_BRANCH | grep -E '\.(cc|h)$' || echo "")
+
+          if [[ -z "$MODIFIED_FILES" ]]; then
+            echo "No .cc or .h files modified."
+            exit 0
+          fi
+
+          echo "Processing the following files:"
+          echo "$MODIFIED_FILES"
+
+          for FILE in $MODIFIED_FILES; do
+            echo "Running script on $FILE"
+            docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" clang-tidy-format-image \
+            bash -c ' clang-tidy --quiet -p compile_commands.json "$FILE" 2>&1 | tail -n +3 && ci/check_clang_format.sh "$FILE"'
+          done
+
+      - name: Ensure script execution success
+        run: echo "Workflow completed successfully."

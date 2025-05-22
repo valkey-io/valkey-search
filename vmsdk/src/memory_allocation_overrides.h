@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,6 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
 
 #ifndef VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_
 #define VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_
@@ -55,6 +54,13 @@ void* (*__real_valloc)(size_t) = valloc;
 __attribute__((weak)) size_t empty_usable_size(void* ptr) noexcept;
 }  // extern "C"
 
+// Different exception specifier between CLANG & GCC
+#ifdef __clang__
+#define PMES
+#else
+#define PMES noexcept
+#endif
+
 extern "C" {
 // See https://www.gnu.org/software/libc/manual/html_node/Replacing-malloc.html
 // NOLINTNEXTLINE
@@ -70,11 +76,12 @@ void* __wrap_aligned_alloc(size_t __alignment, size_t __size) noexcept;
 // NOLINTNEXTLINE
 int __wrap_malloc_usable_size(void* ptr) noexcept;
 // NOLINTNEXTLINE
-int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size);
+int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size) PMES;
 // NOLINTNEXTLINE
 void* __wrap_valloc(size_t size) noexcept;
 }  // extern "C"
 
+#ifndef ASAN_BUILD
 // NOLINTNEXTLINE
 #define malloc(...) __wrap_malloc(__VA_ARGS__)
 // NOLINTNEXTLINE
@@ -90,58 +97,30 @@ void* __wrap_valloc(size_t size) noexcept;
 // NOLINTNEXTLINE
 #define valloc(...) __wrap_valloc(__VA_ARGS__)
 
-// NOLINTNEXTLINE
-void* operator new(size_t __sz) noexcept(false);
+void* operator new(size_t size) noexcept(false);
 void operator delete(void* p) noexcept;
-// NOLINTNEXTLINE
-void operator delete(void* p, size_t __sz) noexcept;
-// NOLINTNEXTLINE
-void* operator new[](size_t __sz) noexcept(false);
+void operator delete(void* p, size_t size) noexcept;
+void* operator new[](size_t size) noexcept(false);
 void operator delete[](void* p) noexcept;
-// NOLINTNEXTLINE
-void operator delete[](void* p, size_t __sz) noexcept;
-// NOLINTNEXTLINE
-void* operator new(size_t __sz, const std::nothrow_t& nt) noexcept;
-// NOLINTNEXTLINE
-void* operator new[](size_t __sz, const std::nothrow_t& nt) noexcept;
+void operator delete[](void* p, size_t size) noexcept;
+void* operator new(size_t size, const std::nothrow_t& nt) noexcept;
+void* operator new[](size_t size, const std::nothrow_t& nt) noexcept;
 void operator delete(void* p, const std::nothrow_t& nt) noexcept;
 void operator delete[](void* p, const std::nothrow_t& nt) noexcept;
-// NOLINTNEXTLINE
-void* operator new(size_t __sz, std::align_val_t alignment) noexcept(false);
-// NOLINTNEXTLINE
-void* operator new(size_t __sz, std::align_val_t alignment,
+void* operator new(size_t size, std::align_val_t alignment) noexcept(false);
+void* operator new(size_t size, std::align_val_t alignment,
                    const std::nothrow_t&) noexcept;
 void operator delete(void* p, std::align_val_t alignment) noexcept;
 void operator delete(void* p, std::align_val_t alignment,
                      const std::nothrow_t&) noexcept;
-// NOLINTNEXTLINE
-void operator delete(void* p, size_t __sz, std::align_val_t alignment) noexcept;
-// NOLINTNEXTLINE
-void* operator new[](size_t __sz, std::align_val_t alignment) noexcept(false);
-// NOLINTNEXTLINE
-void* operator new[](size_t __sz, std::align_val_t alignment,
+void operator delete(void* p, size_t size, std::align_val_t alignment) noexcept;
+void* operator new[](size_t size, std::align_val_t alignment) noexcept(false);
+void* operator new[](size_t size, std::align_val_t alignment,
                      const std::nothrow_t&) noexcept;
 void operator delete[](void* p, std::align_val_t alignment) noexcept;
 void operator delete[](void* p, std::align_val_t alignment,
                        const std::nothrow_t&) noexcept;
-// NOLINTNEXTLINE
-void operator delete[](void* p, size_t __sz,
+void operator delete[](void* p, size_t size,
                        std::align_val_t alignment) noexcept;
-
-inline void SetRealAllocators(void* (*malloc_fn)(size_t),
-                              void (*free_fn)(void*),
-                              void* (*calloc_fn)(size_t, size_t),
-                              void* (*realloc_fn)(void*, size_t),
-                              void* (*aligned_alloc_fn)(size_t, size_t),
-                              int (*posix_memalign_fn)(void**, size_t, size_t),
-                              void* (*valloc_fn)(size_t)) {
-  __real_malloc = malloc_fn;
-  __real_free = free_fn;
-  __real_calloc = calloc_fn;
-  __real_realloc = realloc_fn;
-  __real_aligned_alloc = aligned_alloc_fn;
-  __real_posix_memalign = posix_memalign_fn;
-  __real_valloc = valloc_fn;
-}
-
+#endif  // !ASAN_BUILD
 #endif  // VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_

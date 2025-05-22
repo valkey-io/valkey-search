@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VALKEYSEARCH_TESTING_COMMON_H_
 #define VALKEYSEARCH_TESTING_COMMON_H_
 
@@ -43,14 +42,13 @@
 #include <variant>
 #include <vector>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
-#include "third_party/hnswlib/iostream.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/metadata_manager.h"
@@ -59,18 +57,19 @@
 #include "src/indexes/vector_base.h"
 #include "src/keyspace_event_manager.h"
 #include "src/query/search.h"
-#include "src/rdb_io_stream.h"
+#include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
 #include "src/server_events.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "src/vector_externalizer.h"
+#include "third_party/hnswlib/iostream.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/thread_pool.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 template <typename T, typename K>
@@ -117,7 +116,7 @@ class MockIndex : public indexes::IndexBase {
   MOCK_METHOD(std::unique_ptr<data_model::Index>, ToProto, (),
               (const, override));
   MOCK_METHOD(int, RespondWithInfo, (RedisModuleCtx * ctx), (const, override));
-  MOCK_METHOD(absl::Status, SaveIndex, (RDBOutputStream & rdb_stream),
+  MOCK_METHOD(absl::Status, SaveIndex, (RDBChunkOutputStream chunked_out),
               (const, override));
   MOCK_METHOD((void), ForEachTrackedKey,
               (absl::AnyInvocable<void(const InternedStringPtr& key)> fn),
@@ -154,32 +153,21 @@ class MockAttributeDataType : public AttributeDataType {
   MOCK_METHOD(bool, RecordsProvidedAsString, (), (override, const));
 };
 
-class FakeRDBIOStream : public RDBInputStream, public RDBOutputStream {
+class FakeSafeRDB : public SafeRDB {
  public:
-  FakeRDBIOStream() = default;
-  FakeRDBIOStream(unsigned char dump_rdb[], size_t len) {
+  FakeSafeRDB() = default;
+  FakeSafeRDB(unsigned char dump_rdb[], size_t len) {
     buffer_.write((const char*)dump_rdb, len);
   }
-  ~FakeRDBIOStream() override = default;
-  absl::Status LoadSizeT(size_t& val) override { return LoadPOD(val); }
-  absl::Status LoadUnsigned(unsigned int& val) override { return LoadPOD(val); }
-  absl::Status LoadSigned(int& val) override { return LoadPOD(val); }
-  absl::Status LoadDouble(double& val) override { return LoadPOD(val); }
-
-  absl::StatusOr<hnswlib::StringBufferUniquePtr> LoadStringBuffer(
-      const size_t len) override {
-    size_t _len;
-    VMSDK_EXPECT_OK(LoadPOD(_len));
-    EXPECT_EQ(_len, len);
-    auto str = hnswlib::MakeStringBufferUniquePtr(len);
-    buffer_.read(str.get(), len);
-    EXPECT_TRUE(buffer_);
-    return str;
+  absl::StatusOr<size_t> LoadSizeT() override { return LoadPOD<size_t>(); }
+  absl::StatusOr<unsigned int> LoadUnsigned() override {
+    return LoadPOD<unsigned int>();
   }
+  absl::StatusOr<int> LoadSigned() override { return LoadPOD<int>(); }
+  absl::StatusOr<double> LoadDouble() override { return LoadPOD<double>(); }
 
   absl::StatusOr<vmsdk::UniqueRedisString> LoadString() override {
-    size_t len;
-    VMSDK_EXPECT_OK(LoadPOD(len));
+    auto len = LoadPOD<size_t>();
     auto _str = std::make_unique<char[]>(len);
     buffer_.read(_str.get(), len);
     EXPECT_TRUE(buffer_);
@@ -188,34 +176,46 @@ class FakeRDBIOStream : public RDBInputStream, public RDBOutputStream {
     return str;
   }
 
-  absl::Status SaveSizeT(size_t val) override { return SavePOD(val); }
-  absl::Status SaveUnsigned(unsigned int val) override { return SavePOD(val); }
-  absl::Status SaveSigned(int val) override { return SavePOD(val); }
-  absl::Status SaveDouble(double val) override { return SavePOD(val); }
-
-  absl::Status SaveStringBuffer(const char* str, size_t len) override {
-    VMSDK_EXPECT_OK(SavePOD(len));
-    buffer_.write(str, len);
-    EXPECT_TRUE(buffer_);
+  absl::Status SaveSizeT(size_t val) override {
+    SavePOD(val);
+    return absl::OkStatus();
+  }
+  absl::Status SaveUnsigned(unsigned int val) override {
+    SavePOD(val);
+    return absl::OkStatus();
+  }
+  absl::Status SaveSigned(int val) override {
+    SavePOD(val);
+    return absl::OkStatus();
+  }
+  absl::Status SaveDouble(double val) override {
+    SavePOD(val);
     return absl::OkStatus();
   }
 
- private:
-  template <typename T>
-  absl::Status LoadPOD(T& val) {
-    buffer_.read((char*)&val, sizeof(T));
-    EXPECT_TRUE(buffer_);
-    return absl::OkStatus();
-  }
-
-  template <typename T>
-  absl::Status SavePOD(const T val) {
-    buffer_.write((char*)&val, sizeof(T));
+  absl::Status SaveStringBuffer(absl::string_view buf) override {
+    SavePOD(buf.size());
+    buffer_.write(buf.data(), buf.size());
     EXPECT_TRUE(buffer_);
     return absl::OkStatus();
   }
 
   std::stringstream buffer_;
+
+ private:
+  template <typename T>
+  T LoadPOD() {
+    T val;
+    buffer_.read((char*)&val, sizeof(T));
+    EXPECT_TRUE(buffer_);
+    return val;
+  }
+
+  template <typename T>
+  void SavePOD(const T val) {
+    buffer_.write((char*)&val, sizeof(T));
+    EXPECT_TRUE(buffer_);
+  }
 };
 
 data_model::VectorIndex CreateHNSWVectorIndexProto(
@@ -232,14 +232,14 @@ class MockIndexSchema : public IndexSchema {
       RedisModuleCtx* ctx, absl::string_view key,
       const std::vector<absl::string_view>& subscribed_key_prefixes,
       std::unique_ptr<AttributeDataType> attribute_data_type,
-      RedisModuleType* module_type, vmsdk::ThreadPool* mutations_thread_pool) {
+      vmsdk::ThreadPool* mutations_thread_pool) {
     data_model::IndexSchema index_schema_proto;
     index_schema_proto.set_name(std::string(key));
     index_schema_proto.mutable_subscribed_key_prefixes()->Add(
         subscribed_key_prefixes.begin(), subscribed_key_prefixes.end());
     // NOLINTNEXTLINE
     auto res = std::shared_ptr<MockIndexSchema>(new MockIndexSchema(
-        ctx, index_schema_proto, std::move(attribute_data_type), module_type,
+        ctx, index_schema_proto, std::move(attribute_data_type),
         mutations_thread_pool));
     VMSDK_RETURN_IF_ERROR(res->Init(ctx));
     return res;
@@ -247,10 +247,9 @@ class MockIndexSchema : public IndexSchema {
   MockIndexSchema(RedisModuleCtx* ctx,
                   const data_model::IndexSchema& index_schema_proto,
                   std::unique_ptr<AttributeDataType> attribute_data_type,
-                  RedisModuleType* module_type,
                   vmsdk::ThreadPool* mutations_thread_pool)
       : IndexSchema(ctx, index_schema_proto, std::move(attribute_data_type),
-                    module_type, mutations_thread_pool) {
+                    mutations_thread_pool) {
     ON_CALL(*this, OnLoadingEnded(testing::_))
         .WillByDefault(testing::Invoke([this](RedisModuleCtx* ctx) {
           return IndexSchema::OnLoadingEnded(ctx);
@@ -261,9 +260,8 @@ class MockIndexSchema : public IndexSchema {
               return IndexSchema::OnSwapDB(swap_db_info);
             }));
     ON_CALL(*this, RDBSave(testing::_))
-        .WillByDefault(testing::Invoke([this](RDBOutputStream& rdb_os) {
-          return IndexSchema::RDBSave(rdb_os);
-        }));
+        .WillByDefault(testing::Invoke(
+            [this](SafeRDB* rdb) { return IndexSchema::RDBSave(rdb); }));
     ON_CALL(*this, GetIdentifier(testing::_))
         .WillByDefault(testing::Invoke([](absl::string_view attribute_name) {
           return std::string(attribute_name);
@@ -272,8 +270,7 @@ class MockIndexSchema : public IndexSchema {
   MOCK_METHOD(void, OnLoadingEnded, (RedisModuleCtx * ctx), (override));
   MOCK_METHOD(void, OnSwapDB, (RedisModuleSwapDbInfo * swap_db_info),
               (override));
-  MOCK_METHOD(absl::Status, RDBSave, (RDBOutputStream & rdb_os),
-              (const, override));
+  MOCK_METHOD(absl::Status, RDBSave, (SafeRDB * rdb), (const, override));
   MOCK_METHOD(absl::StatusOr<std::string>, GetIdentifier,
               (absl::string_view attribute_name), (const, override));
 };
@@ -302,34 +299,14 @@ class TestableSchemaManager : public SchemaManager {
       vmsdk::ThreadPool* writer_thread_pool = nullptr,
       bool coordinator_enabled = false)
       : SchemaManager(ctx, std::move(server_events_callback),
-                      writer_thread_pool, coordinator_enabled) {
-    index_schema_module_type_ = GetFakeIndexSchemaModuleType();
-    schema_manager_module_type_ = GetFakeSchemaManagerModuleType();
-  }
-  static RedisModuleType* GetFakeIndexSchemaModuleType() {
-    static RedisModuleType* index_schema_module_type =
-        (RedisModuleType*)0xBAADF00D;
-    return index_schema_module_type;
-  }
-  static RedisModuleType* GetFakeSchemaManagerModuleType() {
-    static RedisModuleType* schema_manager_module_type =
-        (RedisModuleType*)0xBADF00D1;
-    return schema_manager_module_type;
-  }
+                      writer_thread_pool, coordinator_enabled) {}
 };
 
 class TestableMetadataManager : public coordinator::MetadataManager {
  public:
   TestableMetadataManager(RedisModuleCtx* ctx,
                           coordinator::ClientPool& client_pool)
-      : coordinator::MetadataManager(ctx, client_pool) {
-    module_type_ = GetFakeMetadataManagerModuleType();
-  }
-  static RedisModuleType* GetFakeMetadataManagerModuleType() {
-    static RedisModuleType* metadata_manager_module_type =
-        (RedisModuleType*)0xBADF00D2;
-    return metadata_manager_module_type;
-  }
+      : coordinator::MetadataManager(ctx, client_pool) {}
 };
 
 inline void InitThreadPools(std::optional<size_t> readers,
@@ -445,7 +422,7 @@ class ValkeySearchTestWithParam : public vmsdk::RedisTestWithParam<T> {
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() { server_events::SubscribeToServerEvents(); }, nullptr,
         false));
-      ON_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(testing::_))
+    ON_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(testing::_))
         .WillByDefault([&](RedisModuleCtx* ctx) {
           return ctx == &registry_ctx_ ? ctx : nullptr;
         });

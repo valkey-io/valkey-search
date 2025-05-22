@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -43,12 +43,13 @@
 #include <utility>
 #include <vector>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/notification.h"
+#include "gmock/gmock.h"
 #include "grpcpp/support/status.h"
+#include "gtest/gtest.h"
+#include "re2/re2.h"
 #include "src/commands/commands.h"
 #include "src/coordinator/client.h"
 #include "src/coordinator/coordinator.pb.h"
@@ -63,11 +64,10 @@
 #include "testing/coordinator/common.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/thread_pool.h"
-#include "re2/re2.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
@@ -579,8 +579,6 @@ TEST_P(FTSearchTest, FTSearchTests) {
               OpenKey(&fake_ctx_, An<RedisModuleString *>(), testing::_))
       .WillRepeatedly(TestRedisModule_OpenKeyDefaultImpl);
   auto index_schema = CreateVectorHNSWSchema(index_name, &fake_ctx_).value();
-  EXPECT_CALL(*kMockRedisModule, ModuleTypeGetValue(testing::_))
-      .WillRepeatedly(testing::Return(index_schema.get()));
   auto vectors = DeterministicallyGenerateVectors(100, dimensions, 10.0);
   AddVectors(vectors);
   RE2 reply_regex(R"(\*3\r\n:1\r\n\+\d+\r\n\*2\r\n\+score\r\n\+.*\r\n)");

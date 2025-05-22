@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -39,8 +39,6 @@
 #include <utility>
 #include <vector>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/functional/any_invocable.h"
@@ -49,8 +47,8 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/optional.h"
-#include "third_party/hnswlib/hnswlib.h"  // IWYU pragma: keep
-#include "third_party/hnswlib/space_ip.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
@@ -60,13 +58,14 @@
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
-#include "testing/proto_package_rename_compatibility.h"
+#include "third_party/hnswlib/hnswlib.h"  // IWYU pragma: keep
+#include "third_party/hnswlib/space_ip.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
@@ -111,21 +110,18 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
   mutations_thread_pool.StartWorkers();
   for (bool use_thread_pool : {true, false}) {
     RedisModuleCtx fake_ctx;
-    auto fake_module_type =
-        TestableSchemaManager::GetFakeIndexSchemaModuleType();
     std::vector<absl::string_view> key_prefixes = {"prefix:"};
     std::string index_schema_name_str("index_schema_name");
-    auto index_schema =
-        MockIndexSchema::Create(
-            &fake_ctx, index_schema_name_str, key_prefixes,
-            std::make_unique<HashAttributeDataType>(), fake_module_type,
-            use_thread_pool ? &mutations_thread_pool : nullptr)
-            .value();
+    auto index_schema = MockIndexSchema::Create(
+                            &fake_ctx, index_schema_name_str, key_prefixes,
+                            std::make_unique<HashAttributeDataType>(),
+                            use_thread_pool ? &mutations_thread_pool : nullptr)
+                            .value();
     EXPECT_TRUE(
         KeyspaceEventManager::Instance().HasSubscription(index_schema.get()));
     auto mock_index = std::make_shared<MockIndex>();
-    VMSDK_EXPECT_OK(index_schema->AddIndex("attribute_name", test_case.hash_field,
-                                     mock_index));
+    VMSDK_EXPECT_OK(index_schema->AddIndex("attribute_name",
+                                           test_case.hash_field, mock_index));
 
     auto key = StringInternStore::Intern("key");
     auto key_redis_str = vmsdk::MakeUniqueRedisString(key->Str().data());
@@ -205,7 +201,6 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
         .skipped_cnt =
             index_schema->GetStats().subscription_modify.skipped_cnt};
     uint32_t document_cnt = index_schema->GetStats().document_cnt;
-    VMSDK_EXPECT_OK(index_schema->Register(&fake_ctx));
     index_schema->OnKeyspaceNotification(&fake_ctx, REDISMODULE_NOTIFY_HASH,
                                          "event", key_redis_str.get());
     if (use_thread_pool) {
@@ -429,19 +424,19 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
   VMSDK_EXPECT_OK(mutations_thread_pool.SuspendWorkers());
-  auto fake_module_type = TestableSchemaManager::GetFakeIndexSchemaModuleType();
   std::vector<absl::string_view> key_prefixes = {"prefix:"};
   std::string index_schema_name_str("index_schema_name");
   {
     auto index_schema =
         MockIndexSchema::Create(&fake_ctx_, index_schema_name_str, key_prefixes,
                                 std::make_unique<HashAttributeDataType>(),
-                                fake_module_type, &mutations_thread_pool)
+                                &mutations_thread_pool)
             .value();
     EXPECT_TRUE(
         KeyspaceEventManager::Instance().HasSubscription(index_schema.get()));
     auto mock_index = std::make_shared<MockIndex>();
-    VMSDK_EXPECT_OK(index_schema->AddIndex("attribute_name", "vector", mock_index));
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex("attribute_name", "vector", mock_index));
 
     auto key = StringInternStore::Intern("key");
     auto key_redis_str = vmsdk::MakeUniqueRedisString(key->Str().data());
@@ -454,14 +449,12 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
     EXPECT_CALL(*kMockRedisModule,
                 KeyType(vmsdk::RedisModuleKeyIsForString(key->Str())))
         .WillRepeatedly(Return(REDISMODULE_KEYTYPE_HASH));
-
-#ifdef BLOCK_CLIENT_ON_MUTATION
+    EXPECT_CALL(*kMockRedisModule, GetClientId(testing::_))
+        .WillRepeatedly(testing::Return(1));
     EXPECT_CALL(
         *kMockRedisModule,
         BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
         .WillOnce(Return((RedisModuleBlockedClient *)1));
-#endif
-
     const char *field = "vector";
     const char *value = "vector_buffer";
     RedisModuleString *value_redis_str =
@@ -478,18 +471,16 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
           return REDISMODULE_OK;
         });
 
-    VMSDK_EXPECT_OK(index_schema->Register(&fake_ctx_));
     index_schema->OnKeyspaceNotification(&fake_ctx_, REDISMODULE_NOTIFY_HASH,
                                          "event", key_redis_str.get());
-#ifdef BLOCK_CLIENT_ON_MUTATION
     EXPECT_CALL(*kMockRedisModule,
                 UnblockClient((RedisModuleBlockedClient *)1, nullptr))
         .WillOnce(Return(1));
-#endif
   }
   EXPECT_EQ(mutations_thread_pool.QueueSize(), 1);
   VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
+  EXPECT_TRUE(vmsdk::TrackedBlockedClients().empty());
 }
 
 TEST_P(IndexSchemaSubscriptionSimpleTest, EmptyKeyPrefixesTest) {
@@ -497,15 +488,13 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, EmptyKeyPrefixesTest) {
   auto use_thread_pool = GetParam();
 
   mutations_thread_pool.StartWorkers();
-  auto fake_module_type = TestableSchemaManager::GetFakeIndexSchemaModuleType();
   std::vector<absl::string_view> key_prefixes = {};
   std::string index_schema_name_str("index_schema_name");
-  auto index_schema =
-      MockIndexSchema::Create(
-          &fake_ctx_, index_schema_name_str, key_prefixes,
-          std::make_unique<HashAttributeDataType>(), fake_module_type,
-          use_thread_pool ? &mutations_thread_pool : nullptr)
-          .value();
+  auto index_schema = MockIndexSchema::Create(
+                          &fake_ctx_, index_schema_name_str, key_prefixes,
+                          std::make_unique<HashAttributeDataType>(),
+                          use_thread_pool ? &mutations_thread_pool : nullptr)
+                          .value();
 
   EXPECT_THAT(index_schema->GetKeyPrefixes(), UnorderedElementsAreArray({""}));
 }
@@ -515,15 +504,13 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DuplicateKeyPrefixesTest) {
   mutations_thread_pool.StartWorkers();
   auto use_thread_pool = GetParam();
 
-  auto fake_module_type = TestableSchemaManager::GetFakeIndexSchemaModuleType();
   std::vector<absl::string_view> key_prefixes = {"pre", "pre"};
   std::string index_schema_name_str("index_schema_name");
-  auto index_schema =
-      MockIndexSchema::Create(
-          &fake_ctx_, index_schema_name_str, key_prefixes,
-          std::make_unique<HashAttributeDataType>(), fake_module_type,
-          use_thread_pool ? &mutations_thread_pool : nullptr)
-          .value();
+  auto index_schema = MockIndexSchema::Create(
+                          &fake_ctx_, index_schema_name_str, key_prefixes,
+                          std::make_unique<HashAttributeDataType>(),
+                          use_thread_pool ? &mutations_thread_pool : nullptr)
+                          .value();
 
   EXPECT_THAT(index_schema->GetKeyPrefixes(),
               UnorderedElementsAreArray({"pre"}));
@@ -533,15 +520,13 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, PrefixIsPrefixedByAnotherTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
   auto use_thread_pool = GetParam();
-  auto fake_module_type = TestableSchemaManager::GetFakeIndexSchemaModuleType();
   std::vector<absl::string_view> key_prefixes = {"pre", "prefix"};
   std::string index_schema_name_str("index_schema_name");
-  auto index_schema =
-      MockIndexSchema::Create(
-          &fake_ctx_, index_schema_name_str, key_prefixes,
-          std::make_unique<HashAttributeDataType>(), fake_module_type,
-          use_thread_pool ? &mutations_thread_pool : nullptr)
-          .value();
+  auto index_schema = MockIndexSchema::Create(
+                          &fake_ctx_, index_schema_name_str, key_prefixes,
+                          std::make_unique<HashAttributeDataType>(),
+                          use_thread_pool ? &mutations_thread_pool : nullptr)
+                          .value();
 
   EXPECT_THAT(index_schema->GetKeyPrefixes(),
               UnorderedElementsAreArray({"pre"}));
@@ -551,19 +536,16 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, IndexSchemaInDifferentDBTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
   auto use_thread_pool = GetParam();
-  auto fake_module_type = TestableSchemaManager::GetFakeIndexSchemaModuleType();
   std::vector<absl::string_view> key_prefixes = {};
   std::string index_schema_name_str("index_schema_name");
-  auto index_schema =
-      MockIndexSchema::Create(
-          &fake_ctx_, index_schema_name_str, key_prefixes,
-          std::make_unique<HashAttributeDataType>(), fake_module_type,
-          use_thread_pool ? &mutations_thread_pool : nullptr)
-          .value();
+  auto index_schema = MockIndexSchema::Create(
+                          &fake_ctx_, index_schema_name_str, key_prefixes,
+                          std::make_unique<HashAttributeDataType>(),
+                          use_thread_pool ? &mutations_thread_pool : nullptr)
+                          .value();
   auto mock_index = std::make_shared<MockIndex>();
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("attribute_name", "test_identifier", mock_index));
-  VMSDK_EXPECT_OK(index_schema->Register(&fake_ctx_));
 
   EXPECT_CALL(*mock_index, AddRecord(testing::_, testing::_)).Times(0);
   std::string key = "key";
@@ -581,19 +563,16 @@ TEST_P(IndexSchemaSubscriptionSimpleTest,
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
   auto use_thread_pool = GetParam();
-  auto fake_module_type = TestableSchemaManager::GetFakeIndexSchemaModuleType();
   std::vector<absl::string_view> key_prefixes = {};
   std::string index_schema_name_str("index_schema_name");
-  auto index_schema =
-      MockIndexSchema::Create(
-          &fake_ctx_, index_schema_name_str, key_prefixes,
-          std::make_unique<HashAttributeDataType>(), fake_module_type,
-          use_thread_pool ? &mutations_thread_pool : nullptr)
-          .value();
+  auto index_schema = MockIndexSchema::Create(
+                          &fake_ctx_, index_schema_name_str, key_prefixes,
+                          std::make_unique<HashAttributeDataType>(),
+                          use_thread_pool ? &mutations_thread_pool : nullptr)
+                          .value();
   auto mock_index = std::make_shared<MockIndex>();
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("attribute_name", "test_identifier", mock_index));
-  VMSDK_EXPECT_OK(index_schema->Register(&fake_ctx_));
 
   EXPECT_CALL(*mock_index, AddRecord(testing::_, testing::_)).Times(0);
   std::string key = "key";
@@ -614,28 +593,18 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, KeyspaceNotificationWithNullptrTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
   auto use_thread_pool = GetParam();
-  auto fake_module_type = TestableSchemaManager::GetFakeIndexSchemaModuleType();
   std::vector<absl::string_view> key_prefixes = {};
   std::string index_schema_name_str("index_schema_name");
-  auto index_schema =
-      MockIndexSchema::Create(
-          &fake_ctx_, index_schema_name_str, key_prefixes,
-          std::make_unique<HashAttributeDataType>(), fake_module_type,
-          use_thread_pool ? &mutations_thread_pool : nullptr)
-          .value();
+  auto index_schema = MockIndexSchema::Create(
+                          &fake_ctx_, index_schema_name_str, key_prefixes,
+                          std::make_unique<HashAttributeDataType>(),
+                          use_thread_pool ? &mutations_thread_pool : nullptr)
+                          .value();
   auto mock_index = std::make_shared<MockIndex>();
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("attribute_name", "test_identifier", mock_index));
   EXPECT_CALL(*kMockRedisModule, OpenKey(&fake_ctx_, testing::_, testing::_))
       .Times(0);
-  EXPECT_CALL(*kMockRedisModule,
-              OpenKey(&fake_ctx_,
-                      vmsdk::RedisModuleStringValueEq(
-                          IndexSchema::GetRedisKeyForIndexSchemaName(
-                              index_schema_name_str)),
-                      testing::_))
-      .WillRepeatedly(TestRedisModule_OpenKeyDefaultImpl);
-  VMSDK_EXPECT_OK(index_schema->Register(&fake_ctx_));
   index_schema->OnKeyspaceNotification(&fake_ctx_, REDISMODULE_NOTIFY_HASH,
                                        "event", nullptr);
   if (use_thread_pool) {
@@ -647,16 +616,14 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, GetKeyPrefixesTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
   auto use_thread_pool = GetParam();
-  auto fake_module_type = TestableSchemaManager::GetFakeIndexSchemaModuleType();
   std::vector<absl::string_view> key_prefixes = {
       "prefix:", "prefix1:", "prefix2:"};
   std::string index_schema_name_str("index_schema_name");
-  auto index_schema =
-      MockIndexSchema::Create(
-          &fake_ctx_, index_schema_name_str, key_prefixes,
-          std::make_unique<HashAttributeDataType>(), fake_module_type,
-          use_thread_pool ? &mutations_thread_pool : nullptr)
-          .value();
+  auto index_schema = MockIndexSchema::Create(
+                          &fake_ctx_, index_schema_name_str, key_prefixes,
+                          std::make_unique<HashAttributeDataType>(),
+                          use_thread_pool ? &mutations_thread_pool : nullptr)
+                          .value();
 
   EXPECT_THAT(index_schema->GetKeyPrefixes(),
               UnorderedElementsAreArray(key_prefixes));
@@ -666,15 +633,13 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, GetEventTypesTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
   auto use_thread_pool = GetParam();
-  auto fake_module_type = TestableSchemaManager::GetFakeIndexSchemaModuleType();
   std::vector<absl::string_view> key_prefixes = {"unused"};
   std::string index_schema_name_str("index_schema_name");
-  auto index_schema =
-      MockIndexSchema::Create(
-          &fake_ctx_, index_schema_name_str, key_prefixes,
-          std::make_unique<HashAttributeDataType>(), fake_module_type,
-          use_thread_pool ? &mutations_thread_pool : nullptr)
-          .value();
+  auto index_schema = MockIndexSchema::Create(
+                          &fake_ctx_, index_schema_name_str, key_prefixes,
+                          std::make_unique<HashAttributeDataType>(),
+                          use_thread_pool ? &mutations_thread_pool : nullptr)
+                          .value();
 
   EXPECT_EQ(index_schema->GetAttributeDataType().GetRedisEventTypes(),
             REDISMODULE_NOTIFY_HASH | REDISMODULE_NOTIFY_GENERIC |
@@ -695,9 +660,11 @@ struct IndexSchemaBackfillTestCase {
   uint64_t db_size;
   std::vector<std::string> keys_to_return_in_scan;
   bool return_wrong_types;
+  int context_flags = 0;
   uint32_t expected_keys_scanned;
   std::vector<std::string> expected_keys_processed;
   float expected_backfill_percent;
+  std::string expected_state;
 };
 
 class IndexSchemaBackfillTest
@@ -722,16 +689,17 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
 
   RedisModuleCtx parent_ctx;
   RedisModuleCtx scan_ctx;
-  auto fake_module_type = TestableSchemaManager::GetFakeIndexSchemaModuleType();
   EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&parent_ctx))
       .WillRepeatedly(Return(&scan_ctx));
+  EXPECT_CALL(*kMockRedisModule, GetContextFlags(&parent_ctx))
+      .WillRepeatedly(Return(test_case.context_flags));
+  EXPECT_CALL(*kMockRedisModule, GetContextFlags(&scan_ctx))
+      .WillRepeatedly(Return(0));
   auto index_schema =
       MockIndexSchema::Create(&parent_ctx, index_schema_name_str, key_prefixes,
                               std::make_unique<HashAttributeDataType>(),
-                              fake_module_type,
                               use_thread_pool ? &thread_pool : nullptr)
           .value();
-  VMSDK_EXPECT_OK(index_schema->Register(&parent_ctx));
   auto mock_index = std::make_shared<MockIndex>();
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("attribute_name", "test_identifier", mock_index));
@@ -815,6 +783,7 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
               test_case.expected_backfill_percent != 1.0);
     EXPECT_EQ(index_schema->GetBackfillPercent(),
               test_case.expected_backfill_percent);
+    EXPECT_EQ(index_schema->GetStateForInfo(), test_case.expected_state);
   } else {
     EXPECT_CALL(thread_pool,
                 Schedule(testing::_, vmsdk::ThreadPool::Priority::kLow))
@@ -831,17 +800,13 @@ TEST_F(IndexSchemaBackfillTest, PerformBackfill_NoOngoingBackfillTest) {
   for (bool use_thread_pool : {true, false}) {
     RedisModuleCtx parent_ctx;
     RedisModuleCtx scan_ctx;
-    auto fake_module_type =
-        TestableSchemaManager::GetFakeIndexSchemaModuleType();
     EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&parent_ctx))
         .WillRepeatedly(Return(&scan_ctx));
-    auto index_schema =
-        MockIndexSchema::Create(
-            &parent_ctx, index_schema_name_str, key_prefixes,
-            std::make_unique<HashAttributeDataType>(), fake_module_type,
-            use_thread_pool ? &mutations_thread_pool : nullptr)
-            .value();
-    VMSDK_EXPECT_OK(index_schema->Register(&parent_ctx));
+    auto index_schema = MockIndexSchema::Create(
+                            &parent_ctx, index_schema_name_str, key_prefixes,
+                            std::make_unique<HashAttributeDataType>(),
+                            use_thread_pool ? &mutations_thread_pool : nullptr)
+                            .value();
 
     // We only expect it to do the scan the first iteration.
     EXPECT_CALL(*kMockRedisModule,
@@ -867,21 +832,17 @@ TEST_F(IndexSchemaBackfillTest, PerformBackfill_SwapDB) {
     int db_to_swap = 1;
     RedisModuleCtx parent_ctx;
     RedisModuleCtx scan_ctx;
-    auto fake_module_type =
-        TestableSchemaManager::GetFakeIndexSchemaModuleType();
     EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&parent_ctx))
         .WillRepeatedly(Return(&scan_ctx));
     EXPECT_CALL(*kMockRedisModule, GetSelectedDb(&parent_ctx))
         .WillRepeatedly(Return(starting_db));
     EXPECT_CALL(*kMockRedisModule, SelectDb(&scan_ctx, starting_db))
         .WillRepeatedly(Return(REDISMODULE_OK));
-    auto index_schema =
-        MockIndexSchema::Create(
-            &parent_ctx, index_schema_name_str, key_prefixes,
-            std::make_unique<HashAttributeDataType>(), fake_module_type,
-            use_thread_pool ? &mutations_thread_pool : nullptr)
-            .value();
-    VMSDK_EXPECT_OK(index_schema->Register(&parent_ctx));
+    auto index_schema = MockIndexSchema::Create(
+                            &parent_ctx, index_schema_name_str, key_prefixes,
+                            std::make_unique<HashAttributeDataType>(),
+                            use_thread_pool ? &mutations_thread_pool : nullptr)
+                            .value();
 
     // Validate swapping changes the db in the context
     RedisModuleSwapDbInfo swap_db_info = {
@@ -916,6 +877,7 @@ INSTANTIATE_TEST_SUITE_P(
                                                 "prefix1:key3", "prefix1:key4",
                                                 "prefix1:key5"},
                     .expected_backfill_percent = 1.0,
+                    .expected_state = "ready",
                 },
                 {
                     .test_name = "not_all_match",
@@ -929,6 +891,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .expected_keys_processed = {"prefix1:key1", "prefix1:key3",
                                                 "prefix1:key5"},
                     .expected_backfill_percent = 1.0,
+                    .expected_state = "ready",
                 },
                 {
                     .test_name = "smaller_scan_batch_size_than_available",
@@ -942,6 +905,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .expected_keys_processed = {"prefix1:key1", "prefix1:key2",
                                                 "prefix1:key3"},
                     .expected_backfill_percent = 0.6,
+                    .expected_state = "backfill_in_progress",
                 },
                 {
                     .test_name = "bigger_scan_batch_size_than_available",
@@ -956,6 +920,7 @@ INSTANTIATE_TEST_SUITE_P(
                                                 "prefix1:key3", "prefix1:key4",
                                                 "prefix1:key5"},
                     .expected_backfill_percent = 1.0,
+                    .expected_state = "ready",
                 },
                 {
                     .test_name = "no_backfill",
@@ -966,6 +931,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .expected_keys_scanned = 0,
                     .expected_keys_processed = {},
                     .expected_backfill_percent = 1.0,
+                    .expected_state = "ready",
                 },
                 {
                     .test_name = "wrong_types_not_added",
@@ -977,6 +943,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .expected_keys_scanned = 1,
                     .expected_keys_processed = {},
                     .expected_backfill_percent = 1.0,
+                    .expected_state = "ready",
                 },
                 {
                     .test_name = "dbsize_shrunk",
@@ -990,6 +957,19 @@ INSTANTIATE_TEST_SUITE_P(
                     .expected_keys_processed = {"prefix1:key1", "prefix1:key2",
                                                 "prefix1:key3"},
                     .expected_backfill_percent = 0.99,
+                    .expected_state = "backfill_in_progress",
+                },
+                {
+                    .test_name = "oom",
+                    .scan_batch_size = 100,
+                    .key_prefixes = {"prefix1:"},
+                    .db_size = 100,
+                    .keys_to_return_in_scan = {},
+                    .context_flags = REDISMODULE_CTX_FLAGS_OOM,
+                    .expected_keys_scanned = 0,
+                    .expected_keys_processed = {},
+                    .expected_backfill_percent = 0.0,
+                    .expected_state = "backfill_paused_by_oom",
                 },
             })),
     [](const TestParamInfo<::testing::tuple<bool, IndexSchemaBackfillTestCase>>
@@ -998,12 +978,9 @@ INSTANTIATE_TEST_SUITE_P(
              (std::get<0>(info.param) ? "WithThreadPool" : "WithoutThreadPool");
     });
 
-class IndexSchemaRDBTest : public ValkeySearchTest {
- protected:
-  RedisModuleType *fake_type_ = (RedisModuleType *)0xBADF00D1;
-};
+class IndexSchemaRDBTest : public ValkeySearchTest {};
 
-TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS{
+TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   std::vector<absl::string_view> key_prefixes = {"prefix1", "prefix2"};
   std::string index_schema_name_str("index_schema_name");
   int dimensions = 100;
@@ -1014,15 +991,14 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS{
   int ef_runtime = 5;
   int block_size = 250;
 
-  FakeRDBIOStream rdb_stream;
+  FakeSafeRDB rdb_stream;
 
   // Construct and save index schema
   {
-    auto index_schema =
-        MockIndexSchema::Create(&fake_ctx_, index_schema_name_str, key_prefixes,
-                                std::make_unique<HashAttributeDataType>(),
-                                fake_type_, nullptr)
-            .value();
+    auto index_schema = MockIndexSchema::Create(
+                            &fake_ctx_, index_schema_name_str, key_prefixes,
+                            std::make_unique<HashAttributeDataType>(), nullptr)
+                            .value();
 
     auto hnsw_index =
         indexes::VectorHNSW<float>::Create(
@@ -1032,7 +1008,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS{
             data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
             .value();
     VMSDK_EXPECT_OK(index_schema->AddIndex("hnsw_attribute", "hnsw_identifier",
-                                     hnsw_index));
+                                           hnsw_index));
     auto itr = index_schema->attributes_.find("hnsw_attribute");
 
     EXPECT_FALSE(itr == index_schema->attributes_.end());
@@ -1055,9 +1031,9 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS{
             data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
             .value();
     VMSDK_EXPECT_OK(index_schema->AddIndex("flat_attribute", "flat_identifier",
-                                     flat_index));
+                                           flat_index));
 
-    VMSDK_EXPECT_OK(index_schema->RDBSave(rdb_stream));
+    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream));
   }
 
   // Load the saved index schema and validate
@@ -1065,66 +1041,16 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS{
   RedisModuleCtx scan_ctx;
   EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&parent_ctx))
       .WillRepeatedly(Return(&scan_ctx));
-  auto index_schema_or = IndexSchema::LoadFromRDB(
-      rdb_stream, &parent_ctx, fake_type_,
-      /*mutations_thread_pool=*/nullptr, /*encoding_version=*/0);
-  VMSDK_EXPECT_OK(index_schema_or.status());
-  auto index_schema = std::move(index_schema_or.value());
-
-  EXPECT_THAT(index_schema->GetKeyPrefixes(),
-              testing::UnorderedElementsAre("prefix1", "prefix2"));
-  EXPECT_TRUE(dynamic_cast<const HashAttributeDataType *>(
-      &index_schema->GetAttributeDataType()));
-  VMSDK_EXPECT_OK(index_schema->GetIndex("hnsw_attribute"));
-  auto hnsw_index = dynamic_cast<indexes::VectorHNSW<float> *>(
-      index_schema->GetIndex("hnsw_attribute").value().get());
-  EXPECT_TRUE(hnsw_index != nullptr);
-  EXPECT_EQ(hnsw_index->GetDimensions(), dimensions);
-  EXPECT_TRUE(dynamic_cast<const hnswlib::InnerProductSpace *>(
-                  hnsw_index->GetSpace()) != nullptr);
-  EXPECT_EQ(hnsw_index->GetCapacity(), initial_cap);
-  EXPECT_EQ(hnsw_index->GetM(), m);
-  EXPECT_EQ(hnsw_index->GetEfConstruction(), ef_construction);
-  EXPECT_EQ(hnsw_index->GetEfRuntime(), ef_runtime);
-
-  VMSDK_EXPECT_OK(index_schema->GetIndex("flat_attribute"));
-  auto flat_index = dynamic_cast<indexes::VectorFlat<float> *>(
-      index_schema->GetIndex("flat_attribute").value().get());
-  EXPECT_TRUE(flat_index != nullptr);
-  EXPECT_EQ(flat_index->GetDimensions(), dimensions);
-  EXPECT_TRUE(dynamic_cast<const hnswlib::InnerProductSpace *>(
-                  flat_index->GetSpace()) != nullptr);
-  EXPECT_EQ(flat_index->GetCapacity(), initial_cap);
-  EXPECT_EQ(flat_index->GetBlockSize(), block_size);
-
-  EXPECT_TRUE(index_schema->IsBackfillInProgress());
-  EXPECT_EQ(index_schema->GetStats().document_cnt, 10);
-  EXPECT_EQ(index_schema->CountRecords(), 10);
-}
-
-// Load rdb file containing a vector index which was created with a package name
-// redis_query
-TEST_F(IndexSchemaRDBTest, LoadCompatability) ABSL_NO_THREAD_SAFETY_ANALYSIS{
-  std::vector<absl::string_view> key_prefixes = {"prefix1", "prefix2"};
-  std::string index_schema_name_str("index_schema_name");
-  int dimensions = 100;
-  int initial_cap = 12;
-  int m = 16;
-  int ef_construction = 100;
-  int ef_runtime = 5;
-  int block_size = 250;
-
-  FakeRDBIOStream rdb_stream(dump_rdb, dump_rdb_len);
-
-  // Load the saved index schema and validate
-  RedisModuleCtx parent_ctx;
-  RedisModuleCtx scan_ctx;
-  EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&parent_ctx))
-      .WillRepeatedly(Return(&scan_ctx));
-  auto index_schema_or = IndexSchema::LoadFromRDB(
-      rdb_stream, &parent_ctx, fake_type_,
-      /*mutations_thread_pool=*/nullptr, /*encoding_version=*/0);
-  VMSDK_EXPECT_OK(index_schema_or.status());
+  RDBSectionIter iter(&rdb_stream, 1);
+  auto section = iter.Next();
+  VMSDK_EXPECT_OK_STATUSOR(section);
+  auto index_schema_or =
+      IndexSchema::LoadFromRDB(&parent_ctx,
+                               /*mutations_thread_pool=*/nullptr,
+                               std::make_unique<data_model::IndexSchema>(
+                                   (*section)->index_schema_contents()),
+                               iter.IterateSupplementalContent());
+  VMSDK_EXPECT_OK_STATUSOR(index_schema_or);
   auto index_schema = std::move(index_schema_or.value());
 
   EXPECT_THAT(index_schema->GetKeyPrefixes(),
@@ -1177,14 +1103,14 @@ TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
     std::vector<absl::string_view> key_prefixes = {"prefix1", "prefix2"};
     std::string index_schema_name_str("index_schema_name");
 
-    auto index_schema =
-        MockIndexSchema::Create(
-            &fake_ctx_, index_schema_name_str, key_prefixes,
-            std::make_unique<HashAttributeDataType>(), fake_type_,
-            use_thread_pool ? &mutations_thread_pool : nullptr)
-            .value();
+    auto index_schema = MockIndexSchema::Create(
+                            &fake_ctx_, index_schema_name_str, key_prefixes,
+                            std::make_unique<HashAttributeDataType>(),
+                            use_thread_pool ? &mutations_thread_pool : nullptr)
+                            .value();
 
-    VMSDK_EXPECT_OK(index_schema->AddIndex("attribute", "identifier", mock_index));
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex("attribute", "identifier", mock_index));
     EXPECT_CALL(*kMockRedisModule, SelectDb(testing::_, testing::_))
         .WillRepeatedly(Return(1));  // So backfill job can be created.
     EXPECT_CALL(*kMockRedisModule, SelectDb(&fake_ctx_, 0)).WillOnce(Return(1));
@@ -1224,7 +1150,7 @@ class IndexSchemaFriendTest : public ValkeySearchTest {
     index_schema =
         MockIndexSchema::Create(&fake_ctx, index_schema_name_str, key_prefixes,
                                 std::make_unique<HashAttributeDataType>(),
-                                fake_type, &mutations_thread_pool)
+                                &mutations_thread_pool)
             .value();
     hnsw_index =
         indexes::VectorHNSW<float>::Create(
@@ -1233,8 +1159,8 @@ class IndexSchemaFriendTest : public ValkeySearchTest {
             attribute_identifier,
             data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
             .value();
-    VMSDK_EXPECT_OK(index_schema->AddIndex(attribute_identifier, "hnsw_identifier",
-                                     hnsw_index));
+    VMSDK_EXPECT_OK(index_schema->AddIndex(attribute_identifier,
+                                           "hnsw_identifier", hnsw_index));
     VMSDK_EXPECT_OK(SchemaManager::Instance().ImportIndexSchema(index_schema));
   }
   void TearDown() override {
@@ -1253,7 +1179,6 @@ class IndexSchemaFriendTest : public ValkeySearchTest {
   int ef_construction = 100;
   int ef_runtime = 5;
   RedisModuleCtx fake_ctx;
-  RedisModuleType *fake_type = (RedisModuleType *)0xBADF00D1;
   vmsdk::ThreadPool mutations_thread_pool{"writer-thread-pool-", 10};
   std::shared_ptr<IndexSchema> index_schema;
   std::shared_ptr<indexes::VectorHNSW<float>> hnsw_index;
@@ -1486,5 +1411,24 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
   EXPECT_EQ(stats.subscription_add.failure_cnt, 0);
   EXPECT_EQ(stats.subscription_remove.failure_cnt, 0);
   EXPECT_EQ(stats.subscription_modify.failure_cnt, 0);
+}
+
+class IndexSchemaTest : public vmsdk::RedisTest {};
+
+TEST_F(IndexSchemaTest, ShouldBlockClient) {
+  RedisModuleCtx fake_ctx;
+  {
+    EXPECT_CALL(*kMockRedisModule, GetClientId(&fake_ctx))
+        .WillOnce(testing::Return(1));
+    EXPECT_TRUE(ShouldBlockClient(&fake_ctx, false, false));
+  }
+  {
+    EXPECT_CALL(*kMockRedisModule, GetClientId(&fake_ctx))
+        .WillOnce(testing::Return(0));
+    EXPECT_FALSE(ShouldBlockClient(&fake_ctx, false, false));
+  }
+  EXPECT_FALSE(ShouldBlockClient(&fake_ctx, true, false));
+  EXPECT_FALSE(ShouldBlockClient(&fake_ctx, false, true));
+  EXPECT_FALSE(ShouldBlockClient(&fake_ctx, true, true));
 }
 }  // namespace valkey_search

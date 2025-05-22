@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,15 +28,16 @@
  */
 
 #include "vmsdk/src/utils.h"
+
 #include <string>
 
+#include "absl/synchronization/blocking_counter.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "absl/synchronization/blocking_counter.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/thread_pool.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
 
@@ -49,9 +50,9 @@ TEST_F(UtilsTest, RunByMain) {
   ThreadPool thread_pool("test-pool", 1);
   thread_pool.StartWorkers();
   RedisModuleEventLoopOneShotFunc captured_callback;
-  void *captured_data;
+  void* captured_data;
   EXPECT_CALL(*kMockRedisModule, EventLoopAddOneShot(testing::_, testing::_))
-      .WillOnce([&](RedisModuleEventLoopOneShotFunc callback, void *data) {
+      .WillOnce([&](RedisModuleEventLoopOneShotFunc callback, void* data) {
         captured_callback = callback;
         captured_data = data;
         blocking_refcount.DecrementCount();
@@ -84,6 +85,65 @@ TEST_F(UtilsTest, RunByMainWhileInMain) {
   });
   blocking_refcount.Wait();
   EXPECT_TRUE(run);
+}
+
+TEST_F(UtilsTest, ParseTag) {
+  struct {
+    std::string str;
+    std::optional<absl::string_view> expected;
+  } test_cases[] = {
+      {"", std::nullopt},   {"{", std::nullopt},    {"}", std::nullopt},
+      {"{{", std::nullopt}, {"{a", std::nullopt},   {"{a}", "a"},
+      {"a{b}", "b"},        {"}{", std::nullopt},   {"}{a}", "a"},
+      {"{}", std::nullopt}, {"abc{cde}xyz", "cde"}, {"ab{c}{d}{e}", "c"},
+
+  };
+  for (auto& tc : test_cases) {
+    auto actual = ParseHashTag(tc.str);
+    EXPECT_EQ(actual, tc.expected);
+  }
+}
+
+TEST_F(UtilsTest, MultiOrLua) {
+  RedisModuleCtx fake_ctx;
+  {
+    EXPECT_CALL(*kMockRedisModule, GetContextFlags(&fake_ctx))
+        .WillRepeatedly(testing::Return(0));
+    EXPECT_FALSE(MultiOrLua(&fake_ctx));
+  }
+  {
+    EXPECT_CALL(*kMockRedisModule, GetContextFlags(&fake_ctx))
+        .WillRepeatedly(testing::Return(REDISMODULE_CTX_FLAGS_MULTI));
+    EXPECT_TRUE(MultiOrLua(&fake_ctx));
+  }
+  {
+    EXPECT_CALL(*kMockRedisModule, GetContextFlags(&fake_ctx))
+        .WillRepeatedly(testing::Return(REDISMODULE_CTX_FLAGS_LUA));
+    EXPECT_TRUE(MultiOrLua(&fake_ctx));
+  }
+}
+
+TEST_F(UtilsTest, IsRealUserClient) {
+  RedisModuleCtx fake_ctx;
+  {
+    EXPECT_CALL(*kMockRedisModule, GetClientId(&fake_ctx))
+        .WillRepeatedly(testing::Return(1));
+    EXPECT_CALL(*kMockRedisModule, GetContextFlags(&fake_ctx))
+        .WillRepeatedly(testing::Return(0));
+    EXPECT_TRUE(IsRealUserClient(&fake_ctx));
+  }
+  {
+    EXPECT_CALL(*kMockRedisModule, GetClientId(&fake_ctx))
+        .WillRepeatedly(testing::Return(0));
+    EXPECT_FALSE(IsRealUserClient(&fake_ctx));
+  }
+  {
+    EXPECT_CALL(*kMockRedisModule, GetClientId(&fake_ctx))
+        .WillRepeatedly(testing::Return(1));
+    EXPECT_CALL(*kMockRedisModule, GetContextFlags(&fake_ctx))
+        .WillRepeatedly(testing::Return(REDISMODULE_CTX_FLAGS_REPLICATED));
+    EXPECT_FALSE(IsRealUserClient(&fake_ctx));
+  }
 }
 
 }  // namespace

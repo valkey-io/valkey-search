@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VALKEYSEARCH_SRC_KEYSPACE_EVENT_MANAGER_H_
 #define VALKEYSEARCH_SRC_KEYSPACE_EVENT_MANAGER_H_
 
@@ -37,11 +36,10 @@
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
-#include "absl/log/log.h"
 #include "src/attribute_data_type.h"
 #include "src/utils/patricia_tree.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 using StartSubscriptionFunction =
@@ -88,7 +86,7 @@ class KeyspaceEventManager {
   static KeyspaceEventManager &Instance();
 
  private:
-  absl::Status StartRedisSubscribtionIfNeeded(RedisModuleCtx *ctx, int types);
+  absl::Status StartRedisSubscriptionIfNeeded(RedisModuleCtx *ctx, int types);
 
   static inline int OnRedisKeyspaceNotification(RedisModuleCtx *ctx, int type,
                                                 const char *event,

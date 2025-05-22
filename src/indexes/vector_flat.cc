@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -54,11 +54,11 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
-#include "src/rdb_io_stream.h"
+#include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/log.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 // Note that the ordering matters here - we want to minimize the memory
 // overrides to just the hnswlib code.
@@ -94,11 +94,21 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
 }
 
 template <typename T>
-char *VectorFlat<T>::TrackVector(uint64_t internal_id,
-                                 const InternedStringPtr &vector) {
+void VectorFlat<T>::TrackVector(uint64_t internal_id,
+                                const InternedStringPtr &vector) {
   absl::MutexLock lock(&tracked_vectors_mutex_);
   tracked_vectors_[internal_id] = vector;
-  return (char *)vector->Str().data();
+}
+
+template <typename T>
+bool VectorFlat<T>::IsVectorMatch(uint64_t internal_id,
+                                  const InternedStringPtr &vector) {
+  absl::MutexLock lock(&tracked_vectors_mutex_);
+  auto it = tracked_vectors_.find(internal_id);
+  if (it == tracked_vectors_.end()) {
+    return false;
+  }
+  return it->second->Str() == vector->Str();
 }
 
 template <typename T>
@@ -111,7 +121,8 @@ template <typename T>
 absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     RedisModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     const data_model::VectorIndex &vector_index_proto,
-    RDBInputStream &rdb_stream, absl::string_view attribute_identifier) {
+    absl::string_view attribute_identifier,
+    SupplementalContentChunkIter &&iter) {
   try {
     auto index = std::shared_ptr<VectorFlat<T>>(new VectorFlat<T>(
         vector_index_proto.dimension_count(),
@@ -122,18 +133,9 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
                 vector_index_proto.distance_metric(), index->space_);
     index->algo_ =
         std::make_unique<hnswlib::BruteforceSearch<T>>(index->space_.get());
+    RDBChunkInputStream input(std::move(iter));
     VMSDK_RETURN_IF_ERROR(
-        index->algo_->LoadIndex(rdb_stream, index->space_.get(), index.get()));
-    if (vector_index_proto.has_tracked_keys()) {
-      VMSDK_RETURN_IF_ERROR(index->LoadTrackedKeys(
-          ctx, attribute_data_type, vector_index_proto.tracked_keys()));
-      VMSDK_RETURN_IF_ERROR(
-          index->ConsumeKeysAndInternalIdsForBackCompat(rdb_stream));
-    } else {
-      // Previous versions stored tracked keys in the index contents.
-      VMSDK_RETURN_IF_ERROR(
-          index->LoadKeysAndInternalIds(ctx, attribute_data_type, rdb_stream));
-    }
+        index->algo_->LoadIndex(input, index->space_.get(), index.get()));
     return index;
   } catch (const std::exception &e) {
     ++Metrics::GetStats().flat_create_exceptions_cnt;
@@ -195,8 +197,8 @@ absl::Status VectorFlat<T>::AddRecordImpl(uint64_t internal_id,
 }
 
 template <typename T>
-absl::StatusOr<bool> VectorFlat<T>::ModifyRecordImpl(uint64_t internal_id,
-                                                     absl::string_view record) {
+absl::Status VectorFlat<T>::ModifyRecordImpl(uint64_t internal_id,
+                                             absl::string_view record) {
   absl::ReaderMutexLock lock(&resize_mutex_);
   std::unique_lock<std::mutex> index_lock(algo_->index_lock);
   auto found = algo_->dict_external_to_internal.find(internal_id);
@@ -204,18 +206,13 @@ absl::StatusOr<bool> VectorFlat<T>::ModifyRecordImpl(uint64_t internal_id,
     return absl::InternalError(
         absl::StrCat("Couldn't find internal id: ", internal_id));
   }
-  absl::string_view saved_record(*(char **)(*algo_->data_)[found->second],
-                                 dimensions_ * sizeof(T));
-  if (saved_record == record) {
-    return false;
-  }
+
   memcpy((*algo_->data_)[found->second] + algo_->data_ptr_size_, &internal_id,
          sizeof(hnswlib::labeltype));
   *(char **)((*algo_->data_)[found->second]) = (char *)record.data();
 
-  return true;
+  return absl::OkStatus();
 }
-
 template <typename T>
 absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
   try {
@@ -243,9 +240,10 @@ absl::StatusOr<std::deque<Neighbor>> VectorFlat<T>::Search(
       -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
     absl::ReaderMutexLock lock(&resize_mutex_);
     try {
-      return algo_->searchKnn((T *)query.data(),
-                              std::min(count, algo_->cur_element_count_),
-                              filter.get());
+      return algo_->searchKnn(
+          (T *)query.data(),
+          std::min(count, static_cast<uint64_t>(algo_->cur_element_count_)),
+          filter.get());
     } catch (const std::exception &e) {
       Metrics::GetStats().flat_search_exceptions_cnt.fetch_add(
           1, std::memory_order_relaxed);
@@ -326,9 +324,10 @@ int VectorFlat<T>::RespondWithInfoImpl(RedisModuleCtx *ctx) const {
 }
 
 template <typename T>
-absl::Status VectorFlat<T>::SaveIndexImpl(RDBOutputStream &rdb_stream) const {
+absl::Status VectorFlat<T>::SaveIndexImpl(
+    RDBChunkOutputStream chunked_out) const {
   absl::ReaderMutexLock lock(&resize_mutex_);
-  return algo_->SaveIndex(rdb_stream);
+  return algo_->SaveIndex(chunked_out);
 }
 
 template class VectorFlat<float>;

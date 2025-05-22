@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -50,7 +50,7 @@ namespace coordinator {
 static constexpr int kCoordinatorPortOffset = 20294;
 
 inline int GetCoordinatorPort(int redis_port) {
-  // TODO(jkmurphy) Make handling of TLS more robust
+  // TODO Make handling of TLS more robust
   if (redis_port == 6378) {
     return redis_port + kCoordinatorPortOffset + 1;
   }

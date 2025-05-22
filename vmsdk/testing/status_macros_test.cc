@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,11 +33,11 @@
 #include <string>
 #include <tuple>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "vmsdk/src/status/status_builder.h"
 
 namespace vmsdk {
@@ -172,8 +172,7 @@ TEST(AssignOrReturn, WorksWithAppend) {
   auto func = [&]() -> absl::Status {
     VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] int value, ReturnStatusOrValue(1),
                            _ << fail_test_if_called());
-    VMSDK_ASSIGN_OR_RETURN(value,
-                           ReturnStatusOrError("EXPECTED A"),
+    VMSDK_ASSIGN_OR_RETURN(value, ReturnStatusOrError("EXPECTED A"),
                            _ << "EXPECTED B");
     return ReturnOk();
   };

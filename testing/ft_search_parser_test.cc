@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -39,19 +39,19 @@
 #include <utility>
 #include <vector>
 
+#include "absl/strings/string_view.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/vector_flat.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "testing/common.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
@@ -144,9 +144,8 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
                    vector_index_proto, "attribute_identifier_1",
                    data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
                    .value();
-  VMSDK_EXPECT_OK(index_schema->AddIndex(test_case.attribute_alias, "id1", index));
-  EXPECT_CALL(*kMockRedisModule, ModuleTypeGetValue(testing::_))
-      .WillRepeatedly(testing::Return(index_schema.get()));
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex(test_case.attribute_alias, "id1", index));
   args.push_back(
       RedisModule_CreateString(nullptr, key_str.data(), key_str.size()));
   args.push_back(RedisModule_CreateString(nullptr, test_case.filter_str.data(),
@@ -199,11 +198,19 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
         RedisModule_CreateString(nullptr, "END_UNEXPECTED_PARAM", 0));
   }
   auto &schema_manager = SchemaManager::Instance();
+
+  std::cerr << "Executing cmd: ";
+  for (auto &a : args) {
+    std::cerr << vmsdk::ToStringView(a) << " ";
+  }
+  std::cerr << "\n";
+
   auto search_params = ParseVectorSearchParameters(&fake_ctx, &args[0],
                                                    args.size(), schema_manager);
   bool expected_success = dialect_expected_success && limit_expected_success &&
                           test_case.success && !add_end_unexpected_param &&
                           timeout_expected_success;
+
   EXPECT_EQ(search_params.ok(), expected_success);
   if (search_params.ok()) {
     EXPECT_EQ(search_params.value()->index_schema_name, key_str);
@@ -211,7 +218,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
               test_case.attribute_alias);
     std::string vector_str((char *)(&floats[0]), floats.size() * sizeof(float));
     EXPECT_EQ(search_params.value()->query, vector_str.c_str());
-    EXPECT_EQ(search_params.value()->k.value(), test_case.k);
+    EXPECT_EQ(search_params.value()->k, test_case.k);
     EXPECT_EQ(search_params.value()->ef, test_case.ef);
     auto score_as = vmsdk::MakeUniqueRedisString(test_case.score_as);
     if (test_case.score_as.empty()) {
@@ -238,8 +245,8 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
       EXPECT_EQ(search_params.value()->timeout_ms, test_case.timeout_ms);
     }
   } else {
-    std::cerr << "Failed to parse command: " << search_params.status().message()
-              << "\n";
+    std::cerr << "Failed to parse command: `" << vmsdk::ToStringView(args[0])
+              << "` Because: " << search_params.status().message() << "\n";
     if (!test_case.expected_error_message.empty() &&
         !search_params.status().message().starts_with(
             test_case.expected_error_message)) {
@@ -260,8 +267,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
       } else {
         EXPECT_TRUE(add_end_unexpected_param || !test_case.success);
         EXPECT_TRUE(search_params.status().message().starts_with(
-            "Error parsing value for the parameter `PARAMS` - Unexpected "
-            "argument `DIALEC"));
+            "Error parsing vector similarity parameters"));
       }
     }
   }
@@ -389,14 +395,13 @@ INSTANTIATE_TEST_SUITE_P(
                 "EF_RUNTIMe 10 AS]`. AS argument is missing",
         },
         {
-            .test_name = "as_before_ef_runtime",
-            .success = false,
+            .test_name = "happy_path_as_before_ef_runtime",
+            .success = true,
             .params_str = " PARAMS 4 EF 190",
             .filter_str = "(*)=>[KNN 10 @vec $BLOB As as_test EF_RUNTIMe $EF]",
-            .expected_error_message =
-                "Error parsing vector similarity parameters: `[KNN 10 @vec "
-                "$BLOB As as_test EF_RUNTIMe $EF]`. Unexpected argument "
-                "`EF_RUNTIMe`",
+            .k = 10,
+            .ef = 190,
+            .score_as = "as_test",
         },
         {
             .test_name = "empty_hash_field",
@@ -514,6 +519,31 @@ INSTANTIATE_TEST_SUITE_P(
                 "Error parsing vector similarity parameters: `[KNN 10 @vec ]`. "
                 "Blob attribute "
                 "argument is missing",
+        },
+        {
+            .test_name = "extra_blob",
+            .success = false,
+            .params_str = " PARAMS 4 EXTRABLOB 123",
+            .filter_str = " * => [KNN 10 @vec $BLOB]",
+            .expected_error_message = "Parameter `EXTRABLOB` not used.",
+        },
+        {
+            .test_name = "duplicate_blob",
+            .success = false,
+            .params_str = " PARAMS 6 EXTRABLOB 123 EXTRABLOB 123",
+            .filter_str = " * => [KNN 10 @vec $BLOB]",
+            .expected_error_message =
+                "Error parsing value for the parameter `PARAMS` - Parameter "
+                "EXTRABLOB is already defined.",
+        },
+        {
+            .test_name = "odd_param_count",
+            .success = false,
+            .params_str = " PARAMS 1",
+            .filter_str = " * => [KNN 10 @vec $BLOB]",
+            .expected_error_message =
+                "Error parsing value for the parameter `PARAMS` - Parameter "
+                "count must be an even number.",
         },
         {
             .test_name = "missing_hash_field",

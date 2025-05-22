@@ -1,7 +1,7 @@
 {
     "C_Cpp.default.compileCommands": "compile_commands.json",
-    "terminal.integrated.defaultProfile.linux": "bash", // Set default profile to bash
-    "terminal.integrated.defaultProfile.osx": "bash", // Set default profile to bash
+    "terminal.integrated.defaultProfile.linux": "bash",
+    "terminal.integrated.defaultProfile.osx": "bash",
     "clangd.path": "/usr/bin/clangd",
     "C_Cpp.codeAnalysis.runAutomatically": true,
     "editor.formatOnSave": true,
@@ -11,13 +11,11 @@
     "clangd.arguments": [
         "--clang-tidy",
         "--all-scopes-completion",
-        "--background-index"
+        "--background-index",
+        "--header-insertion=never",
+        "--compile-commands-dir=${workspaceFolder}/",
+        "--query-driver=**"
     ],
-    "C_Cpp.codeAnalysis.clangTidy.args": [
-        "-p",
-        "${workspaceFolder}"
-    ],
-    "bazel.buildifierFixOnFormat": true,
     "clangd.inactiveRegions.useBackgroundHighlight": true,
     "clangd.enableCodeCompletion": true
 }

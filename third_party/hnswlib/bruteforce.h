@@ -11,24 +11,23 @@
 #include <unordered_map>
 #include <vector>
 
-#include "hnswlib.h"
-#include "iostream.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "hnswlib.h"
+#include "iostream.h"
+#include "third_party/hnswlib/index.pb.h"
 #include "vmsdk/src/status/status_macros.h"
 
 #ifdef VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES
-  #include "vmsdk/src/memory_allocation_overrides.h" // IWYU pragma: keep
+#include "vmsdk/src/memory_allocation_overrides.h"  // IWYU pragma: keep
 #endif
 
 namespace hnswlib {
-template<typename dist_t>
+template <typename dist_t>
 class BruteforceSearch : public AlgorithmInterface<dist_t> {
  public:
-    static const unsigned int ENCODING_VERSION = 0;
-
     std::unique_ptr<ChunkedArray> data_;
     size_t cur_element_count_;
     size_t vector_size_{0};
@@ -38,7 +37,7 @@ class BruteforceSearch : public AlgorithmInterface<dist_t> {
     std::mutex index_lock;
     const size_t k_elements_per_chunk{10*1024};
 
-    std::unordered_map<labeltype, size_t > dict_external_to_internal;
+  std::unordered_map<labeltype, size_t> dict_external_to_internal;
 
 
     BruteforceSearch(SpaceInterface <dist_t> *s)
@@ -145,100 +144,62 @@ class BruteforceSearch : public AlgorithmInterface<dist_t> {
         return topResults;
     }
 
-
-    void SaveIndex(const std::string &location) {
-      absl::StatusOr<std::unique_ptr<FileOutputStream>> output_or =
-          FileOutputStream::Create(location);
-      if (!output_or.ok()) {
-        throw std::runtime_error(
-            absl::StrCat("Error instantiating FileOutputStream ",
-                         output_or.status().message()));
-      }
-      absl::Status status = SaveIndex(*output_or.value());
-      if (!status.ok()) {
-        throw std::runtime_error(
-            absl::StrCat("Error saving index ", status.message()));
-      }
-    }
-
     absl::Status SaveIndex(OutputStream &output) {
-      VMSDK_RETURN_IF_ERROR(output.SaveUnsigned(ENCODING_VERSION));
-      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(data_->getCapacity()));
+      data_model::BruteForceIndexHeader header;
       const size_t size_per_element = vector_size_ + sizeof(labeltype);
-      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(size_per_element));
-      VMSDK_RETURN_IF_ERROR(output.SaveSizeT(cur_element_count_));
+      header.set_max_elements(data_->getCapacity());
+      header.set_size_per_element(size_per_element);
+      header.set_curr_element_count(cur_element_count_);
+      std::string serialized;
+      if (!header.SerializeToString(&serialized)) {
+        return absl::InternalError("Could not serialize bruteforce header");
+      }
+      VMSDK_RETURN_IF_ERROR(
+          output.SaveChunk(serialized.data(), serialized.size()));
 
       // TODO: write in chunks to improve throughput
       std::vector<char> buf(size_per_element);
       for (int i = 0; i < cur_element_count_; i++) {
         memcpy(buf.data(), *(char **)(*data_)[i], vector_size_);
-        memcpy(buf.data() + vector_size_, (*data_)[i] + sizeof(char*),
-               sizeof(labeltype));
-         VMSDK_RETURN_IF_ERROR(
-             output.SaveStringBuffer(buf.data(), size_per_element));
+        memcpy(buf.data() + vector_size_, (*data_)[i] + sizeof(char *),
+              sizeof(labeltype));
+        VMSDK_RETURN_IF_ERROR(output.SaveChunk(buf.data(), size_per_element));
       }
       return absl::OkStatus();
     }
 
-    void LoadIndex(const std::string &location, SpaceInterface<dist_t> *s) {
-      absl::StatusOr<std::unique_ptr<FileInputStream>> input_or =
-          FileInputStream::Create(location);
-      if (!input_or.ok()) {
-        throw std::runtime_error(
-            absl::StrCat("Error instantiating FileInputStream ",
-                         input_or.status().message()));
-      }
-      absl::Status status = LoadIndex(*input_or.value(), s);
-      if (!status.ok()) {
-        throw std::runtime_error(
-            absl::StrCat("Error loading index ", status.message()));
-      }
-    }
-
     absl::Status LoadIndex(InputStream &input, SpaceInterface<dist_t> *s,
-                           VectorTracker* vector_tracker) {
+                          VectorTracker *vector_tracker) {
       if (data_ != nullptr) {
         data_->clear();
       }
-
-      unsigned int encoding_version;
-      VMSDK_RETURN_IF_ERROR(input.LoadUnsigned(encoding_version));
-      if (encoding_version != ENCODING_VERSION) {
-        return absl::InvalidArgumentError(
-            absl::StrCat("Unsupported Bruteforce index encoding version ",
-                         encoding_version));
+      VMSDK_ASSIGN_OR_RETURN(auto serialized_header, input.LoadChunk());
+      auto header = std::make_unique<data_model::BruteForceIndexHeader>();
+      if (!header->ParseFromString(*serialized_header)) {
+        return absl::InternalError("Could not deserialize bruteforce header");
       }
-
-      size_t maxelements, size_per_element;
-
-      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(maxelements));
-      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(size_per_element));
-      VMSDK_RETURN_IF_ERROR(input.LoadSizeT(cur_element_count_));
+      cur_element_count_ = header->curr_element_count();
 
       vector_size_ = s->get_data_size();
       fstdistfunc_ = s->get_dist_func();
       dist_func_param_ = s->get_dist_func_param();
 
-      if (size_per_element != s->get_data_size() + sizeof(labeltype)) {
-        throw std::runtime_error("Persisted size_per_element does not match expectation.");
+      if (header->size_per_element() != s->get_data_size() + sizeof(labeltype)) {
+        throw std::runtime_error(
+            "Persisted size_per_element does not match expectation.");
       }
 
-      data_ = std::make_unique<ChunkedArray>(
-              data_ptr_size_ + sizeof(labeltype),
-              k_elements_per_chunk,
-              maxelements
-              );
+      data_ = std::make_unique<ChunkedArray>(data_ptr_size_ + sizeof(labeltype),
+                                            k_elements_per_chunk,
+                                            header->max_elements());
 
       for (int i = 0; i < cur_element_count_; i++) {
-         VMSDK_ASSIGN_OR_RETURN(StringBufferUniquePtr buf,
-                               input.LoadStringBuffer(size_per_element));
+        VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());
         labeltype id;
-        memcpy((char *)&id,
-          buf.get() + vector_size_, sizeof(labeltype));
+        memcpy((char *)&id, chunk->data() + vector_size_, sizeof(labeltype));
         *(char **)(*data_)[i] =
-                vector_tracker->TrackVector(id, buf.get(), vector_size_);
-        memcpy((*data_)[i] + data_ptr_size_,
-               (char *)&id, sizeof(labeltype));
+            vector_tracker->TrackVector(id, chunk->data(), vector_size_);
+        memcpy((*data_)[i] + data_ptr_size_, (char *)&id, sizeof(labeltype));
         dict_external_to_internal[id] = i;
       }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VALKEYSEARCH_SRC_VALKEY_SEARCH_H_
 #define VALKEYSEARCH_SRC_VALKEY_SEARCH_H_
 
@@ -44,9 +43,9 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/server.h"
 #include "src/index_schema.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
@@ -59,7 +58,7 @@ class ValkeySearch {
   ValkeySearch() = default;
   virtual ~ValkeySearch() = default;
 
-  bool SupportParralelQueries() const {
+  bool SupportParallelQueries() const {
     return reader_thread_pool_ && reader_thread_pool_->Size() > 0;
   }
 
@@ -69,7 +68,14 @@ class ValkeySearch {
   vmsdk::ThreadPool *GetWriterThreadPool() const {
     return writer_thread_pool_.get();
   }
-  void Info(RedisModuleInfoCtx *ctx) const;
+  void Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const;
+
+  static long long BlockSizeGetConfig([[maybe_unused]] const char *config_name,
+                                      [[maybe_unused]] void *priv_data);
+  static int BlockSizeSetConfig([[maybe_unused]] const char *config_name,
+                                long long value,
+                                [[maybe_unused]] void *priv_data,
+                                [[maybe_unused]] RedisModuleString **err);
 
   IndexSchema::Stats::ResultCnt<uint64_t> AccumulateIndexSchemaResults(
       absl::AnyInvocable<const IndexSchema::Stats::ResultCnt<
@@ -87,6 +93,7 @@ class ValkeySearch {
   void AfterForkParent();
   static ValkeySearch &Instance();
   static void InitInstance(std::unique_ptr<ValkeySearch> instance);
+  uint32_t GetHNSWBlockSize() const;
 
   absl::Status OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
   void OnUnload(RedisModuleCtx *ctx);
@@ -128,7 +135,6 @@ class ValkeySearch {
   static void FreeIndexSchema(void *value);
   static bool IsChildProcess();
   void ProcessIndexSchemaBackfill(RedisModuleCtx *ctx, uint32_t batch_size);
-
   void ResumeWriterThreadPool(RedisModuleCtx *ctx, bool is_expired);
 
   uint64_t inc_id_{0};

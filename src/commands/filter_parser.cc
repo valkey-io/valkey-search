@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -118,7 +118,8 @@ absl::StatusOr<double> FilterParser::ParseNumber() {
   while (!IsEnd() && (std::isdigit(Peek()) || Peek() == '.')) {
     number_str += expression_[pos_++];
   }
-  if (absl::SimpleAtod(number_str, &value)) {
+  if (absl::AsciiStrToLower(number_str) != "nan" &&
+      absl::SimpleAtod(number_str, &value)) {
     return value * multiplier;
   }
   return absl::InvalidArgumentError(
@@ -294,15 +295,15 @@ std::unique_ptr<query::Predicate> WrapPredicate(
 // 1. Predicate evaluation is done with left-associative grouping while the OR
 // operator has higher precedence than the AND operator. precedence. For
 // example: a & b | c & d is evaluated as (a & b) | (c & d).
-// 2. Field name is always preceeded by '@' and followed by ':'.
+// 2. Field name is always preceded by '@' and followed by ':'.
 // 3. A numeric field has the following pattern: @field_name:[Start,End]. Both
-// space and comma are valid seperators between Start and End.
+// space and comma are valid separators between Start and End.
 // 4. A tag field has the following pattern: @field_name:{tag1|tag2|tag3}.
 // 5. The tag separator character is configurable with a default value of '|'.
 // 6. A field name can be wrapped with `()` to group multiple predicates.
-// 7. Space between predicates is considered as AND whlie '|' is considered as
+// 7. Space between predicates is considered as AND while '|' is considered as
 // OR.
-// 8. A predicate can be negated by preceeding it with '-'. For example:
+// 8. A predicate can be negated by preceding it with '-'. For example:
 // -@field_name:10 => NOT(@field_name:10), -(a | b) => NOT(a | b).
 // 9. -inf, inf and +inf are acceptable numbers in a range. Therefore, greater
 // than 100 is expressed as [(100 inf].

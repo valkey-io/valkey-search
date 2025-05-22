@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,11 +33,12 @@
 #include <string>
 #include <vector>
 
-#include "gtest/gtest.h"
 #include "absl/container/flat_hash_set.h"
+#include "gtest/gtest.h"
 #include "src/utils/intrusive_ref_count.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
+#ifndef ASAN_BUILD
 namespace valkey_search {
 
 namespace {
@@ -239,3 +240,4 @@ INSTANTIATE_TEST_SUITE_P(AllocatorTests, AllocatorTest,
 }  // namespace
 
 }  // namespace valkey_search
+#endif

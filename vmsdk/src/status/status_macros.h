@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,15 +27,15 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VMSDK_SRC_STATUS_STATUS_MACROS_H_
 #define VMSDK_SRC_STATUS_STATUS_MACROS_H_
 
 #include <utility>
+
 #include "absl/base/optimization.h"
 #include "absl/status/status.h"
-#include "vmsdk/src/status/status_builder.h"
 #include "vmsdk/src/status/source_location.h"
+#include "vmsdk/src/status/status_builder.h"
 
 // Evaluates an expression that produces a `absl::Status`. If the
 // status is not ok, returns it from the current function.
@@ -96,7 +96,7 @@
   VMSDK_STATUS_MACROS_IMPL_ELSE_BLOCKER_                                 \
   if (::vmsdk::status_macro_internal::StatusAdaptorForMacros             \
           status_macro_internal_adaptor = {(expr), VMSDK_STREAMS_LOC}) { \
-  } else /* NOLINT */                                                      \
+  } else /* NOLINT */                                                    \
     return status_macro_internal_adaptor.Consume()
 
 // Executes an expression `rexpr` that returns a
@@ -146,8 +146,8 @@
 //   VMSDK_ASSIGN_OR_RETURN(ValueType value, MaybeGetValue(query),
 //   _.LogError());
 //
-#define VMSDK_ASSIGN_OR_RETURN(...)                                       \
-  VMSDK_STATUS_MACROS_IMPL_GET_VARIADIC_(                                 \
+#define VMSDK_ASSIGN_OR_RETURN(...)                                     \
+  VMSDK_STATUS_MACROS_IMPL_GET_VARIADIC_(                               \
       (__VA_ARGS__, VMSDK_STATUS_MACROS_IMPL_VMSDK_ASSIGN_OR_RETURN_3_, \
        VMSDK_STATUS_MACROS_IMPL_VMSDK_ASSIGN_OR_RETURN_2_))             \
   (__VA_ARGS__)
@@ -171,40 +171,40 @@ constexpr bool HasPotentialConditionalOperator(const char* lhs, int index) {
 #define VMSDK_STATUS_MACROS_IMPL_GET_VARIADIC_(args) \
   VMSDK_STATUS_MACROS_IMPL_GET_VARIADIC_HELPER_ args
 
-#define VMSDK_STATUS_MACROS_IMPL_VMSDK_ASSIGN_OR_RETURN_2_(lhs, rexpr)  \
-  VMSDK_STATUS_MACROS_IMPL_VMSDK_ASSIGN_OR_RETURN_(                     \
-      VMSDK_STATUS_MACROS_IMPL_CONCAT_(_status_or_value, __LINE__), lhs,  \
-      rexpr,                                                                \
-      return std::move(VMSDK_STATUS_MACROS_IMPL_CONCAT_(_status_or_value, \
-                                                          __LINE__))        \
+#define VMSDK_STATUS_MACROS_IMPL_VMSDK_ASSIGN_OR_RETURN_2_(lhs, rexpr)         \
+  VMSDK_STATUS_MACROS_IMPL_VMSDK_ASSIGN_OR_RETURN_(                            \
+      VMSDK_STATUS_MACROS_IMPL_CONCAT_(_status_or_value, __LINE__), lhs,       \
+      rexpr,                                                                   \
+      return std::move(                                                        \
+                 VMSDK_STATUS_MACROS_IMPL_CONCAT_(_status_or_value, __LINE__)) \
           .status())
 
-#define VMSDK_STATUS_MACROS_IMPL_VMSDK_ASSIGN_OR_RETURN_3_(                \
-    lhs, rexpr, error_expression)                                              \
-  VMSDK_STATUS_MACROS_IMPL_VMSDK_ASSIGN_OR_RETURN_(                        \
+#define VMSDK_STATUS_MACROS_IMPL_VMSDK_ASSIGN_OR_RETURN_3_(lhs, rexpr,       \
+                                                           error_expression) \
+  VMSDK_STATUS_MACROS_IMPL_VMSDK_ASSIGN_OR_RETURN_(                          \
       VMSDK_STATUS_MACROS_IMPL_CONCAT_(_status_or_value, __LINE__), lhs,     \
-      rexpr,                                                                   \
-      ::vmsdk::StatusBuilder _(std::move(VMSDK_STATUS_MACROS_IMPL_CONCAT_( \
-                                               _status_or_value, __LINE__))    \
-                                     .status(),                                \
-                                 VMSDK_STREAMS_LOC);                         \
-      (void)_; /* error_expression is allowed to not use this variable */      \
+      rexpr,                                                                 \
+      ::vmsdk::StatusBuilder _(std::move(VMSDK_STATUS_MACROS_IMPL_CONCAT_(   \
+                                             _status_or_value, __LINE__))    \
+                                   .status(),                                \
+                               VMSDK_STREAMS_LOC);                           \
+      (void)_; /* error_expression is allowed to not use this variable */    \
       return (error_expression))
 
-#define VMSDK_STATUS_MACROS_IMPL_VMSDK_ASSIGN_OR_RETURN_(                \
-    statusor, lhs, rexpr, error_expression)                                  \
-  auto statusor = (rexpr);                                                   \
-  if (ABSL_PREDICT_FALSE(!statusor.ok())) {                                  \
-    error_expression;                                                        \
-  }                                                                          \
-  {                                                                          \
-    static_assert(#lhs[0] != '(' || #lhs[sizeof(#lhs) - 2] != ')' ||         \
-                      !vmsdk::internal::HasPotentialConditionalOperator(   \
-                          #lhs, sizeof(#lhs) - 2),                           \
-                  "Identified potential conditional operator, consider not " \
-                  "using VMSDK_ASSIGN_OR_RETURN");                         \
-  }                                                                          \
-  VMSDK_STATUS_MACROS_IMPL_UNPARENTHESIZE_IF_PARENTHESIZED(lhs) =          \
+#define VMSDK_STATUS_MACROS_IMPL_VMSDK_ASSIGN_OR_RETURN_(statusor, lhs, rexpr, \
+                                                         error_expression)     \
+  auto statusor = (rexpr);                                                     \
+  if (ABSL_PREDICT_FALSE(!statusor.ok())) {                                    \
+    error_expression;                                                          \
+  }                                                                            \
+  {                                                                            \
+    static_assert(#lhs[0] != '(' || #lhs[sizeof(#lhs) - 2] != ')' ||           \
+                      !vmsdk::internal::HasPotentialConditionalOperator(       \
+                          #lhs, sizeof(#lhs) - 2),                             \
+                  "Identified potential conditional operator, consider not "   \
+                  "using VMSDK_ASSIGN_OR_RETURN");                             \
+  }                                                                            \
+  VMSDK_STATUS_MACROS_IMPL_UNPARENTHESIZE_IF_PARENTHESIZED(lhs) =              \
       std::move(statusor).value()
 
 // Internal helpers to check an empty argument.
@@ -227,7 +227,7 @@ constexpr bool HasPotentialConditionalOperator(const char* lhs, int index) {
               /*empty*/)))
 #define VMSDK_STATUS_MACROS_IMPL_PASTES(_0, _1, _2, _3, _4) _0##_1##_2##_3##_4
 #define VMSDK_STATUS_MACROS_IMPL_IS_EMPTY_CASE_0001 ,
-#define VMSDK_STATUS_MACROS_IMPL_IS_EMPTY_HELPER(_0, _1, _2, _3)        \
+#define VMSDK_STATUS_MACROS_IMPL_IS_EMPTY_HELPER(_0, _1, _2, _3)      \
   VMSDK_STATUS_MACROS_IMPL_HAS_COMMA(VMSDK_STATUS_MACROS_IMPL_PASTES( \
       VMSDK_STATUS_MACROS_IMPL_IS_EMPTY_CASE_, _0, _1, _2, _3))
 
@@ -239,20 +239,19 @@ constexpr bool HasPotentialConditionalOperator(const char* lhs, int index) {
 // Internal helpers for if statement.
 #define VMSDK_STATUS_MACROS_IMPL_IF_1(_Then, _Else) _Then
 #define VMSDK_STATUS_MACROS_IMPL_IF_0(_Then, _Else) _Else
-#define VMSDK_STATUS_MACROS_IMPL_IF(_Cond, _Then, _Else)                  \
+#define VMSDK_STATUS_MACROS_IMPL_IF(_Cond, _Then, _Else)                \
   VMSDK_STATUS_MACROS_IMPL_CONCAT_(VMSDK_STATUS_MACROS_IMPL_IF_, _Cond) \
   (_Then, _Else)
 
 // Expands to 1 if the input is parenthesized. Otherwise expands to 0.
 #define VMSDK_STATUS_MACROS_IMPL_IS_PARENTHESIZED(...) \
-  VMSDK_STATUS_MACROS_IMPL_IS_EMPTY(                   \
-      VMSDK_STATUS_MACROS_IMPL_EAT __VA_ARGS__)
+  VMSDK_STATUS_MACROS_IMPL_IS_EMPTY(VMSDK_STATUS_MACROS_IMPL_EAT __VA_ARGS__)
 
 // If the input is parenthesized, removes the parentheses. Otherwise expands to
 // the input unchanged.
-#define VMSDK_STATUS_MACROS_IMPL_UNPARENTHESIZE_IF_PARENTHESIZED(...)   \
-  VMSDK_STATUS_MACROS_IMPL_IF(                                          \
-      VMSDK_STATUS_MACROS_IMPL_IS_PARENTHESIZED(__VA_ARGS__),           \
+#define VMSDK_STATUS_MACROS_IMPL_UNPARENTHESIZE_IF_PARENTHESIZED(...) \
+  VMSDK_STATUS_MACROS_IMPL_IF(                                        \
+      VMSDK_STATUS_MACROS_IMPL_IS_PARENTHESIZED(__VA_ARGS__),         \
       VMSDK_STATUS_MACROS_IMPL_REM, VMSDK_STATUS_MACROS_IMPL_EMPTY()) \
   __VA_ARGS__
 
@@ -273,8 +272,8 @@ constexpr bool HasPotentialConditionalOperator(const char* lhs, int index) {
 //
 // The "switch (0) case 0:" idiom is used to suppress this.
 #define VMSDK_STATUS_MACROS_IMPL_ELSE_BLOCKER_ \
-  switch (0)                                     \
-  case 0:                                        \
+  switch (0)                                   \
+  case 0:                                      \
   default:  // NOLINT
 
 namespace vmsdk {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,6 @@
 #include "src/query/fanout.h"
 
 #include <algorithm>
-#include <cstddef>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -38,16 +37,15 @@
 #include <utility>
 #include <vector>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/container/flat_hash_map.h"
-#include "absl/log/log.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/substitute.h"
-#include "grpcpp/support/status.h"
+#include "gmock/gmock.h"
 #include "google/protobuf/text_format.h"
 #include "google/protobuf/util/message_differencer.h"
+#include "grpcpp/support/status.h"
+#include "gtest/gtest.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
@@ -57,9 +55,9 @@
 #include "src/valkey_search.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 namespace query {
@@ -389,14 +387,17 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 TEST_P(FanoutTest, TestFanout) {
-  auto params = GetParam();
+  auto &params = GetParam();
+
   coordinator::SearchIndexPartitionRequest search_parameters;
-  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(params.parameters_pbtxt,
-                                                  &search_parameters));
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      params.parameters_pbtxt, &search_parameters));
   std::vector<fanout::FanoutSearchTarget> targets;
+  targets.reserve(params.targets.size());
   for (const auto &target : params.targets) {
     targets.push_back(target.target);
   }
+
   auto schema = CreateVectorHNSWSchema("test_index", &fake_ctx_);
   VMSDK_EXPECT_OK(schema);
 
@@ -415,6 +416,7 @@ TEST_P(FanoutTest, TestFanout) {
       std::make_unique<coordinator::MockClientPool>();
   absl::flat_hash_map<std::string, std::shared_ptr<coordinator::MockClient>>
       mock_coordinator_clients;
+
   for (const auto &target : params.targets) {
     auto mock_client = std::make_shared<coordinator::MockClient>();
     mock_coordinator_clients[target.target.address] = mock_client;
@@ -445,18 +447,19 @@ TEST_P(FanoutTest, TestFanout) {
                   if (!neighbor.attribute_contents.has_value()) {
                     continue;
                   }
-                  for (const auto &[alias, content] :
+                  for (const auto &[identifier, record] :
                        neighbor.attribute_contents.value()) {
                     auto *attribute_content =
                         response_neighbor->add_attribute_contents();
-                    attribute_content->set_attribute_alias(alias);
-                    attribute_content->set_content(content);
+                    attribute_content->set_identifier(identifier);
+                    attribute_content->set_content(record);
                   }
                 }
                 callback(grpc::Status::OK, response);
               }));
     }
   }
+
   auto callback = [params, search_parameters](auto &neighbors,
                                               auto parameters) {
     EXPECT_EQ(neighbors.ok(), params.expected_neighbors.ok());
@@ -469,8 +472,8 @@ TEST_P(FanoutTest, TestFanout) {
                   ElementsAreArray(params.expected_neighbors.value()));
     }
     auto grpc_request = coordinator::ParametersToGRPCSearchRequest(*parameters);
-    EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(*grpc_request,
-                                                         search_parameters));
+    EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
+        *grpc_request, search_parameters));
   };
   auto parameters = GRPCSearchRequestToParameters(search_parameters);
   VMSDK_EXPECT_OK(parameters);
@@ -480,7 +483,6 @@ TEST_P(FanoutTest, TestFanout) {
       std::move(callback)));
   ValkeySearch::Instance().GetReaderThreadPool()->JoinWorkers();
 }
-
 struct GetTargetsTestNode {
   std::string node_id;
   std::string ip;
@@ -891,6 +893,7 @@ TEST_P(GetTargetsTest, TestGetTargets) {
   // lists.
   std::vector<testing::Matcher<const fanout::FanoutSearchTarget &>>
       target_matchers;
+  target_matchers.reserve(params.possible_expected_targets.size());
   for (const auto &possible_target_list : params.possible_expected_targets) {
     target_matchers.push_back(testing::AnyOfArray(possible_target_list));
   }

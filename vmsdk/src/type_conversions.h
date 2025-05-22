@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,6 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
 
 #ifndef VMSDK_SRC_TYPE_CONVERSIONS_H_
 #define VMSDK_SRC_TYPE_CONVERSIONS_H_
@@ -102,7 +101,7 @@ static inline absl::StatusOr<T> ToNumeric(absl::string_view str) {
 template <>
 inline absl::StatusOr<float> To(absl::string_view str) {
   float value;
-  if (!absl::SimpleAtof(str, &value)) {
+  if (absl::AsciiStrToLower(str) == "nan" || !absl::SimpleAtof(str, &value)) {
     return absl::InvalidArgumentError(
         absl::StrCat(str, " is not a valid float"));
   }
@@ -141,7 +140,7 @@ inline absl::StatusOr<uint64_t> To(absl::string_view str) {
 template <>
 inline absl::StatusOr<double> To(absl::string_view str) {
   double value;
-  if (!absl::SimpleAtod(str, &value)) {
+  if (absl::AsciiStrToLower(str) == "nan" || !absl::SimpleAtod(str, &value)) {
     return absl::InvalidArgumentError(
         absl::StrCat(str, " is not a valid double"));
   }

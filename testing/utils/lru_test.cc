@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,8 +33,8 @@
 #include <string>
 #include <vector>
 
-#include "gtest/gtest.h"
 #include "absl/strings/str_cat.h"
+#include "gtest/gtest.h"
 
 namespace valkey_search {
 

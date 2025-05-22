@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,15 +31,15 @@
 #include <string>
 #include <vector>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/query/predicate.h"
-#include "vmsdk/src/testing_infra/utils.h"
 #include "testing/common.h"
+#include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search::indexes {
 

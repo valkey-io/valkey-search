@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,6 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
 
 #ifndef VMSDK_SRC_MRMW_MUTEX_H_
 #define VMSDK_SRC_MRMW_MUTEX_H_
@@ -103,13 +102,12 @@ class ABSL_LOCKABLE TimeSlicedMRMWMutex {
   const absl::Duration& GetSwitchGracePeriod() const
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_) {
     return current_mode_ == Mode::kLockRead ? read_switch_grace_period_
-                                          : write_switch_grace_period_;
+                                            : write_switch_grace_period_;
   }
   absl::Duration CalcWaitTime() const ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   absl::Duration CalcEffectiveGraceTime() const
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
-  bool MinimizeWaitTime() const
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  bool MinimizeWaitTime() const ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   bool ShouldSwitch() const ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   void InitSwitch() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   inline bool HasTimeQuotaExceeded() const

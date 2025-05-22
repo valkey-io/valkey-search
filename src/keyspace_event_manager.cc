@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -38,10 +38,10 @@
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
 #include "src/vector_externalizer.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 static absl::NoDestructor<std::unique_ptr<KeyspaceEventManager>>
@@ -91,7 +91,7 @@ absl::Status KeyspaceEventManager::RemoveSubscription(
   auto &subscription_trie = subscription_trie_.Get();
   for (const auto &prefix : key_prefixes) {
     subscription_trie.Remove(prefix, subscription);
-    // TODO[@jkmurphy] - we need to support unsubscribe to keyspace events
+    // TODO - we need to support unsubscribe to keyspace events
   }
 
   subscriptions.erase(subscription);
@@ -100,7 +100,7 @@ absl::Status KeyspaceEventManager::RemoveSubscription(
 
 absl::Status KeyspaceEventManager::InsertSubscription(
     RedisModuleCtx *ctx, KeyspaceEventSubscription *subscription) {
-  VMSDK_RETURN_IF_ERROR(StartRedisSubscribtionIfNeeded(
+  VMSDK_RETURN_IF_ERROR(StartRedisSubscriptionIfNeeded(
       ctx, subscription->GetAttributeDataType().GetRedisEventTypes()));
 
   auto key_prefixes = subscription->GetKeyPrefixes();
@@ -114,7 +114,7 @@ absl::Status KeyspaceEventManager::InsertSubscription(
   return absl::OkStatus();
 }
 
-absl::Status KeyspaceEventManager::StartRedisSubscribtionIfNeeded(
+absl::Status KeyspaceEventManager::StartRedisSubscriptionIfNeeded(
     RedisModuleCtx *ctx, int types) {
   int to_subscribe = types & ~subscribed_types_bit_mask_;
   if (!to_subscribe) {

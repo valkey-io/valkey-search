@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -34,14 +34,14 @@
 #include <string>
 #include <vector>
 
-#include "gtest/gtest.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "gtest/gtest.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
 
@@ -55,15 +55,15 @@ constexpr absl::string_view kEnumParam{"ENUM_PARAM"};
 constexpr absl::string_view kStringParam{"STRING_PARAM"};
 constexpr absl::string_view kFlagParam{"FLAG_PARAM"};
 
-enum class EnumTest { enum1, enum2, enum3 };
+enum class EnumTest { kEnum1, kEnum2, kEnum3 };
 
 using testing::TestParamInfo;
 using testing::ValuesIn;
 
 const absl::flat_hash_map<absl::string_view, EnumTest> kEnumTestByStr = {
-    {"ENUM1", EnumTest::enum1},
-    {"ENUM2", EnumTest::enum2},
-    {"ENUM3", EnumTest::enum3}};
+    {"ENUM1", EnumTest::kEnum1},
+    {"ENUM2", EnumTest::kEnum2},
+    {"ENUM3", EnumTest::kEnum3}};
 
 struct TestParameters {
   absl::string_view test_param1;
@@ -83,12 +83,11 @@ struct KeyValueParseTestCase {
   absl::string_view test_param2{"param2"};
   absl::string_view default_param{"default_param"};
   int int_param{0};
-  EnumTest enum_param{EnumTest::enum1};
+  EnumTest enum_param{EnumTest::kEnum1};
   bool flag_param{false};
   absl::string_view string_param;
   std::string expected_err_msg;
 };
-
 
 class CBTestCommandParser {
  public:
@@ -162,7 +161,7 @@ INSTANTIATE_TEST_SUITE_P(
          .test_param1 = "param1",
          .test_param2 = "param2",
          .int_param = 5,
-         .enum_param = EnumTest::enum1,
+         .enum_param = EnumTest::kEnum1,
          .string_param = "test"},
         {.test_name = "unexpected_TEST_PARAM3",
          .success = false,
@@ -175,7 +174,7 @@ INSTANTIATE_TEST_SUITE_P(
          .test_param1 = "param1",
          .test_param2 = "param2",
          .int_param = 5,
-         .enum_param = EnumTest::enum2,
+         .enum_param = EnumTest::kEnum2,
          .string_param = "test"},
         {.test_name = "unexpected_HELLO_WORLD",
          .success = false,
@@ -190,7 +189,7 @@ INSTANTIATE_TEST_SUITE_P(
          .test_param1 = "param1.",
          .test_param2 = "param2.",
          .int_param = 5,
-         .enum_param = EnumTest::enum2,
+         .enum_param = EnumTest::kEnum2,
          .string_param = "test"},
         {.test_name = "unexpected_TEST_PARAM1AZ",
          .success = false,
@@ -202,7 +201,7 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
-enum class DummyEnum { k100, k200, k500, NONE };
+enum class DummyEnum { k100, k200, k500, kNONE };
 absl::flat_hash_map<absl::string_view, DummyEnum> kDummyEnumByStr = {
     {"100", DummyEnum::k100},
     {"200", DummyEnum::k200},
@@ -279,7 +278,7 @@ TEST_P(ParseParamsTest, ParseParams) {
       test_case.expected_success_as_int, test_case.expected_err_msg_int,
       expected_parsed_int, test_case, ParseFunc<std::optional<int>>);
 
-  auto expected_parsed_enum = DummyEnum::NONE;
+  auto expected_parsed_enum = DummyEnum::kNONE;
   if (test_case.expected_success_as_enum) {
     expected_parsed_enum = kDummyEnumByStr[test_case.expected_parsed_value];
   }

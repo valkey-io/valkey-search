@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -49,8 +49,8 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/grpc_suspender.h"
 #include "src/metrics.h"
-#include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/latency_sampler.h"
+#include "vmsdk/src/managed_pointers.h"
 
 namespace valkey_search::coordinator {
 
@@ -118,10 +118,11 @@ void ClientImpl::GetGlobalMetadata(GetGlobalMetadataCallback done) {
       absl::ToChronoTime(absl::Now() + absl::Seconds(60)));
   args->callback = std::move(done);
   args->latency_sample = SAMPLE_EVERY_N(100);
+  auto args_raw = args.release();
   stub_->async()->GetGlobalMetadata(
-      &args->context, &args->request, &args->response,
+      &args_raw->context, &args_raw->request, &args_raw->response,
       // std::function is not move-only.
-      [args_raw = args.release()](grpc::Status s) mutable {
+      [args_raw](grpc::Status s) mutable {
         GRPCSuspensionGuard guard(GRPCSuspender::Instance());
         auto args = std::unique_ptr<GetGlobalMetadataArgs>(args_raw);
         args->callback(s, args->response);
@@ -157,10 +158,11 @@ void ClientImpl::SearchIndexPartition(
   args->callback = std::move(done);
   args->request = std::move(request);
   args->latency_sample = SAMPLE_EVERY_N(100);
+  auto args_raw = args.release();
   stub_->async()->SearchIndexPartition(
-      &args->context, args->request.get(), &args->response,
+      &args_raw->context, args_raw->request.get(), &args_raw->response,
       // std::function is not move-only.
-      [args_raw = args.release()](grpc::Status s) mutable {
+      [args_raw](grpc::Status s) mutable {
         GRPCSuspensionGuard guard(GRPCSuspender::Instance());
         auto args = std::unique_ptr<SearchIndexPartitionArgs>(args_raw);
         args->callback(s, args->response);

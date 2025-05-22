@@ -1,6 +1,6 @@
 
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
 
 #ifndef VMSDK_SRC_UTILS_H_
 #define VMSDK_SRC_UTILS_H_
-#include <cassert>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -81,7 +81,7 @@ class MainThreadAccessGuard {
  public:
   MainThreadAccessGuard() = default;
   MainThreadAccessGuard(const T &var) : var_(var) {}
-  MainThreadAccessGuard(T&& var) noexcept : var_(std::move(var)) {}
+  MainThreadAccessGuard(T &&var) noexcept : var_(std::move(var)) {}
   MainThreadAccessGuard &operator=(MainThreadAccessGuard<T> const &other) {
     VerifyMainThread();
     var_ = other.var_;
@@ -109,5 +109,12 @@ int RunByMain(absl::AnyInvocable<void()> fn, bool force_async = false);
 
 std::string WrongArity(absl::string_view cmd);
 
+//
+// Parse out a hash tag from a string view
+//
+std::optional<absl::string_view> ParseHashTag(absl::string_view);
+
+bool IsRealUserClient(RedisModuleCtx *ctx);
+bool MultiOrLua(RedisModuleCtx *ctx);
 }  // namespace vmsdk
 #endif  // VMSDK_SRC_UTILS_H_

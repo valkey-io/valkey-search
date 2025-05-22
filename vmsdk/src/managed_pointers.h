@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,17 +27,15 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VMSDK_SRC_MANAGED_POINTERS_H_
 #define VMSDK_SRC_MANAGED_POINTERS_H_
 
 #include <cstddef>
 #include <memory>
-#include <utility>
 
 #include "absl/strings/string_view.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
 
@@ -70,67 +68,6 @@ inline UniqueRedisString RetainUniqueRedisString(RedisModuleString *redis_str) {
   RedisModule_RetainString(nullptr, redis_str);
   return UniquePtrRedisString(redis_str);
 }
-
-class BlockedClient {
- public:
-  BlockedClient(RedisModuleBlockedClient *blocked_client = nullptr)
-      : blocked_client_(blocked_client) {}
-  BlockedClient(RedisModuleCtx *ctx,
-                RedisModuleCmdFunc reply_callback = nullptr,
-                RedisModuleCmdFunc timeout_callback = nullptr,
-                void (*free_privdata)(RedisModuleCtx *, void *) = nullptr,
-                long long timeout_ms = 0) {  // NOLINT
-    blocked_client_ = RedisModule_BlockClient(
-        ctx, reply_callback, timeout_callback, free_privdata, timeout_ms);
-  }
-  BlockedClient(BlockedClient &&other) noexcept
-      : blocked_client_(std::exchange(other.blocked_client_, nullptr)),
-        private_data_(std::exchange(other.private_data_, nullptr)) {}
-
-  BlockedClient &operator=(BlockedClient &&other) noexcept {
-    if (this != &other) {
-      UnblockClient();
-      blocked_client_ = std::exchange(other.blocked_client_, nullptr);
-      private_data_ = std::exchange(other.private_data_, nullptr);
-    }
-    return *this;
-  }
-
-  BlockedClient(const BlockedClient &other) = delete;
-  BlockedClient &operator=(const BlockedClient &other) = delete;
-
-  operator RedisModuleBlockedClient *() const { return blocked_client_; }
-  void SetReplyPrivateData(void *private_data) { private_data_ = private_data; }
-  void UnblockClient() {
-    if (!blocked_client_) {
-      return;
-    }
-    MeasureTimeEnd();
-    RedisModule_UnblockClient(blocked_client_, private_data_);
-    blocked_client_ = nullptr;
-    private_data_ = nullptr;
-  }
-  void MeasureTimeStart() {
-    if (time_measurement_ongoing_ || !blocked_client_) {
-      return;
-    }
-    RedisModule_BlockedClientMeasureTimeStart(blocked_client_);
-    time_measurement_ongoing_ = true;
-  }
-  void MeasureTimeEnd() {
-    if (!time_measurement_ongoing_ || !blocked_client_) {
-      return;
-    }
-    RedisModule_BlockedClientMeasureTimeEnd(blocked_client_);
-    time_measurement_ongoing_ = false;
-  }
-  ~BlockedClient() { UnblockClient(); }
-
- private:
-  RedisModuleBlockedClient *blocked_client_{nullptr};
-  void *private_data_{nullptr};
-  bool time_measurement_ongoing_{false};
-};
 
 struct RedisOpenKeyDeleter {
   void operator()(RedisModuleKey *module_key) {

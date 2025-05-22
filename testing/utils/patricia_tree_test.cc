@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,7 +33,6 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-
 
 namespace valkey_search {
 
@@ -197,4 +196,3 @@ TEST_F(PatriciaTreeSetTest, TriePathIterator) {
 }
 }  // namespace
 }  // namespace valkey_search
-

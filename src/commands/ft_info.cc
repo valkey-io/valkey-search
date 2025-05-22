@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,21 +29,21 @@
 
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
+#include "src/acl.h"
 #include "src/commands/commands.h"
 #include "src/schema_manager.h"
 #include "vmsdk/src/command_parser.h"
-#include "vmsdk/src/utils.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
 absl::Status FTInfoCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
-                             int argc) {
+                       int argc) {
   if (argc < 2) {
-    return absl::InvalidArgumentError(
-        vmsdk::WrongArity(kInfoCommand));
+    return absl::InvalidArgumentError(vmsdk::WrongArity(kInfoCommand));
   }
 
   vmsdk::ArgsIterator itr{argv, argc};
@@ -55,7 +55,10 @@ absl::Status FTInfoCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
       auto index_schema,
       SchemaManager::Instance().GetIndexSchema(RedisModule_GetSelectedDb(ctx),
                                                index_schema_name));
-
+  static const auto permissions =
+      PrefixACLPermissions(kInfoCmdPermissions, kInfoCommand);
+  VMSDK_RETURN_IF_ERROR(
+      AclPrefixCheck(ctx, permissions, index_schema->GetKeyPrefixes()));
   index_schema->RespondWithInfo(ctx);
 
   return absl::OkStatus();

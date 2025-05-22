@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,6 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
 
 #ifndef VMSDK_SRC_LOG_H_
 #define VMSDK_SRC_LOG_H_
@@ -95,15 +94,13 @@ static thread_local ValkeyIOLogSink io_log_sink;
   vmsdk::log_sink.SetContext(ctx); \
   VLOG(static_cast<int>(log_level)).ToSinkOnly(&vmsdk::log_sink)
 
-#define VMSDK_LOG_EVERY_N(log_level, ctx, n)   \
-  vmsdk::log_sink.SetContext(ctx);             \
-  VLOG_EVERY_N(static_cast<int>(log_level), n) \
-      .ToSinkOnly(&vmsdk::log_sink)
+#define VMSDK_LOG_EVERY_N(log_level, ctx, n) \
+  vmsdk::log_sink.SetContext(ctx);           \
+  VLOG_EVERY_N(static_cast<int>(log_level), n).ToSinkOnly(&vmsdk::log_sink)
 
-#define VMSDK_LOG_EVERY_N_SEC(log_level, ctx, n)   \
-  vmsdk::log_sink.SetContext(ctx);                 \
-  VLOG_EVERY_N_SEC(static_cast<int>(log_level), n) \
-      .ToSinkOnly(&vmsdk::log_sink)
+#define VMSDK_LOG_EVERY_N_SEC(log_level, ctx, n) \
+  vmsdk::log_sink.SetContext(ctx);               \
+  VLOG_EVERY_N_SEC(static_cast<int>(log_level), n).ToSinkOnly(&vmsdk::log_sink)
 
 #define VMSDK_IO_LOG(log_level, module_io)   \
   vmsdk::io_log_sink.SetModuleIO(module_io); \
@@ -111,8 +108,7 @@ static thread_local ValkeyIOLogSink io_log_sink;
 
 #define VMSDK_IO_LOG_EVERY_N(log_level, module_io, n) \
   vmsdk::io_log_sink.SetModuleIO(module_io);          \
-  VLOG_EVERY_N(static_cast<int>(log_level), n)        \
-      .ToSinkOnly(&vmsdk::io_log_sink)
+  VLOG_EVERY_N(static_cast<int>(log_level), n).ToSinkOnly(&vmsdk::io_log_sink)
 
 #define VMSDK_IO_LOG_EVERY_N_SEC(log_level, module_io, n) \
   vmsdk::io_log_sink.SetModuleIO(module_io);              \

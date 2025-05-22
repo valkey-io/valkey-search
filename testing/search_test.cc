@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -41,8 +41,6 @@
 #include <utility>
 #include <vector>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
@@ -50,6 +48,8 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/filter_parser.h"
 #include "src/index_schema.pb.h"
@@ -215,7 +215,7 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
   auto tag_index_100_15 = std::make_shared<MockTag>(tag_index_proto);
 
   VMSDK_EXPECT_OK(index_schema->AddIndex("tag_index_100_15", "tag_index_100_15",
-                                   tag_index_100_15));
+                                         tag_index_100_15));
   PatriciaTree<InternedStringPtr, InternedStringPtrHash, InternedStringPtrEqual>
       tree(false);
   absl::flat_hash_set<PatriciaNode<InternedStringPtr, InternedStringPtrHash,
@@ -236,16 +236,16 @@ TEST_P(EvaluateFilterAsPrimaryTest, ParseParams) {
   InitIndexSchema(index_schema.get());
   FilterParser parser(*index_schema, test_case.filter);
   auto filter_parse_results = parser.Parse();
-  std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> enteries_fetchers;
+  std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   EXPECT_EQ(
       EvaluateFilterAsPrimary(filter_parse_results.value().root_predicate.get(),
-                              enteries_fetchers, false),
+                              entries_fetchers, false),
       test_case.evaluate_size);
 
-  EXPECT_EQ(enteries_fetchers.size(), test_case.fetcher_ids.size());
-  while (!enteries_fetchers.empty()) {
-    auto entry_fetcher = std::move(enteries_fetchers.front());
-    enteries_fetchers.pop();
+  EXPECT_EQ(entries_fetchers.size(), test_case.fetcher_ids.size());
+  while (!entries_fetchers.empty()) {
+    auto entry_fetcher = std::move(entries_fetchers.front());
+    entries_fetchers.pop();
     auto numeric_fetcher =
         dynamic_cast<const TestedNumericEntriesFetcher *>(entry_fetcher.get());
     if (numeric_fetcher) {
@@ -359,8 +359,8 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
             data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
             .value();
   }
-  VMSDK_EXPECT_OK(index_schema->AddIndex(kVectorAttributeAlias, kVectorAttributeAlias,
-                                   vector_index));
+  VMSDK_EXPECT_OK(index_schema->AddIndex(kVectorAttributeAlias,
+                                         kVectorAttributeAlias, vector_index));
 
   // Add numeric index
   data_model::NumericIndex numeric_index_proto;
@@ -499,14 +499,17 @@ TEST_P(FetchFilteredKeysTest, ParseParams) {
   FilterParser parser(*index_schema, test_case.filter);
   params.filter_parse_results = std::move(parser.Parse().value());
   params.k = 100;
-  std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> enteries_fetchers;
+  auto vectors = DeterministicallyGenerateVectors(1, kVectorDimensions, 10.0);
+  params.query =
+      std::string((char *)vectors[0].data(), vectors[0].size() * sizeof(float));
+  std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   indexes::Numeric::EntriesRange entries_range;
   for (auto key_range : test_case.fetched_key_ranges) {
-    enteries_fetchers.push(std::make_unique<TestedNumericEntriesFetcher>(
+    entries_fetchers.push(std::make_unique<TestedNumericEntriesFetcher>(
         entries_range, std::make_pair(key_range.first, key_range.second)));
   }
   auto results =
-      CalcBestMatchingPrefiltereddKeys(params, enteries_fetchers, vector_index);
+      CalcBestMatchingPrefiltereddKeys(params, entries_fetchers, vector_index);
   auto neighbors = vector_index->CreateReply(results).value();
   EXPECT_EQ(neighbors.size(), test_case.expected_keys.size());
   for (auto it = neighbors.begin(); it != neighbors.end(); ++it) {
@@ -674,7 +677,7 @@ INSTANTIATE_TEST_SUITE_P(
                  .k = 5,
                  .expected_keys = {"4"},
              },
-             // TODO(b/358524398): Add tests where vector, numeric and tag
+             // TODO: Add tests where vector, numeric and tag
              // indexes are not aligned.
              {
                  .test_name = "numeric_negate_filter",
@@ -871,14 +874,13 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
   } else {
     VMSDK_EXPECT_OK(test_case.expected_output);
     EXPECT_EQ(got->size(), test_case.expected_output->size());
-#ifndef BAZEL_BUILD
-    // Fails on bazel with clang.
+#ifndef TESTING_TMP_DISABLED
     for (size_t i = 0; i < got->size(); ++i) {
       EXPECT_EQ(IndexedContentTestCase::TestNeighbor::FromIndexesNeighbor(
                     got.value()[i]),
                 test_case.expected_output.value()[i]);
     }
-#endif  // BAZEL_BUILD
+#endif  // TESTING_TMP_DISABLED
   }
 }
 

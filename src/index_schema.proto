@@ -57,10 +57,6 @@ message TagIndex {
   bool case_sensitive = 2;
 }
 
-message TrackedKeys {
-  repeated TrackedKeyMetadata tracked_key_metadata = 1;
-}
-
 message TrackedKeyMetadata {
   string key = 1;
   uint64 internal_id = 2;
@@ -77,7 +73,6 @@ message VectorIndex {
     HNSWAlgorithm hnsw_algorithm = 6;
     FlatAlgorithm flat_algorithm = 7;
   }
-  optional TrackedKeys tracked_keys = 8;
 }
 
 enum DistanceMetric {

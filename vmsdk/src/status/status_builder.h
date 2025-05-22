@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,6 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
 
 #ifndef VMSDK_SRC_STATUS_STATUS_BUILDER_H_
 #define VMSDK_SRC_STATUS_STATUS_BUILDER_H_
@@ -55,8 +54,7 @@ class OStringStream final : public std::ostream {
   //
   // The destructor of OStringStream doesn't use the std::string. It's OK to
   // destroy the std::string before the stream.
-  explicit OStringStream(std::string* str)
-      : std::ostream(&buf_), buf_(str) {}
+  explicit OStringStream(std::string* str) : std::ostream(&buf_), buf_(str) {}
   OStringStream(OStringStream&& that)
       : std::ostream(std::move(static_cast<std::ostream&>(that))),
         buf_(that.buf_) {
@@ -132,11 +130,9 @@ class ABSL_MUST_USE_RESULT StatusBuilder {
   // occurs.  A typical user will not specify `location`, allowing it to default
   // to the current location.
   explicit StatusBuilder(const absl::Status& original_status,
-                         SourceLocation location
-                             VMSDK_LOC_CURRENT_DEFAULT_ARG);
+                         SourceLocation location VMSDK_LOC_CURRENT_DEFAULT_ARG);
   explicit StatusBuilder(absl::Status&& original_status,
-                         SourceLocation location
-                             VMSDK_LOC_CURRENT_DEFAULT_ARG);
+                         SourceLocation location VMSDK_LOC_CURRENT_DEFAULT_ARG);
 
   // Creates a `StatusBuilder` from a status code in
   // `util::CanonicalErrorSpace()`  If logging is enabled, it will use
@@ -144,8 +140,7 @@ class ABSL_MUST_USE_RESULT StatusBuilder {
   // user will not specify `location`, allowing it to default to the current
   // location.
   explicit StatusBuilder(absl::StatusCode code,
-                         SourceLocation location
-                             VMSDK_LOC_CURRENT_DEFAULT_ARG);
+                         SourceLocation location VMSDK_LOC_CURRENT_DEFAULT_ARG);
 
   StatusBuilder(const StatusBuilder& sb);
   StatusBuilder& operator=(const StatusBuilder& sb);
@@ -538,8 +533,9 @@ StatusBuilder UnknownErrorBuilder(
 class ExtraMessage {
  public:
   ExtraMessage() : ExtraMessage(std::string()) {}
-  explicit ExtraMessage(std::string msg)
-      : msg_(std::move(msg)) { stream_ << msg_;}
+  explicit ExtraMessage(std::string msg) : msg_(std::move(msg)) {
+    stream_ << msg_;
+  }
 
   // Appends to the extra message that will be added to the original status.  By
   // default, the extra message is added to the original message as if by

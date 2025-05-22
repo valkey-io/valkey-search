@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -40,10 +40,9 @@
 namespace valkey_search {
 
 absl::Status FTListCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
-                             int argc) {
+                       int argc) {
   if (argc > 1) {
-    return absl::InvalidArgumentError(
-        vmsdk::WrongArity(kListCommand));
+    return absl::InvalidArgumentError(vmsdk::WrongArity(kListCommand));
   }
   absl::flat_hash_set<std::string> names =
       SchemaManager::Instance().GetIndexSchemasInDB(

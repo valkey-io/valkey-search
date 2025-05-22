@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,6 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
 
 #ifndef VALKEYSEARCH_SRC_QUERY_PREDICATE_H_
 #define VALKEYSEARCH_SRC_QUERY_PREDICATE_H_
@@ -67,7 +66,7 @@ class Evaluator {
 };
 
 class Predicate;
-struct EstimatedQualifiedEnteries {
+struct EstimatedQualifiedEntries {
   size_t estimated_qualified_entries;
   std::vector<Predicate*> predicates;
 };

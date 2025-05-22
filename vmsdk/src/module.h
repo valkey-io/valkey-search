@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VMSDK_SRC_MODULE_H_
 #define VMSDK_SRC_MODULE_H_
 
@@ -38,8 +37,8 @@
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/utils.h"  // IWYU pragma: keep
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 #define VALKEY_MODULE(options)                                              \
   namespace {                                                               \
@@ -53,10 +52,10 @@
     }                                                                       \
                                                                             \
     if (options.on_load.has_value()) {                                      \
-      return vmsdk::module::LogOnLoad(                                      \
+      return vmsdk::module::OnLoadDone(                                     \
           options.on_load.value()(ctx, argv, argc, options), ctx, options); \
     }                                                                       \
-    return vmsdk::module::LogOnLoad(absl::OkStatus(), ctx, options);        \
+    return vmsdk::module::OnLoadDone(absl::OkStatus(), ctx, options);       \
   }                                                                         \
   int RedisModule_OnUnload(RedisModuleCtx *ctx) {                           \
     if (options.on_unload.has_value()) {                                    \
@@ -70,9 +69,12 @@
 namespace vmsdk {
 namespace module {
 
+constexpr absl::string_view kDenyOOMFlag{"deny-oom"};
+
 struct CommandOptions {
   absl::string_view cmd_name;
-  std::string permissions;
+  std::list<absl::string_view> permissions;
+  std::list<absl::string_view> flags;
   RedisModuleCmdFunc cmd_func{nullptr};
   // By default - assume no keys.
   int first_key{0};
@@ -82,6 +84,8 @@ struct CommandOptions {
 
 struct Options {
   std::string name;
+  std::list<absl::string_view> acl_categories;
+  int version;
   RedisModuleInfoFunc info{nullptr};
   std::list<CommandOptions> commands;
   using OnLoad = std::optional<absl::AnyInvocable<absl::Status(
@@ -93,11 +97,10 @@ struct Options {
   OnUnload on_unload;
 };
 
-int LogOnLoad(absl::Status status, RedisModuleCtx *ctx, const Options &options);
-
 int OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
            const Options &options);
-
+int OnLoadDone(absl::Status status, RedisModuleCtx *ctx,
+               const Options &options);
 absl::Status RegisterInfo(RedisModuleCtx *ctx, RedisModuleInfoFunc info);
 
 }  // namespace module
@@ -111,6 +114,7 @@ int CreateCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   }
   return REDISMODULE_OK;
 }
+bool IsModuleLoaded(RedisModuleCtx *ctx, const std::string &name);
 }  // namespace vmsdk
 
 #endif  // VMSDK_SRC_MODULE_H_

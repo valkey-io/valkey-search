@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,7 +27,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #ifndef VALKEYSEARCH_SRC_QUERY_SEARCH_H_
 #define VALKEYSEARCH_SRC_QUERY_SEARCH_H_
 
@@ -45,12 +44,12 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "third_party/hnswlib/hnswlib.h"
 #include "src/commands/filter_parser.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
+#include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/thread_pool.h"
 
@@ -66,6 +65,7 @@ struct LimitParameter {
 
 struct ReturnAttribute {
   vmsdk::UniqueRedisString identifier;
+  vmsdk::UniqueRedisString attribute_alias;
   vmsdk::UniqueRedisString alias;
 };
 
@@ -77,13 +77,27 @@ struct VectorSearchParameters {
   std::string query;
   uint32_t dialect{2};
   bool local_only{false};
-  std::optional<int> k;
-  std::optional<uint64_t> ef;
+  int k;
+  std::optional<unsigned> ef;
   LimitParameter limit;
   uint64_t timeout_ms{kTimeoutMS};
   bool no_content{false};
   FilterParseResults filter_parse_results;
   std::vector<ReturnAttribute> return_attributes;
+  struct ParseTimeVariables {
+    // Members of this struct are only valid during the parsing of
+    // VectorSearchParameters on the mainthread. They get cleared
+    // at the end of the parse to ensure no dangling pointers.
+    absl::string_view query_string;
+    absl::string_view score_as_string;
+    absl::flat_hash_map<absl::string_view, std::pair<int, absl::string_view>>
+        params;
+    void ClearAtEndOfParse() {
+      query_string = absl::string_view();
+      score_as_string = absl::string_view();
+      assert(params.empty());
+    }
+  } parse_vars;
 };
 
 // Callback to be called when the search is done.
@@ -106,7 +120,7 @@ class Predicate;
 // Defined in the header to support testing
 size_t EvaluateFilterAsPrimary(
     const Predicate* predicate,
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& enteries_fetchers,
+    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
     bool negate);
 
 // Defined in the header to support testing
@@ -117,7 +131,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefiltereddKeys(
     const VectorSearchParameters& parameters,
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& enteries_fetchers,
+    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
     indexes::VectorBase* vector_index);
 
 }  // namespace valkey_search::query

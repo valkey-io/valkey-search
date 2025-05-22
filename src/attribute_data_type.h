@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,6 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
 
 #ifndef VALKEYSEARCH_SRC_ATTRIBUTE_DATA_TYPE_H_
 #define VALKEYSEARCH_SRC_ATTRIBUTE_DATA_TYPE_H_
@@ -84,7 +83,7 @@ class AttributeDataType {
   virtual data_model::AttributeDataType ToProto() const = 0;
   virtual std::string ToString() const = 0;
   virtual bool IsProperType(RedisModuleKey *key) const = 0;
-  // This provides indication wether the fetched content need special
+  // This provides indication whether the fetched content need special
   // normalization.
   virtual bool RecordsProvidedAsString() const = 0;
 };
@@ -138,5 +137,6 @@ class JsonAttributeDataType : public AttributeDataType {
 };
 
 bool IsJsonModuleLoaded(RedisModuleCtx *ctx);
+absl::string_view TrimBrackets(absl::string_view record);
 }  // namespace valkey_search
 #endif  // VALKEYSEARCH_SRC_ATTRIBUTE_DATA_TYPE_H_

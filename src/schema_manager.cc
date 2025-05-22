@@ -356,7 +356,7 @@ uint64_t SchemaManager::GetNumberOfAttributes() const {
   }
   return num_attributes;
 }
-uint64_t SchemaManager::GetTotalIndexedHashKeys() const {
+uint64_t SchemaManager::GetTotalIndexedDocuments() const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto num_hash_keys = 0;
   for (const auto &[db_num, schema_map] : db_to_index_schemas_) {

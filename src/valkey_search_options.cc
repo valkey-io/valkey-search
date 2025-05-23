@@ -107,12 +107,11 @@ void Options::DoInitialize() {
   threads_ = config::NumberBuilder(kThreads, -1, 0, kMaxThreadsCount)
                  .WithFlags(REDISMODULE_CONFIG_HIDDEN)
                  .WithModifyCallback([this](long long value) {
-                   GetReaderThreadCount()
-                       .SetValue(std::max(static_cast<int>(value), 1))
-                       .IgnoreError();
-                   GetWriterThreadCount()
-                       .SetValue(std::max(static_cast<int>(value * 2.5), 1))
-                       .IgnoreError();
+                   GetReaderThreadCount().SetValueOrLog(
+                       std::max(static_cast<int>(value), 1), WARNING);
+
+                   GetWriterThreadCount().SetValueOrLog(
+                       std::max(static_cast<int>(value * 2.5), 1), WARNING);
                    threads_provided_.store(true, std::memory_order_relaxed);
                  })
                  .Build();
@@ -147,18 +146,29 @@ void Options::DoInitialize() {
 
   use_coordinator_ =
       config::BooleanBuilder(kUseCoordinator, false)
-          .WithFlags(REDISMODULE_CONFIG_IMMUTABLE)  // can only be set during
-                                                    // start-up
+          .WithFlags(REDISMODULE_CONFIG_HIDDEN)  // can only be set during
+                                                 // start-up
           .Build();
 
   log_level_ =
       config::EnumBuilder(kLogLevel, static_cast<int>(LogLevel::kNotice),
                           kLogLevelNames, kLogLevelValues)
           .WithModifyCallback([](int value) {
-            // value as validated in using the validation callback
-            if (ValidateLogLevel(value).ok()) {
-              vmsdk::InitLogging(nullptr, kLogLevelNames[value].data())
-                  .IgnoreError();
+            auto res = ValidateLogLevel(value);
+            if (!res.ok()) {
+              VMSDK_LOG(WARNING, nullptr)
+                  << "Invalid value: '" << value << "' provided to enum: '"
+                  << kLogLevel << "'. " << res.message();
+              return;
+            }
+            // "value" is already validated using "ValidateLogLevel" callback
+            // below
+            auto log_level_str = kLogLevelNames[value];
+            res = vmsdk::InitLogging(nullptr, log_level_str.data());
+            if (!res.ok()) {
+              VMSDK_LOG(WARNING, nullptr)
+                  << "Failed to initialize log with new value: "
+                  << log_level_str << ". " << res.message();
             }
           })
           .WithValidationCallback(ValidateLogLevel)

@@ -78,18 +78,18 @@ class Options {
   void DoInitialize();
 
   /// Controls the HNSW resize increments
-  std::unique_ptr<config::ConfigBase<long long>> hnsw_block_size_;
+  std::shared_ptr<config::ConfigBase<long long>> hnsw_block_size_;
   /// **DEPRECATED** controls both the reader & writer pool size
   /// use --reader/--writer-threads instead
-  std::unique_ptr<config::ConfigBase<long long>> threads_;
+  std::shared_ptr<config::ConfigBase<long long>> threads_;
   /// Controls the reader threads count
-  std::unique_ptr<config::ConfigBase<long long>> reader_threads_count_;
+  std::shared_ptr<config::ConfigBase<long long>> reader_threads_count_;
   /// Controls the writer threads count
-  std::unique_ptr<config::ConfigBase<long long>> writer_threads_count_;
+  std::shared_ptr<config::ConfigBase<long long>> writer_threads_count_;
   /// Should this instance launch coordinator?
-  std::unique_ptr<config::ConfigBase<bool>> use_coordinator_;
+  std::shared_ptr<config::ConfigBase<bool>> use_coordinator_;
   /// Control the modules log level verbosity
-  std::unique_ptr<config::ConfigBase<int>> log_level_;
+  std::shared_ptr<config::ConfigBase<int>> log_level_;
   std::atomic_bool threads_provided_{false};
 };
 

@@ -61,6 +61,7 @@ target_include_directories(time_sliced_mrmw_mutex_test
 target_link_libraries(time_sliced_mrmw_mutex_test PUBLIC thread_pool)
 target_link_libraries(time_sliced_mrmw_mutex_test PUBLIC time_sliced_mrmw_mutex)
 target_link_libraries(time_sliced_mrmw_mutex_test PUBLIC utils)
+target_link_libraries(time_sliced_mrmw_mutex_test PUBLIC log)
 finalize_test_flags(time_sliced_mrmw_mutex_test)
 
 set(SRCS_STATUS_MACROS_TEST ${CMAKE_CURRENT_LIST_DIR}/status_macros_test.cc)

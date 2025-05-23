@@ -95,7 +95,7 @@ uint32_t ValkeySearch::GetHNSWBlockSize() const {
 }
 
 void ValkeySearch::SetHNSWBlockSize(uint32_t block_size) {
-  Options::Instance().GetHNSWBlockSize().SetValue(block_size).IgnoreError();
+  Options::Instance().GetHNSWBlockSize().SetValueOrLog(block_size, WARNING);
 }
 
 static std::string ConvertToMB(double bytes_value) {

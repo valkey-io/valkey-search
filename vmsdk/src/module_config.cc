@@ -130,13 +130,12 @@ absl::Status ModuleConfigManager::ParseAndLoadArgv(RedisModuleCtx *ctx,
       if (!iter.HasNext()) {
         return absl::NotFoundError(absl::StrFormat(
             "Command line argument `%s` is missing a value", sv_key));
-      } else {
-        VMSDK_ASSIGN_OR_RETURN(auto val, iter.Get());
-        iter.Next();  // skip the value
-
-        sv_val = vmsdk::ToStringView(val);
-        VMSDK_RETURN_IF_ERROR(UpdateConfigFromKeyVal(ctx, sv_key, sv_val));
       }
+      VMSDK_ASSIGN_OR_RETURN(auto val, iter.Get());
+      iter.Next();  // skip the value
+
+      sv_val = vmsdk::ToStringView(val);
+      VMSDK_RETURN_IF_ERROR(UpdateConfigFromKeyVal(ctx, sv_key, sv_val));
     }
   }
   return absl::OkStatus();
@@ -195,7 +194,7 @@ absl::Status Number::FromString(std::string_view value) {
     return absl::InvalidArgumentError(
         absl::StrFormat("Failed to convert '%s' into a number", value));
   }
-  SetValue(default_value_).IgnoreError();
+  SetValueOrLog(default_value_, WARNING);
   return absl::OkStatus();
 }
 
@@ -254,7 +253,7 @@ absl::Status Enum::FromString(std::string_view value) {
   default_value_ = values_[enumerator_index];
 
   // update the current value, skip the validation as we just did that
-  SetValue(default_value_).IgnoreError();
+  SetValueOrLog(default_value_, WARNING);
   return absl::OkStatus();
 }
 
@@ -284,11 +283,11 @@ absl::Status Boolean::FromString(std::string_view value) {
   if (value_lowercase == "yes" || value_lowercase == "on" ||
       value_lowercase == "true") {
     default_value_ = true;
-    SetValue(default_value_).IgnoreError();
+    SetValueOrLog(default_value_, WARNING);
   } else if (value_lowercase == "no" || value_lowercase == "off" ||
              value_lowercase == "false") {
     default_value_ = false;
-    SetValue(default_value_).IgnoreError();
+    SetValueOrLog(default_value_, WARNING);
   } else {
     return absl::InvalidArgumentError(
         absl::StrFormat("Invalid boolean value: '%s'", value));

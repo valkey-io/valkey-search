@@ -32,8 +32,10 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "gtest/gtest_prod.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
@@ -172,6 +174,20 @@ class ConfigBase : public Registerable {
     return absl::OkStatus();
   }
 
+  /// Set the value to this configuration item, or log a warning message.
+  void SetValueOrLog(T value, LogLevel log_level) {
+    auto res = Validate(value);
+    if (!res.ok()) {
+      VMSDK_LOG(log_level, nullptr)
+          << "Failed to update configuration entry: " << GetName() << ". "
+          << res.message();
+      return;
+    }
+
+    SetValueImpl(value);
+    NotifyChanged();
+  }
+
   T GetValue() const { return GetValueImpl(); }
 
   void NotifyChanged() {
@@ -277,7 +293,13 @@ class Boolean : public ConfigBase<bool> {
 template <typename ValkeyT>
 class ConfigBuilder {
  public:
-  ConfigBuilder(ConfigBase<ValkeyT> *obj) : config_(obj) {}
+  ConfigBuilder() = delete;
+  ConfigBuilder(const ConfigBuilder &) = delete;
+  ConfigBuilder &operator=(const ConfigBuilder &) = delete;
+
+  ConfigBuilder(ConfigBase<ValkeyT> *obj) : config_(obj) {
+    CHECK(config_) << "Attempted to construct ConfigBuilder with nullptr";
+  }
 
   auto &WithModifyCallback(ConfigBase<ValkeyT>::OnModifyCB modify_cb) {
     config_->SetModifyCallback(std::move(modify_cb));
@@ -294,8 +316,8 @@ class ConfigBuilder {
     return *this;
   }
 
-  std::unique_ptr<ConfigBase<ValkeyT>> Build() {
-    return std::unique_ptr<ConfigBase<ValkeyT>>{config_};
+  std::shared_ptr<ConfigBase<ValkeyT>> Build() {
+    return std::shared_ptr<ConfigBase<ValkeyT>>{config_};
   }
 
  private:

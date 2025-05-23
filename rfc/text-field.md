@@ -18,18 +18,18 @@ Text searching is useful in many applications.
 
 In the context of this RFC.
 
-| Term | Meaning |
-| --- | --- |
-| key | A Valkey key. Depending on the context of usage could be the text of the key name or the contents of the HASH or JSON key. |
-| field | A component of an index. Each field has a type and a path.|
-| index | A collection of fields and field-indexes. The object created by the ```FT.CREATE``` command. |
-| field-index | A data structure associated with a field that is intended to accelerate the operation of the search operators for this field type. |
-| character | An Unicode character. A character may occupy 1-4 bytes of a UTF-8 encoded string. |
-| word | A syntactic unit of text consisting of a vector of characters. A word is delimited by un-escaped punctuation and/or whitespace. |
-| token | same as a word |
-| text | A UTF-8 encoded string of bytes. |
-| stemming | A process of mapping similar words into a common base word. For example, the words _drives_, _drove_ and _driven_ would be replaced with the  _drive_. |
-| term | The output of stemming a word. |
+| Term        | Meaning                                                                                                                                                                                                                     |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| key         | A Valkey key. Depending on the context of usage could be the text of the key name or the contents of the HASH or JSON key.                                                                                                  |
+| field       | A component of an index. Each field has a type and a path.                                                                                                                                                                  |
+| index       | A collection of fields and field-indexes. The object created by the ```FT.CREATE``` command.                                                                                                                                |
+| field-index | A data structure associated with a field that is intended to accelerate the operation of the search operators for this field type.                                                                                          |
+| character   | An Unicode character. A character may occupy 1-4 bytes of a UTF-8 encoded string.                                                                                                                                           |
+| word        | A syntactic unit of text consisting of a vector of characters. A word is delimited by un-escaped punctuation and/or whitespace.                                                                                             |
+| token       | same as a word                                                                                                                                                                                                              |
+| text        | A UTF-8 encoded string of bytes.                                                                                                                                                                                            |
+| stemming    | A process of mapping similar words into a common base word. For example, the words _drives_, _drove_ and _driven_ would be replaced with the  _drive_.                                                                      |
+| term        | The output of stemming a word.                                                                                                                                                                                              |
 | prefix tree | A mapping from input string to an output object. Insert/delete operations are O(length(input)). Additional operations include the ability to iterate over the entries that share a common prefix in O(length(prefix)) time. |
 
 ## Design considerations
@@ -83,13 +83,13 @@ Exact phrase matching is specified by enclosing a sequence of terms in double qu
 
 Each ```TEXT``` field has the a set of configurables some control the process to convert a string into a vector of terms, others control the contents of the generated index.
 
-| Metadata | Type | Meaning | Default Value |
-| --- | --- | --- | --- |
-| Punctuation | vector<character> | Characters that separate words during the tokenization process. |  
-| Stop Words | vector<String> | List of stop words to be removed during decomposition |
-| Stemming Language | Enumeration | Snowball stemming library lanugage control |
-| Suffix Tree | Boolean | Controls the presence/absence of a suffix tree. |
-| Word Offsets | Boolean | Indicates if the postings for a word contain word offsets or just a count. |
+| Metadata          | Type              | Meaning                                                                    | Default Value |
+| ----------------- | ----------------- | -------------------------------------------------------------------------- | ------------- |
+| Punctuation       | vector<character> | Characters that separate words during the tokenization process.            |
+| Stop Words        | vector<String>    | List of stop words to be removed during decomposition                      |
+| Stemming Language | Enumeration       | Snowball stemming library language control                                 |
+| Suffix Tree       | Boolean           | Controls the presence/absence of a suffix tree.                            |
+| Word Offsets      | Boolean           | Indicates if the postings for a word contain word offsets or just a count. |
 
 ### Extension of the ```FT.CREATE``` command
 
@@ -160,10 +160,10 @@ Phrase matching is specified by enclosing a sequence of terms in a pair of doubl
 
 To avoid combinatorial explosion certain operations have configurable limits applied.
 
-| Name | Default | Limit |
-| --- | --- | --- |
-| max-fuzzy-distance | 2 | The maximum edit distance for a fuzzy search. |
-| max-wildcard-matches | 200 | Maximum number of words that a single wildcard match can generate |
+| Name                 | Default | Limit                                                             |
+| -------------------- | ------- | ----------------------------------------------------------------- |
+| max-fuzzy-distance   | 2       | The maximum edit distance for a fuzzy search.                     |
+| max-wildcard-matches | 200     | Maximum number of words that a single wildcard match can generate |
 
 ### Dependencies
 

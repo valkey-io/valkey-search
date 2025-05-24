@@ -50,10 +50,26 @@ The tokenization process has four steps.
 2. Latin upper-case characters are converted to lower-case.
 3. Stop words are removed from the vector.
 4. Words with more than a fixed number of characters are replaced with their stemmed equivalent term according to the selected language.
+```
+┌─────────────────┐     ┌───────────────┐     ┌──────────────┐     ┌───────────────┐
+│  Input Text     │     │ Tokenization  │     │ Case         │     │ Stop Word     │
+│  "The quick     │ ──> │ ["The",       │ ──> │ ["the",      │ ──> │ ["quick",     │
+│   brown fox."   │     │  "quick",     │     │  "quick",    │     │  "brown",     │
+└─────────────────┘     │  "brown",     │     │  "brown",    │     │  "fox"]       │
+                        │  "fox"]       │     │  "fox"]      │     └───────┬───────┘
+                        └───────────────┘     └──────────────┘             │
+                                                                           V
+                                                                      ┌───────────────┐
+                                                                      │ Stemming      │
+                                                                      │ ["quick",     │
+                                                                      │  "brown",     │
+                                                                      │  "fox"]       │
+                                                                      └───────────────┘
+```
 
 Step 1 of the tokenization process is controlled by a specified list of punctuation characters. 
 Sequences of one or more punctuations characters delimit word boundaries.
-Note that individual punctuation characters can be escaped using the normal backlash prefix syntax, causing the next character to be treated as non-punctuation.
+Note that individual punctuation characters can be escaped using the normal backslash prefix syntax, causing the next character to be treated as non-punctuation.
 
 ### Text Field-Index Structure
 
@@ -61,6 +77,38 @@ The text field-index is a mapping from a term to a list of locations.
 Depending on the configuration, the list of locations may be just a list of keys or a list of key/term-offset pairs.
 
 The mapping structure is built from one or two prefix trees. When present, the second prefix tree is built from each inserted term sequenced in reverse order, effectively providing a suffix tree.
+
+Here is a visual example. Note that in the drawing, the sections noted as "same postings as _xxxx_" mean that the pointer actually points to the same memory area as referenced. In other words, when a suffix tree is present, the postings list is referenced by both (think shared_ptr).
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                                  TextIndex                                   │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│ ┌──────────────────┐                                ┌──────────────────┐     │
+│ │   Prefix Tree    │             Postings           │   Suffix Tree    │     │
+│ └──────────────────┘                                └──────────────────┘     │
+│ │                  │                                │                  │     │
+│ │  ┌────────────┐  │          ┌────────────┐        │  ┌────────────┐  │     │
+│ │  │   apple    │──┼─────────>│ key1: [0]  │<───────┼──│   elppa    │  │     │
+│ │  └────────────┘  │          │ key2: [3]  │        │  └────────────┘  │     │
+│ │                  │          └────────────┘        │                  │     │
+│ │                  │                                │                  │     │
+│ │  ┌────────────┐  │          ┌────────────┐        │  ┌────────────┐  │     │
+│ │  │   banana   │──┼─────────>│ key1: [1]  │<───────┼──│   ananab   │  │     │
+│ │  └────────────┘  │          │ key3: [2]  │        │  └────────────┘  │     │
+│ │                  │          └────────────┘        │                  │     │
+│ │                  │                                │                  │     │
+│ │  ┌────────────┐  │          ┌────────────┐        │  ┌────────────┐  │     │
+│ │  │   cherry   │──┼─────────>│ key2: [0]  │<───────┼──│   yrrehc   │  │     │
+│ │  └────────────┘  │          │ key3: [8]  │        │  └────────────┘  │     │
+│ │                  │          └────────────┘        │                  │     │
+│ │                  │                                │                  │     │
+│ └──────────────────┘                                └──────────────────┘     │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
 
 ### Search query operators
 
@@ -79,6 +127,141 @@ Note, in this proposal, the second prefix tree is required to perform infix and 
 
 Exact phrase matching is specified by enclosing a sequence of terms in double quotes ```"```. In order to perform phrase matching, the field-index must be configured to contain term-offsets.
 
+#### Phrase matching
+
+Exact phrase matching is specified by enclosing a sequence of terms in double quotes ```"```. In order to perform phrase matching, the field-index must be configured to contain term-offsets.
+
+### Search Query Operations Flow
+
+The following diagram illustrates the flow of a text search operation from query to results:
+
+```
+┌──────────────────┐
+│ Search Query     │
+│ e.g., "quick     │
+│ brown fox"       │
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐     ┌──────────────────────────────────────────┐
+│ Query Parser     │────▶│ Parsed Query Tree                        │
+└────────┬─────────┘     │                                          │
+         │               │    ┌─────────┐                           │
+         │               │    │ PHRASE  │                           │
+         │               │    └────┬────┘                           │
+         │               │         │                                │
+         │               │  ┌──────┴──────┼─────────────┐           │
+         │               │  │             │             |           │
+         │               │  ▼             ▼             ▼           │
+         │               │ ┌─────┐     ┌─────┐     ┌─────┐          │
+         │               │ │quick│     │brown│     │ fox │          │
+         │               │ └─────┘     └─────┘     └─────┘          │
+         │               └──────────────────────────────────────────┘
+         ▼
+┌──────────────────┐
+│ Query Execution  │
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ Term Dictionary Lookup                                               │
+│                                                                      │
+│ ┌─────────────┐         ┌─────────────┐         ┌─────────────┐      │
+│ │Term: "quick"│         │Term: "brown"│         │Term: "fox"  │      │
+│ └──────┬──────┘         └──────┬──────┘         └──────┬──────┘      │
+│        │                       │                       │             │
+│        ▼                       ▼                       ▼             │
+│ ┌──────────────┐        ┌──────────────┐        ┌──────────────┐     │
+│ │Postings List │        │Postings List │        │Postings List │     │
+│ └──────┬───────┘        └──────┬───────┘        └──────┬───────┘     │
+│        │                       │                       │             │
+└────────┼───────────────────────┼───────────────────────┼─────────────┘
+         │                       │                       │
+         └───────────────────────┼───────────────────────┘
+                                 │
+                                 ▼
+┌───────────────────────────────────────────────────────────────────┐
+│ Position Filtering (for phrase matching)                          │
+│                                                                   │
+│ Check if terms appear in correct sequence with proper spacing     │
+│                                                                   │
+│ ┌─────────────────────────────────────────────────────────────┐   │
+│ │ Document: key1                                              │   │
+│ │                                                             │   │
+│ │ [quick:pos2]───┐                                            │   │
+│ │                │                                            │   │
+│ │ [brown:pos3]───┼─── Sequential? YES                         │   │
+│ │                │                                            │   │
+│ │ [fox:pos4]─────┘                                            │   │
+│ └─────────────────────────────────────────────────────────────┘   │
+│                                                                   │
+└───────────────────────────────────────────────────────┬───────────┘
+                                                        │
+                                                        ▼
+                                             ┌───────────────────┐
+                                             │ Results           │
+                                             │ [key1, key5, ...] │
+                                             └───────────────────┘
+```
+
+## System Architecture
+
+The following diagram illustrates the overall architecture and data flow of the text search system:
+
+```
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                        Text Search System Architecture                        │
+├───────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  ┌───────────────┐        ┌────────────────┐         ┌────────────────────┐   │
+│  │ Client        │        │ Command        │         │ Search Query       │   │
+│  │ Applications  │───────▶│ Processing     │────────▶│ Execution Engine   │   │
+│  └───────────────┘        │ (FT.SEARCH)    │         └──────────┬─────────┘   │
+│                           └────────────────┘                     │            │
+│                                    ▲                             │            │
+│                                    │                             │            │
+│                                    │                             ▼            │
+│                                    │                  ┌────────────────────┐  │
+│                                    │                  │ Text Index         │  │
+│                                    │                  │                    │  │
+│                                    │                  │ - Prefix Tree      │  │
+│                                    │                  │ - Suffix Tree      │  │
+│                                    │                  │ - Postings Lists   │  │
+│                                    │                  └──────────┬─────────┘  │
+│                                    │                             │            │
+│                           ┌────────┴───────┐                     │            │
+│  ┌───────────────┐        │ Result         │◀────────────────────┘            │
+│  │ Client        │◀───────│ Formatting     │                                  │
+│  │ Applications  │        │                │                                  │
+│  └───────────────┘        └────────────────┘                                  │
+│                                                                               │
+│                                                                               │
+│  ┌───────────────┐        ┌────────────────┐         ┌────────────────────┐   │
+│  │ Client        │        │ Command        │         │ Text Index         │   │
+│  │ Applications  │───────▶│ Processing     │────────▶│ Builder            │   │
+│  └───────────────┘        │ (FT.CREATE)    │         └──────────┬─────────┘   │
+│                           └────────────────┘                     │            │
+│                                                                  │            │
+│                                                                  ▼            │
+│                                                       ┌────────────────────┐  │
+│                                                       │ Tokenization       │  │
+│                                                       │ Pipeline           │  │
+│                                                       │                    │  │
+│                                                       │ 1. Split on punct. │  │
+│                                                       │ 2. Case conversion │  │
+│                                                       │ 3. Stop word filter│  │
+│                                                       │ 4. Stemming        │  │
+│                                                       └──────────┬─────────┘  │
+│                                                                  │            │
+│                                                                  ▼            │
+│                                                       ┌────────────────────┐  │
+│                                                       │ Term Storage in    │  │
+│                                                       │ Prefix/Suffix Trees│  │
+│                                                       └────────────────────┘  │
+│                                                                               │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+```
 ## Specification
 
 Each ```TEXT``` field has the a set of configurables some control the process to convert a string into a vector of terms, others control the contents of the generated index.

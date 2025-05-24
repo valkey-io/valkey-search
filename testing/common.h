@@ -62,9 +62,11 @@
 #include "src/server_events.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
+#include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "third_party/hnswlib/iostream.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -354,6 +356,7 @@ class ValkeySearchTest : public vmsdk::RedisTest {
 
   void SetUp() override {
     RedisTest::SetUp();
+    options::Options::InitInstance(std::make_unique<options::Options>());
     ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
     KeyspaceEventManager::InitInstance(
         std::make_unique<TestableKeyspaceEventManager>());
@@ -372,6 +375,7 @@ class ValkeySearchTest : public vmsdk::RedisTest {
     KeyspaceEventManager::InitInstance(nullptr);
     VectorExternalizer::Instance().Reset();
     RedisTest::TearDown();
+    options::Options::InitInstance(nullptr);
   }
 };
 
@@ -416,6 +420,7 @@ class ValkeySearchTestWithParam : public vmsdk::RedisTestWithParam<T> {
 
   void SetUp() override {
     vmsdk::RedisTestWithParam<T>::SetUp();
+    options::Options::InitInstance(std::make_unique<options::Options>());
     ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
     KeyspaceEventManager::InitInstance(
         std::make_unique<TestableKeyspaceEventManager>());
@@ -429,6 +434,7 @@ class ValkeySearchTestWithParam : public vmsdk::RedisTestWithParam<T> {
     VectorExternalizer::Instance().Init(&registry_ctx_);
   }
   void TearDown() override {
+    options::Options::InitInstance(nullptr);
     SchemaManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);

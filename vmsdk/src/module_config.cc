@@ -98,6 +98,10 @@ void ModuleConfigManager::RegisterConfig(Registerable *config_item) {
   entries_.emplace(config_item->GetName(), config_item);
 }
 
+void ModuleConfigManager::UnregisterConfig(Registerable *config_item) {
+  entries_.erase(config_item->GetName());
+}
+
 void ModuleConfigManager::Reset() { entries_.clear(); }
 
 absl::Status ModuleConfigManager::Init(RedisModuleCtx *ctx) {

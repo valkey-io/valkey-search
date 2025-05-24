@@ -112,6 +112,11 @@ class ModuleConfigManager {
   /// not call it directly.
   void RegisterConfig(Registerable *config_item);
 
+  /// Call this method to un-register a configuration item with this manager.
+  /// Usually this is done by the destructor of the `Registerable` and is not
+  /// needed manually
+  void UnregisterConfig(Registerable *config_item);
+
   /// Reset the internal state of the manager. Mainly used by tests
   void Reset();
 
@@ -150,11 +155,10 @@ class ConfigBase : public Registerable {
   using OnModifyCB = std::function<void(T)>;
   using ValidateCB = std::function<absl::Status(const T)>;
 
-  ConfigBase(std::string_view name) : Registerable(name) {
-    ModuleConfigManager::Instance().RegisterConfig(this);
+  ~ConfigBase() override {
+    ModuleConfigManager::Instance().UnregisterConfig(this);
   }
 
-  ~ConfigBase() override = default;
   void SetModifyCallback(OnModifyCB modify_callback) {
     modify_callback_ = std::move(modify_callback);
   }
@@ -204,6 +208,10 @@ class ConfigBase : public Registerable {
   }
 
  protected:
+  ConfigBase(std::string_view name) : Registerable(name) {
+    ModuleConfigManager::Instance().RegisterConfig(this);
+  }
+
   /// subclasses should derive these 2 methods to provide the concrete
   /// store/fetch for the value
   virtual void SetValueImpl(T value) = 0;

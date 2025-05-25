@@ -72,7 +72,13 @@ struct LoadTestCase {
   bool expect_thread_pool_started{false};
 };
 
-class LoadTest : public ValkeySearchTestWithParam<LoadTestCase> {};
+class LoadTest : public ValkeySearchTestWithParam<LoadTestCase> {
+ public:
+  void SetUp() override {
+    ValkeySearchTestWithParam<LoadTestCase>::SetUp();
+    CHECK(options::Reset().ok());
+  }
+};
 
 INSTANTIATE_TEST_SUITE_P(
     LoadTests, LoadTest,

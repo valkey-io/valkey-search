@@ -81,28 +81,18 @@ std::vector<const char *> ToCharPtrPtrVec(const std::vector<std::string> &vec) {
 }
 }  // namespace
 
-static std::unique_ptr<ModuleConfigManager> module_config_manager;
-
-void ModuleConfigManager::InitInstance(
-    std::unique_ptr<ModuleConfigManager> instance) {
-  module_config_manager = std::move(instance);
-}
-
 ModuleConfigManager &ModuleConfigManager::Instance() {
-  CHECK(module_config_manager)
-      << "Did you forget to call ModuleConfigManager::InitInstance()?";
-  return *module_config_manager;
+  static ModuleConfigManager module_config_manager;
+  return module_config_manager;
 }
 
 void ModuleConfigManager::RegisterConfig(Registerable *config_item) {
-  entries_.emplace(config_item->GetName(), config_item);
+  entries_.insert({std::string{config_item->GetName()}, config_item});
 }
 
 void ModuleConfigManager::UnregisterConfig(Registerable *config_item) {
   entries_.erase(config_item->GetName());
 }
-
-void ModuleConfigManager::Reset() { entries_.clear(); }
 
 absl::Status ModuleConfigManager::Init(RedisModuleCtx *ctx) {
   for (const auto &[_, entry] : entries_) {
@@ -156,6 +146,7 @@ absl::Status ModuleConfigManager::UpdateConfigFromKeyVal(
   // remove the "--"
   key = key.substr(2);
   auto where = entries_.find(key);
+
   if (where == entries_.end()) {
     return absl::UnknownError(
         absl::StrFormat("Unknown command line argument: `%s`", key));

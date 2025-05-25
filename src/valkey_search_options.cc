@@ -50,6 +50,24 @@ constexpr absl::string_view kThreads{"threads"};
 static const int64_t kDefaultThreadsCount = vmsdk::GetPhysicalCPUCoresCount();
 
 namespace {
+
+/// Did the user provided "--threads"?
+static std::atomic_bool threads_provided{false};
+static bool IsThreadsProvided() {
+  return threads_provided.load(std::memory_order_relaxed);
+}
+
+/// If user passed "--threads" it triumphs any value provided by
+/// "--reader-threads" / "--writer-threads"
+static absl::Status CanUpdateThreads() {
+  if (IsThreadsProvided()) {
+    return absl::AlreadyExistsError(
+        "Can not modify thread pool count. Thread count was already set by "
+        "--threads");
+  }
+  return absl::OkStatus();
+}
+
 /// Check that the new value for configuration item `hnsw-block-size` confirms
 /// to the allowed values.
 absl::Status ValidateHNSWBlockSize(long long new_value) {
@@ -95,137 +113,118 @@ static const std::vector<int> kLogLevelValues = {
     static_cast<int>(LogLevel::kWarning), static_cast<int>(LogLevel::kNotice),
     static_cast<int>(LogLevel::kVerbose), static_cast<int>(LogLevel::kDebug)};
 
-void Options::DoInitialize() {
-  hnsw_block_size_ =
-      config::NumberBuilder(kHNSWBlockSizeConfig,   // name
-                            kHNSWDefaultBlockSize,  // default size
-                            kHNSWMinimumBlockSize,  // min size
-                            UINT_MAX)               // max size
-          .WithValidationCallback(ValidateHNSWBlockSize)
-          .Build();
+static auto hnsw_block_size =
+    config::NumberBuilder(kHNSWBlockSizeConfig,   // name
+                          kHNSWDefaultBlockSize,  // default size
+                          kHNSWMinimumBlockSize,  // min size
+                          UINT_MAX)               // max size
+        .WithValidationCallback(ValidateHNSWBlockSize)
+        .Build();
 
-  threads_ = config::NumberBuilder(kThreads, -1, 0, kMaxThreadsCount)
-                 .WithFlags(REDISMODULE_CONFIG_HIDDEN)
-                 .WithModifyCallback([this](long long value) {
-                   GetReaderThreadCount().SetValueOrLog(
-                       std::max(static_cast<int>(value), 1), WARNING);
+/// DEPRECATED: Register the "--threads" flag.
+static auto threads =
+    config::NumberBuilder(kThreads, -1, 0, kMaxThreadsCount)
+        .WithFlags(REDISMODULE_CONFIG_HIDDEN)
+        .WithModifyCallback([](long long value) {
+          GetReaderThreadCount().SetValueOrLog(
+              std::max(static_cast<int>(value), 1), WARNING);
 
-                   GetWriterThreadCount().SetValueOrLog(
-                       std::max(static_cast<int>(value * 2.5), 1), WARNING);
-                   threads_provided_.store(true, std::memory_order_relaxed);
-                 })
-                 .Build();
+          GetWriterThreadCount().SetValueOrLog(
+              std::max(static_cast<int>(value * 2.5), 1), WARNING);
+          threads_provided.store(true, std::memory_order_relaxed);
+        })
+        .Build();
 
-  reader_threads_count_ =
-      config::NumberBuilder(kReaderThreadsConfig,  // name
-                            kDefaultThreadsCount,  // default size
-                            1,                     // min size
-                            kMaxThreadsCount)      // max size
-          .WithModifyCallback(  // set an "On-Modify" callback
-              [](auto new_value) {
-                UpdateThreadPoolCount(
-                    ValkeySearch::Instance().GetReaderThreadPool(), new_value);
-              })
-          .WithValidationCallback(
-              [this](long long) -> absl::Status { return CanUpdateThreads(); })
-          .Build();
+/// Register the "--reader-threads" flag. Controls the readers thread pool
+static auto reader_threads_count =
+    config::NumberBuilder(kReaderThreadsConfig,  // name
+                          kDefaultThreadsCount,  // default size
+                          1,                     // min size
+                          kMaxThreadsCount)      // max size
+        .WithModifyCallback(                     // set an "On-Modify" callback
+            [](auto new_value) {
+              UpdateThreadPoolCount(
+                  ValkeySearch::Instance().GetReaderThreadPool(), new_value);
+            })
+        .WithValidationCallback(
+            [](long long) -> absl::Status { return CanUpdateThreads(); })
+        .Build();
 
-  writer_threads_count_ =
-      config::NumberBuilder(kWriterThreadsConfig,  // name
-                            kDefaultThreadsCount,  // default size
-                            1,                     // min size
-                            kMaxThreadsCount)      // max size
-          .WithModifyCallback(  // set an "On-Modify" callback
-              [](auto new_value) {
-                UpdateThreadPoolCount(
-                    ValkeySearch::Instance().GetWriterThreadPool(), new_value);
-              })
-          .WithValidationCallback(
-              [this](long long) -> absl::Status { return CanUpdateThreads(); })
-          .Build();
+/// Register the "--reader-threads" flag. Controls the writer thread pool
+static auto writer_threads_count =
+    config::NumberBuilder(kWriterThreadsConfig,  // name
+                          kDefaultThreadsCount,  // default size
+                          1,                     // min size
+                          kMaxThreadsCount)      // max size
+        .WithModifyCallback(                     // set an "On-Modify" callback
+            [](auto new_value) {
+              UpdateThreadPoolCount(
+                  ValkeySearch::Instance().GetWriterThreadPool(), new_value);
+            })
+        .WithValidationCallback(
+            [](long long) -> absl::Status { return CanUpdateThreads(); })
+        .Build();
 
-  use_coordinator_ =
-      config::BooleanBuilder(kUseCoordinator, false)
-          .WithFlags(REDISMODULE_CONFIG_HIDDEN)  // can only be set during
-                                                 // start-up
-          .Build();
+/// Should this instance use coordinator?
+static auto use_coordinator =
+    config::BooleanBuilder(kUseCoordinator, false)
+        .WithFlags(REDISMODULE_CONFIG_HIDDEN)  // can only be set during
+                                               // start-up
+        .Build();
 
-  log_level_ =
-      config::EnumBuilder(kLogLevel, static_cast<int>(LogLevel::kNotice),
-                          kLogLevelNames, kLogLevelValues)
-          .WithModifyCallback([](int value) {
-            auto res = ValidateLogLevel(value);
-            if (!res.ok()) {
-              VMSDK_LOG(WARNING, nullptr)
-                  << "Invalid value: '" << value << "' provided to enum: '"
-                  << kLogLevel << "'. " << res.message();
-              return;
-            }
-            // "value" is already validated using "ValidateLogLevel" callback
-            // below
-            auto log_level_str = kLogLevelNames[value];
-            res = vmsdk::InitLogging(nullptr, log_level_str.data());
-            if (!res.ok()) {
-              VMSDK_LOG(WARNING, nullptr)
-                  << "Failed to initialize log with new value: "
-                  << log_level_str << ". " << res.message();
-            }
-          })
-          .WithValidationCallback(ValidateLogLevel)
-          .Build();
+/// Control the modules log level verbosity
+static auto log_level =
+    config::EnumBuilder(kLogLevel, static_cast<int>(LogLevel::kNotice),
+                        kLogLevelNames, kLogLevelValues)
+        .WithModifyCallback([](int value) {
+          auto res = ValidateLogLevel(value);
+          if (!res.ok()) {
+            VMSDK_LOG(WARNING, nullptr)
+                << "Invalid value: '" << value << "' provided to enum: '"
+                << kLogLevel << "'. " << res.message();
+            return;
+          }
+          // "value" is already validated using "ValidateLogLevel" callback
+          // below
+          auto log_level_str = kLogLevelNames[value];
+          res = vmsdk::InitLogging(nullptr, log_level_str.data());
+          if (!res.ok()) {
+            VMSDK_LOG(WARNING, nullptr)
+                << "Failed to initialize log with new value: " << log_level_str
+                << ". " << res.message();
+          }
+        })
+        .WithValidationCallback(ValidateLogLevel)
+        .Build();
+
+vmsdk::config::Number& GetHNSWBlockSize() {
+  return dynamic_cast<vmsdk::config::Number&>(*hnsw_block_size);
 }
 
-/// If user passed "--threads" it triumphs any value provided by
-/// "--reader-threads" / "--writer-threads"
-absl::Status Options::CanUpdateThreads() const {
-  if (IsThreadsProvided()) {
-    return absl::AlreadyExistsError(
-        "Can not modify thread pool count. Thread count was already set by "
-        "--threads");
-  }
+vmsdk::config::Number& GetReaderThreadCount() {
+  return dynamic_cast<vmsdk::config::Number&>(*reader_threads_count);
+}
+
+vmsdk::config::Number& GetWriterThreadCount() {
+  return dynamic_cast<vmsdk::config::Number&>(*writer_threads_count);
+}
+
+const vmsdk::config::Boolean& GetUseCoordinator() {
+  return dynamic_cast<const vmsdk::config::Boolean&>(*use_coordinator);
+}
+
+vmsdk::config::Enum& GetLogLevel() {
+  return dynamic_cast<vmsdk::config::Enum&>(*log_level);
+}
+
+const vmsdk::config::Number& GetThreads() {
+  return dynamic_cast<const vmsdk::config::Number&>(*threads);
+}
+
+absl::Status Reset() {
+  threads_provided.store(false, std::memory_order_relaxed);
+  VMSDK_RETURN_IF_ERROR(use_coordinator->SetValue(false));
   return absl::OkStatus();
-}
-
-static std::unique_ptr<Options> valkey_search_options;
-
-void Options::InitInstance(std::unique_ptr<Options> instance) {
-  vmsdk::config::ModuleConfigManager::InitInstance(
-      std::make_unique<vmsdk::config::ModuleConfigManager>());
-  valkey_search_options = std::move(instance);
-  if (valkey_search_options) {
-    // constructing
-    valkey_search_options->DoInitialize();
-  }
-}
-
-Options& Options::Instance() {
-  CHECK(valkey_search_options)
-      << "Did you forget to call  Options::InitInstance()?";
-  return *valkey_search_options;
-}
-
-vmsdk::config::Number& Options::GetHNSWBlockSize() {
-  return dynamic_cast<vmsdk::config::Number&>(*hnsw_block_size_);
-}
-
-vmsdk::config::Number& Options::GetReaderThreadCount() {
-  return dynamic_cast<vmsdk::config::Number&>(*reader_threads_count_);
-}
-
-vmsdk::config::Number& Options::GetWriterThreadCount() {
-  return dynamic_cast<vmsdk::config::Number&>(*writer_threads_count_);
-}
-
-const vmsdk::config::Boolean& Options::GetUseCoordinator() {
-  return dynamic_cast<const vmsdk::config::Boolean&>(*use_coordinator_);
-}
-
-vmsdk::config::Enum& Options::GetLogLevel() {
-  return dynamic_cast<vmsdk::config::Enum&>(*log_level_);
-}
-
-const vmsdk::config::Number& Options::GetThreads() {
-  return dynamic_cast<const vmsdk::config::Number&>(*threads_);
 }
 
 }  // namespace options

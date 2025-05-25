@@ -28,10 +28,12 @@
  */
 #pragma once
 
+#include <absl/container/flat_hash_map.h>
+
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
-#include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "gtest/gtest_prod.h"
@@ -68,7 +70,7 @@ enum Flags {
 /// // Create a Valkey configuration item named "config-name" of type `long
 /// // long`
 /// static auto my_config =
-///    config::Builder<long long>(
+///    config::Number(
 ///        "config-name",         // name
 ///        8,                     // default size
 ///        1,                     // min size
@@ -97,7 +99,6 @@ class ModuleConfigManager {
  public:
   ModuleConfigManager() = default;
 
-  static void InitInstance(std::unique_ptr<ModuleConfigManager> instance);
   static ModuleConfigManager &Instance();
 
   /// Do the actual registration with Valkey for all configuration items that
@@ -116,9 +117,6 @@ class ModuleConfigManager {
   /// Usually this is done by the destructor of the `Registerable` and is not
   /// needed manually
   void UnregisterConfig(Registerable *config_item);
-
-  /// Reset the internal state of the manager. Mainly used by tests
-  void Reset();
 
  private:
   absl::Status UpdateConfigFromKeyVal(RedisModuleCtx *ctx, std::string_view key,

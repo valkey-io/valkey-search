@@ -52,14 +52,8 @@ using vmsdk::config::ModuleConfigManager;
 class ConfigTest : public vmsdk::RedisTest {
  protected:
   RedisModuleCtx fake_ctx;
-  void SetUp() override {
-    vmsdk::RedisTest::SetUp();
-    ModuleConfigManager::InitInstance(std::make_unique<ModuleConfigManager>());
-  }
-  void TearDown() override {
-    ModuleConfigManager::InitInstance(nullptr);
-    vmsdk::RedisTest::TearDown();
-  }
+  void SetUp() override { vmsdk::RedisTest::SetUp(); }
+  void TearDown() override { vmsdk::RedisTest::TearDown(); }
 };
 
 TEST_F(ConfigTest, registration) {

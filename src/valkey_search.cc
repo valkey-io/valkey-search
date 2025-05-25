@@ -59,8 +59,6 @@
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
-#include "vmsdk/src/command_parser.h"
-#include "vmsdk/src/concurrency.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -73,7 +71,6 @@
 
 namespace valkey_search {
 
-using valkey_search::options::Options;
 using vmsdk::config::ModuleConfigManager;
 
 static absl::NoDestructor<std::unique_ptr<ValkeySearch>> valkey_search_instance;
@@ -91,11 +88,11 @@ void ValkeySearch::InitInstance(std::unique_ptr<ValkeySearch> instance) {
 }
 
 uint32_t ValkeySearch::GetHNSWBlockSize() const {
-  return Options::Instance().GetHNSWBlockSize().GetValue();
+  return options::GetHNSWBlockSize().GetValue();
 }
 
 void ValkeySearch::SetHNSWBlockSize(uint32_t block_size) {
-  Options::Instance().GetHNSWBlockSize().SetValueOrLog(block_size, WARNING);
+  options::GetHNSWBlockSize().SetValueOrLog(block_size, WARNING);
 }
 
 static std::string ConvertToMB(double bytes_value) {
@@ -443,14 +440,14 @@ absl::StatusOr<int> GetRedisLocalPort(RedisModuleCtx *ctx) {
 
 absl::Status ValkeySearch::Startup(RedisModuleCtx *ctx) {
   reader_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
-      "read-worker-", Options::Instance().GetReaderThreadCount().GetValue());
+      "read-worker-", options::GetReaderThreadCount().GetValue());
   reader_thread_pool_->StartWorkers();
   writer_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
-      "write-worker-", Options::Instance().GetWriterThreadCount().GetValue());
+      "write-worker-", options::GetWriterThreadCount().GetValue());
   writer_thread_pool_->StartWorkers();
 
   VMSDK_LOG(NOTICE, ctx) << "use_coordinator: "
-                         << Options::Instance().GetUseCoordinator().GetValue()
+                         << options::GetUseCoordinator().GetValue()
                          << ", IsCluster: " << IsCluster();
 
   VMSDK_LOG(NOTICE, ctx) << "Reader workers count: "
@@ -458,7 +455,7 @@ absl::Status ValkeySearch::Startup(RedisModuleCtx *ctx) {
   VMSDK_LOG(NOTICE, ctx) << "Writer workers count: "
                          << writer_thread_pool_->Size();
 
-  if (Options::Instance().GetUseCoordinator().GetValue() && IsCluster()) {
+  if (options::GetUseCoordinator().GetValue() && IsCluster()) {
     client_pool_ = std::make_unique<coordinator::ClientPool>(
         vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx));
     coordinator::MetadataManager::InitInstance(
@@ -467,8 +464,8 @@ absl::Status ValkeySearch::Startup(RedisModuleCtx *ctx) {
   }
   SchemaManager::InitInstance(std::make_unique<SchemaManager>(
       ctx, server_events::SubscribeToServerEvents, writer_thread_pool_.get(),
-      Options::Instance().GetUseCoordinator().GetValue() && IsCluster()));
-  if (Options::Instance().GetUseCoordinator().GetValue()) {
+      options::GetUseCoordinator().GetValue() && IsCluster()));
+  if (options::GetUseCoordinator().GetValue()) {
     VMSDK_ASSIGN_OR_RETURN(auto redis_port, GetRedisLocalPort(ctx));
     auto coordinator_port = coordinator::GetCoordinatorPort(redis_port);
     coordinator_ = coordinator::ServerImpl::Create(
@@ -510,9 +507,6 @@ absl::Status ValkeySearch::OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv,
   // Register a single module type for Aux load/save callbacks.
   VMSDK_RETURN_IF_ERROR(RegisterModuleType(ctx));
 
-  /// Initialize the options
-  Options::InitInstance(std::make_unique<Options>());
-
   // Register all global configuration variables
   VMSDK_RETURN_IF_ERROR(ModuleConfigManager::Instance().Init(ctx));
 
@@ -544,10 +538,10 @@ absl::Status ValkeySearch::LoadAndParseArgv(RedisModuleCtx *ctx,
       vmsdk::config::ModuleConfigManager::Instance().ParseAndLoadArgv(ctx, argv,
                                                                       argc));
   // Sanity check
-  if ((Options::Instance().GetReaderThreadCount().GetValue() == 0 &&
-       Options::Instance().GetWriterThreadCount().GetValue() != 0) ||
-      (Options::Instance().GetWriterThreadCount().GetValue() == 0 &&
-       Options::Instance().GetReaderThreadCount().GetValue() != 0)) {
+  if ((options::GetReaderThreadCount().GetValue() == 0 &&
+       options::GetWriterThreadCount().GetValue() != 0) ||
+      (options::GetWriterThreadCount().GetValue() == 0 &&
+       options::GetReaderThreadCount().GetValue() != 0)) {
     return absl::InvalidArgumentError(
         "Maintaining query integrity is only supported when both the reader "
         "and writer thread pools are either enabled or disabled "

@@ -35,63 +35,28 @@ namespace options {
 
 namespace config = vmsdk::config;
 
-class Options {
- public:
-  Options() = default;
-  Options(const Options&) = delete;
-  Options& operator=(const Options) = delete;
+/// Return a mutable reference to the HNSW resize configuration parameter
+config::Number& GetHNSWBlockSize();
 
-  static void InitInstance(std::unique_ptr<Options> instance);
-  static Options& Instance();
+/// Return the configuration entry that allows the caller to control the
+/// number of reader threads
+config::Number& GetReaderThreadCount();
 
-  /// Return a mutable reference to the HNSW resize configuration parameter
-  config::Number& GetHNSWBlockSize();
+/// Return the configuration entry that allows the caller to control the
+/// number of writer threads
+config::Number& GetWriterThreadCount();
 
-  /// Return the configuration entry that allows the caller to control the
-  /// number of reader threads
-  config::Number& GetReaderThreadCount();
+/// Return an immutable reference to the "use-coordinator" flag
+const config::Boolean& GetUseCoordinator();
 
-  /// Return the configuration entry that allows the caller to control the
-  /// number of writer threads
-  config::Number& GetWriterThreadCount();
+/// Return the log level
+config::Enum& GetLogLevel();
 
-  /// Return an immutable reference to the "use-coordinator" flag
-  const config::Boolean& GetUseCoordinator();
+/// [DEPRECATED] Return an immutable reference to the deprecated flag:
+/// "threads"
+const config::Number& GetThreads();
 
-  /// Return the log level
-  config::Enum& GetLogLevel();
-
-  /// [DEPRECATED] Return an immutable reference to the deprecated flag:
-  /// "threads"
-  const config::Number& GetThreads();
-
- private:
-  /// If user passed "--threads" it triumphs any value provided by
-  /// "--reader-threads" / "--writer-threads"
-  absl::Status CanUpdateThreads() const;
-
-  bool IsThreadsProvided() const {
-    return threads_provided_.load(std::memory_order_relaxed);
-  }
-
-  /// Do build the configuration entries
-  void DoInitialize();
-
-  /// Controls the HNSW resize increments
-  std::shared_ptr<config::ConfigBase<long long>> hnsw_block_size_;
-  /// **DEPRECATED** controls both the reader & writer pool size
-  /// use --reader/--writer-threads instead
-  std::shared_ptr<config::ConfigBase<long long>> threads_;
-  /// Controls the reader threads count
-  std::shared_ptr<config::ConfigBase<long long>> reader_threads_count_;
-  /// Controls the writer threads count
-  std::shared_ptr<config::ConfigBase<long long>> writer_threads_count_;
-  /// Should this instance launch coordinator?
-  std::shared_ptr<config::ConfigBase<bool>> use_coordinator_;
-  /// Control the modules log level verbosity
-  std::shared_ptr<config::ConfigBase<int>> log_level_;
-  std::atomic_bool threads_provided_{false};
-};
-
+/// Reset the state of the options (mainly needed for testing)
+absl::Status Reset();
 }  // namespace options
 }  // namespace valkey_search

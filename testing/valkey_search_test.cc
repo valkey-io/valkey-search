@@ -70,6 +70,7 @@ struct LoadTestCase {
   int expected_coordinator_port{0};
   int expected_load_ret{0};
   bool expect_thread_pool_started{false};
+  bool fail_get_cluster_node_info{false};
 };
 
 class LoadTest : public ValkeySearchTestWithParam<LoadTestCase> {};
@@ -191,6 +192,18 @@ INSTANTIATE_TEST_SUITE_P(
             .expect_thread_pool_started = true,
         },
         {
+            .test_name = "use_coordinator_fail_to_get_node_info",
+            .args = "--use-coordinator --writer-threads 10 "
+                    "--reader-threads 20",
+            .cluster_mode = true,
+            .use_coordinator = true,
+            .expected_reader_thread_pool_size = 20,
+            .expected_writer_thread_pool_size = 10,
+            .expected_load_ret = 1,
+            .expect_thread_pool_started = true,
+            .fail_get_cluster_node_info = true,
+        },
+        {
             .test_name = "only_read_zero",
             .args = "--reader-threads 0 --writer-threads 10 ",
             .expected_load_ret = 1,
@@ -201,12 +214,12 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_load_ret = 1,
         },
     }),
-    [](const testing::TestParamInfo<LoadTestCase> &info) {
+    [](const testing::TestParamInfo<LoadTestCase>& info) {
       return info.param.test_name;
     });
 
 TEST_P(LoadTest, load) {
-  const LoadTestCase &test_case = GetParam();
+  const LoadTestCase& test_case = GetParam();
   auto args = vmsdk::ToRedisStringVector(test_case.args);
   ON_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&fake_ctx_))
       .WillByDefault(testing::Return(&fake_ctx_));
@@ -214,7 +227,7 @@ TEST_P(LoadTest, load) {
       *kMockRedisModule,
       CreateDataType(&fake_ctx_, testing::StrEq(kValkeySearchModuleTypeName),
                      testing::_, testing::_))
-      .WillOnce(testing::Return((RedisModuleType *)0xBADF00D));
+      .WillOnce(testing::Return((RedisModuleType*)0xBADF00D));
   if (test_case.expected_load_ret == 0) {
     EXPECT_CALL(*kMockRedisModule,
                 Call(testing::_, testing::StrEq("MODULE"), testing::StrEq("c"),
@@ -228,31 +241,39 @@ TEST_P(LoadTest, load) {
                              REDISMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED))
         .Times(1);
   }
-  std::string port_str;
   if (test_case.use_coordinator) {
+    const char* node_id = "a415b9df6ce0c3c757ad4270242ae432147cacbb";
     if (test_case.redis_port.has_value()) {
-      RedisModuleCallReply array_reply;
-      RedisModuleCallReply string_reply;
-      port_str = std::to_string(test_case.redis_port.value());
-      EXPECT_CALL(
+      ON_CALL(
           *kMockRedisModule,
-          Call(testing::_, testing::StrEq("CONFIG"), testing::StrEq("cc"),
-               testing::StrEq("GET"), testing::StrEq("port")))
-          .WillOnce(testing::Return(&array_reply));
-      EXPECT_CALL(*kMockRedisModule, CallReplyArrayElement(&array_reply, 1))
-          .WillOnce(testing::Return(&string_reply));
-      EXPECT_CALL(*kMockRedisModule,
-                  CallReplyStringPtr(&string_reply, testing::_))
-          .WillOnce(testing::Return(port_str.c_str()));
+          GetClusterNodeInfo(&fake_ctx_, testing::StrEq(node_id), testing::_,
+                             testing::_, testing::_, testing::_))
+          .WillByDefault([&](RedisModuleCtx* ctx, const char* sender_id,
+                             char* ip, char* master_id, int* port, int* flags) {
+            if (test_case.fail_get_cluster_node_info) {
+              return REDISMODULE_ERR;
+            }
+            if (ip != nullptr) {
+              memcpy(ip, "127.0.0.1", 9);
+            }
+            if (port != nullptr) {
+              *port = test_case.redis_port.value();
+            }
+            if (flags != nullptr) {
+              *flags = REDISMODULE_NODE_MYSELF;
+            }
+            return REDISMODULE_OK;
+          });
       ON_CALL(*kMockRedisModule, GetMyClusterID())
-          .WillByDefault(
-              testing::Return("a415b9df6ce0c3c757ad4270242ae432147cacbb"));
+          .WillByDefault(testing::Return(node_id));
     } else {
+      ON_CALL(*kMockRedisModule, GetMyClusterID())
+          .WillByDefault(testing::Return(node_id));
       EXPECT_CALL(
           *kMockRedisModule,
-          Call(testing::_, testing::StrEq("CONFIG"), testing::StrEq("cc"),
-               testing::StrEq("GET"), testing::StrEq("port")))
-          .WillOnce(testing::Return(nullptr));
+          GetClusterNodeInfo(&fake_ctx_, testing::StrEq(node_id), testing::_,
+                             testing::_, testing::_, testing::_))
+          .WillOnce(testing::Return(REDISMODULE_ERR));
     }
   }
   if (test_case.cluster_mode) {
@@ -294,7 +315,7 @@ TEST_P(LoadTest, load) {
     EXPECT_THAT(ValkeySearch::Instance().GetCoordinatorServer(),
                 testing::IsNull());
   }
-  for (const auto &arg : args) {
+  for (const auto& arg : args) {
     TestRedisModule_FreeString(nullptr, arg);
   }
 }
@@ -342,7 +363,7 @@ TEST_F(ValkeySearchTest, Info) {
   auto test_index_schema =
       CreateVectorHNSWSchema("index_schema_key", nullptr, writer_thread_pool)
           .value();
-  auto &index_schema_stats = test_index_schema->stats_;
+  auto& index_schema_stats = test_index_schema->stats_;
   index_schema_stats.subscription_remove.failure_cnt = 1;
   index_schema_stats.subscription_remove.success_cnt = 2;
   index_schema_stats.subscription_remove.skipped_cnt = 3;
@@ -360,7 +381,7 @@ TEST_F(ValkeySearchTest, Info) {
     index_schema_stats.mutations_queue_delay_ = absl::Seconds(3);
   }
 
-  auto &stats = Metrics::GetStats();
+  auto& stats = Metrics::GetStats();
   stats.query_failed_requests_cnt = 1;
   stats.query_successful_requests_cnt = 2;
   stats.query_hybrid_requests_cnt = 1;

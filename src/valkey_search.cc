@@ -413,7 +413,7 @@ void ValkeySearch::OnForkChildCallback(RedisModuleCtx *ctx,
   }
 }
 
-absl::StatusOr<const char*> GetConfigGetReply(RedisModuleCtx *ctx, const char *config) {
+absl::StatusOr<std::string> GetConfigGetReply(RedisModuleCtx *ctx, const char *config) {
   auto reply = vmsdk::UniquePtrRedisCallReply(
     RedisModule_Call(ctx, "CONFIG", "cc", "GET", config));
   if (reply == nullptr) {
@@ -422,7 +422,10 @@ absl::StatusOr<const char*> GetConfigGetReply(RedisModuleCtx *ctx, const char *c
   }
   RedisModuleCallReply *config_reply =
     RedisModule_CallReplyArrayElement(reply.get(), 1);
-  return RedisModule_CallReplyStringPtr(config_reply, nullptr);
+
+  size_t reply_len;
+  const char *reply_str = RedisModule_CallReplyStringPtr(config_reply, &reply_len);
+  return std::string(reply_str, reply_len);
 }
 
 

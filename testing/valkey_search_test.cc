@@ -279,11 +279,19 @@ TEST_P(LoadTest, load) {
         .Times(testing::Between(1, 2))
         .WillOnce(testing::Return(&tls_string_reply))
         .WillOnce(testing::Return(&non_tls_string_reply));
+      
+      int index = 0;
       EXPECT_CALL(*kMockRedisModule,
         CallReplyStringPtr(testing::_, testing::_))
-          .Times(testing::Between(1, 2))
-          .WillOnce(testing::Return(tls_port_str.c_str()))
-          .WillOnce(testing::Return(port_str.c_str()));
+          .WillRepeatedly([&](RedisModuleCallReply* reply, size_t* len) -> const char* {
+            if (index == 1) {
+              *len = port_str.size();
+              return port_str.c_str();
+            }
+            *len = tls_port_str.size();
+            index++;
+            return tls_port_str.c_str();
+        });
       ON_CALL(*kMockRedisModule, GetMyClusterID())
         .WillByDefault(
           testing::Return("a415b9df6ce0c3c757ad4270242ae432147cacbb"));

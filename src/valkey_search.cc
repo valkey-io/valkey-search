@@ -413,20 +413,32 @@ void ValkeySearch::OnForkChildCallback(RedisModuleCtx *ctx,
   }
 }
 
+absl::StatusOr<const char*> GetConfigGetReply(RedisModuleCtx *ctx, const char *config) {
+  auto reply = vmsdk::UniquePtrRedisCallReply(
+    RedisModule_Call(ctx, "CONFIG", "cc", "GET", config));
+  if (reply == nullptr) {
+    return absl::InternalError(
+      absl::StrFormat("Failed to get config: %s", config));
+  }
+  RedisModuleCallReply *config_reply =
+    RedisModule_CallReplyArrayElement(reply.get(), 1);
+  return RedisModule_CallReplyStringPtr(config_reply, nullptr);
+}
+
+
 absl::StatusOr<int> GetRedisLocalPort(RedisModuleCtx *ctx) {
   int port = -1;
-  auto node_id = RedisModule_GetMyClusterID();
-  if (node_id == nullptr) {
-    return absl::InternalError("Failed to get node ID");
-  }
-
-  std::string node_id_str{node_id,
-                          REDISMODULE_NODE_ID_LEN};
-  int flags = 0;
-  if (RedisModule_GetClusterNodeInfo(ctx, node_id_str.c_str(), nullptr, nullptr, &port,
-                                     &flags) != REDISMODULE_OK) {
+  VMSDK_ASSIGN_OR_RETURN(auto tls_port_str, GetConfigGetReply(ctx, "tls-port"));
+  if (!absl::SimpleAtoi(tls_port_str, &port)) {
     return absl::InternalError(
-        absl::StrFormat("Failed to get cluster info for node ID: %s", node_id));
+      absl::StrFormat("Failed to parse port: %s", tls_port_str));
+  }
+  if (port == 0) {
+    VMSDK_ASSIGN_OR_RETURN(auto port_str, GetConfigGetReply(ctx, "port"));
+    if (!absl::SimpleAtoi(port_str, &port)) {
+      return absl::InternalError(
+        absl::StrFormat("Failed to parse port: %s", port_str));
+    }
   }
 
   if (port < 0) {

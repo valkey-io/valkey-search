@@ -61,7 +61,9 @@ namespace valkey_search {
 struct LoadTestCase {
   std::string test_name;
   std::string args;
+  std::optional<int> tls_redis_port;
   std::optional<int> redis_port;
+  bool use_redis_port{false};
   bool cluster_mode;
   bool use_coordinator{false};
   size_t expected_reader_thread_pool_size{0};
@@ -112,10 +114,27 @@ INSTANTIATE_TEST_SUITE_P(
             .expect_thread_pool_started = false,
         },
         {
-            .test_name = "use_coordinator",
+            .test_name = "use_coordinator_non_tls",
             .args = "--use-coordinator --writer-threads 10 "
                     "--reader-threads 20",
+            .tls_redis_port = 0,
             .redis_port = 1000,
+            .use_redis_port = true,
+            .cluster_mode = true,
+            .use_coordinator = true,
+            .expected_reader_thread_pool_size = 20,
+            .expected_writer_thread_pool_size = 10,
+            .expected_coordinator_started = true,
+            .expected_coordinator_port = 21294,  // 20294 larger than redis_port
+            .expect_thread_pool_started = true,
+        },
+        {
+            .test_name = "use_coordinator_tls",
+            .args = "--use-coordinator --writer-threads 10 "
+                    "--reader-threads 20",
+            .tls_redis_port = 1000,
+            .redis_port = 0,
+            .use_redis_port = true,
             .cluster_mode = true,
             .use_coordinator = true,
             .expected_reader_thread_pool_size = 20,
@@ -133,10 +152,27 @@ INSTANTIATE_TEST_SUITE_P(
             .expect_thread_pool_started = true,
         },
         {
-            .test_name = "use_coordinator_not_cluster",
+            .test_name = "use_coordinator_not_cluster_not_tls",
             .args = "--use-coordinator --writer-threads 10 "
                     "--reader-threads 20",
+            .tls_redis_port = 0,
             .redis_port = 1000,
+            .use_redis_port = true,
+            .cluster_mode = false,
+            .use_coordinator = true,
+            .expected_reader_thread_pool_size = 20,
+            .expected_writer_thread_pool_size = 10,
+            .expected_coordinator_started = true,
+            .expected_coordinator_port = 21294,  // 20294 larger than redis_port
+            .expect_thread_pool_started = true,
+        },
+        {
+            .test_name = "use_coordinator_not_cluster_tls",
+            .args = "--use-coordinator --writer-threads 10 "
+                    "--reader-threads 20",
+            .tls_redis_port = 1000,
+            .redis_port = 0,
+            .use_redis_port = true,
             .cluster_mode = false,
             .use_coordinator = true,
             .expected_reader_thread_pool_size = 20,
@@ -149,7 +185,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "use_coordinator_not_cluster_fail_to_get_port",
             .args = "--use-coordinator --writer-threads 10 "
                     "--reader-threads 20",
-            .redis_port = std::nullopt,
+            .use_redis_port = true,
             .cluster_mode = false,
             .use_coordinator = true,
             .expected_reader_thread_pool_size = 20,
@@ -161,7 +197,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "use_coordinator_fail_to_get_port",
             .args = "--use-coordinator --writer-threads 10 "
                     "--reader-threads 20",
-            .redis_port = std::nullopt,
+            .use_redis_port = true,
             .cluster_mode = true,
             .use_coordinator = true,
             .expected_reader_thread_pool_size = 20,
@@ -220,38 +256,44 @@ TEST_P(LoadTest, load) {
         .Times(1);
   }
   if (test_case.use_coordinator) {
-    const char* node_id = "a415b9df6ce0c3c757ad4270242ae432147cacbb";
-    if (test_case.redis_port.has_value()) {
-      ON_CALL(
-          *kMockRedisModule,
-          GetClusterNodeInfo(&fake_ctx_, testing::StrEq(node_id), testing::_,
-                             testing::_, testing::_, testing::_))
-          .WillByDefault([&](RedisModuleCtx* ctx, const char* sender_id,
-                             char* ip, char* master_id, int* port, int* flags) {
-            if (test_case.fail_get_cluster_node_info) {
-              return REDISMODULE_ERR;
-            }
-            if (ip != nullptr) {
-              memcpy(ip, "127.0.0.1", 9);
-            }
-            if (port != nullptr) {
-              *port = test_case.redis_port.value();
-            }
-            if (flags != nullptr) {
-              *flags = REDISMODULE_NODE_MYSELF;
-            }
-            return REDISMODULE_OK;
-          });
-      ON_CALL(*kMockRedisModule, GetMyClusterID())
-          .WillByDefault(testing::Return(node_id));
-    } else {
-      ON_CALL(*kMockRedisModule, GetMyClusterID())
-          .WillByDefault(testing::Return(node_id));
+    if (test_case.use_redis_port) {
+      std::string port_str;
+      std::string tls_port_str;
+      RedisModuleCallReply tls_array_reply;
+      RedisModuleCallReply tls_string_reply;
+      RedisModuleCallReply non_tls_array_reply;
+      RedisModuleCallReply non_tls_string_reply;
+      if (test_case.tls_redis_port.has_value()) {
+        tls_port_str = std::to_string(test_case.tls_redis_port.value());
+        if (test_case.redis_port.has_value()) {
+          port_str = std::to_string(test_case.redis_port.value());
+        }
       EXPECT_CALL(
-          *kMockRedisModule,
-          GetClusterNodeInfo(&fake_ctx_, testing::StrEq(node_id), testing::_,
-                             testing::_, testing::_, testing::_))
-          .WillOnce(testing::Return(REDISMODULE_ERR));
+        *kMockRedisModule,
+        Call(testing::_, testing::StrEq("CONFIG"), testing::StrEq("cc"),
+          testing::StrEq("GET"), testing::_))
+          .Times(testing::Between(1, 2))
+          .WillOnce(testing::Return(&tls_array_reply))
+          .WillOnce(testing::Return(&non_tls_array_reply));
+      EXPECT_CALL(*kMockRedisModule, CallReplyArrayElement(testing::_, 1))
+        .Times(testing::Between(1, 2))
+        .WillOnce(testing::Return(&tls_string_reply))
+        .WillOnce(testing::Return(&non_tls_string_reply));
+      EXPECT_CALL(*kMockRedisModule,
+        CallReplyStringPtr(testing::_, testing::_))
+          .Times(testing::Between(1, 2))
+          .WillOnce(testing::Return(tls_port_str.c_str()))
+          .WillOnce(testing::Return(port_str.c_str()));
+      ON_CALL(*kMockRedisModule, GetMyClusterID())
+        .WillByDefault(
+          testing::Return("a415b9df6ce0c3c757ad4270242ae432147cacbb"));
+      } else {
+        EXPECT_CALL(
+        *kMockRedisModule,
+        Call(testing::_, testing::StrEq("CONFIG"), testing::StrEq("cc"),
+          testing::StrEq("GET"), testing::StrEq("tls-port")))
+          .WillOnce(testing::Return(nullptr));
+      }
     }
   }
   if (test_case.cluster_mode) {

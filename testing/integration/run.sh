@@ -103,7 +103,6 @@ function configure() {
 
     if [[ "${RUN_CMAKE}" == "yes" ]]; then
         printf "${BOLD_PINK}Running cmake...${RESET}\n"
-        rm -rf ${BUILD_DIR}
         mkdir -p ${BUILD_DIR}
         cd $_
         cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE}
@@ -112,20 +111,22 @@ function configure() {
 
     printf "Checking if valkey-server build is required..."
     BUILD_SERVER=$(is_build_required ${VALKEY_SERVER_PATH})
-    printf "${BUILD_SERVER}\n"
-     if [[ "${BUILD_SERVER}" == "yes" ]]; then
+    printf "${GREEN}${BUILD_SERVER}${RESET}\n"
+    if [[ "${BUILD_SERVER}" == "yes" ]]; then
         printf "${BOLD_PINK}Building valkey-server...${RESET}\n"
-
-        rm -rf ${VALKEY_SERVER_DIR}
-        git clone --branch ${VALKEY_VERSION} --single-branch https://github.com/valkey-io/valkey.git ${VALKEY_SERVER_DIR}
-        cd ${VALKEY_SERVER_DIR}
-        make -j$(nproc)
+        if [ ! -d ${VALKEY_SERVER_DIR} ]; then
+            git clone --branch ${VALKEY_VERSION} --single-branch https://github.com/valkey-io/valkey.git ${VALKEY_SERVER_DIR}
+        fi
+        mkdir -p ${VALKEY_SERVER_BUILD_DIR}
+        cd ${VALKEY_SERVER_BUILD_DIR}
+        cmake -DCMAKE_BUILD_TYPE=Release .. -GNinja
+        ninja
         cd ${ROOT_DIR}
     fi
 
     printf "Checking if valkey-json build is required..."
     BUILD_JSON=$(is_build_required ${VALKEY_JSON_PATH})
-    printf "${BUILD_JSON}\n"
+    printf "${GREEN}${BUILD_JSON}${RESET}\n"
      if [[ "${BUILD_JSON}" == "yes" ]]; then
         printf "${BOLD_PINK}Building valkey-json...${RESET}\n"
 
@@ -142,7 +143,7 @@ function configure() {
         cd ${ROOT_DIR}
     fi
 
-    printf "Building ValkeySearch ...\n"
+    printf "${BOLD_PINK}Building ValkeySearch ...${RESET}\n"
     if [[ "${BUILD_CONFIG}" == "debug" ]]; then
         ${MODULE_ROOT}/./build.sh --debug
     else
@@ -157,10 +158,10 @@ function build() {
     make
 }
 
-
 BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
 VALKEY_SERVER_DIR=${BUILD_DIR}/valkey-${VALKEY_VERSION}
-VALKEY_SERVER_PATH=${VALKEY_SERVER_DIR}/src/valkey-server
+VALKEY_SERVER_BUILD_DIR=${VALKEY_SERVER_DIR}/.build-release
+VALKEY_SERVER_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-server
 VALKEY_JSON_DIR=${BUILD_DIR}/valkey-json-${VALKEY_JSON_VERSION}
 VALKEY_JSON_PATH=${VALKEY_JSON_DIR}/build/src/libjson.so
 echo " VALKEY_SERVER_DIR is set to ${VALKEY_SERVER_DIR}"
@@ -171,8 +172,11 @@ if [[ "${CLEAN}" == "yes" ]]; then
 fi
 
 cleanup() {
+  printf "Cleanup before exit..."
+  pkill -9 valkey-server || true
   deactivate >/dev/null 2>&1
   cd ${ROOT_DIR}
+  printf "${GREEN}done${RESET}\n"
 }
 
 # Ensure cleanup runs on exit
@@ -186,7 +190,7 @@ if ! command -v memtier_benchmark &> /dev/null; then
     exit 1
 fi
 export VALKEY_SERVER_PATH="$VALKEY_SERVER_PATH"
-export VALKEY_CLI_PATH=${VALKEY_SERVER_DIR}/src/valkey-cli
+export VALKEY_CLI_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-cli
 export MEMTIER_PATH=memtier_benchmark
 export VALKEY_SEARCH_PATH=${MODULE_ROOT}/.build-${BUILD_CONFIG}/libsearch.so
 export VALKEY_JSON_PATH="${VALKEY_JSON_PATH}"
@@ -197,9 +201,7 @@ export TEST_TMPDIR="$BUILD_DIR/tmp"
 rm -rf $TEST_TMPDIR
 
 mkdir -p $TEST_TMPDIR
-set +e
-pkill -9 valkey-server
-set -e
+pkill -9 valkey-server || true
 
 if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
     ctest --output-on-failure

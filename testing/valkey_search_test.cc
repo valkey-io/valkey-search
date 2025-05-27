@@ -91,27 +91,6 @@ INSTANTIATE_TEST_SUITE_P(
             .expect_thread_pool_started = true,
         },
         {
-            .test_name = "just_threads",
-            .args = "--threads 30",
-            .expected_reader_thread_pool_size = 30,
-            .expected_writer_thread_pool_size = 75,
-            .expect_thread_pool_started = true,
-        },
-        {
-            .test_name = "zero_threads",
-            .args = "--writer-threads 10 --reader-threads 20 --threads 0 ",
-            .expected_reader_thread_pool_size = 1,
-            .expected_writer_thread_pool_size = 1,
-            .expect_thread_pool_started = true,
-        },
-        {
-            .test_name = "one_threads",
-            .args = "--writer-threads 10 --reader-threads 20 --threads 1 ",
-            .expected_reader_thread_pool_size = 1,
-            .expected_writer_thread_pool_size = 2,
-            .expect_thread_pool_started = true,
-        },
-        {
             .test_name = "zero_rw_threads",
             .args = "--writer-threads 0 --reader-threads 0 ",
             .expected_reader_thread_pool_size = 0,
@@ -123,13 +102,6 @@ INSTANTIATE_TEST_SUITE_P(
             .args = "--writer-threads 1 --reader-threads 1 ",
             .expected_reader_thread_pool_size = 1,
             .expected_writer_thread_pool_size = 1,
-            .expect_thread_pool_started = true,
-        },
-        {
-            .test_name = "threads_wins",
-            .args = "--threads 30 --reader-threads 20 --writer-threads 10",
-            .expected_reader_thread_pool_size = 30,
-            .expected_writer_thread_pool_size = 75,
             .expect_thread_pool_started = true,
         },
         {

@@ -60,8 +60,8 @@ function(add_pytest test_name test_script)
 endfunction()
 
 # Add tests
-add_pytest(stability_test stability_test.py)
 add_pytest(vector_search_integration_test vector_search_integration_test.py)
+add_pytest(stability_test stability_test.py)
 
 # Set timeout for long-running tests
 set_tests_properties(stability_test PROPERTIES TIMEOUT 3600)

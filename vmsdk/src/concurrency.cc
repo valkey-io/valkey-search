@@ -165,7 +165,7 @@ size_t GetPhysicalCPUCoresCount() {
     cpu_cores = helper::ParseCPUInfo(cpuinfo);
   }
 #endif
-  VMSDK_LOG(NOTICE, nullptr) << "Cores count is set to:" << cpu_cores;
+  VMSDK_LOG(DEBUG, nullptr) << "Cores count is set to:" << cpu_cores;
   return cpu_cores;
 }
 

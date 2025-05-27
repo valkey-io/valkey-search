@@ -43,6 +43,8 @@
 #include "absl/status/status.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
+#include "vmsdk/src/module_config.h"
+
 namespace {
 
 class ThreadRunContext {

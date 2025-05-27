@@ -45,28 +45,10 @@ constexpr absl::string_view kReaderThreadsConfig{"reader-threads"};
 constexpr absl::string_view kWriterThreadsConfig{"writer-threads"};
 constexpr absl::string_view kUseCoordinator{"use-coordinator"};
 constexpr absl::string_view kLogLevel{"log-level"};
-constexpr absl::string_view kThreads{"threads"};
 
 static const int64_t kDefaultThreadsCount = vmsdk::GetPhysicalCPUCoresCount();
 
 namespace {
-
-/// Did the user provided "--threads"?
-static std::atomic_bool threads_provided{false};
-static bool IsThreadsProvided() {
-  return threads_provided.load(std::memory_order_relaxed);
-}
-
-/// If user passed "--threads" it triumphs any value provided by
-/// "--reader-threads" / "--writer-threads"
-static absl::Status CanUpdateThreads() {
-  if (IsThreadsProvided()) {
-    return absl::AlreadyExistsError(
-        "Can not modify thread pool count. Thread count was already set by "
-        "--threads");
-  }
-  return absl::OkStatus();
-}
 
 /// Check that the new value for configuration item `hnsw-block-size` confirms
 /// to the allowed values.
@@ -121,20 +103,6 @@ static auto hnsw_block_size =
         .WithValidationCallback(ValidateHNSWBlockSize)
         .Build();
 
-/// DEPRECATED: Register the "--threads" flag.
-static auto threads =
-    config::NumberBuilder(kThreads, -1, 0, kMaxThreadsCount)
-        .WithFlags(REDISMODULE_CONFIG_HIDDEN)
-        .WithModifyCallback([](long long value) {
-          GetReaderThreadCount().SetValueOrLog(
-              std::max(static_cast<int>(value), 1), WARNING);
-
-          GetWriterThreadCount().SetValueOrLog(
-              std::max(static_cast<int>(value * 2.5), 1), WARNING);
-          threads_provided.store(true, std::memory_order_relaxed);
-        })
-        .Build();
-
 /// Register the "--reader-threads" flag. Controls the readers thread pool
 static auto reader_threads_count =
     config::NumberBuilder(kReaderThreadsConfig,  // name
@@ -146,8 +114,6 @@ static auto reader_threads_count =
               UpdateThreadPoolCount(
                   ValkeySearch::Instance().GetReaderThreadPool(), new_value);
             })
-        .WithValidationCallback(
-            [](long long) -> absl::Status { return CanUpdateThreads(); })
         .Build();
 
 /// Register the "--reader-threads" flag. Controls the writer thread pool
@@ -161,8 +127,6 @@ static auto writer_threads_count =
               UpdateThreadPoolCount(
                   ValkeySearch::Instance().GetWriterThreadPool(), new_value);
             })
-        .WithValidationCallback(
-            [](long long) -> absl::Status { return CanUpdateThreads(); })
         .Build();
 
 /// Should this instance use coordinator?
@@ -217,12 +181,7 @@ vmsdk::config::Enum& GetLogLevel() {
   return dynamic_cast<vmsdk::config::Enum&>(*log_level);
 }
 
-const vmsdk::config::Number& GetThreads() {
-  return dynamic_cast<const vmsdk::config::Number&>(*threads);
-}
-
 absl::Status Reset() {
-  threads_provided.store(false, std::memory_order_relaxed);
   VMSDK_RETURN_IF_ERROR(use_coordinator->SetValue(false));
   return absl::OkStatus();
 }

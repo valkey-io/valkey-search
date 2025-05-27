@@ -52,10 +52,6 @@ const config::Boolean& GetUseCoordinator();
 /// Return the log level
 config::Enum& GetLogLevel();
 
-/// [DEPRECATED] Return an immutable reference to the deprecated flag:
-/// "threads"
-const config::Number& GetThreads();
-
 /// Reset the state of the options (mainly needed for testing)
 absl::Status Reset();
 }  // namespace options

@@ -321,12 +321,10 @@ class ConfigBuilder {
     return *this;
   }
 
-  std::shared_ptr<ConfigBase<ValkeyT>> Build() {
-    return std::shared_ptr<ConfigBase<ValkeyT>>{config_};
-  }
+  std::shared_ptr<ConfigBase<ValkeyT>> Build() { return config_; }
 
  private:
-  ConfigBase<ValkeyT> *config_ = nullptr;
+  std::shared_ptr<ConfigBase<ValkeyT>> config_;
 };
 
 /// Construct Configuration object of type `T`.

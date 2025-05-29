@@ -52,6 +52,7 @@
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/tag.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
 #include "src/keyspace_event_manager.h"
@@ -66,6 +67,7 @@
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search {
 
@@ -853,6 +855,49 @@ TEST_F(IndexSchemaBackfillTest, PerformBackfill_SwapDB) {
   }
 }
 
+TEST_F(IndexSchemaBackfillTest, PerformBackfill_MemoryTrackingScopeConstructor) {
+  std::vector<absl::string_view> key_prefixes = {"prefix:"};
+  std::string index_schema_name_str("test_index");
+  
+  int constructor_call_count = 0;
+  MemoryStats* captured_stats = nullptr;
+  
+  MemoryTrackingScope::SetScopeEventCallback([&constructor_call_count, &captured_stats](const MemoryTrackingScope* scope) {
+    constructor_call_count++;
+    captured_stats = scope->GetStats();
+  });
+
+  RedisModuleCtx parent_ctx;
+  RedisModuleCtx scan_ctx;
+  EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&parent_ctx))
+      .WillRepeatedly(Return(&scan_ctx));
+  EXPECT_CALL(*kMockRedisModule, DbSize(testing::_))
+      .WillRepeatedly(Return(5));
+
+  auto index_schema = MockIndexSchema::Create(
+                          &parent_ctx, index_schema_name_str, key_prefixes,
+                          std::make_unique<HashAttributeDataType>(),
+                          nullptr)  // No thread pool for simplicity
+                          .value();
+
+  constructor_call_count = 0;
+  captured_stats = nullptr;
+
+  EXPECT_CALL(*kMockRedisModule,
+              Scan(&scan_ctx, testing::An<RedisModuleScanCursor *>(),
+                   testing::An<RedisModuleScanCB>(), testing::An<void *>()))
+      .WillOnce(Return(0));
+
+  EXPECT_EQ(constructor_call_count, 0);
+
+  uint32_t scanned = index_schema->PerformBackfill(&parent_ctx, 10);
+
+  EXPECT_EQ(constructor_call_count, 1);
+  EXPECT_EQ(captured_stats, index_schema->GetMemoryStats());
+
+  MemoryTrackingScope::ClearScopeEventCallback();
+}
+
 INSTANTIATE_TEST_SUITE_P(
     IndexSchemaBackfillTests, IndexSchemaBackfillTest,
     Combine(Bool(),
@@ -1115,6 +1160,46 @@ TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
       WaitWorkerTasksAreCompleted(mutations_thread_pool);
     }
   }
+}
+
+TEST_F(IndexSchemaRDBTest, MemoryTrackingScopeConstructorInLoadFromRDB) {
+  RedisModuleCtx fake_ctx;
+  
+  int constructor_call_count = 0;
+  MemoryStats* captured_stats = nullptr;
+  
+  MemoryTrackingScope::SetScopeEventCallback([&constructor_call_count, &captured_stats](const MemoryTrackingScope* scope) {
+    constructor_call_count++;
+    captured_stats = scope->GetStats();
+  });
+
+  data_model::IndexSchema index_schema_proto;
+  index_schema_proto.set_name("test_index");
+  index_schema_proto.set_db_num(0);
+  index_schema_proto.set_attribute_data_type(data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
+  index_schema_proto.add_subscribed_key_prefixes("prefix:");
+
+  RedisModuleCtx scan_ctx;
+  EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&fake_ctx))
+      .WillRepeatedly(Return(&scan_ctx));
+  EXPECT_CALL(*kMockRedisModule, SelectDb(&scan_ctx, 0))
+      .WillRepeatedly(Return(REDISMODULE_OK));
+
+  FakeSafeRDB fake_rdb;
+
+  EXPECT_EQ(constructor_call_count, 0);
+
+  auto result = IndexSchema::LoadFromRDB(&fake_ctx, nullptr, 
+                                        std::make_unique<data_model::IndexSchema>(index_schema_proto),
+                                        SupplementalContentIter(&fake_rdb, 0));
+
+  VMSDK_EXPECT_OK_STATUSOR(result);
+  auto index_schema = std::move(result.value());
+
+  EXPECT_EQ(constructor_call_count, 2);
+  EXPECT_EQ(captured_stats, index_schema->GetMemoryStats());
+
+  MemoryTrackingScope::ClearScopeEventCallback();
 }
 
 class IndexSchemaFriendTest : public ValkeySearchTest {
@@ -1385,6 +1470,51 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
   EXPECT_EQ(stats.subscription_add.failure_cnt, 0);
   EXPECT_EQ(stats.subscription_remove.failure_cnt, 0);
   EXPECT_EQ(stats.subscription_modify.failure_cnt, 0);
+}
+
+TEST_F(IndexSchemaFriendTest, ProcessMutation_MemoryTrackingScopeConstructor) {
+  int constructor_call_count = 0;
+  MemoryStats* captured_stats = nullptr;
+  
+  MemoryTrackingScope::SetScopeEventCallback([&constructor_call_count, &captured_stats](const MemoryTrackingScope* scope) {
+    constructor_call_count++;
+    captured_stats = scope->GetStats();
+  });
+
+  data_model::IndexSchema index_schema_proto;
+  index_schema_proto.set_name("test_index");
+  index_schema_proto.set_db_num(0);
+  index_schema_proto.set_attribute_data_type(data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
+  index_schema_proto.add_subscribed_key_prefixes("prefix:");
+
+  RedisModuleCtx scan_ctx;
+  EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&fake_ctx))
+      .WillRepeatedly(Return(&scan_ctx));
+  EXPECT_CALL(*kMockRedisModule, SelectDb(&scan_ctx, 0))
+      .WillRepeatedly(Return(REDISMODULE_OK));
+
+  auto test_index_schema = IndexSchema::Create(
+                              &fake_ctx, 
+                              index_schema_proto,
+                              nullptr)  // No thread pool - ProcessMutation will call SyncProcessMutation directly
+                              .value();
+
+  constructor_call_count = 0;
+  captured_stats = nullptr;
+
+  auto key_interned = StringInternStore::Intern("prefix:test_key");
+  
+  IndexSchema::MutatedAttributes mutated_attributes;
+  mutated_attributes["test_attribute"].data = vmsdk::MakeUniqueRedisString("test_data");
+
+  EXPECT_EQ(constructor_call_count, 0);
+
+  test_index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned, false);
+
+  EXPECT_EQ(constructor_call_count, 1);
+  EXPECT_EQ(captured_stats, test_index_schema->GetMemoryStats());
+
+  MemoryTrackingScope::ClearScopeEventCallback();
 }
 
 class IndexSchemaTest : public vmsdk::RedisTest {};

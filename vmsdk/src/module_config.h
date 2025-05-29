@@ -348,7 +348,7 @@ ConfigBuilder<ValkeyT> Builder(Args &&...args) {
     // Boolean
     return ConfigBuilder<int>(new Enum(std::forward<Args>(args)...));
   } else {
-    static_assert(false, "Unreachable");
+    static_assert(!std::is_same_v<ValkeyT, ValkeyT>, "Unreachable");
   }
 }
 

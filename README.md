@@ -16,7 +16,7 @@ FT._LIST
 FT.SEARCH
 ```
 
-For a detailed description of the supported commands and configuration options, see the [Command Reference](https://github.com/valkey-io/valkey-search/blob/main/COMMANDS.md).
+For a detailed description of the supported commands and configuration options, see the [Command Reference](https://valkey.io/commands/#search).
 
 For comprehensive examples, refer to the [Quick Start Guide](https://github.com/valkey-io/valkey-search/blob/main/QUICK_START.md).
 

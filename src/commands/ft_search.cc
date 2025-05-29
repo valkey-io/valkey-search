@@ -229,9 +229,11 @@ absl::Status FTSearchCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
         auto parameters,
         ParseVectorSearchParameters(ctx, argv + 1, argc - 1, schema_manager));
 
-    VMSDK_RETURN_IF_ERROR(
-        AclPrefixCheck(ctx, kCommandCategories.at(kSearch),
-                       parameters->index_schema->GetKeyPrefixes()));
+    static const auto permissions =
+        PrefixACLPermissions(kSearchCmdPermissions, kSearchCommand);
+    VMSDK_RETURN_IF_ERROR(AclPrefixCheck(
+        ctx, permissions, parameters->index_schema->GetKeyPrefixes()));
+
     parameters->index_schema->ProcessMultiQueue();
 
     const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);

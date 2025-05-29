@@ -26,30 +26,33 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+#pragma once
 
-#include "absl/status/status.h"
-#include "src/acl.h"
-#include "src/commands/commands.h"
-#include "src/commands/ft_create_parser.h"
-#include "src/schema_manager.h"
-#include "vmsdk/src/status/status_macros.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "vmsdk/src/module_config.h"
 
 namespace valkey_search {
+namespace options {
 
-absl::Status FTCreateCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
-                         int argc) {
-  VMSDK_ASSIGN_OR_RETURN(auto index_schema_proto,
-                         ParseFTCreateArgs(ctx, argv + 1, argc - 1));
-  index_schema_proto.set_db_num(RedisModule_GetSelectedDb(ctx));
-  static const auto permissions =
-      PrefixACLPermissions(kCreateCmdPermissions, kCreateCommand);
-  VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, permissions, index_schema_proto));
-  VMSDK_RETURN_IF_ERROR(
-      SchemaManager::Instance().CreateIndexSchema(ctx, index_schema_proto));
+namespace config = vmsdk::config;
 
-  RedisModule_ReplyWithSimpleString(ctx, "OK");
-  RedisModule_ReplicateVerbatim(ctx);
-  return absl::OkStatus();
-}
+/// Return a mutable reference to the HNSW resize configuration parameter
+config::Number& GetHNSWBlockSize();
+
+/// Return the configuration entry that allows the caller to control the
+/// number of reader threads
+config::Number& GetReaderThreadCount();
+
+/// Return the configuration entry that allows the caller to control the
+/// number of writer threads
+config::Number& GetWriterThreadCount();
+
+/// Return an immutable reference to the "use-coordinator" flag
+const config::Boolean& GetUseCoordinator();
+
+/// Return the log level
+config::Enum& GetLogLevel();
+
+/// Reset the state of the options (mainly needed for testing)
+absl::Status Reset();
+}  // namespace options
 }  // namespace valkey_search

@@ -356,7 +356,7 @@ uint64_t SchemaManager::GetNumberOfAttributes() const {
   }
   return num_attributes;
 }
-uint64_t SchemaManager::GetTotalIndexedHashKeys() const {
+uint64_t SchemaManager::GetTotalIndexedDocuments() const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto num_hash_keys = 0;
   for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
@@ -501,7 +501,7 @@ void SchemaManager::OnLoadingEnded(RedisModuleCtx *ctx) {
 }
 
 void SchemaManager::PerformBackfill(RedisModuleCtx *ctx, uint32_t batch_size) {
-  // TODO(b/323954093): Address fairness of index backfill/mutation
+  // TODO: Address fairness of index backfill/mutation
   // processing.
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   uint32_t remaining_count = batch_size;
@@ -521,13 +521,13 @@ absl::Status SchemaManager::SaveIndexes(RedisModuleCtx *ctx, SafeRDB *rdb,
   if (db_to_index_schemas_.empty()) {
     // Auxsave2 will ensure nothing is written to the aux section if we
     // write nothing.
-    RedisModule_Log(detached_ctx_.get(), REDISMODULE_LOGLEVEL_NOTICE,
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_NOTICE,
                     "Skipping aux metadata for SchemaManager since there "
                     "is no content");
     return absl::OkStatus();
   }
 
-  RedisModule_Log(detached_ctx_.get(), REDISMODULE_LOGLEVEL_NOTICE,
+  RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_NOTICE,
                   "Saving aux metadata for SchemaManager to aux RDB");
   for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
     for (const auto &[name, schema] : inner_map) {

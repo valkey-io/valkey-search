@@ -35,6 +35,7 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -54,15 +55,36 @@ absl::Status RegisterInfo(RedisModuleCtx *ctx, RedisModuleInfoFunc info) {
   return absl::OkStatus();
 }
 
+absl::Status AddACLCategories(
+    RedisModuleCtx *ctx, const std::list<absl::string_view> &acl_categories) {
+  for (auto &category : acl_categories) {
+    if (RedisModule_AddACLCategory(ctx, category.data()) == REDISMODULE_ERR) {
+      return absl::InternalError(absl::StrCat(
+          "Failed to create a command ACL category: ", category.data()));
+    }
+  }
+  return absl::OkStatus();
+}
+
 absl::Status RegisterCommands(RedisModuleCtx *ctx,
                               const std::list<CommandOptions> &commands) {
   for (auto &command : commands) {
+    auto flags = absl::StrJoin(command.flags, " ");
     if (RedisModule_CreateCommand(ctx, command.cmd_name.data(),
-                                  command.cmd_func, command.permissions.data(),
+                                  command.cmd_func, flags.c_str(),
                                   command.first_key, command.last_key,
                                   command.key_step) == REDISMODULE_ERR) {
       return absl::InternalError(
           absl::StrCat("Failed to create command: ", command.cmd_name.data()));
+    }
+    RedisModuleCommand *cmd =
+        RedisModule_GetCommand(ctx, command.cmd_name.data());
+    auto permissions = absl::StrJoin(command.permissions, " ");
+    if (RedisModule_SetCommandACLCategories(cmd, permissions.c_str()) ==
+        REDISMODULE_ERR) {
+      return absl::InternalError(
+          absl::StrCat("Failed to set ACL categories `", permissions,
+                       "` for the command: ", command.cmd_name.data()));
     }
   }
   return absl::OkStatus();
@@ -70,8 +92,8 @@ absl::Status RegisterCommands(RedisModuleCtx *ctx,
 
 int OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
            const Options &options) {
-  if (RedisModule_Init(ctx, options.name.c_str(), options.version, REDISMODULE_APIVER_1) ==
-      REDISMODULE_ERR) {
+  if (RedisModule_Init(ctx, options.name.c_str(), options.version,
+                       REDISMODULE_APIVER_1) == REDISMODULE_ERR) {
     RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_WARNING, "Failed to init module");
     return REDISMODULE_ERR;
   }
@@ -79,6 +101,12 @@ int OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
   if (!status.ok()) {
     RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_WARNING,
                     "Failed to init logging, %s", status.message().data());
+    return REDISMODULE_ERR;
+  }
+  if (auto status = AddACLCategories(ctx, options.acl_categories);
+      !status.ok()) {
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_WARNING, "%s",
+                    status.message().data());
     return REDISMODULE_ERR;
   }
   if (auto status = RegisterCommands(ctx, options.commands); !status.ok()) {

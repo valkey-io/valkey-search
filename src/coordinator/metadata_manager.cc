@@ -495,7 +495,7 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
   return absl::OkStatus();
 }
 
-bool DoesGlobalMetadataContainEntry(GlobalMetadata &metadata) {
+bool DoesGlobalMetadataContainEntry(const GlobalMetadata &metadata) {
   if (metadata.type_namespace_map().empty()) {
     return false;
   }
@@ -507,6 +507,10 @@ bool DoesGlobalMetadataContainEntry(GlobalMetadata &metadata) {
   return false;
 }
 
+int MetadataManager::GetSectionsCount() const {
+  return DoesGlobalMetadataContainEntry(metadata_.Get()) ? 1 : 0;
+}
+
 absl::Status MetadataManager::SaveMetadata(RedisModuleCtx *ctx, SafeRDB *rdb,
                                            int when) {
   if (when == REDISMODULE_AUX_BEFORE_RDB) {
@@ -516,13 +520,13 @@ absl::Status MetadataManager::SaveMetadata(RedisModuleCtx *ctx, SafeRDB *rdb,
   if (!DoesGlobalMetadataContainEntry(metadata_.Get())) {
     // Auxsave2 will ensure nothing is written to the aux section if we write
     // nothing.
-    VMSDK_LOG(NOTICE, detached_ctx_.get())
+    VMSDK_LOG(NOTICE, ctx)
         << "Skipping aux metadata for MetadataManager since there is no "
            "content";
     return absl::OkStatus();
   }
 
-  VMSDK_LOG(NOTICE, detached_ctx_.get())
+  VMSDK_LOG(NOTICE, ctx)
       << "Saving aux metadata for MetadataManager to aux RDB";
   data_model::RDBSection section;
   std::string serialized_metadata;

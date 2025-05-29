@@ -199,6 +199,11 @@ class MockRedisModule {
                RedisModuleConfigGetNumericFunc getfn,
                RedisModuleConfigSetNumericFunc setfn,
                RedisModuleConfigApplyFunc applyfn, void *privdata));
+  MOCK_METHOD(int, RegisterBoolConfig,
+              (RedisModuleCtx * ctx, const char *name, int default_val,
+               unsigned int flags, RedisModuleConfigGetBoolFunc getfn,
+               RedisModuleConfigSetBoolFunc setfn,
+               RedisModuleConfigApplyFunc applyfn, void *privdata));
   MOCK_METHOD(int, LoadConfigs, (RedisModuleCtx * ctx));
   MOCK_METHOD(int, SetConnectionProperties,
               (const RedisModuleConnectionProperty *properties, int length));
@@ -1009,6 +1014,14 @@ inline int TestRedisModule_RegisterNumericConfig(
       ctx, name, default_val, flags, min, max, getfn, setfn, applyfn, privdata);
 }
 
+inline int TestRedisModule_RegisterBoolConfig(
+    RedisModuleCtx *ctx, const char *name, int default_val, unsigned int flags,
+    RedisModuleConfigGetBoolFunc getfn, RedisModuleConfigSetBoolFunc setfn,
+    RedisModuleConfigApplyFunc applyfn, void *privdata) {
+  return kMockRedisModule->RegisterBoolConfig(ctx, name, default_val, flags,
+                                              getfn, setfn, applyfn, privdata);
+}
+
 inline int TestRedisModule_LoadConfigs(RedisModuleCtx *ctx) {
   return kMockRedisModule->LoadConfigs(ctx);
 }
@@ -1539,6 +1552,7 @@ inline void TestRedisModule_Init() {
   RedisModule_RdbLoad = &TestRedisModule_RdbLoad;
   RedisModule_GetCurrentUserName = &TestRedisModule_GetCurrentUserName;
   RedisModule_RegisterNumericConfig = &TestRedisModule_RegisterNumericConfig;
+  RedisModule_RegisterBoolConfig = &TestRedisModule_RegisterBoolConfig;
 
   kMockRedisModule = new testing::NiceMock<MockRedisModule>();
 

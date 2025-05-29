@@ -36,7 +36,7 @@
 #include "src/indexes/vector_base.h"
 
 namespace valkey_search::query {
-// TODO(b/356910832): Tune this parameter.
+// TODO: Tune this parameter.
 constexpr double kPreFilteringThresholdRatio = 0.001;  // 0.1%
 // The query planner decides whether to use pre or inline filtering based on
 // heuristics.
@@ -50,7 +50,7 @@ bool UsePreFiltering(size_t estimated_num_of_keys,
     return true;
   }
   if (vector_index->GetIndexerType() == indexes::IndexerType::kHNSW) {
-    // TODO(b/356905534): Come up with a formulation accounting for various
+    // TODO: Come up with a formulation accounting for various
     // other factors like ef_construction, M, size of vectors, ef_runtime, k
     // etc. Also benchmark various combinations to tune the hyperparameters.
     size_t N = vector_index->GetCapacity();

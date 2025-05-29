@@ -72,7 +72,13 @@ struct LoadTestCase {
   bool expect_thread_pool_started{false};
 };
 
-class LoadTest : public ValkeySearchTestWithParam<LoadTestCase> {};
+class LoadTest : public ValkeySearchTestWithParam<LoadTestCase> {
+ public:
+  void SetUp() override {
+    ValkeySearchTestWithParam<LoadTestCase>::SetUp();
+    CHECK(options::Reset().ok());
+  }
+};
 
 INSTANTIATE_TEST_SUITE_P(
     LoadTests, LoadTest,
@@ -82,27 +88,6 @@ INSTANTIATE_TEST_SUITE_P(
             .args = "--writer-threads 10 --reader-threads 20",
             .expected_reader_thread_pool_size = 20,
             .expected_writer_thread_pool_size = 10,
-            .expect_thread_pool_started = true,
-        },
-        {
-            .test_name = "just_threads",
-            .args = "--threads 30",
-            .expected_reader_thread_pool_size = 30,
-            .expected_writer_thread_pool_size = 75,
-            .expect_thread_pool_started = true,
-        },
-        {
-            .test_name = "zero_threads",
-            .args = "--writer-threads 10 --reader-threads 20 --threads 0 ",
-            .expected_reader_thread_pool_size = 1,
-            .expected_writer_thread_pool_size = 1,
-            .expect_thread_pool_started = true,
-        },
-        {
-            .test_name = "one_threads",
-            .args = "--writer-threads 10 --reader-threads 20 --threads 1 ",
-            .expected_reader_thread_pool_size = 1,
-            .expected_writer_thread_pool_size = 2,
             .expect_thread_pool_started = true,
         },
         {
@@ -117,13 +102,6 @@ INSTANTIATE_TEST_SUITE_P(
             .args = "--writer-threads 1 --reader-threads 1 ",
             .expected_reader_thread_pool_size = 1,
             .expected_writer_thread_pool_size = 1,
-            .expect_thread_pool_started = true,
-        },
-        {
-            .test_name = "threads_wins",
-            .args = "--threads 30 --reader-threads 20 --writer-threads 10",
-            .expected_reader_thread_pool_size = 30,
-            .expected_writer_thread_pool_size = 75,
             .expect_thread_pool_started = true,
         },
         {
@@ -405,7 +383,8 @@ TEST_F(ValkeySearchTest, Info) {
       fake_info_ctx.info_capture.GetInfo(),
       "memory\nused_memory_bytes: 0\nused_memory_human: "
       "'0.00M'\nindex_stats\nnumber_of_indexes: 1\nnumber_of_attributes: "
-      "1\ntotal_indexed_hash_keys: 4\ningestion\nbackground_indexing_status: "
+      "1\ntotal_indexed_documents: "
+      "4\ningestion\nbackground_indexing_status: "
       "'IN_PROGRESS'\nthread-pool\nquery_queue_size: 10\nwriter_queue_size: "
       "5\nworker_pool_suspend_cnt: 13\nwriter_resumed_cnt: "
       "14\nreader_resumed_cnt: 15\nwriter_suspension_expired_cnt: "

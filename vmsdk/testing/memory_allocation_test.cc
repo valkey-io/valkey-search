@@ -444,17 +444,17 @@ TEST_F(MemoryAllocationTest, MemoryStatsDirect) {
   stats.RecordDeallocation(80);
   EXPECT_EQ(stats.GetAllocatedBytes(), 0);
 
-  stats.RecordDeallocation(10); // Should not go below zero
+  stats.RecordDeallocation(10);
   EXPECT_EQ(stats.GetAllocatedBytes(), 0);
 
   stats.RecordAllocation(20);
   EXPECT_EQ(stats.GetAllocatedBytes(), 20);
-  stats.RecordDeallocation(100); // Deallocate more than allocated
+  stats.RecordDeallocation(100);
   EXPECT_EQ(stats.GetAllocatedBytes(), 0);
 }
 
 TEST_F(MemoryAllocationTest, MemoryTrackingScopeSimple) {
-  vmsdk::UseValkeyAlloc(); // Ensure ReportAlloc/Free are called
+  vmsdk::UseValkeyAlloc();
 
   MemoryStats stats;
   EXPECT_EQ(stats.GetAllocatedBytes(), 0);
@@ -490,7 +490,7 @@ TEST_F(MemoryAllocationTest, MemoryTrackingScopeSimple) {
   EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x2000))).Times(1);
   __wrap_free(ptr2);
   ptr2 = nullptr;
-  EXPECT_EQ(stats.GetAllocatedBytes(), 50); // Still 50, free was outside scope's influence on stats
+  EXPECT_EQ(stats.GetAllocatedBytes(), 50);
   EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
 }
 
@@ -511,7 +511,7 @@ TEST_F(MemoryAllocationTest, MemoryTrackingScopeNested) {
     MemoryTrackingScope outer_scope(&stats1);
     EXPECT_CALL(*kMockRedisModule, Alloc(100)).WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
     EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x1000))).WillRepeatedly(testing::Return(100));
-    ptr1 = __wrap_malloc(100); // Allocated in outer_scope (stats1)
+    ptr1 = __wrap_malloc(100);
     EXPECT_EQ(stats1.GetAllocatedBytes(), 100);
     EXPECT_EQ(stats2.GetAllocatedBytes(), 0);
     EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 100);
@@ -520,42 +520,42 @@ TEST_F(MemoryAllocationTest, MemoryTrackingScopeNested) {
       MemoryTrackingScope inner_scope(&stats2);
       EXPECT_CALL(*kMockRedisModule, Alloc(50)).WillOnce(testing::Return(reinterpret_cast<void*>(0x2000)));
       EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x2000))).WillRepeatedly(testing::Return(50));
-      ptr2 = __wrap_malloc(50); // Allocated in inner_scope (stats2)
+      ptr2 = __wrap_malloc(50);
       EXPECT_EQ(stats1.GetAllocatedBytes(), 100);
       EXPECT_EQ(stats2.GetAllocatedBytes(), 50);
       EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 150);
 
       EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x2000))).Times(1);
-      __wrap_free(ptr2); // Freed in inner_scope (stats2)
+      __wrap_free(ptr2);
       ptr2 = nullptr;
       EXPECT_EQ(stats1.GetAllocatedBytes(), 100);
       EXPECT_EQ(stats2.GetAllocatedBytes(), 0);
       EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 100);
-    } // inner_scope ends, current_scope reverts to outer_scope
+    }
 
-    EXPECT_EQ(stats1.GetAllocatedBytes(), 100); // Unchanged by inner scope's end
-    EXPECT_EQ(stats2.GetAllocatedBytes(), 0);   // Unchanged
+    EXPECT_EQ(stats1.GetAllocatedBytes(), 100);
+    EXPECT_EQ(stats2.GetAllocatedBytes(), 0);
 
     EXPECT_CALL(*kMockRedisModule, Alloc(30)).WillOnce(testing::Return(reinterpret_cast<void*>(0x3000)));
     EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x3000))).WillRepeatedly(testing::Return(30));
-    ptr3 = __wrap_malloc(30); // Allocated in outer_scope (stats1)
+    ptr3 = __wrap_malloc(30);
     EXPECT_EQ(stats1.GetAllocatedBytes(), 130);
     EXPECT_EQ(stats2.GetAllocatedBytes(), 0);
     EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 130);
 
     EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x1000))).Times(1);
-    __wrap_free(ptr1); // Freed in outer_scope (stats1)
+    __wrap_free(ptr1);
     ptr1 = nullptr;
     EXPECT_EQ(stats1.GetAllocatedBytes(), 30);
     EXPECT_EQ(stats2.GetAllocatedBytes(), 0);
     EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 30);
-  } // outer_scope ends
+  }
 
-  EXPECT_EQ(stats1.GetAllocatedBytes(), 30); // Unchanged
-  EXPECT_EQ(stats2.GetAllocatedBytes(), 0);  // Unchanged
+  EXPECT_EQ(stats1.GetAllocatedBytes(), 30);
+  EXPECT_EQ(stats2.GetAllocatedBytes(), 0);
 
   EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x3000))).Times(1);
-  __wrap_free(ptr3); // Freed outside any scope
+  __wrap_free(ptr3);
   ptr3 = nullptr;
   EXPECT_EQ(stats1.GetAllocatedBytes(), 30);
   EXPECT_EQ(stats2.GetAllocatedBytes(), 0);
@@ -568,53 +568,50 @@ TEST_F(MemoryAllocationTest, MemoryTrackingScopeMultipleStats) {
     MemoryStats stats_a, stats_b;
     void *p1 = nullptr, *p2 = nullptr, *p3 = nullptr;
 
-    // Scope for stats_a
     {
         MemoryTrackingScope scope_a(&stats_a);
         EXPECT_CALL(*kMockRedisModule, Alloc(10)).WillOnce(testing::Return(reinterpret_cast<void*>(0x100)));
         EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x100))).WillRepeatedly(testing::Return(10));
-        p1 = __wrap_malloc(10); // Tracked by stats_a
+        p1 = __wrap_malloc(10);
         EXPECT_EQ(stats_a.GetAllocatedBytes(), 10);
         EXPECT_EQ(stats_b.GetAllocatedBytes(), 0);
     }
 
-    // Scope for stats_b
     {
         MemoryTrackingScope scope_b(&stats_b);
         EXPECT_CALL(*kMockRedisModule, Alloc(20)).WillOnce(testing::Return(reinterpret_cast<void*>(0x200)));
         EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x200))).WillRepeatedly(testing::Return(20));
-        p2 = __wrap_malloc(20); // Tracked by stats_b
+        p2 = __wrap_malloc(20);
         EXPECT_EQ(stats_a.GetAllocatedBytes(), 10);
         EXPECT_EQ(stats_b.GetAllocatedBytes(), 20);
 
         EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x100))).Times(1);
-        __wrap_free(p1); // Freed in scope_b, so stats_b is affected
+        __wrap_free(p1);
         p1 = nullptr;
-        EXPECT_EQ(stats_a.GetAllocatedBytes(), 10); // Not affected
-        EXPECT_EQ(stats_b.GetAllocatedBytes(), 10); // Affected
+        EXPECT_EQ(stats_a.GetAllocatedBytes(), 10);
+        EXPECT_EQ(stats_b.GetAllocatedBytes(), 10);
     }
     
-    // No active scope
     EXPECT_CALL(*kMockRedisModule, Alloc(30)).WillOnce(testing::Return(reinterpret_cast<void*>(0x300)));
     EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x300))).WillRepeatedly(testing::Return(30));
-    p3 = __wrap_malloc(30); // Not tracked by any specific MemoryStats
+    p3 = __wrap_malloc(30);
     EXPECT_EQ(stats_a.GetAllocatedBytes(), 10);
     EXPECT_EQ(stats_b.GetAllocatedBytes(), 10);
 
 
     EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x200))).Times(1);
-    __wrap_free(p2); // Freed outside any scope
+    __wrap_free(p2);
     p2 = nullptr;
     EXPECT_EQ(stats_a.GetAllocatedBytes(), 10);
-    EXPECT_EQ(stats_b.GetAllocatedBytes(), 10); // Not affected by this free
+    EXPECT_EQ(stats_b.GetAllocatedBytes(), 10);
 
     EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x300))).Times(1);
-    __wrap_free(p3); // Freed outside any scope
+    __wrap_free(p3);
     p3 = nullptr;
     EXPECT_EQ(stats_a.GetAllocatedBytes(), 10);
     EXPECT_EQ(stats_b.GetAllocatedBytes(), 10);
 
-    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0); // All global memory freed
+    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
 }
 
 #endif  // TESTING_TMP_DISABLED

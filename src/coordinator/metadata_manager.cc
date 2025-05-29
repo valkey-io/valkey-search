@@ -520,13 +520,13 @@ absl::Status MetadataManager::SaveMetadata(RedisModuleCtx *ctx, SafeRDB *rdb,
   if (!DoesGlobalMetadataContainEntry(metadata_.Get())) {
     // Auxsave2 will ensure nothing is written to the aux section if we write
     // nothing.
-    VMSDK_LOG(NOTICE, detached_ctx_.get())
+    VMSDK_LOG(NOTICE, ctx)
         << "Skipping aux metadata for MetadataManager since there is no "
            "content";
     return absl::OkStatus();
   }
 
-  VMSDK_LOG(NOTICE, detached_ctx_.get())
+  VMSDK_LOG(NOTICE, ctx)
       << "Saving aux metadata for MetadataManager to aux RDB";
   data_model::RDBSection section;
   std::string serialized_metadata;

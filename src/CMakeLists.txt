@@ -10,7 +10,9 @@ set(SRCS_MODULE_LOADER ${CMAKE_CURRENT_LIST_DIR}/module_loader.cc)
 # This is the module target
 valkey_search_add_shared_library(libsearch ${SRCS_MODULE_LOADER})
 target_include_directories(libsearch PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_options(libsearch PRIVATE "LINKER:--version-script=${CMAKE_SOURCE_DIR}/vmsdk/versionscript.lds")
+target_link_options(
+  libsearch PRIVATE
+  "LINKER:--version-script=${CMAKE_SOURCE_DIR}/vmsdk/versionscript.lds")
 
 target_link_libraries(libsearch PUBLIC keyspace_event_manager)
 target_link_libraries(libsearch PUBLIC valkey_search)
@@ -22,7 +24,8 @@ target_link_libraries(libsearch PUBLIC server_events)
 list(APPEND THIRD_PARTY_LIBS coordinator_grpc_proto)
 list(APPEND THIRD_PARTY_LIBS coordinator_cc_proto)
 
-valkey_search_create_proto_library("src/rdb_section.proto" "rdb_section_cc_proto")
+valkey_search_create_proto_library("src/rdb_section.proto"
+                                   "rdb_section_cc_proto")
 target_link_libraries(rdb_section_cc_proto PUBLIC index_schema_cc_proto)
 target_link_libraries(rdb_section_cc_proto PUBLIC coordinator_cc_proto)
 message(STATUS "Created proto library rdb_section_cc_proto")
@@ -41,8 +44,11 @@ endif()
 # Append -Wl,--end-group as the LAST argument
 target_link_libraries(libsearch PRIVATE lib_to_add_end_group_flag)
 
-set(SRCS_VALKEY_SEARCH ${CMAKE_CURRENT_LIST_DIR}/valkey_search.cc
-                       ${CMAKE_CURRENT_LIST_DIR}/valkey_search.h)
+set(SRCS_VALKEY_SEARCH
+    ${CMAKE_CURRENT_LIST_DIR}/valkey_search.cc
+    ${CMAKE_CURRENT_LIST_DIR}/valkey_search.h
+    ${CMAKE_CURRENT_LIST_DIR}/valkey_search_options.cc
+    ${CMAKE_CURRENT_LIST_DIR}/valkey_search_options.h)
 
 valkey_search_add_static_library(valkey_search "${SRCS_VALKEY_SEARCH}")
 target_include_directories(valkey_search PUBLIC ${CMAKE_CURRENT_LIST_DIR})

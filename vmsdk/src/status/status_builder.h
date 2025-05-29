@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -350,7 +350,7 @@ class ABSL_MUST_USE_RESULT StatusBuilder {
   template <typename Adaptor>
   ABSL_MUST_USE_RESULT auto
   With(Adaptor&& adaptor) && -> decltype(std::forward<Adaptor>(adaptor)(
-      std::move(*this))) {
+                                 std::move(*this))) {
     return std::forward<Adaptor>(adaptor)(std::move(*this));
   }
 

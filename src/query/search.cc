@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -43,6 +43,7 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
@@ -226,6 +227,21 @@ CalcBestMatchingPrefiltereddKeys(
   return results;
 }
 
+std::string StringFormatVector(std::vector<char> vector) {
+  if (vector.size() % sizeof(float) != 0) {
+    return {vector.data(), vector.size()};
+  }
+
+  std::vector<std::string> float_strings;
+  for (size_t i = 0; i < vector.size(); i += sizeof(float)) {
+    float value;
+    std::memcpy(&value, vector.data() + i, sizeof(float));
+    float_strings.push_back(absl::StrCat(value));
+  }
+
+  return absl::StrCat("[", absl::StrJoin(float_strings, ","), "]");
+}
+
 absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
     absl::StatusOr<std::deque<indexes::Neighbor>> results,
     const VectorSearchParameters &parameters) {
@@ -241,11 +257,14 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
   };
   std::vector<AttributeInfo> attributes;
   for (auto &attribute : parameters.return_attributes) {
-    auto index = parameters.index_schema->GetIndex(
-        vmsdk::ToStringView(attribute.identifier.get()));
-    if (!index.ok()) {
+    if (!attribute.attribute_alias.get()) {
       // Any attribute that is not indexed will result in all attributes being
       // fetched from the main thread for consistency.
+      return results;
+    }
+    auto index = parameters.index_schema->GetIndex(
+        vmsdk::ToStringView(attribute.attribute_alias.get()));
+    if (!index.ok()) {
       return results;
     }
     attributes.push_back(AttributeInfo{&attribute, index.value().get()});
@@ -284,8 +303,15 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
               dynamic_cast<indexes::VectorBase *>(attribute_info.index);
           auto vector = vector_index->GetValue(neighbor.external_id);
           if (vector.ok()) {
-            attribute_value = vmsdk::UniqueRedisString(RedisModule_CreateString(
-                nullptr, vector->data(), vector->size()));
+            if (parameters.index_schema->GetAttributeDataType().ToProto() ==
+                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
+              attribute_value = vmsdk::MakeUniqueRedisString(
+                  StringFormatVector(vector.value()));
+            } else {
+              attribute_value =
+                  vmsdk::UniqueRedisString(RedisModule_CreateString(
+                      nullptr, vector->data(), vector->size()));
+            }
           } else {
             VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
                 << "Failed to get vector value during fetching through index "
@@ -300,12 +326,12 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
       }
 
       if (attribute_value != nullptr) {
-        auto attribute_alias = vmsdk::MakeUniqueRedisString(
-            vmsdk::ToStringView(attribute_info.attribute->alias.get()));
-        auto attribute_alias_view = vmsdk::ToStringView(attribute_alias.get());
+        auto identifier = vmsdk::MakeUniqueRedisString(
+            vmsdk::ToStringView(attribute_info.attribute->identifier.get()));
+        auto identifier_view = vmsdk::ToStringView(identifier.get());
         neighbor.attribute_contents->emplace(
-            attribute_alias_view, RecordsMapValue(std::move(attribute_alias),
-                                                  std::move(attribute_value)));
+            identifier_view,
+            RecordsMapValue(std::move(identifier), std::move(attribute_value)));
       } else {
         // Mark this neighbor as needing content retrieval via the main thread
         // (e.g. the attribute value may exist but not be indexed due to type
@@ -350,6 +376,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
     // Do an exact nearest neighbour search on the reduced search space.
     auto results = CalcBestMatchingPrefiltereddKeys(
         parameters, entries_fetchers, vector_index);
+
     return vector_index->CreateReply(results);
   }
   if (is_local_search) {

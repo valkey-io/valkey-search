@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -81,6 +81,7 @@ int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size) PMES;
 void* __wrap_valloc(size_t size) noexcept;
 }  // extern "C"
 
+#ifndef ASAN_BUILD
 // NOLINTNEXTLINE
 #define malloc(...) __wrap_malloc(__VA_ARGS__)
 // NOLINTNEXTLINE
@@ -121,21 +122,5 @@ void operator delete[](void* p, std::align_val_t alignment,
                        const std::nothrow_t&) noexcept;
 void operator delete[](void* p, size_t size,
                        std::align_val_t alignment) noexcept;
-
-inline void SetRealAllocators(void* (*malloc_fn)(size_t),
-                              void (*free_fn)(void*),
-                              void* (*calloc_fn)(size_t, size_t),
-                              void* (*realloc_fn)(void*, size_t),
-                              void* (*aligned_alloc_fn)(size_t, size_t),
-                              int (*posix_memalign_fn)(void**, size_t, size_t),
-                              void* (*valloc_fn)(size_t)) {
-  __real_malloc = malloc_fn;
-  __real_free = free_fn;
-  __real_calloc = calloc_fn;
-  __real_realloc = realloc_fn;
-  __real_aligned_alloc = aligned_alloc_fn;
-  __real_posix_memalign = posix_memalign_fn;
-  __real_valloc = valloc_fn;
-}
-
+#endif  // !ASAN_BUILD
 #endif  // VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_

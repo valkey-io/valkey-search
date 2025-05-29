@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -37,7 +37,6 @@
 
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
-#include "absl/time/time.h"
 #include "grpc/grpc.h"
 #include "grpcpp/completion_queue.h"
 #include "grpcpp/health_check_service_interface.h"
@@ -117,10 +116,10 @@ void SerializeNeighbors(SearchIndexPartitionResponse* response,
     neighbor_proto->set_score(neighbor.distance);
     if (neighbor.attribute_contents) {
       const auto& attribute_contents = neighbor.attribute_contents.value();
-      for (const auto& [attr_alias, attr_value] : attribute_contents) {
+      for (const auto& [identifier, record] : attribute_contents) {
         auto contents = neighbor_proto->add_attribute_contents();
-        contents->set_attribute_alias(attr_alias);
-        contents->set_content(vmsdk::ToStringView(attr_value.value.get()));
+        contents->set_identifier(identifier);
+        contents->set_content(vmsdk::ToStringView(record.value.get()));
       }
     }
   }
@@ -208,8 +207,8 @@ std::unique_ptr<Server> ServerImpl::Create(
   builder.AddChannelArgument(GRPC_ARG_TCP_TX_ZEROCOPY_ENABLED, 1);
   auto server = builder.BuildAndStart();
   if (server == nullptr) {
-    VMSDK_LOG(NOTICE, ctx) << "Failed to start Coordinator Server on "
-                           << server_address;
+    VMSDK_LOG(WARNING, ctx)
+        << "Failed to start Coordinator Server on " << server_address;
     return nullptr;
   }
   VMSDK_LOG(NOTICE, ctx) << "Coordinator Server listening on "

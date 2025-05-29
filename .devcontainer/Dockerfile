@@ -9,53 +9,42 @@ RUN apt-get update && apt-get install -y \
     software-properties-common
 RUN add-apt-repository ppa:ubuntu-toolchain-r/test && apt update
 
-RUN apt-get install -y \
-    libc6-dev \
-    libc++-dev \
-    libc++abi-dev \
+RUN apt update && apt-get install -y \
+    libssl-dev \
     build-essential \
-    wget \
     git \
     vim \
     bash \
+    gdb \
+    cmake \
+    ninja-build \
     bash-completion \
     entr \
     coreutils \
+    libsystemd-dev \
+    python3-pip \
+    python3.12-venv \
+    locales-all \
+    locales \
+    clang-tidy \
+    clang-format \
+    clangd \
     sudo
 
-RUN rm -rf /var/lib/apt/lists/*
-
-RUN wget https://apt.llvm.org/llvm.sh
-RUN chmod +x llvm.sh
-RUN ./llvm.sh 17
-RUN rm -f llvm.sh
-RUN apt-get update && apt-get install -y clang-tidy-17 clang-format-17  && rm -rf /var/lib/apt/lists/*
-
-RUN update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-17 100 && \
-    update-alternatives --set clang-tidy /usr/bin/clang-tidy-17
-RUN update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-17 100 && \
-    update-alternatives --set clang-format /usr/bin/clang-format-17
-RUN update-alternatives --install /usr/bin/clang clang /usr/bin/clang-17 100 && \
-    update-alternatives --set clang /usr/bin/clang-17
-RUN update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-17 100 && \
-    update-alternatives --set clang++ /usr/bin/clang++-17
-RUN update-alternatives --install /usr/bin/clang-cpp clang-cpp /usr/bin/clang-cpp-17 100 && \
-    update-alternatives --set clang-cpp /usr/bin/clang-cpp-17
-RUN update-alternatives --install /usr/bin/clangd clangd /usr/bin/clangd-17 100 && \
-    update-alternatives --set clangd /usr/bin/clangd-17
+RUN apt install -y lsb-release curl gpg
+RUN curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
+RUN echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
+RUN apt update && apt-get install -y memtier-benchmark
 
 RUN update-ca-certificates
 
-# Install Bazel/Buildifier
-RUN wget -O /usr/local/bin/bazel https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-$([ $(uname -m) = "aarch64" ] && echo "arm64" || echo "amd64") && chmod +x /usr/local/bin/bazel
-RUN wget -O /usr/local/bin/buildifier https://github.com/bazelbuild/buildtools/releases/download/v8.0.1/buildifier-linux-$([ $(uname -m) = "aarch64" ] && echo "arm64" || echo "amd64") && chmod +x /usr/local/bin/buildifier
+RUN rm -rf /var/lib/apt/lists/*
 
-# Add bazel/buildifier to PATH
+# /usr/local/bin should always come before /usr/bin in the PATH
 ENV PATH="/usr/local/bin:$PATH"
 
 # Set working directory
 WORKDIR /workspace
-
 
 ARG USER_UID=1000
 ENV USER_UID=${USER_UID}
@@ -65,6 +54,13 @@ ARG USER_GID=1000
 ENV USER_GID=${USER_GID}
 ARG USER_GNAME=ubuntu
 ENV USER_GNAME=${USER_GNAME}
+
+# Check if the target group name exists and has a different GID. If so, delete it.
+RUN EXISTING_GID=$(getent group $USER_GNAME | cut -d: -f3 || true); \
+    if [ ! -z "$EXISTING_GID" ] && [ "$EXISTING_GID" != "$USER_GID" ]; then \
+    echo "Deleting existing group '$USER_GNAME' (GID $EXISTING_GID) to avoid conflict with target GID $USER_GID."; \
+    groupdel $USER_GNAME; \
+    fi
 
 RUN if getent group $USER_GID > /dev/null; then \
     CURRENT_GROUP_NAME=$(getent group $USER_GID | cut -d: -f1); \
@@ -105,9 +101,6 @@ RUN echo 'if ! command -v vi &> /dev/null; then alias vi="vim"; fi' >> /home/$US
 # Ensure the history file exists and configure permissions
 RUN touch /home/$USER_NAME/.bash_history && \
     chmod 600 /home/$USER_NAME/.bash_history
-
-ENV CC=clang
-ENV CXX=clang++
 
 # Default shell
 SHELL ["/bin/bash", "-c"]

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,7 +29,6 @@
 
 #include "vmsdk/src/module_type.h"
 
-#include <cstddef>
 #include <string>
 
 #include "absl/log/log.h"
@@ -49,7 +48,7 @@ class ModuleTypeTest : public vmsdk::RedisTest {
  protected:
   // Helper function to create RedisModuleString
   RedisModuleString* CreateRedisModuleString(const std::string& str) {
-    return RedisModule_CreateString(NULL, str.c_str(), str.size());
+    return RedisModule_CreateString(nullptr, str.c_str(), str.size());
   }
 };
 
@@ -63,7 +62,7 @@ TEST_F(ModuleTypeTest, FailOpenRegisterKey) {
   void* ptr = reinterpret_cast<void*>(3);
 
   // Call the Register function
-  absl::Status result = ModuleType::Register(NULL, key, ptr, module_type);
+  absl::Status result = ModuleType::Register(nullptr, key, ptr, module_type);
 
   EXPECT_EQ(result.message(), "failed to open Redis module key: test_key");
   EXPECT_TRUE(result.code() != absl::StatusCode::kOk);
@@ -85,7 +84,7 @@ TEST_F(ModuleTypeTest, SuccessfullyRegistersKey) {
       .WillOnce(testing::Return(REDISMODULE_OK));
 
   // Call the Register function
-  absl::Status result = ModuleType::Register(NULL, key, ptr, module_type);
+  absl::Status result = ModuleType::Register(nullptr, key, ptr, module_type);
 
   LOG(INFO) << "result: " << result.code();
   EXPECT_TRUE(result.code() == absl::StatusCode::kOk);
@@ -105,7 +104,7 @@ TEST_F(ModuleTypeTest, RegisterKeyAlreadyExistsError) {
   void* ptr = reinterpret_cast<void*>(3);
 
   // Call the Register function
-  absl::Status result = ModuleType::Register(NULL, key, ptr, module_type);
+  absl::Status result = ModuleType::Register(nullptr, key, ptr, module_type);
 
   LOG(INFO) << "result: " << result.code();
   EXPECT_TRUE(result.code() == absl::StatusCode::kAlreadyExists);
@@ -131,7 +130,7 @@ TEST_F(ModuleTypeTest, RegisterInternalError) {
   void* ptr = reinterpret_cast<void*>(3);
 
   // Call the Register function
-  absl::Status result = ModuleType::Register(NULL, key, ptr, module_type);
+  absl::Status result = ModuleType::Register(nullptr, key, ptr, module_type);
 
   EXPECT_TRUE(result.code() == absl::StatusCode::kInternal);
 }
@@ -148,7 +147,7 @@ TEST_F(ModuleTypeTest, DeregisterSuccessfully) {
       .WillOnce(testing::Return(REDISMODULE_OK));
 
   // Call the Deregister function
-  absl::Status result = ModuleType::Deregister(NULL, "test_key");
+  absl::Status result = ModuleType::Deregister(nullptr, "test_key");
 
   LOG(INFO) << "result: " << result.code();
   EXPECT_TRUE(result.code() == absl::StatusCode::kOk);
@@ -159,7 +158,7 @@ TEST_F(ModuleTypeTest, DeregisterUnregisteredKey) {
       .WillOnce(testing::Return(0));
 
   // Call the Deregister function
-  absl::Status result = ModuleType::Deregister(NULL, "test_key");
+  absl::Status result = ModuleType::Deregister(nullptr, "test_key");
 
   LOG(INFO) << "result: " << result.code();
   VMSDK_EXPECT_OK(result);
@@ -172,7 +171,7 @@ TEST_F(ModuleTypeTest, DeregisterFailOpenRedisKey) {
   EXPECT_CALL(*kMockRedisModule, OpenKey(testing::_, testing::_, testing::_))
       .WillOnce(testing::Return(nullptr));
   // Call the Deregister function
-  absl::Status result = ModuleType::Deregister(NULL, "test_key");
+  absl::Status result = ModuleType::Deregister(nullptr, "test_key");
 
   LOG(INFO) << "result: " << result.code();
   EXPECT_TRUE(result.code() == absl::StatusCode::kInternal);

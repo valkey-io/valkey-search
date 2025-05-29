@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -591,8 +591,8 @@ static const RedisModuleEvent
     RedisModuleEvent_LoadingProgress = {REDISMODULE_EVENT_LOADING_PROGRESS, 1},
     RedisModuleEvent_SwapDB = {REDISMODULE_EVENT_SWAPDB, 1},
     /* Deprecated since Redis 7.0, not used anymore. */
-    __attribute__((deprecated))
-    RedisModuleEvent_ReplBackup = {REDISMODULE_EVENT_REPL_BACKUP, 1},
+    __attribute__((deprecated)) RedisModuleEvent_ReplBackup =
+        {REDISMODULE_EVENT_REPL_BACKUP, 1},
     RedisModuleEvent_ReplAsyncLoad = {REDISMODULE_EVENT_REPL_ASYNC_LOAD, 1},
     RedisModuleEvent_ForkChild = {REDISMODULE_EVENT_FORK_CHILD, 1},
     RedisModuleEvent_EventLoop = {REDISMODULE_EVENT_EVENTLOOP, 1},
@@ -1055,6 +1055,10 @@ REDISMODULE_API int (*RedisModule_CreateCommand)(RedisModuleCtx *ctx,
                                                  const char *strflags,
                                                  int firstkey, int lastkey,
                                                  int keystep) REDISMODULE_ATTR;
+REDISMODULE_API int (*RedisModule_AddACLCategory)(
+    RedisModuleCtx *ctx, const char *name) REDISMODULE_ATTR;
+REDISMODULE_API int (*RedisModule_SetCommandACLCategories)(
+    RedisModuleCommand *command, const char *aclflags) REDISMODULE_ATTR;
 REDISMODULE_API RedisModuleCommand *(*RedisModule_GetCommand)(
     RedisModuleCtx *ctx, const char *name)REDISMODULE_ATTR;
 REDISMODULE_API int (*RedisModule_CreateSubcommand)(
@@ -2068,6 +2072,9 @@ static int RedisModule_Init(RedisModuleCtx *ctx, const char *name, int ver,
   REDISMODULE_GET_API(DictCompare);
   REDISMODULE_GET_API(DictCompareC);
   REDISMODULE_GET_API(RegisterInfoFunc);
+  REDISMODULE_GET_API(AddACLCategory);
+  REDISMODULE_GET_API(SetCommandACLCategories);
+  REDISMODULE_GET_API(SetCommandACLCategories);
   REDISMODULE_GET_API(RegisterAuthCallback);
   REDISMODULE_GET_API(InfoAddSection);
   REDISMODULE_GET_API(InfoBeginDictField);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -180,6 +180,9 @@ absl::StatusOr<FilterParseResults> ParsePreFilter(
 
 absl::Status ParseKNN(query::VectorSearchParameters &parameters,
                       absl::string_view filter_str) {
+  if (filter_str.empty()) {
+    return absl::InvalidArgumentError("Vector query clause is missing");
+  }
   VMSDK_ASSIGN_OR_RETURN(auto close_position,
                          FindCloseSquareBracket(filter_str));
   size_t position = 0;
@@ -284,8 +287,16 @@ ConstructReturnParser() {
               return absl::InvalidArgumentError("Unexpected parameter `AS` ");
             }
           }
+          auto schema_identifier = parameters.index_schema->GetIdentifier(
+              vmsdk::ToStringView(identifier.get()));
+          vmsdk::UniqueRedisString attribute_alias;
+          if (schema_identifier.ok()) {
+            attribute_alias = vmsdk::RetainUniqueRedisString(identifier.get());
+            identifier = vmsdk::MakeUniqueRedisString(*schema_identifier);
+          }
           parameters.return_attributes.emplace_back(query::ReturnAttribute{
-              std::move(identifier), std::move(as_property)});
+              std::move(identifier), std::move(attribute_alias),
+              std::move(as_property)});
         }
         return absl::OkStatus();
       });

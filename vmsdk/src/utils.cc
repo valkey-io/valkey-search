@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -92,4 +92,41 @@ int RunByMain(absl::AnyInvocable<void()> fn, bool force_async) {
 std::string WrongArity(absl::string_view cmd) {
   return absl::StrCat("ERR wrong number of arguments for ", cmd, " command");
 }
+
+bool IsRealUserClient(RedisModuleCtx *ctx) {
+  auto client_id = RedisModule_GetClientId(ctx);
+  if (client_id == 0) {
+    return false;
+  }
+  if (RedisModule_IsAOFClient(client_id)) {
+    return false;
+  }
+  if ((RedisModule_GetContextFlags(ctx) & REDISMODULE_CTX_FLAGS_REPLICATED)) {
+    return false;
+  }
+  return true;
+}
+
+bool MultiOrLua(RedisModuleCtx *ctx) {
+  return (RedisModule_GetContextFlags(ctx) &
+          (REDISMODULE_CTX_FLAGS_MULTI | REDISMODULE_CTX_FLAGS_LUA)) != 0;
+}
+
+std::optional<absl::string_view> ParseHashTag(absl::string_view s) {
+  auto start = s.find('{');
+  // Does a left bracket exist and is NOT the last character
+  if (start == absl::string_view::npos || (start + 1) == s.size()) {
+    return std::nullopt;
+  }
+  auto end = s.find('}', start + 1);
+  if (end == absl::string_view::npos) {
+    return std::nullopt;
+  }
+  auto tag_size = end - (start + 1);
+  if (tag_size == 0) {
+    return std::nullopt;
+  }
+  return s.substr(start + 1, tag_size);
+}
+
 }  // namespace vmsdk

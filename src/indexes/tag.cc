@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -43,14 +43,11 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
-#include "absl/strings/strip.h"
 #include "absl/synchronization/mutex.h"
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
 #include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
-#include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
@@ -356,15 +353,6 @@ std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
   }
   return std::make_unique<Tag::EntriesFetcher>(tree_, entries, size, negate,
                                                untracked_keys_);
-}
-
-vmsdk::UniqueRedisString Tag::NormalizeStringRecord(
-    vmsdk::UniqueRedisString input) const {
-  auto input_str = vmsdk::ToStringView(input.get());
-  if (absl::ConsumePrefix(&input_str, "[")) {
-    absl::ConsumeSuffix(&input_str, "]");
-  }
-  return vmsdk::MakeUniqueRedisString(input_str);
 }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Tag::EntriesFetcher::Begin() {

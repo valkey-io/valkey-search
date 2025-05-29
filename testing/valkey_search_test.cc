@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -49,6 +49,7 @@
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
+#include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -209,17 +210,16 @@ TEST_P(LoadTest, load) {
   auto args = vmsdk::ToRedisStringVector(test_case.args);
   ON_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&fake_ctx_))
       .WillByDefault(testing::Return(&fake_ctx_));
+  EXPECT_CALL(
+      *kMockRedisModule,
+      CreateDataType(&fake_ctx_, testing::StrEq(kValkeySearchModuleTypeName),
+                     testing::_, testing::_))
+      .WillOnce(testing::Return((RedisModuleType *)0xBADF00D));
   if (test_case.expected_load_ret == 0) {
     EXPECT_CALL(*kMockRedisModule,
-                Call(testing::_, testing::StrEq(kJsonCmd), testing::StrEq("cc"),
-                     testing::StrEq("nonexistentkey"), testing::StrEq(".")))
+                Call(testing::_, testing::StrEq("MODULE"), testing::StrEq("c"),
+                     testing::StrEq("LIST")))
         .WillOnce(testing::Return(nullptr));
-    EXPECT_CALL(
-        *kMockRedisModule,
-        CreateDataType(&fake_ctx_, testing::StrEq(kIndexSchemaModuleTypeName),
-                       testing::_, testing::_))
-        .WillOnce(testing::Return(
-            TestableSchemaManager::GetFakeIndexSchemaModuleType()));
     EXPECT_CALL(
         *kMockRedisModule,
         SetModuleOptions(&fake_ctx_,
@@ -227,12 +227,6 @@ TEST_P(LoadTest, load) {
                              REDISMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD |
                              REDISMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED))
         .Times(1);
-    EXPECT_CALL(
-        *kMockRedisModule,
-        CreateDataType(&fake_ctx_, testing::StrEq(kSchemaManagerModuleTypeName),
-                       testing::_, testing::_))
-        .WillOnce(testing::Return(
-            TestableSchemaManager::GetFakeSchemaManagerModuleType()));
   }
   std::string port_str;
   if (test_case.use_coordinator) {
@@ -264,13 +258,6 @@ TEST_P(LoadTest, load) {
   if (test_case.cluster_mode) {
     EXPECT_CALL(*kMockRedisModule, GetContextFlags(&fake_ctx_))
         .WillRepeatedly(testing::Return(REDISMODULE_CTX_FLAGS_CLUSTER));
-    EXPECT_CALL(*kMockRedisModule,
-                CreateDataType(
-                    &fake_ctx_,
-                    testing::StrEq(coordinator::kMetadataManagerModuleTypeName),
-                    testing::_, testing::_))
-        .WillOnce(testing::Return(
-            TestableMetadataManager::GetFakeMetadataManagerModuleType()));
     EXPECT_CALL(
         *kMockRedisModule,
         RegisterClusterMessageReceiver(
@@ -282,10 +269,11 @@ TEST_P(LoadTest, load) {
         .WillRepeatedly(testing::Return(0));
   }
   vmsdk::module::Options options;
-  EXPECT_EQ(vmsdk::module::LogOnLoad(ValkeySearch::Instance().OnLoad(
-                                         &fake_ctx_, args.data(), args.size()),
-                                     &fake_ctx_, options),
-            test_case.expected_load_ret);
+  auto load_res = vmsdk::module::OnLoadDone(
+      ValkeySearch::Instance().OnLoad(&fake_ctx_, args.data(), args.size()),
+      &fake_ctx_, options);
+  vmsdk::ResetValkeyAlloc();
+  EXPECT_EQ(load_res, test_case.expected_load_ret);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   auto reader_thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
   if (test_case.expect_thread_pool_started) {
@@ -411,13 +399,14 @@ TEST_F(ValkeySearchTest, Info) {
   auto interned_key_1 = StringInternStore::Intern("key1");
   EXPECT_EQ(std::string(*interned_key_1), "key1");
   RedisModuleInfoCtx fake_info_ctx;
-  ValkeySearch::Instance().Info(&fake_info_ctx);
-#ifndef BAZEL_BUILD
+  ValkeySearch::Instance().Info(&fake_info_ctx, false);
+#ifndef TESTING_TMP_DISABLED
   EXPECT_EQ(
       fake_info_ctx.info_capture.GetInfo(),
       "memory\nused_memory_bytes: 0\nused_memory_human: "
       "'0.00M'\nindex_stats\nnumber_of_indexes: 1\nnumber_of_attributes: "
-      "1\ntotal_indexed_hash_keys: 4\ningestion\nbackground_indexing_status: "
+      "1\ntotal_indexed_documents: "
+      "4\ningestion\nbackground_indexing_status: "
       "'IN_PROGRESS'\nthread-pool\nquery_queue_size: 10\nwriter_queue_size: "
       "5\nworker_pool_suspend_cnt: 13\nwriter_resumed_cnt: "
       "14\nreader_resumed_cnt: 15\nwriter_suspension_expired_cnt: "

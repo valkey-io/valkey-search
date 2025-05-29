@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -35,37 +35,67 @@
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
+#define MODULE_VERSION 10000
+/* The release stage is used in order to provide release status information.
+ * In unstable branch the status is always "dev".
+ * During release process the status will be set to rc1,rc2...rcN.
+ * When the version is released the status will be "ga". */
+#define MODULE_RELEASE_STAGE "rc1"
+
 namespace {
+
+// Strip the '@' prefix from command categories (e.g., @read)
+// to format them for Valkey Search's prefix ACL rules (e.g., read).
+inline std::list<absl::string_view> ACLPermissionFormatter(
+    const absl::flat_hash_set<absl::string_view> &cmd_permissions) {
+  std::list<absl::string_view> permissions;
+  for (auto permission : cmd_permissions) {
+    CHECK(permission[0] == '@');
+    permissions.push_back(permission.substr(1));
+  }
+  return permissions;
+}
 
 vmsdk::module::Options options = {
     .name = "search",
+    .acl_categories = ACLPermissionFormatter({
+        valkey_search::kSearchCategory,
+    }),
+    .version = MODULE_VERSION,
     .info = valkey_search::ModuleInfo,
     .commands =
         {
             {
                 .cmd_name = valkey_search::kCreateCommand,
-                .permissions = "write deny-oom",
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kCreateCmdPermissions),
+                .flags = {vmsdk::module::kDenyOOMFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTCreateCmd>,
             },
             {
                 .cmd_name = valkey_search::kDropIndexCommand,
-                .permissions = "write",
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kDropIndexCmdPermissions),
                 .cmd_func =
                     &vmsdk::CreateCommand<valkey_search::FTDropIndexCmd>,
             },
             {
                 .cmd_name = valkey_search::kInfoCommand,
-                .permissions = "readonly",
+                .permissions =
+                    ACLPermissionFormatter(valkey_search::kInfoCmdPermissions),
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTInfoCmd>,
             },
             {
                 .cmd_name = valkey_search::kListCommand,
-                .permissions = "readonly",
+                .permissions =
+                    ACLPermissionFormatter(valkey_search::kListCmdPermissions),
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTListCmd>,
             },
             {
                 .cmd_name = valkey_search::kSearchCommand,
-                .permissions = "readonly",
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kSearchCmdPermissions),
+                .flags = {vmsdk::module::kDenyOOMFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTSearchCmd>,
             },
             {
@@ -74,7 +104,8 @@ vmsdk::module::Options options = {
                 .cmd_func =
                     &vmsdk::CreateCommand<valkey_search::FTAggregateCmd>,
             },
-        },
+        }  // namespace
+    ,
     .on_load =
         [](RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
            [[maybe_unused]] const vmsdk::module::Options &options) {

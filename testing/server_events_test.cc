@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -37,7 +37,7 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::server_events {
-#ifndef BAZEL_BUILD
+#ifndef TESTING_TMP_DISABLED
 // SubscribesToServerEvents leads to segfault due to a call to pthread_atfork
 class MockPthreadAtfork {
  public:
@@ -49,7 +49,7 @@ MockPthreadAtfork mock_pthread_atfork;
 int pthread_atfork(void (*prepare)(), void (*parent)(), void (*child)()) {
   return mock_pthread_atfork.pthread_atfork(prepare, parent, child);
 }
-#endif  // BAZEL_BUILD
+#endif  // TESTING_TMP_DISABLED
 
 class ServerEventsTest : public ValkeySearchTest {};
 
@@ -66,11 +66,11 @@ TEST_F(ServerEventsTest, SubscribesToServerEvents) {
           testing::_, vmsdk::IsRedisModuleEvent(RedisModuleEvent_ForkChild),
           testing::_))
       .WillOnce(testing::Return(1));
-#ifndef BAZEL_BUILD
+#ifndef TESTING_TMP_DISABLED
   EXPECT_CALL(mock_pthread_atfork,
               pthread_atfork(testing::_, testing::_, testing::_))
       .WillOnce(testing::Return(1));
-#endif  // BAZEL_BUILD
+#endif  // TESTING_TMP_DISABLED
   EXPECT_CALL(
       *kMockRedisModule,
       SubscribeToServerEvent(testing::_,
@@ -87,12 +87,6 @@ TEST_F(ServerEventsTest, SubscribesToServerEvents) {
       *kMockRedisModule,
       SubscribeToServerEvent(
           testing::_, vmsdk::IsRedisModuleEvent(RedisModuleEvent_FlushDB),
-          testing::_))
-      .WillOnce(testing::Return(1));
-  EXPECT_CALL(
-      *kMockRedisModule,
-      SubscribeToServerEvent(
-          testing::_, vmsdk::IsRedisModuleEvent(RedisModuleEvent_Persistence),
           testing::_))
       .WillOnce(testing::Return(1));
   SubscribeToServerEvents();

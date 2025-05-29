@@ -1,243 +1,127 @@
-set(MODULE_BASE_DIR "${CMAKE_BINARY_DIR}/.deps")
-set(MODULES_BIN_DIR "${MODULE_BASE_DIR}/install/bin")
-set(MODULES_LIB_DIR "${CMAKE_BINARY_DIR}/.deps/install/lib")
-
-# Protobuf C++ plugin (needed by coordinator)
-set(grpc_cpp_plugin_location ${MODULES_BIN_DIR}/grpc_cpp_plugin)
-message(STATUS "gRPC C++ plugin: ${grpc_cpp_plugin_location}")
-
-find_library(
-  PROTOBUF_LIBS protobuf
-  PATHS ${MODULES_LIB_DIR}
-  NO_DEFAULT_PATH REQUIRED)
-message(STATUS "PROTOBUF_LIBS => ${PROTOBUF_LIBS}")
-
 # TODO: we should narrow down this list, some of the libraries here some useless
 # to us (e.g. Rust) - removing them however, causing an undefined symbol error.
 # Probably we should build gRPC differently to resolve this issue
-set(ABSL_LIBS_NAME
-    absl_bad_any_cast_impl
-    absl_bad_optional_access
-    absl_bad_variant_access
-    absl_base
-    absl_city
-    absl_civil_time
-    absl_cord
-    absl_cord_internal
-    absl_cordz_functions
-    absl_cordz_handle
-    absl_cordz_info
-    absl_cordz_sample_token
-    absl_crc32c
-    absl_crc_cord_state
-    absl_crc_cpu_detect
-    absl_crc_internal
-    absl_debugging_internal
-    absl_demangle_rust
-    absl_decode_rust_punycode
-    absl_demangle_internal
-    absl_die_if_null
-    absl_examine_stack
-    absl_exponential_biased
-    absl_failure_signal_handler
-    absl_flags_commandlineflag
-    absl_flags_commandlineflag_internal
-    absl_flags_config
-    absl_flags_internal
-    absl_flags_marshalling
-    absl_flags_parse
-    absl_flags_private_handle_accessor
-    absl_flags_program_name
-    absl_flags_reflection
-    absl_flags_usage
-    absl_flags_usage_internal
-    absl_graphcycles_internal
-    absl_hash
-    absl_hashtablez_sampler
-    absl_int128
-    absl_kernel_timeout_internal
-    absl_leak_check
-    absl_log_entry
-    absl_log_flags
-    absl_log_globals
-    absl_log_initialize
-    absl_log_internal_check_op
-    absl_log_internal_conditions
-    absl_log_internal_fnmatch
-    absl_log_internal_format
-    absl_log_internal_globals
-    absl_log_internal_log_sink_set
-    absl_log_internal_message
-    absl_log_internal_nullguard
-    absl_log_internal_proto
-    absl_log_severity
-    absl_log_sink
-    absl_low_level_hash
-    absl_malloc_internal
-    absl_periodic_sampler
-    absl_poison
-    absl_random_distributions
-    absl_random_internal_distribution_test_util
-    absl_random_internal_platform
-    absl_random_internal_pool_urbg
-    absl_random_internal_randen
-    absl_random_internal_randen_hwaes
-    absl_random_internal_randen_hwaes_impl
-    absl_random_internal_randen_slow
-    absl_random_internal_seed_material
-    absl_random_seed_gen_exception
-    absl_random_seed_sequences
-    absl_raw_hash_set
-    absl_raw_logging_internal
-    absl_scoped_set_env
-    absl_spinlock_wait
-    absl_stacktrace
-    absl_status
-    absl_statusor
-    absl_str_format_internal
-    absl_strerror
-    absl_string_view
-    absl_strings
-    absl_strings_internal
-    absl_symbolize
-    absl_synchronization
-    absl_throw_delegate
-    absl_time
-    absl_time_zone
-    absl_utf8_for_code_point
-    absl_vlog_config_internal)
+set(ABSL_ALL_TARGETS
+    absl::bad_any_cast_impl
+    absl::bad_optional_access
+    absl::bad_variant_access
+    absl::base
+    absl::city
+    absl::civil_time
+    absl::cord
+    absl::cord_internal
+    absl::cordz_functions
+    absl::cordz_handle
+    absl::cordz_info
+    absl::cordz_sample_token
+    absl::crc32c
+    absl::crc_cord_state
+    absl::crc_cpu_detect
+    absl::crc_internal
+    absl::debugging_internal
+    absl::demangle_rust
+    absl::decode_rust_punycode
+    absl::demangle_internal
+    absl::die_if_null
+    absl::examine_stack
+    absl::exponential_biased
+    absl::failure_signal_handler
+    absl::flags_commandlineflag
+    absl::flags_commandlineflag_internal
+    absl::flags_config
+    absl::flags_internal
+    absl::flags_marshalling
+    absl::flags_parse
+    absl::flags_private_handle_accessor
+    absl::flags_program_name
+    absl::flags_reflection
+    absl::flags_usage
+    absl::flags_usage_internal
+    absl::graphcycles_internal
+    absl::hash
+    absl::hashtablez_sampler
+    absl::int128
+    absl::kernel_timeout_internal
+    absl::leak_check
+    absl::log_entry
+    absl::log_flags
+    absl::log_globals
+    absl::log_initialize
+    absl::log_internal_check_op
+    absl::log_internal_conditions
+    absl::log_internal_fnmatch
+    absl::log_internal_format
+    absl::log_internal_globals
+    absl::log_internal_log_sink_set
+    absl::log_internal_message
+    absl::log_internal_nullguard
+    absl::log_internal_proto
+    absl::log_severity
+    absl::log_sink
+    absl::low_level_hash
+    absl::malloc_internal
+    absl::periodic_sampler
+    absl::poison
+    absl::random_distributions
+    absl::random_internal_distribution_test_util
+    absl::random_internal_platform
+    absl::random_internal_pool_urbg
+    absl::random_internal_randen
+    absl::random_internal_randen_hwaes
+    absl::random_internal_randen_hwaes_impl
+    absl::random_internal_randen_slow
+    absl::random_internal_seed_material
+    absl::random_seed_gen_exception
+    absl::random_seed_sequences
+    absl::raw_hash_set
+    absl::raw_logging_internal
+    absl::scoped_set_env
+    absl::spinlock_wait
+    absl::stacktrace
+    absl::status
+    absl::statusor
+    absl::str_format_internal
+    absl::strerror
+    absl::string_view
+    absl::strings
+    absl::strings_internal
+    absl::symbolize
+    absl::synchronization
+    absl::throw_delegate
+    absl::time
+    absl::time_zone
+    absl::utf8_for_code_point
+    absl::vlog_config_internal)
+
+# Any target wishes to build against Abseil, should link against our interface
+# library "absl::all"
+message(STATUS "Collecting absl libs. CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}")
+
+find_package(absl REQUIRED CONFIG)
+add_library(absl::all INTERFACE IMPORTED GLOBAL)
+get_target_property(__ASBL_INCLUDE_PATH absl::base
+                    INTERFACE_INCLUDE_DIRECTORIES)
+set(ABSL_INCLUDE_PATH ${__ASBL_INCLUDE_PATH})
+
+target_include_directories(absl::all INTERFACE "${__ASBL_INCLUDE_PATH}")
+message(STATUS "ASBL_INCLUDE_PATH => ${__ASBL_INCLUDE_PATH}")
 
 set(ABSL_LIBS "")
-message(STATUS "Collecting absl libs")
-foreach(LIBNAME ${ABSL_LIBS_NAME})
-  find_library(
-    __LIB ${LIBNAME} REQUIRED
-    PATHS ${MODULES_LIB_DIR}
-    NO_DEFAULT_PATH)
-  list(APPEND ABSL_LIBS ${__LIB})
-  message(STATUS "  Found library ${__LIB}")
-  unset(__LIB CACHE)
+foreach(ABSL_TARGET ${ABSL_ALL_TARGETS})
+  target_link_libraries(absl::all INTERFACE ${ABSL_TARGET})
 endforeach()
 
-set(GRPC_LIBS_NAME
-    grpc++
-    grpc++_alts
-    grpc++_error_details
-    grpc++_reflection
-    grpc++_unsecure
-    grpc
-    grpc_authorization_provider
-    grpc_plugin_support
-    grpc_unsecure
-    grpcpp_channelz)
+list(APPEND THIRD_PARTY_LIBS absl::all)
+list(APPEND THIRD_PARTY_LIBS highwayhash)
 
-message(STATUS "Collecting grpc libs")
-set(GRPC_LIBS "")
-foreach(LIBNAME ${GRPC_LIBS_NAME})
-  find_library(
-    __LIB ${LIBNAME} REQUIRED
-    PATHS ${MODULES_LIB_DIR}
-    NO_DEFAULT_PATH)
-  list(APPEND GRPC_LIBS ${__LIB})
-  message(STATUS "  Found library ${__LIB}")
-  unset(__LIB CACHE)
-endforeach()
+find_package(protobuf REQUIRED CONFIG)
+list(APPEND THIRD_PARTY_LIBS protobuf::libprotobuf)
+get_target_property(__PROTOBUF_INCLUDE_PATH protobuf::libprotobuf
+                    INTERFACE_INCLUDE_DIRECTORIES)
+set(PROTOBUF_INCLUDE_PATH ${__PROTOBUF_INCLUDE_PATH})
+message(STATUS "PROTOBUF_INCLUDE_PATH => ${__PROTOBUF_INCLUDE_PATH}")
+include_directories(${__PROTOBUF_INCLUDE_PATH})
 
-find_library(
-  LIBGPR gpr REQUIRED
-  PATHS ${MODULES_LIB_DIR}
-  NO_DEFAULT_PATH)
-
-# upb libs
-set(UPB_LIBS_NAMES
-    upb
-    upb_base_lib
-    upb_json_lib
-    upb_mem_lib
-    upb_message_lib
-    upb_mini_descriptor_lib
-    upb_textformat_lib
-    upb_wire_lib)
-
-message(STATUS "Collecting upb libs")
-set(UPB_LIBS "")
-foreach(LIBNAME ${UPB_LIBS_NAMES})
-  find_library(
-    __LIB ${LIBNAME} REQUIRED
-    PATHS ${MODULES_LIB_DIR}
-    NO_DEFAULT_PATH)
-  list(APPEND UPB_LIBS ${__LIB})
-  message(STATUS "  Found library ${__LIB}")
-  unset(__LIB CACHE)
-endforeach()
-
-# UTF-8 libs
-set(UTF8_LIBS_NAMES utf8_range utf8_range_lib utf8_validity)
-
-message(STATUS "Collecting utf8 libs")
-set(UTF8_LIBS "")
-foreach(LIBNAME ${UTF8_LIBS_NAMES})
-  find_library(
-    __LIB ${LIBNAME} REQUIRED
-    PATHS ${MODULES_LIB_DIR}
-    NO_DEFAULT_PATH)
-  list(APPEND UTF8_LIBS ${__LIB})
-  message(STATUS "  Found library ${__LIB}")
-  unset(__LIB CACHE)
-endforeach()
-
-set(GTEST_LIBS_NAME gtest gtest_main gmock)
-message(STATUS "Collecting GTest libs")
-set(GTEST_LIBS "")
-foreach(LIBNAME ${GTEST_LIBS_NAME})
-  find_library(
-    __LIB ${LIBNAME} REQUIRED
-    PATHS ${MODULES_LIB_DIR}
-    NO_DEFAULT_PATH)
-  list(APPEND GTEST_LIBS ${__LIB})
-  message(STATUS "  Found library ${__LIB}")
-  unset(__LIB CACHE)
-endforeach()
-
-find_library(
-  LIBZ z REQUIRED
-  PATHS ${MODULES_LIB_DIR}
-  NO_DEFAULT_PATH)
-
-message(STATUS "LIBZ => ${LIBZ}")
-
-find_library(
-  LIBRE2 re2 REQUIRED
-  PATHS ${MODULES_LIB_DIR}
-  NO_DEFAULT_PATH)
-message(STATUS "LIBRE2 => ${LIBRE2}")
-
-find_library(
-  LIBCARES cares REQUIRED
-  PATHS ${MODULES_LIB_DIR}
-  NO_DEFAULT_PATH)
-message(STATUS "LIBCARES => ${LIBCARES}")
-
-find_library(
-  LIBADDRESS_SORTING address_sorting REQUIRED
-  PATHS ${MODULES_LIB_DIR}
-  NO_DEFAULT_PATH)
-message(STATUS "LIBADDRESS_SORTING => ${LIBADDRESS_SORTING}")
-
-find_package(OpenSSL REQUIRED)
-message(STATUS "OpenSSL include dir: ${OPENSSL_INCLUDE_DIR}")
-message(STATUS "OpenSSL libraries: ${OPENSSL_LIBRARIES}")
-include_directories(${OPENSSL_INCLUDE_DIR})
-
-list(APPEND THIRD_PARTY_LIBS ${ABSL_LIBS})
-list(APPEND THIRD_PARTY_LIBS ${PROTOBUF_LIBS})
-list(APPEND THIRD_PARTY_LIBS ${GRPC_LIBS})
-list(APPEND THIRD_PARTY_LIBS ${LIBGPR})
-list(APPEND THIRD_PARTY_LIBS ${UPB_LIBS})
-list(APPEND THIRD_PARTY_LIBS ${LIBZ})
-list(APPEND THIRD_PARTY_LIBS ${LIBRE2})
-list(APPEND THIRD_PARTY_LIBS ${LIBCARES})
-list(APPEND THIRD_PARTY_LIBS ${UTF8_LIBS})
-list(APPEND THIRD_PARTY_LIBS ${LIBADDRESS_SORTING})
-list(APPEND THIRD_PARTY_LIBS ${OPENSSL_LIBRARIES})
-list(APPEND THIRD_PARTY_LIBS ${LIB_HIGHWAY_HASHING})
+find_package(gRPC REQUIRED CONFIG)
+list(APPEND THIRD_PARTY_LIBS gRPC::grpc++)
+list(APPEND THIRD_PARTY_LIBS gRPC::grpc)

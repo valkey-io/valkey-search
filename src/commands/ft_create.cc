@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,8 +28,9 @@
  */
 
 #include "absl/status/status.h"
+#include "src/acl.h"
+#include "src/commands/commands.h"
 #include "src/commands/ft_create_parser.h"
-#include "src/index_schema.pb.h"
 #include "src/schema_manager.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -40,6 +41,10 @@ absl::Status FTCreateCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
                          int argc) {
   VMSDK_ASSIGN_OR_RETURN(auto index_schema_proto,
                          ParseFTCreateArgs(ctx, argv + 1, argc - 1));
+  index_schema_proto.set_db_num(RedisModule_GetSelectedDb(ctx));
+  static const auto permissions =
+      PrefixACLPermissions(kCreateCmdPermissions, kCreateCommand);
+  VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, permissions, index_schema_proto));
   VMSDK_RETURN_IF_ERROR(
       SchemaManager::Instance().CreateIndexSchema(ctx, index_schema_proto));
 

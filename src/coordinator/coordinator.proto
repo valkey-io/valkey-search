@@ -102,7 +102,7 @@ message SearchIndexPartitionResponse {
 }
 
 message AttributeContentEntry {
-  string attribute_alias = 1;
+  string identifier = 1;
   bytes content = 2;
 }
 

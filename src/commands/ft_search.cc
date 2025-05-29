@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,7 +32,6 @@
 #include <strings.h>
 
 #include <algorithm>
-#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -47,6 +46,8 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
+#include "src/acl.h"
+#include "src/commands/commands.h"
 #include "src/commands/ft_aggregate.h"
 #include "src/commands/ft_search_parser.h"
 #include "src/indexes/vector_base.h"
@@ -56,6 +57,7 @@
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
+#include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
@@ -225,24 +227,29 @@ int Timeout(RedisModuleCtx *ctx, [[maybe_unused]] RedisModuleString **argv,
 
 absl::Status FTSearchCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
                          int argc) {
-  auto status = [&]() {
+  auto status = [&]() -> absl::Status {
     auto &schema_manager = SchemaManager::Instance();
     VMSDK_ASSIGN_OR_RETURN(
         auto parameters,
         ParseVectorSearchParameters(ctx, argv + 1, argc - 1, schema_manager));
 
+    static const auto permissions =
+        PrefixACLPermissions(kSearchCmdPermissions, kSearchCommand);
+    VMSDK_RETURN_IF_ERROR(AclPrefixCheck(
+        ctx, permissions, parameters->index_schema->GetKeyPrefixes()));
+
     parameters->index_schema->ProcessMultiQueue();
-    bool inside_multi =
-        (RedisModule_GetContextFlags(ctx) & REDISMODULE_CTX_FLAGS_MULTI) != 0;
+
+    const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);
     if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
-                           inside_multi)) {
+                           inside_multi_exec)) {
       VMSDK_ASSIGN_OR_RETURN(auto neighbors, query::Search(*parameters, true));
       SendReply(ctx, neighbors, *parameters);
       return absl::OkStatus();
     }
 
     vmsdk::BlockedClient blocked_client(ctx, async::Reply, async::Timeout,
-                                        async::Free, 0);
+                                        async::Free, parameters->timeout_ms);
     blocked_client.MeasureTimeStart();
     auto on_done_callback = [blocked_client = std::move(blocked_client)](
                                 auto &neighbors, auto parameters) mutable {

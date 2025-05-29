@@ -1,0 +1,21 @@
+{
+  "FT.INFO": {
+    "acl_categories": [
+      "READ",
+      "FAST",
+      "SEARCH"
+    ],
+    "arguments": [
+      {
+        "key_spec_index": 0,
+        "name": "key",
+        "type": "key"
+      }
+    ],
+    "arity": 2,
+    "complexity": "O(1)",
+    "group": "search",
+    "module_since": "1.0.0",
+    "summary": "Detailed information about the specified index is returned"
+  }
+}

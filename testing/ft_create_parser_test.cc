@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -204,695 +204,731 @@ TEST_P(FTCreateParserTest, ParseParams) {
 
 INSTANTIATE_TEST_SUITE_P(
     FTCreateParserTests, FTCreateParserTest,
-    ValuesIn<FTCreateParserTestCase>({
-        {
-            .test_name = "happy_path_hnsw",
-            .success = true,
-            .command_str = " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
-                           "ENGLISh SCORE 1.0 SChema hash_field1 as "
-                           "hash_field11 vector hnsw 14 TYPE  FLOAT32 DIM 3  "
-                           "DISTANCE_METRIC IP M 1 EF_CONSTRUCTION 5 "
-                           " INITIAL_CAP 15000 EF_RUNTIME 25 ",
-            .hnsw_parameters = {{
-                {
-                    .dimensions = 3,
-                    .distance_metric = data_model::DISTANCE_METRIC_IP,
-                    .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
-                    .initial_cap = 15000,
-                },
-                /* .m =*/1,
-                /* .ef_construction =*/5,
-                /* .ef_runtime =*/25,
-            }},
-            .expected = {.index_schema_name = "idx1",
-                         .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
-                         .prefixes = {"abc", "def", "ghi"},
-                         .attributes = {{
-                             .identifier = "hash_field1",
-                             .attribute_alias = "hash_field11",
-                             .indexer_type = indexes::IndexerType::kHNSW,
-                         }}},
-        },
-        {
-            .test_name = "happy_path_flat",
-            .success = true,
-            .command_str = " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
-                           "ENGLISh SCORE 1.0 SChema hash_field1 as "
-                           "hash_field11 vector flat 10 TYPE  FLOAT32 DIM 3  "
-                           "DISTANCE_METRIC IP  "
-                           " INITIAL_CAP 15000 BLOCK_SIZE 25 ",
-            .flat_parameters = {{
-                {
-                    .dimensions = 3,
-                    .distance_metric = data_model::DISTANCE_METRIC_IP,
-                    .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
-                    .initial_cap = 15000,
-                },
-                /*.block_size =*/25,
-            }},
-            .expected = {.index_schema_name = "idx1",
-                         .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
-                         .prefixes = {"abc", "def", "ghi"},
-                         .attributes = {{
-                             .identifier = "hash_field1",
-                             .attribute_alias = "hash_field11",
-                             .indexer_type = indexes::IndexerType::kFlat,
-                         }}},
-        },
-        {
-            .test_name = "happy_path_hnsw_and_numeric",
-            .success = true,
-            .command_str = " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
-                           "ENGLISh SCORE 1.0 SChema hash_field10 as "
-                           "hash_field10 numeric hash_field1 as "
-                           "hash_field11 vector hnsw 14 TYPE  FLOAT32 DIM 3  "
-                           "DISTANCE_METRIC IP M 1 EF_CONSTRUCTION 5 "
-                           " INITIAL_CAP 15000 EF_RUNTIME 25 ",
-            .hnsw_parameters = {{
-                {
-                    .dimensions = 3,
-                    .distance_metric = data_model::DISTANCE_METRIC_IP,
-                    .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
-                    .initial_cap = 15000,
-                },
-                /* .m =*/1,
-                /* .ef_construction =*/5,
-                /* .ef_runtime =*/25,
-            }},
-            .expected =
-                {.index_schema_name = "idx1",
-                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
-                 .prefixes = {"abc", "def", "ghi"},
-                 .attributes =
-                     {
-                         {
-                             .identifier = "hash_field10",
-                             .attribute_alias = "hash_field10",
-                             .indexer_type = indexes::IndexerType::kNumeric,
-                         },
-                         {
-                             .identifier = "hash_field1",
-                             .attribute_alias = "hash_field11",
-                             .indexer_type = indexes::IndexerType::kHNSW,
-                         },
-                     }},
-        },
-        {
-            .test_name = "happy_path_hnsw_and_tag_1",
-            .success = true,
-            .command_str =
-                " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
-                "ENGLISh SCORE 1.0 SChema hash_field10 as "
-                "hash_field10 tag SEPARATOR '|' CASESENSITIVE hash_field1 as "
-                "hash_field11 vector hnsw 14 TYPE  FLOAT32 DIM 3  "
-                "DISTANCE_METRIC IP M 1 EF_CONSTRUCTION 5 "
-                " INITIAL_CAP 15000 EF_RUNTIME 25 ",
-            .hnsw_parameters = {{
-                {
-                    .dimensions = 3,
-                    .distance_metric = data_model::DISTANCE_METRIC_IP,
-                    .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
-                    .initial_cap = 15000,
-                },
-                /* .m =*/1,
-                /* .ef_construction =*/5,
-                /* .ef_runtime =*/25,
-            }},
-            .tag_parameters = {{
-                .separator = "|",
-                .case_sensitive = true,
-            }},
-            .expected =
-                {.index_schema_name = "idx1",
-                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
-                 .prefixes = {"abc", "def", "ghi"},
-                 .attributes =
-                     {
-                         {
-                             .identifier = "hash_field10",
-                             .attribute_alias = "hash_field10",
-                             .indexer_type = indexes::IndexerType::kTag,
-                         },
-                         {
-                             .identifier = "hash_field1",
-                             .attribute_alias = "hash_field11",
-                             .indexer_type = indexes::IndexerType::kHNSW,
-                         },
-                     }},
-        },
-        {
-            .test_name = "happy_path_hnsw_and_tag_2",
-            .success = true,
-            .command_str =
-                " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
-                "ENGLISh SCORE 1.0 SChema hash_field20 as "
-                "hash_field20 tag SEPARATOR '|' CASESENSITIVE hash_field21 as "
-                "hash_field21 tag SEPARATOR $ hash_field22 as "
-                "hash_field22 tag  hash_field1 as "
-                "hash_field11 vector hnsw 14 TYPE  FLOAT32 DIM 3  "
-                "DISTANCE_METRIC IP M 1 EF_CONSTRUCTION 5 "
-                " INITIAL_CAP 15000 EF_RUNTIME 25 ",
-            .hnsw_parameters = {{
-                {
-                    .dimensions = 3,
-                    .distance_metric = data_model::DISTANCE_METRIC_IP,
-                    .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
-                    .initial_cap = 15000,
-                },
-                /* .m =*/1,
-                /* .ef_construction =*/5,
-                /* .ef_runtime =*/25,
-            }},
-            .tag_parameters = {{
-                                   .separator = "|",
-                                   .case_sensitive = true,
-                               },
-                               {
-                                   .separator = "$",
-                                   .case_sensitive = false,
-                               },
-                               {
-                                   .separator = ",",
-                                   .case_sensitive = false,
-                               }},
-            .expected =
-                {.index_schema_name = "idx1",
-                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
-                 .prefixes = {"abc", "def", "ghi"},
-                 .attributes =
-                     {
-                         {
-                             .identifier = "hash_field20",
-                             .attribute_alias = "hash_field20",
-                             .indexer_type = indexes::IndexerType::kTag,
-                         },
-                         {
-                             .identifier = "hash_field21",
-                             .attribute_alias = "hash_field21",
-                             .indexer_type = indexes::IndexerType::kTag,
-                         },
-                         {
-                             .identifier = "hash_field22",
-                             .attribute_alias = "hash_field22",
-                             .indexer_type = indexes::IndexerType::kTag,
-                         },
-                         {
-                             .identifier = "hash_field1",
-                             .attribute_alias = "hash_field11",
-                             .indexer_type = indexes::IndexerType::kHNSW,
-                         },
-                     }},
-        },
-        {
-            .test_name = "happy_path_flat_and_numeric",
-            .success = true,
-            .command_str = " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
-                           "ENGLISh SCORE 1.0 SChema hash_field1 as "
-                           "hash_field11 vector flat 10 TYPE  FLOAT32 DIM 3  "
-                           "DISTANCE_METRIC IP  "
-                           " INITIAL_CAP 15000 BLOCK_SIZE 25 hash_field10 as "
-                           "hash_field10 numeric ",
-            .flat_parameters = {{
-                {
-                    .dimensions = 3,
-                    .distance_metric = data_model::DISTANCE_METRIC_IP,
-                    .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
-                    .initial_cap = 15000,
-                },
-                /*.block_size =*/25,
-            }},
-            .expected =
-                {.index_schema_name = "idx1",
-                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
-                 .prefixes = {"abc", "def", "ghi"},
-                 .attributes =
-                     {
-                         {
-                             .identifier = "hash_field1",
-                             .attribute_alias = "hash_field11",
-                             .indexer_type = indexes::IndexerType::kFlat,
-                         },
-                         {
-                             .identifier = "hash_field10",
-                             .attribute_alias = "hash_field10",
-                             .indexer_type = indexes::IndexerType::kNumeric,
-                         },
-                     }},
-        },
-        {
-            .test_name = "happy_path_flat_and_tag_1",
-            .success = true,
-            .command_str = " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
-                           "ENGLISh SCORE 1.0 SChema hash_field1 as "
-                           "hash_field11 vector flat 10 TYPE  FLOAT32 DIM 3  "
-                           "DISTANCE_METRIC IP  "
-                           " INITIAL_CAP 15000 BLOCK_SIZE 25 hash_field10 as "
-                           "hash_field10 tag SEPARATOR \"@\"",
-            .flat_parameters = {{
-                {
-                    .dimensions = 3,
-                    .distance_metric = data_model::DISTANCE_METRIC_IP,
-                    .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
-                    .initial_cap = 15000,
-                },
-                /*.block_size =*/25,
-            }},
-            .tag_parameters = {{
-                .separator = "@",
-                .case_sensitive = false,
-            }},
-            .expected =
-                {.index_schema_name = "idx1",
-                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
-                 .prefixes = {"abc", "def", "ghi"},
-                 .attributes =
-                     {
-                         {
-                             .identifier = "hash_field1",
-                             .attribute_alias = "hash_field11",
-                             .indexer_type = indexes::IndexerType::kFlat,
-                         },
-                         {
-                             .identifier = "hash_field10",
-                             .attribute_alias = "hash_field10",
-                             .indexer_type = indexes::IndexerType::kTag,
-                         },
-                     }},
-        },
-        {
-            .test_name = "happy_path_hnsw_3_attributes",
-            .success = true,
-            .command_str =
-                "idx1 on HASH SChema hash_field1 as "
-                "hash_field11 vector hnsw 12 TYPE  FLOAT32 DIM 3  "
-                "DISTANCE_METRIC IP EF_CONSTRUCTION 5 "
-                " INITIAL_CAP 15000  EF_RUNTIME 25 "
-                "hash_field3 vecTor hnsw 6 DISTANCE_METRIC COSINE TYPE "
-                "FLOAT32 DIM 5 "
-                "hash_field4 Vector Hnsw 8 DISTANCE_METRIc cOSINE tYPE "
-                "FLOAt32 dIM 15 m 12 ",
-            .hnsw_parameters =
-                {{
-                     FTCreateVectorParameters{
-                         .dimensions = 3,
-                         .distance_metric = data_model::DISTANCE_METRIC_IP,
-                         .vector_data_type =
-                             data_model::VECTOR_DATA_TYPE_FLOAT32,
-                         .initial_cap = 15000,
-                     },
-                     /* .m = */ kDefaultM,
-                     /* .ef_construction = */ 5,
-                     /* .ef_runtime = */ 25,
-                 },
+    ValuesIn<FTCreateParserTestCase>(
+        {{
+             .test_name = "happy_path_hnsw",
+             .success = true,
+             .command_str = " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
+                            "ENGLISh SCORE 1.0 SChema hash_field1 as "
+                            "hash_field11 vector hnsw 14 TYPE  FLOAT32 DIM 3  "
+                            "DISTANCE_METRIC IP M 1 EF_CONSTRUCTION 5 "
+                            " INITIAL_CAP 15000 EF_RUNTIME 25 ",
+             .hnsw_parameters = {{
                  {
-                     {
-                         .dimensions = 5,
-                         .distance_metric = data_model::DISTANCE_METRIC_COSINE,
-                         .vector_data_type =
-                             data_model::VECTOR_DATA_TYPE_FLOAT32,
-                         .initial_cap = kDefaultInitialCap,
-                     },
-                     /* .m = */ kDefaultM,
-                     /* .ef_construction = */
-                     kDefaultEFConstruction,
-                     /* .ef_runtime = */
-                     kDefaultEFRuntime,
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_IP,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                     .initial_cap = 15000,
                  },
+                 /* .m =*/1,
+                 /* .ef_construction =*/5,
+                 /* .ef_runtime =*/25,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .prefixes = {"abc", "def", "ghi"},
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field11",
+                              .indexer_type = indexes::IndexerType::kHNSW,
+                          }}},
+         },
+         {
+             .test_name = "happy_path_flat",
+             .success = true,
+             .command_str = " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
+                            "ENGLISh SCORE 1.0 SChema hash_field1 as "
+                            "hash_field11 vector flat 10 TYPE  FLOAT32 DIM 3  "
+                            "DISTANCE_METRIC IP  "
+                            " INITIAL_CAP 15000 BLOCK_SIZE 25 ",
+             .flat_parameters = {{
                  {
-                     {
-                         .dimensions = 15,
-                         .distance_metric = data_model::DISTANCE_METRIC_COSINE,
-                         .vector_data_type =
-                             data_model::VECTOR_DATA_TYPE_FLOAT32,
-                         .initial_cap = kDefaultInitialCap,
-                     },
-                     /* .m = */ 12,
-                     /* .ef_construction = */
-                     kDefaultEFConstruction,
-                     /* .ef_runtime = */
-                     kDefaultEFRuntime,
-                 }},
-            .expected =
-                {.index_schema_name = "idx1",
-                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
-                 .attributes = {{
-                                    .identifier = "hash_field1",
-                                    .attribute_alias = "hash_field11",
-                                    .indexer_type = indexes::IndexerType::kHNSW,
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_IP,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                     .initial_cap = 15000,
+                 },
+                 /*.block_size =*/25,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .prefixes = {"abc", "def", "ghi"},
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field11",
+                              .indexer_type = indexes::IndexerType::kFlat,
+                          }}},
+         },
+         {
+             .test_name = "happy_path_hnsw_and_numeric",
+             .success = true,
+             .command_str = " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
+                            "ENGLISh SCORE 1.0 SChema hash_field10 as "
+                            "hash_field10 numeric hash_field1 as "
+                            "hash_field11 vector hnsw 14 TYPE  FLOAT32 DIM 3  "
+                            "DISTANCE_METRIC IP M 1 EF_CONSTRUCTION 5 "
+                            " INITIAL_CAP 15000 EF_RUNTIME 25 ",
+             .hnsw_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_IP,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                     .initial_cap = 15000,
+                 },
+                 /* .m =*/1,
+                 /* .ef_construction =*/5,
+                 /* .ef_runtime =*/25,
+             }},
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"abc", "def", "ghi"},
+                  .attributes =
+                      {
+                          {
+                              .identifier = "hash_field10",
+                              .attribute_alias = "hash_field10",
+                              .indexer_type = indexes::IndexerType::kNumeric,
+                          },
+                          {
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field11",
+                              .indexer_type = indexes::IndexerType::kHNSW,
+                          },
+                      }},
+         },
+         {
+             .test_name = "happy_path_hnsw_and_tag_1",
+             .success = true,
+             .command_str =
+                 " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
+                 "ENGLISh SCORE 1.0 SChema hash_field10 as "
+                 "hash_field10 tag SEPARATOR '|' CASESENSITIVE hash_field1 as "
+                 "hash_field11 vector hnsw 14 TYPE  FLOAT32 DIM 3  "
+                 "DISTANCE_METRIC IP M 1 EF_CONSTRUCTION 5 "
+                 " INITIAL_CAP 15000 EF_RUNTIME 25 ",
+             .hnsw_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_IP,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                     .initial_cap = 15000,
+                 },
+                 /* .m =*/1,
+                 /* .ef_construction =*/5,
+                 /* .ef_runtime =*/25,
+             }},
+             .tag_parameters = {{
+                 .separator = "|",
+                 .case_sensitive = true,
+             }},
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"abc", "def", "ghi"},
+                  .attributes =
+                      {
+                          {
+                              .identifier = "hash_field10",
+                              .attribute_alias = "hash_field10",
+                              .indexer_type = indexes::IndexerType::kTag,
+                          },
+                          {
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field11",
+                              .indexer_type = indexes::IndexerType::kHNSW,
+                          },
+                      }},
+         },
+         {
+             .test_name = "happy_path_hnsw_and_tag_2",
+             .success = true,
+             .command_str =
+                 " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
+                 "ENGLISh SCORE 1.0 SChema hash_field20 as "
+                 "hash_field20 tag SEPARATOR '|' CASESENSITIVE hash_field21 as "
+                 "hash_field21 tag SEPARATOR $ hash_field22 as "
+                 "hash_field22 tag  hash_field1 as "
+                 "hash_field11 vector hnsw 14 TYPE  FLOAT32 DIM 3  "
+                 "DISTANCE_METRIC IP M 1 EF_CONSTRUCTION 5 "
+                 " INITIAL_CAP 15000 EF_RUNTIME 25 ",
+             .hnsw_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_IP,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                     .initial_cap = 15000,
+                 },
+                 /* .m =*/1,
+                 /* .ef_construction =*/5,
+                 /* .ef_runtime =*/25,
+             }},
+             .tag_parameters = {{
+                                    .separator = "|",
+                                    .case_sensitive = true,
                                 },
                                 {
-                                    .identifier = "hash_field3",
-                                    .attribute_alias = "hash_field3",
-                                    .indexer_type = indexes::IndexerType::kHNSW,
+                                    .separator = "$",
+                                    .case_sensitive = false,
                                 },
                                 {
-                                    .identifier = "hash_field4",
-                                    .attribute_alias = "hash_field4",
-                                    .indexer_type = indexes::IndexerType::kHNSW,
-                                }}},
-        },
-        {
-            .test_name = "happy_path_hnsw_default_on_hash",
-            .success = true,
-            .command_str = " idx1 SChema hash_field1 as "
-                           "hash_field11 vector hnsw 6 TYPE  FLOAT32 DIM 3 "
-                           "DISTANCE_METRIC IP ",
-            .hnsw_parameters = {{
-                {
-                    .dimensions = 3,
-                    .distance_metric = data_model::DISTANCE_METRIC_IP,
-                    .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
-                },
-            }},
-            .expected = {.index_schema_name = "idx1",
-                         .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
-                         .attributes = {{
-                             .identifier = "hash_field1",
-                             .attribute_alias = "hash_field11",
-                             .indexer_type = indexes::IndexerType::kHNSW,
-                         }}},
-        },
-        {
-            .test_name = "invalid_separator",
-            .success = false,
-            .command_str =
-                " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
-                "ENGLISh SCORE 1.0 SChema hash_field10 as "
-                "hash_field10 tag SEPARATOR @@ CASESENSITIVE hash_field1 as "
-                "hash_field11 vector hnsw 14 TYPE  FLOAT32 DIM 3  "
-                "DISTANCE_METRIC IP M 1 EF_CONSTRUCTION 5 "
-                " INITIAL_CAP 15000 EF_RUNTIME 25 ",
-            .tag_parameters = {{
-                .separator = "@@",
-            }},
-            .expected_error_message =
-                "Invalid field type for field `hash_field10`: The separator "
-                "must be a single character, but got `@@`",
-        },
-        {
-            .test_name = "duplicate_identifier",
-            .success = false,
-            .command_str = "idx1 on HASH SChema hash_field1 vector hnsw 6 TYPE "
-                           "FLOAT32 DIM 3  DISTANCE_METRIC Ip "
-                           "hash_field1 vector hnsw 6 TYPE FLOAT32 DIM 3 "
-                           "DISTANCE_METRIC Ip",
-            .expected_error_message = "Duplicate field in schema - hash_field1",
-        },
-        {
-            .test_name = "trailing_invalid_token_at_the_end",
-            .success = false,
-            .command_str =
-                " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
-                "ENGLISh SCORE 1.0 SChema hash_field1 as "
-                "hash_field11 vector hnsw 14 TYPE  FLOAT32 DIM 3  "
-                "DISTANCE_METRIC IP M 1 EF_CONSTRUCTION 5 "
-                " INITIAL_CAP 15000 EF_RUNTIME 25 random_token_at_the_end",
-            .expected_error_message =
-                "Invalid field type for field `random_token_at_the_end`: "
-                "Missing argument",
-        },
-        {
-            .test_name = "invalid_ef_runtime_negative",
-            .success = false,
-            .command_str = "idx1 SChema hash_field1 as "
-                           "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
-                           "DISTANCE_METRIC IP EF_RUNTIME -100",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: Error parsing "
-                "value for the parameter `EF_RUNTIME` - `-100` is outside "
-                "acceptable "
-                "bounds",
-        },
-        {
-            .test_name = "invalid_ef_runtime_zero",
-            .success = false,
-            .command_str = "idx1 SChema hash_field1 as "
-                           "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
-                           "DISTANCE_METRIC IP EF_RUNTIME 0",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: EF_RUNTIME must "
-                "be a positive integer greater than 0 and cannot exceed 4096.",
-        },
-        {
-            .test_name = "invalid_m_negative",
-            .success = false,
-            .command_str = "idx1 SChema hash_field1 as "
-                           "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
-                           "DISTANCE_METRIC IP M -10",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: M must be a "
-                "positive integer greater than 0 and cannot exceed 2000000.",
-        },
-        {
-            .test_name = "invalid_m_too_big",
-            .success = false,
-            .command_str = "idx1 SChema hash_field1 as "
-                           "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
-                           "DISTANCE_METRIC IP M 3000000",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: M must be a "
-                "positive integer greater than 0 and cannot exceed 2000000.",
-        },
-        {
-            .test_name = "invalid_ef_construction_zero",
-            .success = false,
-            .command_str = "idx1 SChema hash_field1 as "
-                           "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
-                           "DISTANCE_METRIC IP EF_CONSTRUCTIOn 0",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: EF_CONSTRUCTION "
-                "must "
-                "be a positive integer greater than 0 and cannot exceed 4096.",
-        },
-        {
-            .test_name = "invalid_ef_construction_negative",
-            .success = false,
-            .command_str = "idx1 SChema hash_field1 as "
-                           "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
-                           "DISTANCE_METRIC IP EF_CONSTRUCTIOn -100",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: EF_CONSTRUCTION "
-                "must be a positive integer greater than 0 and cannot exceed "
-                "4096.",
-        },
-        {
-            .test_name = "invalid_as",
-            .success = false,
-            .command_str = "idx1 SChema hash_field1 asa "
-                           "hash_field11 vector hnsw 6 TYPE  FLOAT32 DIM 3 "
-                           "DISTANCE_METRIC IP ",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: Unknown argument "
-                "`asa`",
-        },
-        {.test_name = "invalid_negative_prefix_cnt",
-         .success = false,
-         .command_str = "idx1 prefix -2 SChema hash_field1 vector1 hnsw 6 TYPE "
-                        "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
-         .expected_error_message =
-             "Bad arguments for PREFIX: `-2` is outside acceptable bounds"},
-        {.test_name = "invalid_too_bit_prefix_cnt",
-         .success = false,
-         .command_str = "idx1 prefix 20 SChema hash_field1vector1 hnsw 6 TYPE "
-                        "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
-         .expected_error_message =
-             "Bad arguments for PREFIX: `20` is outside acceptable bounds"},
-        {
-            .test_name = "invalid_vector",
-            .success = false,
-            .command_str = "idx1 SChema hash_field1 vector1 hnsw 6 TYPE "
-                           "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: Unknown argument "
-                "`vector1`",
-        },
-        {.test_name = "invalid_hnsw",
-         .success = false,
-         .command_str = "idx1 SChema hash_field1 vector hnsw1 6 TYPE "
-                        "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
-         .expected_error_message =
-             "Invalid field type for field `hash_field1`: Unknown argument "
-             "`hnsw1`"},
-        {
-            .test_name = "invalid_too_many_attributes",
-            .success = false,
-            .command_str = "idx1 SChema "
-                           "hash_field1 vector hnsw 6 TYPE FLOAT32 DIM 3 "
-                           "DISTANCE_METRIC IP ",
-            .too_many_attributes = true,
-            .expected_error_message =
-                "The maximum number of attributes cannot exceed 50.",
-        },
-        {
-            .test_name = "invalid_param_num_1",
-            .success = false,
-            .command_str = "idx1 SChema hash_field1 vector hnsw 8 TYPE "
-                           "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: Expected 8 "
-                "parameters for HNSW but got 6 parameters.",
-        },
-        {
-            .test_name = "invalid_param_num_2",
-            .success = false,
-            .command_str = " idx1 SChema hash_field1 vector hnsw 5 TYPE "
-                           "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: Error parsing "
-                "value for the parameter `DISTANCE_METRIC` - Missing argument",
-        },
-        {
-            .test_name = "invalid_param_num_3",
-            .success = false,
-            .command_str = "idx1 SChema hash_field1 vector hnsw -6 TYPE "
-                           "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: `-6` is outside "
-                "acceptable bounds",
-        },
-        {
-            .test_name = "invalid_flat_param_num_1",
-            .success = false,
-            .command_str = "idx1 SChema hash_field1 vector flat 8 TYPE "
-                           "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: Expected 8 "
-                "parameters for FLAT but got 6 parameters.",
-        },
-        {
-            .test_name = "invalid_flat_param_num_2",
-            .success = false,
-            .command_str = " idx1 SChema hash_field1 vector FLAT 5 TYPE "
-                           "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: Error parsing "
-                "value for the parameter `DISTANCE_METRIC` - Missing argument",
-        },
-        {
-            .test_name = "invalid_flat_param_num_3",
-            .success = false,
-            .command_str = "idx1 SChema hash_field1 vector flat -6 TYPE "
-                           "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: `-6` is outside "
-                "acceptable bounds",
-        },
-        {
-            .test_name = "invalid_type_1",
-            .success = false,
-            .command_str = " idx1 SChema hash_field1 vector hnsw 6 TYPE1 "
-                           "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: Unexpected "
-                "argument `TYPE1`",
-        },
-        {
-            .test_name = "invalid_type_2",
-            .success = false,
-            .command_str = " idx1 SChema hash_field1 vector hnsw 6 TYPE "
-                           "FLOAT321 DIM 3 DISTANCE_METRIC IP ",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: Error parsing "
-                "value for the parameter `TYPE` - Unknown argument `FLOAT321`",
-        },
-        {
-            .test_name = "invalid_dim_1",
-            .success = false,
-            .command_str = " idx1 SChema hash_field1 vector hnsw 6 TYPE1 "
-                           "FLOAT32 DIM1 3 DISTANCE_METRIC IP ",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: Unexpected "
-                "argument `TYPE1`",
-        },
-        {
-            .test_name = "invalid_dim_2",
-            .success = false,
-            .command_str = " idx1 SChema hash_field1 vector hnsw 6 TYPE "
-                           "FLOAT321 DIM a DISTANCE_METRIC IP ",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: Error parsing "
-                "value for the parameter `TYPE` - Unknown argument `FLOAT321`",
-        },
-        {
-            .test_name = "invalid_dim_3",
-            .success = false,
-            .command_str = " idx1 SChema hash_field1 vector hnsw 6 TYPE "
-                           "FLOAT321 DIM -5 DISTANCE_METRIC IP ",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: Error parsing "
-                "value for the parameter `TYPE` - Unknown argument `FLOAT321`",
-        },
-        {
-            .test_name = "invalid_distance_1",
-            .success = false,
-            .command_str = " idx1 SChema hash_field1 vector hnsw 6 TYPE1 "
-                           "FLOAT32 DIM 3 DISTANCE_METRIC1 IP ",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: Unexpected "
-                "argument `TYPE1`",
-        },
-        {
-            .test_name = "invalid_distance_2",
-            .success = false,
-            .command_str = " idx1 SChema hash_field1 vector hnsw 6 TYPE "
-                           "FLOAT321 DIM 3 DISTANCE_METRIC IP1 ",
-            .expected_error_message =
-                "Invalid field type for field `hash_field1`: Error parsing "
-                "value for the parameter `TYPE` - Unknown argument `FLOAT321`",
-        },
-        {
-            .test_name = "unexpected_filter",
-            .success = false,
-            .command_str =
-                " idx1 filter aa SChema hash_field1 vector hnsw 6 TYPE "
-                "FLOAT321 DIM 5 DISTANCE_METRIC IP ",
-            .expected_error_message = "The parameter `FILTER` is not supported",
-        },
-        {
-            .test_name = "invalid_language_parameter_value",
-            .success = false,
-            .command_str = " idx1 LANGUAGE hebrew SChema hash_field1 vector "
-                           "hnsw 6 TYPE FLOAT321 DIM 5 DISTANCE_METRIC IP ",
-            .expected_error_message =
-                "Bad arguments for LANGUAGE: Unknown argument `hebrew`",
-        },
-        {
-            .test_name = "unexpected_language_field",
-            .success = false,
-            .command_str = " idx1 LANGUAGE_FIELD aa SChema hash_field1 vector "
-                           "hnsw 6 TYPE FLOAT321 DIM 5 DISTANCE_METRIC IP ",
-            .expected_error_message =
-                "The parameter `LANGUAGE_FIELD` is not supported",
-        },
-        {
-            .test_name = "invalid_score_parameter_value",
-            .success = false,
-            .command_str =
-                " idx1 SCORE 2 SChema hash_field1 vector hnsw 6 TYPE "
-                "FLOAT321 DIM 5 DISTANCE_METRIC IP ",
-            .expected_error_message =
-                "`SCORE` parameter with a value `2` is not supported. The only "
-                "supported value is `1.0`",
-        },
-        {
-            .test_name = "unexpected_score_field",
-            .success = false,
-            .command_str =
-                " idx1 SCORE_FIELD SChema hash_field1 vector hnsw 6 TYPE "
-                "FLOAT321 DIM 5 DISTANCE_METRIC IP ",
-            .expected_error_message =
-                "The parameter `SCORE_FIELD` is not supported",
-        },
-        {
-            .test_name = "invalid_parameter_before_schema",
-            .success = false,
-            .command_str =
-                " idx1 SCOREa 2 SChema hash_field1 vector hnsw 6 TYPE "
-                "FLOAT321 DIM 5 DISTANCE_METRIC IP ",
-            .expected_error_message =
-                "Unexpected parameter `SCOREa`, expecting `SCHEMA`",
-        },
-    }),
+                                    .separator = ",",
+                                    .case_sensitive = false,
+                                }},
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"abc", "def", "ghi"},
+                  .attributes =
+                      {
+                          {
+                              .identifier = "hash_field20",
+                              .attribute_alias = "hash_field20",
+                              .indexer_type = indexes::IndexerType::kTag,
+                          },
+                          {
+                              .identifier = "hash_field21",
+                              .attribute_alias = "hash_field21",
+                              .indexer_type = indexes::IndexerType::kTag,
+                          },
+                          {
+                              .identifier = "hash_field22",
+                              .attribute_alias = "hash_field22",
+                              .indexer_type = indexes::IndexerType::kTag,
+                          },
+                          {
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field11",
+                              .indexer_type = indexes::IndexerType::kHNSW,
+                          },
+                      }},
+         },
+         {
+             .test_name = "happy_path_flat_and_numeric",
+             .success = true,
+             .command_str = " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
+                            "ENGLISh SCORE 1.0 SChema hash_field1 as "
+                            "hash_field11 vector flat 10 TYPE  FLOAT32 DIM 3  "
+                            "DISTANCE_METRIC IP  "
+                            " INITIAL_CAP 15000 BLOCK_SIZE 25 hash_field10 as "
+                            "hash_field10 numeric ",
+             .flat_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_IP,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                     .initial_cap = 15000,
+                 },
+                 /*.block_size =*/25,
+             }},
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"abc", "def", "ghi"},
+                  .attributes =
+                      {
+                          {
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field11",
+                              .indexer_type = indexes::IndexerType::kFlat,
+                          },
+                          {
+                              .identifier = "hash_field10",
+                              .attribute_alias = "hash_field10",
+                              .indexer_type = indexes::IndexerType::kNumeric,
+                          },
+                      }},
+         },
+         {
+             .test_name = "happy_path_flat_and_tag_1",
+             .success = true,
+             .command_str = " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
+                            "ENGLISh SCORE 1.0 SChema hash_field1 as "
+                            "hash_field11 vector flat 10 TYPE  FLOAT32 DIM 3  "
+                            "DISTANCE_METRIC IP  "
+                            " INITIAL_CAP 15000 BLOCK_SIZE 25 hash_field10 as "
+                            "hash_field10 tag SEPARATOR \"@\"",
+             .flat_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_IP,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                     .initial_cap = 15000,
+                 },
+                 /*.block_size =*/25,
+             }},
+             .tag_parameters = {{
+                 .separator = "@",
+                 .case_sensitive = false,
+             }},
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"abc", "def", "ghi"},
+                  .attributes =
+                      {
+                          {
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field11",
+                              .indexer_type = indexes::IndexerType::kFlat,
+                          },
+                          {
+                              .identifier = "hash_field10",
+                              .attribute_alias = "hash_field10",
+                              .indexer_type = indexes::IndexerType::kTag,
+                          },
+                      }},
+         },
+         {
+             .test_name = "happy_path_hnsw_3_attributes",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 as "
+                 "hash_field11 vector hnsw 12 TYPE  FLOAT32 DIM 3  "
+                 "DISTANCE_METRIC IP EF_CONSTRUCTION 5 "
+                 " INITIAL_CAP 15000  EF_RUNTIME 25 "
+                 "hash_field3 vecTor hnsw 6 DISTANCE_METRIC COSINE TYPE "
+                 "FLOAT32 DIM 5 "
+                 "hash_field4 Vector Hnsw 8 DISTANCE_METRIc cOSINE tYPE "
+                 "FLOAt32 dIM 15 m 12 ",
+             .hnsw_parameters =
+                 {{
+                      FTCreateVectorParameters{
+                          .dimensions = 3,
+                          .distance_metric = data_model::DISTANCE_METRIC_IP,
+                          .vector_data_type =
+                              data_model::VECTOR_DATA_TYPE_FLOAT32,
+                          .initial_cap = 15000,
+                      },
+                      /* .m = */ kDefaultM,
+                      /* .ef_construction = */ 5,
+                      /* .ef_runtime = */ 25,
+                  },
+                  {
+                      {
+                          .dimensions = 5,
+                          .distance_metric = data_model::DISTANCE_METRIC_COSINE,
+                          .vector_data_type =
+                              data_model::VECTOR_DATA_TYPE_FLOAT32,
+                          .initial_cap = kDefaultInitialCap,
+                      },
+                      /* .m = */ kDefaultM,
+                      /* .ef_construction = */
+                      kDefaultEFConstruction,
+                      /* .ef_runtime = */
+                      kDefaultEFRuntime,
+                  },
+                  {
+                      {
+                          .dimensions = 15,
+                          .distance_metric = data_model::DISTANCE_METRIC_COSINE,
+                          .vector_data_type =
+                              data_model::VECTOR_DATA_TYPE_FLOAT32,
+                          .initial_cap = kDefaultInitialCap,
+                      },
+                      /* .m = */ 12,
+                      /* .ef_construction = */
+                      kDefaultEFConstruction,
+                      /* .ef_runtime = */
+                      kDefaultEFRuntime,
+                  }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes =
+                              {{
+                                   .identifier = "hash_field1",
+                                   .attribute_alias = "hash_field11",
+                                   .indexer_type = indexes::IndexerType::kHNSW,
+                               },
+                               {
+                                   .identifier = "hash_field3",
+                                   .attribute_alias = "hash_field3",
+                                   .indexer_type = indexes::IndexerType::kHNSW,
+                               },
+                               {
+                                   .identifier = "hash_field4",
+                                   .attribute_alias = "hash_field4",
+                                   .indexer_type = indexes::IndexerType::kHNSW,
+                               }}},
+         },
+         {
+             .test_name = "happy_path_hnsw_default_on_hash",
+             .success = true,
+             .command_str = " idx1 SChema hash_field1 as "
+                            "hash_field11 vector hnsw 6 TYPE  FLOAT32 DIM 3 "
+                            "DISTANCE_METRIC IP ",
+             .hnsw_parameters = {{
+                 {
+                     .dimensions = 3,
+                     .distance_metric = data_model::DISTANCE_METRIC_IP,
+                     .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                 },
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field11",
+                              .indexer_type = indexes::IndexerType::kHNSW,
+                          }}},
+         },
+         {
+             .test_name = "missing_vector_index",
+             .success = false,
+             .command_str = "idx1 on HASH SChema hash_field1 as "
+                            "hash_field11 numeric ",
+             .expected_error_message =
+                 "At least one attribute must be indexed as a vector",
+         },
+         {
+             .test_name = "invalid_separator",
+             .success = false,
+             .command_str =
+                 " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
+                 "ENGLISh SCORE 1.0 SChema hash_field10 as "
+                 "hash_field10 tag SEPARATOR @@ CASESENSITIVE hash_field1 as "
+                 "hash_field11 vector hnsw 14 TYPE  FLOAT32 DIM 3  "
+                 "DISTANCE_METRIC IP M 1 EF_CONSTRUCTION 5 "
+                 " INITIAL_CAP 15000 EF_RUNTIME 25 ",
+             .tag_parameters = {{
+                 .separator = "@@",
+             }},
+             .expected_error_message =
+                 "Invalid field type for field `hash_field10`: The separator "
+                 "must be a single character, but got `@@`",
+         },
+         {
+             .test_name = "duplicate_identifier",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SChema hash_field1 vector hnsw 6 TYPE "
+                 "FLOAT32 DIM 3  DISTANCE_METRIC Ip "
+                 "hash_field1 vector hnsw 6 TYPE FLOAT32 DIM 3 "
+                 "DISTANCE_METRIC Ip",
+             .expected_error_message =
+                 "Duplicate field in schema - hash_field1",
+         },
+         {
+             .test_name = "trailing_invalid_token_at_the_end",
+             .success = false,
+             .command_str =
+                 " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
+                 "ENGLISh SCORE 1.0 SChema hash_field1 as "
+                 "hash_field11 vector hnsw 14 TYPE  FLOAT32 DIM 3  "
+                 "DISTANCE_METRIC IP M 1 EF_CONSTRUCTION 5 "
+                 " INITIAL_CAP 15000 EF_RUNTIME 25 random_token_at_the_end",
+             .expected_error_message =
+                 "Invalid field type for field `random_token_at_the_end`: "
+                 "Missing argument",
+         },
+         {
+             .test_name = "invalid_ef_runtime_negative",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 as "
+                            "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
+                            "DISTANCE_METRIC IP EF_RUNTIME -100",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Error parsing "
+                 "value for the parameter `EF_RUNTIME` - `-100` is outside "
+                 "acceptable "
+                 "bounds",
+         },
+         {
+             .test_name = "invalid_ef_runtime_zero",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 as "
+                            "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
+                            "DISTANCE_METRIC IP EF_RUNTIME 0",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: EF_RUNTIME must "
+                 "be a positive integer greater than 0 and cannot exceed 4096.",
+         },
+         {
+             .test_name = "invalid_m_negative",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 as "
+                            "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
+                            "DISTANCE_METRIC IP M -10",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: M must be a "
+                 "positive integer greater than 0 and cannot exceed 2000000.",
+         },
+         {
+             .test_name = "invalid_m_too_big",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 as "
+                            "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
+                            "DISTANCE_METRIC IP M 3000000",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: M must be a "
+                 "positive integer greater than 0 and cannot exceed 2000000.",
+         },
+         {
+             .test_name = "invalid_ef_construction_zero",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 as "
+                            "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
+                            "DISTANCE_METRIC IP EF_CONSTRUCTIOn 0",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: EF_CONSTRUCTION "
+                 "must "
+                 "be a positive integer greater than 0 and cannot exceed 4096.",
+         },
+         {
+             .test_name = "invalid_ef_construction_negative",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 as "
+                            "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
+                            "DISTANCE_METRIC IP EF_CONSTRUCTIOn -100",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: EF_CONSTRUCTION "
+                 "must be a positive integer greater than 0 and cannot exceed "
+                 "4096.",
+         },
+         {
+             .test_name = "invalid_as",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 asa "
+                            "hash_field11 vector hnsw 6 TYPE  FLOAT32 DIM 3 "
+                            "DISTANCE_METRIC IP ",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Unknown argument "
+                 "`asa`",
+         },
+         {.test_name = "invalid_negative_prefix_cnt",
+          .success = false,
+          .command_str =
+              "idx1 prefix -2 SChema hash_field1 vector1 hnsw 6 TYPE "
+              "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
+          .expected_error_message =
+              "Bad arguments for PREFIX: `-2` is outside acceptable bounds"},
+         {.test_name = "invalid_too_bit_prefix_cnt",
+          .success = false,
+          .command_str = "idx1 prefix 20 SChema hash_field1vector1 hnsw 6 TYPE "
+                         "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
+          .expected_error_message =
+              "Bad arguments for PREFIX: `20` is outside acceptable bounds"},
+         {
+             .test_name = "invalid_vector",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 vector1 hnsw 6 TYPE "
+                            "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Unknown argument "
+                 "`vector1`",
+         },
+         {.test_name = "invalid_hnsw",
+          .success = false,
+          .command_str = "idx1 SChema hash_field1 vector hnsw1 6 TYPE "
+                         "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
+          .expected_error_message =
+              "Invalid field type for field `hash_field1`: Unknown argument "
+              "`hnsw1`"},
+         {
+             .test_name = "invalid_too_many_attributes",
+             .success = false,
+             .command_str = "idx1 SChema "
+                            "hash_field1 vector hnsw 6 TYPE FLOAT32 DIM 3 "
+                            "DISTANCE_METRIC IP ",
+             .too_many_attributes = true,
+             .expected_error_message =
+                 "The maximum number of attributes cannot exceed 50.",
+         },
+         {
+             .test_name = "invalid_param_num_1",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 vector hnsw 8 TYPE "
+                            "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Expected 8 "
+                 "parameters for HNSW but got 6 parameters.",
+         },
+         {
+             .test_name = "invalid_param_num_2",
+             .success = false,
+             .command_str = " idx1 SChema hash_field1 vector hnsw 5 TYPE "
+                            "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Error parsing "
+                 "value for the parameter `DISTANCE_METRIC` - Missing argument",
+         },
+         {
+             .test_name = "invalid_param_num_3",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 vector hnsw -6 TYPE "
+                            "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: `-6` is outside "
+                 "acceptable bounds",
+         },
+         {
+             .test_name = "invalid_flat_param_num_1",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 vector flat 8 TYPE "
+                            "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Expected 8 "
+                 "parameters for FLAT but got 6 parameters.",
+         },
+         {
+             .test_name = "invalid_flat_param_num_2",
+             .success = false,
+             .command_str = " idx1 SChema hash_field1 vector FLAT 5 TYPE "
+                            "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Error parsing "
+                 "value for the parameter `DISTANCE_METRIC` - Missing argument",
+         },
+         {
+             .test_name = "invalid_flat_param_num_3",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 vector flat -6 TYPE "
+                            "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: `-6` is outside "
+                 "acceptable bounds",
+         },
+         {
+             .test_name = "invalid_type_1",
+             .success = false,
+             .command_str = " idx1 SChema hash_field1 vector hnsw 6 TYPE1 "
+                            "FLOAT32 DIM 3 DISTANCE_METRIC IP ",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Unexpected "
+                 "argument `TYPE1`",
+         },
+         {
+             .test_name = "invalid_type_2",
+             .success = false,
+             .command_str = " idx1 SChema hash_field1 vector hnsw 6 TYPE "
+                            "FLOAT321 DIM 3 DISTANCE_METRIC IP ",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Error parsing "
+                 "value for the parameter `TYPE` - Unknown argument `FLOAT321`",
+         },
+         {
+             .test_name = "invalid_dim_1",
+             .success = false,
+             .command_str = " idx1 SChema hash_field1 vector hnsw 6 TYPE1 "
+                            "FLOAT32 DIM1 3 DISTANCE_METRIC IP ",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Unexpected "
+                 "argument `TYPE1`",
+         },
+         {
+             .test_name = "invalid_dim_2",
+             .success = false,
+             .command_str = " idx1 SChema hash_field1 vector hnsw 6 TYPE "
+                            "FLOAT321 DIM a DISTANCE_METRIC IP ",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Error parsing "
+                 "value for the parameter `TYPE` - Unknown argument `FLOAT321`",
+         },
+         {
+             .test_name = "invalid_dim_3",
+             .success = false,
+             .command_str = " idx1 SChema hash_field1 vector hnsw 6 TYPE "
+                            "FLOAT321 DIM -5 DISTANCE_METRIC IP ",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Error parsing "
+                 "value for the parameter `TYPE` - Unknown argument `FLOAT321`",
+         },
+         {
+             .test_name = "invalid_distance_1",
+             .success = false,
+             .command_str = " idx1 SChema hash_field1 vector hnsw 6 TYPE1 "
+                            "FLOAT32 DIM 3 DISTANCE_METRIC1 IP ",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Unexpected "
+                 "argument `TYPE1`",
+         },
+         {
+             .test_name = "invalid_distance_2",
+             .success = false,
+             .command_str = " idx1 SChema hash_field1 vector hnsw 6 TYPE "
+                            "FLOAT321 DIM 3 DISTANCE_METRIC IP1 ",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Error parsing "
+                 "value for the parameter `TYPE` - Unknown argument `FLOAT321`",
+         },
+         {
+             .test_name = "unexpected_filter",
+             .success = false,
+             .command_str =
+                 " idx1 filter aa SChema hash_field1 vector hnsw 6 TYPE "
+                 "FLOAT321 DIM 5 DISTANCE_METRIC IP ",
+             .expected_error_message =
+                 "The parameter `FILTER` is not supported",
+         },
+         {
+             .test_name = "invalid_language_parameter_value",
+             .success = false,
+             .command_str = " idx1 LANGUAGE hebrew SChema hash_field1 vector "
+                            "hnsw 6 TYPE FLOAT321 DIM 5 DISTANCE_METRIC IP ",
+             .expected_error_message =
+                 "Bad arguments for LANGUAGE: Unknown argument `hebrew`",
+         },
+         {
+             .test_name = "unexpected_language_field",
+             .success = false,
+             .command_str = " idx1 LANGUAGE_FIELD aa SChema hash_field1 vector "
+                            "hnsw 6 TYPE FLOAT321 DIM 5 DISTANCE_METRIC IP ",
+             .expected_error_message =
+                 "The parameter `LANGUAGE_FIELD` is not supported",
+         },
+         {
+             .test_name = "invalid_score_parameter_value",
+             .success = false,
+             .command_str =
+                 " idx1 SCORE 2 SChema hash_field1 vector hnsw 6 TYPE "
+                 "FLOAT321 DIM 5 DISTANCE_METRIC IP ",
+             .expected_error_message = "`SCORE` parameter with a value `2` is "
+                                       "not supported. The only "
+                                       "supported value is `1.0`",
+         },
+         {
+             .test_name = "unexpected_score_field",
+             .success = false,
+             .command_str =
+                 " idx1 SCORE_FIELD SChema hash_field1 vector hnsw 6 TYPE "
+                 "FLOAT321 DIM 5 DISTANCE_METRIC IP ",
+             .expected_error_message =
+                 "The parameter `SCORE_FIELD` is not supported",
+         },
+         {
+             .test_name = "invalid_parameter_before_schema",
+             .success = false,
+             .command_str =
+                 " idx1 SCOREa 2 SChema hash_field1 vector hnsw 6 TYPE "
+                 "FLOAT321 DIM 5 DISTANCE_METRIC IP ",
+             .expected_error_message =
+                 "Unexpected parameter `SCOREa`, expecting `SCHEMA`",
+         },
+         {
+             .test_name = "missing_schema",
+             .success = false,
+             .command_str = "idx prefix 1 x",
+             .expected_error_message = "Missing argument",
+         },
+         {
+             .test_name = "missing_schema_2",
+             .success = false,
+             .command_str = "idx",
+             .expected_error_message = "Missing argument",
+         },
+         {
+             .test_name = "invalid_index_name",
+             .success = false,
+             .command_str = "idx{a}",
+             .expected_error_message = "Index name must not contain a hash tag",
+         },
+         {
+             .test_name = "invalid_index_prefix",
+             .success = false,
+             .command_str = "idx on hash prefix 1 a{b}",
+             .expected_error_message =
+                 "PREFIX argument(s) must not contain a hash tag",
+         }}),
     [](const TestParamInfo<FTCreateParserTestCase> &info) {
       return info.param.test_name;
     });

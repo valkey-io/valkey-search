@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -44,7 +44,6 @@
 // We put this at the end since it will otherwise mangle the malloc symbols in
 // the dependencies.
 #include "vmsdk/src/memory_allocation_overrides.h"
-// clang-format on
 
 namespace vmsdk {
 
@@ -158,6 +157,7 @@ void* PerformAndTrackAlignedAlloc(size_t align, size_t size,
 extern "C" {
 // Our allocator doesn't support tracking system memory size, so we just
 // return 0.
+// NOLINTNEXTLINE
 __attribute__((weak)) size_t empty_usable_size(void* ptr) noexcept { return 0; }
 
 // For Valkey allocation - we need to ensure alignment by taking advantage of
@@ -208,7 +208,7 @@ void* __wrap_calloc(size_t __nmemb, size_t size) noexcept {
     vmsdk::SystemAllocTracker::GetInstance().TrackPointer(ptr);
     return ptr;
   }
-  return vmsdk::PerformAndTrackCalloc(__nmemb, size, RedisModule_Calloc,
+  return vmsdk::PerformAndTrackCalloc(__nmemb, AlignSize(size), RedisModule_Calloc,
                                       RedisModule_MallocUsableSize);
 }
 
@@ -270,6 +270,7 @@ size_t GetNewAllocSize(size_t size) {
   return size;
 }
 
+#ifndef ASAN_BUILD
 void* operator new(size_t size) noexcept(false) {
   return __wrap_malloc(GetNewAllocSize(size));
 }
@@ -339,3 +340,4 @@ void operator delete[](void* p, size_t size,
                        std::align_val_t alignment) noexcept {
   __wrap_free(p);
 }
+#endif // !ASAN_BUILD

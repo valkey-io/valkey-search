@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -48,11 +48,6 @@ void OnFlushDBCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
   SchemaManager::Instance().OnFlushDBCallback(ctx, eid, subevent, data);
 }
 
-void OnPersistenceCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
-                           uint64_t subevent, void *data) {
-  SchemaManager::Instance().OnPersistenceCallback(ctx, eid, subevent, data);
-}
-
 void OnLoadingCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
                        uint64_t subevent, void *data) {
   SchemaManager::Instance().OnLoadingCallback(ctx, eid, subevent, data);
@@ -93,8 +88,6 @@ void SubscribeToServerEvents() {
   pthread_atfork(AtForkPrepare, AfterForkParent, nullptr);
   RedisModule_SubscribeToServerEvent(ctx, RedisModuleEvent_ForkChild,
                                      &OnForkChildCallback);
-  RedisModule_SubscribeToServerEvent(ctx, RedisModuleEvent_Persistence,
-                                     &OnPersistenceCallback);
   RedisModule_SubscribeToServerEvent(ctx, RedisModuleEvent_Loading,
                                      &OnLoadingCallback);
   RedisModule_SubscribeToServerEvent(ctx, RedisModuleEvent_SwapDB,

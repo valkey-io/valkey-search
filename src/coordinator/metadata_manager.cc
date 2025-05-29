@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -52,10 +52,9 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/util.h"
-#include "src/rdb_io_stream.h"
+#include "src/rdb_serialization.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
-#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -321,12 +320,13 @@ void MetadataManager::HandleBroadcastedMetadata(
   if (header->top_level_version() < top_level_version) {
     return;
   }
+  std::string sender_id_str(sender_id, REDISMODULE_NODE_ID_LEN);
   if (header->top_level_version() == top_level_version) {
     if (header->top_level_fingerprint() == top_level_fingerprint) {
       return;
     }
     VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
-        << "Got conflicting contents from " << sender_id << " for version "
+        << "Got conflicting contents from " << sender_id_str << " for version "
         << top_level_version
         << ": have "
            "fingerprint "
@@ -336,13 +336,12 @@ void MetadataManager::HandleBroadcastedMetadata(
            "GlobalMetadata.";
   } else {
     VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 1)
-        << "Got newer version from " << sender_id << ": have "
+        << "Got newer version from " << sender_id_str << ": have "
         << top_level_version << ", got " << header->top_level_version()
         << ". Retrieving full GlobalMetadata.";
   }
   // sender_id isn't NULL terminated, so we copy to a std::string to make sure
   // it is properly NULL terminated
-  std::string sender_id_str(sender_id, REDISMODULE_NODE_ID_LEN);
   char node_ip[REDISMODULE_NODE_ID_LEN];
   int node_port;
   if (RedisModule_GetClusterNodeInfo(ctx, sender_id_str.c_str(), node_ip,
@@ -496,7 +495,7 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
   return absl::OkStatus();
 }
 
-bool DoesGlobalMetadataContainEntry(GlobalMetadata &metadata) {
+bool DoesGlobalMetadataContainEntry(const GlobalMetadata &metadata) {
   if (metadata.type_namespace_map().empty()) {
     return false;
   }
@@ -508,67 +507,57 @@ bool DoesGlobalMetadataContainEntry(GlobalMetadata &metadata) {
   return false;
 }
 
-void MetadataManager::AuxSave(RedisModuleIO *rdb, int when) {
+int MetadataManager::GetSectionsCount() const {
+  return DoesGlobalMetadataContainEntry(metadata_.Get()) ? 1 : 0;
+}
+
+absl::Status MetadataManager::SaveMetadata(RedisModuleCtx *ctx, SafeRDB *rdb,
+                                           int when) {
   if (when == REDISMODULE_AUX_BEFORE_RDB) {
-    return;
+    return absl::OkStatus();
   }
 
   if (!DoesGlobalMetadataContainEntry(metadata_.Get())) {
     // Auxsave2 will ensure nothing is written to the aux section if we write
     // nothing.
-    RedisModule_Log(
-        detached_ctx_.get(), REDISMODULE_LOGLEVEL_NOTICE,
-        "Skipping aux metadata for MetadataManager since there is no content");
-    return;
-  }
-
-  RedisModule_Log(detached_ctx_.get(), REDISMODULE_LOGLEVEL_NOTICE,
-                  "Saving aux metadata for MetadataManager to aux RDB");
-  std::string serialized_metadata;
-  metadata_.Get().SerializeToString(&serialized_metadata);
-  RedisModule_SaveStringBuffer(rdb, serialized_metadata.data(),
-                               serialized_metadata.size());
-}
-
-absl::Status MetadataManager::AuxLoad(RedisModuleIO *rdb, int encver,
-                                      int when) {
-  if (when == REDISMODULE_AUX_BEFORE_RDB) {
+    VMSDK_LOG(NOTICE, detached_ctx_.get())
+        << "Skipping aux metadata for MetadataManager since there is no "
+           "content";
     return absl::OkStatus();
   }
 
-  RDBInputStream rdb_is(rdb);
-  VMSDK_ASSIGN_OR_RETURN(auto serialized_metadata, rdb_is.LoadString());
-  GlobalMetadata loaded_metadata;
-  if (!loaded_metadata.ParseFromString(
-          vmsdk::ToStringView(serialized_metadata.get()))) {
-    return absl::InternalError("Failed to parse metadata from RDB");
+  VMSDK_LOG(NOTICE, detached_ctx_.get())
+      << "Saving aux metadata for MetadataManager to aux RDB";
+  data_model::RDBSection section;
+  std::string serialized_metadata;
+  section.set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
+  section.mutable_global_metadata_contents()->CopyFrom(metadata_.Get());
+  if (!section.SerializeToString(&serialized_metadata)) {
+    return absl::InternalError("Failed to serialize metadata");
   }
+  VMSDK_RETURN_IF_ERROR(rdb->SaveStringBuffer(serialized_metadata));
+  return absl::OkStatus();
+}
+
+absl::Status MetadataManager::LoadMetadata(
+    RedisModuleCtx *ctx, std::unique_ptr<data_model::RDBSection> section,
+    SupplementalContentIter &&supplemental_iter) {
+  if (section->type() != data_model::RDB_SECTION_GLOBAL_METADATA) {
+    return absl::InternalError(
+        "Unexpected RDB section type passed to MetadataManager");
+  }
+
   if (staging_metadata_due_to_repl_load_.Get()) {
-    staged_metadata_ = loaded_metadata;
+    staged_metadata_ = section->global_metadata_contents();
   } else {
     // In case we had an existing state, we need to merge the two views. This
     // could happen if a module triggers a load after we have already been
     // running.
-    VMSDK_RETURN_IF_ERROR(ReconcileMetadata(loaded_metadata,
+    VMSDK_RETURN_IF_ERROR(ReconcileMetadata(section->global_metadata_contents(),
                                             /*trigger_callbacks=*/false,
                                             /*prefer_incoming=*/true));
   }
   return absl::OkStatus();
-}
-
-void MetadataManagerAuxSave(RedisModuleIO *rdb, int when) {
-  MetadataManager::Instance().AuxSave(rdb, when);
-}
-
-int MetadataManagerAuxLoad(RedisModuleIO *rdb, int encver, int when) {
-  auto status = MetadataManager::Instance().AuxLoad(rdb, encver, when);
-  if (status.ok()) {
-    return REDISMODULE_OK;
-  }
-  VMSDK_LOG(WARNING, nullptr)
-      << "Failed to load Metadata Manager aux data from RDB: "
-      << status.message();
-  return REDISMODULE_ERR;
 }
 
 void MetadataManagerOnClusterMessageCallback(RedisModuleCtx *ctx,
@@ -668,40 +657,5 @@ void MetadataManager::RegisterForClusterMessages(RedisModuleCtx *ctx) {
   RedisModule_RegisterClusterMessageReceiver(
       ctx, coordinator::kMetadataBroadcastClusterMessageReceiverId,
       MetadataManagerOnClusterMessageCallback);
-}
-
-// This module type is used purely to get aux callbacks.
-absl::Status MetadataManager::RegisterModuleType(RedisModuleCtx *ctx) {
-  static RedisModuleTypeMethods tm = {
-      .version = REDISMODULE_TYPE_METHOD_VERSION,
-      .rdb_load = [](RedisModuleIO *io, int encver) -> void * {
-        DCHECK(false) << "Attempt to load MetadataManager from RDB";
-        return nullptr;
-      },
-      .rdb_save =
-          [](RedisModuleIO *io, void *value) {
-            DCHECK(false) << "Attempt to save MetadataManager to RDB";
-          },
-      .aof_rewrite =
-          [](RedisModuleIO *aof, RedisModuleString *key, void *value) {
-            DCHECK(false) << "Attempt to rewrite MetadataManager to AOF";
-          },
-      .free =
-          [](void *value) {
-            DCHECK(false) << "Attempt to free MetadataManager object";
-          },
-      .aux_load = MetadataManagerAuxLoad,
-      // We want to save/load the metadata after the RDB.
-      .aux_save_triggers = REDISMODULE_AUX_AFTER_RDB,
-      .aux_save2 = MetadataManagerAuxSave,
-  };
-
-  module_type_ = RedisModule_CreateDataType(
-      ctx, kMetadataManagerModuleTypeName.data(), kEncodingVersion, &tm);
-  if (!module_type_) {
-    return absl::InternalError(absl::StrCat(
-        "failed to create ", kMetadataManagerModuleTypeName, " type"));
-  }
-  return absl::OkStatus();
 }
 }  // namespace valkey_search::coordinator

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -48,7 +48,7 @@
 #include "absl/synchronization/mutex.h"
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
-#include "src/rdb_io_stream.h"
+#include "src/rdb_serialization.h"
 #include "src/utils/segment_tree.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -95,7 +95,7 @@ class BTreeNumeric {
   // Note on overhead: SegmentTree is roughly 80 bytes per entry (40 B per node,
   // 2x nodes per entries with a balanced tree).
   //
-  // TODO(b/373427882): Consider using a single data structure to maintain both
+  // TODO: Consider using a single data structure to maintain both
   // the keys and the count.
   absl::btree_map<double, SetType> btree_;
   utils::SegmentTree segment_tree_;
@@ -116,7 +116,7 @@ class Numeric : public IndexBase {
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   int RespondWithInfo(RedisModuleCtx* ctx) const override;
   bool IsTracked(const InternedStringPtr& key) const override;
-  absl::Status SaveIndex(RDBOutputStream& rdb_stream) const override {
+  absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
     return absl::OkStatus();
   }
   inline void ForEachTrackedKey(

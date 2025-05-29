@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -146,8 +146,6 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
                    .value();
   VMSDK_EXPECT_OK(
       index_schema->AddIndex(test_case.attribute_alias, "id1", index));
-  EXPECT_CALL(*kMockRedisModule, ModuleTypeGetValue(testing::_))
-      .WillRepeatedly(testing::Return(index_schema.get()));
   args.push_back(
       RedisModule_CreateString(nullptr, key_str.data(), key_str.size()));
   args.push_back(RedisModule_CreateString(nullptr, test_case.filter_str.data(),

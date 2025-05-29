@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -150,5 +150,6 @@ class JsonAttributeDataType : public AttributeDataType {
 };
 
 bool IsJsonModuleLoaded(RedisModuleCtx *ctx);
+absl::string_view TrimBrackets(absl::string_view record);
 }  // namespace valkey_search
 #endif  // VALKEYSEARCH_SRC_ATTRIBUTE_DATA_TYPE_H_

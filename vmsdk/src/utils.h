@@ -1,6 +1,6 @@
 
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,6 +32,7 @@
 #define VMSDK_SRC_UTILS_H_
 #include <cassert>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -110,9 +111,16 @@ int RunByMain(absl::AnyInvocable<void()> fn, bool force_async = false);
 
 std::string WrongArity(absl::string_view cmd);
 
-std::ostream& operator<<(std::ostream& os, RedisModuleString *s) {
+std::ostream &operator<<(std::ostream &os, RedisModuleString *s) {
   return os << (*(std::string *)s);
 }
 
+//
+// Parse out a hash tag from a string view
+//
+std::optional<absl::string_view> ParseHashTag(absl::string_view);
+
+bool IsRealUserClient(RedisModuleCtx *ctx);
+bool MultiOrLua(RedisModuleCtx *ctx);
 }  // namespace vmsdk
 #endif  // VMSDK_SRC_UTILS_H_

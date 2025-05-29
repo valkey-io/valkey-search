@@ -13,6 +13,33 @@ set(MODULES_INSTALL_PREFIX "${MODULES_DIR}/install")
 
 find_program(_GIT_EXE git REQUIRED)
 
+# On some distros (mainly RedHat based) the cmake files might be installed under
+# lib64/ and not under lib/, this function helps locating the cmake path for the
+# given module
+function(update_cmake_prefix MODULE_NAME)
+  set(__cmake_lib_dir
+      "${CMAKE_BINARY_DIR}/.deps/install/lib/cmake/${MODULE_NAME}")
+  set(__cmake_lib64_dir
+      "${CMAKE_BINARY_DIR}/.deps/install/lib64/cmake/${MODULE_NAME}")
+  set(__cmake_libdir_FOUND "")
+  if(EXISTS "${__cmake_lib_dir}" AND IS_DIRECTORY "${__cmake_lib_dir}")
+    set(__cmake_libdir_FOUND "${__cmake_lib_dir}")
+
+  elseif(EXISTS "${__cmake_lib64_dir}" AND IS_DIRECTORY "${__cmake_lib64_dir}")
+    set(__cmake_libdir_FOUND "${__cmake_lib64_dir}")
+    string(APPEND __CMAKE_PREFIX_PATH ":${__cmake_lib64_dir}")
+  else()
+    message(
+      FATAL_ERROR "Could not locate CMake files for module: ${MODULE_NAME}")
+  endif()
+  string(APPEND __CMAKE_PREFIX_PATH ":${__cmake_libdir_FOUND}")
+  message(
+    STATUS "CMake files for ${MODULE_NAME} found at: ${__cmake_libdir_FOUND}")
+  set(__CMAKE_PREFIX_PATH
+      "${__CMAKE_PREFIX_PATH}"
+      PARENT_SCOPE)
+endfunction()
+
 # Helper method: checkout submodule for a given branch/tag and place it under
 # the ".deps" folder
 function(checkout_submodule_branch MODULE_NAME GIT_URL GIT_BRANCH HINT_PATH)
@@ -150,19 +177,12 @@ else()
 
   include_directories("${CMAKE_BINARY_DIR}/.deps/install/include")
   # Make sure that find_package will find our installed submodules
-  set(__CMAKE_PREFIX_PATH
-      "${__CMAKE_PREFIX_PATH}:${CMAKE_BINARY_DIR}/.deps/install/lib/cmake/absl")
-  set(__CMAKE_PREFIX_PATH
-      "${__CMAKE_PREFIX_PATH}:${CMAKE_BINARY_DIR}/.deps/install/lib/cmake/GTest"
-  )
-  set(__CMAKE_PREFIX_PATH
-      "${__CMAKE_PREFIX_PATH}:${CMAKE_BINARY_DIR}/.deps/install/lib/cmake/grpc")
-  set(__CMAKE_PREFIX_PATH
-      "${__CMAKE_PREFIX_PATH}:${CMAKE_BINARY_DIR}/.deps/install/lib/cmake/protobuf"
-  )
-  set(__CMAKE_PREFIX_PATH
-      "${__CMAKE_PREFIX_PATH}:${CMAKE_BINARY_DIR}/.deps/install/lib/cmake/utf8_range"
-  )
+  set(__CMAKE_PREFIX_PATH "")
+  update_cmake_prefix("absl" __CMAKE_PREFIX_PATH)
+  update_cmake_prefix("GTest" __CMAKE_PREFIX_PATH)
+  update_cmake_prefix("grpc" __CMAKE_PREFIX_PATH)
+  update_cmake_prefix("protobuf" __CMAKE_PREFIX_PATH)
+  update_cmake_prefix("utf8_range" __CMAKE_PREFIX_PATH)
   set(ENV{CMAKE_PREFIX_PATH} "${__CMAKE_PREFIX_PATH}")
   message(STATUS "CMAKE_PREFIX_PATH=${__CMAKE_PREFIX_PATH}")
 endif()

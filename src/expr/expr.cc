@@ -434,7 +434,7 @@ struct Compiler {
       } else {
         DBG << "func_call scan for actual Parameter: " << s_.GetUnscanned()
             << "\n";
-        VMSDK_ASSIGN_OR_RETURN(auto param, Expression(ctx));
+        VMSDK_ASSIGN_OR_RETURN(auto param, ParseExpression(ctx));
         if (!param) {
           return absl::InvalidArgumentError(
               absl::StrCat("Expected , or ) near position ", s_.GetPosition()));
@@ -513,13 +513,13 @@ struct Compiler {
     return DoDyadic(ctx, &Compiler::Primary, ops);
   }
 
-  absl::StatusOr<ExprPtr> Expression(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> ParseExpression(CompileContext& ctx) {
     DBG << "Start Expression: '" << s_.GetUnscanned() << "'\n";
     return LorOp(ctx);
   }
 
   absl::StatusOr<ExprPtr> Compile(CompileContext& ctx) {
-    VMSDK_ASSIGN_OR_RETURN(auto result, Expression(ctx));
+    VMSDK_ASSIGN_OR_RETURN(auto result, ParseExpression(ctx));
     if (s_.SkipWhiteSpacePeekByte() != EOF) {
       return absl::InvalidArgumentError(absl::StrCat(
           "Extra characters at or near position ", s_.GetPosition()));

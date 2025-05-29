@@ -519,6 +519,7 @@ Value FuncParsetime(const Value& str, const Value& fmt) {
   auto fmtstr = fmt.AsString();
   struct tm tm;
   ::strptime(timestr.data(), fmtstr.data(), &tm);
+  tm.tm_isdst = -1;  // Don't try to figure out DST, just use UTC
   return Value(double(::mktime(&tm)));
 }
 

@@ -100,7 +100,9 @@ vmsdk::module::Options options = {
             },
             {
                 .cmd_name = valkey_search::kAggregateCommand,
-                .permissions = "readonly",
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kSearchCmdPermissions),
+                .flags = {vmsdk::module::kDenyOOMFlag},
                 .cmd_func =
                     &vmsdk::CreateCommand<valkey_search::FTAggregateCmd>,
             },

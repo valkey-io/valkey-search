@@ -47,7 +47,7 @@ TEST_F(ValueTest, TypesTest) {
                           {Value(std::nan("a nan")), false, false, true, false},
                           {Value(std::string("")), false, false, false, true},
                           {Value(std::string("a")), false, false, false, true},
-                          {Value(std::nan("nan")), false, false, false, true}};
+                          {Value(std::nan("nan")), false, false, true, false}};
 
   for (auto& c : t) {
     EXPECT_EQ(c.v.IsNil(), c.is_nil) << "Value is " << c.v;

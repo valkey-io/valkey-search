@@ -8,6 +8,7 @@
 #define VALKEYSEARCH_EXPR_VALUE_H
 
 #include <iostream>
+#include <optional>
 #include <variant>
 
 #include "absl/container/inlined_vector.h"
@@ -28,7 +29,7 @@ class Value {
     const char* reason_;
   };
 
-  Value() = default;
+  Value() : value_(Nil()){};
   explicit Value(Nil n) : value_(n) {}
   explicit Value(bool b) : value_(b) {}
   explicit Value(int i) : value_(double(i)) {}
@@ -83,7 +84,7 @@ class Value {
 
 enum Ordering { kLESS, kEQUAL, kGREATER, kUNORDERED };
 
-std::ostream& operator<<(std::ostream& os, Ordering o) {
+static inline std::ostream& operator<<(std::ostream& os, Ordering o) {
   switch (o) {
     case Ordering::kLESS:
       return os << "LESS";
@@ -103,30 +104,30 @@ Ordering Compare(const Value& l, const Value& r);
 //
 // These orderings aren't IEEE compatible, but they match the legacy
 //
-bool operator==(const Value& l, const Value& r) {
+static inline bool operator==(const Value& l, const Value& r) {
   auto res = Compare(l, r);
   return res == Ordering::kEQUAL || res == Ordering::kUNORDERED;
 }
 
-bool operator!=(const Value& l, const Value& r) {
+static inline bool operator!=(const Value& l, const Value& r) {
   auto res = Compare(l, r);
   return res == Ordering::kLESS || res == Ordering::kGREATER;
 }
 
-bool operator<(const Value& l, const Value& r) {
+static inline bool operator<(const Value& l, const Value& r) {
   return Compare(l, r) == Ordering::kLESS;
 }
 
-bool operator<=(const Value& l, const Value& r) {
+static inline bool operator<=(const Value& l, const Value& r) {
   auto res = Compare(l, r);
   return res != Ordering::kGREATER;
 }
 
-bool operator>(const Value& l, const Value& r) {
+static inline bool operator>(const Value& l, const Value& r) {
   return Compare(l, r) == Ordering::kGREATER;
 }
 
-bool operator>=(const Value& l, const Value& r) {
+static inline bool operator>=(const Value& l, const Value& r) {
   auto res = Compare(l, r);
   return res != Ordering::kLESS;
 }

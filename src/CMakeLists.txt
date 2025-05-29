@@ -1,8 +1,10 @@
 add_subdirectory(coordinator)
-add_subdirectory(utils)
 add_subdirectory(commands)
-add_subdirectory(query)
 add_subdirectory(indexes)
+add_subdirectory(expr)
+add_subdirectory(query)
+add_subdirectory(utils)
+
 set(SRCS_MODULE_LOADER ${CMAKE_CURRENT_LIST_DIR}/module_loader.cc)
 
 # This is the module target

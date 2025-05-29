@@ -111,7 +111,7 @@ int RunByMain(absl::AnyInvocable<void()> fn, bool force_async = false);
 
 std::string WrongArity(absl::string_view cmd);
 
-std::ostream &operator<<(std::ostream &os, RedisModuleString *s) {
+inline std::ostream &operator<<(std::ostream &os, RedisModuleString *s) {
   return os << (*(std::string *)s);
 }
 

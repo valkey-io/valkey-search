@@ -63,7 +63,7 @@ struct GroupKey {
   }
   friend std::ostream& operator<<(std::ostream& os, const GroupKey& gk) {
     for (auto& k : gk.keys_) {
-      if (&k == &gk.keys_[0]) {
+      if (&k != &gk.keys_[0]) {
         os << ',';
       }
       os << k;

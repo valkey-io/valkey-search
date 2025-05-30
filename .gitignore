@@ -10,3 +10,4 @@ build-*
 *.workspace
 build/
 .build-*
+debs/*.deb

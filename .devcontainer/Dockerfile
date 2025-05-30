@@ -1,9 +1,14 @@
 # Use Ubuntu 24.04 as the base image
 FROM ubuntu:noble
 
+# Choose different mirror for Ubuntu
+RUN sed -i 's/archive\.ubuntu/us\.archive\.ubuntu/g' /etc/apt/sources.list.d/ubuntu.sources
+
 RUN apt update && apt-get install -y ca-certificates
+
 # Set non-interactive mode for APT
 ENV DEBIAN_FRONTEND=noninteractive
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     software-properties-common

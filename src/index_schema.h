@@ -62,6 +62,7 @@
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "vmsdk/src/memory_stats.h"
 
 namespace valkey_search {
 bool ShouldBlockClient(RedisModuleCtx *ctx, bool inside_multi_exec,
@@ -149,6 +150,9 @@ class IndexSchema : public KeyspaceEventSubscription,
   virtual void OnLoadingEnded(RedisModuleCtx *ctx);
 
   inline const Stats &GetStats() const { return stats_; }
+  inline MemoryStats *GetMemoryStats() { return &memory_stats_; }
+  inline const MemoryStats *GetMemoryStats() const { return &memory_stats_; }
+
   void ProcessSingleMutationAsync(RedisModuleCtx *ctx, bool from_backfill,
                                   const InternedStringPtr &key,
                                   vmsdk::StopWatch *delay_capturer);
@@ -219,6 +223,7 @@ class IndexSchema : public KeyspaceEventSubscription,
                           vmsdk::UniqueRedisString &record);
 
   mutable Stats stats_;
+  mutable MemoryStats memory_stats_;
 
   void ProcessKeyspaceNotification(RedisModuleCtx *ctx, RedisModuleString *key,
                                    bool from_backfill);
@@ -268,6 +273,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   FRIEND_TEST(IndexSchemaFriendTest, ConsistencyTest);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributes);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributesSanity);
+  FRIEND_TEST(IndexSchemaFriendTest, ProcessMutation_MemoryTrackingScopeConstructor);
   FRIEND_TEST(ValkeySearchTest, Info);
   FRIEND_TEST(OnSwapDBCallbackTest, OnSwapDBCallback);
 };

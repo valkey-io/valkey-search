@@ -30,6 +30,8 @@
 
 #ifndef VMSDK_SRC_UTILS_H_
 #define VMSDK_SRC_UTILS_H_
+#include <cassert>
+#include <iostream>
 #include <optional>
 #include <string>
 #include <utility>
@@ -108,6 +110,10 @@ class MainThreadAccessGuard {
 int RunByMain(absl::AnyInvocable<void()> fn, bool force_async = false);
 
 std::string WrongArity(absl::string_view cmd);
+
+inline std::ostream &operator<<(std::ostream &os, RedisModuleString *s) {
+  return os << (*(std::string *)s);
+}
 
 //
 // Parse out a hash tag from a string view

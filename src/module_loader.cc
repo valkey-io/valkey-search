@@ -98,6 +98,14 @@ vmsdk::module::Options options = {
                 .flags = {vmsdk::module::kDenyOOMFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTSearchCmd>,
             },
+            {
+                .cmd_name = valkey_search::kAggregateCommand,
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kSearchCmdPermissions),
+                .flags = {vmsdk::module::kDenyOOMFlag},
+                .cmd_func =
+                    &vmsdk::CreateCommand<valkey_search::FTAggregateCmd>,
+            },
         }  // namespace
     ,
     .on_load =

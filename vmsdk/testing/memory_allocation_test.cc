@@ -31,6 +31,9 @@
 
 #include <cstddef>
 #include <cstdlib>
+#include <thread>
+#include <vector>
+#include <atomic>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -615,6 +618,249 @@ TEST_F(MemoryAllocationTest, MemoryTrackingScopeMultipleStats) {
     EXPECT_EQ(stats_b.GetAllocatedBytes(), 10);
 
     EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0); // All global memory freed
+}
+
+TEST_F(MemoryAllocationTest, MemoryTrackingScopeThreadSafety) {
+  vmsdk::UseValkeyAlloc();
+
+  MemoryStats stats;
+  absl::Mutex stats_mutex;
+  constexpr int kNumThreads = 4;
+  constexpr int kAllocsPerThread = 100;
+  constexpr size_t kAllocSize = 64;
+
+  std::vector<std::thread> threads;
+  std::vector<std::vector<void*>> thread_ptrs(kNumThreads);
+  std::atomic<int> ready_count{0};
+  std::atomic<bool> start_flag{false};
+
+  // Set up mock expectations for all allocations
+  EXPECT_CALL(*kMockRedisModule, Alloc(kAllocSize))
+      .Times(kNumThreads * kAllocsPerThread)
+      .WillRepeatedly(testing::Invoke([](size_t size) {
+        static std::atomic<uintptr_t> counter{0x10000};
+        return reinterpret_cast<void*>(counter.fetch_add(size));
+      }));
+
+  EXPECT_CALL(*kMockRedisModule, MallocUsableSize(testing::_))
+      .Times(testing::AtLeast(kNumThreads * kAllocsPerThread * 2))  // At least 2x for alloc tracking
+      .WillRepeatedly(testing::Return(kAllocSize));
+
+  // Create threads that will perform concurrent allocations
+  for (int i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back([&, i]() {
+      thread_ptrs[i].reserve(kAllocsPerThread);
+      
+      // Set up memory tracking scope with mutex
+      MemoryTrackingScope scope(&stats, &stats_mutex);
+      
+      // Signal ready and wait for start
+      ready_count.fetch_add(1);
+      while (!start_flag.load()) {
+        std::this_thread::yield();
+      }
+      
+      // Perform allocations
+      for (int j = 0; j < kAllocsPerThread; ++j) {
+        void* ptr = __wrap_malloc(kAllocSize);
+        EXPECT_NE(ptr, nullptr);
+        thread_ptrs[i].push_back(ptr);
+      }
+    });
+  }
+
+  // Wait for all threads to be ready
+  while (ready_count.load() < kNumThreads) {
+    std::this_thread::yield();
+  }
+
+  // Start all threads simultaneously
+  start_flag.store(true);
+
+  // Wait for all threads to complete
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  // Verify final memory stats
+  long long expected_total = static_cast<long long>(kNumThreads * kAllocsPerThread * kAllocSize);
+  EXPECT_EQ(stats.GetAllocatedBytes(), expected_total);
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), expected_total);
+
+  // Clean up all allocations
+  EXPECT_CALL(*kMockRedisModule, Free(testing::_))
+      .Times(kNumThreads * kAllocsPerThread);
+
+  for (int i = 0; i < kNumThreads; ++i) {
+    for (void* ptr : thread_ptrs[i]) {
+      __wrap_free(ptr);
+    }
+  }
+
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
+}
+
+TEST_F(MemoryAllocationTest, MemoryTrackingScopeThreadSafetyWithDeallocation) {
+  vmsdk::UseValkeyAlloc();
+
+  MemoryStats stats;
+  absl::Mutex stats_mutex;
+  constexpr int kNumThreads = 4;
+  constexpr int kOperationsPerThread = 50;
+  constexpr size_t kAllocSize = 128;
+
+  std::vector<std::thread> threads;
+  std::atomic<int> ready_count{0};
+  std::atomic<bool> start_flag{false};
+
+  // Set up mock expectations
+  EXPECT_CALL(*kMockRedisModule, Alloc(kAllocSize))
+      .Times(testing::AtLeast(kNumThreads * kOperationsPerThread))
+      .WillRepeatedly(testing::Invoke([](size_t size) {
+        static std::atomic<uintptr_t> counter{0x20000};
+        return reinterpret_cast<void*>(counter.fetch_add(size));
+      }));
+
+  EXPECT_CALL(*kMockRedisModule, MallocUsableSize(testing::_))
+      .Times(testing::AtLeast(kNumThreads * kOperationsPerThread * 2))
+      .WillRepeatedly(testing::Return(kAllocSize));
+
+  EXPECT_CALL(*kMockRedisModule, Free(testing::_))
+      .Times(testing::AtLeast(kNumThreads * kOperationsPerThread / 2));
+
+  // Create threads that perform mixed alloc/dealloc operations
+  for (int i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back([&, i]() {
+      std::vector<void*> ptrs;
+      ptrs.reserve(kOperationsPerThread);
+      
+      // Set up memory tracking scope with mutex
+      MemoryTrackingScope scope(&stats, &stats_mutex);
+      
+      // Signal ready and wait for start
+      ready_count.fetch_add(1);
+      while (!start_flag.load()) {
+        std::this_thread::yield();
+      }
+      
+      // Perform mixed allocation/deallocation operations
+      for (int j = 0; j < kOperationsPerThread; ++j) {
+        if (j % 3 == 0 && !ptrs.empty()) {
+          // Deallocate some memory
+          void* ptr = ptrs.back();
+          ptrs.pop_back();
+          __wrap_free(ptr);
+        } else {
+          // Allocate memory
+          void* ptr = __wrap_malloc(kAllocSize);
+          EXPECT_NE(ptr, nullptr);
+          ptrs.push_back(ptr);
+        }
+      }
+      
+      // Clean up remaining allocations
+      for (void* ptr : ptrs) {
+        __wrap_free(ptr);
+      }
+    });
+  }
+
+  // Wait for all threads to be ready
+  while (ready_count.load() < kNumThreads) {
+    std::this_thread::yield();
+  }
+
+  // Start all threads simultaneously
+  start_flag.store(true);
+
+  // Wait for all threads to complete
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  // Memory stats should be consistent (all memory freed)
+  EXPECT_EQ(stats.GetAllocatedBytes(), 0);
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
+}
+
+TEST_F(MemoryAllocationTest, MemoryTrackingScopeNestedWithMutex) {
+  vmsdk::UseValkeyAlloc();
+
+  MemoryStats outer_stats, inner_stats;
+  absl::Mutex outer_mutex, inner_mutex;
+  constexpr int kNumThreads = 2;
+  constexpr size_t kAllocSize = 256;
+
+  std::vector<std::thread> threads;
+  std::atomic<int> ready_count{0};
+  std::atomic<bool> start_flag{false};
+
+  // Set up mock expectations
+  EXPECT_CALL(*kMockRedisModule, Alloc(kAllocSize))
+      .Times(kNumThreads * 2)  // 2 allocations per thread
+      .WillRepeatedly(testing::Invoke([](size_t size) {
+        static std::atomic<uintptr_t> counter{0x30000};
+        return reinterpret_cast<void*>(counter.fetch_add(size));
+      }));
+
+  EXPECT_CALL(*kMockRedisModule, MallocUsableSize(testing::_))
+      .Times(testing::AtLeast(kNumThreads * 4))
+      .WillRepeatedly(testing::Return(kAllocSize));
+
+  EXPECT_CALL(*kMockRedisModule, Free(testing::_))
+      .Times(kNumThreads * 2);
+
+  // Create threads with nested scopes
+  for (int i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back([&, i]() {
+      void* outer_ptr = nullptr;
+      void* inner_ptr = nullptr;
+      
+      // Signal ready and wait for start
+      ready_count.fetch_add(1);
+      while (!start_flag.load()) {
+        std::this_thread::yield();
+      }
+      
+      {
+        MemoryTrackingScope outer_scope(&outer_stats, &outer_mutex);
+        
+        outer_ptr = __wrap_malloc(kAllocSize);
+        EXPECT_NE(outer_ptr, nullptr);
+        
+        {
+          MemoryTrackingScope inner_scope(&inner_stats, &inner_mutex);
+          
+          inner_ptr = __wrap_malloc(kAllocSize);
+          EXPECT_NE(inner_ptr, nullptr);
+          
+          __wrap_free(inner_ptr);
+          inner_ptr = nullptr;
+        }
+        
+        __wrap_free(outer_ptr);
+        outer_ptr = nullptr;
+      }
+    });
+  }
+
+  // Wait for all threads to be ready
+  while (ready_count.load() < kNumThreads) {
+    std::this_thread::yield();
+  }
+
+  // Start all threads simultaneously
+  start_flag.store(true);
+
+  // Wait for all threads to complete
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  // Both stats should show no memory allocated
+  EXPECT_EQ(outer_stats.GetAllocatedBytes(), 0);
+  EXPECT_EQ(inner_stats.GetAllocatedBytes(), 0);
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
 }
 
 #endif  // TESTING_TMP_DISABLED

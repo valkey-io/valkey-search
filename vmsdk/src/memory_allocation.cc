@@ -35,6 +35,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include "absl/synchronization/mutex.h"
 
 namespace vmsdk {
 
@@ -82,7 +83,13 @@ void ReportAllocMemorySize(uint64_t size) {
   if (current_scope != nullptr) {
     MemoryStats* current_memory_stats = current_scope->GetStats();
     if (current_memory_stats != nullptr) {
-        current_memory_stats->RecordAllocation(size);
+        absl::Mutex* stats_mutex = current_scope->GetStatsMutex();
+        if (stats_mutex != nullptr) {
+            absl::MutexLock lock(stats_mutex);
+            current_memory_stats->RecordAllocation(size);
+        } else {
+            current_memory_stats->RecordAllocation(size);
+        }
     }
   }
 }
@@ -98,7 +105,13 @@ void ReportFreeMemorySize(uint64_t size) {
   if (current_scope != nullptr) {
     MemoryStats* current_memory_stats = current_scope->GetStats();
     if (current_memory_stats != nullptr) {
-      current_memory_stats->RecordDeallocation(size);
+      absl::Mutex* stats_mutex = current_scope->GetStatsMutex();
+      if (stats_mutex != nullptr) {
+          absl::MutexLock lock(stats_mutex);
+          current_memory_stats->RecordDeallocation(size);
+      } else {
+          current_memory_stats->RecordDeallocation(size);
+      }
     }
   }
 }

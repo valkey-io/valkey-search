@@ -30,12 +30,17 @@
 #ifndef VMSDK_SRC_MEMORY_STATS_H_
 #define VMSDK_SRC_MEMORY_STATS_H_
 
-#include <atomic>
 #include <cstddef>
 
+/**
+ * MemoryStats tracks memory allocation and deallocation statistics.
+ * 
+ * THREAD SAFETY: This class is NOT thread-safe. If concurrent access is required,
+ * the caller must provide external synchronization (e.g., using a mutex).
+ */
 class MemoryStats {
 public:
-    MemoryStats() : allocated_bytes_(0) {}
+    MemoryStats() = default;
 
     MemoryStats(const MemoryStats&) = delete;
     MemoryStats& operator=(const MemoryStats&) = delete;
@@ -43,24 +48,23 @@ public:
     MemoryStats& operator=(MemoryStats&&) = delete;
 
     void RecordAllocation(size_t size) {
-        allocated_bytes_.fetch_add(size, std::memory_order_relaxed);
+        allocated_bytes_ += size;
     }
 
     void RecordDeallocation(size_t size) {
-        long long current_val = allocated_bytes_.load(std::memory_order_relaxed);
-        if (size_t(current_val) <= size) {
-            allocated_bytes_.store(0, std::memory_order_relaxed);
+        if (size_t(allocated_bytes_) <= size) {
+            allocated_bytes_ = 0;
         } else {
-            allocated_bytes_.fetch_sub(size, std::memory_order_relaxed);
+            allocated_bytes_ -= size;
         }
     }
 
     long long GetAllocatedBytes() const {
-        return allocated_bytes_.load(std::memory_order_relaxed);
+        return allocated_bytes_;
     }
 
 private:
-    std::atomic<long long> allocated_bytes_;
+    long long allocated_bytes_{};
 };
 
 #endif // VMSDK_SRC_MEMORY_STATS_H_ 

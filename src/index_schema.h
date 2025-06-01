@@ -152,6 +152,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline const Stats &GetStats() const { return stats_; }
   inline MemoryStats *GetMemoryStats() { return &memory_stats_; }
   inline const MemoryStats *GetMemoryStats() const { return &memory_stats_; }
+  inline absl::Mutex *GetMemoryStatsMutex() { return &memory_stats_mutex_; }
 
   void ProcessSingleMutationAsync(RedisModuleCtx *ctx, bool from_backfill,
                                   const InternedStringPtr &key,
@@ -224,6 +225,7 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   mutable Stats stats_;
   mutable MemoryStats memory_stats_;
+  mutable absl::Mutex memory_stats_mutex_;
 
   void ProcessKeyspaceNotification(RedisModuleCtx *ctx, RedisModuleString *key,
                                    bool from_backfill);

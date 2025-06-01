@@ -31,6 +31,7 @@
 #define VMSDK_SRC_MEMORY_TRACKER_H_
 
 #include <functional>
+#include <absl/synchronization/mutex.h>
 
 class MemoryStats;
 
@@ -40,6 +41,7 @@ public:
     using ScopeEventCallback = std::function<void(const MemoryTrackingScope*)>;
     
     explicit MemoryTrackingScope(MemoryStats* index_stats);
+    explicit MemoryTrackingScope(MemoryStats* index_stats, absl::Mutex* stats_mutex);
     ~MemoryTrackingScope();
 
     MemoryTrackingScope(const MemoryTrackingScope&) = delete;
@@ -49,6 +51,7 @@ public:
 
     static MemoryTrackingScope* GetCurrentScope();
     MemoryStats* GetStats() const;
+    absl::Mutex* GetStatsMutex() const;
     
     // Used for testing
     static void SetScopeEventCallback(ScopeEventCallback callback);
@@ -56,6 +59,7 @@ public:
 
 private:
     MemoryStats* target_stats_;
+    absl::Mutex* stats_mutex_;
     MemoryTrackingScope* previous_scope_;
 
     static thread_local MemoryTrackingScope* current_scope_tls_;

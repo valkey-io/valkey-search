@@ -900,7 +900,7 @@ TEST_F(IndexSchemaBackfillTest, PerformBackfill_MemoryTrackingScopeConstructor) 
   uint32_t scanned = index_schema->PerformBackfill(&parent_ctx, 10);
 
   EXPECT_EQ(constructor_call_count, 1);
-  EXPECT_EQ(captured_stats, index_schema->GetMemoryStats());
+  EXPECT_EQ(captured_stats, &index_schema->GetMemoryStats());
 
   MemoryTrackingScope::ClearScopeEventCallback();
 }
@@ -1223,7 +1223,7 @@ TEST_F(IndexSchemaRDBTest, MemoryTrackingScopeConstructorInLoadFromRDB) {
   auto index_schema = std::move(result.value());
 
   EXPECT_EQ(constructor_call_count, 2);
-  EXPECT_EQ(captured_stats, index_schema->GetMemoryStats());
+  EXPECT_EQ(captured_stats, &index_schema->GetMemoryStats());
 
   MemoryTrackingScope::ClearScopeEventCallback();
 }
@@ -1538,7 +1538,7 @@ TEST_F(IndexSchemaFriendTest, ProcessMutation_MemoryTrackingScopeConstructor) {
   test_index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned, false);
 
   EXPECT_EQ(constructor_call_count, 1);
-  EXPECT_EQ(captured_stats, test_index_schema->GetMemoryStats());
+  EXPECT_EQ(captured_stats, &test_index_schema->GetMemoryStats());
 
   MemoryTrackingScope::ClearScopeEventCallback();
 }

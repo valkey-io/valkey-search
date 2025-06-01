@@ -34,14 +34,14 @@ thread_local MemoryTrackingScope* MemoryTrackingScope::current_scope_tls_ = null
 
 thread_local MemoryTrackingScope::ScopeEventCallback MemoryTrackingScope::scope_event_callback_ = nullptr;
 
-MemoryTrackingScope::MemoryTrackingScope(MemoryStats* index_stats)
-    : target_stats_(index_stats), stats_mutex_(nullptr), previous_scope_(current_scope_tls_) {
+MemoryTrackingScope::MemoryTrackingScope(MemoryStats* stats)
+    : target_stats_(stats), previous_scope_(current_scope_tls_) {
     current_scope_tls_ = this;
     NotifyScopeEvent();
 }
 
-MemoryTrackingScope::MemoryTrackingScope(MemoryStats* index_stats, absl::Mutex* stats_mutex)
-    : target_stats_(index_stats), stats_mutex_(stats_mutex), previous_scope_(current_scope_tls_) {
+MemoryTrackingScope::MemoryTrackingScope(MemoryStats* stats, absl::Mutex* stats_mutex)
+    : target_stats_(stats), stats_mutex_(stats_mutex), previous_scope_(current_scope_tls_) {
     current_scope_tls_ = this;
     NotifyScopeEvent();
 }

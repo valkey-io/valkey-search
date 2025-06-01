@@ -91,10 +91,10 @@ TEST_P(FTInfoTest, FTInfoTests) {
         EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 1);
         // Simulate memory usage if requested by test case
         if (test_case.memory_bytes.has_value()) {
-          auto schema_or = SchemaManager::Instance().GetIndexSchema(
+          auto schema = SchemaManager::Instance().GetIndexSchema(
               index_schema_proto.db_num(), index_schema_proto.name());
-          ASSERT_TRUE(schema_or.ok());
-          schema_or.value()->GetMemoryStats()->RecordAllocation(
+          ASSERT_TRUE(schema.ok());
+          schema.value()->GetMemoryStats().RecordAllocation(
               test_case.memory_bytes.value());
         }
       }

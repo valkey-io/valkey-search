@@ -35,13 +35,13 @@
 
 class MemoryStats;
 
-class MemoryTrackingScope {
+class MemoryTrackingScope final {
 public:
     // Test hook function type for scope lifecycle events
     using ScopeEventCallback = std::function<void(const MemoryTrackingScope*)>;
     
-    explicit MemoryTrackingScope(MemoryStats* index_stats);
-    explicit MemoryTrackingScope(MemoryStats* index_stats, absl::Mutex* stats_mutex);
+    explicit MemoryTrackingScope(MemoryStats* stats);
+    explicit MemoryTrackingScope(MemoryStats* stats, absl::Mutex* stats_mutex);
     ~MemoryTrackingScope();
 
     MemoryTrackingScope(const MemoryTrackingScope&) = delete;
@@ -58,9 +58,9 @@ public:
     static void ClearScopeEventCallback();
 
 private:
-    MemoryStats* target_stats_;
-    absl::Mutex* stats_mutex_;
-    MemoryTrackingScope* previous_scope_;
+    MemoryStats* target_stats_ = nullptr;
+    absl::Mutex* stats_mutex_ = nullptr;
+    MemoryTrackingScope* previous_scope_ = nullptr;
 
     static thread_local MemoryTrackingScope* current_scope_tls_;
     

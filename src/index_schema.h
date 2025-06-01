@@ -150,9 +150,9 @@ class IndexSchema : public KeyspaceEventSubscription,
   virtual void OnLoadingEnded(RedisModuleCtx *ctx);
 
   inline const Stats &GetStats() const { return stats_; }
-  inline MemoryStats *GetMemoryStats() { return &memory_stats_; }
-  inline const MemoryStats *GetMemoryStats() const { return &memory_stats_; }
-  inline absl::Mutex *GetMemoryStatsMutex() { return &memory_stats_mutex_; }
+  inline MemoryStats &GetMemoryStats() { return memory_stats_; }
+  inline const MemoryStats &GetMemoryStats() const { return memory_stats_; }
+  inline absl::Mutex &GetMemoryStatsMutex() { return memory_stats_mutex_; }
 
   void ProcessSingleMutationAsync(RedisModuleCtx *ctx, bool from_backfill,
                                   const InternedStringPtr &key,

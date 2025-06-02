@@ -32,6 +32,7 @@
 
 #include <functional>
 #include <absl/synchronization/mutex.h>
+#include "gtest/gtest_prod.h"
 #include "vmsdk/src/utils.h"
 
 class MemoryStats;
@@ -50,7 +51,7 @@ public:
     static MemoryTrackingScope* GetCurrentScope();
     MemoryStats* GetStats() const;
     absl::Mutex* GetStatsMutex() const;
-    
+
     // Used for testing
     static void SetScopeEventCallback(ScopeEventCallback callback);
     static void ClearScopeEventCallback();

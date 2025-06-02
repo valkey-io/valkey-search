@@ -465,7 +465,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "backfill_in_progress\r\n$1\r\n0\r\n+backfill_"
                             "complete_percent\r\n$8\r\n1.000000\r\n+mutation_"
                             "queue_size\r\n$1\r\n0\r\n+recent_mutations_queue_"
-                            "delay\r\n$5\r\n0 sec\r\n+index_size_mb\r\n:2\r\n",
+                            "delay\r\n$5\r\n0 sec\r\n+state\r\n+ready\r\n+"
+                            "index_size_mb\r\n+2\r\n",
                         .memory_bytes = 2097152,  // 2 MB
                     },
                 },

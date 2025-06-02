@@ -32,6 +32,7 @@
 
 #include <functional>
 #include <absl/synchronization/mutex.h>
+#include "vmsdk/src/utils.h"
 
 class MemoryStats;
 
@@ -44,10 +45,7 @@ public:
     explicit MemoryTrackingScope(MemoryStats* stats, absl::Mutex* stats_mutex);
     ~MemoryTrackingScope();
 
-    MemoryTrackingScope(const MemoryTrackingScope&) = delete;
-    MemoryTrackingScope& operator=(const MemoryTrackingScope&) = delete;
-    MemoryTrackingScope(MemoryTrackingScope&&) = delete;
-    MemoryTrackingScope& operator=(MemoryTrackingScope&&) = delete;
+    VMSDK_NON_COPYABLE_NON_MOVABLE(MemoryTrackingScope);
 
     static MemoryTrackingScope* GetCurrentScope();
     MemoryStats* GetStats() const;

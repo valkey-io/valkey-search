@@ -32,6 +32,7 @@
 
 #include <functional>
 #include <absl/synchronization/mutex.h>
+#include "gtest/gtest_prod.h"
 #include "vmsdk/src/utils.h"
 
 class MemoryStats;

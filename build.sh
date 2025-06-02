@@ -13,6 +13,7 @@ NINJA_TOOL="ninja"
 INTEGRETION_TEST="no"
 ASAN_BUILD="no"
 ARGV=$@
+EXIT_CODE=0
 
 # Constants
 BOLD_PINK='\e[35;1m'
@@ -169,6 +170,9 @@ function print_test_error_and_exit() {
     printf " ... ${RED}failed${RESET}\n"
     if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
         cat ${TEST_OUTPUT_FILE}
+        # To avoid dumping the content over and over again,
+        # clear the file
+        cp /dev/null ${TEST_OUTPUT_FILE}
     fi
 
     # When running tests with ASan enabled, do not terminate the execution after the first failure continue
@@ -176,6 +180,9 @@ function print_test_error_and_exit() {
     if [[ "${ASAN_BUILD}" == "no" ]]; then
         print_test_summary
         exit 1
+    else
+        # Make sure to exit the script with an error
+        EXIT_CODE=1
     fi
 }
 
@@ -302,3 +309,4 @@ fi
 
 END_TIME=`date +%s`
 TEST_RUNTIME=$((END_TIME - START_TIME))
+exit ${EXIT_CODE}

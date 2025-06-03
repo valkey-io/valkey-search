@@ -304,6 +304,10 @@ elif [[ "${INTEGRETION_TEST}" == "yes" ]]; then
     if [[ "${BUILD_CONFIG}" == "debug" ]]; then
         params="${params} --debug"
     fi
+
+    if [[ "${ASAN_BUILD}" == "yes" ]]; then
+        params="${params} --asan"
+    fi
     ./run.sh ${params}
 fi
 

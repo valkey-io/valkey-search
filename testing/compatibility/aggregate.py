@@ -336,6 +336,7 @@ class TestAggregateCompatibility:
             except KeyError:
                 print("Failed on sortkeys: ", sortkeys)
                 print("CMD:", cmd)
+                print("RESULT:", rs)
                 print("Out:", out)
                 assert False
         return out
@@ -407,7 +408,8 @@ class TestAggregateCompatibility:
                     sortkeys.remove(f)
         else:
             # todo, remove __key as sortkey once the search output sorting is fixed.
-            sortkeys=["__key"] if "ft.aggregate" in cmd else []
+            # sortkeys=["__key"] if "ft.aggregate" in cmd else []
+            sortkeys=[]
 
         # If both failed, it's a wrong search cmd and we can exit
         if answer["exception"] and results["exception"]:
@@ -451,7 +453,7 @@ class TestAggregateCompatibility:
         # Directly comparing dicts instead of custom compare function
         # TODO: investigate this later
         if all([self.compare_row(ec[i], rl[i]) for i in range(len(rl))]):
-            #print("Results look good.")
+            # print("Results look good.")
             #print(TEST_MARKER)
             if "ft.search" in cmd:
                 print(f"CMD:{cmd}")

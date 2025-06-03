@@ -1,12 +1,12 @@
 # Determine if we are building in Release or Debug mode
-if(CMAKE_BUILD_TYPE MATCHES Release)
-  set(VALKEY_SEARCH_DEBUG_BUILD 0)
-  set(VALKEY_SEARCH_RELEASE_BUILD 1)
-  message(STATUS "Building in release mode")
-else()
+if(CMAKE_BUILD_TYPE MATCHES Debug)
   set(VALKEY_SEARCH_DEBUG_BUILD 1)
   set(VALKEY_SEARCH_RELEASE_BUILD 0)
   message(STATUS "Building in debug mode")
+else()
+  set(VALKEY_SEARCH_DEBUG_BUILD 0)
+  set(VALKEY_SEARCH_RELEASE_BUILD 1)
+  message(STATUS "Building in release mode")
 endif()
 
 if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "x86_64")

@@ -4,6 +4,7 @@ import numpy as np
 from collections import defaultdict
 from operator import itemgetter
 from itertools import chain, combinations
+import pickle
 '''
 Compare two systems for a bunch of aggregation operations
 '''
@@ -55,7 +56,7 @@ def sortkeyfunc(row):
     return None
 
 SYSTEM_L_ADDRESS = ('localhost', 6379)
-SYSTEM_R_ADDRESS = ('localhost', 6380)
+SYSTEM_R_ADDRESS = ('localhost', 6379)
 
 class ClientSystem:
     def __init__(self, address):
@@ -102,142 +103,147 @@ class ClientLSystem(ClientSystem):
         return result
 
 NUM_KEYS = 10
+ANSWER_FILE_NAME = "aggregate-answers.txt"
+
+### Reusable Data ###
+def compute_data_sets():
+    '''Generate all of the possible data sets'''
+    data = {}
+
+    create_cmds = {
+        "hash": "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {}",
+        "json": "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA {}",
+    }
+    field_type_to_name = {"tag": "t", "numeric": "n", "vector": "v"}
+    field_types_to_count = {"numeric": 3, "tag": 3, "vector" : 1}
+
+    def make_field_definition(key_type, name, typ, i):
+        if typ == "vector":
+            return f"{name}{i} vector HNSW 6 DIM {VECTOR_DIM} TYPE FLOAT32 DISTANCE_METRIC L2"
+        else:
+            return f"{name}{i} {typ}" if key_type == "hash" else f"$.{name}{i} AS {name}{i} {typ}"
+
+    data["hard numbers"] = {}
+    data["sortable numbers"] = {}
+    data["reverse vector numbers"] = {}
+    for key_type in ["hash", "json"]:
+        schema = [
+            make_field_definition(key_type, field_type_to_name[typ], typ, i + 1)
+            for typ, count in field_types_to_count.items()
+            for i in range(count)
+        ]
+        schema = " ".join(schema)
+        print(f"Generated schema: {schema}")
+        #
+        # Hard Numbers, edge case numbers.
+        #
+        hard_numbers = ["-0.5", "0", "1", "-1", "-inf", "inf"] # todo "nan", -0
+        combinations = list(itertools.combinations(hard_numbers, 3))
+        data["hard numbers"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+        data["hard numbers"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{i:02d}",
+                {
+                    "n1": combinations[i][0],
+                    "n2": combinations[i][1],
+                    "n3" : combinations[i][2],
+                    "t1": f"one.one{i*2}",
+                    "t2": f"two.two{i*-2}",
+                    "t3": "all_the_same_value",
+                    "v1": np.array([i for _ in range(VECTOR_DIM)]).astype(np.float32).tobytes(),
+                },
+            )
+            for i in range(len(combinations))
+        ]
+        #
+        # Sortable numbers, designed so that sorted keys for this index don't have any duplications
+        # which makes the compare functions harder.
+        #
+        sortable_numbers = range(-5, 10)
+        data["sortable numbers"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+        data["sortable numbers"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{i:02d}",
+                {
+                    "n1": sortable_numbers[i],
+                    "n2": -sortable_numbers[i],
+                    "n3" : sortable_numbers[-i],
+                    "t1": f"one.one{i*2}",
+                    "t2": f"two.two{i*-2}",
+                    "t3": "all_the_same_value",
+                    "v1": np.array([i for _ in range(VECTOR_DIM)]).astype(np.float32).tobytes(),
+                },
+            )
+            for i in range(len(sortable_numbers))
+        ]
+        #
+        # Sortable numbers, designed so that sorted keys for this index don't have any duplications
+        # which makes the compare functions harder.
+        #
+        sortable_numbers = range(-5, 10)
+        data["reverse vector numbers"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+        data["reverse vector numbers"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{i:02d}",
+                {
+                    "n1": sortable_numbers[i],
+                    "n2": -sortable_numbers[i],
+                    "n3" : sortable_numbers[-i],
+                    "t1": f"one.one{i*2}",
+                    "t2": f"two.two{i*-2}",
+                    "t3": "all_the_same_value",
+                    "v1": np.array([(len(sortable_numbers)-i) for _ in range(VECTOR_DIM)]).astype(np.float32).tobytes(),
+                },
+            )
+            for i in range(len(sortable_numbers))
+        ]
+    return data
+
 
 #@pytest.mark.parametrize("key_type", ["hash", "json"])
 @pytest.mark.parametrize("key_type", ["hash"])
 class TestAggregateCompatibility:
 
+    @classmethod
+    def setup_class(cls):
+        ''' Figure out if this is generate or compare '''
+        cls.data = compute_data_sets()
+        try:
+            cls.answer_file = open(ANSWER_FILE_NAME, "rb")
+            print("Answer file was found")
+            cls.generating_answers = False
+            cls.client = ClientLSystem()
+        except FileNotFoundError:
+            print("Answer file not found, generating")
+            cls.answer_file = open(ANSWER_FILE_NAME, "wb")
+            cls.generating_answers = True
+            cls.client = ClientRSystem()
+
     def setup_method(self):
-        self.client_l = ClientLSystem()
-        self.client_r = ClientRSystem()
-        self.data = {}
-
-    ### Reusable Data ###
-    def setup_data(self):
-        data = {}
-
-        create_cmds = {
-            "hash": "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {}",
-            "json": "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA {}",
-        }
-        field_type_to_name = {"tag": "t", "numeric": "n", "vector": "v"}
-        field_types_to_count = {"numeric": 3, "tag": 3, "vector" : 1}
-
-        def make_field_definition(key_type, name, typ, i):
-            if typ == "vector":
-                return f"{name}{i} vector HNSW 6 DIM {VECTOR_DIM} TYPE FLOAT32 DISTANCE_METRIC L2"
-            else:
-                return f"{name}{i} {typ}" if key_type == "hash" else f"$.{name}{i} AS {name}{i} {typ}"
-
-        data["hard numbers"] = {}
-        data["sortable numbers"] = {}
-        data["reverse vector numbers"] = {}
-        for key_type in ["hash", "json"]:
-            schema = [
-                make_field_definition(key_type, field_type_to_name[typ], typ, i + 1)
-                for typ, count in field_types_to_count.items()
-                for i in range(count)
-            ]
-            schema = " ".join(schema)
-            print(f"Generated schema: {schema}")
-            #
-            # Hard Numbers, edge case numbers.
-            #
-            hard_numbers = ["-0.5", "0", "1", "-1", "-inf", "inf"] # todo "nan", -0
-            combinations = list(itertools.combinations(hard_numbers, 3))
-            data["hard numbers"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
-            data["hard numbers"][SETS_KEY(key_type)] = [
-                (
-                    f"{key_type}:{i:02d}",
-                    {
-                        "n1": combinations[i][0],
-                        "n2": combinations[i][1],
-                        "n3" : combinations[i][2],
-                        "t1": f"one.one{i*2}",
-                        "t2": f"two.two{i*-2}",
-                        "t3": "all_the_same_value",
-                        "v1": np.array([i for _ in range(VECTOR_DIM)]).astype(np.float32).tobytes(),
-                    },
-                )
-                for i in range(len(combinations))
-            ]
-            #
-            # Sortable numbers, designed so that sorted keys for this index don't have any duplications
-            # which makes the compare functions harder.
-            #
-            sortable_numbers = range(-5, 10)
-            data["sortable numbers"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
-            data["sortable numbers"][SETS_KEY(key_type)] = [
-                (
-                    f"{key_type}:{i:02d}",
-                    {
-                        "n1": sortable_numbers[i],
-                        "n2": -sortable_numbers[i],
-                        "n3" : sortable_numbers[-i],
-                        "t1": f"one.one{i*2}",
-                        "t2": f"two.two{i*-2}",
-                        "t3": "all_the_same_value",
-                        "v1": np.array([i for _ in range(VECTOR_DIM)]).astype(np.float32).tobytes(),
-                    },
-                )
-                for i in range(len(sortable_numbers))
-            ]
-            #
-            # Sortable numbers, designed so that sorted keys for this index don't have any duplications
-            # which makes the compare functions harder.
-            #
-            sortable_numbers = range(-5, 10)
-            data["reverse vector numbers"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
-            data["reverse vector numbers"][SETS_KEY(key_type)] = [
-                (
-                    f"{key_type}:{i:02d}",
-                    {
-                        "n1": sortable_numbers[i],
-                        "n2": -sortable_numbers[i],
-                        "n3" : sortable_numbers[-i],
-                        "t1": f"one.one{i*2}",
-                        "t2": f"two.two{i*-2}",
-                        "t3": "all_the_same_value",
-                        "v1": np.array([(len(sortable_numbers)-i) for _ in range(VECTOR_DIM)]).astype(np.float32).tobytes(),
-                    },
-                )
-                for i in range(len(sortable_numbers))
-            ]
-        self.data["hard numbers"] = data["hard numbers"]
-        self.data["sortable numbers"] = data["sortable numbers"]
-        self.data["reverse vector numbers"] = data["reverse vector numbers"]
+        self.client.execute_command("FLUSHALL SYNC")
 
     ### Helper Functions ###
-    def load_data_with_index(self, data_key, key_type):
-        self.setup_data()
+    def setup_data(self, data_key, key_type):
         print("load_data with index", data_key, " ", key_type);
         load_list = self.data[data_key][SETS_KEY(key_type)]
         print(f"Start Loading Data, data set has {len(load_list)} records")
-        for client in [self.client_r, self.client_l]:
-            print("Doing: ", self.data[data_key][CREATES_KEY(key_type)])
-            for create_index_cmd in self.data[data_key][CREATES_KEY(key_type)]:
-                client.execute_command(create_index_cmd)
+        print("Doing: ", self.data[data_key][CREATES_KEY(key_type)])
+        for create_index_cmd in self.data[data_key][CREATES_KEY(key_type)]:
+            self.client.execute_command(create_index_cmd)
 
-            # Make large chunks to accelerate things
-            batch_size = 50
-            for s in range(0, len(load_list), batch_size):
-                pipe = client.pipeline()
-                for cmd in load_list[s : s + batch_size]:
-                    if client == self.client_r:
-                        if key_type == "hash":
-                            data_str = " ".join([f"{f} {v}" for f, v in cmd[1].items()])
-                            print_cmd = " ".join(["HSET", cmd[0], data_str])
-                        else:
-                            print_cmd = " ".join(["JSON.SET", cmd[0], "$", f"'{json.dumps(cmd[1])}'"])
-                        print(print_cmd)
-                    if key_type == "hash":
-                        pipe.hset(cmd[0], mapping=cmd[1])
-                    else:
-                        pipe.execute_command(*["JSON.SET", cmd[0], "$", json.dumps(cmd[1])])
-                pipe.execute()
+        # Make large chunks to accelerate things
+        batch_size = 50
+        for s in range(0, len(load_list), batch_size):
+            pipe = self.client.pipeline()
+            for cmd in load_list[s : s + batch_size]:
+                if key_type == "hash":
+                    pipe.hset(cmd[0], mapping=cmd[1])
+                else:
+                    pipe.execute_command(*["JSON.SET", cmd[0], "$", json.dumps(cmd[1])])
+            pipe.execute()
 
-            client.wait_for_indexing_done()
-        print(f"load_data_with_index completed {data_key} {key_type}")
+        self.client.wait_for_indexing_done()
+        print(f"setup_data completed {data_key} {key_type}")
         return len(load_list)
 
     def process_row(self, row):
@@ -331,6 +337,7 @@ class TestAggregateCompatibility:
                 print("Failed on sortkeys: ", sortkeys)
                 print("CMD:", cmd)
                 print("Out:", out)
+                assert False
         return out
     def compare_number_eq(self, l, r):
         if (l == "nan" and r == "nan") or (l == "-nan" and r == "-nan") or \
@@ -356,10 +363,34 @@ class TestAggregateCompatibility:
                 return False
         return True            
         
-    def compare_results(self, cmd):
-        #print(TEST_MARKER)
-        #print(f"CMD: {cmd}")
-        engines = {"RL": self.client_r, "EC": self.client_l}
+    def execute_command(self, cmd):
+        answer = {"cmd": cmd}
+        try:
+            answer["result"] = self.client.execute_command(*cmd)
+            answer["exception"] = False
+            exception = None
+            # print(f"{name} replied: {rs}")
+        except Exception as exc:
+            print(f"Got exception for Error: '{exc}', Cmd:{cmd}")
+            answer["result"] = {}
+            answer["exception"] = True
+
+        if self.generating_answers:
+            self.generate_answer(answer)
+        else:
+            self.compare_results(answer)
+    
+    def generate_answer(self, answer):
+        pickle.dump(answer, self.answer_file)
+    
+    def compare_results(self, results):
+        answer = pickle.load(self.answer_file)
+        
+        cmd = answer["cmd"]
+        if cmd != results["cmd"]:
+            print("CMD Mismatch: ", cmd, " ", answer["cmd"])
+            assert False
+        
         if 'groupby' in cmd and 'sortby' in cmd:
             assert False
         if 'groupby' in cmd:
@@ -378,33 +409,21 @@ class TestAggregateCompatibility:
             # todo, remove __key as sortkey once the search output sorting is fixed.
             sortkeys=["__key"] if "ft.aggregate" in cmd else []
 
-        results = {eng: None for eng in engines}
-        exception = {eng: False for eng in engines}
-        for name, client in engines.items():
-            try:
-                rs = client.execute_command(*cmd)
-                results[name] = rs
-                # print(f"{name} replied: {rs}")
-            except Exception as exc:
-                print(f"Got exception for {name} Error: '{exc}', Cmd:{cmd}")
-                exception[name] = True
-                assert False
-
         # If both failed, it's a wrong search cmd and we can exit
-        if all(exception.values()):
+        if answer["exception"] and results["exception"]:
             print("Both engines failed.")
             print(f"CMD:{cmd}")
             print(TEST_MARKER)
             return
 
-        if exception["RL"]:
+        if answer["exception"]:
             print("RL Exception, skipped")
             #print(f"RL Exception: Raw: {printable_result(results['RL'])}")
             #print(f"EC Result: {printable_result(results['EC'])}")
             print(TEST_MARKER)
             return
 
-        if exception["EC"]:
+        if results["exception"]:
             print(f"CMD: {cmd}")
             print(f"RL Result: {printable_result(results['RL'])}")
             print(f"EC Exception Raw: {printable_result(results['EC'])}")
@@ -412,8 +431,8 @@ class TestAggregateCompatibility:
             assert False
 
         # Output raw results
-        rl = self.unpack_result(cmd, results["RL"], sortkeys)
-        ec = self.unpack_result(cmd, results["EC"], sortkeys)
+        rl = self.unpack_result(cmd, answer["result"], sortkeys)
+        ec = self.unpack_result(cmd, results["result"], sortkeys)
 
         # Process failures
         if len(rl) != len(ec):
@@ -475,21 +494,21 @@ class TestAggregateCompatibility:
             "DIALECT",
             "3",
         ]
-        self.compare_results(new_cmd)
+        self.execute_command(new_cmd)
     '''
     def test_search_reverse(self, key_type):
-        self.load_data_with_index("reverse vector numbers", key_type)
+        self.setup_data("reverse vector numbers", key_type)
         self.checkvec(f"ft.search {key_type}_idx1 *")
         self.checkvec(f"ft.search {key_type}_idx1 * limit 0 5")
 
     def test_search(self, key_type):
-        self.load_data_with_index("sortable numbers", key_type)
+        self.setup_data("sortable numbers", key_type)
         self.checkvec(f"ft.search {key_type}_idx1 *")
         self.checkvec(f"ft.search {key_type}_idx1 * limit 0 5")
     '''
 
     def test_aggregate_sortby(self, key_type):
-        self.load_data_with_index("sortable numbers", key_type)
+        self.setup_data("sortable numbers", key_type)
         self.checkvec(f"ft.aggregate {key_type}_idx1 * load 2 @__key @n2 sortby 1 @n2")
         self.checkvec(f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 1 @n2")
         self.checkvec(
@@ -509,7 +528,7 @@ class TestAggregateCompatibility:
         )
 
     def test_aggregate_groupby(self, key_type):
-        self.load_data_with_index("sortable numbers", key_type)
+        self.setup_data("sortable numbers", key_type)
         self.checkvec(f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @n1")
         self.checkvec(f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1")
         self.checkvec(
@@ -573,26 +592,26 @@ class TestAggregateCompatibility:
     '''
     # todo enable when search sorting is fixed
     def test_aggregate_limit(self, key_type):
-        keys = self.load_data_with_index("sortable numbers", key_type)
+        keys = self.setup_data("sortable numbers", key_type)
         self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2")
         self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 limit 1 4")
         self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 limit 1 4 sortby 2 @__key desc")
         self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 1 4")
     '''
     def test_aggregate_short_limit(self, key_type):
-        keys = self.load_data_with_index("sortable numbers", key_type)
+        keys = self.setup_data("sortable numbers", key_type)
         self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 limit 0 5")
         self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc")
         self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 0 5")
         self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key asc limit 1 4", knn=4)
 
     def test_aggregate_load(self, key_type):
-        keys = self.load_data_with_index("sortable numbers", key_type)
+        keys = self.setup_data("sortable numbers", key_type)
         self.checkvec(f"ft.aggregate {key_type}_idx1  *")
         self.checkvec(f"ft.aggregate {key_type}_idx1  * load *")
 
     def test_aggregate_numeric_dyadic_operators(self, key_type):
-        keys = self.load_data_with_index("hard numbers", key_type)
+        keys = self.setup_data("hard numbers", key_type)
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]
         logops = ["||", "&&"]
@@ -602,7 +621,7 @@ class TestAggregateCompatibility:
             )
 
     def test_aggregate_numeric_triadic_operators(self, key_type):
-        keys = self.load_data_with_index("hard numbers", key_type)
+        keys = self.setup_data("hard numbers", key_type)
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]
         logops = ["||", "&&"]
@@ -613,7 +632,7 @@ class TestAggregateCompatibility:
                 )
 
     def test_aggregate_numeric_functions(self, key_type):
-        keys = self.load_data_with_index("hard numbers", key_type)
+        keys = self.setup_data("hard numbers", key_type)
         function = ["log", "abs", "ceil", "floor", "log2", "exp", "sqrt"]
         for f in function:
             self.checkvec(
@@ -621,7 +640,7 @@ class TestAggregateCompatibility:
             )
 
     def test_aggregate_string_apply_functions(self, key_type):
-        self.load_data_with_index("hard numbers", key_type)
+        self.setup_data("hard numbers", key_type)
 
         # String apply function "contains"
         self.checkvec(
@@ -717,7 +736,7 @@ class TestAggregateCompatibility:
         )
 
     def test_aggregate_substr(self, key_type):
-        self.load_data_with_index("hard numbers", key_type)
+        self.setup_data("hard numbers", key_type)
         for offset in [0, 1, 2, 100, -1, -2, -3, -1000]:
             for len in [0, 1, 2, 100, -1, -2, -3, -1000]:
                 self.checkvec(
@@ -735,7 +754,7 @@ class TestAggregateCompatibility:
         )
 
     def test_aggregate_dyadic_ops(self, key_type):
-        self.load_data_with_index("hard numbers", key_type)
+        self.setup_data("hard numbers", key_type)
         values = ["-inf", "-1.5", "-1", "-0.5", "0", "0.5", "1.0", "+inf"]
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]

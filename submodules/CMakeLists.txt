@@ -2,6 +2,17 @@ include(FetchContent)
 include(ProcessorCount)
 ProcessorCount(PROCESSOR_COUNT)
 
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+  # Read the os-release file
+  file(READ "/etc/os-release" OS_RELEASE)
+
+  # Extract distribution name
+  string(REGEX MATCH "NAME=\"([^\"]+)\"" _ ${OS_RELEASE})
+  string(TOLOWER "${CMAKE_MATCH_1}" DISTRO_NAME)
+
+  message(STATUS "Linux Distribution: ${DISTRO_NAME}")
+endif()
+
 set(MODULES_DIR "${CMAKE_BINARY_DIR}/.deps")
 file(MAKE_DIRECTORY "${MODULES_DIR}")
 
@@ -142,6 +153,19 @@ else()
   # Pull submodules with a given branch / tag and build them
   checkout_submodule_branch(${MODULE_GRPC} "https://github.com/grpc/grpc"
                             "v1.70.1" "${MODULES_DIR}/grpc/build-release")
+
+  string(FIND "${DISTRO_NAME}" "alpine" POSITION)
+  if(POSITION GREATER -1)
+    file(READ "${MODULES_DIR}/grpc/third_party/re2/util/pcre.h" FILE_CONTENTS)
+    string(REPLACE "mutable int32_t" "mutable int" FILE_CONTENTS
+                   "${FILE_CONTENTS}")
+    file(WRITE "${MODULES_DIR}/grpc/third_party/re2/util/pcre.h"
+         "${FILE_CONTENTS}")
+    message(
+      STATUS
+        "Fixed 'mutable int32_t' issue in file: ${MODULES_DIR}/grpc/third_party/re2/util/pcre.h"
+    )
+  endif()
 
   checkout_submodule_branch(
     ${MODULE_HIGHWAYHASH} "https://github.com/google/highwayhash.git" "master"

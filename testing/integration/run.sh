@@ -9,6 +9,17 @@ VALKEY_JSON_VERSION="1.0.0"
 MODULE_ROOT=${ROOT_DIR}/../..
 DUMP_TEST_ERRORS_STDOUT="no"
 
+# List of pytest-dependent test files
+PYTEST_TESTS=(
+    "compatibility"
+)
+
+# List of standalone test programs
+STANDALONE_TESTS=(
+    "stability_test"
+    "vector_search_integration_test"
+)
+
 # Constants
 BOLD_PINK='\e[35;1m'
 RESET='\e[0m'
@@ -25,7 +36,7 @@ Usage: test.sh [options...]
     --help | -h              Print this help message and exit.
     --clean                  Clean the current build configuration.
     --debug                  Build for debug version.
-    --test                   Specify the test name [stability|integration]. Default all.
+    --test                   Specify the test name or 'all'. Default all.
     --test-errors-stdout     When a test fails, dump the captured tests output to stdout.
 
 EOF
@@ -63,10 +74,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ ! "${TEST}" == "stability" ]] && [[ ! "${TEST}" == "integration" ]] && [[ ! "${TEST}" == "all" ]]; then
-    printf "\n${RED}Invalid test value: ${TEST}${RESET}\n\n" >&2
-    print_usage
-    exit 1
+if [[ "${TEST}" != "all" ]]; then
+    if [[ ! " ${PYTEST_TESTS[@]} ${STANDALONE_TESTS[@]} " =~ " ${TEST} " ]]; then
+        printf "\n${RED}Invalid test value: ${TEST}${RESET}\n\n" >&2
+        print_usage
+        exit 1
+    fi
 fi
 
 function is_cmake_required() {
@@ -203,8 +216,33 @@ rm -rf $TEST_TMPDIR
 mkdir -p $TEST_TMPDIR
 pkill -9 valkey-server || true
 
+run_tests() {
+    if [[ "${TEST}" == "all" ]]; then
+        for test in "${PYTEST_TESTS[@]}" "${STANDALONE_TESTS[@]}"; do
+            run_single_test "$test"
+        done
+    else
+        run_single_test "${TEST}"
+    fi
+}
+
+run_single_test() {
+    local test_name="$1"
+    local test_file="${test_name}.py"
+    if [[ " ${PYTEST_TESTS[@]} " =~ " ${test_name} " ]]; then
+        printf "${BOLD_PINK}Running pytest for ${test_file}...${RESET}\n"
+        pytest "${test_file}"
+    elif [[ " ${STANDALONE_TESTS[@]} " =~ " ${test_name} " ]]; then
+        printf "${BOLD_PINK}Running standalone test ${test_file}...${RESET}\n"
+        python3 "${test_file}"
+    else
+        printf "${RED}Unknown test: ${test_name}${RESET}\n"
+        exit 1
+    fi
+}
+
 if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
-    ctest --output-on-failure
+    run_tests
 else
-    ctest -V
+    run_tests
 fi

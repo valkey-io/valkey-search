@@ -133,6 +133,7 @@ class ValkeySearch {
   static bool IsChildProcess();
   void ProcessIndexSchemaBackfill(RedisModuleCtx *ctx, uint32_t batch_size);
   void ResumeWriterThreadPool(RedisModuleCtx *ctx, bool is_expired);
+  absl::StatusOr<std::string> GetConfigGetReply(RedisModuleCtx *ctx, const char* config);
 
   uint64_t inc_id_{0};
   RedisModuleCtx *ctx_{nullptr};

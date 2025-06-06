@@ -413,20 +413,37 @@ void ValkeySearch::OnForkChildCallback(RedisModuleCtx *ctx,
   }
 }
 
-absl::StatusOr<int> GetRedisLocalPort(RedisModuleCtx *ctx) {
+absl::StatusOr<std::string> GetConfigGetReply(RedisModuleCtx *ctx, const char *config) {
   auto reply = vmsdk::UniquePtrRedisCallReply(
-      RedisModule_Call(ctx, "CONFIG", "cc", "GET", "port"));
+    RedisModule_Call(ctx, "CONFIG", "cc", "GET", config));
   if (reply == nullptr) {
-    return absl::InternalError("Failed to get port configuration");
-  }
-  RedisModuleCallReply *port_reply =
-      RedisModule_CallReplyArrayElement(reply.get(), 1);
-  const char *port_str = RedisModule_CallReplyStringPtr(port_reply, nullptr);
-  int port;
-  if (!absl::SimpleAtoi(port_str, &port)) {
     return absl::InternalError(
-        absl::StrFormat("Failed to parse port: %s", port_str));
+      absl::StrFormat("Failed to get config: %s", config));
   }
+  RedisModuleCallReply *config_reply =
+    RedisModule_CallReplyArrayElement(reply.get(), 1);
+
+  size_t reply_len;
+  const char *reply_str = RedisModule_CallReplyStringPtr(config_reply, &reply_len);
+  return std::string(reply_str, reply_len);
+}
+
+
+absl::StatusOr<int> GetRedisLocalPort(RedisModuleCtx *ctx) {
+  int port = -1;
+  VMSDK_ASSIGN_OR_RETURN(auto tls_port_str, GetConfigGetReply(ctx, "tls-port"));
+  if (!absl::SimpleAtoi(tls_port_str, &port)) {
+    return absl::InternalError(
+      absl::StrFormat("Failed to parse port: %s", tls_port_str));
+  }
+  if (port == 0) {
+    VMSDK_ASSIGN_OR_RETURN(auto port_str, GetConfigGetReply(ctx, "port"));
+    if (!absl::SimpleAtoi(port_str, &port)) {
+      return absl::InternalError(
+        absl::StrFormat("Failed to parse port: %s", port_str));
+    }
+  }
+
   if (port < 0) {
     return absl::InternalError("Redis port is negative");
   }

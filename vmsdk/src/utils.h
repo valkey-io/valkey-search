@@ -1,4 +1,3 @@
-
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
@@ -116,5 +115,18 @@ std::optional<absl::string_view> ParseHashTag(absl::string_view);
 
 bool IsRealUserClient(RedisModuleCtx *ctx);
 bool MultiOrLua(RedisModuleCtx *ctx);
+
+#define VMSDK_NON_COPYABLE(ClassName)              \
+  ClassName(const ClassName&) = delete;            \
+  ClassName& operator=(const ClassName&) = delete
+
+#define VMSDK_NON_MOVABLE(ClassName)               \
+  ClassName(ClassName&&) = delete;                 \
+  ClassName& operator=(ClassName&&) = delete
+
+#define VMSDK_NON_COPYABLE_NON_MOVABLE(ClassName)  \
+  VMSDK_NON_COPYABLE(ClassName);                   \
+  VMSDK_NON_MOVABLE(ClassName)
+
 }  // namespace vmsdk
 #endif  // VMSDK_SRC_UTILS_H_

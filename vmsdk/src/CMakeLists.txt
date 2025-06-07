@@ -133,7 +133,6 @@ target_link_libraries(blocked_client PUBLIC valkey_module)
 
 set(SRCS_VMSDK_MEMORY_TRACKER 
     ${CMAKE_CURRENT_LIST_DIR}/memory_tracker.cc
-    ${CMAKE_CURRENT_LIST_DIR}/memory_tracker.h
-    ${CMAKE_CURRENT_LIST_DIR}/memory_stats.h)
+    ${CMAKE_CURRENT_LIST_DIR}/memory_tracker.h)
 valkey_search_add_static_library(vmsdk_memory_tracker "${SRCS_VMSDK_MEMORY_TRACKER}")
 target_include_directories(vmsdk_memory_tracker PUBLIC ${CMAKE_CURRENT_LIST_DIR})

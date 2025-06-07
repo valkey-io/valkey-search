@@ -27,15 +27,10 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "vmsdk/src/memory_allocation.h"
-#include "vmsdk/src/memory_tracker.h"
-#include "vmsdk/src/memory_stats.h"
-
 #include <unistd.h>
 
 #include <atomic>
 #include <cstdint>
-#include "absl/synchronization/mutex.h"
 
 namespace vmsdk {
 
@@ -54,6 +49,7 @@ namespace vmsdk {
 // state.
 thread_local static bool thread_using_valkey_module_alloc = false;
 static std::atomic<bool> use_valkey_module_alloc_switch = false;
+thread_local static int64_t memory_delta = 0;
 
 bool IsUsingValkeyAlloc() {
   if (!thread_using_valkey_module_alloc &&
@@ -72,6 +68,7 @@ void ResetValkeyAlloc() {
   use_valkey_module_alloc_switch.store(false, std::memory_order_relaxed);
   thread_using_valkey_module_alloc = false;
   used_memory_bytes.store(0, std::memory_order_relaxed);
+  memory_delta = 0;
 }
 
 uint64_t GetUsedMemoryCnt() { return used_memory_bytes; }
@@ -79,19 +76,7 @@ uint64_t GetUsedMemoryCnt() { return used_memory_bytes; }
 void ReportAllocMemorySize(uint64_t size) {
   vmsdk::used_memory_bytes.fetch_add(size, std::memory_order_relaxed);
 
-  MemoryTrackingScope* current_scope = MemoryTrackingScope::GetCurrentScope();
-  if (current_scope != nullptr) {
-    MemoryStats* current_memory_stats = current_scope->GetStats();
-    if (current_memory_stats != nullptr) {
-        absl::Mutex* stats_mutex = current_scope->GetStatsMutex();
-        if (stats_mutex != nullptr) {
-            absl::MutexLock lock(stats_mutex);
-            current_memory_stats->RecordAllocation(size);
-        } else {
-            current_memory_stats->RecordAllocation(size);
-        }
-    }
-  }
+  memory_delta += static_cast<int64_t>(size);
 }
 
 void ReportFreeMemorySize(uint64_t size) {
@@ -101,19 +86,11 @@ void ReportFreeMemorySize(uint64_t size) {
     vmsdk::used_memory_bytes.fetch_sub(size, std::memory_order_relaxed);
   }
 
-  MemoryTrackingScope* current_scope = MemoryTrackingScope::GetCurrentScope();
-  if (current_scope != nullptr) {
-    MemoryStats* current_memory_stats = current_scope->GetStats();
-    if (current_memory_stats != nullptr) {
-      absl::Mutex* stats_mutex = current_scope->GetStatsMutex();
-      if (stats_mutex != nullptr) {
-          absl::MutexLock lock(stats_mutex);
-          current_memory_stats->RecordDeallocation(size);
-      } else {
-          current_memory_stats->RecordDeallocation(size);
-      }
-    }
-  }
+  memory_delta -= static_cast<int64_t>(size);
+}
+
+int64_t GetMemoryDelta() {
+  return memory_delta;
 }
 
 }  // namespace vmsdk

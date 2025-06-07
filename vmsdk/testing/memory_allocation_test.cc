@@ -40,7 +40,6 @@
 #include "vmsdk/src/memory_allocation_overrides.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
-#include "vmsdk/src/memory_stats.h"
 #include "vmsdk/src/memory_tracker.h"
 
 class MockSystemAlloc {
@@ -431,435 +430,188 @@ TEST_F(MemoryAllocationTest, VallocOverride) {
   __wrap_free(test_ptr);
 }
 
-TEST_F(MemoryAllocationTest, MemoryStatsDirect) {
-  MemoryStats stats;
-  EXPECT_EQ(stats.GetAllocatedBytes(), 0);
-
-  stats.RecordAllocation(100);
-  EXPECT_EQ(stats.GetAllocatedBytes(), 100);
-
-  stats.RecordAllocation(50);
-  EXPECT_EQ(stats.GetAllocatedBytes(), 150);
-
-  stats.RecordDeallocation(70);
-  EXPECT_EQ(stats.GetAllocatedBytes(), 80);
-
-  stats.RecordDeallocation(80);
-  EXPECT_EQ(stats.GetAllocatedBytes(), 0);
-
-  stats.RecordDeallocation(10); // Should not go below zero
-  EXPECT_EQ(stats.GetAllocatedBytes(), 0);
-
-  stats.RecordAllocation(20);
-  EXPECT_EQ(stats.GetAllocatedBytes(), 20);
-  stats.RecordDeallocation(100); // Deallocate more than allocated
-  EXPECT_EQ(stats.GetAllocatedBytes(), 0);
-}
-
 TEST_F(MemoryAllocationTest, MemoryTrackingScopeSimple) {
   vmsdk::UseValkeyAlloc(); // Ensure ReportAlloc/Free are called
 
-  MemoryStats stats;
-  EXPECT_EQ(stats.GetAllocatedBytes(), 0);
+  std::atomic<int64_t> memory_pool{0};
+  EXPECT_EQ(memory_pool.load(), 0);
   EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
 
   void* ptr1 = nullptr;
   void* ptr2 = nullptr;
 
   {
-    MemoryTrackingScope scope(&stats);
+    MemoryTrackingScope scope(&memory_pool);
     EXPECT_CALL(*kMockRedisModule, Alloc(100)).WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
     EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x1000))).WillRepeatedly(testing::Return(100));
     ptr1 = __wrap_malloc(100);
-    EXPECT_EQ(stats.GetAllocatedBytes(), 100);
+    EXPECT_EQ(memory_pool.load(), 0);
     EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 100);
 
     EXPECT_CALL(*kMockRedisModule, Alloc(50)).WillOnce(testing::Return(reinterpret_cast<void*>(0x2000)));
     EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x2000))).WillRepeatedly(testing::Return(50));
     ptr2 = __wrap_malloc(50);
-    EXPECT_EQ(stats.GetAllocatedBytes(), 150);
+    EXPECT_EQ(memory_pool.load(), 0);
     EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 150);
 
     EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x1000))).Times(1);
     __wrap_free(ptr1);
     ptr1 = nullptr;
-    EXPECT_EQ(stats.GetAllocatedBytes(), 50);
+    EXPECT_EQ(memory_pool.load(), 0);
     EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 50);
-  }
+  } // Scope ends, net change: +50
 
-  // Outside scope, stats should not change
-  EXPECT_EQ(stats.GetAllocatedBytes(), 50);
+  EXPECT_EQ(memory_pool.load(), 50);
 
   EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x2000))).Times(1);
   __wrap_free(ptr2);
   ptr2 = nullptr;
-  EXPECT_EQ(stats.GetAllocatedBytes(), 50); // Still 50, free was outside scope's influence on stats
+  EXPECT_EQ(memory_pool.load(), 50);
   EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
 }
 
 TEST_F(MemoryAllocationTest, MemoryTrackingScopeNested) {
   vmsdk::UseValkeyAlloc();
 
-  MemoryStats stats1;
-  MemoryStats stats2;
-  EXPECT_EQ(stats1.GetAllocatedBytes(), 0);
-  EXPECT_EQ(stats2.GetAllocatedBytes(), 0);
+  std::atomic<int64_t> pool{0};
+  EXPECT_EQ(pool.load(), 0);
   EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
 
   void* ptr1 = nullptr;
   void* ptr2 = nullptr;
   void* ptr3 = nullptr;
+  void* ptr4 = nullptr;
 
   {
-    MemoryTrackingScope outer_scope(&stats1);
+    MemoryTrackingScope outer_scope(&pool);
     EXPECT_CALL(*kMockRedisModule, Alloc(100)).WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
     EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x1000))).WillRepeatedly(testing::Return(100));
-    ptr1 = __wrap_malloc(100); // Allocated in outer_scope (stats1)
-    EXPECT_EQ(stats1.GetAllocatedBytes(), 100);
-    EXPECT_EQ(stats2.GetAllocatedBytes(), 0);
+    ptr1 = __wrap_malloc(100);
+    EXPECT_EQ(pool.load(), 0);
     EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 100);
 
     {
-      MemoryTrackingScope inner_scope(&stats2);
+      MemoryTrackingScope inner_scope(&pool);
       EXPECT_CALL(*kMockRedisModule, Alloc(50)).WillOnce(testing::Return(reinterpret_cast<void*>(0x2000)));
       EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x2000))).WillRepeatedly(testing::Return(50));
-      ptr2 = __wrap_malloc(50); // Allocated in inner_scope (stats2)
-      EXPECT_EQ(stats1.GetAllocatedBytes(), 100);
-      EXPECT_EQ(stats2.GetAllocatedBytes(), 50);
+      ptr2 = __wrap_malloc(50);
+      EXPECT_EQ(pool.load(), 0);
       EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 150);
 
+      EXPECT_CALL(*kMockRedisModule, Alloc(30)).WillOnce(testing::Return(reinterpret_cast<void*>(0x3000)));
+      EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x3000))).WillRepeatedly(testing::Return(30));
+      ptr3 = __wrap_malloc(30);
+      EXPECT_EQ(pool.load(), 0);
+      EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 180);
+
       EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x2000))).Times(1);
-      __wrap_free(ptr2); // Freed in inner_scope (stats2)
-      ptr2 = nullptr;
-      EXPECT_EQ(stats1.GetAllocatedBytes(), 100);
-      EXPECT_EQ(stats2.GetAllocatedBytes(), 0);
-      EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 100);
-    } // inner_scope ends, current_scope reverts to outer_scope
+      __wrap_free(ptr3);
+      ptr3 = nullptr;
+      EXPECT_EQ(pool.load(), 0);
+      EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 150);
+    } // inner_scope ends, net change: +50
 
-    EXPECT_EQ(stats1.GetAllocatedBytes(), 100); // Unchanged by inner scope's end
-    EXPECT_EQ(stats2.GetAllocatedBytes(), 0);   // Unchanged
+    EXPECT_EQ(pool.load(), 50);
 
-    EXPECT_CALL(*kMockRedisModule, Alloc(30)).WillOnce(testing::Return(reinterpret_cast<void*>(0x3000)));
-    EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x3000))).WillRepeatedly(testing::Return(30));
-    ptr3 = __wrap_malloc(30); // Allocated in outer_scope (stats1)
-    EXPECT_EQ(stats1.GetAllocatedBytes(), 130);
-    EXPECT_EQ(stats2.GetAllocatedBytes(), 0);
-    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 130);
+    EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x3000))).Times(1);
+    __wrap_free(ptr2);
+    ptr2 = nullptr;
+    EXPECT_EQ(pool.load(), 50);
+    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 100);
+
+    EXPECT_CALL(*kMockRedisModule, Alloc(20)).WillOnce(testing::Return(reinterpret_cast<void*>(0x4000)));
+    EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x4000))).WillRepeatedly(testing::Return(20));
+    ptr4 = __wrap_malloc(20);
+    EXPECT_EQ(pool.load(), 50);
+    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 120);
 
     EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x1000))).Times(1);
-    __wrap_free(ptr1); // Freed in outer_scope (stats1)
+    __wrap_free(ptr1);
     ptr1 = nullptr;
-    EXPECT_EQ(stats1.GetAllocatedBytes(), 30);
-    EXPECT_EQ(stats2.GetAllocatedBytes(), 0);
-    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 30);
-  } // outer_scope ends
+    EXPECT_EQ(pool.load(), 50);
+    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 20);
+  } // outer_scope ends, net change: +20
 
-  EXPECT_EQ(stats1.GetAllocatedBytes(), 30); // Unchanged
-  EXPECT_EQ(stats2.GetAllocatedBytes(), 0);  // Unchanged
+  EXPECT_EQ(pool.load(), 20);
 
   EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x3000))).Times(1);
-  __wrap_free(ptr3); // Freed outside any scope
-  ptr3 = nullptr;
-  EXPECT_EQ(stats1.GetAllocatedBytes(), 30);
-  EXPECT_EQ(stats2.GetAllocatedBytes(), 0);
+  __wrap_free(ptr4);
+  ptr4 = nullptr;
+  EXPECT_EQ(pool.load(), 20);
   EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
 }
 
-TEST_F(MemoryAllocationTest, MemoryTrackingScopeMultipleStats) {
-    vmsdk::UseValkeyAlloc();
+TEST_F(MemoryAllocationTest, MemoryTrackingScopeNullPool) {
+  vmsdk::UseValkeyAlloc();
 
-    MemoryStats stats_a, stats_b;
-    void *p1 = nullptr, *p2 = nullptr, *p3 = nullptr;
+  void* ptr = nullptr;
 
-    // Scope for stats_a
-    {
-        MemoryTrackingScope scope_a(&stats_a);
-        EXPECT_CALL(*kMockRedisModule, Alloc(10)).WillOnce(testing::Return(reinterpret_cast<void*>(0x100)));
-        EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x100))).WillRepeatedly(testing::Return(10));
-        p1 = __wrap_malloc(10); // Tracked by stats_a
-        EXPECT_EQ(stats_a.GetAllocatedBytes(), 10);
-        EXPECT_EQ(stats_b.GetAllocatedBytes(), 0);
-    }
-
-    // Scope for stats_b
-    {
-        MemoryTrackingScope scope_b(&stats_b);
-        EXPECT_CALL(*kMockRedisModule, Alloc(20)).WillOnce(testing::Return(reinterpret_cast<void*>(0x200)));
-        EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x200))).WillRepeatedly(testing::Return(20));
-        p2 = __wrap_malloc(20); // Tracked by stats_b
-        EXPECT_EQ(stats_a.GetAllocatedBytes(), 10);
-        EXPECT_EQ(stats_b.GetAllocatedBytes(), 20);
-
-        EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x100))).Times(1);
-        __wrap_free(p1); // Freed in scope_b, so stats_b is affected
-        p1 = nullptr;
-        EXPECT_EQ(stats_a.GetAllocatedBytes(), 10); // Not affected
-        EXPECT_EQ(stats_b.GetAllocatedBytes(), 10); // Affected
-    }
+  {
+    MemoryTrackingScope scope(nullptr);
     
-    // No active scope
-    EXPECT_CALL(*kMockRedisModule, Alloc(30)).WillOnce(testing::Return(reinterpret_cast<void*>(0x300)));
-    EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x300))).WillRepeatedly(testing::Return(30));
-    p3 = __wrap_malloc(30); // Not tracked by any specific MemoryStats
-    EXPECT_EQ(stats_a.GetAllocatedBytes(), 10);
-    EXPECT_EQ(stats_b.GetAllocatedBytes(), 10);
-
-
-    EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x200))).Times(1);
-    __wrap_free(p2); // Freed outside any scope
-    p2 = nullptr;
-    EXPECT_EQ(stats_a.GetAllocatedBytes(), 10);
-    EXPECT_EQ(stats_b.GetAllocatedBytes(), 10); // Not affected by this free
-
-    EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x300))).Times(1);
-    __wrap_free(p3); // Freed outside any scope
-    p3 = nullptr;
-    EXPECT_EQ(stats_a.GetAllocatedBytes(), 10);
-    EXPECT_EQ(stats_b.GetAllocatedBytes(), 10);
-
-    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0); // All global memory freed
-}
-
-TEST_F(MemoryAllocationTest, MemoryTrackingScopeThreadSafety) {
-  vmsdk::UseValkeyAlloc();
-
-  MemoryStats stats;
-  absl::Mutex stats_mutex;
-  constexpr int kNumThreads = 4;
-  constexpr int kAllocsPerThread = 100;
-  constexpr size_t kAllocSize = 64;
-
-  std::vector<std::thread> threads;
-  std::vector<std::vector<void*>> thread_ptrs(kNumThreads);
-  std::atomic<int> ready_count{0};
-  std::atomic<bool> start_flag{false};
-
-  // Set up mock expectations for all allocations
-  EXPECT_CALL(*kMockRedisModule, Alloc(kAllocSize))
-      .Times(kNumThreads * kAllocsPerThread)
-      .WillRepeatedly(testing::Invoke([](size_t size) {
-        static std::atomic<uintptr_t> counter{0x10000};
-        return reinterpret_cast<void*>(counter.fetch_add(size));
-      }));
-
-  EXPECT_CALL(*kMockRedisModule, MallocUsableSize(testing::_))
-      .Times(testing::AtLeast(kNumThreads * kAllocsPerThread * 2))  // At least 2x for alloc tracking
-      .WillRepeatedly(testing::Return(kAllocSize));
-
-  // Create threads that will perform concurrent allocations
-  for (int i = 0; i < kNumThreads; ++i) {
-    threads.emplace_back([&, i]() {
-      thread_ptrs[i].reserve(kAllocsPerThread);
-      
-      // Set up memory tracking scope with mutex
-      MemoryTrackingScope scope(&stats, &stats_mutex);
-      
-      // Signal ready and wait for start
-      ready_count.fetch_add(1);
-      while (!start_flag.load()) {
-        std::this_thread::yield();
-      }
-      
-      // Perform allocations
-      for (int j = 0; j < kAllocsPerThread; ++j) {
-        void* ptr = __wrap_malloc(kAllocSize);
-        EXPECT_NE(ptr, nullptr);
-        thread_ptrs[i].push_back(ptr);
-      }
-    });
+    EXPECT_CALL(*kMockRedisModule, Alloc(100)).WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
+    EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x1000))).WillRepeatedly(testing::Return(100));
+    ptr = __wrap_malloc(100);
+    EXPECT_NE(ptr, nullptr);
+    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 100);
   }
 
-  // Wait for all threads to be ready
-  while (ready_count.load() < kNumThreads) {
-    std::this_thread::yield();
-  }
-
-  // Start all threads simultaneously
-  start_flag.store(true);
-
-  // Wait for all threads to complete
-  for (auto& thread : threads) {
-    thread.join();
-  }
-
-  // Verify final memory stats
-  long long expected_total = static_cast<long long>(kNumThreads * kAllocsPerThread * kAllocSize);
-  EXPECT_EQ(stats.GetAllocatedBytes(), expected_total);
-  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), expected_total);
-
-  // Clean up all allocations
-  EXPECT_CALL(*kMockRedisModule, Free(testing::_))
-      .Times(kNumThreads * kAllocsPerThread);
-
-  for (int i = 0; i < kNumThreads; ++i) {
-    for (void* ptr : thread_ptrs[i]) {
-      __wrap_free(ptr);
-    }
-  }
-
+  EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x1000))).Times(1);
+  __wrap_free(ptr);
   EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
 }
 
-TEST_F(MemoryAllocationTest, MemoryTrackingScopeThreadSafetyWithDeallocation) {
+TEST_F(MemoryAllocationTest, MemoryTrackingScopeNonZeroBaseline) {
   vmsdk::UseValkeyAlloc();
 
-  MemoryStats stats;
-  absl::Mutex stats_mutex;
-  constexpr int kNumThreads = 4;
-  constexpr int kOperationsPerThread = 50;
-  constexpr size_t kAllocSize = 128;
+  std::atomic<int64_t> memory_pool{0};
+  void* ptr1 = nullptr;
+  void* ptr2 = nullptr;
+  void* ptr3 = nullptr;
 
-  std::vector<std::thread> threads;
-  std::atomic<int> ready_count{0};
-  std::atomic<bool> start_flag{false};
+  EXPECT_CALL(*kMockRedisModule, Alloc(200)).WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
+  EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x1000))).WillRepeatedly(testing::Return(200));
+  ptr1 = __wrap_malloc(200);
+  EXPECT_EQ(memory_pool.load(), 0);
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 200);
 
-  // Set up mock expectations
-  EXPECT_CALL(*kMockRedisModule, Alloc(kAllocSize))
-      .Times(testing::AtLeast(kNumThreads * kOperationsPerThread))
-      .WillRepeatedly(testing::Invoke([](size_t size) {
-        static std::atomic<uintptr_t> counter{0x20000};
-        return reinterpret_cast<void*>(counter.fetch_add(size));
-      }));
+  {
+    MemoryTrackingScope scope(&memory_pool);
+    
+    EXPECT_CALL(*kMockRedisModule, Alloc(100)).WillOnce(testing::Return(reinterpret_cast<void*>(0x2000)));
+    EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x2000))).WillRepeatedly(testing::Return(100));
+    ptr2 = __wrap_malloc(100);
+    EXPECT_EQ(memory_pool.load(), 0);
+    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 300);
 
-  EXPECT_CALL(*kMockRedisModule, MallocUsableSize(testing::_))
-      .Times(testing::AtLeast(kNumThreads * kOperationsPerThread * 2))
-      .WillRepeatedly(testing::Return(kAllocSize));
+    EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x1000))).Times(1);
+    __wrap_free(ptr1);
+    ptr1 = nullptr;
+    EXPECT_EQ(memory_pool.load(), 0);
+    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 100);
 
-  EXPECT_CALL(*kMockRedisModule, Free(testing::_))
-      .Times(testing::AtLeast(kNumThreads * kOperationsPerThread / 2));
+    EXPECT_CALL(*kMockRedisModule, Alloc(50)).WillOnce(testing::Return(reinterpret_cast<void*>(0x3000)));
+    EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x3000))).WillRepeatedly(testing::Return(50));
+    ptr3 = __wrap_malloc(50);
+    EXPECT_EQ(memory_pool.load(), 0);
+    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 150);
+  } // Scope ends
+  // current_delta = 200 - 200 + 100 + 50 = 150
+  // net_change = 150 - 200 = -50
 
-  // Create threads that perform mixed alloc/dealloc operations
-  for (int i = 0; i < kNumThreads; ++i) {
-    threads.emplace_back([&, i]() {
-      std::vector<void*> ptrs;
-      ptrs.reserve(kOperationsPerThread);
-      
-      // Set up memory tracking scope with mutex
-      MemoryTrackingScope scope(&stats, &stats_mutex);
-      
-      // Signal ready and wait for start
-      ready_count.fetch_add(1);
-      while (!start_flag.load()) {
-        std::this_thread::yield();
-      }
-      
-      // Perform mixed allocation/deallocation operations
-      for (int j = 0; j < kOperationsPerThread; ++j) {
-        if (j % 3 == 0 && !ptrs.empty()) {
-          // Deallocate some memory
-          void* ptr = ptrs.back();
-          ptrs.pop_back();
-          __wrap_free(ptr);
-        } else {
-          // Allocate memory
-          void* ptr = __wrap_malloc(kAllocSize);
-          EXPECT_NE(ptr, nullptr);
-          ptrs.push_back(ptr);
-        }
-      }
-      
-      // Clean up remaining allocations
-      for (void* ptr : ptrs) {
-        __wrap_free(ptr);
-      }
-    });
-  }
+  EXPECT_EQ(memory_pool.load(), -50);
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 150);
 
-  // Wait for all threads to be ready
-  while (ready_count.load() < kNumThreads) {
-    std::this_thread::yield();
-  }
+  EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x2000))).Times(1);
+  __wrap_free(ptr2);
+  ptr2 = nullptr;
+  EXPECT_EQ(memory_pool.load(), -50);
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 50);
 
-  // Start all threads simultaneously
-  start_flag.store(true);
-
-  // Wait for all threads to complete
-  for (auto& thread : threads) {
-    thread.join();
-  }
-
-  // Memory stats should be consistent (all memory freed)
-  EXPECT_EQ(stats.GetAllocatedBytes(), 0);
-  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
-}
-
-TEST_F(MemoryAllocationTest, MemoryTrackingScopeNestedWithMutex) {
-  vmsdk::UseValkeyAlloc();
-
-  MemoryStats outer_stats, inner_stats;
-  absl::Mutex outer_mutex, inner_mutex;
-  constexpr int kNumThreads = 2;
-  constexpr size_t kAllocSize = 256;
-
-  std::vector<std::thread> threads;
-  std::atomic<int> ready_count{0};
-  std::atomic<bool> start_flag{false};
-
-  // Set up mock expectations
-  EXPECT_CALL(*kMockRedisModule, Alloc(kAllocSize))
-      .Times(kNumThreads * 2)  // 2 allocations per thread
-      .WillRepeatedly(testing::Invoke([](size_t size) {
-        static std::atomic<uintptr_t> counter{0x30000};
-        return reinterpret_cast<void*>(counter.fetch_add(size));
-      }));
-
-  EXPECT_CALL(*kMockRedisModule, MallocUsableSize(testing::_))
-      .Times(testing::AtLeast(kNumThreads * 4))
-      .WillRepeatedly(testing::Return(kAllocSize));
-
-  EXPECT_CALL(*kMockRedisModule, Free(testing::_))
-      .Times(kNumThreads * 2);
-
-  // Create threads with nested scopes
-  for (int i = 0; i < kNumThreads; ++i) {
-    threads.emplace_back([&, i]() {
-      void* outer_ptr = nullptr;
-      void* inner_ptr = nullptr;
-      
-      // Signal ready and wait for start
-      ready_count.fetch_add(1);
-      while (!start_flag.load()) {
-        std::this_thread::yield();
-      }
-      
-      {
-        MemoryTrackingScope outer_scope(&outer_stats, &outer_mutex);
-        
-        outer_ptr = __wrap_malloc(kAllocSize);
-        EXPECT_NE(outer_ptr, nullptr);
-        
-        {
-          MemoryTrackingScope inner_scope(&inner_stats, &inner_mutex);
-          
-          inner_ptr = __wrap_malloc(kAllocSize);
-          EXPECT_NE(inner_ptr, nullptr);
-          
-          __wrap_free(inner_ptr);
-          inner_ptr = nullptr;
-        }
-        
-        __wrap_free(outer_ptr);
-        outer_ptr = nullptr;
-      }
-    });
-  }
-
-  // Wait for all threads to be ready
-  while (ready_count.load() < kNumThreads) {
-    std::this_thread::yield();
-  }
-
-  // Start all threads simultaneously
-  start_flag.store(true);
-
-  // Wait for all threads to complete
-  for (auto& thread : threads) {
-    thread.join();
-  }
-
-  // Both stats should show no memory allocated
-  EXPECT_EQ(outer_stats.GetAllocatedBytes(), 0);
-  EXPECT_EQ(inner_stats.GetAllocatedBytes(), 0);
+  EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x3000))).Times(1);
+  __wrap_free(ptr3);
+  ptr3 = nullptr;
+  EXPECT_EQ(memory_pool.load(), -50); 
   EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
 }
 

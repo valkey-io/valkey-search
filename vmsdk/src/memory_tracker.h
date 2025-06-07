@@ -31,38 +31,33 @@
 #define VMSDK_SRC_MEMORY_TRACKER_H_
 
 #include <functional>
-#include <absl/synchronization/mutex.h>
+#include <atomic>
 #include "vmsdk/src/utils.h"
-
-class MemoryStats;
 
 class MemoryTrackingScope final {
 public:
     // Test hook function type for scope lifecycle events
     using ScopeEventCallback = std::function<void(const MemoryTrackingScope*)>;
     
-    explicit MemoryTrackingScope(MemoryStats* stats);
-    explicit MemoryTrackingScope(MemoryStats* stats, absl::Mutex* stats_mutex);
+    explicit MemoryTrackingScope(std::atomic<int64_t>* pool);
     ~MemoryTrackingScope();
 
     VMSDK_NON_COPYABLE_NON_MOVABLE(MemoryTrackingScope);
 
     static MemoryTrackingScope* GetCurrentScope();
-    MemoryStats* GetStats() const;
-    absl::Mutex* GetStatsMutex() const;
 
     // Used for testing
     static void SetScopeEventCallback(ScopeEventCallback callback);
     static void ClearScopeEventCallback();
 
 private:
-    MemoryStats* target_stats_ = nullptr;
-    absl::Mutex* stats_mutex_ = nullptr;
+    std::atomic<int64_t>* target_pool_ = nullptr;
+    int64_t baseline_memory_delta_ = 0;
     MemoryTrackingScope* previous_scope_ = nullptr;
 
     static thread_local MemoryTrackingScope* current_scope_tls_;
-    
     static thread_local ScopeEventCallback scope_event_callback_;
+
     void NotifyScopeEvent();
 };
 

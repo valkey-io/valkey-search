@@ -94,7 +94,7 @@ TEST_P(FTInfoTest, FTInfoTests) {
           auto schema = SchemaManager::Instance().GetIndexSchema(
               index_schema_proto.db_num(), index_schema_proto.name());
           ASSERT_TRUE(schema.ok());
-          schema.value()->GetMemoryStats().RecordAllocation(
+          schema.value()->GetMemoryPool().fetch_add(
               test_case.memory_bytes.value());
         }
       }

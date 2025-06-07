@@ -28,38 +28,29 @@
  */
 
 #include "memory_tracker.h"
-#include "memory_stats.h"
+#include "vmsdk/src/memory_allocation.h"
 
 thread_local MemoryTrackingScope* MemoryTrackingScope::current_scope_tls_ = nullptr;
 
 thread_local MemoryTrackingScope::ScopeEventCallback MemoryTrackingScope::scope_event_callback_ = nullptr;
 
-MemoryTrackingScope::MemoryTrackingScope(MemoryStats* stats)
-    : target_stats_(stats), previous_scope_(current_scope_tls_) {
-    current_scope_tls_ = this;
-    NotifyScopeEvent();
-}
-
-MemoryTrackingScope::MemoryTrackingScope(MemoryStats* stats, absl::Mutex* stats_mutex)
-    : target_stats_(stats), stats_mutex_(stats_mutex), previous_scope_(current_scope_tls_) {
+MemoryTrackingScope::MemoryTrackingScope(std::atomic<int64_t>* pool)
+    : target_pool_(pool), baseline_memory_delta_(vmsdk::GetMemoryDelta()), previous_scope_(current_scope_tls_) {
     current_scope_tls_ = this;
     NotifyScopeEvent();
 }
 
 MemoryTrackingScope::~MemoryTrackingScope() {
+    if (target_pool_ != nullptr) {
+        int64_t current_delta = vmsdk::GetMemoryDelta();
+        int64_t net_change = current_delta - baseline_memory_delta_;
+        target_pool_->fetch_add(net_change);
+    }
     current_scope_tls_ = previous_scope_;
 }
 
 MemoryTrackingScope* MemoryTrackingScope::GetCurrentScope() {
     return current_scope_tls_;
-}
-
-MemoryStats* MemoryTrackingScope::GetStats() const {
-    return target_stats_;
-}
-
-absl::Mutex* MemoryTrackingScope::GetStatsMutex() const {
-    return stats_mutex_;
 }
 
 void MemoryTrackingScope::NotifyScopeEvent() {

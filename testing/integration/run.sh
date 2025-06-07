@@ -19,6 +19,13 @@ GRAY='\e[90;1m'
 
 echo "Root directory: ${ROOT_DIR}"
 
+STANDALONE_TESTS=(
+    "vector_search_integration"
+    "stability"
+)
+PYTEST_TESTS=(
+)
+
 function print_usage() {
 cat<<EOF
 Usage: test.sh [options...]
@@ -279,12 +286,6 @@ print_environment_var TEST_TMPDIR ${TEST_TMPDIR}
 mkdir -p $TEST_TMPDIR
 pkill -9 valkey-server || true
 
-STANDALONE_TESTS=(
-    "vector_search_integration"
-    "stability"
-)
-PYTEST_TESTS=(
-)
 
 if [[ "${TEST}" == "all" ]]; then
     for test in "${STANDALONE_TESTS[@]}"; do

@@ -31,8 +31,6 @@
 
 #include <cstddef>
 #include <cstdlib>
-#include <thread>
-#include <vector>
 #include <atomic>
 
 #include "gmock/gmock.h"

@@ -88,7 +88,7 @@ struct FTSearchParserTestCase {
   std::unordered_map<std::string, std::string> return_attributes;
   bool no_content{false};
   std::string search_parameters_str;
-  uint64_t timeout_ms{kTimeoutMS};
+  uint64_t timeout_ms{query::kTimeoutMS};
 };
 
 class FTSearchParserTest
@@ -165,7 +165,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
     auto timeout_str = std::to_string(timeout_ms.value());
     args.push_back(RedisModule_CreateString(nullptr, timeout_str.data(),
                                             timeout_str.size()));
-    if (timeout_ms.value() >= kMaxTimeoutMs + 1) {
+    if (timeout_ms.value() >= query::kMaxTimeoutMs + 1) {
       timeout_expected_success = false;
     }
   }
@@ -297,7 +297,7 @@ TEST_P(FTSearchParserTest, Parse) {
                                    std::nullopt);
           DoVectorSearchParserTest(test_case, dialect_itr, limit_itr,
                                    add_end_unexpected_param, no_content,
-                                   kMaxTimeoutMs + 1);
+                                   query::kMaxTimeoutMs + 1);
         }
       }
     }
@@ -473,7 +473,7 @@ INSTANTIATE_TEST_SUITE_P(
             .params_str = " PARAMS 2",
             .filter_str = "* =>[KNN 5 @vec1 $BLOB]",
             .k = 5,
-            .expected_error_message = "Index field `vec1` not exists",
+            .expected_error_message = "Index field `vec1` does not exist",
         },
         {
             .test_name = "missing_index_field_w_score_as",
@@ -482,7 +482,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter_str = "* =>[KNN 5 @vec1 $BLOB]",
             .k = 5,
             .score_as = "as_test_1",
-            .expected_error_message = "Index field `vec1` not exists",
+            .expected_error_message = "Index field `vec1` does not exist",
         },
         {
             .test_name = "missing_return_1",

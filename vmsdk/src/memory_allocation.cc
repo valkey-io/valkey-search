@@ -27,6 +27,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "vmsdk/src/memory_allocation.h"
+
 #include <unistd.h>
 
 #include <atomic>

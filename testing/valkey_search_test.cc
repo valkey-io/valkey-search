@@ -234,6 +234,8 @@ INSTANTIATE_TEST_SUITE_P(
 
 TEST_P(LoadTest, load) {
   const LoadTestCase& test_case = GetParam();
+  std::string port_str, tls_port_str;
+  int call_reply_count = 0;
   auto args = vmsdk::ToRedisStringVector(test_case.args);
   ON_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&fake_ctx_))
       .WillByDefault(testing::Return(&fake_ctx_));
@@ -257,8 +259,6 @@ TEST_P(LoadTest, load) {
   }
   if (test_case.use_coordinator) {
     if (test_case.use_redis_port) {
-      std::string port_str;
-      std::string tls_port_str;
       RedisModuleCallReply tls_array_reply;
       RedisModuleCallReply tls_string_reply;
       RedisModuleCallReply non_tls_array_reply;
@@ -268,39 +268,39 @@ TEST_P(LoadTest, load) {
         if (test_case.redis_port.has_value()) {
           port_str = std::to_string(test_case.redis_port.value());
         }
-      EXPECT_CALL(
-        *kMockRedisModule,
-        Call(testing::_, testing::StrEq("CONFIG"), testing::StrEq("cc"),
-          testing::StrEq("GET"), testing::_))
-          .Times(testing::Between(1, 2))
-          .WillOnce(testing::Return(&tls_array_reply))
-          .WillOnce(testing::Return(&non_tls_array_reply));
-      EXPECT_CALL(*kMockRedisModule, CallReplyArrayElement(testing::_, 1))
-        .Times(testing::Between(1, 2))
-        .WillOnce(testing::Return(&tls_string_reply))
-        .WillOnce(testing::Return(&non_tls_string_reply));
-      
-      int index = 0;
-      EXPECT_CALL(*kMockRedisModule,
-        CallReplyStringPtr(testing::_, testing::_))
-          .WillRepeatedly([&](RedisModuleCallReply* reply, size_t* len) -> const char* {
-            if (index == 1) {
-              *len = port_str.size();
-              return port_str.c_str();
-            }
-            *len = tls_port_str.size();
-            index++;
-            return tls_port_str.c_str();
-        });
-      ON_CALL(*kMockRedisModule, GetMyClusterID())
-        .WillByDefault(
-          testing::Return("a415b9df6ce0c3c757ad4270242ae432147cacbb"));
+        EXPECT_CALL(
+            *kMockRedisModule,
+            Call(testing::_, testing::StrEq("CONFIG"), testing::StrEq("cc"),
+                 testing::StrEq("GET"), testing::_))
+            .Times(testing::Between(1, 2))
+            .WillOnce(testing::Return(&tls_array_reply))
+            .WillOnce(testing::Return(&non_tls_array_reply));
+        EXPECT_CALL(*kMockRedisModule, CallReplyArrayElement(testing::_, 1))
+            .Times(testing::Between(1, 2))
+            .WillOnce(testing::Return(&tls_string_reply))
+            .WillOnce(testing::Return(&non_tls_string_reply));
+
+        EXPECT_CALL(*kMockRedisModule,
+                    CallReplyStringPtr(testing::_, testing::_))
+            .WillRepeatedly(
+                [&](RedisModuleCallReply* reply, size_t* len) -> const char* {
+                  if (call_reply_count == 1) {
+                    *len = port_str.size();
+                    return port_str.c_str();
+                  }
+                  *len = tls_port_str.size();
+                  call_reply_count++;
+                  return tls_port_str.c_str();
+                });
+        ON_CALL(*kMockRedisModule, GetMyClusterID())
+            .WillByDefault(
+                testing::Return("a415b9df6ce0c3c757ad4270242ae432147cacbb"));
       } else {
         EXPECT_CALL(
-        *kMockRedisModule,
-        Call(testing::_, testing::StrEq("CONFIG"), testing::StrEq("cc"),
-          testing::StrEq("GET"), testing::StrEq("tls-port")))
-          .WillOnce(testing::Return(nullptr));
+            *kMockRedisModule,
+            Call(testing::_, testing::StrEq("CONFIG"), testing::StrEq("cc"),
+                 testing::StrEq("GET"), testing::StrEq("tls-port")))
+            .WillOnce(testing::Return(nullptr));
       }
     }
   }

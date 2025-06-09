@@ -24,6 +24,7 @@ STANDALONE_TESTS=(
     "stability"
 )
 PYTEST_TESTS=(
+    "compatibility"
 )
 
 function print_usage() {

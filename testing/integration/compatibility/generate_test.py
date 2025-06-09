@@ -1,84 +1,16 @@
-import pytest, logging, time, itertools, redis, math
-import sys, json
+import pytest, traceback
+import sys, json, os
 import numpy as np
-from collections import defaultdict
-from operator import itemgetter
-from itertools import chain, combinations
 import pickle
-import data_sets
-from data_sets import compute_data_sets, SETS_KEY, CREATES_KEY, VECTOR_DIM, NUM_KEYS, ANSWER_FILE_NAME
+from data_sets import compute_data_sets, ClientSystem, SETS_KEY, CREATES_KEY, VECTOR_DIM, NUM_KEYS, ANSWER_FILE_NAME
 '''
 Compare two systems for a bunch of aggregation operations
 '''
 TEST_MARKER = "*" * 100
 
-def cvrt(x):
-    if not isinstance(x, bytes):
-        return x
-    else:
-        try:
-            res = x.decode("utf-8")
-            return res
-        except:
-            return x
-
-
 encoder = lambda x: x.encode() if not isinstance(x, bytes) else x
 
-def printable_cmd(cmd):
-    new_cmd = [encoder(c) for c in cmd]
-    return b" ".join(new_cmd)
-
-
-def printable_result(res):
-    if isinstance(res, list):
-        return [printable_result(x) for x in res]
-    else:
-        return cvrt(res)
-
-
-def sortkeyfunc(row):
-    if isinstance(row, list):
-        r = {row[i]: row[i + 1] for i in range(0, len(row), 2)}
-        if b"__key" in r:
-            return r[b"__key"]
-        elif b"n1" in r:
-            return r[b"n1"]
-        elif b"t1" in r:
-            return r[b"t1"]
-        elif b"t2" in r:
-            return r[b"t2"]
-        elif b"t3" in r:
-            return r[b"t3"]
-    return None
-
-SYSTEM_L_ADDRESS = ('localhost', 6379)
 SYSTEM_R_ADDRESS = ('localhost', 6379)
-
-class ClientSystem:
-    def __init__(self, address):
-        self.address = address
-        self.client = redis.Redis(host=address[0], port=address[1])
-        try:
-            self.client.execute_command("PING")
-        except:
-            print(f"Can't ping {address}")
-            sys.exit(1)
-        self.client.execute_command("FLUSHALL SYNC")
-    def execute_command(self, *cmd):
-        #print("Execute:", *cmd)
-        result = self.client.execute_command(*cmd)
-        #print("Result:", result)
-        return result
-    def pipeline(self):
-        return self.client.pipeline()
-    
-    def wait_for_indexing_done(self):
-        pass
-    
-    def hset(self, *cmd):
-        return self.client.hset(*cmd)
-
 class ClientRSystem(ClientSystem):
     def __init__(self):
         super().__init__(SYSTEM_R_ADDRESS)
@@ -91,43 +23,34 @@ class ClientRSystem(ClientSystem):
         # print("R:", *cmd, " => ", result)
         return result
 
-class ClientLSystem(ClientSystem):
-    def __init__(self):
-        super().__init__(SYSTEM_L_ADDRESS)
-    def execute_command(self, *cmd):
-        result = self.client.execute_command(*cmd)
-        # print("L:", *cmd, " => ", result)
-        return result
-
 #@pytest.mark.parametrize("key_type", ["hash", "json"])
 @pytest.mark.parametrize("key_type", ["hash"])
 class TestAggregateCompatibility:
 
     @classmethod
     def setup_class(cls):
-        ''' Figure out if this is generate or compare '''
+        if os.system(f"docker run --name Generate-search -p {SYSTEM_R_ADDRESS[1]}:6379 redis/redis-stack-server"):
+            print("Failed to start Redis Stack server, please check your Docker setup.")
+            sys.exit(1)
         cls.data = compute_data_sets()
-        try:
-            cls.answer_file = open(ANSWER_FILE_NAME, "rb")
-            print("Answer file was found")
-            cls.generating_answers = False
-            cls.client = ClientLSystem()
-        except FileNotFoundError:
-            print("Answer file not found, generating")
-            cls.answer_file = open(ANSWER_FILE_NAME, "wb")
-            cls.generating_answers = True
-            cls.client = ClientRSystem()
+        cls.answer_file = open(ANSWER_FILE_NAME, "wb")
+        cls.generating_answers = True
+        cls.client = ClientRSystem()
 
+    @classmethod
+    def teardown_class(cls):
+        os.system(f"docker stop Generate-search")
     def setup_method(self):
         self.client.execute_command("FLUSHALL SYNC")
 
     ### Helper Functions ###
-    def setup_data(self, data_key, key_type):
-        print("load_data with index", data_key, " ", key_type);
-        load_list = self.data[data_key][SETS_KEY(key_type)]
+    def setup_data(self, data_set, key_type):
+        self.loaded_data_set = data_set
+        print("load_data with index", data_set, " ", key_type);
+        load_list = self.data[data_set][SETS_KEY(key_type)]
         print(f"Start Loading Data, data set has {len(load_list)} records")
-        print("Doing: ", self.data[data_key][CREATES_KEY(key_type)])
-        for create_index_cmd in self.data[data_key][CREATES_KEY(key_type)]:
+        print("Doing: ", self.data[data_set][CREATES_KEY(key_type)])
+        for create_index_cmd in self.data[data_set][CREATES_KEY(key_type)]:
             self.client.execute_command(create_index_cmd)
 
         # Make large chunks to accelerate things
@@ -142,129 +65,11 @@ class TestAggregateCompatibility:
             pipe.execute()
 
         self.client.wait_for_indexing_done()
-        print(f"setup_data completed {data_key} {key_type}")
+        print(f"setup_data completed {data_set} {key_type}")
         return len(load_list)
 
-    def process_row(self, row):
-        if any([isinstance(r, redis.ResponseError) for r in row]):
-            return (True, None)
-        if 0 != (len(row) % 2):
-            print(f"BAD ROW, not even # of fields: {row}")
-            for r in row:
-                print(f">> [{type(r)}] {r}")
-            return (True, None)
-        return (False, row)
-
-    def parse_field(self, x):
-        if isinstance(x, bytes):
-            return self.parse_field(x.decode("utf-8"))
-        if isinstance(x, str):
-            return x[2::] if x.startswith("$.") else x
-        if isinstance(x, int):
-            return x
-        print("Unknown type ", type(x))
-        assert False
-    def parse_value(self, x):
-        if isinstance(x, bytes):
-            return x
-        if isinstance(x, str):
-            return x
-        if isinstance(x, int):
-            return x
-        print("Unknown type ", type(x))
-        assert False
-    def unpack_search_result(self, rs):
-        rows = []
-        for (key, value) in [(rs[i],rs[i+1]) for i in range(1, len(rs), 2)]:
-            #try:
-            row = {"__key": key}
-            for i in range(0, len(value), 2):
-                row[self.parse_field(value[i])] = self.parse_value(value[i+1])
-            rows += [row]
-            #except:
-            #    print("Parse failure: ", key, value)
-        return rows
-
-    def unpack_agg_result(self, rs, decode=True):
-        """
-        Input:
-            rs: [
-                    _,
-                    ['__key', key1, field1, val1, field2, val2, ...],
-                    ['__key', key2, field1, val1, field2, val2, ...],
-                    ...
-                ]
-        Example input:
-                [
-                    1,
-                    [b'__key', b'hash:0', b'n1', b'0', b'n2', b'0', ...]
-                ]
-
-        Output:
-            resultset: {
-                    'key1': {field_key_1: field_val_key_1},
-                    'key2': {field_key_2: field_val_key_2},
-                    ...
-                }
-        Example output:
-                {
-                    'hash:k3': {'USERNAME': 'Tom', 'AGE': 33}
-                }
-        """
-        # Skip the first gibberish int
-        try:
-            rows = []
-            for key_res in rs[1:]:
-                rows += [{self.parse_field(key_res[f_idx]): self.parse_value(key_res[f_idx + 1])
-                    for f_idx in range(0, len(key_res), 2)}]
-        except:
-            print("Parse Failure: ", rs[1:])
-        return rows
-
-    def unpack_result(self, cmd, rs, sortkeys):
-        if "ft.search" in cmd:
-            out = self.unpack_search_result(rs)
-        else:
-            out = self.unpack_agg_result(rs)
-        #
-        # Sort by the sortkeys
-        #
-        if len(sortkeys) > 0:
-            try:
-                out.sort(key=itemgetter(*sortkeys))
-            except KeyError:
-                print("Failed on sortkeys: ", sortkeys)
-                print("CMD:", cmd)
-                print("RESULT:", rs)
-                print("Out:", out)
-                assert False
-        return out
-    def compare_number_eq(self, l, r):
-        if (l == "nan" and r == "nan") or (l == "-nan" and r == "-nan") or \
-           (l == b"nan" and r == b"nan") or (l == b"-nan" and r == b"-nan"):
-            return True
-        else:
-            return math.isclose(float(l), float(r), rel_tol=.01)
-    def compare_row(self, l, r):
-        lks = sorted(list(l.keys()))
-        rks = sorted(list(r.keys()))
-        if lks != rks:
-            return False
-        for i in range(len(lks)):
-            #
-            # Hack, fields that start with an 'n' are assumed to be numeric
-            #
-            if lks[i].startswith("n"):
-                if not self.compare_number_eq(l[lks[i]], r[rks[i]]):
-                    print("mismatch numeric field: ", l[lks[i]], " ", r[rks[i]])
-                    return False                
-            elif l[lks[i]] != r[rks[i]]:
-                print("mismatch field: ", lks[i], " and ", rks[i], " ", l[lks[i]], "!=", r[rks[i]])
-                return False
-        return True            
-        
     def execute_command(self, cmd):
-        answer = {"cmd": cmd}
+        answer = {"cmd": cmd, "data_set": self.data_set, "traceback": "".join(traceback.format_stack())}
         try:
             answer["result"] = self.client.execute_command(*cmd)
             answer["exception"] = False
@@ -275,106 +80,8 @@ class TestAggregateCompatibility:
             answer["result"] = {}
             answer["exception"] = True
 
-        if self.generating_answers:
-            self.generate_answer(answer)
-        else:
-            self.compare_results(answer)
-    
-    def generate_answer(self, answer):
         pickle.dump(answer, self.answer_file)
     
-    def compare_results(self, results):
-        answer = pickle.load(self.answer_file)
-        
-        cmd = answer["cmd"]
-        if cmd != results["cmd"]:
-            print("CMD Mismatch: ", cmd, " ", answer["cmd"])
-            assert False
-        
-        if 'groupby' in cmd and 'sortby' in cmd:
-            assert False
-        if 'groupby' in cmd:
-            ix = cmd.index('groupby')
-            count = int(cmd[ix+1])
-            sortkeys = [cmd[ix+2+i][1:] for i in range(count)]
-        elif 'sortby' in cmd:
-            ix = cmd.index('sortby')
-            count = int(cmd[ix+1])
-            # Grab the fields after the count, stripping any leading '@'
-            sortkeys = [cmd[ix+2+i][1 if cmd[ix+2+i].startswith("@") else 0:] for i in range(count)]
-            for f in ['asc', 'desc', 'ASC', 'DESC']:
-                if f in sortkeys:
-                    sortkeys.remove(f)
-        else:
-            # todo, remove __key as sortkey once the search output sorting is fixed.
-            # sortkeys=["__key"] if "ft.aggregate" in cmd else []
-            sortkeys=[]
-
-        # If both failed, it's a wrong search cmd and we can exit
-        if answer["exception"] and results["exception"]:
-            print("Both engines failed.")
-            print(f"CMD:{cmd}")
-            print(TEST_MARKER)
-            return
-
-        if answer["exception"]:
-            print("RL Exception, skipped")
-            #print(f"RL Exception: Raw: {printable_result(results['RL'])}")
-            #print(f"EC Result: {printable_result(results['EC'])}")
-            print(TEST_MARKER)
-            return
-
-        if results["exception"]:
-            print(f"CMD: {cmd}")
-            print(f"RL Result: {printable_result(results['RL'])}")
-            print(f"EC Exception Raw: {printable_result(results['EC'])}")
-            print(TEST_MARKER)
-            assert False
-
-        # Output raw results
-        rl = self.unpack_result(cmd, answer["result"], sortkeys)
-        ec = self.unpack_result(cmd, results["result"], sortkeys)
-
-        # Process failures
-        if len(rl) != len(ec):
-            print(f"CMD:{cmd}")
-            print(f"Mismatched sizes RL:{len(rl)} EC:{len(ec)}")
-            print("--RL--")
-            for r in rl:
-                print(r)
-            print("--EC--")
-            for e in ec:
-                print(e)
-            #assert False
-            return
-
-        # if compare_results(ec, rl):
-        # Directly comparing dicts instead of custom compare function
-        # TODO: investigate this later
-        if all([self.compare_row(ec[i], rl[i]) for i in range(len(rl))]):
-            # print("Results look good.")
-            #print(TEST_MARKER)
-            if "ft.search" in cmd:
-                print(f"CMD:{cmd}")
-                for i in range(len(rl)):
-                    print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())])
-                    print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())])
-            return
-        print("***** MISMATCH ON DATA *****, sortkeys=", sortkeys, " records=", len(rl))
-        print(f"CMD: {cmd}")
-        for i in range(len(rl)):
-            if not self.compare_row(rl[i], ec[i]):
-                print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())], "<<<")
-                print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())], "<<<")
-            else:
-                print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())])
-                print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())])
-
-        print("Raw RL:", results["RL"])
-        print("Raw EC:", results["EC"])
-        print(TEST_MARKER)
-        assert False
-
     def checkvec(self, *orig_cmd, knn=10000, score_as=""):
         '''Temporary change until query parser is redone.'''
         cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]

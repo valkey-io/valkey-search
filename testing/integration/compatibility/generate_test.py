@@ -1,8 +1,9 @@
-import pytest, traceback
+import pytest, traceback, redis, time
 import sys, json, os
 import numpy as np
 import pickle
-from data_sets import compute_data_sets, ClientSystem, SETS_KEY, CREATES_KEY, VECTOR_DIM, NUM_KEYS, ANSWER_FILE_NAME
+from . import data_sets
+from .data_sets import compute_data_sets, ClientSystem, SETS_KEY, CREATES_KEY, VECTOR_DIM, NUM_KEYS, ANSWER_FILE_NAME
 '''
 Compare two systems for a bunch of aggregation operations
 '''
@@ -18,10 +19,17 @@ class ClientRSystem(ClientSystem):
             self.client.execute_command("FT.CONFIG SET TIMEOUT 0")
         except:
             pass
-    def execute_command(self, *cmd):
-        result = self.client.execute_command(*cmd)
-        # print("R:", *cmd, " => ", result)
-        return result
+
+    def wait_for_indexing_done(self, index_name):
+        '''Wait for indexing to be done.'''
+        indexing = True
+        while indexing:
+            try:
+                indexing = self.ft_info(index_name)["indexing"]
+            except redis.ConnectionError:
+                print("failed")
+                assert False
+        print("Indexing is done.")
 
 #@pytest.mark.parametrize("key_type", ["hash", "json"])
 @pytest.mark.parametrize("key_type", ["hash"])
@@ -29,27 +37,39 @@ class TestAggregateCompatibility:
 
     @classmethod
     def setup_class(cls):
-        if os.system(f"docker run --name Generate-search -p {SYSTEM_R_ADDRESS[1]}:6379 redis/redis-stack-server"):
+        os.system("docker remove Generate-search || true")
+        if os.system("docker run --name Generate-search -p 6379:6379 redis/redis-stack-server &") != 0:
             print("Failed to start Redis Stack server, please check your Docker setup.")
             sys.exit(1)
+        print("Started Generate-search server")
         cls.data = compute_data_sets()
         cls.answer_file = open(ANSWER_FILE_NAME, "wb")
         cls.generating_answers = True
-        cls.client = ClientRSystem()
+        while True:
+            try:
+                cls.client = ClientRSystem()
+                cls.client.execute_command("PING")
+                break
+            except redis.ConnectionError:
+                print("Waiting for R system to be ready...")
+                time.sleep(.25)
+        print("Done initializing")
 
     @classmethod
     def teardown_class(cls):
-        os.system(f"docker stop Generate-search")
+        print("Stopping Generate-search server")
+        os.system("docker stop Generate-search")
+        os.system("docker remove Generate-search")
+
     def setup_method(self):
         self.client.execute_command("FLUSHALL SYNC")
 
     ### Helper Functions ###
     def setup_data(self, data_set, key_type):
-        self.loaded_data_set = data_set
+        self.data_set_name = data_set
         print("load_data with index", data_set, " ", key_type);
         load_list = self.data[data_set][SETS_KEY(key_type)]
         print(f"Start Loading Data, data set has {len(load_list)} records")
-        print("Doing: ", self.data[data_set][CREATES_KEY(key_type)])
         for create_index_cmd in self.data[data_set][CREATES_KEY(key_type)]:
             self.client.execute_command(create_index_cmd)
 
@@ -64,17 +84,18 @@ class TestAggregateCompatibility:
                     pipe.execute_command(*["JSON.SET", cmd[0], "$", json.dumps(cmd[1])])
             pipe.execute()
 
-        self.client.wait_for_indexing_done()
+        self.client.wait_for_indexing_done(f"{key_type}_idx1")
         print(f"setup_data completed {data_set} {key_type}")
         return len(load_list)
 
     def execute_command(self, cmd):
-        answer = {"cmd": cmd, "data_set": self.data_set, "traceback": "".join(traceback.format_stack())}
+        answer = {"cmd": cmd, "data_set_name": self.data_set_name, "traceback": "".join(traceback.format_stack())}
         try:
+            print("Cmd:", *cmd)
             answer["result"] = self.client.execute_command(*cmd)
             answer["exception"] = False
             exception = None
-            # print(f"{name} replied: {rs}")
+            # print(f"replied: {answer['result']}")
         except Exception as exc:
             print(f"Got exception for Error: '{exc}', Cmd:{cmd}")
             answer["result"] = {}

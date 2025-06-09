@@ -1,5 +1,5 @@
 import numpy as np
-import itertools
+import itertools, redis, sys
 
 ### Reusable Data ###
 #
@@ -13,26 +13,32 @@ SETS_KEY = lambda key_type: f"{key_type} sets"
 CREATES_KEY = lambda key_type: f"{key_type} creates"
 ANSWER_FILE_NAME = "aggregate-answers.pickle"
 
+def unbytes(b):
+    if isinstance(b, bytes):
+        return b.decode("utf-8")
+    else:
+        return b
 class ClientSystem:
     def __init__(self, address):
         self.address = address
         self.client = redis.Redis(host=address[0], port=address[1])
-        try:
-            self.client.execute_command("PING")
-        except:
-            print(f"Can't ping {address}")
-            sys.exit(1)
-        self.client.execute_command("FLUSHALL SYNC")
+
     def execute_command(self, *cmd):
-        #print("Execute:", *cmd)
+        # print("Execute:", *cmd)
         result = self.client.execute_command(*cmd)
         #print("Result:", result)
         return result
+    
+    def ft_info(self, index):
+        values = self.client.execute_command(f"FT.INFO {index}")
+        result = {unbytes(values[i]):unbytes(values[i+1]) for i in range(0, len(values), 2)}
+        return result
+        
     def pipeline(self):
         return self.client.pipeline()
     
-    def wait_for_indexing_done(self):
-        pass
+    def wait_for_indexing_done(self, index_name):
+        assert False
     
     def hset(self, *cmd):
         return self.client.hset(*cmd)

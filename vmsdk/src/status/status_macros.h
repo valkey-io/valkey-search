@@ -101,7 +101,7 @@
 
 // Executes an expression `rexpr` that returns a
 // `absl::StatusOr<T>`. On OK, extracts its value into the variable defined by
-// `lhs`, otherwise returns from the current function. By default the error
+// `lhs`; otherwise, returns from the current function. By default the error
 // status is returned unchanged, but it may be modified by an
 // `error_expression`. If there is an error, `lhs` is not evaluated; thus any
 // side effects that `lhs` may have only occur in the success case.

@@ -41,7 +41,7 @@ FT.CREATE <index-name>
 **TAG**: A tag field is a string that contains one or more tag values.  
       
 - **SEPARATOR \<sep\>** (optional): One of these characters `,.<>{}[]"':;!@#$%^&*()-+=~` used to delimit individual tags. If omitted the default value is `,`.  
-- **CASESENSITIVE** (optional): If present, tag comparisons will be case sensitive. The default is that tag comparisons are NOT case sensitive
+- **CASESENSITIVE** (optional): If present, tag comparisons will be case-sensitive. The default is that tag comparisons are NOT case-sensitive
 
 **NUMERIC**: A numeric field contains a number.  
       

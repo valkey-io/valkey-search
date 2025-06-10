@@ -194,7 +194,7 @@ function check_tools() {
         check_tool ${tool}
     done
 
-    # Check for ninja. On RedHat based Linux, it is called ninja-build, while on Debian based Linux, it is simply ninja
+    # Check for ninja. On Red Hat based Linux, it is called ninja-build, while on Debian based Linux, it is simply ninja
     # Ubuntu / Mint et al will report "ID_LIKE=debian"
     local debian_output=$(cat /etc/*-release|grep -i debian|wc -l)
     if [ ${debian_output} -gt 0 ]; then

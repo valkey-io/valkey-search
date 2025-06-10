@@ -13,7 +13,7 @@ set(MODULES_INSTALL_PREFIX "${MODULES_DIR}/install")
 
 find_program(_GIT_EXE git REQUIRED)
 
-# On some distros (mainly RedHat based) the cmake files might be installed under
+# On some distros (mainly Red Hat based) the cmake files might be installed under
 # lib64/ and not under lib/, this function helps locating the cmake path for the
 # given module
 function(update_cmake_prefix MODULE_NAME)

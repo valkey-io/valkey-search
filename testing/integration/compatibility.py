@@ -5,23 +5,9 @@ from collections import defaultdict
 from operator import itemgetter
 from itertools import chain, combinations
 import pickle
-import data_sets
-from data_sets import compute_data_sets, SETS_KEY, CREATES_KEY, VECTOR_DIM, NUM_KEYS, ANSWER_FILE_NAME
-'''
-Compare two systems for a bunch of aggregation operations
-'''
+import compatibility
+from compatibility.data_sets import * 
 TEST_MARKER = "*" * 100
-
-def cvrt(x):
-    if not isinstance(x, bytes):
-        return x
-    else:
-        try:
-            res = x.decode("utf-8")
-            return res
-        except:
-            return x
-
 
 encoder = lambda x: x.encode() if not isinstance(x, bytes) else x
 
@@ -34,8 +20,7 @@ def printable_result(res):
     if isinstance(res, list):
         return [printable_result(x) for x in res]
     else:
-        return cvrt(res)
-
+        return unbytes(res)
 
 def sortkeyfunc(row):
     if isinstance(row, list):
@@ -73,23 +58,11 @@ class ClientSystem:
     def pipeline(self):
         return self.client.pipeline()
     
-    def wait_for_indexing_done(self):
+    def wait_for_indexing_done(self, index):
         pass
     
     def hset(self, *cmd):
         return self.client.hset(*cmd)
-
-class ClientRSystem(ClientSystem):
-    def __init__(self):
-        super().__init__(SYSTEM_R_ADDRESS)
-        try:
-            self.client.execute_command("FT.CONFIG SET TIMEOUT 0")
-        except:
-            pass
-    def execute_command(self, *cmd):
-        result = self.client.execute_command(*cmd)
-        # print("R:", *cmd, " => ", result)
-        return result
 
 class ClientLSystem(ClientSystem):
     def __init__(self):
@@ -99,580 +72,217 @@ class ClientLSystem(ClientSystem):
         # print("L:", *cmd, " => ", result)
         return result
 
-#@pytest.mark.parametrize("key_type", ["hash", "json"])
-@pytest.mark.parametrize("key_type", ["hash"])
-class TestAggregateCompatibility:
+def process_row(row):
+    if any([isinstance(r, redis.ResponseError) for r in row]):
+        return (True, None)
+    if 0 != (len(row) % 2):
+        print(f"BAD ROW, not even # of fields: {row}")
+        for r in row:
+            print(f">> [{type(r)}] {r}")
+        return (True, None)
+    return (False, row)
 
-    @classmethod
-    def setup_class(cls):
-        ''' Figure out if this is generate or compare '''
-        cls.data = compute_data_sets()
-        try:
-            cls.answer_file = open(ANSWER_FILE_NAME, "rb")
-            print("Answer file was found")
-            cls.generating_answers = False
-            cls.client = ClientLSystem()
-        except FileNotFoundError:
-            print("Answer file not found, generating")
-            cls.answer_file = open(ANSWER_FILE_NAME, "wb")
-            cls.generating_answers = True
-            cls.client = ClientRSystem()
+def parse_field(x):
+    if isinstance(x, bytes):
+        return parse_field(x.decode("utf-8"))
+    if isinstance(x, str):
+        return x[2::] if x.startswith("$.") else x
+    if isinstance(x, int):
+        return x
+    print("Unknown type ", type(x))
+    assert False
 
-    def setup_method(self):
-        self.client.execute_command("FLUSHALL SYNC")
+def parse_value(x):
+    if isinstance(x, bytes):
+        return x
+    if isinstance(x, str):
+        return x
+    if isinstance(x, int):
+        return x
+    print("Unknown type ", type(x))
+    assert False
 
-    ### Helper Functions ###
-    def setup_data(self, data_key, key_type):
-        print("load_data with index", data_key, " ", key_type);
-        load_list = self.data[data_key][SETS_KEY(key_type)]
-        print(f"Start Loading Data, data set has {len(load_list)} records")
-        print("Doing: ", self.data[data_key][CREATES_KEY(key_type)])
-        for create_index_cmd in self.data[data_key][CREATES_KEY(key_type)]:
-            self.client.execute_command(create_index_cmd)
+def unpack_search_result(rs):
+    rows = []
+    for (key, value) in [(rs[i],rs[i+1]) for i in range(1, len(rs), 2)]:
+        #try:
+        row = {"__key": key}
+        for i in range(0, len(value), 2):
+            row[parse_field(value[i])] = parse_value(value[i+1])
+        rows += [row]
+        #except:
+        #    print("Parse failure: ", key, value)
+    return rows
 
-        # Make large chunks to accelerate things
-        batch_size = 50
-        for s in range(0, len(load_list), batch_size):
-            pipe = self.client.pipeline()
-            for cmd in load_list[s : s + batch_size]:
-                if key_type == "hash":
-                    pipe.hset(cmd[0], mapping=cmd[1])
-                else:
-                    pipe.execute_command(*["JSON.SET", cmd[0], "$", json.dumps(cmd[1])])
-            pipe.execute()
-
-        self.client.wait_for_indexing_done()
-        print(f"setup_data completed {data_key} {key_type}")
-        return len(load_list)
-
-    def process_row(self, row):
-        if any([isinstance(r, redis.ResponseError) for r in row]):
-            return (True, None)
-        if 0 != (len(row) % 2):
-            print(f"BAD ROW, not even # of fields: {row}")
-            for r in row:
-                print(f">> [{type(r)}] {r}")
-            return (True, None)
-        return (False, row)
-
-    def parse_field(self, x):
-        if isinstance(x, bytes):
-            return self.parse_field(x.decode("utf-8"))
-        if isinstance(x, str):
-            return x[2::] if x.startswith("$.") else x
-        if isinstance(x, int):
-            return x
-        print("Unknown type ", type(x))
-        assert False
-    def parse_value(self, x):
-        if isinstance(x, bytes):
-            return x
-        if isinstance(x, str):
-            return x
-        if isinstance(x, int):
-            return x
-        print("Unknown type ", type(x))
-        assert False
-    def unpack_search_result(self, rs):
+def unpack_agg_result(rs, decode=True):
+    # Skip the first gibberish int
+    try:
         rows = []
-        for (key, value) in [(rs[i],rs[i+1]) for i in range(1, len(rs), 2)]:
-            #try:
-            row = {"__key": key}
-            for i in range(0, len(value), 2):
-                row[self.parse_field(value[i])] = self.parse_value(value[i+1])
-            rows += [row]
-            #except:
-            #    print("Parse failure: ", key, value)
-        return rows
+        for key_res in rs[1:]:
+            rows += [{parse_field(key_res[f_idx]): parse_value(key_res[f_idx + 1])
+                for f_idx in range(0, len(key_res), 2)}]
+    except:
+        print("Parse Failure: ", rs[1:])
+        assert False
+    return rows
 
-    def unpack_agg_result(self, rs, decode=True):
-        """
-        Input:
-            rs: [
-                    _,
-                    ['__key', key1, field1, val1, field2, val2, ...],
-                    ['__key', key2, field1, val1, field2, val2, ...],
-                    ...
-                ]
-        Example input:
-                [
-                    1,
-                    [b'__key', b'hash:0', b'n1', b'0', b'n2', b'0', ...]
-                ]
-
-        Output:
-            resultset: {
-                    'key1': {field_key_1: field_val_key_1},
-                    'key2': {field_key_2: field_val_key_2},
-                    ...
-                }
-        Example output:
-                {
-                    'hash:k3': {'USERNAME': 'Tom', 'AGE': 33}
-                }
-        """
-        # Skip the first gibberish int
+def unpack_result(cmd, rs, sortkeys):
+    if "ft.search" in cmd:
+        out = unpack_search_result(rs)
+    else:
+        out = unpack_agg_result(rs)
+    #
+    # Sort by the sortkeys
+    #
+    if len(sortkeys) > 0:
         try:
-            rows = []
-            for key_res in rs[1:]:
-                rows += [{self.parse_field(key_res[f_idx]): self.parse_value(key_res[f_idx + 1])
-                    for f_idx in range(0, len(key_res), 2)}]
-        except:
-            print("Parse Failure: ", rs[1:])
-        return rows
+            out.sort(key=itemgetter(*sortkeys))
+        except KeyError:
+            print("Failed on sortkeys: ", sortkeys)
+            print("CMD:", cmd)
+            print("RESULT:", rs)
+            print("Out:", out)
+            assert False
+    return out
 
-    def unpack_result(self, cmd, rs, sortkeys):
-        if "ft.search" in cmd:
-            out = self.unpack_search_result(rs)
-        else:
-            out = self.unpack_agg_result(rs)
+def compare_number_eq(l, r):
+    if (l == "nan" and r == "nan") or (l == "-nan" and r == "-nan") or \
+        (l == b"nan" and r == b"nan") or (l == b"-nan" and r == b"-nan"):
+        return True
+    else:
+        return math.isclose(float(l), float(r), rel_tol=.01)
+    
+def compare_row(l, r):
+    lks = sorted(list(l.keys()))
+    rks = sorted(list(r.keys()))
+    if lks != rks:
+        return False
+    for i in range(len(lks)):
         #
-        # Sort by the sortkeys
+        # Hack, fields that start with an 'n' are assumed to be numeric
         #
-        if len(sortkeys) > 0:
-            try:
-                out.sort(key=itemgetter(*sortkeys))
-            except KeyError:
-                print("Failed on sortkeys: ", sortkeys)
-                print("CMD:", cmd)
-                print("RESULT:", rs)
-                print("Out:", out)
-                assert False
-        return out
-    def compare_number_eq(self, l, r):
-        if (l == "nan" and r == "nan") or (l == "-nan" and r == "-nan") or \
-           (l == b"nan" and r == b"nan") or (l == b"-nan" and r == b"-nan"):
-            return True
-        else:
-            return math.isclose(float(l), float(r), rel_tol=.01)
-    def compare_row(self, l, r):
-        lks = sorted(list(l.keys()))
-        rks = sorted(list(r.keys()))
-        if lks != rks:
+        if lks[i].startswith("n"):
+            if not compare_number_eq(l[lks[i]], r[rks[i]]):
+                print("mismatch numeric field: ", l[lks[i]], " ", r[rks[i]])
+                return False                
+        elif l[lks[i]] != r[rks[i]]:
+            print("mismatch field: ", lks[i], " and ", rks[i], " ", l[lks[i]], "!=", r[rks[i]])
             return False
-        for i in range(len(lks)):
-            #
-            # Hack, fields that start with an 'n' are assumed to be numeric
-            #
-            if lks[i].startswith("n"):
-                if not self.compare_number_eq(l[lks[i]], r[rks[i]]):
-                    print("mismatch numeric field: ", l[lks[i]], " ", r[rks[i]])
-                    return False                
-            elif l[lks[i]] != r[rks[i]]:
-                print("mismatch field: ", lks[i], " and ", rks[i], " ", l[lks[i]], "!=", r[rks[i]])
-                return False
-        return True            
-        
-    def execute_command(self, cmd):
-        answer = {"cmd": cmd}
-        try:
-            answer["result"] = self.client.execute_command(*cmd)
-            answer["exception"] = False
-            exception = None
-            # print(f"{name} replied: {rs}")
-        except Exception as exc:
-            print(f"Got exception for Error: '{exc}', Cmd:{cmd}")
-            answer["result"] = {}
-            answer["exception"] = True
-
-        if self.generating_answers:
-            self.generate_answer(answer)
-        else:
-            self.compare_results(answer)
+    return True            
     
-    def generate_answer(self, answer):
-        pickle.dump(answer, self.answer_file)
+def compare_results(answer, results):
+    cmd = answer["cmd"]
+    if cmd != results["cmd"]:
+        print("CMD Mismatch: ", cmd, " ", answer["cmd"])
+        assert False
     
-    def compare_results(self, results):
-        answer = pickle.load(self.answer_file)
-        
-        cmd = answer["cmd"]
-        if cmd != results["cmd"]:
-            print("CMD Mismatch: ", cmd, " ", answer["cmd"])
-            assert False
-        
-        if 'groupby' in cmd and 'sortby' in cmd:
-            assert False
-        if 'groupby' in cmd:
-            ix = cmd.index('groupby')
-            count = int(cmd[ix+1])
-            sortkeys = [cmd[ix+2+i][1:] for i in range(count)]
-        elif 'sortby' in cmd:
-            ix = cmd.index('sortby')
-            count = int(cmd[ix+1])
-            # Grab the fields after the count, stripping any leading '@'
-            sortkeys = [cmd[ix+2+i][1 if cmd[ix+2+i].startswith("@") else 0:] for i in range(count)]
-            for f in ['asc', 'desc', 'ASC', 'DESC']:
-                if f in sortkeys:
-                    sortkeys.remove(f)
-        else:
-            # todo, remove __key as sortkey once the search output sorting is fixed.
-            # sortkeys=["__key"] if "ft.aggregate" in cmd else []
-            sortkeys=[]
+    if 'groupby' in cmd and 'sortby' in cmd:
+        assert False
+    if 'groupby' in cmd:
+        ix = cmd.index('groupby')
+        count = int(cmd[ix+1])
+        sortkeys = [cmd[ix+2+i][1:] for i in range(count)]
+    elif 'sortby' in cmd:
+        ix = cmd.index('sortby')
+        count = int(cmd[ix+1])
+        # Grab the fields after the count, stripping any leading '@'
+        sortkeys = [cmd[ix+2+i][1 if cmd[ix+2+i].startswith("@") else 0:] for i in range(count)]
+        for f in ['asc', 'desc', 'ASC', 'DESC']:
+            if f in sortkeys:
+                sortkeys.remove(f)
+    else:
+        # todo, remove __key as sortkey once the search output sorting is fixed.
+        # sortkeys=["__key"] if "ft.aggregate" in cmd else []
+        sortkeys=[]
 
-        # If both failed, it's a wrong search cmd and we can exit
-        if answer["exception"] and results["exception"]:
-            print("Both engines failed.")
-            print(f"CMD:{cmd}")
-            print(TEST_MARKER)
-            return
+    # If both failed, it's a wrong search cmd and we can exit
+    if answer["exception"] and results["exception"]:
+        print("Both engines failed.")
+        print(f"CMD:{cmd}")
+        print(TEST_MARKER)
+        return
 
-        if answer["exception"]:
-            print("RL Exception, skipped")
-            #print(f"RL Exception: Raw: {printable_result(results['RL'])}")
-            #print(f"EC Result: {printable_result(results['EC'])}")
-            print(TEST_MARKER)
-            return
+    if answer["exception"]:
+        print("RL Exception, skipped")
+        #print(f"RL Exception: Raw: {printable_result(results['RL'])}")
+        #print(f"EC Result: {printable_result(results['EC'])}")
+        print(TEST_MARKER)
+        return
 
-        if results["exception"]:
-            print(f"CMD: {cmd}")
-            print(f"RL Result: {printable_result(results['RL'])}")
-            print(f"EC Exception Raw: {printable_result(results['EC'])}")
-            print(TEST_MARKER)
-            assert False
-
-        # Output raw results
-        rl = self.unpack_result(cmd, answer["result"], sortkeys)
-        ec = self.unpack_result(cmd, results["result"], sortkeys)
-
-        # Process failures
-        if len(rl) != len(ec):
-            print(f"CMD:{cmd}")
-            print(f"Mismatched sizes RL:{len(rl)} EC:{len(ec)}")
-            print("--RL--")
-            for r in rl:
-                print(r)
-            print("--EC--")
-            for e in ec:
-                print(e)
-            #assert False
-            return
-
-        # if compare_results(ec, rl):
-        # Directly comparing dicts instead of custom compare function
-        # TODO: investigate this later
-        if all([self.compare_row(ec[i], rl[i]) for i in range(len(rl))]):
-            # print("Results look good.")
-            #print(TEST_MARKER)
-            if "ft.search" in cmd:
-                print(f"CMD:{cmd}")
-                for i in range(len(rl)):
-                    print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())])
-                    print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())])
-            return
-        print("***** MISMATCH ON DATA *****, sortkeys=", sortkeys, " records=", len(rl))
+    if results["exception"]:
         print(f"CMD: {cmd}")
-        for i in range(len(rl)):
-            if not self.compare_row(rl[i], ec[i]):
-                print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())], "<<<")
-                print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())], "<<<")
-            else:
-                print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())])
-                print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())])
-
-        print("Raw RL:", results["RL"])
-        print("Raw EC:", results["EC"])
+        print(f"RL Result: {printable_result(results['RL'])}")
+        print(f"EC Exception Raw: {printable_result(results['EC'])}")
         print(TEST_MARKER)
         assert False
 
-    def checkvec(self, *orig_cmd, knn=10000, score_as=""):
-        '''Temporary change until query parser is redone.'''
-        cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]
-        new_cmd = []
-        did_one = False
-        for c in cmd:
-            if c.strip() == "*" and not did_one:
-                ''' substitute '''
-                new_cmd += [f"*=>[KNN {knn} @v1 $BLOB {score_as}]"]
-                did_one = True
-            else:
-                new_cmd += [c]
-        new_cmd += [
-            "PARAMS",
-            "2",
-            "BLOB",
-            np.array([0] * VECTOR_DIM).astype(np.float32).tobytes(),
-            "DIALECT",
-            "3",
-        ]
-        self.execute_command(new_cmd)
-    '''
-    def test_search_reverse(self, key_type):
-        self.setup_data("reverse vector numbers", key_type)
-        self.checkvec(f"ft.search {key_type}_idx1 *")
-        self.checkvec(f"ft.search {key_type}_idx1 * limit 0 5")
+    # Output raw results
+    rl = unpack_result(cmd, answer["result"], sortkeys)
+    ec = unpack_result(cmd, results["result"], sortkeys)
 
-    def test_search(self, key_type):
-        self.setup_data("sortable numbers", key_type)
-        self.checkvec(f"ft.search {key_type}_idx1 *")
-        self.checkvec(f"ft.search {key_type}_idx1 * limit 0 5")
-    '''
+    # Process failures
+    if len(rl) != len(ec):
+        print(f"CMD:{cmd}")
+        print(f"Mismatched sizes RL:{len(rl)} EC:{len(ec)}")
+        print("--RL--")
+        for r in rl:
+            print(r)
+        print("--EC--")
+        for e in ec:
+            print(e)
+        #assert False
+        return
 
-    def test_aggregate_sortby(self, key_type):
-        self.setup_data("sortable numbers", key_type)
-        self.checkvec(f"ft.aggregate {key_type}_idx1 * load 2 @__key @n2 sortby 1 @n2")
-        self.checkvec(f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 1 @n2")
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @n2 asc"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @n2 desc"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @__key desc"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 VECTORDISTANCE sortby 2 @VECTORDISTANCE desc"
-        , score_as="AS VECTORDISTANCE")
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @__v1_score asc"
-        )
+    # if compare_results(ec, rl):
+    # Directly comparing dicts instead of custom compare function
+    # TODO: investigate this later
+    if all([compare_row(ec[i], rl[i]) for i in range(len(rl))]):
+        # print("Results look good.")
+        #print(TEST_MARKER)
+        if "ft.search" in cmd:
+            print(f"CMD:{cmd}")
+            for i in range(len(rl)):
+                print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())])
+                print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())])
+        return
+    print("***** MISMATCH ON DATA *****, sortkeys=", sortkeys, " records=", len(rl))
+    print(f"CMD: {cmd}")
+    for i in range(len(rl)):
+        if not compare_row(rl[i], ec[i]):
+            print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())], "<<<")
+            print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())], "<<<")
+        else:
+            print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())])
+            print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())])
 
-    def test_aggregate_groupby(self, key_type):
-        self.setup_data("sortable numbers", key_type)
-        self.checkvec(f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @n1")
-        self.checkvec(f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1")
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce count 0 as count"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce count 0 as count"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce COUNT 0 as count"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce CoUnT 0 as count"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce sum 1 @n1 as sum"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce sum 1 @n1 as sum"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce sum 1 @n2 as sum"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce avg 1 @n1 as avg"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce avg 1 @n1 as avg"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce avg 1 @n2 as avg"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce min 1 @n1 as min"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce min 1 @n2 as min"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce min 1 @n1 as min"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce min 1 @n2 as min"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce stddev 1 @n1 as nstddev"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce stddev 1 @n1 as nstddev"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce stddev 1 @n2 as nstddev"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n1 as nmax"
-        )
-        self.checkvec(
-            f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce max 1 @n1 as nmax"
-        )
-        self.checkvec(f'ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n2 as nmax')
-    '''
-    # todo enable when search sorting is fixed
-    def test_aggregate_limit(self, key_type):
-        keys = self.setup_data("sortable numbers", key_type)
-        self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2")
-        self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 limit 1 4")
-        self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 limit 1 4 sortby 2 @__key desc")
-        self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 1 4")
-    '''
-    def test_aggregate_short_limit(self, key_type):
-        keys = self.setup_data("sortable numbers", key_type)
-        self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 limit 0 5")
-        self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc")
-        self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 0 5")
-        self.checkvec(f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key asc limit 1 4", knn=4)
+    print("Raw RL:", results["RL"])
+    print("Raw EC:", results["EC"])
+    print(TEST_MARKER)
+    assert False
 
-    def test_aggregate_load(self, key_type):
-        keys = self.setup_data("sortable numbers", key_type)
-        self.checkvec(f"ft.aggregate {key_type}_idx1  *")
-        self.checkvec(f"ft.aggregate {key_type}_idx1  * load *")
+def do_answer(expected, data_set):
+    if expected['data_set_name'] != data_set:
+        print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'])
+        client.execute_command("FLUSHALL SYNC")
+        load_data(client, expected['data_set_name'], expected['key_type'])
+        data_set = expected['data_set_name']
+    try:
+        result = {}
+        result["cmd"] = expected['cmd']
+        result["result"] = client.execute_command(*expected['cmd'])
+        result["exception"] = False
+        compare_results(expected, result)
+    except redis.ResponseError as e:
+        result["exception"] = True
+        compare_results(expected, result)
+    return data_set
 
-    def test_aggregate_numeric_dyadic_operators(self, key_type):
-        keys = self.setup_data("hard numbers", key_type)
-        dyadic = ["+", "-", "*", "/", "^"]
-        relops = ["<", "<=", "==", "!=", ">=", ">"]
-        logops = ["||", "&&"]
-        for op in dyadic + relops + logops:
-            self.checkvec(
-                f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 apply @n1{op}@n2 as nn"
-            )
 
-    def test_aggregate_numeric_triadic_operators(self, key_type):
-        keys = self.setup_data("hard numbers", key_type)
-        dyadic = ["+", "-", "*", "/", "^"]
-        relops = ["<", "<=", "==", "!=", ">=", ">"]
-        logops = ["||", "&&"]
-        for op1 in dyadic+relops+logops:
-            for op2 in dyadic+relops+logops:
-                self.checkvec(
-                    f"ft.aggregate {key_type}_idx1  * load 4 @__key @n1 @n2 @n3 apply @n1{op1}@n2{op2}@n3 as nn apply (@n1{op1}@n2) as nn1"
-                )
-
-    def test_aggregate_numeric_functions(self, key_type):
-        keys = self.setup_data("hard numbers", key_type)
-        function = ["log", "abs", "ceil", "floor", "log2", "exp", "sqrt"]
-        for f in function:
-            self.checkvec(
-                f"ft.aggregate {key_type}_idx1  * load 2 @__key @n1 apply {f}(@n1) as nn"
-            )
-
-    def test_aggregate_string_apply_functions(self, key_type):
-        self.setup_data("hard numbers", key_type)
-
-        # String apply function "contains"
-        self.checkvec(
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "__key",
-            "t3",
-            "apply",
-            'contains(@t3, "all")',
-            "as",
-            "apply_result",
-        )
-        self.checkvec(
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "__key",
-            "t3",
-            "apply",
-            'contains(@t3, "value")',
-            "as",
-            "apply_result",
-        )
-        self.checkvec(
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t2",
-            "__key",
-            "apply",
-            'contains(@t2, "two")',
-            "as",
-            "apply_result",
-        )
-        self.checkvec(
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t1",
-            "__key",
-            "apply",
-            'contains(@t1, "one")',
-            "as",
-            "apply_result",
-        )
-        self.checkvec(
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t1",
-            "__key",
-            "apply",
-            'contains(@t1, "")',
-            "as",
-            "apply_result",
-        )
-        self.checkvec(
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "__key",
-            "t1",
-            "apply",
-            'contains("", "one")',
-            "as",
-            "apply_result",
-        )
-        self.checkvec(
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "__key",
-            "t3",
-            "apply",
-            'contains("", "")',
-            "as",
-            "apply_result",
-        )
-
-    def test_aggregate_substr(self, key_type):
-        self.setup_data("hard numbers", key_type)
-        for offset in [0, 1, 2, 100, -1, -2, -3, -1000]:
-            for len in [0, 1, 2, 100, -1, -2, -3, -1000]:
-                self.checkvec(
-                    "ft.aggregate",
-                    f"{key_type}_idx1",
-                    "*",
-                    "load",
-                    "2",
-                    "t2",
-                    "__key",
-                    "apply",
-                    f"substr(@t2, {offset}, {len})",
-                    "as",
-                    "apply_result",
-        )
-
-    def test_aggregate_dyadic_ops(self, key_type):
-        self.setup_data("hard numbers", key_type)
-        values = ["-inf", "-1.5", "-1", "-0.5", "0", "0.5", "1.0", "+inf"]
-        dyadic = ["+", "-", "*", "/", "^"]
-        relops = ["<", "<=", "==", "!=", ">=", ">"]
-        logops = ["||", "&&"]
-        for lop in values:
-            for rop in values:
-                for op in dyadic+relops+logops:
-                    self.checkvec(
-                        "ft.aggregate",
-                        f"{key_type}_idx1",
-                        "*",
-                        "load",
-                        "2",
-                        "__key",
-                        "t2",
-                        "apply",
-                        f"({lop}){op}({rop})",
-                        "as",
-                        "nn",
-                )
+f = open("compatibility/" + ANSWER_FILE_NAME, "rb")
+client = ClientLSystem()
+data_set = None
+answers = pickle.load(f)
+print(f"Loaded {len(answers)} answers")
+data_set = None
+for i in range(len(answers)):
+    data_set = do_answer(answers[i], data_set)

@@ -1,5 +1,5 @@
 import numpy as np
-import itertools, redis, sys
+import itertools, redis, json
 
 ### Reusable Data ###
 #
@@ -24,7 +24,7 @@ class ClientSystem:
         self.client = redis.Redis(host=address[0], port=address[1])
 
     def execute_command(self, *cmd):
-        # print("Execute:", *cmd)
+        print("Execute:", *cmd)
         result = self.client.execute_command(*cmd)
         #print("Result:", result)
         return result
@@ -42,6 +42,12 @@ class ClientSystem:
     
     def hset(self, *cmd):
         return self.client.hset(*cmd)
+    
+def array_encode(key_type, array):
+    if key_type == "hash":
+        return np.array(array).astype(np.float32).tobytes()
+    else:
+        return array      
 
 
 def compute_data_sets():
@@ -57,6 +63,10 @@ def compute_data_sets():
 
     def make_field_definition(key_type, name, typ, i):
         if typ == "vector":
+            if key_type == "hash":
+                return f"{name}{i} vector HNSW 6 DIM {VECTOR_DIM} TYPE FLOAT32 DISTANCE_METRIC L2"
+            else:
+                return f"$.{name}{i} as {name}{i} vector HNSW 6 DIM {VECTOR_DIM} TYPE FLOAT32 DISTANCE_METRIC L2"
             return f"{name}{i} vector HNSW 6 DIM {VECTOR_DIM} TYPE FLOAT32 DISTANCE_METRIC L2"
         else:
             return f"{name}{i} {typ}" if key_type == "hash" else f"$.{name}{i} AS {name}{i} {typ}"
@@ -88,7 +98,7 @@ def compute_data_sets():
                     "t1": f"one.one{i*2}",
                     "t2": f"two.two{i*-2}",
                     "t3": "all_the_same_value",
-                    "v1": np.array([i for _ in range(VECTOR_DIM)]).astype(np.float32).tobytes(),
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
                 },
             )
             for i in range(len(combinations))
@@ -109,7 +119,7 @@ def compute_data_sets():
                     "t1": f"one.one{i*2}",
                     "t2": f"two.two{i*-2}",
                     "t3": "all_the_same_value",
-                    "v1": np.array([i for _ in range(VECTOR_DIM)]).astype(np.float32).tobytes(),
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
                 },
             )
             for i in range(len(sortable_numbers))
@@ -130,9 +140,32 @@ def compute_data_sets():
                     "t1": f"one.one{i*2}",
                     "t2": f"two.two{i*-2}",
                     "t3": "all_the_same_value",
-                    "v1": np.array([(len(sortable_numbers)-i) for _ in range(VECTOR_DIM)]).astype(np.float32).tobytes(),
+                    "v1": array_encode(key_type, [(len(sortable_numbers)-i) for _ in range(VECTOR_DIM)]),
                 },
             )
             for i in range(len(sortable_numbers))
         ]
     return data
+
+### Helper Functions ###
+def load_data(client, data_set, key_type):
+    data = compute_data_sets()
+    load_list = data[data_set][SETS_KEY(key_type)]
+    print(f"Start Loading Data, data set has {len(load_list)} records")
+    for create_index_cmd in data[data_set][CREATES_KEY(key_type)]:
+        client.execute_command(create_index_cmd)
+
+    # Make large chunks to accelerate things
+    batch_size = 50
+    for s in range(0, len(load_list), batch_size):
+        pipe = client.pipeline()
+        for cmd in load_list[s : s + batch_size]:
+            if key_type == "hash":
+                pipe.hset(cmd[0], mapping=cmd[1])
+            else:
+                pipe.execute_command(*["JSON.SET", cmd[0], "$", json.dumps(cmd[1])])
+        pipe.execute()
+
+    client.wait_for_indexing_done(f"{key_type}_idx1")
+    print(f"setup_data completed {data_set} {key_type}")
+    return len(load_list)

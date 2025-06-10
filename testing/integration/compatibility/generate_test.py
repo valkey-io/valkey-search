@@ -1,9 +1,9 @@
 import pytest, traceback, redis, time
-import sys, json, os
+import sys, os
 import numpy as np
 import pickle
 from . import data_sets
-from .data_sets import compute_data_sets, ClientSystem, SETS_KEY, CREATES_KEY, VECTOR_DIM, NUM_KEYS, ANSWER_FILE_NAME
+from .data_sets import *
 '''
 Compare two systems for a bunch of aggregation operations
 '''
@@ -31,8 +31,7 @@ class ClientRSystem(ClientSystem):
                 assert False
         print("Indexing is done.")
 
-#@pytest.mark.parametrize("key_type", ["hash", "json"])
-@pytest.mark.parametrize("key_type", ["hash"])
+@pytest.mark.parametrize("key_type", ["json", "hash"])
 class TestAggregateCompatibility:
 
     @classmethod
@@ -42,9 +41,7 @@ class TestAggregateCompatibility:
             print("Failed to start Redis Stack server, please check your Docker setup.")
             sys.exit(1)
         print("Started Generate-search server")
-        cls.data = compute_data_sets()
-        cls.answer_file = open(ANSWER_FILE_NAME, "wb")
-        cls.generating_answers = True
+        cls.answers = []
         while True:
             try:
                 cls.client = ClientRSystem()
@@ -60,38 +57,25 @@ class TestAggregateCompatibility:
         print("Stopping Generate-search server")
         os.system("docker stop Generate-search")
         os.system("docker remove Generate-search")
+        print("Dumping ", len(cls.answers), " answers")
+        answer_file = open(ANSWER_FILE_NAME, "wb")
+        pickle.dump(cls.answers, answer_file)
 
     def setup_method(self):
         self.client.execute_command("FLUSHALL SYNC")
 
-    ### Helper Functions ###
-    def setup_data(self, data_set, key_type):
-        self.data_set_name = data_set
-        print("load_data with index", data_set, " ", key_type);
-        load_list = self.data[data_set][SETS_KEY(key_type)]
-        print(f"Start Loading Data, data set has {len(load_list)} records")
-        for create_index_cmd in self.data[data_set][CREATES_KEY(key_type)]:
-            self.client.execute_command(create_index_cmd)
-
-        # Make large chunks to accelerate things
-        batch_size = 50
-        for s in range(0, len(load_list), batch_size):
-            pipe = self.client.pipeline()
-            for cmd in load_list[s : s + batch_size]:
-                if key_type == "hash":
-                    pipe.hset(cmd[0], mapping=cmd[1])
-                else:
-                    pipe.execute_command(*["JSON.SET", cmd[0], "$", json.dumps(cmd[1])])
-            pipe.execute()
-
-        self.client.wait_for_indexing_done(f"{key_type}_idx1")
-        print(f"setup_data completed {data_set} {key_type}")
-        return len(load_list)
+    def setup_data(self, data_set_name, key_type):
+        self.data_set_name = data_set_name
+        self.key_type = key_type
+        load_data(self.client, data_set_name, key_type)
 
     def execute_command(self, cmd):
-        answer = {"cmd": cmd, "data_set_name": self.data_set_name, "traceback": "".join(traceback.format_stack())}
+        answer = {"cmd": cmd,
+                  "key_type": self.key_type,
+                  "data_set_name": self.data_set_name, 
+                  "traceback": "".join(traceback.format_stack())}
         try:
-            print("Cmd:", *cmd)
+            # print("Cmd:", *cmd)
             answer["result"] = self.client.execute_command(*cmd)
             answer["exception"] = False
             exception = None
@@ -100,9 +84,8 @@ class TestAggregateCompatibility:
             print(f"Got exception for Error: '{exc}', Cmd:{cmd}")
             answer["result"] = {}
             answer["exception"] = True
+        self.answers.append(answer)
 
-        pickle.dump(answer, self.answer_file)
-    
     def checkvec(self, *orig_cmd, knn=10000, score_as=""):
         '''Temporary change until query parser is redone.'''
         cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]

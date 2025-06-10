@@ -255,7 +255,7 @@ The following query will return all books with "comedy" genre that are not publi
 
 **Operator Precedence**
 
-Typical operator precedence rules apply, i.e., Logical negate is the highest priority, followed by Logical and and then Logical Or with the lowest priority. Parenthesis can be used to override the default precedence rules.
+Typical operator precedence rules apply, i.e., Logical negate is the highest priority, followed by Logical and then Logical Or with the lowest priority. Parenthesis can be used to override the default precedence rules.
 
 **Examples of Combining Logical Operators**
 

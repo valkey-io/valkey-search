@@ -234,7 +234,7 @@ void IndexSchema::RDBSave() {
    ValkeyModule_RDBSaveString(section.SerializeAsString());
 
    for (auto &attribute : attributes_) {
-      data_model::SuplementalContent index_content;
+      data_model::SupplementalContent index_content;
       index_content.set_type(SUPPLEMENTAL_CONTENT_INDEX_CONTENT);
       data_model::IndexContentHeader index_content_header;
       index_content_header.set_attribute(attribute.second.ToProto());
@@ -245,7 +245,7 @@ void IndexSchema::RDBSave() {
       attribute.second.GetIndex()->SaveIndex(std::move(index_writer));
       /* SaveIndex writes all index contents as binary, then the writer is destructed once done */
 
-      data_model::SuplementalContent key_mapping;
+      data_model::SupplementalContent key_mapping;
       key_mapping.set_type(SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP);
       data_model::KeyToIdHeader key_to_id_header;
       key_to_id_header.set_attribute(attribute.second.ToProto());

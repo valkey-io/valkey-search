@@ -107,7 +107,7 @@ message RDBSection {
 
 (`message IndexSchema` follows from the existing definition in src/index_schema.proto)
 
-Before the `RDBSection`s, a single integer will be emitted using `ValekyModule_SaveUnsigned` to denote the number of `RDBSection`s emitted. Each `RDBSection` is then saved into the RDB using a single `ValkeyModule_SaveString` API call.
+Before the `RDBSection`s, a single integer will be emitted using `ValkeyModule_SaveUnsigned` to denote the number of `RDBSection`s emitted. Each `RDBSection` is then saved into the RDB using a single `ValkeyModule_SaveString` API call.
 
 The goal of breaking into sections is to support skipping optional sections if they are not understood. New sections should be introduced in a manner where failure to understand the new section will generally load fine without loss. Any time that failure to load the section would result in some form of lossiness or inconsistency, we will need to bump the minimum semantic version to the minimum version that will be capable of reading it. When loading an RDB, if the semantic version is greater than our version, we can fail fast with a message. This would be desired in cases where operators have used new features and therefore need to think about the downgrade more critically, potentially removing (or, once supported, altering) indexes that will not downgrade gracefully.
 

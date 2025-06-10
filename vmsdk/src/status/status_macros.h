@@ -243,11 +243,11 @@ constexpr bool HasPotentialConditionalOperator(const char* lhs, int index) {
   VMSDK_STATUS_MACROS_IMPL_CONCAT_(VMSDK_STATUS_MACROS_IMPL_IF_, _Cond) \
   (_Then, _Else)
 
-// Expands to 1 if the input is parenthesized. Otherwise expands to 0.
+// Expands to 1 if the input is parenthesized. Otherwise, expands to 0.
 #define VMSDK_STATUS_MACROS_IMPL_IS_PARENTHESIZED(...) \
   VMSDK_STATUS_MACROS_IMPL_IS_EMPTY(VMSDK_STATUS_MACROS_IMPL_EAT __VA_ARGS__)
 
-// If the input is parenthesized, removes the parentheses. Otherwise expands to
+// If the input is parenthesized, removes the parentheses. Otherwise, expands to
 // the input unchanged.
 #define VMSDK_STATUS_MACROS_IMPL_UNPARENTHESIZE_IF_PARENTHESIZED(...) \
   VMSDK_STATUS_MACROS_IMPL_IF(                                        \

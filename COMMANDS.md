@@ -151,7 +151,7 @@ The command returns either an array if successful or an error.
 On success, the first entry in the response array represents the count of matching keys, followed by one array entry for each matching key. 
 Note that if  the `LIMIT` option is specified it will only control the number of returned keys and will not affect the value of the first entry.
 
-When `NOCONTENT` is specified, each entry in the response contains only the matching keyname, Otherwise, each entry includes the matching keyname, followed by an array of the returned fields.
+When `NOCONTENT` is specified, each entry in the response contains only the matching keyname. Otherwise, each entry includes the matching keyname, followed by an array of the returned fields.
 
 The result fields for a key consists of a set of name/value pairs. The first name/value pair is for the distance computed. The name of this pair is constructed from the vector field name prepended with "\_\_" and appended with "\_score" and the value is the computed distance. The remaining name/value pairs are the members and values of the key as controlled by the `RETURN` clause.
 

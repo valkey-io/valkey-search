@@ -82,9 +82,9 @@ def process_row(row):
         return (True, None)
     return (False, row)
 
-def parse_field(x):
+def parse_field(x, key_type):
     if isinstance(x, bytes):
-        return parse_field(x.decode("utf-8"))
+        return parse_field(x.decode("utf-8"), key_type)
     if isinstance(x, str):
         return x[2::] if x.startswith("$.") else x
     if isinstance(x, int):
@@ -92,9 +92,19 @@ def parse_field(x):
     print("Unknown type ", type(x))
     assert False
 
-def parse_value(x):
+def parse_value(x, key_type):
+    if key_type == "json" and x[0] == b'[':
+        assert isinstance(x, bytes), f"Expected bytes for JSON value, got {type(x)}"
+        try:
+            return json.loads(x.decode("utf-8"))
+        except json.JSONDecodeError as e:
+            print(f"JSON decode error: {e} for value {x}")
+            assert False
     if isinstance(x, bytes):
-        return x
+        if key_type == "json":
+            return x.decode("utf-8")
+        else:
+            return x
     if isinstance(x, str):
         return x
     if isinstance(x, int):
@@ -102,35 +112,37 @@ def parse_value(x):
     print("Unknown type ", type(x))
     assert False
 
-def unpack_search_result(rs):
+def unpack_search_result(rs, key_type):
     rows = []
     for (key, value) in [(rs[i],rs[i+1]) for i in range(1, len(rs), 2)]:
         #try:
         row = {"__key": key}
         for i in range(0, len(value), 2):
-            row[parse_field(value[i])] = parse_value(value[i+1])
+            row[parse_field(value[i], key_type)] = parse_value(value[i+1])
         rows += [row]
         #except:
         #    print("Parse failure: ", key, value)
     return rows
 
-def unpack_agg_result(rs, decode=True):
+def unpack_agg_result(rs, key_type):
     # Skip the first gibberish int
     try:
         rows = []
         for key_res in rs[1:]:
-            rows += [{parse_field(key_res[f_idx]): parse_value(key_res[f_idx + 1])
+            rows += [{parse_field(key_res[f_idx], key_type): parse_value(key_res[f_idx + 1], key_type)
                 for f_idx in range(0, len(key_res), 2)}]
     except:
         print("Parse Failure: ", rs[1:])
+        print("Trying to parse: ", key_res)
+        print("Rows so far are:", rows)
         assert False
     return rows
 
-def unpack_result(cmd, rs, sortkeys):
+def unpack_result(cmd, key_type, rs, sortkeys):
     if "ft.search" in cmd:
-        out = unpack_search_result(rs)
+        out = unpack_search_result(rs, key_type)
     else:
-        out = unpack_agg_result(rs)
+        out = unpack_agg_result(rs, key_type)
     #
     # Sort by the sortkeys
     #
@@ -149,10 +161,22 @@ def compare_number_eq(l, r):
     if (l == "nan" and r == "nan") or (l == "-nan" and r == "-nan") or \
         (l == b"nan" and r == b"nan") or (l == b"-nan" and r == b"-nan"):
         return True
+    elif isinstance(l, str) and l.startswith("[") and isinstance(r, str) and r.startswith("["):
+        # Special case. It's really a list encoded as JSON
+        ll = json.loads(l)
+        rr = json.loads(r)
+        if len(ll) != len(rr):
+            print("mismatch vector field length: ", ll, " ", rr)
+            return False
+        for i in range(len(ll)):
+            if not compare_number_eq(ll[i], rr[i]):
+                print("mismatch vector field value: ", ll, " ", rr, " at index ", i)
+                return False
+        return True
     else:
         return math.isclose(float(l), float(r), rel_tol=.01)
     
-def compare_row(l, r):
+def compare_row(l, r, key_type):
     lks = sorted(list(l.keys()))
     rks = sorted(list(r.keys()))
     if lks != rks:
@@ -164,16 +188,28 @@ def compare_row(l, r):
         if lks[i].startswith("n"):
             if not compare_number_eq(l[lks[i]], r[rks[i]]):
                 print("mismatch numeric field: ", l[lks[i]], " ", r[rks[i]])
-                return False                
+                return False
+        elif lks[i].startswith("v") and key_type == "json":
+            # Vector compare fields
+            assert isinstance(l[lks[i]], list)
+            assert isinstance(r[rks[i]], list)
+            if len(l[lks[i]]) != len(r[rks[i]]):
+                print("mismatch vector field length: ", l[lks[i]], " ", r[rks[i]])
+                return False
+            for i in range(l[lks[i]]):
+                if not compare_number_eq(l[lks[i]][i], r[rks[i]][i]):
+                    print("mismatch vector field value: ", l[lks[i]], " ", r[rks[i]])
+                    return False
         elif l[lks[i]] != r[rks[i]]:
             print("mismatch field: ", lks[i], " and ", rks[i], " ", l[lks[i]], "!=", r[rks[i]])
             return False
     return True            
     
-def compare_results(answer, results):
-    cmd = answer["cmd"]
+def compare_results(expected, results):
+    cmd = expected["cmd"]
+    key_type = expected["key_type"]
     if cmd != results["cmd"]:
-        print("CMD Mismatch: ", cmd, " ", answer["cmd"])
+        print("CMD Mismatch: ", cmd, " ", results["cmd"])
         assert False
     
     if 'groupby' in cmd and 'sortby' in cmd:
@@ -196,13 +232,13 @@ def compare_results(answer, results):
         sortkeys=[]
 
     # If both failed, it's a wrong search cmd and we can exit
-    if answer["exception"] and results["exception"]:
+    if expected["exception"] and results["exception"]:
         print("Both engines failed.")
         print(f"CMD:{cmd}")
         print(TEST_MARKER)
         return
 
-    if answer["exception"]:
+    if expected["exception"]:
         print("RL Exception, skipped")
         #print(f"RL Exception: Raw: {printable_result(results['RL'])}")
         #print(f"EC Result: {printable_result(results['EC'])}")
@@ -211,14 +247,14 @@ def compare_results(answer, results):
 
     if results["exception"]:
         print(f"CMD: {cmd}")
-        print(f"RL Result: {printable_result(results['RL'])}")
-        print(f"EC Exception Raw: {printable_result(results['EC'])}")
+        print(f"RL Result: {printable_result(expected['result'])}")
+        print(f"EC Exception Raw: {printable_result(results['result'])}")
         print(TEST_MARKER)
         assert False
 
     # Output raw results
-    rl = unpack_result(cmd, answer["result"], sortkeys)
-    ec = unpack_result(cmd, results["result"], sortkeys)
+    rl = unpack_result(cmd, expected["key_type"], expected["result"], sortkeys)
+    ec = unpack_result(cmd, expected["key_type"], results["result"], sortkeys)
 
     # Process failures
     if len(rl) != len(ec):
@@ -236,7 +272,7 @@ def compare_results(answer, results):
     # if compare_results(ec, rl):
     # Directly comparing dicts instead of custom compare function
     # TODO: investigate this later
-    if all([compare_row(ec[i], rl[i]) for i in range(len(rl))]):
+    if all([compare_row(ec[i], rl[i], key_type) for i in range(len(rl))]):
         # print("Results look good.")
         #print(TEST_MARKER)
         if "ft.search" in cmd:
@@ -248,24 +284,24 @@ def compare_results(answer, results):
     print("***** MISMATCH ON DATA *****, sortkeys=", sortkeys, " records=", len(rl))
     print(f"CMD: {cmd}")
     for i in range(len(rl)):
-        if not compare_row(rl[i], ec[i]):
+        if not compare_row(rl[i], ec[i], key_type):
             print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())], "<<<")
             print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())], "<<<")
         else:
             print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())])
             print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())])
 
-    print("Raw RL:", results["RL"])
-    print("Raw EC:", results["EC"])
+    print("Raw RL:", expected["results"])
+    print("Raw EC:", results["results"])
     print(TEST_MARKER)
     assert False
 
 def do_answer(expected, data_set):
-    if expected['data_set_name'] != data_set:
+    if (expected['data_set_name'], expected['key_type']) != data_set:
         print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'])
         client.execute_command("FLUSHALL SYNC")
         load_data(client, expected['data_set_name'], expected['key_type'])
-        data_set = expected['data_set_name']
+        data_set = (expected['data_set_name'], expected['key_type'])
     try:
         result = {}
         result["cmd"] = expected['cmd']

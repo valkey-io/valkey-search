@@ -9,7 +9,6 @@ set(SRCS_HNSWLIB_VMSDK
 
 valkey_search_create_proto_library("third_party/hnswlib/index.proto"
                                    "index_cc_proto")
-message(STATUS "Created proto library index_cc_proto")
 
 add_library(hnswlib_vmsdk INTERFACE ${SRCS_HNSWLIB_VMSDK})
 target_include_directories(hnswlib_vmsdk INTERFACE ${CMAKE_CURRENT_LIST_DIR})

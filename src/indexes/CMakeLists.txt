@@ -1,5 +1,5 @@
-valkey_search_create_proto_library("src/index_schema.proto" "index_schema_cc_proto")
-message(STATUS "Created proto library index_schema_cc_proto")
+valkey_search_create_proto_library("src/index_schema.proto"
+                                   "index_schema_cc_proto")
 
 add_library(index_base INTERFACE ${SRCS_INDEX_BASE})
 target_include_directories(index_base INTERFACE ${CMAKE_CURRENT_LIST_DIR})

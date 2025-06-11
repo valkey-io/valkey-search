@@ -2,6 +2,19 @@ Valkey Search 1.0 release notes
 =================================
 
 ================================================================================
+Valkey Search 1.0.1 - Released Wed 11 June 2025
+================================================================================
+
+Bug fixes
+=========
+* Module-Config: fix a possibility of of a double free (#149)
+* More resilient builds on different Linux distros (#152, #154, #158, #168, #172)
+* Use a managed pointer for thread safe context in coordinator (#159)
+* Enable integration tests + ASAN (#162)
+* Fixed drop index bug (#166)
+* Fix GetRedisLocalPort function to support TLS (#144)
+
+================================================================================
 Valkey Search 1.0.0 GA - Released Wed 28 May 2025
 ================================================================================
 

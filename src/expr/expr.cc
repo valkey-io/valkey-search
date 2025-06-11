@@ -491,12 +491,6 @@ struct Compiler {
     };
     return DoDyadic(ctx, &Compiler::CmpOp, ops);
   }
-  absl::StatusOr<ExprPtr> AndOp(CompileContext& ctx) {
-    static std::vector<DyadicOp> ops{
-        {"&&", &FuncLand},
-    };
-    return DoDyadic(ctx, &Compiler::CmpOp, ops);
-  }
   absl::StatusOr<ExprPtr> CmpOp(CompileContext& ctx) {
     static std::vector<DyadicOp> ops{{"<=", &FuncLe}, {"<", &FuncLt},
                                      {"==", &FuncEq}, {"!=", &FuncNe},

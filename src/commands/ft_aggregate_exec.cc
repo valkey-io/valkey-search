@@ -54,7 +54,7 @@ void Record::Dump(std::ostream& os,
     os << fields_[i];
   }
   if (!extra_fields_.empty()) {
-    os << '[' << extra_fields_.size() << ']';
+    os << " Extra:" << extra_fields_.size() << ' ';
     for (const auto& [field, value] : extra_fields_) {
       os << " " << field << ":" << value;
     }

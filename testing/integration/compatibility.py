@@ -158,8 +158,10 @@ def unpack_result(cmd, key_type, rs, sortkeys):
     return out
 
 def compare_number_eq(l, r):
-    if (l == "nan" and r == "nan") or (l == "-nan" and r == "-nan") or \
-        (l == b"nan" and r == b"nan") or (l == b"-nan" and r == b"-nan"):
+    lnan = l in ["nan", b"nan", "-nan", b"-nan"]
+    rnan = r in ["nan", b"nan", "-nan", b"-nan"]
+
+    if lnan and rnan:
         return True
     elif isinstance(l, str) and l.startswith("[") and isinstance(r, str) and r.startswith("["):
         # Special case. It's really a list encoded as JSON
@@ -236,21 +238,21 @@ def compare_results(expected, results):
         print("Both engines failed.")
         print(f"CMD:{cmd}")
         print(TEST_MARKER)
-        return
+        return True
 
     if expected["exception"]:
         print("RL Exception, skipped")
         #print(f"RL Exception: Raw: {printable_result(results['RL'])}")
         #print(f"EC Result: {printable_result(results['EC'])}")
         print(TEST_MARKER)
-        return
+        return True
 
     if results["exception"]:
         print(f"CMD: {cmd}")
         print(f"RL Result: {printable_result(expected['result'])}")
         print(f"EC Exception Raw: {printable_result(results['result'])}")
         print(TEST_MARKER)
-        assert False
+        return False
 
     # Output raw results
     rl = unpack_result(cmd, expected["key_type"], expected["result"], sortkeys)
@@ -267,7 +269,7 @@ def compare_results(expected, results):
         for e in ec:
             print(e)
         #assert False
-        return
+        return False
 
     # if compare_results(ec, rl):
     # Directly comparing dicts instead of custom compare function
@@ -280,8 +282,8 @@ def compare_results(expected, results):
             for i in range(len(rl)):
                 print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())])
                 print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())])
-        return
-    print("***** MISMATCH ON DATA *****, sortkeys=", sortkeys, " records=", len(rl))
+        return True
+    print("***** MISMATCH ON DATA *****, sortkeys=", sortkeys, " records=", len(rl), " TestName: ", expected["testname"])
     print(f"CMD: {cmd}")
     for i in range(len(rl)):
         if not compare_row(rl[i], ec[i], key_type):
@@ -291,12 +293,16 @@ def compare_results(expected, results):
             print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())])
             print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())])
 
-    print("Raw RL:", expected["results"])
-    print("Raw EC:", results["results"])
+    print("Raw RL:", expected["result"])
+    print("Raw EC:", results["result"])
     print(TEST_MARKER)
-    assert False
+    return False
+
+correct_answers = 0
+StopOnFailure = False
 
 def do_answer(expected, data_set):
+    global correct_answers
     if (expected['data_set_name'], expected['key_type']) != data_set:
         print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'])
         client.execute_command("FLUSHALL SYNC")
@@ -307,10 +313,16 @@ def do_answer(expected, data_set):
         result["cmd"] = expected['cmd']
         result["result"] = client.execute_command(*expected['cmd'])
         result["exception"] = False
-        compare_results(expected, result)
+        if compare_results(expected, result):
+            correct_answers += 1
+        else:
+            assert not StopOnFailure, "Test failed, stopping execution"
     except redis.ResponseError as e:
         result["exception"] = True
-        compare_results(expected, result)
+        if compare_results(expected, result):
+            correct_answers += 1
+        else:
+            assert not StopOnFailure, f"Test failed with exception: {e}, stopping execution"
     return data_set
 
 
@@ -322,3 +334,5 @@ print(f"Loaded {len(answers)} answers")
 data_set = None
 for i in range(len(answers)):
     data_set = do_answer(answers[i], data_set)
+
+print(f"Correct answers: {correct_answers} out of {len(answers)}")

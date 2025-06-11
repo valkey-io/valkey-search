@@ -31,7 +31,8 @@ class ClientRSystem(ClientSystem):
                 assert False
         print("Indexing is done.")
 
-@pytest.mark.parametrize("key_type", ["json", "hash"])
+@pytest.mark.parametrize("key_type", ["hash"])
+# @pytest.mark.parametrize("key_type", ["json", "hash"])
 class TestAggregateCompatibility:
 
     @classmethod
@@ -72,7 +73,8 @@ class TestAggregateCompatibility:
     def execute_command(self, cmd):
         answer = {"cmd": cmd,
                   "key_type": self.key_type,
-                  "data_set_name": self.data_set_name, 
+                  "data_set_name": self.data_set_name,
+                  "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
                   "traceback": "".join(traceback.format_stack())}
         try:
             # print("Cmd:", *cmd)

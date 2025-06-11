@@ -157,7 +157,7 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
   //
   RecordSet records(&parameters);
   // Todo: fix this  for (auto &n : neighbors) {
-  for (auto &n : std::ranges::reverse_view(neighbors)) {
+  for (auto &n : neighbors) {
     DBG << "Neighbor: " << n << "\n";
     auto rec = std::make_unique<Record>(parameters.attr_record_indexes_.size());
     if (parameters.load_key) {

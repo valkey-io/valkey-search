@@ -13,6 +13,8 @@
 
 #include "src/utils/scanner.h"
 
+// #define DBG std::cerr
+#define DBG 0 && std::cerr
 namespace valkey_search {
 namespace expr {
 
@@ -23,7 +25,7 @@ static const uint64_t kMantissaMask = 0x000FFFFFFFFFFFFFull;
 
 // Built-in isnan doesn't work when compiling with fast-math, which is what we
 // want to do.
-static bool IsNan(double& d) {
+static bool IsNan(const double& d) {
   uint64_t v = *(uint64_t*)&d;
   return ((v & kExponentMask) == kExponentMask) && ((v & kMantissaMask) != 0);
 }
@@ -80,7 +82,10 @@ std::optional<bool> Value::AsBool() const {
   if (auto result = std::get_if<bool>(&value_)) {
     return *result;
   } else if (auto result = std::get_if<double>(&value_)) {
-    return *result != 0.0;
+    if (IsNan(*result)) {
+      return true;
+    }
+    return !(*result == 0.0);
   } else if (std::get_if<absl::string_view>(&value_)) {
     auto dble = AsDouble();
     if (dble) {
@@ -321,6 +326,8 @@ Value FuncLand(const Value& l, const Value& r) {
   auto lv = l.AsBool();
   auto rv = r.AsBool();
   if (lv && rv) {
+    DBG << "FuncLand -> " << lv.value() << " && " << rv.value() << " -> "
+        << Value(lv.value() && rv.value()) << "\n";
     return Value(lv.value() && rv.value());
   } else {
     return Value(Value::Nil("land requires booleans"));

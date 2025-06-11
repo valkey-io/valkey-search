@@ -321,12 +321,10 @@ class ConfigBuilder {
     return *this;
   }
 
-  std::shared_ptr<ConfigBase<ValkeyT>> Build() {
-    return std::shared_ptr<ConfigBase<ValkeyT>>{config_};
-  }
+  std::shared_ptr<ConfigBase<ValkeyT>> Build() { return config_; }
 
  private:
-  ConfigBase<ValkeyT> *config_ = nullptr;
+  std::shared_ptr<ConfigBase<ValkeyT>> config_;
 };
 
 /// Construct Configuration object of type `T`.
@@ -350,7 +348,7 @@ ConfigBuilder<ValkeyT> Builder(Args &&...args) {
     // Boolean
     return ConfigBuilder<int>(new Enum(std::forward<Args>(args)...));
   } else {
-    static_assert(false, "Unreachable");
+    static_assert(!std::is_same_v<ValkeyT, ValkeyT>, "Unreachable");
   }
 }
 

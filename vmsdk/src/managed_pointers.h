@@ -124,7 +124,7 @@ inline UniqueRedisScanCursor MakeUniqueRedisScanCursor() {
   return std::unique_ptr<RedisModuleScanCursor, RedisScanCursorDeleter>(cursor);
 }
 
-struct RedisDetachedThreadSafeContextDeleter {
+struct RedisThreadSafeContextDeleter {
   void operator()(RedisModuleCtx *ctx) {
     // Contexts cannot be safely freed from a background thread since they
     // assert if IO threads are active.
@@ -133,13 +133,21 @@ struct RedisDetachedThreadSafeContextDeleter {
 };
 
 using UniqueRedisDetachedThreadSafeContext =
-    std::unique_ptr<RedisModuleCtx, RedisDetachedThreadSafeContextDeleter>;
+    std::unique_ptr<RedisModuleCtx, RedisThreadSafeContextDeleter>;
 
 inline UniqueRedisDetachedThreadSafeContext
 MakeUniqueRedisDetachedThreadSafeContext(RedisModuleCtx *base_ctx) {
   auto ctx = RedisModule_GetDetachedThreadSafeContext(base_ctx);
-  return std::unique_ptr<RedisModuleCtx, RedisDetachedThreadSafeContextDeleter>(
-      ctx);
+  return std::unique_ptr<RedisModuleCtx, RedisThreadSafeContextDeleter>(ctx);
+}
+
+using UniqueRedisThreadSafeContext =
+    std::unique_ptr<RedisModuleCtx, RedisThreadSafeContextDeleter>;
+
+inline UniqueRedisThreadSafeContext MakeUniqueRedisThreadSafeContext(
+    RedisModuleBlockedClient *bc) {
+  auto ctx = RedisModule_GetThreadSafeContext(bc);
+  return std::unique_ptr<RedisModuleCtx, RedisThreadSafeContextDeleter>(ctx);
 }
 
 struct RedisClusterNodesListDeleter {

@@ -206,7 +206,7 @@ class StabilityTests(parameterized.TestCase):
         valkey_cli_path = os.environ["VALKEY_CLI_PATH"]
         memtier_path = os.environ["MEMTIER_PATH"]
         valkey_search_path = os.environ["VALKEY_SEARCH_PATH"]
-     
+
         config = config._replace(memtier_path=memtier_path)
 
         self.valkey_cluster_under_test = utils.start_valkey_cluster(
@@ -223,7 +223,7 @@ class StabilityTests(parameterized.TestCase):
                 "cluster-node-timeout": "45000",
             },
             {
-                f"{valkey_search_path}": "--threads 2 --log-level notice"
+                f"{valkey_search_path}": "--reader-threads 2 --writer-threads 5 --log-level notice"
                 + (" --use-coordinator" if config.use_coordinator else "")
             },
             config.replica_count,

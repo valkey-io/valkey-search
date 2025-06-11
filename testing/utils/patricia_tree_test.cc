@@ -71,6 +71,18 @@ TEST_F(PatriciaTreeSetTest, SimpleAddRemoveModify) {
   EXPECT_FALSE(tree_->Remove("APp", 2));
 }
 
+TEST_F(PatriciaTreeSetTest, MultipleItemsWithSameKey) {
+  tree_->AddKeyValue("hash:", 0);
+  tree_->AddKeyValue("hash:", 1);
+  auto set = tree_->GetValue("hash:", true);
+  EXPECT_EQ(set->size(), 2);
+
+  EXPECT_TRUE(tree_->Remove("hash:", 1));
+  set = tree_->GetValue("hash:", true);
+  EXPECT_TRUE(set != nullptr);
+  EXPECT_EQ(set->size(), 1);
+}
+
 TEST_F(PatriciaTreeSetTest, SimpleAddRemoveModifyCaseSensitive) {
   tree_case_sensitive_->AddKeyValue("", 0);
   tree_case_sensitive_->AddKeyValue("apple", 1);

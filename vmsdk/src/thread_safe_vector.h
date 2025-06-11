@@ -19,7 +19,10 @@ class ThreadSafeVector {
   ThreadSafeVector& operator=(const ThreadSafeVector&) = delete;
   ThreadSafeVector() = default;
 
-  size_t Size() const { return vec_.size(); }
+  size_t Size() const {
+    absl::ReaderMutexLock lock{&mutex_};
+    return vec_.size();
+  }
   bool IsEmpty() const { return Size() == 0; }
 
   /// Pop the first item that matches the predicate (starting from the top of
@@ -80,7 +83,7 @@ class ThreadSafeVector {
   void Clear() { ClearWithCallback(nullptr); }
 
  private:
-  std::vector<T> vec_;
-  absl::Mutex mutex_;
+  mutable absl::Mutex mutex_;
+  std::vector<T> vec_ ABSL_GUARDED_BY(mutex_);
 };
 }  // namespace vmsdk

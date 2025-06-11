@@ -40,6 +40,7 @@
 #include "absl/strings/string_view.h"
 #include "src/metrics.h"
 #include "src/rdb_section.pb.h"
+#include "src/valkey_search.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -282,8 +283,8 @@ absl::Status PerformRDBSave(RedisModuleCtx *ctx, SafeRDB *rdb, int when) {
 }
 
 void AuxSaveCallback(RedisModuleIO *rdb, int when) {
-  auto ctx = RedisModule_GetContextFromIO(rdb);
   SafeRDB safe_rdb(rdb);
+  auto ctx = ValkeySearch::Instance().GetBackgroundCtx();
   auto result = PerformRDBSave(ctx, &safe_rdb, when);
   if (result.ok()) {
     Metrics::GetStats().rdb_save_success_cnt++;

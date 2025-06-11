@@ -155,23 +155,24 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
           reactor->Finish(grpc::Status::OK);
           RecordSearchMetrics(false, std::move(latency_sample));
         } else {
-          vmsdk::RunByMain([parameters = std::move(parameters), response,
-                            reactor, latency_sample = std::move(latency_sample),
-                            neighbors =
-                                std::move(neighbors.value())]() mutable {
-            const auto& attribute_data_type =
-                parameters->index_schema->GetAttributeDataType();
-            auto ctx = RedisModule_GetThreadSafeContext(nullptr);
-            auto vector_identifier =
-                parameters->index_schema
-                    ->GetIdentifier(parameters->attribute_alias)
-                    .value();
-            query::ProcessNeighborsForReply(ctx, attribute_data_type, neighbors,
-                                            *parameters, vector_identifier);
-            SerializeNeighbors(response, neighbors);
-            reactor->Finish(grpc::Status::OK);
-            RecordSearchMetrics(false, std::move(latency_sample));
-          });
+          vmsdk::RunByMain(
+              [parameters = std::move(parameters), response, reactor,
+               latency_sample = std::move(latency_sample),
+               neighbors = std::move(neighbors.value())]() mutable {
+                const auto& attribute_data_type =
+                    parameters->index_schema->GetAttributeDataType();
+                auto ctx = vmsdk::MakeUniqueRedisThreadSafeContext(nullptr);
+                auto vector_identifier =
+                    parameters->index_schema
+                        ->GetIdentifier(parameters->attribute_alias)
+                        .value();
+                query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
+                                                neighbors, *parameters,
+                                                vector_identifier);
+                SerializeNeighbors(response, neighbors);
+                reactor->Finish(grpc::Status::OK);
+                RecordSearchMetrics(false, std::move(latency_sample));
+              });
         }
       },
       false);

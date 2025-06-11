@@ -521,13 +521,13 @@ absl::Status SchemaManager::SaveIndexes(RedisModuleCtx *ctx, SafeRDB *rdb,
   if (db_to_index_schemas_.empty()) {
     // Auxsave2 will ensure nothing is written to the aux section if we
     // write nothing.
-    RedisModule_Log(detached_ctx_.get(), REDISMODULE_LOGLEVEL_NOTICE,
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_NOTICE,
                     "Skipping aux metadata for SchemaManager since there "
                     "is no content");
     return absl::OkStatus();
   }
 
-  RedisModule_Log(detached_ctx_.get(), REDISMODULE_LOGLEVEL_NOTICE,
+  RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_NOTICE,
                   "Saving aux metadata for SchemaManager to aux RDB");
   for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
     for (const auto &[name, schema] : inner_map) {

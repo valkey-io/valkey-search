@@ -1,11 +1,36 @@
 #!/bin/bash -e
 
+## Search for --asan
+while [ $# -gt 0 ]
+do
+    arg=$1
+    case $arg in
+    --asan)
+        ASAN_BUILD="yes"
+        shift || true
+        ;;
+    *)
+        shift || true
+        ;;
+    esac
+done
+
+if [[ "${ASAN_BUILD}" == "yes" ]]; then
+    asan_suffix="-asan"
+    echo "Building with ASAN enabled"
+fi
+
+
 ROOT_DIR=$(readlink -f $(dirname $0)/..)
-SRC_DIR=${ROOT_DIR}/.build-release/submodules/.src
-INSTALL_DIR=${ROOT_DIR}/.build-release/submodules/root
+BUILD_DIR=$(readlink -f $(dirname $0))/.build-release${asan_suffix}
+SRC_DIR=${BUILD_DIR}/.src
+INSTALL_DIR=${BUILD_DIR}/install
 
 mkdir -p ${SRC_DIR}
+mkdir -p ${BUILD_DIR}
 mkdir -p ${INSTALL_DIR}
+
+cd ${BUILD_DIR}
 
 function clone_repo() {
     local GIT_URL=$1
@@ -31,6 +56,12 @@ function build_submodule() {
     mkdir -p ${SRC_DIR}/${MODULE_NAME}/.build-release
     cd $_
     export CXXFLAGS="-Wno-missing-requires -Wno-attributes -Wno-deprecated -Wno-return-type -Wno-stringop-overflow -Wno-deprecated-declarations"
+    if [[ "${ASAN_BUILD}" == "1" ]]; then
+        echo "Passing ASAN flags"
+        export CXXFLAGS="-fsanitize=address ${CXXFLAGS}"
+        export CFLAGS="-fsanitize=address ${CFLAGS}"
+        export LDFLAGS="-fsanitize=address ${LDFLAGS}"
+    fi
     cmake .. -GNinja ${CMAKE_BASE_ARGS} ${MODULE_CMAKE_ARGS}
     ninja ${INSTALL}
 }
@@ -79,16 +110,17 @@ function get_deb_suffix() {
         distro=${distro_id}-${codename}
         distro=$(echo "$distro" | tr '[:upper:]' '[:lower:]')
     fi
-    echo valkey-search-deps-${distro}-${arch}
+
+    echo valkey-search-deps-${distro}${asan_suffix}-${arch}
 }
 
 ARCH=$(get_arch_spec)
 DEB_NAME=$(get_deb_suffix)
-DEB_ROOT=${ROOT_DIR}/.build-release/${DEB_NAME}
+DEB_ROOT=${BUILD_DIR}/${DEB_NAME}
 rm -fr ${DEB_ROOT}
 mkdir -p ${DEB_ROOT}/DEBIAN
-mkdir -p ${DEB_ROOT}/opt/valkey-search-deps
-cp -fr ${INSTALL_DIR}/* ${DEB_ROOT}/opt/valkey-search-deps
+mkdir -p ${DEB_ROOT}/opt/valkey-search-deps${asan_suffix}
+cp -fr ${INSTALL_DIR}/* ${DEB_ROOT}/opt/valkey-search-deps${asan_suffix}
 cat<<EOF > ${DEB_ROOT}/DEBIAN/control
 Package: ${DEB_NAME}
 Version: 1.0
@@ -97,11 +129,11 @@ Architecture: ${ARCH}
 Description: dependencies for building valkey-search
 EOF
 
-cd ${ROOT_DIR}/.build-release/
+cd ${BUILD_DIR}
 dpkg-deb --build ${DEB_NAME}
 
 mkdir -p ${ROOT_DIR}/debs
-mv ${ROOT_DIR}/.build-release/${DEB_NAME}.deb ${ROOT_DIR}/debs
+mv ${BUILD_DIR}/${DEB_NAME}.deb ${ROOT_DIR}/debs
 echo ""
 echo ""
 echo "Debian file generated: ${ROOT_DIR}/debs/${DEB_NAME}.deb"

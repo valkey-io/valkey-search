@@ -286,12 +286,15 @@ class PatriciaTree {
     for (auto it = node->children.begin(); it != node->children.end(); ++it) {
       absl::string_view common_prefix =
           GetCommonPrefix(key, it->first, case_sensitive_);
+      PatriciaNodeType *child_node = it->second.get();
       if (!common_prefix.empty() && common_prefix.size() == it->first.size()) {
-        bool found = RemoveHelper(it->second.get(),
-                                  key.substr(common_prefix.size()), value);
+        bool found =
+            RemoveHelper(child_node, key.substr(common_prefix.size()), value);
         if (found) {
           node->subtree_values_count--;
-          if (it->second.get()->children.empty()) {
+          if (child_node->children.empty() &&
+              (!child_node->value.has_value() ||
+               child_node->value.value().empty())) {
             node->children.erase(it);
           }
           return found;

@@ -1,5 +1,49 @@
-Valkey Search 1.0.0 release notes
+Valkey Search 1.0 release notes
 =================================
+
+================================================================================
+Valkey Search 1.0.1 - Released Wed 11 June 2025
+================================================================================
+
+Bug fixes
+=========
+* Module-Config: fix a possibility of of a double free (#149)
+* More resilient builds on different Linux distros (#152, #154, #158, #168, #172)
+* Use a managed pointer for thread safe context in coordinator (#159)
+* Enable integration tests + ASAN (#162)
+* Fixed drop index bug (#166)
+* Fix GetRedisLocalPort function to support TLS (#144)
+
+================================================================================
+Valkey Search 1.0.0 GA - Released Wed 28 May 2025
+================================================================================
+
+This is the first official release of Valkey Search 1.0. This release is fully compatible with Valkey 8.1.1 and later releases.
+
+Behavior changes
+================
+* Adding support for blocking clients during keyspace notification (#95)
+* Make index backfill batch/block size configurable (#97)
+* FT.SEARCH - Update neighbor sorting to always be asc (#104)
+* Add OOM checking to index backfill (#135)
+
+Bug fixes
+=========
+* Avoid unsafe code in INFO during crash dump (#98)
+* Support counting cores on aarch64 (#107)
+* Create index with the correct DB number (#120) (#123)
+* Fix dumping corrupted rdb file (#131)
+* Fix empty vector query clause ft.search cmd parsing (#138)
+
+Performance/efficiency improvements
+===================================
+* Allow dynamic adjustment of thread count at runtime (#126) (#129)
+
+Build and packaging changes
+===========================
+* Allow building with external libs (#85)
+* Don't suppress error when running python integration tests (#89)
+* Add ASAN build option (#100)
 
 ================================================================================
 Valkey Search 1.0.0 RC1 - Released Fri 28 Mar 2025
@@ -11,7 +55,7 @@ Valkey-Search allows users to create indexes and perform similarity searches, in
 Major API and Functionality
 =========================
 * Add the search module data type which can handle RDB load, RDB save, free, and memory usage
-* Add the following search module commands: 
+* Add the following search module commands:
     ** FT.CREATE
     ** FT.DROPINDEX
     ** FT.INFO
@@ -21,7 +65,7 @@ Major API and Functionality
     ** Vector: HNSW and Flat
     ** Non-vector: Numeric and Tag
 * Index data types include Valkey Hash and Valkey JSON.
-* Cluster support
+* Cluster support including cross-shard search via coordinator mode
 * Linear scaling of keyspace and compute
 * ACL support
 * RDB serialization of metadata including the search index
@@ -35,4 +79,5 @@ New configurations
 
 We appreciate the efforts of all who contributed code to this release!
 
-Yair Gottdenker (yairgott), Allen Samuels (allenss-amazon), Eran Ifrah (eifrah-aws), Jacob Murphy (murphyjacob4), Chanil Jeon (jeon1226), Qu Chen (QuChen88), DP (dpbnasika)
+Yair Gottdenker (yairgott), Jacob Murphy (murphyjacob4), Allen Samuels (allenss-amazon), Eran Ifrah (eifrah-aws),
+Chanil Jeon (jeon1226), Qu Chen (QuChen88), DP (dpbnasika), Shivshankar-Reddy, KarthikSubbarao, Hyeonho Kim (proost)

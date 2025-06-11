@@ -148,7 +148,8 @@ endfunction()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-missing-requires")
 
-include(protobuf_generate)
+message(STATUS "Including file ${CMAKE_SOURCE_DIR}/cmake/Modules/protobuf_generate.cmake")
+include(${CMAKE_SOURCE_DIR}/cmake/Modules/protobuf_generate.cmake)
 include(linux_utils)
 
 # HACK: in order to force CMake to put "-Wl,--end-group" as the last argument we

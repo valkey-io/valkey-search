@@ -21,36 +21,44 @@
  * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
  * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
  * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * INTERRUPTION) HOWEVER CAUSED ON ANY THEORY OF LIABILITY, WHETHER IN
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef VMSDK_SRC_MEMORY_ALLOCATION_H_
-#define VMSDK_SRC_MEMORY_ALLOCATION_H_
+#ifndef VMSDK_SRC_MEMORY_TRACKER_H_
+#define VMSDK_SRC_MEMORY_TRACKER_H_
 
-#include <cstdint>
+#include <functional>
+#include <atomic>
+#include "vmsdk/src/utils.h"
 
-namespace vmsdk {
+class MemoryTrackingScope final {
+public:
+    // Test hook function type for scope lifecycle events
+    using ScopeEventCallback = std::function<void(const MemoryTrackingScope*)>;
+    
+    explicit MemoryTrackingScope(std::atomic<int64_t>* pool);
+    ~MemoryTrackingScope();
 
-// Updates the custom allocator to perform any future allocations using the
-// Valkey allocator.
-void UseValkeyAlloc();
-bool IsUsingValkeyAlloc();
+    VMSDK_NON_COPYABLE_NON_MOVABLE(MemoryTrackingScope);
 
-// Switch back to the default allocator. No guarantees around atomicity. Only
-// safe in single-threaded or testing environments.
-void ResetValkeyAlloc();
+    static MemoryTrackingScope* GetCurrentScope();
 
-// Report used memory counter.
-uint64_t GetUsedMemoryCnt();
+    // Used for testing
+    static void SetScopeEventCallback(ScopeEventCallback callback);
+    static void ClearScopeEventCallback();
 
-void ReportAllocMemorySize(uint64_t size);
-void ReportFreeMemorySize(uint64_t size);
+private:
+    std::atomic<int64_t>* target_pool_ = nullptr;
+    int64_t baseline_memory_delta_ = 0;
+    MemoryTrackingScope* previous_scope_ = nullptr;
 
-int64_t GetMemoryDelta();
+    static thread_local MemoryTrackingScope* current_scope_tls_;
+    static thread_local ScopeEventCallback scope_event_callback_;
 
-}  // namespace vmsdk
+    void NotifyScopeEvent();
+};
 
-#endif  // VMSDK_SRC_MEMORY_ALLOCATION_H_
+#endif // VMSDK_SRC_MEMORY_TRACKER_H_ 

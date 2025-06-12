@@ -1,22 +1,11 @@
-# Create a static library "coordinator_grpc_proto" with the proto files
-add_library(coordinator_grpc_proto STATIC
-            ${CMAKE_CURRENT_LIST_DIR}/coordinator.proto)
-protobuf_generate(
-  TARGET
-  coordinator_grpc_proto
-  LANGUAGE
-  grpc
-  GENERATE_EXTENSIONS
-  .grpc.pb.h
-  .grpc.pb.cc
-  PLUGIN
-  "protoc-gen-grpc=${GRPC_CPP_PLUGIN_PATH}")
+valkey_search_create_proto_grpc_library("src/coordinator/coordinator.proto"
+                                        coordinator_grpc_proto)
 
 # Create the proto code (no grpc)
 valkey_search_create_proto_library("src/coordinator/coordinator.proto"
-                                   "coordinator_cc_proto")
-target_link_libraries(coordinator_grpc_proto coordinator_cc_proto)
+                                   coordinator_cc_proto)
 
+target_link_libraries(coordinator_grpc_proto PUBLIC coordinator_cc_proto)
 set(SRCS_SERVER ${CMAKE_CURRENT_LIST_DIR}/server.cc
                 ${CMAKE_CURRENT_LIST_DIR}/server.h)
 

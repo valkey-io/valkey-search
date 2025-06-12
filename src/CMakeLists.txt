@@ -26,7 +26,6 @@ valkey_search_create_proto_library("src/rdb_section.proto"
                                    "rdb_section_cc_proto")
 target_link_libraries(rdb_section_cc_proto PUBLIC index_schema_cc_proto)
 target_link_libraries(rdb_section_cc_proto PUBLIC coordinator_cc_proto)
-message(STATUS "Created proto library rdb_section_cc_proto")
 
 # Wrap ${THIRD_PARTY_LIBS} with "--start/--end group"
 target_link_options(libsearch PRIVATE -Wl,--start-group)

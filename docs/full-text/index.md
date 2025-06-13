@@ -1,6 +1,6 @@
 # Text Index
 
-The _TextIndex_ object is logically a sequence of 4-tuples: (_Word_, _Key_, _Field_, _Position_), as will be seen the search operators can be streamlined when the tuple can be iterated in that order, henceforth referred to as lexical order.
+The _TextIndex_ object is logically a sequence of 4-tuples: (_Word_, _Key_, _Field_, _Position_). The search operators can be streamlined when the tuple can be iterated in that order, henceforth referred to as lexical order.
 Lexical ordering allows operations like intersection and union that operate on multiple
 iteration sequences to perform merge-like operations in linear time.
 

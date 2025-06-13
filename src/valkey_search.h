@@ -70,13 +70,6 @@ class ValkeySearch {
   }
   void Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const;
 
-  static long long BlockSizeGetConfig([[maybe_unused]] const char *config_name,
-                                      [[maybe_unused]] void *priv_data);
-  static int BlockSizeSetConfig([[maybe_unused]] const char *config_name,
-                                long long value,
-                                [[maybe_unused]] void *priv_data,
-                                [[maybe_unused]] RedisModuleString **err);
-
   IndexSchema::Stats::ResultCnt<uint64_t> AccumulateIndexSchemaResults(
       absl::AnyInvocable<const IndexSchema::Stats::ResultCnt<
           std::atomic<uint64_t>> &(const IndexSchema::Stats &) const>
@@ -93,7 +86,9 @@ class ValkeySearch {
   void AfterForkParent();
   static ValkeySearch &Instance();
   static void InitInstance(std::unique_ptr<ValkeySearch> instance);
+
   uint32_t GetHNSWBlockSize() const;
+  void SetHNSWBlockSize(uint32_t block_size);
 
   absl::Status OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
   void OnUnload(RedisModuleCtx *ctx);
@@ -129,13 +124,16 @@ class ValkeySearch {
   virtual size_t GetMaxWorkerThreadPoolSuspensionSec() const;
 
  private:
-  absl::Status LoadOptions(RedisModuleCtx *ctx, RedisModuleString **argv,
-                           int argc);
+  absl::Status Startup(RedisModuleCtx *ctx);
+  absl::Status LoadAndParseArgv(RedisModuleCtx *ctx, RedisModuleString **argv,
+                                int argc);
+
   static void *RDBLoad(RedisModuleIO *rdb, int encoding_version);
   static void FreeIndexSchema(void *value);
   static bool IsChildProcess();
   void ProcessIndexSchemaBackfill(RedisModuleCtx *ctx, uint32_t batch_size);
   void ResumeWriterThreadPool(RedisModuleCtx *ctx, bool is_expired);
+  absl::StatusOr<std::string> GetConfigGetReply(RedisModuleCtx *ctx, const char* config);
 
   uint64_t inc_id_{0};
   RedisModuleCtx *ctx_{nullptr};

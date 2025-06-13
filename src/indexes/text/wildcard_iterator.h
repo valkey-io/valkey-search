@@ -9,7 +9,7 @@ match any pattern with a single wildcard, i.e., pattern*, *pattern, or pat*tern.
 Words are iterated in lexical order.
 
 The Wildcard iterator has two underlying algorithms and it selects between the
-two algorithms based on the constructor form used and/or run-time sizing
+two algorithms based on the constructor form used and/or runtime sizing
 information.
 
 Algorithm 1: Is used when there is no suffix tree OR the number of

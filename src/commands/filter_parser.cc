@@ -263,7 +263,7 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   }
   filter_identifiers_.clear();
   pos_ = 0;
-  VMSDK_ASSIGN_OR_RETURN(auto predicate, ParseExpression());
+  VMSDK_ASSIGN_OR_RETURN(auto predicate, ParseExpression(0));
   if (!IsEnd()) {
     return UnexpectedChar(expression_, pos_);
   }
@@ -312,9 +312,8 @@ std::unique_ptr<query::Predicate> WrapPredicate(
 // prepended to the number, for example, [(100 (200].
 absl::StatusOr<std::unique_ptr<query::Predicate>>
 FilterParser::ParseExpression(int level) {
-  if (level++ == options::GetQueryStringDepth().GetValue()) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Query string recursive depth exceeded"));
+  if (level++ >= options::GetQueryStringDepth().GetValue()) {
+    return absl::InvalidArgumentError("Query string recursive depth exceeded");
   }
   std::unique_ptr<query::Predicate> prev_predicate;
 

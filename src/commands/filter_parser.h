@@ -61,7 +61,7 @@ class FilterParser {
   absl::flat_hash_set<std::string> filter_identifiers_;
 
   absl::StatusOr<bool> IsMatchAllExpression();
-  absl::StatusOr<std::unique_ptr<query::Predicate>> ParseExpression();
+  absl::StatusOr<std::unique_ptr<query::Predicate>> ParseExpression(int level = 0);
   absl::StatusOr<std::unique_ptr<query::NumericPredicate>>
   ParseNumericPredicate(const std::string& attribute_alias);
   absl::StatusOr<std::unique_ptr<query::TagPredicate>> ParseTagPredicate(

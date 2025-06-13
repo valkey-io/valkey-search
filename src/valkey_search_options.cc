@@ -36,10 +36,13 @@
 namespace valkey_search {
 namespace options {
 
+constexpr uint32_t kDefaultQueryStringDepth{1000};
+constexpr uint32_t kMinimumQueryStringDepth{1};
 constexpr uint32_t kHNSWDefaultBlockSize{10240};
 constexpr uint32_t kHNSWMinimumBlockSize{0};
 constexpr uint32_t kMaxThreadsCount{1024};
 
+constexpr absl::string_view kQueryStringDepthConfig{"query-string-depth"};
 constexpr absl::string_view kHNSWBlockSizeConfig{"hnsw-block-size"};
 constexpr absl::string_view kReaderThreadsConfig{"reader-threads"};
 constexpr absl::string_view kWriterThreadsConfig{"writer-threads"};
@@ -94,6 +97,15 @@ static const std::vector<std::string_view> kLogLevelNames = {
 static const std::vector<int> kLogLevelValues = {
     static_cast<int>(LogLevel::kWarning), static_cast<int>(LogLevel::kNotice),
     static_cast<int>(LogLevel::kVerbose), static_cast<int>(LogLevel::kDebug)};
+
+/// Register the "--query-string-depth" flag. Controls the depth of the query
+/// string parsing from the FT.SEARCH cmd.
+static auto query_string_depth =
+    config::NumberBuilder(kQueryStringDepthConfig,   // name
+                          kDefaultQueryStringDepth,  // default size
+                          kMinimumQueryStringDepth,  // min size
+                          UINT_MAX)                  // max size
+        .Build();
 
 static auto hnsw_block_size =
     config::NumberBuilder(kHNSWBlockSizeConfig,   // name
@@ -160,6 +172,10 @@ static auto log_level =
         })
         .WithValidationCallback(ValidateLogLevel)
         .Build();
+
+vmsdk::config::Number& GetQueryStringDepth() {
+  return dynamic_cast<vmsdk::config::Number&>(*query_string_depth);
+}
 
 vmsdk::config::Number& GetHNSWBlockSize() {
   return dynamic_cast<vmsdk::config::Number&>(*hnsw_block_size);

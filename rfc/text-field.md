@@ -35,7 +35,7 @@ In the context of this RFC.
 ## Design considerations
 
 The text searching facility provides machinery that decomposes text fields into terms and field-indexes them.
-The query facility of the ```FT.SEARCH``` and ```FT.AGGREGATE``` commands is enhanced to select keys based on combinations of words, wildcard, fuzzy and phrase matching.
+The query facility of the ```FT.SEARCH``` and ```FT.AGGREGATE``` commands is enhanced to select keys based on combinations of term, fuzzy and phrase matching together with the existing selection operators of TAG, Numeric range and Vector searches.
 
 ### Tokenization process
 
@@ -53,17 +53,17 @@ The tokenization process has four steps.
 ```
 ┌─────────────────┐     ┌───────────────┐     ┌──────────────┐     ┌───────────────┐
 │  Input Text     │     │ Tokenization  │     │ Case         │     │ Stop Word     │
-│  "The quick     │ ──> │ ["The",       │ ──> │ ["the",      │ ──> │ ["quick",     │
-│   brown fox."   │     │  "quick",     │     │  "quick",    │     │  "brown",     │
-└─────────────────┘     │  "brown",     │     │  "brown",    │     │  "fox"]       │
-                        │  "fox"]       │     │  "fox"]      │     └───────┬───────┘
+│  "The Running   │ ──> │ ["The",       │ ──> │ ["the",      │ ──> │ ["running",   │
+│   Searches cat" │     │  "Running",   │     │  "running",  │     │  "searches",  │
+└─────────────────┘     │  "Searches",  │     │  "searches", │     │  "cat"]       │
+                        │  "cat"]       │     │  "cat"]      │     └───────┬───────┘
                         └───────────────┘     └──────────────┘             │
                                                                            V
                                                                       ┌───────────────┐
                                                                       │ Stemming      │
-                                                                      │ ["quick",     │
-                                                                      │  "brown",     │
-                                                                      │  "fox"]       │
+                                                                      │ ["run",       │
+                                                                      │  "search",    │
+                                                                      │  "cat"]       │
                                                                       └───────────────┘
 ```
 
@@ -74,7 +74,7 @@ Note that individual punctuation characters can be escaped using the normal back
 ### Text Field-Index Structure
 
 The text field-index is a mapping from a term to a list of locations.
-Depending on the configuration, the list of locations may be just a list of keys or a list of key/term-offset pairs.
+Depending on the configuration, the list of locations may be just a list of keys or a list of key/term-offset pairs. The list of locations is also known as a postings or a postings list.
 
 The mapping structure is built from one or two prefix trees. When present, the second prefix tree is built from each inserted term sequenced in reverse order, effectively providing a suffix tree.
 
@@ -112,7 +112,7 @@ Here is a visual example. Note that in the drawing, the sections noted as "same 
 
 ### Search query operators
 
-Unlike the Vector, Tag and Numeric search operators the specification of a field is optional. If the field specification is omitted then a match is declared if any field matches the search operator.
+Unlike the Vector, Tag and Numeric search operators the specification of a field is optional. If the field specification is omitted then a match is declared if any text field matches the search operator.
 
 #### Term matching
 
@@ -123,13 +123,52 @@ Initially, only a single wildcard specifier ```*``` is allowed which matches any
 The wildcard can be at any position within the term, providing prefix, suffix and infix style matching.
 Note, in this proposal, the second prefix tree is required to perform infix and suffix matching.
 
+#### Fuzzy matching
+
+Fuzzy word matching is specified by enclosing a word in pairs of percent signs ```%```. This term matches words within one [Levenshtein edit distance](https://en.wikipedia.org/wiki/Levenshtein_distance) edit distance for each pair of percent signs from the specified word. 
+
 #### Phrase matching
 
-Exact phrase matching is specified by enclosing a sequence of terms in double quotes ```"```. In order to perform phrase matching, the field-index must be configured to contain term-offsets.
+Exact phrase matching is specified by enclosing a sequence of term-specifiers in double quotes ```"```. In order to perform phrase matching, the field-index must be configured to contain offsets. In the context of phrase matching a term-specifier is either a term match or a fuzzy match specifier.
 
-#### Phrase matching
+The syntax of the phrase matching term allows the specification of two additional modifiers: `Inorder` and `Slop`. The `Slop` modifier controls the maximum distance between the matching terms. A `Slop` value of zero means that the matched terms must be sequentially in order. A `Slop` value of 1 indicates that the matched terms could have up to 1 addition non-matched word between them. The default value for `Slop` is zero.
 
-Exact phrase matching is specified by enclosing a sequence of terms in double quotes ```"```. In order to perform phrase matching, the field-index must be configured to contain term-offsets.
+The `Inorder` modifier is a boolean which controls whether the ordering of the matches terms must match the ordering in the phrase. If `Inorder` is `false` then the terms can be matched in any order. The default is `true`.
+
+### Example Search operations
+
+These examples provide an example query string as a block of text. When used in an FT.SEARCH or FT.AGGREGATE command, this text is the contents of a single field in that command.
+Thus if the command is submitted through some application like valkey-cli which will subject its command line to various shell-like metadata operations (quote removal, environment variable substitution, etc.) then the reader must compensate for that, for example by escaping spaces which valkey-cli would tend to separate into separate command fields.
+
+#### Term Matching Examples
+
+| Example | Interpretation | Required Index Options |
+|:-:|---|:-:|
+| `abcd` | exact term match | none |
+| `a*`   | matches any term starting with `a` | none |
+| `fred*` | matches any term starting with `fred` | none |
+| `*z` | matches any term ending with `z` | SUFFIXTRIE |
+| `a*b`  | matches any term starting with `a` and ending with `b` | SUFFIXTRIE |
+
+#### Fuzzy Matching Examples
+
+| Example | Interpretation |
+|:-:|---|
+| %abc% | Matches any term within one edit-distance of `abc` |
+| %%abc%% | Matches any term within two edit-distances of `abc` |
+
+#### Phrase Matching Examples
+
+All phrase matching queries require the `WITHOFFSETS` index creation option.
+
+| Example | Interpretation |
+|:-:|---|
+| `"a b"` | Matches term `a` immediately followed by term `b` |
+| `"a %b%"` | Matches term `a` immediately followed by any term within one edit-distance of `b` |
+| `"a*b c"` | Matches any term that starts with `a` and ends with `b` followed by the term `c` |
+| `"a b c"` | Matches the terms `a`, `b` and `c` in that order with no intervening words |
+| `"a b c" => [$inorder:false]` | Matches the terms `a`, `b`, and `c` in any order with no intervening words |
+| `"a b" => [$inorder:false, $slop:1]"` | Matches the terms `a` and `b` in any order with up to one intervening term |
 
 ### Search Query Operations Flow
 
@@ -283,7 +322,7 @@ If supplied as part of an individual field declaration, i.e., after the ```SCHEM
 ```
 [PUNCTUATION <string>]
 ```
-The characters of this string are used to split the input string into words. Note, the splitting process allows escaping of input characters using the usual backslash notation. This string cannot be empty. Default value is: 
+The characters of this string are used to split the input string into words. Note, the splitting process allows escaping of input characters using the usual backslash notation. This string cannot be empty. Default value is: _TBD_
 
 
 ```

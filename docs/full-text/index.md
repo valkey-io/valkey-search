@@ -6,7 +6,7 @@ iteration sequences to perform merge-like operations in linear time.
 
 In addition to the standard CRUD operations _TextIndex_ provides _WordIterator_ that efficiently iterates over sequences of tuples where the _Word_ element shares a common prefix or
 optionally a common suffix, again in lexical order. _WordIterator_ optimizes other operations, e.g.,
-it's efficient to move from one _Key_ to a next _Key_ without iterating over the intervening _Field_ and/or _Position_ entries -- typically in O(1) or worst case O(log #keys) time.
+it's efficient to move from one _Key_ to another _Key_ without iterating over the intervening _Field_ and/or _Position_ entries -- typically in O(1) or worst case O(log #keys) time.
 From this capability is constructed the various search operators: word search, phrase search, and fuzzy search.
 
 The _TextIndex_ object is implemented as a two-level hierarchy of objects. At the top level is a _RadixTree_ which maps a _Word_ into a _Postings_ object which is a container of (_Key_, _Field_, _Position_) triples.

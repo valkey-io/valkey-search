@@ -45,7 +45,7 @@ struct WildCardIterator : public WordIterator {
   using Posting = typename Postings::Posting;
   // Use this form when there's no suffix tree available.
   WildCardIterator(absl::string_view prefix, absl::string_view suffix,
-                   const RadixTree<Postings>& prefix_tree, );
+                   const RadixTree<Postings>& prefix_tree);
 
   // Use this form when a suffix tree IS available.
   WildCardIterator(absl::string_view prefix, absl::string_view suffix,

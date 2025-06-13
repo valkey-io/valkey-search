@@ -588,7 +588,7 @@ void MetadataManager::OnServerCronCallback(
     [[maybe_unused]] uint64_t subevent, [[maybe_unused]] void *data) {
   static bool timer_started = false;
   if (!timer_started) {
-    // The first server cron tick after the FT.CREATE is run needs to kickstart
+    // The first server cron tick after the FT.CREATE is run needs to kick start
     // the timer. This can't be done during normal server event subscription
     // because timers cannot be safely created in background threads (the GIL
     // does not protect event loop code which uses the timers).

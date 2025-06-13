@@ -42,7 +42,7 @@
 namespace valkey_search {
 constexpr size_t kFreeEntriesPerChunkGroupSize = 7;
 constexpr size_t kChunkBufferPages = 10;
-constexpr size_t kChunkBufferMinEntryiesPerChunk = 8;
+constexpr size_t kChunkBufferMinEntriesPerChunk = 8;
 
 /*
 FixedSizeAllocator is responsible for allocating and managing contiguous

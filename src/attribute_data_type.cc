@@ -163,7 +163,7 @@ absl::StatusOr<RecordsMap> JsonAttributeDataType::FetchAllRecords(
     absl::string_view key,
     const absl::flat_hash_set<absl::string_view> &identifiers) const {
   vmsdk::VerifyMainThread();
-  // Validating that the a JSON object with the key exists with the vector
+  // Validating that a JSON object with the key exists with the vector
   // identifier
   auto reply = vmsdk::UniquePtrRedisCallReply(RedisModule_Call(
       ctx, kJsonCmd.data(), "cc", key.data(), vector_identifier.c_str()));

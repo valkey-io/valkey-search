@@ -201,7 +201,7 @@ struct PrefilteredKey {
 };
 
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
-CalcBestMatchingPrefiltereddKeys(
+CalcBestMatchingPrefilteredKeys(
     const VectorSearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index) {
@@ -374,7 +374,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
         << "Using pre-filter query execution, qualified entries="
         << qualified_entries;
     // Do an exact nearest neighbour search on the reduced search space.
-    auto results = CalcBestMatchingPrefiltereddKeys(
+    auto results = CalcBestMatchingPrefilteredKeys(
         parameters, entries_fetchers, vector_index);
 
     return vector_index->CreateReply(results);

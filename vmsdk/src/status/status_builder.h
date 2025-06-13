@@ -657,7 +657,7 @@ inline StatusBuilder&& StatusBuilder::VLog(int verbose_level) && {
 inline StatusBuilder& StatusBuilder::EmitStackTrace() & {
   if (rep_ == nullptr) return *this;
   if (rep_->logging_mode == Rep::LoggingMode::kDisabled) {
-    // Default to INFO logging, otherwise nothing would be emitted.
+    // Default to INFO logging; otherwise, nothing would be emitted.
     rep_->logging_mode = Rep::LoggingMode::kLog;
     rep_->log_severity = absl::LogSeverity::kInfo;
   }

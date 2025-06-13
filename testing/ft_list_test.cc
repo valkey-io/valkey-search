@@ -50,7 +50,7 @@ namespace {
 class FTListTest : public ValkeySearchTest {};
 
 TEST_F(FTListTest, basic) {
-  // Setup the data structures for the test case.
+  // Set up the data structures for the test case.
   for (bool use_thread_pool : {true, false}) {
     RedisModuleCtx fake_ctx;
     vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);

@@ -64,7 +64,7 @@ using RDBSectionLoadCallback = absl::AnyInvocable<absl::Status(
     SupplementalContentIter &&supplemental_iter)>;
 
 // Callback to save an arbitrary count of RDBSections to RDB on aux save events.
-// Return value is an error status or the count of writted RDBSections.
+// Return value is an error status or the count of written RDBSections.
 using RDBSectionSaveCallback = absl::AnyInvocable<absl::Status(
     RedisModuleCtx *ctx, SafeRDB *rdb, int when)>;
 

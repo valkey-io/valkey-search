@@ -132,7 +132,7 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
       });
 
   parameters.filter_parse_results.root_predicate = std::move(predicate);
-  parameters.attribute_alias = "some_addribute_name";
+  parameters.attribute_alias = "some_attribute_name";
 
   MockAttributeDataType data_type;
   EXPECT_CALL(data_type, ToProto()).WillRepeatedly([&params]() {

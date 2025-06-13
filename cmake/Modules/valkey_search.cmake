@@ -63,7 +63,7 @@ endfunction()
 function(valkey_search_target_update_asan_flags TARGET)
   if(ASAN_BUILD)
     # For ASAN build, it is recommended to have at least -O1 and enable
-    # fno-omit-frame-pointer to get nicer stack traces
+    # -fno-omit-frame-pointer to get nicer stack traces
     target_compile_options(${TARGET} PRIVATE -O1)
     target_compile_options(${TARGET} PRIVATE -fno-omit-frame-pointer)
     target_compile_options(${TARGET} PRIVATE -fsanitize=address)

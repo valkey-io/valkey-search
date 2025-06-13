@@ -378,13 +378,13 @@ TEST_F(VectorIndexTest, ResizeFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   }
 }
 
-float CalcRecall(VectorFlat<float>* flat_index, VectorHNSW<float>* hsw_index,
+float CalcRecall(VectorFlat<float>* flat_index, VectorHNSW<float>* hnsw_index,
                  uint64_t k, int dimensions, std::optional<size_t> ef_runtime) {
   auto search_vectors = DeterministicallyGenerateVectors(50, dimensions, 1.5);
   int cnt = 0;
   for (const auto& search_vector : search_vectors) {
     absl::string_view vector = VectorToStr(search_vector);
-    auto res_hnsw = hsw_index->Search(vector, k, nullptr, ef_runtime);
+    auto res_hnsw = hnsw_index->Search(vector, k, nullptr, ef_runtime);
     auto res_flat = flat_index->Search(vector, k);
     for (auto& label : *res_hnsw) {
       for (auto& real_label : *res_flat) {

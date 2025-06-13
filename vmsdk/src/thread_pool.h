@@ -83,7 +83,7 @@ class ThreadPool {
       ABSL_LOCKS_EXCLUDED(queue_mutex_);
 
   /// Resize the pool size to `count` threads. If `wait_for_resize` is `true`,
-  /// this method waits for resize operation to complete, otherwise, the resize
+  /// this method waits for resize operation to complete; otherwise, the resize
   /// operation is done asynchronously.
   void Resize(size_t count, bool wait_for_resize = false);
 

@@ -35,6 +35,9 @@ namespace options {
 
 namespace config = vmsdk::config;
 
+/// Return a mutable reference to the Query String Depth configuration
+config::Number& GetQueryStringDepth();
+
 /// Return a mutable reference to the HNSW resize configuration parameter
 config::Number& GetHNSWBlockSize();
 

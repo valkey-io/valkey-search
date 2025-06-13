@@ -50,7 +50,7 @@ struct WildCardIterator : public WordIterator {
   // Use this form when a suffix tree IS available.
   WildCardIterator(absl::string_view prefix, absl::string_view suffix,
                    const RadixTree<Postings>& prefix_tree,
-                   const RadixTree<Postings>& suffix_tree, );
+                   const RadixTree<Postings>& suffix_tree);
 
   // Points to valid Word?
   bool Done() const override;

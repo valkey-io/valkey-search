@@ -59,7 +59,12 @@ TEST_P(AllocatorTest, BasicFixedSizeAllocator) {
   Allocator::Free(ptr);
   EXPECT_EQ(allocator->ActiveAllocations(), 0);
   EXPECT_EQ(allocator->ChunkCount(), 0);
+#if defined(__APPLE__)
+  // Page on macOS is 16K, while on Linux it is usually 4K
+  EXPECT_EQ(EntriesFitInChunk(size, kChunkBufferPages), 14894);
+#else
   EXPECT_EQ(EntriesFitInChunk(size, kChunkBufferPages), 3723);
+#endif
 }
 
 TEST_P(AllocatorTest, FixedSizeAllocatorMultipleChunks) {

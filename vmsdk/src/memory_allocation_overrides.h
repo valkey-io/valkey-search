@@ -35,21 +35,28 @@
 #include <cstdlib>
 #include <new>
 
+#if defined(__clang__)
+#define WEAK_SYMBOL __attribute__((weak))
+#else
+#define WEAK_SYMBOL
+#endif
+
 extern "C" {
 // NOLINTNEXTLINE
-void* (*__real_malloc)(size_t) = malloc;
+WEAK_SYMBOL void* (*__real_malloc)(size_t) = malloc;
 // NOLINTNEXTLINE
-void (*__real_free)(void*) = free;
+WEAK_SYMBOL void (*__real_free)(void*) = free;
 // NOLINTNEXTLINE
-void* (*__real_calloc)(size_t, size_t) = calloc;
+WEAK_SYMBOL void* (*__real_calloc)(size_t, size_t) = calloc;
 // NOLINTNEXTLINE
-void* (*__real_realloc)(void*, size_t) = realloc;
+WEAK_SYMBOL void* (*__real_realloc)(void*, size_t) = realloc;
 // NOLINTNEXTLINE
-void* (*__real_aligned_alloc)(size_t, size_t) = aligned_alloc;
+WEAK_SYMBOL void* (*__real_aligned_alloc)(size_t, size_t) = aligned_alloc;
 // NOLINTNEXTLINE
-int (*__real_posix_memalign)(void**, size_t, size_t) = posix_memalign;
+WEAK_SYMBOL int (*__real_posix_memalign)(void**, size_t,
+                                         size_t) = posix_memalign;
 // NOLINTNEXTLINE
-void* (*__real_valloc)(size_t) = valloc;
+WEAK_SYMBOL void* (*__real_valloc)(size_t) = valloc;
 // NOLINTNEXTLINE
 __attribute__((weak)) size_t empty_usable_size(void* ptr) noexcept;
 }  // extern "C"

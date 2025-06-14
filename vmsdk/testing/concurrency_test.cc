@@ -33,6 +33,7 @@
 
 #include <sstream>
 #include <string>
+#include <thread>
 
 namespace vmsdk {
 namespace helper {

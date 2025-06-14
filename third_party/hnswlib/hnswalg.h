@@ -29,6 +29,12 @@
 #include "vmsdk/src/memory_allocation_overrides.h"  // IWYU pragma: keep
 #endif
 
+#ifdef __APPLE__
+#include <libkern/OSByteOrder.h>
+#define htole64(x) OSSwapHostToLittleInt64(x)
+#define le64toh(x) OSSwapLittleToHostInt64(x)
+#endif
+
 namespace hnswlib {
 typedef unsigned int tableint;
 typedef unsigned int linklistsizeint;

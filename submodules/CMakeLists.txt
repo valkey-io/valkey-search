@@ -24,6 +24,16 @@ set(MODULES_INSTALL_PREFIX "${MODULES_DIR}/install")
 
 find_program(_GIT_EXE git REQUIRED)
 
+function(find_and_replace file_name find_what replace_with)
+  file(READ "${file_name}" FILE_CONTENTS)
+  string(REPLACE "${find_what}" "${replace_with}" FILE_CONTENTS
+                 "${FILE_CONTENTS}")
+  file(WRITE "${file_name}" "${FILE_CONTENTS}")
+  message(
+    STATUS
+      "Replaced: '${find_what}' with '${replace_with}' in file: ${file_name}")
+endfunction()
+
 # On some distros (mainly RedHat based) the cmake files might be installed under
 # lib64/ and not under lib/, this function helps locating the cmake path for the
 # given module
@@ -88,9 +98,15 @@ endfunction()
 function(build_submodule MODULE_NAME MODULE_CMAKE_ARGS HINT_FILE)
   if(NOT EXISTS "${HINT_FILE}")
     file(MAKE_DIRECTORY ${MODULES_DIR}/${MODULE_NAME}/build-release)
-    set(CXX_FLAGS
-        "-Wno-missing-requires -Wno-attributes -Wno-deprecated -Wno-return-type -Wno-stringop-overflow -Wno-deprecated-declarations"
-    )
+    if(UNIX AND NOT APPLE)
+      set(CXX_FLAGS
+          "-Wno-missing-requires -Wno-attributes -Wno-deprecated -Wno-return-type -Wno-stringop-overflow -Wno-deprecated-declarations"
+      )
+    else()
+      set(CXX_FLAGS
+          "-Wno-attributes -Wno-deprecated -Wno-return-type -Wno-deprecated-declarations"
+      )
+    endif()
     set(C_FLAGS "")
     set(LD_FLAGS "")
     if(ASAN_BUILD)
@@ -156,15 +172,14 @@ else()
 
   string(FIND "${DISTRO_NAME}" "alpine" POSITION)
   if(POSITION GREATER -1)
-    file(READ "${MODULES_DIR}/grpc/third_party/re2/util/pcre.h" FILE_CONTENTS)
-    string(REPLACE "mutable int32_t" "mutable int" FILE_CONTENTS
-                   "${FILE_CONTENTS}")
-    file(WRITE "${MODULES_DIR}/grpc/third_party/re2/util/pcre.h"
-         "${FILE_CONTENTS}")
-    message(
-      STATUS
-        "Fixed 'mutable int32_t' issue in file: ${MODULES_DIR}/grpc/third_party/re2/util/pcre.h"
-    )
+    find_and_replace("${MODULES_DIR}/grpc/third_party/re2/util/pcre.h"
+                     "mutable int32_t" "mutable int")
+  endif()
+
+  if(APPLE)
+    # Fix wrong detection of fdopen on macOS
+    find_and_replace("${MODULES_DIR}/grpc/third_party/zlib/zutil.h"
+                     "ifndef fdopen" "if 0")
   endif()
 
   checkout_submodule_branch(

@@ -137,6 +137,13 @@ inline absl::StatusOr<uint64_t> To(absl::string_view str) {
   return ToNumeric<uint64_t>(str);
 }
 
+#if defined(__clang__)
+template <>
+inline absl::StatusOr<unsigned long> To(absl::string_view str) {
+  return ToNumeric<uint64_t>(str);
+}
+#endif
+
 template <>
 inline absl::StatusOr<double> To(absl::string_view str) {
   double value;

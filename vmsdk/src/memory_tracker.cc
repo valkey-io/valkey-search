@@ -21,36 +21,48 @@
  * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
  * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
  * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * INTERRUPTION) HOWEVER CAUSED ON ANY THEORY OF LIABILITY, WHETHER IN
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef VMSDK_SRC_MEMORY_ALLOCATION_H_
-#define VMSDK_SRC_MEMORY_ALLOCATION_H_
+#include "memory_tracker.h"
+#include "vmsdk/src/memory_allocation.h"
 
-#include <cstdint>
+thread_local MemoryTrackingScope* MemoryTrackingScope::current_scope_tls_ = nullptr;
 
-namespace vmsdk {
+thread_local MemoryTrackingScope::ScopeEventCallback MemoryTrackingScope::scope_event_callback_ = nullptr;
 
-// Updates the custom allocator to perform any future allocations using the
-// Valkey allocator.
-void UseValkeyAlloc();
-bool IsUsingValkeyAlloc();
+MemoryTrackingScope::MemoryTrackingScope(std::atomic<int64_t>* pool)
+    : target_pool_(pool), baseline_memory_delta_(vmsdk::GetMemoryDelta()), previous_scope_(current_scope_tls_) {
+    current_scope_tls_ = this;
+    NotifyScopeEvent();
+}
 
-// Switch back to the default allocator. No guarantees around atomicity. Only
-// safe in single-threaded or testing environments.
-void ResetValkeyAlloc();
+MemoryTrackingScope::~MemoryTrackingScope() {
+    if (target_pool_ != nullptr) {
+        int64_t current_delta = vmsdk::GetMemoryDelta();
+        int64_t net_change = current_delta - baseline_memory_delta_;
+        target_pool_->fetch_add(net_change);
+    }
+    current_scope_tls_ = previous_scope_;
+}
 
-// Report used memory counter.
-uint64_t GetUsedMemoryCnt();
+MemoryTrackingScope* MemoryTrackingScope::GetCurrentScope() {
+    return current_scope_tls_;
+}
 
-void ReportAllocMemorySize(uint64_t size);
-void ReportFreeMemorySize(uint64_t size);
+void MemoryTrackingScope::NotifyScopeEvent() {
+    if (scope_event_callback_) {
+        scope_event_callback_(this);
+    }
+}
 
-int64_t GetMemoryDelta();
+void MemoryTrackingScope::SetScopeEventCallback(ScopeEventCallback callback) {
+    scope_event_callback_ = callback;
+}
 
-}  // namespace vmsdk
-
-#endif  // VMSDK_SRC_MEMORY_ALLOCATION_H_
+void MemoryTrackingScope::ClearScopeEventCallback() {
+    scope_event_callback_ = nullptr;
+}

@@ -71,7 +71,7 @@ target_link_libraries(valkey_search PUBLIC utils)
 target_link_libraries(valkey_search PUBLIC status_macros)
 target_link_libraries(valkey_search PUBLIC valkey_module)
 target_link_libraries(valkey_search PUBLIC acl)
-target_link_libraries(valkey_search PUBLIC vmsdk_memory_tracker)
+target_link_libraries(valkey_search PUBLIC memory_tracker)
 
 set(SRCS_KEYSPACE_EVENT_MANAGER
     ${CMAKE_CURRENT_LIST_DIR}/keyspace_event_manager.cc

@@ -46,14 +46,15 @@ public:
 
     static MemoryTrackingScope* GetCurrentScope();
 
+    int64_t GetMemoryDelta() const { return memory_delta_; }
+
     // Used for testing
     static void SetScopeEventCallback(ScopeEventCallback callback);
     static void ClearScopeEventCallback();
 
 private:
     std::atomic<int64_t>* target_pool_ = nullptr;
-    int64_t baseline_memory_delta_ = 0;
-    MemoryTrackingScope* previous_scope_ = nullptr;
+    int64_t memory_delta_ = 0;
 
     static thread_local MemoryTrackingScope* current_scope_tls_;
     static thread_local ScopeEventCallback scope_event_callback_;

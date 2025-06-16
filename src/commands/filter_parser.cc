@@ -312,7 +312,7 @@ std::unique_ptr<query::Predicate> WrapPredicate(
 // prepended to the number, for example, [(100 (200].
 absl::StatusOr<std::unique_ptr<query::Predicate>>
 FilterParser::ParseExpression(int level) {
-  if (level++ >= options::GetQueryStringDepth().GetValue()) {
+  if (level++ >= options::GetQueryStringDepth()) {
     return absl::InvalidArgumentError("Query string recursive depth exceeded");
   }
   std::unique_ptr<query::Predicate> prev_predicate;

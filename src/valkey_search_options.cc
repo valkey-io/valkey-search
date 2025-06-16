@@ -172,8 +172,8 @@ static auto log_level =
         .WithValidationCallback(ValidateLogLevel)
         .Build();
 
-vmsdk::config::Number& GetQueryStringDepth() {
-  return dynamic_cast<vmsdk::config::Number&>(*query_string_depth);
+uint32_t GetQueryStringDepth() {
+  return query_string_depth->GetValue();
 }
 
 vmsdk::config::Number& GetHNSWBlockSize() {

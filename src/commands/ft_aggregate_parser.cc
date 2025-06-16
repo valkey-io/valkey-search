@@ -14,8 +14,8 @@
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 
-// #define DBG std::cerr
-#define DBG 0 && std::cerr
+#define DBG std::cerr
+// #define DBG 0 && std::cerr
 
 namespace valkey_search {
 namespace aggregate {
@@ -213,8 +213,9 @@ ConstructGroupByParser() {
           GroupBy::Reducer r;
           VMSDK_ASSIGN_OR_RETURN(auto name, itr.PopNext(),
                                  _ << "Missing Reducer name");
-          auto ucname = expr::FuncUpper(expr::Value(vmsdk::ToStringView(name)));
-          auto reducer_itr = GroupBy::reducerTable.find(ucname.AsStringView());
+          auto uc_name =
+              expr::FuncUpper(expr::Value(vmsdk::ToStringView(name)));
+          auto reducer_itr = GroupBy::reducerTable.find(uc_name.AsStringView());
           if (reducer_itr == GroupBy::reducerTable.end()) {
             return absl::NotFoundError(absl::StrCat("reducer function `",
                                                     vmsdk::ToStringView(name),
@@ -226,7 +227,7 @@ ConstructGroupByParser() {
           if (cnt < r.info_->min_nargs_ || cnt > r.info_->max_nargs_) {
             return absl::OutOfRangeError(
                 absl::StrCat("incorrect number of arguments (", cnt,
-                             ") to reducer ", ucname.AsStringView()));
+                             ") to reducer ", uc_name.AsStringView()));
           }
           for (int i = 0; i < cnt; ++i) {
             VMSDK_ASSIGN_OR_RETURN(auto arg, itr.PopNext(),
@@ -280,30 +281,44 @@ vmsdk::KeyValueParser<AggregateParameters> CreateAggregateParser() {
 }
 
 absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
-AggregateParameters::MakeReference(const absl::string_view s, bool create) {
-  DBG << "MakeReference : " << s << " Create:" << create << "\n";
-  auto it = attr_record_indexes_.find(s);
-  if (it != attr_record_indexes_.end()) {
-    return std::make_unique<Attribute>(s, it->second);
-  } else {
-    if (!create) {
-      VMSDK_ASSIGN_OR_RETURN(auto fieldType,
-                             parse_vars_.index_interface_->GetFieldType(s));
-      switch (fieldType) {
-        case indexes::IndexerType::kTag:
-        case indexes::IndexerType::kNumeric:
-        case indexes::IndexerType::kVector:
-        case indexes::IndexerType::kFlat:
-        case indexes::IndexerType::kHNSW:
-          break;
-        default:
-          return absl::InvalidArgumentError(
-              absl::StrCat("Invalid data type for @", s));
-      }
-    }
-    size_t new_index = AddRecordAttribute(s);
-    return std::make_unique<Attribute>(s, new_index);
+AggregateParameters::MakeReference(const absl::string_view name, bool create) {
+  DBG << "MakeReference : " << name << " Create:" << create << "\n";
+  auto it = record_indexes_by_identifier_.find(name);
+  if (it != record_indexes_by_identifier_.end()) {
+    return std::make_unique<Attribute>(name, it->second);
   }
+  it = record_indexes_by_alias_.find(name);
+  if (it != record_indexes_by_alias_.end()) {
+    return std::make_unique<Attribute>(name, it->second);
+  }
+  indexes::IndexerType fieldType = indexes::IndexerType::kNone;
+  if (!create) {
+    VMSDK_ASSIGN_OR_RETURN(fieldType,
+                           parse_vars_.index_interface_->GetFieldType(name));
+    switch (fieldType) {
+      case indexes::IndexerType::kTag:
+      case indexes::IndexerType::kNumeric:
+      case indexes::IndexerType::kVector:
+      case indexes::IndexerType::kFlat:
+      case indexes::IndexerType::kHNSW:
+        break;
+      default:
+        return absl::InvalidArgumentError(
+            absl::StrCat("Invalid data type for @", name));
+    }
+  }
+  auto identifier = parse_vars_.index_interface_->GetIdentifier(name);
+  size_t new_index;
+  if (identifier.ok()) {
+    DBG << "Adding Record Attribute: " << name << " with alias "
+        << identifier.value() << "\n";
+    new_index = AddRecordAttribute(*identifier, name, fieldType);
+  } else {
+    DBG << "Adding Record Attribute: " << name
+        << " with synthetic alias (no index schema)\n";
+    new_index = AddRecordAttribute(name, name, indexes::IndexerType::kNone);
+  }
+  return std::make_unique<Attribute>(name, new_index);
 }
 
 std::ostream &operator<<(std::ostream &os, const AggregateParameters &agg) {

@@ -47,7 +47,7 @@ void Record::Dump(std::ostream& os,
       os << ',';
     }
     if (agg_params) {
-      os << agg_params->attr_record_names_[i] << ':';
+      os << agg_params->record_info_by_index_[i] << ':';
     } else {
       os << '?' << i << '?';
     }

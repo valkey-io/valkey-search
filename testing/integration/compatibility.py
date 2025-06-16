@@ -93,24 +93,26 @@ def parse_field(x, key_type):
     assert False
 
 def parse_value(x, key_type):
-    if key_type == "json" and x[0] == b'[':
+    if key_type == "json" and x.startswith(b'['):
         assert isinstance(x, bytes), f"Expected bytes for JSON value, got {type(x)}"
         try:
-            return json.loads(x.decode("utf-8"))
-        except json.JSONDecodeError as e:
-            print(f"JSON decode error: {e} for value {x}")
-            assert False
-    if isinstance(x, bytes):
+            result = json.loads(x.decode("utf-8"))
+        except json.decoder.JSONDecodeError as e:
+            print(f">>>> JSON decode error: {e} for value {x}")
+            return None
+    elif isinstance(x, bytes):
         if key_type == "json":
-            return x.decode("utf-8")
+            result = x.decode("utf-8")
         else:
-            return x
-    if isinstance(x, str):
-        return x
-    if isinstance(x, int):
-        return x
-    print("Unknown type ", type(x))
-    assert False
+            result = x
+    elif isinstance(x, str):
+        result = x
+    elif isinstance(x, int):
+        result = x
+    else:
+        print("Unknown type ", type(x))
+        assert False
+    return result
 
 def unpack_search_result(rs, key_type):
     rows = []
@@ -143,6 +145,7 @@ def unpack_result(cmd, key_type, rs, sortkeys):
         out = unpack_search_result(rs, key_type)
     else:
         out = unpack_agg_result(rs, key_type)
+        print("Unpacked result: ", out)
     #
     # Sort by the sortkeys
     #
@@ -176,11 +179,22 @@ def compare_number_eq(l, r):
                 return False
         return True
     else:
-        return math.isclose(float(l), float(r), rel_tol=.01)
+        try:
+            return math.isclose(float(l), float(r), rel_tol=.01)
+        except ValueError:
+            print("ValueError comparing: ", l, " and ", r)
+            return False
+        except TypeError:
+            print("TypeError comparing: ", l, " and ", r)
+            return False
+        
+        
     
 def compare_row(l, r, key_type):
     lks = sorted(list(l.keys()))
     rks = sorted(list(r.keys()))
+    print("Comparing row: ", l, " and ", r)
+    print("Sorted keys: ", lks, " and ", rks)
     if lks != rks:
         return False
     for i in range(len(lks)):
@@ -208,6 +222,9 @@ def compare_row(l, r, key_type):
     return True            
     
 def compare_results(expected, results):
+    print("CMD:", printable_cmd(expected["cmd"]))
+    print("Raw Expected Results:", results["result"])
+    print("Raw Actual Results", results["result"])
     cmd = expected["cmd"]
     key_type = expected["key_type"]
     if cmd != results["cmd"]:
@@ -255,8 +272,12 @@ def compare_results(expected, results):
         return False
 
     # Output raw results
+    print("Raw expected result:", expected["result"])
     rl = unpack_result(cmd, expected["key_type"], expected["result"], sortkeys)
+    print("Unpack of expected result:", rl)
+    print("Raw actual result:", results["result"])
     ec = unpack_result(cmd, expected["key_type"], results["result"], sortkeys)
+    print("Unpack of actual result:", ec)
 
     # Process failures
     if len(rl) != len(ec):
@@ -300,9 +321,10 @@ def compare_results(expected, results):
 
 correct_answers = 0
 StopOnFailure = False
+failed_tests = {}
 
 def do_answer(expected, data_set):
-    global correct_answers
+    global correct_answers, failed_tests
     if (expected['data_set_name'], expected['key_type']) != data_set:
         print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'])
         client.execute_command("FLUSHALL SYNC")
@@ -316,12 +338,18 @@ def do_answer(expected, data_set):
         if compare_results(expected, result):
             correct_answers += 1
         else:
+            if expected['testname'] not in failed_tests:
+                failed_tests[expected['testname']] = 0
+            failed_tests[expected['testname']] += 1
             assert not StopOnFailure, "Test failed, stopping execution"
     except redis.ResponseError as e:
         result["exception"] = True
         if compare_results(expected, result):
             correct_answers += 1
         else:
+            if expected['testname'] not in failed_tests:
+                failed_tests[expected['testname']] = 0
+            failed_tests[expected['testname']] += 1
             assert not StopOnFailure, f"Test failed with exception: {e}, stopping execution"
     return data_set
 
@@ -336,3 +364,4 @@ for i in range(len(answers)):
     data_set = do_answer(answers[i], data_set)
 
 print(f"Correct answers: {correct_answers} out of {len(answers)}")
+print("Failed tests:", failed_tests)

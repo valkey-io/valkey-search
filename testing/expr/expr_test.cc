@@ -29,9 +29,9 @@ class ExprTest : public testing::Test {
     Value GetValue(Expression::EvalContext& ctx,
                    const Expression::Record& record) const override {
       const Record& attrs = reinterpret_cast<const Record&>(record);
-      auto itrs = attrs.attrs.find(name_);
-      if (itrs != attrs.attrs.end()) {
-        return itrs->second;
+      auto itr = attrs.attrs.find(name_);
+      if (itr != attrs.attrs.end()) {
+        return itr->second;
       } else {
         return Value{};
       }

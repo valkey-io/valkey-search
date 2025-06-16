@@ -22,8 +22,8 @@
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
 
-// #define DBG std::cerr
-#define DBG 0 && std::cerr
+#define DBG std::cerr
+// #define DBG 0 && std::cerr
 
 namespace valkey_search {
 namespace aggregate {
@@ -35,12 +35,22 @@ struct RealIndexInterface : public IndexInterface {
     VMSDK_ASSIGN_OR_RETURN(auto indexer, schema_->GetIndex(s));
     return indexer->GetIndexerType();
   }
+  absl::StatusOr<std::string> GetIdentifier(
+      absl::string_view alias) const override {
+    return schema_->GetIdentifier(alias);
+  }
+  absl::StatusOr<std::string> GetAlias(
+      absl::string_view identifier) const override {
+    return schema_->GetAlias(identifier);
+  }
   RealIndexInterface(std::shared_ptr<IndexSchema> schema) : schema_(schema) {}
 };
 
 absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   // Figure out what fields actually need to be returned by the aggregation
   // operation. And modify the common search returns list accordingly
+  DBG << "Manipulating returns clause for: " << params.index_schema_name
+      << "\n";
   RedisModule_Assert(!params.no_content);
   if (params.loadall_) {
     DBG << "**LOADALL**\n";
@@ -48,7 +58,6 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   } else if (params.loads_.empty()) {
     // Nothing, don't load anything
     params.no_content = true;
-    ;
   } else {
     DBG << "LOADING: ";
     for (const auto &load : params.loads_) {
@@ -57,17 +66,32 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       // Skip loading of the score and the key, we always get those...
       //
       if (load == "__key") {
-        DBG << "*skipped*";
+        DBG << " *skipped*";
         params.load_key = true;
         continue;
       }
       if (load == vmsdk::ToStringView(params.score_as.get())) {
-        DBG << "*skipped*";
+        DBG << " *skipping score*";
         continue;
       }
-      params.return_attributes.emplace_back(query::ReturnAttribute{
-          .identifier = vmsdk::MakeUniqueRedisString(load),
-          .alias = vmsdk::MakeUniqueRedisString(load)});
+      VMSDK_ASSIGN_OR_RETURN(auto indexer, params.index_schema->GetIndex(load));
+      auto field_type = indexer->GetIndexerType();
+      auto schema_identifier = params.index_schema->GetIdentifier(load);
+      if (schema_identifier.ok()) {
+        DBG << " (alias: " << *schema_identifier << ", " << load << ")";
+        params.return_attributes.emplace_back(query::ReturnAttribute{
+            .identifier = vmsdk::MakeUniqueRedisString(*schema_identifier),
+            .attribute_alias = vmsdk::MakeUniqueRedisString(load),
+            .alias = vmsdk::MakeUniqueRedisString(load)});
+        params.AddRecordAttribute(*schema_identifier, load, field_type);
+      } else {
+        DBG << " " << load;
+        params.return_attributes.emplace_back(query::ReturnAttribute{
+            .identifier = vmsdk::MakeUniqueRedisString(load),
+            .attribute_alias = vmsdk::UniqueRedisString(),
+            .alias = vmsdk::MakeUniqueRedisString(load)});
+        params.AddRecordAttribute(load, load, indexes::IndexerType::kNone);
+      }
     }
     DBG << "\n";
   }
@@ -96,9 +120,11 @@ absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
   VMSDK_RETURN_IF_ERROR(PreParseQueryString(*params));
 
   // Ensure that key is first value if it gets included...
-  RedisModule_Assert(params->AddRecordAttribute("__key") == 0);
   RedisModule_Assert(params->AddRecordAttribute(
-                         vmsdk::ToStringView(params->score_as.get())) == 1);
+                         "__key", "__key", indexes::IndexerType::kNone) == 0);
+  auto score_sv = vmsdk::ToStringView(params->score_as.get());
+  RedisModule_Assert(params->AddRecordAttribute(
+                         score_sv, score_sv, indexes::IndexerType::kNone) == 1);
 
   VMSDK_RETURN_IF_ERROR(parser.Parse(*params, itr, true));
   if (itr.DistanceEnd() > 0) {
@@ -115,15 +141,51 @@ absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
   return std::move(params);
 }
 
-bool ReplyWithValue(RedisModuleCtx *ctx, absl::string_view name,
+bool ReplyWithValue(RedisModuleCtx *ctx,
+                    data_model::AttributeDataType data_type,
+                    std::string_view name, indexes::IndexerType field_type,
                     const expr::Value &value) {
   if (value.IsNil()) {
     return false;
   } else {
     RedisModule_ReplyWithSimpleString(ctx, name.data());
-    auto value_sv = value.AsStringView();
-    RedisModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
-    DBG << " " << name << ":" << value_sv;
+    if (data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
+      auto value_sv = value.AsStringView();
+      RedisModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
+      DBG << "HASH: " << name << ":" << value_sv << "\n";
+    } else {
+      static std::ostringstream ss;
+      ss.str(std::string());  // Clear the stringstream
+      switch (field_type) {
+        case indexes::IndexerType::kNone:
+          DBG << "kNone: " << value.AsStringView() << "\n";
+          ss << value.AsStringView();
+          break;
+        case indexes::IndexerType::kNumeric: {
+          auto dble = value.AsDouble();
+          if (!dble) {
+            return false;
+          }
+          DBG << "kNumeric: " << *dble << "\n";
+          ss << '[' << *dble << ']';
+          break;
+        }
+        case indexes::IndexerType::kTag:
+          DBG << "kTag: " << value.AsStringView() << "\n";
+          ss << '[' << '"' << value.AsStringView() << '"'
+             << ']';  // Todo: Handle Escaped Characters
+          break;
+        default:
+          DBG << "Unsupported field type for reply: " << int(field_type)
+              << "\n";
+          assert("Unsupported field type" == nullptr);
+      }
+      std::string s = ss.str();
+      DBG << "JSON1: " << name << ":" << s << "\n";
+      DBG << "JSON2: " << name << ":" << s << "\n";
+      RedisModule_ReplyWithStringBuffer(ctx, s.data(), s.size());
+      DBG << "JSON3: " << name << ":" << s << "\n";
+    }
   }
   return true;
 }
@@ -143,13 +205,15 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
 
   size_t key_index = 0, scores_index = 0;
   if (parameters.load_key) {
-    key_index = parameters.AddRecordAttribute("__key");
+    key_index = parameters.AddRecordAttribute("__key", "__key",
+                                              indexes::IndexerType::kNone);
   }
   // Include scores? The presence of a vector search implies yes, so when
   // vector search becomes optional this will need to change: todo:
   if (/* parameters.addscores_ */ true) {
-    scores_index = parameters.AddRecordAttribute(
-        vmsdk::ToStringView(parameters.score_as.get()));
+    auto score_sv = vmsdk::ToStringView(parameters.score_as.get());
+    scores_index = parameters.AddRecordAttribute(score_sv, score_sv,
+                                                 indexes::IndexerType::kNone);
   }
 
   //
@@ -159,7 +223,8 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
   // Todo: fix this  for (auto &n : neighbors) {
   for (auto &n : neighbors) {
     DBG << "Neighbor: " << n << "\n";
-    auto rec = std::make_unique<Record>(parameters.attr_record_indexes_.size());
+    auto rec =
+        std::make_unique<Record>(parameters.record_indexes_by_alias_.size());
     if (parameters.load_key) {
       rec->fields_[key_index] = expr::Value(n.external_id.get()->Str());
     }
@@ -170,15 +235,20 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
     if (n.attribute_contents.has_value() && !parameters.no_content) {
       for (auto &[name, records_map_value] : *n.attribute_contents) {
         auto value = vmsdk::ToStringView(records_map_value.value.get());
-        DBG << "Attribute_contents: " << name << " : " << value << "\n";
-        auto ref = parameters.attr_record_indexes_.find(name);
-        if (ref != parameters.attr_record_indexes_.end()) {
+        auto ref = parameters.record_indexes_by_alias_.find(name);
+        if (ref == parameters.record_indexes_by_alias_.end()) {
+          ref = parameters.record_indexes_by_identifier_.find(name);
+        }
+        if (ref != parameters.record_indexes_by_alias_.end()) {
           // Need to find the field type
           indexes::IndexerType field_type = indexes::IndexerType::kNone;
           auto indexer = parameters.index_schema->GetIndex(name);
           if (indexer.ok()) {
             field_type = (*indexer)->GetIndexerType();
           }
+          DBG << "Attribute_contents: " << name << " : " << value
+              << " Index:" << ref->second << " FieldType:" << int(field_type)
+              << "\n";
           switch (field_type) {
             case indexes::IndexerType::kNumeric: {
               auto numeric_value = vmsdk::To<double>(value);
@@ -195,7 +265,10 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
               rec->fields_[ref->second] = expr::Value(value);
               break;
           }
+          DBG << "After set record is " << *rec << "\n";
         } else {
+          DBG << "Attribute_contents: " << name << " : " << value
+              << " Extra:\n";
           rec->extra_fields_.push_back(
               std::make_pair(std::string(name), expr::Value(value)));
         }
@@ -236,8 +309,11 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
     DBG << "Starting row:";
     size_t array_count = 0;
     for (size_t i = 0; i < rec->fields_.size(); ++i) {
-      if (ReplyWithValue(ctx, parameters.attr_record_names_[i],
-                         rec->fields_[i])) {
+      if (ReplyWithValue(
+              ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
+              parameters.record_info_by_index_[i].identifier_,
+              parameters.record_info_by_index_[i].data_type_,
+              rec->fields_[i])) {
         array_count += 2;
       }
     }
@@ -245,16 +321,15 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
     // Now the unreferenced ones
     //
     for (const auto &[name, value] : rec->extra_fields_) {
-      RedisModule_ReplyWithSimpleString(ctx, name.data());
-      auto value_sv = value.AsStringView();
-      RedisModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
-      DBG << " " << name << ":" << value_sv;
-      array_count += 2;
+      if (ReplyWithValue(
+              ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
+              name, indexes::IndexerType::kNone, value)) {
+        array_count += 2;
+      }
     }
     DBG << " (Total length) " << array_count << "\n";
     RedisModule_ReplySetArrayLength(ctx, array_count);
   }
-
   return absl::OkStatus();
 }
 

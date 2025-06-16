@@ -21,7 +21,7 @@ class ClientRSystem(ClientSystem):
             pass
 
     def wait_for_indexing_done(self, index_name):
-        '''Wait for indexing to be done.'''
+        '''Wait for indexing to be done.
         indexing = True
         while indexing:
             try:
@@ -29,10 +29,10 @@ class ClientRSystem(ClientSystem):
             except redis.ConnectionError:
                 print("failed")
                 assert False
+                '''
         print("Indexing is done.")
 
-@pytest.mark.parametrize("key_type", ["hash"])
-# @pytest.mark.parametrize("key_type", ["json", "hash"])
+@pytest.mark.parametrize("key_type", ["json", "hash"])
 class TestAggregateCompatibility:
 
     @classmethod

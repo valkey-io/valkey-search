@@ -32,6 +32,23 @@ struct FakeIndexInterface : public IndexInterface {
       return itr->second;
     }
   }
+  absl::StatusOr<std::string> GetIdentifier(
+      absl::string_view alias) const override {
+    std::cout << "Fake get identifier for " << alias << "\n";
+    VMSDK_ASSIGN_OR_RETURN(auto type, GetFieldType(alias));
+    return std::string(alias);
+  }
+  absl::StatusOr<std::string> GetAlias(
+      absl::string_view identifier) const override {
+    std::cout << "Fake get alias for " << identifier << "\n";
+    auto itr = fields_.find(std::string(identifier));
+    if (itr == fields_.end()) {
+      return absl::NotFoundError(
+          absl::StrCat("Unknown identifier ", identifier, " in index."));
+    } else {
+      return itr->first;
+    }
+  }
 };
 
 struct AggregateTest : public vmsdk::RedisTest {

@@ -27,6 +27,10 @@ class Stage;
 struct IndexInterface {
   virtual absl::StatusOr<indexes::IndexerType> GetFieldType(
       absl::string_view s) const = 0;
+  virtual absl::StatusOr<std::string> GetIdentifier(
+      absl::string_view alias) const = 0;
+  virtual absl::StatusOr<std::string> GetAlias(
+      absl::string_view identifier) const = 0;
 };
 
 struct AggregateParameters : public expr::Expression::CompileContext,
@@ -51,19 +55,57 @@ struct AggregateParameters : public expr::Expression::CompileContext,
     }
   }
 
-  absl::flat_hash_map<std::string, size_t> attr_record_indexes_;
-  std::vector<std::string> attr_record_names_;
+  //
+  // Information for each index position in a Record
+  //
+  struct AttributeRecordInfo {
+    std::string identifier_;  // The identifier of the attribute
+    std::string alias_;
+    indexes::IndexerType data_type_;
+  };
 
-  size_t AddRecordAttribute(absl::string_view attr) {
-    size_t new_index = attr_record_names_.size();
-    auto [itr, inserted] =
-        attr_record_indexes_.try_emplace(std::string(attr), new_index);
-    if (!inserted) {
-      return itr->second;
-    } else {
-      attr_record_names_.push_back(std::string(attr));
-      return new_index;
+  friend std::ostream& operator<<(std::ostream& os,
+                                  const AttributeRecordInfo& info) {
+    return os << info.identifier_;
+    if (info.identifier_ != info.identifier_) {
+      os << '(' << info.alias_ << "):" << int(info.data_type_);
     }
+  }
+  //
+  // Maps attribute names to their index in the Record.
+  //
+  absl::flat_hash_map<std::string, size_t> record_indexes_by_identifier_;
+  absl::flat_hash_map<std::string, size_t> record_indexes_by_alias_;
+  //
+  // Maps indexes in a record into metadata for that index
+  //
+  std::vector<AttributeRecordInfo> record_info_by_index_;
+
+  size_t AddRecordAttribute(absl::string_view identifier,
+                            absl::string_view alias,
+                            indexes::IndexerType data_type) {
+    auto identifier_itr = record_indexes_by_identifier_.find(identifier);
+    auto alias_itr = record_indexes_by_alias_.find(alias);
+    if (identifier_itr != record_indexes_by_identifier_.end() &&
+        alias_itr != record_indexes_by_alias_.end()) {
+      assert(identifier_itr->second == alias_itr->second);
+      return identifier_itr->second;
+    }
+    std::cerr << "Couldn't find Record Attribute: " << identifier
+              << " with alias " << alias << "\n";
+    assert(identifier_itr == record_indexes_by_identifier_.end());
+    assert(alias_itr == record_indexes_by_alias_.end());
+    size_t new_index = record_info_by_index_.size();
+    record_indexes_by_identifier_.emplace(std::string(identifier), new_index);
+    record_indexes_by_alias_.emplace(std::string(alias), new_index);
+    record_info_by_index_.push_back(
+        AttributeRecordInfo{.identifier_ = std::string(identifier),
+                            .alias_ = std::string(alias),
+                            .data_type_ = data_type});
+    std::cerr << "Added Record Attribute: " << identifier << " as index "
+              << new_index << " with alias " << alias
+              << " and synthetic=" << int(data_type) << "\n";
+    return new_index;
   }
 
   struct {

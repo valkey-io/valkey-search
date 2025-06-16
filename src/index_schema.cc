@@ -270,6 +270,16 @@ absl::StatusOr<std::string> IndexSchema::GetIdentifier(
   return itr->second.GetIdentifier();
 }
 
+absl::StatusOr<std::string> IndexSchema::GetAlias(
+    absl::string_view identifier) const {
+  auto itr = identifier_to_alias_.find(std::string{identifier});
+  if (itr == identifier_to_alias_.end()) {
+    return absl::NotFoundError(
+        absl::StrCat("Index Identifier `", identifier, "` does not exist"));
+  }
+  return itr->second;
+}
+
 absl::StatusOr<vmsdk::UniqueRedisString> IndexSchema::DefaultReplyScoreAs(
     absl::string_view attribute_alias) const {
   auto itr = attributes_.find(std::string{attribute_alias});
@@ -290,6 +300,10 @@ absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
     return absl::AlreadyExistsError(
         absl::StrCat("Index field `", attribute_alias, "` already exists"));
   }
+  identifier_to_alias_.insert(
+      {std::string(identifier), std::string(attribute_alias)});
+  std::cerr << "AddIndex Alias:" << attribute_alias << " with identifier "
+            << identifier << "\n";
   return absl::OkStatus();
 }
 

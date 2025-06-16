@@ -7,7 +7,6 @@
 #ifndef VALKEYSEARCH_EXPR_EXPR_H
 #define VALKEYSEARCH_EXPR_EXPR_H
 
-#include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/expr/value.h"

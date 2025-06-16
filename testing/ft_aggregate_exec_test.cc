@@ -6,7 +6,6 @@
 
 #include "src/commands/ft_aggregate_exec.h"
 
-#include "absl/hash/hash_testing.h"
 #include "gtest/gtest.h"
 #include "src/commands/ft_aggregate_parser.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -26,6 +25,23 @@ struct FakeIndexInterface : public IndexInterface {
           absl::StrCat("Unknown field ", fld_name, " in index."));
     } else {
       return itr->second;
+    }
+  }
+  absl::StatusOr<std::string> GetIdentifier(
+      absl::string_view alias) const override {
+    std::cout << "Fake get identifier for " << alias << "\n";
+    VMSDK_ASSIGN_OR_RETURN(auto type, GetFieldType(alias));
+    return std::string(alias);
+  }
+  absl::StatusOr<std::string> GetAlias(
+      absl::string_view identifier) const override {
+    std::cout << "Fake get alias for " << identifier << "\n";
+    auto itr = fields_.find(std::string(identifier));
+    if (itr == fields_.end()) {
+      return absl::NotFoundError(
+          absl::StrCat("Unknown identifier ", identifier, " in index."));
+    } else {
+      return itr->first;
     }
   }
 };
@@ -61,8 +77,12 @@ struct AggregateExecTest : public vmsdk::RedisTest {
     vmsdk::ArgsIterator itr(argv.data(), argv.size());
 
     auto params = std::make_unique<AggregateParameters>(&fakeIndex);
-    EXPECT_EQ(params->AddRecordAttribute("n1"), 0);
-    EXPECT_EQ(params->AddRecordAttribute("n2"), 1);
+    EXPECT_EQ(
+        params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric),
+        0);
+    EXPECT_EQ(
+        params->AddRecordAttribute("n2", "n1", indexes::IndexerType::kNumeric),
+        1);
     // params->attr_record_indexes_["n1"] = 0;
     // params->attr_record_indexes_["n2"] = 1;
 
@@ -152,12 +172,12 @@ TEST_F(AggregateExecTest, SortTest) {
       {"sortby 4 @n2 desc @n1 desc", {1, 0}, false, {9, 8}},
 
   };
-  for (auto domax : {false, true}) {
+  for (auto do_max : {false, true}) {
     for (auto& tc : testcases) {
       std::string text = tc.text_;
       size_t input_count = tc.order_.size();
       auto order = tc.order_;
-      if (domax) {
+      if (do_max) {
         text += " MAX ";
         text += std::to_string(tc.max_order_.size());
         input_count = 10;
@@ -175,7 +195,7 @@ TEST_F(AggregateExecTest, SortTest) {
       for (auto& r : records) {
         std::cerr << *r << "\n";
       }
-      if (!domax || tc.ordered) {
+      if (!do_max || tc.ordered) {
         for (auto i = 0; i < order.size(); ++i) {
           EXPECT_EQ(*records[i], *RecordNOfM(order[i], input_count));
         }

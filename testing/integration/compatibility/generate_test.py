@@ -11,7 +11,7 @@ TEST_MARKER = "*" * 100
 
 encoder = lambda x: x.encode() if not isinstance(x, bytes) else x
 
-SYSTEM_R_ADDRESS = ('localhost', 6379)
+SYSTEM_R_ADDRESS = ('localhost', 6380)
 class ClientRSystem(ClientSystem):
     def __init__(self):
         super().__init__(SYSTEM_R_ADDRESS)
@@ -38,7 +38,7 @@ class TestAggregateCompatibility:
     @classmethod
     def setup_class(cls):
         os.system("docker remove Generate-search || true")
-        if os.system("docker run --name Generate-search -p 6379:6379 redis/redis-stack-server &") != 0:
+        if os.system("docker run --name Generate-search -p 6380:6379 redis/redis-stack-server &") != 0:
             print("Failed to start Redis Stack server, please check your Docker setup.")
             sys.exit(1)
         print("Started Generate-search server")
@@ -64,6 +64,8 @@ class TestAggregateCompatibility:
 
     def setup_method(self):
         self.client.execute_command("FLUSHALL SYNC")
+        time.sleep(1)
+        pass
 
     def setup_data(self, data_set_name, key_type):
         self.data_set_name = data_set_name
@@ -109,6 +111,25 @@ class TestAggregateCompatibility:
             "3",
         ]
         self.execute_command(new_cmd)
+    def test_aggregate_numeric_dyadic_operators_sortable_numbers(self, key_type):
+        keys = self.setup_data("sortable numbers", key_type)
+        dyadic = ["+", "-", "*", "/", "^"]
+        relops = ["<", "<=", "==", "!=", ">=", ">"]
+        logops = ["||", "&&"]
+        for op in dyadic + relops + logops:
+            self.checkvec(
+                f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 apply @n1{op}@n2 as nn"
+            )
+    def test_aggregate_numeric_dyadic_operators_hard_numbers(self, key_type):
+        keys = self.setup_data("hard numbers", key_type)
+        dyadic = ["+", "-", "*", "/", "^"]
+        relops = ["<", "<=", "==", "!=", ">=", ">"]
+        logops = ["||", "&&"]
+        for op in dyadic + relops + logops:
+            self.checkvec(
+                f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 apply @n1{op}@n2 as nn"
+            )
+
     '''
     def test_search_reverse(self, key_type):
         self.setup_data("reverse vector numbers", key_type)

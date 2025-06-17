@@ -168,4 +168,8 @@ def load_data(client, data_set, key_type):
 
     client.wait_for_indexing_done(f"{key_type}_idx1")
     print(f"setup_data completed {data_set} {key_type}")
+    if key_type != "hash":
+        for s in range(0, len(load_list)):
+            k = client.execute_command(*["JSON.GET", load_list[s][0], "$"])
+            print(f"{s}:{load_list[s][0]}:  ", k)
     return len(load_list)

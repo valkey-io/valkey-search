@@ -310,19 +310,19 @@ AggregateParameters::MakeReference(const absl::string_view name, bool create) {
   auto identifier = parse_vars_.index_interface_->GetIdentifier(name);
   size_t new_index;
   if (identifier.ok()) {
-    DBG << "Adding Record Attribute: " << name << " with alias "
-        << identifier.value() << "\n";
+    // DBG << "Adding Record Attribute: " << name << " with alias "
+    //     << identifier.value() << "\n";
     new_index = AddRecordAttribute(*identifier, name, fieldType);
   } else {
-    DBG << "Adding Record Attribute: " << name
-        << " with synthetic alias (no index schema)\n";
+    // DBG << "Adding Record Attribute: " << name
+    //     << " with synthetic alias (no index schema)\n";
     new_index = AddRecordAttribute(name, name, indexes::IndexerType::kNone);
   }
   return std::make_unique<Attribute>(name, new_index);
 }
 
 std::ostream &operator<<(std::ostream &os, const AggregateParameters &agg) {
-  os << "\nAggregate command: " << "\n";
+  os << "\nAggregate command Parameters: " << "\n";
   for (const auto &[key, value] : agg.parse_vars.params) {
     DBG << "Parameter " << key << " And Value: " << value.first << ":"
         << value.second << "\n";

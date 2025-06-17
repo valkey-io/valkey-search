@@ -50,6 +50,7 @@ class ClientSystem:
             print(f"Can't ping {address}")
             sys.exit(1)
         self.client.execute_command("FLUSHALL SYNC")
+        time.sleep(1)
     def execute_command(self, *cmd):
         #print("Execute:", *cmd)
         result = self.client.execute_command(*cmd)
@@ -82,6 +83,19 @@ def process_row(row):
         return (True, None)
     return (False, row)
 
+def json_load(s):
+    if isinstance(s, bytes):
+        try:
+            s = s.decode("utf-8")
+        except UnicodeDecodeError:
+            print(f">>>> Unicode decode error for value {s}")
+            return None
+    try:
+        return json.loads(s.replace("inf","Infinity"))
+    except json.decoder.JSONDecodeError as e:
+        print(f">>>> JSON decode error: {e} for value {s}")
+        return None
+
 def parse_field(x, key_type):
     if isinstance(x, bytes):
         return parse_field(x.decode("utf-8"), key_type)
@@ -95,11 +109,7 @@ def parse_field(x, key_type):
 def parse_value(x, key_type):
     if key_type == "json" and x.startswith(b'['):
         assert isinstance(x, bytes), f"Expected bytes for JSON value, got {type(x)}"
-        try:
-            result = json.loads(x.decode("utf-8"))
-        except json.decoder.JSONDecodeError as e:
-            print(f">>>> JSON decode error: {e} for value {x}")
-            return None
+        return json_load(x)
     elif isinstance(x, bytes):
         if key_type == "json":
             result = x.decode("utf-8")
@@ -145,7 +155,6 @@ def unpack_result(cmd, key_type, rs, sortkeys):
         out = unpack_search_result(rs, key_type)
     else:
         out = unpack_agg_result(rs, key_type)
-        print("Unpacked result: ", out)
     #
     # Sort by the sortkeys
     #
@@ -166,10 +175,19 @@ def compare_number_eq(l, r):
 
     if lnan and rnan:
         return True
+    elif isinstance(l, list) and isinstance(r, list):
+        if len(l) != len(r):
+            print("mismatch vector field length: ", l, " ", r)
+            return False
+        for i in range(len(l)):
+            if not compare_number_eq(l[i], r[i]):
+                print("mismatch vector field value: ", l, " ", r, " at index ", i)
+                return False
+        return True
     elif isinstance(l, str) and l.startswith("[") and isinstance(r, str) and r.startswith("["):
         # Special case. It's really a list encoded as JSON
-        ll = json.loads(l)
-        rr = json.loads(r)
+        ll = json_load(l)
+        rr = json_load(r)
         if len(ll) != len(rr):
             print("mismatch vector field length: ", ll, " ", rr)
             return False
@@ -185,7 +203,7 @@ def compare_number_eq(l, r):
             print("ValueError comparing: ", l, " and ", r)
             return False
         except TypeError:
-            print("TypeError comparing: ", l, " and ", r)
+            print("TypeError comparing: ", l, " type:", type(l), " and ", r, " type:", type(r))
             return False
         
         
@@ -203,7 +221,7 @@ def compare_row(l, r, key_type):
         #
         if lks[i].startswith("n"):
             if not compare_number_eq(l[lks[i]], r[rks[i]]):
-                print("mismatch numeric field: ", l[lks[i]], " ", r[rks[i]])
+                print(f"mismatch numeric field: {l[lks[i]]}:{type(l[lks[i]])} and {r[rks[i]]}:{type(r[rks[i]])}")
                 return False
         elif lks[i].startswith("v") and key_type == "json":
             # Vector compare fields
@@ -216,6 +234,17 @@ def compare_row(l, r, key_type):
                 if not compare_number_eq(l[lks[i]][i], r[rks[i]][i]):
                     print("mismatch vector field value: ", l[lks[i]], " ", r[rks[i]])
                     return False
+        elif lks[i] == b'$' and rks[i] == b'$':
+            try:
+                l_json = json_load(l[lks[i]])
+                r_json = json_load(r[rks[i]])
+                if l_json != r_json:
+                    print("mismatch JSON field: ", l[lks[i]], " and ", r[rks[i]])
+                    print("Loaded JSON: L:", l_json, " and R:", r_json)
+                    return False
+            except json.decoder.JSONDecodeError:
+                print("JSON decode error comparing: ", l[lks[i]], " and ", r[rks[i]])
+                return False
         elif l[lks[i]] != r[rks[i]]:
             print("mismatch field: ", lks[i], " and ", rks[i], " ", l[lks[i]], "!=", r[rks[i]])
             return False
@@ -223,8 +252,6 @@ def compare_row(l, r, key_type):
     
 def compare_results(expected, results):
     print("CMD:", printable_cmd(expected["cmd"]))
-    print("Raw Expected Results:", results["result"])
-    print("Raw Actual Results", results["result"])
     cmd = expected["cmd"]
     key_type = expected["key_type"]
     if cmd != results["cmd"]:
@@ -320,37 +347,51 @@ def compare_results(expected, results):
     return False
 
 correct_answers = 0
+wrong_answers = 0
 StopOnFailure = False
 failed_tests = {}
+passed_tests = {}
+
+def test_passed(testname):
+    global correct_answers, passed_tests
+    correct_answers += 1
+    if testname not in passed_tests:
+        passed_tests[testname] = 0
+    passed_tests[testname] += 1
+
+def test_failed(testname):
+    global failed_tests, wrong_answers
+    print(">>>>>>>>>>> ERROR FAILURE <<<<<<<<<<<<<<")
+    if testname not in failed_tests:
+        failed_tests[testname] = 0
+    failed_tests[testname] += 1
+    wrong_answers += 1
+    assert not StopOnFailure, "Test failed, stopping execution"
 
 def do_answer(expected, data_set):
-    global correct_answers, failed_tests
+    global correct_answers, failed_tests, passed_tests
     if (expected['data_set_name'], expected['key_type']) != data_set:
         print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'])
         client.execute_command("FLUSHALL SYNC")
+        time.sleep(1)
         load_data(client, expected['data_set_name'], expected['key_type'])
         data_set = (expected['data_set_name'], expected['key_type'])
     try:
+        print(f">>>>>> Starting Test {expected['testname']} So Far: Correct:{correct_answers} Wrong:{wrong_answers} <<<<<<<<<")
         result = {}
         result["cmd"] = expected['cmd']
         result["result"] = client.execute_command(*expected['cmd'])
         result["exception"] = False
         if compare_results(expected, result):
-            correct_answers += 1
+            test_passed(expected['testname'])
         else:
-            if expected['testname'] not in failed_tests:
-                failed_tests[expected['testname']] = 0
-            failed_tests[expected['testname']] += 1
-            assert not StopOnFailure, "Test failed, stopping execution"
+            test_failed(expected['testname'])
     except redis.ResponseError as e:
         result["exception"] = True
         if compare_results(expected, result):
-            correct_answers += 1
+            test_passed(expected['testname'])
         else:
-            if expected['testname'] not in failed_tests:
-                failed_tests[expected['testname']] = 0
-            failed_tests[expected['testname']] += 1
-            assert not StopOnFailure, f"Test failed with exception: {e}, stopping execution"
+            test_failed(expected['testname'])
     return data_set
 
 
@@ -364,4 +405,10 @@ for i in range(len(answers)):
     data_set = do_answer(answers[i], data_set)
 
 print(f"Correct answers: {correct_answers} out of {len(answers)}")
-print("Failed tests:", failed_tests)
+if len(failed_tests) != 0:
+    print(">>>>>>>>> Failed Tests <<<<<<<<<")
+    for k, v in failed_tests.items():
+        print(f"Failed test {k:60}: {v} times")
+print(">>>>>>>>> Passed Tests <<<<<<<<<")
+for k, v in passed_tests.items():
+    print(f"Passed test {k:60}: {v} times")

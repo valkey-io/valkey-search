@@ -35,6 +35,9 @@ struct IndexInterface {
 
 struct AggregateParameters : public expr::Expression::CompileContext,
                              public query::VectorSearchParameters {
+  ~AggregateParameters() override {
+    std::cerr << "Destruction of AggregateParameters @ " << (void*)this << "\n";
+  }
   bool loadall_{false};
   std::vector<std::string> loads_;
   bool load_key{false};
@@ -66,10 +69,11 @@ struct AggregateParameters : public expr::Expression::CompileContext,
 
   friend std::ostream& operator<<(std::ostream& os,
                                   const AttributeRecordInfo& info) {
-    return os << info.identifier_;
-    if (info.identifier_ != info.identifier_) {
-      os << '(' << info.alias_ << "):" << int(info.data_type_);
+    os << info.identifier_;
+    if (info.identifier_ != info.alias_) {
+      os << '(' << info.alias_ << ")";
     }
+    return os << ":" << int(info.data_type_);
   }
   //
   // Maps attribute names to their index in the Record.

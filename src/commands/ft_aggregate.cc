@@ -112,6 +112,8 @@ absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
                                                index_schema_name));
   RealIndexInterface index_interface(index_schema);
   auto params = std::make_unique<AggregateParameters>(&index_interface);
+  DBG << "AggregateParameters created for index: " << index_schema_name << " @"
+      << (void *)params.get() << "\n";
   params->index_schema_name = std::move(index_schema_name);
   params->index_schema = std::move(index_schema);
 
@@ -152,39 +154,43 @@ bool ReplyWithValue(RedisModuleCtx *ctx,
     if (data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
       auto value_sv = value.AsStringView();
       RedisModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
-      DBG << "HASH: " << name << ":" << value_sv << "\n";
+      // DBG << "HASH: " << name << ":" << value_sv << "\n";
     } else {
       static std::ostringstream ss;
       ss.str(std::string());  // Clear the stringstream
-      switch (field_type) {
-        case indexes::IndexerType::kNone:
-          DBG << "kNone: " << value.AsStringView() << "\n";
-          ss << value.AsStringView();
-          break;
-        case indexes::IndexerType::kNumeric: {
-          auto dble = value.AsDouble();
-          if (!dble) {
-            return false;
+      if (name == "$") {
+        // DBG << "Overriding for field name of $ " << int(field_type) << "\n";
+        // DBG << "Input: " << value.AsStringView() << "\n";
+        ss << '[' << value.AsStringView() << ']';
+      } else {
+        switch (field_type) {
+          case indexes::IndexerType::kNone:
+            // DBG << "kNone: " << value.AsStringView() << "\n";
+            ss << value.AsStringView();
+            break;
+          case indexes::IndexerType::kNumeric: {
+            auto dble = value.AsDouble();
+            if (!dble) {
+              return false;
+            }
+            // DBG << "kNumeric: " << *dble << "\n";
+            ss << '[' << *dble << ']';
+            break;
           }
-          DBG << "kNumeric: " << *dble << "\n";
-          ss << '[' << *dble << ']';
-          break;
+          case indexes::IndexerType::kTag:
+            // DBG << "kTag: " << value.AsStringView() << "\n";
+            ss << '[' << '"' << value.AsStringView() << '"'
+               << ']';  // Todo: Handle Escaped Characters
+            break;
+          default:
+            // DBG << "Unsupported field type for reply: " << int(field_type)
+            //     << "\n";
+            assert("Unsupported field type" == nullptr);
         }
-        case indexes::IndexerType::kTag:
-          DBG << "kTag: " << value.AsStringView() << "\n";
-          ss << '[' << '"' << value.AsStringView() << '"'
-             << ']';  // Todo: Handle Escaped Characters
-          break;
-        default:
-          DBG << "Unsupported field type for reply: " << int(field_type)
-              << "\n";
-          assert("Unsupported field type" == nullptr);
       }
       std::string s = ss.str();
-      DBG << "JSON1: " << name << ":" << s << "\n";
-      DBG << "JSON2: " << name << ":" << s << "\n";
+      // DBG << "JSON: " << name << ":" << s << "\n";
       RedisModule_ReplyWithStringBuffer(ctx, s.data(), s.size());
-      DBG << "JSON3: " << name << ":" << s << "\n";
     }
   }
   return true;
@@ -246,9 +252,9 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
           if (indexer.ok()) {
             field_type = (*indexer)->GetIndexerType();
           }
-          DBG << "Attribute_contents: " << name << " : " << value
-              << " Index:" << ref->second << " FieldType:" << int(field_type)
-              << "\n";
+          // DBG << "Attribute_contents: " << name << " : " << value
+          //     << " Index:" << ref->second << " FieldType:" << int(field_type)
+          //     << "\n";
           switch (field_type) {
             case indexes::IndexerType::kNumeric: {
               auto numeric_value = vmsdk::To<double>(value);
@@ -265,10 +271,10 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
               rec->fields_[ref->second] = expr::Value(value);
               break;
           }
-          DBG << "After set record is " << *rec << "\n";
+          // DBG << "After set record is " << *rec << "\n";
         } else {
-          DBG << "Attribute_contents: " << name << " : " << value
-              << " Extra:\n";
+          // DBG << "Attribute_contents: " << name << " : " << value << "
+          // Extra:\n";
           rec->extra_fields_.push_back(
               std::make_pair(std::string(name), expr::Value(value)));
         }

@@ -13,8 +13,8 @@
 
 #include "src/utils/scanner.h"
 
-// #define DBG std::cerr
-#define DBG 0 && std::cerr
+#define DBG std::cerr
+// #define DBG 0 && std::cerr
 namespace valkey_search {
 namespace expr {
 
@@ -81,6 +81,9 @@ std::string FormatDouble(double d) {
 std::optional<bool> Value::AsBool() const {
   if (auto result = std::get_if<bool>(&value_)) {
     return *result;
+  }
+  return false;
+  /*
   } else if (auto result = std::get_if<double>(&value_)) {
     if (IsNan(*result)) {
       return true;
@@ -93,7 +96,7 @@ std::optional<bool> Value::AsBool() const {
     }
     return std::nullopt;
   };
-  return std::nullopt;
+  return std::nullopt; */
 }
 
 std::optional<double> Value::AsDouble() const {
@@ -161,9 +164,10 @@ std::ostream& operator<<(std::ostream& os, const Value& v) {
   if (v.IsNil()) {
     return os << "Nil(" << v.AsNil().value().GetReason() << ")";
   } else if (v.IsBool()) {
-    return os << std::boolalpha << v.AsBool().value();
+    return os << "Bool(" << std::boolalpha << v.AsBool().value() << ")";
   } else if (v.IsDouble()) {
-    return os << std::setprecision(10) << v.AsDouble().value();
+    return os << "Dble(" << std::setprecision(10) << v.AsDouble().value()
+              << ")";
   } else if (v.IsString()) {
     return os << "'" << v.AsStringView() << "'";
   }
@@ -313,6 +317,7 @@ Value FuncGt(const Value& l, const Value& r) { return Value(l > r); }
 Value FuncGe(const Value& l, const Value& r) { return Value(l >= r); }
 
 Value FuncLor(const Value& l, const Value& r) {
+  DBG << "FuncLor: " << l << " || " << r << "\n";
   auto lv = l.AsBool();
   auto rv = r.AsBool();
   if (lv && rv) {

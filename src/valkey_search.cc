@@ -252,6 +252,9 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
   if (UsingCoordinator()) {
     RedisModule_InfoAddSection(ctx, "coordinator");
     RedisModule_InfoAddFieldLongLong(
+        ctx, "coordinator_server_listening_port",
+        GetCoordinatorServer()->GetPort());
+    RedisModule_InfoAddFieldLongLong(
         ctx, "coordinator_server_get_global_metadata_success_count",
         Metrics::GetStats().coordinator_server_get_global_metadata_success_cnt);
     RedisModule_InfoAddFieldLongLong(

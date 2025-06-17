@@ -76,8 +76,9 @@ void ReplyAvailNeighbors(RedisModuleCtx *ctx,
 
 size_t CalcEndIndex(const std::deque<indexes::Neighbor> &neighbors,
                     const query::VectorSearchParameters &parameters) {
-  return std::min(static_cast<size_t>(parameters.k),
-                  std::min(parameters.limit.number, neighbors.size()));
+  return std::min(
+      static_cast<size_t>(parameters.k),
+      std::min(static_cast<size_t>(parameters.limit.number), neighbors.size()));
 }
 
 size_t CalcStartIndex(const std::deque<indexes::Neighbor> &neighbors,

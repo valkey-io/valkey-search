@@ -710,8 +710,7 @@ typedef struct RedisModuleClientInfo {
 
 #define RedisModuleClientInfo RedisModuleClientInfoV1
 
-#define REDISMODULE_CLIENTINFO_INITIALIZER_V1 \
-  { .version = 1 }
+#define REDISMODULE_CLIENTINFO_INITIALIZER_V1 {.version = 1}
 
 #define REDISMODULE_REPLICATIONINFO_VERSION 1
 typedef struct RedisModuleReplicationInfo {
@@ -807,8 +806,7 @@ typedef struct RedisModuleClusterInfo {
 
 #define RedisModuleClusterInfo RedisModuleClusterInfoV1
 
-#define REDISMODULE_CLUSTERINFO_INITIALIZER_V1 \
-  { .version = 1 }
+#define REDISMODULE_CLUSTERINFO_INITIALIZER_V1 {.version = 1}
 
 /* If PSC connection cannot be extracted from a client,
  * Consider it to be 0. */
@@ -894,6 +892,8 @@ typedef long long mstime_t;
 #ifndef REDISMODULE_ATTR_COMMON
 #if defined(__GNUC__) && !(defined(__clang__) && defined(__cplusplus))
 #define REDISMODULE_ATTR_COMMON __attribute__((__common__))
+#elif defined(__clang__)
+#define REDISMODULE_ATTR_COMMON __attribute__((weak))
 #else
 #define REDISMODULE_ATTR_COMMON
 #endif

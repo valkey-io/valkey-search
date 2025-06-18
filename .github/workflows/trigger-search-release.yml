@@ -35,5 +35,5 @@ jobs:
           client-payload: >
             {
               "version": "${{ steps.determine-vars.outputs.version }}",
-              "module": "search"
+              "component": "search"
             }

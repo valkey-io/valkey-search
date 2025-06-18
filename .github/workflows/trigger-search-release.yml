@@ -30,7 +30,7 @@ jobs:
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.EXTENSION_PAT }}
-          repository: ${{ github.repository_owner }}/valkey-extensions
+          repository: ${{ github.repository_owner }}/valkey-bundle
           event-type: search-release
           client-payload: >
             {

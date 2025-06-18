@@ -301,10 +301,10 @@ def compare_results(expected, results):
     # Output raw results
     print("Raw expected result:", expected["result"])
     rl = unpack_result(cmd, expected["key_type"], expected["result"], sortkeys)
-    print("Unpack of expected result:", rl)
+    # print("Unpack of expected result:", rl)
     print("Raw actual result:", results["result"])
     ec = unpack_result(cmd, expected["key_type"], results["result"], sortkeys)
-    print("Unpack of actual result:", ec)
+    # print("Unpack of actual result:", ec)
 
     # Process failures
     if len(rl) != len(ec):

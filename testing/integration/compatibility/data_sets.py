@@ -85,7 +85,9 @@ def compute_data_sets():
         #
         # Hard Numbers, edge case numbers.
         #
-        hard_numbers = ["-0.5", "0", "1", "-1", "-inf", "inf"] # todo "nan", -0
+        hard_numbers = [-0.5, 0, -0, 1, -1] # todo "nan", -0
+        if key_type == "hash":
+            hard_numbers += [float("inf"), float("-inf")]
         combinations = list(itertools.combinations(hard_numbers, 3))
         data["hard numbers"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
         data["hard numbers"][SETS_KEY(key_type)] = [

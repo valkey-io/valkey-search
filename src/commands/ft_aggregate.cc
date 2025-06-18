@@ -228,24 +228,38 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
   RecordSet records(&parameters);
   // Todo: fix this  for (auto &n : neighbors) {
   for (auto &n : neighbors) {
-    DBG << "Neighbor: " << n << "\n";
     auto rec =
         std::make_unique<Record>(parameters.record_indexes_by_alias_.size());
+    DBG << "Neighbor: " << n << " Empty Record:" << *rec << "\n";
     if (parameters.load_key) {
-      rec->fields_[key_index] = expr::Value(n.external_id.get()->Str());
+      rec->fields_.at(key_index) = expr::Value(n.external_id.get()->Str());
     }
     if (/* todo: parameters.addscores_ */ true) {
-      rec->fields_[scores_index] = expr::Value(n.distance);
+      rec->fields_.at(scores_index) = expr::Value(n.distance);
     }
     // For the fields that were fetched, stash them into the RecordSet
     if (n.attribute_contents.has_value() && !parameters.no_content) {
       for (auto &[name, records_map_value] : *n.attribute_contents) {
         auto value = vmsdk::ToStringView(records_map_value.value.get());
-        auto ref = parameters.record_indexes_by_alias_.find(name);
-        if (ref == parameters.record_indexes_by_alias_.end()) {
-          ref = parameters.record_indexes_by_identifier_.find(name);
+        size_t record_index;
+        bool found_index = false;
+        if (auto by_alias = parameters.record_indexes_by_alias_.find(name);
+            by_alias != parameters.record_indexes_by_alias_.end()) {
+          record_index = by_alias->second;
+          found_index = true;
+          DBG << "Found by alias " << name << " is " << record_index << "\n";
+          assert(record_index < rec->field_.size());
+        } else if (auto by_identifier =
+                       parameters.record_indexes_by_identifier_.find(name);
+                   by_identifier !=
+                   parameters.record_indexes_by_identifier_.end()) {
+          record_index = by_identifier->second;
+          found_index = true;
+          DBG << "Found by identifier " << name << " is " << record_index
+              << "\n";
+          assert(record_index < rec->field_.size());
         }
-        if (ref != parameters.record_indexes_by_alias_.end()) {
+        if (found_index) {
           // Need to find the field type
           indexes::IndexerType field_type = indexes::IndexerType::kNone;
           auto indexer = parameters.index_schema->GetIndex(name);
@@ -255,11 +269,13 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
           // DBG << "Attribute_contents: " << name << " : " << value
           //     << " Index:" << ref->second << " FieldType:" << int(field_type)
           //     << "\n";
+          DBG << "Rec[" << record_index << "]: " << int(field_type)
+              << " :=" << value << "\n";
           switch (field_type) {
             case indexes::IndexerType::kNumeric: {
               auto numeric_value = vmsdk::To<double>(value);
               if (numeric_value.ok()) {
-                rec->fields_[ref->second] = expr::Value(numeric_value.value());
+                rec->fields_[record_index] = expr::Value(numeric_value.value());
               } else {
                 // Skip this field, it contains an invalid number....
                 // todo Prove that skipping this field is the right thing to
@@ -268,7 +284,7 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
               break;
             }
             default:
-              rec->fields_[ref->second] = expr::Value(value);
+              rec->fields_[record_index] = expr::Value(value);
               break;
           }
           // DBG << "After set record is " << *rec << "\n";
@@ -312,8 +328,10 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
     //
     // First the referenced fields
     //
-    DBG << "Starting row:";
+    DBG << "Starting row with fields size:" << rec->fields_.size() << "\n";
     size_t array_count = 0;
+    RedisModule_Assert(rec->fields_.size() <=
+                       parameters.record_info_by_index_.size());
     for (size_t i = 0; i < rec->fields_.size(); ++i) {
       if (ReplyWithValue(
               ctx, parameters.index_schema->GetAttributeDataType().ToProto(),

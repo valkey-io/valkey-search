@@ -81,15 +81,15 @@ std::string FormatDouble(double d) {
 std::optional<bool> Value::AsBool() const {
   if (auto result = std::get_if<bool>(&value_)) {
     return *result;
-  }
-  return false;
-  /*
   } else if (auto result = std::get_if<double>(&value_)) {
     if (IsNan(*result)) {
       return true;
     }
     return !(*result == 0.0);
-  } else if (std::get_if<absl::string_view>(&value_)) {
+  } else {
+    return false;
+  }
+  /* if (std::get_if<absl::string_view>(&value_)) {
     auto dble = AsDouble();
     if (dble) {
       return dble != 0.0;
@@ -328,6 +328,7 @@ Value FuncLor(const Value& l, const Value& r) {
 }
 
 Value FuncLand(const Value& l, const Value& r) {
+  DBG << "FuncLand: " << l << " && " << r << "\n";
   auto lv = l.AsBool();
   auto rv = r.AsBool();
   if (lv && rv) {

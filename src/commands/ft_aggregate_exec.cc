@@ -158,8 +158,14 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
   absl::flat_hash_map<GroupKey,
                       absl::InlinedVector<std::unique_ptr<ReducerInstance>, 4>>
       groups;
+  size_t record_field_count = 0;
   while (!records.empty()) {
     auto record = records.pop_front();
+    if (record_field_count == 0) {
+      record_field_count = record->fields_.size();
+    } else {
+      RedisModule_Assert(record_field_count == record->fields_.size());
+    }
     GroupKey k;
     // todo: How do we handle keys that have a missing attribute in the key??
     // Skip them?
@@ -184,8 +190,7 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
   }
   for (auto& group : groups) {
     DBG << "Making record for group " << group.first << "\n";
-    RecordPtr record =
-        std::make_unique<Record>(groups.size() + reducers_.size());
+    RecordPtr record = std::make_unique<Record>(record_field_count);
     RedisModule_Assert(groups_.size() == group.first.keys_.size());
     for (auto i = 0; i < groups_.size(); ++i) {
       SetField(*record, *groups_[i], group.first.keys_[i]);

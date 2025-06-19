@@ -53,6 +53,18 @@
 
 namespace valkey_search {
 
+namespace {
+#if defined(__clang__)
+//  std::numeric_limits<..>::infinity() can not be used with clang when
+// -ffast-math is enabled
+constexpr double kPositiveInf = std::numeric_limits<double>::max();
+constexpr double kNegativeInf = std::numeric_limits<double>::lowest();
+#else
+constexpr double kPositiveInf = std::numeric_limits<double>::infinity();
+constexpr double kNegativeInf = -std::numeric_limits<double>::infinity();
+#endif
+}  // namespace
+
 FilterParser::FilterParser(const IndexSchema& index_schema,
                            absl::string_view expression)
     : index_schema_(index_schema),
@@ -109,9 +121,9 @@ absl::StatusOr<std::string> FilterParser::ParseFieldName() {
 absl::StatusOr<double> FilterParser::ParseNumber() {
   SkipWhitespace();
   if (MatchInsensitive("-inf")) {
-    return std::numeric_limits<double>::infinity() * -1;
+    return kNegativeInf;
   } else if (MatchInsensitive("+inf") || MatchInsensitive("inf")) {
-    return std::numeric_limits<double>::infinity();
+    return kPositiveInf;
   }
   std::string number_str;
   double value;

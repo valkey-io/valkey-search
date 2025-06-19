@@ -35,9 +35,7 @@ struct IndexInterface {
 
 struct AggregateParameters : public expr::Expression::CompileContext,
                              public query::VectorSearchParameters {
-  ~AggregateParameters() override {
-    std::cerr << "Destruction of AggregateParameters @ " << (void*)this << "\n";
-  }
+  ~AggregateParameters() override = default;
   bool loadall_{false};
   std::vector<std::string> loads_;
   bool load_key{false};
@@ -95,8 +93,6 @@ struct AggregateParameters : public expr::Expression::CompileContext,
       assert(identifier_itr->second == alias_itr->second);
       return identifier_itr->second;
     }
-    std::cerr << "Couldn't find Record Attribute: " << identifier
-              << " with alias " << alias << "\n";
     assert(identifier_itr == record_indexes_by_identifier_.end());
     assert(alias_itr == record_indexes_by_alias_.end());
     size_t new_index = record_info_by_index_.size();
@@ -106,9 +102,6 @@ struct AggregateParameters : public expr::Expression::CompileContext,
         AttributeRecordInfo{.identifier_ = std::string(identifier),
                             .alias_ = std::string(alias),
                             .data_type_ = data_type});
-    std::cerr << "Added Record Attribute: " << identifier << " as index "
-              << new_index << " with alias " << alias
-              << " and synthetic=" << int(data_type) << "\n";
     return new_index;
   }
 

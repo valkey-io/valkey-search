@@ -14,8 +14,8 @@
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 
-#define DBG std::cerr
-// #define DBG 0 && std::cerr
+// #define DBG std::cerr
+#define DBG 0 && std::cerr
 
 namespace valkey_search {
 namespace aggregate {

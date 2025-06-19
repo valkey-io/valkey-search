@@ -48,8 +48,7 @@ def array_encode(key_type, array):
         return np.array(array).astype(np.float32).tobytes()
     else:
         return array      
-
-
+    
 def compute_data_sets():
     '''Generate all of the possible data sets'''
     data = {}

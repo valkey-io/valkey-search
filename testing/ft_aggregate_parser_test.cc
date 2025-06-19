@@ -77,9 +77,15 @@ static struct TimeoutTestValue {
 static struct DialectTestValue {
   std::string text_;
   std::optional<size_t> value_;
-} DialectCases[]{{"", query::kDialect}, {"DIALecT", std::nullopt},
-                 {"Dialect 0", 0},      {"Dialect 3", 3},
-                 {"Dialect 5", 5},      {"Dialect fred", std::nullopt}};
+} DialectCases[]{{"", query::kDialect},
+                 {"DIALecT", std::nullopt},
+                 {"Dialect 0", std::nullopt},
+                 {"Dialect 1", 1},
+                 {"Dialect 2", 2},
+                 {"Dialect 3", 3},
+                 {"Dialect 4", 4},
+                 {"Dialect 5", std::nullopt},
+                 {"Dialect fred", std::nullopt}};
 
 static struct LoadsTestValue {
   std::string text_;

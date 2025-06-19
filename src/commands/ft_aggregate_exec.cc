@@ -7,15 +7,14 @@
 #include "src/commands/ft_aggregate_exec.h"
 
 #include <algorithm>
-#include <limits>
 #include <queue>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "src/commands/ft_aggregate_parser.h"
 
-#define DBG std::cerr
-// #define DBG 0 && std::cerr
+// #define DBG std::cerr
+#define DBG 0 && std::cerr
 
 namespace valkey_search {
 namespace aggregate {
@@ -214,22 +213,26 @@ class Count : public GroupBy::ReducerInstance {
 };
 
 class Min : public GroupBy::ReducerInstance {
-  expr::Value min_{expr::Value(std::numeric_limits<double>::infinity())};
+  expr::Value min_;
   void ProcessRecord(absl::InlinedVector<expr::Value, 4>& values) override {
     if (values[0].IsNil()) {
       return;
     }
     if (min_.IsNil()) {
+      DBG << "First Value Min is " << values[0] << "\n";
       min_ = values[0];
     } else if (min_ > values[0]) {
+      DBG << " New Min: " << values[0] << "\n";
       min_ = values[0];
+    } else {
+      DBG << "Not new Min: " << values[0] << "\n";
     }
   }
   expr::Value GetResult() const override { return min_; }
 };
 
 class Max : public GroupBy::ReducerInstance {
-  expr::Value max_{expr::Value(-std::numeric_limits<double>::infinity())};
+  expr::Value max_;
   void ProcessRecord(absl::InlinedVector<expr::Value, 4>& values) override {
     if (values[0].IsNil()) {
       return;

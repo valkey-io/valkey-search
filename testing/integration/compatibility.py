@@ -50,7 +50,6 @@ class ClientSystem:
             print(f"Can't ping {address}")
             sys.exit(1)
         self.client.execute_command("FLUSHALL SYNC")
-        time.sleep(1)
     def execute_command(self, *cmd):
         #print("Execute:", *cmd)
         result = self.client.execute_command(*cmd)
@@ -211,8 +210,8 @@ def compare_number_eq(l, r):
 def compare_row(l, r, key_type):
     lks = sorted(list(l.keys()))
     rks = sorted(list(r.keys()))
-    print("Comparing row: ", l, " and ", r)
-    print("Sorted keys: ", lks, " and ", rks)
+    #print("Comparing row: ", l, " and ", r)
+    #print("Sorted keys: ", lks, " and ", rks)
     if lks != rks:
         return False
     for i in range(len(lks)):
@@ -222,6 +221,8 @@ def compare_row(l, r, key_type):
         if lks[i].startswith("n"):
             if not compare_number_eq(l[lks[i]], r[rks[i]]):
                 print(f"mismatch numeric field: {l[lks[i]]}:{type(l[lks[i]])} and {r[rks[i]]}:{type(r[rks[i]])}")
+                print("RL: ", r)
+                print("VK: ", l)
                 return False
         elif lks[i].startswith("v") and key_type == "json":
             # Vector compare fields
@@ -287,62 +288,62 @@ def compare_results(expected, results):
     if expected["exception"]:
         print("RL Exception, skipped")
         #print(f"RL Exception: Raw: {printable_result(results['RL'])}")
-        #print(f"EC Result: {printable_result(results['EC'])}")
+        #print(f"VK: Result: {printable_result(results['VK:'])}")
         print(TEST_MARKER)
         return True
 
     if results["exception"]:
         print(f"CMD: {cmd}")
-        print(f"RL Result: {printable_result(expected['result'])}")
-        print(f"EC Exception Raw: {printable_result(results['result'])}")
+        print(f"RL: Result: {printable_result(expected['result'])}")
+        print(f"VK: Exception Raw: {printable_result(results['result'])}")
         print(TEST_MARKER)
         return False
 
     # Output raw results
-    print("Raw expected result:", expected["result"])
+    # print("Raw expected result:", expected["result"])
     rl = unpack_result(cmd, expected["key_type"], expected["result"], sortkeys)
     # print("Unpack of expected result:", rl)
-    print("Raw actual result:", results["result"])
-    ec = unpack_result(cmd, expected["key_type"], results["result"], sortkeys)
-    # print("Unpack of actual result:", ec)
+    # print("Raw actual result:", results["result"])
+    vk = unpack_result(cmd, expected["key_type"], results["result"], sortkeys)
+    # print("Unpack of actual result:", vk)
 
     # Process failures
-    if len(rl) != len(ec):
+    if len(rl) != len(vk):
         print(f"CMD:{cmd}")
-        print(f"Mismatched sizes RL:{len(rl)} EC:{len(ec)}")
+        print(f"Mismatched sizes RL:{len(rl)} VK:{len(vk)}")
         print("--RL--")
         for r in rl:
             print(r)
-        print("--EC--")
-        for e in ec:
+        print("--VK:--")
+        for e in vk:
             print(e)
         #assert False
         return False
 
-    # if compare_results(ec, rl):
+    # if compare_results(vk, rl):
     # Directly comparing dicts instead of custom compare function
     # TODO: investigate this later
-    if all([compare_row(ec[i], rl[i], key_type) for i in range(len(rl))]):
+    if all([compare_row(vk[i], rl[i], key_type) for i in range(len(rl))]):
         # print("Results look good.")
         #print(TEST_MARKER)
         if "ft.search" in cmd:
             print(f"CMD:{cmd}")
             for i in range(len(rl)):
-                print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())])
-                print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())])
+                print("RL:",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())])
+                print("VK:",i,[(k,vk[i][k]) for k in sorted(vk[i].keys())])
         return True
     print("***** MISMATCH ON DATA *****, sortkeys=", sortkeys, " records=", len(rl), " TestName: ", expected["testname"])
     print(f"CMD: {cmd}")
     for i in range(len(rl)):
-        if not compare_row(rl[i], ec[i], key_type):
-            print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())], "<<<")
-            print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())], "<<<")
+        if not compare_row(rl[i], vk[i], key_type):
+            print("RL:",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())], "<<<")
+            print("VK:",i,[(k,vk[i][k]) for k in sorted(vk[i].keys())], "<<<")
         else:
-            print("RL",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())])
-            print("EC",i,[(k,ec[i][k]) for k in sorted(ec[i].keys())])
+            print("RL:",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())])
+            print("VK:",i,[(k,vk[i][k]) for k in sorted(vk[i].keys())])
 
     print("Raw RL:", expected["result"])
-    print("Raw EC:", results["result"])
+    print("Raw VK:", results["result"])
     print(TEST_MARKER)
     return False
 
@@ -373,7 +374,6 @@ def do_answer(expected, data_set):
     if (expected['data_set_name'], expected['key_type']) != data_set:
         print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'])
         client.execute_command("FLUSHALL SYNC")
-        time.sleep(1)
         load_data(client, expected['data_set_name'], expected['key_type'])
         data_set = (expected['data_set_name'], expected['key_type'])
     try:

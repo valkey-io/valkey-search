@@ -302,8 +302,6 @@ absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
   }
   identifier_to_alias_.insert(
       {std::string(identifier), std::string(attribute_alias)});
-  std::cerr << "AddIndex Alias:" << attribute_alias << " with identifier "
-            << identifier << "\n";
   return absl::OkStatus();
 }
 

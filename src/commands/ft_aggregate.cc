@@ -22,8 +22,8 @@
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
 
-#define DBG std::cerr
-// #define DBG 0 && std::cerr
+// #define DBG std::cerr
+#define DBG 0 && std::cerr
 
 namespace valkey_search {
 namespace aggregate {
@@ -135,6 +135,10 @@ absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
                      ":", vmsdk::ToStringView(itr.Get().value())));
   }
 
+  if (params->dialect < 2 || params->dialect > 4) {
+    return absl::InvalidArgumentError("Only Dialects 2, 3 and 4 are supported");
+  }
+
   VMSDK_RETURN_IF_ERROR(PostParseQueryString(*params));
   VMSDK_RETURN_IF_ERROR(ManipulateReturnsClause(*params));
 
@@ -146,26 +150,31 @@ absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
 bool ReplyWithValue(RedisModuleCtx *ctx,
                     data_model::AttributeDataType data_type,
                     std::string_view name, indexes::IndexerType field_type,
-                    const expr::Value &value) {
+                    const expr::Value &value, int dialect) {
   if (value.IsNil()) {
     return false;
   } else {
-    RedisModule_ReplyWithSimpleString(ctx, name.data());
     if (data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
+      RedisModule_ReplyWithSimpleString(ctx, name.data());
       auto value_sv = value.AsStringView();
       RedisModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
       // DBG << "HASH: " << name << ":" << value_sv << "\n";
     } else {
-      static std::ostringstream ss;
-      ss.str(std::string());  // Clear the stringstream
+      std::ostringstream ss;
       if (name == "$") {
         // DBG << "Overriding for field name of $ " << int(field_type) << "\n";
         // DBG << "Input: " << value.AsStringView() << "\n";
-        ss << '[' << value.AsStringView() << ']';
+        RedisModule_ReplyWithSimpleString(ctx, name.data());
+        if (dialect == 2) {
+          ss << value.AsStringView();
+        } else {
+          ss << '[' << value.AsStringView() << ']';
+        }
       } else {
         switch (field_type) {
           case indexes::IndexerType::kNone:
             // DBG << "kNone: " << value.AsStringView() << "\n";
+            RedisModule_ReplyWithSimpleString(ctx, name.data());
             ss << value.AsStringView();
             break;
           case indexes::IndexerType::kNumeric: {
@@ -173,14 +182,25 @@ bool ReplyWithValue(RedisModuleCtx *ctx,
             if (!dble) {
               return false;
             }
+            RedisModule_ReplyWithSimpleString(ctx, name.data());
             // DBG << "kNumeric: " << *dble << "\n";
-            ss << '[' << *dble << ']';
+            if (dialect == 2) {
+              ss << *dble;
+            } else {
+              ss << '[' << *dble << ']';
+            }
             break;
           }
           case indexes::IndexerType::kTag:
             // DBG << "kTag: " << value.AsStringView() << "\n";
-            ss << '[' << '"' << value.AsStringView() << '"'
-               << ']';  // Todo: Handle Escaped Characters
+            // Todo: Handle Escaped Characters
+            RedisModule_ReplyWithSimpleString(ctx, name.data());
+            if (dialect == 2) {
+              ss << value.AsStringView();
+            } else {
+              ss << '[' << '"' << value.AsStringView() << '"'
+                 << ']';  // Todo: Handle Escaped Characters
+            }
             break;
           default:
             // DBG << "Unsupported field type for reply: " << int(field_type)
@@ -247,7 +267,6 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
             by_alias != parameters.record_indexes_by_alias_.end()) {
           record_index = by_alias->second;
           found_index = true;
-          DBG << "Found by alias " << name << " is " << record_index << "\n";
           assert(record_index < rec->field_.size());
         } else if (auto by_identifier =
                        parameters.record_indexes_by_identifier_.find(name);
@@ -255,22 +274,15 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
                    parameters.record_indexes_by_identifier_.end()) {
           record_index = by_identifier->second;
           found_index = true;
-          DBG << "Found by identifier " << name << " is " << record_index
-              << "\n";
           assert(record_index < rec->field_.size());
         }
         if (found_index) {
           // Need to find the field type
-          indexes::IndexerType field_type = indexes::IndexerType::kNone;
-          auto indexer = parameters.index_schema->GetIndex(name);
-          if (indexer.ok()) {
-            field_type = (*indexer)->GetIndexerType();
-          }
-          // DBG << "Attribute_contents: " << name << " : " << value
-          //     << " Index:" << ref->second << " FieldType:" << int(field_type)
-          //     << "\n";
-          DBG << "Rec[" << record_index << "]: " << int(field_type)
-              << " :=" << value << "\n";
+          indexes::IndexerType field_type =
+              parameters.record_info_by_index_[record_index].data_type_;
+          DBG << "Attribute_contents: " << name << " : " << value
+              << " Index:" << record_index << " FieldType:" << int(field_type)
+              << "\n";
           switch (field_type) {
             case indexes::IndexerType::kNumeric: {
               auto numeric_value = vmsdk::To<double>(value);
@@ -289,8 +301,8 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
           }
           // DBG << "After set record is " << *rec << "\n";
         } else {
-          // DBG << "Attribute_contents: " << name << " : " << value << "
-          // Extra:\n";
+          DBG << "Attribute_contents: " << name << " : " << value
+              << " Extra:\n";
           rec->extra_fields_.push_back(
               std::make_pair(std::string(name), expr::Value(value)));
         }
@@ -328,7 +340,6 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
     //
     // First the referenced fields
     //
-    DBG << "Starting row with fields size:" << rec->fields_.size() << "\n";
     size_t array_count = 0;
     RedisModule_Assert(rec->fields_.size() <=
                        parameters.record_info_by_index_.size());
@@ -336,8 +347,8 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
       if (ReplyWithValue(
               ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
               parameters.record_info_by_index_[i].identifier_,
-              parameters.record_info_by_index_[i].data_type_,
-              rec->fields_[i])) {
+              parameters.record_info_by_index_[i].data_type_, rec->fields_[i],
+              parameters.dialect)) {
         array_count += 2;
       }
     }
@@ -347,7 +358,7 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
     for (const auto &[name, value] : rec->extra_fields_) {
       if (ReplyWithValue(
               ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
-              name, indexes::IndexerType::kNone, value)) {
+              name, indexes::IndexerType::kNone, value, parameters.dialect)) {
         array_count += 2;
       }
     }

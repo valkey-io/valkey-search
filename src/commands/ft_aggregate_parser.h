@@ -40,6 +40,7 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   std::vector<std::string> loads_;
   bool load_key{false};
   bool addscores_{false};
+  bool has_limit_stage{false};
   std::vector<std::unique_ptr<Stage>> stages_;
 
   absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>

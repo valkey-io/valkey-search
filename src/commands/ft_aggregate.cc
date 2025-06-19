@@ -229,6 +229,15 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
     ++Metrics::GetStats().query_failed_requests_cnt;
     return identifier.status();
   }
+
+  if (!parameters.has_limit_stage) {
+    //
+    // Apply default "LIMIT 0 10"
+    //
+    while (neighbors.size() > 10) {
+      neighbors.pop_front();
+    }
+  }
   query::ProcessNeighborsForReply(
       ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
       parameters, identifier.value());

@@ -40,7 +40,6 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   std::vector<std::string> loads_;
   bool load_key{false};
   bool addscores_{false};
-  bool has_limit_stage{false};
   std::vector<std::unique_ptr<Stage>> stages_;
 
   absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
@@ -130,7 +129,6 @@ class Stage {
  public:
   virtual ~Stage() = default;
   virtual absl::Status Execute(RecordSet& records) const = 0;
-  virtual bool IsLimiter() const { return false; }
   virtual void Dump(std::ostream& os) const = 0;
   friend std::ostream& operator<<(std::ostream& os, const Stage& s) {
     s.Dump(os);
@@ -157,7 +155,6 @@ class Limit : public Stage {
  public:
   size_t offset_;
   size_t limit_;
-  bool IsLimiter() const override { return true; }
   void Dump(std::ostream& os) const override {
     os << "LIMIT: " << offset_ << " " << limit_;
   }
@@ -169,7 +166,6 @@ class Apply : public Stage {
   std::unique_ptr<Attribute> name_;
   std::unique_ptr<expr::Expression> expr_;
   absl::Status Execute(RecordSet& records) const override;
-  bool IsLimiter() const override { return true; }
   void Dump(std::ostream& os) const override {
     os << "APPLY: ";
     name_->Dump(os);
@@ -189,7 +185,6 @@ class Filter : public Stage {
 
 class GroupBy : public Stage {
  public:
-  bool IsLimiter() const override { return true; }
   absl::Status Execute(RecordSet& records) const override;
   struct ReducerInstance {
     virtual ~ReducerInstance() = default;
@@ -248,7 +243,7 @@ class SortBy : public Stage {
     Direction direction_;
     std::unique_ptr<expr::Expression> expr_;
   };
-  std::optional<size_t> max_;
+  size_t max_{10};
   absl::InlinedVector<SortKey, 4> sortkeys_;
   void Dump(std::ostream& os) const override {
     os << "SORTBY:";
@@ -266,7 +261,7 @@ class SortBy : public Stage {
       os << k.expr_.get();
     }
     if (max_) {
-      os << " MAX:" << *max_;
+      os << " MAX:" << max_;
     }
   }
 };

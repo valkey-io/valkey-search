@@ -115,7 +115,6 @@ ConstructLimitParser() {
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, stage->offset_));
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, stage->limit_));
         parameters.stages_.emplace_back(std::move(stage));
-        parameters.has_limit_stage = true;
         return absl::OkStatus();
       });
 }

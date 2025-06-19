@@ -126,13 +126,13 @@ struct SortFunctor {
 
 absl::Status SortBy::Execute(RecordSet& records) const {
   DBG << "Executing SORTBY with sortkeys: " << sortkeys_.size() << "\n";
-  if (max_ && records.size() > *max_) {
+  if (records.size() > max_) {
     // Sadly std::priority_queue can't operate on unique_ptr's. so we need an
-    // extra cop
+    // extra copy
     SortFunctor<Record*> sorter{&sortkeys_};
     std::priority_queue<Record*, std::vector<Record*>, SortFunctor<Record*>>
         heap(sorter);
-    for (auto i = 0; i < *max_; ++i) {
+    for (auto i = 0; i < max_; ++i) {
       heap.push(records.pop_front().release());
     }
     while (!records.empty()) {

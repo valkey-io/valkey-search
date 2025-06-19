@@ -73,6 +73,7 @@ def compute_data_sets():
     data["hard numbers"] = {}
     data["sortable numbers"] = {}
     data["reverse vector numbers"] = {}
+    data["bad numbers"] = {}
     for key_type in ["hash", "json"]:
         schema = [
             make_field_definition(key_type, field_type_to_name[typ], typ, i + 1)
@@ -145,6 +146,76 @@ def compute_data_sets():
                 },
             )
             for i in range(len(sortable_numbers))
+        ]
+        #
+        #  Bad numbers, things that don't convert to their designated types.
+        #
+        data["bad numbers"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+        data["bad numbers"][SETS_KEY(key_type)] = [
+            (f"{key_type}:0",
+                {
+                    "n1": 0,
+                    "n2": 0,
+                    "n3": 0,
+                    "t1": "",
+                    "t2": "",
+                    "t3": "",
+                    "v1": array_encode(key_type, [0 for _ in range(VECTOR_DIM)]),
+                },
+            ),
+            (f"{key_type}:1",
+                {
+                    "n1": "bad",
+                    "n2": 0,
+                    "n3": 0,
+                    "t1": "",
+                    "t2": "",
+                    "t3": "",
+                    "v1": array_encode(key_type, [1 for _ in range(VECTOR_DIM)]),
+                },
+            ),
+            (f"{key_type}:2",
+                {
+                    "n1": True if key_type == "json" else 1,
+                    "n2": 0,
+                    "n3": 0,
+                    "t1": "",
+                    "t2": "",
+                    "t3": "",
+                    "v1": array_encode(key_type, [2 for _ in range(VECTOR_DIM)]),
+                },
+            ),
+            (f"{key_type}:3",
+                {
+                    # "n1": 0,
+                    "n2": 0,
+                    "n3": 0,
+                    "t1": "",
+                    "t2": "",
+                    "t3": "",
+                    "v1": array_encode(key_type, [3 for _ in range(VECTOR_DIM)]),
+                },
+            ),
+            (f"{key_type}:4",
+                {
+                    "n1": 0,
+                    "n2": 0,
+                    "n3": 0,
+                    "t2": "",
+                    "t3": "",
+                    "v1": array_encode(key_type, [4 for _ in range(VECTOR_DIM)]),
+                },
+            ),
+            (f"{key_type}:5",
+                {
+                    "n1": 0,
+                    "n2": 0,
+                    "n3": 0,
+                    "t2": "",
+                    "t3": "",
+                    "v1": array_encode(key_type, [5 for _ in range(VECTOR_DIM+1)]),
+                },
+            ),
         ]
     return data
 

@@ -285,7 +285,7 @@ class MockRedisModule {
 // NOLINTBEGIN(readability-identifier-naming)
 // Global kMockRedisModule is a fake Redis module used for static wrappers
 // around MockRedisModule methods.
-MockRedisModule *kMockRedisModule;
+MockRedisModule *kMockRedisModule REDISMODULE_ATTR;
 
 inline void TestRedisModule_Log(RedisModuleCtx *ctx [[maybe_unused]],
                                 const char *levelstr [[maybe_unused]],
@@ -1217,9 +1217,9 @@ struct RedisModuleCallReply {
   CallReplyVariant val;
   std::string msg;
 };
-std::unique_ptr<RedisModuleCallReply> default_reply;
+std::unique_ptr<RedisModuleCallReply> default_reply REDISMODULE_ATTR;
 
-std::unique_ptr<RedisModuleCallReply> CreateRedisModuleCallReply(
+inline std::unique_ptr<RedisModuleCallReply> CreateRedisModuleCallReply(
     CallReplyVariant value) {
   std::unique_ptr<RedisModuleCallReply> reply{new RedisModuleCallReply{
       .type = std::visit(
@@ -1245,8 +1245,8 @@ std::unique_ptr<RedisModuleCallReply> CreateRedisModuleCallReply(
   return reply;
 }
 
-void AddElementToCallReplyMap(CallReplyMap &map, CallReplyVariant key,
-                              CallReplyVariant val) {
+inline void AddElementToCallReplyMap(CallReplyMap &map, CallReplyVariant key,
+                                     CallReplyVariant val) {
   std::unique_ptr<RedisModuleCallReply> k =
       CreateRedisModuleCallReply(std::move(key));
   std::unique_ptr<RedisModuleCallReply> v =

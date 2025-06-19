@@ -2,6 +2,17 @@ include(FetchContent)
 include(ProcessorCount)
 ProcessorCount(PROCESSOR_COUNT)
 
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+  # Read the os-release file
+  file(READ "/etc/os-release" OS_RELEASE)
+
+  # Extract distribution name
+  string(REGEX MATCH "NAME=\"([^\"]+)\"" _ ${OS_RELEASE})
+  string(TOLOWER "${CMAKE_MATCH_1}" DISTRO_NAME)
+
+  message(STATUS "Linux Distribution: ${DISTRO_NAME}")
+endif()
+
 set(MODULES_DIR "${CMAKE_BINARY_DIR}/.deps")
 file(MAKE_DIRECTORY "${MODULES_DIR}")
 
@@ -12,6 +23,16 @@ set(MODULE_GOOGLE_TEST "googletest")
 set(MODULES_INSTALL_PREFIX "${MODULES_DIR}/install")
 
 find_program(_GIT_EXE git REQUIRED)
+
+function(find_and_replace file_name find_what replace_with)
+  file(READ "${file_name}" FILE_CONTENTS)
+  string(REPLACE "${find_what}" "${replace_with}" FILE_CONTENTS
+                 "${FILE_CONTENTS}")
+  file(WRITE "${file_name}" "${FILE_CONTENTS}")
+  message(
+    STATUS
+      "Replaced: '${find_what}' with '${replace_with}' in file: ${file_name}")
+endfunction()
 
 # On some distros (mainly RedHat based) the cmake files might be installed under
 # lib64/ and not under lib/, this function helps locating the cmake path for the
@@ -77,9 +98,15 @@ endfunction()
 function(build_submodule MODULE_NAME MODULE_CMAKE_ARGS HINT_FILE)
   if(NOT EXISTS "${HINT_FILE}")
     file(MAKE_DIRECTORY ${MODULES_DIR}/${MODULE_NAME}/build-release)
-    set(CXX_FLAGS
-        "-Wno-missing-requires -Wno-attributes -Wno-deprecated -Wno-return-type -Wno-stringop-overflow -Wno-deprecated-declarations"
-    )
+    if(UNIX AND NOT APPLE)
+      set(CXX_FLAGS
+          "-Wno-missing-requires -Wno-attributes -Wno-deprecated -Wno-return-type -Wno-stringop-overflow -Wno-deprecated-declarations"
+      )
+    else()
+      set(CXX_FLAGS
+          "-Wno-attributes -Wno-deprecated -Wno-return-type -Wno-deprecated-declarations"
+      )
+    endif()
     set(C_FLAGS "")
     set(LD_FLAGS "")
     if(ASAN_BUILD)
@@ -142,6 +169,18 @@ else()
   # Pull submodules with a given branch / tag and build them
   checkout_submodule_branch(${MODULE_GRPC} "https://github.com/grpc/grpc"
                             "v1.70.1" "${MODULES_DIR}/grpc/build-release")
+
+  string(FIND "${DISTRO_NAME}" "alpine" POSITION)
+  if(POSITION GREATER -1)
+    find_and_replace("${MODULES_DIR}/grpc/third_party/re2/util/pcre.h"
+                     "mutable int32_t" "mutable int")
+  endif()
+
+  if(APPLE)
+    # Fix wrong detection of fdopen on macOS
+    find_and_replace("${MODULES_DIR}/grpc/third_party/zlib/zutil.h"
+                     "ifndef fdopen" "if 0")
+  endif()
 
   checkout_submodule_branch(
     ${MODULE_HIGHWAYHASH} "https://github.com/google/highwayhash.git" "master"

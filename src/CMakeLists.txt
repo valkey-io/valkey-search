@@ -10,9 +10,11 @@ set(SRCS_MODULE_LOADER ${CMAKE_CURRENT_LIST_DIR}/module_loader.cc)
 # This is the module target
 valkey_search_add_shared_library(libsearch ${SRCS_MODULE_LOADER})
 target_include_directories(libsearch PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_options(
-  libsearch PRIVATE
-  "LINKER:--version-script=${CMAKE_SOURCE_DIR}/vmsdk/versionscript.lds")
+if(UNIX AND NOT APPLE)
+  target_link_options(
+    libsearch PRIVATE
+    "LINKER:--version-script=${CMAKE_SOURCE_DIR}/vmsdk/versionscript.lds")
+endif()
 
 target_link_libraries(libsearch PUBLIC keyspace_event_manager)
 target_link_libraries(libsearch PUBLIC valkey_search)
@@ -29,10 +31,11 @@ valkey_search_create_proto_library("src/rdb_section.proto"
                                    "rdb_section_cc_proto")
 target_link_libraries(rdb_section_cc_proto PUBLIC index_schema_cc_proto)
 target_link_libraries(rdb_section_cc_proto PUBLIC coordinator_cc_proto)
-message(STATUS "Created proto library rdb_section_cc_proto")
 
-# Wrap ${THIRD_PARTY_LIBS} with "--start/--end group"
-target_link_options(libsearch PRIVATE -Wl,--start-group)
+if(UNIX AND NOT APPLE)
+  # Wrap ${THIRD_PARTY_LIBS} with "--start/--end group"
+  target_link_options(libsearch PRIVATE -Wl,--start-group)
+endif()
 target_link_libraries(libsearch PRIVATE ${THIRD_PARTY_LIBS})
 
 # Remove the "lib" prefix from the module
@@ -42,8 +45,10 @@ if(UNIX AND NOT APPLE)
   target_link_options(libsearch PRIVATE -Wl,--allow-multiple-definition)
 endif()
 
-# Append -Wl,--end-group as the LAST argument
-target_link_libraries(libsearch PRIVATE lib_to_add_end_group_flag)
+if(UNIX AND NOT APPLE)
+  # Append -Wl,--end-group as the LAST argument
+  target_link_libraries(libsearch PRIVATE lib_to_add_end_group_flag)
+endif()
 
 set(SRCS_VALKEY_SEARCH
     ${CMAKE_CURRENT_LIST_DIR}/valkey_search.cc

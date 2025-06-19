@@ -34,9 +34,7 @@ Usage: test.sh [options...]
     --help | -h              Print this help message and exit.
     --clean                  Clean the current build configuration.
     --debug                  Build for debug version.
-    --test                   Specify the test name. Default all.
-                             Standalone tests: ${STANDALONE_TESTS[*]}
-                             Pytest tests: ${PYTEST_TESTS[*]}
+    --test                   Specify the test name [stability|vector_search_integration]. Default all.
     --test-errors-stdout     When a test fails, dump the captured tests output to stdout.
     --asan                   Build the ASan version of the module.
 
@@ -79,7 +77,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ ! "${TEST}" == "all" ]] && [[ ! " ${STANDALONE_TESTS[*]} ${PYTEST_TESTS[*]} " =~ " ${TEST} " ]]; then
+if [[ ! "${TEST}" == "stability" ]] && [[ ! "${TEST}" == "vector_search_integration" ]] && [[ ! "${TEST}" == "all" ]]; then
     printf "\n${RED}Invalid test value: ${TEST}${RESET}\n\n" >&2
     print_usage
     exit 1
@@ -287,23 +285,14 @@ print_environment_var TEST_TMPDIR ${TEST_TMPDIR}
 mkdir -p $TEST_TMPDIR
 pkill -9 valkey-server || true
 
+ALL_FILES="vector_search_integration_test.py stability_test.py"
 
 if [[ "${TEST}" == "all" ]]; then
-    for test in "${STANDALONE_TESTS[@]}"; do
-        python3 ${ROOT_DIR}/${test}_test.py
+    for file in $ALL_FILES; do
+        python3 ${ROOT_DIR}/${file}
     done
-    if [ ${#PYTEST_TESTS[@]} -gt 0 ]; then
-        pytest ${ROOT_DIR} -v $(printf "%s_test.py " "${PYTEST_TESTS[@]}")
-    fi
 else
-    if [[ " ${STANDALONE_TESTS[*]} " =~ " ${TEST} " ]]; then
-        python3 ${ROOT_DIR}/${TEST}_test.py
-    elif [[ " ${PYTEST_TESTS[*]} " =~ " ${TEST} " ]]; then
-        pytest ${ROOT_DIR}/${TEST}_test.py -v
-    else
-        echo "Error: Test '$TEST' not found in either STANDALONE_TESTS or PYTEST_TESTS"
-        exit 1
-    fi
+    python3 ${ROOT_DIR}/${TEST}_test.py
 fi
 
 printf "Checking for errors...\n"

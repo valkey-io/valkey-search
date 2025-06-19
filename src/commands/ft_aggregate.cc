@@ -139,6 +139,10 @@ absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
     return absl::InvalidArgumentError("Only Dialects 2, 3 and 4 are supported");
   }
 
+  params->limit.number =
+      std::numeric_limits<uint64_t>::max();  // Override default of 10 from
+                                             // search
+
   VMSDK_RETURN_IF_ERROR(PostParseQueryString(*params));
   VMSDK_RETURN_IF_ERROR(ManipulateReturnsClause(*params));
 
@@ -314,18 +318,9 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
   //
   //  2. Perform the aggregation stages
   //
-  bool is_limited =
-      parameters.loads_.empty();  // Empty loads clause is limiting too.
   for (auto &stage : parameters.stages_) {
     // Todo Check for timeout
     VMSDK_RETURN_IF_ERROR(stage->Execute(records));
-    is_limited |= stage->IsLimiter();
-  }
-  if (!is_limited) {
-    Limit limiter;
-    limiter.offset_ = 0;
-    limiter.limit_ = 10;
-    VMSDK_RETURN_IF_ERROR(limiter.Execute(records));
   }
   DBG << ">> Finished stages\n" << records;
 

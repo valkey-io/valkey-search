@@ -129,7 +129,7 @@ def unpack_search_result(rs, key_type):
         #try:
         row = {"__key": key}
         for i in range(0, len(value), 2):
-            row[parse_field(value[i], key_type)] = parse_value(value[i+1])
+            row[parse_field(value[i], key_type)] = parse_value(value[i+1], key_type)
         rows += [row]
         #except:
         #    print("Parse failure: ", key, value)

@@ -138,7 +138,7 @@ function build() {
     printf "${BOLD_PINK}Building${RESET}\n"
     if [ -d ${BUILD_DIR} ]; then
         cd ${BUILD_DIR}
-	${NINJA_TOOL} -j 10 ${VERBOSE_ARGS} ${CMAKE_TARGET}
+	${NINJA_TOOL} ${VERBOSE_ARGS} ${CMAKE_TARGET}
 	exit 1
         cd ${ROOT_DIR}
 

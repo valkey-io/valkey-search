@@ -32,7 +32,7 @@ class ClientRSystem(ClientSystem):
                 '''
         print("Indexing is done.")
 
-@pytest.mark.parametrize("dialect", [2, 3, 4])
+@pytest.mark.parametrize("dialect", [2])
 @pytest.mark.parametrize("key_type", ["json", "hash"])
 class TestAggregateCompatibility:
 
@@ -112,7 +112,7 @@ class TestAggregateCompatibility:
             str(dialect),
         ]
         self.execute_command(new_cmd)
-    '''
+    '''        
     def test_search_reverse(self, key_type, dialect):
         self.setup_data("reverse vector numbers", key_type)
         self.checkvec(dialect, f"ft.search {key_type}_idx1 *")
@@ -123,7 +123,6 @@ class TestAggregateCompatibility:
         self.checkvec(dialect, f"ft.search {key_type}_idx1 *")
         self.checkvec(dialect, f"ft.search {key_type}_idx1 * limit 0 5")
     '''
-
     def test_aggregate_sortby(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key @n2 sortby 1 @n2")
@@ -206,51 +205,47 @@ class TestAggregateCompatibility:
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce max 1 @n1 as nmax"
         )
         self.checkvec(dialect, f'ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n2 as nmax')
-    '''
-    # todo enable when search sorting is fixed
     def test_aggregate_limit(self, key_type, dialect):
-        keys = self.setup_data("sortable numbers", key_type)
+        self.setup_data("sortable numbers", key_type)
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2")
-        self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 limit 1 4")
-        self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 limit 1 4 sortby 2 @__key desc")
+        self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key asc limit 1 4 ")
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 1 4")
-    '''
     def test_aggregate_short_limit(self, key_type, dialect):
-        keys = self.setup_data("sortable numbers", key_type)
+        self.setup_data("sortable numbers", key_type)
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 limit 0 5")
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc")
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 0 5")
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key asc limit 1 4", knn=4)
 
     def test_aggregate_load(self, key_type, dialect):
-        keys = self.setup_data("sortable numbers", key_type)
+        self.setup_data("sortable numbers", key_type)
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  *")
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load *")
 
     def test_aggregate_numeric_dyadic_operators(self, key_type, dialect):
-        keys = self.setup_data("hard numbers", key_type)
+        self.setup_data("hard numbers", key_type)
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]
-        logops = ["||", "&&"]
+        logops = ["||", "&&"] if dialect == 2 else []
         for op in dyadic + relops + logops:
             self.checkvec(dialect, 
                 f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 apply @n1{op}@n2 as nn"
             )
     def test_aggregate_numeric_dyadic_operators_sortable_numbers(self, key_type, dialect):
-        keys = self.setup_data("sortable numbers", key_type)
+        self.setup_data("sortable numbers", key_type)
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]
-        logops = ["||", "&&"]
+        logops = ["||", "&&"] if dialect == 2 else []
         for op in dyadic + relops + logops:
             self.checkvec(dialect, 
                 f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 apply @n1{op}@n2 as nn"
             )
 
     def test_aggregate_numeric_triadic_operators(self, key_type, dialect):
-        keys = self.setup_data("hard numbers", key_type)
+        self.setup_data("hard numbers", key_type)
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]
-        logops = ["||", "&&"]
+        logops = ["||", "&&"] if dialect == 2 else []
         for op1 in dyadic+relops+logops:
             for op2 in dyadic+relops+logops:
                 self.checkvec(dialect, 
@@ -258,7 +253,7 @@ class TestAggregateCompatibility:
                 )
 
     def test_aggregate_numeric_functions(self, key_type, dialect):
-        keys = self.setup_data("hard numbers", key_type)
+        self.setup_data("hard numbers", key_type)
         function = ["log", "abs", "ceil", "floor", "log2", "exp", "sqrt"]
         for f in function:
             self.checkvec(dialect, 

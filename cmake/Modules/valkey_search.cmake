@@ -116,7 +116,9 @@ function(valkey_search_target_update_compile_flags TARGET)
   target_compile_options(${TARGET} PRIVATE -ffast-math)
   target_compile_options(${TARGET} PRIVATE -funroll-loops)
   target_compile_options(${TARGET} PRIVATE -ftree-vectorize)
-  target_compile_options(${TARGET} PRIVATE -fopenmp)
+  if(UNIX AND NOT APPLE)
+    target_compile_options(${TARGET} PRIVATE -fopenmp)
+  endif()
   target_compile_options(${TARGET} PRIVATE -ffp-contract=off)
   target_compile_options(${TARGET} PRIVATE -flax-vector-conversions)
   target_compile_options(${TARGET} PRIVATE -Wno-unknown-pragmas)
@@ -146,29 +148,45 @@ function(valkey_search_target_update_compile_flags TARGET)
   endif()
 endfunction()
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-missing-requires")
+if(UNIX AND NOT APPLE)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-missing-requires")
+endif()
 
-include(protobuf_generate)
+message(
+  STATUS
+    "Including file ${CMAKE_SOURCE_DIR}/cmake/Modules/protobuf_generate.cmake")
+include(${CMAKE_SOURCE_DIR}/cmake/Modules/protobuf_generate.cmake)
 include(linux_utils)
 
 # HACK: in order to force CMake to put "-Wl,--end-group" as the last argument we
 # use a fake library "lib_to_add_end_group_flag"
 add_library(lib_to_add_end_group_flag INTERFACE "")
-target_link_libraries(lib_to_add_end_group_flag INTERFACE "-Wl,--end-group")
+if(UNIX AND NOT APPLE)
+  target_link_libraries(lib_to_add_end_group_flag INTERFACE "-Wl,--end-group")
+endif()
 
 macro(finalize_test_flags __TARGET)
   # --end-group will added by our fake target "lib_to_add_end_group_flag"
-  target_link_options(${__TARGET} PRIVATE "LINKER:--start-group")
+  if(UNIX AND NOT APPLE)
+    target_link_options(${__TARGET} PRIVATE "LINKER:--start-group")
+  endif()
   foreach(__lib ${THIRD_PARTY_LIBS})
     target_link_libraries(${__TARGET} PRIVATE ${__lib})
   endforeach()
 
-  target_link_options(${__TARGET} PRIVATE "LINKER:--allow-multiple-definition")
+  if(UNIX AND NOT APPLE)
+    target_link_options(${__TARGET} PRIVATE
+                        "LINKER:--allow-multiple-definition")
+  endif()
+
   target_compile_options(${__TARGET} PRIVATE -O1)
   valkey_search_target_update_compile_flags(${__TARGET})
   set_target_properties(${__TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
                                                "${CMAKE_BINARY_DIR}/tests")
-  target_link_libraries(${__TARGET} PRIVATE lib_to_add_end_group_flag)
+  if(UNIX AND NOT APPLE)
+    target_link_libraries(${__TARGET} PRIVATE lib_to_add_end_group_flag)
+  endif()
+
   if(VALKEY_SEARCH_IS_ARM)
     target_link_libraries(${__TARGET} PRIVATE pthread)
   endif()

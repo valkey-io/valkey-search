@@ -149,6 +149,14 @@ class IndexSchema : public KeyspaceEventSubscription,
   virtual void OnLoadingEnded(RedisModuleCtx *ctx);
 
   inline const Stats &GetStats() const { return stats_; }
+  inline std::atomic<int64_t> &GetMemoryPool() { return memory_pool_; }
+  inline const std::atomic<int64_t> &GetMemoryPool() const { return memory_pool_; }
+
+  // NOTE: Net memory usage can be negative in temporary.
+  inline int64_t GetMemoryUsage() const {
+    return std::max(0L, memory_pool_.load());
+  }
+
   void ProcessSingleMutationAsync(RedisModuleCtx *ctx, bool from_backfill,
                                   const InternedStringPtr &key,
                                   vmsdk::StopWatch *delay_capturer);
@@ -219,6 +227,7 @@ class IndexSchema : public KeyspaceEventSubscription,
                           vmsdk::UniqueRedisString &record);
 
   mutable Stats stats_;
+  mutable std::atomic<int64_t> memory_pool_{0};
 
   void ProcessKeyspaceNotification(RedisModuleCtx *ctx, RedisModuleString *key,
                                    bool from_backfill);
@@ -268,6 +277,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   FRIEND_TEST(IndexSchemaFriendTest, ConsistencyTest);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributes);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributesSanity);
+  FRIEND_TEST(IndexSchemaFriendTest, ProcessMutation_MemoryTrackingScopeConstructor);
   FRIEND_TEST(ValkeySearchTest, Info);
   FRIEND_TEST(OnSwapDBCallbackTest, OnSwapDBCallback);
 };

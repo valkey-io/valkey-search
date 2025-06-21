@@ -21,6 +21,14 @@ GRAY='\e[90;1m'
 
 echo "Root directory: ${ROOT_DIR}"
 
+STANDALONE_TESTS=(
+    "vector_search_integration"
+    "stability"
+)
+PYTEST_TESTS=(
+    "compatibility"
+)
+
 function print_usage() {
 cat<<EOF
 Usage: test.sh [options...]

@@ -103,8 +103,7 @@ absl::Status ParseKnnInner(query::VectorSearchParameters &parameters,
   if (params.size() == 1) {
     return absl::InvalidArgumentError("KNN argument is missing");
   }
-  VMSDK_ASSIGN_OR_RETURN(auto k_string, SubstituteParam(parameters, params[1]));
-  VMSDK_ASSIGN_OR_RETURN(parameters.k, vmsdk::To<unsigned>(k_string));
+  parameters.parse_vars.k_string = params[1];
   if (params.size() == 2) {
     return absl::InvalidArgumentError("Vector field argument is missing");
   }
@@ -118,8 +117,7 @@ absl::Status ParseKnnInner(query::VectorSearchParameters &parameters,
   if (params.size() == 3) {
     return absl::InvalidArgumentError("Blob attribute argument is missing");
   }
-  VMSDK_ASSIGN_OR_RETURN(parameters.query,
-                         SubstituteParam(parameters, params[3]));
+  parameters.parse_vars.blob_string = params[3];
   size_t i = 4;
   while (i < params.size()) {
     if (absl::EqualsIgnoreCase(params[i], "EF_RUNTIME")) {
@@ -208,27 +206,18 @@ absl::Status Verify(query::VectorSearchParameters &parameters) {
   if (parameters.k <= 0) {
     return absl::InvalidArgumentError("k must be positive");
   }
-  if (parameters.timeout_ms > kMaxTimeoutMs) {
+  if (parameters.timeout_ms > query::kMaxTimeoutMs) {
     return absl::InvalidArgumentError(
         absl::StrCat(kTimeoutParam,
                      " must be a positive integer greater than 0 and "
                      "cannot exceed ",
-                     kMaxTimeoutMs, "."));
+                     query::kMaxTimeoutMs, "."));
   }
   if (parameters.dialect < 2 || parameters.dialect > 4) {
     return absl::InvalidArgumentError(
         "DIALECT requires a non negative integer >=2 and <= 4");
   }
 
-  // Validate all parameters used, nuke the map to avoid dangling pointers
-  while (!parameters.parse_vars.params.empty()) {
-    auto begin = parameters.parse_vars.params.begin();
-    if (begin->second.first == 0) {
-      return absl::NotFoundError(
-          absl::StrCat("Parameter `", begin->first, "` not used."));
-    }
-    parameters.parse_vars.params.erase(begin);
-  }
   return absl::OkStatus();
 }
 
@@ -336,7 +325,9 @@ vmsdk::KeyValueParser<query::VectorSearchParameters> CreateSearchParser() {
 static vmsdk::KeyValueParser<query::VectorSearchParameters> SearchParser =
     CreateSearchParser();
 
-absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
+}  // namespace
+
+absl::Status PreParseQueryString(query::VectorSearchParameters &parameters) {
   auto filter_expression =
       absl::string_view(parameters.parse_vars.query_string);
   auto pos = filter_expression.find(kVectorFilterDelimiter);
@@ -379,7 +370,35 @@ absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
   }
   return absl::OkStatus();
 }
-}  // namespace
+
+//
+// Perform parameter substitution and parse K and the Blob, which were deferred
+//
+absl::Status PostParseQueryString(query::VectorSearchParameters &parameters) {
+  auto parse = [&] {
+    VMSDK_ASSIGN_OR_RETURN(
+        auto k_string,
+        SubstituteParam(parameters, parameters.parse_vars.k_string));
+    VMSDK_ASSIGN_OR_RETURN(parameters.k, vmsdk::To<unsigned>(k_string));
+    VMSDK_ASSIGN_OR_RETURN(
+        parameters.query,
+        SubstituteParam(parameters, parameters.parse_vars.blob_string));
+    // Validate all parameters used, nuke the map to avoid dangling pointers
+    while (!parameters.parse_vars.params.empty()) {
+      auto begin = parameters.parse_vars.params.begin();
+      if (begin->second.first == 0) {
+        return absl::NotFoundError(
+            absl::StrCat("Parameter `", begin->first, "` not used."));
+      }
+      parameters.parse_vars.params.erase(begin);
+    }
+
+    return absl::OkStatus();
+  };
+  VMSDK_RETURN_IF_ERROR(parse()).SetPrepend()
+      << "Error parsing vector similarity parameters. ";
+  return absl::OkStatus();
+}
 
 absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
 ParseVectorSearchParameters(RedisModuleCtx *ctx, RedisModuleString **argv,
@@ -400,7 +419,8 @@ ParseVectorSearchParameters(RedisModuleCtx *ctx, RedisModuleString **argv,
         absl::StrCat("Unexpected parameter at position ", (itr.Position() + 1),
                      ":", vmsdk::ToStringView(itr.Get().value())));
   }
-  VMSDK_RETURN_IF_ERROR(ParseQueryString(*parameters));
+  VMSDK_RETURN_IF_ERROR(PreParseQueryString(*parameters));
+  VMSDK_RETURN_IF_ERROR(PostParseQueryString(*parameters));
   VMSDK_RETURN_IF_ERROR(Verify(*parameters));
   parameters->parse_vars.ClearAtEndOfParse();
   return parameters;

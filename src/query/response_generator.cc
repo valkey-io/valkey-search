@@ -41,7 +41,6 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
-#include "src/coordinator/coordinator.pb.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
@@ -181,6 +180,7 @@ absl::StatusOr<RecordsMap> GetContent(
 //
 // Any neighbors already contained in the attribute content map will be skipped.
 // Any data not found locally will be skipped.
+
 void ProcessNeighborsForReply(RedisModuleCtx *ctx,
                               const AttributeDataType &attribute_data_type,
                               std::deque<indexes::Neighbor> &neighbors,

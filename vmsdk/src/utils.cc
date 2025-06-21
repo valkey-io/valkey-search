@@ -29,6 +29,7 @@
 
 #include "vmsdk/src/utils.h"
 
+#include <iomanip>
 #include <string>
 #include <utility>
 
@@ -127,6 +128,24 @@ std::optional<absl::string_view> ParseHashTag(absl::string_view s) {
     return std::nullopt;
   }
   return s.substr(start + 1, tag_size);
+}
+
+std::ostream& operator<<(std::ostream& os, const JsonQuotedStringView& s) {
+  os << '"';
+  for (unsigned char c : s.view_) {
+    if (c == '"') {
+      os << '\\';
+      os << '"';
+    } else if (c == '\\') {
+      os << '\\';
+      os << '\\';
+    } else if (c <= 0x1F) {
+      os << "\\u" << std::hex << std::setfill('0') << std::setw(4) << int(c);
+    } else {
+      os << c;
+    }
+  }
+  return os << '"';
 }
 
 }  // namespace vmsdk

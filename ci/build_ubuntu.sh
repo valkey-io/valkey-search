@@ -3,7 +3,7 @@
 CI_DIR=$(readlink -f $(dirname $0))
 ROOT_DIR=$(readlink -f ${CI_DIR}/..)
 BUILD_SH_ARGS=$@
-WGET="wget -q"
+WGET="wget -q --show-progress"
 HOSTADDR="https://github.com/valkey-io/valkey-search/releases/download/1.0.0-rc1"
 
 # Constants

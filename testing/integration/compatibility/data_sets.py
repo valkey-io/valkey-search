@@ -47,7 +47,20 @@ def array_encode(key_type, array):
     if key_type == "hash":
         return np.array(array).astype(np.float32).tobytes()
     else:
-        return array      
+        return array
+
+def json_quote(s):
+    if s == '"':
+        return '\\"'
+    if s == '\\':
+        return '\\\\'
+    return f'\\u{s:04x}'
+
+def binary_string_encode(key_type, s):
+    if key_type == "hash":
+        return s
+    else:
+        return '"' + "".join([json_quote(s[i]) for i in range(len(s))]) + '"'       
     
 def compute_data_sets():
     '''Generate all of the possible data sets'''
@@ -74,6 +87,7 @@ def compute_data_sets():
     data["sortable numbers"] = {}
     data["reverse vector numbers"] = {}
     data["bad numbers"] = {}
+    data["hard strings"] = {}
     for key_type in ["hash", "json"]:
         schema = [
             make_field_definition(key_type, field_type_to_name[typ], typ, i + 1)
@@ -216,6 +230,25 @@ def compute_data_sets():
                     "v1": array_encode(key_type, [5 for _ in range(VECTOR_DIM+1)]),
                 },
             ),
+        ]
+        #
+        # hard strings
+        #
+        data["hard strings"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+        data["hard strings"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{i:02d}",
+                {
+                    "n1": 0,
+                    "n2": -i,
+                    "n3" : i*2,
+                    "t1": f"one.one{i*2}",
+                    "t2": f"two.two{i*-2}",
+                    "t3": "all_the_same_value",
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                },
+            )
+            for i in range(300))
         ]
     return data
 

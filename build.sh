@@ -123,21 +123,11 @@ do
     esac
 done
 
-# Capitalize a word. This method is compatible with bash-3 and bash-4
-function capitalize_string() {
-    local string=$1
-    local first_char=${string:0:1}
-    local remainder=${string:1}
-    first_char=$(echo "${first_char}" | tr '[:lower:]' '[:upper:]')
-    remainder=$(echo "${remainder}" | tr '[:upper:]' '[:lower:]')
-    echo ${first_char}${remainder}
-}
-
 function configure() {
     printf "${BOLD_PINK}Running cmake...${RESET}\n"
     mkdir -p ${BUILD_DIR}
     cd $_
-    local BUILD_TYPE=$(capitalize_string ${BUILD_CONFIG})
+    local BUILD_TYPE=$(echo ${BUILD_CONFIG^})
     rm -f CMakeCache.txt
     printf "Running: cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -GNinja ${CMAKE_EXTRA_ARGS}\n"
     cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -GNinja ${CMAKE_EXTRA_ARGS}
@@ -148,8 +138,7 @@ function build() {
     printf "${BOLD_PINK}Building${RESET}\n"
     if [ -d ${BUILD_DIR} ]; then
         cd ${BUILD_DIR}
-	${NINJA_TOOL} ${VERBOSE_ARGS} ${CMAKE_TARGET}
-	exit 1
+        ${NINJA_TOOL} ${VERBOSE_ARGS} ${CMAKE_TARGET}
         cd ${ROOT_DIR}
 
         printf "\n${GREEN}Build Successful!${RESET}\n\n"
@@ -212,19 +201,13 @@ function check_tools() {
         check_tool ${tool}
     done
 
-    os_name=$(uname -s)
-    if [[ "${os_name}" == "Darwin" ]]; then
-        # ninja is can be installed via "brew"
+    # Check for ninja. On RedHat based Linux, it is called ninja-build, while on Debian based Linux, it is simply ninja
+    # Ubuntu / Mint et al will report "ID_LIKE=debian"
+    local debian_output=$(cat /etc/*-release|grep -i debian|wc -l)
+    if [ ${debian_output} -gt 0 ]; then
         NINJA_TOOL="ninja"
     else
-        # Check for ninja. On RedHat based Linux, it is called ninja-build, while on Debian based Linux, it is simply ninja
-        # Ubuntu / Mint et al will report "ID_LIKE=debian"
-        local debian_output=$(cat /etc/*-release|grep -i debian|wc -l)
-        if [ ${debian_output} -gt 0 ]; then
-            NINJA_TOOL="ninja"
-        else
-            NINJA_TOOL="ninja-build"
-        fi
+        NINJA_TOOL="ninja-build"
     fi
     check_tool ${NINJA_TOOL}
 }
@@ -243,10 +226,10 @@ function is_configure_required() {
         echo "yes"
         return
     fi
-    local build_file_lastmodified=$(date -r ${ninja_build_file} +%s)
+    local build_file_lastmodified=$(stat --printf "%Y" ${ninja_build_file})
     local cmake_files=$(find ${ROOT_DIR} -name "CMakeLists.txt" -o -name "*.cmake"| grep -v ".build-release" | grep -v ".build-debug")
     for cmake_file in ${cmake_files}; do
-        local cmake_file_modified=$(date -r ${cmake_file} +%s)
+        local cmake_file_modified=$(stat --printf "%Y" ${cmake_file})
         if [ ${cmake_file_modified} -gt ${build_file_lastmodified} ]; then
             echo "yes"
             return

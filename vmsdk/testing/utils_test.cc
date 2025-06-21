@@ -146,6 +146,22 @@ TEST_F(UtilsTest, IsRealUserClient) {
   }
 }
 
+TEST_F(UtilsTest, JsonQuotedStringTest) {
+  std::vector<std::pair<std::string, std::string>> testcases{
+    {"", "\"\""},
+    {"a", "\"a\""},
+    {std::string("\0",1), "\"\\u0000\""},
+    {std::string("\x1f", 1), "\"\\u001f\""},
+    {std::string("\x20", 1), "\"\x20\""},
+  };
+
+  for (auto& [str, expected] : testcases) {
+    std::ostringstream os;
+    os << JsonQuotedStringView(str);
+    EXPECT_EQ(os.str(), expected);
+  }
+}
+
 }  // namespace
 
 }  // namespace vmsdk

@@ -1,0 +1,55 @@
+# Constants
+BOLD_PINK='\e[35;1m'
+RESET='\e[0m'
+GREEN='\e[32;1m'
+RED='\e[31;1m'
+BLUE='\e[34;1m'
+
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    MODULE_EXT="dylib"
+else
+    MODULE_EXT="so"
+fi
+
+# Determine pip command
+PIP_PATH="${PIP_PATH:=}"
+PYTHON_PATH="${PYTHON_PATH:=}"
+
+if [ -z "${PIP_PATH}" ]; then
+    if command -v pip3 > /dev/null 2>&1; then
+        PIP_PATH="pip3"
+    elif command -v pip > /dev/null 2>&1; then
+        PIP_PATH="pip"
+    fi
+fi
+
+if [ -z "${PYTHON_PATH}" ]; then
+    if command -v python3 > /dev/null 2>&1; then
+        PYTHON_PATH="python3"
+    elif command -v python > /dev/null 2>&1; then
+        PYTHON_PATH="python"
+    fi
+fi
+
+# Capitalize a word. This method is compatible with bash-3 and bash-4
+function capitalize_string() {
+    local string=$1
+    local first_char=${string:0:1}
+    local remainder=${string:1}
+    first_char=$(echo "${first_char}" | tr '[:lower:]' '[:upper:]')
+    remainder=$(echo "${remainder}" | tr '[:upper:]' '[:lower:]')
+    echo ${first_char}${remainder}
+}
+
+function LOG_INFO() {
+    printf "${GREEN}INFO  ${RESET}: $1\n"
+}
+
+function LOG_ERROR() {
+    printf "${RED}ERROR ${RESET}: $1\n"
+}
+
+function LOG_NOTICE() {
+    printf "${BOLD_PINK}NOTICE${RESET}: $1\n"
+}
+

@@ -79,12 +79,12 @@ static struct DialectTestValue {
   std::optional<size_t> value_;
 } DialectCases[]{{"", query::kDialect},
                  {"DIALecT", std::nullopt},
-                 {"Dialect 0", std::nullopt},
+                 {"Dialect 0", 0},
                  {"Dialect 1", 1},
                  {"Dialect 2", 2},
                  {"Dialect 3", 3},
                  {"Dialect 4", 4},
-                 {"Dialect 5", std::nullopt},
+                 {"Dialect 5", 5},
                  {"Dialect fred", std::nullopt}};
 
 static struct LoadsTestValue {
@@ -181,9 +181,9 @@ static std::vector<TestStage> TestStages{
     {"FILTER @fred", nullptr},
     {"FILTER @n1 + @n2", nullptr},
     {"FILTER @n1", "FILTER: @n1"},
-    {"SORtBY 1 @n1", "SORTBY: ASC:@n1"},
-    {"SORTBY 2 @n1 ASC", "SORTBY: ASC:@n1"},
-    {"SORTBY 2 @n1 DESC", "SORTBY: DESC:@n1"},
+    {"SORtBY 1 @n1", "SORTBY: ASC:@n1 MAX:10"},
+    {"SORTBY 2 @n1 ASC", "SORTBY: ASC:@n1 MAX:10"},
+    {"SORTBY 2 @n1 DESC", "SORTBY: DESC:@n1 MAX:10"},
     {"SORTBY", nullptr},
     {"SORTBY 1", nullptr},
     {"SOrTBY 2 @n1", nullptr},

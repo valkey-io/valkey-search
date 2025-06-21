@@ -1,23 +1,12 @@
 #!/bin/bash
 set +e
 
-bazel run @hedron_compile_commands//:refresh_all
-
-use_cache=false
-from_branch=
-if [[ "$1" == "--cached" ]]; then
-  use_cache=true
-fi
-if [[ "$1" == "--from" ]]; then
-  from_branch="$2"
-fi
-
+git_args=""
+for arg in "$@"; do
+  git_args+=" \"$arg\""
+done
 # Get the list of modified or new files
-if $use_cache; then
-  files=$(git diff --cached --name-only --diff-filter=AM | grep -E '\.cc$|\.h$')
-else
-  files=$(git diff --name-only --diff-filter=AM $from_branch | grep -E '\.cc$|\.h$')
-fi
+files=$(eval "git diff --name-only --diff-filter=AM $git_args"| grep -E '\.cc$|\.h$' || echo "")
 
 # Check if there are any files to process
 if [ -z "$files" ]; then

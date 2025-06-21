@@ -5,7 +5,9 @@ BUILD_CONFIG=release
 TEST=all
 CLEAN="no"
 VALKEY_VERSION="8.1.1"
-VALKEY_JSON_VERSION="1.0.0"
+# Use this commit: https://github.com/valkey-io/valkey-json/commit/5b2f3db24c0135a8d8b8e5cf434c7a3d42bd91f0
+VALKEY_JSON_COMMIT_HASH="5b2f3db24c0135a8d8b8e5cf434c7a3d42bd91f0"
+VALKEY_JSON_VERSION="unstable"
 MODULE_ROOT=$(readlink -f ${ROOT_DIR}/../..)
 DUMP_TEST_ERRORS_STDOUT="no"
 
@@ -159,11 +161,10 @@ function configure() {
         printf "${BOLD_PINK}Building valkey-json...${RESET}\n"
 
         rm -rf ${VALKEY_JSON_DIR}
-        git clone --branch ${VALKEY_JSON_VERSION} --single-branch https://github.com/valkey-io/valkey-json.git ${VALKEY_JSON_DIR}
+        git clone https://github.com/valkey-io/valkey-json.git ${VALKEY_JSON_DIR}
         cd ${VALKEY_JSON_DIR}
-        set +e
-        SERVER_VERSION=$VALKEY_VERSION ./build.sh
-        set -e
+        git checkout ${VALKEY_JSON_COMMIT_HASH}
+        SERVER_VERSION=$VALKEY_VERSION ./build.sh --release
         cd ${ROOT_DIR}
     fi
 

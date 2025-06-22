@@ -136,6 +136,10 @@ static void DoPrefaceTestCase(FakeIndexInterface *fake_index, std::string test,
       EXPECT_EQ(params.dialect, query::kDialect);
     }
   }
+  // Need to manually free the string vector
+  for (auto arg : argv) {
+    RedisModule_FreeString(nullptr, arg);
+  }
 }
 
 TEST_F(AggregateTest, PrefaceParserTest) {

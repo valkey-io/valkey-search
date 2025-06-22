@@ -239,6 +239,10 @@ static void DoStageTest(FakeIndexInterface *fake_index,
       EXPECT_EQ(os.str(), TestStages[indexes[i]].stage_out_);
     }
   }
+  // Need to manually free the string vector
+  for (auto arg : argv) {
+    RedisModule_FreeString(nullptr, arg);
+  }
 }
 
 TEST_F(AggregateTest, StageParserTest) {

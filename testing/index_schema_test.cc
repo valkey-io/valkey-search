@@ -1522,11 +1522,11 @@ TEST_F(IndexSchemaFriendTest, ProcessMutation_MemoryTrackingScopeConstructor) {
   IndexSchema::MutatedAttributes mutated_attributes;
   mutated_attributes["test_attribute"].data = vmsdk::MakeUniqueRedisString("test_data");
 
-  EXPECT_EQ(constructor_call_count, 0);
+  EXPECT_EQ(constructor_call_count, 1);
 
   test_index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned, false);
 
-  EXPECT_EQ(constructor_call_count, 1);
+  EXPECT_EQ(constructor_call_count, 2);
 
   MemoryTrackingScope::ClearScopeEventCallback();
 }

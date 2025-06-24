@@ -53,6 +53,7 @@ public:
     static void ClearScopeEventCallback();
 
 private:
+    MemoryTrackingScope* prev_scope_ = nullptr;
     std::atomic<int64_t>* target_pool_ = nullptr;
     int64_t memory_delta_ = 0;
 

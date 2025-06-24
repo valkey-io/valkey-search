@@ -32,6 +32,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <set>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
@@ -56,12 +57,22 @@ class StringInternStore {
   static std::shared_ptr<InternedString> Intern(absl::string_view str,
                                                 Allocator *allocator = nullptr);
 
+  static int64_t GetMemoryUsage();
+  static int64_t GetIndexUsage(const void* index_id);
+  static void RegisterIndexUsage(const void* index_id, absl::string_view str);
+  static void UnregisterIndexUsage(const void* index_id, absl::string_view str);
+
   size_t Size() const {
     absl::MutexLock lock(&mutex_);
     return str_to_interned_.size();
   }
 
  private:
+  static std::atomic<int64_t> memory_pool_;
+  static absl::flat_hash_map<const void*, std::set<std::string>> index_usage_map_;
+  static absl::flat_hash_map<const void*, int64_t> index_usage_cache_;
+  static absl::Mutex usage_mutex_;
+  
   StringInternStore() = default;
   std::shared_ptr<InternedString> InternImpl(absl::string_view str,
                                              Allocator *allocator);

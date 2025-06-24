@@ -37,6 +37,7 @@
 #include "absl/log/check.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "log.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
@@ -130,22 +131,156 @@ std::optional<absl::string_view> ParseHashTag(absl::string_view s) {
   return s.substr(start + 1, tag_size);
 }
 
-std::ostream& operator<<(std::ostream& os, const JsonQuotedStringView& s) {
+std::ostream &operator<<(std::ostream &os, const JsonQuotedStringView &s) {
   os << '"';
-  for (unsigned char c : s.view_) {
-    if (c == '"') {
-      os << '\\';
-      os << '"';
-    } else if (c == '\\') {
-      os << '\\';
-      os << '\\';
-    } else if (c <= 0x1F) {
-      os << "\\u" << std::hex << std::setfill('0') << std::setw(4) << int(c);
-    } else {
-      os << c;
+  for (auto itr = s.view_.begin(); itr != s.view_.end(); ++itr) {
+    unsigned char c = *itr;
+    switch (c) {
+      case '"':
+        os << "\\\"";
+        break;
+      case '\\':
+        os << "\\\\";
+        break;
+      case '/':
+        os << "/";
+        break;
+      case '\n':
+        os << "\\n";
+        break;
+      case '\t':
+        os << "\\t";
+        break;
+      case '\r':
+        os << "\\r";
+        break;
+      case '\f':
+        os << "\\f";
+        break;
+      case '\b':
+        os << "\\b";
+        break;
+      default:
+        if (c > 0x1f && c < 0x80) {
+          os << c;
+        } else {
+          uint16_t codepoint;
+          if (c <= 0x1f) {
+            codepoint = int(c);
+          } else if ((c & 0b11100000) == 0b11000000) {
+            // Start of 2 byte sequence
+            itr++;
+            if (itr == s.view_.end() || ((*itr) & 0b11000000) != 0b10000000) {
+              VMSDK_LOG(DEBUG, nullptr) << "Invalid Json Encode";
+              codepoint = 0xFFFF;
+            } else {
+              codepoint = ((c & 0b11111) << 6) | ((*itr) & 0b00111111);
+            }
+          } else if ((c & 0b11110000) == 0b11100000) {
+            // Start of 3 byte sequence
+            ++itr;
+            if (itr == s.view_.end() || ((*itr) & 0b11000000) != 0b10000000) {
+              VMSDK_LOG(DEBUG, nullptr) << "Invalid Json Encode";
+              codepoint = 0xffff;
+            } else {
+              unsigned char d = *itr;
+              ++itr;
+              if (itr == s.view_.end() || ((*itr) & 0b11000000) != 0b10000000) {
+                VMSDK_LOG(DEBUG, nullptr) << "Invalid Json Encode";
+                codepoint = 0xFFFF;
+              } else {
+                codepoint = ((c & 0b00001111) << 12) | ((d & 0b00111111) << 6) |
+                            ((*itr) & 0b00111111);
+              }
+            }
+          } else {
+            VMSDK_LOG(DEBUG, nullptr) << "Invalid Json Encode";
+            codepoint = 0xFFFF;
+          }
+          os << "\\u" << std::hex << std::setfill('0') << std::setw(4)
+             << codepoint;
+        }
+        break;
     }
   }
   return os << '"';
+}
+
+std::optional<std::string> JsonUnquote(absl::string_view sv) {
+  std::string result;
+  result.reserve(sv.length());
+
+  for (auto itr = sv.begin(); itr != sv.end(); ++itr) {
+    if (*itr != '\\') {
+      result += *itr;
+    } else {
+      ++itr;
+      if (itr == sv.end()) {
+        VMSDK_LOG(DEBUG, nullptr) << "Invalid JSON (\\ at end)";
+        return std::nullopt;
+      }
+      switch (*itr) {
+        case 'b':
+          result += '\b';
+          break;
+        case 'n':
+          result += '\n';
+          break;
+        case 'f':
+          result += '\f';
+          break;
+        case '"':
+          result += '"';
+          break;
+        case '\\':
+          result += '\\';
+          break;
+        case 't':
+          result += '\t';
+          break;
+        case 'r':
+          result += '\r';
+          break;
+        case '/':
+          result += '/';
+          break;
+        case 'u': {
+          unsigned unicode = 0;
+          for (auto unichar = 0; unichar < 4; ++unichar) {
+            itr++;
+            if (itr == sv.end()) {
+              VMSDK_LOG(DEBUG, nullptr) << "Invalid JSON (Short unicode)";
+              return std::nullopt;
+            }
+            char c = *itr;
+            if (c >= '0' && c <= '9') {
+              unicode = (unicode << 4) | (*itr - '0');
+            } else if (c >= 'a' && c <= 'f') {
+              unicode = (unicode << 4) | (*itr - 'a' + 10);
+            } else if (c >= 'A' && c <= 'F') {
+              unicode = (unicode << 4) | (*itr - 'A' + 10);
+            } else {
+              VMSDK_LOG(DEBUG, nullptr)
+                  << "Invalid JSON (invalid unicode char)";
+              return std::nullopt;
+            }
+          }
+          if (unicode < 0x100) {
+            result += char(unicode);
+          } else if (unicode < 0x1000) {
+            result += char(0b11000000 | (unicode >> 6));
+            result += char(0b10000000 | (unicode & 0b111111));
+          } else {
+            result += char(0b11100000) | (unicode >> 12);
+            result += char(0b10000000) | ((unicode >> 6) & 0b111111);
+            result += char(0b10000000) | (unicode & 0b111111);
+          }
+          break;
+        }
+      }
+    }
+  }
+  return result;
 }
 
 }  // namespace vmsdk

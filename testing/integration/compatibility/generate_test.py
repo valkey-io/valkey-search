@@ -261,8 +261,9 @@ class TestAggregateCompatibility:
                 f"ft.aggregate {key_type}_idx1  * load 2 @__key @n1 apply {f}(@n1) as nn"
             )
 
-    def test_aggregate_string_apply_functions(self, key_type, dialect):
-        self.setup_data("hard numbers", key_type)
+    @pytest.mark.parametrize("dataset", ["hard numbers", "hard strings"])
+    def test_aggregate_string_apply_functions(self, key_type, dialect, dataset):
+        self.setup_data(dataset, key_type)
 
         # String apply function "contains"
         self.checkvec(dialect, 
@@ -357,8 +358,9 @@ class TestAggregateCompatibility:
             "apply_result",
         )
 
-    def test_aggregate_substr(self, key_type, dialect):
-        self.setup_data("hard numbers", key_type)
+    @pytest.mark.parametrize("dataset", ["hard numbers", "hard strings"])
+    def test_aggregate_substr(self, key_type, dialect, dataset):
+        self.setup_data(dataset, key_type)
         for offset in [0, 1, 2, 100, -1, -2, -3, -1000]:
             for len in [0, 1, 2, 100, -1, -2, -3, -1000]:
                 self.checkvec(dialect, 

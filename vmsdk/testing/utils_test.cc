@@ -29,6 +29,7 @@
 
 #include "vmsdk/src/utils.h"
 
+#include <iomanip>
 #include <string>
 
 #include "absl/synchronization/blocking_counter.h"
@@ -148,17 +149,52 @@ TEST_F(UtilsTest, IsRealUserClient) {
 
 TEST_F(UtilsTest, JsonQuotedStringTest) {
   std::vector<std::pair<std::string, std::string>> testcases{
-    {"", "\"\""},
-    {"a", "\"a\""},
-    {std::string("\0",1), "\"\\u0000\""},
-    {std::string("\x1f", 1), "\"\\u001f\""},
-    {std::string("\x20", 1), "\"\x20\""},
+      {"", "\"\""},
+      {"\\", "\"\\\\\""},
+      {"\n", "\"\\n\""},
+      {"\b", "\"\\b\""},
+      {"\r", "\"\\r\""},
+      {"\t", "\"\\t\""},
+      {"\f", "\"\\f\""},
+      {"a", "\"a\""},
+      {std::string("\0", 1), "\"\\u0000\""},
+      {"\x1f", "\"\\u001f\""},
+      {"\xc2\x80", "\"\\u0080\""},
+      {std::string("\x20", 1), "\"\x20\""},
   };
 
   for (auto& [str, expected] : testcases) {
     std::ostringstream os;
     os << JsonQuotedStringView(str);
-    EXPECT_EQ(os.str(), expected);
+    EXPECT_EQ(os.str(), expected) << " Original Input:" << str;
+  }
+}
+
+TEST_F(UtilsTest, JsonUnquoteStringTest) {
+  for (size_t i = 0; i < 0x10000; ++i) {
+    std::ostringstream input;
+    input << "\\u" << std::hex << std::setfill('0') << std::setw(4) << i;
+    auto result = JsonUnquote(input.str());
+    EXPECT_TRUE(result);
+    std::ostringstream output;
+    if (i <= 0xFF) {
+      output << char(i);
+    } else if (i <= 0xFFF) {
+      output << char(0b11000000 | (i >> 6))
+             << char(0b10000000 | (i & 0b00111111));
+    } else {
+      output << char(0b11100000 | (i >> 12))
+             << char(0b10000000 | ((i >> 6) & 0b00111111))
+             << char(0b10000000 | (i & 0b00111111));
+    }
+    EXPECT_EQ(output.str(), *result)
+        << "Failed for i=" << i << " Input:" << input.str();
+  }
+  //
+  // Bad cases...
+  //
+  for (auto sv : {"\\", "\\u", "\\uabcx", "\\u0", "\\u00", "\\u000"}) {
+    EXPECT_TRUE(!JsonUnquote(sv)) << "Input was: " << sv << "\n";
   }
 }
 

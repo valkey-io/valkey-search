@@ -106,21 +106,22 @@ def parse_field(x, key_type):
     assert False
 
 def parse_value(x, key_type):
-    if key_type == "json" and x.startswith(b'['):
-        assert isinstance(x, bytes), f"Expected bytes for JSON value, got {type(x)}"
-        return json_load(x)
-    elif isinstance(x, bytes):
-        if key_type == "json":
-            result = x.decode("utf-8")
-        else:
+    try:
+        if key_type == "json" and x.startswith(b'['):
+            assert isinstance(x, bytes), f"Expected bytes for JSON value, got {type(x)}"
+            return json_load(x)
+        elif isinstance(x, bytes):
             result = x
-    elif isinstance(x, str):
-        result = x
-    elif isinstance(x, int):
-        result = x
-    else:
-        print("Unknown type ", type(x))
-        assert False
+        elif isinstance(x, str):
+            result = x
+        elif isinstance(x, int):
+            result = x
+        else:
+            print("Unknown type ", type(x))
+            assert False
+    except Exception as e:
+        print(">>> Got Exception parsing field ",x, " for key_type ", key_type, " Exception was ", e)
+        raise
     return result
 
 def unpack_search_result(rs, key_type):
@@ -146,7 +147,7 @@ def unpack_agg_result(rs, key_type):
         print("Parse Failure: ", rs[1:])
         print("Trying to parse: ", key_res)
         print("Rows so far are:", rows)
-        assert False
+        raise
     return rows
 
 def unpack_result(cmd, key_type, rs, sortkeys):
@@ -349,7 +350,7 @@ def compare_results(expected, results):
 
 correct_answers = 0
 wrong_answers = 0
-StopOnFailure = False
+StopOnFailure = True
 failed_tests = {}
 passed_tests = {}
 

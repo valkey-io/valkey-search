@@ -115,6 +115,8 @@ def compute_data_sets():
                     "t2": f"two.two{i*-2}",
                     "t3": "all_the_same_value",
                     "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                    "e1" : 1,
+                    "e2" : "two",
                 },
             )
             for i in range(len(combinations))
@@ -136,6 +138,8 @@ def compute_data_sets():
                     "t2": f"two.two{i*-2}",
                     "t3": "all_the_same_value",
                     "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                    "e1" : 1,
+                    "e2" : "two",
                 },
             )
             for i in range(len(sortable_numbers))
@@ -157,6 +161,8 @@ def compute_data_sets():
                     "t2": f"two.two{i*-2}",
                     "t3": "all_the_same_value",
                     "v1": array_encode(key_type, [(len(sortable_numbers)-i) for _ in range(VECTOR_DIM)]),
+                    "e1" : 1,
+                    "e2" : "two",
                 },
             )
             for i in range(len(sortable_numbers))
@@ -175,6 +181,8 @@ def compute_data_sets():
                     "t2": "",
                     "t3": "",
                     "v1": array_encode(key_type, [0 for _ in range(VECTOR_DIM)]),
+                    "e1" : 1,
+                    "e2" : "two",
                 },
             ),
             (f"{key_type}:1",
@@ -186,6 +194,8 @@ def compute_data_sets():
                     "t2": "",
                     "t3": "",
                     "v1": array_encode(key_type, [1 for _ in range(VECTOR_DIM)]),
+                    "e1" : 1,
+                    "e2" : "two",
                 },
             ),
             (f"{key_type}:2",
@@ -197,6 +207,8 @@ def compute_data_sets():
                     "t2": "",
                     "t3": "",
                     "v1": array_encode(key_type, [2 for _ in range(VECTOR_DIM)]),
+                    "e1" : 1,
+                    "e2" : "two",
                 },
             ),
             (f"{key_type}:3",
@@ -208,6 +220,8 @@ def compute_data_sets():
                     "t2": "",
                     "t3": "",
                     "v1": array_encode(key_type, [3 for _ in range(VECTOR_DIM)]),
+                    "e1" : 1,
+                    "e2" : "two",
                 },
             ),
             (f"{key_type}:4",
@@ -218,6 +232,8 @@ def compute_data_sets():
                     "t2": "",
                     "t3": "",
                     "v1": array_encode(key_type, [4 for _ in range(VECTOR_DIM)]),
+                    "e1" : 1,
+                    "e2" : "two",
                 },
             ),
             (f"{key_type}:5",
@@ -234,6 +250,12 @@ def compute_data_sets():
         #
         # hard strings
         #
+        unicode_chars = "".join(
+            [chr(c) for c in range(0, 128)] + 
+            [chr(c) for c in range(0x7f, 0x82)] +
+            [chr(c) for c in range(0x7ff, 0x802)] +
+            [chr(c) for c in range(0xFFFB, 0x10002)] +
+            [chr(c) for c in range(0x10FFFB, 0x110000)])
         data["hard strings"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
         data["hard strings"][SETS_KEY(key_type)] = [
             (
@@ -242,13 +264,15 @@ def compute_data_sets():
                     "n1": 0,
                     "n2": -i,
                     "n3" : i*2,
-                    "t1": f"one.one{i*2}",
-                    "t2": f"two.two{i*-2}",
+                    "t1": unicode_chars,
+                    "t2": unicode_chars[i:],
                     "t3": "all_the_same_value",
                     "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                    "e1" : 1,
+                    "e2" : "two",
                 },
             )
-            for i in range(300))
+            for i in range(20)
         ]
     return data
 

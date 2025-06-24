@@ -162,12 +162,13 @@ bool ReplyWithValue(RedisModuleCtx *ctx,
       RedisModule_ReplyWithSimpleString(ctx, name.data());
       auto value_sv = value.AsStringView();
       RedisModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
-      // DBG << "HASH: " << name << ":" << value_sv << "\n";
+      DBG << "HASH: " << name << ":" << value_sv << "\n";
     } else {
+      DBG << "ReplyWithValue " << name << "\n";
       std::ostringstream ss;
       if (name == "$") {
-        // DBG << "Overriding for field name of $ " << int(field_type) << "\n";
-        // DBG << "Input: " << value.AsStringView() << "\n";
+        DBG << "Overriding for field name of $ " << int(field_type) << "\n";
+        DBG << "Input: " << value.AsStringView() << "\n";
         RedisModule_ReplyWithSimpleString(ctx, name.data());
         if (dialect == 2) {
           ss << value.AsStringView();
@@ -177,7 +178,7 @@ bool ReplyWithValue(RedisModuleCtx *ctx,
       } else {
         switch (field_type) {
           case indexes::IndexerType::kNone:
-            // DBG << "kNone: " << value.AsStringView() << "\n";
+            DBG << "kNone: " << value.AsStringView() << "\n";
             RedisModule_ReplyWithSimpleString(ctx, name.data());
             ss << value.AsStringView();
             break;
@@ -187,7 +188,7 @@ bool ReplyWithValue(RedisModuleCtx *ctx,
               return false;
             }
             RedisModule_ReplyWithSimpleString(ctx, name.data());
-            // DBG << "kNumeric: " << *dble << "\n";
+            DBG << "kNumeric: " << *dble << "\n";
             if (dialect == 2) {
               ss << *dble;
             } else {
@@ -196,7 +197,7 @@ bool ReplyWithValue(RedisModuleCtx *ctx,
             break;
           }
           case indexes::IndexerType::kTag:
-            // DBG << "kTag: " << value.AsStringView() << "\n";
+            DBG << "kTag: " << value.AsStringView() << "\n";
             // Todo: Handle Escaped Characters
             RedisModule_ReplyWithSimpleString(ctx, name.data());
             if (dialect == 2) {
@@ -207,13 +208,13 @@ bool ReplyWithValue(RedisModuleCtx *ctx,
             }
             break;
           default:
-            // DBG << "Unsupported field type for reply: " << int(field_type)
-            //     << "\n";
+            DBG << "Unsupported field type for reply: " << int(field_type)
+                << "\n";
             assert("Unsupported field type" == nullptr);
         }
       }
       std::string s = ss.str();
-      // DBG << "JSON: " << name << ":" << s << "\n";
+      DBG << "JSON: " << name << ":" << s << "\n";
       RedisModule_ReplyWithStringBuffer(ctx, s.data(), s.size());
     }
   }
@@ -250,6 +251,7 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
   //
   //  1. Process the collected Neighbors into Aggregate Records.
   //
+  auto data_type = parameters.index_schema->GetAttributeDataType().ToProto();
   RecordSet records(&parameters);
   // Todo: fix this  for (auto &n : neighbors) {
   for (auto &n : neighbors) {
@@ -301,7 +303,20 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
               break;
             }
             default:
-              rec->fields_[record_index] = expr::Value(value);
+              if (data_type ==
+                  data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
+                rec->fields_[record_index] = expr::Value(value);
+              } else {
+                auto v = vmsdk::JsonUnquote(value);
+                if (v) {
+                  DBG << "De-quoting:\n"
+                      << value << "\nBecame:\n"
+                      << *v << "\n";
+                  rec->fields_[record_index] = expr::Value(std::move(*v));
+                } else {
+                  goto drop_record;
+                }
+              }
               break;
           }
           // DBG << "After set record is " << *rec << "\n";
@@ -314,6 +329,7 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
       }
     }
     records.push_back(std::move(rec));
+  drop_record:;
   }
   DBG << "After Record Fetch\n" << records << "\n";
   //

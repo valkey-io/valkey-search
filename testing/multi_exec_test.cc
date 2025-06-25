@@ -53,7 +53,7 @@ namespace valkey_search {
 
 namespace {
 
-class MulriExecTest : public ValkeySearchTest {
+class MultiExecTest : public ValkeySearchTest {
  public:
   void SetUp() override {
     ValkeySearchTest::SetUp();
@@ -122,7 +122,7 @@ class MulriExecTest : public ValkeySearchTest {
   mutable absl::Mutex mutex;
 };
 
-TEST_F(MulriExecTest, Basic) {
+TEST_F(MultiExecTest, Basic) {
   EXPECT_CALL(*kMockRedisModule, GetContextFlags(testing::_))
       .WillRepeatedly(testing::Return(REDISMODULE_CTX_FLAGS_MULTI));
   EXPECT_CALL(*kMockRedisModule, EventLoopAddOneShot(testing::_, testing::_))
@@ -194,7 +194,7 @@ TEST_F(MulriExecTest, Basic) {
   }
 }
 
-TEST_F(MulriExecTest, TrackMutationOverride) {
+TEST_F(MultiExecTest, TrackMutationOverride) {
   VMSDK_EXPECT_OK(mutations_thread_pool->SuspendWorkers());
   EXPECT_CALL(*kMockRedisModule, EventLoopAddOneShot(testing::_, testing::_))
       .WillOnce([this](RedisModuleEventLoopOneShotFunc func, void *data) {
@@ -262,7 +262,7 @@ TEST_F(MulriExecTest, TrackMutationOverride) {
   index_schema = nullptr;
 }
 
-TEST_F(MulriExecTest, FtSearchMulti) {
+TEST_F(MultiExecTest, FtSearchMulti) {
   EXPECT_CALL(*kMockRedisModule, EventLoopAddOneShot(testing::_, testing::_))
       .Times(0);
   VMSDK_EXPECT_OK(

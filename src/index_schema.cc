@@ -255,7 +255,7 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexSchema::GetIndex(
   auto itr = attributes_.find(std::string{attribute_alias});
   if (ABSL_PREDICT_FALSE(itr == attributes_.end())) {
     return absl::NotFoundError(
-        absl::StrCat("Index field `", attribute_alias, "` not exists"));
+        absl::StrCat("Index field `", attribute_alias, "` does not exist"));
   }
   return itr->second.GetIndex();
 }
@@ -264,9 +264,20 @@ absl::StatusOr<std::string> IndexSchema::GetIdentifier(
     absl::string_view attribute_alias) const {
   auto itr = attributes_.find(std::string{attribute_alias});
   if (itr == attributes_.end()) {
-    return absl::NotFoundError("Index field not exists");
+    return absl::NotFoundError(
+        absl::StrCat("Index field `", attribute_alias, "` does not exist"));
   }
   return itr->second.GetIdentifier();
+}
+
+absl::StatusOr<std::string> IndexSchema::GetAlias(
+    absl::string_view identifier) const {
+  auto itr = identifier_to_alias_.find(std::string{identifier});
+  if (itr == identifier_to_alias_.end()) {
+    return absl::NotFoundError(
+        absl::StrCat("Index Identifier `", identifier, "` does not exist"));
+  }
+  return itr->second;
 }
 
 absl::StatusOr<vmsdk::UniqueRedisString> IndexSchema::DefaultReplyScoreAs(
@@ -274,7 +285,7 @@ absl::StatusOr<vmsdk::UniqueRedisString> IndexSchema::DefaultReplyScoreAs(
   auto itr = attributes_.find(std::string{attribute_alias});
   if (ABSL_PREDICT_FALSE(itr == attributes_.end())) {
     return absl::NotFoundError(
-        absl::StrCat("Index field `", attribute_alias, "` not exists"));
+        absl::StrCat("Index field `", attribute_alias, "` does not exist"));
   }
   return itr->second.DefaultReplyScoreAs();
 }
@@ -286,8 +297,11 @@ absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
       attributes_.insert({std::string(attribute_alias),
                           Attribute{attribute_alias, identifier, index}});
   if (!res) {
-    return absl::AlreadyExistsError("Index field already exists");
+    return absl::AlreadyExistsError(
+        absl::StrCat("Index field `", attribute_alias, "` already exists"));
   }
+  identifier_to_alias_.insert(
+      {std::string(identifier), std::string(attribute_alias)});
   return absl::OkStatus();
 }
 
@@ -948,7 +962,7 @@ void IndexSchema::OnLoadingEnded(RedisModuleCtx *ctx) {
                          << absl::FormatDuration(stop_watch.Duration());
 }
 
-// Returns true if the inserted key not exists otherwise false
+// Returns true if the inserted key does not exist otherwise false
 bool IndexSchema::TrackMutatedRecord(RedisModuleCtx *ctx,
                                      const InternedStringPtr &key,
                                      MutatedAttributes &&mutated_attributes,

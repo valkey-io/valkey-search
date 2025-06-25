@@ -34,9 +34,13 @@
 #include <string>
 
 #include "gtest/gtest.h"
+#include "gmock/gmock.h"
+#include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/memory_tracker.h"
 #include "src/utils/allocator.h"
 #include "src/utils/intrusive_ref_count.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/testing_infra/module.h"
 
 namespace valkey_search {
 
@@ -98,6 +102,119 @@ INSTANTIATE_TEST_SUITE_P(StringInterningTests, StringInterningTest,
                          [](const TestParamInfo<bool> &info) {
                            return std::to_string(info.param);
                          });
+
+class StringInterningMemoryTest : public vmsdk::RedisTest {
+ protected:
+  void SetUp() override {
+    vmsdk::RedisTest::SetUp();
+    vmsdk::ResetValkeyAlloc();
+  }
+  
+  void TearDown() override {
+    vmsdk::RedisTest::TearDown();
+    vmsdk::ResetValkeyAlloc();
+  }
+};
+
+TEST_F(StringInterningMemoryTest, BasicUsageTracking) {
+  const void* index = reinterpret_cast<const void*>(0x1000);
+  
+  EXPECT_EQ(StringInternStore::GetIndexUsage(index), 0);
+  
+  StringInternStore::RegisterIndexUsage(index, "test_key_1");
+  StringInternStore::RegisterIndexUsage(index, "test_key_2");
+  
+  // "test_key_1" = 10 bytes + 1 (null) = 11
+  // "test_key_2" = 10 bytes + 1 (null) = 11  
+  // Total = 22
+  EXPECT_EQ(StringInternStore::GetIndexUsage(index), 22);
+  
+  // Register same string again - should not double count
+  StringInternStore::RegisterIndexUsage(index, "test_key_1");
+  EXPECT_EQ(StringInternStore::GetIndexUsage(index), 22);
+
+  // Duplicate Unregister.
+  StringInternStore::UnregisterIndexUsage(index, "test_key_1");
+  EXPECT_EQ(StringInternStore::GetIndexUsage(index), 11);
+  StringInternStore::UnregisterIndexUsage(index, "test_key_1");
+  EXPECT_EQ(StringInternStore::GetIndexUsage(index), 11);
+
+  // Clean up.
+  StringInternStore::UnregisterIndexUsage(index, "test_key_2");
+  EXPECT_EQ(StringInternStore::GetIndexUsage(index), 0);
+}
+
+class MockAllocator : public Allocator {
+ public:
+  MockAllocator() = default;
+  
+  ~MockAllocator() override {
+    if (buffer_) {
+      delete[] buffer_;
+      buffer_ = nullptr;
+    }
+  }
+  
+  char* Allocate(size_t size) override {
+    void* mock_ptr = RedisModule_Alloc(size);
+    buffer_ = new char[size];
+    mock_ptr_ = mock_ptr;
+    return buffer_;
+  }
+  
+  void Free(AllocatorChunk* chunk, char* ptr) override {}
+  
+  size_t ChunkSize() const override {
+    return 12;
+  }
+  
+ private:
+  char* buffer_ = nullptr;
+  void* mock_ptr_ = nullptr;
+};
+
+TEST_F(StringInterningMemoryTest, MemoryTrackingIsolation) {
+  vmsdk::UseValkeyAlloc();
+  
+  EXPECT_CALL(*kMockRedisModule, Alloc(testing::_))
+      .WillOnce([](size_t size) {
+        void* ptr = reinterpret_cast<void*>(0xBAADF00D);
+        // Simulate the real RedisModule_Alloc behavior by reporting the allocation
+        vmsdk::ReportAllocMemorySize(size);
+        return ptr;
+      });
+
+  std::atomic<int64_t> caller_pool{0};
+  std::shared_ptr<InternedString> interned_str;
+  MockAllocator mock_allocator;
+
+  {
+    MemoryTrackingScope scope(&caller_pool);
+    interned_str = StringInternStore::Intern("test_string", &mock_allocator);
+  }
+
+  EXPECT_EQ(caller_pool.load(), 0);
+  EXPECT_EQ(StringInternStore::GetMemoryUsage(), 12);
+
+  interned_str.reset();
+}
+
+TEST_F(StringInterningMemoryTest, EdgeCases) {
+  const void* index1 = reinterpret_cast<const void*>(0x1000);
+  
+  // Empty string
+  StringInternStore::RegisterIndexUsage(index1, "");
+  EXPECT_EQ(StringInternStore::GetIndexUsage(index1), 1);  // Just null terminator
+  StringInternStore::UnregisterIndexUsage(index1, "");
+  
+  // Non-existent index
+  const void* non_existent = reinterpret_cast<const void*>(0x9999);
+  EXPECT_EQ(StringInternStore::GetIndexUsage(non_existent), 0);
+  
+  // Unregister non-existent string
+  StringInternStore::UnregisterIndexUsage(index1, "non_existent");
+  EXPECT_EQ(StringInternStore::GetIndexUsage(index1), 0);
+}
 
 }  // namespace
 

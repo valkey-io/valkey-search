@@ -62,6 +62,7 @@ struct SingleFtInfoTestCase {
   bool expect_return_failure;
   absl::string_view expected_output;
   std::optional<size_t> memory_bytes;
+  std::optional<size_t> shared_strings_bytes;
 };
 
 struct MultiFtInfoTestCase {
@@ -97,6 +98,16 @@ TEST_P(FTInfoTest, FTInfoTests) {
           schema.value()->GetMemoryPool().fetch_add(
               test_case.memory_bytes.value());
         }
+        if (test_case.shared_strings_bytes.has_value()) {
+          auto schema = SchemaManager::Instance().GetIndexSchema(
+              index_schema_proto.db_num(), index_schema_proto.name());
+          ASSERT_TRUE(schema.ok());
+          
+          int64_t target_bytes = test_case.shared_strings_bytes.value();
+          std::string test_string(target_bytes - 1, 'x');  // -1 because RegisterIndexUsage adds +1 for null terminator
+          
+          StringInternStore::RegisterIndexUsage(schema.value().get(), test_string);
+        }
       }
 
       if (test_case.expect_return_failure) {
@@ -120,6 +131,17 @@ TEST_P(FTInfoTest, FTInfoTests) {
         VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(
             index_schema_proto.db_num(), index_schema_proto.name()));
         EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 0);
+        
+        // Clean up string interning if it was used in this test
+        if (test_case.shared_strings_bytes.has_value()) {
+          auto schema = SchemaManager::Instance().GetIndexSchema(
+              index_schema_proto.db_num(), index_schema_proto.name());
+          if (schema.ok()) {
+            int64_t target_bytes = test_case.shared_strings_bytes.value();
+            std::string test_string(target_bytes - 1, 'x');
+            StringInternStore::UnregisterIndexUsage(schema.value().get(), test_string);
+          }
+        }
       }
 
       // Clean up
@@ -165,7 +187,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -183,7 +205,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "percent\r\n$8\r\n1.000000\r\n+mutation_queue_"
                             "size\r\n$1\r\n0\r\n+recent_mutations_queue_"
                             "delay\r\n$5\r\n0 sec\r\n+state\r\n+ready\r\n+"
-                            "index_size_mb\r\n+0\r\n",
+                            "index_size_mb\r\n+0\r\n+shared_strings_size_mb\r\n+"
+                            "0\r\n",
                     },
                 },
         },
@@ -217,7 +240,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -234,7 +257,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "complete_percent\r\n$8\r\n1.000000\r\n+mutation_"
                             "queue_size\r\n$1\r\n0\r\n+recent_mutations_queue_"
                             "delay\r\n$5\r\n0 sec\r\n+state\r\n+ready\r\n+"
-                            "index_size_mb\r\n+0\r\n",
+                            "index_size_mb\r\n+0\r\n+shared_strings_size_mb\r\n+"
+                            "0\r\n",
                     },
                 },
         },
@@ -261,7 +285,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -274,7 +298,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "1\r\n0\r\n+backfill_complete_percent\r\n$8\r\n1."
                             "000000\r\n+mutation_queue_size\r\n$1\r\n0\r\n+"
                             "recent_mutations_queue_delay\r\n$5\r\n0 sec\r\n"
-                            "+state\r\n+ready\r\n+index_size_mb\r\n+0\r\n",
+                            "+state\r\n+ready\r\n+index_size_mb\r\n+0\r\n+"
+                            "shared_strings_size_mb\r\n+0\r\n",
                     },
                 },
         },
@@ -302,7 +327,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -316,7 +341,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "percent\r\n$8\r\n1.000000\r\n+mutation_queue_"
                             "size\r\n$1\r\n0\r\n+recent_mutations_queue_"
                             "delay\r\n$5\r\n0 sec\r\n+state\r\n+ready\r\n+"
-                            "index_size_mb\r\n+0\r\n",
+                            "index_size_mb\r\n+0\r\n+shared_strings_size_mb\r\n+"
+                            "0\r\n",
                     },
                 },
         },
@@ -341,7 +367,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -354,7 +380,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
                             "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
                             "mutations_queue_delay\r\n$5\r\n0 sec\r\n+state\r\n"
-                            "+ready\r\n+index_size_mb\r\n+0\r\n"
+                            "+ready\r\n+index_size_mb\r\n+0\r\n+shared_strings_"
+                            "size_mb\r\n+0\r\n",
                     },
                 },
         },
@@ -449,7 +476,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -466,8 +493,10 @@ INSTANTIATE_TEST_SUITE_P(
                             "complete_percent\r\n$8\r\n1.000000\r\n+mutation_"
                             "queue_size\r\n$1\r\n0\r\n+recent_mutations_queue_"
                             "delay\r\n$5\r\n0 sec\r\n+state\r\n+ready\r\n+"
-                            "index_size_mb\r\n+2\r\n",
+                            "index_size_mb\r\n+2\r\n+shared_strings_size_mb\r\n+"
+                            "1\r\n",
                         .memory_bytes = 2097152,  // 2 MB
+                        .shared_strings_bytes = 1024 * 1024,  // 1 MB
                     },
                 },
         },

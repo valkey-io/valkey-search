@@ -35,8 +35,14 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/utils/allocator.h"
+#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search {
+
+std::atomic<int64_t> StringInternStore::memory_pool_{0};
+absl::flat_hash_map<const void*, std::set<std::string>> StringInternStore::index_usage_map_{};
+absl::flat_hash_map<const void*, int64_t> StringInternStore::index_usage_cache_{};
+absl::Mutex StringInternStore::usage_mutex_;
 
 InternedString::InternedString(absl::string_view str, bool shared)
     : length_(str.length()), is_shared_(shared), is_data_owner_(true) {
@@ -88,6 +94,10 @@ std::shared_ptr<InternedString> StringInternStore::InternImpl(
       return locked;
     }
   }
+
+  // NOTE: isolate memory tracking.
+  MemoryTrackingScope scope {&memory_pool_};
+
   std::shared_ptr<InternedString> interned_string;
   if (allocator) {
     auto buffer = allocator->Allocate(str.size() + 1);
@@ -101,6 +111,46 @@ std::shared_ptr<InternedString> StringInternStore::InternImpl(
   }
   str_to_interned_.insert({*interned_string, interned_string});
   return interned_string;
+}
+
+void StringInternStore::RegisterIndexUsage(const void* index_id, absl::string_view str) {
+  absl::MutexLock lock(&usage_mutex_);
+  
+  bool is_new = index_usage_map_[index_id].insert(std::string(str)).second;
+  
+  if (is_new) {
+    int64_t string_size = str.size() + 1;
+    index_usage_cache_[index_id] += string_size;
+  }
+}
+
+void StringInternStore::UnregisterIndexUsage(const void* index_id, absl::string_view str) {
+  absl::MutexLock lock(&usage_mutex_);
+  auto it = index_usage_map_.find(index_id);
+  if (it != index_usage_map_.end()) {
+    
+    bool was_removed = it->second.erase(std::string(str)) > 0;
+    
+    if (was_removed) {
+      int64_t string_size = str.size() + 1;
+      index_usage_cache_[index_id] -= string_size;
+    }
+    
+    if (it->second.empty()) {
+      index_usage_map_.erase(it);
+      index_usage_cache_.erase(index_id);
+    }
+  }
+}
+
+int64_t StringInternStore::GetIndexUsage(const void* index_id) {
+  absl::MutexLock lock(&usage_mutex_);
+  auto it = index_usage_cache_.find(index_id);
+  return (it != index_usage_cache_.end()) ? it->second : 0;
+}
+
+int64_t StringInternStore::GetMemoryUsage() {
+  return memory_pool_.load();
 }
 
 }  // namespace valkey_search

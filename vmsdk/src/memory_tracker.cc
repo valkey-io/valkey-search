@@ -35,7 +35,8 @@ thread_local MemoryTrackingScope* MemoryTrackingScope::current_scope_tls_ = null
 thread_local MemoryTrackingScope::ScopeEventCallback MemoryTrackingScope::scope_event_callback_ = nullptr;
 
 MemoryTrackingScope::MemoryTrackingScope(std::atomic<int64_t>* pool)
-    : target_pool_(pool), baseline_memory_delta_(vmsdk::GetMemoryDelta()), previous_scope_(current_scope_tls_) {
+    : target_pool_(pool), memory_delta_(vmsdk::GetMemoryDelta()) {
+    prev_scope_ = current_scope_tls_;
     current_scope_tls_ = this;
     NotifyScopeEvent();
 }
@@ -43,10 +44,13 @@ MemoryTrackingScope::MemoryTrackingScope(std::atomic<int64_t>* pool)
 MemoryTrackingScope::~MemoryTrackingScope() {
     if (target_pool_ != nullptr) {
         int64_t current_delta = vmsdk::GetMemoryDelta();
-        int64_t net_change = current_delta - baseline_memory_delta_;
+        int64_t net_change = current_delta - memory_delta_;
         target_pool_->fetch_add(net_change);
+        if (prev_scope_ != nullptr) {
+            prev_scope_->memory_delta_ += net_change;
+        }
     }
-    current_scope_tls_ = previous_scope_;
+    current_scope_tls_ = prev_scope_;
 }
 
 MemoryTrackingScope* MemoryTrackingScope::GetCurrentScope() {

@@ -64,7 +64,7 @@ using RDBSectionLoadCallback = absl::AnyInvocable<absl::Status(
     SupplementalContentIter &&supplemental_iter)>;
 
 // Callback to save an arbitrary count of RDBSections to RDB on aux save events.
-// Return value is an error status or the count of writted RDBSections.
+// Return value is an error status or the count of written RDBSections.
 using RDBSectionSaveCallback = absl::AnyInvocable<absl::Status(
     RedisModuleCtx *ctx, SafeRDB *rdb, int when)>;
 
@@ -85,7 +85,7 @@ using RDBSectionCallbacks = struct RDBSectionCallbacks {
 extern absl::flat_hash_map<data_model::RDBSectionType, RDBSectionCallbacks>
     kRegisteredRDBSectionCallbacks;
 
-std::string HumanReadableSemanticVersion(uint64_t semantic_version) {
+inline std::string HumanReadableSemanticVersion(uint64_t semantic_version) {
   return absl::StrFormat("%d.%d.%d", (semantic_version >> 16) & 0xFF,
                          (semantic_version >> 8) & 0xFF,
                          semantic_version & 0xFF);

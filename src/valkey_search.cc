@@ -252,6 +252,9 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
   if (UsingCoordinator()) {
     RedisModule_InfoAddSection(ctx, "coordinator");
     RedisModule_InfoAddFieldLongLong(
+        ctx, "coordinator_server_listening_port",
+        GetCoordinatorServer()->GetPort());
+    RedisModule_InfoAddFieldLongLong(
         ctx, "coordinator_server_get_global_metadata_success_count",
         Metrics::GetStats().coordinator_server_get_global_metadata_success_cnt);
     RedisModule_InfoAddFieldLongLong(
@@ -337,7 +340,7 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
 
 // Beside the thread which initiates the fork, no other threads are present
 // in the forked child process. This could lead to full sync corruption as the
-// fork systemcall may occur in the middle of mutating the index. In addition,
+// fork system-call may occur in the middle of mutating the index. In addition,
 // vector insertion may lead to high amount of dirty pages which increases the
 // chances to OOM during full sync. Addressing these by temporary suspending the
 // writer thread pool during full sync. The writer thread pool resumes once the

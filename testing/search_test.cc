@@ -509,7 +509,7 @@ TEST_P(FetchFilteredKeysTest, ParseParams) {
         entries_range, std::make_pair(key_range.first, key_range.second)));
   }
   auto results =
-      CalcBestMatchingPrefiltereddKeys(params, entries_fetchers, vector_index);
+      CalcBestMatchingPrefilteredKeys(params, entries_fetchers, vector_index);
   auto neighbors = vector_index->CreateReply(results).value();
   EXPECT_EQ(neighbors.size(), test_case.expected_keys.size());
   for (auto it = neighbors.begin(); it != neighbors.end(); ++it) {

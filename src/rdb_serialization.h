@@ -85,7 +85,7 @@ using RDBSectionCallbacks = struct RDBSectionCallbacks {
 extern absl::flat_hash_map<data_model::RDBSectionType, RDBSectionCallbacks>
     kRegisteredRDBSectionCallbacks;
 
-std::string HumanReadableSemanticVersion(uint64_t semantic_version) {
+inline std::string HumanReadableSemanticVersion(uint64_t semantic_version) {
   return absl::StrFormat("%d.%d.%d", (semantic_version >> 16) & 0xFF,
                          (semantic_version >> 8) & 0xFF,
                          semantic_version & 0xFF);

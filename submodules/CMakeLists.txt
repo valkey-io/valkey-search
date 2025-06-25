@@ -24,6 +24,7 @@ set(MODULES_INSTALL_PREFIX "${MODULES_DIR}/install")
 
 find_program(_GIT_EXE git REQUIRED)
 
+
 function(find_and_replace file_name find_what replace_with)
   file(READ "${file_name}" FILE_CONTENTS)
   string(REPLACE "${find_what}" "${replace_with}" FILE_CONTENTS

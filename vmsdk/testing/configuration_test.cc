@@ -149,7 +149,7 @@ absl::Status CheckEnumValues(int new_value) {
 
 }  // namespace
 
-TEST_F(ConfigTest, CheckEumerator) {
+TEST_F(ConfigTest, CheckEnumerator) {
   auto enumerator = config::Builder<int>("my-enum", 2, kEnumNames, kEnumValues)
                         .WithValidationCallback(CheckEnumValues)
                         .Build();

@@ -78,7 +78,7 @@ sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 1000
 sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 1000
 ```
 
-#### RedHat / CentOS / Amazon Linux
+#### Red Hat / CentOS / Amazon Linux
 
 ```sh
 sudo yum update

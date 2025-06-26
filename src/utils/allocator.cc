@@ -213,7 +213,7 @@ size_t GetPageSize() { return static_cast<size_t>(sysconf(_SC_PAGESIZE)); }
 size_t EntriesFitInChunk(size_t size, size_t num_pages) {
   static const size_t page_size = GetPageSize();
   size_t total_bytes = num_pages * page_size;
-  return std::max<size_t>(kChunkBufferMinEntryiesPerChunk, total_bytes / size);
+  return std::max<size_t>(kChunkBufferMinEntriesPerChunk, total_bytes / size);
 }
 
 AllocatorChunk::AllocatorChunk(Allocator *allocator, size_t size)

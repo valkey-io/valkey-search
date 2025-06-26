@@ -10,7 +10,7 @@ RUN_TEST=""
 RUN_BUILD="yes"
 DUMP_TEST_ERRORS_STDOUT="no"
 NINJA_TOOL="ninja"
-INTEGRETION_TEST="no"
+INTEGRATION_TEST="no"
 ASAN_BUILD="no"
 ARGV=$@
 EXIT_CODE=0
@@ -87,7 +87,7 @@ do
         echo "Running test ${RUN_TEST}"
         ;;
     --run-integration-tests)
-        INTEGRETION_TEST="yes"
+        INTEGRATION_TEST="yes"
         shift || true
         echo "Running integration tests"
         ;;
@@ -311,7 +311,7 @@ elif [ ! -z "${RUN_TEST}" ]; then
     print_test_prefix "${TESTS_DIR}/${RUN_TEST}"
     (${TESTS_DIR}/${RUN_TEST} && print_test_ok) || print_test_error_and_exit
     print_test_summary
-elif [[ "${INTEGRETION_TEST}" == "yes" ]]; then
+elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     cd testing/integration
     params=""
     if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then

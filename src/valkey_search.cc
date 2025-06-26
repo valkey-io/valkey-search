@@ -29,7 +29,6 @@
 
 #include "src/valkey_search.h"
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -59,6 +58,7 @@
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -95,12 +95,6 @@ void ValkeySearch::SetHNSWBlockSize(uint32_t block_size) {
   options::GetHNSWBlockSize().SetValueOrLog(block_size, WARNING);
 }
 
-static std::string ConvertToMB(double bytes_value) {
-  const double CONVERSION_VALUE = 1024 * 1024;
-  double mb_value = bytes_value / CONVERSION_VALUE;
-  auto converted_mb = absl::StrFormat("%.2f", mb_value);
-  return absl::StrCat(converted_mb, "M");
-}
 
 void ModuleInfo(RedisModuleInfoCtx *ctx, int for_crash_report) {
   ValkeySearch::Instance().Info(ctx, for_crash_report);
@@ -122,14 +116,20 @@ void AddLatencyStat(RedisModuleInfoCtx *ctx, absl::string_view stat_name,
  *   2. Performing heap allocations
  *   3. Requiring execution on the main thread
  */
+
+ static vmsdk::info_field::Numeric human_used_memory("memory", "used_memory_human", 
+    vmsdk::info_field::NumericBuilder()
+      .SIUnits()
+      .AppVisible()
+      .Computed(vmsdk::GetUsedMemoryCnt)
+      .CrashSafe());
+
 void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
-  RedisModule_InfoAddSection(ctx, "memory");
+  vmsdk::info_field::DoSection(ctx, "memory", for_crash_report);
   RedisModule_InfoAddFieldLongLong(ctx, "used_memory_bytes",
                                    vmsdk::GetUsedMemoryCnt());
-  RedisModule_InfoAddFieldCString(
-      ctx, "used_memory_human", ConvertToMB(vmsdk::GetUsedMemoryCnt()).c_str());
   if (!for_crash_report) {
-    RedisModule_InfoAddSection(ctx, "index_stats");
+    vmsdk::info_field::DoSection(ctx, "index_stats", for_crash_report);
     RedisModule_InfoAddFieldLongLong(
         ctx, "number_of_indexes",
         SchemaManager::Instance().GetNumberOfIndexSchemas());
@@ -140,13 +140,13 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
         ctx, "total_indexed_documents",
         SchemaManager::Instance().GetTotalIndexedDocuments());
 
-    RedisModule_InfoAddSection(ctx, "ingestion");
+    vmsdk::info_field::DoSection(ctx, "ingestion", for_crash_report);
     RedisModule_InfoAddFieldCString(
         ctx, "background_indexing_status",
         SchemaManager::Instance().IsIndexingInProgress() ? "IN_PROGRESS"
                                                          : "NO_ACTIVITY");
   }
-  RedisModule_InfoAddSection(ctx, "thread-pool");
+  vmsdk::info_field::DoSection(ctx, "thread-pool", for_crash_report);
   RedisModule_InfoAddFieldLongLong(ctx, "query_queue_size",
                                    reader_thread_pool_->QueueSize());
   RedisModule_InfoAddFieldLongLong(ctx, "writer_queue_size",
@@ -164,7 +164,7 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
       ctx, "writer_suspension_expired_cnt",
       Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt);
 
-  RedisModule_InfoAddSection(ctx, "rdb");
+  vmsdk::info_field::DoSection(ctx, "rdb", for_crash_report);
   RedisModule_InfoAddFieldLongLong(ctx, "rdb_load_success_cnt",
                                    Metrics::GetStats().rdb_load_success_cnt);
   RedisModule_InfoAddFieldLongLong(ctx, "rdb_load_failure_cnt",
@@ -174,7 +174,7 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
   RedisModule_InfoAddFieldLongLong(ctx, "rdb_save_failure_cnt",
                                    Metrics::GetStats().rdb_save_failure_cnt);
 
-  RedisModule_InfoAddSection(ctx, "query");
+  vmsdk::info_field::DoSection(ctx, "query", for_crash_report);
   RedisModule_InfoAddFieldLongLong(
       ctx, "successful_requests_count",
       Metrics::GetStats().query_successful_requests_cnt);
@@ -206,7 +206,7 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
                                        stat.skipped_cnt);
     };
 #ifdef DEBUG_INFO
-    RedisModule_InfoAddSection(ctx, "subscription");
+    vmsdk::info_field::DoSection(ctx, "subscription");
     InfoResultCnt(
         SchemaManager::Instance().AccumulateIndexSchemaResults(
             [](const IndexSchema::Stats &stats)
@@ -227,7 +227,7 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
         "remove_subscription");
 #endif
   }
-  RedisModule_InfoAddSection(ctx, "hnswlib");
+  vmsdk::info_field::DoSection(ctx, "hnswlib", for_crash_report);
   RedisModule_InfoAddFieldLongLong(ctx, "hnsw_add_exceptions_count",
                                    Metrics::GetStats().hnsw_add_exceptions_cnt);
   RedisModule_InfoAddFieldLongLong(
@@ -243,14 +243,14 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
       ctx, "hnsw_create_exceptions_count",
       Metrics::GetStats().hnsw_create_exceptions_cnt);
 
-  RedisModule_InfoAddSection(ctx, "latency");
+  vmsdk::info_field::DoSection(ctx, "latency", for_crash_report);
   AddLatencyStat(ctx, "hnsw_vector_index_search_latency_usec",
                  Metrics::GetStats().hnsw_vector_index_search_latency);
   AddLatencyStat(ctx, "flat_vector_index_search_latency_usec",
                  Metrics::GetStats().flat_vector_index_search_latency);
 
   if (UsingCoordinator()) {
-    RedisModule_InfoAddSection(ctx, "coordinator");
+    vmsdk::info_field::DoSection(ctx, "coordinator", for_crash_report);
     RedisModule_InfoAddFieldLongLong(
         ctx, "coordinator_server_listening_port",
         GetCoordinatorServer()->GetPort());
@@ -316,11 +316,11 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
             .coordinator_server_search_index_partition_failure_latency);
   }
   if (!for_crash_report) {
-    RedisModule_InfoAddSection(ctx, "string_interning");
+    vmsdk::info_field::DoSection(ctx, "string_interning", for_crash_report);
     RedisModule_InfoAddFieldLongLong(ctx, "string_interning_store_size",
                                      StringInternStore::Instance().Size());
 
-    RedisModule_InfoAddSection(ctx, "vector_externing");
+    vmsdk::info_field::DoSection(ctx, "vector_externing", for_crash_report);
     auto vector_externing_stats = VectorExternalizer::Instance().GetStats();
     RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_entry_count",
                                      vector_externing_stats.entry_cnt);
@@ -336,6 +336,7 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
     RedisModule_InfoAddFieldLongLong(ctx, "vector_externing_deferred_entry_cnt",
                                      vector_externing_stats.deferred_entry_cnt);
   }
+  vmsdk::info_field::DoRemainingSections(ctx, for_crash_report);
 }
 
 // Beside the thread which initiates the fork, no other threads are present
@@ -547,6 +548,7 @@ absl::Status ValkeySearch::OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv,
                          << (IsJsonModuleLoaded(ctx) ? "" : "not ")
                          << "loaded!";
   VectorExternalizer::Instance().Init(ctx_);
+  RedisModule_Assert(vmsdk::info_field::Validate(ctx));
   VMSDK_LOG(DEBUG, ctx) << "Search module completed initialization!";
   return absl::OkStatus();
 }

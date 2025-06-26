@@ -23,7 +23,9 @@ else()
 endif()
 
 set(SRCS_UTILS ${CMAKE_CURRENT_LIST_DIR}/utils.cc
-               ${CMAKE_CURRENT_LIST_DIR}/utils.h)
+               ${CMAKE_CURRENT_LIST_DIR}/utils.h
+       	       ${CMAKE_CURRENT_LIST_DIR}/info.h
+               ${CMAKE_CURRENT_LIST_DIR}/info.cc)
 
 valkey_search_add_static_library(utils "${SRCS_UTILS}")
 target_include_directories(utils PUBLIC ${CMAKE_CURRENT_LIST_DIR})

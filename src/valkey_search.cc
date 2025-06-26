@@ -119,8 +119,8 @@ void AddLatencyStat(RedisModuleInfoCtx *ctx, absl::string_view stat_name,
 
  static vmsdk::info_field::Numeric human_used_memory("memory", "used_memory_human", 
     vmsdk::info_field::NumericBuilder()
-      .SIUnits()
-      .AppVisible()
+      .SIBytes()
+      .App()
       .Computed(vmsdk::GetUsedMemoryCnt)
       .CrashSafe());
 

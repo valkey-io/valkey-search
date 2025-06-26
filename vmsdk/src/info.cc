@@ -220,7 +220,7 @@ Numeric::Numeric(absl::string_view section, absl::string_view name, NumericBuild
 void Numeric::Dump(RedisModuleInfoCtx *ctx) const {
     long long value = compute_func_ ? (*compute_func_)() : Get();
     VMSDK_LOG(WARNING, nullptr) << "Numeric::Dump " << GetName() << " Value:" << value << " Flags:" << GetFlags();
-    if (GetFlags() & Flags::kSIUnits) {
+    if (GetFlags() & Flags::kSIBytes) {
         char buffer[100];
         size_t used = vmsdk::DisplayAsSIBytes(value, buffer, sizeof(buffer));
         RedisModule_InfoAddFieldCString(ctx, GetName().data(), buffer);

@@ -46,7 +46,10 @@ machinery in the "vmsdk::info_field" namespace.
 
 To create an info field you instantiate one of the objects defined in this file and then
 increment it at appropriate places in your code. The infrastructure handles the rest of the work
-for you automatically.
+for you automatically. Normally, info fields are instantiated at file scope, this is considered
+best practice. It's also possible to dynamically instantiate info fields during module load. Once
+module load is completed, no more info fields can be instantiated -- this preserves crash integrity
+of the info subsystem.
 
 The Valkey core invokes the info machinery in two different situations. In the first situation you see it
 as part of the INFO command. This invocation happens on the Main Thread.
@@ -56,38 +59,25 @@ This invocation can happen in any thread context at any time -- meaning that inf
 depend on locking a mutex, allocating memory or examining a complex data structure that might be in
 the process of being mutated must not be part of a crash dump. The designation of crash-safe
 info fields is done through a flag. The absence of that flag in the definition of the field
-will mean that it won't be part of a crash dump. Some of the utility classes for info fields
-(AppCounter and DevCounter) are by nature crash-safe and they set the crash-safe flag for you.
-
-Stylistically, the expectation is that application code should be able to use the classes defined in this file
-for all of their info fields.
+will mean that it won't be part of a crash dump.
 
 The infrastructure requires that all info fields be designated as either Application or Developer fields.
 The primary difference is that the OSS Community pledges to maintain Application info fields compatibly between
 releases. Whereas Developer info fields explicitly do not have this pledge and are subject to change from release
 to release without notice. Best practices for application developers is to only rely on Application info fields.
 There is a CONFIG variable in the infrastructure to enable/disable the visibility of Developer info fields.
-When this is at it's default setting, there is no external visibility for Developer info fields. Thus applications
+When this is at its default setting, there is no external visibility for Developer info fields. Thus applications
 which are developed around unmodified OSS code (or a pre-built binary) can safely use all of the info fields that
 appear.
+
+Generally, there is one info class for each data type: Number and String are currently supported (Enum is possible).
+
+The "Builder" patten is adopt to construct info field classes.
 
 */
 
 namespace vmsdk {
 namespace info_field {
-
-//
-// Validate configuration, Called on load to avoid difficult to diagnose asserts on module load
-//
-// false-> failure with reason written to the log.
-//
-bool Validate(RedisModuleCtx *ctx);
-
-//
-// Info Function Interface.
-//
-void DoSection(RedisModuleInfoCtx *ctx, absl::string_view section, int for_crash_report);
-void DoRemainingSections(RedisModuleInfoCtx *ctx, int for_crash_report);
 
 enum Flags {
     //
@@ -104,7 +94,7 @@ enum Flags {
     //
     // For Numeric
     //
-    kSIUnits = 8,
+    kSIBytes = 8,
 }; 
 
 class Base {
@@ -132,44 +122,53 @@ protected:
 // Builder for Numeric when the defaults aren't desirable.
 //
 struct NumericBuilder {
-    // Mark this Application Visible
     NumericBuilder() = default;
-    NumericBuilder& AppVisible() {
+
+    // Mark this Application Visible
+    NumericBuilder& App() {
         flags_ = Flags((flags_ & ~(Flags::kApplication | Flags::kDeveloper)) | Flags::kApplication);
         return *this;
     }
+
     // Mark as Developer Visible
-    NumericBuilder& DevVisible() {
+    NumericBuilder& Dev() {
         flags_ = Flags((flags_ & ~(Flags::kApplication | Flags::kDeveloper)) | Flags::kDeveloper);
         return *this;
     }
-    // Dump in Human Readable SI Units, typically for bytes 
-    NumericBuilder& SIUnits() {
-        flags_ = Flags(flags_ | Flags::kSIUnits);
-        assert(flags_ & Flags::kSIUnits);
+
+    // Mark as a Bytes value, i.e., Display in Human Readble Units 
+    NumericBuilder& SIBytes() {
+        flags_ = Flags(flags_ | Flags::kSIBytes);
+        assert(flags_ & Flags::kSIBytes);
         return *this;
     }
-    // If visible optionally. Note: this field will not be visible in crash dumps
+
+    // Used to make this field controllably visible. Note: By default, this is marked not Crash Safe.
     NumericBuilder& VisibleIf(std::function<bool ()> visible_func) {
         visible_func_ = visible_func;
         flags_ = Flags(flags_ & ~Flags::kCrashSafe);
         return *this;
     }
-    // Computed Value. Note this field will not be visible in crash dumps
+
+    // Used when the value must be computed at run-time. Note: By Default, this is marked as not Crash Safe.
     NumericBuilder& Computed(std::function<long long()> compute_func) {
         compute_func_ = compute_func;
         flags_ = Flags(flags_ & ~Flags::kCrashSafe);
         return *this;
     }
+
     //
-    // DANGER: Overrides the default assumption that callback functions aren't crash safe.
-    // Only use this function if you're certain that your callback doesn't access any locks
-    // OR never allocations any memory
+    // DANGER:  Only use this function if you're certain that your callbacks are crash safe.
+    // To be crash safe you must not:
+    // 1. Access any locks.
+    // 2. Allocate or Free any memory (this means strings too!)
+    // 3. Access a complex data structure that gets mutated by any thread.
     //
     NumericBuilder& CrashSafe() {
         flags_ = Flags(flags_ | Flags::kCrashSafe);
         return *this;
     }
+
   private:
     friend class Numeric;
     Flags flags_{Flags::kCrashSafe};
@@ -178,7 +177,9 @@ struct NumericBuilder {
 };
 
 //
-// All numeric fields
+// All numeric fields.
+//
+// This class provides an std::atomic<long long> for your use. But this is ignored if the "Computed" callback is used.
 //
 class Numeric : private Base {
   public:
@@ -205,37 +206,47 @@ class Numeric : private Base {
 //
 // Builder for all String Valued Fields
 //
+// IN PROGRESS
+//
 struct StringBuilder {
-    StringBuilder& AppVisible() {
+
+    // Mark as Application Visible
+    StringBuilder& App() {
         flags_ = Flags((flags_ & (Flags::kApplication | Flags::kDeveloper)) | Flags::kApplication);
         return *this;
     }
+
     // Mark as Developer Visible
-    StringBuilder& DevVisible() {
+    StringBuilder& Dev() {
         flags_ = Flags((flags_ & (Flags::kApplication | Flags::kDeveloper)) | Flags::kDeveloper);
         return *this;
     }
+
     // If visible optionally. Note: this field will not be visible in crash dumps
     StringBuilder& VisibleIf(std::function<bool ()> visible_func) {
         visible_func_ = visible_func;
         flags_ = Flags(flags_ & ~Flags::kCrashSafe);
         return *this;
     }
-    // Computed Value. Note this field will not be visible in crash dumps
+
+    // Computed Value. Cannot be crash safe with std::string return value.
     StringBuilder& Computed(std::function<std::string ()> compute_func) {
         compute_string_func_ = compute_func;
         flags_ = Flags(flags_ & ~Flags::kCrashSafe);
         return *this;
     }
+
     // Computed Value. This function is assumed to be crash safe.
     StringBuilder& Computed(std::function<const char * ()> compute_func) {
         compute_char_func_ = compute_func;
         return *this;
     }
     //
-    // DANGER: Overrides the default assumption that callback functions aren't crash safe.
-    // Only use this function if you're certain that your callback doesn't access any locks
-    // OR never allocations any memory
+    // DANGER:  Only use this function if you're certain that your callbacks are crash safe.
+    // To be crash safe you must not:
+    // 1. Access any locks.
+    // 2. Allocate or Free any memory (this means strings too!)
+    // 3. Access a complex data structure that gets mutated by any thread.
     //
     StringBuilder& CrashSafe() {
         flags_ = Flags(flags_ | Flags::kCrashSafe);
@@ -263,6 +274,20 @@ class String : private Base {
     std::optional<std::function<const char *()>>  compute_char_func_;
     std::optional<std::function<std::string ()>>  compute_string_func_;
 };
+
+//
+// Validate configuration, Called on load to avoid difficult to diagnose asserts on module load
+//
+// false-> failure with reason written to the log.
+//
+bool Validate(RedisModuleCtx *ctx);
+
+//
+// Info Function Interface.
+//
+void DoSection(RedisModuleInfoCtx *ctx, absl::string_view section, int for_crash_report);
+void DoRemainingSections(RedisModuleInfoCtx *ctx, int for_crash_report);
+
 
 } // namespace info_field
 } // namespace vmsdk

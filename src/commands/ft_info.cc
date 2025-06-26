@@ -40,7 +40,7 @@
 
 namespace valkey_search {
 
-absl::Status FTInfoCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
+absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                        int argc) {
   if (argc < 2) {
     return absl::InvalidArgumentError(vmsdk::WrongArity(kInfoCommand));
@@ -53,7 +53,7 @@ absl::Status FTInfoCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
 
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,
-      SchemaManager::Instance().GetIndexSchema(RedisModule_GetSelectedDb(ctx),
+      SchemaManager::Instance().GetIndexSchema(ValkeyModule_GetSelectedDb(ctx),
                                                index_schema_name));
   static const auto permissions =
       PrefixACLPermissions(kInfoCmdPermissions, kInfoCommand);

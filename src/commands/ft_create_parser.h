@@ -84,6 +84,6 @@ struct FlatParameters : public FTCreateVectorParameters {
 };
 
 absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
-    RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
+    ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc);
 }  // namespace valkey_search
 #endif  // VALKEYSEARCH_SRC_COMMANDS_FT_CREATE_PARSER_H_

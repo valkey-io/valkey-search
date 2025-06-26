@@ -113,17 +113,17 @@ inline absl::StatusOr<int> To(absl::string_view str) {
   return ToNumeric<int>(str);
 }
 
-inline absl::string_view ToStringView(const RedisModuleString *str) {
+inline absl::string_view ToStringView(const ValkeyModuleString *str) {
   if (!str) {
     return {};
   }
   size_t length = 0;
-  const char *str_ptr = RedisModule_StringPtrLen(str, &length);
+  const char *str_ptr = ValkeyModule_StringPtrLen(str, &length);
   return {str_ptr, length};
 }
 
 template <typename T>
-inline absl::StatusOr<T> To(const RedisModuleString *str) {
+inline absl::StatusOr<T> To(const ValkeyModuleString *str) {
   return To<T>(ToStringView(str));
 }
 
@@ -184,7 +184,7 @@ inline absl::StatusOr<T> ToEnum(
 
 template <typename T>
 inline absl::StatusOr<T> ToEnum(
-    const RedisModuleString *param,
+    const ValkeyModuleString *param,
     const absl::flat_hash_map<absl::string_view, T> &map) {
   if (!param) {
     return absl::InvalidArgumentError("unexpected nullptr");

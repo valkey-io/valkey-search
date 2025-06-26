@@ -39,130 +39,134 @@
 
 namespace vmsdk {
 
-struct RedisStringDeleter {
-  void operator()(RedisModuleString *str) {
-    RedisModule_FreeString(nullptr, str);
+struct ValkeyStringDeleter {
+  void operator()(ValkeyModuleString *str) {
+    ValkeyModule_FreeString(nullptr, str);
   }
 };
 
-using UniqueRedisString =
-    std::unique_ptr<RedisModuleString, RedisStringDeleter>;
+using UniqueValkeyString =
+    std::unique_ptr<ValkeyModuleString, ValkeyStringDeleter>;
 
-inline UniqueRedisString UniquePtrRedisString(RedisModuleString *redis_str) {
-  return std::unique_ptr<RedisModuleString, RedisStringDeleter>(redis_str);
+inline UniqueValkeyString UniquePtrValkeyString(ValkeyModuleString *valkey_str) {
+  return std::unique_ptr<ValkeyModuleString, ValkeyStringDeleter>(valkey_str);
 }
 
-inline UniqueRedisString MakeUniqueRedisString(absl::string_view str) {
-  auto redis_str = RedisModule_CreateString(nullptr, str.data(), str.size());
-  return UniquePtrRedisString(redis_str);
+inline UniqueValkeyString MakeUniqueValkeyString(absl::string_view str) {
+  auto valkey_str = ValkeyModule_CreateString(nullptr, str.data(), str.size());
+  return UniquePtrValkeyString(valkey_str);
 }
 
-inline UniqueRedisString MakeUniqueRedisString(const char *str) {
+inline UniqueValkeyString MakeUniqueValkeyString(const char *str) {
   if (str) {
-    return MakeUniqueRedisString(absl::string_view(str));
+    return MakeUniqueValkeyString(absl::string_view(str));
   }
-  return UniquePtrRedisString(nullptr);
+  return UniquePtrValkeyString(nullptr);
 }
 
-inline UniqueRedisString RetainUniqueRedisString(RedisModuleString *redis_str) {
-  RedisModule_RetainString(nullptr, redis_str);
-  return UniquePtrRedisString(redis_str);
+inline UniqueValkeyString RetainUniqueValkeyString(
+    ValkeyModuleString *valkey_str) {
+  ValkeyModule_RetainString(nullptr, valkey_str);
+  return UniquePtrValkeyString(valkey_str);
 }
 
-struct RedisOpenKeyDeleter {
-  void operator()(RedisModuleKey *module_key) {
+struct ValkeyOpenKeyDeleter {
+  void operator()(ValkeyModuleKey *module_key) {
     if (module_key) {
-      RedisModule_CloseKey(module_key);
+      ValkeyModule_CloseKey(module_key);
     }
   }
 };
 
-using UniqueRedisOpenKey = std::unique_ptr<RedisModuleKey, RedisOpenKeyDeleter>;
+using UniqueValkeyOpenKey =
+    std::unique_ptr<ValkeyModuleKey, ValkeyOpenKeyDeleter>;
 
-inline UniqueRedisOpenKey UniquePtrRedisOpenKey(RedisModuleKey *redis_key) {
-  return std::unique_ptr<RedisModuleKey, RedisOpenKeyDeleter>(redis_key);
+inline UniqueValkeyOpenKey UniquePtrValkeyOpenKey(ValkeyModuleKey *valkey_key) {
+  return std::unique_ptr<ValkeyModuleKey, ValkeyOpenKeyDeleter>(valkey_key);
 }
 
-inline UniqueRedisOpenKey MakeUniqueRedisOpenKey(RedisModuleCtx *ctx,
-                                                 RedisModuleString *str,
+inline UniqueValkeyOpenKey MakeUniqueValkeyOpenKey(ValkeyModuleCtx *ctx,
+                                                 ValkeyModuleString *str,
                                                  int flags) {
   VerifyMainThread();
-  auto module_key = RedisModule_OpenKey(ctx, str, flags);
-  return std::unique_ptr<RedisModuleKey, RedisOpenKeyDeleter>(module_key);
+  auto module_key = ValkeyModule_OpenKey(ctx, str, flags);
+  return std::unique_ptr<ValkeyModuleKey, ValkeyOpenKeyDeleter>(module_key);
 }
 
-struct RedisReplyDeleter {
-  void operator()(RedisModuleCallReply *reply) {
-    RedisModule_FreeCallReply(reply);
+struct ValkeyReplyDeleter {
+  void operator()(ValkeyModuleCallReply *reply) {
+    ValkeyModule_FreeCallReply(reply);
   }
 };
 
-using UniqueRedisCallReply =
-    std::unique_ptr<RedisModuleCallReply, RedisReplyDeleter>;
+using UniqueValkeyCallReply =
+    std::unique_ptr<ValkeyModuleCallReply, ValkeyReplyDeleter>;
 
-inline UniqueRedisCallReply UniquePtrRedisCallReply(
-    RedisModuleCallReply *reply) {
-  return std::unique_ptr<RedisModuleCallReply, RedisReplyDeleter>(reply);
+inline UniqueValkeyCallReply UniquePtrValkeyCallReply(
+    ValkeyModuleCallReply *reply) {
+  return std::unique_ptr<ValkeyModuleCallReply, ValkeyReplyDeleter>(reply);
 }
 
-struct RedisScanCursorDeleter {
-  void operator()(RedisModuleScanCursor *cursor) {
-    RedisModule_ScanCursorDestroy(cursor);
+struct ValkeyScanCursorDeleter {
+  void operator()(ValkeyModuleScanCursor *cursor) {
+    ValkeyModule_ScanCursorDestroy(cursor);
   }
 };
 
-using UniqueRedisScanCursor =
-    std::unique_ptr<RedisModuleScanCursor, RedisScanCursorDeleter>;
+using UniqueValkeyScanCursor =
+    std::unique_ptr<ValkeyModuleScanCursor, ValkeyScanCursorDeleter>;
 
-inline UniqueRedisScanCursor UniquePtrRedisScanCursor(
-    RedisModuleScanCursor *cursor) {
-  return std::unique_ptr<RedisModuleScanCursor, RedisScanCursorDeleter>(cursor);
+inline UniqueValkeyScanCursor UniquePtrValkeyScanCursor(
+    ValkeyModuleScanCursor *cursor) {
+  return std::unique_ptr<ValkeyModuleScanCursor, ValkeyScanCursorDeleter>(
+      cursor);
 }
 
-inline UniqueRedisScanCursor MakeUniqueRedisScanCursor() {
-  auto cursor = RedisModule_ScanCursorCreate();
-  return std::unique_ptr<RedisModuleScanCursor, RedisScanCursorDeleter>(cursor);
+inline UniqueValkeyScanCursor MakeUniqueValkeyScanCursor() {
+  auto cursor = ValkeyModule_ScanCursorCreate();
+  return std::unique_ptr<ValkeyModuleScanCursor, ValkeyScanCursorDeleter>(
+      cursor);
 }
 
-struct RedisThreadSafeContextDeleter {
-  void operator()(RedisModuleCtx *ctx) {
+struct ValkeyThreadSafeContextDeleter {
+  void operator()(ValkeyModuleCtx *ctx) {
     // Contexts cannot be safely freed from a background thread since they
     // assert if IO threads are active.
-    RunByMain([ctx]() { RedisModule_FreeThreadSafeContext(ctx); });
+    RunByMain([ctx]() { ValkeyModule_FreeThreadSafeContext(ctx); });
   }
 };
 
-using UniqueRedisDetachedThreadSafeContext =
-    std::unique_ptr<RedisModuleCtx, RedisThreadSafeContextDeleter>;
+using UniqueValkeyDetachedThreadSafeContext =
+    std::unique_ptr<ValkeyModuleCtx, ValkeyThreadSafeContextDeleter>;
 
-inline UniqueRedisDetachedThreadSafeContext
-MakeUniqueRedisDetachedThreadSafeContext(RedisModuleCtx *base_ctx) {
-  auto ctx = RedisModule_GetDetachedThreadSafeContext(base_ctx);
-  return std::unique_ptr<RedisModuleCtx, RedisThreadSafeContextDeleter>(ctx);
+inline UniqueValkeyDetachedThreadSafeContext
+MakeUniqueValkeyDetachedThreadSafeContext(ValkeyModuleCtx *base_ctx) {
+  auto ctx = ValkeyModule_GetDetachedThreadSafeContext(base_ctx);
+  return std::unique_ptr<ValkeyModuleCtx, ValkeyThreadSafeContextDeleter>(ctx);
 }
 
-using UniqueRedisThreadSafeContext =
-    std::unique_ptr<RedisModuleCtx, RedisThreadSafeContextDeleter>;
+using UniqueValkeyThreadSafeContext =
+    std::unique_ptr<ValkeyModuleCtx, ValkeyThreadSafeContextDeleter>;
 
-inline UniqueRedisThreadSafeContext MakeUniqueRedisThreadSafeContext(
-    RedisModuleBlockedClient *bc) {
-  auto ctx = RedisModule_GetThreadSafeContext(bc);
-  return std::unique_ptr<RedisModuleCtx, RedisThreadSafeContextDeleter>(ctx);
+inline UniqueValkeyThreadSafeContext MakeUniqueValkeyThreadSafeContext(
+    ValkeyModuleBlockedClient *bc) {
+  auto ctx = ValkeyModule_GetThreadSafeContext(bc);
+  return std::unique_ptr<ValkeyModuleCtx, ValkeyThreadSafeContextDeleter>(ctx);
 }
 
-struct RedisClusterNodesListDeleter {
+struct ValkeyClusterNodesListDeleter {
   void operator()(char **nodes_list) {
-    RedisModule_FreeClusterNodesList(nodes_list);
+    ValkeyModule_FreeClusterNodesList(nodes_list);
   }
 };
 
-using UniqueRedisClusterNodesList =
-    std::unique_ptr<char *, RedisClusterNodesListDeleter>;
+using UniqueValkeyClusterNodesList =
+    std::unique_ptr<char *, ValkeyClusterNodesListDeleter>;
 
-inline UniqueRedisClusterNodesList MakeUniqueRedisClusterNodesList(
-    RedisModuleCtx *ctx, size_t *num_nodes) {
-  auto nodes_list = RedisModule_GetClusterNodesList(ctx, num_nodes);
-  return std::unique_ptr<char *, RedisClusterNodesListDeleter>(nodes_list);
+inline UniqueValkeyClusterNodesList MakeUniqueValkeyClusterNodesList(
+    ValkeyModuleCtx *ctx, size_t *num_nodes) {
+  auto nodes_list = ValkeyModule_GetClusterNodesList(ctx, num_nodes);
+  return std::unique_ptr<char *, ValkeyClusterNodesListDeleter>(nodes_list);
 }
 
 }  // namespace vmsdk

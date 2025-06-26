@@ -41,19 +41,19 @@ namespace vmsdk {
 
 class ModuleType {
  public:
-  ModuleType(RedisModuleCtx *ctx, absl::string_view key,
-             RedisModuleType *module_type);
+  ModuleType(ValkeyModuleCtx *ctx, absl::string_view key,
+             ValkeyModuleType *module_type);
   virtual ~ModuleType() = default;
-  absl::Status Register(RedisModuleCtx *ctx);
-  absl::Status Deregister(RedisModuleCtx *ctx);
+  absl::Status Register(ValkeyModuleCtx *ctx);
+  absl::Status Deregister(ValkeyModuleCtx *ctx);
 
-  static absl::Status Register(RedisModuleCtx *ctx, absl::string_view key,
-                               void *ptr, RedisModuleType *module_type);
-  static absl::Status Deregister(RedisModuleCtx *ctx, absl::string_view key);
+  static absl::Status Register(ValkeyModuleCtx *ctx, absl::string_view key,
+                               void *ptr, ValkeyModuleType *module_type);
+  static absl::Status Deregister(ValkeyModuleCtx *ctx, absl::string_view key);
 
  protected:
-  RedisModuleType *module_type_{nullptr};
-  vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx_;
+  ValkeyModuleType *module_type_{nullptr};
+  vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
   std::string key_;
 };
 

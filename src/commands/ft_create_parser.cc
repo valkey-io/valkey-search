@@ -303,7 +303,7 @@ bool HasVectorIndex(const data_model::IndexSchema &index_schema_proto) {
 
 }  // namespace
 absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
-    RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   data_model::IndexSchema index_schema_proto;
   vmsdk::ArgsIterator itr{argv, argc};
   VMSDK_RETURN_IF_ERROR(

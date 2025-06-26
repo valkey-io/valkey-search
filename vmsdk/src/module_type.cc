@@ -41,37 +41,37 @@
 
 namespace vmsdk {
 
-void DoDeregister(RedisModuleCtx *ctx, RedisModuleKey *module_key,
+void DoDeregister(ValkeyModuleCtx *ctx, ValkeyModuleKey *module_key,
                   absl::string_view key) {
-  if (RedisModule_DeleteKey(module_key) != REDISMODULE_OK) {
+  if (ValkeyModule_DeleteKey(module_key) != VALKEYMODULE_OK) {
     VMSDK_LOG(WARNING, ctx) << "failed to delete redis key " << key;
     DCHECK(false);
   }
 }
 
-ModuleType::ModuleType(RedisModuleCtx *ctx, absl::string_view key,
-                       RedisModuleType *module_type)
+ModuleType::ModuleType(ValkeyModuleCtx *ctx, absl::string_view key,
+                       ValkeyModuleType *module_type)
     : module_type_(module_type),
-      detached_ctx_(vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx)),
+      detached_ctx_(vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx)),
       key_(key) {
   DCHECK(module_type);
 }
 
-absl::Status ModuleType::Register(RedisModuleCtx *ctx, absl::string_view key,
-                                  void *ptr, RedisModuleType *module_type) {
-  auto redis_str = MakeUniqueRedisString(key);
+absl::Status ModuleType::Register(ValkeyModuleCtx *ctx, absl::string_view key,
+                                  void *ptr, ValkeyModuleType *module_type) {
+  auto valkey_str = MakeUniqueValkeyString(key);
   auto module_key =
-      MakeUniqueRedisOpenKey(ctx, redis_str.get(), REDISMODULE_WRITE);
+      MakeUniqueValkeyOpenKey(ctx, valkey_str.get(), VALKEYMODULE_WRITE);
   if (!module_key) {
     return absl::InternalError(
-        absl::StrCat("failed to open Redis module key: ", key));
+        absl::StrCat("failed to open Valkey module key: ", key));
   }
-  if (RedisModule_KeyType(module_key.get()) != REDISMODULE_KEYTYPE_EMPTY) {
+  if (ValkeyModule_KeyType(module_key.get()) != VALKEYMODULE_KEYTYPE_EMPTY) {
     return absl::AlreadyExistsError(
-        absl::StrCat("Redis module key ", key, " already exists"));
+        absl::StrCat("Valkey module key ", key, " already exists"));
   }
-  if (RedisModule_ModuleTypeSetValue(module_key.get(), module_type, ptr) !=
-      REDISMODULE_OK) {
+  if (ValkeyModule_ModuleTypeSetValue(module_key.get(), module_type, ptr) !=
+      VALKEYMODULE_OK) {
     DoDeregister(ctx, module_key.get(), key);
     return absl::InternalError(
         absl::StrCat("failed to set module type value for key: ", key));
@@ -79,14 +79,14 @@ absl::Status ModuleType::Register(RedisModuleCtx *ctx, absl::string_view key,
   return absl::OkStatus();
 }
 
-absl::Status ModuleType::Deregister(RedisModuleCtx *ctx,
+absl::Status ModuleType::Deregister(ValkeyModuleCtx *ctx,
                                     absl::string_view key) {
-  auto redis_str = MakeUniqueRedisString(key);
+  auto valkey_str = MakeUniqueValkeyString(key);
 
-  if (!RedisModule_KeyExists(ctx, redis_str.get())) return absl::OkStatus();
+  if (!ValkeyModule_KeyExists(ctx, valkey_str.get())) return absl::OkStatus();
 
   auto module_key =
-      MakeUniqueRedisOpenKey(ctx, redis_str.get(), REDISMODULE_WRITE);
+      MakeUniqueValkeyOpenKey(ctx, valkey_str.get(), VALKEYMODULE_WRITE);
   if (!module_key) {
     DCHECK(false);
     return absl::InternalError(
@@ -96,11 +96,11 @@ absl::Status ModuleType::Deregister(RedisModuleCtx *ctx,
   return absl::OkStatus();
 }
 
-absl::Status ModuleType::Register(RedisModuleCtx *ctx) {
+absl::Status ModuleType::Register(ValkeyModuleCtx *ctx) {
   return Register(ctx, key_, this, module_type_);
 }
 
-absl::Status ModuleType::Deregister(RedisModuleCtx *ctx) {
+absl::Status ModuleType::Deregister(ValkeyModuleCtx *ctx) {
   return Deregister(ctx, key_);
 }
 

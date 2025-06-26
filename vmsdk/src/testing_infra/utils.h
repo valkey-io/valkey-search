@@ -58,39 +58,39 @@ using ::testing::TestWithParam;
 
 namespace vmsdk {
 
-class RedisTest : public testing::Test {
+class ValkeyTest : public testing::Test {
  protected:
-  void SetUp() override { TestRedisModule_Init(); }
+  void SetUp() override { TestValkeyModule_Init(); }
 
-  void TearDown() override { TestRedisModule_Teardown(); }
+  void TearDown() override { TestValkeyModule_Teardown(); }
 };
 
 template <typename T>
-class RedisTestWithParam : public TestWithParam<T> {
+class ValkeyTestWithParam : public TestWithParam<T> {
  protected:
-  void SetUp() override { TestRedisModule_Init(); }
+  void SetUp() override { TestValkeyModule_Init(); }
 
-  void TearDown() override { TestRedisModule_Teardown(); }
+  void TearDown() override { TestValkeyModule_Teardown(); }
 };
 
-std::vector<RedisModuleString*> ToRedisStringVector(
+std::vector<ValkeyModuleString*> ToValkeyStringVector(
     absl::string_view params_str, absl::string_view exclude = "");
 
-MATCHER_P(RedisModuleStringEq, value, "") {
+MATCHER_P(ValkeyModuleStringEq, value, "") {
   return *((std::string*)arg) == *((std::string*)value);
 }
 
-MATCHER_P(RedisModuleStringValueEq, value, "") {
+MATCHER_P(ValkeyModuleStringValueEq, value, "") {
   *result_listener << "where the string is " << *((std::string*)arg);
   return *((std::string*)arg) == value;
 }
 
-MATCHER_P(RedisModuleKeyIsForString, value, "") {
-  *result_listener << "where the key is " << ((RedisModuleKey*)arg)->key;
-  return ((RedisModuleKey*)arg)->key == value;
+MATCHER_P(ValkeyModuleKeyIsForString, value, "") {
+  *result_listener << "where the key is " << ((ValkeyModuleKey*)arg)->key;
+  return ((ValkeyModuleKey*)arg)->key == value;
 }
 
-MATCHER_P(IsRedisModuleEvent, expected, "") {
+MATCHER_P(IsValkeyModuleEvent, expected, "") {
   return arg.id == expected.id && arg.dataver == expected.dataver;
 }
 

@@ -44,44 +44,45 @@ namespace vmsdk {
 namespace {
 
 // Test fixture for module_type tests
-class ModuleTypeTest : public vmsdk::RedisTest {
+class ModuleTypeTest : public vmsdk::ValkeyTest {
  protected:
-  // Helper function to create RedisModuleString
-  RedisModuleString* CreateRedisModuleString(const std::string& str) {
-    return RedisModule_CreateString(nullptr, str.c_str(), str.size());
+  // Helper function to create ValkeyModuleString
+  ValkeyModuleString* CreateValkeyModuleString(const std::string& str) {
+    return ValkeyModule_CreateString(nullptr, str.c_str(), str.size());
   }
 };
 
 TEST_F(ModuleTypeTest, FailOpenRegisterKey) {
-  EXPECT_CALL(*kMockRedisModule, OpenKey(testing::_, testing::_, testing::_))
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
       .WillOnce(
-          testing::Return(reinterpret_cast<RedisModuleKey*>(REDISMODULE_OK)));
+          testing::Return(reinterpret_cast<ValkeyModuleKey*>(VALKEYMODULE_OK)));
 
   std::string key = "test_key";
-  RedisModuleType* module_type = reinterpret_cast<RedisModuleType*>(2);
+  ValkeyModuleType* module_type = reinterpret_cast<ValkeyModuleType*>(2);
   void* ptr = reinterpret_cast<void*>(3);
 
   // Call the Register function
   absl::Status result = ModuleType::Register(nullptr, key, ptr, module_type);
 
-  EXPECT_EQ(result.message(), "failed to open Redis module key: test_key");
+  EXPECT_EQ(result.message(), "failed to open Valkey module key: test_key");
   EXPECT_TRUE(result.code() != absl::StatusCode::kOk);
 }
 
 TEST_F(ModuleTypeTest, SuccessfullyRegistersKey) {
-  auto fake_key = reinterpret_cast<RedisModuleKey*>(1);
-  EXPECT_CALL(*kMockRedisModule, OpenKey(testing::_, testing::_, testing::_))
+  auto fake_key = reinterpret_cast<ValkeyModuleKey*>(1);
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
       .WillOnce(testing::Return(fake_key));
-  EXPECT_CALL(*kMockRedisModule, CloseKey(fake_key))
+  EXPECT_CALL(*kMockValkeyModule, CloseKey(fake_key))
       .WillOnce(testing::Return());
-  EXPECT_CALL(*kMockRedisModule, KeyType(fake_key))
-      .WillOnce(testing::Return(REDISMODULE_KEYTYPE_EMPTY));
+  EXPECT_CALL(*kMockValkeyModule, KeyType(fake_key))
+      .WillOnce(testing::Return(VALKEYMODULE_KEYTYPE_EMPTY));
 
   std::string key = "test_key";
-  RedisModuleType* module_type = reinterpret_cast<RedisModuleType*>(2);
+  ValkeyModuleType* module_type = reinterpret_cast<ValkeyModuleType*>(2);
   void* ptr = reinterpret_cast<void*>(3);
-  EXPECT_CALL(*kMockRedisModule, ModuleTypeSetValue(fake_key, module_type, ptr))
-      .WillOnce(testing::Return(REDISMODULE_OK));
+  EXPECT_CALL(*kMockValkeyModule,
+              ModuleTypeSetValue(fake_key, module_type, ptr))
+      .WillOnce(testing::Return(VALKEYMODULE_OK));
 
   // Call the Register function
   absl::Status result = ModuleType::Register(nullptr, key, ptr, module_type);
@@ -91,16 +92,16 @@ TEST_F(ModuleTypeTest, SuccessfullyRegistersKey) {
 }
 
 TEST_F(ModuleTypeTest, RegisterKeyAlreadyExistsError) {
-  auto fake_key = reinterpret_cast<RedisModuleKey*>(1);
-  EXPECT_CALL(*kMockRedisModule, OpenKey(testing::_, testing::_, testing::_))
+  auto fake_key = reinterpret_cast<ValkeyModuleKey*>(1);
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
       .WillOnce(testing::Return(fake_key));
-  EXPECT_CALL(*kMockRedisModule, CloseKey(fake_key))
+  EXPECT_CALL(*kMockValkeyModule, CloseKey(fake_key))
       .WillOnce(testing::Return());
-  EXPECT_CALL(*kMockRedisModule, KeyType(testing::_))
-      .WillOnce(testing::Return(REDISMODULE_KEYTYPE_STRING));
+  EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillOnce(testing::Return(VALKEYMODULE_KEYTYPE_STRING));
 
   std::string key = "test_key";
-  RedisModuleType* module_type = reinterpret_cast<RedisModuleType*>(2);
+  ValkeyModuleType* module_type = reinterpret_cast<ValkeyModuleType*>(2);
   void* ptr = reinterpret_cast<void*>(3);
 
   // Call the Register function
@@ -111,22 +112,22 @@ TEST_F(ModuleTypeTest, RegisterKeyAlreadyExistsError) {
 }
 
 TEST_F(ModuleTypeTest, RegisterInternalError) {
-  auto fake_key = reinterpret_cast<RedisModuleKey*>(1);
-  EXPECT_CALL(*kMockRedisModule, OpenKey(testing::_, testing::_, testing::_))
+  auto fake_key = reinterpret_cast<ValkeyModuleKey*>(1);
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
       .WillOnce(testing::Return(fake_key));
-  EXPECT_CALL(*kMockRedisModule, CloseKey(fake_key))
+  EXPECT_CALL(*kMockValkeyModule, CloseKey(fake_key))
       .WillOnce(testing::Return());
-  EXPECT_CALL(*kMockRedisModule, KeyType(fake_key))
-      .WillOnce(testing::Return(REDISMODULE_KEYTYPE_EMPTY));
-  EXPECT_CALL(*kMockRedisModule, DeleteKey(fake_key))
-      .WillOnce(testing::Return(REDISMODULE_OK));
+  EXPECT_CALL(*kMockValkeyModule, KeyType(fake_key))
+      .WillOnce(testing::Return(VALKEYMODULE_KEYTYPE_EMPTY));
+  EXPECT_CALL(*kMockValkeyModule, DeleteKey(fake_key))
+      .WillOnce(testing::Return(VALKEYMODULE_OK));
 
-  EXPECT_CALL(*kMockRedisModule,
+  EXPECT_CALL(*kMockValkeyModule,
               ModuleTypeSetValue(testing::_, testing::_, testing::_))
       .WillOnce(testing::Return(1));
 
   std::string key = "test_key";
-  RedisModuleType* module_type = reinterpret_cast<RedisModuleType*>(2);
+  ValkeyModuleType* module_type = reinterpret_cast<ValkeyModuleType*>(2);
   void* ptr = reinterpret_cast<void*>(3);
 
   // Call the Register function
@@ -136,15 +137,15 @@ TEST_F(ModuleTypeTest, RegisterInternalError) {
 }
 
 TEST_F(ModuleTypeTest, DeregisterSuccessfully) {
-  auto fake_key = reinterpret_cast<RedisModuleKey*>(1);
-  EXPECT_CALL(*kMockRedisModule, KeyExists(testing::_, testing::_))
+  auto fake_key = reinterpret_cast<ValkeyModuleKey*>(1);
+  EXPECT_CALL(*kMockValkeyModule, KeyExists(testing::_, testing::_))
       .WillOnce(testing::Return(1));
-  EXPECT_CALL(*kMockRedisModule, OpenKey(testing::_, testing::_, testing::_))
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
       .WillOnce(testing::Return(fake_key));
-  EXPECT_CALL(*kMockRedisModule, CloseKey(fake_key))
+  EXPECT_CALL(*kMockValkeyModule, CloseKey(fake_key))
       .WillOnce(testing::Return());
-  EXPECT_CALL(*kMockRedisModule, DeleteKey(fake_key))
-      .WillOnce(testing::Return(REDISMODULE_OK));
+  EXPECT_CALL(*kMockValkeyModule, DeleteKey(fake_key))
+      .WillOnce(testing::Return(VALKEYMODULE_OK));
 
   // Call the Deregister function
   absl::Status result = ModuleType::Deregister(nullptr, "test_key");
@@ -154,7 +155,7 @@ TEST_F(ModuleTypeTest, DeregisterSuccessfully) {
 }
 
 TEST_F(ModuleTypeTest, DeregisterUnregisteredKey) {
-  EXPECT_CALL(*kMockRedisModule, KeyExists(testing::_, testing::_))
+  EXPECT_CALL(*kMockValkeyModule, KeyExists(testing::_, testing::_))
       .WillOnce(testing::Return(0));
 
   // Call the Deregister function
@@ -165,10 +166,10 @@ TEST_F(ModuleTypeTest, DeregisterUnregisteredKey) {
 }
 
 #ifdef NDEBUG
-TEST_F(ModuleTypeTest, DeregisterFailOpenRedisKey) {
-  EXPECT_CALL(*kMockRedisModule, KeyExists(testing::_, testing::_))
+TEST_F(ModuleTypeTest, DeregisterFailOpenValkeyKey) {
+  EXPECT_CALL(*kMockValkeyModule, KeyExists(testing::_, testing::_))
       .WillOnce(testing::Return(1));
-  EXPECT_CALL(*kMockRedisModule, OpenKey(testing::_, testing::_, testing::_))
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
       .WillOnce(testing::Return(nullptr));
   // Call the Deregister function
   absl::Status result = ModuleType::Deregister(nullptr, "test_key");

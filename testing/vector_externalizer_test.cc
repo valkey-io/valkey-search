@@ -65,7 +65,7 @@ class VectorExternalizerTest : public ValkeySearchTestWithParam<bool> {
   }
   void TearDown() override { ValkeySearchTestWithParam<bool>::TearDown(); }
   std::vector<std::vector<float>> vectors;
-  RedisModuleCtx fake_ctx;
+  ValkeyModuleCtx fake_ctx;
   UniqueFixedSizeAllocatorPtr allocator;
 };
 
@@ -113,29 +113,29 @@ void VerifyStats(const VectorExternalizer::Stats &stats) {
 
 TEST_P(VectorExternalizerTest, SimpleExternalize) {
   bool normalize = GetParam();
-  absl::flat_hash_map<RedisModuleKey *, std::string> keys;
-  EXPECT_CALL(*kMockRedisModule,
+  absl::flat_hash_map<ValkeyModuleKey *, std::string> keys;
+  EXPECT_CALL(*kMockValkeyModule,
               OpenKey(VectorExternalizer::Instance().GetCtx(),
-                      testing::An<RedisModuleString *>(), REDISMODULE_WRITE))
+                      testing::An<ValkeyModuleString *>(), VALKEYMODULE_WRITE))
       .Times(vectors.size())
       .WillRepeatedly(
-          [&](RedisModuleCtx *ctx, RedisModuleString *key, int flags) {
-            auto res = TestRedisModule_OpenKeyDefaultImpl(ctx, key, flags);
+          [&](ValkeyModuleCtx *ctx, ValkeyModuleString *key, int flags) {
+            auto res = TestValkeyModule_OpenKeyDefaultImpl(ctx, key, flags);
             keys[res] = vmsdk::ToStringView(key);
             return res;
           });
-  absl::flat_hash_map<std::string, std::pair<RedisModuleHashExternCB, void *>>
+  absl::flat_hash_map<std::string, std::pair<ValkeyModuleHashExternCB, void *>>
       registration;
-  EXPECT_CALL(*kMockRedisModule,
+  EXPECT_CALL(*kMockValkeyModule,
               HashExternalize(testing::_, testing::_, testing::_, testing::_))
       .Times(vectors.size())
-      .WillRepeatedly([&](RedisModuleKey *key, RedisModuleString *field,
-                          RedisModuleHashExternCB fn, void *privdata) {
+      .WillRepeatedly([&](ValkeyModuleKey *key, ValkeyModuleString *field,
+                          ValkeyModuleHashExternCB fn, void *privdata) {
         registration.insert({keys[key], std::make_pair(fn, privdata)});
         auto field_str = vmsdk::ToStringView(field);
         EXPECT_EQ(field_str, "attribute_identifier_1");
         EXPECT_EQ(fn, ExternalizeCB);
-        return REDISMODULE_OK;
+        return VALKEYMODULE_OK;
       });
   for (size_t j = 0; j < 2; ++j) {
     ExternalizeVectors(vectors, 0, allocator.get(), normalize);
@@ -175,29 +175,29 @@ TEST_P(VectorExternalizerTest, SimpleExternalize) {
 }
 
 TEST_P(VectorExternalizerTest, PreferNotNormalized) {
-  absl::flat_hash_map<RedisModuleKey *, std::string> keys;
-  EXPECT_CALL(*kMockRedisModule,
+  absl::flat_hash_map<ValkeyModuleKey *, std::string> keys;
+  EXPECT_CALL(*kMockValkeyModule,
               OpenKey(VectorExternalizer::Instance().GetCtx(),
-                      testing::An<RedisModuleString *>(), REDISMODULE_WRITE))
+                      testing::An<ValkeyModuleString *>(), VALKEYMODULE_WRITE))
       .Times(vectors.size())
       .WillRepeatedly(
-          [&](RedisModuleCtx *ctx, RedisModuleString *key, int flags) {
-            auto res = TestRedisModule_OpenKeyDefaultImpl(ctx, key, flags);
+          [&](ValkeyModuleCtx *ctx, ValkeyModuleString *key, int flags) {
+            auto res = TestValkeyModule_OpenKeyDefaultImpl(ctx, key, flags);
             keys[res] = vmsdk::ToStringView(key);
             return res;
           });
-  absl::flat_hash_map<std::string, std::pair<RedisModuleHashExternCB, void *>>
+  absl::flat_hash_map<std::string, std::pair<ValkeyModuleHashExternCB, void *>>
       registration;
-  EXPECT_CALL(*kMockRedisModule,
+  EXPECT_CALL(*kMockValkeyModule,
               HashExternalize(testing::_, testing::_, testing::_, testing::_))
       .Times(vectors.size())
-      .WillRepeatedly([&](RedisModuleKey *key, RedisModuleString *field,
-                          RedisModuleHashExternCB fn, void *privdata) {
+      .WillRepeatedly([&](ValkeyModuleKey *key, ValkeyModuleString *field,
+                          ValkeyModuleHashExternCB fn, void *privdata) {
         registration.insert({keys[key], std::make_pair(fn, privdata)});
         auto field_str = vmsdk::ToStringView(field);
         EXPECT_EQ(field_str, "attribute_identifier_1");
         EXPECT_EQ(fn, ExternalizeCB);
-        return REDISMODULE_OK;
+        return VALKEYMODULE_OK;
       });
   ExternalizeVectors(vectors, 0, allocator.get(), true);
   ExternalizeVectors(vectors, 0, allocator.get(), false);
@@ -220,11 +220,11 @@ TEST_P(VectorExternalizerTest, PreferNotNormalized) {
   VerifyStats(stats);
 }
 
-void VerifyCB(
-    const std::vector<std::vector<float>> &vectors, size_t offset,
-    absl::flat_hash_map<std::string, std::pair<RedisModuleHashExternCB, void *>>
-        &registration,
-    bool normalized, size_t expected_lru_promote_cnt) {
+void VerifyCB(const std::vector<std::vector<float>> &vectors, size_t offset,
+              absl::flat_hash_map<std::string,
+                                  std::pair<ValkeyModuleHashExternCB, void *>>
+                  &registration,
+              bool normalized, size_t expected_lru_promote_cnt) {
   VectorExternalizer::Instance().ProcessEngineUpdateQueue();
 
   auto stats = VectorExternalizer::Instance().GetStats();
@@ -258,29 +258,29 @@ void VerifyCB(
 
 TEST_P(VectorExternalizerTest, LRUTest) {
   bool normalized = GetParam();
-  absl::flat_hash_map<RedisModuleKey *, std::string> keys;
-  EXPECT_CALL(*kMockRedisModule,
+  absl::flat_hash_map<ValkeyModuleKey *, std::string> keys;
+  EXPECT_CALL(*kMockValkeyModule,
               OpenKey(VectorExternalizer::Instance().GetCtx(),
-                      testing::An<RedisModuleString *>(), REDISMODULE_WRITE))
+                      testing::An<ValkeyModuleString *>(), VALKEYMODULE_WRITE))
       .Times(vectors.size())
       .WillRepeatedly(
-          [&](RedisModuleCtx *ctx, RedisModuleString *key, int flags) {
-            auto res = TestRedisModule_OpenKeyDefaultImpl(ctx, key, flags);
+          [&](ValkeyModuleCtx *ctx, ValkeyModuleString *key, int flags) {
+            auto res = TestValkeyModule_OpenKeyDefaultImpl(ctx, key, flags);
             keys[res] = vmsdk::ToStringView(key);
             return res;
           });
-  absl::flat_hash_map<std::string, std::pair<RedisModuleHashExternCB, void *>>
+  absl::flat_hash_map<std::string, std::pair<ValkeyModuleHashExternCB, void *>>
       registration;
-  EXPECT_CALL(*kMockRedisModule,
+  EXPECT_CALL(*kMockValkeyModule,
               HashExternalize(testing::_, testing::_, testing::_, testing::_))
       .Times(vectors.size())
-      .WillRepeatedly([&](RedisModuleKey *key, RedisModuleString *field,
-                          RedisModuleHashExternCB fn, void *privdata) {
+      .WillRepeatedly([&](ValkeyModuleKey *key, ValkeyModuleString *field,
+                          ValkeyModuleHashExternCB fn, void *privdata) {
         auto field_str = vmsdk::ToStringView(field);
         EXPECT_EQ(field_str, "attribute_identifier_1");
         EXPECT_EQ(fn, ExternalizeCB);
         registration.insert({keys[key], std::make_pair(fn, privdata)});
-        return REDISMODULE_OK;
+        return VALKEYMODULE_OK;
       });
   std::vector<std::vector<float>> generated_vectors;
   generated_vectors.reserve(vectors.size());
@@ -305,24 +305,26 @@ TEST_P(VectorExternalizerTest, OpenKeyFailure) {
   bool during_registration = GetParam();
   auto &vector_externalizer = VectorExternalizer::Instance();
   if (during_registration) {
-    EXPECT_CALL(*kMockRedisModule,
-                OpenKey(VectorExternalizer::Instance().GetCtx(),
-                        testing::An<RedisModuleString *>(), REDISMODULE_WRITE))
+    EXPECT_CALL(
+        *kMockValkeyModule,
+        OpenKey(VectorExternalizer::Instance().GetCtx(),
+                testing::An<ValkeyModuleString *>(), VALKEYMODULE_WRITE))
         .Times(vectors.size())
         .WillRepeatedly(testing::Return(nullptr));
   } else {
-    EXPECT_CALL(*kMockRedisModule,
-                OpenKey(VectorExternalizer::Instance().GetCtx(),
-                        testing::An<RedisModuleString *>(), REDISMODULE_WRITE))
+    EXPECT_CALL(
+        *kMockValkeyModule,
+        OpenKey(VectorExternalizer::Instance().GetCtx(),
+                testing::An<ValkeyModuleString *>(), VALKEYMODULE_WRITE))
         .WillRepeatedly(
-            [&](RedisModuleCtx *ctx, RedisModuleString *key, int flags) {
+            [&](ValkeyModuleCtx *ctx, ValkeyModuleString *key, int flags) {
               static size_t i = 0;
               return (i++ < vectors.size())
-                         ? TestRedisModule_OpenKeyDefaultImpl(ctx, key, flags)
+                         ? TestValkeyModule_OpenKeyDefaultImpl(ctx, key, flags)
                          : nullptr;
             });
   }
-  EXPECT_CALL(*kMockRedisModule,
+  EXPECT_CALL(*kMockValkeyModule,
               HashExternalize(testing::_, testing::_, testing::_, testing::_))
       .Times(during_registration ? 0 : vectors.size());
 
@@ -338,10 +340,10 @@ TEST_P(VectorExternalizerTest, OpenKeyFailure) {
 
 TEST_F(VectorExternalizerTest, ModuleApiNotAvailable) {
   auto &vector_externalizer = VectorExternalizer::Instance();
-  EXPECT_CALL(*kMockRedisModule, GetApi(testing::_, testing::_))
-      .WillOnce(testing::Return(REDISMODULE_ERR));
-  EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&fake_ctx))
-      .WillOnce([&](RedisModuleCtx *ctx) { return ctx; });
+  EXPECT_CALL(*kMockValkeyModule, GetApi(testing::_, testing::_))
+      .WillOnce(testing::Return(VALKEYMODULE_ERR));
+  EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&fake_ctx))
+      .WillOnce([&](ValkeyModuleCtx *ctx) { return ctx; });
   VectorExternalizer::Instance().Init(&fake_ctx);
   auto stats = vector_externalizer.GetStats();
   ExternalizeVectors(vectors, 0, allocator.get(), true, false);

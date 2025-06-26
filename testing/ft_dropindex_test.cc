@@ -74,7 +74,7 @@ TEST_P(FTDropIndexTest, FTDropIndexTests) {
   for (bool use_thread_pool : {true, false}) {
     for (const auto& test_case : test_cases.test_cases) {
       // Set up the data structures for the test case.
-      RedisModuleCtx fake_ctx;
+      ValkeyModuleCtx fake_ctx;
       vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
       SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
           &fake_ctx_, []() {},
@@ -95,11 +95,11 @@ TEST_P(FTDropIndexTest, FTDropIndexTests) {
       }
 
       // Run the command.
-      std::vector<RedisModuleString*> cmd_argv;
+      std::vector<ValkeyModuleString*> cmd_argv;
       std::transform(test_case.argv.begin(), test_case.argv.end(),
                      std::back_inserter(cmd_argv),
                      [&fake_ctx](std::string val) {
-                       return TestRedisModule_CreateStringPrintf(
+                       return TestValkeyModule_CreateStringPrintf(
                            &fake_ctx, "%s", val.data());
                      });
 
@@ -131,7 +131,7 @@ TEST_P(FTDropIndexTest, FTDropIndexTests) {
 
       // Clean up
       for (auto cmd_arg : cmd_argv) {
-        TestRedisModule_FreeString(&fake_ctx, cmd_arg);
+        TestValkeyModule_FreeString(&fake_ctx, cmd_arg);
       }
     }
   }

@@ -140,7 +140,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override;
   absl::Status SaveTrackedKeys(RDBChunkOutputStream chunked_out) const
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
-  absl::Status LoadTrackedKeys(RedisModuleCtx* ctx,
+  absl::Status LoadTrackedKeys(ValkeyModuleCtx* ctx,
                                const AttributeDataType* attribute_data_type,
                                SupplementalContentChunkIter&& iter);
   void ForEachTrackedKey(
@@ -156,8 +156,8 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       absl::string_view query, uint64_t count, const InternedStringPtr& key,
       std::priority_queue<std::pair<float, hnswlib::labeltype>>& results,
       absl::flat_hash_set<hnswlib::labeltype>& top_keys) const;
-  vmsdk::UniqueRedisString NormalizeStringRecord(
-      vmsdk::UniqueRedisString record) const override;
+  vmsdk::UniqueValkeyString NormalizeStringRecord(
+      vmsdk::UniqueValkeyString record) const override;
   uint64_t GetRecordCount() const override;
   template <typename T>
   absl::StatusOr<std::deque<Neighbor>> CreateReply(
@@ -190,7 +190,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
     int32_t dim = record.size() / GetDataTypeSize();
     return dim == dimensions_ && (record.size() % data_type_size == 0);
   }
-  int RespondWithInfo(RedisModuleCtx* ctx) const override;
+  int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
   template <typename T>
   void Init(int dimensions, data_model::DistanceMetric distance_metric,
             std::unique_ptr<hnswlib::SpaceInterface<T>>& space);
@@ -200,14 +200,14 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   virtual absl::Status RemoveRecordImpl(uint64_t internal_id) = 0;
   virtual absl::Status ModifyRecordImpl(uint64_t internal_id,
                                         absl::string_view record) = 0;
-  virtual int RespondWithInfoImpl(RedisModuleCtx* ctx) const = 0;
+  virtual int RespondWithInfoImpl(ValkeyModuleCtx* ctx) const = 0;
 
   virtual size_t GetDataTypeSize() const = 0;
   virtual void ToProtoImpl(
       data_model::VectorIndex* vector_index_proto) const = 0;
   virtual absl::Status SaveIndexImpl(
       RDBChunkOutputStream chunked_out) const = 0;
-  void ExternalizeVector(RedisModuleCtx* ctx,
+  void ExternalizeVector(ValkeyModuleCtx* ctx,
                          const AttributeDataType* attribute_data_type,
                          absl::string_view key_cstr,
                          absl::string_view attribute_identifier);

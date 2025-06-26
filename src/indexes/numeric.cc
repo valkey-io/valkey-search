@@ -123,13 +123,13 @@ absl::StatusOr<bool> Numeric::RemoveRecord(const InternedStringPtr& key,
   return true;
 }
 
-int Numeric::RespondWithInfo(RedisModuleCtx* ctx) const {
-  RedisModule_ReplyWithSimpleString(ctx, "type");
-  RedisModule_ReplyWithSimpleString(ctx, "NUMERIC");
-  RedisModule_ReplyWithSimpleString(ctx, "size");
+int Numeric::RespondWithInfo(ValkeyModuleCtx* ctx) const {
+  ValkeyModule_ReplyWithSimpleString(ctx, "type");
+  ValkeyModule_ReplyWithSimpleString(ctx, "NUMERIC");
+  ValkeyModule_ReplyWithSimpleString(ctx, "size");
   absl::MutexLock lock(&index_mutex_);
-  RedisModule_ReplyWithCString(ctx,
-                               std::to_string(tracked_keys_.size()).c_str());
+  ValkeyModule_ReplyWithCString(ctx,
+                                std::to_string(tracked_keys_.size()).c_str());
   return 4;
 }
 

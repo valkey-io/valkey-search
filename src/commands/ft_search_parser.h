@@ -50,7 +50,7 @@ struct LimitParameter {
 };
 
 absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
-ParseVectorSearchParameters(RedisModuleCtx *ctx, RedisModuleString **argv,
+ParseVectorSearchParameters(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc, const SchemaManager &schema_manager);
 
 }  // namespace valkey_search

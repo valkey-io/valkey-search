@@ -55,9 +55,9 @@ void KeyspaceEventManager::InitInstance(
   *keyspace_event_manager_instance = std::move(instance);
 }
 
-void KeyspaceEventManager::NotifySubscribers(RedisModuleCtx *ctx, int type,
+void KeyspaceEventManager::NotifySubscribers(ValkeyModuleCtx *ctx, int type,
                                              const char *event,
-                                             RedisModuleString *key) {
+                                             ValkeyModuleString *key) {
   if (ctx == VectorExternalizer::Instance().GetCtx()) {
     return;
   }
@@ -67,7 +67,7 @@ void KeyspaceEventManager::NotifySubscribers(RedisModuleCtx *ctx, int type,
     for (auto match_itr = subscription_trie_.Get().PathIterator(key_view);
          !match_itr.Done(); match_itr.Next()) {
       for (const auto &subscription : *match_itr.Value().value) {
-        if (subscription->GetAttributeDataType().GetRedisEventTypes() & type) {
+        if (subscription->GetAttributeDataType().GetValkeyEventTypes() & type) {
           subscriptions_to_notify.push_back(subscription);
         }
       }
@@ -99,9 +99,9 @@ absl::Status KeyspaceEventManager::RemoveSubscription(
 }
 
 absl::Status KeyspaceEventManager::InsertSubscription(
-    RedisModuleCtx *ctx, KeyspaceEventSubscription *subscription) {
-  VMSDK_RETURN_IF_ERROR(StartRedisSubscriptionIfNeeded(
-      ctx, subscription->GetAttributeDataType().GetRedisEventTypes()));
+    ValkeyModuleCtx *ctx, KeyspaceEventSubscription *subscription) {
+  VMSDK_RETURN_IF_ERROR(StartValkeySubscriptionIfNeeded(
+      ctx, subscription->GetAttributeDataType().GetValkeyEventTypes()));
 
   auto key_prefixes = subscription->GetKeyPrefixes();
   CHECK(!key_prefixes.empty());
@@ -114,14 +114,14 @@ absl::Status KeyspaceEventManager::InsertSubscription(
   return absl::OkStatus();
 }
 
-absl::Status KeyspaceEventManager::StartRedisSubscriptionIfNeeded(
-    RedisModuleCtx *ctx, int types) {
+absl::Status KeyspaceEventManager::StartValkeySubscriptionIfNeeded(
+    ValkeyModuleCtx *ctx, int types) {
   int to_subscribe = types & ~subscribed_types_bit_mask_;
   if (!to_subscribe) {
     return absl::OkStatus();
   }
-  if (RedisModule_SubscribeToKeyspaceEvents(
-          ctx, to_subscribe, OnRedisKeyspaceNotification) != REDISMODULE_OK) {
+  if (ValkeyModule_SubscribeToKeyspaceEvents(
+          ctx, to_subscribe, OnValkeyKeyspaceNotification) != VALKEYMODULE_OK) {
     return absl::InternalError("failed to subscribe to keyspace events");
   }
   subscribed_types_bit_mask_ |= types;

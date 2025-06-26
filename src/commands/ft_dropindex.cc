@@ -39,7 +39,7 @@
 
 namespace valkey_search {
 
-absl::Status FTDropIndexCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
+absl::Status FTDropIndexCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc) {
   if (argc != 2) {
     return absl::InvalidArgumentError(vmsdk::WrongArity(kDropIndexCommand));
@@ -48,7 +48,7 @@ absl::Status FTDropIndexCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
 
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,
-      SchemaManager::Instance().GetIndexSchema(RedisModule_GetSelectedDb(ctx),
+      SchemaManager::Instance().GetIndexSchema(ValkeyModule_GetSelectedDb(ctx),
                                                index_schema_name));
   static const auto permissions =
       PrefixACLPermissions(kDropIndexCmdPermissions, kDropIndexCommand);
@@ -56,9 +56,9 @@ absl::Status FTDropIndexCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
       AclPrefixCheck(ctx, permissions, index_schema->GetKeyPrefixes()));
 
   VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().RemoveIndexSchema(
-      RedisModule_GetSelectedDb(ctx), index_schema_name));
-  RedisModule_ReplyWithSimpleString(ctx, "OK");
-  RedisModule_ReplicateVerbatim(ctx);
+      ValkeyModule_GetSelectedDb(ctx), index_schema_name));
+  ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+  ValkeyModule_ReplicateVerbatim(ctx);
   return absl::OkStatus();
 }
 }  // namespace valkey_search

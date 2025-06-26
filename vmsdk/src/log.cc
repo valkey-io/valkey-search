@@ -51,13 +51,13 @@ namespace vmsdk {
 const char* ToStrLogLevel(int log_level) {
   switch (log_level) {
     case 0:
-      return REDISMODULE_LOGLEVEL_WARNING;
+      return VALKEYMODULE_LOGLEVEL_WARNING;
     case 1:
-      return REDISMODULE_LOGLEVEL_NOTICE;
+      return VALKEYMODULE_LOGLEVEL_NOTICE;
     case 2:
-      return REDISMODULE_LOGLEVEL_VERBOSE;
+      return VALKEYMODULE_LOGLEVEL_VERBOSE;
     case 3:
-      return REDISMODULE_LOGLEVEL_DEBUG;
+      return VALKEYMODULE_LOGLEVEL_DEBUG;
   }
   CHECK(false);
 }
@@ -87,15 +87,15 @@ void SetSinkFormatter(LogFormatterFunc formatter) {
 }
 
 const absl::flat_hash_map<std::string, LogLevel> kLogLevelMap = {
-    {absl::AsciiStrToLower(REDISMODULE_LOGLEVEL_WARNING), LogLevel::kWarning},
-    {absl::AsciiStrToLower(REDISMODULE_LOGLEVEL_NOTICE), LogLevel::kNotice},
-    {absl::AsciiStrToLower(REDISMODULE_LOGLEVEL_VERBOSE), LogLevel::kVerbose},
-    {absl::AsciiStrToLower(REDISMODULE_LOGLEVEL_DEBUG), LogLevel::kDebug},
+    {absl::AsciiStrToLower(VALKEYMODULE_LOGLEVEL_WARNING), LogLevel::kWarning},
+    {absl::AsciiStrToLower(VALKEYMODULE_LOGLEVEL_NOTICE), LogLevel::kNotice},
+    {absl::AsciiStrToLower(VALKEYMODULE_LOGLEVEL_VERBOSE), LogLevel::kVerbose},
+    {absl::AsciiStrToLower(VALKEYMODULE_LOGLEVEL_DEBUG), LogLevel::kDebug},
 };
 
-absl::StatusOr<std::string> FetchEngineLogLevel(RedisModuleCtx* ctx) {
-  auto reply = vmsdk::UniquePtrRedisCallReply(
-      RedisModule_Call(ctx, "CONFIG", "cc", "GET", "loglevel"));
+absl::StatusOr<std::string> FetchEngineLogLevel(ValkeyModuleCtx* ctx) {
+  auto reply = vmsdk::UniquePtrValkeyCallReply(
+      ValkeyModule_Call(ctx, "CONFIG", "cc", "GET", "loglevel"));
   if (reply == nullptr) {
     if (errno == EINVAL) {
       return absl::InvalidArgumentError(
@@ -109,22 +109,22 @@ absl::StatusOr<std::string> FetchEngineLogLevel(RedisModuleCtx* ctx) {
     }
   }
 
-  RedisModuleCallReply* loglevel_reply =
-      RedisModule_CallReplyArrayElement(reply.get(), 1);
+  ValkeyModuleCallReply* loglevel_reply =
+      ValkeyModule_CallReplyArrayElement(reply.get(), 1);
 
   if (loglevel_reply == nullptr ||
-      RedisModule_CallReplyType(loglevel_reply) != REDISMODULE_REPLY_STRING) {
+      ValkeyModule_CallReplyType(loglevel_reply) != VALKEYMODULE_REPLY_STRING) {
     return absl::NotFoundError(
         absl::StrCat("Log level value is missing or not a string."));
   }
 
   size_t len;
   const char* loglevel_str =
-      RedisModule_CallReplyStringPtr(loglevel_reply, &len);
+      ValkeyModule_CallReplyStringPtr(loglevel_reply, &len);
   return std::string(loglevel_str, len);
 }
 
-absl::Status InitLogging(RedisModuleCtx* ctx,
+absl::Status InitLogging(ValkeyModuleCtx* ctx,
                          std::optional<std::string> log_level_str) {
   if (!log_level_str.has_value()) {
     auto engine_log_level = FetchEngineLogLevel(ctx);
@@ -155,19 +155,19 @@ absl::Status InitLogging(RedisModuleCtx* ctx,
 
 const char* ReportedLogLevel(int log_level) {
   if (sink_options.log_level_specified) {
-    return REDISMODULE_LOGLEVEL_WARNING;
+    return VALKEYMODULE_LOGLEVEL_WARNING;
   }
   return ToStrLogLevel(log_level);
 }
 
 void ValkeyLogSink::Send(const absl::LogEntry& entry) {
-  RedisModule_Log(ctx_, ReportedLogLevel(entry.verbosity()), "%s",
-                  GetSinkFormatter()(entry).c_str());
+  ValkeyModule_Log(ctx_, ReportedLogLevel(entry.verbosity()), "%s",
+                   GetSinkFormatter()(entry).c_str());
 }
 
 void ValkeyIOLogSink::Send(const absl::LogEntry& entry) {
-  RedisModule_LogIOError(io_, ReportedLogLevel(entry.verbosity()), "%s",
-                         GetSinkFormatter()(entry).c_str());
+  ValkeyModule_LogIOError(io_, ReportedLogLevel(entry.verbosity()), "%s",
+                          GetSinkFormatter()(entry).c_str());
 }
 
 }  // namespace vmsdk

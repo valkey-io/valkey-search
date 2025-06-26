@@ -287,9 +287,9 @@ ConstructReturnParser() {
           return absl::OkStatus();
         }
         for (uint32_t i = 0; i < cnt; ++i) {
-          vmsdk::UniqueRedisString identifier;
+          vmsdk::UniqueValkeyString identifier;
           VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, identifier));
-          auto as_property = vmsdk::RetainUniqueRedisString(identifier.get());
+          auto as_property = vmsdk::RetainUniqueValkeyString(identifier.get());
           VMSDK_ASSIGN_OR_RETURN(
               auto res, vmsdk::ParseParam(kAsParam, false, itr, as_property));
           if (res) {
@@ -300,10 +300,10 @@ ConstructReturnParser() {
           }
           auto schema_identifier = parameters.index_schema->GetIdentifier(
               vmsdk::ToStringView(identifier.get()));
-          vmsdk::UniqueRedisString attribute_alias;
+          vmsdk::UniqueValkeyString attribute_alias;
           if (schema_identifier.ok()) {
-            attribute_alias = vmsdk::RetainUniqueRedisString(identifier.get());
-            identifier = vmsdk::MakeUniqueRedisString(*schema_identifier);
+            attribute_alias = vmsdk::RetainUniqueValkeyString(identifier.get());
+            identifier = vmsdk::MakeUniqueValkeyString(*schema_identifier);
           }
           parameters.return_attributes.emplace_back(query::ReturnAttribute{
               std::move(identifier), std::move(attribute_alias),
@@ -375,14 +375,14 @@ absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
                                parameters.attribute_alias));
   } else {
     parameters.score_as =
-        vmsdk::MakeUniqueRedisString(parameters.parse_vars.score_as_string);
+        vmsdk::MakeUniqueValkeyString(parameters.parse_vars.score_as_string);
   }
   return absl::OkStatus();
 }
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
-ParseVectorSearchParameters(RedisModuleCtx *ctx, RedisModuleString **argv,
+ParseVectorSearchParameters(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc, const SchemaManager &schema_manager) {
   vmsdk::ArgsIterator itr{argv, argc};
   auto parameters = std::make_unique<query::VectorSearchParameters>();
@@ -390,7 +390,7 @@ ParseVectorSearchParameters(RedisModuleCtx *ctx, RedisModuleString **argv,
       vmsdk::ParseParamValue(itr, parameters->index_schema_name));
   VMSDK_ASSIGN_OR_RETURN(
       parameters->index_schema,
-      SchemaManager::Instance().GetIndexSchema(RedisModule_GetSelectedDb(ctx),
+      SchemaManager::Instance().GetIndexSchema(ValkeyModule_GetSelectedDb(ctx),
                                                parameters->index_schema_name));
   VMSDK_RETURN_IF_ERROR(
       vmsdk::ParseParamValue(itr, parameters->parse_vars.query_string));

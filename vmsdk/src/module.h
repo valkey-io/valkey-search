@@ -43,11 +43,11 @@
 #define VALKEY_MODULE(options)                                              \
   namespace {                                                               \
   extern "C" {                                                              \
-  int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv,     \
-                         int argc) {                                        \
+  int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,  \
+                          int argc) {                                       \
     vmsdk::TrackCurrentAsMainThread();                                      \
     if (auto status = vmsdk::module::OnLoad(ctx, argv, argc, options);      \
-        status != REDISMODULE_OK) {                                         \
+        status != VALKEYMODULE_OK) {                                        \
       return status;                                                        \
     }                                                                       \
                                                                             \
@@ -57,11 +57,11 @@
     }                                                                       \
     return vmsdk::module::OnLoadDone(absl::OkStatus(), ctx, options);       \
   }                                                                         \
-  int RedisModule_OnUnload(RedisModuleCtx *ctx) {                           \
+  int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {                         \
     if (options.on_unload.has_value()) {                                    \
       options.on_unload.value()(ctx, options);                              \
     }                                                                       \
-    return REDISMODULE_OK;                                                  \
+    return VALKEYMODULE_OK;                                                 \
   }                                                                         \
   }                                                                         \
   }
@@ -75,7 +75,7 @@ struct CommandOptions {
   absl::string_view cmd_name;
   std::list<absl::string_view> permissions;
   std::list<absl::string_view> flags;
-  RedisModuleCmdFunc cmd_func{nullptr};
+  ValkeyModuleCmdFunc cmd_func{nullptr};
   // By default - assume no keys.
   int first_key{0};
   int last_key{0};
@@ -86,35 +86,35 @@ struct Options {
   std::string name;
   std::list<absl::string_view> acl_categories;
   int version;
-  RedisModuleInfoFunc info{nullptr};
+  ValkeyModuleInfoFunc info{nullptr};
   std::list<CommandOptions> commands;
   using OnLoad = std::optional<absl::AnyInvocable<absl::Status(
-      RedisModuleCtx *, RedisModuleString **, int, const Options &)>>;
+      ValkeyModuleCtx *, ValkeyModuleString **, int, const Options &)>>;
 
   using OnUnload = std::optional<
-      absl::AnyInvocable<void(RedisModuleCtx *, const Options &)>>;
+      absl::AnyInvocable<void(ValkeyModuleCtx *, const Options &)>>;
   OnLoad on_load;
   OnUnload on_unload;
 };
 
-int OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
+int OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
            const Options &options);
-int OnLoadDone(absl::Status status, RedisModuleCtx *ctx,
+int OnLoadDone(absl::Status status, ValkeyModuleCtx *ctx,
                const Options &options);
-absl::Status RegisterInfo(RedisModuleCtx *ctx, RedisModuleInfoFunc info);
+absl::Status RegisterInfo(ValkeyModuleCtx *ctx, ValkeyModuleInfoFunc info);
 
 }  // namespace module
-using ModuleCommandFunc = absl::Status (*)(RedisModuleCtx *,
-                                           RedisModuleString **, int);
+using ModuleCommandFunc = absl::Status (*)(ValkeyModuleCtx *,
+                                           ValkeyModuleString **, int);
 template <ModuleCommandFunc func>
-int CreateCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int CreateCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   auto status = func(ctx, argv, argc);
   if (!status.ok()) {
-    return RedisModule_ReplyWithError(ctx, status.message().data());
+    return ValkeyModule_ReplyWithError(ctx, status.message().data());
   }
-  return REDISMODULE_OK;
+  return VALKEYMODULE_OK;
 }
-bool IsModuleLoaded(RedisModuleCtx *ctx, const std::string &name);
+bool IsModuleLoaded(ValkeyModuleCtx *ctx, const std::string &name);
 }  // namespace vmsdk
 
 #endif  // VMSDK_SRC_MODULE_H_

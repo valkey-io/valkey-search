@@ -43,7 +43,7 @@ namespace valkey_search {
 
 namespace {
 
-class AllocatorTest : public vmsdk::RedisTestWithParam<bool> {};
+class AllocatorTest : public vmsdk::ValkeyTestWithParam<bool> {};
 
 TEST_P(AllocatorTest, BasicFixedSizeAllocator) {
   const size_t size = 11;

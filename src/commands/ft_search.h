@@ -42,7 +42,7 @@
 namespace valkey_search {
 class ValkeySearch;
 // Declared here to support testing
-void SendReply(RedisModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
+void SendReply(ValkeyModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
                const query::VectorSearchParameters &parameters);
 namespace async {
 
@@ -51,10 +51,10 @@ struct Result {
   std::unique_ptr<query::VectorSearchParameters> parameters;
 };
 
-int Reply(RedisModuleCtx *ctx, [[maybe_unused]] RedisModuleString **argv,
+int Reply(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
           [[maybe_unused]] int argc);
 
-void Free(RedisModuleCtx * /*ctx*/, void *privdata);
+void Free(ValkeyModuleCtx * /*ctx*/, void *privdata);
 
 }  // namespace async
 

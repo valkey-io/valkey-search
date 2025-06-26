@@ -392,28 +392,28 @@ absl::StatusOr<bool> VectorBase::UpdateMetadata(
   return true;
 }
 
-int VectorBase::RespondWithInfo(RedisModuleCtx *ctx) const {
-  RedisModule_ReplyWithSimpleString(ctx, "type");
-  RedisModule_ReplyWithSimpleString(ctx, "VECTOR");
-  RedisModule_ReplyWithSimpleString(ctx, "index");
+int VectorBase::RespondWithInfo(ValkeyModuleCtx *ctx) const {
+  ValkeyModule_ReplyWithSimpleString(ctx, "type");
+  ValkeyModule_ReplyWithSimpleString(ctx, "VECTOR");
+  ValkeyModule_ReplyWithSimpleString(ctx, "index");
 
-  RedisModule_ReplyWithArray(ctx, REDISMODULE_POSTPONED_ARRAY_LEN);
-  RedisModule_ReplyWithSimpleString(ctx, "capacity");
-  RedisModule_ReplyWithLongLong(ctx, GetCapacity());
-  RedisModule_ReplyWithSimpleString(ctx, "dimensions");
-  RedisModule_ReplyWithLongLong(ctx, dimensions_);
-  RedisModule_ReplyWithSimpleString(ctx, "distance_metric");
-  RedisModule_ReplyWithSimpleString(
+  ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+  ValkeyModule_ReplyWithSimpleString(ctx, "capacity");
+  ValkeyModule_ReplyWithLongLong(ctx, GetCapacity());
+  ValkeyModule_ReplyWithSimpleString(ctx, "dimensions");
+  ValkeyModule_ReplyWithLongLong(ctx, dimensions_);
+  ValkeyModule_ReplyWithSimpleString(ctx, "distance_metric");
+  ValkeyModule_ReplyWithSimpleString(
       ctx, LookupKeyByValue(*kDistanceMetricByStr, distance_metric_).data());
-  RedisModule_ReplyWithSimpleString(ctx, "size");
+  ValkeyModule_ReplyWithSimpleString(ctx, "size");
   {
     absl::MutexLock lock(&key_to_metadata_mutex_);
-    RedisModule_ReplyWithCString(
+    ValkeyModule_ReplyWithCString(
         ctx, std::to_string(key_by_internal_id_.size()).c_str());
   }
   int array_len = 8;
   array_len += RespondWithInfoImpl(ctx);
-  RedisModule_ReplySetArrayLength(ctx, array_len);
+  ValkeyModule_ReplySetArrayLength(ctx, array_len);
 
   return 4;
 }
@@ -439,18 +439,18 @@ absl::Status VectorBase::SaveTrackedKeys(
   return absl::OkStatus();
 }
 
-void VectorBase::ExternalizeVector(RedisModuleCtx *ctx,
+void VectorBase::ExternalizeVector(ValkeyModuleCtx *ctx,
                                    const AttributeDataType *attribute_data_type,
                                    absl::string_view key_cstr,
                                    absl::string_view attribute_identifier) {
-  auto key_obj = vmsdk::MakeUniqueRedisOpenKey(
-      ctx, vmsdk::MakeUniqueRedisString(key_cstr).get(),
-      REDISMODULE_OPEN_KEY_NOEFFECTS | REDISMODULE_READ);
+  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+      ctx, vmsdk::MakeUniqueValkeyString(key_cstr).get(),
+      VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
   if (!key_obj || !attribute_data_type->IsProperType(key_obj.get())) {
     return;
   }
   bool is_module_owned;
-  vmsdk::UniqueRedisString record = VectorExternalizer::Instance().GetRecord(
+  vmsdk::UniqueValkeyString record = VectorExternalizer::Instance().GetRecord(
       ctx, attribute_data_type, key_obj.get(), key_cstr, attribute_identifier,
       is_module_owned);
   CHECK(!is_module_owned);
@@ -466,7 +466,7 @@ void VectorBase::ExternalizeVector(RedisModuleCtx *ctx,
 }
 
 absl::Status VectorBase::LoadTrackedKeys(
-    RedisModuleCtx *ctx, const AttributeDataType *attribute_data_type,
+    ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     SupplementalContentChunkIter &&iter) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
   while (iter.HasNext()) {
@@ -532,8 +532,8 @@ void VectorBase::AddPrefilteredKey(
   }
 }
 
-vmsdk::UniqueRedisString VectorBase::NormalizeStringRecord(
-    vmsdk::UniqueRedisString record) const {
+vmsdk::UniqueValkeyString VectorBase::NormalizeStringRecord(
+    vmsdk::UniqueValkeyString record) const {
   CHECK_EQ(GetDataTypeSize(), sizeof(float));
   auto record_str = vmsdk::ToStringView(record.get());
   if (absl::ConsumePrefix(&record_str, "[")) {
@@ -550,7 +550,7 @@ vmsdk::UniqueRedisString VectorBase::NormalizeStringRecord(
     }
     binary_string += std::string((char *)&value, sizeof(float));
   }
-  return vmsdk::MakeUniqueRedisString(binary_string);
+  return vmsdk::MakeUniqueValkeyString(binary_string);
 }
 
 uint64_t VectorBase::GetRecordCount() const {

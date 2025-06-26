@@ -44,10 +44,10 @@ namespace valkey_search::indexes {
 
 namespace {
 
-class TagIndexTest : public vmsdk::RedisTest {
+class TagIndexTest : public vmsdk::ValkeyTest {
  public:
   void SetUp() override {
-    vmsdk::RedisTest::SetUp();
+    vmsdk::ValkeyTest::SetUp();
     data_model::TagIndex tag_index_proto;
     tag_index_proto.set_separator(",");
     tag_index_proto.set_case_sensitive(false);

@@ -101,7 +101,7 @@ vmsdk::module::Options options = {
         }  // namespace
     ,
     .on_load =
-        [](RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
+        [](ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
            [[maybe_unused]] const vmsdk::module::Options &options) {
           valkey_search::KeyspaceEventManager::InitInstance(
               std::make_unique<valkey_search::KeyspaceEventManager>());
@@ -112,7 +112,7 @@ vmsdk::module::Options options = {
                                                                 argc);
         },
     .on_unload =
-        [](RedisModuleCtx *ctx,
+        [](ValkeyModuleCtx *ctx,
            [[maybe_unused]] const vmsdk::module::Options &options) {
           valkey_search::ValkeySearch::Instance().OnUnload(ctx);
         },

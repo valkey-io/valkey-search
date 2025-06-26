@@ -45,16 +45,16 @@ inline grpc::Status ToGrpcStatus(const absl::Status& status) {
           std::string(status.message())};
 }
 namespace coordinator {
-// This offset results in 26673 for Redis default port 6379 - which is COORD
+// This offset results in 26673 for Valkey default port 6379 - which is COORD
 // on a telephone keypad.
 static constexpr int kCoordinatorPortOffset = 20294;
 
-inline int GetCoordinatorPort(int redis_port) {
+inline int GetCoordinatorPort(int valkey_port) {
   // TODO Make handling of TLS more robust
-  if (redis_port == 6378) {
-    return redis_port + kCoordinatorPortOffset + 1;
+  if (valkey_port == 6378) {
+    return valkey_port + kCoordinatorPortOffset + 1;
   }
-  return redis_port + kCoordinatorPortOffset;
+  return valkey_port + kCoordinatorPortOffset;
 }
 }  // namespace coordinator
 

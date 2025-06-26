@@ -99,7 +99,7 @@ bool VerifyFilter(const query::Predicate *predicate,
 }
 
 absl::StatusOr<RecordsMap> GetContentNoReturnJson(
-    RedisModuleCtx *ctx, const AttributeDataType &attribute_data_type,
+    ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::VectorSearchParameters &parameters, absl::string_view key,
     const std::string &vector_identifier) {
   absl::flat_hash_set<absl::string_view> identifiers;
@@ -119,8 +119,8 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     return absl::NotFoundError("Verify filter failed");
   }
   RecordsMap return_content;
-  static const vmsdk::UniqueRedisString kJsonRootElementQueryPtr =
-      vmsdk::MakeUniqueRedisString(kJsonRootElementQuery);
+  static const vmsdk::UniqueValkeyString kJsonRootElementQueryPtr =
+      vmsdk::MakeUniqueValkeyString(kJsonRootElementQuery);
   return_content.emplace(
       kJsonRootElementQuery,
       RecordsMapValue(
@@ -130,7 +130,7 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
 }
 
 absl::StatusOr<RecordsMap> GetContent(
-    RedisModuleCtx *ctx, const AttributeDataType &attribute_data_type,
+    ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::VectorSearchParameters &parameters, absl::string_view key,
     const std::string &vector_identifier) {
   if (attribute_data_type.ToProto() ==
@@ -173,7 +173,7 @@ absl::StatusOr<RecordsMap> GetContent(
         vmsdk::ToStringView(return_attribute.identifier.get()),
         RecordsMapValue(
             return_attribute.identifier.get(),
-            vmsdk::RetainUniqueRedisString(itr->second.value.get())));
+            vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
   }
   return return_content;
 }
@@ -181,7 +181,7 @@ absl::StatusOr<RecordsMap> GetContent(
 //
 // Any neighbors already contained in the attribute content map will be skipped.
 // Any data not found locally will be skipped.
-void ProcessNeighborsForReply(RedisModuleCtx *ctx,
+void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
                               const AttributeDataType &attribute_data_type,
                               std::deque<indexes::Neighbor> &neighbors,
                               const query::VectorSearchParameters &parameters,

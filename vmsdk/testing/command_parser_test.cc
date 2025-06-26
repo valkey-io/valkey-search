@@ -110,7 +110,7 @@ class CBTestCommandParser {
   }
   virtual ~CBTestCommandParser() = default;
 
-  absl::StatusOr<TestParameters> Parse(RedisModuleString **argv, int argc) {
+  absl::StatusOr<TestParameters> Parse(ValkeyModuleString **argv, int argc) {
     TestParameters test_params;
     ArgsIterator itr{argv, argc};
     VMSDK_RETURN_IF_ERROR(param_parsers_.Parse(test_params, itr));
@@ -123,12 +123,12 @@ class CBTestCommandParser {
 };
 
 class KeyValueParserTest
-    : public vmsdk::RedisTestWithParam<KeyValueParseTestCase> {};
+    : public vmsdk::ValkeyTestWithParam<KeyValueParseTestCase> {};
 
 TEST_P(KeyValueParserTest, ParseParams) {
   const KeyValueParseTestCase &test_case = GetParam();
   static CBTestCommandParser parser;
-  auto args = ToRedisStringVector(test_case.params_str);
+  auto args = ToValkeyStringVector(test_case.params_str);
   auto params = parser.Parse(&args[0], args.size());
   EXPECT_EQ(params.ok(), test_case.success);
   if (params.ok()) {
@@ -147,7 +147,7 @@ TEST_P(KeyValueParserTest, ParseParams) {
     }
   }
   for (const auto &arg : args) {
-    TestRedisModule_FreeString(nullptr, arg);
+    TestValkeyModule_FreeString(nullptr, arg);
   }
 }
 
@@ -223,14 +223,14 @@ struct ParseParamsTestCase {
   bool expected_iterator_last{false};
 };
 
-class ParseParamsTest : public vmsdk::RedisTestWithParam<ParseParamsTestCase> {
+class ParseParamsTest : public vmsdk::ValkeyTestWithParam<ParseParamsTestCase> {
 };
 
 template <typename T>
 void DoTest(bool expected_success, const std::string &expected_err_msg,
             const T expected_parsed_value, const ParseParamsTestCase &test_case,
             auto parse_func) {
-  auto args = ToRedisStringVector(test_case.args_str);
+  auto args = ToValkeyStringVector(test_case.args_str);
   ArgsIterator itr{args.data(), static_cast<int>(args.size())};
   T parsed_value;
   auto res = parse_func(test_case.parse_key, test_case.is_mandatory, itr,
@@ -246,10 +246,10 @@ void DoTest(bool expected_success, const std::string &expected_err_msg,
       EXPECT_EQ(expected_err_msg, res.status().message());
     }
   }
-  auto redis_str = itr.Get();
-  EXPECT_EQ(!test_case.expected_iterator_last, redis_str.ok());
+  auto valkey_str = itr.Get();
+  EXPECT_EQ(!test_case.expected_iterator_last, valkey_str.ok());
   for (const auto &arg : args) {
-    TestRedisModule_FreeString(nullptr, arg);
+    TestValkeyModule_FreeString(nullptr, arg);
   }
 }
 

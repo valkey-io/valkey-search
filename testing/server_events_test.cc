@@ -55,15 +55,15 @@ class ServerEventsTest : public ValkeySearchTest {};
 
 TEST_F(ServerEventsTest, SubscribesToServerEvents) {
   EXPECT_CALL(
-      *kMockRedisModule,
+      *kMockValkeyModule,
       SubscribeToServerEvent(
-          testing::_, vmsdk::IsRedisModuleEvent(RedisModuleEvent_CronLoop),
+          testing::_, vmsdk::IsValkeyModuleEvent(ValkeyModuleEvent_CronLoop),
           testing::_))
       .WillOnce(testing::Return(1));
   EXPECT_CALL(
-      *kMockRedisModule,
+      *kMockValkeyModule,
       SubscribeToServerEvent(
-          testing::_, vmsdk::IsRedisModuleEvent(RedisModuleEvent_ForkChild),
+          testing::_, vmsdk::IsValkeyModuleEvent(ValkeyModuleEvent_ForkChild),
           testing::_))
       .WillOnce(testing::Return(1));
 #ifndef TESTING_TMP_DISABLED
@@ -72,21 +72,21 @@ TEST_F(ServerEventsTest, SubscribesToServerEvents) {
       .WillOnce(testing::Return(1));
 #endif  // TESTING_TMP_DISABLED
   EXPECT_CALL(
-      *kMockRedisModule,
-      SubscribeToServerEvent(testing::_,
-                             vmsdk::IsRedisModuleEvent(RedisModuleEvent_SwapDB),
-                             testing::_))
-      .WillOnce(testing::Return(1));
-  EXPECT_CALL(
-      *kMockRedisModule,
+      *kMockValkeyModule,
       SubscribeToServerEvent(
-          testing::_, vmsdk::IsRedisModuleEvent(RedisModuleEvent_Loading),
+          testing::_, vmsdk::IsValkeyModuleEvent(ValkeyModuleEvent_SwapDB),
           testing::_))
       .WillOnce(testing::Return(1));
   EXPECT_CALL(
-      *kMockRedisModule,
+      *kMockValkeyModule,
       SubscribeToServerEvent(
-          testing::_, vmsdk::IsRedisModuleEvent(RedisModuleEvent_FlushDB),
+          testing::_, vmsdk::IsValkeyModuleEvent(ValkeyModuleEvent_Loading),
+          testing::_))
+      .WillOnce(testing::Return(1));
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      SubscribeToServerEvent(
+          testing::_, vmsdk::IsValkeyModuleEvent(ValkeyModuleEvent_FlushDB),
           testing::_))
       .WillOnce(testing::Return(1));
   SubscribeToServerEvents();

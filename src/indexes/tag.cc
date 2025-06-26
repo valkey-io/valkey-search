@@ -188,20 +188,20 @@ absl::StatusOr<bool> Tag::RemoveRecord(const InternedStringPtr& key,
   return true;
 }
 
-int Tag::RespondWithInfo(RedisModuleCtx* ctx) const {
+int Tag::RespondWithInfo(ValkeyModuleCtx* ctx) const {
   auto num_replies = 6;
-  RedisModule_ReplyWithSimpleString(ctx, "type");
-  RedisModule_ReplyWithSimpleString(ctx, "TAG");
-  RedisModule_ReplyWithSimpleString(ctx, "SEPARATOR");
-  RedisModule_ReplyWithSimpleString(
+  ValkeyModule_ReplyWithSimpleString(ctx, "type");
+  ValkeyModule_ReplyWithSimpleString(ctx, "TAG");
+  ValkeyModule_ReplyWithSimpleString(ctx, "SEPARATOR");
+  ValkeyModule_ReplyWithSimpleString(
       ctx, std::string(&separator_, sizeof(char)).c_str());
   if (case_sensitive_) {
     num_replies++;
-    RedisModule_ReplyWithSimpleString(ctx, "CASESENSITIVE");
+    ValkeyModule_ReplyWithSimpleString(ctx, "CASESENSITIVE");
   }
-  RedisModule_ReplyWithSimpleString(ctx, "size");
+  ValkeyModule_ReplyWithSimpleString(ctx, "size");
   absl::MutexLock lock(&index_mutex_);
-  RedisModule_ReplyWithCString(
+  ValkeyModule_ReplyWithCString(
       ctx, std::to_string(tracked_tags_by_keys_.size()).c_str());
   return num_replies;
 }

@@ -250,7 +250,7 @@ TEST_P(NormalizeStringRecordTest, NormalizeStringRecord) {
                                  kInitialCap, kM, kEFConstruction, kEFRuntime),
       "attribute_identifier_1",
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
-  auto record = vmsdk::MakeUniqueRedisString(params.record);
+  auto record = vmsdk::MakeUniqueValkeyString(params.record);
   auto norm_record = index.value()->NormalizeStringRecord(std::move(record));
   if (!params.success) {
     EXPECT_FALSE(norm_record.get());

@@ -66,23 +66,23 @@ void SetSinkFormatter(LogFormatterFunc formatter);
 class ValkeyLogSink : public absl::LogSink {
  public:
   void Send(const absl::LogEntry& entry) override;
-  void SetContext(RedisModuleCtx* ctx) { ctx_ = ctx; }
+  void SetContext(ValkeyModuleCtx* ctx) { ctx_ = ctx; }
 
  private:
-  RedisModuleCtx* ctx_{nullptr};
+  ValkeyModuleCtx* ctx_{nullptr};
 };
 
 class ValkeyIOLogSink : public absl::LogSink {
  public:
   void Send(const absl::LogEntry& entry) override;
-  void SetModuleIO(RedisModuleIO* io) { io_ = io; }
+  void SetModuleIO(ValkeyModuleIO* io) { io_ = io; }
 
  private:
-  RedisModuleIO* io_{nullptr};
+  ValkeyModuleIO* io_{nullptr};
 };
 
 absl::Status InitLogging(
-    RedisModuleCtx* ctx,
+    ValkeyModuleCtx* ctx,
     std::optional<std::string> log_level_str = std::nullopt);
 
 static thread_local ValkeyLogSink log_sink;

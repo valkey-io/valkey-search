@@ -77,13 +77,15 @@ inline absl::flat_hash_set<absl::string_view> PrefixACLPermissions(
   return ret;
 }
 
-absl::Status FTCreateCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
+absl::Status FTCreateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc);
-absl::Status FTDropIndexCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
+absl::Status FTDropIndexCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc);
-absl::Status FTInfoCmd(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
-absl::Status FTListCmd(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
-absl::Status FTSearchCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
+absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                       int argc);
+absl::Status FTListCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                       int argc);
+absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc);
 }  // namespace valkey_search
 

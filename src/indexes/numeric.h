@@ -114,7 +114,7 @@ class Numeric : public IndexBase {
   absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
                                     absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  int RespondWithInfo(RedisModuleCtx* ctx) const override;
+  int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
   bool IsTracked(const InternedStringPtr& key) const override;
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
     return absl::OkStatus();

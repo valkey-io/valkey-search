@@ -102,8 +102,8 @@ class NumericPredicate : public Predicate {
   absl::string_view GetIdentifier() const {
     return vmsdk::ToStringView(identifier_.get());
   }
-  vmsdk::UniqueRedisString GetRetainedIdentifier() const {
-    return vmsdk::RetainUniqueRedisString(identifier_.get());
+  vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
+    return vmsdk::RetainUniqueValkeyString(identifier_.get());
   }
   double GetStart() const { return start_; }
   bool IsStartInclusive() const { return is_inclusive_start_; }
@@ -114,7 +114,7 @@ class NumericPredicate : public Predicate {
 
  private:
   const indexes::Numeric* index_;
-  vmsdk::UniqueRedisString identifier_;
+  vmsdk::UniqueValkeyString identifier_;
   double start_;
   bool is_inclusive_start_;
   double end_;
@@ -133,15 +133,15 @@ class TagPredicate : public Predicate {
   absl::string_view GetIdentifier() const {
     return vmsdk::ToStringView(identifier_.get());
   }
-  vmsdk::UniqueRedisString GetRetainedIdentifier() const {
-    return vmsdk::RetainUniqueRedisString(identifier_.get());
+  vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
+    return vmsdk::RetainUniqueValkeyString(identifier_.get());
   }
   const std::string& GetTagString() const { return raw_tag_string_; }
   const absl::flat_hash_set<std::string>& GetTags() const { return tags_; }
 
  private:
   const indexes::Tag* index_;
-  vmsdk::UniqueRedisString identifier_;
+  vmsdk::UniqueValkeyString identifier_;
   std::string raw_tag_string_;
   absl::flat_hash_set<std::string> tags_;
 };

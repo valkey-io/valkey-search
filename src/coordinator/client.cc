@@ -88,7 +88,7 @@ grpc::ChannelArguments& GetChannelArgs() {
 }
 
 std::shared_ptr<Client> ClientImpl::MakeInsecureClient(
-    vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx,
+    vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx,
     absl::string_view address) {
   std::shared_ptr<grpc::ChannelCredentials> creds =
       grpc::InsecureChannelCredentials();
@@ -98,7 +98,7 @@ std::shared_ptr<Client> ClientImpl::MakeInsecureClient(
                                       Coordinator::NewStub(channel));
 }
 
-ClientImpl::ClientImpl(vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx,
+ClientImpl::ClientImpl(vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx,
                        absl::string_view address,
                        std::unique_ptr<Coordinator::Stub> stub)
     : detached_ctx_(std::move(detached_ctx)),

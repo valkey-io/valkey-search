@@ -54,15 +54,15 @@ TrackedBlockedClients() {
 // VM_BlockClient, while subsequent calls simply increment an internal reference
 // count. VM_UnblockClient is only called once the reference count returns to
 // zero.
-BlockedClient::BlockedClient(RedisModuleCtx *ctx, bool handle_duplication) {
+BlockedClient::BlockedClient(ValkeyModuleCtx *ctx, bool handle_duplication) {
   if (handle_duplication) {
-    unsigned long long tracked_client_id = RedisModule_GetClientId(ctx);
+    unsigned long long tracked_client_id = ValkeyModule_GetClientId(ctx);
     if (tracked_client_id != 0) {
       absl::MutexLock lock(&blocked_clients_mutex);
       auto it = TrackedBlockedClients().find(tracked_client_id);
       if (it == TrackedBlockedClients().end()) {
         blocked_client_ =
-            RedisModule_BlockClient(ctx, nullptr, nullptr, nullptr, 0);
+            ValkeyModule_BlockClient(ctx, nullptr, nullptr, nullptr, 0);
         if (!blocked_client_) {
           return;
         }
@@ -77,15 +77,15 @@ BlockedClient::BlockedClient(RedisModuleCtx *ctx, bool handle_duplication) {
       return;
     }
   }
-  blocked_client_ = RedisModule_BlockClient(ctx, nullptr, nullptr, nullptr, 0);
+  blocked_client_ = ValkeyModule_BlockClient(ctx, nullptr, nullptr, nullptr, 0);
 }
 
-BlockedClient::BlockedClient(RedisModuleCtx *ctx,
-                             RedisModuleCmdFunc reply_callback,
-                             RedisModuleCmdFunc timeout_callback,
-                             void (*free_privdata)(RedisModuleCtx *, void *),
+BlockedClient::BlockedClient(ValkeyModuleCtx *ctx,
+                             ValkeyModuleCmdFunc reply_callback,
+                             ValkeyModuleCmdFunc timeout_callback,
+                             void (*free_privdata)(ValkeyModuleCtx *, void *),
                              long long timeout_ms) {
-  blocked_client_ = RedisModule_BlockClient(
+  blocked_client_ = ValkeyModule_BlockClient(
       ctx, reply_callback, timeout_callback, free_privdata, timeout_ms);
 }
 
@@ -124,14 +124,14 @@ void BlockedClient::UnblockClient() {
     }
     TrackedBlockedClients().erase(tracked_client_id);
   }
-  RedisModule_UnblockClient(blocked_client, private_data);
+  ValkeyModule_UnblockClient(blocked_client, private_data);
 }
 
 void BlockedClient::MeasureTimeStart() {
   if (time_measurement_ongoing_ || !blocked_client_) {
     return;
   }
-  RedisModule_BlockedClientMeasureTimeStart(blocked_client_);
+  ValkeyModule_BlockedClientMeasureTimeStart(blocked_client_);
   time_measurement_ongoing_ = true;
 }
 
@@ -139,7 +139,7 @@ void BlockedClient::MeasureTimeEnd() {
   if (!time_measurement_ongoing_ || !blocked_client_) {
     return;
   }
-  RedisModule_BlockedClientMeasureTimeEnd(blocked_client_);
+  ValkeyModule_BlockedClientMeasureTimeEnd(blocked_client_);
   time_measurement_ongoing_ = false;
 }
 }  // namespace vmsdk

@@ -81,7 +81,7 @@ struct FTCreateParserTestCase {
 };
 
 class FTCreateParserTest
-    : public vmsdk::RedisTestWithParam<FTCreateParserTestCase> {};
+    : public vmsdk::ValkeyTestWithParam<FTCreateParserTestCase> {};
 
 void VerifyVectorParams(const data_model::VectorIndex &vector_index_proto,
                         const FTCreateVectorParameters *expected_params) {
@@ -103,7 +103,7 @@ TEST_P(FTCreateParserTest, ParseParams) {
                       "DISTANCE_METRIC IP ");
     }
   }
-  auto args = vmsdk::ToRedisStringVector(command_str);
+  auto args = vmsdk::ToValkeyStringVector(command_str);
   auto index_schema_proto =
       ParseFTCreateArgs(nullptr, args.data(), args.size());
   EXPECT_EQ(index_schema_proto.ok(), test_case.success);
@@ -198,7 +198,7 @@ TEST_P(FTCreateParserTest, ParseParams) {
               << "\n";
   }
   for (const auto &arg : args) {
-    TestRedisModule_FreeString(nullptr, arg);
+    TestValkeyModule_FreeString(nullptr, arg);
   }
 }
 

@@ -39,11 +39,11 @@ namespace vmsdk {
 
 class BlockedClient {
  public:
-  BlockedClient(RedisModuleCtx *ctx, bool handle_duplication);
-  BlockedClient(RedisModuleCtx *ctx,
-                RedisModuleCmdFunc reply_callback = nullptr,
-                RedisModuleCmdFunc timeout_callback = nullptr,
-                void (*free_privdata)(RedisModuleCtx *, void *) = nullptr,
+  BlockedClient(ValkeyModuleCtx *ctx, bool handle_duplication);
+  BlockedClient(ValkeyModuleCtx *ctx,
+                ValkeyModuleCmdFunc reply_callback = nullptr,
+                ValkeyModuleCmdFunc timeout_callback = nullptr,
+                void (*free_privdata)(ValkeyModuleCtx *, void *) = nullptr,
                 long long timeout_ms = 0);
   BlockedClient(BlockedClient &&other) noexcept
       : blocked_client_(std::exchange(other.blocked_client_, nullptr)),
@@ -57,7 +57,7 @@ class BlockedClient {
   BlockedClient(const BlockedClient &other) = delete;
   BlockedClient &operator=(const BlockedClient &other) = delete;
 
-  operator RedisModuleBlockedClient *() const { return blocked_client_; }
+  operator ValkeyModuleBlockedClient *() const { return blocked_client_; }
   void SetReplyPrivateData(void *private_data);
   void UnblockClient();
   void MeasureTimeStart();
@@ -65,7 +65,7 @@ class BlockedClient {
   ~BlockedClient() { UnblockClient(); }
 
  private:
-  RedisModuleBlockedClient *blocked_client_{nullptr};
+  ValkeyModuleBlockedClient *blocked_client_{nullptr};
   void *private_data_{nullptr};
   bool time_measurement_ongoing_{false};
   unsigned long long tracked_client_id_{0};
@@ -73,7 +73,7 @@ class BlockedClient {
 
 struct BlockedClientEntry {
   size_t cnt{0};
-  RedisModuleBlockedClient *blocked_client{nullptr};
+  ValkeyModuleBlockedClient *blocked_client{nullptr};
 };
 absl::flat_hash_map<unsigned long long, BlockedClientEntry> &
 TrackedBlockedClients();

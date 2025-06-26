@@ -46,17 +46,17 @@ namespace {
 
 class SafeRDBTest : public ValkeySearchTest {
  protected:
-  void SetUp() override { TestRedisModule_Init(); }
-  RedisModuleIO* fake_redis_module_io_ = (RedisModuleIO*)0xBADF00D1;
+  void SetUp() override { TestValkeyModule_Init(); }
+  ValkeyModuleIO* fake_valkey_module_io_ = (ValkeyModuleIO*)0xBADF00D1;
 };
 
 TEST_F(SafeRDBTest, LoadSizeTSuccess) {
   size_t expected_value = 34;
-  EXPECT_CALL(*kMockRedisModule, LoadUnsigned(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, LoadUnsigned(fake_valkey_module_io_))
       .WillOnce(testing::Return(expected_value));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(0));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   auto res = rdb_stream.LoadSizeT();
   VMSDK_EXPECT_OK(res);
   EXPECT_EQ(res.value(), expected_value);
@@ -64,22 +64,22 @@ TEST_F(SafeRDBTest, LoadSizeTSuccess) {
 
 TEST_F(SafeRDBTest, LoadSizeTFailure) {
   size_t expected_value = 34;
-  EXPECT_CALL(*kMockRedisModule, LoadUnsigned(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, LoadUnsigned(fake_valkey_module_io_))
       .WillOnce(testing::Return(expected_value));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(1));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   EXPECT_EQ(rdb_stream.LoadSizeT().status().code(),
             absl::StatusCode::kInternal);
 }
 
 TEST_F(SafeRDBTest, LoadUnsignedSuccess) {
   unsigned int expected_value = 34;
-  EXPECT_CALL(*kMockRedisModule, LoadUnsigned(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, LoadUnsigned(fake_valkey_module_io_))
       .WillOnce(testing::Return(expected_value));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(0));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   auto res = rdb_stream.LoadUnsigned();
   VMSDK_EXPECT_OK(res);
   EXPECT_EQ(res.value(), expected_value);
@@ -88,22 +88,22 @@ TEST_F(SafeRDBTest, LoadUnsignedSuccess) {
 TEST_F(SafeRDBTest, LoadUnsignedFailure) {
   unsigned int actual_value;
   unsigned int expected_value = 34;
-  EXPECT_CALL(*kMockRedisModule, LoadUnsigned(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, LoadUnsigned(fake_valkey_module_io_))
       .WillOnce(testing::Return(expected_value));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(1));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   EXPECT_EQ(rdb_stream.LoadUnsigned().status().code(),
             absl::StatusCode::kInternal);
 }
 
 TEST_F(SafeRDBTest, LoadSignedSuccess) {
   int expected_value = 34;
-  EXPECT_CALL(*kMockRedisModule, LoadSigned(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, LoadSigned(fake_valkey_module_io_))
       .WillOnce(testing::Return(expected_value));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(0));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   auto res = rdb_stream.LoadSigned();
   VMSDK_EXPECT_OK(res);
   EXPECT_EQ(res.value(), expected_value);
@@ -111,11 +111,11 @@ TEST_F(SafeRDBTest, LoadSignedSuccess) {
 
 TEST_F(SafeRDBTest, LoadSignedFailure) {
   int expected_value = 34;
-  EXPECT_CALL(*kMockRedisModule, LoadSigned(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, LoadSigned(fake_valkey_module_io_))
       .WillOnce(testing::Return(expected_value));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(1));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   EXPECT_EQ(rdb_stream.LoadSigned().status().code(),
             absl::StatusCode::kInternal);
 }
@@ -123,11 +123,11 @@ TEST_F(SafeRDBTest, LoadSignedFailure) {
 TEST_F(SafeRDBTest, LoadDoubleSuccess) {
   double actual_value;
   double expected_value = 34.5;
-  EXPECT_CALL(*kMockRedisModule, LoadDouble(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, LoadDouble(fake_valkey_module_io_))
       .WillOnce(testing::Return(expected_value));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(0));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   auto res = rdb_stream.LoadDouble();
   VMSDK_EXPECT_OK(res);
   EXPECT_EQ(res.value(), expected_value);
@@ -135,129 +135,129 @@ TEST_F(SafeRDBTest, LoadDoubleSuccess) {
 
 TEST_F(SafeRDBTest, LoadDoubleFailure) {
   double expected_value = 34.5;
-  EXPECT_CALL(*kMockRedisModule, LoadDouble(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, LoadDouble(fake_valkey_module_io_))
       .WillOnce(testing::Return(expected_value));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(1));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   EXPECT_EQ(rdb_stream.LoadDouble().status().code(),
             absl::StatusCode::kInternal);
 }
 
 TEST_F(SafeRDBTest, LoadStringSuccess) {
-  RedisModuleString* expected_value =
-      TestRedisModule_CreateStringPrintf(nullptr, "test");
-  EXPECT_CALL(*kMockRedisModule, LoadString(fake_redis_module_io_))
+  ValkeyModuleString* expected_value =
+      TestValkeyModule_CreateStringPrintf(nullptr, "test");
+  EXPECT_CALL(*kMockValkeyModule, LoadString(fake_valkey_module_io_))
       .WillOnce(testing::Return(expected_value));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(0));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   auto actual_value_or = rdb_stream.LoadString();
   VMSDK_EXPECT_OK(actual_value_or.status());
   EXPECT_EQ(actual_value_or.value().get(), expected_value);
 }
 
 TEST_F(SafeRDBTest, LoadStringFailure) {
-  RedisModuleString* expected_value =
-      TestRedisModule_CreateStringPrintf(nullptr, "test");
-  EXPECT_CALL(*kMockRedisModule, LoadString(fake_redis_module_io_))
+  ValkeyModuleString* expected_value =
+      TestValkeyModule_CreateStringPrintf(nullptr, "test");
+  EXPECT_CALL(*kMockValkeyModule, LoadString(fake_valkey_module_io_))
       .WillOnce(testing::Return(expected_value));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(1));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   EXPECT_EQ(rdb_stream.LoadString().status().code(),
             absl::StatusCode::kInternal);
 }
 
 TEST_F(SafeRDBTest, SaveSizeTSuccess) {
   size_t value = 34;
-  EXPECT_CALL(*kMockRedisModule, SaveUnsigned(fake_redis_module_io_, value));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, SaveUnsigned(fake_valkey_module_io_, value));
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(0));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   VMSDK_EXPECT_OK(rdb_stream.SaveSizeT(value));
 }
 
 TEST_F(SafeRDBTest, SaveSizeTFailure) {
   size_t value = 34;
-  EXPECT_CALL(*kMockRedisModule, SaveUnsigned(fake_redis_module_io_, value));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, SaveUnsigned(fake_valkey_module_io_, value));
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(1));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   EXPECT_EQ(rdb_stream.SaveSizeT(value).code(), absl::StatusCode::kInternal);
 }
 
 TEST_F(SafeRDBTest, SaveUnsignedSuccess) {
   unsigned int value = 34;
-  EXPECT_CALL(*kMockRedisModule, SaveUnsigned(fake_redis_module_io_, value));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, SaveUnsigned(fake_valkey_module_io_, value));
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(0));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   VMSDK_EXPECT_OK(rdb_stream.SaveUnsigned(value));
 }
 
 TEST_F(SafeRDBTest, SaveUnsignedFailure) {
   unsigned int value = 34;
-  EXPECT_CALL(*kMockRedisModule, SaveUnsigned(fake_redis_module_io_, value));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, SaveUnsigned(fake_valkey_module_io_, value));
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(1));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   EXPECT_EQ(rdb_stream.SaveUnsigned(value).code(), absl::StatusCode::kInternal);
 }
 
 TEST_F(SafeRDBTest, SaveSignedSuccess) {
   int64_t value = 34;
-  EXPECT_CALL(*kMockRedisModule, SaveSigned(fake_redis_module_io_, value));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, SaveSigned(fake_valkey_module_io_, value));
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(0));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   VMSDK_EXPECT_OK(rdb_stream.SaveSigned(value));
 }
 
 TEST_F(SafeRDBTest, SaveSignedFailure) {
   int64_t value = 34;
-  EXPECT_CALL(*kMockRedisModule, SaveSigned(fake_redis_module_io_, value));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, SaveSigned(fake_valkey_module_io_, value));
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(1));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   EXPECT_EQ(rdb_stream.SaveSigned(value).code(), absl::StatusCode::kInternal);
 }
 
 TEST_F(SafeRDBTest, SaveDoubleSuccess) {
   double value = 34.5;
-  EXPECT_CALL(*kMockRedisModule, SaveDouble(fake_redis_module_io_, value));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, SaveDouble(fake_valkey_module_io_, value));
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(0));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   VMSDK_EXPECT_OK(rdb_stream.SaveDouble(value));
 }
 
 TEST_F(SafeRDBTest, SaveDoubleFailure) {
   double value = 34.5;
-  EXPECT_CALL(*kMockRedisModule, SaveDouble(fake_redis_module_io_, value));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, SaveDouble(fake_valkey_module_io_, value));
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(1));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   EXPECT_EQ(rdb_stream.SaveDouble(value).code(), absl::StatusCode::kInternal);
 }
 
 TEST_F(SafeRDBTest, SaveStringBufferSuccess) {
   absl::string_view value = "test";
-  EXPECT_CALL(*kMockRedisModule, SaveStringBuffer(fake_redis_module_io_,
-                                                  value.data(), value.size()));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, SaveStringBuffer(fake_valkey_module_io_,
+                                                   value.data(), value.size()));
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(0));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   VMSDK_EXPECT_OK(rdb_stream.SaveStringBuffer(value));
 }
 
 TEST_F(SafeRDBTest, SaveStringBufferFailureIOError) {
   absl::string_view value = "test";
-  EXPECT_CALL(*kMockRedisModule, SaveStringBuffer(fake_redis_module_io_,
-                                                  value.data(), value.size()));
-  EXPECT_CALL(*kMockRedisModule, IsIOError(fake_redis_module_io_))
+  EXPECT_CALL(*kMockValkeyModule, SaveStringBuffer(fake_valkey_module_io_,
+                                                   value.data(), value.size()));
+  EXPECT_CALL(*kMockValkeyModule, IsIOError(fake_valkey_module_io_))
       .WillOnce(testing::Return(1));
-  SafeRDB rdb_stream(fake_redis_module_io_);
+  SafeRDB rdb_stream(fake_valkey_module_io_);
   EXPECT_EQ(rdb_stream.SaveStringBuffer(value).code(),
             absl::StatusCode::kInternal);
 }
@@ -265,13 +265,13 @@ TEST_F(SafeRDBTest, SaveStringBufferFailureIOError) {
 class MockRDBSectionCallback {
  public:
   MOCK_METHOD(absl::Status, load,
-              (RedisModuleCtx * ctx,
+              (ValkeyModuleCtx * ctx,
                std::unique_ptr<data_model::RDBSection> section,
                SupplementalContentIter&& iter));
   MOCK_METHOD(absl::Status, save,
-              (RedisModuleCtx * ctx, SafeRDB* rdb, int when));
-  MOCK_METHOD(int, section_count, (RedisModuleCtx * ctx, int when));
-  MOCK_METHOD(int, minimum_semantic_version, (RedisModuleCtx * ctx, int when));
+              (ValkeyModuleCtx * ctx, SafeRDB* rdb, int when));
+  MOCK_METHOD(int, section_count, (ValkeyModuleCtx * ctx, int when));
+  MOCK_METHOD(int, minimum_semantic_version, (ValkeyModuleCtx * ctx, int when));
 };
 
 class RDBSerializationTest : public ValkeySearchTest {
@@ -280,9 +280,9 @@ class RDBSerializationTest : public ValkeySearchTest {
     std::shared_ptr<MockRDBSectionCallback> mock_callbacks;
     RDBSectionCallbacks callbacks_struct;
   };
-  void SetUp() override { TestRedisModule_Init(); }
+  void SetUp() override { TestValkeyModule_Init(); }
   void TearDown() override {
-    TestRedisModule_Teardown();
+    TestValkeyModule_Teardown();
     ClearRDBCallbacks();
   }
   TestRDBSectionCallbacks GenerateRDBSectionCallbacks() {
@@ -290,21 +290,21 @@ class RDBSerializationTest : public ValkeySearchTest {
         std::make_shared<testing::NiceMock<MockRDBSectionCallback>>();
     RDBSectionCallbacks callbacks_struct{
         .load =
-            [mock_callbacks](RedisModuleCtx* ctx,
+            [mock_callbacks](ValkeyModuleCtx* ctx,
                              std::unique_ptr<data_model::RDBSection> section,
                              SupplementalContentIter&& iter) {
               return mock_callbacks->load(ctx, std::move(section),
                                           std::move(iter));
             },
         .save = [mock_callbacks](
-                    RedisModuleCtx* ctx, SafeRDB* rdb,
+                    ValkeyModuleCtx* ctx, SafeRDB* rdb,
                     int when) { return mock_callbacks->save(ctx, rdb, when); },
         .section_count =
-            [mock_callbacks](RedisModuleCtx* ctx, int when) {
+            [mock_callbacks](ValkeyModuleCtx* ctx, int when) {
               return mock_callbacks->section_count(ctx, when);
             },
         .minimum_semantic_version =
-            [mock_callbacks](RedisModuleCtx* ctx, int when) {
+            [mock_callbacks](ValkeyModuleCtx* ctx, int when) {
               return mock_callbacks->minimum_semantic_version(ctx, when);
             },
     };
@@ -317,30 +317,30 @@ class RDBSerializationTest : public ValkeySearchTest {
 
 TEST_F(RDBSerializationTest, RegisterModuleTypeHappyPath) {
   EXPECT_CALL(
-      *kMockRedisModule,
+      *kMockValkeyModule,
       CreateDataType(&fake_ctx_, testing::StrEq(kValkeySearchModuleTypeName),
                      kCurrentEncVer, testing::_))
       .WillOnce(testing::Invoke(
-          [](RedisModuleCtx* ctx, const char* name, int encver,
-             RedisModuleTypeMethods* type_methods) -> RedisModuleType* {
+          [](ValkeyModuleCtx* ctx, const char* name, int encver,
+             ValkeyModuleTypeMethods* type_methods) -> ValkeyModuleType* {
             EXPECT_EQ(type_methods->aux_load, AuxLoadCallback);
             EXPECT_EQ(type_methods->aux_save2, AuxSaveCallback);
             EXPECT_EQ(type_methods->aux_save, nullptr);
             EXPECT_EQ(type_methods->aux_save_triggers,
-                      REDISMODULE_AUX_AFTER_RDB);
-            return (RedisModuleType*)0xBAADF00D;
+                      VALKEYMODULE_AUX_AFTER_RDB);
+            return (ValkeyModuleType*)0xBAADF00D;
           }));
   VMSDK_EXPECT_OK(RegisterModuleType(&fake_ctx_));
 }
 
 TEST_F(RDBSerializationTest, RegisterModuleTypeReturnNullptr) {
   EXPECT_CALL(
-      *kMockRedisModule,
+      *kMockValkeyModule,
       CreateDataType(&fake_ctx_, testing::StrEq(kValkeySearchModuleTypeName),
                      kCurrentEncVer, testing::_))
       .WillOnce(testing::Invoke(
-          [](RedisModuleCtx* ctx, const char* name, int encver,
-             RedisModuleTypeMethods* type_methods) -> RedisModuleType* {
+          [](ValkeyModuleCtx* ctx, const char* name, int encver,
+             ValkeyModuleTypeMethods* type_methods) -> ValkeyModuleType* {
             return nullptr;
           }));
   EXPECT_EQ(RegisterModuleType(&fake_ctx_).code(), absl::StatusCode::kInternal);
@@ -349,7 +349,7 @@ TEST_F(RDBSerializationTest, RegisterModuleTypeReturnNullptr) {
 TEST_F(RDBSerializationTest, PerformRDBSaveNoRegisteredTypes) {
   FakeSafeRDB fake_rdb;
   VMSDK_EXPECT_OK(
-      PerformRDBSave(&fake_ctx_, &fake_rdb, REDISMODULE_AUX_BEFORE_RDB));
+      PerformRDBSave(&fake_ctx_, &fake_rdb, VALKEYMODULE_AUX_BEFORE_RDB));
   EXPECT_EQ(fake_rdb.buffer_.rdbuf()->in_avail(), 0);
 }
 
@@ -361,7 +361,7 @@ TEST_F(RDBSerializationTest, PerformRDBSaveNoRDBSectionDoesNothing) {
   EXPECT_CALL(*test_cb.mock_callbacks, save(testing::_, testing::_, testing::_))
       .Times(0);
   EXPECT_CALL(*test_cb.mock_callbacks,
-              section_count(&fake_ctx_, REDISMODULE_AUX_BEFORE_RDB))
+              section_count(&fake_ctx_, VALKEYMODULE_AUX_BEFORE_RDB))
       .WillOnce(testing::Return(0));
   EXPECT_CALL(*test_cb.mock_callbacks,
               minimum_semantic_version(testing::_, testing::_))
@@ -369,7 +369,7 @@ TEST_F(RDBSerializationTest, PerformRDBSaveNoRDBSectionDoesNothing) {
   RegisterRDBCallback(data_model::RDB_SECTION_INDEX_SCHEMA,
                       std::move(test_cb.callbacks_struct));
   VMSDK_EXPECT_OK(
-      PerformRDBSave(&fake_ctx_, &fake_rdb, REDISMODULE_AUX_BEFORE_RDB));
+      PerformRDBSave(&fake_ctx_, &fake_rdb, VALKEYMODULE_AUX_BEFORE_RDB));
   EXPECT_EQ(fake_rdb.buffer_.rdbuf()->in_avail(), 0);
 }
 
@@ -380,13 +380,13 @@ TEST_F(RDBSerializationTest, PerformRDBSaveOneRDBSection) {
       .Times(0);
   EXPECT_CALL(*test_cb.mock_callbacks, save(testing::_, testing::_, testing::_))
       .WillOnce(testing::Invoke(
-          [](RedisModuleCtx* ctx, SafeRDB* rdb, int when) -> absl::Status {
-            EXPECT_EQ(when, REDISMODULE_AUX_BEFORE_RDB);
+          [](ValkeyModuleCtx* ctx, SafeRDB* rdb, int when) -> absl::Status {
+            EXPECT_EQ(when, VALKEYMODULE_AUX_BEFORE_RDB);
             VMSDK_EXPECT_OK(rdb->SaveStringBuffer("test-string"));
             return absl::OkStatus();
           }));
   EXPECT_CALL(*test_cb.mock_callbacks,
-              section_count(&fake_ctx_, REDISMODULE_AUX_BEFORE_RDB))
+              section_count(&fake_ctx_, VALKEYMODULE_AUX_BEFORE_RDB))
       .WillOnce(testing::Return(1));
   EXPECT_CALL(*test_cb.mock_callbacks,
               minimum_semantic_version(testing::_, testing::_))
@@ -394,7 +394,7 @@ TEST_F(RDBSerializationTest, PerformRDBSaveOneRDBSection) {
   RegisterRDBCallback(data_model::RDB_SECTION_INDEX_SCHEMA,
                       std::move(test_cb.callbacks_struct));
   VMSDK_EXPECT_OK(
-      PerformRDBSave(&fake_ctx_, &fake_rdb, REDISMODULE_AUX_BEFORE_RDB));
+      PerformRDBSave(&fake_ctx_, &fake_rdb, VALKEYMODULE_AUX_BEFORE_RDB));
   auto sem_ver = fake_rdb.LoadUnsigned();
   VMSDK_EXPECT_OK_STATUSOR(sem_ver);
   EXPECT_EQ(sem_ver.value(), 0x0100ff);
@@ -417,14 +417,14 @@ TEST_F(RDBSerializationTest, PerformRDBSaveTwoRDBSection) {
     EXPECT_CALL(*test_cb.mock_callbacks,
                 save(testing::_, testing::_, testing::_))
         .WillOnce(testing::Invoke(
-            [i](RedisModuleCtx* ctx, SafeRDB* rdb, int when) -> absl::Status {
-              EXPECT_EQ(when, REDISMODULE_AUX_BEFORE_RDB);
+            [i](ValkeyModuleCtx* ctx, SafeRDB* rdb, int when) -> absl::Status {
+              EXPECT_EQ(when, VALKEYMODULE_AUX_BEFORE_RDB);
               std::string save_value = absl::StrCat("test-string-", i);
               VMSDK_EXPECT_OK(rdb->SaveStringBuffer(save_value));
               return absl::OkStatus();
             }));
     EXPECT_CALL(*test_cb.mock_callbacks,
-                section_count(&fake_ctx_, REDISMODULE_AUX_BEFORE_RDB))
+                section_count(&fake_ctx_, VALKEYMODULE_AUX_BEFORE_RDB))
         .WillOnce(testing::Return(1));
     EXPECT_CALL(*test_cb.mock_callbacks,
                 minimum_semantic_version(testing::_, testing::_))
@@ -435,7 +435,7 @@ TEST_F(RDBSerializationTest, PerformRDBSaveTwoRDBSection) {
   }
 
   VMSDK_EXPECT_OK(
-      PerformRDBSave(&fake_ctx_, &fake_rdb, REDISMODULE_AUX_BEFORE_RDB));
+      PerformRDBSave(&fake_ctx_, &fake_rdb, VALKEYMODULE_AUX_BEFORE_RDB));
   auto sem_ver = fake_rdb.LoadUnsigned();
   VMSDK_EXPECT_OK(sem_ver);
   EXPECT_EQ(sem_ver.value(), 0x0200ff);  // Larger of the two
@@ -465,11 +465,11 @@ TEST_F(RDBSerializationTest, PerformRDBSaveSectionSaveFail) {
       .Times(0);
   EXPECT_CALL(*test_cb.mock_callbacks, save(testing::_, testing::_, testing::_))
       .WillOnce(testing::Invoke(
-          [](RedisModuleCtx* ctx, SafeRDB* rdb, int when) -> absl::Status {
+          [](ValkeyModuleCtx* ctx, SafeRDB* rdb, int when) -> absl::Status {
             return absl::InternalError("test error");
           }));
   EXPECT_CALL(*test_cb.mock_callbacks,
-              section_count(&fake_ctx_, REDISMODULE_AUX_BEFORE_RDB))
+              section_count(&fake_ctx_, VALKEYMODULE_AUX_BEFORE_RDB))
       .WillOnce(testing::Return(1));
   EXPECT_CALL(*test_cb.mock_callbacks,
               minimum_semantic_version(testing::_, testing::_))
@@ -478,7 +478,7 @@ TEST_F(RDBSerializationTest, PerformRDBSaveSectionSaveFail) {
                       std::move(test_cb.callbacks_struct));
 
   EXPECT_EQ(
-      PerformRDBSave(&fake_ctx_, &fake_rdb, REDISMODULE_AUX_BEFORE_RDB).code(),
+      PerformRDBSave(&fake_ctx_, &fake_rdb, VALKEYMODULE_AUX_BEFORE_RDB).code(),
       absl::StatusCode::kInternal);
 }
 
@@ -493,13 +493,13 @@ TEST_F(RDBSerializationTest, PerformRDBSaveTwoRDBSectionOneEmpty) {
     if (i == 0) {
       EXPECT_CALL(*test_cb.mock_callbacks,
                   save(testing::_, testing::_, testing::_))
-          .WillOnce(testing::Invoke(
-              [i](RedisModuleCtx* ctx, SafeRDB* rdb, int when) -> absl::Status {
-                EXPECT_EQ(when, REDISMODULE_AUX_BEFORE_RDB);
-                std::string save_value = absl::StrCat("test-string-", i);
-                VMSDK_EXPECT_OK(rdb->SaveStringBuffer(save_value));
-                return absl::OkStatus();
-              }));
+          .WillOnce(testing::Invoke([i](ValkeyModuleCtx* ctx, SafeRDB* rdb,
+                                        int when) -> absl::Status {
+            EXPECT_EQ(when, VALKEYMODULE_AUX_BEFORE_RDB);
+            std::string save_value = absl::StrCat("test-string-", i);
+            VMSDK_EXPECT_OK(rdb->SaveStringBuffer(save_value));
+            return absl::OkStatus();
+          }));
       EXPECT_CALL(*test_cb.mock_callbacks,
                   minimum_semantic_version(testing::_, testing::_))
           .WillOnce(testing::Return(0x0100ff));
@@ -512,7 +512,7 @@ TEST_F(RDBSerializationTest, PerformRDBSaveTwoRDBSectionOneEmpty) {
           .Times(0);
     }
     EXPECT_CALL(*test_cb.mock_callbacks,
-                section_count(&fake_ctx_, REDISMODULE_AUX_BEFORE_RDB))
+                section_count(&fake_ctx_, VALKEYMODULE_AUX_BEFORE_RDB))
         .WillOnce(testing::Return(i == 0 ? 1 : 0));
     RegisterRDBCallback(i == 0 ? data_model::RDB_SECTION_INDEX_SCHEMA
                                : data_model::RDB_SECTION_GLOBAL_METADATA,
@@ -520,7 +520,7 @@ TEST_F(RDBSerializationTest, PerformRDBSaveTwoRDBSectionOneEmpty) {
   }
 
   VMSDK_EXPECT_OK(
-      PerformRDBSave(&fake_ctx_, &fake_rdb, REDISMODULE_AUX_BEFORE_RDB));
+      PerformRDBSave(&fake_ctx_, &fake_rdb, VALKEYMODULE_AUX_BEFORE_RDB));
   auto sem_ver = fake_rdb.LoadUnsigned();
   VMSDK_EXPECT_OK(sem_ver);
   EXPECT_EQ(sem_ver.value(), 0x0100ff);
@@ -594,7 +594,7 @@ TEST_F(RDBSerializationTest, PerformRDBLoadRDBSectionRegistered) {
   auto test_cb = GenerateRDBSectionCallbacks();
   EXPECT_CALL(*test_cb.mock_callbacks, load(testing::_, testing::_, testing::_))
       .WillOnce(
-          testing::Invoke([](RedisModuleCtx* ctx,
+          testing::Invoke([](ValkeyModuleCtx* ctx,
                              std::unique_ptr<data_model::RDBSection> section,
                              SupplementalContentIter&& iter) {
             EXPECT_EQ(section->type(), data_model::RDB_SECTION_INDEX_SCHEMA);
@@ -607,7 +607,7 @@ TEST_F(RDBSerializationTest, PerformRDBLoadRDBSectionRegistered) {
   EXPECT_CALL(*test_cb.mock_callbacks, save(testing::_, testing::_, testing::_))
       .Times(0);
   EXPECT_CALL(*test_cb.mock_callbacks,
-              section_count(&fake_ctx_, REDISMODULE_AUX_BEFORE_RDB))
+              section_count(&fake_ctx_, VALKEYMODULE_AUX_BEFORE_RDB))
       .Times(0);
   EXPECT_CALL(*test_cb.mock_callbacks,
               minimum_semantic_version(testing::_, testing::_))
@@ -631,7 +631,7 @@ TEST_F(RDBSerializationTest, PerformRDBLoadRDBSectionCallbackFailure) {
   auto test_cb = GenerateRDBSectionCallbacks();
   EXPECT_CALL(*test_cb.mock_callbacks, load(testing::_, testing::_, testing::_))
       .WillOnce(
-          testing::Invoke([](RedisModuleCtx* ctx,
+          testing::Invoke([](ValkeyModuleCtx* ctx,
                              std::unique_ptr<data_model::RDBSection> section,
                              SupplementalContentIter&& iter) {
             return absl::InternalError("test");
@@ -639,7 +639,7 @@ TEST_F(RDBSerializationTest, PerformRDBLoadRDBSectionCallbackFailure) {
   EXPECT_CALL(*test_cb.mock_callbacks, save(testing::_, testing::_, testing::_))
       .Times(0);
   EXPECT_CALL(*test_cb.mock_callbacks,
-              section_count(&fake_ctx_, REDISMODULE_AUX_BEFORE_RDB))
+              section_count(&fake_ctx_, VALKEYMODULE_AUX_BEFORE_RDB))
       .Times(0);
   EXPECT_CALL(*test_cb.mock_callbacks,
               minimum_semantic_version(testing::_, testing::_))

@@ -36,7 +36,7 @@
 #include "absl/time/time.h"
 #include "vmsdk/src/latency_sampler.h"
 
-// 2 is the value used by Redis and correlates to ~40KiB and ~1% precision.
+// 2 is the value used by Valkey and correlates to ~40KiB and ~1% precision.
 #define LATENCY_PRECISION 2
 
 namespace valkey_search {

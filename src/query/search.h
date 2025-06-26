@@ -64,16 +64,16 @@ struct LimitParameter {
 };
 
 struct ReturnAttribute {
-  vmsdk::UniqueRedisString identifier;
-  vmsdk::UniqueRedisString attribute_alias;
-  vmsdk::UniqueRedisString alias;
+  vmsdk::UniqueValkeyString identifier;
+  vmsdk::UniqueValkeyString attribute_alias;
+  vmsdk::UniqueValkeyString alias;
 };
 
 struct VectorSearchParameters {
   std::shared_ptr<IndexSchema> index_schema;
   std::string index_schema_name;
   std::string attribute_alias;
-  vmsdk::UniqueRedisString score_as;
+  vmsdk::UniqueValkeyString score_as;
   std::string query;
   uint32_t dialect{2};
   bool local_only{false};

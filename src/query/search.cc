@@ -276,13 +276,13 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
     neighbor.attribute_contents = RecordsMap();
     bool any_value_missing = false;
     for (auto &attribute_info : attributes) {
-      vmsdk::UniqueRedisString attribute_value = nullptr;
+      vmsdk::UniqueValkeyString attribute_value = nullptr;
       switch (attribute_info.index->GetIndexerType()) {
         case indexes::IndexerType::kTag: {
           auto tag_index = dynamic_cast<indexes::Tag *>(attribute_info.index);
           auto tag_value_ptr = tag_index->GetRawValue(neighbor.external_id);
           if (tag_value_ptr != nullptr) {
-            attribute_value = vmsdk::MakeUniqueRedisString(*tag_value_ptr);
+            attribute_value = vmsdk::MakeUniqueValkeyString(*tag_value_ptr);
           }
           break;
         }
@@ -292,7 +292,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
           auto numeric = numeric_index->GetValue(neighbor.external_id);
           if (numeric != nullptr) {
             attribute_value =
-                vmsdk::MakeUniqueRedisString(absl::StrCat(*numeric));
+                vmsdk::MakeUniqueValkeyString(absl::StrCat(*numeric));
           }
           break;
         }
@@ -305,11 +305,11 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
           if (vector.ok()) {
             if (parameters.index_schema->GetAttributeDataType().ToProto() ==
                 data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
-              attribute_value = vmsdk::MakeUniqueRedisString(
+              attribute_value = vmsdk::MakeUniqueValkeyString(
                   StringFormatVector(vector.value()));
             } else {
               attribute_value =
-                  vmsdk::UniqueRedisString(RedisModule_CreateString(
+                  vmsdk::UniqueValkeyString(ValkeyModule_CreateString(
                       nullptr, vector->data(), vector->size()));
             }
           } else {
@@ -326,7 +326,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
       }
 
       if (attribute_value != nullptr) {
-        auto identifier = vmsdk::MakeUniqueRedisString(
+        auto identifier = vmsdk::MakeUniqueValkeyString(
             vmsdk::ToStringView(attribute_info.attribute->identifier.get()));
         auto identifier_view = vmsdk::ToStringView(identifier.get());
         neighbor.attribute_contents->emplace(

@@ -57,23 +57,23 @@ class Attribute {
     attribute_proto->set_allocated_index(index_->ToProto().release());
     return attribute_proto;
   }
-  inline int RespondWithInfo(RedisModuleCtx* ctx) const {
-    RedisModule_ReplyWithArray(ctx, REDISMODULE_POSTPONED_LEN);
-    RedisModule_ReplyWithSimpleString(ctx, "identifier");
-    RedisModule_ReplyWithSimpleString(ctx, GetIdentifier().c_str());
-    RedisModule_ReplyWithSimpleString(ctx, "attribute");
-    RedisModule_ReplyWithSimpleString(ctx, GetAlias().c_str());
+  inline int RespondWithInfo(ValkeyModuleCtx* ctx) const {
+    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
+    ValkeyModule_ReplyWithSimpleString(ctx, "identifier");
+    ValkeyModule_ReplyWithSimpleString(ctx, GetIdentifier().c_str());
+    ValkeyModule_ReplyWithSimpleString(ctx, "attribute");
+    ValkeyModule_ReplyWithSimpleString(ctx, GetAlias().c_str());
     int added_fields = index_->RespondWithInfo(ctx);
-    RedisModule_ReplySetArrayLength(ctx, added_fields + 4);
+    ValkeyModule_ReplySetArrayLength(ctx, added_fields + 4);
     return 1;
   }
 
-  inline vmsdk::UniqueRedisString DefaultReplyScoreAs() const {
+  inline vmsdk::UniqueValkeyString DefaultReplyScoreAs() const {
     if (!cached_score_as_) {
       cached_score_as_ =
-          vmsdk::MakeUniqueRedisString(absl::StrCat("__", alias_, "_score"));
+          vmsdk::MakeUniqueValkeyString(absl::StrCat("__", alias_, "_score"));
     }
-    return vmsdk::RetainUniqueRedisString(cached_score_as_.get());
+    return vmsdk::RetainUniqueValkeyString(cached_score_as_.get());
   }
 
  private:
@@ -81,7 +81,7 @@ class Attribute {
   std::string identifier_;
   std::shared_ptr<indexes::IndexBase> index_;
   // Maintaining a cached version
-  mutable vmsdk::UniqueRedisString cached_score_as_;
+  mutable vmsdk::UniqueValkeyString cached_score_as_;
 };
 
 }  // namespace valkey_search

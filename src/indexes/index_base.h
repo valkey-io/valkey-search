@@ -74,7 +74,7 @@ class IndexBase {
                                             DeletionType deletion_type) = 0;
   virtual absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
                                             absl::string_view data) = 0;
-  virtual int RespondWithInfo(RedisModuleCtx* ctx) const = 0;
+  virtual int RespondWithInfo(ValkeyModuleCtx* ctx) const = 0;
   virtual bool IsTracked(const InternedStringPtr& key) const = 0;
   IndexerType GetIndexerType() const { return indexer_type_; }
   virtual absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const = 0;
@@ -83,8 +83,8 @@ class IndexBase {
   virtual void ForEachTrackedKey(
       absl::AnyInvocable<void(const InternedStringPtr&)> fn) const {}
 
-  virtual vmsdk::UniqueRedisString NormalizeStringRecord(
-      vmsdk::UniqueRedisString input) const {
+  virtual vmsdk::UniqueValkeyString NormalizeStringRecord(
+      vmsdk::UniqueValkeyString input) const {
     return input;
   }
   virtual uint64_t GetRecordCount() const = 0;

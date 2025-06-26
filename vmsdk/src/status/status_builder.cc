@@ -134,8 +134,8 @@ void StatusBuilder::ConditionallyLog(const absl::Status& status) const {
       }
     }
   }
-  RedisModule_Log(nullptr, REDISMODULE_LOGLEVEL_NOTICE, "%s:%d, %s",
-                  loc_.file_name(), loc_.line(), status.message().data());
+  ValkeyModule_Log(nullptr, VALKEYMODULE_LOGLEVEL_NOTICE, "%s:%d, %s",
+                   loc_.file_name(), loc_.line(), status.message().data());
 }
 
 absl::Status StatusBuilder::CreateStatusAndConditionallyLog() && {

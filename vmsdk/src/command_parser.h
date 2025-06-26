@@ -53,7 +53,8 @@ namespace vmsdk {
 
 class ArgsIterator {
  public:
-  ArgsIterator(RedisModuleString **argv, int argc) : argv_(argv), argc_(argc) {}
+  ArgsIterator(ValkeyModuleString **argv, int argc)
+      : argv_(argv), argc_(argc) {}
   absl::StatusOr<ArgsIterator> SubIterator(int distance) {
     if (distance <= 0) {
       return absl::InvalidArgumentError("distance must be positive");
@@ -63,7 +64,7 @@ class ArgsIterator {
     }
     return ArgsIterator(argv_ + itr_, distance);
   }
-  absl::StatusOr<RedisModuleString *> Get() {
+  absl::StatusOr<ValkeyModuleString *> Get() {
     if (itr_ >= argc_) {
       return absl::OutOfRangeError("Missing argument");
     }
@@ -81,7 +82,7 @@ class ArgsIterator {
 
  private:
   int itr_{0};
-  RedisModuleString **argv_;
+  ValkeyModuleString **argv_;
   int argc_;
 };
 
@@ -103,9 +104,9 @@ inline absl::Status ParseParamValue(ArgsIterator &itr,
 }
 
 inline absl::Status ParseParamValue(ArgsIterator &itr,
-                                    UniqueRedisString &value) {
+                                    UniqueValkeyString &value) {
   VMSDK_ASSIGN_OR_RETURN(auto value_rs, itr.Get());
-  value = RetainUniqueRedisString(value_rs);
+  value = RetainUniqueValkeyString(value_rs);
   itr.Next();
   return absl::OkStatus();
 }

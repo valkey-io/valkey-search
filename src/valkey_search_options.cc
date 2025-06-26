@@ -85,10 +85,10 @@ namespace config = vmsdk::config;
 
 // Register an enumerator for the log level
 static const std::vector<std::string_view> kLogLevelNames = {
-    REDISMODULE_LOGLEVEL_WARNING,
-    REDISMODULE_LOGLEVEL_NOTICE,
-    REDISMODULE_LOGLEVEL_VERBOSE,
-    REDISMODULE_LOGLEVEL_DEBUG,
+    VALKEYMODULE_LOGLEVEL_WARNING,
+    VALKEYMODULE_LOGLEVEL_NOTICE,
+    VALKEYMODULE_LOGLEVEL_VERBOSE,
+    VALKEYMODULE_LOGLEVEL_DEBUG,
 };
 
 static const std::vector<int> kLogLevelValues = {
@@ -132,8 +132,8 @@ static auto writer_threads_count =
 /// Should this instance use coordinator?
 static auto use_coordinator =
     config::BooleanBuilder(kUseCoordinator, false)
-        .WithFlags(REDISMODULE_CONFIG_HIDDEN)  // can only be set during
-                                               // start-up
+        .WithFlags(VALKEYMODULE_CONFIG_HIDDEN)  // can only be set during
+                                                // start-up
         .Build();
 
 /// Control the modules log level verbosity

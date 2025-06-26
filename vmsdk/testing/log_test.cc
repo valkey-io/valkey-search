@@ -65,21 +65,21 @@ class StreamMessageEvalCnt {
   std::string data_;
 };
 
-class LogTest : public vmsdk::RedisTest {
+class LogTest : public vmsdk::ValkeyTest {
  protected:
   void SetUp() override {
     SetSinkFormatter(nullptr);
-    RedisTest::SetUp();
+    ValkeyTest::SetUp();
   }
 };
 
 TEST_F(LogTest, WithInitValue) {
-  RedisModuleCtx ctx;
+  ValkeyModuleCtx ctx;
   VMSDK_EXPECT_OK(InitLogging(&ctx, "VERBOSE"));
   StreamMessageEvalCnt stream_eval_cnt("hello");
   EXPECT_CALL(
-      *kMockRedisModule,
-      Log(&ctx, testing::StrEq(REDISMODULE_LOGLEVEL_WARNING), testing::_))
+      *kMockValkeyModule,
+      Log(&ctx, testing::StrEq(VALKEYMODULE_LOGLEVEL_WARNING), testing::_))
       .Times(6);
   VMSDK_LOG(NOTICE, &ctx) << "s1, expected" << stream_eval_cnt;
   for (int i = 0; i < 9; ++i) {
@@ -101,17 +101,17 @@ std::string CustomSinkFormatter(const absl::LogEntry& entry) {
 }
 
 TEST_F(LogTest, SinkOptions) {
-  RedisModuleCtx ctx;
+  ValkeyModuleCtx ctx;
   VMSDK_EXPECT_OK(InitLogging(&ctx, "DEBUG"));
   SetSinkFormatter(CustomSinkFormatter);
   {
     ThreadPool thread_pool("test-pool-", 5);
     thread_pool.StartWorkers();
-    RedisModuleCtx fake_ctxes[10];
+    ValkeyModuleCtx fake_ctxes[10];
     for (int i = 0; i < 10; ++i) {
       EXPECT_CALL(
-          *kMockRedisModule,
-          Log(&fake_ctxes[i], testing::StrEq(REDISMODULE_LOGLEVEL_WARNING),
+          *kMockValkeyModule,
+          Log(&fake_ctxes[i], testing::StrEq(VALKEYMODULE_LOGLEVEL_WARNING),
               testing::_));
       thread_pool.Schedule(
           [&fake_ctxes, i]() mutable {
@@ -126,23 +126,23 @@ TEST_F(LogTest, SinkOptions) {
 }
 
 TEST_F(LogTest, WithoutInitValue) {
-  RedisModuleCtx ctx;
-  EXPECT_CALL(*kMockRedisModule,
+  ValkeyModuleCtx ctx;
+  EXPECT_CALL(*kMockValkeyModule,
               Call(&ctx, testing::StrEq("CONFIG"), testing::StrEq("cc"),
                    testing::StrEq("GET"), testing::StrEq("loglevel")))
-      .WillOnce([](RedisModuleCtx* ctx, const char* cmd, const char* fmt,
+      .WillOnce([](ValkeyModuleCtx* ctx, const char* cmd, const char* fmt,
                    const char* arg1,
-                   const char* arg2) -> RedisModuleCallReply* {
-        auto reply = new RedisModuleCallReply;
-        reply->msg = REDISMODULE_LOGLEVEL_NOTICE;
-        EXPECT_CALL(*kMockRedisModule, FreeCallReply(reply))
-            .WillOnce([](RedisModuleCallReply* reply) { delete reply; });
-        EXPECT_CALL(*kMockRedisModule, CallReplyArrayElement(reply, 1))
+                   const char* arg2) -> ValkeyModuleCallReply* {
+        auto reply = new ValkeyModuleCallReply;
+        reply->msg = VALKEYMODULE_LOGLEVEL_NOTICE;
+        EXPECT_CALL(*kMockValkeyModule, FreeCallReply(reply))
+            .WillOnce([](ValkeyModuleCallReply* reply) { delete reply; });
+        EXPECT_CALL(*kMockValkeyModule, CallReplyArrayElement(reply, 1))
             .WillOnce(testing::Return(reply));
-        EXPECT_CALL(*kMockRedisModule, CallReplyType(reply))
-            .WillOnce(testing::Return(REDISMODULE_REPLY_STRING));
-        EXPECT_CALL(*kMockRedisModule, CallReplyStringPtr(reply, testing::_))
-            .WillOnce([](RedisModuleCallReply* reply, size_t* len) {
+        EXPECT_CALL(*kMockValkeyModule, CallReplyType(reply))
+            .WillOnce(testing::Return(VALKEYMODULE_REPLY_STRING));
+        EXPECT_CALL(*kMockValkeyModule, CallReplyStringPtr(reply, testing::_))
+            .WillOnce([](ValkeyModuleCallReply* reply, size_t* len) {
               *len = reply->msg.size();
               return reply->msg.c_str();
             });
@@ -152,8 +152,8 @@ TEST_F(LogTest, WithoutInitValue) {
   StreamMessageEvalCnt stream_eval_cnt("hello");
 
   EXPECT_CALL(
-      *kMockRedisModule,
-      Log(&ctx, testing::StrEq(REDISMODULE_LOGLEVEL_NOTICE), testing::_));
+      *kMockValkeyModule,
+      Log(&ctx, testing::StrEq(VALKEYMODULE_LOGLEVEL_NOTICE), testing::_));
   VMSDK_LOG(NOTICE, &ctx) << "s1, expected" << stream_eval_cnt;
   VMSDK_LOG(DEBUG, &ctx) << "s2, not expected! " << stream_eval_cnt;
   VMSDK_LOG(DEBUG, &ctx) << "s3, not expected! " << stream_eval_cnt;
@@ -161,20 +161,20 @@ TEST_F(LogTest, WithoutInitValue) {
 }
 
 TEST_F(LogTest, WithoutInitValueConfigGetError) {
-  RedisModuleCtx ctx;
-  EXPECT_CALL(*kMockRedisModule,
+  ValkeyModuleCtx ctx;
+  EXPECT_CALL(*kMockValkeyModule,
               Call(&ctx, testing::StrEq("CONFIG"), testing::StrEq("cc"),
                    testing::StrEq("GET"), testing::StrEq("loglevel")))
       .WillOnce(
-          [](RedisModuleCtx* ctx, const char* cmd, const char* fmt,
+          [](ValkeyModuleCtx* ctx, const char* cmd, const char* fmt,
              const char* arg1,
-             const char* arg2) -> RedisModuleCallReply* { return nullptr; });
+             const char* arg2) -> ValkeyModuleCallReply* { return nullptr; });
   VMSDK_EXPECT_OK(InitLogging(&ctx, std::nullopt));
   StreamMessageEvalCnt stream_eval_cnt("hello");
 
   EXPECT_CALL(
-      *kMockRedisModule,
-      Log(&ctx, testing::StrEq(REDISMODULE_LOGLEVEL_NOTICE), testing::_));
+      *kMockValkeyModule,
+      Log(&ctx, testing::StrEq(VALKEYMODULE_LOGLEVEL_NOTICE), testing::_));
   VMSDK_LOG(NOTICE, &ctx) << "s1, expected" << stream_eval_cnt;
   VMSDK_LOG(DEBUG, &ctx) << "s2, not expected! " << stream_eval_cnt;
   VMSDK_LOG(DEBUG, &ctx) << "s3, not expected! " << stream_eval_cnt;
@@ -182,12 +182,12 @@ TEST_F(LogTest, WithoutInitValueConfigGetError) {
 }
 
 TEST_F(LogTest, IOWithInitValue) {
-  RedisModuleCtx ctx;
-  RedisModuleIO io;
+  ValkeyModuleCtx ctx;
+  ValkeyModuleIO io;
   VMSDK_EXPECT_OK(InitLogging(&ctx, "VERBOSE"));
   StreamMessageEvalCnt stream_eval_cnt("hello");
 
-  EXPECT_CALL(*kMockRedisModule, LogIOError(&io, testing::_, testing::_))
+  EXPECT_CALL(*kMockValkeyModule, LogIOError(&io, testing::_, testing::_))
       .Times(6);
   VMSDK_IO_LOG(NOTICE, &io) << "s1, expected" << stream_eval_cnt;
   for (int i = 0; i < 9; ++i) {

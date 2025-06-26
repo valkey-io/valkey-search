@@ -180,8 +180,8 @@ void* __wrap_malloc(size_t size) noexcept {
   }
   // Forcing 16-byte alignment in Valkey, which may otherwise return 8-byte
   // aligned memory.
-  return vmsdk::PerformAndTrackMalloc(AlignSize(size), RedisModule_Alloc,
-                                      RedisModule_MallocUsableSize);
+  return vmsdk::PerformAndTrackMalloc(AlignSize(size), ValkeyModule_Alloc,
+                                      ValkeyModule_MallocUsableSize);
 }
 void __wrap_free(void* ptr) noexcept {
   if (ptr == nullptr) {
@@ -196,8 +196,8 @@ void __wrap_free(void* ptr) noexcept {
   if (was_tracked || !vmsdk::IsUsingValkeyAlloc()) {
     vmsdk::PerformAndTrackFree(ptr, __real_free, empty_usable_size);
   } else {
-    vmsdk::PerformAndTrackFree(ptr, RedisModule_Free,
-                               RedisModule_MallocUsableSize);
+    vmsdk::PerformAndTrackFree(ptr, ValkeyModule_Free,
+                               ValkeyModule_MallocUsableSize);
   }
 }
 // NOLINTNEXTLINE
@@ -208,8 +208,8 @@ void* __wrap_calloc(size_t __nmemb, size_t size) noexcept {
     vmsdk::SystemAllocTracker::GetInstance().TrackPointer(ptr);
     return ptr;
   }
-  return vmsdk::PerformAndTrackCalloc(__nmemb, AlignSize(size), RedisModule_Calloc,
-                                      RedisModule_MallocUsableSize);
+  return vmsdk::PerformAndTrackCalloc(__nmemb, AlignSize(size), ValkeyModule_Calloc,
+                                      ValkeyModule_MallocUsableSize);
 }
 
 void* __wrap_realloc(void* ptr, size_t size) noexcept {
@@ -221,8 +221,8 @@ void* __wrap_realloc(void* ptr, size_t size) noexcept {
     // Forcing 16-byte alignment in Valkey, which may otherwise return 8-byte
     // aligned memory.
     return vmsdk::PerformAndTrackRealloc(ptr, AlignSize(size),
-                                         RedisModule_Realloc,
-                                         RedisModule_MallocUsableSize);
+                                         ValkeyModule_Realloc,
+                                         ValkeyModule_MallocUsableSize);
   } else {
     auto new_ptr = vmsdk::PerformAndTrackRealloc(ptr, size, __real_realloc,
                                                  empty_usable_size);
@@ -240,15 +240,15 @@ void* __wrap_aligned_alloc(size_t __alignment, size_t __size) noexcept {
   }
 
   return vmsdk::PerformAndTrackMalloc(AlignSize(__size, __alignment),
-                                      RedisModule_Alloc,
-                                      RedisModule_MallocUsableSize);
+                                      ValkeyModule_Alloc,
+                                      ValkeyModule_MallocUsableSize);
 }
 
 int __wrap_malloc_usable_size(void* ptr) noexcept {
   if (vmsdk::SystemAllocTracker::GetInstance().IsTracked(ptr)) {
     return empty_usable_size(ptr);
   }
-  return RedisModule_MallocUsableSize(ptr);
+  return ValkeyModule_MallocUsableSize(ptr);
 }
 
 // NOLINTNEXTLINE

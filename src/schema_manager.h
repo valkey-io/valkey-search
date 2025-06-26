@@ -58,7 +58,7 @@ constexpr uint32_t kMetadataEncodingVersion = 1;
 
 class SchemaManager {
  public:
-  SchemaManager(RedisModuleCtx *ctx,
+  SchemaManager(ValkeyModuleCtx *ctx,
                 absl::AnyInvocable<void()> server_events_subscriber_callback,
                 vmsdk::ThreadPool *mutations_thread_pool,
                 bool coordinator_enabled);
@@ -67,7 +67,7 @@ class SchemaManager {
   SchemaManager &operator=(const SchemaManager &) = delete;
 
   absl::Status CreateIndexSchema(
-      RedisModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto)
+      ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   absl::Status ImportIndexSchema(std::shared_ptr<IndexSchema> index_schema)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
@@ -88,33 +88,33 @@ class SchemaManager {
           std::atomic<uint64_t>> &(const IndexSchema::Stats &) const>
           get_result_cnt_func) const;
 
-  void OnFlushDBEnded(RedisModuleCtx *ctx);
-  void OnSwapDB(RedisModuleSwapDbInfo *swap_db_info);
+  void OnFlushDBEnded(ValkeyModuleCtx *ctx);
+  void OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info);
 
-  void OnLoadingEnded(RedisModuleCtx *ctx)
+  void OnLoadingEnded(ValkeyModuleCtx *ctx)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
-  void OnReplicationLoadStart(RedisModuleCtx *ctx);
+  void OnReplicationLoadStart(ValkeyModuleCtx *ctx);
 
-  void PerformBackfill(RedisModuleCtx *ctx, uint32_t batch_size)
+  void PerformBackfill(ValkeyModuleCtx *ctx, uint32_t batch_size)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
 
-  void OnFlushDBCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
+  void OnFlushDBCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                          uint64_t subevent, void *data)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
 
-  void OnLoadingCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
+  void OnLoadingCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                          uint64_t subevent, void *data);
 
-  void OnServerCronCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
+  void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                             uint64_t subevent, void *data);
 
   static void InitInstance(std::unique_ptr<SchemaManager> instance);
   static SchemaManager &Instance();
 
-  absl::Status LoadIndex(RedisModuleCtx *ctx,
+  absl::Status LoadIndex(ValkeyModuleCtx *ctx,
                          std::unique_ptr<data_model::RDBSection> section,
                          SupplementalContentIter &&supplemental_iter);
-  absl::Status SaveIndexes(RedisModuleCtx *ctx, SafeRDB *rdb, int when);
+  absl::Status SaveIndexes(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when);
 
  private:
   absl::Status RemoveAll()
@@ -122,7 +122,7 @@ class SchemaManager {
   absl::AnyInvocable<void()> server_events_subscriber_callback_;
   bool is_subscribed_to_server_events_ = false;
   vmsdk::ThreadPool *mutations_thread_pool_;
-  vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx_;
+  vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
 
   static absl::StatusOr<uint64_t> ComputeFingerprint(
       const google::protobuf::Any &metadata);
@@ -131,7 +131,7 @@ class SchemaManager {
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
 
   absl::Status CreateIndexSchemaInternal(
-      RedisModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto)
+      ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
   absl::StatusOr<std::shared_ptr<IndexSchema>> RemoveIndexSchemaInternal(
       uint32_t db_num, absl::string_view name)

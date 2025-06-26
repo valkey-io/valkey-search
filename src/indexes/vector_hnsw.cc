@@ -159,7 +159,7 @@ void VectorHNSW<T>::UnTrackVector(uint64_t internal_id) {}
 
 template <typename T>
 absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
-    RedisModuleCtx *ctx, const AttributeDataType *attribute_data_type,
+    ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier,
     SupplementalContentChunkIter &&iter) {
@@ -225,32 +225,32 @@ absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
 }
 
 template <typename T>
-int VectorHNSW<T>::RespondWithInfoImpl(RedisModuleCtx *ctx) const {
-  RedisModule_ReplyWithSimpleString(ctx, "data_type");
+int VectorHNSW<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
+  ValkeyModule_ReplyWithSimpleString(ctx, "data_type");
   if constexpr (std::is_same_v<T, float>) {
-    RedisModule_ReplyWithSimpleString(
+    ValkeyModule_ReplyWithSimpleString(
         ctx,
         LookupKeyByValue(*kVectorDataTypeByStr,
                          data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32)
             .data());
   } else {
-    RedisModule_ReplyWithSimpleString(ctx, "UNKNOWN");
+    ValkeyModule_ReplyWithSimpleString(ctx, "UNKNOWN");
   }
-  RedisModule_ReplyWithSimpleString(ctx, "algorithm");
-  RedisModule_ReplyWithArray(ctx, 8);
-  RedisModule_ReplyWithSimpleString(ctx, "name");
-  RedisModule_ReplyWithSimpleString(
+  ValkeyModule_ReplyWithSimpleString(ctx, "algorithm");
+  ValkeyModule_ReplyWithArray(ctx, 8);
+  ValkeyModule_ReplyWithSimpleString(ctx, "name");
+  ValkeyModule_ReplyWithSimpleString(
       ctx,
       LookupKeyByValue(*kVectorAlgoByStr,
                        data_model::VectorIndex::AlgorithmCase::kHnswAlgorithm)
           .data());
-  RedisModule_ReplyWithSimpleString(ctx, "m");
+  ValkeyModule_ReplyWithSimpleString(ctx, "m");
   absl::ReaderMutexLock lock(&resize_mutex_);
-  RedisModule_ReplyWithLongLong(ctx, GetM());
-  RedisModule_ReplyWithSimpleString(ctx, "ef_construction");
-  RedisModule_ReplyWithLongLong(ctx, GetEfConstruction());
-  RedisModule_ReplyWithSimpleString(ctx, "ef_runtime");
-  RedisModule_ReplyWithLongLong(ctx, GetEfRuntime());
+  ValkeyModule_ReplyWithLongLong(ctx, GetM());
+  ValkeyModule_ReplyWithSimpleString(ctx, "ef_construction");
+  ValkeyModule_ReplyWithLongLong(ctx, GetEfConstruction());
+  ValkeyModule_ReplyWithSimpleString(ctx, "ef_runtime");
+  ValkeyModule_ReplyWithLongLong(ctx, GetEfRuntime());
   return 4;
 }
 

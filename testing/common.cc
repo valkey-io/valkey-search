@@ -89,7 +89,7 @@ void TestableValkeySearch::InitThreadPools(std::optional<size_t> readers,
 }
 
 absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateVectorHNSWSchema(
-    std::string index_schema_key, RedisModuleCtx *fake_ctx,
+    std::string index_schema_key, ValkeyModuleCtx *fake_ctx,
     vmsdk::ThreadPool *writer_thread_pool,
     const std::vector<absl::string_view> *key_prefixes,
     int32_t index_schema_db_num) {
@@ -110,11 +110,11 @@ absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateVectorHNSWSchema(
 }
 
 absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateIndexSchema(
-    std::string index_schema_key, RedisModuleCtx *fake_ctx,
+    std::string index_schema_key, ValkeyModuleCtx *fake_ctx,
     vmsdk::ThreadPool *writer_thread_pool,
     const std::vector<absl::string_view> *key_prefixes,
     int32_t index_schema_db_num) {
-  RedisModuleCtx local_fake_ctx;
+  ValkeyModuleCtx local_fake_ctx;
   if (fake_ctx == nullptr) {
     fake_ctx = &local_fake_ctx;
   }
@@ -122,9 +122,9 @@ absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateIndexSchema(
   if (key_prefixes == nullptr) {
     key_prefixes = &local_key_prefixes;
   }
-  ON_CALL(*kMockRedisModule, GetSelectedDb(fake_ctx))
+  ON_CALL(*kMockValkeyModule, GetSelectedDb(fake_ctx))
       .WillByDefault(testing::Return(index_schema_db_num));
-  EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(testing::_))
+  EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
       .WillRepeatedly(testing::Return(fake_ctx));
   VMSDK_ASSIGN_OR_RETURN(
       auto test_index_schema,
@@ -176,12 +176,12 @@ indexes::Neighbor ToIndexesNeighbor(const NeighborTest &neighbor_test) {
     for (const auto &attribute_contents :
          neighbor_test.attribute_contents.value()) {
       auto attribute_alias =
-          vmsdk::MakeUniqueRedisString(attribute_contents.first);
+          vmsdk::MakeUniqueValkeyString(attribute_contents.first);
       neighbor.attribute_contents.value().emplace(
           vmsdk::ToStringView(attribute_alias.get()),
           RecordsMapValue(
               std::move(attribute_alias),
-              vmsdk::MakeUniqueRedisString(attribute_contents.second)));
+              vmsdk::MakeUniqueValkeyString(attribute_contents.second)));
     }
   }
   return neighbor;
@@ -206,8 +206,8 @@ query::ReturnAttribute ToReturnAttribute(
     const TestReturnAttribute &test_return_attribute) {
   return query::ReturnAttribute{
       .identifier =
-          vmsdk::MakeUniqueRedisString(test_return_attribute.identifier),
-      .alias = vmsdk::MakeUniqueRedisString(test_return_attribute.alias)};
+          vmsdk::MakeUniqueValkeyString(test_return_attribute.identifier),
+      .alias = vmsdk::MakeUniqueValkeyString(test_return_attribute.alias)};
 }
 
 std::unordered_map<std::string, std::string> ToStringMap(

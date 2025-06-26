@@ -37,19 +37,19 @@
 
 namespace valkey_search {
 
-absl::Status FTCreateCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
+absl::Status FTCreateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc) {
   VMSDK_ASSIGN_OR_RETURN(auto index_schema_proto,
                          ParseFTCreateArgs(ctx, argv + 1, argc - 1));
-  index_schema_proto.set_db_num(RedisModule_GetSelectedDb(ctx));
+  index_schema_proto.set_db_num(ValkeyModule_GetSelectedDb(ctx));
   static const auto permissions =
       PrefixACLPermissions(kCreateCmdPermissions, kCreateCommand);
   VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, permissions, index_schema_proto));
   VMSDK_RETURN_IF_ERROR(
       SchemaManager::Instance().CreateIndexSchema(ctx, index_schema_proto));
 
-  RedisModule_ReplyWithSimpleString(ctx, "OK");
-  RedisModule_ReplicateVerbatim(ctx);
+  ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+  ValkeyModule_ReplicateVerbatim(ctx);
   return absl::OkStatus();
 }
 }  // namespace valkey_search

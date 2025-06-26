@@ -45,20 +45,20 @@
 namespace vmsdk {
 namespace module {
 
-absl::Status RegisterInfo(RedisModuleCtx *ctx, RedisModuleInfoFunc info) {
+absl::Status RegisterInfo(ValkeyModuleCtx *ctx, ValkeyModuleInfoFunc info) {
   if (info == nullptr) {
     return absl::OkStatus();
   }
-  if (RedisModule_RegisterInfoFunc(ctx, info) == REDISMODULE_ERR) {
+  if (ValkeyModule_RegisterInfoFunc(ctx, info) == VALKEYMODULE_ERR) {
     return absl::InternalError("Failed to register info");
   }
   return absl::OkStatus();
 }
 
 absl::Status AddACLCategories(
-    RedisModuleCtx *ctx, const std::list<absl::string_view> &acl_categories) {
+    ValkeyModuleCtx *ctx, const std::list<absl::string_view> &acl_categories) {
   for (auto &category : acl_categories) {
-    if (RedisModule_AddACLCategory(ctx, category.data()) == REDISMODULE_ERR) {
+    if (ValkeyModule_AddACLCategory(ctx, category.data()) == VALKEYMODULE_ERR) {
       return absl::InternalError(absl::StrCat(
           "Failed to create a command ACL category: ", category.data()));
     }
@@ -66,22 +66,22 @@ absl::Status AddACLCategories(
   return absl::OkStatus();
 }
 
-absl::Status RegisterCommands(RedisModuleCtx *ctx,
+absl::Status RegisterCommands(ValkeyModuleCtx *ctx,
                               const std::list<CommandOptions> &commands) {
   for (auto &command : commands) {
     auto flags = absl::StrJoin(command.flags, " ");
-    if (RedisModule_CreateCommand(ctx, command.cmd_name.data(),
-                                  command.cmd_func, flags.c_str(),
-                                  command.first_key, command.last_key,
-                                  command.key_step) == REDISMODULE_ERR) {
+    if (ValkeyModule_CreateCommand(ctx, command.cmd_name.data(),
+                                   command.cmd_func, flags.c_str(),
+                                   command.first_key, command.last_key,
+                                   command.key_step) == VALKEYMODULE_ERR) {
       return absl::InternalError(
           absl::StrCat("Failed to create command: ", command.cmd_name.data()));
     }
-    RedisModuleCommand *cmd =
-        RedisModule_GetCommand(ctx, command.cmd_name.data());
+    ValkeyModuleCommand *cmd =
+        ValkeyModule_GetCommand(ctx, command.cmd_name.data());
     auto permissions = absl::StrJoin(command.permissions, " ");
-    if (RedisModule_SetCommandACLCategories(cmd, permissions.c_str()) ==
-        REDISMODULE_ERR) {
+    if (ValkeyModule_SetCommandACLCategories(cmd, permissions.c_str()) ==
+        VALKEYMODULE_ERR) {
       return absl::InternalError(
           absl::StrCat("Failed to set ACL categories `", permissions,
                        "` for the command: ", command.cmd_name.data()));
@@ -90,85 +90,86 @@ absl::Status RegisterCommands(RedisModuleCtx *ctx,
   return absl::OkStatus();
 }
 
-int OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
+int OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
            const Options &options) {
-  if (RedisModule_Init(ctx, options.name.c_str(), options.version,
-                       REDISMODULE_APIVER_1) == REDISMODULE_ERR) {
-    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_WARNING, "Failed to init module");
-    return REDISMODULE_ERR;
+  if (ValkeyModule_Init(ctx, options.name.c_str(), options.version,
+                        VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) {
+    ValkeyModule_Log(ctx, VALKEYMODULE_LOGLEVEL_WARNING,
+                     "Failed to init module");
+    return VALKEYMODULE_ERR;
   }
   auto status = vmsdk::InitLogging(ctx);
   if (!status.ok()) {
-    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_WARNING,
-                    "Failed to init logging, %s", status.message().data());
-    return REDISMODULE_ERR;
+    ValkeyModule_Log(ctx, VALKEYMODULE_LOGLEVEL_WARNING,
+                     "Failed to init logging, %s", status.message().data());
+    return VALKEYMODULE_ERR;
   }
   if (auto status = AddACLCategories(ctx, options.acl_categories);
       !status.ok()) {
-    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_WARNING, "%s",
-                    status.message().data());
-    return REDISMODULE_ERR;
+    ValkeyModule_Log(ctx, VALKEYMODULE_LOGLEVEL_WARNING, "%s",
+                     status.message().data());
+    return VALKEYMODULE_ERR;
   }
   if (auto status = RegisterCommands(ctx, options.commands); !status.ok()) {
-    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_WARNING, "%s",
-                    status.message().data());
-    return REDISMODULE_ERR;
+    ValkeyModule_Log(ctx, VALKEYMODULE_LOGLEVEL_WARNING, "%s",
+                     status.message().data());
+    return VALKEYMODULE_ERR;
   }
   // Initialize counters for request count metric
   if (auto status = RegisterInfo(ctx, options.info); !status.ok()) {
-    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_WARNING, "%s",
-                    status.message().data());
-    return REDISMODULE_ERR;
+    ValkeyModule_Log(ctx, VALKEYMODULE_LOGLEVEL_WARNING, "%s",
+                     status.message().data());
+    return VALKEYMODULE_ERR;
   }
-  return REDISMODULE_OK;
+  return VALKEYMODULE_OK;
 }
 
-int OnLoadDone(absl::Status status, RedisModuleCtx *ctx,
+int OnLoadDone(absl::Status status, ValkeyModuleCtx *ctx,
                const Options &options) {
   if (status.ok()) {
     VMSDK_LOG(NOTICE, ctx) << options.name
                            << " module was successfully loaded!";
     vmsdk::UseValkeyAlloc();
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
   }
   VMSDK_LOG(WARNING, ctx) << status.message().data();
-  return REDISMODULE_ERR;
+  return VALKEYMODULE_ERR;
 }
 }  // namespace module
 
-bool IsModuleLoaded(RedisModuleCtx *ctx, const std::string &name) {
+bool IsModuleLoaded(ValkeyModuleCtx *ctx, const std::string &name) {
   static absl::flat_hash_set<std::string> loaded_modules;
   if (loaded_modules.contains(name)) {
     return true;
   }
 
   auto reply =
-      UniquePtrRedisCallReply(RedisModule_Call(ctx, "MODULE", "c", "LIST"));
+      UniquePtrValkeyCallReply(ValkeyModule_Call(ctx, "MODULE", "c", "LIST"));
   if (!reply ||
-      RedisModule_CallReplyType(reply.get()) != REDISMODULE_REPLY_ARRAY) {
+      ValkeyModule_CallReplyType(reply.get()) != VALKEYMODULE_REPLY_ARRAY) {
     return false;
   }
 
-  size_t num_modules = RedisModule_CallReplyLength(reply.get());
+  size_t num_modules = ValkeyModule_CallReplyLength(reply.get());
   for (size_t i = 0; i < num_modules; ++i) {
-    RedisModuleCallReply *mod_info =
-        RedisModule_CallReplyArrayElement(reply.get(), i);
+    ValkeyModuleCallReply *mod_info =
+        ValkeyModule_CallReplyArrayElement(reply.get(), i);
     if (!mod_info ||
-        RedisModule_CallReplyType(mod_info) != REDISMODULE_REPLY_ARRAY) {
+        ValkeyModule_CallReplyType(mod_info) != VALKEYMODULE_REPLY_ARRAY) {
       continue;
     }
 
-    size_t len = RedisModule_CallReplyLength(mod_info);
+    size_t len = ValkeyModule_CallReplyLength(mod_info);
 
     for (size_t j = 0; j + 1 < len; j += 2) {
-      RedisModuleCallReply *key =
-          RedisModule_CallReplyArrayElement(mod_info, j);
-      RedisModuleCallReply *val =
-          RedisModule_CallReplyArrayElement(mod_info, j + 1);
+      ValkeyModuleCallReply *key =
+          ValkeyModule_CallReplyArrayElement(mod_info, j);
+      ValkeyModuleCallReply *val =
+          ValkeyModule_CallReplyArrayElement(mod_info, j + 1);
 
       size_t key_len, val_len;
-      const char *key_str = RedisModule_CallReplyStringPtr(key, &key_len);
-      const char *val_str = RedisModule_CallReplyStringPtr(val, &val_len);
+      const char *key_str = ValkeyModule_CallReplyStringPtr(key, &key_len);
+      const char *val_str = ValkeyModule_CallReplyStringPtr(val, &val_len);
       absl::string_view module_key{key_str, key_len};
       absl::string_view module_value{val_str, val_len};
 

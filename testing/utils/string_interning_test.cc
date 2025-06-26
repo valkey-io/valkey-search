@@ -44,7 +44,7 @@ using testing::TestParamInfo;
 
 namespace {
 
-class StringInterningTest : public vmsdk::RedisTestWithParam<bool> {};
+class StringInterningTest : public vmsdk::ValkeyTestWithParam<bool> {};
 
 TEST_F(StringInterningTest, BasicTest) {
   EXPECT_EQ(StringInternStore::Instance().Size(), 0);

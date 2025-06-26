@@ -64,7 +64,7 @@ class Tag : public IndexBase {
   absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
                                     absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  int RespondWithInfo(RedisModuleCtx* ctx) const override;
+  int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
   bool IsTracked(const InternedStringPtr& key) const override;
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
     return absl::OkStatus();
@@ -123,7 +123,7 @@ class Tag : public IndexBase {
           size_(size),
           entries_(entries),
           negate_(negate),
-          untracked_keys_(untracked_keys){};
+          untracked_keys_(untracked_keys) {};
     size_t Size() const override;
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 

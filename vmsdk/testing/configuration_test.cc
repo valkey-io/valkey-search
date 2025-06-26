@@ -38,9 +38,9 @@ namespace vmsdk {
 
 namespace {
 
-inline void FreeRedisArgs(std::vector<RedisModuleString *> &args) {
+inline void FreeValkeyArgs(std::vector<ValkeyModuleString *> &args) {
   for (const auto &arg : args) {
-    TestRedisModule_FreeString(nullptr, arg);
+    TestValkeyModule_FreeString(nullptr, arg);
   }
 }
 
@@ -49,11 +49,11 @@ using ::testing::Eq;
 using ::testing::StrEq;
 using vmsdk::config::ModuleConfigManager;
 
-class ConfigTest : public vmsdk::RedisTest {
+class ConfigTest : public vmsdk::ValkeyTest {
  protected:
-  RedisModuleCtx fake_ctx;
-  void SetUp() override { vmsdk::RedisTest::SetUp(); }
-  void TearDown() override { vmsdk::RedisTest::TearDown(); }
+  ValkeyModuleCtx fake_ctx;
+  void SetUp() override { vmsdk::ValkeyTest::SetUp(); }
+  void TearDown() override { vmsdk::ValkeyTest::TearDown(); }
 };
 
 TEST_F(ConfigTest, registration) {
@@ -61,12 +61,12 @@ TEST_F(ConfigTest, registration) {
   vmsdk::config::Boolean boolean("boolean", true);
 
   // 2 integer registration
-  EXPECT_CALL(*kMockRedisModule,
+  EXPECT_CALL(*kMockValkeyModule,
               RegisterNumericConfig(&fake_ctx, StrEq("number"), Eq(42), _,
                                     Eq(0), Eq(1024), _, _, _, Eq(&number)))
       .Times(testing::AtLeast(1));
 
-  EXPECT_CALL(*kMockRedisModule,
+  EXPECT_CALL(*kMockValkeyModule,
               RegisterBoolConfig(&fake_ctx, StrEq("boolean"), Eq(1), _, _, _, _,
                                  Eq(&boolean)))
       .Times(testing::AtLeast(1));
@@ -185,7 +185,7 @@ TEST_F(ConfigTest, parseArgsHappyPath) {
 
   // Happy path
   auto args =
-      vmsdk::ToRedisStringVector("--my-bool no --my-number 10 --my-enum 4");
+      vmsdk::ToValkeyStringVector("--my-bool no --my-number 10 --my-enum 4");
   auto res = ModuleConfigManager::Instance().Init(&fake_ctx);
   EXPECT_TRUE(res.ok());
   res = ModuleConfigManager::Instance().ParseAndLoadArgv(&fake_ctx, args.data(),
@@ -196,11 +196,11 @@ TEST_F(ConfigTest, parseArgsHappyPath) {
   EXPECT_EQ(enumerator->GetValue(), 4);
   EXPECT_EQ(number_config->GetValue(), 10);
 
-  FreeRedisArgs(args);
+  FreeValkeyArgs(args);
 }
 
 TEST_F(ConfigTest, ParseArgsWithUnknownArgument) {
-  auto args = vmsdk::ToRedisStringVector("--my-bool no");
+  auto args = vmsdk::ToValkeyStringVector("--my-bool no");
   auto res = ModuleConfigManager::Instance().Init(&fake_ctx);
   EXPECT_TRUE(res.ok());
 
@@ -208,39 +208,39 @@ TEST_F(ConfigTest, ParseArgsWithUnknownArgument) {
                                                          args.size());
   EXPECT_FALSE(res.ok());
   EXPECT_TRUE(absl::IsUnknown(res));
-  FreeRedisArgs(args);
+  FreeValkeyArgs(args);
 }
 
 // we made an exception for --use-coordinator, test it
 TEST_F(ConfigTest, ParseArgsUseCoordinator) {
   auto use_coordinator =
       config::Builder<bool>("use-coordinator", false).Build();
-  auto args = vmsdk::ToRedisStringVector("--use-coordinator");
+  auto args = vmsdk::ToValkeyStringVector("--use-coordinator");
   auto res = ModuleConfigManager::Instance().Init(&fake_ctx);
   EXPECT_TRUE(res.ok());
   res = ModuleConfigManager::Instance().ParseAndLoadArgv(&fake_ctx, args.data(),
                                                          args.size());
   EXPECT_TRUE(res.ok());
   EXPECT_TRUE(use_coordinator->GetValue());
-  FreeRedisArgs(args);
+  FreeValkeyArgs(args);
 }
 
 TEST_F(ConfigTest, ParseArgsInvalidFormat) {
   auto boolean = config::Builder<bool>("enable-something", false).Build();
-  auto args = vmsdk::ToRedisStringVector("enable-something yes");
+  auto args = vmsdk::ToValkeyStringVector("enable-something yes");
   auto res = ModuleConfigManager::Instance().Init(&fake_ctx);
   EXPECT_TRUE(res.ok());
   res = ModuleConfigManager::Instance().ParseAndLoadArgv(&fake_ctx, args.data(),
                                                          args.size());
   // missing "--" prefix yields "InvalidArgument" error
   EXPECT_TRUE(absl::IsInvalidArgument(res));
-  FreeRedisArgs(args);
+  FreeValkeyArgs(args);
 }
 
 TEST_F(ConfigTest, ParseArgsMissingValue) {
   auto number =
       config::Builder<long long>("possible-answers", 42, 0, 1024).Build();
-  auto args = vmsdk::ToRedisStringVector("--possible-answers");
+  auto args = vmsdk::ToValkeyStringVector("--possible-answers");
   auto res = ModuleConfigManager::Instance().Init(&fake_ctx);
   EXPECT_TRUE(res.ok());
 
@@ -248,7 +248,7 @@ TEST_F(ConfigTest, ParseArgsMissingValue) {
                                                          args.size());
   // Missing value yields "NotFound" error
   EXPECT_TRUE(absl::IsNotFound(res));
-  FreeRedisArgs(args);
+  FreeValkeyArgs(args);
 }
 
 }  // namespace

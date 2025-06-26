@@ -59,15 +59,15 @@ class StopWatch {
 //
 // This function creates a timer from a background thread by creating a task
 // that is added to the event loop, which then creates the timer.
-int StartTimerFromBackgroundThread(RedisModuleCtx *ctx, mstime_t period,
-                                   RedisModuleTimerProc callback, void *data);
+int StartTimerFromBackgroundThread(ValkeyModuleCtx *ctx, mstime_t period,
+                                   ValkeyModuleTimerProc callback, void *data);
 struct TimerDeletionTask {
-  RedisModuleCtx *ctx;
-  RedisModuleTimerID timer_id;
+  ValkeyModuleCtx *ctx;
+  ValkeyModuleTimerID timer_id;
   absl::AnyInvocable<void(void *)> user_data_deleter;
 };
 int StopTimerFromBackgroundThread(
-    RedisModuleCtx *ctx, RedisModuleTimerID timer_id,
+    ValkeyModuleCtx *ctx, ValkeyModuleTimerID timer_id,
     absl::AnyInvocable<void(void *)> user_data_deleter);
 
 void TrackCurrentAsMainThread();
@@ -114,7 +114,7 @@ std::string WrongArity(absl::string_view cmd);
 //
 std::optional<absl::string_view> ParseHashTag(absl::string_view);
 
-bool IsRealUserClient(RedisModuleCtx *ctx);
-bool MultiOrLua(RedisModuleCtx *ctx);
+bool IsRealUserClient(ValkeyModuleCtx *ctx);
+bool MultiOrLua(ValkeyModuleCtx *ctx);
 }  // namespace vmsdk
 #endif  // VMSDK_SRC_UTILS_H_

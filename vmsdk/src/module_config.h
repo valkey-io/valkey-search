@@ -45,14 +45,14 @@ namespace config {
 /// Flags to further specify the behavior of the config
 /// These can be specified using the Builder().WithFlags(...) method (see below)
 enum Flags {
-  kDefault = REDISMODULE_CONFIG_DEFAULT,
-  kImmutable = REDISMODULE_CONFIG_IMMUTABLE,
-  kSensitive = REDISMODULE_CONFIG_SENSITIVE,
-  kHidden = REDISMODULE_CONFIG_HIDDEN,
-  kProtected = REDISMODULE_CONFIG_PROTECTED,
-  kDenyLoading = REDISMODULE_CONFIG_DENY_LOADING,
-  kMemory = REDISMODULE_CONFIG_MEMORY,
-  kBitFlags = REDISMODULE_CONFIG_BITFLAGS,
+  kDefault = VALKEYMODULE_CONFIG_DEFAULT,
+  kImmutable = VALKEYMODULE_CONFIG_IMMUTABLE,
+  kSensitive = VALKEYMODULE_CONFIG_SENSITIVE,
+  kHidden = VALKEYMODULE_CONFIG_HIDDEN,
+  kProtected = VALKEYMODULE_CONFIG_PROTECTED,
+  kDenyLoading = VALKEYMODULE_CONFIG_DENY_LOADING,
+  kMemory = VALKEYMODULE_CONFIG_MEMORY,
+  kBitFlags = VALKEYMODULE_CONFIG_BITFLAGS,
 };
 
 /// Support Valkey configuration entries in a one-liner.
@@ -82,7 +82,7 @@ enum Flags {
 ///            [](const long long new_value) -> absl::Status {
 ///              return absl::OkStatus();
 ///            })
-///        .WithFlags(REDISMODULE_CONFIG_DEFAULT)
+///        .WithFlags(VALKEYMODULE_CONFIG_DEFAULT)
 ///        .Build();
 /// ```
 ///
@@ -102,10 +102,10 @@ class ModuleConfigManager {
 
   /// Do the actual registration with Valkey for all configuration items that
   /// previously registered themselves with this manager
-  absl::Status Init(RedisModuleCtx *ctx);
+  absl::Status Init(ValkeyModuleCtx *ctx);
 
   /// Parse and load command line arguments
-  absl::Status ParseAndLoadArgv(RedisModuleCtx *ctx, RedisModuleString **argv,
+  absl::Status ParseAndLoadArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                                 int argc);
   /// Call this method to register a configuration item with this manager. This
   /// method is mainly used by the constructor of `ConfigBase` so users should
@@ -118,7 +118,8 @@ class ModuleConfigManager {
   void UnregisterConfig(Registerable *config_item);
 
  private:
-  absl::Status UpdateConfigFromKeyVal(RedisModuleCtx *ctx, std::string_view key,
+  absl::Status UpdateConfigFromKeyVal(ValkeyModuleCtx *ctx,
+                                      std::string_view key,
                                       std::string_view value);
   absl::flat_hash_map<std::string, Registerable *> entries_;
   friend class Configbase;
@@ -130,7 +131,7 @@ class Registerable {
   Registerable(std::string_view name) : name_(name) {}
   virtual ~Registerable() = default;
 
-  virtual absl::Status Register(RedisModuleCtx *ctx) = 0;
+  virtual absl::Status Register(ValkeyModuleCtx *ctx) = 0;
   /// Attempt to initialize the value from a string. For example, a subclass of
   /// `Boolean` should check that `value` is one of: [`yes`, `no`, `true`,
   /// `false`] otherwise return an error status code
@@ -139,7 +140,7 @@ class Registerable {
 
   // bitwise OR'ed flags of `Flags`
   inline void SetFlags(size_t flags) { flags_ = flags; }
-  inline bool IsHidden() const { return flags_ & REDISMODULE_CONFIG_HIDDEN; }
+  inline bool IsHidden() const { return flags_ & VALKEYMODULE_CONFIG_HIDDEN; }
 
  protected:
   std::string name_;
@@ -229,7 +230,7 @@ class Number : public ConfigBase<long long> {
 
  protected:
   // Implementation specific
-  absl::Status Register(RedisModuleCtx *ctx) override;
+  absl::Status Register(ValkeyModuleCtx *ctx) override;
   long long GetValueImpl() const override {
     return current_value_.load(std::memory_order_relaxed);
   }
@@ -256,7 +257,7 @@ class Enum : public ConfigBase<int> {
 
  protected:
   // Implementation specific
-  absl::Status Register(RedisModuleCtx *ctx) override;
+  absl::Status Register(ValkeyModuleCtx *ctx) override;
   int GetValueImpl() const override {
     return current_value_.load(std::memory_order_relaxed);
   }
@@ -280,7 +281,7 @@ class Boolean : public ConfigBase<bool> {
 
  protected:
   // Implementation specific
-  absl::Status Register(RedisModuleCtx *ctx) override;
+  absl::Status Register(ValkeyModuleCtx *ctx) override;
   bool GetValueImpl() const override {
     return current_value_.load(std::memory_order_relaxed);
   }

@@ -415,7 +415,7 @@ TEST_P(PerformVectorSearchTest, PerformVectorSearchTest) {
   query::VectorSearchParameters params;
   params.index_schema_name = kIndexSchemaName;
   params.attribute_alias = kVectorAttributeAlias;
-  params.score_as = vmsdk::MakeUniqueRedisString(kScoreAs);
+  params.score_as = vmsdk::MakeUniqueValkeyString(kScoreAs);
   params.dialect = kDialect;
   params.k = test_case.k;
   params.ef = kEfRuntime;
@@ -577,7 +577,7 @@ TEST_P(SearchTest, ParseParams) {
   params.index_schema = CreateIndexSchemaWithMultipleAttributes(indexer_type);
   params.index_schema_name = kIndexSchemaName;
   params.attribute_alias = kVectorAttributeAlias;
-  params.score_as = vmsdk::MakeUniqueRedisString(kScoreAs);
+  params.score_as = vmsdk::MakeUniqueValkeyString(kScoreAs);
   params.dialect = kDialect;
   params.k = test_case.k;
   params.ef = kEfRuntime;
@@ -728,8 +728,8 @@ struct IndexedContentTestCase {
         for (auto &attribute : *attribute_contents) {
           result.attribute_contents->emplace(
               attribute.first,
-              RecordsMapValue(vmsdk::MakeUniqueRedisString(attribute.first),
-                              vmsdk::MakeUniqueRedisString(attribute.second)));
+              RecordsMapValue(vmsdk::MakeUniqueValkeyString(attribute.first),
+                              vmsdk::MakeUniqueValkeyString(attribute.second)));
         }
       }
       return result;
@@ -850,8 +850,8 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
   auto parameters = query::VectorSearchParameters();
   parameters.index_schema = index_schema;
   for (auto &attribute : test_case.return_attributes) {
-    auto identifier = vmsdk::MakeUniqueRedisString(attribute.identifier);
-    auto alias = vmsdk::MakeUniqueRedisString(attribute.alias);
+    auto identifier = vmsdk::MakeUniqueValkeyString(attribute.identifier);
+    auto alias = vmsdk::MakeUniqueValkeyString(attribute.alias);
     parameters.return_attributes.push_back(query::ReturnAttribute{
         .identifier = std::move(identifier), .alias = std::move(alias)});
   }

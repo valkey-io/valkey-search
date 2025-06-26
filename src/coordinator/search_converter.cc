@@ -145,7 +145,7 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request) {
       parameters->index_schema,
       SchemaManager::Instance().GetIndexSchema(0, request.index_schema_name()));
   if (request.has_score_as()) {
-    parameters->score_as = vmsdk::MakeUniqueRedisString(request.score_as());
+    parameters->score_as = vmsdk::MakeUniqueValkeyString(request.score_as());
   } else {
     VMSDK_ASSIGN_OR_RETURN(parameters->score_as,
                            parameters->index_schema->DefaultReplyScoreAs(
@@ -168,8 +168,8 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request) {
   }
   for (auto& return_parameter : request.return_parameters()) {
     parameters->return_attributes.emplace_back(query::ReturnAttribute(
-        vmsdk::MakeUniqueRedisString(return_parameter.identifier()),
-        vmsdk::MakeUniqueRedisString(return_parameter.alias())));
+        vmsdk::MakeUniqueValkeyString(return_parameter.identifier()),
+        vmsdk::MakeUniqueValkeyString(return_parameter.alias())));
   }
   return parameters;
 }

@@ -60,19 +60,19 @@ class RDBSectionIter;
 // if the load fails. Supplemental content iterator must be fully iterated (and
 // any chunks within it iterated as well) or loading will not succeed.
 using RDBSectionLoadCallback = absl::AnyInvocable<absl::Status(
-    RedisModuleCtx *ctx, std::unique_ptr<data_model::RDBSection> section,
+    ValkeyModuleCtx *ctx, std::unique_ptr<data_model::RDBSection> section,
     SupplementalContentIter &&supplemental_iter)>;
 
 // Callback to save an arbitrary count of RDBSections to RDB on aux save events.
 // Return value is an error status or the count of written RDBSections.
 using RDBSectionSaveCallback = absl::AnyInvocable<absl::Status(
-    RedisModuleCtx *ctx, SafeRDB *rdb, int when)>;
+    ValkeyModuleCtx *ctx, SafeRDB *rdb, int when)>;
 
 using RDBSectionCountCallback =
-    absl::AnyInvocable<int(RedisModuleCtx *ctx, int when)>;
+    absl::AnyInvocable<int(ValkeyModuleCtx *ctx, int when)>;
 
 using RDBSectionMinSemVerCallback =
-    absl::AnyInvocable<int(RedisModuleCtx *ctx, int when)>;
+    absl::AnyInvocable<int(ValkeyModuleCtx *ctx, int when)>;
 
 using RDBSectionCallbacks = struct RDBSectionCallbacks {
   RDBSectionLoadCallback load;
@@ -91,89 +91,89 @@ inline std::string HumanReadableSemanticVersion(uint64_t semantic_version) {
                          semantic_version & 0xFF);
 }
 
-/* SafeRDB wraps a RedisModuleIO object and performs IO error checking,
+/* SafeRDB wraps a ValkeyModuleIO object and performs IO error checking,
  * returning absl::StatusOr to force error handling on the caller side. */
 class SafeRDB {
  public:
-  explicit SafeRDB(RedisModuleIO *rdb) : rdb_(rdb) {}
+  explicit SafeRDB(ValkeyModuleIO *rdb) : rdb_(rdb) {}
 
   virtual absl::StatusOr<size_t> LoadSizeT() {
-    auto val = RedisModule_LoadUnsigned(rdb_);
-    if (RedisModule_IsIOError(rdb_)) {
-      return absl::InternalError("RedisModule_LoadUnsigned failed");
+    auto val = ValkeyModule_LoadUnsigned(rdb_);
+    if (ValkeyModule_IsIOError(rdb_)) {
+      return absl::InternalError("ValkeyModule_LoadUnsigned failed");
     }
     return val;
   }
 
   virtual absl::StatusOr<unsigned int> LoadUnsigned() {
-    auto val = RedisModule_LoadUnsigned(rdb_);
-    if (RedisModule_IsIOError(rdb_)) {
-      return absl::InternalError("RedisModule_LoadUnsigned failed");
+    auto val = ValkeyModule_LoadUnsigned(rdb_);
+    if (ValkeyModule_IsIOError(rdb_)) {
+      return absl::InternalError("ValkeyModule_LoadUnsigned failed");
     }
     return val;
   }
 
   virtual absl::StatusOr<int> LoadSigned() {
-    auto val = RedisModule_LoadSigned(rdb_);
-    if (RedisModule_IsIOError(rdb_)) {
-      return absl::InternalError("RedisModule_LoadSigned failed");
+    auto val = ValkeyModule_LoadSigned(rdb_);
+    if (ValkeyModule_IsIOError(rdb_)) {
+      return absl::InternalError("ValkeyModule_LoadSigned failed");
     }
     return val;
   }
 
   virtual absl::StatusOr<double> LoadDouble() {
-    auto val = RedisModule_LoadDouble(rdb_);
-    if (RedisModule_IsIOError(rdb_)) {
-      return absl::InternalError("RedisModule_LoadDouble failed");
+    auto val = ValkeyModule_LoadDouble(rdb_);
+    if (ValkeyModule_IsIOError(rdb_)) {
+      return absl::InternalError("ValkeyModule_LoadDouble failed");
     }
     return val;
   }
 
-  virtual absl::StatusOr<vmsdk::UniqueRedisString> LoadString() {
-    auto str = vmsdk::UniqueRedisString(RedisModule_LoadString(rdb_));
-    if (RedisModule_IsIOError(rdb_)) {
-      return absl::InternalError("RedisModule_LoadString failed");
+  virtual absl::StatusOr<vmsdk::UniqueValkeyString> LoadString() {
+    auto str = vmsdk::UniqueValkeyString(ValkeyModule_LoadString(rdb_));
+    if (ValkeyModule_IsIOError(rdb_)) {
+      return absl::InternalError("ValkeyModule_LoadString failed");
     }
     return str;
   }
   bool operator==(const SafeRDB &other) const { return rdb_ == other.rdb_; }
 
   virtual absl::Status SaveSizeT(size_t val) {
-    RedisModule_SaveUnsigned(rdb_, val);
-    if (RedisModule_IsIOError(rdb_)) {
-      return absl::InternalError("RedisModule_SaveUnsigned failed");
+    ValkeyModule_SaveUnsigned(rdb_, val);
+    if (ValkeyModule_IsIOError(rdb_)) {
+      return absl::InternalError("ValkeyModule_SaveUnsigned failed");
     }
     return absl::OkStatus();
   }
 
   virtual absl::Status SaveUnsigned(unsigned int val) {
-    RedisModule_SaveUnsigned(rdb_, val);
-    if (RedisModule_IsIOError(rdb_)) {
-      return absl::InternalError("RedisModule_SaveUnsigned failed");
+    ValkeyModule_SaveUnsigned(rdb_, val);
+    if (ValkeyModule_IsIOError(rdb_)) {
+      return absl::InternalError("ValkeyModule_SaveUnsigned failed");
     }
     return absl::OkStatus();
   }
 
   virtual absl::Status SaveSigned(int val) {
-    RedisModule_SaveSigned(rdb_, val);
-    if (RedisModule_IsIOError(rdb_)) {
-      return absl::InternalError("RedisModule_SaveSigned failed");
+    ValkeyModule_SaveSigned(rdb_, val);
+    if (ValkeyModule_IsIOError(rdb_)) {
+      return absl::InternalError("ValkeyModule_SaveSigned failed");
     }
     return absl::OkStatus();
   }
 
   virtual absl::Status SaveDouble(double val) {
-    RedisModule_SaveDouble(rdb_, val);
-    if (RedisModule_IsIOError(rdb_)) {
-      return absl::InternalError("RedisModule_SaveDouble failed");
+    ValkeyModule_SaveDouble(rdb_, val);
+    if (ValkeyModule_IsIOError(rdb_)) {
+      return absl::InternalError("ValkeyModule_SaveDouble failed");
     }
     return absl::OkStatus();
   }
 
   virtual absl::Status SaveStringBuffer(absl::string_view buf) {
-    RedisModule_SaveStringBuffer(rdb_, buf.data(), buf.size());
-    if (RedisModule_IsIOError(rdb_)) {
-      return absl::InternalError("RedisModule_SaveStringBuffer failed");
+    ValkeyModule_SaveStringBuffer(rdb_, buf.data(), buf.size());
+    if (ValkeyModule_IsIOError(rdb_)) {
+      return absl::InternalError("ValkeyModule_SaveStringBuffer failed");
     }
     return absl::OkStatus();
   }
@@ -182,7 +182,7 @@ class SafeRDB {
   SafeRDB() = default;
 
  private:
-  RedisModuleIO *rdb_;
+  ValkeyModuleIO *rdb_;
 };
 
 /* SupplementalContentChunkIter is an iterator over chunks of a supplemental
@@ -373,11 +373,11 @@ class RDBChunkOutputStream : public hnswlib::OutputStream {
 void RegisterRDBCallback(data_model::RDBSectionType type,
                          RDBSectionCallbacks callbacks);
 void ClearRDBCallbacks();
-absl::Status PerformRDBLoad(RedisModuleCtx *ctx, SafeRDB *rdb, int encver);
-int AuxLoadCallback(RedisModuleIO *rdb, int encver, int when);
-absl::Status PerformRDBSave(RedisModuleCtx *ctx, SafeRDB *rdb, int when);
-void AuxSaveCallback(RedisModuleIO *rdb, int when);
-absl::Status RegisterModuleType(RedisModuleCtx *ctx);
+absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver);
+int AuxLoadCallback(ValkeyModuleIO *rdb, int encver, int when);
+absl::Status PerformRDBSave(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when);
+void AuxSaveCallback(ValkeyModuleIO *rdb, int when);
+absl::Status RegisterModuleType(ValkeyModuleCtx *ctx);
 
 }  // namespace valkey_search
 

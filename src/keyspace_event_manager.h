@@ -43,7 +43,7 @@
 
 namespace valkey_search {
 using StartSubscriptionFunction =
-    std::function<absl::Status(RedisModuleCtx *, int)>;
+    std::function<absl::Status(ValkeyModuleCtx *, int)>;
 
 // KeyspaceEventSubscription is an interface for classes that want to subscribe
 // to keyspace events.
@@ -63,18 +63,18 @@ class KeyspaceEventSubscription {
   // completely prefixed by B. Otherwise, duplicate events may fire.
   virtual const std::vector<std::string> &GetKeyPrefixes() const = 0;
 
-  virtual void OnKeyspaceNotification(RedisModuleCtx *ctx, int type,
+  virtual void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
                                       const char *event,
-                                      RedisModuleString *key) = 0;
+                                      ValkeyModuleString *key) = 0;
 };
 
 class KeyspaceEventManager {
  public:
   KeyspaceEventManager() = default;
-  void NotifySubscribers(RedisModuleCtx *ctx, int type, const char *event,
-                         RedisModuleString *key);
+  void NotifySubscribers(ValkeyModuleCtx *ctx, int type, const char *event,
+                         ValkeyModuleString *key);
 
-  absl::Status InsertSubscription(RedisModuleCtx *ctx,
+  absl::Status InsertSubscription(ValkeyModuleCtx *ctx,
                                   KeyspaceEventSubscription *subscription);
 
   absl::Status RemoveSubscription(KeyspaceEventSubscription *subscription);
@@ -86,13 +86,13 @@ class KeyspaceEventManager {
   static KeyspaceEventManager &Instance();
 
  private:
-  absl::Status StartRedisSubscriptionIfNeeded(RedisModuleCtx *ctx, int types);
+  absl::Status StartValkeySubscriptionIfNeeded(ValkeyModuleCtx *ctx, int types);
 
-  static inline int OnRedisKeyspaceNotification(RedisModuleCtx *ctx, int type,
+  static inline int OnValkeyKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
                                                 const char *event,
-                                                RedisModuleString *key) {
+                                                ValkeyModuleString *key) {
     Instance().NotifySubscribers(ctx, type, event, key);
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
   }
 
   vmsdk::MainThreadAccessGuard<absl::flat_hash_set<KeyspaceEventSubscription *>>

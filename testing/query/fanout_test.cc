@@ -503,7 +503,7 @@ struct GetTargetsTestParam {
 class GetTargetsTest : public ValkeySearchTestWithParam<GetTargetsTestParam> {};
 
 std::string GetNodeId(int i) {
-  return std::string(REDISMODULE_NODE_ID_LEN, 'a' + i);
+  return std::string(VALKEYMODULE_NODE_ID_LEN, 'a' + i);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -826,8 +826,8 @@ INSTANTIATE_TEST_SUITE_P(
 char **GenerateClusterNodesList(std::vector<GetTargetsTestNode> node_ids) {
   char **res = new char *[node_ids.size()];
   for (size_t i = 0; i < node_ids.size(); ++i) {
-    res[i] = new char[REDISMODULE_NODE_ID_LEN];
-    memcpy(res[i], node_ids[i].node_id.c_str(), REDISMODULE_NODE_ID_LEN);
+    res[i] = new char[VALKEYMODULE_NODE_ID_LEN];
+    memcpy(res[i], node_ids[i].node_id.c_str(), VALKEYMODULE_NODE_ID_LEN);
   }
   return res;
 }
@@ -841,26 +841,26 @@ void FreeClusterNodesList(char **ids, size_t num_nodes) {
 
 TEST_P(GetTargetsTest, TestGetTargets) {
   auto params = GetParam();
-  EXPECT_CALL(*kMockRedisModule,
+  EXPECT_CALL(*kMockValkeyModule,
               GetClusterNodesList(testing::_, testing::An<size_t *>()))
-      .WillRepeatedly([params](RedisModuleCtx *ctx, size_t *numnodes) {
+      .WillRepeatedly([params](ValkeyModuleCtx *ctx, size_t *numnodes) {
         *numnodes = params.nodes.size();
         return GenerateClusterNodesList(params.nodes);
       });
-  EXPECT_CALL(*kMockRedisModule, FreeClusterNodesList(testing::_))
+  EXPECT_CALL(*kMockValkeyModule, FreeClusterNodesList(testing::_))
       .WillRepeatedly([params](char **ids) {
         FreeClusterNodesList(ids, params.nodes.size());
       });
   for (auto &node : params.nodes) {
     EXPECT_CALL(
-        *kMockRedisModule,
+        *kMockValkeyModule,
         GetClusterNodeInfo(testing::_, testing::StrEq(node.node_id), testing::_,
                            testing::_, testing::_, testing::_))
-        .WillRepeatedly([node](RedisModuleCtx *ctx, const char *node_id,
+        .WillRepeatedly([node](ValkeyModuleCtx *ctx, const char *node_id,
                                char *ip, char *master_id, int *port,
                                int *flags) {
           if (node.fail_to_get_node_info) {
-            return REDISMODULE_ERR;
+            return VALKEYMODULE_ERR;
           }
           if (ip != nullptr) {
             // Note this is intentionally not null terminated.
@@ -872,20 +872,20 @@ TEST_P(GetTargetsTest, TestGetTargets) {
           if (flags != nullptr) {
             *flags = 0;
             if (node.myself) {
-              *flags |= REDISMODULE_NODE_MYSELF;
+              *flags |= VALKEYMODULE_NODE_MYSELF;
             }
             if (node.pfail) {
-              *flags |= REDISMODULE_NODE_PFAIL;
+              *flags |= VALKEYMODULE_NODE_PFAIL;
             }
             if (node.master_id.has_value()) {
-              *flags |= REDISMODULE_NODE_SLAVE;
+              *flags |= VALKEYMODULE_NODE_SLAVE;
               memcpy(master_id, node.master_id->c_str(),
                      node.master_id->size());
             } else {
-              *flags |= REDISMODULE_NODE_MASTER;
+              *flags |= VALKEYMODULE_NODE_MASTER;
             }
           }
-          return REDISMODULE_OK;
+          return VALKEYMODULE_OK;
         });
   }
 

@@ -45,7 +45,7 @@ namespace valkey_search::indexes {
 
 namespace {
 
-class NumericIndexTest : public vmsdk::RedisTest {
+class NumericIndexTest : public vmsdk::ValkeyTest {
  protected:
   data_model::NumericIndex numeric_index_proto;
   IndexTeser<Numeric, data_model::NumericIndex> index{numeric_index_proto};

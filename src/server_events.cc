@@ -38,17 +38,17 @@
 
 namespace valkey_search::server_events {
 
-void OnForkChildCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
+void OnForkChildCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                          uint64_t subevent, void *data) {
   ValkeySearch::Instance().OnForkChildCallback(ctx, eid, subevent, data);
 }
 
-void OnFlushDBCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
+void OnFlushDBCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                        uint64_t subevent, void *data) {
   SchemaManager::Instance().OnFlushDBCallback(ctx, eid, subevent, data);
 }
 
-void OnLoadingCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
+void OnLoadingCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                        uint64_t subevent, void *data) {
   SchemaManager::Instance().OnLoadingCallback(ctx, eid, subevent, data);
   if (coordinator::MetadataManager::IsInitialized()) {
@@ -57,12 +57,12 @@ void OnLoadingCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
   }
 }
 
-void OnSwapDBCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
+void OnSwapDBCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                       uint64_t subevent, void *data) {
-  SchemaManager::Instance().OnSwapDB((RedisModuleSwapDbInfo *)data);
+  SchemaManager::Instance().OnSwapDB((ValkeyModuleSwapDbInfo *)data);
 }
 
-void OnServerCronCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
+void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                           uint64_t subevent, void *data) {
   ValkeySearch::Instance().OnServerCronCallback(ctx, eid, subevent, data);
   SchemaManager::Instance().OnServerCronCallback(ctx, eid, subevent, data);
@@ -82,18 +82,18 @@ void SubscribeToServerEvents() {
   // prevent unexpected behavior. If multiple events are subscribed to in
   // different places, the engine will only call the callback for the first
   // subscriber and the other will silently be ignored.
-  RedisModuleCtx *ctx = ValkeySearch::Instance().GetBackgroundCtx();
-  RedisModule_SubscribeToServerEvent(ctx, RedisModuleEvent_CronLoop,
-                                     &OnServerCronCallback);
+  ValkeyModuleCtx *ctx = ValkeySearch::Instance().GetBackgroundCtx();
+  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_CronLoop,
+                                      &OnServerCronCallback);
   pthread_atfork(AtForkPrepare, AfterForkParent, nullptr);
-  RedisModule_SubscribeToServerEvent(ctx, RedisModuleEvent_ForkChild,
-                                     &OnForkChildCallback);
-  RedisModule_SubscribeToServerEvent(ctx, RedisModuleEvent_Loading,
-                                     &OnLoadingCallback);
-  RedisModule_SubscribeToServerEvent(ctx, RedisModuleEvent_SwapDB,
-                                     &OnSwapDBCallback);
-  RedisModule_SubscribeToServerEvent(ctx, RedisModuleEvent_FlushDB,
-                                     &OnFlushDBCallback);
+  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_ForkChild,
+                                      &OnForkChildCallback);
+  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_Loading,
+                                      &OnLoadingCallback);
+  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_SwapDB,
+                                      &OnSwapDBCallback);
+  ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_FlushDB,
+                                      &OnFlushDBCallback);
 }
 
 }  // namespace valkey_search::server_events

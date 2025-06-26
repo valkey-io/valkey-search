@@ -61,7 +61,7 @@ class VectorFlat : public VectorBase {
       data_model::AttributeDataType attribute_data_type)
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> LoadFromRDB(
-      RedisModuleCtx* ctx, const AttributeDataType* attribute_data_type,
+      ValkeyModuleCtx* ctx, const AttributeDataType* attribute_data_type,
       const data_model::VectorIndex& vector_index_proto,
       absl::string_view attribute_identifier,
       SupplementalContentChunkIter&& iter) ABSL_NO_THREAD_SAFETY_ANALYSIS;
@@ -93,7 +93,7 @@ class VectorFlat : public VectorBase {
   absl::Status ModifyRecordImpl(uint64_t internal_id,
                                 absl::string_view record) override;
   void ToProtoImpl(data_model::VectorIndex* vector_index_proto) const override;
-  int RespondWithInfoImpl(RedisModuleCtx* ctx) const override;
+  int RespondWithInfoImpl(ValkeyModuleCtx* ctx) const override;
   absl::Status SaveIndexImpl(RDBChunkOutputStream chunked_out) const override;
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecordImpl(uint64_t internal_id,

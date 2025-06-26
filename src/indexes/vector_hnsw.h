@@ -60,7 +60,7 @@ class VectorHNSW : public VectorBase {
       data_model::AttributeDataType attribute_data_type)
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> LoadFromRDB(
-      RedisModuleCtx* ctx, const AttributeDataType* attribute_data_type,
+      ValkeyModuleCtx* ctx, const AttributeDataType* attribute_data_type,
       const data_model::VectorIndex& vector_index_proto,
       absl::string_view attribute_identifier,
       SupplementalContentChunkIter&& iter) ABSL_NO_THREAD_SAFETY_ANALYSIS;
@@ -104,7 +104,7 @@ class VectorHNSW : public VectorBase {
                                 absl::string_view record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   void ToProtoImpl(data_model::VectorIndex* vector_index_proto) const override;
-  int RespondWithInfoImpl(RedisModuleCtx* ctx) const override;
+  int RespondWithInfoImpl(ValkeyModuleCtx* ctx) const override;
   absl::Status SaveIndexImpl(RDBChunkOutputStream chunked_out) const override;
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecordImpl(uint64_t internal_id, absl::string_view query)

@@ -75,7 +75,7 @@ TEST_P(FTInfoTest, FTInfoTests) {
 
   for (bool use_thread_pool : {true, false}) {
     for (const auto& test_case : test_cases.test_cases) {
-      fake_ctx_ = RedisModuleCtx{};
+      fake_ctx_ = ValkeyModuleCtx{};
       // Set up the data structures for the test case.
       vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
       SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
@@ -91,20 +91,20 @@ TEST_P(FTInfoTest, FTInfoTests) {
       }
 
       if (test_case.expect_return_failure) {
-        EXPECT_CALL(*kMockRedisModule, ReplyWithError(&fake_ctx_, _))
-            .WillOnce(Return(REDISMODULE_OK));
+        EXPECT_CALL(*kMockValkeyModule, ReplyWithError(&fake_ctx_, _))
+            .WillOnce(Return(VALKEYMODULE_OK));
       }
 
       // Run the command.
-      std::vector<RedisModuleString*> cmd_argv;
+      std::vector<ValkeyModuleString*> cmd_argv;
       std::transform(test_case.argv.begin(), test_case.argv.end(),
                      std::back_inserter(cmd_argv), [&](std::string val) {
-                       return TestRedisModule_CreateStringPrintf(
+                       return TestValkeyModule_CreateStringPrintf(
                            &fake_ctx_, "%s", val.data());
                      });
       EXPECT_EQ(vmsdk::CreateCommand<FTInfoCmd>(&fake_ctx_, cmd_argv.data(),
                                                 cmd_argv.size()),
-                REDISMODULE_OK);
+                VALKEYMODULE_OK);
       EXPECT_EQ(fake_ctx_.reply_capture.GetReply(), test_case.expected_output);
 
       if (test_case.index_schema_pbtxt.has_value()) {
@@ -115,7 +115,7 @@ TEST_P(FTInfoTest, FTInfoTests) {
 
       // Clean up
       for (auto cmd_arg : cmd_argv) {
-        TestRedisModule_FreeString(&fake_ctx_, cmd_arg);
+        TestValkeyModule_FreeString(&fake_ctx_, cmd_arg);
       }
     }
   }

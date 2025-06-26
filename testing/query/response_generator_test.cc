@@ -88,15 +88,15 @@ RecordsMap ToRecordsMap(
   RecordsMap records_map;
   for (const auto &[key, value] : record_map) {
     records_map.emplace(key,
-                        RecordsMapValue(vmsdk::MakeUniqueRedisString(key),
-                                        vmsdk::MakeUniqueRedisString(value)));
+                        RecordsMapValue(vmsdk::MakeUniqueValkeyString(key),
+                                        vmsdk::MakeUniqueValkeyString(value)));
   }
   return records_map;
 }
 
 TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
   auto &params = GetParam();
-  RedisModuleCtx fake_ctx;
+  ValkeyModuleCtx fake_ctx;
 
   std::deque<indexes::Neighbor> expected_neighbors;
   for (const auto &external_id : params.external_id_neighbors) {
@@ -113,8 +113,8 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
   for (const auto &return_attribute : params.return_attributes) {
     parameters.return_attributes.push_back(
         {.identifier =
-             vmsdk::MakeUniqueRedisString(return_attribute.identifier),
-         .alias = vmsdk::MakeUniqueRedisString(return_attribute.alias)});
+             vmsdk::MakeUniqueValkeyString(return_attribute.identifier),
+         .alias = vmsdk::MakeUniqueValkeyString(return_attribute.alias)});
   }
   parameters.filter_parse_results.filter_identifiers =
       params.filter_identifiers;
@@ -148,7 +148,7 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
                                 absl::string_view(*neighbor.external_id),
                                 expected_fetched_identifiers))
         .WillOnce([&params](
-                      RedisModuleCtx *ctx,
+                      ValkeyModuleCtx *ctx,
                       const std::string &query_attribute_alias,
                       absl::string_view key,
                       const absl::flat_hash_set<absl::string_view> &identifiers)

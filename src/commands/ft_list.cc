@@ -39,17 +39,17 @@
 
 namespace valkey_search {
 
-absl::Status FTListCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
+absl::Status FTListCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                        int argc) {
   if (argc > 1) {
     return absl::InvalidArgumentError(vmsdk::WrongArity(kListCommand));
   }
   absl::flat_hash_set<std::string> names =
       SchemaManager::Instance().GetIndexSchemasInDB(
-          RedisModule_GetSelectedDb(ctx));
-  RedisModule_ReplyWithArray(ctx, names.size());
+          ValkeyModule_GetSelectedDb(ctx));
+  ValkeyModule_ReplyWithArray(ctx, names.size());
   for (const auto &name : names) {
-    RedisModule_ReplyWithSimpleString(ctx, name.c_str());
+    ValkeyModule_ReplyWithSimpleString(ctx, name.c_str());
   }
   return absl::OkStatus();
 }

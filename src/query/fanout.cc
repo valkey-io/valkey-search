@@ -101,11 +101,11 @@ struct SearchPartitionResultsTracker {
       for (const auto &attribute_content :
            neighbor_entry->attribute_contents()) {
         auto identifier =
-            vmsdk::MakeUniqueRedisString(attribute_content.identifier());
+            vmsdk::MakeUniqueValkeyString(attribute_content.identifier());
         auto identifier_view = vmsdk::ToStringView(identifier.get());
         attribute_contents.emplace(
             identifier_view, RecordsMapValue(std::move(identifier),
-                                             vmsdk::MakeUniqueRedisString(
+                                             vmsdk::MakeUniqueValkeyString(
                                                  attribute_content.content())));
       }
       indexes::Neighbor neighbor{
@@ -183,7 +183,7 @@ void PerformRemoteSearchRequestAsync(
 }
 
 absl::Status PerformSearchFanoutAsync(
-    RedisModuleCtx *ctx, std::vector<FanoutSearchTarget> &search_targets,
+    ValkeyModuleCtx *ctx, std::vector<FanoutSearchTarget> &search_targets,
     coordinator::ClientPool *coordinator_client_pool,
     std::unique_ptr<VectorSearchParameters> parameters,
     vmsdk::ThreadPool *thread_pool, query::SearchResponseCallback callback) {
@@ -197,7 +197,7 @@ absl::Status PerformSearchFanoutAsync(
       std::move(parameters));
   bool has_local_target = false;
   for (auto &node : search_targets) {
-    auto detached_ctx = vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx);
+    auto detached_ctx = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);
     if (node.type == FanoutSearchTarget::Type::kLocal) {
       // Defer the local target enqueue, since it will own the parameters from
       // then on.
@@ -242,37 +242,38 @@ absl::Status PerformSearchFanoutAsync(
 }
 
 // TODO See if caching this improves performance.
-std::vector<FanoutSearchTarget> GetSearchTargetsForFanout(RedisModuleCtx *ctx) {
+std::vector<FanoutSearchTarget> GetSearchTargetsForFanout(
+    ValkeyModuleCtx *ctx) {
   size_t num_nodes;
-  auto nodes = vmsdk::MakeUniqueRedisClusterNodesList(ctx, &num_nodes);
+  auto nodes = vmsdk::MakeUniqueValkeyClusterNodesList(ctx, &num_nodes);
   absl::flat_hash_map<std::string, std::vector<FanoutSearchTarget>>
       shard_id_to_target;
   std::vector<FanoutSearchTarget> selected_targets;
   for (size_t i = 0; i < num_nodes; ++i) {
-    std::string node_id(nodes.get()[i], REDISMODULE_NODE_ID_LEN);
+    std::string node_id(nodes.get()[i], VALKEYMODULE_NODE_ID_LEN);
     char ip[INET6_ADDRSTRLEN] = "";
-    char master_id[REDISMODULE_NODE_ID_LEN] = "";
+    char master_id[VALKEYMODULE_NODE_ID_LEN] = "";
     int port;
     int flags;
-    if (RedisModule_GetClusterNodeInfo(ctx, node_id.c_str(), ip, master_id,
-                                       &port, &flags) != REDISMODULE_OK) {
+    if (ValkeyModule_GetClusterNodeInfo(ctx, node_id.c_str(), ip, master_id,
+                                        &port, &flags) != VALKEYMODULE_OK) {
       VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
           << "Failed to get node info for node " << node_id
           << ", skipping node...";
       continue;
     }
     // Master ID is not null terminated.
-    auto master_id_str = std::string(master_id, REDISMODULE_NODE_ID_LEN);
-    if (flags & REDISMODULE_NODE_PFAIL || flags & REDISMODULE_NODE_FAIL) {
+    auto master_id_str = std::string(master_id, VALKEYMODULE_NODE_ID_LEN);
+    if (flags & VALKEYMODULE_NODE_PFAIL || flags & VALKEYMODULE_NODE_FAIL) {
       VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
           << "Node " << node_id << " (" << ip
           << ") is failing, skipping for FT.SEARCH...";
       continue;
     }
-    if (flags & REDISMODULE_NODE_MASTER) {
+    if (flags & VALKEYMODULE_NODE_MASTER) {
       master_id_str = node_id;
     }
-    if (flags & REDISMODULE_NODE_MYSELF) {
+    if (flags & VALKEYMODULE_NODE_MYSELF) {
       shard_id_to_target[master_id_str].push_back(
           FanoutSearchTarget{.type = FanoutSearchTarget::Type::kLocal});
     } else {

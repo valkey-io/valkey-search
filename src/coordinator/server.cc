@@ -161,7 +161,7 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
                neighbors = std::move(neighbors.value())]() mutable {
                 const auto& attribute_data_type =
                     parameters->index_schema->GetAttributeDataType();
-                auto ctx = vmsdk::MakeUniqueRedisThreadSafeContext(nullptr);
+                auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
                 auto vector_identifier =
                     parameters->index_schema
                         ->GetIdentifier(parameters->attribute_alias)
@@ -193,13 +193,14 @@ ServerImpl::ServerImpl(std::unique_ptr<Service> coordinator_service,
       port_(port) {}
 
 std::unique_ptr<Server> ServerImpl::Create(
-    RedisModuleCtx* ctx, vmsdk::ThreadPool* reader_thread_pool, uint16_t port) {
+    ValkeyModuleCtx* ctx, vmsdk::ThreadPool* reader_thread_pool,
+    uint16_t port) {
   std::string server_address = absl::StrCat("[::]:", port);
   grpc::EnableDefaultHealthCheckService(true);
   std::shared_ptr<grpc::ServerCredentials> creds =
       grpc::InsecureServerCredentials();
   auto coordinator_service = std::make_unique<Service>(
-      vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx), reader_thread_pool);
+      vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx), reader_thread_pool);
   grpc::ServerBuilder builder;
   builder.AddListeningPort(server_address, creds);
   builder.RegisterService(coordinator_service.get());

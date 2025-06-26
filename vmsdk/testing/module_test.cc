@@ -42,41 +42,43 @@ namespace vmsdk {
 namespace {
 #define INSTALLED_MODULES 3
 
-class ModuleTest : public vmsdk::RedisTest {
+class ModuleTest : public vmsdk::ValkeyTest {
  protected:
-  RedisModuleCtx fake_ctx;
-  RedisModuleCallReply json_key;
-  RedisModuleCallReply json_value;
-  RedisModuleCallReply some_key;
-  RedisModuleCallReply reply_internal[INSTALLED_MODULES];
+  ValkeyModuleCtx fake_ctx;
+  ValkeyModuleCallReply json_key;
+  ValkeyModuleCallReply json_value;
+  ValkeyModuleCallReply some_key;
+  ValkeyModuleCallReply reply_internal[INSTALLED_MODULES];
   void InstallCheckers();
 };
 
 void ModuleTest::InstallCheckers() {
-  auto reply = new RedisModuleCallReply;
-  EXPECT_CALL(*kMockRedisModule,
+  auto reply = new ValkeyModuleCallReply;
+  EXPECT_CALL(*kMockValkeyModule,
               Call(&fake_ctx, testing::StrEq("MODULE"), testing::StrEq("c"),
                    testing::StrEq("LIST")))
-      .WillOnce(
-          [reply](RedisModuleCtx* ctx, const char* cmd, const char* fmt,
-                  const char* arg1) -> RedisModuleCallReply* { return reply; });
-  EXPECT_CALL(*kMockRedisModule, FreeCallReply(reply))
-      .WillOnce([](RedisModuleCallReply* reply) { delete reply; });
+      .WillOnce([reply](ValkeyModuleCtx* ctx, const char* cmd, const char* fmt,
+                        const char* arg1) -> ValkeyModuleCallReply* {
+        return reply;
+      });
+  EXPECT_CALL(*kMockValkeyModule, FreeCallReply(reply))
+      .WillOnce([](ValkeyModuleCallReply* reply) { delete reply; });
 
-  EXPECT_CALL(*kMockRedisModule, CallReplyType(testing::_))
-      .WillRepeatedly(
-          [](RedisModuleCallReply* reply) { return REDISMODULE_REPLY_ARRAY; });
-  EXPECT_CALL(*kMockRedisModule, CallReplyLength(testing::_))
-      .WillRepeatedly([reply](RedisModuleCallReply* in_reply) -> size_t {
+  EXPECT_CALL(*kMockValkeyModule, CallReplyType(testing::_))
+      .WillRepeatedly([](ValkeyModuleCallReply* reply) {
+        return VALKEYMODULE_REPLY_ARRAY;
+      });
+  EXPECT_CALL(*kMockValkeyModule, CallReplyLength(testing::_))
+      .WillRepeatedly([reply](ValkeyModuleCallReply* in_reply) -> size_t {
         if (reply == in_reply) {
           return INSTALLED_MODULES;
         }
         return 10;
       });
 
-  EXPECT_CALL(*kMockRedisModule, CallReplyArrayElement(testing::_, testing::_))
-      .WillRepeatedly([reply, this](RedisModuleCallReply* in_reply,
-                                    size_t indx) -> RedisModuleCallReply* {
+  EXPECT_CALL(*kMockValkeyModule, CallReplyArrayElement(testing::_, testing::_))
+      .WillRepeatedly([reply, this](ValkeyModuleCallReply* in_reply,
+                                    size_t indx) -> ValkeyModuleCallReply* {
         if (reply == in_reply) {
           return &reply_internal[indx];
         }
@@ -90,9 +92,9 @@ void ModuleTest::InstallCheckers() {
         return &some_key;
       });
 
-  EXPECT_CALL(*kMockRedisModule, CallReplyStringPtr(testing::_, testing::_))
+  EXPECT_CALL(*kMockValkeyModule, CallReplyStringPtr(testing::_, testing::_))
       .WillRepeatedly(
-          [&](RedisModuleCallReply* in_reply, size_t* len) -> const char* {
+          [&](ValkeyModuleCallReply* in_reply, size_t* len) -> const char* {
             if (in_reply == &json_key) {
               static const std::string str("name");
               *len = str.length();

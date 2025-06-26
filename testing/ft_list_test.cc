@@ -52,7 +52,7 @@ class FTListTest : public ValkeySearchTest {};
 TEST_F(FTListTest, basic) {
   // Set up the data structures for the test case.
   for (bool use_thread_pool : {true, false}) {
-    RedisModuleCtx fake_ctx;
+    ValkeyModuleCtx fake_ctx;
     vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() {}, use_thread_pool ? &mutations_thread_pool : nullptr,
@@ -103,7 +103,7 @@ TEST_F(FTListTest, basic) {
     VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
         &fake_ctx, different_db_index_schema));
 
-    EXPECT_CALL(*kMockRedisModule, GetSelectedDb(&fake_ctx))
+    EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx))
         .WillRepeatedly(testing::Return(0));
     VMSDK_EXPECT_OK(FTListCmd(&fake_ctx, nullptr, 0));
     EXPECT_THAT(fake_ctx.reply_capture.GetReply(),
@@ -119,7 +119,7 @@ TEST_F(FTListTest, basic) {
   }
 }
 TEST_F(FTListTest, no_indexes) {
-  EXPECT_CALL(*kMockRedisModule, ReplyWithArray(&fake_ctx_, 0));
+  EXPECT_CALL(*kMockValkeyModule, ReplyWithArray(&fake_ctx_, 0));
   VMSDK_EXPECT_OK(FTListCmd(&fake_ctx_, nullptr, 0));
 }
 

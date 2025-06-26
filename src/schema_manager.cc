@@ -79,30 +79,31 @@ void SchemaManager::InitInstance(std::unique_ptr<SchemaManager> instance) {
 }
 
 SchemaManager::SchemaManager(
-    RedisModuleCtx *ctx,
+    ValkeyModuleCtx *ctx,
     absl::AnyInvocable<void()> server_events_subscriber_callback,
     vmsdk::ThreadPool *mutations_thread_pool, bool coordinator_enabled)
     : server_events_subscriber_callback_(
           std::move(server_events_subscriber_callback)),
       mutations_thread_pool_(mutations_thread_pool),
-      detached_ctx_(vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx)),
+      detached_ctx_(vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx)),
       coordinator_enabled_(coordinator_enabled) {
   RegisterRDBCallback(
       data_model::RDB_SECTION_INDEX_SCHEMA,
       RDBSectionCallbacks{
-          .load = [this](RedisModuleCtx *ctx,
+          .load = [this](ValkeyModuleCtx *ctx,
                          std::unique_ptr<data_model::RDBSection> section,
                          SupplementalContentIter &&iter) -> absl::Status {
             return LoadIndex(ctx, std::move(section), std::move(iter));
           },
 
-          .save = [this](RedisModuleCtx *ctx, SafeRDB *rdb, int when)
+          .save = [this](ValkeyModuleCtx *ctx, SafeRDB *rdb, int when)
               -> absl::Status { return SaveIndexes(ctx, rdb, when); },
 
-          .section_count = [this](RedisModuleCtx *ctx, int when) -> int {
+          .section_count = [this](ValkeyModuleCtx *ctx, int when) -> int {
             return this->GetNumberOfIndexSchemas();
           },
-          .minimum_semantic_version = [](RedisModuleCtx *ctx, int when) -> int {
+          .minimum_semantic_version = [](ValkeyModuleCtx *ctx,
+                                         int when) -> int {
             return 0x010000;  // Always use 1.0.0 for now
           }});
   if (coordinator_enabled) {
@@ -166,7 +167,7 @@ absl::Status SchemaManager::ImportIndexSchema(
 }
 
 absl::Status SchemaManager::CreateIndexSchemaInternal(
-    RedisModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto) {
+    ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto) {
   uint32_t db_num = index_schema_proto.db_num();
   const std::string &name = index_schema_proto.name();
   auto existing_entry = LookupInternal(db_num, name);
@@ -188,7 +189,7 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
 }
 
 absl::Status SchemaManager::CreateIndexSchema(
-    RedisModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto) {
+    ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto) {
   if (coordinator_enabled_) {
     CHECK(index_schema_proto.db_num() == 0)
         << "In cluster mode, we only support DB 0";
@@ -395,9 +396,9 @@ SchemaManager::AccumulateIndexSchemaResults(
   return total_cnt;
 }
 
-void SchemaManager::OnFlushDBEnded(RedisModuleCtx *ctx) {
+void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  int selected_db = RedisModule_GetSelectedDb(ctx);
+  int selected_db = ValkeyModule_GetSelectedDb(ctx);
   if (!db_to_index_schemas_.contains(selected_db)) {
     return;
   }
@@ -433,7 +434,7 @@ void SchemaManager::OnFlushDBEnded(RedisModuleCtx *ctx) {
   }
 }
 
-void SchemaManager::OnSwapDB(RedisModuleSwapDbInfo *swap_db_info) {
+void SchemaManager::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   if (swap_db_info->dbnum_first == swap_db_info->dbnum_second) {
     for (auto &schema : db_to_index_schemas_[swap_db_info->dbnum_first]) {
@@ -457,7 +458,7 @@ void SchemaManager::OnSwapDB(RedisModuleSwapDbInfo *swap_db_info) {
   }
 }
 
-void SchemaManager::OnReplicationLoadStart(RedisModuleCtx *ctx) {
+void SchemaManager::OnReplicationLoadStart(ValkeyModuleCtx *ctx) {
   // Only in replication do we stage the changes first, before applying
   // them.
   //
@@ -471,7 +472,7 @@ void SchemaManager::OnReplicationLoadStart(RedisModuleCtx *ctx) {
   staging_indices_due_to_repl_load_ = true;
 }
 
-void SchemaManager::OnLoadingEnded(RedisModuleCtx *ctx) {
+void SchemaManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   if (staging_indices_due_to_repl_load_.Get()) {
     // Perform swap of staged schemas to main schemas. Note that no merge
@@ -500,7 +501,7 @@ void SchemaManager::OnLoadingEnded(RedisModuleCtx *ctx) {
   VectorExternalizer::Instance().ProcessEngineUpdateQueue();
 }
 
-void SchemaManager::PerformBackfill(RedisModuleCtx *ctx, uint32_t batch_size) {
+void SchemaManager::PerformBackfill(ValkeyModuleCtx *ctx, uint32_t batch_size) {
   // TODO: Address fairness of index backfill/mutation
   // processing.
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
@@ -512,23 +513,23 @@ void SchemaManager::PerformBackfill(RedisModuleCtx *ctx, uint32_t batch_size) {
   }
 }
 
-absl::Status SchemaManager::SaveIndexes(RedisModuleCtx *ctx, SafeRDB *rdb,
+absl::Status SchemaManager::SaveIndexes(ValkeyModuleCtx *ctx, SafeRDB *rdb,
                                         int when) {
-  if (when == REDISMODULE_AUX_BEFORE_RDB) {
+  if (when == VALKEYMODULE_AUX_BEFORE_RDB) {
     return absl::OkStatus();
   }
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   if (db_to_index_schemas_.empty()) {
     // Auxsave2 will ensure nothing is written to the aux section if we
     // write nothing.
-    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_NOTICE,
-                    "Skipping aux metadata for SchemaManager since there "
-                    "is no content");
+    ValkeyModule_Log(ctx, VALKEYMODULE_LOGLEVEL_NOTICE,
+                     "Skipping aux metadata for SchemaManager since there "
+                     "is no content");
     return absl::OkStatus();
   }
 
-  RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_NOTICE,
-                  "Saving aux metadata for SchemaManager to aux RDB");
+  ValkeyModule_Log(ctx, VALKEYMODULE_LOGLEVEL_NOTICE,
+                   "Saving aux metadata for SchemaManager to aux RDB");
   for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
     for (const auto &[name, schema] : inner_map) {
       VMSDK_RETURN_IF_ERROR(schema->RDBSave(rdb));
@@ -554,7 +555,7 @@ absl::Status SchemaManager::RemoveAll() {
 }
 
 absl::Status SchemaManager::LoadIndex(
-    RedisModuleCtx *ctx, std::unique_ptr<data_model::RDBSection> section,
+    ValkeyModuleCtx *ctx, std::unique_ptr<data_model::RDBSection> section,
     SupplementalContentIter &&supplemental_iter) {
   // If not subscribed, we need to subscribe now so that we can get the loading
   // ended callback.
@@ -577,7 +578,7 @@ absl::Status SchemaManager::LoadIndex(
   const std::string &name = index_schema->GetName();
 
   // Select the DB number in the context for subsequent usage.
-  if (RedisModule_SelectDb(ctx, db_num) != REDISMODULE_OK) {
+  if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {
     return absl::InternalError(
         absl::StrFormat("Unable to select DB %d for loading of index schema %s",
                         db_num, name.c_str()));
@@ -602,42 +603,43 @@ absl::Status SchemaManager::LoadIndex(
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto remove_existing_status = RemoveIndexSchemaInternal(db_num, name);
   if (remove_existing_status.ok()) {
-    RedisModule_Log(detached_ctx_.get(), REDISMODULE_LOGLEVEL_NOTICE,
-                    "Deleted existing index from RDB for: %s (in db %d)",
-                    name.c_str(), db_num);
+    ValkeyModule_Log(detached_ctx_.get(), VALKEYMODULE_LOGLEVEL_NOTICE,
+                     "Deleted existing index from RDB for: %s (in db %d)",
+                     name.c_str(), db_num);
   } else if (!absl::IsNotFound(remove_existing_status.status())) {
-    RedisModule_Log(detached_ctx_.get(), REDISMODULE_LOGLEVEL_WARNING,
-                    "Failed to delete existing index from RDB for: %s (in db "
-                    "%d): %s",
-                    name.c_str(), db_num,
-                    remove_existing_status.status().message().data());
+    ValkeyModule_Log(detached_ctx_.get(), VALKEYMODULE_LOGLEVEL_WARNING,
+                     "Failed to delete existing index from RDB for: %s (in db "
+                     "%d): %s",
+                     name.c_str(), db_num,
+                     remove_existing_status.status().message().data());
   }
 
   db_to_index_schemas_[db_num][name] = std::move(index_schema);
   return absl::OkStatus();
 }
 
-void SchemaManager::OnFlushDBCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
-                                      uint64_t subevent, void *data) {
-  if (subevent & REDISMODULE_SUBEVENT_FLUSHDB_END) {
+void SchemaManager::OnFlushDBCallback(ValkeyModuleCtx *ctx,
+                                      ValkeyModuleEvent eid, uint64_t subevent,
+                                      void *data) {
+  if (subevent & VALKEYMODULE_SUBEVENT_FLUSHDB_END) {
     SchemaManager::Instance().OnFlushDBEnded(ctx);
   }
 }
 
-void SchemaManager::OnLoadingCallback(RedisModuleCtx *ctx,
-                                      [[maybe_unused]] RedisModuleEvent eid,
+void SchemaManager::OnLoadingCallback(ValkeyModuleCtx *ctx,
+                                      [[maybe_unused]] ValkeyModuleEvent eid,
                                       uint64_t subevent,
                                       [[maybe_unused]] void *data) {
-  if (subevent == REDISMODULE_SUBEVENT_LOADING_ENDED) {
+  if (subevent == VALKEYMODULE_SUBEVENT_LOADING_ENDED) {
     SchemaManager::Instance().OnLoadingEnded(ctx);
   }
-  if (subevent == REDISMODULE_SUBEVENT_LOADING_REPL_START) {
+  if (subevent == VALKEYMODULE_SUBEVENT_LOADING_REPL_START) {
     SchemaManager::Instance().OnReplicationLoadStart(ctx);
   }
 }
 
-void SchemaManager::OnServerCronCallback(RedisModuleCtx *ctx,
-                                         [[maybe_unused]] RedisModuleEvent eid,
+void SchemaManager::OnServerCronCallback(ValkeyModuleCtx *ctx,
+                                         [[maybe_unused]] ValkeyModuleEvent eid,
                                          [[maybe_unused]] uint64_t subevent,
                                          [[maybe_unused]] void *data) {
   SchemaManager::Instance().PerformBackfill(ctx, kIndexSchemaBackfillBatchSize);

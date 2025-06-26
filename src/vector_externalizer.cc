@@ -112,12 +112,12 @@ void VectorExternalizer::LRUPromote(VectorExternalizer::LRUCacheEntry* entry) {
   lru_cache_.Get()->Promote(entry);
 }
 
-void VectorExternalizer::Init(RedisModuleCtx* ctx) {
+void VectorExternalizer::Init(ValkeyModuleCtx* ctx) {
   hash_registration_supported_ =
-      (RedisModule_GetApi("RedisModule_HashExternalize",
-                          (void**)&RedisModule_HashExternalize) ==
-       REDISMODULE_OK);
-  ctx_ = vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx);
+      (ValkeyModule_GetApi("ValkeyModule_HashExternalize",
+                           (void**)&ValkeyModule_HashExternalize) ==
+       VALKEYMODULE_OK);
+  ctx_ = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);
 }
 
 VectorExternalizer::LRUCacheEntry::~LRUCacheEntry() {
@@ -158,7 +158,7 @@ void VectorExternalizer::ProcessEngineUpdateQueue() {
   auto& deferred_shared_vectors = deferred_shared_vectors_.Get();
   auto& shared_vectors = shared_vectors_.Get();
   for (auto& [key, attribute_identifiers] : deferred_shared_vectors) {
-    vmsdk::UniqueRedisOpenKey key_obj;
+    vmsdk::UniqueValkeyOpenKey key_obj;
     for (auto& [attribute_identifier, vector_externalizer_entry] :
          attribute_identifiers) {
       auto it = shared_vectors[key].find(attribute_identifier);
@@ -172,18 +172,18 @@ void VectorExternalizer::ProcessEngineUpdateQueue() {
       entry.magnitude = vector_externalizer_entry.magnitude;
       entry.vector = std::move(vector_externalizer_entry.vector);
       if (!key_obj) {
-        auto key_str = vmsdk::MakeUniqueRedisString(key->Str());
-        key_obj = vmsdk::MakeUniqueRedisOpenKey(ctx_.Get().get(), key_str.get(),
-                                                REDISMODULE_WRITE);
+        auto key_str = vmsdk::MakeUniqueValkeyString(key->Str());
+        key_obj = vmsdk::MakeUniqueValkeyOpenKey(ctx_.Get().get(), key_str.get(),
+                                                VALKEYMODULE_WRITE);
         if (!key_obj) {
           break;
         }
       }
 
-      if (RedisModule_HashExternalize(
+      if (ValkeyModule_HashExternalize(
               key_obj.get(),
-              vmsdk::MakeUniqueRedisString(attribute_identifier).get(),
-              ExternalizeCB, &entry) != REDISMODULE_OK) {
+              vmsdk::MakeUniqueValkeyString(attribute_identifier).get(),
+              ExternalizeCB, &entry) != VALKEYMODULE_OK) {
         shared_vectors[key].erase(attribute_identifier);
         ++stats_.Get().hash_extern_errors;
       }
@@ -243,12 +243,12 @@ size_t VectorExternalizer::PendingEntriesCnt() const {
   return size;
 }
 
-vmsdk::UniqueRedisString VectorExternalizer::GetRecord(
-    RedisModuleCtx* ctx, const AttributeDataType* attribute_data_type,
-    RedisModuleKey* key_obj, absl::string_view key_cstr,
+vmsdk::UniqueValkeyString VectorExternalizer::GetRecord(
+    ValkeyModuleCtx* ctx, const AttributeDataType* attribute_data_type,
+    ValkeyModuleKey* key_obj, absl::string_view key_cstr,
     absl::string_view attribute_identifier, bool& is_module_owned) {
   vmsdk::VerifyMainThread();
-  vmsdk::UniqueRedisString record;
+  vmsdk::UniqueValkeyString record;
   is_module_owned = false;
   auto generated_value_cnt = stats_.Get().generated_value_cnt;
   auto res = attribute_data_type->GetRecord(ctx, key_obj, key_cstr,

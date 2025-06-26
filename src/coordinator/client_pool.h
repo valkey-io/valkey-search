@@ -45,7 +45,7 @@ namespace valkey_search::coordinator {
 
 class ClientPool {
  public:
-  ClientPool(vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx)
+  ClientPool(vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx)
       : detached_ctx_(std::move(detached_ctx)) {}
   virtual ~ClientPool() = default;
 
@@ -54,7 +54,7 @@ class ClientPool {
     auto itr = client_pool_.find(address);
     if (itr == client_pool_.end()) {
       auto client = ClientImpl::MakeInsecureClient(
-          vmsdk::MakeUniqueRedisDetachedThreadSafeContext(detached_ctx_.get()),
+          vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(detached_ctx_.get()),
           address);
       client_pool_[address] = std::move(client);
     }
@@ -62,7 +62,7 @@ class ClientPool {
   }
 
  private:
-  vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx_;
+  vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
   absl::Mutex client_pool_mutex_;
   absl::flat_hash_map<std::string, std::shared_ptr<Client>> client_pool_
       ABSL_GUARDED_BY(client_pool_mutex_);

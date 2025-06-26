@@ -43,16 +43,16 @@ namespace vmsdk {
 
 namespace {
 
-class UtilsTest : public vmsdk::RedisTest {};
+class UtilsTest : public vmsdk::ValkeyTest {};
 
 TEST_F(UtilsTest, RunByMain) {
   absl::BlockingCounter blocking_refcount(1);
   ThreadPool thread_pool("test-pool", 1);
   thread_pool.StartWorkers();
-  RedisModuleEventLoopOneShotFunc captured_callback;
+  ValkeyModuleEventLoopOneShotFunc captured_callback;
   void* captured_data;
-  EXPECT_CALL(*kMockRedisModule, EventLoopAddOneShot(testing::_, testing::_))
-      .WillOnce([&](RedisModuleEventLoopOneShotFunc callback, void* data) {
+  EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
+      .WillOnce([&](ValkeyModuleEventLoopOneShotFunc callback, void* data) {
         captured_callback = callback;
         captured_data = data;
         blocking_refcount.DecrementCount();
@@ -75,7 +75,7 @@ TEST_F(UtilsTest, RunByMain) {
 
 TEST_F(UtilsTest, RunByMainWhileInMain) {
   absl::BlockingCounter blocking_refcount(1);
-  EXPECT_CALL(*kMockRedisModule, EventLoopAddOneShot(testing::_, testing::_))
+  EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
       .Times(0);
   bool run = false;
   RunByMain([&blocking_refcount, &run] {
@@ -105,43 +105,43 @@ TEST_F(UtilsTest, ParseTag) {
 }
 
 TEST_F(UtilsTest, MultiOrLua) {
-  RedisModuleCtx fake_ctx;
+  ValkeyModuleCtx fake_ctx;
   {
-    EXPECT_CALL(*kMockRedisModule, GetContextFlags(&fake_ctx))
+    EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx))
         .WillRepeatedly(testing::Return(0));
     EXPECT_FALSE(MultiOrLua(&fake_ctx));
   }
   {
-    EXPECT_CALL(*kMockRedisModule, GetContextFlags(&fake_ctx))
-        .WillRepeatedly(testing::Return(REDISMODULE_CTX_FLAGS_MULTI));
+    EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx))
+        .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_MULTI));
     EXPECT_TRUE(MultiOrLua(&fake_ctx));
   }
   {
-    EXPECT_CALL(*kMockRedisModule, GetContextFlags(&fake_ctx))
-        .WillRepeatedly(testing::Return(REDISMODULE_CTX_FLAGS_LUA));
+    EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx))
+        .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_LUA));
     EXPECT_TRUE(MultiOrLua(&fake_ctx));
   }
 }
 
 TEST_F(UtilsTest, IsRealUserClient) {
-  RedisModuleCtx fake_ctx;
+  ValkeyModuleCtx fake_ctx;
   {
-    EXPECT_CALL(*kMockRedisModule, GetClientId(&fake_ctx))
+    EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx))
         .WillRepeatedly(testing::Return(1));
-    EXPECT_CALL(*kMockRedisModule, GetContextFlags(&fake_ctx))
+    EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx))
         .WillRepeatedly(testing::Return(0));
     EXPECT_TRUE(IsRealUserClient(&fake_ctx));
   }
   {
-    EXPECT_CALL(*kMockRedisModule, GetClientId(&fake_ctx))
+    EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx))
         .WillRepeatedly(testing::Return(0));
     EXPECT_FALSE(IsRealUserClient(&fake_ctx));
   }
   {
-    EXPECT_CALL(*kMockRedisModule, GetClientId(&fake_ctx))
+    EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx))
         .WillRepeatedly(testing::Return(1));
-    EXPECT_CALL(*kMockRedisModule, GetContextFlags(&fake_ctx))
-        .WillRepeatedly(testing::Return(REDISMODULE_CTX_FLAGS_REPLICATED));
+    EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx))
+        .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_REPLICATED));
     EXPECT_FALSE(IsRealUserClient(&fake_ctx));
   }
 }

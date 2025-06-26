@@ -53,7 +53,7 @@ NumericPredicate::NumericPredicate(const indexes::Numeric* index,
                                    bool is_inclusive_end)
     : Predicate(PredicateType::kNumeric),
       index_(index),
-      identifier_(vmsdk::MakeUniqueRedisString(identifier)),
+      identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
       start_(start),
       is_inclusive_start_(is_inclusive_start),
       end_(end),
@@ -78,7 +78,7 @@ TagPredicate::TagPredicate(const indexes::Tag* index,
                            const absl::flat_hash_set<absl::string_view>& tags)
     : Predicate(PredicateType::kTag),
       index_(index),
-      identifier_(vmsdk::MakeUniqueRedisString(identifier)),
+      identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
       raw_tag_string_(raw_tag_string),
       tags_(tags.begin(), tags.end()) {}
 

@@ -119,7 +119,7 @@ void VectorFlat<T>::UnTrackVector(uint64_t internal_id) {
 
 template <typename T>
 absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
-    RedisModuleCtx *ctx, const AttributeDataType *attribute_data_type,
+    ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier,
     SupplementalContentChunkIter &&iter) {
@@ -298,27 +298,27 @@ void VectorFlat<T>::ToProtoImpl(
 }
 
 template <typename T>
-int VectorFlat<T>::RespondWithInfoImpl(RedisModuleCtx *ctx) const {
-  RedisModule_ReplyWithSimpleString(ctx, "data_type");
+int VectorFlat<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
+  ValkeyModule_ReplyWithSimpleString(ctx, "data_type");
   if constexpr (std::is_same_v<T, float>) {
-    RedisModule_ReplyWithSimpleString(
+    ValkeyModule_ReplyWithSimpleString(
         ctx,
         LookupKeyByValue(*kVectorDataTypeByStr,
                          data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32)
             .data());
   } else {
-    RedisModule_ReplyWithSimpleString(ctx, "UNKNOWN");
+    ValkeyModule_ReplyWithSimpleString(ctx, "UNKNOWN");
   }
-  RedisModule_ReplyWithSimpleString(ctx, "algorithm");
-  RedisModule_ReplyWithArray(ctx, 4);
-  RedisModule_ReplyWithSimpleString(ctx, "name");
-  RedisModule_ReplyWithSimpleString(
+  ValkeyModule_ReplyWithSimpleString(ctx, "algorithm");
+  ValkeyModule_ReplyWithArray(ctx, 4);
+  ValkeyModule_ReplyWithSimpleString(ctx, "name");
+  ValkeyModule_ReplyWithSimpleString(
       ctx,
       LookupKeyByValue(*kVectorAlgoByStr,
                        data_model::VectorIndex::AlgorithmCase::kFlatAlgorithm)
           .data());
-  RedisModule_ReplyWithSimpleString(ctx, "block_size");
-  RedisModule_ReplyWithLongLong(ctx, block_size_);
+  ValkeyModule_ReplyWithSimpleString(ctx, "block_size");
+  ValkeyModule_ReplyWithLongLong(ctx, block_size_);
 
   return 4;
 }

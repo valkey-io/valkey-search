@@ -58,11 +58,11 @@ class Client {
 
 class ClientImpl : public Client {
  public:
-  ClientImpl(vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx,
+  ClientImpl(vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx,
              absl::string_view address,
              std::unique_ptr<Coordinator::Stub> stub);
   static std::shared_ptr<Client> MakeInsecureClient(
-      vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx,
+      vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx,
       absl::string_view address);
 
   ClientImpl(const ClientImpl&) = delete;
@@ -74,7 +74,7 @@ class ClientImpl : public Client {
       SearchIndexPartitionCallback done) override;
 
  private:
-  vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx_;
+  vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
   std::string address_;
   std::unique_ptr<Coordinator::Stub> stub_;
 };

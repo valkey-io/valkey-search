@@ -48,7 +48,7 @@ namespace valkey_search::coordinator {
 
 class Service final : public Coordinator::CallbackService {
  public:
-  Service(vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx,
+  Service(vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx,
           vmsdk::ThreadPool* reader_thread_pool)
       : detached_ctx_(std::move(detached_ctx)),
         reader_thread_pool_(reader_thread_pool) {}
@@ -68,7 +68,7 @@ class Service final : public Coordinator::CallbackService {
       SearchIndexPartitionResponse* response) override;
 
  private:
-  vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx_;
+  vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
   vmsdk::ThreadPool* reader_thread_pool_;
 };
 
@@ -80,7 +80,7 @@ class Server {
 
 class ServerImpl final : public Server {
  public:
-  static std::unique_ptr<Server> Create(RedisModuleCtx* ctx,
+  static std::unique_ptr<Server> Create(ValkeyModuleCtx* ctx,
                                         vmsdk::ThreadPool* reader_thread_pool,
                                         uint16_t port);
   ServerImpl(const ServerImpl&) = delete;

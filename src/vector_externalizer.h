@@ -104,14 +104,14 @@ class VectorExternalizer {
   void LRUPromote(LRUCacheEntry* entry);
   LRUCacheEntry* LRUAdd(LRUCacheEntry* entry);
   void LRURemove(LRUCacheEntry* entry);
-  void Init(RedisModuleCtx* ctx);
-  RedisModuleCtx* GetCtx() const {
+  void Init(ValkeyModuleCtx* ctx);
+  ValkeyModuleCtx* GetCtx() const {
     CHECK(ctx_.Get());
     return ctx_.Get().get();
   }
-  vmsdk::UniqueRedisString GetRecord(
-      RedisModuleCtx* ctx, const AttributeDataType* attribute_data_type,
-      RedisModuleKey* key_obj, absl::string_view key_cstr,
+  vmsdk::UniqueValkeyString GetRecord(
+      ValkeyModuleCtx* ctx, const AttributeDataType* attribute_data_type,
+      ValkeyModuleKey* key_obj, absl::string_view key_cstr,
       absl::string_view attribute_identifier, bool& is_module_owned);
 
   // Used for testing.
@@ -128,7 +128,7 @@ class VectorExternalizer {
       deferred_shared_vectors_;
   vmsdk::MainThreadAccessGuard<std::unique_ptr<LRU<LRUCacheEntry>>> lru_cache_;
   vmsdk::MainThreadAccessGuard<Stats> stats_;
-  vmsdk::MainThreadAccessGuard<vmsdk::UniqueRedisDetachedThreadSafeContext>
+  vmsdk::MainThreadAccessGuard<vmsdk::UniqueValkeyDetachedThreadSafeContext>
       ctx_;
   size_t EntriesCnt() const;
   size_t PendingEntriesCnt() const;

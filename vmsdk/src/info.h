@@ -230,14 +230,14 @@ struct StringBuilder {
     }
 
     // Computed Value. Cannot be crash safe with std::string return value.
-    StringBuilder& Computed(std::function<std::string ()> compute_func) {
+    StringBuilder& ComputedString(std::function<std::string ()> compute_func) {
         compute_string_func_ = compute_func;
         flags_ = Flags(flags_ & ~Flags::kCrashSafe);
         return *this;
     }
 
     // Computed Value. This function is assumed to be crash safe.
-    StringBuilder& Computed(std::function<const char * ()> compute_func) {
+    StringBuilder& ComputedCharPtr(std::function<const char *()> compute_func) {
         compute_char_func_ = compute_func;
         return *this;
     }

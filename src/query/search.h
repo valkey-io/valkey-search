@@ -129,7 +129,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
     const VectorSearchParameters& parameters);
 
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
-CalcBestMatchingPrefiltereddKeys(
+CalcBestMatchingPrefilteredKeys(
     const VectorSearchParameters& parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
     indexes::VectorBase* vector_index);

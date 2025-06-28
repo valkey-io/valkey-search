@@ -73,7 +73,7 @@ TEST_P(FTDropIndexTest, FTDropIndexTests) {
   const MultiFtDropIndexTestCase& test_cases = GetParam();
   for (bool use_thread_pool : {true, false}) {
     for (const auto& test_case : test_cases.test_cases) {
-      // Setup the data structures for the test case.
+      // Set up the data structures for the test case.
       RedisModuleCtx fake_ctx;
       vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
       SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(

@@ -447,6 +447,9 @@ TEST_F(ValkeySearchTest, Info) {
   stats.coordinator_server_search_index_partition_success_cnt = 28;
   auto interned_key_1 = StringInternStore::Intern("key1");
   EXPECT_EQ(std::string(*interned_key_1), "key1");
+  
+  StringInternStore::SetMemoryUsageForTesting(2097152);  // 2MB in bytes
+  
   RedisModuleInfoCtx fake_info_ctx;
   ValkeySearch::Instance().Info(&fake_info_ctx, false);
 #ifndef TESTING_TMP_DISABLED
@@ -486,12 +489,13 @@ TEST_F(ValkeySearchTest, Info) {
       "21\ncoordinator_client_search_index_partition_success_count: "
       "24\ncoordinator_client_search_index_partition_failure_count: "
       "23\nstring_interning\nstring_interning_store_size: "
-      "1\nvector_externing\nvector_externing_entry_count: "
+      "1\nstring_interning_memory_mb: '2.00M'\nvector_externing\nvector_externing_entry_count: "
       "0\nvector_externing_hash_extern_errors: "
       "0\nvector_externing_generated_value_cnt: "
       "0\nvector_externing_num_lru_entries: "
       "0\nvector_externing_lru_promote_cnt: "
       "0\nvector_externing_deferred_entry_cnt: 0\n");
+  StringInternStore::SetMemoryUsageForTesting(0); // reset memory pool
 #endif
 }
 

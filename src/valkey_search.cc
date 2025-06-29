@@ -319,6 +319,9 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
     RedisModule_InfoAddSection(ctx, "string_interning");
     RedisModule_InfoAddFieldLongLong(ctx, "string_interning_store_size",
                                      StringInternStore::Instance().Size());
+    RedisModule_InfoAddFieldCString(
+        ctx, "string_interning_memory_mb", 
+        ConvertToMB(StringInternStore::GetMemoryUsage()).c_str());
 
     RedisModule_InfoAddSection(ctx, "vector_externing");
     auto vector_externing_stats = VectorExternalizer::Instance().GetStats();

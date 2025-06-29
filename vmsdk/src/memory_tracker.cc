@@ -21,36 +21,35 @@
  * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
  * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
  * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * INTERRUPTION) HOWEVER CAUSED ON ANY THEORY OF LIABILITY, WHETHER IN
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef VMSDK_SRC_MEMORY_ALLOCATION_H_
-#define VMSDK_SRC_MEMORY_ALLOCATION_H_
+#include "memory_tracker.h"
+#include "vmsdk/src/memory_allocation.h"
 
-#include <cstdint>
+thread_local MemoryTrackingScope* MemoryTrackingScope::current_scope_tls_ = nullptr;
 
-namespace vmsdk {
+MemoryTrackingScope::MemoryTrackingScope(std::atomic<int64_t>* pool)
+    : target_pool_(pool), memory_delta_(vmsdk::GetMemoryDelta()) {
+    prev_scope_ = current_scope_tls_;
+    current_scope_tls_ = this;
+}
 
-// Updates the custom allocator to perform any future allocations using the
-// Valkey allocator.
-void UseValkeyAlloc();
-bool IsUsingValkeyAlloc();
+MemoryTrackingScope::~MemoryTrackingScope() {
+    if (target_pool_ != nullptr) {
+        int64_t current_delta = vmsdk::GetMemoryDelta();
+        int64_t net_change = current_delta - memory_delta_;
+        target_pool_->fetch_add(net_change);
+        if (prev_scope_ != nullptr) {
+            prev_scope_->memory_delta_ += net_change;
+        }
+    }
+    current_scope_tls_ = prev_scope_;
+}
 
-// Switch back to the default allocator. No guarantees around atomicity. Only
-// safe in single-threaded or testing environments.
-void ResetValkeyAlloc();
-
-// Report used memory counter.
-uint64_t GetUsedMemoryCnt();
-
-void ReportAllocMemorySize(uint64_t size);
-void ReportFreeMemorySize(uint64_t size);
-
-int64_t GetMemoryDelta();
-
-}  // namespace vmsdk
-
-#endif  // VMSDK_SRC_MEMORY_ALLOCATION_H_
+MemoryTrackingScope* MemoryTrackingScope::GetCurrentScope() {
+    return current_scope_tls_;
+}

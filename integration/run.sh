@@ -79,33 +79,77 @@ LOG_INFO "MODULE_PATH => ${MODULE_PATH}"
 mkdir -p ${WD}
 LOG_INFO "Working directory is set to: ${WD}"
 
+function setup_python() {
+    if [ -z "${PYTHON_PATH}" ]; then
+        LOG_INFO "Setting python env at: ${WD}/env"
+        if [ ! -d ${WD}/env ]; then
+            python3 -m venv ${WD}/env
+        fi
+        source ${WD}/env/bin/activate
+        PYTHON_PATH=${WD}/env/bin/python3
+        PIP_PATH=${WD}/env/bin/pip3
+    fi
+}
+
 function install_test_framework() {
     local test_framework_url="https://github.com/valkey-io/valkey-test-framework"
     local test_framework_path="${WD}/valkey-test-framework"
 
     LOG_INFO "PIP_PATH => ${PIP_PATH}"
-    if [ -d "${test_framework_path}" ]; then
+    if [ -L "${WD}/valkeytestframework" ]; then
         LOG_INFO "valkey-test-framework found: ${test_framework_path}"
     else
-        LOG_INFO "Cloning valkey-test-framework into ${test_framework_path}"
-        git clone "${test_framework_url}" ${test_framework_path}
+        if [ ! -d ${test_framework_path} ]; then
+            LOG_INFO "Cloning valkey-test-framework into ${test_framework_path}"
+            git clone "${test_framework_url}" ${test_framework_path}
+        fi
         pushd ${test_framework_path}
         local requirements_txt=${test_framework_path}/requirements.txt
         if [ -f ${requirements_txt} ]; then
             LOG_INFO "Installing requirements file"
             ${PIP_PATH} install -r ${requirements_txt}
+            ${PIP_PATH} install --upgrade pytest
         fi
         popd
         ln -sf ${test_framework_path}/src ${WD}/valkeytestframework
     fi
 }
 
+function build_json_module() {
+    local json_url="https://github.com/valkey-io/valkey-json"
+    local json_repo_path="${WD}/valkey-json"
+    local json_module=${json_repo_path}/.build-release/src/libjson.${MODULE_EXT}
+    if [ -f "${json_module}" ]; then
+        LOG_INFO "Found JSON module: ${json_module}"
+    else
+        LOG_INFO "Cloning ${json_url} into ${json_repo_path}"
+        git clone "${json_url}" ${json_repo_path}
+        pushd ${json_repo_path}
+        mkdir .build-release
+        pushd .build-release
+        cmake .. -DCMAKE_BUILD_TYPE=Release
+        make -j$(nproc)
+        popd
+        popd
+    fi
+    JSON_MODULE_PATH=${json_module}
+}
+
+# Check for user provided JSON module path
+JSON_MODULE_PATH="${JSON_MODULE_PATH:=}"
+if [ -z "${JSON_MODULE_PATH}" ]; then
+    build_json_module
+fi
+LOG_INFO "JSON_MODULE_PATH => ${JSON_MODULE_PATH}"
+
+setup_python
 install_test_framework
 
 # Export variables required by the test framework
 export MODULE_PATH=${MODULE_PATH}
 export VALKEY_SERVER_PATH=${VALKEY_SERVER_PATH}
 export PYTHONPATH=${WD}/valkeytestframework:${WD}
+export JSON_MODULE_PATH=${JSON_MODULE_PATH}
 
 FILTER_ARGS=""
 if [ ! -z "${TEST_PATTERN}" ]; then
@@ -114,5 +158,5 @@ if [ ! -z "${TEST_PATTERN}" ]; then
 else
     LOG_INFO "TEST_PATTERN is not set. Running all integration tests."
 fi
-LOG_INFO "Running: python3 -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/"
-python3 -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/
+LOG_INFO "Running: ${PYTHON_PATH} -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/"
+${PYTHON_PATH} -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/

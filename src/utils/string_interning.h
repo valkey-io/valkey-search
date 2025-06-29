@@ -32,7 +32,6 @@
 
 #include <cstddef>
 #include <memory>
-#include <set>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"

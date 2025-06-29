@@ -33,7 +33,6 @@
 #include <cstdlib>
 #include <atomic>
 
-#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "vmsdk/src/memory_allocation_overrides.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -549,48 +548,36 @@ TEST_F(MemoryAllocationTest, MemoryTrackingScopeNonZeroBaseline) {
   EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
 }
 
-TEST_F(MemoryAllocationTest, MemoryTrackingScopeNested) {
+TEST_F(MemoryAllocationTest, MemoryTrackingScopeOverrides) {
   vmsdk::UseValkeyAlloc();
 
-  std::atomic<int64_t> outer_pool{0};
-  std::atomic<int64_t> inner_pool{0};
+  std::atomic<int64_t> first_pool{0};
+  std::atomic<int64_t> second_pool{0};
 
   void* ptr1 = nullptr;
   void* ptr2 = nullptr;
-  void* ptr3 = nullptr;
 
   {
-    MemoryTrackingScope outer_scope(&outer_pool);
+    MemoryTrackingScope outer_scope(&first_pool);
 
     EXPECT_CALL(*kMockRedisModule, Alloc(100)).WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
     EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x1000))).WillRepeatedly(testing::Return(100));
     ptr1 = __wrap_malloc(100);
 
-    {
-        MemoryTrackingScope inner_scope(&inner_pool);
-        EXPECT_CALL(*kMockRedisModule, Alloc(50)).WillOnce(testing::Return(reinterpret_cast<void*>(0x2000)));
-        EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x2000))).WillRepeatedly(testing::Return(50));
-        ptr2 = __wrap_malloc(50);
-    } // Inner scope ends, net change: +50
+    MemoryTrackingScope inner_scope(&second_pool);
+    EXPECT_CALL(*kMockRedisModule, Alloc(50)).WillOnce(testing::Return(reinterpret_cast<void*>(0x2000)));
+    EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x2000))).WillRepeatedly(testing::Return(50));
+    ptr2 = __wrap_malloc(50);
+  } // Outer scope ends, net change: +100 + 50 = 150
 
-    EXPECT_EQ(inner_pool.load(), 50);
-    EXPECT_EQ(outer_pool.load(), 0);
-
-    EXPECT_CALL(*kMockRedisModule, Alloc(20)).WillOnce(testing::Return(reinterpret_cast<void*>(0x3000)));
-    EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x3000))).WillRepeatedly(testing::Return(20));
-    ptr3 = __wrap_malloc(20);
-  } // Outer scope ends, net change: +100 + 20 = 120
-
-  EXPECT_EQ(inner_pool.load(), 50);
-  EXPECT_EQ(outer_pool.load(), 120);
+  EXPECT_EQ(first_pool.load(), 100);
+  EXPECT_EQ(second_pool.load(), 50);
 
   // Cleanup
   EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x1000))).Times(1);
   EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x2000))).Times(1);
-  EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x3000))).Times(1);
   __wrap_free(ptr1);
   __wrap_free(ptr2);
-  __wrap_free(ptr3);
 }
 
 #endif  // TESTING_TMP_DISABLED

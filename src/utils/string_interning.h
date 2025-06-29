@@ -58,10 +58,11 @@ class StringInternStore {
                                                 Allocator *allocator = nullptr);
 
   static int64_t GetMemoryUsage();
-  static int64_t GetIndexUsage(const void* index_id);
-  static void RegisterIndexUsage(const void* index_id, absl::string_view str);
-  static void UnregisterIndexUsage(const void* index_id, absl::string_view str);
-  static bool IsUsedByIndex(const void* index_id, absl::string_view str);
+
+  // Testing utility to set memory pool value for predictable test results
+  static void SetMemoryUsageForTesting(int64_t value) {
+    memory_pool_.store(value);
+  }
 
   size_t Size() const {
     absl::MutexLock lock(&mutex_);
@@ -70,10 +71,7 @@ class StringInternStore {
 
  private:
   static std::atomic<int64_t> memory_pool_;
-  static absl::flat_hash_map<const void*, std::set<std::string>> index_usage_map_;
-  static absl::flat_hash_map<const void*, int64_t> index_usage_cache_;
-  static absl::Mutex usage_mutex_;
-  
+
   StringInternStore() = default;
   std::shared_ptr<InternedString> InternImpl(absl::string_view str,
                                              Allocator *allocator);

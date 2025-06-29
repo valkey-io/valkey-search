@@ -278,8 +278,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributes);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributesSanity);
   FRIEND_TEST(IndexSchemaFriendTest, ProcessMutation_MemoryTrackingScopeConstructor);
-  FRIEND_TEST(IndexSchemaFriendTest, ProcessMutation_TrackNewKey);
-  FRIEND_TEST(IndexSchemaFriendTest, ProcessMutation_UnTrackDeletedKey);
   FRIEND_TEST(ValkeySearchTest, Info);
   FRIEND_TEST(OnSwapDBCallbackTest, OnSwapDBCallback);
 };

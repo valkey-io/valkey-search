@@ -439,7 +439,6 @@ void IndexSchema::ProcessAttributeMutation(
       if (!was_tracked) {
         ++stats_.document_cnt;
       }
-      StringInternStore::RegisterIndexUsage(this, key->Str());
     }
     return;
   }
@@ -451,7 +450,6 @@ void IndexSchema::ProcessAttributeMutation(
     if (!IsTrackedByAnyIndex(key)) {
       --stats_.document_cnt;
     }
-    StringInternStore::UnregisterIndexUsage(this, *key);
   }
 }
 
@@ -693,7 +691,7 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(RedisModuleCtx *ctx) const {
-  RedisModule_ReplyWithArray(ctx, 30);
+  RedisModule_ReplyWithArray(ctx, 28);
   RedisModule_ReplyWithSimpleString(ctx, "index_name");
   RedisModule_ReplyWithSimpleString(ctx, name_.data());
   RedisModule_ReplyWithSimpleString(ctx, "index_options");
@@ -756,9 +754,6 @@ void IndexSchema::RespondWithInfo(RedisModuleCtx *ctx) const {
   RedisModule_ReplyWithSimpleString(ctx, "index_size_mb");
   RedisModule_ReplyWithSimpleString(
     ctx, absl::StrFormat("%lu", GetMemoryUsage() / 1024 / 1024).c_str());
-  RedisModule_ReplyWithSimpleString(ctx, "shared_strings_size_mb");
-  RedisModule_ReplyWithSimpleString(
-    ctx, absl::StrFormat("%lu", StringInternStore::GetIndexUsage(this) / 1024 / 1024).c_str());
 }
 
 bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {

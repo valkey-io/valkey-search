@@ -61,6 +61,7 @@ class StringInternStore {
   static int64_t GetIndexUsage(const void* index_id);
   static void RegisterIndexUsage(const void* index_id, absl::string_view str);
   static void UnregisterIndexUsage(const void* index_id, absl::string_view str);
+  static bool IsUsedByIndex(const void* index_id, absl::string_view str);
 
   size_t Size() const {
     absl::MutexLock lock(&mutex_);

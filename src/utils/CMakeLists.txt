@@ -16,6 +16,7 @@ target_include_directories(string_interning PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(string_interning PUBLIC allocator)
 target_link_libraries(string_interning PUBLIC memory_tracker)
 target_link_libraries(string_interning PUBLIC memory_allocation)
+target_link_libraries(string_interning PUBLIC memory_allocation_overrides)
 
 set(SRCS_ALLOCATOR ${CMAKE_CURRENT_LIST_DIR}/allocator.cc
                    ${CMAKE_CURRENT_LIST_DIR}/allocator.h)

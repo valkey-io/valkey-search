@@ -77,7 +77,6 @@ target_link_libraries(valkey_search PUBLIC utils)
 target_link_libraries(valkey_search PUBLIC status_macros)
 target_link_libraries(valkey_search PUBLIC valkey_module)
 target_link_libraries(valkey_search PUBLIC acl)
-target_link_libraries(valkey_search PUBLIC memory_tracker)
 
 set(SRCS_KEYSPACE_EVENT_MANAGER
     ${CMAKE_CURRENT_LIST_DIR}/keyspace_event_manager.cc
@@ -139,6 +138,9 @@ target_link_libraries(index_schema PUBLIC type_conversions)
 target_link_libraries(index_schema PUBLIC utils)
 target_link_libraries(index_schema PUBLIC status_macros)
 target_link_libraries(index_schema PUBLIC valkey_module)
+target_link_libraries(index_schema PUBLIC memory_tracker)
+target_link_libraries(index_schema PUBLIC memory_allocation)
+target_link_libraries(index_schema PUBLIC memory_allocation_overrides)
 
 set(SRCS_ATTRIBUTE_DATA_TYPE ${CMAKE_CURRENT_LIST_DIR}/attribute_data_type.cc
                              ${CMAKE_CURRENT_LIST_DIR}/attribute_data_type.h)

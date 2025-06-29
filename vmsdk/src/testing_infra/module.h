@@ -148,6 +148,8 @@ class MockRedisModule {
   MOCK_METHOD(int, ReplyWithStringBuffer,
               (RedisModuleCtx * ctx, const char *buf, size_t len));
   MOCK_METHOD(int, FreeString, (RedisModuleCtx * ctx, RedisModuleString *str));
+  MOCK_METHOD(RedisModuleString *, CreateString,
+              (RedisModuleCtx * ctx, const char *ptr, size_t len));
   MOCK_METHOD(RedisModuleType *, CreateDataType,
               (RedisModuleCtx * ctx, const char *name, int encver,
                RedisModuleTypeMethods *typemethods));
@@ -570,11 +572,10 @@ inline void TestRedisModule_ACLAddLogEntryByUserName(
   return kMockRedisModule->ACLAddLogEntryByUserName(ctx, user, object, reason);
 }
 
-inline RedisModuleString *TestRedisModule_CreateString(RedisModuleCtx *ctx
-                                                       [[maybe_unused]],
+inline RedisModuleString *TestRedisModule_CreateString(RedisModuleCtx *ctx,
                                                        const char *ptr,
                                                        size_t len) {
-  return new RedisModuleString{std::string(ptr, len)};
+  return kMockRedisModule->CreateString(ctx, ptr, len);
 }
 
 inline void TestRedisModule_FreeString(RedisModuleCtx *ctx [[maybe_unused]],
@@ -1583,6 +1584,10 @@ inline void TestRedisModule_Init() {
 
   ON_CALL(*kMockRedisModule, GetCurrentUserName(testing::_))
       .WillByDefault(TestRedisModule_GetCurrentUserNameImpl);
+  ON_CALL(*kMockRedisModule, CreateString(testing::_, testing::_, testing::_))
+      .WillByDefault([](RedisModuleCtx *ctx, const char *ptr, size_t len) -> RedisModuleString* {
+        return new RedisModuleString{std::string(ptr, len)};
+      });
 
   ON_CALL(*kMockRedisModule, CallReplyType(testing::_))
       .WillByDefault(TestRedisModule_CallReplyTypeImpl);

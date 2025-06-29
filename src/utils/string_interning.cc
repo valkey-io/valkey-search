@@ -36,6 +36,7 @@
 #include "absl/synchronization/mutex.h"
 #include "src/utils/allocator.h"
 #include "vmsdk/src/memory_tracker.h"
+#include "vmsdk/src/memory_allocation_overrides.h"
 
 namespace valkey_search {
 
@@ -115,9 +116,9 @@ std::shared_ptr<InternedString> StringInternStore::InternImpl(
 
 void StringInternStore::RegisterIndexUsage(const void* index_id, absl::string_view str) {
   absl::MutexLock lock(&usage_mutex_);
-  
+
   bool is_new = index_usage_map_[index_id].insert(std::string(str)).second;
-  
+
   if (is_new) {
     int64_t string_size = str.size() + 1;
     index_usage_cache_[index_id] += string_size;
@@ -128,19 +129,28 @@ void StringInternStore::UnregisterIndexUsage(const void* index_id, absl::string_
   absl::MutexLock lock(&usage_mutex_);
   auto it = index_usage_map_.find(index_id);
   if (it != index_usage_map_.end()) {
-    
+
     bool was_removed = it->second.erase(std::string(str)) > 0;
-    
+
     if (was_removed) {
       int64_t string_size = str.size() + 1;
       index_usage_cache_[index_id] -= string_size;
     }
-    
+
     if (it->second.empty()) {
       index_usage_map_.erase(it);
       index_usage_cache_.erase(index_id);
     }
   }
+}
+
+bool StringInternStore::IsUsedByIndex(const void* index_id, absl::string_view str) {
+  absl::MutexLock lock(&usage_mutex_);
+  auto it = index_usage_map_.find(index_id);
+  if (it != index_usage_map_.end()) {
+    return it->second.contains(std::string(str));
+  }
+  return false;
 }
 
 int64_t StringInternStore::GetIndexUsage(const void* index_id) {

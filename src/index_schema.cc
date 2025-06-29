@@ -185,7 +185,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
   auto res = std::shared_ptr<IndexSchema>(
       new IndexSchema(ctx, index_schema_proto, std::move(attribute_data_type),
                       mutations_thread_pool));
-  
+
   MemoryTrackingScope scope {&res->memory_pool_};
 
   VMSDK_RETURN_IF_ERROR(res->Init(ctx));
@@ -365,7 +365,6 @@ void IndexSchema::ProcessKeyspaceNotification(RedisModuleCtx *ctx,
   MutatedAttributes mutated_attributes;
   bool added = false;
   auto interned_key = StringInternStore::Intern(key_cstr);
-  StringInternStore::RegisterIndexUsage(this, key_cstr);
   for (const auto &attribute_itr : attributes_) {
     auto &attribute = attribute_itr.second;
     if (!key_obj) {
@@ -440,6 +439,7 @@ void IndexSchema::ProcessAttributeMutation(
       if (!was_tracked) {
         ++stats_.document_cnt;
       }
+      StringInternStore::RegisterIndexUsage(this, key->Str());
     }
     return;
   }

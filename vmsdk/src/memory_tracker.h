@@ -36,9 +36,6 @@
 
 class MemoryTrackingScope final {
 public:
-    // Test hook function type for scope lifecycle events
-    using ScopeEventCallback = std::function<void(const MemoryTrackingScope*)>;
-    
     explicit MemoryTrackingScope(std::atomic<int64_t>* pool);
     ~MemoryTrackingScope();
 
@@ -48,19 +45,12 @@ public:
 
     int64_t GetMemoryDelta() const { return memory_delta_; }
 
-    // Used for testing
-    static void SetScopeEventCallback(ScopeEventCallback callback);
-    static void ClearScopeEventCallback();
-
 private:
     MemoryTrackingScope* prev_scope_ = nullptr;
     std::atomic<int64_t>* target_pool_ = nullptr;
     int64_t memory_delta_ = 0;
 
     static thread_local MemoryTrackingScope* current_scope_tls_;
-    static thread_local ScopeEventCallback scope_event_callback_;
-
-    void NotifyScopeEvent();
 };
 
 #endif // VMSDK_SRC_MEMORY_TRACKER_H_ 

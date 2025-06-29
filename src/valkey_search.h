@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef VALKEYSEARCH_SRC_VALKEY_SEARCH_H_
@@ -68,20 +46,20 @@ class ValkeySearch {
   vmsdk::ThreadPool *GetWriterThreadPool() const {
     return writer_thread_pool_.get();
   }
-  void Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const;
+  void Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const;
 
   IndexSchema::Stats::ResultCnt<uint64_t> AccumulateIndexSchemaResults(
       absl::AnyInvocable<const IndexSchema::Stats::ResultCnt<
           std::atomic<uint64_t>> &(const IndexSchema::Stats &) const>
           get_result_cnt_func) const;
-  void OnServerCronCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
+  void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                             uint64_t subevent, void *data);
-  void OnForkChildCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
+  void OnForkChildCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                            uint64_t subevent, void *data);
-  void OnClusterMessageCallback(RedisModuleCtx *ctx, const char *sender_id,
+  void OnClusterMessageCallback(ValkeyModuleCtx *ctx, const char *sender_id,
                                 uint8_t type, const unsigned char *payload,
                                 uint32_t len);
-  void SendMetadataBroadcast(RedisModuleCtx *ctx, void *data);
+  void SendMetadataBroadcast(ValkeyModuleCtx *ctx, void *data);
   void AtForkPrepare();
   void AfterForkParent();
   static ValkeySearch &Instance();
@@ -90,14 +68,15 @@ class ValkeySearch {
   uint32_t GetHNSWBlockSize() const;
   void SetHNSWBlockSize(uint32_t block_size);
 
-  absl::Status OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
-  void OnUnload(RedisModuleCtx *ctx);
+  absl::Status OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                      int argc);
+  void OnUnload(ValkeyModuleCtx *ctx);
   friend absl::NoDestructor<ValkeySearch>;
 
   bool UsingCoordinator() const { return coordinator_ != nullptr; }
   bool IsCluster() const {
-    return RedisModule_GetContextFlags(GetBackgroundCtx()) &
-           REDISMODULE_CTX_FLAGS_CLUSTER;
+    return ValkeyModule_GetContextFlags(GetBackgroundCtx()) &
+           VALKEYMODULE_CTX_FLAGS_CLUSTER;
   }
 
   coordinator::ClientPool *GetCoordinatorClientPool() const {
@@ -113,10 +92,10 @@ class ValkeySearch {
   void SetCoordinatorServer(std::unique_ptr<coordinator::Server> server) {
     coordinator_ = std::move(server);
   }
-  // GetBackgroundCtx returns a RedisModuleCtx that is valid for the scope of
+  // GetBackgroundCtx returns a ValkeyModuleCtx that is valid for the scope of
   // the module lifetime. Getting this context should be safe for the duration
   // of the program.
-  RedisModuleCtx *GetBackgroundCtx() const { return ctx_; }
+  ValkeyModuleCtx *GetBackgroundCtx() const { return ctx_; }
 
  protected:
   std::unique_ptr<vmsdk::ThreadPool> reader_thread_pool_;
@@ -124,25 +103,26 @@ class ValkeySearch {
   virtual size_t GetMaxWorkerThreadPoolSuspensionSec() const;
 
  private:
-  absl::Status Startup(RedisModuleCtx *ctx);
-  absl::Status LoadAndParseArgv(RedisModuleCtx *ctx, RedisModuleString **argv,
+  absl::Status Startup(ValkeyModuleCtx *ctx);
+  absl::Status LoadAndParseArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                                 int argc);
 
-  static void *RDBLoad(RedisModuleIO *rdb, int encoding_version);
+  static void *RDBLoad(ValkeyModuleIO *rdb, int encoding_version);
   static void FreeIndexSchema(void *value);
   static bool IsChildProcess();
-  void ProcessIndexSchemaBackfill(RedisModuleCtx *ctx, uint32_t batch_size);
-  void ResumeWriterThreadPool(RedisModuleCtx *ctx, bool is_expired);
-  absl::StatusOr<std::string> GetConfigGetReply(RedisModuleCtx *ctx, const char* config);
+  void ProcessIndexSchemaBackfill(ValkeyModuleCtx *ctx, uint32_t batch_size);
+  void ResumeWriterThreadPool(ValkeyModuleCtx *ctx, bool is_expired);
+  absl::StatusOr<std::string> GetConfigGetReply(ValkeyModuleCtx *ctx,
+                                                const char *config);
 
   uint64_t inc_id_{0};
-  RedisModuleCtx *ctx_{nullptr};
+  ValkeyModuleCtx *ctx_{nullptr};
   std::optional<vmsdk::StopWatch> writer_thread_pool_suspend_watch_;
 
   std::unique_ptr<coordinator::Server> coordinator_;
   std::unique_ptr<coordinator::ClientPool> client_pool_;
 };
-void ModuleInfo(RedisModuleInfoCtx *ctx, int for_crash_report);
+void ModuleInfo(ValkeyModuleInfoCtx *ctx, int for_crash_report);
 }  // namespace valkey_search
 
 #endif  // VALKEYSEARCH_SRC_VALKEY_SEARCH_H_

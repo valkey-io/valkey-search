@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/query/fanout.h"
@@ -503,7 +481,7 @@ struct GetTargetsTestParam {
 class GetTargetsTest : public ValkeySearchTestWithParam<GetTargetsTestParam> {};
 
 std::string GetNodeId(int i) {
-  return std::string(REDISMODULE_NODE_ID_LEN, 'a' + i);
+  return std::string(VALKEYMODULE_NODE_ID_LEN, 'a' + i);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -826,8 +804,8 @@ INSTANTIATE_TEST_SUITE_P(
 char **GenerateClusterNodesList(std::vector<GetTargetsTestNode> node_ids) {
   char **res = new char *[node_ids.size()];
   for (size_t i = 0; i < node_ids.size(); ++i) {
-    res[i] = new char[REDISMODULE_NODE_ID_LEN];
-    memcpy(res[i], node_ids[i].node_id.c_str(), REDISMODULE_NODE_ID_LEN);
+    res[i] = new char[VALKEYMODULE_NODE_ID_LEN];
+    memcpy(res[i], node_ids[i].node_id.c_str(), VALKEYMODULE_NODE_ID_LEN);
   }
   return res;
 }
@@ -841,26 +819,26 @@ void FreeClusterNodesList(char **ids, size_t num_nodes) {
 
 TEST_P(GetTargetsTest, TestGetTargets) {
   auto params = GetParam();
-  EXPECT_CALL(*kMockRedisModule,
+  EXPECT_CALL(*kMockValkeyModule,
               GetClusterNodesList(testing::_, testing::An<size_t *>()))
-      .WillRepeatedly([params](RedisModuleCtx *ctx, size_t *numnodes) {
+      .WillRepeatedly([params](ValkeyModuleCtx *ctx, size_t *numnodes) {
         *numnodes = params.nodes.size();
         return GenerateClusterNodesList(params.nodes);
       });
-  EXPECT_CALL(*kMockRedisModule, FreeClusterNodesList(testing::_))
+  EXPECT_CALL(*kMockValkeyModule, FreeClusterNodesList(testing::_))
       .WillRepeatedly([params](char **ids) {
         FreeClusterNodesList(ids, params.nodes.size());
       });
   for (auto &node : params.nodes) {
     EXPECT_CALL(
-        *kMockRedisModule,
+        *kMockValkeyModule,
         GetClusterNodeInfo(testing::_, testing::StrEq(node.node_id), testing::_,
                            testing::_, testing::_, testing::_))
-        .WillRepeatedly([node](RedisModuleCtx *ctx, const char *node_id,
+        .WillRepeatedly([node](ValkeyModuleCtx *ctx, const char *node_id,
                                char *ip, char *master_id, int *port,
                                int *flags) {
           if (node.fail_to_get_node_info) {
-            return REDISMODULE_ERR;
+            return VALKEYMODULE_ERR;
           }
           if (ip != nullptr) {
             // Note this is intentionally not null terminated.
@@ -872,20 +850,20 @@ TEST_P(GetTargetsTest, TestGetTargets) {
           if (flags != nullptr) {
             *flags = 0;
             if (node.myself) {
-              *flags |= REDISMODULE_NODE_MYSELF;
+              *flags |= VALKEYMODULE_NODE_MYSELF;
             }
             if (node.pfail) {
-              *flags |= REDISMODULE_NODE_PFAIL;
+              *flags |= VALKEYMODULE_NODE_PFAIL;
             }
             if (node.master_id.has_value()) {
-              *flags |= REDISMODULE_NODE_SLAVE;
+              *flags |= VALKEYMODULE_NODE_SLAVE;
               memcpy(master_id, node.master_id->c_str(),
                      node.master_id->size());
             } else {
-              *flags |= REDISMODULE_NODE_MASTER;
+              *flags |= VALKEYMODULE_NODE_MASTER;
             }
           }
-          return REDISMODULE_OK;
+          return VALKEYMODULE_OK;
         });
   }
 

@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/coordinator/metadata_manager.h"
@@ -271,12 +249,12 @@ void MetadataManager::RegisterType(absl::string_view type_name,
   DCHECK(insert_result.second);
 }
 
-void MetadataManager::BroadcastMetadata(RedisModuleCtx *ctx) {
+void MetadataManager::BroadcastMetadata(ValkeyModuleCtx *ctx) {
   BroadcastMetadata(ctx, metadata_.Get().version_header());
 }
 
 void MetadataManager::BroadcastMetadata(
-    RedisModuleCtx *ctx, const GlobalMetadataVersionHeader &version_header) {
+    ValkeyModuleCtx *ctx, const GlobalMetadataVersionHeader &version_header) {
   if (is_loading_.Get()) {
     VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
         << "Skipping send of metadata header due to loading";
@@ -285,12 +263,12 @@ void MetadataManager::BroadcastMetadata(
   std::string payload;
   version_header.SerializeToString(&payload);
   // Nullptr for target means broadcast to all.
-  RedisModule_SendClusterMessage(ctx, /* target= */ nullptr,
-                                 kMetadataBroadcastClusterMessageReceiverId,
-                                 payload.c_str(), payload.size());
+  ValkeyModule_SendClusterMessage(ctx, /* target= */ nullptr,
+                                  kMetadataBroadcastClusterMessageReceiverId,
+                                  payload.c_str(), payload.size());
 }
 
-void MetadataManager::HandleClusterMessage(RedisModuleCtx *ctx,
+void MetadataManager::HandleClusterMessage(ValkeyModuleCtx *ctx,
                                            const char *sender_id, uint8_t type,
                                            const unsigned char *payload,
                                            uint32_t len) {
@@ -306,7 +284,7 @@ void MetadataManager::HandleClusterMessage(RedisModuleCtx *ctx,
 }
 
 void MetadataManager::HandleBroadcastedMetadata(
-    RedisModuleCtx *ctx, const char *sender_id,
+    ValkeyModuleCtx *ctx, const char *sender_id,
     std::unique_ptr<GlobalMetadataVersionHeader> header) {
   if (is_loading_.Get()) {
     VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 10)
@@ -320,7 +298,7 @@ void MetadataManager::HandleBroadcastedMetadata(
   if (header->top_level_version() < top_level_version) {
     return;
   }
-  std::string sender_id_str(sender_id, REDISMODULE_NODE_ID_LEN);
+  std::string sender_id_str(sender_id, VALKEYMODULE_NODE_ID_LEN);
   if (header->top_level_version() == top_level_version) {
     if (header->top_level_fingerprint() == top_level_fingerprint) {
       return;
@@ -342,11 +320,11 @@ void MetadataManager::HandleBroadcastedMetadata(
   }
   // sender_id isn't NULL terminated, so we copy to a std::string to make sure
   // it is properly NULL terminated
-  char node_ip[REDISMODULE_NODE_ID_LEN];
+  char node_ip[VALKEYMODULE_NODE_ID_LEN];
   int node_port;
-  if (RedisModule_GetClusterNodeInfo(ctx, sender_id_str.c_str(), node_ip,
-                                     nullptr, &node_port,
-                                     nullptr) != REDISMODULE_OK) {
+  if (ValkeyModule_GetClusterNodeInfo(ctx, sender_id_str.c_str(), node_ip,
+                                      nullptr, &node_port,
+                                      nullptr) != VALKEYMODULE_OK) {
     VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
         << "Failed to get cluster node info for node " << sender_id
         << " broadcasting "
@@ -511,9 +489,9 @@ int MetadataManager::GetSectionsCount() const {
   return DoesGlobalMetadataContainEntry(metadata_.Get()) ? 1 : 0;
 }
 
-absl::Status MetadataManager::SaveMetadata(RedisModuleCtx *ctx, SafeRDB *rdb,
+absl::Status MetadataManager::SaveMetadata(ValkeyModuleCtx *ctx, SafeRDB *rdb,
                                            int when) {
-  if (when == REDISMODULE_AUX_BEFORE_RDB) {
+  if (when == VALKEYMODULE_AUX_BEFORE_RDB) {
     return absl::OkStatus();
   }
 
@@ -540,7 +518,7 @@ absl::Status MetadataManager::SaveMetadata(RedisModuleCtx *ctx, SafeRDB *rdb,
 }
 
 absl::Status MetadataManager::LoadMetadata(
-    RedisModuleCtx *ctx, std::unique_ptr<data_model::RDBSection> section,
+    ValkeyModuleCtx *ctx, std::unique_ptr<data_model::RDBSection> section,
     SupplementalContentIter &&supplemental_iter) {
   if (section->type() != data_model::RDB_SECTION_GLOBAL_METADATA) {
     return absl::InternalError(
@@ -560,7 +538,7 @@ absl::Status MetadataManager::LoadMetadata(
   return absl::OkStatus();
 }
 
-void MetadataManagerOnClusterMessageCallback(RedisModuleCtx *ctx,
+void MetadataManagerOnClusterMessageCallback(ValkeyModuleCtx *ctx,
                                              const char *sender_id,
                                              uint8_t type,
                                              const unsigned char *payload,
@@ -575,16 +553,16 @@ mstime_t GetIntervalWithJitter(mstime_t interval, float jitter_ratio) {
   return interval + interval * jitter;
 }
 
-void MetadataManagerSendMetadataBroadcast(RedisModuleCtx *ctx, void *data) {
-  RedisModule_CreateTimer(ctx,
-                          GetIntervalWithJitter(kMetadataBroadcastIntervalMs,
-                                                kMetadataBroadcastJitterRatio),
-                          &MetadataManagerSendMetadataBroadcast, nullptr);
+void MetadataManagerSendMetadataBroadcast(ValkeyModuleCtx *ctx, void *data) {
+  ValkeyModule_CreateTimer(ctx,
+                           GetIntervalWithJitter(kMetadataBroadcastIntervalMs,
+                                                 kMetadataBroadcastJitterRatio),
+                           &MetadataManagerSendMetadataBroadcast, nullptr);
   MetadataManager::Instance().BroadcastMetadata(ctx);
 }
 
 void MetadataManager::OnServerCronCallback(
-    RedisModuleCtx *ctx, [[maybe_unused]] RedisModuleEvent eid,
+    ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleEvent eid,
     [[maybe_unused]] uint64_t subevent, [[maybe_unused]] void *data) {
   static bool timer_started = false;
   if (!timer_started) {
@@ -593,7 +571,7 @@ void MetadataManager::OnServerCronCallback(
     // because timers cannot be safely created in background threads (the GIL
     // does not protect event loop code which uses the timers).
     timer_started = true;
-    RedisModule_CreateTimer(
+    ValkeyModule_CreateTimer(
         ctx,
         GetIntervalWithJitter(kMetadataBroadcastIntervalMs,
                               kMetadataBroadcastJitterRatio),
@@ -601,7 +579,7 @@ void MetadataManager::OnServerCronCallback(
   }
 }
 
-void MetadataManager::OnLoadingEnded(RedisModuleCtx *ctx) {
+void MetadataManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
   // Only on loading ended do we apply the staged changes.
   if (staging_metadata_due_to_repl_load_.Get()) {
     VMSDK_LOG(NOTICE, ctx)
@@ -623,38 +601,38 @@ void MetadataManager::OnLoadingEnded(RedisModuleCtx *ctx) {
   is_loading_ = false;
 }
 
-void MetadataManager::OnReplicationLoadStart(RedisModuleCtx *ctx) {
+void MetadataManager::OnReplicationLoadStart(ValkeyModuleCtx *ctx) {
   VMSDK_LOG(NOTICE, ctx) << "Staging metadata during RDB load due to "
                             "replication, will apply on loading finished";
   staging_metadata_due_to_repl_load_ = true;
 }
 
-void MetadataManager::OnLoadingStarted(RedisModuleCtx *ctx) {
+void MetadataManager::OnLoadingStarted(ValkeyModuleCtx *ctx) {
   VMSDK_LOG(NOTICE, ctx)
       << "Loading started, stopping incoming metadata updates";
   is_loading_ = true;
 }
 
-void MetadataManager::OnLoadingCallback(RedisModuleCtx *ctx,
-                                        [[maybe_unused]] RedisModuleEvent eid,
+void MetadataManager::OnLoadingCallback(ValkeyModuleCtx *ctx,
+                                        [[maybe_unused]] ValkeyModuleEvent eid,
                                         uint64_t subevent,
                                         [[maybe_unused]] void *data) {
-  if (subevent == REDISMODULE_SUBEVENT_LOADING_ENDED) {
+  if (subevent == VALKEYMODULE_SUBEVENT_LOADING_ENDED) {
     MetadataManager::Instance().OnLoadingEnded(ctx);
     return;
   }
-  if (subevent == REDISMODULE_SUBEVENT_LOADING_REPL_START) {
+  if (subevent == VALKEYMODULE_SUBEVENT_LOADING_REPL_START) {
     MetadataManager::Instance().OnReplicationLoadStart(ctx);
   }
-  if (subevent == REDISMODULE_SUBEVENT_LOADING_AOF_START ||
-      subevent == REDISMODULE_SUBEVENT_LOADING_RDB_START ||
-      subevent == REDISMODULE_SUBEVENT_LOADING_REPL_START) {
+  if (subevent == VALKEYMODULE_SUBEVENT_LOADING_AOF_START ||
+      subevent == VALKEYMODULE_SUBEVENT_LOADING_RDB_START ||
+      subevent == VALKEYMODULE_SUBEVENT_LOADING_REPL_START) {
     MetadataManager::Instance().OnLoadingStarted(ctx);
   }
 }
 
-void MetadataManager::RegisterForClusterMessages(RedisModuleCtx *ctx) {
-  RedisModule_RegisterClusterMessageReceiver(
+void MetadataManager::RegisterForClusterMessages(ValkeyModuleCtx *ctx) {
+  ValkeyModule_RegisterClusterMessageReceiver(
       ctx, coordinator::kMetadataBroadcastClusterMessageReceiverId,
       MetadataManagerOnClusterMessageCallback);
 }

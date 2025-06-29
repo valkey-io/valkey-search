@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "testing/common.h"
@@ -89,7 +67,7 @@ void TestableValkeySearch::InitThreadPools(std::optional<size_t> readers,
 }
 
 absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateVectorHNSWSchema(
-    std::string index_schema_key, RedisModuleCtx *fake_ctx,
+    std::string index_schema_key, ValkeyModuleCtx *fake_ctx,
     vmsdk::ThreadPool *writer_thread_pool,
     const std::vector<absl::string_view> *key_prefixes,
     int32_t index_schema_db_num) {
@@ -110,11 +88,11 @@ absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateVectorHNSWSchema(
 }
 
 absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateIndexSchema(
-    std::string index_schema_key, RedisModuleCtx *fake_ctx,
+    std::string index_schema_key, ValkeyModuleCtx *fake_ctx,
     vmsdk::ThreadPool *writer_thread_pool,
     const std::vector<absl::string_view> *key_prefixes,
     int32_t index_schema_db_num) {
-  RedisModuleCtx local_fake_ctx;
+  ValkeyModuleCtx local_fake_ctx;
   if (fake_ctx == nullptr) {
     fake_ctx = &local_fake_ctx;
   }
@@ -122,9 +100,9 @@ absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateIndexSchema(
   if (key_prefixes == nullptr) {
     key_prefixes = &local_key_prefixes;
   }
-  ON_CALL(*kMockRedisModule, GetSelectedDb(fake_ctx))
+  ON_CALL(*kMockValkeyModule, GetSelectedDb(fake_ctx))
       .WillByDefault(testing::Return(index_schema_db_num));
-  EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(testing::_))
+  EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
       .WillRepeatedly(testing::Return(fake_ctx));
   VMSDK_ASSIGN_OR_RETURN(
       auto test_index_schema,
@@ -176,12 +154,12 @@ indexes::Neighbor ToIndexesNeighbor(const NeighborTest &neighbor_test) {
     for (const auto &attribute_contents :
          neighbor_test.attribute_contents.value()) {
       auto attribute_alias =
-          vmsdk::MakeUniqueRedisString(attribute_contents.first);
+          vmsdk::MakeUniqueValkeyString(attribute_contents.first);
       neighbor.attribute_contents.value().emplace(
           vmsdk::ToStringView(attribute_alias.get()),
           RecordsMapValue(
               std::move(attribute_alias),
-              vmsdk::MakeUniqueRedisString(attribute_contents.second)));
+              vmsdk::MakeUniqueValkeyString(attribute_contents.second)));
     }
   }
   return neighbor;
@@ -206,8 +184,8 @@ query::ReturnAttribute ToReturnAttribute(
     const TestReturnAttribute &test_return_attribute) {
   return query::ReturnAttribute{
       .identifier =
-          vmsdk::MakeUniqueRedisString(test_return_attribute.identifier),
-      .alias = vmsdk::MakeUniqueRedisString(test_return_attribute.alias)};
+          vmsdk::MakeUniqueValkeyString(test_return_attribute.identifier),
+      .alias = vmsdk::MakeUniqueValkeyString(test_return_attribute.alias)};
 }
 
 std::unordered_map<std::string, std::string> ToStringMap(

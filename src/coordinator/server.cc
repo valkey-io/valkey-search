@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/coordinator/server.h"
@@ -161,7 +139,7 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
                neighbors = std::move(neighbors.value())]() mutable {
                 const auto& attribute_data_type =
                     parameters->index_schema->GetAttributeDataType();
-                auto ctx = vmsdk::MakeUniqueRedisThreadSafeContext(nullptr);
+                auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
                 auto vector_identifier =
                     parameters->index_schema
                         ->GetIdentifier(parameters->attribute_alias)
@@ -193,13 +171,14 @@ ServerImpl::ServerImpl(std::unique_ptr<Service> coordinator_service,
       port_(port) {}
 
 std::unique_ptr<Server> ServerImpl::Create(
-    RedisModuleCtx* ctx, vmsdk::ThreadPool* reader_thread_pool, uint16_t port) {
+    ValkeyModuleCtx* ctx, vmsdk::ThreadPool* reader_thread_pool,
+    uint16_t port) {
   std::string server_address = absl::StrCat("[::]:", port);
   grpc::EnableDefaultHealthCheckService(true);
   std::shared_ptr<grpc::ServerCredentials> creds =
       grpc::InsecureServerCredentials();
   auto coordinator_service = std::make_unique<Service>(
-      vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx), reader_thread_pool);
+      vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx), reader_thread_pool);
   grpc::ServerBuilder builder;
   builder.AddListeningPort(server_address, creds);
   builder.RegisterService(coordinator_service.get());

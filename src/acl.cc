@@ -211,9 +211,9 @@ bool IsAllowedCommands(
   return allowed;
 }
 
-absl::string_view CallReplyStringToStringView(RedisModuleCallReply *r) {
+absl::string_view CallReplyStringToStringView(ValkeyModuleCallReply *r) {
   size_t l;
-  const char *r_c_str = RedisModule_CallReplyStringPtr(r, &l);
+  const char *r_c_str = ValkeyModule_CallReplyStringPtr(r, &l);
   return {r_c_str, l};
 }
 
@@ -278,18 +278,18 @@ bool IsPrefixAllowed(const absl::string_view &module_prefix,
 
 void GetAclViewFromCallReplyImpl(
     std::vector<acl::ValkeyAclGetUserReplyView> &acl_views,
-    RedisModuleCallReply *reply) {
+    ValkeyModuleCallReply *reply) {
   acl_views.emplace_back(acl::ValkeyAclGetUserReplyView{});
   auto &acl_view = acl_views.back();
 
-  RedisModuleCallReply *map_key;
-  RedisModuleCallReply *map_val;
+  ValkeyModuleCallReply *map_key;
+  ValkeyModuleCallReply *map_val;
   int idx = 0;
 
-  while (RedisModule_CallReplyMapElement(reply, idx, &map_key, &map_val) ==
-         REDISMODULE_OK) {
+  while (ValkeyModule_CallReplyMapElement(reply, idx, &map_key, &map_val) ==
+         VALKEYMODULE_OK) {
     if (map_key &&
-        RedisModule_CallReplyType(map_key) == REDISMODULE_REPLY_STRING) {
+        ValkeyModule_CallReplyType(map_key) == VALKEYMODULE_REPLY_STRING) {
       absl::string_view key = CallReplyStringToStringView(map_key);
 
       if (absl::EqualsIgnoreCase(key, "commands")) {
@@ -298,9 +298,9 @@ void GetAclViewFromCallReplyImpl(
         acl_view.keys = CallReplyStringToStringView(map_val);
       } else if (absl::EqualsIgnoreCase(key, "selectors")) {
         int selector_idx = 0;
-        RedisModuleCallReply *selector_reply;
-        while ((selector_reply =
-                    RedisModule_CallReplyArrayElement(map_val, selector_idx))) {
+        ValkeyModuleCallReply *selector_reply;
+        while ((selector_reply = ValkeyModule_CallReplyArrayElement(
+                    map_val, selector_idx))) {
           GetAclViewFromCallReplyImpl(acl_views, selector_reply);
           selector_idx++;
         }
@@ -313,8 +313,8 @@ void GetAclViewFromCallReplyImpl(
 }  // namespace
 
 absl::StatusOr<std::vector<acl::ValkeyAclGetUserReplyView>>
-GetAclViewFromCallReply(RedisModuleCallReply *reply) {
-  if (!reply || RedisModule_CallReplyType(reply) != REDISMODULE_REPLY_MAP) {
+GetAclViewFromCallReply(ValkeyModuleCallReply *reply) {
+  if (!reply || ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_MAP) {
     return absl::FailedPreconditionError(
         "Cannot get an ACL from the server, got an invalid response");
   }
@@ -325,15 +325,16 @@ GetAclViewFromCallReply(RedisModuleCallReply *reply) {
 }
 
 absl::Status AclPrefixCheck(
-    RedisModuleCtx *ctx,
+    ValkeyModuleCtx *ctx,
     const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
     const std::vector<std::string> &module_prefixes) {
   if (!vmsdk::IsRealUserClient(ctx)) {
     return absl::OkStatus();
   }
-  auto username = vmsdk::UniqueRedisString(RedisModule_GetCurrentUserName(ctx));
-  auto reply = vmsdk::UniquePtrRedisCallReply(
-      RedisModule_Call(ctx, "ACL", "cs3", "GETUSER", username.get()));
+  auto username =
+      vmsdk::UniqueValkeyString(ValkeyModule_GetCurrentUserName(ctx));
+  auto reply = vmsdk::UniquePtrValkeyCallReply(
+      ValkeyModule_Call(ctx, "ACL", "cs3", "GETUSER", username.get()));
   VMSDK_ASSIGN_OR_RETURN(auto acl_views, GetAclViewFromCallReply(reply.get()));
 
   auto acl_keys = GetKeysWithAllowedCommands(module_allowed_cmds, acl_views);
@@ -354,7 +355,7 @@ absl::Status AclPrefixCheck(
 }
 
 absl::Status AclPrefixCheck(
-    RedisModuleCtx *ctx,
+    ValkeyModuleCtx *ctx,
     const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
     const data_model::IndexSchema &index_schema_proto) {
   std::vector<std::string> module_prefixes;

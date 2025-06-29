@@ -1,7 +1,7 @@
 {
   global:
-    # Only expose the RedisModule APIs
-    RedisModule_OnLoad;
-    RedisModule_OnUnload;
+    # Only expose the ValkeyModule APIs
+    ValkeyModule_OnLoad;
+    ValkeyModule_OnUnload;
   local: *;  # hide everything else
 };

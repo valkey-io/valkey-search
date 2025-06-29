@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <algorithm>
@@ -68,14 +46,14 @@ class FTCreateTest : public ValkeySearchTestWithParam<FTCreateTestCase> {};
 TEST_P(FTCreateTest, FTCreateTests) {
   const FTCreateTestCase& test_case = GetParam();
   int db_num = 1;
-  ON_CALL(*kMockRedisModule, GetSelectedDb(&fake_ctx_))
+  ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
       .WillByDefault(testing::Return(db_num));
 
-  std::vector<RedisModuleString*> cmd_argv;
+  std::vector<ValkeyModuleString*> cmd_argv;
   std::transform(test_case.argv.begin(), test_case.argv.end(),
                  std::back_inserter(cmd_argv), [&](std::string val) {
-                   return TestRedisModule_CreateStringPrintf(&fake_ctx_, "%s",
-                                                             val.data());
+                   return TestValkeyModule_CreateStringPrintf(&fake_ctx_, "%s",
+                                                              val.data());
                  });
   EXPECT_EQ(vmsdk::CreateCommand<FTCreateCmd>(&fake_ctx_, cmd_argv.data(),
                                               cmd_argv.size()),
@@ -93,7 +71,7 @@ TEST_P(FTCreateTest, FTCreateTests) {
   VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(
       db_num, test_case.index_schema_name));
   for (auto cmd_arg : cmd_argv) {
-    TestRedisModule_FreeString(&fake_ctx_, cmd_arg);
+    TestValkeyModule_FreeString(&fake_ctx_, cmd_arg);
   }
 }
 
@@ -107,7 +85,7 @@ INSTANTIATE_TEST_SUITE_P(
                      "DIM", "100", "DISTANCE_METRIC", "IP", "EF_CONSTRUCTION",
                      "40", "INITIAL_CAP", "15000"},
             .index_schema_name = "test_index_schema",
-            .expected_run_return = REDISMODULE_OK,
+            .expected_run_return = VALKEYMODULE_OK,
             .expected_reply_message = "+OK\r\n",
             .expected_indexes =
                 {
@@ -131,7 +109,7 @@ INSTANTIATE_TEST_SUITE_P(
                      "40",        "INITIAL_CAP",
                      "15000"},
             .index_schema_name = "test_index_schema",
-            .expected_run_return = REDISMODULE_OK,
+            .expected_run_return = VALKEYMODULE_OK,
             .expected_reply_message = "+OK\r\n",
             .expected_indexes =
                 {
@@ -151,7 +129,7 @@ INSTANTIATE_TEST_SUITE_P(
                      "vector", "Flat", "8", "TYPE", "FLOAT32", "DIM", "100",
                      "DISTANCE_METRIC", "IP", "INITIAL_CAP", "15000"},
             .index_schema_name = "test_index_schema",
-            .expected_run_return = REDISMODULE_OK,
+            .expected_run_return = VALKEYMODULE_OK,
             .expected_reply_message = "+OK\r\n",
             .expected_indexes =
                 {
@@ -168,7 +146,7 @@ INSTANTIATE_TEST_SUITE_P(
                      "DISTANCE_METRIC", "IP", "INITIAL_CAP", "15000", "field1",
                      "tag", "separator", "|"},
             .index_schema_name = "test_index_schema",
-            .expected_run_return = REDISMODULE_OK,
+            .expected_run_return = VALKEYMODULE_OK,
             .expected_reply_message = "+OK\r\n",
             .expected_indexes =
                 {

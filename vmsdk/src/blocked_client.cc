@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "vmsdk/src/blocked_client.h"
@@ -54,15 +32,15 @@ TrackedBlockedClients() {
 // VM_BlockClient, while subsequent calls simply increment an internal reference
 // count. VM_UnblockClient is only called once the reference count returns to
 // zero.
-BlockedClient::BlockedClient(RedisModuleCtx *ctx, bool handle_duplication) {
+BlockedClient::BlockedClient(ValkeyModuleCtx *ctx, bool handle_duplication) {
   if (handle_duplication) {
-    unsigned long long tracked_client_id = RedisModule_GetClientId(ctx);
+    unsigned long long tracked_client_id = ValkeyModule_GetClientId(ctx);
     if (tracked_client_id != 0) {
       absl::MutexLock lock(&blocked_clients_mutex);
       auto it = TrackedBlockedClients().find(tracked_client_id);
       if (it == TrackedBlockedClients().end()) {
         blocked_client_ =
-            RedisModule_BlockClient(ctx, nullptr, nullptr, nullptr, 0);
+            ValkeyModule_BlockClient(ctx, nullptr, nullptr, nullptr, 0);
         if (!blocked_client_) {
           return;
         }
@@ -77,15 +55,15 @@ BlockedClient::BlockedClient(RedisModuleCtx *ctx, bool handle_duplication) {
       return;
     }
   }
-  blocked_client_ = RedisModule_BlockClient(ctx, nullptr, nullptr, nullptr, 0);
+  blocked_client_ = ValkeyModule_BlockClient(ctx, nullptr, nullptr, nullptr, 0);
 }
 
-BlockedClient::BlockedClient(RedisModuleCtx *ctx,
-                             RedisModuleCmdFunc reply_callback,
-                             RedisModuleCmdFunc timeout_callback,
-                             void (*free_privdata)(RedisModuleCtx *, void *),
+BlockedClient::BlockedClient(ValkeyModuleCtx *ctx,
+                             ValkeyModuleCmdFunc reply_callback,
+                             ValkeyModuleCmdFunc timeout_callback,
+                             void (*free_privdata)(ValkeyModuleCtx *, void *),
                              long long timeout_ms) {
-  blocked_client_ = RedisModule_BlockClient(
+  blocked_client_ = ValkeyModule_BlockClient(
       ctx, reply_callback, timeout_callback, free_privdata, timeout_ms);
 }
 
@@ -124,14 +102,14 @@ void BlockedClient::UnblockClient() {
     }
     TrackedBlockedClients().erase(tracked_client_id);
   }
-  RedisModule_UnblockClient(blocked_client, private_data);
+  ValkeyModule_UnblockClient(blocked_client, private_data);
 }
 
 void BlockedClient::MeasureTimeStart() {
   if (time_measurement_ongoing_ || !blocked_client_) {
     return;
   }
-  RedisModule_BlockedClientMeasureTimeStart(blocked_client_);
+  ValkeyModule_BlockedClientMeasureTimeStart(blocked_client_);
   time_measurement_ongoing_ = true;
 }
 
@@ -139,7 +117,7 @@ void BlockedClient::MeasureTimeEnd() {
   if (!time_measurement_ongoing_ || !blocked_client_) {
     return;
   }
-  RedisModule_BlockedClientMeasureTimeEnd(blocked_client_);
+  ValkeyModule_BlockedClientMeasureTimeEnd(blocked_client_);
   time_measurement_ongoing_ = false;
 }
 }  // namespace vmsdk

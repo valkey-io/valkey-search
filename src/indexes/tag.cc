@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/indexes/tag.h"
@@ -188,20 +166,20 @@ absl::StatusOr<bool> Tag::RemoveRecord(const InternedStringPtr& key,
   return true;
 }
 
-int Tag::RespondWithInfo(RedisModuleCtx* ctx) const {
+int Tag::RespondWithInfo(ValkeyModuleCtx* ctx) const {
   auto num_replies = 6;
-  RedisModule_ReplyWithSimpleString(ctx, "type");
-  RedisModule_ReplyWithSimpleString(ctx, "TAG");
-  RedisModule_ReplyWithSimpleString(ctx, "SEPARATOR");
-  RedisModule_ReplyWithSimpleString(
+  ValkeyModule_ReplyWithSimpleString(ctx, "type");
+  ValkeyModule_ReplyWithSimpleString(ctx, "TAG");
+  ValkeyModule_ReplyWithSimpleString(ctx, "SEPARATOR");
+  ValkeyModule_ReplyWithSimpleString(
       ctx, std::string(&separator_, sizeof(char)).c_str());
   if (case_sensitive_) {
     num_replies++;
-    RedisModule_ReplyWithSimpleString(ctx, "CASESENSITIVE");
+    ValkeyModule_ReplyWithSimpleString(ctx, "CASESENSITIVE");
   }
-  RedisModule_ReplyWithSimpleString(ctx, "size");
+  ValkeyModule_ReplyWithSimpleString(ctx, "size");
   absl::MutexLock lock(&index_mutex_);
-  RedisModule_ReplyWithCString(
+  ValkeyModule_ReplyWithCString(
       ctx, std::to_string(tracked_tags_by_keys_.size()).c_str());
   return num_replies;
 }

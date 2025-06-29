@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/rdb_serialization.h"
@@ -160,7 +138,7 @@ void RegisterRDBCallback(data_model::RDBSectionType type,
 }
 void ClearRDBCallbacks() { kRegisteredRDBSectionCallbacks.clear(); }
 
-absl::Status PerformRDBLoad(RedisModuleCtx *ctx, SafeRDB *rdb, int encver) {
+absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
   // Parse the header
   if (encver != kCurrentEncVer) {
     return absl::InternalError(absl::StrFormat(
@@ -211,36 +189,36 @@ absl::Status PerformRDBLoad(RedisModuleCtx *ctx, SafeRDB *rdb, int encver) {
   return absl::OkStatus();
 }
 
-absl::StatusOr<vmsdk::UniqueRedisDetachedThreadSafeContext>
-CreateRDBDetachedContext(RedisModuleIO *rdb) {
+absl::StatusOr<vmsdk::UniqueValkeyDetachedThreadSafeContext>
+CreateRDBDetachedContext(ValkeyModuleIO *rdb) {
   /* Wrap the RDB context in a detached context to ensure we have a client. */
-  auto ctx = RedisModule_GetContextFromIO(rdb);
-  return vmsdk::MakeUniqueRedisDetachedThreadSafeContext(
-      RedisModule_GetDetachedThreadSafeContext(ctx));
+  auto ctx = ValkeyModule_GetContextFromIO(rdb);
+  return vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(
+      ValkeyModule_GetDetachedThreadSafeContext(ctx));
 }
 
-int AuxLoadCallback(RedisModuleIO *rdb, int encver, int when) {
+int AuxLoadCallback(ValkeyModuleIO *rdb, int encver, int when) {
   auto ctx = CreateRDBDetachedContext(rdb);
   if (!ctx.ok()) {
     VMSDK_LOG(WARNING, nullptr)
         << "Could not create RDB load context: " << ctx.status().message();
-    return REDISMODULE_ERR;
+    return VALKEYMODULE_ERR;
   }
   SafeRDB safe_rdb(rdb);
   auto result = PerformRDBLoad(ctx.value().get(), &safe_rdb, encver);
   if (result.ok()) {
     Metrics::GetStats().rdb_load_success_cnt++;
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
   }
   Metrics::GetStats().rdb_load_failure_cnt++;
   VMSDK_LOG_EVERY_N_SEC(WARNING, ctx.value().get(), 0.1)
       << "Failed to load ValkeySearch aux section from RDB: "
       << result.message();
-  return REDISMODULE_ERR;
+  return VALKEYMODULE_ERR;
 }
 
-absl::Status PerformRDBSave(RedisModuleCtx *ctx, SafeRDB *rdb, int when) {
+absl::Status PerformRDBSave(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when) {
   // Aggregate header information from save callbacks first
   int rdb_section_count = 0;
   int min_semantic_version = 0;  // 0.0.0 by default
@@ -282,7 +260,7 @@ absl::Status PerformRDBSave(RedisModuleCtx *ctx, SafeRDB *rdb, int when) {
   return absl::OkStatus();
 }
 
-void AuxSaveCallback(RedisModuleIO *rdb, int when) {
+void AuxSaveCallback(ValkeyModuleIO *rdb, int when) {
   SafeRDB safe_rdb(rdb);
   auto ctx = ValkeySearch::Instance().GetBackgroundCtx();
   auto result = PerformRDBSave(ctx, &safe_rdb, when);
@@ -296,19 +274,19 @@ void AuxSaveCallback(RedisModuleIO *rdb, int when) {
 }
 
 // This module type is used purely to get aux callbacks.
-absl::Status RegisterModuleType(RedisModuleCtx *ctx) {
-  static RedisModuleTypeMethods tm = {
-      .version = REDISMODULE_TYPE_METHOD_VERSION,
-      .rdb_load = [](RedisModuleIO *io, int encver) -> void * {
+absl::Status RegisterModuleType(ValkeyModuleCtx *ctx) {
+  static ValkeyModuleTypeMethods tm = {
+      .version = VALKEYMODULE_TYPE_METHOD_VERSION,
+      .rdb_load = [](ValkeyModuleIO *io, int encver) -> void * {
         DCHECK(false) << "Attempt to load ValkeySearch module type from RDB";
         return nullptr;
       },
       .rdb_save =
-          [](RedisModuleIO *io, void *value) {
+          [](ValkeyModuleIO *io, void *value) {
             DCHECK(false) << "Attempt to save ValkeySearch module type to RDB";
           },
       .aof_rewrite =
-          [](RedisModuleIO *aof, RedisModuleString *key, void *value) {
+          [](ValkeyModuleIO *aof, ValkeyModuleString *key, void *value) {
             DCHECK(false)
                 << "Attempt to rewrite ValkeySearch module type to AOF";
           },
@@ -317,12 +295,12 @@ absl::Status RegisterModuleType(RedisModuleCtx *ctx) {
             DCHECK(false) << "Attempt to free ValkeySearch module type object";
           },
       .aux_load = AuxLoadCallback,
-      .aux_save_triggers = REDISMODULE_AUX_AFTER_RDB,
+      .aux_save_triggers = VALKEYMODULE_AUX_AFTER_RDB,
       .aux_save2 = AuxSaveCallback,
   };
 
-  static RedisModuleType *kValkeySearchModuleType = nullptr;
-  kValkeySearchModuleType = RedisModule_CreateDataType(
+  static ValkeyModuleType *kValkeySearchModuleType = nullptr;
+  kValkeySearchModuleType = ValkeyModule_CreateDataType(
       ctx, kValkeySearchModuleTypeName.data(), kCurrentEncVer, &tm);
   if (!kValkeySearchModuleType) {
     return absl::InternalError(absl::StrCat(

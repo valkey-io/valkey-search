@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/commands/ft_search_parser.h"
@@ -287,9 +265,9 @@ ConstructReturnParser() {
           return absl::OkStatus();
         }
         for (uint32_t i = 0; i < cnt; ++i) {
-          vmsdk::UniqueRedisString identifier;
+          vmsdk::UniqueValkeyString identifier;
           VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, identifier));
-          auto as_property = vmsdk::RetainUniqueRedisString(identifier.get());
+          auto as_property = vmsdk::RetainUniqueValkeyString(identifier.get());
           VMSDK_ASSIGN_OR_RETURN(
               auto res, vmsdk::ParseParam(kAsParam, false, itr, as_property));
           if (res) {
@@ -300,10 +278,10 @@ ConstructReturnParser() {
           }
           auto schema_identifier = parameters.index_schema->GetIdentifier(
               vmsdk::ToStringView(identifier.get()));
-          vmsdk::UniqueRedisString attribute_alias;
+          vmsdk::UniqueValkeyString attribute_alias;
           if (schema_identifier.ok()) {
-            attribute_alias = vmsdk::RetainUniqueRedisString(identifier.get());
-            identifier = vmsdk::MakeUniqueRedisString(*schema_identifier);
+            attribute_alias = vmsdk::RetainUniqueValkeyString(identifier.get());
+            identifier = vmsdk::MakeUniqueValkeyString(*schema_identifier);
           }
           parameters.return_attributes.emplace_back(query::ReturnAttribute{
               std::move(identifier), std::move(attribute_alias),
@@ -375,14 +353,14 @@ absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
                                parameters.attribute_alias));
   } else {
     parameters.score_as =
-        vmsdk::MakeUniqueRedisString(parameters.parse_vars.score_as_string);
+        vmsdk::MakeUniqueValkeyString(parameters.parse_vars.score_as_string);
   }
   return absl::OkStatus();
 }
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
-ParseVectorSearchParameters(RedisModuleCtx *ctx, RedisModuleString **argv,
+ParseVectorSearchParameters(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc, const SchemaManager &schema_manager) {
   vmsdk::ArgsIterator itr{argv, argc};
   auto parameters = std::make_unique<query::VectorSearchParameters>();
@@ -390,7 +368,7 @@ ParseVectorSearchParameters(RedisModuleCtx *ctx, RedisModuleString **argv,
       vmsdk::ParseParamValue(itr, parameters->index_schema_name));
   VMSDK_ASSIGN_OR_RETURN(
       parameters->index_schema,
-      SchemaManager::Instance().GetIndexSchema(RedisModule_GetSelectedDb(ctx),
+      SchemaManager::Instance().GetIndexSchema(ValkeyModule_GetSelectedDb(ctx),
                                                parameters->index_schema_name));
   VMSDK_RETURN_IF_ERROR(
       vmsdk::ParseParamValue(itr, parameters->parse_vars.query_string));

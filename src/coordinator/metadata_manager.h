@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef VALKEYSEARCH_SRC_COORDINATOR_METADATA_MANAGER_H_
@@ -55,8 +33,8 @@ using FingerprintCallback = absl::AnyInvocable<absl::StatusOr<uint64_t>(
     const google::protobuf::Any &metadata)>;
 using MetadataUpdateCallback = absl::AnyInvocable<absl::Status(
     absl::string_view, const google::protobuf::Any *metadata)>;
-using AuxSaveCallback = void (*)(RedisModuleIO *rdb, int when);
-using AuxLoadCallback = int (*)(RedisModuleIO *rdb, int encver, int when);
+using AuxSaveCallback = void (*)(ValkeyModuleIO *rdb, int when);
+using AuxLoadCallback = int (*)(ValkeyModuleIO *rdb, int encver, int when);
 static constexpr int kEncodingVersion = 0;
 static constexpr uint8_t kMetadataBroadcastClusterMessageReceiverId = 0x00;
 
@@ -67,25 +45,25 @@ static constexpr highwayhash::HHKey kHashKey{
 
 class MetadataManager {
  public:
-  MetadataManager(RedisModuleCtx *ctx, ClientPool &client_pool)
+  MetadataManager(ValkeyModuleCtx *ctx, ClientPool &client_pool)
       : client_pool_(client_pool),
-        detached_ctx_(vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx)) {
+        detached_ctx_(vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx)) {
     RegisterRDBCallback(
         data_model::RDB_SECTION_GLOBAL_METADATA,
         RDBSectionCallbacks{
-            .load = [this](RedisModuleCtx *ctx,
+            .load = [this](ValkeyModuleCtx *ctx,
                            std::unique_ptr<data_model::RDBSection> section,
                            SupplementalContentIter &&iter) -> absl::Status {
               return LoadMetadata(ctx, std::move(section), std::move(iter));
             },
 
-            .save = [this](RedisModuleCtx *ctx, SafeRDB *rdb, int when)
+            .save = [this](ValkeyModuleCtx *ctx, SafeRDB *rdb, int when)
                 -> absl::Status { return SaveMetadata(ctx, rdb, when); },
 
-            .section_count = [this](RedisModuleCtx *ctx, int when) -> int {
+            .section_count = [this](ValkeyModuleCtx *ctx, int when) -> int {
               return GetSectionsCount();
             },
-            .minimum_semantic_version = [](RedisModuleCtx *ctx,
+            .minimum_semantic_version = [](ValkeyModuleCtx *ctx,
                                            int when) -> int {
               return 0x010000;  // Always use 1.0.0 for now
             }});
@@ -124,36 +102,36 @@ class MetadataManager {
                     FingerprintCallback fingerprint_callback,
                     MetadataUpdateCallback callback);
 
-  void BroadcastMetadata(RedisModuleCtx *ctx);
+  void BroadcastMetadata(ValkeyModuleCtx *ctx);
 
-  void BroadcastMetadata(RedisModuleCtx *ctx,
+  void BroadcastMetadata(ValkeyModuleCtx *ctx,
                          const GlobalMetadataVersionHeader &version_header);
 
-  void HandleClusterMessage(RedisModuleCtx *ctx, const char *sender_id,
+  void HandleClusterMessage(ValkeyModuleCtx *ctx, const char *sender_id,
                             uint8_t type, const unsigned char *payload,
                             uint32_t len);
 
   void HandleBroadcastedMetadata(
-      RedisModuleCtx *ctx, const char *sender_id,
+      ValkeyModuleCtx *ctx, const char *sender_id,
       std::unique_ptr<GlobalMetadataVersionHeader> header);
 
   absl::Status ReconcileMetadata(const GlobalMetadata &proposed,
                                  bool trigger_callbacks = true,
                                  bool prefer_incoming = false);
 
-  void OnServerCronCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
+  void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                             uint64_t subevent, void *data);
 
-  void OnLoadingEnded(RedisModuleCtx *ctx);
-  void OnLoadingStarted(RedisModuleCtx *ctx);
-  void OnReplicationLoadStart(RedisModuleCtx *ctx);
-  void OnLoadingCallback(RedisModuleCtx *ctx, RedisModuleEvent eid,
+  void OnLoadingEnded(ValkeyModuleCtx *ctx);
+  void OnLoadingStarted(ValkeyModuleCtx *ctx);
+  void OnReplicationLoadStart(ValkeyModuleCtx *ctx);
+  void OnLoadingCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                          uint64_t subevent, void *data);
-  absl::Status SaveMetadata(RedisModuleCtx *ctx, SafeRDB *rdb, int when);
-  absl::Status LoadMetadata(RedisModuleCtx *ctx,
+  absl::Status SaveMetadata(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when);
+  absl::Status LoadMetadata(ValkeyModuleCtx *ctx,
                             std::unique_ptr<data_model::RDBSection> section,
                             SupplementalContentIter &&supplemental_iter);
-  void RegisterForClusterMessages(RedisModuleCtx *ctx);
+  void RegisterForClusterMessages(ValkeyModuleCtx *ctx);
 
   static bool IsInitialized();
   static void InitInstance(std::unique_ptr<MetadataManager> instance);
@@ -176,7 +154,7 @@ class MetadataManager {
   vmsdk::MainThreadAccessGuard<absl::flat_hash_map<std::string, RegisteredType>>
       registered_types_;
   coordinator::ClientPool &client_pool_;
-  vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx_;
+  vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
 };
 }  // namespace valkey_search::coordinator
 

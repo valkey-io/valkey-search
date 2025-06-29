@@ -53,27 +53,27 @@ struct AclPrefixCheckTestCase {
 class AclPrefixCheckTest
     : public ValkeySearchTestWithParam<AclPrefixCheckTestCase> {};
 
-RedisModuleCtx fake_ctx;
+ValkeyModuleCtx fake_ctx;
 
 TEST_P(AclPrefixCheckTest, AclPrefixCheckTests) {
   const AclPrefixCheckTestCase &test_case = GetParam();
 
-  EXPECT_CALL(*kMockRedisModule, GetCurrentUserName(testing::_))
-      .WillOnce([](RedisModuleCtx *ctx) {
-        return new RedisModuleString(std::string("alice"));
+  EXPECT_CALL(*kMockValkeyModule, GetCurrentUserName(testing::_))
+      .WillOnce([](ValkeyModuleCtx *ctx) {
+        return new ValkeyModuleString(std::string("alice"));
       });
 
-  EXPECT_CALL(*kMockRedisModule, GetClientId(testing::_))
-      .WillOnce([](RedisModuleCtx *ctx) { return 3; });
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(testing::_))
+      .WillOnce([](ValkeyModuleCtx *ctx) { return 3; });
 
   CallReplyMap reply_map;
 
   CallReplyArray flags;
-  flags.emplace_back(CreateRedisModuleCallReply("on"));
+  flags.emplace_back(CreateValkeyModuleCallReply("on"));
   AddElementToCallReplyMap(reply_map, "flags", std::move(flags));
 
   CallReplyArray pass;
-  pass.emplace_back(CreateRedisModuleCallReply("pass"));
+  pass.emplace_back(CreateValkeyModuleCallReply("pass"));
   AddElementToCallReplyMap(reply_map, "passwords", std::move(pass));
 
   AddElementToCallReplyMap(reply_map, "commands", test_case.acls[0].cmds);
@@ -88,20 +88,20 @@ TEST_P(AclPrefixCheckTest, AclPrefixCheckTests) {
       AddElementToCallReplyMap(selector, "commands", test_case.acls[i].cmds);
       AddElementToCallReplyMap(selector, "keys", test_case.acls[i].keys);
       AddElementToCallReplyMap(selector, "channels", "&");
-      selectors.emplace_back(CreateRedisModuleCallReply(std::move(selector)));
+      selectors.emplace_back(CreateValkeyModuleCallReply(std::move(selector)));
     }
     AddElementToCallReplyMap(reply_map, "selectors", std::move(selectors));
   } else {
     AddElementToCallReplyMap(reply_map, "selectors", nullptr);
   }
-  std::unique_ptr<RedisModuleCallReply> reply =
-      CreateRedisModuleCallReply(std::move(reply_map));
+  std::unique_ptr<ValkeyModuleCallReply> reply =
+      CreateValkeyModuleCallReply(std::move(reply_map));
 
-  EXPECT_CALL(*kMockRedisModule,
+  EXPECT_CALL(*kMockValkeyModule,
               Call(testing::_, testing::StrEq(std::string("ACL")),
                    testing::StrEq("cs3"), testing::StrEq("GETUSER"),
                    testing::StrEq("alice")))
-      .WillOnce([&reply](RedisModuleCtx *ctx, const char *cmd, const char *fmt,
+      .WillOnce([&reply](ValkeyModuleCtx *ctx, const char *cmd, const char *fmt,
                          const char *arg1,
                          const char *arg2) { return (reply.get()); });
   EXPECT_EQ(test_case.expected_return,

@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef VMSDK_SRC_MODULE_H_
@@ -43,11 +21,11 @@
 #define VALKEY_MODULE(options)                                              \
   namespace {                                                               \
   extern "C" {                                                              \
-  int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv,     \
-                         int argc) {                                        \
+  int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,  \
+                          int argc) {                                       \
     vmsdk::TrackCurrentAsMainThread();                                      \
     if (auto status = vmsdk::module::OnLoad(ctx, argv, argc, options);      \
-        status != REDISMODULE_OK) {                                         \
+        status != VALKEYMODULE_OK) {                                        \
       return status;                                                        \
     }                                                                       \
                                                                             \
@@ -57,11 +35,11 @@
     }                                                                       \
     return vmsdk::module::OnLoadDone(absl::OkStatus(), ctx, options);       \
   }                                                                         \
-  int RedisModule_OnUnload(RedisModuleCtx *ctx) {                           \
+  int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {                         \
     if (options.on_unload.has_value()) {                                    \
       options.on_unload.value()(ctx, options);                              \
     }                                                                       \
-    return REDISMODULE_OK;                                                  \
+    return VALKEYMODULE_OK;                                                 \
   }                                                                         \
   }                                                                         \
   }
@@ -75,7 +53,7 @@ struct CommandOptions {
   absl::string_view cmd_name;
   std::list<absl::string_view> permissions;
   std::list<absl::string_view> flags;
-  RedisModuleCmdFunc cmd_func{nullptr};
+  ValkeyModuleCmdFunc cmd_func{nullptr};
   // By default - assume no keys.
   int first_key{0};
   int last_key{0};
@@ -86,35 +64,35 @@ struct Options {
   std::string name;
   std::list<absl::string_view> acl_categories;
   int version;
-  RedisModuleInfoFunc info{nullptr};
+  ValkeyModuleInfoFunc info{nullptr};
   std::list<CommandOptions> commands;
   using OnLoad = std::optional<absl::AnyInvocable<absl::Status(
-      RedisModuleCtx *, RedisModuleString **, int, const Options &)>>;
+      ValkeyModuleCtx *, ValkeyModuleString **, int, const Options &)>>;
 
   using OnUnload = std::optional<
-      absl::AnyInvocable<void(RedisModuleCtx *, const Options &)>>;
+      absl::AnyInvocable<void(ValkeyModuleCtx *, const Options &)>>;
   OnLoad on_load;
   OnUnload on_unload;
 };
 
-int OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
+int OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
            const Options &options);
-int OnLoadDone(absl::Status status, RedisModuleCtx *ctx,
+int OnLoadDone(absl::Status status, ValkeyModuleCtx *ctx,
                const Options &options);
-absl::Status RegisterInfo(RedisModuleCtx *ctx, RedisModuleInfoFunc info);
+absl::Status RegisterInfo(ValkeyModuleCtx *ctx, ValkeyModuleInfoFunc info);
 
 }  // namespace module
-using ModuleCommandFunc = absl::Status (*)(RedisModuleCtx *,
-                                           RedisModuleString **, int);
+using ModuleCommandFunc = absl::Status (*)(ValkeyModuleCtx *,
+                                           ValkeyModuleString **, int);
 template <ModuleCommandFunc func>
-int CreateCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int CreateCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   auto status = func(ctx, argv, argc);
   if (!status.ok()) {
-    return RedisModule_ReplyWithError(ctx, status.message().data());
+    return ValkeyModule_ReplyWithError(ctx, status.message().data());
   }
-  return REDISMODULE_OK;
+  return VALKEYMODULE_OK;
 }
-bool IsModuleLoaded(RedisModuleCtx *ctx, const std::string &name);
+bool IsModuleLoaded(ValkeyModuleCtx *ctx, const std::string &name);
 }  // namespace vmsdk
 
 #endif  // VMSDK_SRC_MODULE_H_

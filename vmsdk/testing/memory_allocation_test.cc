@@ -568,7 +568,7 @@ TEST_F(MemoryAllocationTest, MemoryTrackingScopeOverrides) {
     EXPECT_CALL(*kMockRedisModule, Alloc(50)).WillOnce(testing::Return(reinterpret_cast<void*>(0x2000)));
     EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x2000))).WillRepeatedly(testing::Return(50));
     ptr2 = __wrap_malloc(50);
-  } // Outer scope ends, net change: +100 + 50 = 150
+  }
 
   EXPECT_EQ(first_pool.load(), 100);
   EXPECT_EQ(second_pool.load(), 50);

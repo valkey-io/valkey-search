@@ -323,9 +323,10 @@ std::unique_ptr<query::Predicate> WrapPredicate(
 // 10. Numeric filters are inclusive. Exclusive min or max are expressed with (
 // prepended to the number, for example, [(100 (200].
 absl::StatusOr<std::unique_ptr<query::Predicate>>
-FilterParser::ParseExpression(int level) {
+FilterParser::ParseExpression(uint32_t level) {
   if (level++ >= options::GetQueryStringDepth()) {
-    return absl::InvalidArgumentError("Query string recursive depth exceeded");
+    return absl::InvalidArgumentError(absl::StrCat("Query string recursive depth exceeded limit: ",
+                                                   options::GetQueryStringDepth()));
   }
   std::unique_ptr<query::Predicate> prev_predicate;
 

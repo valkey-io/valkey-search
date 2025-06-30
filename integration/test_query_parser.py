@@ -34,9 +34,8 @@ class TestQueryParser(ValkeySearchTestCaseBase):
             assert False
         except ResponseError as e:
             assert str(e) == "Invalid filter expression: `@price:[10 20] | @category:{electronics|books}`. Query string recursive depth exceeded limit: 1"
-        # Example of Depth of 10:
-        assert client.execute_command("CONFIG SET search.query-string-depth 10") == b"OK"
         # Validate the success case with a query depth of 10.
+        assert client.execute_command("CONFIG SET search.query-string-depth 10") == b"OK"
         assert client.execute_command(
             "FT.SEARCH", "my_index",
             "(((((((((@price:[10 20]))))))))) =>[KNN 10 @doc_embedding $BLOB]",

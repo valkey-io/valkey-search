@@ -41,7 +41,7 @@ FT.CREATE <index-name>
 **TAG**: A tag field is a string that contains one or more tag values.  
       
 - **SEPARATOR \<sep\>** (optional): One of these characters `,.<>{}[]"':;!@#$%^&*()-+=~` used to delimit individual tags. If omitted the default value is `,`.  
-- **CASESENSITIVE** (optional): If present, tag comparisons will be case sensitive. The default is that tag comparisons are NOT case sensitive
+- **CASESENSITIVE** (optional): If present, tag comparisons will be case-sensitive. The default is that tag comparisons are NOT case-sensitive
 
 **NUMERIC**: A numeric field contains a number.  
       
@@ -138,7 +138,7 @@ Performs a search of the specified index. The keys which match the query express
 - **\<index\>** (required): This index name you want to query.  
 - **\<query\>** (required): The query string, see below for details.  
 - **NOCONTENT** (optional): When present, only the resulting key names are returned, no key values are included.  
-- **TIMEOUT \<timeout\>** (optional): Lets you set a timeout value for the search command. This must be an integer in milliSeconds.  
+- **TIMEOUT \<timeout\>** (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.  
 - **PARAMS \<count\> \<name1\> \<value1\> \<name2\> \<value2\> ...** (optional): `count` is of the number of arguments, i.e., twice the number of value name pairs. See the query string for usage details.
 - **RETURN \<count\> \<field1\> \<field2\> ...** (options): `count` is the number of fields to return. Specifies the fields you want to retrieve from your documents, along with any aliases for the returned values. By default, all fields are returned unless the NOCONTENT option is set, in which case no fields are returned. If num is set to 0, it behaves the same as NOCONTENT.
 - **LIMIT \<offset\> \<count\>** (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.  
@@ -151,7 +151,7 @@ The command returns either an array if successful or an error.
 On success, the first entry in the response array represents the count of matching keys, followed by one array entry for each matching key. 
 Note that if  the `LIMIT` option is specified it will only control the number of returned keys and will not affect the value of the first entry.
 
-When `NOCONTENT` is specified, each entry in the response contains only the matching keyname, Otherwise, each entry includes the matching keyname, followed by an array of the returned fields.
+When `NOCONTENT` is specified, each entry in the response contains only the matching keyname. Otherwise, each entry includes the matching keyname, followed by an array of the returned fields.
 
 The result fields for a key consists of a set of name/value pairs. The first name/value pair is for the distance computed. The name of this pair is constructed from the vector field name prepended with "\_\_" and appended with "\_score" and the value is the computed distance. The remaining name/value pairs are the members and values of the key as controlled by the `RETURN` clause.
 
@@ -255,7 +255,7 @@ The following query will return all books with "comedy" genre that are not publi
 
 **Operator Precedence**
 
-Typical operator precedence rules apply, i.e., Logical negate is the highest priority, followed by Logical and and then Logical Or with the lowest priority. Parenthesis can be used to override the default precedence rules.
+Typical operator precedence rules apply, i.e., Logical negate is the highest priority, followed by Logical and then Logical Or with the lowest priority. Parenthesis can be used to override the default precedence rules.
 
 **Examples of Combining Logical Operators**
 

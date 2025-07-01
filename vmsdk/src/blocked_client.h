@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef VMSDK_SRC_BLOCKED_CLIENT_H_
@@ -39,11 +17,11 @@ namespace vmsdk {
 
 class BlockedClient {
  public:
-  BlockedClient(RedisModuleCtx *ctx, bool handle_duplication);
-  BlockedClient(RedisModuleCtx *ctx,
-                RedisModuleCmdFunc reply_callback = nullptr,
-                RedisModuleCmdFunc timeout_callback = nullptr,
-                void (*free_privdata)(RedisModuleCtx *, void *) = nullptr,
+  BlockedClient(ValkeyModuleCtx *ctx, bool handle_duplication);
+  BlockedClient(ValkeyModuleCtx *ctx,
+                ValkeyModuleCmdFunc reply_callback = nullptr,
+                ValkeyModuleCmdFunc timeout_callback = nullptr,
+                void (*free_privdata)(ValkeyModuleCtx *, void *) = nullptr,
                 long long timeout_ms = 0);
   BlockedClient(BlockedClient &&other) noexcept
       : blocked_client_(std::exchange(other.blocked_client_, nullptr)),
@@ -57,7 +35,7 @@ class BlockedClient {
   BlockedClient(const BlockedClient &other) = delete;
   BlockedClient &operator=(const BlockedClient &other) = delete;
 
-  operator RedisModuleBlockedClient *() const { return blocked_client_; }
+  operator ValkeyModuleBlockedClient *() const { return blocked_client_; }
   void SetReplyPrivateData(void *private_data);
   void UnblockClient();
   void MeasureTimeStart();
@@ -65,7 +43,7 @@ class BlockedClient {
   ~BlockedClient() { UnblockClient(); }
 
  private:
-  RedisModuleBlockedClient *blocked_client_{nullptr};
+  ValkeyModuleBlockedClient *blocked_client_{nullptr};
   void *private_data_{nullptr};
   bool time_measurement_ongoing_{false};
   unsigned long long tracked_client_id_{0};
@@ -73,7 +51,7 @@ class BlockedClient {
 
 struct BlockedClientEntry {
   size_t cnt{0};
-  RedisModuleBlockedClient *blocked_client{nullptr};
+  ValkeyModuleBlockedClient *blocked_client{nullptr};
 };
 absl::flat_hash_map<unsigned long long, BlockedClientEntry> &
 TrackedBlockedClients();

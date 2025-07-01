@@ -372,15 +372,15 @@ class VectorSearchIntegrationTest(VSSTestCase):
         logging.basicConfig(level=logging.DEBUG)
 
         # Get the logger used by redis-py
-        redis_logger = logging.getLogger("redis")
-        redis_logger.setLevel(logging.DEBUG)
+        valkey_logger = logging.getLogger("redis")
+        valkey_logger.setLevel(logging.DEBUG)
 
         # Optional: Stream to stderr explicitly
         handler = logging.StreamHandler()
         handler.setLevel(logging.DEBUG)
         formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
         handler.setFormatter(formatter)
-        redis_logger.addHandler(handler)
+        valkey_logger.addHandler(handler)
 
         valkey_server_stdout_dir = os.environ["TEST_UNDECLARED_OUTPUTS_DIR"]
         valkey_server_path = os.environ["VALKEY_SERVER_PATH"]

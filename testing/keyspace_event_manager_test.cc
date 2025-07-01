@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/keyspace_event_manager.h"
@@ -98,14 +76,14 @@ TEST_P(KeyspaceEventManagerTest, SubscriptionAndNotificationTest) {
        test_case.subscriptions) {
     if (subscription.expected_type_subscriptions.has_value()) {
       EXPECT_CALL(
-          *kMockRedisModule,
+          *kMockValkeyModule,
           SubscribeToKeyspaceEvents(
               &fake_ctx_, subscription.expected_type_subscriptions.value(), _))
-          .WillOnce(Return(REDISMODULE_OK));
+          .WillOnce(Return(VALKEYMODULE_OK));
     }
     auto mock_subscription = std::make_unique<MockKeyspaceEventSubscription>();
     auto mock_attribute_data_type = std::make_unique<MockAttributeDataType>();
-    EXPECT_CALL(*mock_attribute_data_type, GetRedisEventTypes())
+    EXPECT_CALL(*mock_attribute_data_type, GetValkeyEventTypes())
         .WillRepeatedly(Return(subscription.types_to_subscribe));
     EXPECT_CALL(*mock_subscription, GetAttributeDataType())
         .WillRepeatedly(ReturnRef(*mock_attribute_data_type));
@@ -121,7 +99,7 @@ TEST_P(KeyspaceEventManagerTest, SubscriptionAndNotificationTest) {
 
   for (const KeyspaceEventNotificationTestCase &notification :
        test_case.notifications) {
-    RedisModuleString *key = TestRedisModule_CreateStringPrintf(
+    ValkeyModuleString *key = TestValkeyModule_CreateStringPrintf(
         &fake_ctx_, "%s", notification.notification_key.data());
     for (const std::string &subscription_id :
          notification.expected_subscriptions_with_notifications) {
@@ -133,7 +111,7 @@ TEST_P(KeyspaceEventManagerTest, SubscriptionAndNotificationTest) {
     }
     keyspace_event_manager->NotifySubscribers(
         &fake_ctx_, notification.notification_type, event_name.data(), key);
-    TestRedisModule_FreeString(nullptr, key);
+    TestValkeyModule_FreeString(nullptr, key);
   }
 
   for (const KeyspaceEventSubscriptionTestCase &subscription :
@@ -145,11 +123,11 @@ TEST_P(KeyspaceEventManagerTest, SubscriptionAndNotificationTest) {
   // Check everything is cleaned up. We should see no calls
   for (const KeyspaceEventNotificationTestCase &notification :
        test_case.notifications) {
-    RedisModuleString *key = TestRedisModule_CreateStringPrintf(
+    ValkeyModuleString *key = TestValkeyModule_CreateStringPrintf(
         &fake_ctx_, "%s", notification.notification_key.data());
     keyspace_event_manager->NotifySubscribers(
         &fake_ctx_, notification.notification_type, event_name.data(), key);
-    TestRedisModule_FreeString(nullptr, key);
+    TestValkeyModule_FreeString(nullptr, key);
   }
 }
 
@@ -169,12 +147,12 @@ INSTANTIATE_TEST_SUITE_P(
             .subscriptions = {{
                 .subscription_id = "subscription_id",
                 .key_prefixes_to_subscribe = {"prefix:"},
-                .types_to_subscribe = REDISMODULE_NOTIFY_HASH,
-                .expected_type_subscriptions = REDISMODULE_NOTIFY_HASH,
+                .types_to_subscribe = VALKEYMODULE_NOTIFY_HASH,
+                .expected_type_subscriptions = VALKEYMODULE_NOTIFY_HASH,
             }},
             .notifications = {{
                 .notification_key = "prefix:key",
-                .notification_type = REDISMODULE_NOTIFY_HASH,
+                .notification_type = VALKEYMODULE_NOTIFY_HASH,
                 .expected_subscriptions_with_notifications =
                     {"subscription_id"},
             }},
@@ -184,12 +162,12 @@ INSTANTIATE_TEST_SUITE_P(
             .subscriptions = {{
                 .subscription_id = "subscription_id",
                 .key_prefixes_to_subscribe = {"prefix1:"},
-                .types_to_subscribe = REDISMODULE_NOTIFY_HASH,
-                .expected_type_subscriptions = REDISMODULE_NOTIFY_HASH,
+                .types_to_subscribe = VALKEYMODULE_NOTIFY_HASH,
+                .expected_type_subscriptions = VALKEYMODULE_NOTIFY_HASH,
             }},
             .notifications = {{
                 .notification_key = "prefix:key",
-                .notification_type = REDISMODULE_NOTIFY_HASH,
+                .notification_type = VALKEYMODULE_NOTIFY_HASH,
                 .expected_subscriptions_with_notifications = {},
             }},
         },
@@ -198,12 +176,12 @@ INSTANTIATE_TEST_SUITE_P(
             .subscriptions = {{
                 .subscription_id = "subscription_id",
                 .key_prefixes_to_subscribe = {"prefix:"},
-                .types_to_subscribe = REDISMODULE_NOTIFY_HASH,
-                .expected_type_subscriptions = REDISMODULE_NOTIFY_HASH,
+                .types_to_subscribe = VALKEYMODULE_NOTIFY_HASH,
+                .expected_type_subscriptions = VALKEYMODULE_NOTIFY_HASH,
             }},
             .notifications = {{
                 .notification_key = "prefix:key",
-                .notification_type = REDISMODULE_NOTIFY_EVICTED,
+                .notification_type = VALKEYMODULE_NOTIFY_EVICTED,
                 .expected_subscriptions_with_notifications = {},
             }},
         },
@@ -212,40 +190,40 @@ INSTANTIATE_TEST_SUITE_P(
             .subscriptions = {{
                 .subscription_id = "subscription_id",
                 .key_prefixes_to_subscribe = {""},
-                .types_to_subscribe = REDISMODULE_NOTIFY_HASH,
-                .expected_type_subscriptions = REDISMODULE_NOTIFY_HASH,
+                .types_to_subscribe = VALKEYMODULE_NOTIFY_HASH,
+                .expected_type_subscriptions = VALKEYMODULE_NOTIFY_HASH,
             }},
             .notifications = {{
                                   .notification_key = "prefix:key",
-                                  .notification_type = REDISMODULE_NOTIFY_HASH,
+                                  .notification_type = VALKEYMODULE_NOTIFY_HASH,
                                   .expected_subscriptions_with_notifications =
                                       {"subscription_id"},
                               },
                               {
                                   .notification_key = "different:key",
-                                  .notification_type = REDISMODULE_NOTIFY_HASH,
+                                  .notification_type = VALKEYMODULE_NOTIFY_HASH,
                                   .expected_subscriptions_with_notifications =
                                       {"subscription_id"},
                               }},
         },
         {
             .test_name = "two_subscriptions_same_types",
-            .subscriptions = {{
-                                  .subscription_id = "subscription_id_0",
-                                  .key_prefixes_to_subscribe = {"prefix:"},
-                                  .types_to_subscribe = REDISMODULE_NOTIFY_HASH,
-                                  .expected_type_subscriptions =
-                                      REDISMODULE_NOTIFY_HASH,
-                              },
-                              {
-                                  .subscription_id = "subscription_id_1",
-                                  .key_prefixes_to_subscribe = {"prefix:"},
-                                  .types_to_subscribe = REDISMODULE_NOTIFY_HASH,
-                                  .expected_type_subscriptions = absl::nullopt,
-                              }},
+            .subscriptions =
+                {{
+                     .subscription_id = "subscription_id_0",
+                     .key_prefixes_to_subscribe = {"prefix:"},
+                     .types_to_subscribe = VALKEYMODULE_NOTIFY_HASH,
+                     .expected_type_subscriptions = VALKEYMODULE_NOTIFY_HASH,
+                 },
+                 {
+                     .subscription_id = "subscription_id_1",
+                     .key_prefixes_to_subscribe = {"prefix:"},
+                     .types_to_subscribe = VALKEYMODULE_NOTIFY_HASH,
+                     .expected_type_subscriptions = absl::nullopt,
+                 }},
             .notifications = {{
                 .notification_key = "prefix:key",
-                .notification_type = REDISMODULE_NOTIFY_HASH,
+                .notification_type = VALKEYMODULE_NOTIFY_HASH,
                 .expected_subscriptions_with_notifications =
                     {"subscription_id_0", "subscription_id_1"},
             }},
@@ -256,63 +234,63 @@ INSTANTIATE_TEST_SUITE_P(
                 {{
                      .subscription_id = "subscription_id_0",
                      .key_prefixes_to_subscribe = {"prefix:"},
-                     .types_to_subscribe = REDISMODULE_NOTIFY_HASH |
-                                           REDISMODULE_NOTIFY_STREAM,
-                     .expected_type_subscriptions = REDISMODULE_NOTIFY_HASH |
-                                                    REDISMODULE_NOTIFY_STREAM,
+                     .types_to_subscribe = VALKEYMODULE_NOTIFY_HASH |
+                                           VALKEYMODULE_NOTIFY_STREAM,
+                     .expected_type_subscriptions = VALKEYMODULE_NOTIFY_HASH |
+                                                    VALKEYMODULE_NOTIFY_STREAM,
                  },
                  {
                      .subscription_id = "subscription_id_1",
                      .key_prefixes_to_subscribe = {"prefix:"},
-                     .types_to_subscribe = REDISMODULE_NOTIFY_HASH |
-                                           REDISMODULE_NOTIFY_ZSET,
-                     .expected_type_subscriptions = REDISMODULE_NOTIFY_ZSET,
+                     .types_to_subscribe = VALKEYMODULE_NOTIFY_HASH |
+                                           VALKEYMODULE_NOTIFY_ZSET,
+                     .expected_type_subscriptions = VALKEYMODULE_NOTIFY_ZSET,
                  }},
             .notifications =
                 {{
                      .notification_key = "prefix:key",
-                     .notification_type = REDISMODULE_NOTIFY_HASH,
+                     .notification_type = VALKEYMODULE_NOTIFY_HASH,
                      .expected_subscriptions_with_notifications =
                          {"subscription_id_0", "subscription_id_1"},
                  },
                  {
                      .notification_key = "prefix:key",
-                     .notification_type = REDISMODULE_NOTIFY_ZSET,
+                     .notification_type = VALKEYMODULE_NOTIFY_ZSET,
                      .expected_subscriptions_with_notifications =
                          {"subscription_id_1"},
                  },
                  {
                      .notification_key = "prefix:key",
-                     .notification_type = REDISMODULE_NOTIFY_STREAM,
+                     .notification_type = VALKEYMODULE_NOTIFY_STREAM,
                      .expected_subscriptions_with_notifications =
                          {"subscription_id_0"},
                  }},
         },
         {
             .test_name = "two_subscriptions_prefix_partial_match",
-            .subscriptions = {{
-                                  .subscription_id = "subscription_id_0",
-                                  .key_prefixes_to_subscribe = {"prefix1"},
-                                  .types_to_subscribe = REDISMODULE_NOTIFY_HASH,
-                                  .expected_type_subscriptions =
-                                      REDISMODULE_NOTIFY_HASH,
-                              },
-                              {
-                                  .subscription_id = "subscription_id_1",
-                                  .key_prefixes_to_subscribe = {"prefix11"},
-                                  .types_to_subscribe = REDISMODULE_NOTIFY_HASH,
-                                  .expected_type_subscriptions = absl::nullopt,
-                              }},
+            .subscriptions =
+                {{
+                     .subscription_id = "subscription_id_0",
+                     .key_prefixes_to_subscribe = {"prefix1"},
+                     .types_to_subscribe = VALKEYMODULE_NOTIFY_HASH,
+                     .expected_type_subscriptions = VALKEYMODULE_NOTIFY_HASH,
+                 },
+                 {
+                     .subscription_id = "subscription_id_1",
+                     .key_prefixes_to_subscribe = {"prefix11"},
+                     .types_to_subscribe = VALKEYMODULE_NOTIFY_HASH,
+                     .expected_type_subscriptions = absl::nullopt,
+                 }},
             .notifications = {{
                                   .notification_key = "prefix11:key",
-                                  .notification_type = REDISMODULE_NOTIFY_HASH,
+                                  .notification_type = VALKEYMODULE_NOTIFY_HASH,
                                   .expected_subscriptions_with_notifications =
                                       {"subscription_id_0",
                                        "subscription_id_1"},
                               },
                               {
                                   .notification_key = "prefix1:key",
-                                  .notification_type = REDISMODULE_NOTIFY_HASH,
+                                  .notification_type = VALKEYMODULE_NOTIFY_HASH,
                                   .expected_subscriptions_with_notifications =
                                       {"subscription_id_0"},
                               }},

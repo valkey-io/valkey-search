@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/index_schema.h"
@@ -86,7 +64,7 @@ struct IndexSchemaSubscriptionTestCase {
   int open_key_type;
   bool expect_wrong_type;
   // Set to nullopt to have Redis return does not exist
-  absl::optional<std::pair<std::string, std::string>> redis_hash_data;
+  absl::optional<std::pair<std::string, std::string>> valkey_hash_data;
   bool is_tracked;
   // Set to nullopt to not expect a call to the given index method.
   absl::optional<absl::StatusOr<bool>> expect_index_add_w_result;
@@ -109,7 +87,7 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
   for (bool use_thread_pool : {true, false}) {
-    RedisModuleCtx fake_ctx;
+    ValkeyModuleCtx fake_ctx;
     std::vector<absl::string_view> key_prefixes = {"prefix:"};
     std::string index_schema_name_str("index_schema_name");
     auto index_schema = MockIndexSchema::Create(
@@ -124,7 +102,7 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
                                            test_case.hash_field, mock_index));
 
     auto key = StringInternStore::Intern("key");
-    auto key_redis_str = vmsdk::MakeUniqueRedisString(key->Str().data());
+    auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str().data());
     EXPECT_CALL(*mock_index, IsTracked(key))
         .WillRepeatedly(Return(test_case.is_tracked));
     if (test_case.expect_index_add_w_result.has_value()) {
@@ -144,45 +122,49 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
     }
     if (test_case.open_key_fail) {
       // Keep the default behavior still for other keys (e.g. IndexSchema key).
-      EXPECT_CALL(*kMockRedisModule, OpenKey(&fake_ctx, testing::_, testing::_))
-          .WillRepeatedly(TestRedisModule_OpenKeyDefaultImpl);
-      EXPECT_CALL(*kMockRedisModule,
-                  OpenKey(&fake_ctx, key_redis_str.get(),
-                          REDISMODULE_OPEN_KEY_NOEFFECTS | REDISMODULE_READ))
+      EXPECT_CALL(*kMockValkeyModule,
+                  OpenKey(&fake_ctx, testing::_, testing::_))
+          .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+      EXPECT_CALL(*kMockValkeyModule,
+                  OpenKey(&fake_ctx, key_valkey_str.get(),
+                          VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ))
           .WillOnce(Return(nullptr));
     } else {
-      EXPECT_CALL(*kMockRedisModule, KeyType(testing::_))
-          .WillRepeatedly(TestRedisModule_KeyTypeDefaultImpl);
-      EXPECT_CALL(*kMockRedisModule,
-                  KeyType(vmsdk::RedisModuleKeyIsForString(key->Str())))
+      EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+          .WillRepeatedly(TestValkeyModule_KeyTypeDefaultImpl);
+      EXPECT_CALL(*kMockValkeyModule,
+                  KeyType(vmsdk::ValkeyModuleKeyIsForString(key->Str())))
           .WillRepeatedly(Return(test_case.open_key_type));
     }
 
-    if (test_case.redis_hash_data.has_value()) {
-      const char *field = test_case.redis_hash_data.value().first.c_str();
-      const char *value = test_case.redis_hash_data.value().second.c_str();
-      RedisModuleString *value_redis_str =
-          TestRedisModule_CreateStringPrintf(nullptr, "%s", value);
+    if (test_case.valkey_hash_data.has_value()) {
+      const char *field = test_case.valkey_hash_data.value().first.c_str();
+      const char *value = test_case.valkey_hash_data.value().second.c_str();
+      ValkeyModuleString *value_valkey_str =
+          TestValkeyModule_CreateStringPrintf(nullptr, "%s", value);
 
-      EXPECT_CALL(*kMockRedisModule,
-                  HashGet(vmsdk::RedisModuleKeyIsForString(key->Str()),
-                          REDISMODULE_HASH_CFIELDS, StrEq(field),
-                          An<RedisModuleString **>(), TypedEq<void *>(nullptr)))
-          .WillOnce([value_redis_str](
-                        RedisModuleKey *key, int flags, const char *field,
-                        RedisModuleString **value_out, void *terminating_null) {
-            *value_out = value_redis_str;
-            return REDISMODULE_OK;
+      EXPECT_CALL(
+          *kMockValkeyModule,
+          HashGet(vmsdk::ValkeyModuleKeyIsForString(key->Str()),
+                  VALKEYMODULE_HASH_CFIELDS, StrEq(field),
+                  An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
+          .WillOnce([value_valkey_str](ValkeyModuleKey *key, int flags,
+                                       const char *field,
+                                       ValkeyModuleString **value_out,
+                                       void *terminating_null) {
+            *value_out = value_valkey_str;
+            return VALKEYMODULE_OK;
           });
     } else if (!test_case.open_key_fail && !test_case.expect_wrong_type) {
-      EXPECT_CALL(*kMockRedisModule,
-                  HashGet(vmsdk::RedisModuleKeyIsForString(key->Str()),
-                          REDISMODULE_HASH_CFIELDS, StrEq(test_case.hash_field),
-                          An<RedisModuleString **>(), TypedEq<void *>(nullptr)))
-          .WillOnce([](RedisModuleKey *key, int flags, const char *field,
-                       RedisModuleString **value_out, void *terminating_null) {
+      EXPECT_CALL(
+          *kMockValkeyModule,
+          HashGet(vmsdk::ValkeyModuleKeyIsForString(key->Str()),
+                  VALKEYMODULE_HASH_CFIELDS, StrEq(test_case.hash_field),
+                  An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
+          .WillOnce([](ValkeyModuleKey *key, int flags, const char *field,
+                       ValkeyModuleString **value_out, void *terminating_null) {
             *value_out = nullptr;
-            return REDISMODULE_OK;
+            return VALKEYMODULE_OK;
           });
     }
 
@@ -201,8 +183,8 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
         .skipped_cnt =
             index_schema->GetStats().subscription_modify.skipped_cnt};
     uint32_t document_cnt = index_schema->GetStats().document_cnt;
-    index_schema->OnKeyspaceNotification(&fake_ctx, REDISMODULE_NOTIFY_HASH,
-                                         "event", key_redis_str.get());
+    index_schema->OnKeyspaceNotification(&fake_ctx, VALKEYMODULE_NOTIFY_HASH,
+                                         "event", key_valkey_str.get());
     if (use_thread_pool) {
       WaitWorkerTasksAreCompleted(mutations_thread_pool);
     }
@@ -237,8 +219,8 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "happy_path_add",
             .hash_field = "vector",
             .open_key_fail = false,
-            .open_key_type = REDISMODULE_KEYTYPE_HASH,
-            .redis_hash_data = std::make_pair("vector", "vector_buffer"),
+            .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
+            .valkey_hash_data = std::make_pair("vector", "vector_buffer"),
             .is_tracked = false,
             .expect_index_add_w_result = true,
             .expected_vector_buffer = "vector_buffer",
@@ -252,8 +234,8 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "happy_path_remove_key",
             .hash_field = "vector",
             .open_key_fail = true,
-            .open_key_type = REDISMODULE_KEYTYPE_HASH,
-            .redis_hash_data = std::nullopt,
+            .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
+            .valkey_hash_data = std::nullopt,
             .is_tracked = true,
             .expect_index_remove_w_result = true,
             .expected_vector_buffer = "vector_buffer",
@@ -267,8 +249,8 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "happy_path_remove_record",
             .hash_field = "vector",
             .open_key_fail = false,
-            .open_key_type = REDISMODULE_KEYTYPE_HASH,
-            .redis_hash_data = std::nullopt,
+            .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
+            .valkey_hash_data = std::nullopt,
             .is_tracked = true,
             .expect_index_remove_w_result = true,
             .expected_vector_buffer = "vector_buffer",
@@ -281,8 +263,8 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "happy_path_modify",
             .hash_field = "vector",
             .open_key_fail = false,
-            .open_key_type = REDISMODULE_KEYTYPE_HASH,
-            .redis_hash_data = std::make_pair("vector", "vector_buffer"),
+            .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
+            .valkey_hash_data = std::make_pair("vector", "vector_buffer"),
             .is_tracked = true,
             .expect_index_modify_w_result = true,
             .expected_vector_buffer = "vector_buffer",
@@ -295,8 +277,8 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "untracked_and_record_does_not_exist",
             .hash_field = "vector",
             .open_key_fail = false,
-            .open_key_type = REDISMODULE_KEYTYPE_HASH,
-            .redis_hash_data = std::nullopt,
+            .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
+            .valkey_hash_data = std::nullopt,
             .is_tracked = false,
             .expect_index_remove_w_result = false,
             .expected_remove_cnt_delta =
@@ -308,8 +290,8 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "untracked_and_key_does_not_exist",
             .hash_field = "vector",
             .open_key_fail = true,
-            .open_key_type = REDISMODULE_KEYTYPE_HASH,
-            .redis_hash_data = std::nullopt,
+            .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
+            .valkey_hash_data = std::nullopt,
             .is_tracked = false,
             .expect_index_remove_w_result = false,
             .expected_remove_cnt_delta =
@@ -322,8 +304,8 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "add_failure",
             .hash_field = "vector",
             .open_key_fail = false,
-            .open_key_type = REDISMODULE_KEYTYPE_HASH,
-            .redis_hash_data = std::make_pair("vector", "vector_buffer"),
+            .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
+            .valkey_hash_data = std::make_pair("vector", "vector_buffer"),
             .is_tracked = false,
             .expect_index_add_w_result = absl::InternalError("error"),
             .expected_vector_buffer = "vector_buffer",
@@ -336,8 +318,8 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "modify_failure",
             .hash_field = "vector",
             .open_key_fail = false,
-            .open_key_type = REDISMODULE_KEYTYPE_HASH,
-            .redis_hash_data = std::make_pair("vector", "vector_buffer"),
+            .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
+            .valkey_hash_data = std::make_pair("vector", "vector_buffer"),
             .is_tracked = true,
             .expect_index_modify_w_result = absl::InternalError("error"),
             .expected_vector_buffer = "vector_buffer",
@@ -350,8 +332,8 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "remove_failure",
             .hash_field = "vector",
             .open_key_fail = false,
-            .open_key_type = REDISMODULE_KEYTYPE_HASH,
-            .redis_hash_data = std::nullopt,
+            .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
+            .valkey_hash_data = std::nullopt,
             .is_tracked = true,
             .expect_index_remove_w_result = absl::InternalError("error"),
             .expected_vector_buffer = "vector_buffer",
@@ -364,8 +346,8 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "add_skipped",
             .hash_field = "vector",
             .open_key_fail = false,
-            .open_key_type = REDISMODULE_KEYTYPE_HASH,
-            .redis_hash_data = std::make_pair("vector", "vector_buffer"),
+            .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
+            .valkey_hash_data = std::make_pair("vector", "vector_buffer"),
             .is_tracked = false,
             .expect_index_add_w_result = false,
             .expected_vector_buffer = "vector_buffer",
@@ -378,15 +360,15 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "add_wrong_type",
             .hash_field = "vector",
             .open_key_fail = false,
-            .open_key_type = REDISMODULE_KEYTYPE_STRING,
+            .open_key_type = VALKEYMODULE_KEYTYPE_STRING,
             .expect_wrong_type = true,
         },
         {
             .test_name = "modify_skipped",
             .hash_field = "vector",
             .open_key_fail = false,
-            .open_key_type = REDISMODULE_KEYTYPE_HASH,
-            .redis_hash_data = std::make_pair("vector", "vector_buffer"),
+            .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
+            .valkey_hash_data = std::make_pair("vector", "vector_buffer"),
             .is_tracked = true,
             .expect_index_modify_w_result = false,
             .expected_vector_buffer = "vector_buffer",
@@ -399,8 +381,8 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "remove_skipped",
             .hash_field = "vector",
             .open_key_fail = false,
-            .open_key_type = REDISMODULE_KEYTYPE_HASH,
-            .redis_hash_data = std::nullopt,
+            .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
+            .valkey_hash_data = std::nullopt,
             .is_tracked = true,
             .expect_index_remove_w_result = false,
             .expected_vector_buffer = "vector_buffer",
@@ -439,42 +421,42 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
         index_schema->AddIndex("attribute_name", "vector", mock_index));
 
     auto key = StringInternStore::Intern("key");
-    auto key_redis_str = vmsdk::MakeUniqueRedisString(key->Str().data());
+    auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str().data());
     EXPECT_CALL(*mock_index, IsTracked(key)).WillRepeatedly(Return(false));
 
     EXPECT_CALL(*mock_index, AddRecord(key, testing::_)).Times(0);
 
-    EXPECT_CALL(*kMockRedisModule, KeyType(testing::_))
-        .WillRepeatedly(TestRedisModule_KeyTypeDefaultImpl);
-    EXPECT_CALL(*kMockRedisModule,
-                KeyType(vmsdk::RedisModuleKeyIsForString(key->Str())))
-        .WillRepeatedly(Return(REDISMODULE_KEYTYPE_HASH));
-    EXPECT_CALL(*kMockRedisModule, GetClientId(testing::_))
+    EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+        .WillRepeatedly(TestValkeyModule_KeyTypeDefaultImpl);
+    EXPECT_CALL(*kMockValkeyModule,
+                KeyType(vmsdk::ValkeyModuleKeyIsForString(key->Str())))
+        .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
+    EXPECT_CALL(*kMockValkeyModule, GetClientId(testing::_))
         .WillRepeatedly(testing::Return(1));
     EXPECT_CALL(
-        *kMockRedisModule,
+        *kMockValkeyModule,
         BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
-        .WillOnce(Return((RedisModuleBlockedClient *)1));
+        .WillOnce(Return((ValkeyModuleBlockedClient *)1));
     const char *field = "vector";
     const char *value = "vector_buffer";
-    RedisModuleString *value_redis_str =
-        TestRedisModule_CreateStringPrintf(nullptr, "%s", value);
+    ValkeyModuleString *value_valkey_str =
+        TestValkeyModule_CreateStringPrintf(nullptr, "%s", value);
 
-    EXPECT_CALL(*kMockRedisModule,
-                HashGet(vmsdk::RedisModuleKeyIsForString(key->Str()),
-                        REDISMODULE_HASH_CFIELDS, StrEq(field),
-                        An<RedisModuleString **>(), TypedEq<void *>(nullptr)))
-        .WillOnce([value_redis_str](
-                      RedisModuleKey *key, int flags, const char *field,
-                      RedisModuleString **value_out, void *terminating_null) {
-          *value_out = value_redis_str;
-          return REDISMODULE_OK;
+    EXPECT_CALL(*kMockValkeyModule,
+                HashGet(vmsdk::ValkeyModuleKeyIsForString(key->Str()),
+                        VALKEYMODULE_HASH_CFIELDS, StrEq(field),
+                        An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
+        .WillOnce([value_valkey_str](
+                      ValkeyModuleKey *key, int flags, const char *field,
+                      ValkeyModuleString **value_out, void *terminating_null) {
+          *value_out = value_valkey_str;
+          return VALKEYMODULE_OK;
         });
 
-    index_schema->OnKeyspaceNotification(&fake_ctx_, REDISMODULE_NOTIFY_HASH,
-                                         "event", key_redis_str.get());
-    EXPECT_CALL(*kMockRedisModule,
-                UnblockClient((RedisModuleBlockedClient *)1, nullptr))
+    index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                         "event", key_valkey_str.get());
+    EXPECT_CALL(*kMockValkeyModule,
+                UnblockClient((ValkeyModuleBlockedClient *)1, nullptr))
         .WillOnce(Return(1));
   }
   EXPECT_EQ(mutations_thread_pool.QueueSize(), 1);
@@ -549,10 +531,11 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, IndexSchemaInDifferentDBTest) {
 
   EXPECT_CALL(*mock_index, AddRecord(testing::_, testing::_)).Times(0);
   std::string key = "key";
-  auto key_redis_str = vmsdk::MakeUniqueRedisString(key.c_str());
-  RedisModuleCtx different_db_ctx;
-  index_schema->OnKeyspaceNotification(
-      &different_db_ctx, REDISMODULE_NOTIFY_HASH, "event", key_redis_str.get());
+  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key.c_str());
+  ValkeyModuleCtx different_db_ctx;
+  index_schema->OnKeyspaceNotification(&different_db_ctx,
+                                       VALKEYMODULE_NOTIFY_HASH, "event",
+                                       key_valkey_str.get());
   if (use_thread_pool) {
     WaitWorkerTasksAreCompleted(mutations_thread_pool);
   }
@@ -576,14 +559,15 @@ TEST_P(IndexSchemaSubscriptionSimpleTest,
 
   EXPECT_CALL(*mock_index, AddRecord(testing::_, testing::_)).Times(0);
   std::string key = "key";
-  auto key_redis_str = vmsdk::MakeUniqueRedisString(key.c_str());
-  RedisModuleCtx different_db_ctx;
+  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key.c_str());
+  ValkeyModuleCtx different_db_ctx;
   auto match_key =
-      vmsdk::MakeUniqueRedisOpenKey(&different_db_ctx, key_redis_str.get(), 0);
-  TestRedisModule_ModuleTypeSetValueDefaultImpl(
-      match_key.get(), (RedisModuleType *)0x1, nullptr);
-  index_schema->OnKeyspaceNotification(
-      &different_db_ctx, REDISMODULE_NOTIFY_HASH, "event", key_redis_str.get());
+      vmsdk::MakeUniqueValkeyOpenKey(&different_db_ctx, key_valkey_str.get(), 0);
+  TestValkeyModule_ModuleTypeSetValueDefaultImpl(
+      match_key.get(), (ValkeyModuleType *)0x1, nullptr);
+  index_schema->OnKeyspaceNotification(&different_db_ctx,
+                                       VALKEYMODULE_NOTIFY_HASH, "event",
+                                       key_valkey_str.get());
   if (use_thread_pool) {
     WaitWorkerTasksAreCompleted(mutations_thread_pool);
   }
@@ -603,9 +587,9 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, KeyspaceNotificationWithNullptrTest) {
   auto mock_index = std::make_shared<MockIndex>();
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("attribute_name", "test_identifier", mock_index));
-  EXPECT_CALL(*kMockRedisModule, OpenKey(&fake_ctx_, testing::_, testing::_))
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(&fake_ctx_, testing::_, testing::_))
       .Times(0);
-  index_schema->OnKeyspaceNotification(&fake_ctx_, REDISMODULE_NOTIFY_HASH,
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
                                        "event", nullptr);
   if (use_thread_pool) {
     WaitWorkerTasksAreCompleted(mutations_thread_pool);
@@ -641,9 +625,9 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, GetEventTypesTest) {
                           use_thread_pool ? &mutations_thread_pool : nullptr)
                           .value();
 
-  EXPECT_EQ(index_schema->GetAttributeDataType().GetRedisEventTypes(),
-            REDISMODULE_NOTIFY_HASH | REDISMODULE_NOTIFY_GENERIC |
-                REDISMODULE_NOTIFY_EXPIRED | REDISMODULE_NOTIFY_EVICTED);
+  EXPECT_EQ(index_schema->GetAttributeDataType().GetValkeyEventTypes(),
+            VALKEYMODULE_NOTIFY_HASH | VALKEYMODULE_NOTIFY_GENERIC |
+                VALKEYMODULE_NOTIFY_EXPIRED | VALKEYMODULE_NOTIFY_EVICTED);
 }
 
 INSTANTIATE_TEST_SUITE_P(IndexSchemaSubscriptionSimpleTests,
@@ -684,16 +668,16 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
                    return absl::string_view(key_prefix);
                  });
   std::string index_schema_name_str("index_schema_name");
-  EXPECT_CALL(*kMockRedisModule, DbSize(testing::_))
+  EXPECT_CALL(*kMockValkeyModule, DbSize(testing::_))
       .WillRepeatedly(Return(test_case.db_size));
 
-  RedisModuleCtx parent_ctx;
-  RedisModuleCtx scan_ctx;
-  EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&parent_ctx))
+  ValkeyModuleCtx parent_ctx;
+  ValkeyModuleCtx scan_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&parent_ctx))
       .WillRepeatedly(Return(&scan_ctx));
-  EXPECT_CALL(*kMockRedisModule, GetContextFlags(&parent_ctx))
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&parent_ctx))
       .WillRepeatedly(Return(test_case.context_flags));
-  EXPECT_CALL(*kMockRedisModule, GetContextFlags(&scan_ctx))
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&scan_ctx))
       .WillRepeatedly(Return(0));
   auto index_schema =
       MockIndexSchema::Create(&parent_ctx, index_schema_name_str, key_prefixes,
@@ -705,11 +689,11 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
       index_schema->AddIndex("attribute_name", "test_identifier", mock_index));
 
   size_t i = 0;
-  EXPECT_CALL(*kMockRedisModule,
-              Scan(&scan_ctx, testing::An<RedisModuleScanCursor *>(),
-                   testing::An<RedisModuleScanCB>(), testing::An<void *>()))
-      .WillRepeatedly([&](RedisModuleCtx *ctx, RedisModuleScanCursor *cursor,
-                          RedisModuleScanCB fn, void *privdata) -> int {
+  EXPECT_CALL(*kMockValkeyModule,
+              Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor *>(),
+                   testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
+      .WillRepeatedly([&](ValkeyModuleCtx *ctx, ValkeyModuleScanCursor *cursor,
+                          ValkeyModuleScanCB fn, void *privdata) -> int {
         if (i >= test_case.keys_to_return_in_scan.size()) {
           return 0;
         }
@@ -720,22 +704,22 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
             test_case.expected_keys_processed.end();
 
         auto key_str = test_case.keys_to_return_in_scan[i];
-        auto key_r_str = vmsdk::MakeUniqueRedisString(key_str);
-        RedisModuleKey key = {.ctx = &scan_ctx, .key = key_str};
+        auto key_r_str = vmsdk::MakeUniqueValkeyString(key_str);
+        ValkeyModuleKey key = {.ctx = &scan_ctx, .key = key_str};
         if (expect_processed) {
-          RedisModuleString *value_redis_str =
-              TestRedisModule_CreateStringPrintf(nullptr, "arbitrary data");
+          ValkeyModuleString *value_valkey_str =
+              TestValkeyModule_CreateStringPrintf(nullptr, "arbitrary data");
           EXPECT_CALL(
-              *kMockRedisModule,
-              HashGet(vmsdk::RedisModuleKeyIsForString(key_str),
-                      REDISMODULE_HASH_CFIELDS, testing::_,
-                      An<RedisModuleString **>(), TypedEq<void *>(nullptr)))
-              .WillOnce([value_redis_str](RedisModuleKey *key, int flags,
-                                          const char *field,
-                                          RedisModuleString **value_out,
-                                          void *terminating_null) {
-                *value_out = value_redis_str;
-                return REDISMODULE_OK;
+              *kMockValkeyModule,
+              HashGet(vmsdk::ValkeyModuleKeyIsForString(key_str),
+                      VALKEYMODULE_HASH_CFIELDS, testing::_,
+                      An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
+              .WillOnce([value_valkey_str](ValkeyModuleKey *key, int flags,
+                                           const char *field,
+                                           ValkeyModuleString **value_out,
+                                           void *terminating_null) {
+                *value_out = value_valkey_str;
+                return VALKEYMODULE_OK;
               });
           EXPECT_CALL(*mock_index,
                       IsTracked(testing::Pointee(testing::StrEq(key_str))))
@@ -748,23 +732,23 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
             EXPECT_CALL(thread_pool,
                         Schedule(testing::_, vmsdk::ThreadPool::Priority::kLow))
                 .Times(1);
-            EXPECT_CALL(*kMockRedisModule,
+            EXPECT_CALL(*kMockValkeyModule,
                         BlockClient(testing::_, testing::_, testing::_,
                                     testing::_, testing::_))
                 .Times(0);
-            EXPECT_CALL(*kMockRedisModule,
+            EXPECT_CALL(*kMockValkeyModule,
                         UnblockClient(testing::_, testing::_))
                 .Times(0);
           }
         }
         if (test_case.return_wrong_types) {
-          EXPECT_CALL(*kMockRedisModule,
-                      KeyType(vmsdk::RedisModuleKeyIsForString(key_str)))
-              .WillRepeatedly(Return(REDISMODULE_KEYTYPE_STRING));
+          EXPECT_CALL(*kMockValkeyModule,
+                      KeyType(vmsdk::ValkeyModuleKeyIsForString(key_str)))
+              .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_STRING));
         } else {
-          EXPECT_CALL(*kMockRedisModule,
-                      KeyType(vmsdk::RedisModuleKeyIsForString(key_str)))
-              .WillRepeatedly(Return(REDISMODULE_KEYTYPE_HASH));
+          EXPECT_CALL(*kMockValkeyModule,
+                      KeyType(vmsdk::ValkeyModuleKeyIsForString(key_str)))
+              .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
         }
         fn(ctx, key_r_str.get(), &key, privdata);
         if (use_thread_pool) {
@@ -798,9 +782,9 @@ TEST_F(IndexSchemaBackfillTest, PerformBackfill_NoOngoingBackfillTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
   for (bool use_thread_pool : {true, false}) {
-    RedisModuleCtx parent_ctx;
-    RedisModuleCtx scan_ctx;
-    EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&parent_ctx))
+    ValkeyModuleCtx parent_ctx;
+    ValkeyModuleCtx scan_ctx;
+    EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&parent_ctx))
         .WillRepeatedly(Return(&scan_ctx));
     auto index_schema = MockIndexSchema::Create(
                             &parent_ctx, index_schema_name_str, key_prefixes,
@@ -809,11 +793,11 @@ TEST_F(IndexSchemaBackfillTest, PerformBackfill_NoOngoingBackfillTest) {
                             .value();
 
     // We only expect it to do the scan the first iteration.
-    EXPECT_CALL(*kMockRedisModule,
-                Scan(&scan_ctx, testing::An<RedisModuleScanCursor *>(),
-                     testing::An<RedisModuleScanCB>(), testing::An<void *>()))
-        .WillOnce([&](RedisModuleCtx *ctx, RedisModuleScanCursor *cursor,
-                      RedisModuleScanCB fn,
+    EXPECT_CALL(*kMockValkeyModule,
+                Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor *>(),
+                     testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
+        .WillOnce([&](ValkeyModuleCtx *ctx, ValkeyModuleScanCursor *cursor,
+                      ValkeyModuleScanCB fn,
                       void *privdata) -> int { return 0; });
 
     for (size_t i = 0; i < 100; ++i) {
@@ -830,14 +814,14 @@ TEST_F(IndexSchemaBackfillTest, PerformBackfill_SwapDB) {
   for (bool use_thread_pool : {true, false}) {
     int starting_db = 0;
     int db_to_swap = 1;
-    RedisModuleCtx parent_ctx;
-    RedisModuleCtx scan_ctx;
-    EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&parent_ctx))
+    ValkeyModuleCtx parent_ctx;
+    ValkeyModuleCtx scan_ctx;
+    EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&parent_ctx))
         .WillRepeatedly(Return(&scan_ctx));
-    EXPECT_CALL(*kMockRedisModule, GetSelectedDb(&parent_ctx))
+    EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&parent_ctx))
         .WillRepeatedly(Return(starting_db));
-    EXPECT_CALL(*kMockRedisModule, SelectDb(&scan_ctx, starting_db))
-        .WillRepeatedly(Return(REDISMODULE_OK));
+    EXPECT_CALL(*kMockValkeyModule, SelectDb(&scan_ctx, starting_db))
+        .WillRepeatedly(Return(VALKEYMODULE_OK));
     auto index_schema = MockIndexSchema::Create(
                             &parent_ctx, index_schema_name_str, key_prefixes,
                             std::make_unique<HashAttributeDataType>(),
@@ -845,17 +829,17 @@ TEST_F(IndexSchemaBackfillTest, PerformBackfill_SwapDB) {
                             .value();
 
     // Validate swapping changes the db in the context
-    RedisModuleSwapDbInfo swap_db_info = {
+    ValkeyModuleSwapDbInfo swap_db_info = {
         .dbnum_first = starting_db,
         .dbnum_second = db_to_swap,
     };
-    EXPECT_CALL(*kMockRedisModule, SelectDb(&scan_ctx, db_to_swap))
-        .WillOnce(Return(REDISMODULE_OK));
+    EXPECT_CALL(*kMockValkeyModule, SelectDb(&scan_ctx, db_to_swap))
+        .WillOnce(Return(VALKEYMODULE_OK));
     index_schema->OnSwapDB(&swap_db_info);
 
     // Validate swapping again brings the db back to the original
-    EXPECT_CALL(*kMockRedisModule, SelectDb(&scan_ctx, starting_db))
-        .WillOnce(Return(REDISMODULE_OK));
+    EXPECT_CALL(*kMockValkeyModule, SelectDb(&scan_ctx, starting_db))
+        .WillOnce(Return(VALKEYMODULE_OK));
     index_schema->OnSwapDB(&swap_db_info);
   }
 }
@@ -965,7 +949,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .key_prefixes = {"prefix1:"},
                     .db_size = 100,
                     .keys_to_return_in_scan = {},
-                    .context_flags = REDISMODULE_CTX_FLAGS_OOM,
+                    .context_flags = VALKEYMODULE_CTX_FLAGS_OOM,
                     .expected_keys_scanned = 0,
                     .expected_keys_processed = {},
                     .expected_backfill_percent = 0.0,
@@ -1014,8 +998,8 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
     EXPECT_FALSE(itr == index_schema->attributes_.end());
     auto vectors = DeterministicallyGenerateVectors(10, dimensions, 2);
     for (size_t i = 0; i < vectors.size(); ++i) {
-      vmsdk::UniqueRedisString data =
-          vmsdk::MakeUniqueRedisString(absl::string_view(
+      vmsdk::UniqueValkeyString data =
+          vmsdk::MakeUniqueValkeyString(absl::string_view(
               (char *)&vectors[i][0], dimensions * sizeof(float)));
       auto interned_key = StringInternStore::Intern("key" + std::to_string(i));
       index_schema->ProcessAttributeMutation(&fake_ctx_, itr->second,
@@ -1037,9 +1021,9 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   }
 
   // Load the saved index schema and validate
-  RedisModuleCtx parent_ctx;
-  RedisModuleCtx scan_ctx;
-  EXPECT_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&parent_ctx))
+  ValkeyModuleCtx parent_ctx;
+  ValkeyModuleCtx scan_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&parent_ctx))
       .WillRepeatedly(Return(&scan_ctx));
   RDBSectionIter iter(&rdb_stream, 1);
   auto section = iter.Next();
@@ -1111,17 +1095,18 @@ TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
 
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("attribute", "identifier", mock_index));
-    EXPECT_CALL(*kMockRedisModule, SelectDb(testing::_, testing::_))
+    EXPECT_CALL(*kMockValkeyModule, SelectDb(testing::_, testing::_))
         .WillRepeatedly(Return(1));  // So backfill job can be created.
-    EXPECT_CALL(*kMockRedisModule, SelectDb(&fake_ctx_, 0)).WillOnce(Return(1));
-    EXPECT_CALL(*kMockRedisModule,
-                KeyExists(&fake_ctx_, vmsdk::RedisModuleStringValueEq("key1")))
+    EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx_, 0))
+        .WillOnce(Return(1));
+    EXPECT_CALL(*kMockValkeyModule,
+                KeyExists(&fake_ctx_, vmsdk::ValkeyModuleStringValueEq("key1")))
         .WillRepeatedly(Return(0));
-    EXPECT_CALL(*kMockRedisModule,
-                KeyExists(&fake_ctx_, vmsdk::RedisModuleStringValueEq("key2")))
+    EXPECT_CALL(*kMockValkeyModule,
+                KeyExists(&fake_ctx_, vmsdk::ValkeyModuleStringValueEq("key2")))
         .WillRepeatedly(Return(0));
-    EXPECT_CALL(*kMockRedisModule,
-                KeyExists(&fake_ctx_, vmsdk::RedisModuleStringValueEq("key3")))
+    EXPECT_CALL(*kMockValkeyModule,
+                KeyExists(&fake_ctx_, vmsdk::ValkeyModuleStringValueEq("key3")))
         .WillRepeatedly(Return(1));
 
     EXPECT_CALL(*mock_index,
@@ -1178,7 +1163,7 @@ class IndexSchemaFriendTest : public ValkeySearchTest {
   int m = 16;
   int ef_construction = 100;
   int ef_runtime = 5;
-  RedisModuleCtx fake_ctx;
+  ValkeyModuleCtx fake_ctx;
   vmsdk::ThreadPool mutations_thread_pool{"writer-thread-pool-", 10};
   std::shared_ptr<IndexSchema> index_schema;
   std::shared_ptr<indexes::VectorHNSW<float>> hnsw_index;
@@ -1190,7 +1175,7 @@ IndexSchema::MutatedAttributes CreateMutatedAttributes(
     const std::string &attribute_identifier, absl::string_view data_ptr) {
   IndexSchema::MutatedAttributes mutated_attributes;
   mutated_attributes[attribute_identifier].data =
-      vmsdk::MakeUniqueRedisString(data_ptr);
+      vmsdk::MakeUniqueValkeyString(data_ptr);
   return mutated_attributes;
 }
 
@@ -1255,8 +1240,8 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
     EXPECT_TRUE(consumed_data.has_value());
     auto data_view =
         vmsdk::ToStringView(consumed_data->begin()->second.data.get());
-    vmsdk::UniqueRedisString expected_data =
-        vmsdk::MakeUniqueRedisString(data_ptr);
+    vmsdk::UniqueValkeyString expected_data =
+        vmsdk::MakeUniqueValkeyString(data_ptr);
     VLOG(1) << "consumed_data size: " << consumed_data->size();
     auto expected_data_view = vmsdk::ToStringView(expected_data.get());
     EXPECT_EQ(data_view, expected_data_view);
@@ -1285,8 +1270,8 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
       EXPECT_TRUE(consumed_data.has_value());
       auto data_view =
           vmsdk::ToStringView(consumed_data->begin()->second.data.get());
-      vmsdk::UniqueRedisString expected_data =
-          vmsdk::MakeUniqueRedisString(track_after_consumption_data_ptr);
+      vmsdk::UniqueValkeyString expected_data =
+          vmsdk::MakeUniqueValkeyString(track_after_consumption_data_ptr);
 
       auto expected_data_view = vmsdk::ToStringView(expected_data.get());
       EXPECT_EQ(data_view, expected_data_view);
@@ -1323,7 +1308,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
     // Verify that the mutations were processed asynchronous, by the writer
     // worker pool
     VMSDK_EXPECT_OK(mutations_thread_pool.SuspendWorkers());
-    vmsdk::UniqueRedisString data = vmsdk::MakeUniqueRedisString(
+    vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(
         absl::string_view((char *)&vectors[0][0], dimensions * sizeof(float)));
     IndexSchema::MutatedAttributes mutated_attributes;
     mutated_attributes[itr->second.GetIdentifier()].data = std::move(data);
@@ -1338,8 +1323,8 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
   // Test delete consistency
   for (size_t j = 0; j < iterations; ++j) {
     for (size_t i = 0; i < vectors.size(); ++i) {
-      vmsdk::UniqueRedisString data =
-          vmsdk::MakeUniqueRedisString(absl::string_view(
+      vmsdk::UniqueValkeyString data =
+          vmsdk::MakeUniqueValkeyString(absl::string_view(
               (char *)&vectors[i][0], dimensions * sizeof(float)));
       IndexSchema::MutatedAttributes mutated_attributes;
       mutated_attributes[attribute_identifier].data = std::move(data);
@@ -1350,7 +1335,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
     }
   }
   for (size_t i = 0; i < vectors.size(); ++i) {
-    vmsdk::UniqueRedisString data;
+    vmsdk::UniqueValkeyString data;
     IndexSchema::MutatedAttributes mutated_attributes;
     mutated_attributes[attribute_identifier].data = std::move(data);
     auto key_interned =
@@ -1375,8 +1360,8 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
   // Test update consistency
   for (size_t j = 0; j < iterations; ++j) {
     for (size_t i = 0; i < vectors.size(); ++i) {
-      vmsdk::UniqueRedisString data =
-          vmsdk::MakeUniqueRedisString(absl::string_view(
+      vmsdk::UniqueValkeyString data =
+          vmsdk::MakeUniqueValkeyString(absl::string_view(
               (char *)&vectors[0][0], dimensions * sizeof(float)));
       IndexSchema::MutatedAttributes mutated_attributes;
       mutated_attributes[attribute_identifier].data = std::move(data);
@@ -1387,7 +1372,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
     }
   }
   for (size_t i = 0; i < vectors.size(); ++i) {
-    vmsdk::UniqueRedisString data = vmsdk::MakeUniqueRedisString(
+    vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(
         absl::string_view((char *)&vectors[i][0], dimensions * sizeof(float)));
     IndexSchema::MutatedAttributes mutated_attributes;
     mutated_attributes[attribute_identifier].data = std::move(data);
@@ -1413,17 +1398,17 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
   EXPECT_EQ(stats.subscription_modify.failure_cnt, 0);
 }
 
-class IndexSchemaTest : public vmsdk::RedisTest {};
+class IndexSchemaTest : public vmsdk::ValkeyTest {};
 
 TEST_F(IndexSchemaTest, ShouldBlockClient) {
-  RedisModuleCtx fake_ctx;
+  ValkeyModuleCtx fake_ctx;
   {
-    EXPECT_CALL(*kMockRedisModule, GetClientId(&fake_ctx))
+    EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx))
         .WillOnce(testing::Return(1));
     EXPECT_TRUE(ShouldBlockClient(&fake_ctx, false, false));
   }
   {
-    EXPECT_CALL(*kMockRedisModule, GetClientId(&fake_ctx))
+    EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx))
         .WillOnce(testing::Return(0));
     EXPECT_FALSE(ShouldBlockClient(&fake_ctx, false, false));
   }

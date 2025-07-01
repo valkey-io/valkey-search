@@ -6,6 +6,7 @@
  */
 
 #include "absl/status/status.h"
+#include "absl/strings/ascii.h"
 #include "absl/strings/string_view.h"
 #include "src/acl.h"
 #include "src/commands/commands.h"
@@ -15,6 +16,8 @@
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+
+#include <iostream>
 
 namespace valkey_search {
 
@@ -28,6 +31,20 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   itr.Next();
   VMSDK_ASSIGN_OR_RETURN(auto itr_arg, itr.Get());
   auto index_schema_name = vmsdk::ToStringView(itr_arg);
+
+  // Parse optional LOCAL/GLOBAL parameter
+  bool is_global = false;
+  if (argc > 2) {  // Only parse scope if there's a third argument
+    itr.Next();
+    VMSDK_ASSIGN_OR_RETURN(auto scope_arg, itr.Get());
+    auto scope = vmsdk::ToStringView(scope_arg);
+
+    // default parameter is LOCAL; GLOBAL must be specified to retrieve global info
+    if (absl::EqualsIgnoreCase(scope, "GLOBAL")) {
+      is_global = true;
+      std::cout << "==========Using Global Scope==========" << std::endl;
+    }
+  }
 
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,

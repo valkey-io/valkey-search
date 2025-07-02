@@ -6,6 +6,7 @@
  */
 
 #include "vmsdk/src/utils.h"
+#include "vmsdk/src/log.h"
 
 #include <string>
 #include <utility>
@@ -105,6 +106,34 @@ std::optional<absl::string_view> ParseHashTag(absl::string_view s) {
     return std::nullopt;
   }
   return s.substr(start + 1, tag_size);
+}
+
+//
+// This is done "C" style to avoid memory allocations, so that it
+// can be part of a crash dump.
+//
+size_t DisplayAsSIBytes(size_t bytes, char *buffer, size_t buffer_size) {
+  VMSDK_LOG(WARNING ,nullptr) << "DISPLAY AS SI BYTES " << bytes;
+  double value = bytes;
+  const size_t Ki = 1024;
+  const size_t Mi = 1024 * Ki;
+  const size_t Gi = 1024 * Mi;
+  const size_t Ti = 1024 * Gi;
+  const size_t Pi = 1024 * Ti;
+
+  if (bytes >= Pi) {
+    return snprintf(buffer, buffer_size, "%.2fPiB", value / Pi);
+  } else if (bytes >= Ti) {
+    return snprintf(buffer, buffer_size, "%.2fTiB", value / Ti);
+  } else if (bytes >= Gi) {
+    return snprintf(buffer, buffer_size, "%.2fGiB", value / Gi);
+  } else if (bytes >= Mi) {
+    return snprintf(buffer, buffer_size, "%.2fMiB", value / Mi);
+  } else if (bytes >= Ki) {
+    return snprintf(buffer, buffer_size, "%.2fKiB", value / Ki);
+  } else {
+    return snprintf(buffer, buffer_size, "%ld", bytes);
+  }
 }
 
 }  // namespace vmsdk

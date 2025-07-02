@@ -246,7 +246,11 @@ TEST_F(MultiExecTest, FtSearchMulti) {
   EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
       .Times(0);
   VMSDK_EXPECT_OK(
+      ValkeySearch::Instance().GetReaderThreadPool()->SuspendWorkers());
   EXPECT_CALL(
+      *kMockValkeyModule,
+      OpenKey(&fake_ctx_, testing::An<ValkeyModuleString *>(), testing::_))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
 
   EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
       .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_MULTI));

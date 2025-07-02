@@ -112,7 +112,7 @@ protected:
     const std::string& GetSection() const { return section_; }
     const std::string& GetName() const { return name_; }
     Flags GetFlags() const { return flags_; }
-    virtual void Dump(RedisModuleInfoCtx *ctx) const = 0;
+    virtual void Dump(ValkeyModuleInfoCtx *ctx) const = 0;
     virtual bool IsVisible() const = 0;
 };
 
@@ -204,7 +204,7 @@ class Numeric : private Base {
     Numeric(absl::string_view section, absl::string_view name, NumericBuilder<T> builder = NumericBuilder<T>());
   private:
     friend struct NumericBuilder<T>;
-    void Dump(RedisModuleInfoCtx *ctx) const final;
+    void Dump(ValkeyModuleInfoCtx *ctx) const final;
     bool IsVisible() const final;
     std::atomic<long long> value_{0};
     std::optional<std::function<bool ()>> visible_func_;
@@ -276,7 +276,7 @@ class String : private Base {
     String(absl::string_view section, absl::string_view name, StringBuilder builder);
   private:
     friend struct StringBuilder;
-    void Dump(RedisModuleInfoCtx *ctx) const final;
+    void Dump(ValkeyModuleInfoCtx *ctx) const final;
     bool IsVisible() const final;
     std::optional<std::function<bool ()>> visible_func_;
     std::optional<std::function<const char *()>>  compute_char_func_;
@@ -288,13 +288,13 @@ class String : private Base {
 //
 // false-> failure with reason written to the log.
 //
-bool Validate(RedisModuleCtx *ctx);
+bool Validate(ValkeyModuleCtx *ctx);
 
 //
 // Info Function Interface.
 //
-void DoSection(RedisModuleInfoCtx *ctx, absl::string_view section, int for_crash_report);
-void DoRemainingSections(RedisModuleInfoCtx *ctx, int for_crash_report);
+void DoSection(ValkeyModuleInfoCtx *ctx, absl::string_view section, int for_crash_report);
+void DoRemainingSections(ValkeyModuleInfoCtx *ctx, int for_crash_report);
 
 
 } // namespace info_field

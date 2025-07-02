@@ -111,7 +111,7 @@ static auto show_developer = vmsdk::config::Boolean("info-developer-visible", fa
 //
 // No locks or memory allocations are permitted here.
 //
-void DoRemainingSections(RedisModuleInfoCtx *ctx, int for_crash_report) {
+void DoRemainingSections(ValkeyModuleInfoCtx *ctx, int for_crash_report) {
     SectionMap& section_map = GetSectionMap();
 
     //
@@ -151,8 +151,8 @@ void DoRemainingSections(RedisModuleInfoCtx *ctx, int for_crash_report) {
 //
 // No memory allocations or locks are permitted here.
 //
-void DoSection(RedisModuleInfoCtx *ctx, absl::string_view section, int for_crash_report) {
-    if (RedisModule_InfoAddSection(ctx, section.data()) == REDISMODULE_ERR) {
+void DoSection(ValkeyModuleInfoCtx *ctx, absl::string_view section, int for_crash_report) {
+    if (ValkeyModule_InfoAddSection(ctx, section.data()) == VALKEYMODULE_ERR) {
         VMSDK_LOG(DEBUG, nullptr) << "Info Section " << section << " Skipped";
         return;
     }
@@ -173,7 +173,7 @@ void DoSection(RedisModuleInfoCtx *ctx, absl::string_view section, int for_crash
     }
 }
 
-bool Validate(RedisModuleCtx *ctx) {
+bool Validate(ValkeyModuleCtx *ctx) {
     doing_startup = false; // Done.
     bool failed = false;
     if (bad_field_reason) {
@@ -219,19 +219,19 @@ Numeric<T>::Numeric(absl::string_view section, absl::string_view name, NumericBu
       }
 
 template<typename T>
-void Numeric<T>::Dump(RedisModuleInfoCtx *ctx) const {
+void Numeric<T>::Dump(ValkeyModuleInfoCtx *ctx) const {
     T value = compute_func_ ? (*compute_func_)() : Get();
     VMSDK_LOG(WARNING, nullptr) << "Numeric::Dump " << GetName() << " Value:" << value << " Flags:" << GetFlags();
     if constexpr (std::is_integral<T>::value) {
         if (GetFlags() & Flags::kSIBytes) {
             char buffer[100];
             size_t used = vmsdk::DisplayAsSIBytes(value, buffer, sizeof(buffer));
-            RedisModule_InfoAddFieldCString(ctx, GetName().data(), buffer);
+            ValkeyModule_InfoAddFieldCString(ctx, GetName().data(), buffer);
         } else {
-            RedisModule_InfoAddFieldLongLong(ctx, GetName().data(), value);
+            ValkeyModule_InfoAddFieldLongLong(ctx, GetName().data(), value);
         }
     } else if constexpr (std::is_floating_point<T>::value) {
-        RedisModule_InfoAddFieldDouble(ctx, GetName().data(), value);
+        ValkeyModule_InfoAddFieldDouble(ctx, GetName().data(), value);
     } else {
         CHECK(false);
     }
@@ -255,15 +255,15 @@ String::String(absl::string_view section, absl::string_view name, StringBuilder 
       compute_char_func_(builder.compute_char_func_)
        {}
 
-void String::Dump(RedisModuleInfoCtx *ctx) const {
+void String::Dump(ValkeyModuleInfoCtx *ctx) const {
     if (compute_char_func_) {
         const char *str = (*compute_char_func_)();
         if (str) {
-            RedisModule_InfoAddFieldCString(ctx, GetName().data(), (*compute_char_func_)());
+            ValkeyModule_InfoAddFieldCString(ctx, GetName().data(), (*compute_char_func_)());
         }
     } else if (compute_string_func_) {
         std::string s = (*compute_string_func_)();
-        RedisModule_InfoAddFieldCString(ctx, GetName().data(), s.data());
+        ValkeyModule_InfoAddFieldCString(ctx, GetName().data(), s.data());
     } else {
         VMSDK_LOG(WARNING, nullptr) << "Invalid state for Info String: " << GetSection() << "/" << GetName();
     }

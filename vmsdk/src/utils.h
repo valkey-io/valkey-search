@@ -92,8 +92,8 @@ std::string WrongArity(absl::string_view cmd);
 //
 std::optional<absl::string_view> ParseHashTag(absl::string_view);
 
-bool IsRealUserClient(RedisModuleCtx *ctx);
-bool MultiOrLua(RedisModuleCtx *ctx);
+bool IsRealUserClient(ValkeyModuleCtx *ctx);
+bool MultiOrLua(ValkeyModuleCtx *ctx);
 
 size_t DisplayAsSIBytes(size_t value, char *buffer, size_t buffer_size);
 

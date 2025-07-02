@@ -41,7 +41,6 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/numbers.h"
-#include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/time/time.h"
@@ -115,19 +114,25 @@ void AddLatencyStat(RedisModuleInfoCtx *ctx, absl::string_view stat_name,
  *   1. Acquiring locks
  *   2. Performing heap allocations
  *   3. Requiring execution on the main thread
+
+ >>> This is being converted to the new machinery in vmsdk::info_field. Once that's done this section
+ will be empty and it can be removed.
  */
 
- static vmsdk::info_field::Numeric human_used_memory("memory", "used_memory_human", 
-    vmsdk::info_field::NumericBuilder()
+ static vmsdk::info_field::Integer human_used_memory("memory", "used_memory_human", 
+    vmsdk::info_field::IntegerBuilder()
       .SIBytes()
       .App()
       .Computed(vmsdk::GetUsedMemoryCnt)
       .CrashSafe());
 
+ static vmsdk::info_field::Integer used_memory("memory", "used_memory_bytes", 
+    vmsdk::info_field::IntegerBuilder()
+      .App()
+      .Computed(vmsdk::GetUsedMemoryCnt)
+      .CrashSafe());
+
 void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
-  vmsdk::info_field::DoSection(ctx, "memory", for_crash_report);
-  RedisModule_InfoAddFieldLongLong(ctx, "used_memory_bytes",
-                                   vmsdk::GetUsedMemoryCnt());
   if (!for_crash_report) {
     vmsdk::info_field::DoSection(ctx, "index_stats", for_crash_report);
     RedisModule_InfoAddFieldLongLong(

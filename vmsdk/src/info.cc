@@ -154,18 +154,18 @@ void DoRemainingSections(RedisModuleInfoCtx *ctx, int for_crash_report) {
 void DoSection(RedisModuleInfoCtx *ctx, absl::string_view section, int for_crash_report) {
     if (RedisModule_InfoAddSection(ctx, section.data()) == REDISMODULE_ERR) {
         VMSDK_LOG(DEBUG, nullptr) << "Info Section " << section << " Skipped";
-    } else {
-        // Find the section without a memory allocation....
-        auto& section_map = GetSectionMap();
-        for (auto& [name, section_info] : section_map) {
-            if (section == name) {
-                // Found it....
-                section_info.handled_ = true;
-                for (auto& [name, field] : section_info.fields_) {
-                    if ((!for_crash_report || (field->GetFlags() & kCrashSafe)) && field->IsVisible()) {
-                        if (show_developer.GetValue() || (field->GetFlags() & kApplication)) {
-                            field->Dump(ctx);
-                        }
+        return;
+    }
+    // Find the section without a memory allocation....
+    SectionMap& section_map = GetSectionMap();
+    for (auto& [name, section_info] : section_map) {
+        if (section == name) {
+            // Found it....
+            section_info.handled_ = true;
+            for (auto& [name, field] : section_info.fields_) {
+                if ((!for_crash_report || (field->GetFlags() & kCrashSafe)) && field->IsVisible()) {
+                    if (show_developer.GetValue() || (field->GetFlags() & kApplication)) {
+                        field->Dump(ctx);
                     }
                 }
             }
@@ -182,7 +182,7 @@ bool Validate(RedisModuleCtx *ctx) {
     }
     std::set<std::string> unique_names; // Python info parsing requires that names are unique across sections.
     
-    SectionMap section_map = GetSectionMap();
+    SectionMap& section_map = GetSectionMap();
     for (auto& [section, section_info] : section_map) {
         if (!IsValidName(section)) {
             VMSDK_LOG(WARNING, ctx) << "Invalid characters in section name: " << section;
@@ -211,27 +211,42 @@ bool Validate(RedisModuleCtx *ctx) {
     return !failed;
 }
 
-Numeric::Numeric(absl::string_view section, absl::string_view name, NumericBuilder builder)
+template<typename T>
+Numeric<T>::Numeric(absl::string_view section, absl::string_view name, NumericBuilder<T> builder)
     : Base(section, name, builder.flags_),
       visible_func_(builder.visible_func_),
       compute_func_(builder.compute_func_) {
       }
 
-void Numeric::Dump(RedisModuleInfoCtx *ctx) const {
-    long long value = compute_func_ ? (*compute_func_)() : Get();
+template<typename T>
+void Numeric<T>::Dump(RedisModuleInfoCtx *ctx) const {
+    T value = compute_func_ ? (*compute_func_)() : Get();
     VMSDK_LOG(WARNING, nullptr) << "Numeric::Dump " << GetName() << " Value:" << value << " Flags:" << GetFlags();
-    if (GetFlags() & Flags::kSIBytes) {
-        char buffer[100];
-        size_t used = vmsdk::DisplayAsSIBytes(value, buffer, sizeof(buffer));
-        RedisModule_InfoAddFieldCString(ctx, GetName().data(), buffer);
+    if constexpr (std::is_integral<T>::value) {
+        if (GetFlags() & Flags::kSIBytes) {
+            char buffer[100];
+            size_t used = vmsdk::DisplayAsSIBytes(value, buffer, sizeof(buffer));
+            RedisModule_InfoAddFieldCString(ctx, GetName().data(), buffer);
+        } else {
+            RedisModule_InfoAddFieldLongLong(ctx, GetName().data(), value);
+        }
+    } else if constexpr (std::is_floating_point<T>::value) {
+        RedisModule_InfoAddFieldDouble(ctx, GetName().data(), value);
     } else {
-        RedisModule_InfoAddFieldLongLong(ctx, GetName().data(), value);
+        CHECK(false);
     }
 }
 
-bool Numeric::IsVisible() const {
+template<typename T>
+bool Numeric<T>::IsVisible() const {
     return visible_func_? (*visible_func_)() : true;
 }
+
+//
+// Explicitly instantiate the Numeric templates for the types we use.
+//
+template struct Numeric<long long>;
+template struct Numeric<double>;
 
 String::String(absl::string_view section, absl::string_view name, StringBuilder builder)
     : Base(section, name, builder.flags_),

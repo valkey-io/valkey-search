@@ -72,7 +72,7 @@ appear.
 
 Generally, there is one info class for each data type: Number and String are currently supported (Enum is possible).
 
-The "Builder" patten is adopt to construct info field classes.
+The "Builder" pattern is adopted to construct info field classes.
 
 */
 
@@ -108,8 +108,6 @@ protected:
     Base(const Base&) = delete;
     Base(const Base&&) = delete;
 
-    friend struct NumericBuilder;
-    friend struct StringBuilder;
  public:
     const std::string& GetSection() const { return section_; }
     const std::string& GetName() const { return name_; }
@@ -118,9 +116,18 @@ protected:
     virtual bool IsVisible() const = 0;
 };
 
+template<typename T> class Numeric;
+template<typename T> struct NumericBuilder;
+using IntegerBuilder = NumericBuilder<long long>;
+using Integer = Numeric<long long>;
+
+using FloatBuilder = NumericBuilder<double>;
+using Float = Numeric<double>;
+
 //
 // Builder for Numeric when the defaults aren't desirable.
 //
+template <typename T>
 struct NumericBuilder {
     NumericBuilder() = default;
 
@@ -136,7 +143,7 @@ struct NumericBuilder {
         return *this;
     }
 
-    // Mark as a Bytes value, i.e., Display in Human Readble Units 
+    // Mark as a Bytes value, i.e., Display in Human Readable Units 
     NumericBuilder& SIBytes() {
         flags_ = Flags(flags_ | Flags::kSIBytes);
         assert(flags_ & Flags::kSIBytes);
@@ -151,7 +158,7 @@ struct NumericBuilder {
     }
 
     // Used when the value must be computed at run-time. Note: By Default, this is marked as not Crash Safe.
-    NumericBuilder& Computed(std::function<long long()> compute_func) {
+    NumericBuilder& Computed(std::function<T()> compute_func) {
         compute_func_ = compute_func;
         flags_ = Flags(flags_ & ~Flags::kCrashSafe);
         return *this;
@@ -170,10 +177,10 @@ struct NumericBuilder {
     }
 
   private:
-    friend class Numeric;
+    friend class Numeric<T>;
     Flags flags_{Flags::kCrashSafe};
     std::optional<std::function<bool ()>> visible_func_;
-    std::optional<std::function<long long ()>>  compute_func_;
+    std::optional<std::function<T ()>>  compute_func_;
 };
 
 //
@@ -181,26 +188,27 @@ struct NumericBuilder {
 //
 // This class provides an std::atomic<long long> for your use. But this is ignored if the "Computed" callback is used.
 //
+template<typename T>
 class Numeric : private Base {
   public:
-    long long Increment(long long amount = 1) {
+    long long Increment(T amount = 1) {
         return value_.fetch_add(amount, std::memory_order_relaxed);
     }
-    long long Decrement(long long amount = 1) {
+    long long Decrement(T amount = 1) {
         return value_.fetch_sub(amount, std::memory_order_relaxed);
     }
-    long long Set(long long value = 0) {
+    long long Set(T value = 0) {
         return value_.exchange(value, std::memory_order_relaxed);
     }
-    long long Get() const { return value_.load(std::memory_order_relaxed); }
-    Numeric(absl::string_view section, absl::string_view name, NumericBuilder builder = NumericBuilder());
+    T Get() const { return value_.load(std::memory_order_relaxed); }
+    Numeric(absl::string_view section, absl::string_view name, NumericBuilder<T> builder = NumericBuilder<T>());
   private:
-    friend struct NumericBuilder;
+    friend struct NumericBuilder<T>;
     void Dump(RedisModuleInfoCtx *ctx) const final;
     bool IsVisible() const final;
     std::atomic<long long> value_{0};
     std::optional<std::function<bool ()>> visible_func_;
-    std::optional<std::function<long long ()>>  compute_func_;
+    std::optional<std::function<T ()>>  compute_func_;
 };
 
 //

@@ -13,10 +13,13 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
         # Validate that the valkey-search module is loaded.
         module_list_data = client.execute_command("MODULE LIST")
         module_list_count = len(module_list_data)
-        assert module_list_count == 1
+        # We expect JSON & Search to be loaded
+        assert module_list_count == 2
         module_loaded = False
+        json_loaded = False
         for module in module_list_data:
             if module[b"name"] == b"search":
                 module_loaded = True
-                break
+            elif module[b"name"] == b"json":
+                json_loaded = True
         assert module_loaded

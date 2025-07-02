@@ -110,25 +110,17 @@ void AddLatencyStat(ValkeyModuleInfoCtx *ctx, absl::string_view stat_name,
       .Computed(vmsdk::GetUsedMemoryCnt)
       .CrashSafe());
 
-void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
-  if (!for_crash_report) {
-    vmsdk::info_field::DoSection(ctx, "index_stats", for_crash_report);
-    ValkeyModule_InfoAddFieldLongLong(
-        ctx, "number_of_indexes",
-        SchemaManager::Instance().GetNumberOfIndexSchemas());
-    ValkeyModule_InfoAddFieldLongLong(
-        ctx, "number_of_attributes",
-        SchemaManager::Instance().GetNumberOfAttributes());
-    ValkeyModule_InfoAddFieldLongLong(
-        ctx, "total_indexed_documents",
-        SchemaManager::Instance().GetTotalIndexedDocuments());
+static vmsdk::info_field::String background_indexing_status("indexing", "background_indexing_status",
+    vmsdk::info_field::StringBuilder()
+        .App()
+        .ComputedCharPtr([]() -> const char * {
+          return SchemaManager::Instance().IsIndexingInProgress()
+                     ? "IN_PROGRESS"
+                     : "NO_ACTIVITY";
+        })
+        );      
 
-    vmsdk::info_field::DoSection(ctx, "ingestion", for_crash_report);
-    ValkeyModule_InfoAddFieldCString(
-        ctx, "background_indexing_status",
-        SchemaManager::Instance().IsIndexingInProgress() ? "IN_PROGRESS"
-                                                         : "NO_ACTIVITY");
-  }
+void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
   vmsdk::info_field::DoSection(ctx, "thread-pool", for_crash_report);
   ValkeyModule_InfoAddFieldLongLong(ctx, "query_queue_size",
                                    reader_thread_pool_->QueueSize());

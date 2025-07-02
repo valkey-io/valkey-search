@@ -220,13 +220,13 @@ struct StringBuilder {
 
     // Mark as Application Visible
     StringBuilder& App() {
-        flags_ = Flags((flags_ & (Flags::kApplication | Flags::kDeveloper)) | Flags::kApplication);
+        flags_ = Flags((flags_ & ~(Flags::kApplication | Flags::kDeveloper)) | Flags::kApplication);
         return *this;
     }
 
     // Mark as Developer Visible
     StringBuilder& Dev() {
-        flags_ = Flags((flags_ & (Flags::kApplication | Flags::kDeveloper)) | Flags::kDeveloper);
+        flags_ = Flags((flags_ & ~(Flags::kApplication | Flags::kDeveloper)) | Flags::kDeveloper);
         return *this;
     }
 

@@ -35,6 +35,7 @@
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
 #include "src/vector_externalizer.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -622,5 +623,21 @@ void SchemaManager::OnServerCronCallback(ValkeyModuleCtx *ctx,
                                          [[maybe_unused]] void *data) {
   SchemaManager::Instance().PerformBackfill(ctx, kIndexSchemaBackfillBatchSize);
 }
+
+static vmsdk::info_field::Integer number_of_indexes("index_stats", "number_of_indexes",
+  vmsdk::info_field::IntegerBuilder()
+    .App()
+    .Computed([] {return SchemaManager::Instance().GetNumberOfIndexSchemas(); })
+  );
+static vmsdk::info_field::Integer number_of_attributes("index_stats", "number_of_attributes",
+  vmsdk::info_field::IntegerBuilder()
+    .App()
+    .Computed([] {return SchemaManager::Instance().GetNumberOfAttributes(); })
+  );
+static vmsdk::info_field::Integer total_indexed_documents("index_stats", "total_indexed_documents",
+  vmsdk::info_field::IntegerBuilder()
+    .App()
+    .Computed([] {return SchemaManager::Instance().GetTotalIndexedDocuments(); })
+  );
 
 }  // namespace valkey_search

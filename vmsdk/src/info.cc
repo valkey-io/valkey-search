@@ -119,6 +119,7 @@ void DoRemainingSections(ValkeyModuleInfoCtx *ctx, int for_crash_report) {
     //
     for (auto& [section, section_info] : section_map) {
         if (section_info.handled_) {
+            VMSDK_LOG(DEBUG, nullptr) << "Skipping Section " << section << " as it was already handled";
             section_info.handled_ = false;
             continue;
         }
@@ -135,7 +136,7 @@ void DoRemainingSections(ValkeyModuleInfoCtx *ctx, int for_crash_report) {
                 }
             }
         }
-        if (do_section) {
+        if (!do_section) {
             continue;
         }
         DoSection(ctx, section, for_crash_report);
@@ -194,7 +195,7 @@ bool Validate(ValkeyModuleCtx *ctx) {
                 return true;
             }
             if (!(info->GetFlags() ^ (Flags::kDeveloper | Flags::kApplication))) {
-                VMSDK_LOG(WARNING, ctx) << "Incorrect flags set for INFO Section:" << section << " Name:" << name;
+                VMSDK_LOG(WARNING, ctx) << "Missing App/Dev for Section:" << section << " Name:" << name;
                 failed = true;
             }
             if (!IsValidName(name)) {

@@ -99,6 +99,13 @@ target_link_libraries(search_converter PUBLIC managed_pointers)
 target_link_libraries(search_converter PUBLIC type_conversions)
 target_link_libraries(search_converter PUBLIC status_macros)
 
+set(SRCS_INFO_CONVERTER ${CMAKE_CURRENT_LIST_DIR}/info_converter.cc
+                        ${CMAKE_CURRENT_LIST_DIR}/info_converter.h)
+
+valkey_search_add_static_library(info_converter "${SRCS_INFO_CONVERTER}")
+target_include_directories(info_converter PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(info_converter PUBLIC coordinator_cc_proto)
+
 set(SRCS_GRPC_SUSPENDER ${CMAKE_CURRENT_LIST_DIR}/grpc_suspender.cc
                         ${CMAKE_CURRENT_LIST_DIR}/grpc_suspender.h)
 

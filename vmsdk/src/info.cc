@@ -2,37 +2,14 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
-#include <map>
-#include <set>
 #include <string>
 
+#include "absl/container/btree_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/utils.h"
@@ -41,14 +18,14 @@
 namespace vmsdk {
 namespace info_field {
 
-using FieldMap = std::map<std::string, const Base *>;
+using FieldMap = absl::btree_map<std::string, const Base *>;
 
 struct SectionInfo {
     bool handled_{false};
     FieldMap fields_;
 };
 
-using SectionMap = std::map<std::string, SectionInfo>;
+using SectionMap = absl::btree_map<std::string, SectionInfo>;
 
 //
 // This trick allows fields to be declared globally static.
@@ -58,7 +35,7 @@ static SectionMap& GetSectionMap() {
     return section_map;
 }
 
-static const char *bad_field_reason = nullptr;
+static std::optional<std::string> bad_field_reason;
 
 static bool IsValidName(const std::string& str) {
     for (auto c : str) {
@@ -128,8 +105,8 @@ void DoRemainingSections(ValkeyModuleInfoCtx *ctx, int for_crash_report) {
             do_section = true;
         } else {
             for (auto& [name, field] : section_info.fields_) {
-                if ((!for_crash_report || (field->GetFlags() & kCrashSafe)) && field->IsVisible()) {
-                    if (field->GetFlags() & kApplication) {
+                if ((!for_crash_report || field->IsCrashSafe()) && field->IsVisible()) {
+                    if (field->IsApplication()) {
                         do_section = true;
                         break;
                     }
@@ -160,14 +137,15 @@ void DoSection(ValkeyModuleInfoCtx *ctx, absl::string_view section, int for_cras
     // Find the section without a memory allocation....
     SectionMap& section_map = GetSectionMap();
     for (auto& [name, section_info] : section_map) {
-        if (section == name) {
-            // Found it....
-            section_info.handled_ = true;
-            for (auto& [name, field] : section_info.fields_) {
-                if ((!for_crash_report || (field->GetFlags() & kCrashSafe)) && field->IsVisible()) {
-                    if (show_developer.GetValue() || (field->GetFlags() & kApplication)) {
-                        field->Dump(ctx);
-                    }
+        if (section != name) {
+            continue;
+        }
+        // Found it....
+        section_info.handled_ = true;
+        for (auto& [name, field] : section_info.fields_) {
+            if ((!for_crash_report || field->IsCrashSafe()) && field->IsVisible()) {
+                if (show_developer.GetValue() || field->IsApplication()) {
+                    field->Dump(ctx);
                 }
             }
         }
@@ -178,10 +156,10 @@ bool Validate(ValkeyModuleCtx *ctx) {
     doing_startup = false; // Done.
     bool failed = false;
     if (bad_field_reason) {
-        LOG(WARNING) << "Invalid INFO Section Configuration detected, first error was: " << bad_field_reason << "\n";
+        LOG(WARNING) << "Invalid INFO Section Configuration detected, first error was: " << *bad_field_reason << "\n";
         failed = true;
     }
-    std::set<std::string> unique_names; // Python info parsing requires that names are unique across sections.
+    absl::flat_hash_set<std::string> unique_names; // Python info parsing requires that names are unique across sections.
     
     SectionMap& section_map = GetSectionMap();
     for (auto& [section, section_info] : section_map) {

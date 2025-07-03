@@ -7,7 +7,6 @@
 
 #include "src/valkey_search.h"
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -20,7 +19,6 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/numbers.h"
-#include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/time/time.h"
@@ -37,6 +35,7 @@
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -73,12 +72,6 @@ void ValkeySearch::SetHNSWBlockSize(uint32_t block_size) {
   options::GetHNSWBlockSize().SetValueOrLog(block_size, WARNING);
 }
 
-static std::string ConvertToMB(double bytes_value) {
-  const double CONVERSION_VALUE = 1024 * 1024;
-  double mb_value = bytes_value / CONVERSION_VALUE;
-  auto converted_mb = absl::StrFormat("%.2f", mb_value);
-  return absl::StrCat(converted_mb, "M");
-}
 
 void ModuleInfo(ValkeyModuleInfoCtx *ctx, int for_crash_report) {
   ValkeySearch::Instance().Info(ctx, for_crash_report);
@@ -99,36 +92,40 @@ void AddLatencyStat(ValkeyModuleInfoCtx *ctx, absl::string_view stat_name,
  *   1. Acquiring locks
  *   2. Performing heap allocations
  *   3. Requiring execution on the main thread
- */
-void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
-  ValkeyModule_InfoAddSection(ctx, "memory");
-  ValkeyModule_InfoAddFieldLongLong(ctx, "used_memory_bytes",
-                                    vmsdk::GetUsedMemoryCnt());
-  ValkeyModule_InfoAddFieldCString(
-      ctx, "used_memory_human", ConvertToMB(vmsdk::GetUsedMemoryCnt()).c_str());
-  if (!for_crash_report) {
-    ValkeyModule_InfoAddSection(ctx, "index_stats");
-    ValkeyModule_InfoAddFieldLongLong(
-        ctx, "number_of_indexes",
-        SchemaManager::Instance().GetNumberOfIndexSchemas());
-    ValkeyModule_InfoAddFieldLongLong(
-        ctx, "number_of_attributes",
-        SchemaManager::Instance().GetNumberOfAttributes());
-    ValkeyModule_InfoAddFieldLongLong(
-        ctx, "total_indexed_documents",
-        SchemaManager::Instance().GetTotalIndexedDocuments());
 
-    ValkeyModule_InfoAddSection(ctx, "ingestion");
-    ValkeyModule_InfoAddFieldCString(
-        ctx, "background_indexing_status",
-        SchemaManager::Instance().IsIndexingInProgress() ? "IN_PROGRESS"
-                                                         : "NO_ACTIVITY");
-  }
-  ValkeyModule_InfoAddSection(ctx, "thread-pool");
+ >>> This is being converted to the new machinery in vmsdk::info_field. Once that's done this section
+ will be empty and it can be removed.
+ */
+
+ static vmsdk::info_field::Integer human_used_memory("memory", "used_memory_human", 
+    vmsdk::info_field::IntegerBuilder()
+      .SIBytes()
+      .App()
+      .Computed(vmsdk::GetUsedMemoryCnt)
+      .CrashSafe());
+
+ static vmsdk::info_field::Integer used_memory("memory", "used_memory_bytes", 
+    vmsdk::info_field::IntegerBuilder()
+      .App()
+      .Computed(vmsdk::GetUsedMemoryCnt)
+      .CrashSafe());
+
+static vmsdk::info_field::String background_indexing_status("indexing", "background_indexing_status",
+    vmsdk::info_field::StringBuilder()
+        .App()
+        .ComputedCharPtr([]() -> const char * {
+          return SchemaManager::Instance().IsIndexingInProgress()
+                     ? "IN_PROGRESS"
+                     : "NO_ACTIVITY";
+        })
+        );      
+
+void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
+  vmsdk::info_field::DoSection(ctx, "thread-pool", for_crash_report);
   ValkeyModule_InfoAddFieldLongLong(ctx, "query_queue_size",
-                                    reader_thread_pool_->QueueSize());
+                                   reader_thread_pool_->QueueSize());
   ValkeyModule_InfoAddFieldLongLong(ctx, "writer_queue_size",
-                                    writer_thread_pool_->QueueSize());
+                                   writer_thread_pool_->QueueSize());
   ValkeyModule_InfoAddFieldLongLong(
       ctx, "worker_pool_suspend_cnt",
       Metrics::GetStats().worker_thread_pool_suspend_cnt);
@@ -142,17 +139,17 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
       ctx, "writer_suspension_expired_cnt",
       Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt);
 
-  ValkeyModule_InfoAddSection(ctx, "rdb");
+  vmsdk::info_field::DoSection(ctx, "rdb", for_crash_report);
   ValkeyModule_InfoAddFieldLongLong(ctx, "rdb_load_success_cnt",
-                                    Metrics::GetStats().rdb_load_success_cnt);
+                                   Metrics::GetStats().rdb_load_success_cnt);
   ValkeyModule_InfoAddFieldLongLong(ctx, "rdb_load_failure_cnt",
-                                    Metrics::GetStats().rdb_load_failure_cnt);
+                                   Metrics::GetStats().rdb_load_failure_cnt);
   ValkeyModule_InfoAddFieldLongLong(ctx, "rdb_save_success_cnt",
-                                    Metrics::GetStats().rdb_save_success_cnt);
+                                   Metrics::GetStats().rdb_save_success_cnt);
   ValkeyModule_InfoAddFieldLongLong(ctx, "rdb_save_failure_cnt",
-                                    Metrics::GetStats().rdb_save_failure_cnt);
+                                   Metrics::GetStats().rdb_save_failure_cnt);
 
-  ValkeyModule_InfoAddSection(ctx, "query");
+  vmsdk::info_field::DoSection(ctx, "query", for_crash_report);
   ValkeyModule_InfoAddFieldLongLong(
       ctx, "successful_requests_count",
       Metrics::GetStats().query_successful_requests_cnt);
@@ -184,7 +181,7 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
                                         stat.skipped_cnt);
     };
 #ifdef DEBUG_INFO
-    ValkeyModule_InfoAddSection(ctx, "subscription");
+    vmsdk::info_field::DoSection(ctx, "subscription", for_crash_report);
     InfoResultCnt(
         SchemaManager::Instance().AccumulateIndexSchemaResults(
             [](const IndexSchema::Stats &stats)
@@ -205,10 +202,9 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
         "remove_subscription");
 #endif
   }
-  ValkeyModule_InfoAddSection(ctx, "hnswlib");
-  ValkeyModule_InfoAddFieldLongLong(
-      ctx, "hnsw_add_exceptions_count",
-      Metrics::GetStats().hnsw_add_exceptions_cnt);
+  vmsdk::info_field::DoSection(ctx, "hnswlib", for_crash_report);
+  ValkeyModule_InfoAddFieldLongLong(ctx, "hnsw_add_exceptions_count",
+                                   Metrics::GetStats().hnsw_add_exceptions_cnt);
   ValkeyModule_InfoAddFieldLongLong(
       ctx, "hnsw_remove_exceptions_count",
       Metrics::GetStats().hnsw_remove_exceptions_cnt);
@@ -222,16 +218,17 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
       ctx, "hnsw_create_exceptions_count",
       Metrics::GetStats().hnsw_create_exceptions_cnt);
 
-  ValkeyModule_InfoAddSection(ctx, "latency");
+  vmsdk::info_field::DoSection(ctx, "latency", for_crash_report);
   AddLatencyStat(ctx, "hnsw_vector_index_search_latency_usec",
                  Metrics::GetStats().hnsw_vector_index_search_latency);
   AddLatencyStat(ctx, "flat_vector_index_search_latency_usec",
                  Metrics::GetStats().flat_vector_index_search_latency);
 
   if (UsingCoordinator()) {
-    ValkeyModule_InfoAddSection(ctx, "coordinator");
-    ValkeyModule_InfoAddFieldLongLong(ctx, "coordinator_server_listening_port",
-                                      GetCoordinatorServer()->GetPort());
+    vmsdk::info_field::DoSection(ctx, "coordinator", for_crash_report);
+    ValkeyModule_InfoAddFieldLongLong(
+        ctx, "coordinator_server_listening_port",
+        GetCoordinatorServer()->GetPort());
     ValkeyModule_InfoAddFieldLongLong(
         ctx, "coordinator_server_get_global_metadata_success_count",
         Metrics::GetStats().coordinator_server_get_global_metadata_success_cnt);
@@ -294,11 +291,11 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
             .coordinator_server_search_index_partition_failure_latency);
   }
   if (!for_crash_report) {
-    ValkeyModule_InfoAddSection(ctx, "string_interning");
+    vmsdk::info_field::DoSection(ctx, "string_interning", for_crash_report);
     ValkeyModule_InfoAddFieldLongLong(ctx, "string_interning_store_size",
-                                      StringInternStore::Instance().Size());
+                                     StringInternStore::Instance().Size());
 
-    ValkeyModule_InfoAddSection(ctx, "vector_externing");
+    vmsdk::info_field::DoSection(ctx, "vector_externing", for_crash_report);
     auto vector_externing_stats = VectorExternalizer::Instance().GetStats();
     ValkeyModule_InfoAddFieldLongLong(ctx, "vector_externing_entry_count",
                                       vector_externing_stats.entry_cnt);
@@ -316,6 +313,7 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
         ctx, "vector_externing_deferred_entry_cnt",
         vector_externing_stats.deferred_entry_cnt);
   }
+  vmsdk::info_field::DoRemainingSections(ctx, for_crash_report);
 }
 
 // Beside the thread which initiates the fork, no other threads are present
@@ -528,6 +526,7 @@ absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
                          << (IsJsonModuleLoaded(ctx) ? "" : "not ")
                          << "loaded!";
   VectorExternalizer::Instance().Init(ctx_);
+  ValkeyModule_Assert(vmsdk::info_field::Validate(ctx));
   VMSDK_LOG(DEBUG, ctx) << "Search module completed initialization!";
   return absl::OkStatus();
 }

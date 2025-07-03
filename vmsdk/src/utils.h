@@ -94,5 +94,8 @@ std::optional<absl::string_view> ParseHashTag(absl::string_view);
 
 bool IsRealUserClient(ValkeyModuleCtx *ctx);
 bool MultiOrLua(ValkeyModuleCtx *ctx);
+
+size_t DisplayAsSIBytes(size_t value, char *buffer, size_t buffer_size);
+
 }  // namespace vmsdk
 #endif  // VMSDK_SRC_UTILS_H_

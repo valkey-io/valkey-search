@@ -95,4 +95,8 @@ int64_t GetMemoryDelta() {
   return memory_delta;
 }
 
+void SetMemoryDelta(int64_t delta) {
+  memory_delta = delta;
+}
+
 }  // namespace vmsdk

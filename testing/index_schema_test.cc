@@ -863,7 +863,7 @@ TEST_F(IndexSchemaBackfillTest, PerformBackfill_SwapDB) {
   }
 }
 
-TEST_F(IndexSchemaBackfillTest, PerformBackfill_MemoryTrackingScopeConstructor) {
+TEST_F(IndexSchemaBackfillTest, PerformBackfill_MemoryScopeConstructor) {
   std::vector<absl::string_view> key_prefixes = {"prefix:"};
   std::string index_schema_name_str("test_index");
 
@@ -1210,7 +1210,7 @@ TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
   }
 }
 
-TEST_F(IndexSchemaRDBTest, MemoryTrackingScopeConstructorInLoadFromRDB) {
+TEST_F(IndexSchemaRDBTest, MemoryScopeConstructorInLoadFromRDB) {
   RedisModuleCtx fake_ctx;
 
   data_model::IndexSchema index_schema_proto;
@@ -1534,7 +1534,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
   EXPECT_EQ(stats.subscription_modify.failure_cnt, 0);
 }
 
-TEST_F(IndexSchemaFriendTest, ProcessMutation_MemoryTrackingScopeConstructor) {
+TEST_F(IndexSchemaFriendTest, ProcessMutation_MemoryScopeConstructor) {
   data_model::IndexSchema index_schema_proto;
   index_schema_proto.set_name("test_index");
   index_schema_proto.set_db_num(0);
@@ -1562,7 +1562,6 @@ TEST_F(IndexSchemaFriendTest, ProcessMutation_MemoryTrackingScopeConstructor) {
   EXPECT_CALL(*mock_index, AddRecord(key_interned, testing::_))
       .WillOnce([](const auto&, const auto&) {
         // Simulate memory allocation by directly reporting memory usage
-        // This will be tracked by the MemoryTrackingScope in SyncProcessMutation
         vmsdk::ReportAllocMemorySize(1024 * 1024);
         return true;
       });

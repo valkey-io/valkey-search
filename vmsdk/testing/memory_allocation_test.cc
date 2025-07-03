@@ -427,157 +427,240 @@ TEST_F(MemoryAllocationTest, VallocOverride) {
   __wrap_free(test_ptr);
 }
 
-TEST_F(MemoryAllocationTest, MemoryTrackingScopeSimple) {
+TEST_F(MemoryAllocationTest, IsolatedMemoryScopeAllocationIsolation) {
   vmsdk::UseValkeyAlloc();
 
-  std::atomic<int64_t> memory_pool{0};
-  EXPECT_EQ(memory_pool.load(), 0);
-  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
+  std::atomic<int64_t> pool{0};
 
-  void* ptr1 = nullptr;
-  void* ptr2 = nullptr;
+  void* outer_ptr = nullptr;
+  void* inner_ptr = nullptr;
+
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
+  EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
 
   {
-    MemoryTrackingScope scope {&memory_pool};
-    EXPECT_CALL(*kMockRedisModule, Alloc(100)).WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
-    EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x1000))).WillRepeatedly(testing::Return(100));
-    ptr1 = __wrap_malloc(100);
-    EXPECT_EQ(memory_pool.load(), 0);
+    IsolatedMemoryScope scope{&pool};
+    
+    EXPECT_CALL(*kMockRedisModule, Alloc(100))
+        .WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
+    EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x1000)))
+        .WillRepeatedly(testing::Return(100));
+    outer_ptr = __wrap_malloc(100);
+
     EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 100);
-    EXPECT_EQ(MemoryTrackingScope::GetCurrentScope()->GetMemoryDelta(), 0);
+    EXPECT_EQ(pool.load(), 0);
+    EXPECT_EQ(vmsdk::GetMemoryDelta(), 100);
 
-    EXPECT_CALL(*kMockRedisModule, Alloc(50)).WillOnce(testing::Return(reinterpret_cast<void*>(0x2000)));
-    EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x2000))).WillRepeatedly(testing::Return(50));
-    ptr2 = __wrap_malloc(50);
-    EXPECT_EQ(memory_pool.load(), 0);
-    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 150);
-    EXPECT_EQ(MemoryTrackingScope::GetCurrentScope()->GetMemoryDelta(), 0);
+    {
+      IsolatedMemoryScope scope{&pool};
+      
+      EXPECT_CALL(*kMockRedisModule, Alloc(75))
+          .WillOnce(testing::Return(reinterpret_cast<void*>(0x2000)));
+      EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x2000)))
+          .WillRepeatedly(testing::Return(75));
+      inner_ptr = __wrap_malloc(75);
+      
+      EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 175);
+      EXPECT_EQ(pool.load(), 0);
+      EXPECT_EQ(vmsdk::GetMemoryDelta(), 175);
+    }
 
-    EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x1000))).Times(1);
-    __wrap_free(ptr1);
-    ptr1 = nullptr;
-    EXPECT_EQ(memory_pool.load(), 0);
-    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 50);
-    EXPECT_EQ(MemoryTrackingScope::GetCurrentScope()->GetMemoryDelta(), 0);
-  } // Scope ends, net change: +50
+    EXPECT_EQ(vmsdk::GetMemoryDelta(), 100);
+    EXPECT_EQ(pool.load(), 75);
+    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 175);
+  }
+  
+  EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
+  EXPECT_EQ(pool.load(), 175);
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 175);
 
-  EXPECT_EQ(memory_pool.load(), 50);
-
-  EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x2000))).Times(1);
-  __wrap_free(ptr2);
-  ptr2 = nullptr;
-  EXPECT_EQ(memory_pool.load(), 50);
-  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
+  __wrap_free(outer_ptr);
+  __wrap_free(inner_ptr);
 }
 
-TEST_F(MemoryAllocationTest, MemoryTrackingScopeNullPool) {
+TEST_F(MemoryAllocationTest, IsolatedMemoryScopeFreeIsolation) {
   vmsdk::UseValkeyAlloc();
+
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
+  EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
+  
+  std::atomic<int64_t> pool{0};
+  void* ptr = nullptr;
+  
+  IsolatedMemoryScope scope{&pool};
+  
+  EXPECT_CALL(*kMockRedisModule, Alloc(100))
+      .WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
+  EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x1000)))
+      .WillRepeatedly(testing::Return(100));
+  ptr = __wrap_malloc(100);
+
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 100);
+  EXPECT_EQ(vmsdk::GetMemoryDelta(), 100);
+
+  {
+    IsolatedMemoryScope scope{&pool};
+    EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x1000))).Times(1);
+    __wrap_free(ptr);
+
+    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
+    EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
+  }
+
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
+  EXPECT_EQ(vmsdk::GetMemoryDelta(), 100);
+}
+
+TEST_F(MemoryAllocationTest, IsolatedMemoryScopeNullPool) {
+  vmsdk::UseValkeyAlloc();
+
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
+  EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
 
   void* ptr = nullptr;
 
   {
-    MemoryTrackingScope scope(nullptr);
+    IsolatedMemoryScope scope{nullptr};
 
-    EXPECT_CALL(*kMockRedisModule, Alloc(100)).WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
-    EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x1000))).WillRepeatedly(testing::Return(100));
+    EXPECT_CALL(*kMockRedisModule, Alloc(100))
+        .WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
+    EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x1000)))
+        .WillRepeatedly(testing::Return(100));
     ptr = __wrap_malloc(100);
-    EXPECT_NE(ptr, nullptr);
+
     EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 100);
-    EXPECT_EQ(MemoryTrackingScope::GetCurrentScope()->GetMemoryDelta(), 0);
+    EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
   }
 
-  EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x1000))).Times(1);
-  __wrap_free(ptr);
-  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
-}
-
-TEST_F(MemoryAllocationTest, MemoryTrackingScopeNonZeroBaseline) {
-  vmsdk::UseValkeyAlloc();
-
-  std::atomic<int64_t> memory_pool{0};
-  void* ptr1 = nullptr;
-  void* ptr2 = nullptr;
-  void* ptr3 = nullptr;
-
-  EXPECT_CALL(*kMockRedisModule, Alloc(200)).WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
-  EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x1000))).WillRepeatedly(testing::Return(200));
-  ptr1 = __wrap_malloc(200);
-  EXPECT_EQ(memory_pool.load(), 0);
-  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 200);
-
   {
-    MemoryTrackingScope scope(&memory_pool);
-
-    EXPECT_CALL(*kMockRedisModule, Alloc(100)).WillOnce(testing::Return(reinterpret_cast<void*>(0x2000)));
-    EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x2000))).WillRepeatedly(testing::Return(100));
-    ptr2 = __wrap_malloc(100);
-    EXPECT_EQ(memory_pool.load(), 0);
-    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 300);
-    EXPECT_EQ(MemoryTrackingScope::GetCurrentScope()->GetMemoryDelta(), 0);
+    IsolatedMemoryScope scope{nullptr};
 
     EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x1000))).Times(1);
-    __wrap_free(ptr1);
-    ptr1 = nullptr;
-    EXPECT_EQ(memory_pool.load(), 0);
-    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 100);
-    EXPECT_EQ(MemoryTrackingScope::GetCurrentScope()->GetMemoryDelta(), 0);
+    __wrap_free(ptr);
 
-    EXPECT_CALL(*kMockRedisModule, Alloc(50)).WillOnce(testing::Return(reinterpret_cast<void*>(0x3000)));
-    EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x3000))).WillRepeatedly(testing::Return(50));
-    ptr3 = __wrap_malloc(50);
-    EXPECT_EQ(memory_pool.load(), 0);
-    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 150);
-    EXPECT_EQ(MemoryTrackingScope::GetCurrentScope()->GetMemoryDelta(), 0);
-  } // Scope ends
-  // current_delta = 200 - 200 + 100 + 50 = 150
-  // net_change = 150 - 200 = -50
-
-  EXPECT_EQ(memory_pool.load(), -50);
-  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 150);
-
-  EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x2000))).Times(1);
-  __wrap_free(ptr2);
-  ptr2 = nullptr;
-  EXPECT_EQ(memory_pool.load(), -50);
-  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 50);
-
-  EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x3000))).Times(1);
-  __wrap_free(ptr3);
-  ptr3 = nullptr;
-  EXPECT_EQ(memory_pool.load(), -50);
-  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
-}
-
-TEST_F(MemoryAllocationTest, MemoryTrackingScopeOverrides) {
-  vmsdk::UseValkeyAlloc();
-
-  std::atomic<int64_t> first_pool{0};
-  std::atomic<int64_t> second_pool{0};
-
-  void* ptr1 = nullptr;
-  void* ptr2 = nullptr;
-
-  {
-    MemoryTrackingScope outer_scope(&first_pool);
-
-    EXPECT_CALL(*kMockRedisModule, Alloc(100)).WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
-    EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x1000))).WillRepeatedly(testing::Return(100));
-    ptr1 = __wrap_malloc(100);
-
-    MemoryTrackingScope inner_scope(&second_pool);
-    EXPECT_CALL(*kMockRedisModule, Alloc(50)).WillOnce(testing::Return(reinterpret_cast<void*>(0x2000)));
-    EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x2000))).WillRepeatedly(testing::Return(50));
-    ptr2 = __wrap_malloc(50);
+    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
+    EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
   }
 
-  EXPECT_EQ(first_pool.load(), 100);
-  EXPECT_EQ(second_pool.load(), 50);
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
+  EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
+}
 
-  // Cleanup
-  EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x1000))).Times(1);
-  EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x2000))).Times(1);
-  __wrap_free(ptr1);
-  __wrap_free(ptr2);
+TEST_F(MemoryAllocationTest, NestedMemoryScopeAllocation) {
+  vmsdk::UseValkeyAlloc();
+
+  std::atomic<int64_t> pool{0};
+
+  void* outer_ptr = nullptr;
+  void* inner_ptr = nullptr;
+
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
+  EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
+
+  {
+    NestedMemoryScope scope{&pool};
+
+    EXPECT_CALL(*kMockRedisModule, Alloc(100))
+        .WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
+    EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x1000)))
+        .WillRepeatedly(testing::Return(100));
+    outer_ptr = __wrap_malloc(100);
+
+    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 100);
+    EXPECT_EQ(pool.load(), 0);
+    EXPECT_EQ(vmsdk::GetMemoryDelta(), 100);
+
+    {
+      NestedMemoryScope scope{&pool};
+
+      EXPECT_CALL(*kMockRedisModule, Alloc(75))
+          .WillOnce(testing::Return(reinterpret_cast<void*>(0x2000)));
+      EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x2000)))
+          .WillRepeatedly(testing::Return(75));
+      inner_ptr = __wrap_malloc(75);
+
+      EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 175);
+      EXPECT_EQ(pool.load(), 0);
+      EXPECT_EQ(vmsdk::GetMemoryDelta(), 175);
+    }
+
+    EXPECT_EQ(vmsdk::GetMemoryDelta(), 175);
+    EXPECT_EQ(pool.load(), 75);
+    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 175);
+  }
+
+  EXPECT_EQ(vmsdk::GetMemoryDelta(), 175);
+  EXPECT_EQ(pool.load(), 175);
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 175);
+
+  __wrap_free(outer_ptr);
+  __wrap_free(inner_ptr);
+}
+
+TEST_F(MemoryAllocationTest, NestedMemoryScopeFree) {
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
+  EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
+  
+  std::atomic<int64_t> pool{0};
+  void* ptr = nullptr;
+  
+  NestedMemoryScope scope{&pool};
+  
+  EXPECT_CALL(*kMockRedisModule, Alloc(100))
+      .WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
+  EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x1000)))
+      .WillRepeatedly(testing::Return(100));
+  ptr = __wrap_malloc(100);
+
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 100);
+  EXPECT_EQ(vmsdk::GetMemoryDelta(), 100);
+
+  {
+    NestedMemoryScope scope{&pool};
+    EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x1000))).Times(1);
+    __wrap_free(ptr);
+
+    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
+    EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
+  }
+
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
+  EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
+}
+
+TEST_F(MemoryAllocationTest, NestedMemoryScopeNullPool) {
+  vmsdk::UseValkeyAlloc();
+
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
+  EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
+
+  void* ptr = nullptr;
+
+  {
+    NestedMemoryScope scope{nullptr};
+
+    EXPECT_CALL(*kMockRedisModule, Alloc(100))
+        .WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
+    EXPECT_CALL(*kMockRedisModule, MallocUsableSize(reinterpret_cast<void*>(0x1000)))
+        .WillRepeatedly(testing::Return(100));
+    ptr = __wrap_malloc(100);
+
+    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 100);
+    EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
+  }
+
+  {
+    NestedMemoryScope scope{nullptr};
+
+    EXPECT_CALL(*kMockRedisModule, Free(reinterpret_cast<void*>(0x1000))).Times(1);
+    __wrap_free(ptr);
+
+    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
+    EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
+  }
+
+  EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
+  EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
 }
 
 #endif  // TESTING_TMP_DISABLED

@@ -51,6 +51,8 @@ void ReportFreeMemorySize(uint64_t size);
 
 int64_t GetMemoryDelta();
 
+void SetMemoryDelta(int64_t delta);
+
 }  // namespace vmsdk
 
 #endif  // VMSDK_SRC_MEMORY_ALLOCATION_H_

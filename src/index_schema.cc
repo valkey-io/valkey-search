@@ -186,7 +186,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
       new IndexSchema(ctx, index_schema_proto, std::move(attribute_data_type),
                       mutations_thread_pool));
 
-  MemoryTrackingScope scope {&res->memory_pool_};
+  NestedMemoryScope scope {&res->memory_pool_};
 
   VMSDK_RETURN_IF_ERROR(res->Init(ctx));
   if (!skip_attributes) {
@@ -402,7 +402,7 @@ bool IndexSchema::IsTrackedByAnyIndex(const InternedStringPtr &key) const {
 void IndexSchema::SyncProcessMutation(RedisModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
                                       const InternedStringPtr &key) {
-  MemoryTrackingScope scope {&memory_pool_};
+  NestedMemoryScope scope {&memory_pool_};
 
   vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
   for (auto &attribute_data_itr : mutated_attributes) {
@@ -605,7 +605,7 @@ void IndexSchema::BackfillScanCallback(RedisModuleCtx *ctx,
 
 uint32_t IndexSchema::PerformBackfill(RedisModuleCtx *ctx,
                                       uint32_t batch_size) {
-  MemoryTrackingScope scope {&memory_pool_};
+  NestedMemoryScope scope {&memory_pool_};
 
   auto &backfill_job = backfill_job_.Get();
   if (!backfill_job.has_value() || backfill_job->IsScanDone()) {
@@ -858,7 +858,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
       IndexSchema::Create(ctx, *index_schema_proto, mutations_thread_pool,
                           /*skip_attributes=*/true));
 
-  MemoryTrackingScope scope {&index_schema->memory_pool_};
+  NestedMemoryScope scope {&index_schema->memory_pool_};
 
   // Supplemental content will include indices and any content for them
   while (supplemental_iter.HasNext()) {

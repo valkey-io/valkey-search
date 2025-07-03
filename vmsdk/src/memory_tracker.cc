@@ -21,7 +21,7 @@
  * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
  * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
  * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED ON ANY THEORY OF LIABILITY, WHETHER IN
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
@@ -30,26 +30,39 @@
 #include "memory_tracker.h"
 #include "vmsdk/src/memory_allocation.h"
 
-thread_local MemoryTrackingScope* MemoryTrackingScope::current_scope_tls_ = nullptr;
+thread_local MemoryScope* MemoryScope::current_scope_ = nullptr;
 
-MemoryTrackingScope::MemoryTrackingScope(std::atomic<int64_t>* pool)
-    : target_pool_(pool), memory_delta_(vmsdk::GetMemoryDelta()) {
-    prev_scope_ = current_scope_tls_;
-    current_scope_tls_ = this;
+MemoryScope::MemoryScope(std::atomic<int64_t>* pool)
+    : target_pool_(pool), baseline_memory_(vmsdk::GetMemoryDelta()) {
+    current_scope_ = this;
 }
 
-MemoryTrackingScope::~MemoryTrackingScope() {
+MemoryScope* MemoryScope::GetCurrentScope() {
+    return current_scope_;
+}
+
+IsolatedMemoryScope::IsolatedMemoryScope(std::atomic<int64_t>* pool)
+    : MemoryScope(pool) {
+}
+
+IsolatedMemoryScope::~IsolatedMemoryScope() {
     if (target_pool_ != nullptr) {
         int64_t current_delta = vmsdk::GetMemoryDelta();
-        int64_t net_change = current_delta - memory_delta_;
+        int64_t net_change = current_delta - baseline_memory_;
         target_pool_->fetch_add(net_change);
-        if (prev_scope_ != nullptr) {
-            prev_scope_->memory_delta_ += net_change;
-        }
+
+        vmsdk::SetMemoryDelta(baseline_memory_);
     }
-    current_scope_tls_ = prev_scope_;
 }
 
-MemoryTrackingScope* MemoryTrackingScope::GetCurrentScope() {
-    return current_scope_tls_;
+NestedMemoryScope::NestedMemoryScope(std::atomic<int64_t>* pool)
+    : MemoryScope(pool) {
+}
+
+NestedMemoryScope::~NestedMemoryScope() {
+    if (target_pool_ != nullptr) {
+        int64_t current_delta = vmsdk::GetMemoryDelta();
+        int64_t net_change = current_delta - baseline_memory_;
+        target_pool_->fetch_add(net_change);
+    }
 }

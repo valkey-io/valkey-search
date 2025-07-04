@@ -13,6 +13,8 @@
 #include <optional>
 
 #include "absl/strings/string_view.h"
+#include "command_parser.h"
+#include "module.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 /*
@@ -75,14 +77,34 @@ enum Flags {
     kSIBytes = 8,
 }; 
 
+enum Units {
+    kNone,
+
+    kCount,
+    kCountPerSecond,
+    kPercent,
+
+    kSeconds,
+    kMilliSeconds,
+    kMicroSeconds,
+
+    kBytes,
+
+    kBytesPerSecond,
+    kKiloBytesPerSecond,
+    kMegaBytesPerSecond,
+    kGigaBytesPerSecond,
+};
+
 class Base {
 protected:
     std::string section_;
     std::string name_;
     Flags flags_;
+    Units units_;
 
     virtual ~Base();
-    Base(absl::string_view section, absl::string_view name, Flags flags);
+    Base(absl::string_view section, absl::string_view name, Flags flags, Units units);
     Base(const Base&) = delete;
     Base(const Base&&) = delete;
 
@@ -90,7 +112,9 @@ protected:
     const std::string& GetSection() const { return section_; }
     const std::string& GetName() const { return name_; }
     Flags GetFlags() const { return flags_; }
+    Units GetUnits() const { return units_; }
     virtual void Dump(ValkeyModuleInfoCtx *ctx) const = 0;
+    virtual void Reply(ValkeyModuleCtx *ctx) const = 0;
     virtual bool IsVisible() const = 0;
     bool IsCrashSafe() const {
         return (flags_ & Flags::kCrashSafe) != 0;
@@ -137,6 +161,11 @@ struct NumericBuilder {
         return *this;
     }
 
+    NumericBuilder& Units(Units units) {
+        units_ = units;
+        return *this;
+    }
+
     // Used to make this field controllably visible. Note: By default, this is marked not Crash Safe.
     NumericBuilder& VisibleIf(std::function<bool ()> visible_func) {
         visible_func_ = visible_func;
@@ -165,7 +194,8 @@ struct NumericBuilder {
 
   private:
     friend class Numeric<T>;
-    Flags flags_{Flags::kCrashSafe};
+    enum Flags flags_{Flags::kCrashSafe};
+    enum Units units_{Units::kCount};
     std::optional<std::function<bool ()>> visible_func_;
     std::optional<std::function<T ()>>  compute_func_;
 };
@@ -192,6 +222,7 @@ class Numeric : private Base {
   private:
     friend struct NumericBuilder<T>;
     void Dump(ValkeyModuleInfoCtx *ctx) const final;
+    void Reply(ValkeyModuleCtx *ctx) const final;
     bool IsVisible() const final;
     std::atomic<long long> value_{0};
     std::optional<std::function<bool ()>> visible_func_;
@@ -250,6 +281,7 @@ struct StringBuilder {
   private:
     friend class String;
     Flags flags_{kDeveloper};
+    Units units_{kNone};
     std::optional<std::function<bool ()>> visible_func_;
     std::optional<std::function<const char *()>>  compute_char_func_;
     std::optional<std::function<std::string ()>>  compute_string_func_;
@@ -264,6 +296,7 @@ class String : private Base {
   private:
     friend struct StringBuilder;
     void Dump(ValkeyModuleInfoCtx *ctx) const final;
+    void Reply(ValkeyModuleCtx *ctx) const final;
     bool IsVisible() const final;
     std::optional<std::function<bool ()>> visible_func_;
     std::optional<std::function<const char *()>>  compute_char_func_;
@@ -282,7 +315,8 @@ bool Validate(ValkeyModuleCtx *ctx);
 //
 void DoSection(ValkeyModuleInfoCtx *ctx, absl::string_view section, int for_crash_report);
 void DoRemainingSections(ValkeyModuleInfoCtx *ctx, int for_crash_report);
-
+absl::Status DumpInfoMetaData(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator itr, const vmsdk::module::Options &options);
+absl::Status DumpInfoValues(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator itr, const vmsdk::module::Options &options);
 
 } // namespace info_field
 } // namespace vmsdk

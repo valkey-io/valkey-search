@@ -16,6 +16,7 @@
 #include "vmsdk/src/module_config.h"
 
 namespace vmsdk {
+
 namespace info_field {
 
 using FieldMap = absl::btree_map<std::string, const Base *>;
@@ -48,8 +49,8 @@ static bool IsValidName(const std::string& str) {
 
 static bool doing_startup = true;
 
-Base::Base(absl::string_view section, absl::string_view name, Flags flags) 
-: section_(section), name_(name), flags_(flags) {
+Base::Base(absl::string_view section, absl::string_view name, Flags flags, Units units) 
+: section_(section), name_(name), flags_(flags), units_(units) {
 
     CHECK(doing_startup || IsMainThread());
 
@@ -60,6 +61,7 @@ Base::Base(absl::string_view section, absl::string_view name, Flags flags)
     } else {
         field_map[name_] = this;
     }
+
 }
 
 Base::~Base() {
@@ -192,7 +194,7 @@ bool Validate(ValkeyModuleCtx *ctx) {
 
 template<typename T>
 Numeric<T>::Numeric(absl::string_view section, absl::string_view name, NumericBuilder<T> builder)
-    : Base(section, name, builder.flags_),
+    : Base(section, name, builder.flags_, builder.units_),
       visible_func_(builder.visible_func_),
       compute_func_(builder.compute_func_) {
       }
@@ -200,7 +202,6 @@ Numeric<T>::Numeric(absl::string_view section, absl::string_view name, NumericBu
 template<typename T>
 void Numeric<T>::Dump(ValkeyModuleInfoCtx *ctx) const {
     T value = compute_func_ ? (*compute_func_)() : Get();
-    VMSDK_LOG(WARNING, nullptr) << "Numeric::Dump " << GetName() << " Value:" << value << " Flags:" << GetFlags();
     if constexpr (std::is_integral<T>::value) {
         if (GetFlags() & Flags::kSIBytes) {
             char buffer[100];
@@ -211,6 +212,24 @@ void Numeric<T>::Dump(ValkeyModuleInfoCtx *ctx) const {
         }
     } else if constexpr (std::is_floating_point<T>::value) {
         ValkeyModule_InfoAddFieldDouble(ctx, GetName().data(), value);
+    } else {
+        CHECK(false);
+    }
+}
+
+template<typename T>
+void Numeric<T>::Reply(ValkeyModuleCtx *ctx) const {
+    T value = compute_func_ ? (*compute_func_)() : Get();
+    if constexpr (std::is_integral<T>::value) {
+        if (GetFlags() & Flags::kSIBytes) {
+            char buffer[100];
+            size_t used = vmsdk::DisplayAsSIBytes(value, buffer, sizeof(buffer));
+            ValkeyModule_ReplyWithCString(ctx, buffer);
+        } else {
+            ValkeyModule_ReplyWithLongLong(ctx, value);
+        }
+    } else if constexpr (std::is_floating_point<T>::value) {
+        ValkeyModule_ReplyWithDouble(ctx, value);
     } else {
         CHECK(false);
     }
@@ -228,7 +247,7 @@ template struct Numeric<long long>;
 template struct Numeric<double>;
 
 String::String(absl::string_view section, absl::string_view name, StringBuilder builder)
-    : Base(section, name, builder.flags_),
+    : Base(section, name, builder.flags_, Units::kNone),
       visible_func_(builder.visible_func_),
       compute_string_func_(builder.compute_string_func_),
       compute_char_func_(builder.compute_char_func_)
@@ -248,8 +267,104 @@ void String::Dump(ValkeyModuleInfoCtx *ctx) const {
     }
 }
 
+void String::Reply(ValkeyModuleCtx *ctx) const {
+    if (compute_char_func_) {
+        const char *str = (*compute_char_func_)();
+        if (str) {
+            ValkeyModule_ReplyWithCString(ctx, (*compute_char_func_)());
+        }
+    } else if (compute_string_func_) {
+        std::string s = (*compute_string_func_)();
+        ValkeyModule_ReplyWithCString(ctx, s.data());
+    } else {
+        VMSDK_LOG(WARNING, nullptr) << "Invalid state for Info String: " << GetSection() << "/" << GetName();
+    }
+}
+
 bool String::IsVisible() const {
     return visible_func_? (*visible_func_)() : true;
+}
+
+static absl::flat_hash_map<Units, absl::string_view> kUnitsToString {
+    {Units::kNone, ""},
+
+    {Units::kCount, "Count"},
+    {Units::kCountPerSecond, "Count/Second"},
+    {Units::kPercent, "Percent"},
+
+    {Units::kSeconds, "Seconds"},
+    {Units::kMilliSeconds, "Milliseconds"},
+    {Units::kMicroSeconds, "Microseconds"},
+
+    {Units::kBytes, "Bytes"},
+
+    {Units::kBytesPerSecond, "Bytes/Second"},
+    {Units::kKiloBytesPerSecond, "KiloBytes/Second"},
+    {Units::kMegaBytesPerSecond, "MegaBytes/Second"},
+    {Units::kGigaBytesPerSecond, "GigaBytes/Second"},
+};
+
+static size_t DumpNames(ValkeyModuleCtx *ctx, const vmsdk::module::Options & options, const Base* field) {
+    VMSDK_LOG(WARNING, ctx) << "Dumping Info Field: " << field->GetSection() << "/" << field->GetName();
+    ValkeyModule_ReplyWithCString(ctx, "Section");
+    ValkeyModule_ReplyWithCString(ctx, field->GetSection().data());
+    ValkeyModule_ReplyWithCString(ctx, "InternalName");
+    ValkeyModule_ReplyWithCString(ctx, field->GetName().data());
+    std::string external_name = options.name + "." + field->GetName();
+    ValkeyModule_ReplyWithCString(ctx, "ExternalName");
+    ValkeyModule_ReplyWithCString(ctx, external_name.data());
+    return 6;
+}
+
+absl::Status DumpInfoMetaData(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator itr, const vmsdk::module::Options& options) {
+    if (itr.DistanceEnd() > 0) {
+        return absl::InvalidArgumentError("Too many parameters");
+    }
+    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+    size_t num_infos = 0;
+    SectionMap& section_map = GetSectionMap();
+    for (const auto& [section, section_info] : section_map) {
+        for (const auto& [name, field] : section_info.fields_) {
+            num_infos++;
+            ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+            size_t response_length = DumpNames(ctx, options, field);
+            ValkeyModule_ReplyWithCString(ctx, "Units");
+            ValkeyModule_ReplyWithCString(ctx, kUnitsToString[field->GetUnits()].data());
+            ValkeyModule_ReplyWithCString(ctx, "Application");
+            ValkeyModule_ReplyWithBool(ctx, field->IsApplication());
+            response_length += 4;
+            if (field->IsVisible()) {
+                ValkeyModule_ReplyWithCString(ctx, "Value");
+                field->Reply(ctx);
+                response_length += 2;
+            }
+            ValkeyModule_ReplySetArrayLength(ctx, response_length);
+        }
+    }
+    ValkeyModule_ReplySetArrayLength(ctx, num_infos);
+    return absl::OkStatus();
+}
+
+absl::Status DumpInfoValues(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator itr, const vmsdk::module::Options& options) {
+    if (itr.DistanceEnd() > 0) {
+        return absl::InvalidArgumentError("Too many parameters");
+    }
+    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+    size_t num_infos = 0;
+    SectionMap& section_map = GetSectionMap();
+    for (const auto& [section, section_info] : section_map) {
+        for (const auto& [name, field] : section_info.fields_) {
+            if (field->IsVisible()) {
+                ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+                ValkeyModule_ReplyWithCString(ctx, "Value");
+                field->Reply(ctx);
+                ValkeyModule_ReplySetArrayLength(ctx, 2 + DumpNames(ctx, options, field));
+                num_infos++;
+            }
+        }
+    }
+    ValkeyModule_ReplySetArrayLength(ctx, num_infos);
+    return absl::OkStatus();
 }
 
 }

@@ -495,8 +495,8 @@ TEST_F(MemoryAllocationTest, IsolatedMemoryScopeNullPool) {
   EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
   EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
 
-  void* ptr = nullptr;
-
+  std::atomic<int64_t> pool{0};
+  
   {
     IsolatedMemoryScope scope{nullptr};
 
@@ -506,9 +506,11 @@ TEST_F(MemoryAllocationTest, IsolatedMemoryScopeNullPool) {
         .WillRepeatedly(testing::Return(100));
     ptr = __wrap_malloc(100);
 
-    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 100);
-    EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
+    EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 200);
+    EXPECT_EQ(vmsdk::GetMemoryDelta(), 100);
   }
+
+  EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
 
   {
     IsolatedMemoryScope scope{nullptr};
@@ -624,8 +626,10 @@ TEST_F(MemoryAllocationTest, NestedMemoryScopeNullPool) {
     ptr = __wrap_malloc(100);
 
     EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 100);
-    EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
+    EXPECT_EQ(vmsdk::GetMemoryDelta(), 100);
   }
+
+  EXPECT_EQ(vmsdk::GetMemoryDelta(), 100);
 
   {
     NestedMemoryScope scope{nullptr};

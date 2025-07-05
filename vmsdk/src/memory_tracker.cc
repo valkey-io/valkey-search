@@ -50,9 +50,9 @@ IsolatedMemoryScope::~IsolatedMemoryScope() {
         int64_t current_delta = vmsdk::GetMemoryDelta();
         int64_t net_change = current_delta - baseline_memory_;
         target_pool_->fetch_add(net_change);
-
-        vmsdk::SetMemoryDelta(baseline_memory_);
     }
+
+    vmsdk::SetMemoryDelta(baseline_memory_);
 }
 
 NestedMemoryScope::NestedMemoryScope(std::atomic<int64_t>* pool)

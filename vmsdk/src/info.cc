@@ -332,7 +332,9 @@ absl::Status DumpInfoMetaData(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator itr, con
             ValkeyModule_ReplyWithCString(ctx, kUnitsToString[field->GetUnits()].data());
             ValkeyModule_ReplyWithCString(ctx, "Application");
             ValkeyModule_ReplyWithBool(ctx, field->IsApplication());
-            response_length += 4;
+            ValkeyModule_ReplyWithCString(ctx, "Cumulative");
+            ValkeyModule_ReplyWithBool(ctx, field->IsCumulative());
+            response_length += 6;
             if (field->IsVisible()) {
                 ValkeyModule_ReplyWithCString(ctx, "Value");
                 field->Reply(ctx);

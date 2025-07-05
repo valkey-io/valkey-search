@@ -70,11 +70,14 @@ enum Flags {
     // By default, fields aren't considered crash-safe, set this flag to indicate that they are
     //
     kCrashSafe = 4,     // This field is Crash Safe
-
     //
-    // For Numeric
+    // For Numeric, this flag indicates that the value is displayed as an "SI Byte" value. 
     //
     kSIBytes = 8,
+    //
+    // Numeric Metrics are generally either "Sampling" or "Cumulative". Default is Cumulative
+    //
+    kSampling = 16,
 }; 
 
 enum Units {
@@ -124,6 +127,12 @@ protected:
     }
     bool IsDeveloper() const {
         return (flags_ & Flags::kDeveloper) != 0;
+    }
+    bool IsSampling() const {
+        return (flags_ & Flags::kSampling) != 0;
+    }
+    bool IsCumulative() const {
+        return !IsSampling();
     }
 };
 
@@ -177,6 +186,18 @@ struct NumericBuilder {
     NumericBuilder& Computed(std::function<T()> compute_func) {
         compute_func_ = compute_func;
         flags_ = Flags(flags_ & ~Flags::kCrashSafe);
+        return *this;
+    }
+
+    // Mark as Sampling
+    NumericBuilder& Sampling() {
+        flags_ = Flags(flags_ | Flags::kSampling);
+        return *this;
+    }
+
+    // Mark as Cumulative
+    NumericBuilder& Cumulative() {
+        flags_ = Flags(flags_ & ~Flags::kSampling);
         return *this;
     }
 

@@ -308,12 +308,10 @@ static size_t DumpNames(ValkeyModuleCtx *ctx, const vmsdk::module::Options & opt
     VMSDK_LOG(WARNING, ctx) << "Dumping Info Field: " << field->GetSection() << "/" << field->GetName();
     ValkeyModule_ReplyWithCString(ctx, "Section");
     ValkeyModule_ReplyWithCString(ctx, field->GetSection().data());
-    ValkeyModule_ReplyWithCString(ctx, "InternalName");
-    ValkeyModule_ReplyWithCString(ctx, field->GetName().data());
     std::string external_name = options.name + "." + field->GetName();
-    ValkeyModule_ReplyWithCString(ctx, "ExternalName");
+    ValkeyModule_ReplyWithCString(ctx, "Name");
     ValkeyModule_ReplyWithCString(ctx, external_name.data());
-    return 6;
+    return 4;
 }
 
 absl::Status DumpInfoMetaData(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator itr, const vmsdk::module::Options& options) {

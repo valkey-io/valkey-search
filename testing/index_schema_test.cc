@@ -847,70 +847,6 @@ TEST_F(IndexSchemaBackfillTest, PerformBackfill_SwapDB) {
   }
 }
 
-TEST_F(IndexSchemaBackfillTest, PerformBackfill_MemoryScopeConstructor) {
-  std::vector<absl::string_view> key_prefixes = {"prefix:"};
-  std::string index_schema_name_str("test_index");
-
-  ValkeyModuleCtx parent_ctx;
-  ValkeyModuleCtx scan_ctx;
-
-  EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&parent_ctx))
-      .WillRepeatedly(Return(&scan_ctx));
-  EXPECT_CALL(*kMockValkeyModule, DbSize(testing::_))
-      .WillRepeatedly(Return(5));
-  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&parent_ctx))
-      .WillRepeatedly(Return(0));
-  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&scan_ctx))
-      .WillRepeatedly(Return(0));
-  auto index_schema = MockIndexSchema::Create(
-                          &parent_ctx, index_schema_name_str, key_prefixes,
-                          std::make_unique<HashAttributeDataType>(),
-                          nullptr)  // No thread pool for simplicity
-                          .value();
-
-  auto mock_index = std::make_shared<MockIndex>();
-  VMSDK_EXPECT_OK(index_schema->AddIndex("test_attribute", "test_identifier", mock_index));
-
-  EXPECT_CALL(*kMockValkeyModule,
-              Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor *>(),
-                   testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
-      .WillOnce([&](ValkeyModuleCtx *ctx, ValkeyModuleScanCursor *cursor,
-                    ValkeyModuleScanCB fn, void *privdata) -> int {
-        auto key_str = "prefix:test_key";
-        auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key_str);
-        ValkeyModuleKey key = {.ctx = ctx, .key = key_str};
-
-        EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
-            .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
-        EXPECT_CALL(*mock_index, IsTracked(testing::_))
-            .WillRepeatedly(Return(false));
-        EXPECT_CALL(*mock_index, AddRecord(testing::_, testing::_))
-            .WillOnce(Return(true));
-
-        ValkeyModuleString *value_valkey_str =
-            TestValkeyModule_CreateStringPrintf(nullptr, "test_data");
-        EXPECT_CALL(*kMockValkeyModule,
-                    HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
-                           testing::An<ValkeyModuleString **>(), testing::An<void *>()))
-            .WillOnce([value_valkey_str](ValkeyModuleKey *key, int flags,
-                                      const char *field, ValkeyModuleString **value_out,
-                                      void *terminating_null) {
-              *value_out = value_valkey_str;
-              return VALKEYMODULE_OK;
-            });
-
-        fn(ctx, key_valkey_str.get(), &key, privdata);
-
-        // simulate the memory allocation
-        vmsdk::ReportAllocMemorySize(1024 * 1024);
-        return 0;
-      });
-
-  uint32_t scanned = index_schema->PerformBackfill(&parent_ctx, 10);
-
-  EXPECT_EQ(index_schema->GetMemoryPool().load(), 1024 * 1024);
-}
-
 INSTANTIATE_TEST_SUITE_P(
     IndexSchemaBackfillTests, IndexSchemaBackfillTest,
     Combine(Bool(),
@@ -1195,60 +1131,6 @@ TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
   }
 }
 
-TEST_F(IndexSchemaRDBTest, MemoryScopeConstructorInLoadFromRDB) {
-  ValkeyModuleCtx fake_ctx;
-
-  data_model::IndexSchema index_schema_proto;
-  index_schema_proto.set_name("test_index");
-  index_schema_proto.set_db_num(0);
-  index_schema_proto.set_attribute_data_type(data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
-  index_schema_proto.add_subscribed_key_prefixes("prefix:");
-
-  ValkeyModuleCtx scan_ctx;
-  EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&fake_ctx))
-      .WillRepeatedly(Return(&scan_ctx));
-  EXPECT_CALL(*kMockValkeyModule, SelectDb(&scan_ctx, 0))
-      .WillRepeatedly(Return(VALKEYMODULE_OK));
-
-  FakeSafeRDB fake_rdb;
-
-  data_model::SupplementalContentHeader supp_header;
-  supp_header.set_type(data_model::SUPPLEMENTAL_CONTENT_INDEX_CONTENT);
-  data_model::Attribute* attribute = supp_header.mutable_index_content_header()->mutable_attribute();
-  attribute->set_alias("test_attr");
-  attribute->set_identifier("test_attr_id");
-  attribute->mutable_index()->mutable_tag_index();
-
-  std::string serialized_supp = supp_header.SerializeAsString();
-  VMSDK_EXPECT_OK(fake_rdb.SaveStringBuffer(serialized_supp));
-
-  data_model::SupplementalContentChunk chunk_1;
-  chunk_1.set_binary_content("test-content");
-  std::string serialized_chunk_1 = chunk_1.SerializeAsString();
-  VMSDK_EXPECT_OK(fake_rdb.SaveStringBuffer(serialized_chunk_1));
-
-  data_model::SupplementalContentChunk chunk_2;
-  std::string serialized_chunk_2 = chunk_2.SerializeAsString();
-  VMSDK_EXPECT_OK(fake_rdb.SaveStringBuffer(serialized_chunk_2));
-
-  EXPECT_CALL(*kMockValkeyModule, CreateString(testing::_, testing::_, testing::_))
-      .WillOnce(testing::Invoke([](ValkeyModuleCtx* ctx, const char* ptr, size_t len) -> ValkeyModuleString* {
-        // simulate the memory allocation
-        vmsdk::ReportAllocMemorySize(1024 * 1024);
-        return new ValkeyModuleString{std::string(ptr, len)};
-      }))
-      .WillRepeatedly(testing::Invoke([](ValkeyModuleCtx* ctx, const char* ptr, size_t len) -> ValkeyModuleString* {
-        return new ValkeyModuleString{std::string(ptr, len)};
-      }));
-
-  auto result = IndexSchema::LoadFromRDB(&fake_ctx, nullptr,
-                                        std::make_unique<data_model::IndexSchema>(index_schema_proto),
-                                        SupplementalContentIter(&fake_rdb, 1));
-
-  VMSDK_EXPECT_OK_STATUSOR(result);
-  EXPECT_EQ(result.value()->GetMemoryPool().load(), 1024 * 1024);
-}
-
 class IndexSchemaFriendTest : public ValkeySearchTest {
   void SetUp() override {
     ValkeySearchTest::SetUp();
@@ -1517,48 +1399,6 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
   EXPECT_EQ(stats.subscription_add.failure_cnt, 0);
   EXPECT_EQ(stats.subscription_remove.failure_cnt, 0);
   EXPECT_EQ(stats.subscription_modify.failure_cnt, 0);
-}
-
-TEST_F(IndexSchemaFriendTest, ProcessMutation_MemoryScopeConstructor) {
-  data_model::IndexSchema index_schema_proto;
-  index_schema_proto.set_name("test_index");
-  index_schema_proto.set_db_num(0);
-  index_schema_proto.set_attribute_data_type(data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
-  index_schema_proto.add_subscribed_key_prefixes("prefix:");
-
-  ValkeyModuleCtx scan_ctx;
-  EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&fake_ctx))
-      .WillRepeatedly(Return(&scan_ctx));
-  EXPECT_CALL(*kMockValkeyModule, SelectDb(&scan_ctx, 0))
-      .WillRepeatedly(Return(VALKEYMODULE_OK));
-
-  auto test_index_schema = IndexSchema::Create(
-                              &fake_ctx,
-                              index_schema_proto,
-                              nullptr)  // No thread pool - ProcessMutation will call SyncProcessMutation directly
-                              .value();
-
-  auto mock_index = std::make_shared<MockIndex>();
-  VMSDK_EXPECT_OK(test_index_schema->AddIndex("test_attribute", "test_identifier", mock_index));
-
-  auto key_interned = StringInternStore::Intern("prefix:test_key");
-  EXPECT_CALL(*mock_index, IsTracked(key_interned))
-      .WillRepeatedly(Return(false));  // Called twice: once directly, once in IsTrackedByAnyIndex
-  EXPECT_CALL(*mock_index, AddRecord(key_interned, testing::_))
-      .WillOnce([](const auto&, const auto&) {
-        // Simulate memory allocation by directly reporting memory usage
-        vmsdk::ReportAllocMemorySize(1024 * 1024);
-        return true;
-      });
-
-      IndexSchema::MutatedAttributes mutated_attributes;
-  mutated_attributes["test_attribute"].data = vmsdk::MakeUniqueValkeyString("test_data");
-
-  auto before_memory_pool = test_index_schema->GetMemoryPool().load();
-
-  test_index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned, false);
-
-  EXPECT_EQ(test_index_schema->GetMemoryPool().load(), before_memory_pool + 1024 * 1024);
 }
 
 class IndexSchemaTest : public vmsdk::ValkeyTest {};

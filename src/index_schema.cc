@@ -52,7 +52,6 @@
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
-#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search {
 
@@ -163,8 +162,6 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
   auto res = std::shared_ptr<IndexSchema>(
       new IndexSchema(ctx, index_schema_proto, std::move(attribute_data_type),
                       mutations_thread_pool));
-
-  NestedMemoryScope scope {&res->memory_pool_};
 
   VMSDK_RETURN_IF_ERROR(res->Init(ctx));
   if (!skip_attributes) {
@@ -380,8 +377,6 @@ bool IndexSchema::IsTrackedByAnyIndex(const InternedStringPtr &key) const {
 void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
                                       const InternedStringPtr &key) {
-  NestedMemoryScope scope {&memory_pool_};
-
   vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
   for (auto &attribute_data_itr : mutated_attributes) {
     const auto itr = attributes_.find(attribute_data_itr.first);
@@ -583,8 +578,6 @@ void IndexSchema::BackfillScanCallback(ValkeyModuleCtx *ctx,
 
 uint32_t IndexSchema::PerformBackfill(ValkeyModuleCtx *ctx,
                                       uint32_t batch_size) {
-  NestedMemoryScope scope {&memory_pool_};
-
   auto &backfill_job = backfill_job_.Get();
   if (!backfill_job.has_value() || backfill_job->IsScanDone()) {
     return 0;
@@ -669,7 +662,7 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithArray(ctx, 28);
+  ValkeyModule_ReplyWithArray(ctx, 26);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
   ValkeyModule_ReplyWithSimpleString(ctx, "index_options");
@@ -729,9 +722,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
                .c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "state");
   ValkeyModule_ReplyWithSimpleString(ctx, GetStateForInfo().data());
-  ValkeyModule_ReplyWithSimpleString(ctx, "index_size_mb");
-  ValkeyModule_ReplyWithSimpleString(
-    ctx, absl::StrFormat("%lu", GetMemoryUsage() / 1024 / 1024).c_str());
 }
 
 bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {
@@ -835,8 +825,6 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
       auto index_schema,
       IndexSchema::Create(ctx, *index_schema_proto, mutations_thread_pool,
                           /*skip_attributes=*/true));
-
-  NestedMemoryScope scope {&index_schema->memory_pool_};
 
   // Supplemental content will include indices and any content for them
   while (supplemental_iter.HasNext()) {

@@ -32,7 +32,7 @@
 
 thread_local MemoryScope* MemoryScope::current_scope_ = nullptr;
 
-MemoryScope::MemoryScope(std::atomic<int64_t>* pool)
+MemoryScope::MemoryScope(std::atomic<int64_t>& pool)
     : target_pool_(pool), baseline_memory_(vmsdk::GetMemoryDelta()) {
     current_scope_ = this;
 }
@@ -41,28 +41,24 @@ MemoryScope* MemoryScope::GetCurrentScope() {
     return current_scope_;
 }
 
-IsolatedMemoryScope::IsolatedMemoryScope(std::atomic<int64_t>* pool)
+IsolatedMemoryScope::IsolatedMemoryScope(std::atomic<int64_t>& pool)
     : MemoryScope(pool) {
 }
 
 IsolatedMemoryScope::~IsolatedMemoryScope() {
-    if (target_pool_ != nullptr) {
-        int64_t current_delta = vmsdk::GetMemoryDelta();
-        int64_t net_change = current_delta - baseline_memory_;
-        target_pool_->fetch_add(net_change);
-    }
+    int64_t current_delta = vmsdk::GetMemoryDelta();
+    int64_t net_change = current_delta - baseline_memory_;
+    target_pool_.fetch_add(net_change);
 
     vmsdk::SetMemoryDelta(baseline_memory_);
 }
 
-NestedMemoryScope::NestedMemoryScope(std::atomic<int64_t>* pool)
+NestedMemoryScope::NestedMemoryScope(std::atomic<int64_t>& pool)
     : MemoryScope(pool) {
 }
 
 NestedMemoryScope::~NestedMemoryScope() {
-    if (target_pool_ != nullptr) {
-        int64_t current_delta = vmsdk::GetMemoryDelta();
-        int64_t net_change = current_delta - baseline_memory_;
-        target_pool_->fetch_add(net_change);
-    }
+    int64_t current_delta = vmsdk::GetMemoryDelta();
+    int64_t net_change = current_delta - baseline_memory_;
+    target_pool_.fetch_add(net_change);
 }

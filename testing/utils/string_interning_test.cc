@@ -116,7 +116,7 @@ TEST_F(StringInterningTest, MemoryTrackingIsolation) {
   std::atomic<int64_t> caller_pool{0};
   std::shared_ptr<InternedString> interned_str;
 
-  NestedMemoryScope scope{&caller_pool};
+  NestedMemoryScope scope{caller_pool};
   auto allocator = std::make_unique<MockAllocator>();
   auto before_memory_delta = vmsdk::GetMemoryDelta();
 

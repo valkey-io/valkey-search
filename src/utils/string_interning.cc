@@ -36,7 +36,7 @@ InternedString::~InternedString() {
   }
   
   // NOTE: isolate memory tracking for deallocation.
-  IsolatedMemoryScope scope {&StringInternStore::memory_pool_};
+  IsolatedMemoryScope scope {StringInternStore::memory_pool_};
   
   if (is_data_owner_) {
     delete[] data_;
@@ -75,7 +75,7 @@ std::shared_ptr<InternedString> StringInternStore::InternImpl(
     }
   }
 
-  IsolatedMemoryScope scope {&memory_pool_};
+  IsolatedMemoryScope scope {memory_pool_};
 
   std::shared_ptr<InternedString> interned_string;
   if (allocator) {

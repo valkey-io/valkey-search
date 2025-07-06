@@ -162,7 +162,6 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
   auto res = std::shared_ptr<IndexSchema>(
       new IndexSchema(ctx, index_schema_proto, std::move(attribute_data_type),
                       mutations_thread_pool));
-
   VMSDK_RETURN_IF_ERROR(res->Init(ctx));
   if (!skip_attributes) {
     for (const auto &attribute : index_schema_proto.attributes()) {

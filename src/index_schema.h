@@ -127,7 +127,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   virtual void OnLoadingEnded(ValkeyModuleCtx *ctx);
 
   inline const Stats &GetStats() const { return stats_; }
-
   void ProcessSingleMutationAsync(ValkeyModuleCtx *ctx, bool from_backfill,
                                   const InternedStringPtr &key,
                                   vmsdk::StopWatch *delay_capturer);

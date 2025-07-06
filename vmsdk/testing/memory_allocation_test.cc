@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <atomic>
 
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "vmsdk/src/memory_allocation_overrides.h"
 #include "vmsdk/src/testing_infra/module.h"

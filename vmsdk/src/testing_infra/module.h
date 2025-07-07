@@ -558,7 +558,7 @@ inline ValkeyModuleString *TestValkeyModule_CreateString(ValkeyModuleCtx *ctx
                                                          [[maybe_unused]],
                                                          const char *ptr,
                                                          size_t len) {
-return new ValkeyModuleString{std::string(ptr, len)};
+  return new ValkeyModuleString{std::string(ptr, len)};
 }
 
 inline void TestValkeyModule_FreeString(ValkeyModuleCtx *ctx [[maybe_unused]],
@@ -1569,6 +1569,7 @@ inline void TestValkeyModule_Init() {
 
   ON_CALL(*kMockValkeyModule, GetCurrentUserName(testing::_))
       .WillByDefault(TestValkeyModule_GetCurrentUserNameImpl);
+
   ON_CALL(*kMockValkeyModule, CallReplyType(testing::_))
       .WillByDefault(TestValkeyModule_CallReplyTypeImpl);
   ON_CALL(*kMockValkeyModule, CallReplyStringPtr(testing::_, testing::_))

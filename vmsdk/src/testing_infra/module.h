@@ -129,8 +129,6 @@ class MockValkeyModule {
               (ValkeyModuleCtx * ctx, const char *buf, size_t len));
   MOCK_METHOD(int, FreeString,
               (ValkeyModuleCtx * ctx, ValkeyModuleString *str));
-  MOCK_METHOD(ValkeyModuleString *, CreateString,
-              (ValkeyModuleCtx * ctx, const char *str, size_t len));
   MOCK_METHOD(ValkeyModuleType *, CreateDataType,
               (ValkeyModuleCtx * ctx, const char *name, int encver,
                ValkeyModuleTypeMethods *typemethods));
@@ -560,7 +558,7 @@ inline ValkeyModuleString *TestValkeyModule_CreateString(ValkeyModuleCtx *ctx
                                                          [[maybe_unused]],
                                                          const char *ptr,
                                                          size_t len) {
-  return kMockValkeyModule->CreateString(ctx, ptr, len);
+return new ValkeyModuleString{std::string(ptr, len)};
 }
 
 inline void TestValkeyModule_FreeString(ValkeyModuleCtx *ctx [[maybe_unused]],
@@ -1571,10 +1569,6 @@ inline void TestValkeyModule_Init() {
 
   ON_CALL(*kMockValkeyModule, GetCurrentUserName(testing::_))
       .WillByDefault(TestValkeyModule_GetCurrentUserNameImpl);
-  ON_CALL(*kMockValkeyModule, CreateString(testing::_, testing::_, testing::_))
-      .WillByDefault([](ValkeyModuleCtx *ctx, const char *ptr, size_t len) -> ValkeyModuleString* {
-        return new ValkeyModuleString{std::string(ptr, len)};
-      });
   ON_CALL(*kMockValkeyModule, CallReplyType(testing::_))
       .WillByDefault(TestValkeyModule_CallReplyTypeImpl);
   ON_CALL(*kMockValkeyModule, CallReplyStringPtr(testing::_, testing::_))

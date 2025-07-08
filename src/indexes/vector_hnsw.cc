@@ -36,6 +36,7 @@
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -94,10 +95,9 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
         index->space_.get(), vector_index_proto.initial_cap(), hnsw_proto.m(),
         hnsw_proto.ef_construction());
     index->algo_->setEf(hnsw_proto.ef_runtime());
-    // Notes:
-    // 1. Not allowing replace delete is aligned with RediSearch
-    // 2. Consider making allow_replace_deleted_ configurable
-    index->algo_->allow_replace_deleted_ = false;
+    // The allow_replace_deleted_ flag is configurable
+    // When enabled, deleted elements can be replaced during insertions
+    index->algo_->allow_replace_deleted_ = options::GetHNSWAllowReplaceDeleted().GetValue();
     return index;
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_create_exceptions_cnt;
@@ -159,10 +159,8 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
                                 vector_index_proto.initial_cap(), index.get()));
     // ef_runtime is not persisted in the index contents
     index->algo_->setEf(vector_index_proto.hnsw_algorithm().ef_runtime());
-    // Notes:
-    // 1. Not allowing replace delete is aligned with RediSearch
-    // 2. Consider making allow_replace_deleted_ configurable
-    index->algo_->allow_replace_deleted_ = false;
+    // Apply the configured value for allow_replace_deleted_
+    index->algo_->allow_replace_deleted_ = options::GetHNSWAllowReplaceDeleted().GetValue();
     return index;
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_create_exceptions_cnt;
@@ -185,7 +183,9 @@ absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
 
-      algo_->addPoint((T *)record.data(), internal_id);
+      // When allow_replace_deleted_ is enabled, pass replace_deleted=true
+      // to enable reusing deleted slots
+      algo_->addPoint((T *)record.data(), internal_id, algo_->allow_replace_deleted_);
       return absl::OkStatus();
     } catch (const std::exception &e) {
       std::string error_msg = e.what();
@@ -229,6 +229,11 @@ int VectorHNSW<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithLongLong(ctx, GetEfConstruction());
   ValkeyModule_ReplyWithSimpleString(ctx, "ef_runtime");
   ValkeyModule_ReplyWithLongLong(ctx, GetEfRuntime());
+  ValkeyModule_ReplyWithSimpleString(ctx, "curr_vectors");
+  ValkeyModule_ReplyWithLongLong(ctx, GetElementCount());
+  ValkeyModule_ReplyWithSimpleString(ctx, "curr_deleted_vectors");
+  ValkeyModule_ReplyWithLongLong(ctx, GetDeletedCount());
+
   return 4;
 }
 

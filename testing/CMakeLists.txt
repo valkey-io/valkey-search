@@ -251,6 +251,23 @@ target_link_libraries(filter_test PUBLIC predicate)
 target_link_libraries(filter_test PUBLIC string_interning)
 finalize_test_flags(filter_test)
 
+set(SRCS_HNSW_ALLOW_REPLACE_DELETED_TEST
+    ${CMAKE_CURRENT_LIST_DIR}/hnsw_allow_replace_deleted_test.cc)
+add_executable(hnsw_allow_replace_deleted_test ${SRCS_HNSW_ALLOW_REPLACE_DELETED_TEST})
+target_include_directories(hnsw_allow_replace_deleted_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(hnsw_allow_replace_deleted_test PUBLIC testing_common)
+target_link_libraries(hnsw_allow_replace_deleted_test PUBLIC attribute_data_type)
+target_link_libraries(hnsw_allow_replace_deleted_test PUBLIC index_schema_cc_proto)
+target_link_libraries(hnsw_allow_replace_deleted_test PUBLIC index_base)
+target_link_libraries(hnsw_allow_replace_deleted_test PUBLIC vector_base)
+target_link_libraries(hnsw_allow_replace_deleted_test PUBLIC vector_flat)
+target_link_libraries(hnsw_allow_replace_deleted_test PUBLIC vector_hnsw)
+target_link_libraries(hnsw_allow_replace_deleted_test PUBLIC string_interning)
+target_link_libraries(hnsw_allow_replace_deleted_test PUBLIC hnswlib_vmsdk)
+target_link_libraries(hnsw_allow_replace_deleted_test PUBLIC managed_pointers)
+target_link_libraries(hnsw_allow_replace_deleted_test PUBLIC type_conversions)
+finalize_test_flags(hnsw_allow_replace_deleted_test)
+
 set(SRCS_NUMERIC_INDEX_TEST ${CMAKE_CURRENT_LIST_DIR}/numeric_index_test.cc)
 
 add_executable(numeric_index_test ${SRCS_NUMERIC_INDEX_TEST})

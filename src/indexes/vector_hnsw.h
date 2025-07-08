@@ -63,6 +63,12 @@ class VectorHNSW : public VectorBase {
   size_t GetEfRuntime() const ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
     return algo_->ef_;
   }
+  size_t GetDeletedCount() const ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+    return algo_->getDeletedCount();
+  }
+  size_t GetElementCount() const ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+    return algo_->getCurrentElementCount();
+  }
 
   absl::StatusOr<std::deque<Neighbor>> Search(
       absl::string_view query, uint64_t count,

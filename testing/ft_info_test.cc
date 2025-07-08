@@ -144,13 +144,15 @@ INSTANTIATE_TEST_SUITE_P(
                             "dimensions\r\n:10\r\n+distance_metric\r\n+"
                             "COSINE\r\n+size\r\n$1\r\n0\r\n+data_type\r\n+"
                             "FLOAT32\r\n+algorithm\r\n*8\r\n+name\r\n+HNSW\r\n+"
-                            "m\r\n:240\r\n+ef_construction\r\n:400\r\n+ef_"
-                            "runtime\r\n:30\r\n+num_docs\r\n$1\r\n0\r\n+num_"
-                            "terms\r\n$1\r\n0\r\n+num_records\r\n$1\r\n0\r\n+"
-                            "hash_indexing_failures\r\n$1\r\n0\r\n+backfill_in_"
-                            "progress\r\n$1\r\n0\r\n+backfill_complete_"
-                            "percent\r\n$8\r\n1.000000\r\n+mutation_queue_"
-                            "size\r\n$1\r\n0\r\n+recent_mutations_queue_"
+                            "m\r\n:240\r\n+ef_construction\r\n:400\r\n+"
+                            "ef_runtime\r\n:30\r\n+curr_vectors\r\n:0\r\n+"
+                            "curr_deleted_vectors\r\n:0\r\n+num_docs\r\n$"
+                            "1\r\n0\r\n+"
+                            "num_terms\r\n$1\r\n0\r\n+num_records\r\n$"
+                            "1\r\n0\r\n+hash_indexing_failures\r\n$1\r\n0\r\n+"
+                            "backfill_in_progress\r\n$1\r\n0\r\n+backfill_"
+                            "complete_percent\r\n$8\r\n1.000000\r\n+mutation_"
+                            "queue_size\r\n$1\r\n0\r\n+recent_mutations_queue_"
                             "delay\r\n$5\r\n0 sec\r\n+state\r\n+ready\r\n",
                     },
                 },

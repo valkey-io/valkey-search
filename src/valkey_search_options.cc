@@ -23,6 +23,7 @@ constexpr absl::string_view kReaderThreadsConfig{"reader-threads"};
 constexpr absl::string_view kWriterThreadsConfig{"writer-threads"};
 constexpr absl::string_view kUseCoordinator{"use-coordinator"};
 constexpr absl::string_view kLogLevel{"log-level"};
+constexpr absl::string_view kHNSWAllowReplaceDeleted{"hnsw-allow-replace-deleted"};
 
 static const int64_t kDefaultThreadsCount = vmsdk::GetPhysicalCPUCoresCount();
 
@@ -139,6 +140,12 @@ static auto log_level =
         .WithValidationCallback(ValidateLogLevel)
         .Build();
 
+/// Register the "--hnsw-allow-replace-deleted" flag.
+static auto hnsw_allow_replace_deleted =
+    config::BooleanBuilder(kHNSWAllowReplaceDeleted, false)  // default false
+        .WithFlags(VALKEYMODULE_CONFIG_DEFAULT)
+        .Build();
+
 vmsdk::config::Number& GetHNSWBlockSize() {
   return dynamic_cast<vmsdk::config::Number&>(*hnsw_block_size);
 }
@@ -155,12 +162,21 @@ const vmsdk::config::Boolean& GetUseCoordinator() {
   return dynamic_cast<const vmsdk::config::Boolean&>(*use_coordinator);
 }
 
+const config::Boolean& GetHNSWAllowReplaceDeleted() {
+  return dynamic_cast<const config::Boolean&>(*hnsw_allow_replace_deleted);
+}
+
+config::Boolean& GetHNSWAllowReplaceDeletedMutable() {
+  return dynamic_cast<config::Boolean&>(*hnsw_allow_replace_deleted);
+}
+
 vmsdk::config::Enum& GetLogLevel() {
   return dynamic_cast<vmsdk::config::Enum&>(*log_level);
 }
 
 absl::Status Reset() {
   VMSDK_RETURN_IF_ERROR(use_coordinator->SetValue(false));
+  VMSDK_RETURN_IF_ERROR(hnsw_allow_replace_deleted->SetValue(false));
   return absl::OkStatus();
 }
 

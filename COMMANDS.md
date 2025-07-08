@@ -110,7 +110,9 @@ An array of key value pairs.
         - **name**	(string)	HNSW or FLAT  
         - **m**	(integer)	The count of maximum permitted outgoing edges for each node in the graph in each layer. The maximum number of outgoing edges is 2\*M for layer 0\. The Default is 16\. The maximum is 512\.  
         - **ef\_construction**	(integer)	The count of vectors in the index. The default is 200, and the max is 4096\. Higher values increase the time needed to create indexes, but improve the recall ratio.  
-        - **ef\_runtime**	(integer)	The count of vectors to be examined during a query operation. The default is 10, and the max is 4096\.
+        - **ef\_runtime**	(integer)	The count of vectors to be examined during a query operation. The default is 10, and the max is 4096\.  
+        - **curr\_vectors**	(integer)	The current total number of vectors stored in the index, including both active and deleted vectors.  
+        - **curr\_deleted\_vectors**	(integer)	The current number of deleted vector slots in the index that can potentially be reused for new vectors.
 
 ## FT._LIST
 ```

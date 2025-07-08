@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/commands/ft_search.h"
@@ -109,16 +87,16 @@ void SendReplyTest::DoSendReplyTest(
     const std::set<std::string> &hash_get_exclude_ids,
     const std::set<std::string> &open_key_exclude_ids,
     vmsdk::ThreadPool *mutations_thread_pool) {
-  RedisModuleCtx fake_ctx;
+  ValkeyModuleCtx fake_ctx;
   SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
       &fake_ctx, []() {}, mutations_thread_pool, false));
 
   const std::string attribute_id = "attribute_id";
-  EXPECT_CALL(*kMockRedisModule,
-              HashGet(An<RedisModuleKey *>(),
-                      REDISMODULE_HASH_CFIELDS | REDISMODULE_HASH_EXISTS,
+  EXPECT_CALL(*kMockValkeyModule,
+              HashGet(An<ValkeyModuleKey *>(),
+                      VALKEYMODULE_HASH_CFIELDS | VALKEYMODULE_HASH_EXISTS,
                       An<const char *>(), An<int *>(), An<void *>()))
-      .WillRepeatedly([&](RedisModuleKey *module_key, int flags,
+      .WillRepeatedly([&](ValkeyModuleKey *module_key, int flags,
                           const char *field, int *exists,
                           void *terminating_null) {
         *exists = 1;
@@ -127,14 +105,14 @@ void SendReplyTest::DoSendReplyTest(
         if (hash_get_exclude_ids.find(key_str) != hash_get_exclude_ids.end()) {
           *exists = 0;
         }
-        return REDISMODULE_OK;
+        return VALKEYMODULE_OK;
       });
-  EXPECT_CALL(*kMockRedisModule,
-              ScanKey(An<RedisModuleKey *>(), An<RedisModuleScanCursor *>(),
-                      An<RedisModuleScanKeyCB>(), An<void *>()))
-      .WillRepeatedly([&](RedisModuleKey *key,
-                          RedisModuleScanCursor *scan_cursor,
-                          RedisModuleScanKeyCB fn, void *privdata) {
+  EXPECT_CALL(*kMockValkeyModule,
+              ScanKey(An<ValkeyModuleKey *>(), An<ValkeyModuleScanCursor *>(),
+                      An<ValkeyModuleScanKeyCB>(), An<void *>()))
+      .WillRepeatedly([&](ValkeyModuleKey *key,
+                          ValkeyModuleScanCursor *scan_cursor,
+                          ValkeyModuleScanKeyCB fn, void *privdata) {
         ++scan_cursor->cursor;
         if ((scan_cursor->cursor % 5) == 0) {
           return 0;
@@ -142,36 +120,36 @@ void SendReplyTest::DoSendReplyTest(
         if ((scan_cursor->cursor % 5) == 1) {
           static const absl::string_view field_str = "field1";
           static const absl::string_view value_str = "value1";
-          auto field = vmsdk::MakeUniqueRedisString(field_str);
-          auto value = vmsdk::MakeUniqueRedisString(value_str);
+          auto field = vmsdk::MakeUniqueValkeyString(field_str);
+          auto value = vmsdk::MakeUniqueValkeyString(value_str);
           fn(key, field.get(), value.get(), privdata);
           return 1;
         }
         if ((scan_cursor->cursor % 5) == 2) {
           std::string value2_str = input.attribute_alias + "_hash_value";
-          auto field = vmsdk::MakeUniqueRedisString(input.attribute_alias);
-          auto value = vmsdk::MakeUniqueRedisString(value2_str);
+          auto field = vmsdk::MakeUniqueValkeyString(input.attribute_alias);
+          auto value = vmsdk::MakeUniqueValkeyString(value2_str);
           fn(key, field.get(), value.get(), privdata);
           return 1;
         }
         if ((scan_cursor->cursor % 5) == 3) {
           static const absl::string_view field_str = "";
           static const absl::string_view value_str = "value1";
-          auto field = vmsdk::MakeUniqueRedisString(field_str);
-          auto value = vmsdk::MakeUniqueRedisString(value_str);
+          auto field = vmsdk::MakeUniqueValkeyString(field_str);
+          auto value = vmsdk::MakeUniqueValkeyString(value_str);
           fn(key, field.get(), value.get(), privdata);
           return 1;
         }
         fn(key, nullptr, nullptr, privdata);
         return 1;
       });
-  EXPECT_CALL(*kMockRedisModule,
-              OpenKey(&fake_ctx, An<RedisModuleString *>(), testing::_))
-      .WillRepeatedly(TestRedisModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(*kMockValkeyModule,
+              OpenKey(&fake_ctx, An<ValkeyModuleString *>(), testing::_))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
   for (const auto &key : open_key_exclude_ids) {
     EXPECT_CALL(
-        *kMockRedisModule,
-        OpenKey(&fake_ctx, vmsdk::RedisModuleStringValueEq(key), testing::_))
+        *kMockValkeyModule,
+        OpenKey(&fake_ctx, vmsdk::ValkeyModuleStringValueEq(key), testing::_))
         .WillRepeatedly(testing::Return(nullptr));
   }
 
@@ -197,7 +175,7 @@ void SendReplyTest::DoSendReplyTest(
   auto parameters = std::make_unique<query::VectorSearchParameters>();
   parameters->index_schema = test_index_schema;
   parameters->attribute_alias = attribute_alias;
-  parameters->score_as = vmsdk::MakeUniqueRedisString(score_as);
+  parameters->score_as = vmsdk::MakeUniqueValkeyString(score_as);
   parameters->k = 20;
   parameters->limit = input.limit;
   parameters->no_content = no_content;
@@ -479,7 +457,7 @@ class FTSearchTest : public ValkeySearchTestWithParam<
 };
 
 std::string GetNodeId(int i) {
-  return std::string(REDISMODULE_NODE_ID_LEN, 'a' + i);
+  return std::string(VALKEYMODULE_NODE_ID_LEN, 'a' + i);
 }
 
 TEST_P(FTSearchTest, FTSearchTests) {
@@ -502,20 +480,20 @@ TEST_P(FTSearchTest, FTSearchTests) {
     ValkeySearch::Instance().SetCoordinatorServer(std::move(mock_server));
     std::vector<std::string> node_ids = {GetNodeId(0), GetNodeId(1),
                                          GetNodeId(2)};
-    EXPECT_CALL(*kMockRedisModule,
+    EXPECT_CALL(*kMockValkeyModule,
                 GetClusterNodesList(testing::_, testing::An<size_t *>()))
-        .WillRepeatedly([node_ids](RedisModuleCtx *ctx, size_t *numnodes) {
+        .WillRepeatedly([node_ids](ValkeyModuleCtx *ctx, size_t *numnodes) {
           *numnodes = node_ids.size();
           char **res = new char *[3];
-          res[0] = new char[REDISMODULE_NODE_ID_LEN];
-          res[1] = new char[REDISMODULE_NODE_ID_LEN];
-          res[2] = new char[REDISMODULE_NODE_ID_LEN];
-          memcpy(res[0], node_ids[0].c_str(), REDISMODULE_NODE_ID_LEN);
-          memcpy(res[1], node_ids[1].c_str(), REDISMODULE_NODE_ID_LEN);
-          memcpy(res[2], node_ids[2].c_str(), REDISMODULE_NODE_ID_LEN);
+          res[0] = new char[VALKEYMODULE_NODE_ID_LEN];
+          res[1] = new char[VALKEYMODULE_NODE_ID_LEN];
+          res[2] = new char[VALKEYMODULE_NODE_ID_LEN];
+          memcpy(res[0], node_ids[0].c_str(), VALKEYMODULE_NODE_ID_LEN);
+          memcpy(res[1], node_ids[1].c_str(), VALKEYMODULE_NODE_ID_LEN);
+          memcpy(res[2], node_ids[2].c_str(), VALKEYMODULE_NODE_ID_LEN);
           return res;
         });
-    EXPECT_CALL(*kMockRedisModule, FreeClusterNodesList(testing::_))
+    EXPECT_CALL(*kMockValkeyModule, FreeClusterNodesList(testing::_))
         .WillRepeatedly([](char **ids) {
           delete[] ids[0];
           delete[] ids[1];
@@ -525,20 +503,20 @@ TEST_P(FTSearchTest, FTSearchTests) {
     for (size_t i = 0; i < node_ids.size(); ++i) {
       auto node_id = node_ids[i];
       EXPECT_CALL(
-          *kMockRedisModule,
+          *kMockValkeyModule,
           GetClusterNodeInfo(testing::_, testing::StrEq(node_id), testing::_,
                              testing::_, testing::_, testing::_))
-          .WillRepeatedly([i](RedisModuleCtx *ctx, const char *node_id,
+          .WillRepeatedly([i](ValkeyModuleCtx *ctx, const char *node_id,
                               char *ip, char *master_id, int *port,
                               int *flags) {
             memcpy(ip, "127.0.0.1", 9);
             *port = i;
             if (i == 0) {
-              *flags = REDISMODULE_NODE_MYSELF;
+              *flags = VALKEYMODULE_NODE_MYSELF;
             } else {
-              *flags = REDISMODULE_NODE_MASTER;
+              *flags = VALKEYMODULE_NODE_MASTER;
             }
-            return REDISMODULE_OK;
+            return VALKEYMODULE_OK;
           });
       if (i != 0) {
         auto mock_client = std::make_shared<coordinator::MockClient>();
@@ -561,23 +539,23 @@ TEST_P(FTSearchTest, FTSearchTests) {
     }
   }
   const FTSearchTestCase &test_case = std::get<2>(params);
-  EXPECT_CALL(*kMockRedisModule,
-              HashGet(An<RedisModuleKey *>(),
-                      REDISMODULE_HASH_CFIELDS | REDISMODULE_HASH_EXISTS,
+  EXPECT_CALL(*kMockValkeyModule,
+              HashGet(An<ValkeyModuleKey *>(),
+                      VALKEYMODULE_HASH_CFIELDS | VALKEYMODULE_HASH_EXISTS,
                       An<const char *>(), An<int *>(), An<void *>()))
-      .WillRepeatedly([&](RedisModuleKey *module_key, int flags,
+      .WillRepeatedly([&](ValkeyModuleKey *module_key, int flags,
                           const char *field, int *exists,
                           void *terminating_null) {
         *exists = 1;
-        return REDISMODULE_OK;
+        return VALKEYMODULE_OK;
       });
-  EXPECT_CALL(*kMockRedisModule,
+  EXPECT_CALL(*kMockValkeyModule,
               OpenKey(VectorExternalizer::Instance().GetCtx(),
-                      An<RedisModuleString *>(), testing::_))
-      .WillRepeatedly(TestRedisModule_OpenKeyDefaultImpl);
-  EXPECT_CALL(*kMockRedisModule,
-              OpenKey(&fake_ctx_, An<RedisModuleString *>(), testing::_))
-      .WillRepeatedly(TestRedisModule_OpenKeyDefaultImpl);
+                      An<ValkeyModuleString *>(), testing::_))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(*kMockValkeyModule,
+              OpenKey(&fake_ctx_, An<ValkeyModuleString *>(), testing::_))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
   auto index_schema = CreateVectorHNSWSchema(index_name, &fake_ctx_).value();
   auto vectors = DeterministicallyGenerateVectors(100, dimensions, 10.0);
   AddVectors(vectors);
@@ -585,33 +563,33 @@ TEST_P(FTSearchTest, FTSearchTests) {
   uint64_t i = 0;
   for (auto &vector : vectors) {
     ++i;
-    std::vector<RedisModuleString *> cmd_argv;
+    std::vector<ValkeyModuleString *> cmd_argv;
     std::transform(
         test_case.argv.begin(), test_case.argv.end(),
         std::back_inserter(cmd_argv), [&](std::string val) {
           if (val == "$index_name") {
-            return RedisModule_CreateString(&fake_ctx_, index_name.data(),
-                                            index_name.size());
+            return ValkeyModule_CreateString(&fake_ctx_, index_name.data(),
+                                             index_name.size());
           }
           if (val == "$embedding") {
-            return RedisModule_CreateString(&fake_ctx_, (char *)vector.data(),
-                                            vector.size() * sizeof(float));
+            return ValkeyModule_CreateString(&fake_ctx_, (char *)vector.data(),
+                                             vector.size() * sizeof(float));
           }
-          return RedisModule_CreateString(&fake_ctx_, val.data(), val.size());
+          return ValkeyModule_CreateString(&fake_ctx_, val.data(), val.size());
         });
     absl::Notification search_done;
     void *private_data_external = nullptr;
     if (use_thread_pool) {
-      EXPECT_CALL(*kMockRedisModule,
+      EXPECT_CALL(*kMockValkeyModule,
                   BlockClient(testing::_, testing::_, testing::_, testing::_,
                               testing::_))
-          .WillOnce(testing::Return((RedisModuleBlockedClient *)i));
-      EXPECT_CALL(*kMockRedisModule,
-                  UnblockClient((RedisModuleBlockedClient *)i, testing::_))
-          .WillOnce([&](RedisModuleBlockedClient *client, void *private_data) {
+          .WillOnce(testing::Return((ValkeyModuleBlockedClient *)i));
+      EXPECT_CALL(*kMockValkeyModule,
+                  UnblockClient((ValkeyModuleBlockedClient *)i, testing::_))
+          .WillOnce([&](ValkeyModuleBlockedClient *client, void *private_data) {
             private_data_external = private_data;
             search_done.Notify();
-            return REDISMODULE_OK;
+            return VALKEYMODULE_OK;
           });
     }
     EXPECT_EQ(vmsdk::CreateCommand<FTSearchCmd>(&fake_ctx_, cmd_argv.data(),
@@ -620,7 +598,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
     if (use_thread_pool) {
       fake_ctx_.reply_capture.ClearReply();
       search_done.WaitForNotification();
-      EXPECT_CALL(*kMockRedisModule, GetBlockedClientPrivateData(&fake_ctx_))
+      EXPECT_CALL(*kMockValkeyModule, GetBlockedClientPrivateData(&fake_ctx_))
           .WillRepeatedly(testing::InvokeWithoutArgs(
               [&] { return private_data_external; }));
       async::Reply(&fake_ctx_, nullptr, 0);
@@ -631,7 +609,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
     //      RE2::FullMatch(fake_ctx_.reply_capture.GetReply(), reply_regex));
     fake_ctx_.reply_capture.ClearReply();
     for (auto cmd_arg : cmd_argv) {
-      TestRedisModule_FreeString(&fake_ctx_, cmd_arg);
+      TestValkeyModule_FreeString(&fake_ctx_, cmd_arg);
     }
   }
 }
@@ -655,7 +633,7 @@ INSTANTIATE_TEST_SUITE_P(
                                      "DIALECT",
                                      "2",
                                  },
-                             .expected_run_return = REDISMODULE_OK,
+                             .expected_run_return = VALKEYMODULE_OK,
                          },
                      })),
     [](const TestParamInfo<::testing::tuple<bool, bool, FTSearchTestCase>>

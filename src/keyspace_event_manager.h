@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef VALKEYSEARCH_SRC_KEYSPACE_EVENT_MANAGER_H_
@@ -43,7 +21,7 @@
 
 namespace valkey_search {
 using StartSubscriptionFunction =
-    std::function<absl::Status(RedisModuleCtx *, int)>;
+    std::function<absl::Status(ValkeyModuleCtx *, int)>;
 
 // KeyspaceEventSubscription is an interface for classes that want to subscribe
 // to keyspace events.
@@ -63,18 +41,18 @@ class KeyspaceEventSubscription {
   // completely prefixed by B. Otherwise, duplicate events may fire.
   virtual const std::vector<std::string> &GetKeyPrefixes() const = 0;
 
-  virtual void OnKeyspaceNotification(RedisModuleCtx *ctx, int type,
+  virtual void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
                                       const char *event,
-                                      RedisModuleString *key) = 0;
+                                      ValkeyModuleString *key) = 0;
 };
 
 class KeyspaceEventManager {
  public:
   KeyspaceEventManager() = default;
-  void NotifySubscribers(RedisModuleCtx *ctx, int type, const char *event,
-                         RedisModuleString *key);
+  void NotifySubscribers(ValkeyModuleCtx *ctx, int type, const char *event,
+                         ValkeyModuleString *key);
 
-  absl::Status InsertSubscription(RedisModuleCtx *ctx,
+  absl::Status InsertSubscription(ValkeyModuleCtx *ctx,
                                   KeyspaceEventSubscription *subscription);
 
   absl::Status RemoveSubscription(KeyspaceEventSubscription *subscription);
@@ -86,13 +64,13 @@ class KeyspaceEventManager {
   static KeyspaceEventManager &Instance();
 
  private:
-  absl::Status StartRedisSubscriptionIfNeeded(RedisModuleCtx *ctx, int types);
+  absl::Status StartValkeySubscriptionIfNeeded(ValkeyModuleCtx *ctx, int types);
 
-  static inline int OnRedisKeyspaceNotification(RedisModuleCtx *ctx, int type,
+  static inline int OnValkeyKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
                                                 const char *event,
-                                                RedisModuleString *key) {
+                                                ValkeyModuleString *key) {
     Instance().NotifySubscribers(ctx, type, event, key);
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
   }
 
   vmsdk::MainThreadAccessGuard<absl::flat_hash_set<KeyspaceEventSubscription *>>

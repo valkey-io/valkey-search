@@ -11,7 +11,7 @@ class ValkeySearchTestCaseBase(ValkeyTestCase):
 
     @pytest.fixture(autouse=True)
     def setup_test(self, setup):
-        loadmodule = f"{os.getenv('MODULE_PATH')} --loadmodule {os.getenv('JSON_MODULE_PATH')}"
+        loadmodule = f"{os.getenv('MODULE_PATH')}"
         args = {
             "enable-debug-command": "yes",
             "loadmodule": loadmodule,

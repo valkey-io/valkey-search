@@ -145,9 +145,9 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request) {
             parameters->filter_parse_results.filter_identifiers));
   }
   for (auto& return_parameter : request.return_parameters()) {
-    parameters->return_attributes.emplace_back(query::ReturnAttribute(
-        vmsdk::MakeUniqueValkeyString(return_parameter.identifier()),
-        vmsdk::MakeUniqueValkeyString(return_parameter.alias())));
+    parameters->return_attributes.emplace_back(query::ReturnAttribute{
+        .identifier = vmsdk::MakeUniqueValkeyString(return_parameter.identifier()),
+        .alias = vmsdk::MakeUniqueValkeyString(return_parameter.alias())});
   }
   return parameters;
 }

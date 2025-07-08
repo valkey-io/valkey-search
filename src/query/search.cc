@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <deque>
+#include <iomanip>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -29,15 +30,18 @@
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
+#include "src/index_schema.h"
 #include "src/metrics.h"
 #include "src/query/planner.h"
 #include "src/query/predicate.h"
-#include "third_party/hnswlib/hnswlib.h"
+#include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
+#include "third_party/hnswlib/space_l2.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
-#include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -67,6 +71,11 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
 absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase *vector_index,
     const VectorSearchParameters &parameters) {
+  // Simple thread-safe logging without calling thread-unsafe methods
+  if (options::GetReIndexVectorRDBLoad().GetValue()) {
+    VMSDK_LOG(DEBUG, nullptr) << "Vector search with reindex-vector-rdb-load enabled";
+  }
+
   std::unique_ptr<InlineVectorFilter> inline_filter;
   if (parameters.filter_parse_results.root_predicate != nullptr) {
     inline_filter = std::make_unique<InlineVectorFilter>(
@@ -170,7 +179,11 @@ size_t EvaluateFilterAsPrimary(
     return EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
                                    entries_fetchers, !negate);
   }
-  CHECK(false);
+  if (predicate->GetType() == PredicateType::kNone) {
+    // Handle kNone predicate type that may occur during backfill
+    return 0;
+  }
+  CHECK(false) << "Unexpected predicate type: " << static_cast<int>(predicate->GetType());
 }
 
 struct PrefilteredKey {

@@ -36,6 +36,7 @@
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -148,6 +149,30 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     index->Init(vector_index_proto.dimension_count(),
                 vector_index_proto.distance_metric(), index->space_);
 
+    if (options::GetReIndexVectorRDBLoad().GetValue()) {
+      VMSDK_LOG(NOTICE, ctx) << "Skipping vector index RDB load - will rebuild via backfill";
+      
+      // Create empty HNSW index with same parameters as would be loaded from RDB
+      index->algo_ = std::make_unique<hnswlib::HierarchicalNSW<T>>(
+          index->space_.get(), 
+          vector_index_proto.initial_cap(), 
+          vector_index_proto.hnsw_algorithm().m(),
+          vector_index_proto.hnsw_algorithm().ef_construction());
+      
+      // Set runtime parameters exactly as normal RDB loading would
+      index->algo_->setEf(vector_index_proto.hnsw_algorithm().ef_runtime());
+      index->algo_->allow_replace_deleted_ = false;
+      
+      // Skip all supplemental content (index data and tracked keys)
+      while (iter.HasNext()) {
+        VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto content, iter.Next());
+        // Explicitly ignore
+      }
+      
+      return index;
+    }
+
+    // Current behavior: load full index and mappings
     index->algo_ =
         std::make_unique<hnswlib::HierarchicalNSW<T>>(index->space_.get());
     // initial_cap needs to be provided to retain the original initial_cap if

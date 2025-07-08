@@ -199,7 +199,16 @@ else()
       "${MODULES_COMMON_CMAKE_ARGS} -DSKIP_INSTALL_ALL=ON -DgRPC_INSTALL=ON -DgRPC_BUILD_TESTS=OFF -DgRPC_SSL_PROVIDER=package"
   )
 
+  # Force C++ standard for highwayhash before adding it as subdirectory
+  set(CMAKE_CXX_STANDARD_BACKUP ${CMAKE_CXX_STANDARD})
+  set(CMAKE_CXX_STANDARD 14)
   add_subdirectory(${MODULES_DIR}/highwayhash ${CMAKE_BINARY_DIR}/highwayhash)
+  set(CMAKE_CXX_STANDARD ${CMAKE_CXX_STANDARD_BACKUP})
+  # Set C++ standard for highwayhash target
+  if(TARGET highwayhash)
+    set_property(TARGET highwayhash PROPERTY CXX_STANDARD 14)
+    set_property(TARGET highwayhash PROPERTY CXX_STANDARD_REQUIRED ON)
+  endif()
   build_submodule(${MODULE_GOOGLE_TEST} "${GOOGLE_TEST_CMAKE_ARGS}"
                   "${MODULES_INSTALL_PREFIX}/include/gtest/gtest.h")
   build_submodule(${MODULE_GRPC} "${GRPC_CMAKE_ARGS}"

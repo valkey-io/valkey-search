@@ -42,6 +42,7 @@
 #include "src/keyspace_event_manager.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/log.h"
@@ -54,6 +55,13 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
+
+// Helper function to check if an index is a vector index
+bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {
+  return index->GetIndexerType() == indexes::IndexerType::kVector ||
+         index->GetIndexerType() == indexes::IndexerType::kHNSW ||
+         index->GetIndexerType() == indexes::IndexerType::kFlat;
+}
 
 LogLevel GetLogSeverity(bool ok) { return ok ? DEBUG : WARNING; }
 
@@ -647,7 +655,20 @@ absl::string_view IndexSchema::GetStateForInfo() const {
     if (backfill_job_.Get()->paused_by_oom) {
       return "backfill_paused_by_oom";
     } else {
-      return "backfill_in_progress";
+      // Check if we have vector indexes and reindex-vector-rdb-load was enabled
+      bool has_vector_index = false;
+      for (const auto &attribute : attributes_) {
+        if (IsVectorIndex(attribute.second.GetIndex())) {
+          has_vector_index = true;
+          break;
+        }
+      }
+      // TODO: This is not accurate in case we have backfill started due to new index (config set only has impact if index is loaded from rdb).
+      if (has_vector_index && options::GetReIndexVectorRDBLoad().GetValue()) {
+        return "vector_index_rebuilding";
+      } else {
+        return "backfill_in_progress";
+      }
     }
   }
 }
@@ -721,12 +742,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
                .c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "state");
   ValkeyModule_ReplyWithSimpleString(ctx, GetStateForInfo().data());
-}
-
-bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {
-  return index->GetIndexerType() == indexes::IndexerType::kVector ||
-         index->GetIndexerType() == indexes::IndexerType::kHNSW ||
-         index->GetIndexerType() == indexes::IndexerType::kFlat;
 }
 
 std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
@@ -853,10 +868,23 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
                             "(index: %s, attribute: %s)",
                             index_schema->GetName(), attribute.alias()));
       }
-      auto vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
-      VMSDK_RETURN_IF_ERROR(vector_index->LoadTrackedKeys(
-          ctx, &index_schema->GetAttributeDataType(),
-          supplemental_iter.IterateChunks()));
+      
+      if (options::GetReIndexVectorRDBLoad().GetValue()) {
+        // Skip loading tracked keys - let backfill rebuild everything
+        VMSDK_LOG(DEBUG, ctx) << "Skipping tracked keys RDB load for vector index " 
+                              << attribute.alias();
+        // Consume all chunks but don't load them
+        auto chunk_it = supplemental_iter.IterateChunks();
+        while (chunk_it.HasNext()) {
+          VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto chunk, chunk_it.Next());
+          // Explicitly ignore the chunk for skipping
+        }
+      } else {
+        auto vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
+        VMSDK_RETURN_IF_ERROR(vector_index->LoadTrackedKeys(
+            ctx, &index_schema->GetAttributeDataType(),
+            supplemental_iter.IterateChunks()));
+      }
     } else {
       VMSDK_LOG(NOTICE, ctx) << "Unknown supplemental content type: "
                              << data_model::SupplementalContentType_Name(

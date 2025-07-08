@@ -27,6 +27,12 @@ config::Number& GetWriterThreadCount();
 /// Return an immutable reference to the "use-coordinator" flag
 const config::Boolean& GetUseCoordinator();
 
+/// Return the configuration entry for skipping vector index RDB loading
+const config::Boolean& GetReIndexVectorRDBLoad();
+
+/// Return a mutable reference for testing
+config::Boolean& GetReIndexVectorRDBLoadMutable();
+
 /// Return the log level
 config::Enum& GetLogLevel();
 

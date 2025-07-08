@@ -33,7 +33,7 @@ class TestQueryParser(ValkeySearchTestCaseBase):
             )
             assert False
         except ResponseError as e:
-            assert str(e) == "Invalid filter expression: `@price:[10 20] | @category:{electronics|books}`. Query string recursive depth exceeded limit: 1"
+            assert str(e) == "Invalid filter expression: `@price:[10 20] | @category:{electronics|books}`. Query string is too complex"
         # Validate the success case with a query depth of 10.
         assert client.execute_command("CONFIG SET search.query-string-depth 10") == b"OK"
         assert client.execute_command(
@@ -58,7 +58,7 @@ class TestQueryParser(ValkeySearchTestCaseBase):
             )
             assert False
         except ResponseError as e:
-            assert str(e) == "Invalid filter expression: `((((((((((@price:[10 20]))))))))))`. Query string recursive depth exceeded limit: 10"
+            assert str(e) == "Invalid filter expression: `((((((((((@price:[10 20]))))))))))`. Query string is too complex"
         # Test that the config ranges from 1 to 4294967295
         try:
             client.execute_command("CONFIG SET search.query-string-depth 0")

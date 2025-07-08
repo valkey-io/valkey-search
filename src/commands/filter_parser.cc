@@ -325,8 +325,7 @@ std::unique_ptr<query::Predicate> WrapPredicate(
 absl::StatusOr<std::unique_ptr<query::Predicate>>
 FilterParser::ParseExpression(uint32_t level) {
   if (level++ >= options::GetQueryStringDepth()) {
-    return absl::InvalidArgumentError(absl::StrCat("Query string recursive depth exceeded limit: ",
-                                                   options::GetQueryStringDepth()));
+    return absl::InvalidArgumentError("Query string is too complex");
   }
   std::unique_ptr<query::Predicate> prev_predicate;
 

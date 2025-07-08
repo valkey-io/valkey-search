@@ -78,6 +78,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
 
     auto latency_sample = SAMPLE_EVERY_N(100);
     auto res = vector_hnsw->Search(parameters.query, parameters.k,
+                                  parameters.cancellation_token,
                                    std::move(inline_filter), parameters.ef);
     Metrics::GetStats().hnsw_vector_index_search_latency.SubmitSample(
         std::move(latency_sample));
@@ -87,6 +88,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
     auto vector_flat = dynamic_cast<indexes::VectorFlat<float> *>(vector_index);
     auto latency_sample = SAMPLE_EVERY_N(100);
     auto res = vector_flat->Search(parameters.query, parameters.k,
+                                    parameters.cancellation_token,
                                    std::move(inline_filter));
     Metrics::GetStats().flat_vector_index_search_latency.SubmitSample(
         std::move(latency_sample));

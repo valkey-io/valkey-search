@@ -33,6 +33,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
+#include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -207,6 +208,7 @@ absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
 template <typename T>
 absl::StatusOr<std::deque<Neighbor>> VectorFlat<T>::Search(
     absl::string_view query, uint64_t count,
+    cancel::Token &cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
   if (!IsValidSizeVector(query)) {
     return absl::InvalidArgumentError(absl::StrCat(
@@ -214,7 +216,7 @@ absl::StatusOr<std::deque<Neighbor>> VectorFlat<T>::Search(
         query.size(), ") does not match index's expected size (",
         dimensions_ * GetDataTypeSize(), ")."));
   }
-  auto perform_search = [this, count, &filter](absl::string_view query)
+  auto perform_search = [this, count, &filter, &cancellation_token](absl::string_view query)
       -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
     absl::ReaderMutexLock lock(&resize_mutex_);
     try {

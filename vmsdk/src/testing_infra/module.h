@@ -268,6 +268,7 @@ class MockValkeyModule {
   MOCK_METHOD(void, RdbStreamFree, (ValkeyModuleRdbStream * stream));
   MOCK_METHOD(ValkeyModuleString *, GetCurrentUserName,
               (ValkeyModuleCtx * ctx));
+  MOCK_METHOD(long long, Milliseconds, ());
 };
 // NOLINTBEGIN(readability-identifier-naming)
 // Global kMockValkeyModule is a fake Valkey module used for static wrappers
@@ -1418,6 +1419,10 @@ inline ValkeyModuleString *TestValkeyModule_GetCurrentUserNameImpl(
   return new ValkeyModuleString{std::string("default")};
 }
 
+inline long long TestValkeyModule_Milliseconds() {
+  return kMockValkeyModule->Milliseconds();
+}
+
 // TestValkeyModule_Init initializes the module API function table with mock
 // implementations of functions to prevent segmentation faults when
 // executing tests and to allow validation of Valkey module API calls.
@@ -1559,6 +1564,7 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_GetCurrentUserName = &TestValkeyModule_GetCurrentUserName;
   ValkeyModule_RegisterNumericConfig = &TestValkeyModule_RegisterNumericConfig;
   ValkeyModule_RegisterBoolConfig = &TestValkeyModule_RegisterBoolConfig;
+  ValkeyModule_Milliseconds = &TestValkeyModule_Milliseconds;
 
   kMockValkeyModule = new testing::NiceMock<MockValkeyModule>();
 
@@ -1599,6 +1605,7 @@ inline void TestValkeyModule_Init() {
   ON_CALL(*kMockValkeyModule,
           CallReplyMapElement(testing::_, testing::_, testing::_, testing::_))
       .WillByDefault(TestValkeyModule_CallReplyMapElementImpl);
+  ON_CALL(*kMockValkeyModule, Milliseconds()).WillByDefault(testing::Return(0));
   static absl::once_flag flag;
   absl::call_once(flag, []() { vmsdk::TrackCurrentAsMainThread(); });
   CHECK(vmsdk::InitLogging(nullptr, "debug").ok());

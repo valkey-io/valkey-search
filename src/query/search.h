@@ -27,6 +27,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
+#include "src/utils/cancel.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/thread_pool.h"
@@ -48,6 +49,7 @@ struct ReturnAttribute {
 };
 
 struct VectorSearchParameters {
+  mutable cancel::Token cancellation_token;
   std::shared_ptr<IndexSchema> index_schema;
   std::string index_schema_name;
   std::string attribute_alias;

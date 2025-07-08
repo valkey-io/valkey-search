@@ -29,6 +29,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
+#include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
 #include "third_party/hnswlib/space_ip.h"
@@ -53,6 +54,7 @@ const absl::flat_hash_map<data_model::DistanceMetric, std::string>
         {data_model::DISTANCE_METRIC_IP, typeid(kInnerProductSpace).name()},
         {data_model::DISTANCE_METRIC_L2, typeid(kL2Space).name()},
 };
+static cancel::Token cancel_never = cancel::OnTime::Make(100000);
 
 class VectorIndexTest : public ValkeySearchTest {
  public:
@@ -171,7 +173,7 @@ void TestIndex(T* index, int dimensions, int vector_size) {
                ExpectedResults::kSuccess, true);
 
   absl::string_view vector = VectorToStr(vectors_small_dim[0]);
-  auto res = index->Search(vector, 10);
+  auto res = index->Search(vector, 10, cancel_never);
   EXPECT_FALSE(res.ok());
   EXPECT_EQ(
       res.status().message(),
@@ -181,7 +183,7 @@ void TestIndex(T* index, int dimensions, int vector_size) {
           dimensions * sizeof(float), ")."));
   for (size_t i = 1; i < vectors.size() - 1; ++i) {
     absl::string_view vector = VectorToStr(vectors[i]);
-    auto res = index->Search(vector, 10);
+    auto res = index->Search(vector, 10, cancel_never);
     VMSDK_EXPECT_OK(res);
     if (res.ok()) {
       EXPECT_FALSE(res->empty());
@@ -362,8 +364,8 @@ float CalcRecall(VectorFlat<float>* flat_index, VectorHNSW<float>* hnsw_index,
   int cnt = 0;
   for (const auto& search_vector : search_vectors) {
     absl::string_view vector = VectorToStr(search_vector);
-    auto res_hnsw = hnsw_index->Search(vector, k, nullptr, ef_runtime);
-    auto res_flat = flat_index->Search(vector, k);
+    auto res_hnsw = hnsw_index->Search(vector, k, cancel_never, nullptr, ef_runtime);
+    auto res_flat = flat_index->Search(vector, k, cancel_never);
     for (auto& label : *res_hnsw) {
       for (auto& real_label : *res_flat) {
         if (label.external_id == real_label.external_id) {
@@ -533,7 +535,7 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
       }
       for (const auto& search_vector : search_vectors) {
         absl::string_view vector = VectorToStr(search_vector);
-        auto res = index->Search(vector, k);
+        auto res = index->Search(vector, k, cancel_never);
         expected_results.push_back(std::move(*res));
       }
       VMSDK_EXPECT_OK(index->SaveIndex(RDBChunkOutputStream(&rdb)));
@@ -554,7 +556,7 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
                                  SupplementalContentChunkIter(&rdb)));
       for (size_t i = 0; i < search_vectors.size(); ++i) {
         absl::string_view vector = VectorToStr(search_vectors[i]);
-        auto res = index->Search(vector, k);
+        auto res = index->Search(vector, k, cancel_never);
         EXPECT_EQ(ToVectorNeighborTest(*res),
                   ToVectorNeighborTest(expected_results[i]));
       }

@@ -257,6 +257,14 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
         ctx, "coordinator_client_search_index_partition_failure_count",
         Metrics::GetStats()
             .coordinator_client_search_index_partition_failure_cnt);
+    ValkeyModule_InfoAddFieldLongLong(
+        ctx, "coordinator_bytes_out",
+        Metrics::GetStats()
+            .coordinator_bytes_out);
+    ValkeyModule_InfoAddFieldLongLong(
+        ctx, "coordinator_bytes_in",
+        Metrics::GetStats()
+            .coordinator_bytes_in);
     AddLatencyStat(
         ctx, "coordinator_client_get_global_metadata_success_latency_usec",
         Metrics::GetStats()

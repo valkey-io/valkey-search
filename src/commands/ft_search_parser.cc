@@ -199,15 +199,16 @@ absl::Status ParseKNN(query::VectorSearchParameters &parameters,
 }
 
 absl::Status Verify(query::VectorSearchParameters &parameters) {
-  if (parameters.query.empty()) {
-    return absl::InvalidArgumentError("missing vector parameter");
-  }
+  // Only verify the vector KNN parameters for vector based queries.
+  // if (parameters.query.empty()) {
+  //   return absl::InvalidArgumentError("missing vector parameter");
+  // }
   if (parameters.ef.has_value() && parameters.ef <= 0) {
     return absl::InvalidArgumentError("`EF` value must be positive");
   }
-  if (parameters.k <= 0) {
-    return absl::InvalidArgumentError("k must be positive");
-  }
+  // if (parameters.k <= 0) {
+  //   return absl::InvalidArgumentError("k must be positive");
+  // }
   if (parameters.timeout_ms > kMaxTimeoutMs) {
     return absl::InvalidArgumentError(
         absl::StrCat(kTimeoutParam,
@@ -340,12 +341,15 @@ absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
   auto filter_expression =
       absl::string_view(parameters.parse_vars.query_string);
   auto pos = filter_expression.find(kVectorFilterDelimiter);
+  absl::string_view pre_filter;
+  absl::string_view vector_filter;
   if (pos == absl::string_view::npos) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Invalid filter format. Missing `", kVectorFilterDelimiter, "`"));
+    pre_filter = absl::StripAsciiWhitespace(filter_expression);
+  } else {
+    pre_filter = absl::StripAsciiWhitespace(filter_expression.substr(0, pos));
+    vector_filter = absl::StripAsciiWhitespace(
+      filter_expression.substr(pos + kVectorFilterDelimiter.size()));
   }
-  auto pre_filter =
-      absl::StripAsciiWhitespace(filter_expression.substr(0, pos));
   VMSDK_ASSIGN_OR_RETURN(
       parameters.filter_parse_results,
       ParsePreFilter(*parameters.index_schema, pre_filter),
@@ -353,30 +357,29 @@ absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
   if (parameters.filter_parse_results.root_predicate) {
     ++Metrics::GetStats().query_hybrid_requests_cnt;
   }
-  auto vector_filter = absl::StripAsciiWhitespace(
-      filter_expression.substr(pos + kVectorFilterDelimiter.size()));
-  VMSDK_RETURN_IF_ERROR(ParseKNN(parameters, vector_filter)).SetPrepend()
+
+  if (!vector_filter.empty()) {
+    VMSDK_RETURN_IF_ERROR(ParseKNN(parameters, vector_filter)).SetPrepend()
       << "Error parsing vector similarity parameters: `" << vector_filter
       << "`. ";
-
-  // Validate the index exists and is a vector index.
-  VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
-                                         parameters.attribute_alias));
-  if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
-      index->GetIndexerType() != indexes::IndexerType::kFlat) {
-    return absl::InvalidArgumentError(absl::StrCat("Index field `",
-                                                   parameters.attribute_alias,
-                                                   "` is not a Vector index "));
-  }
-
-  if (parameters.parse_vars.score_as_string.empty()) {
-    VMSDK_ASSIGN_OR_RETURN(parameters.score_as,
-                           parameters.index_schema->DefaultReplyScoreAs(
-                               parameters.attribute_alias));
-  } else {
-    parameters.score_as =
-        vmsdk::MakeUniqueRedisString(parameters.parse_vars.score_as_string);
-  }
+      // Validate the index exists and is a vector index.
+    VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
+                                          parameters.attribute_alias));
+    if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
+        index->GetIndexerType() != indexes::IndexerType::kFlat) {
+      return absl::InvalidArgumentError(absl::StrCat("Index field `",
+                                                    parameters.attribute_alias,
+                                                    "` is not a Vector index "));
+    }
+    if (parameters.parse_vars.score_as_string.empty()) {
+      VMSDK_ASSIGN_OR_RETURN(parameters.score_as,
+                            parameters.index_schema->DefaultReplyScoreAs(
+                                parameters.attribute_alias));
+    } else {
+      parameters.score_as =
+          vmsdk::MakeUniqueRedisString(parameters.parse_vars.score_as_string);
+    }
+  } 
   return absl::OkStatus();
 }
 }  // namespace

@@ -102,7 +102,8 @@ absl::StatusOr<RecordsMap> HashAttributeDataType::FetchAllRecords(
     return absl::NotFoundError(
         absl::StrCat("No such record with key: `", vector_identifier, "`"));
   }
-  if (!HashHasRecord(key_obj.get(), vector_identifier)) {
+  // Only check for vector_identifier if it's not empty (vector queries)
+  if (!vector_identifier.empty() && !HashHasRecord(key_obj.get(), vector_identifier)) {
     return absl::NotFoundError(absl::StrCat("No such record with identifier: `",
                                             vector_identifier, "`"));
   }

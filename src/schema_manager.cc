@@ -38,11 +38,27 @@
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
+
+constexpr absl::string_view kMaxIndexesConfig{"max-indexes"};
+constexpr uint32_t kMaxIndexesDefault{10};
+/// Register the "--max-indexes" flag. Controls the max number of indexes we can
+/// have.
+static auto max_indexes =
+    vmsdk::config::NumberBuilder(kMaxIndexesConfig,   // name
+                                 kMaxIndexesDefault,  // default size
+                                 1,                   // min size
+                                 UINT_MAX)            // max size
+        .Build();
+
+vmsdk::config::Number &GetMaxIndexes() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_indexes);
+}
 
 // Randomly generated 32 bit key for fingerprinting the metadata.
 static constexpr highwayhash::HHKey kHashKey{
@@ -169,6 +185,13 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
 
 absl::Status SchemaManager::CreateIndexSchema(
     ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto) {
+  long long max_indexes = GetMaxIndexes().GetValue();
+
+  if (SchemaManager::Instance().GetNumberOfIndexSchemas() >= max_indexes) {
+    return absl::OutOfRangeError(
+        absl::StrCat("Maximum number of indexes reached (", max_indexes,
+                     "). Cannot create additional indexes."));
+  }
   if (coordinator_enabled_) {
     CHECK(index_schema_proto.db_num() == 0)
         << "In cluster mode, we only support DB 0";

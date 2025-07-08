@@ -25,6 +25,7 @@
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -33,6 +34,9 @@ namespace valkey_search {
 
 constexpr absl::string_view kSchemaManagerMetadataTypeName{"vs_index_schema"};
 constexpr uint32_t kMetadataEncodingVersion = 1;
+
+/// Return the maximum number of indexes allowed to create.
+vmsdk::config::Number &GetMaxIndexes();
 
 class SchemaManager {
  public:

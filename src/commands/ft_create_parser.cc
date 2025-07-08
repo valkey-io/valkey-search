@@ -28,6 +28,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "vmsdk/src/command_parser.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
@@ -55,11 +56,96 @@ const absl::string_view kSeparatorParam{"SEPARATOR"};
 const absl::string_view kCaseSensitiveParam{"CASESENSITIVE"};
 const absl::string_view kScoreParam{"SCORE"};
 constexpr absl::string_view kSchemaParam{"SCHEMA"};
-constexpr size_t kMaxAttributes{50};
-constexpr int kMaxDimensions{32768};
-constexpr int kMaxM{2000000};
-constexpr int kMaxEfConstruction{4096};
-constexpr int kMaxEfRuntime{4096};
+constexpr size_t kMaxAttributesDefault{50};
+constexpr int kMaxDimensionsDefault{32768};
+constexpr int kMaxMDefault{2000000};
+constexpr int kMaxEfConstructionDefault{4096};
+constexpr int kMaxEfRuntimeDefault{4096};
+constexpr int kMaxPrefixesDefault{16};
+constexpr int kMaxTagFieldLenDefault{10000};
+constexpr int kMaxNumericFieldLenDefault{256};
+
+constexpr absl::string_view kMaxPrefixesConfig{"max-prefixes"};
+constexpr absl::string_view kMaxTagFieldLenConfig{"max-tag-field-length"};
+constexpr absl::string_view kMaxNumericFieldLenConfig{
+    "max-numeric-field-length"};
+constexpr absl::string_view kMaxAttributesConfig{"max-vector-attributes"};
+constexpr absl::string_view kMaxDimensionsConfig{"max-vector-dimensions"};
+constexpr absl::string_view kMaxMConfig{"max-vector-m"};
+constexpr absl::string_view kMaxEfConstructionConfig{"max-vector-ef-construction"};
+constexpr absl::string_view kMaxEfRuntimeConfig{"max-vector-ef-runtime"};
+
+/// Register the "--max-prefixes" flag. Controls the max number of prefixes per
+/// index.
+static auto max_prefixes =
+    vmsdk::config::NumberBuilder(kMaxPrefixesConfig,   // name
+                                 kMaxPrefixesDefault,  // default size
+                                 1,                    // min size
+                                 UINT_MAX)             // max size
+        .Build();
+
+/// Register the "--max-tag-field-length" flag. Controls the max length of a tag
+/// field.
+static auto max_tag_field_len =
+    vmsdk::config::NumberBuilder(kMaxTagFieldLenConfig,   // name
+                                 kMaxTagFieldLenDefault,  // default size
+                                 1,                       // min size
+                                 UINT_MAX)                // max size
+        .Build();
+
+/// Register the "--max-numeric-field-length" flag. Controls the max length of a
+/// numeric field.
+static auto max_numeric_field_len =
+    vmsdk::config::NumberBuilder(kMaxNumericFieldLenConfig,   // name
+                                 kMaxNumericFieldLenDefault,  // default size
+                                 1,                           // min size
+                                 UINT_MAX)                    // max size
+        .Build();
+
+/// Register the "--max-attributes" flag. Controls the max number of attributes
+/// per index.
+static auto max_attributes =
+    vmsdk::config::NumberBuilder(kMaxAttributesConfig,   // name
+                                 kMaxAttributesDefault,  // default size
+                                 1,                      // min size
+                                 UINT_MAX)               // max size
+        .Build();
+
+/// Register the "--max-dimensions" flag. Controls the max dimensions for vector
+/// indices.
+static auto max_dimensions =
+    vmsdk::config::NumberBuilder(kMaxDimensionsConfig,   // name
+                                 kMaxDimensionsDefault,  // default size
+                                 1,                      // min size
+                                 UINT_MAX)                // max size
+        .Build();
+
+/// Register the "--max-m" flag. Controls the max M parameter for HNSW
+/// algorithm.
+static auto max_m = vmsdk::config::NumberBuilder(kMaxMConfig,   // name
+                                                 kMaxMDefault,  // default size
+                                                 1,             // min size
+                                                 INT_MAX)       // max size
+                        .Build();
+
+/// Register the "--max-ef-construction" flag. Controls the max EF construction
+/// parameter for HNSW algorithm.
+static auto max_ef_construction =
+    vmsdk::config::NumberBuilder(kMaxEfConstructionConfig,   // name
+                                 kMaxEfConstructionDefault,  // default size
+                                 1,                          // min size
+                                 UINT_MAX)                    // max size
+        .Build();
+
+/// Register the "--max-ef-runtime" flag. Controls the max EF runtime parameter
+/// for HNSW algorithm.
+static auto max_ef_runtime =
+    vmsdk::config::NumberBuilder(kMaxEfRuntimeConfig,   // name
+                                 kMaxEfRuntimeDefault,  // default size
+                                 1,                     // min size
+                                 UINT_MAX)               // max size
+        .Build();
+
 const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::Language>>
     kLanguageByStr({{"ENGLISH", data_model::LANGUAGE_ENGLISH}});
@@ -79,6 +165,13 @@ absl::Status ParsePrefixes(vmsdk::ArgsIterator &itr,
     return absl::InvalidArgumentError(
         absl::StrCat("Bad arguments for PREFIX: `", prefixes_cnt,
                      "` is outside acceptable bounds"));
+  }
+  // Check if the number of prefixes exceeds the configured maximum
+  long long max_prefixes = GetMaxPrefixes().GetValue();
+  if (prefixes_cnt > max_prefixes) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Number of prefixes (", prefixes_cnt,
+                     ") exceeds the maximum allowed (", max_prefixes, ")"));
   }
   for (uint32_t i = 0; i < prefixes_cnt; ++i) {
     VMSDK_ASSIGN_OR_RETURN(auto itr_arg, itr.Get());
@@ -196,7 +289,14 @@ absl::Status ParseVector(vmsdk::ArgsIterator &itr,
   return absl::OkStatus();
 }
 absl::Status ParseNumeric(vmsdk::ArgsIterator &itr,
-                          data_model::Index &index_proto) {
+                          data_model::Index &index_proto,
+                          absl::string_view attribute_identifier) {
+  long long max_numeric_identifier_len = GetMaxNumericFieldLen().GetValue();
+  if (attribute_identifier.length() > max_numeric_identifier_len) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("A numeric field can have a maximum length of ",
+                     max_numeric_identifier_len));
+  }
   auto numeric_index_proto = std::make_unique<data_model::NumericIndex>();
   index_proto.set_allocated_numeric_index(numeric_index_proto.release());
   return absl::OkStatus();
@@ -210,8 +310,13 @@ vmsdk::KeyValueParser<FTCreateTagParameters> CreateTagParser() {
       GENERATE_FLAG_PARSER(FTCreateTagParameters, case_sensitive));
   return parser;
 }
-absl::Status ParseTag(vmsdk::ArgsIterator &itr,
-                      data_model::Index &index_proto) {
+absl::Status ParseTag(vmsdk::ArgsIterator &itr, data_model::Index &index_proto,
+                      absl::string_view attribute_identifier) {
+  long long max_tag_identifier_len = GetMaxTagFieldLen().GetValue();
+  if (attribute_identifier.length() > max_tag_identifier_len) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "A tag field can have a maximum length of ", max_tag_identifier_len));
+  }
   auto tag_index_proto = std::make_unique<data_model::TagIndex>();
   static auto parser = CreateTagParser();
   FTCreateTagParameters parameters;
@@ -258,9 +363,10 @@ absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
   if (index_type == indexes::IndexerType::kVector) {
     VMSDK_RETURN_IF_ERROR(ParseVector(itr, *index_proto));
   } else if (index_type == indexes::IndexerType::kTag) {
-    VMSDK_RETURN_IF_ERROR(ParseTag(itr, *index_proto));
+    VMSDK_RETURN_IF_ERROR(ParseTag(itr, *index_proto, attribute_identifier));
   } else if (index_type == indexes::IndexerType::kNumeric) {
-    VMSDK_RETURN_IF_ERROR(ParseNumeric(itr, *index_proto));
+    VMSDK_RETURN_IF_ERROR(
+        ParseNumeric(itr, *index_proto, attribute_identifier));
   } else {
     CHECK(false);
   }
@@ -282,6 +388,9 @@ bool HasVectorIndex(const data_model::IndexSchema &index_schema_proto) {
 }  // namespace
 absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+  // Get configuration values
+  long long max_attributes_value = valkey_search::GetMaxAttributes().GetValue();
+
   data_model::IndexSchema index_schema_proto;
   vmsdk::ArgsIterator itr{argv, argc};
   VMSDK_RETURN_IF_ERROR(
@@ -335,10 +444,10 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
       return absl::InvalidArgumentError(absl::StrCat(
           "Duplicate field in schema - ", attribute->identifier()));
     }
-    if (identifier_names.size() >= kMaxAttributes) {
+    if (identifier_names.size() >= max_attributes_value) {
       return absl::InvalidArgumentError(
           absl::StrCat("The maximum number of attributes cannot exceed ",
-                       kMaxAttributes, "."));
+                       max_attributes_value, "."));
     }
     identifier_names.insert(attribute->identifier());
   }
@@ -361,11 +470,12 @@ absl::Status FTCreateVectorParameters::Verify() const {
   if (!dimensions) {
     return absl::InvalidArgumentError("Missing dimensions parameter.");
   }
-  if (dimensions.value() <= 0 || dimensions.value() >= kMaxDimensions) {
+  long long max_dimensions_value = valkey_search::GetMaxDimensions().GetValue();
+  if (dimensions.value() <= 0 || dimensions.value() > max_dimensions_value) {
     return absl::InvalidArgumentError(absl::StrCat(
         "The dimensions value must be a positive integer greater than 0 and "
         "less than or equal to ",
-        kMaxDimensions, "."));
+        max_dimensions_value, "."));
   }
   if (initial_cap <= 0) {
     return absl::InvalidArgumentError(
@@ -392,25 +502,29 @@ std::unique_ptr<data_model::VectorIndex> HNSWParameters::ToProto() const {
 }
 absl::Status HNSWParameters::Verify() const {
   VMSDK_RETURN_IF_ERROR(FTCreateVectorParameters::Verify());
-  if (m <= 0 || m > kMaxM) {
+  long long max_m_value = valkey_search::GetMaxM().GetValue();
+  if (m <= 0 || m > max_m_value) {
     return absl::InvalidArgumentError(absl::StrCat(
         kMParam,
-        " must be a positive integer greater than 0 and cannot exceed ", kMaxM,
-        "."));
+        " must be a positive integer greater than 0 and cannot exceed ",
+        max_m_value, "."));
   }
-  if (ef_construction <= 0 || ef_construction > kMaxEfConstruction) {
+  long long max_ef_construction_value =
+      valkey_search::GetMaxEfConstruction().GetValue();
+  if (ef_construction <= 0 || ef_construction > max_ef_construction_value) {
     return absl::InvalidArgumentError(
         absl::StrCat(kEfConstructionParam,
                      " must be a positive integer greater than 0 "
                      "and cannot exceed ",
-                     kMaxEfConstruction, "."));
+                     max_ef_construction_value, "."));
   }
-  if (ef_runtime == 0 || ef_runtime > kMaxEfRuntime) {
+  long long max_ef_runtime_value = valkey_search::GetMaxEfRuntime().GetValue();
+  if (ef_runtime == 0 || ef_runtime > max_ef_runtime_value) {
     return absl::InvalidArgumentError(
         absl::StrCat(kEfRuntimeParam,
                      " must be a positive integer greater than 0 and "
                      "cannot exceed ",
-                     kMaxEfRuntime, "."));
+                     max_ef_runtime_value, "."));
   }
   return absl::OkStatus();
 }
@@ -421,5 +535,37 @@ std::unique_ptr<data_model::VectorIndex> FlatParameters::ToProto() const {
   vector_index_proto->set_allocated_flat_algorithm(
       flat_algorithm_proto.release());
   return vector_index_proto;
+}
+
+vmsdk::config::Number &GetMaxPrefixes() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_prefixes);
+}
+
+vmsdk::config::Number &GetMaxTagFieldLen() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_tag_field_len);
+}
+
+vmsdk::config::Number &GetMaxNumericFieldLen() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_numeric_field_len);
+}
+
+vmsdk::config::Number &GetMaxAttributes() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_attributes);
+}
+
+vmsdk::config::Number &GetMaxDimensions() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_dimensions);
+}
+
+vmsdk::config::Number &GetMaxM() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_m);
+}
+
+vmsdk::config::Number &GetMaxEfConstruction() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_ef_construction);
+}
+
+vmsdk::config::Number &GetMaxEfRuntime() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_ef_runtime);
 }
 }  // namespace valkey_search

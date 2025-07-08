@@ -17,6 +17,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
@@ -43,6 +44,31 @@ constexpr int kDefaultBlockSize{1024};
 constexpr int kDefaultM{16};
 constexpr int kDefaultEFConstruction{200};
 constexpr int kDefaultEFRuntime{10};
+
+/// Return the maximum number of prefixes allowed per index.
+vmsdk::config::Number& GetMaxPrefixes();
+
+/// Return the maximum length of a tag field.
+vmsdk::config::Number& GetMaxTagFieldLen();
+
+/// Return the maximum length of a numeric field.
+vmsdk::config::Number& GetMaxNumericFieldLen();
+
+/// Return the maximum number of attributes allowed per index.
+vmsdk::config::Number& GetMaxAttributes();
+
+/// Return the maximum number of dimensions allowed for vector indices.
+vmsdk::config::Number& GetMaxDimensions();
+
+/// Return the maximum M parameter value allowed for HNSW algorithm.
+vmsdk::config::Number& GetMaxM();
+
+/// Return the maximum EF construction parameter value allowed for HNSW
+/// algorithm.
+vmsdk::config::Number& GetMaxEfConstruction();
+
+/// Return the maximum EF runtime parameter value allowed for HNSW algorithm.
+vmsdk::config::Number& GetMaxEfRuntime();
 
 struct HNSWParameters : public FTCreateVectorParameters {
   // Tightly connected with internal dimensionality of the data

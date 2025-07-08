@@ -108,21 +108,85 @@ void RecordSearchMetrics(bool failure,
   }
 }
 
+
+// void SerializeNeighbors(coordinator::SearchIndexPartitionResponse* response,
+//                        const std::deque<indexes::Neighbor>& neighbors) {
+//     try {
+//         VMSDK_LOG(WARNING, nullptr) 
+//             << "SerializeNeighbors called with " << neighbors.size() << " neighbors";
+            
+//         for (const auto& neighbor : neighbors) {
+//             auto* proto_neighbor = response->add_neighbors();
+//             if (!proto_neighbor) {
+//                 VMSDK_LOG(WARNING, nullptr) << "Failed to add neighbor to response";
+//                 continue;
+//             }
+            
+//             if (!neighbor.external_id) {
+//                 VMSDK_LOG(WARNING, nullptr) << "Neighbor has null external_id";
+//                 continue;
+//             }
+            
+//             // proto_neighbor->set_external_id(*neighbor.external_id);
+//             proto_neighbor->set_key(std::move(*neighbor.external_id));
+//             proto_neighbor->set_score(neighbor.distance);  // Added score field
+            
+//             if (neighbor.attribute_contents.has_value()) {
+//                 for (const auto& content : neighbor.attribute_contents.value()) {
+//                     if (!content.second.value || !content.second.GetIdentifier()) {
+//                         VMSDK_LOG(WARNING, nullptr) << "Invalid content in neighbor";
+//                         continue;
+//                     }
+//                     auto proto_content = proto_neighbor->add_attribute_contents();
+//                     proto_content->set_identifier(content.first);
+//                     proto_content->set_value(content.second.value.get());
+//                 }
+//             }
+//         }
+        
+//         VMSDK_LOG(WARNING, nullptr) 
+//             << "SerializeNeighbors completed successfully";
+//     } catch (const std::exception& e) {
+//         VMSDK_LOG(WARNING, nullptr) 
+//             << "Exception in SerializeNeighbors: " << e.what();
+//         throw; // Re-throw after logging
+//     }
+// }
+
+
 void SerializeNeighbors(SearchIndexPartitionResponse* response,
-                        const std::deque<indexes::Neighbor>& neighbors) {
-  for (const auto& neighbor : neighbors) {
-    auto* neighbor_proto = response->add_neighbors();
-    neighbor_proto->set_key(std::move(*neighbor.external_id));
-    neighbor_proto->set_score(neighbor.distance);
-    if (neighbor.attribute_contents) {
-      const auto& attribute_contents = neighbor.attribute_contents.value();
-      for (const auto& [identifier, record] : attribute_contents) {
-        auto contents = neighbor_proto->add_attribute_contents();
-        contents->set_identifier(identifier);
-        contents->set_content(vmsdk::ToStringView(record.value.get()));
+                        const std::deque<indexes::Neighbor>& neighbors) {            
+  try {
+    VMSDK_LOG(WARNING, nullptr) 
+        << "SerializeNeighbors called with " << neighbors.size() << " neighbors";
+    for (const auto& neighbor : neighbors) {
+      auto* neighbor_proto = response->add_neighbors();
+      if (!neighbor_proto) {
+          VMSDK_LOG(WARNING, nullptr) << "Failed to add neighbor to response";
+          continue;
+      }
+      if (!neighbor.external_id) {
+        VMSDK_LOG(WARNING, nullptr) << "Neighbor has null external_id";
+        continue;
+      }
+      neighbor_proto->set_key(std::move(*neighbor.external_id));
+      neighbor_proto->set_score(neighbor.distance);
+      if (neighbor.attribute_contents) {
+        const auto& attribute_contents = neighbor.attribute_contents.value();
+        for (const auto& [identifier, record] : attribute_contents) {
+          auto contents = neighbor_proto->add_attribute_contents();
+          contents->set_identifier(identifier);
+          contents->set_content(vmsdk::ToStringView(record.value.get()));
+        }
       }
     }
-  }
+    VMSDK_LOG(WARNING, nullptr) 
+        << "SerializeNeighbors completed successfully";
+  } catch (const std::exception& e) {
+    VMSDK_LOG(WARNING, nullptr) 
+        << "Exception in SerializeNeighbors: " << e.what();
+    throw; // Re-throw after logging
+  }                   
 }
 
 grpc::ServerUnaryReactor* Service::SearchIndexPartition(
@@ -134,6 +198,8 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
   grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
   auto vector_search_parameters = GRPCSearchRequestToParameters(*request);
   if (!vector_search_parameters.ok()) {
+    VMSDK_LOG(WARNING, nullptr)
+      << "this is why";
     reactor->Finish(ToGrpcStatus(vector_search_parameters.status()));
     RecordSearchMetrics(true, std::move(latency_sample));
     return reactor;
@@ -162,14 +228,34 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
                 const auto& attribute_data_type =
                     parameters->index_schema->GetAttributeDataType();
                 auto ctx = vmsdk::MakeUniqueRedisThreadSafeContext(nullptr);
-                auto vector_identifier =
-                    parameters->index_schema
-                        ->GetIdentifier(parameters->attribute_alias)
-                        .value();
-                query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
-                                                neighbors, *parameters,
-                                                vector_identifier);
+                VMSDK_LOG(WARNING, nullptr)
+                  << "Inside SearchAsyc, before GetIdentifier"
+                  << " attribute_alias: "
+                  << parameters->attribute_alias;
+                if (parameters->k == 0) {
+                    VMSDK_LOG(WARNING, nullptr) 
+                      << "Non-vector query detected, using ProcessNonVectorNeighborsForReply";
+                    query::ProcessNonVectorNeighborsForReply(ctx.get(), attribute_data_type,
+                                            neighbors, *parameters);
+                } else {
+                  VMSDK_LOG(WARNING, nullptr)
+                    << "Vector query detected, getting identifier for: " 
+                    << parameters->attribute_alias;
+                  auto vector_identifier =
+                      parameters->index_schema
+                          ->GetIdentifier(parameters->attribute_alias)
+                          .value();
+                  VMSDK_LOG(WARNING, nullptr)
+                    << "SearchAsyc, after GetIdentifier";
+                    query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
+                                                    neighbors, *parameters,
+                                                    vector_identifier);
+                }
+                VMSDK_LOG(WARNING, nullptr)
+                  << "Before SerializeNeighbors";
                 SerializeNeighbors(response, neighbors);
+                VMSDK_LOG(WARNING, nullptr)
+                  << "After SerializeNeighbors";
                 reactor->Finish(grpc::Status::OK);
                 RecordSearchMetrics(false, std::move(latency_sample));
               });

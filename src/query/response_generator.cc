@@ -140,6 +140,10 @@ absl::StatusOr<RecordsMap> GetContent(
                                   vector_identifier);
   }
   absl::flat_hash_set<absl::string_view> identifiers;
+  for (const auto &filter_identifier :
+       parameters.filter_parse_results.filter_identifiers) {
+    identifiers.insert(filter_identifier);
+  }
   for (const auto &return_attribute : parameters.return_attributes) {
     identifiers.insert(vmsdk::ToStringView(return_attribute.identifier.get()));
   }
@@ -177,6 +181,23 @@ absl::StatusOr<RecordsMap> GetContent(
   }
   return return_content;
 }
+
+void ProcessNonVectorNeighborsForReply(RedisModuleCtx *ctx,
+                                      const AttributeDataType &attribute_data_type,
+                                      std::deque<indexes::Neighbor> &neighbors,
+                                      const query::VectorSearchParameters &parameters) {
+    VMSDK_LOG(WARNING, nullptr) 
+        << "Before processing, neighbors size: " << neighbors.size();
+        
+    // For non-vector queries, we need to ensure parameters are properly set up
+    // auto modified_params = parameters;
+    // modified_params.return_attributes.clear();  // Clear return attributes to get all fields
+    
+    ProcessNeighborsForReply(ctx, attribute_data_type, neighbors, parameters, "");
+
+    VMSDK_LOG(WARNING, nullptr) 
+        << "After processing, neighbors size: " << neighbors.size();
+}
 // Adds all local content for neighbors to the list of neighbors.
 //
 // Any neighbors already contained in the attribute content map will be skipped.
@@ -186,15 +207,30 @@ void ProcessNeighborsForReply(RedisModuleCtx *ctx,
                               std::deque<indexes::Neighbor> &neighbors,
                               const query::VectorSearchParameters &parameters,
                               const std::string &identifier) {
+
+  VMSDK_LOG(WARNING, nullptr) 
+      << "Starting ProcessNeighborsForReply with " << neighbors.size() << " neighbors";
+  VMSDK_LOG(WARNING, nullptr) 
+      << "Filter identifiers size: " 
+      << parameters.filter_parse_results.filter_identifiers.size();
+  for (const auto& filter_id : parameters.filter_parse_results.filter_identifiers) {
+    VMSDK_LOG(WARNING, nullptr) << "Filter identifier: " << filter_id;
+  }
+  VMSDK_LOG(WARNING, nullptr) 
+      << "Return attributes size: " 
+      << parameters.return_attributes.size();                           
+  
   for (auto &neighbor : neighbors) {
     // neighbors which were added from remote nodes already have attribute
     // content
     if (neighbor.attribute_contents.has_value()) {
+      VMSDK_LOG(WARNING, nullptr) << "Neighbor already has content";
       continue;
     }
     auto content = GetContent(ctx, attribute_data_type, parameters,
                               *neighbor.external_id, identifier);
     if (!content.ok()) {
+      VMSDK_LOG(WARNING, nullptr) << "GetContent failed: " << content.status().message() ;
       continue;
     }
     neighbor.attribute_contents = std::move(content.value());

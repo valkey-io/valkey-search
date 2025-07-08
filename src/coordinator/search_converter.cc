@@ -89,12 +89,19 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       }
       attribute_identifiers.insert(predicate.numeric().attribute_alias());
       auto numeric_index = dynamic_cast<indexes::Numeric*>(index.get());
+      // TODO: Add log
+      VMSDK_LOG(WARNING, nullptr)
+        << "Inside search_converter"
+        // << " numeric_index: " << numeric_index->GetIdentifier()
+        << " attribute_alias: " << predicate.numeric().attribute_alias();
       auto numeric_predicate = std::make_unique<query::NumericPredicate>(
           numeric_index,
           index_schema->GetIdentifier(predicate.numeric().attribute_alias())
               .value(),
           predicate.numeric().start(), predicate.numeric().is_inclusive_start(),
           predicate.numeric().end(), predicate.numeric().is_inclusive_end());
+      VMSDK_LOG(WARNING, nullptr)
+        << "done with search_converter";
       return numeric_predicate;
     }
     case Predicate::kAnd: {
@@ -141,6 +148,10 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request) {
   auto parameters = std::make_unique<query::VectorSearchParameters>();
   parameters->index_schema_name = request.index_schema_name();
   parameters->attribute_alias = request.attribute_alias();
+  // parameters->k = request.k();
+  // if (parameters->k != 0) {
+  //   parameters->attribute_alias = request.attribute_alias();
+  // }
   VMSDK_ASSIGN_OR_RETURN(
       parameters->index_schema,
       SchemaManager::Instance().GetIndexSchema(0, request.index_schema_name()));
@@ -153,13 +164,14 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request) {
   }
   parameters->query = request.query();
   parameters->dialect = request.dialect();
-  parameters->k = request.k();
   parameters->ef = request.ef();
   parameters->limit = query::LimitParameter{request.limit().first_index(),
                                             request.limit().number()};
   parameters->timeout_ms = request.timeout_ms();
   parameters->no_content = request.no_content();
   if (request.has_root_filter_predicate()) {
+    VMSDK_LOG(WARNING, nullptr)
+        << "inside GRPCSearchRequestToParameters";
     VMSDK_ASSIGN_OR_RETURN(
         parameters->filter_parse_results.root_predicate,
         GRPCPredicateToPredicate(
@@ -171,6 +183,8 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request) {
         vmsdk::MakeUniqueRedisString(return_parameter.identifier()),
         vmsdk::MakeUniqueRedisString(return_parameter.alias())));
   }
+  VMSDK_LOG(WARNING, nullptr)
+        << "done with GRPCSearchRequestToParameters";
   return parameters;
 }
 
@@ -247,6 +261,9 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   auto request = std::make_unique<SearchIndexPartitionRequest>();
   request->set_index_schema_name(parameters.index_schema_name);
   request->set_attribute_alias(parameters.attribute_alias);
+  // if (parameters.k != 0) {
+  //   request->set_attribute_alias(parameters.attribute_alias);
+  // }
   request->set_score_as(vmsdk::ToStringView(parameters.score_as.get()));
   request->set_query(parameters.query);
   request->set_dialect(parameters.dialect);
@@ -260,7 +277,7 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   request->set_no_content(parameters.no_content);
   if (parameters.filter_parse_results.root_predicate != nullptr) {
     request->set_allocated_root_filter_predicate(
-        PredicateToGRPCPredicate(
+        PredicateToGRPCPredicate( // This is setting the attribute_alias on the predicate.
             *parameters.filter_parse_results.root_predicate)
             .release());
   } else {

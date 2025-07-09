@@ -18,6 +18,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <iostream>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
@@ -34,6 +35,7 @@
 #include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/search.h"
+#include "src/query/broadcast_template.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -224,54 +226,70 @@ absl::Status PerformSearchFanoutAsync(
   return absl::OkStatus();
 }
 
+// // TODO See if caching this improves performance.
+// std::vector<FanoutSearchTarget> GetSearchTargetsForFanout(
+//     ValkeyModuleCtx *ctx) {
+//   size_t num_nodes;
+//   auto nodes = vmsdk::MakeUniqueValkeyClusterNodesList(ctx, &num_nodes);
+//   absl::flat_hash_map<std::string, std::vector<FanoutSearchTarget>>
+//       shard_id_to_target;
+//   std::vector<FanoutSearchTarget> selected_targets;
+//   for (size_t i = 0; i < num_nodes; ++i) {
+//     std::string node_id(nodes.get()[i], VALKEYMODULE_NODE_ID_LEN);
+//     char ip[INET6_ADDRSTRLEN] = "";
+//     char master_id[VALKEYMODULE_NODE_ID_LEN] = "";
+//     int port;
+//     int flags;
+//     if (ValkeyModule_GetClusterNodeInfo(ctx, node_id.c_str(), ip, master_id,
+//                                         &port, &flags) != VALKEYMODULE_OK) {
+//       VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+//           << "Failed to get node info for node " << node_id
+//           << ", skipping node...";
+//       continue;
+//     }
+//     // Master ID is not null terminated.
+//     auto master_id_str = std::string(master_id, VALKEYMODULE_NODE_ID_LEN);
+//     if (flags & VALKEYMODULE_NODE_PFAIL || flags & VALKEYMODULE_NODE_FAIL) {
+//       VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+//           << "Node " << node_id << " (" << ip
+//           << ") is failing, skipping for FT.SEARCH...";
+//       continue;
+//     }
+//     if (flags & VALKEYMODULE_NODE_MASTER) {
+//       master_id_str = node_id;
+//     }
+//     if (flags & VALKEYMODULE_NODE_MYSELF) {
+//       shard_id_to_target[master_id_str].push_back(
+//           FanoutSearchTarget{.type = FanoutSearchTarget::Type::kLocal});
+//     } else {
+//       shard_id_to_target[master_id_str].push_back(FanoutSearchTarget{
+//           .type = FanoutSearchTarget::Type::kRemote,
+//           .address =
+//               absl::StrCat(ip, ":", coordinator::GetCoordinatorPort(port))});
+//     }
+//   }
+//   absl::BitGen gen;
+//   for (const auto &[shard_id, targets] : shard_id_to_target) {
+//     size_t index = absl::Uniform(gen, 0u, targets.size());
+//     selected_targets.push_back(targets.at(index));
+//   }
+//   return selected_targets;
+// }
+
 // TODO See if caching this improves performance.
 std::vector<FanoutSearchTarget> GetSearchTargetsForFanout(
     ValkeyModuleCtx *ctx) {
-  size_t num_nodes;
-  auto nodes = vmsdk::MakeUniqueValkeyClusterNodesList(ctx, &num_nodes);
-  absl::flat_hash_map<std::string, std::vector<FanoutSearchTarget>>
-      shard_id_to_target;
-  std::vector<FanoutSearchTarget> selected_targets;
-  for (size_t i = 0; i < num_nodes; ++i) {
-    std::string node_id(nodes.get()[i], VALKEYMODULE_NODE_ID_LEN);
-    char ip[INET6_ADDRSTRLEN] = "";
-    char master_id[VALKEYMODULE_NODE_ID_LEN] = "";
-    int port;
-    int flags;
-    if (ValkeyModule_GetClusterNodeInfo(ctx, node_id.c_str(), ip, master_id,
-                                        &port, &flags) != VALKEYMODULE_OK) {
-      VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
-          << "Failed to get node info for node " << node_id
-          << ", skipping node...";
-      continue;
-    }
-    // Master ID is not null terminated.
-    auto master_id_str = std::string(master_id, VALKEYMODULE_NODE_ID_LEN);
-    if (flags & VALKEYMODULE_NODE_PFAIL || flags & VALKEYMODULE_NODE_FAIL) {
-      VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
-          << "Node " << node_id << " (" << ip
-          << ") is failing, skipping for FT.SEARCH...";
-      continue;
-    }
-    if (flags & VALKEYMODULE_NODE_MASTER) {
-      master_id_str = node_id;
-    }
-    if (flags & VALKEYMODULE_NODE_MYSELF) {
-      shard_id_to_target[master_id_str].push_back(
-          FanoutSearchTarget{.type = FanoutSearchTarget::Type::kLocal});
-    } else {
-      shard_id_to_target[master_id_str].push_back(FanoutSearchTarget{
-          .type = FanoutSearchTarget::Type::kRemote,
-          .address =
-              absl::StrCat(ip, ":", coordinator::GetCoordinatorPort(port))});
-    }
-  }
-  absl::BitGen gen;
-  for (const auto &[shard_id, targets] : shard_id_to_target) {
-    size_t index = absl::Uniform(gen, 0u, targets.size());
-    selected_targets.push_back(targets.at(index));
-  }
-  return selected_targets;
+  std::cout << "Using get target template" << std::endl;
+  return BroadcastTemplate::GetTargets<FanoutSearchTarget>(
+      ctx,
+      []() { return FanoutSearchTarget{.type = FanoutSearchTarget::Type::kLocal}; },
+      [](const std::string& address) {
+        return FanoutSearchTarget{
+            .type = FanoutSearchTarget::Type::kRemote,
+            .address = address
+        };
+      });
 }
+
 
 }  // namespace valkey_search::query::fanout

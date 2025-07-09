@@ -45,6 +45,8 @@ constexpr int kDefaultM{16};
 constexpr int kDefaultEFConstruction{200};
 constexpr int kDefaultEFRuntime{10};
 
+namespace options {
+
 /// Return the maximum number of prefixes allowed per index.
 vmsdk::config::Number& GetMaxPrefixes();
 
@@ -69,6 +71,8 @@ vmsdk::config::Number& GetMaxEfConstruction();
 
 /// Return the maximum EF runtime parameter value allowed for HNSW algorithm.
 vmsdk::config::Number& GetMaxEfRuntime();
+
+} // namespace options
 
 struct HNSWParameters : public FTCreateVectorParameters {
   // Tightly connected with internal dimensionality of the data

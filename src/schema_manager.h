@@ -35,9 +35,12 @@ namespace valkey_search {
 constexpr absl::string_view kSchemaManagerMetadataTypeName{"vs_index_schema"};
 constexpr uint32_t kMetadataEncodingVersion = 1;
 
+namespace options {
+
 /// Return the maximum number of indexes allowed to create.
 vmsdk::config::Number &GetMaxIndexes();
 
+}  // namespace options
 class SchemaManager {
  public:
   SchemaManager(ValkeyModuleCtx *ctx,

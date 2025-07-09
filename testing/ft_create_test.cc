@@ -192,8 +192,7 @@ INSTANTIATE_TEST_SUITE_P(
 // Test to verify the max-indexes limit
 TEST_F(FTCreateTest, MaxIndexesLimit) {
   // Set max-indexes to 2 for this test
-  VMSDK_EXPECT_OK(GetMaxIndexes().SetValue(2));
-  VMSDK_EXPECT_OK(GetMaxPrefixes().SetValue(2));
+  VMSDK_EXPECT_OK(options::GetMaxIndexes().SetValue(2));
 
   int db_num = 1;
   ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
@@ -208,7 +207,7 @@ TEST_F(FTCreateTest, MaxIndexesLimit) {
                                    "IP",        "INITIAL_CAP",
                                    "15000"};
 
-  // Create 2 indexes succesfully
+  // Create 2 indexes successfully
   for (int i = 0; i < 2; i++) {
     // Change index and vector ids
     argv[1] = absl::StrCat(argv[1], i);
@@ -223,9 +222,10 @@ TEST_F(FTCreateTest, MaxIndexesLimit) {
   argv[3] = absl::StrCat(argv[3], 2);
 
   // Execute command with empty expected reply (we'll check it separately)
-  ExecuteFTCreateCommand(&fake_ctx_, argv, VALKEYMODULE_OK,
-                         "$72\r\nMaximum number of indexes reached (2). Cannot "
-                         "create additional indexes.\r\n");
+  ExecuteFTCreateCommand(
+      &fake_ctx_, argv, VALKEYMODULE_OK,
+      "$108\r\nInvalid range: Value above maximum; Maximum number of indexes "
+      "reached (2). Cannot create additional indexes.\r\n");
 }
 
 // Struct to hold parameters for max limit tests
@@ -264,7 +264,9 @@ INSTANTIATE_TEST_SUITE_P(
         {
             .test_name = "MaxPrefixesLimit",
             .set_limit_func =
-                [](long long value) { return GetMaxPrefixes().SetValue(2); },
+                [](long long value) {
+                  return options::GetMaxPrefixes().SetValue(2);
+                },
             .valid_argv = {"FT.CREATE", "test_index_schema", "PREFIX", "2",
                            "prefix1", "prefix2", "schema", "vector", "vector",
                            "Flat", "8", "TYPE", "FLOAT32", "DIM", "100",
@@ -289,13 +291,16 @@ INSTANTIATE_TEST_SUITE_P(
                             "IP",
                             "INITIAL_CAP",
                             "15000"},
-            .expected_error_message = "$54\r\nNumber of prefixes (3) exceeds "
-                                      "the maximum allowed (2)\r\n",
+            .expected_error_message =
+                "$90\r\nInvalid range: Value above maximum; Number of prefixes "
+                "(3) exceeds the maximum allowed (2)\r\n",
         },
         {
             .test_name = "MaxTagFieldLengthLimit",
             .set_limit_func =
-                [](long long value) { return GetMaxTagFieldLen().SetValue(5); },
+                [](long long value) {
+                  return options::GetMaxTagFieldLen().SetValue(5);
+                },
             .valid_argv = {"FT.CREATE", "test_index_schema", "schema", "vector",
                            "vector", "Flat", "8", "TYPE", "FLOAT32", "DIM",
                            "100", "DISTANCE_METRIC", "IP", "INITIAL_CAP",
@@ -306,14 +311,15 @@ INSTANTIATE_TEST_SUITE_P(
                             "INITIAL_CAP", "15000", "field_too_long", "tag",
                             "separator", "|"},
             .expected_error_message =
-                "$89\r\nInvalid field type for field `field_too_long`: A tag "
-                "field can have a maximum length of 5\r\n",
+                "$126\r\nInvalid field type for field `field_too_long`: "
+                "Invalid range: Value above maximum; A tag field can have a "
+                "maximum length of 5.\r\n",
         },
         {
             .test_name = "MaxNumericFieldLengthLimit",
             .set_limit_func =
                 [](long long value) {
-                  return GetMaxNumericFieldLen().SetValue(5);
+                  return options::GetMaxNumericFieldLen().SetValue(5);
                 },
             .valid_argv = {"FT.CREATE", "test_index_schema", "schema", "vector",
                            "vector", "Flat", "8", "TYPE", "FLOAT32", "DIM",
@@ -325,13 +331,16 @@ INSTANTIATE_TEST_SUITE_P(
                             "INITIAL_CAP", "15000", "field_too_long",
                             "numeric"},
             .expected_error_message =
-                "$93\r\nInvalid field type for field `field_too_long`: A "
-                "numeric field can have a maximum length of 5\r\n",
+                "$130\r\nInvalid field type for field `field_too_long`: "
+                "Invalid range: Value above maximum; A numeric field can have "
+                "a maximum length of 5.\r\n",
         },
         {
             .test_name = "MaxAttributesLimit",
             .set_limit_func =
-                [](long long value) { return GetMaxAttributes().SetValue(1); },
+                [](long long value) {
+                  return options::GetMaxAttributes().SetValue(1);
+                },
             .valid_argv = {"FT.CREATE", "test_index_schema", "schema", "vector",
                            "vector", "HNSW", "6", "TYPE", "FLOAT32", "DIM", "3",
                            "DISTANCE_METRIC", "IP"},
@@ -348,12 +357,15 @@ INSTANTIATE_TEST_SUITE_P(
                             "3",         "DISTANCE_METRIC",
                             "IP"},
             .expected_error_message =
-                "$49\r\nThe maximum number of attributes cannot exceed 1.\r\n",
+                "$85\r\nInvalid range: Value above maximum; The maximum number "
+                "of attributes cannot exceed 1.\r\n",
         },
         {
             .test_name = "MaxDimensionsLimit",
             .set_limit_func =
-                [](long long value) { return GetMaxDimensions().SetValue(10); },
+                [](long long value) {
+                  return options::GetMaxDimensions().SetValue(10);
+                },
             .valid_argv = {"FT.CREATE", "test_index_schema", "schema", "vector",
                            "vector", "HNSW", "6", "TYPE", "FLOAT32", "DIM",
                            "10", "DISTANCE_METRIC", "IP"},
@@ -361,14 +373,14 @@ INSTANTIATE_TEST_SUITE_P(
                             "vector", "vector", "HNSW", "6", "TYPE", "FLOAT32",
                             "DIM", "11", "DISTANCE_METRIC", "IP"},
             .expected_error_message =
-                "$131\r\nInvalid field type for field `vector`: The dimensions "
-                "value must be a positive integer greater than 0 and less than "
-                "or equal to 10.\r\n",
+                "$167\r\nInvalid field type for field `vector`: Invalid range: "
+                "Value above maximum; The dimensions value must be a positive "
+                "integer greater than 0 and less than or equal to 10.\r\n",
         },
         {
             .test_name = "MaxMLimit",
             .set_limit_func =
-                [](long long value) { return GetMaxM().SetValue(50); },
+                [](long long value) { return options::GetMaxM().SetValue(50); },
             .valid_argv = {"FT.CREATE", "test_index_schema", "schema", "vector",
                            "vector", "HNSW", "8", "TYPE", "FLOAT32", "DIM", "3",
                            "DISTANCE_METRIC", "IP", "M", "50"},
@@ -376,14 +388,15 @@ INSTANTIATE_TEST_SUITE_P(
                             "vector", "vector", "HNSW", "8", "TYPE", "FLOAT32",
                             "DIM", "3", "DISTANCE_METRIC", "IP", "M", "51"},
             .expected_error_message =
-                "$104\r\nInvalid field type for field `vector`: M must be a "
-                "positive integer greater than 0 and cannot exceed 50.\r\n",
+                "$140\r\nInvalid field type for field `vector`: Invalid range: "
+                "Value above maximum; M must be a positive integer greater "
+                "than 0 and cannot exceed 50.\r\n",
         },
         {
             .test_name = "MaxEfConstructionLimit",
             .set_limit_func =
                 [](long long value) {
-                  return GetMaxEfConstruction().SetValue(200);
+                  return options::GetMaxEfConstruction().SetValue(200);
                 },
             .valid_argv = {"FT.CREATE", "test_index_schema", "schema", "vector",
                            "vector", "HNSW", "8", "TYPE", "FLOAT32", "DIM", "3",
@@ -393,14 +406,16 @@ INSTANTIATE_TEST_SUITE_P(
                             "DIM", "3", "DISTANCE_METRIC", "IP",
                             "EF_CONSTRUCTION", "201"},
             .expected_error_message =
-                "$119\r\nInvalid field type for field `vector`: "
-                "EF_CONSTRUCTION must be a positive integer greater than 0 and "
-                "cannot exceed 200.\r\n",
+                "$155\r\nInvalid field type for field `vector`: Invalid range: "
+                "Value above maximum; EF_CONSTRUCTION must be a positive "
+                "integer greater than 0 and cannot exceed 200.\r\n",
         },
         {
             .test_name = "MaxEfRuntimeLimit",
             .set_limit_func =
-                [](long long value) { return GetMaxEfRuntime().SetValue(100); },
+                [](long long value) {
+                  return options::GetMaxEfRuntime().SetValue(100);
+                },
             .valid_argv = {"FT.CREATE", "test_index_schema", "schema", "vector",
                            "vector", "HNSW", "8", "TYPE", "FLOAT32", "DIM", "3",
                            "DISTANCE_METRIC", "IP", "EF_RUNTIME", "100"},
@@ -409,9 +424,9 @@ INSTANTIATE_TEST_SUITE_P(
                             "DIM", "3", "DISTANCE_METRIC", "IP", "EF_RUNTIME",
                             "101"},
             .expected_error_message =
-                "$114\r\nInvalid field type for field `vector`: EF_RUNTIME "
-                "must be a positive integer greater than 0 and cannot exceed "
-                "100.\r\n",
+                "$150\r\nInvalid field type for field `vector`: Invalid range: "
+                "Value above maximum; EF_RUNTIME must be a positive integer "
+                "greater than 0 and cannot exceed 100.\r\n",
         },
     }),
     [](const TestParamInfo<MaxLimitTestCase>& info) {

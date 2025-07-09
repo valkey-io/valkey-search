@@ -618,8 +618,7 @@ INSTANTIATE_TEST_SUITE_P(
                             "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
                             "DISTANCE_METRIC IP EF_RUNTIME 0",
              .expected_error_message =
-                 "Invalid field type for field `hash_field1`: EF_RUNTIME must "
-                 "be a positive integer greater than 0 and cannot exceed 4096.",
+                 "Invalid field type for field `hash_field1`: Invalid range: Value below minimum; EF_RUNTIME must be a positive integer greater than 0 and cannot exceed 4096.",
          },
          {
              .test_name = "invalid_m_negative",
@@ -628,8 +627,7 @@ INSTANTIATE_TEST_SUITE_P(
                             "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
                             "DISTANCE_METRIC IP M -10",
              .expected_error_message =
-                 "Invalid field type for field `hash_field1`: M must be a "
-                 "positive integer greater than 0 and cannot exceed 2000000.",
+                 "Invalid field type for field `hash_field1`: Invalid range: Value below minimum; M must be a positive integer greater than 0 and cannot exceed 2000000.",
          },
          {
              .test_name = "invalid_m_too_big",
@@ -638,8 +636,7 @@ INSTANTIATE_TEST_SUITE_P(
                             "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
                             "DISTANCE_METRIC IP M 3000000",
              .expected_error_message =
-                 "Invalid field type for field `hash_field1`: M must be a "
-                 "positive integer greater than 0 and cannot exceed 2000000.",
+                 "Invalid field type for field `hash_field1`: Invalid range: Value above maximum; M must be a positive integer greater than 0 and cannot exceed 2000000.",
          },
          {
              .test_name = "invalid_ef_construction_zero",
@@ -648,9 +645,7 @@ INSTANTIATE_TEST_SUITE_P(
                             "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
                             "DISTANCE_METRIC IP EF_CONSTRUCTIOn 0",
              .expected_error_message =
-                 "Invalid field type for field `hash_field1`: EF_CONSTRUCTION "
-                 "must "
-                 "be a positive integer greater than 0 and cannot exceed 4096.",
+                 "Invalid field type for field `hash_field1`: Invalid range: Value below minimum; EF_CONSTRUCTION must be a positive integer greater than 0 and cannot exceed 4096.",
          },
          {
              .test_name = "invalid_ef_construction_negative",
@@ -659,9 +654,7 @@ INSTANTIATE_TEST_SUITE_P(
                             "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
                             "DISTANCE_METRIC IP EF_CONSTRUCTIOn -100",
              .expected_error_message =
-                 "Invalid field type for field `hash_field1`: EF_CONSTRUCTION "
-                 "must be a positive integer greater than 0 and cannot exceed "
-                 "4096.",
+                "Invalid field type for field `hash_field1`: Invalid range: Value below minimum; EF_CONSTRUCTION must be a positive integer greater than 0 and cannot exceed 4096.",
          },
          {
              .test_name = "invalid_as",
@@ -710,7 +703,7 @@ INSTANTIATE_TEST_SUITE_P(
                             "DISTANCE_METRIC IP ",
              .too_many_attributes = true,
              .expected_error_message =
-                 "The maximum number of attributes cannot exceed 50.",
+                 "Invalid range: Value above maximum; The maximum number of attributes cannot exceed 50.",
          },
          {
              .test_name = "invalid_param_num_1",

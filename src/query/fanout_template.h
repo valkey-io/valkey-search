@@ -14,8 +14,8 @@
 
 namespace valkey_search::query::fanout {
 
-// Template class for broadcast operations across cluster nodes
-class BroadcastTemplate {
+// Template class for fanout operations across cluster nodes
+class FanoutTemplate {
  public:
   template<typename TargetType>
   static std::vector<TargetType> GetTargets(
@@ -44,7 +44,7 @@ class BroadcastTemplate {
       if (flags & VALKEYMODULE_NODE_PFAIL || flags & VALKEYMODULE_NODE_FAIL) {
         VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
             << "Node " << node_id << " (" << ip
-            << ") is failing, skipping for broadcast...";
+            << ") is failing, skipping for fanout...";
         continue;
       }
       if (flags & VALKEYMODULE_NODE_MASTER) {

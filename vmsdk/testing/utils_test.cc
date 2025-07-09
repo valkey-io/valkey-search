@@ -141,7 +141,7 @@ TEST_F(UtilsTest, DisplayAsSIBytes) {
     std::memset(buffer, -1, sizeof(buffer));
     bytes = DisplayAsSIBytes(value, buffer, 1);
     EXPECT_EQ(buffer[0], 0);
-    EXPECT_EQ(buffer[1], -1); // untouched.
+    EXPECT_EQ(buffer[1], '\xff'); // untouched.
   }
 }
 

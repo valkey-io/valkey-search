@@ -35,7 +35,7 @@
 #include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/search.h"
-#include "src/query/broadcast_template.h"
+#include "src/query/fanout_template.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -275,7 +275,7 @@ absl::Status PerformSearchFanoutAsync(
 std::vector<FanoutSearchTarget> GetSearchTargetsForFanout(
     ValkeyModuleCtx *ctx) {
   std::cout << "Using get target template" << std::endl;
-  return BroadcastTemplate::GetTargets<FanoutSearchTarget>(
+  return FanoutTemplate::GetTargets<FanoutSearchTarget>(
       ctx,
       []() { return FanoutSearchTarget{.type = FanoutSearchTarget::Type::kLocal}; },
       [](const std::string& address) {

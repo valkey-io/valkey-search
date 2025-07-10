@@ -28,8 +28,8 @@ service Coordinator {
       returns (SearchIndexPartitionResponse) {
   }
   // Get index info across cluster
-  rpc InfoIndex(InfoIndexRequest)
-      returns (InfoIndexResponse) {
+  rpc InfoIndexPartition(InfoIndexPartitionRequest)
+      returns (InfoIndexPartitionResponse) {
   }
 }
 
@@ -138,10 +138,20 @@ message GetGlobalMetadataResponse {
   GlobalMetadata metadata = 1;
 }
 
-message InfoIndexRequest {
+message InfoIndexPartitionRequest {
   string index_name = 1;
 }
 
-message InfoIndexResponse {
-  string info_data = 1;
+message InfoIndexPartitionResponse {
+  bool exists = 1;
+  string index_name = 2;
+  uint64 num_docs = 3;
+  uint64 num_records = 4;
+  uint64 hash_indexing_failures = 5;
+  float backfill_complete_percent = 6;
+  bool backfill_in_progress = 7;
+  uint64 mutation_queue_size = 8;
+  string state = 9;
+  string error = 10;
 }
+

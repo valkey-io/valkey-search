@@ -162,7 +162,7 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
                 const auto& attribute_data_type =
                     parameters->index_schema->GetAttributeDataType();
                 auto ctx = vmsdk::MakeUniqueRedisThreadSafeContext(nullptr);
-                if (parameters->k == 0) {
+                if (parameters->attribute_alias.empty()) {
                     VMSDK_LOG(WARNING, nullptr)
                       << "Non-vector query detected, using ProcessNonVectorNeighborsForReply";
                     query::ProcessNonVectorNeighborsForReply(ctx.get(), attribute_data_type,

@@ -316,4 +316,37 @@ TEST_F(ThreadPoolTest, DynamicSizing) {
   EXPECT_EQ(thread_pool.pending_join_threads_.Size(), 0);
 }
 
+TEST_F(ThreadPoolTest, TestCPUUsage) {
+  std::atomic_bool atomic_flag{false};
+  const size_t thread_count = 2;
+  absl::BlockingCounter pending_tasks(thread_count);
+  ThreadPool thread_pool("test-pool", thread_count);
+  for (size_t i = 0; i < thread_count; i++) {
+    EXPECT_TRUE(thread_pool.Schedule(
+      [&pending_tasks]() {
+        pending_tasks.DecrementCount();
+      },
+      vmsdk::ThreadPool::Priority::kHigh));
+  }
+  thread_pool.StartWorkers();
+  pending_tasks.Wait();
+  absl::SleepFor(absl::Milliseconds(100));
+  // Expect current CPU avg to be around 0
+  EXPECT_LT(thread_pool.GetAvgCPUPercentage().value(), 1.0);
+  // Occupy the threads with initial task
+  for (size_t i = 0; i < thread_count; i++) {
+    EXPECT_TRUE(thread_pool.Schedule(
+      [&atomic_flag]() {
+        while (!atomic_flag) {
+        }
+      },
+      vmsdk::ThreadPool::Priority::kHigh));
+  }
+  absl::SleepFor(absl::Milliseconds(100));
+  // Expect current CPU avg to be higher now that there are active tasks
+  EXPECT_GT(thread_pool.GetAvgCPUPercentage().value(), 1.0);
+  atomic_flag.store(true);
+  thread_pool.JoinWorkers();
+}
+
 }  // namespace vmsdk

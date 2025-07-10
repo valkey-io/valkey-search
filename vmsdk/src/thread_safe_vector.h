@@ -70,12 +70,13 @@ class ThreadSafeVector {
   /// `callback` can be `nullptr`.
   void ClearWithCallback(std::function<void(T)> callback) {
     absl::MutexLock lock{&mutex_};
-    if (callback != nullptr) {
-      for (auto& item : vec_) {
-        callback(item);
-      }
-    }
+    ForEachInternal(callback);
     vec_.clear();
+  }
+
+  void ForEach(std::function<void(T)> callback) {
+    absl::MutexLock lock{&mutex_};
+    ForEachInternal(callback);
   }
 
   /// This is the same as calling `ClearWithCallback()` with `nullptr` as the
@@ -83,6 +84,13 @@ class ThreadSafeVector {
   void Clear() { ClearWithCallback(nullptr); }
 
  private:
+  void ForEachInternal(std::function<void(T)> callback) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_) {
+    if (callback != nullptr) {
+      for (auto& item : vec_) {
+        callback(item);
+      }
+    }
+  }
   mutable absl::Mutex mutex_;
   std::vector<T> vec_ ABSL_GUARDED_BY(mutex_);
 };

@@ -294,6 +294,9 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
     vmsdk::info_field::DoSection(ctx, "string_interning", for_crash_report);
     ValkeyModule_InfoAddFieldLongLong(ctx, "string_interning_store_size",
                                      StringInternStore::Instance().Size());
+    ValkeyModule_InfoAddFieldCString(
+        ctx, "string_interning_memory_mb", 
+        absl::StrFormat("%lu", StringInternStore::GetMemoryUsage() / 1024 / 1024).c_str());
 
     vmsdk::info_field::DoSection(ctx, "vector_externing", for_crash_report);
     auto vector_externing_stats = VectorExternalizer::Instance().GetStats();

@@ -34,12 +34,21 @@ class StringInternStore {
   static std::shared_ptr<InternedString> Intern(absl::string_view str,
                                                 Allocator *allocator = nullptr);
 
+  static int64_t GetMemoryUsage();
+
+  // Testing utility to set memory pool value for predictable test results
+  static void SetMemoryUsageForTesting(int64_t value) {
+    memory_pool_.store(value);
+  }
+
   size_t Size() const {
     absl::MutexLock lock(&mutex_);
     return str_to_interned_.size();
   }
 
  private:
+  static std::atomic<int64_t> memory_pool_;
+
   StringInternStore() = default;
   std::shared_ptr<InternedString> InternImpl(absl::string_view str,
                                              Allocator *allocator);

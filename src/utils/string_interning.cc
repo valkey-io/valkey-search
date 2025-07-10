@@ -13,8 +13,12 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/utils/allocator.h"
+#include "vmsdk/src/memory_tracker.h"
+#include "vmsdk/src/memory_allocation_overrides.h"
 
 namespace valkey_search {
+
+std::atomic<int64_t> StringInternStore::memory_pool_{0};
 
 InternedString::InternedString(absl::string_view str, bool shared)
     : length_(str.length()), is_shared_(shared), is_data_owner_(true) {
@@ -30,6 +34,10 @@ InternedString::~InternedString() {
   if (is_shared_) {
     StringInternStore::Instance().Release(this);
   }
+  
+  // NOTE: isolate memory tracking for deallocation.
+  IsolatedMemoryScope scope {StringInternStore::memory_pool_};
+  
   if (is_data_owner_) {
     delete[] data_;
   } else {
@@ -66,6 +74,9 @@ std::shared_ptr<InternedString> StringInternStore::InternImpl(
       return locked;
     }
   }
+
+  IsolatedMemoryScope scope {memory_pool_};
+
   std::shared_ptr<InternedString> interned_string;
   if (allocator) {
     auto buffer = allocator->Allocate(str.size() + 1);
@@ -79,6 +90,10 @@ std::shared_ptr<InternedString> StringInternStore::InternImpl(
   }
   str_to_interned_.insert({*interned_string, interned_string});
   return interned_string;
+}
+
+int64_t StringInternStore::GetMemoryUsage() {
+  return memory_pool_.load();
 }
 
 }  // namespace valkey_search

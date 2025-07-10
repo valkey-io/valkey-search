@@ -264,8 +264,6 @@ absl::StatusOr<std::string> IndexSchema::GetIdentifier(
     absl::string_view attribute_alias) const {
   auto itr = attributes_.find(std::string{attribute_alias});
   if (itr == attributes_.end()) {
-      VMSDK_LOG(WARNING, nullptr)
-        << "bad";
     return absl::NotFoundError("Index field not exists");
   }
   return itr->second.GetIdentifier();

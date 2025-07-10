@@ -356,24 +356,12 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
     size_t qualified_entries = EvaluateFilterAsPrimary(
         parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
         false);
-
     // Collect matching keys
     std::deque<indexes::Neighbor> neighbors;
     indexes::InlineVectorEvaluator evaluator;
     while (!entries_fetchers.empty()) {
       auto fetcher = std::move(entries_fetchers.front());
       entries_fetchers.pop();
-      // auto iterator = fetcher->Begin();
-      // while (!iterator->Done()) {
-      //   const auto &key = *iterator;
-      //   if (evaluator.Evaluate(*parameters.filter_parse_results.root_predicate, *key)) {
-      //     // For non-vector: distance = 0.0 (or sentinel), label = key label
-      //     // neighbors.push_back(indexes::Neighbor{0.0f, key->GetLabel()});
-      //     neighbors.push_back(indexes::Neighbor{key, 0.0f});
-
-      //   }
-      //   iterator->Next();
-      // }
       auto iterator = fetcher->Begin();
       while (!iterator->Done()) {
         const InternedStringPtr& label = **iterator;
@@ -385,30 +373,6 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
       }
     }
     return neighbors;
-
-
-    // std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
-    // size_t qualified_entries = EvaluateFilterAsPrimary(
-    //     parameters.filter_parse_results.root_predicate.get(), entries_fetchers, false);
-
-    // indexes::InlineVectorEvaluator evaluator;
-    // auto predicate = parameters.filter_parse_results.root_predicate.get();
-
-    // std::deque<indexes::Neighbor> results;
-    // while (!entries_fetchers.empty()) {
-    //   auto fetcher = std::move(entries_fetchers.front());
-    //   entries_fetchers.pop();
-    //   auto iterator = fetcher->Begin();
-    //   while (!iterator->Done()) {
-    //     const auto &key = *iterator;
-    //     if (evaluator.Evaluate(*predicate, *key)) {
-    //       // Distance is irrelevant in this case; return 0.0 or sentinel
-    //       results.emplace_back(indexes::Neighbor{key->Key(), 0.0});
-    //     }
-    //     iterator->Next();
-    //   }
-    // }
-    // return results;
   }
   VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
                                          parameters.attribute_alias));

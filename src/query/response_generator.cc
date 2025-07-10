@@ -140,6 +140,7 @@ absl::StatusOr<RecordsMap> GetContent(
                                   vector_identifier);
   }
   absl::flat_hash_set<absl::string_view> identifiers;
+  // Arguably, we only need this for non vector queries. Need to validate.
   for (const auto &filter_identifier :
        parameters.filter_parse_results.filter_identifiers) {
     identifiers.insert(filter_identifier);

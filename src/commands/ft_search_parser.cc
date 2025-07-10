@@ -200,15 +200,17 @@ absl::Status ParseKNN(query::VectorSearchParameters &parameters,
 
 absl::Status Verify(query::VectorSearchParameters &parameters) {
   // Only verify the vector KNN parameters for vector based queries.
-  // if (parameters.query.empty()) {
-  //   return absl::InvalidArgumentError("missing vector parameter");
-  // }
-  if (parameters.ef.has_value() && parameters.ef <= 0) {
-    return absl::InvalidArgumentError("`EF` value must be positive");
+  if (!parameters.attribute_alias.empty()) {
+    if (parameters.query.empty()) {
+      return absl::InvalidArgumentError("missing vector parameter");
+    }
+    if (parameters.ef.has_value() && parameters.ef <= 0) {
+      return absl::InvalidArgumentError("`EF` value must be positive");
+    }
+    if (parameters.k <= 0) {
+      return absl::InvalidArgumentError("k must be positive");
+    }
   }
-  // if (parameters.k <= 0) {
-  //   return absl::InvalidArgumentError("k must be positive");
-  // }
   if (parameters.timeout_ms > kMaxTimeoutMs) {
     return absl::InvalidArgumentError(
         absl::StrCat(kTimeoutParam,

@@ -224,7 +224,7 @@ void SendReply(RedisModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
   ++Metrics::GetStats().query_successful_requests_cnt;
 
   // Support non-vector queries: no attribute_alias and k == 0
-  if (parameters.attribute_alias.empty() && parameters.k == 0) {
+  if (parameters.attribute_alias.empty()) {
     SerializeNonVectorNeighbors(ctx, neighbors, parameters);
     return;
   }

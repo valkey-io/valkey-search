@@ -21,6 +21,7 @@
 #include "absl/status/status.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
+#include "status/status_macros.h"
 #include "vmsdk/src/module_config.h"
 
 namespace {
@@ -41,6 +42,7 @@ class ThreadRunContext {
 
 void *RunWorkerThread(void *arg) {
   ThreadRunContext *ctx = static_cast<ThreadRunContext *>(arg);
+  ctx->GetThread()->InitThreadMonitor();
   ctx->GetPool()->WorkerThread(ctx->GetThread());
   delete ctx;  // shallow delete
   return nullptr;
@@ -58,6 +60,28 @@ void ThreadPool::StartWorkers() {
   CHECK(!started_);
   started_ = true;
   IncrThreadCountBy(initial_thread_count_);
+}
+
+absl::StatusOr<double> ThreadPool::GetAvgCPUPercentage() {
+  std::vector<double> cpu_results;
+  absl::Status err = absl::OkStatus();
+  threads_.ForEach([&cpu_results, &err, this](auto thread) {
+    if(!err.ok()) {
+      return;
+    }
+    auto status = thread->thread_monitor_->GetThreadCPUPercentage();
+    if (!status.ok()) {
+      err = status.status();
+      return;
+    }
+    cpu_results.push_back(status.value());
+  });
+  VMSDK_RETURN_IF_ERROR(err);
+  double sum_all_cpus = std::accumulate(cpu_results.begin(), cpu_results.end(), 0.0);
+  if (cpu_results.size() == 0) {
+    return sum_all_cpus;
+  }
+  return sum_all_cpus / cpu_results.size();
 }
 
 bool ThreadPool::Schedule(absl::AnyInvocable<void()> task, Priority priority) {

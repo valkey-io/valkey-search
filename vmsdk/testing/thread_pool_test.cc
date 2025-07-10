@@ -316,4 +316,76 @@ TEST_F(ThreadPoolTest, DynamicSizing) {
   EXPECT_EQ(thread_pool.pending_join_threads_.Size(), 0);
 }
 
+TEST_F(ThreadPoolTest, TestCPUUsage) {
+  const size_t thread_count = 2;
+  ThreadPool thread_pool("test-pool", thread_count);
+  std::atomic_bool atomic_flag{true};
+  int modulo = 0;
+  std::unique_ptr<absl::BlockingCounter> blocking_counter;
+  // Reset the blocking counter
+  blocking_counter = std::make_unique<absl::BlockingCounter>(thread_count);
+  // Creating the general lambda task. The task sleeps every few iterations
+  // (decided by the modulo), and when the atomic flag is updated, it means the
+  // task is ready to finish
+  auto task = [&atomic_flag, &modulo, &blocking_counter]() {
+    uint64_t counter = 0;
+    while (!atomic_flag) {
+      counter++;
+      if (counter % modulo == 0) {
+        absl::SleepFor(absl::Microseconds(1));
+      }
+    }
+    blocking_counter->DecrementCount();
+  };
+
+  // Initializing threads, waiting for them to be ready
+  // Since atomic_flag is true, the task will only decrement the counter and
+  // finish.
+  for (size_t i = 0; i < thread_count; i++) {
+    EXPECT_TRUE(thread_pool.Schedule(task, vmsdk::ThreadPool::Priority::kHigh));
+  }
+  thread_pool.StartWorkers();
+  blocking_counter->Wait();
+  absl::SleepFor(absl::Milliseconds(100));
+  // Expect current CPU avg to be around 0
+  EXPECT_LT(thread_pool.GetAvgCPUPercentage().value(), 1.0);
+
+  atomic_flag.store(false);
+  // Reset the blocking counter
+  blocking_counter = std::make_unique<absl::BlockingCounter>(thread_count);
+  // Occupy the threads with initial task
+  modulo = 1000;
+  for (size_t i = 0; i < thread_count; i++) {
+    EXPECT_TRUE(thread_pool.Schedule(task, vmsdk::ThreadPool::Priority::kHigh));
+  }
+  absl::SleepFor(absl::Milliseconds(100));
+  // Expect current CPU avg to be higher now that there are active tasks
+  // We expect it to be around 10%
+  double first_sample = thread_pool.GetAvgCPUPercentage().value();
+  EXPECT_GT(first_sample, 10.0);
+  // Expect the avg CPU does not pass 100%
+  EXPECT_LT(first_sample, 100.0);
+  atomic_flag.store(true);
+  blocking_counter->Wait();
+
+  // Occupy again the threads with new tasks
+  atomic_flag.store(false);
+  // Reset the blocking counter
+  blocking_counter = std::make_unique<absl::BlockingCounter>(thread_count);
+  // Decrease the number of time sleep will be activated in the task by
+  // increasing the modulo
+  modulo = 10000;
+  for (size_t i = 0; i < thread_count; i++) {
+    EXPECT_TRUE(thread_pool.Schedule(task, vmsdk::ThreadPool::Priority::kHigh));
+  }
+  absl::SleepFor(absl::Milliseconds(100));
+  // Threads are expected now to work harder, so current CPU will be higher
+  // than previous sample
+  double second_sample = thread_pool.GetAvgCPUPercentage().value();
+  EXPECT_GT(second_sample, first_sample);
+  atomic_flag.store(true);
+  blocking_counter->Wait();
+  thread_pool.JoinWorkers();
+}
+
 }  // namespace vmsdk

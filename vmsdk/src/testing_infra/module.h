@@ -163,6 +163,8 @@ class MockValkeyModule {
                long long field));  // NOLINT
   MOCK_METHOD(int, InfoAddFieldCString,
               (ValkeyModuleInfoCtx * ctx, const char *str, const char *field));
+  MOCK_METHOD(int, InfoAddFieldDouble,
+              (ValkeyModuleInfoCtx * ctx, const char *str, double field));
   MOCK_METHOD(int, RegisterStringConfig,
               (ValkeyModuleCtx * ctx, const char *name, const char *default_val,
                unsigned int flags, ValkeyModuleConfigGetStringFunc getfn,
@@ -472,6 +474,14 @@ class InfoCapture {
       info_ << str << "=" << field << ",";
     } else {
       info_ << str << ": '" << field << "'" << std::endl;
+    }
+  }
+  void InfoAddFieldDouble(const char *str, double field,
+                            int in_dict_field) {
+    if (in_dict_field) {
+      info_ << str << "=" << field << ",";
+    } else {
+      info_ << str << ": " << field << std::endl;
     }
   }
   void InfoEndDictField() {
@@ -953,6 +963,15 @@ inline int TestValkeyModule_InfoAddFieldCString(ValkeyModuleInfoCtx *ctx,
     ctx->info_capture.InfoAddFieldCString(str, field, ctx->in_dict_field);
   }
   return kMockValkeyModule->InfoAddFieldCString(ctx, str, field);
+}
+
+inline int TestValkeyModule_InfoAddFieldDouble(ValkeyModuleInfoCtx *ctx,
+                                          const char *str,
+                                          double field) {
+  if (ctx) {
+    ctx->info_capture.InfoAddFieldDouble(str, field, ctx->in_dict_field);
+  }
+  return kMockValkeyModule->InfoAddFieldDouble(ctx, str, field);
 }
 
 inline int TestValkeyModule_InfoBeginDictField(ValkeyModuleInfoCtx *ctx,
@@ -1473,6 +1492,7 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_InfoAddSection = &TestValkeyModule_InfoAddSection;
   ValkeyModule_InfoAddFieldLongLong = &TestValkeyModule_InfoAddFieldLongLong;
   ValkeyModule_InfoAddFieldCString = &TestValkeyModule_InfoAddFieldCString;
+  ValkeyModule_InfoAddFieldDouble = &TestValkeyModule_InfoAddFieldDouble;
   ValkeyModule_InfoBeginDictField = &TestValkeyModule_InfoBeginDictField;
   ValkeyModule_InfoEndDictField = &TestValkeyModule_InfoEndDictField;
   ValkeyModule_RegisterStringConfig = &TestValkeyModule_RegisterStringConfig;

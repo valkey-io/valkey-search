@@ -53,7 +53,9 @@ target_link_libraries(module_type PUBLIC managed_pointers)
 target_link_libraries(module_type PUBLIC valkey_module)
 
 set(SRCS_THREAD_POOL ${CMAKE_CURRENT_LIST_DIR}/thread_pool.cc
-                     ${CMAKE_CURRENT_LIST_DIR}/thread_pool.h)
+                     ${CMAKE_CURRENT_LIST_DIR}/thread_pool.h
+                     ${CMAKE_CURRENT_LIST_DIR}/thread_monitoring.h
+                     ${CMAKE_CURRENT_LIST_DIR}/thread_monitoring.cc)
 
 valkey_search_add_static_library(thread_pool "${SRCS_THREAD_POOL}")
 target_include_directories(thread_pool PUBLIC ${CMAKE_CURRENT_LIST_DIR})

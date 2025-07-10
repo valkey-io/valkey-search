@@ -113,8 +113,7 @@ void ReplyScore(RedisModuleCtx *ctx, RedisModuleString &score_as,
 void SerializeNeighbors(RedisModuleCtx *ctx,
                         const std::deque<indexes::Neighbor> &neighbors,
                         const query::VectorSearchParameters &parameters) {
-  // Do I still need to comment this out?
-  // CHECK_GT(static_cast<size_t>(parameters.k), parameters.limit.first_index);
+  CHECK_GT(static_cast<size_t>(parameters.k), parameters.limit.first_index);
   const size_t start_index = CalcStartIndex(neighbors, parameters);
   const size_t end_index = start_index + CalcEndIndex(neighbors, parameters);
   RedisModule_ReplyWithArray(ctx, 2 * (end_index - start_index) + 1);
@@ -155,6 +154,11 @@ void SerializeNeighbors(RedisModuleCtx *ctx,
   }
 }
 
+// This is the function where we handle non-vector queries.
+// It processes the neighbors and replies with the attribute contents
+// without the vector score.
+// The part to extend here is other search libraries return all fields (not just those used in the query).
+// Currrently, we only return the fields usd in the query.
 void SerializeNonVectorNeighbors(RedisModuleCtx *ctx,
                                 std::deque<indexes::Neighbor> &neighbors,
                                 const query::VectorSearchParameters &parameters) {

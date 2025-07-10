@@ -150,6 +150,21 @@ class IndexSchema : public KeyspaceEventSubscription,
   void ProcessMultiQueue();
   void SubscribeToVectorExternalizer(absl::string_view attribute_identifier,
                                      indexes::VectorBase *vector_index);
+  // number of documents (what FT.INFO num_docs returns)
+  uint64_t GetNumDocs() const {
+    return stats_.document_cnt;
+  }
+
+  // how many skip‐on‐add (hash_indexing_failures)
+  uint64_t GetHashIndexingFailures() const {
+    return stats_.subscription_add.skipped_cnt;
+  }
+
+  // current size of the mutation queue
+  uint64_t GetMutationQueueSize() const {
+    absl::MutexLock lock(&stats_.mutex_);
+    return stats_.mutation_queue_size_;
+  }
 
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,

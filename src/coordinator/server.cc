@@ -31,6 +31,7 @@
 #include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
+#include "src/schema_manager.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "valkey_search_options.h"
@@ -175,6 +176,45 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
     RecordSearchMetrics(true, nullptr);
     reactor->Finish(ToGrpcStatus(status));
   }
+  return reactor;
+}
+
+grpc::ServerUnaryReactor* Service::InfoIndexPartition(
+    grpc::CallbackServerContext* context,
+    const InfoIndexPartitionRequest* request,
+    InfoIndexPartitionResponse* response) {
+  GRPCSuspensionGuard guard(GRPCSuspender::Instance());
+  auto latency_sample = SAMPLE_EVERY_N(100);
+  grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
+
+  vmsdk::RunByMain(
+      [reactor, response, idx = request->index_name(),
+       latency_sample = std::move(latency_sample)]() mutable {
+        auto status_or_schema =
+            SchemaManager::Instance().GetIndexSchema(/*db=*/0, idx);
+        if (!status_or_schema.ok()) {
+          response->set_exists(false);
+          response->set_index_name(idx);
+          response->set_error(status_or_schema.status().ToString());
+          reactor->Finish(grpc::Status::OK);
+          return;
+        }
+
+        auto schema = std::move(status_or_schema.value());
+        response->set_exists(true);
+        response->set_index_name(idx);
+
+        response->set_num_docs(schema->GetNumDocs());
+        response->set_num_records(schema->CountRecords());
+        response->set_hash_indexing_failures(schema->GetHashIndexingFailures());
+        response->set_backfill_complete_percent(schema->GetBackfillPercent());
+        response->set_backfill_in_progress(schema->IsBackfillInProgress());
+        response->set_mutation_queue_size(schema->GetMutationQueueSize());
+        response->set_state(std::string(schema->GetStateForInfo()));
+
+        reactor->Finish(grpc::Status::OK);
+      });
+
   return reactor;
 }
 

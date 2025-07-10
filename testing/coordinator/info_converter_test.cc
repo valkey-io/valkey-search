@@ -6,7 +6,7 @@ namespace valkey_search::coordinator {
 TEST(InfoConverterTest, CreateInfoIndexRequest) {
   std::string index_name = "test_index";
   
-  auto request = CreateInfoIndexRequest(index_name);
+  auto request = CreateInfoIndexPartitionRequest(index_name);
   
   ASSERT_NE(request, nullptr);
   EXPECT_EQ(request->index_name(), "test_index");

@@ -7,7 +7,7 @@
 
 namespace valkey_search::coordinator {
 
-std::unique_ptr<InfoIndexRequest> CreateInfoIndexRequest(const std::string& index_name);
+std::unique_ptr<InfoIndexPartitionRequest> CreateInfoIndexPartitionRequest(const std::string& index_name);
 
 }  // namespace valkey_search::coordinator
 

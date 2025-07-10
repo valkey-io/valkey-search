@@ -364,10 +364,6 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     }
     identifier_names.insert(attribute->identifier());
   }
-  // if (!HasVectorIndex(index_schema_proto)) {
-  //   return absl::InvalidArgumentError(
-  //       "At least one attribute must be indexed as a vector");
-  // }
   return index_schema_proto;
 }
 std::unique_ptr<data_model::VectorIndex> FTCreateVectorParameters::ToProto()

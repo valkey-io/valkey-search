@@ -124,6 +124,11 @@ struct SearchPartitionResultsTracker {
 
   void AddResult(indexes::Neighbor &neighbor)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex) {
+    if (parameters->k == 0) {
+        VMSDK_LOG(WARNING, nullptr) << "Non-vector query, adding result directly";
+        results.emplace(std::move(neighbor));
+        return;
+    }
     if (results.size() < parameters->k) {
       results.emplace(std::move(neighbor));
     } else if (neighbor.distance < results.top().distance) {

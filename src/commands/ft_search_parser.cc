@@ -379,7 +379,7 @@ absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
       parameters.score_as =
           vmsdk::MakeUniqueRedisString(parameters.parse_vars.score_as_string);
     }
-  } 
+  }
   return absl::OkStatus();
 }
 }  // namespace

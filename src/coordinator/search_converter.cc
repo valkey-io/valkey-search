@@ -164,6 +164,7 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request) {
   }
   parameters->query = request.query();
   parameters->dialect = request.dialect();
+  parameters->k = request.k();
   parameters->ef = request.ef();
   parameters->limit = query::LimitParameter{request.limit().first_index(),
                                             request.limit().number()};

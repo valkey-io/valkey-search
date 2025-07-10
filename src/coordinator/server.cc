@@ -108,52 +108,6 @@ void RecordSearchMetrics(bool failure,
   }
 }
 
-
-// void SerializeNeighbors(coordinator::SearchIndexPartitionResponse* response,
-//                        const std::deque<indexes::Neighbor>& neighbors) {
-//     try {
-//         VMSDK_LOG(WARNING, nullptr) 
-//             << "SerializeNeighbors called with " << neighbors.size() << " neighbors";
-            
-//         for (const auto& neighbor : neighbors) {
-//             auto* proto_neighbor = response->add_neighbors();
-//             if (!proto_neighbor) {
-//                 VMSDK_LOG(WARNING, nullptr) << "Failed to add neighbor to response";
-//                 continue;
-//             }
-            
-//             if (!neighbor.external_id) {
-//                 VMSDK_LOG(WARNING, nullptr) << "Neighbor has null external_id";
-//                 continue;
-//             }
-            
-//             // proto_neighbor->set_external_id(*neighbor.external_id);
-//             proto_neighbor->set_key(std::move(*neighbor.external_id));
-//             proto_neighbor->set_score(neighbor.distance);  // Added score field
-            
-//             if (neighbor.attribute_contents.has_value()) {
-//                 for (const auto& content : neighbor.attribute_contents.value()) {
-//                     if (!content.second.value || !content.second.GetIdentifier()) {
-//                         VMSDK_LOG(WARNING, nullptr) << "Invalid content in neighbor";
-//                         continue;
-//                     }
-//                     auto proto_content = proto_neighbor->add_attribute_contents();
-//                     proto_content->set_identifier(content.first);
-//                     proto_content->set_value(content.second.value.get());
-//                 }
-//             }
-//         }
-        
-//         VMSDK_LOG(WARNING, nullptr) 
-//             << "SerializeNeighbors completed successfully";
-//     } catch (const std::exception& e) {
-//         VMSDK_LOG(WARNING, nullptr) 
-//             << "Exception in SerializeNeighbors: " << e.what();
-//         throw; // Re-throw after logging
-//     }
-// }
-
-
 void SerializeNeighbors(SearchIndexPartitionResponse* response,
                         const std::deque<indexes::Neighbor>& neighbors) {            
   try {

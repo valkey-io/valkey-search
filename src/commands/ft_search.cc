@@ -110,40 +110,10 @@ void ReplyScore(RedisModuleCtx *ctx, RedisModuleString &score_as,
                               vmsdk::MakeUniqueRedisString(score_value).get());
 }
 
-
-
-// void SerializeFilteredNeighbors(
-//     RedisModuleCtx *ctx,
-//     const std::deque<indexes::Neighbor> &neighbors,
-//     const query::VectorSearchParameters &parameters) {
-//   RedisModule_ReplyWithArray(ctx, neighbors.size() * 2 + 1);
-//   RedisModule_ReplyWithLongLong(ctx, neighbors.size());
-//   for (const auto &neighbor : neighbors) {
-//     RedisModule_ReplyWithString(
-//         ctx, vmsdk::MakeUniqueRedisString(*neighbor.external_id).get());
-//     // RedisModule_ReplyWithArray(ctx, 0);  // or actual attributes if you add them
-//         // Reply with an array of attributes (field-value pairs)
-//     if (neighbor.attribute_contents.has_value()) {
-//       const auto &attrs = neighbor.attribute_contents.value();
-//       RedisModule_ReplyWithArray(ctx, attrs.size() * 2);
-//       for (const auto &[field, val] : attrs) {
-//         RedisModule_ReplyWithString(ctx,
-//             vmsdk::MakeUniqueRedisString(field).get());
-//         RedisModule_ReplyWithString(ctx,
-//             vmsdk::MakeUniqueRedisString(val.ToString()).get());
-//       }
-//     } else {
-//       // No attributes, send empty array
-//       RedisModule_ReplyWithArray(ctx, 0);
-//     }
-//   }
-// }
-
 void SerializeNeighbors(RedisModuleCtx *ctx,
                         const std::deque<indexes::Neighbor> &neighbors,
                         const query::VectorSearchParameters &parameters) {
-  // TODO: Add warn logging here
-  VMSDK_LOG(WARNING, ctx) << "I am here";                   
+  // Do I still need to comment this out?
   // CHECK_GT(static_cast<size_t>(parameters.k), parameters.limit.first_index);
   const size_t start_index = CalcStartIndex(neighbors, parameters);
   const size_t end_index = start_index + CalcEndIndex(neighbors, parameters);
@@ -185,105 +155,42 @@ void SerializeNeighbors(RedisModuleCtx *ctx,
   }
 }
 
-// void SerializeNonVectorNeighbors(RedisModuleCtx *ctx,
-//                                 const std::deque<indexes::Neighbor> &neighbors,
-//                                 const query::VectorSearchParameters &parameters) {
-//     const size_t start_index = parameters.limit.first_index;
-//     const size_t available_results = neighbors.size();
-//     const size_t end_index = std::min(
-//         start_index + (parameters.limit.number ? parameters.limit.number : available_results),
-//         available_results);
-
-//     RedisModule_ReplyWithArray(ctx, 2 * (end_index - start_index) + 1);
-//     RedisModule_ReplyWithLongLong(ctx, available_results);
-
-//     for (auto i = start_index; i < end_index; ++i) {
-//         RedisModule_ReplyWithString(
-//           ctx, vmsdk::MakeUniqueRedisString(*neighbors[i].external_id).get());
-//         // RedisModule_ReplyWithString(
-//         //     ctx, neighbors[i].external_id->c_str());
-
-//         if (!neighbors[i].attribute_contents.has_value()) {
-//           // Handle case where attribute_contents is not present
-//           RedisModule_ReplyWithArray(ctx, 0);
-//           continue;
-//         }
-        
-//         if (parameters.return_attributes.empty()) {
-//             RedisModule_ReplyWithArray(
-//                 ctx, 2 * neighbors[i].attribute_contents.value().size() + 2);
-//             ReplyScore(ctx, *parameters.score_as, neighbors[i]);
-//             for (auto &attribute_content : neighbors[i].attribute_contents.value()) {
-//                 RedisModule_ReplyWithString(ctx,
-//                                           attribute_content.second.GetIdentifier());
-//                 RedisModule_ReplyWithString(ctx, attribute_content.second.value.get());
-//             }
-//         } else {
-//             RedisModule_ReplyWithArray(ctx, REDISMODULE_POSTPONED_LEN);
-//             size_t cnt = 0;
-//             for (const auto &return_attribute : parameters.return_attributes) {
-//                 if (vmsdk::ToStringView(parameters.score_as.get()) ==
-//                     vmsdk::ToStringView(return_attribute.identifier.get())) {
-//                     ReplyScore(ctx, *parameters.score_as, neighbors[i]);
-//                     ++cnt;
-//                     continue;
-//                 }
-//                 auto it = neighbors[i].attribute_contents.value().find(
-//                     vmsdk::ToStringView(return_attribute.identifier.get()));
-//                 if (it != neighbors[i].attribute_contents.value().end()) {
-//                     RedisModule_ReplyWithString(ctx, return_attribute.alias.get());
-//                     RedisModule_ReplyWithString(ctx, it->second.value.get());
-//                     ++cnt;
-//                 }
-//             }
-//             RedisModule_ReplySetArrayLength(ctx, 2 * cnt);
-//         }
-//     }
-// }
-
 void SerializeNonVectorNeighbors(RedisModuleCtx *ctx,
                                 std::deque<indexes::Neighbor> &neighbors,
                                 const query::VectorSearchParameters &parameters) {
     VMSDK_LOG(WARNING, nullptr) << "Starting SerializeNonVectorNeighbors";
-    
+
     ProcessNonVectorNeighborsForReply(ctx, parameters.index_schema->GetAttributeDataType(),
                                      neighbors, parameters);
 
     const size_t start_index = parameters.limit.first_index;
     const size_t available_results = neighbors.size();
     VMSDK_LOG(WARNING, nullptr) << "Available results: " << available_results;
-    
+
     const size_t end_index = std::min(
         start_index + (parameters.limit.number ? parameters.limit.number : available_results),
         available_results);
     VMSDK_LOG(WARNING, nullptr) << "End index: " << end_index;
-
     RedisModule_ReplyWithArray(ctx, 2 * (end_index - start_index) + 1);
     RedisModule_ReplyWithLongLong(ctx, available_results);
-
     for (auto i = start_index; i < end_index; ++i) {
         VMSDK_LOG(WARNING, nullptr) << "Processing neighbor " << i;
-        
         if (!neighbors[i].external_id) {
             VMSDK_LOG(WARNING, nullptr) << "Null external_id for neighbor " << i;
             continue;
         }
-
         RedisModule_ReplyWithString(
             ctx, vmsdk::MakeUniqueRedisString(*neighbors[i].external_id).get());
-        
         if (!neighbors[i].attribute_contents.has_value()) {
             VMSDK_LOG(WARNING, nullptr) << "No attribute contents for neighbor " << i;
             continue;
         }
-
         const auto& contents = neighbors[i].attribute_contents.value();
         VMSDK_LOG(WARNING, nullptr) << "Contents size: " << contents.size();
-
         // For non-vector queries, just return all contents without score
         RedisModule_ReplyWithArray(ctx, 2 * contents.size());
         for (const auto &attribute_content : contents) {
-            if (!attribute_content.second.GetIdentifier() || 
+            if (!attribute_content.second.GetIdentifier() ||
                 !attribute_content.second.value) {
                 VMSDK_LOG(WARNING, nullptr) << "Null content identifiers";
                 continue;
@@ -295,60 +202,6 @@ void SerializeNonVectorNeighbors(RedisModuleCtx *ctx,
     }
     VMSDK_LOG(WARNING, nullptr) << "Finished SerializeNonVectorNeighbors";
 }
-
-
-
-// void SerializeNonVectorNeighbors(RedisModuleCtx *ctx,
-//                                 std::deque<indexes::Neighbor> &neighbors,
-//                                 const query::VectorSearchParameters &parameters) {
-//     // Process neighbors to get content
-//     ProcessNonVectorNeighborsForReply(ctx, parameters.index_schema->GetAttributeDataType(),
-//                                      neighbors, parameters);
-
-//     const size_t start_index = parameters.limit.first_index;
-//     const size_t available_results = neighbors.size();
-//     const size_t end_index = std::min(
-//         start_index + (parameters.limit.number ? parameters.limit.number : available_results),
-//         available_results);
-
-//     RedisModule_ReplyWithArray(ctx, 2 * (end_index - start_index) + 1);
-//     RedisModule_ReplyWithLongLong(ctx, available_results);
-
-//     for (auto i = start_index; i < end_index; ++i) {
-//         RedisModule_ReplyWithString(
-//           ctx, vmsdk::MakeUniqueRedisString(*neighbors[i].external_id).get());
-        
-//         const auto& contents = neighbors[i].attribute_contents.value();
-//         if (parameters.return_attributes.empty()) {
-//             RedisModule_ReplyWithArray(ctx, 2 * contents.size() + 2);
-//             ReplyScore(ctx, *parameters.score_as, neighbors[i]);
-//             for (const auto &attribute_content : contents) {
-//                 RedisModule_ReplyWithString(ctx,
-//                                           attribute_content.second.GetIdentifier());
-//                 RedisModule_ReplyWithString(ctx, attribute_content.second.value.get());
-//             }
-//         } else {
-//             RedisModule_ReplyWithArray(ctx, REDISMODULE_POSTPONED_LEN);
-//             size_t cnt = 0;
-//             for (const auto &return_attribute : parameters.return_attributes) {
-//                 if (vmsdk::ToStringView(parameters.score_as.get()) ==
-//                     vmsdk::ToStringView(return_attribute.identifier.get())) {
-//                     ReplyScore(ctx, *parameters.score_as, neighbors[i]);
-//                     ++cnt;
-//                     continue;
-//                 }
-//                 auto it = contents.find(
-//                     vmsdk::ToStringView(return_attribute.identifier.get()));
-//                 if (it != contents.end()) {
-//                     RedisModule_ReplyWithString(ctx, return_attribute.alias.get());
-//                     RedisModule_ReplyWithString(ctx, it->second.value.get());
-//                     ++cnt;
-//                 }
-//             }
-//             RedisModule_ReplySetArrayLength(ctx, 2 * cnt);
-//         }
-//     }
-// }
 
 }  // namespace
 // The reply structure is an array which consists of:
@@ -372,18 +225,9 @@ void SendReply(RedisModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
     return;
   }
 
-  // if (parameters.attribute_alias.empty()) {
-  //   SerializeFilteredNeighbors(ctx, neighbors, parameters);
-  //   return;
-  // }
   // @karsubba: Here, first_index is 10 by default. And k is 0 by default. k is only set with KNN queries which are not the case for vector search queries.
   if (parameters.limit.first_index >= static_cast<uint64_t>(parameters.k) ||
       parameters.limit.number == 0) {
-    VMSDK_LOG(WARNING, nullptr)
-        << "FT.SEARCH with first_index=" << parameters.limit.first_index
-        << " and k=" << parameters.k
-        << " is not supported. Returning empty result.";
-    // Check why we are entering this code path:
     RedisModule_ReplyWithArray(ctx, 1);
     RedisModule_ReplyWithLongLong(ctx, neighbors.size());
     return;

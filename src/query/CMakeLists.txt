@@ -94,6 +94,18 @@ target_link_libraries(response_generator PUBLIC type_conversions)
 target_link_libraries(response_generator PUBLIC status_macros)
 target_link_libraries(response_generator PUBLIC valkey_module)
 
+set(SRCS_INFO_FANOUT ${CMAKE_CURRENT_LIST_DIR}/info_fanout.cc
+                     ${CMAKE_CURRENT_LIST_DIR}/info_fanout.h)
+
+valkey_search_add_static_library(info_fanout "${SRCS_INFO_FANOUT}")
+target_include_directories(info_fanout PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(info_fanout PUBLIC fanout)
+target_link_libraries(info_fanout PUBLIC client_pool)
+target_link_libraries(info_fanout PUBLIC managed_pointers)
+target_link_libraries(info_fanout PUBLIC thread_pool)
+target_link_libraries(info_fanout PUBLIC status_macros)
+target_link_libraries(info_fanout PUBLIC valkey_module)
+
 set(SRCS_PLANNER ${CMAKE_CURRENT_LIST_DIR}/planner.cc
                  ${CMAKE_CURRENT_LIST_DIR}/planner.h)
 

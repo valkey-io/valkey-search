@@ -3,7 +3,10 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include <ostream>
+#include <netinet/in.h> 
 
+#include "absl/status/status.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/random/random.h"
 #include "absl/strings/str_cat.h"
@@ -13,6 +16,27 @@
 #include "vmsdk/src/managed_pointers.h"
 
 namespace valkey_search::query::fanout {
+
+struct FanoutSearchTarget {
+  enum Type {
+    kLocal,
+    kRemote,
+  };
+  Type type;
+  // Empty string if type is kLocal.
+  std::string address;
+
+  bool operator==(const FanoutSearchTarget& other) const {
+    return type == other.type && address == other.address;
+  }
+
+  friend std::ostream& operator<<(std::ostream& os,
+                                  const FanoutSearchTarget& target) {
+    os << "FanoutSearchTarget{type: " << target.type
+       << ", address: " << target.address << "}";
+    return os;
+  }
+};
 
 // Template class for fanout operations across cluster nodes
 class FanoutTemplate {

@@ -11,11 +11,14 @@
 #include "src/acl.h"
 #include "src/commands/commands.h"
 #include "src/schema_manager.h"
+#include "src/query/info_fanout.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+
+#include "vmsdk/src/log.h"
 
 #include <iostream>
 
@@ -42,7 +45,21 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     // default parameter is LOCAL; GLOBAL must be specified to retrieve global info
     if (absl::EqualsIgnoreCase(scope, "GLOBAL")) {
       is_global = true;
-      std::cout << "==========Using Global Scope==========" << std::endl;
+      // std::cout << "==========Using Global Scope==========" << std::endl;
+      VMSDK_LOG(NOTICE, ctx) << "==========Using Global Scope==========";
+      
+      // Test GetInfoTargetsForFanout
+      auto targets = query::info_fanout::GetInfoTargetsForFanout(ctx);
+      // std::cout << "Found " << targets.size() << " fanout targets:" << std::endl;
+      VMSDK_LOG(NOTICE, ctx) << "Found " << targets.size() << " fanout targets:";
+      for (const auto& target : targets) {
+        // std::cout << "  Target type: " << (target.type == query::fanout::FanoutSearchTarget::Type::kLocal ? "LOCAL" : "REMOTE")
+        //           << ", address: " << target.address << std::endl;
+        VMSDK_LOG(NOTICE, ctx)
+            << "  Target type: "
+            << (target.type == query::fanout::FanoutSearchTarget::Type::kLocal ? "LOCAL" : "REMOTE")
+            << ", address: " << target.address;
+      }
     }
   }
 

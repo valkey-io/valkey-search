@@ -21,6 +21,7 @@
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "src/valkey_search_options.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
@@ -252,7 +253,7 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   }
   filter_identifiers_.clear();
   pos_ = 0;
-  VMSDK_ASSIGN_OR_RETURN(auto predicate, ParseExpression());
+  VMSDK_ASSIGN_OR_RETURN(auto predicate, ParseExpression(0));
   if (!IsEnd()) {
     return UnexpectedChar(expression_, pos_);
   }
@@ -300,7 +301,10 @@ std::unique_ptr<query::Predicate> WrapPredicate(
 // 10. Numeric filters are inclusive. Exclusive min or max are expressed with (
 // prepended to the number, for example, [(100 (200].
 absl::StatusOr<std::unique_ptr<query::Predicate>>
-FilterParser::ParseExpression() {
+FilterParser::ParseExpression(uint32_t level) {
+  if (level++ >= options::GetQueryStringDepth()) {
+    return absl::InvalidArgumentError("Query string is too complex");
+  }
   std::unique_ptr<query::Predicate> prev_predicate;
 
   SkipWhitespace();
@@ -312,7 +316,7 @@ FilterParser::ParseExpression() {
     bool negate = Match('-');
 
     if (Match('(')) {
-      VMSDK_ASSIGN_OR_RETURN(predicate, ParseExpression());
+      VMSDK_ASSIGN_OR_RETURN(predicate, ParseExpression(level));
       if (!Match(')')) {
         return absl::InvalidArgumentError(
             absl::StrCat("Expected ')' after expression got '",
@@ -325,7 +329,7 @@ FilterParser::ParseExpression() {
       if (negate) {
         return UnexpectedChar(expression_, pos_ - 1);
       }
-      VMSDK_ASSIGN_OR_RETURN(predicate, ParseExpression());
+      VMSDK_ASSIGN_OR_RETURN(predicate, ParseExpression(level));
       prev_predicate =
           WrapPredicate(std::move(prev_predicate), std::move(predicate), negate,
                         query::LogicalOperator::kOr);

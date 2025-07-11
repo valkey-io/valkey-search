@@ -33,6 +33,7 @@ inline std::list<absl::string_view> ACLPermissionFormatter(
   }
   return permissions;
 }
+}
 
 vmsdk::module::Options options = {
     .name = "search",
@@ -76,6 +77,12 @@ vmsdk::module::Options options = {
                 .flags = {vmsdk::module::kDenyOOMFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTSearchCmd>,
             },
+            {
+                .cmd_name = valkey_search::kDebugCommand,
+                .permissions =
+                    ACLPermissionFormatter(valkey_search::kDebugCmdPermissions),
+                .cmd_func = &vmsdk::CreateCommand<valkey_search::FTDebugCmd>,
+            },
         }  // namespace
     ,
     .on_load =
@@ -96,4 +103,3 @@ vmsdk::module::Options options = {
         },
 };
 VALKEY_MODULE(options);
-}  // namespace

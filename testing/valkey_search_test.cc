@@ -427,6 +427,8 @@ TEST_F(ValkeySearchTest, Info) {
   stats.coordinator_server_get_global_metadata_success_cnt = 26;
   stats.coordinator_server_search_index_partition_failure_cnt = 27;
   stats.coordinator_server_search_index_partition_success_cnt = 28;
+  stats.coordinator_bytes_out = 1000;
+  stats.coordinator_bytes_in = 2000;
   auto interned_key_1 = StringInternStore::Intern("key1");
   EXPECT_EQ(std::string(*interned_key_1), "key1");
   ValkeyModuleInfoCtx fake_info_ctx;
@@ -467,7 +469,8 @@ TEST_F(ValkeySearchTest, Info) {
       "22\ncoordinator_client_get_global_metadata_failure_count: "
       "21\ncoordinator_client_search_index_partition_success_count: "
       "24\ncoordinator_client_search_index_partition_failure_count: "
-      "23\nstring_interning\nstring_interning_store_size: "
+      "23\ncoordinator_bytes_out: 1000\ncoordinator_bytes_in: 2000"
+      "\nstring_interning\nstring_interning_store_size: "
       "1\nvector_externing\nvector_externing_entry_count: "
       "0\nvector_externing_hash_extern_errors: "
       "0\nvector_externing_generated_value_cnt: "

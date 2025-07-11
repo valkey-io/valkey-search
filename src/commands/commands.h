@@ -21,6 +21,7 @@ enum FTCommand {
   kInfo,
   kList,
   kSearch,
+  kDebug,
 };
 
 constexpr absl::string_view kSearchCategory{"@search"};
@@ -35,6 +36,7 @@ constexpr absl::string_view kDropIndexCommand{"FT.DROPINDEX"};
 constexpr absl::string_view kInfoCommand{"FT.INFO"};
 constexpr absl::string_view kListCommand{"FT._LIST"};
 constexpr absl::string_view kSearchCommand{"FT.SEARCH"};
+constexpr absl::string_view kDebugCommand{"FT._DEBUG"};
 
 const absl::flat_hash_set<absl::string_view> kCreateCmdPermissions{
     kSearchCategory, kWriteCategory, kFastCategory};
@@ -46,6 +48,9 @@ const absl::flat_hash_set<absl::string_view> kInfoCmdPermissions{
     kSearchCategory, kReadCategory, kFastCategory};
 const absl::flat_hash_set<absl::string_view> kListCmdPermissions{
     kSearchCategory, kReadCategory, kSlowCategory, kAdminCategory};
+const absl::flat_hash_set<absl::string_view> kDebugCmdPermissions{
+    kSearchCategory, kReadCategory, kSlowCategory, kAdminCategory};
+
 
 inline absl::flat_hash_set<absl::string_view> PrefixACLPermissions(
     const absl::flat_hash_set<absl::string_view> &cmd_permissions,
@@ -64,6 +69,8 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 absl::Status FTListCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                        int argc);
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                         int argc);
+absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc);
 }  // namespace valkey_search
 

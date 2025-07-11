@@ -177,6 +177,18 @@ absl::StatusOr<RecordsMap> GetContent(
   }
   return return_content;
 }
+
+void ProcessNonVectorNeighborsForReply(RedisModuleCtx *ctx,
+                                      const AttributeDataType &attribute_data_type,
+                                      std::deque<indexes::Neighbor> &neighbors,
+                                      const query::VectorSearchParameters &parameters) {
+    VMSDK_LOG(WARNING, nullptr)
+        << "Before processing, neighbors size: " << neighbors.size();
+    ProcessNeighborsForReply(ctx, attribute_data_type, neighbors, parameters, "");
+    VMSDK_LOG(WARNING, nullptr)
+        << "After processing, neighbors size: " << neighbors.size();
+}
+
 // Adds all local content for neighbors to the list of neighbors.
 //
 // Any neighbors already contained in the attribute content map will be skipped.

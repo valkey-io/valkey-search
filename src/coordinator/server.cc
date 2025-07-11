@@ -162,13 +162,20 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
                 const auto& attribute_data_type =
                     parameters->index_schema->GetAttributeDataType();
                 auto ctx = vmsdk::MakeUniqueRedisThreadSafeContext(nullptr);
-                auto vector_identifier =
-                    parameters->index_schema
-                        ->GetIdentifier(parameters->attribute_alias)
-                        .value();
-                query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
-                                                neighbors, *parameters,
-                                                vector_identifier);
+                if (parameters->attribute_alias.empty()) {
+                    VMSDK_LOG(WARNING, nullptr)
+                      << "Non-vector query detected, using ProcessNonVectorNeighborsForReply";
+                    query::ProcessNonVectorNeighborsForReply(ctx.get(), attribute_data_type,
+                                            neighbors, *parameters);
+                } else {
+                  auto vector_identifier =
+                      parameters->index_schema
+                          ->GetIdentifier(parameters->attribute_alias)
+                          .value();
+                    query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
+                                                    neighbors, *parameters,
+                                                    vector_identifier);
+                }
                 SerializeNeighbors(response, neighbors);
                 reactor->Finish(grpc::Status::OK);
                 RecordSearchMetrics(false, std::move(latency_sample));

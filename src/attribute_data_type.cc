@@ -75,6 +75,7 @@ void HashScanCallback(RedisModuleKey *key, RedisModuleString *field,
   if (field_str.empty()) {
     return;
   }
+  // This needs to be empty for non vector queries.
   if (callback_data->identifiers.empty() ||
       callback_data->identifiers.contains(field_str)) {
     callback_data->key_value_content.emplace(

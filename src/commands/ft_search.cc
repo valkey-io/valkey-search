@@ -24,6 +24,8 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
+#include "info.h"
+#include "module_config.h"
 #include "src/acl.h"
 #include "src/commands/commands.h"
 #include "src/commands/ft_search_parser.h"
@@ -43,6 +45,11 @@
 namespace valkey_search {
 
 namespace {
+
+vmsdk::config::Boolean EnablePartialResults("enable-partial-results", false);
+vmsdk::info_field::Integer QueryTimeouts("Query Stats", "QueryTimeouts", 
+    vmsdk::info_field::IntegerBuilder().CrashSafe().Cumulative().Dev());
+
 // FT.SEARCH idx "*=>[KNN 10 @vec $BLOB AS score]" PARAMS 2 BLOB
 // "\x12\xa9\xf5\x6c" DIALECT 2
 void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
@@ -204,8 +211,14 @@ void SendReply(ValkeyModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
 
 namespace async {
 
-int Reply(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
+int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
           [[maybe_unused]] int argc) {
+  QueryTimeouts.Increment(1);
+  return ValkeyModule_ReplyWithSimpleString(ctx, "Request timed out");
+}
+
+
+int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   auto *res =
       static_cast<Result *>(ValkeyModule_GetBlockedClientPrivateData(ctx));
   CHECK(res != nullptr);
@@ -214,18 +227,17 @@ int Reply(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
     return ValkeyModule_ReplyWithError(
         ctx, res->neighbors.status().message().data());
   }
-  SendReply(ctx, res->neighbors.value(), *res->parameters);
+  if (!EnablePartialResults.GetValue() && res->parameters->cancellation_token->IsCancelled()) {
+    return Timeout(ctx, argv, argc);
+  } else {
+    SendReply(ctx, res->neighbors.value(), *res->parameters);
+  }
   return VALKEYMODULE_OK;
 }
 
 void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
   auto *result = static_cast<Result *>(privdata);
   delete result;
-}
-
-int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
-            [[maybe_unused]] int argc) {
-  return ValkeyModule_ReplyWithSimpleString(ctx, "Request timed out");
 }
 
 }  // namespace async

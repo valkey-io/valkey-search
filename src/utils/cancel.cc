@@ -8,21 +8,20 @@
 #include "src/utils/cancel.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
-#include "vmsdk/src/log.h"
 #include "vmsdk/src/info.h"
 
 namespace valkey_search {
 namespace cancel {
 
-vmsdk::config::Number kPollFrequency("cancel-poll-frequency", 100, 1, std::numeric_limits<long long>::max());
-
+vmsdk::config::Number kPollFrequency("timeout-poll-frequency", 100, 1, std::numeric_limits<long long>::max());
+vmsdk::config::Boolean kForceTimeout("debug-force-timeout", false);
 vmsdk::info_field::Integer kTimeouts("timeouts", "cancel-timeouts", vmsdk::info_field::IntegerBuilder().Dev());
 
 bool OnTime::IsCancelled() {
   if (++count_ > kPollFrequency.GetValue()) {
     count_ = 0;
     long long now_us = ValkeyModule_Milliseconds();
-    if (now_us >= deadline_ms_) {
+    if (now_us >= deadline_ms_ || kForceTimeout.GetValue()) {
       is_cancelled_ = true; // Operation should be cancelled
       kTimeouts.Increment(1);
     }

@@ -1605,7 +1605,10 @@ inline void TestValkeyModule_Init() {
   ON_CALL(*kMockValkeyModule,
           CallReplyMapElement(testing::_, testing::_, testing::_, testing::_))
       .WillByDefault(TestValkeyModule_CallReplyMapElementImpl);
-  ON_CALL(*kMockValkeyModule, Milliseconds()).WillByDefault(testing::Return(0));
+  ON_CALL(*kMockValkeyModule, Milliseconds()).WillByDefault([]() -> long long {
+    static long long fake_time = 0;
+    return ++fake_time;
+   });
   static absl::once_flag flag;
   absl::call_once(flag, []() { vmsdk::TrackCurrentAsMainThread(); });
   CHECK(vmsdk::InitLogging(nullptr, "debug").ok());

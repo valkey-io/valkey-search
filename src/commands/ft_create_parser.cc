@@ -84,10 +84,10 @@ constexpr absl::string_view kMaxEfRuntimeConfig{"max-vector-ef-runtime"};
 /// Register the "--max-prefixes" flag. Controls the max number of prefixes per
 /// index.
 static auto max_prefixes =
-    vmsdk::config::NumberBuilder(kMaxPrefixesConfig,         // name
+    vmsdk::config::NumberBuilder(kMaxPrefixesConfig,          // name
                                  kDefaultPrefixesCountLimit,  // default size
-                                 1,                          // min size
-                                 kMaxPrefixesCount)          // max size
+                                 1,                           // min size
+                                 kMaxPrefixesCount)           // max size
         .WithValidationCallback(
             CHECK_RANGE(1, kMaxPrefixesCount, kMaxPrefixesConfig))
         .Build();
@@ -95,10 +95,10 @@ static auto max_prefixes =
 /// Register the "--max-tag-field-length" flag. Controls the max length of a tag
 /// field.
 static auto max_tag_field_len =
-    vmsdk::config::NumberBuilder(kMaxTagFieldLenConfig,    // name
+    vmsdk::config::NumberBuilder(kMaxTagFieldLenConfig,     // name
                                  kDefaultTagFieldLenLimit,  // default size
-                                 1,                        // min size
-                                 kMaxTagFieldLen)          // max size
+                                 1,                         // min size
+                                 kMaxTagFieldLen)           // max size
         .WithValidationCallback(
             CHECK_RANGE(1, kMaxTagFieldLen, kMaxTagFieldLenConfig))
         .Build();
@@ -106,10 +106,10 @@ static auto max_tag_field_len =
 /// Register the "--max-numeric-field-length" flag. Controls the max length of a
 /// numeric field.
 static auto max_numeric_field_len =
-    vmsdk::config::NumberBuilder(kMaxNumericFieldLenConfig,    // name
+    vmsdk::config::NumberBuilder(kMaxNumericFieldLenConfig,     // name
                                  kDefaultNumericFieldLenLimit,  // default size
-                                 1,                            // min size
-                                 kMaxNumericFieldLen)          // max size
+                                 1,                             // min size
+                                 kMaxNumericFieldLen)           // max size
         .WithValidationCallback(
             CHECK_RANGE(1, kMaxNumericFieldLen, kMaxNumericFieldLenConfig))
         .Build();
@@ -117,10 +117,10 @@ static auto max_numeric_field_len =
 /// Register the "--max-attributes" flag. Controls the max number of attributes
 /// per index.
 static auto max_attributes =
-    vmsdk::config::NumberBuilder(kMaxAttributesConfig,         // name
+    vmsdk::config::NumberBuilder(kMaxAttributesConfig,          // name
                                  kDefaultAttributesCountLimit,  // default size
-                                 1,                            // min size
-                                 kMaxAttributesCount)          // max size
+                                 1,                             // min size
+                                 kMaxAttributesCount)           // max size
         .WithValidationCallback(
             CHECK_RANGE(1, kMaxAttributesCount, kMaxAttributesConfig))
         .Build();

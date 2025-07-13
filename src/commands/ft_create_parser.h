@@ -72,7 +72,7 @@ vmsdk::config::Number& GetMaxEfConstruction();
 /// Return the maximum EF runtime parameter value allowed for HNSW algorithm.
 vmsdk::config::Number& GetMaxEfRuntime();
 
-} // namespace options
+}  // namespace options
 
 struct HNSWParameters : public FTCreateVectorParameters {
   // Tightly connected with internal dimensionality of the data
@@ -92,6 +92,6 @@ struct FlatParameters : public FTCreateVectorParameters {
 };
 
 absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
-    ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc);
+    ValkeyModuleCtx* ctx, ValkeyModuleString** argv, int argc);
 }  // namespace valkey_search
 #endif  // VALKEYSEARCH_SRC_COMMANDS_FT_CREATE_PARSER_H_

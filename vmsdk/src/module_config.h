@@ -352,7 +352,7 @@ ConfigBuilder<bool> BooleanBuilder(Args &&...args) {
 #define CHECK_RANGE(MIN, MAX, CONFIG_NAME)                         \
   [](const int value) {                                            \
     if (value < MIN || value > MAX) {                              \
-      return absl::OutOfRangeError(absl::StrFormat(           \
+      return absl::OutOfRangeError(absl::StrFormat(                \
           "%s must be between %u and %u", CONFIG_NAME, MIN, MAX)); \
     }                                                              \
     return absl::OkStatus();                                       \

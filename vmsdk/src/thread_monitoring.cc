@@ -10,7 +10,6 @@
 #include <pthread.h>
 
 #include "absl/time/clock.h"
-
 #include "vmsdk/src/status/status_macros.h"
 
 #ifdef __APPLE__
@@ -24,16 +23,14 @@ namespace vmsdk {
 
 #ifdef __APPLE__
 namespace {
-thread_inspect_t ThreadMonitor::ConvertToMachThread() {
-  thread_inspect_t thread_id = pthread_mach_thread_np(thread_id_);
+thread_inspect_t ConvertToMachThread(pthread_t tid) {
+  thread_inspect_t thread_id = pthread_mach_thread_np(tid);
   return thread_id;
 }
-}
+}  // namespace
 #endif
 
-ThreadMonitor::ThreadMonitor(pthread_t thread_id) {
-  thread_id_ = thread_id;
-}
+ThreadMonitor::ThreadMonitor(pthread_t thread_id) { thread_id_ = thread_id; }
 
 absl::StatusOr<double> ThreadMonitor::GetThreadCPUPercentage() {
   // First call, initializing values
@@ -52,7 +49,8 @@ absl::StatusOr<double> ThreadMonitor::GetThreadCPUPercentage() {
   if (current_wall_time_micro < last_wall_time_micro_) {
     return absl::InternalError("Internal error in CPU calculation");
   }
-  int64_t wall_time_elapsed = current_wall_time_micro - last_wall_time_micro_.value();
+  int64_t wall_time_elapsed =
+      current_wall_time_micro - last_wall_time_micro_.value();
 
   // Update last measurements
   last_cpu_time_ = current_cpu_time;
@@ -60,7 +58,8 @@ absl::StatusOr<double> ThreadMonitor::GetThreadCPUPercentage() {
 
   // Calculate percentage (CPU time / wall time * 100)
   if (wall_time_elapsed > 0) {
-    return (static_cast<double>(cpu_time_elapsed_us) / wall_time_elapsed) * 100.0;
+    return (static_cast<double>(cpu_time_elapsed_us) / wall_time_elapsed) *
+           100.0;
   }
 
   return 0.0;
@@ -75,8 +74,7 @@ absl::StatusOr<uint64_t> ThreadMonitor::GetCPUTime() const {
   if (thread_info(target, THREAD_BASIC_INFO, (thread_info_t)&info, &count) !=
       KERN_SUCCESS) {
     return absl::InternalError(
-        absl::StrFormat("Failed to get thread info for thread %u",
-                        static_cast<unsigned int>(thread_id_)));
+        absl::StrFormat("Failed to get thread info for thread %p", thread_id_));
   }
 
   // Result in microseconds

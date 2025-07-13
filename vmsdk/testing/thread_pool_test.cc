@@ -316,18 +316,15 @@ TEST_F(ThreadPoolTest, DynamicSizing) {
   EXPECT_EQ(thread_pool.pending_join_threads_.Size(), 0);
 }
 
-TEST_F(ThreadPoolTest, TestCPUUsage) {
-  const size_t thread_count{2};
-  ThreadPool thread_pool("test-pool", thread_count);
-  std::atomic_bool atomic_flag{true};
-  int modulo{0};
-  std::shared_ptr<absl::BlockingCounter> blocking_counter;
-  // Reset the blocking counter
-  blocking_counter = std::make_shared<absl::BlockingCounter>(thread_count);
-  // Creating the general lambda task. The task sleeps every few iterations
-  // (decided by the modulo), and when the atomic flag is updated, it means the
-  // task is ready to finish
-  auto task = [&atomic_flag, &modulo, &blocking_counter]() {
+namespace {
+constexpr size_t kThreadCount = 2;
+std::shared_ptr<absl::BlockingCounter> ScheduleTasks(
+    ThreadPool& thread_pool, std::atomic_bool& atomic_flag, size_t modulo) {
+  std::shared_ptr<absl::BlockingCounter> blocking_counter =
+      std::make_shared<absl::BlockingCounter>(kThreadCount);
+
+  for (size_t i = 0; i < kThreadCount; i++) {
+    EXPECT_TRUE(thread_pool.Schedule([&atomic_flag, modulo, blocking_counter]() {
     uint64_t counter = 0;
     while (!atomic_flag) {
       counter++;
@@ -336,14 +333,19 @@ TEST_F(ThreadPoolTest, TestCPUUsage) {
       }
     }
     blocking_counter->DecrementCount();
-  };
-
-  // Initializing threads, waiting for them to be ready
-  // Since atomic_flag is true, the task will only decrement the counter and
-  // finish.
-  for (size_t i = 0; i < thread_count; i++) {
-    EXPECT_TRUE(thread_pool.Schedule(task, vmsdk::ThreadPool::Priority::kHigh));
+  }, vmsdk::ThreadPool::Priority::kHigh));
   }
+  return blocking_counter;
+}
+}  // namespace
+
+TEST_F(ThreadPoolTest, TestCPUUsage) {
+  const size_t thread_count{2};
+  ThreadPool thread_pool("test-pool", thread_count);
+  std::atomic_bool atomic_flag{true};
+  int modulo{0};
+  // Initializing the threads with first simple tasks
+  auto blocking_counter = ScheduleTasks(thread_pool, atomic_flag, modulo);
   thread_pool.StartWorkers();
   blocking_counter->Wait();
   absl::SleepFor(absl::Milliseconds(100));
@@ -351,15 +353,10 @@ TEST_F(ThreadPoolTest, TestCPUUsage) {
   EXPECT_LT(thread_pool.GetAvgCPUPercentage().value(), 1.0);
 
   atomic_flag.store(false);
-  // Reset the blocking counter
-  blocking_counter = std::make_shared<absl::BlockingCounter>(thread_count);
-  // Occupy the threads with initial task
+  // Increasing modulo means we will be sleeping less in the task, so CPU expected to rise
   modulo = 1000;
-  for (size_t i = 0; i < thread_count; i++) {
-    EXPECT_TRUE(thread_pool.Schedule(task, vmsdk::ThreadPool::Priority::kHigh));
-  }
+  blocking_counter = ScheduleTasks(thread_pool, atomic_flag, modulo);
   absl::SleepFor(absl::Milliseconds(100));
-  // Expect current CPU avg to be higher now that there are active tasks
   double first_sample = thread_pool.GetAvgCPUPercentage().value();
   // Expect the avg CPU does not pass 100%
   EXPECT_LT(first_sample, 100.0);
@@ -368,14 +365,9 @@ TEST_F(ThreadPoolTest, TestCPUUsage) {
 
   // Occupy again the threads with new tasks
   atomic_flag.store(false);
-  // Reset the blocking counter
-  blocking_counter = std::make_shared<absl::BlockingCounter>(thread_count);
-  // Decrease the number of time sleep will be activated in the task by
-  // increasing the modulo
+  // Decrease the amount of time the threads will sleep by increasing modulo
   modulo = 10000;
-  for (size_t i = 0; i < thread_count; i++) {
-    EXPECT_TRUE(thread_pool.Schedule(task, vmsdk::ThreadPool::Priority::kHigh));
-  }
+  blocking_counter = ScheduleTasks(thread_pool, atomic_flag, modulo);
   absl::SleepFor(absl::Milliseconds(100));
   // Threads are expected now to work harder, so current CPU will be higher
   // than previous sample

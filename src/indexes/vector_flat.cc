@@ -205,6 +205,19 @@ absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
   return absl::OkStatus();
 }
 
+// Paper over the impedance mismatch between the
+// cancel::Token and hnswlib::BaseCancellationFunctor.
+class CancelCondition : public hnswlib::BaseCancellationFunctor {
+  public:
+  explicit CancelCondition(cancel::Token &token)
+      : token_(token) {}
+  bool isCancelled() override { return token_->IsCancelled(); }
+
+  private:
+  cancel::Token &token_;
+};
+
+
 template <typename T>
 absl::StatusOr<std::deque<Neighbor>> VectorFlat<T>::Search(
     absl::string_view query, uint64_t count,
@@ -220,10 +233,12 @@ absl::StatusOr<std::deque<Neighbor>> VectorFlat<T>::Search(
       -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
     absl::ReaderMutexLock lock(&resize_mutex_);
     try {
+      CancelCondition canceler(cancellation_token);
       return algo_->searchKnn(
           (T *)query.data(),
           std::min(count, static_cast<uint64_t>(algo_->cur_element_count_)),
-          filter.get());
+          filter.get(),
+          &canceler);
     } catch (const std::exception &e) {
       Metrics::GetStats().flat_search_exceptions_cnt.fetch_add(
           1, std::memory_order_relaxed);

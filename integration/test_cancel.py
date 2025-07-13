@@ -34,31 +34,63 @@ class TestCMDCancel(ValkeySearchTestCaseBase):
         flat_index.create(client)
         hnsw_index.load_data(client, 100)
 
-        hnsw_full_result = self.search(client, "hnsw")
-        flat_full_result = self.search(client, "flat")
+        #
+        # Nominal case
+        #
+        hnsw_result = self.search(client, "hnsw")
+        flat_result = self.search(client, "flat")
 
         assert client.info("SEARCH")["search_cancel-timeouts"] == 0
         assert client.info("SEARCH")["search_QueryTimeouts"] == 0
 
-        # assert client.execute_command("CONFIG SET search.enable-partial-results yes") == b"OK"
+        assert hnsw_result[0] == 10
+        assert flat_result[0] == 10
 
+        #
+        # Now, force timeouts quickly
+        #
         client.execute_command("CONFIG SET search.debug-force-timeout yes") == b"OK"
         client.execute_command("CONFIG SET search.timeout-poll-frequency 5") == b"OK"
-        client.execute_command("CONFIG SEt search.enable-partial-results no") == b"OK"
 
-        hnsw_partial_result = self.search(client, "hnsw")
+
+        #
+        # Enable timeout path, no error but message result
+        #
+        client.execute_command("CONFIG SET search.enable-partial-results no") == b"OK"
+
+        hnsw_result = self.search(client, "hnsw")
 
         assert client.info("SEARCH")["search_cancel-timeouts"] == 1
         assert client.info("SEARCH")["search_QueryTimeouts"] == 1
 
-        assert hnsw_partial_result == b"Request timed out"
+        assert hnsw_result == b"Request timed out"
 
-        flat_partial_result = self.search(client, "flat")
+        flat_result = self.search(client, "flat")
 
         assert client.info("SEARCH")["search_cancel-timeouts"] == 2
         assert client.info("SEARCH")["search_QueryTimeouts"] == 2
 
-        assert flat_partial_result == b"Request timed out"
+        assert flat_result == b"Request timed out"
+
+        #
+        # Enable partial results
+        #
+
+        assert client.execute_command("CONFIG SET search.enable-partial-results yes") == b"OK"
+
+        hnsw_result = self.search(client, "hnsw")
+
+        assert client.info("SEARCH")["search_cancel-timeouts"] == 3
+        assert client.info("SEARCH")["search_QueryTimeouts"] == 2
+
+        assert hnsw_result[0] == 10
+
+        flat_result = self.search(client, "flat")
+
+        assert client.info("SEARCH")["search_cancel-timeouts"] == 4
+        assert client.info("SEARCH")["search_QueryTimeouts"] == 2
+
+        assert flat_result[0] == 10
 
 
 

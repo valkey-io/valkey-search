@@ -126,7 +126,7 @@ class BruteforceSearch : public AlgorithmInterface<dist_t> {
             }
         }
         dist_t lastdist = topResults.empty() ? std::numeric_limits<dist_t>::max() : topResults.top().first;
-        for (int i = k; i < cur_element_count_ && (!isCancelled || isCancelled->isCancelled()); i++) {
+        for (int i = k; i < cur_element_count_ && (!isCancelled || !isCancelled->isCancelled()); i++) {
             dist_t dist = fstdistfunc_(query_data, *(char**)(*data_)[i], dist_func_param_);
             if (dist <= lastdist) {
                 labeltype label = *((labeltype *) ((*data_)[i] + data_ptr_size_));

@@ -1,0 +1,15 @@
+{
+  "FT._DEBUG": {
+    "acl_categories": [
+      "ADMIN",
+      "SLOW",
+      "READ",
+      "SEARCH"
+    ],
+    "arguments": [],
+    "complexity": "O(1)",
+    "group": "search",
+    "module_since": "1.1.0",
+    "summary": "Developer access, not for production use"
+  }
+}

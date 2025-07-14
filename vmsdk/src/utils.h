@@ -96,6 +96,13 @@ bool MultiOrLua(ValkeyModuleCtx *ctx);
 
 size_t DisplayAsSIBytes(size_t value, char *buffer, size_t buffer_size);
 
+// Checks if a numeric value falls within an optional inclusive range [min,
+// max]. The range is inclusive: a value is considered valid if min <= value <=
+// max. If either boundary is not specified (`std::nullopt`), that check is
+// skipped.
+absl::Status VerifyRange(long long num_value, std::optional<long long> min,
+                         std::optional<long long> max);
+
 #define VMSDK_NON_COPYABLE(ClassName)              \
   ClassName(const ClassName&) = delete;            \
   ClassName& operator=(const ClassName&) = delete

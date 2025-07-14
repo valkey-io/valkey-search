@@ -257,6 +257,14 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
         ctx, "coordinator_client_search_index_partition_failure_count",
         Metrics::GetStats()
             .coordinator_client_search_index_partition_failure_cnt);
+    ValkeyModule_InfoAddFieldLongLong(
+        ctx, "coordinator_bytes_out",
+        Metrics::GetStats()
+            .coordinator_bytes_out);
+    ValkeyModule_InfoAddFieldLongLong(
+        ctx, "coordinator_bytes_in",
+        Metrics::GetStats()
+            .coordinator_bytes_in);
     AddLatencyStat(
         ctx, "coordinator_client_get_global_metadata_success_latency_usec",
         Metrics::GetStats()
@@ -294,9 +302,10 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
     vmsdk::info_field::DoSection(ctx, "string_interning", for_crash_report);
     ValkeyModule_InfoAddFieldLongLong(ctx, "string_interning_store_size",
                                      StringInternStore::Instance().Size());
+    char buffer[100];
+    vmsdk::DisplayAsSIBytes(StringInternStore::GetMemoryUsage(), buffer, sizeof(buffer));
     ValkeyModule_InfoAddFieldCString(
-        ctx, "string_interning_memory_mb", 
-        absl::StrFormat("%lu", StringInternStore::GetMemoryUsage() / 1024 / 1024).c_str());
+        ctx, "string_interning_memory_mb", buffer);
 
     vmsdk::info_field::DoSection(ctx, "vector_externing", for_crash_report);
     auto vector_externing_stats = VectorExternalizer::Instance().GetStats();

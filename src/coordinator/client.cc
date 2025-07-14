@@ -137,6 +137,8 @@ void ClientImpl::SearchIndexPartition(
   args->request = std::move(request);
   args->latency_sample = SAMPLE_EVERY_N(100);
   auto args_raw = args.release();
+  Metrics::GetStats().coordinator_bytes_out.fetch_add(
+      args_raw->request->ByteSizeLong(), std::memory_order_relaxed);
   stub_->async()->SearchIndexPartition(
       &args_raw->context, args_raw->request.get(), &args_raw->response,
       // std::function is not move-only.
@@ -150,12 +152,15 @@ void ClientImpl::SearchIndexPartition(
           Metrics::GetStats()
               .coordinator_client_search_index_partition_success_latency
               .SubmitSample(std::move(args->latency_sample));
+          Metrics::GetStats().coordinator_bytes_in.fetch_add(
+              args->response.ByteSizeLong(), std::memory_order_relaxed);
         } else {
           Metrics::GetStats()
               .coordinator_client_search_index_partition_failure_cnt++;
           Metrics::GetStats()
               .coordinator_client_search_index_partition_failure_latency
               .SubmitSample(std::move(args->latency_sample));
+          // No need to count bytes on error
         }
       });
 }

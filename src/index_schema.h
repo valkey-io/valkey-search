@@ -223,7 +223,7 @@ class IndexSchema : public KeyspaceEventSubscription,
                                    ValkeyModuleString *keyname,
                                    ValkeyModuleKey *key, void *privdata);
   bool DeleteIfNotInValkeyDict(ValkeyModuleCtx *ctx, ValkeyModuleString *key,
-                              const Attribute &attribute);
+                               const Attribute &attribute);
 
   bool TrackMutatedRecord(ValkeyModuleCtx *ctx, const InternedStringPtr &key,
                           MutatedAttributes &&mutated_attributes,

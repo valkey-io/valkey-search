@@ -67,6 +67,8 @@ class Metrics {
         0};
     std::atomic<uint64_t> coordinator_client_search_index_partition_failure_cnt{
         0};
+    std::atomic<uint64_t> coordinator_bytes_out{0};
+    std::atomic<uint64_t> coordinator_bytes_in{0};
     vmsdk::LatencySampler
         coordinator_client_get_global_metadata_failure_latency{
             absl::ToInt64Nanoseconds(absl::Nanoseconds(1)),

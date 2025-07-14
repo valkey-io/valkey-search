@@ -1,30 +1,8 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/commands/ft_search_parser.h"
@@ -70,15 +48,25 @@ constexpr absl::string_view kAsParam{"AS"};
 constexpr absl::string_view kLocalOnly{"LOCALONLY"};
 constexpr absl::string_view kVectorFilterDelimiter = "=>";
 
-struct ParamVariables {
-  absl::string_view attribute_alias;
-  absl::string_view query;
-  absl::string_view k;
-  absl::string_view ef;
-  std::string score_as;
-};
+absl::StatusOr<absl::string_view> SubstituteParam(
+    query::VectorSearchParameters &parameters, absl::string_view source) {
+  if (source.empty() || source[0] != '$') {
+    return source;
+  } else {
+    source.remove_prefix(1);
+    auto itr = parameters.parse_vars.params.find(source);
+    if (itr == parameters.parse_vars.params.end()) {
+      return absl::NotFoundError(
+          absl::StrCat("Parameter ", source, " not found."));
+    } else {
+      itr->second.first++;
+      return itr->second.second;
+    }
+  }
+}
 
-absl::StatusOr<ParamVariables> ParseVectorFilter(std::string_view filter) {
+absl::Status ParseKnnInner(query::VectorSearchParameters &parameters,
+                           std::string_view filter) {
   absl::InlinedVector<absl::string_view, 8> params =
       absl::StrSplit(filter, ' ', absl::SkipEmpty());
   if (params.empty()) {
@@ -93,8 +81,8 @@ absl::StatusOr<ParamVariables> ParseVectorFilter(std::string_view filter) {
   if (params.size() == 1) {
     return absl::InvalidArgumentError("KNN argument is missing");
   }
-  ParamVariables result;
-  result.k = params[1];
+  VMSDK_ASSIGN_OR_RETURN(auto k_string, SubstituteParam(parameters, params[1]));
+  VMSDK_ASSIGN_OR_RETURN(parameters.k, vmsdk::To<unsigned>(k_string));
   if (params.size() == 2) {
     return absl::InvalidArgumentError("Vector field argument is missing");
   }
@@ -103,38 +91,36 @@ absl::StatusOr<ParamVariables> ParseVectorFilter(std::string_view filter) {
         absl::StrCat("Unexpected argument `", params[2],
                      "`. Expecting a vector field name, starting with '@'"));
   }
-  result.attribute_alias =
+  parameters.attribute_alias =
       absl::string_view(params[2].data() + 1, params[2].size() - 1);
   if (params.size() == 3) {
     return absl::InvalidArgumentError("Blob attribute argument is missing");
   }
-  result.query = params[3];
+  VMSDK_ASSIGN_OR_RETURN(parameters.query,
+                         SubstituteParam(parameters, params[3]));
   size_t i = 4;
-  if (i == params.size()) {
-    return result;
-  }
-  if (absl::EqualsIgnoreCase(params[i], "EF_RUNTIME")) {
-    if (i + 1 == params.size()) {
-      return absl::InvalidArgumentError("EF_RUNTIME argument is missing");
+  while (i < params.size()) {
+    if (absl::EqualsIgnoreCase(params[i], "EF_RUNTIME")) {
+      i++;
+      if (i == params.size()) {
+        return absl::InvalidArgumentError("EF_RUNTIME argument is missing");
+      }
+      VMSDK_ASSIGN_OR_RETURN(auto ef_string,
+                             SubstituteParam(parameters, params[i++]));
+      VMSDK_ASSIGN_OR_RETURN(parameters.ef, vmsdk::To<unsigned>(ef_string));
+    } else if (absl::EqualsIgnoreCase(params[i], kAsParam)) {
+      i++;
+      if (i == params.size()) {
+        return absl::InvalidArgumentError("AS argument is missing");
+      }
+      VMSDK_ASSIGN_OR_RETURN(parameters.parse_vars.score_as_string,
+                             SubstituteParam(parameters, params[i++]));
+    } else {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Unexpected argument `", params[i], "`"));
     }
-    result.ef = params[i + 1];
-    i += 2;
-    if (i == params.size()) {
-      return result;
-    }
   }
-  if (absl::EqualsIgnoreCase(params[i], kAsParam)) {
-    if (i + 1 == params.size()) {
-      return absl::InvalidArgumentError("AS argument is missing");
-    }
-    result.score_as = params[i + 1];
-    i += 2;
-  }
-  if (i < params.size()) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Unexpected argument `", params[i], "`"));
-  }
-  return result;
+  return absl::OkStatus();
 }
 
 absl::StatusOr<size_t> FindOpenSquareBracket(absl::string_view input) {
@@ -172,8 +158,11 @@ absl::StatusOr<FilterParseResults> ParsePreFilter(
   return parser.Parse();
 }
 
-absl::StatusOr<ParamVariables> ParseParamVariables(
-    absl::string_view filter_str) {
+absl::Status ParseKNN(query::VectorSearchParameters &parameters,
+                      absl::string_view filter_str) {
+  if (filter_str.empty()) {
+    return absl::InvalidArgumentError("Vector query clause is missing");
+  }
   VMSDK_ASSIGN_OR_RETURN(auto close_position,
                          FindCloseSquareBracket(filter_str));
   size_t position = 0;
@@ -182,25 +171,41 @@ absl::StatusOr<ParamVariables> ParseParamVariables(
       FindOpenSquareBracket(absl::string_view(filter_str.data() + position,
                                               close_position - position)));
   position += open_position;
-  return ParseVectorFilter(absl::string_view(filter_str.data() + position + 1,
-                                             close_position - position - 1));
+  return ParseKnnInner(parameters,
+                       absl::string_view(filter_str.data() + position + 1,
+                                         close_position - position - 1));
 }
 
 absl::Status Verify(query::VectorSearchParameters &parameters) {
-  if (!parameters.ef.has_value() && !parameters.k.has_value()) {
-    return absl::InvalidArgumentError("Missing `PARAMS` parameter");
+  if (parameters.query.empty()) {
+    return absl::InvalidArgumentError("missing vector parameter");
   }
   if (parameters.ef.has_value() && parameters.ef <= 0) {
     return absl::InvalidArgumentError("`EF` value must be positive");
   }
-  if (!parameters.k) {
-    return absl::InvalidArgumentError("missing KNN parameter");
-  }
-  if (parameters.k.value() <= 0) {
+  if (parameters.k <= 0) {
     return absl::InvalidArgumentError("k must be positive");
   }
-  if (parameters.query.empty()) {
-    return absl::InvalidArgumentError("missing vector parameter");
+  if (parameters.timeout_ms > kMaxTimeoutMs) {
+    return absl::InvalidArgumentError(
+        absl::StrCat(kTimeoutParam,
+                     " must be a positive integer greater than 0 and "
+                     "cannot exceed ",
+                     kMaxTimeoutMs, "."));
+  }
+  if (parameters.dialect < 2 || parameters.dialect > 4) {
+    return absl::InvalidArgumentError(
+        "DIALECT requires a non negative integer >=2 and <= 4");
+  }
+
+  // Validate all parameters used, nuke the map to avoid dangling pointers
+  while (!parameters.parse_vars.params.empty()) {
+    auto begin = parameters.parse_vars.params.begin();
+    if (begin->second.first == 0) {
+      return absl::NotFoundError(
+          absl::StrCat("Parameter `", begin->first, "` not used."));
+    }
+    parameters.parse_vars.params.erase(begin);
   }
   return absl::OkStatus();
 }
@@ -218,90 +223,32 @@ ConstructLimitParser() {
       });
 }
 
-absl::Status SetQuery(absl::string_view param_variable,
-                      query::VectorSearchParameters &parameters) {
-  parameters.query = param_variable;
-  return absl::OkStatus();
-}
-
-std::unique_ptr<::vmsdk::ParamParser<query::VectorSearchParameters>>
-CreateQueryParser() {
-  return GENERATE_VALUE_PARSER(query::VectorSearchParameters, query);
-}
-
-absl::Status SetEf(absl::string_view param_variable,
-                   query::VectorSearchParameters &parameters) {
-  VMSDK_ASSIGN_OR_RETURN(parameters.ef, vmsdk::To<uint64_t>(param_variable));
-  return absl::OkStatus();
-}
-
-std::unique_ptr<::vmsdk::ParamParser<query::VectorSearchParameters>>
-CreateEfParser() {
-  return GENERATE_VALUE_PARSER(query::VectorSearchParameters, ef);
-}
-
-absl::Status SetK(absl::string_view param_variable,
-                  query::VectorSearchParameters &parameters) {
-  VMSDK_ASSIGN_OR_RETURN(parameters.k, vmsdk::To<uint64_t>(param_variable));
-  return absl::OkStatus();
-}
-
-std::unique_ptr<::vmsdk::ParamParser<query::VectorSearchParameters>>
-CreateKParser() {
-  return GENERATE_VALUE_PARSER(query::VectorSearchParameters, k);
-}
-
-using FieldSetter = absl::Status (*)(absl::string_view,
-                                     query::VectorSearchParameters &);
-using ValueParserGenerator =
-    std::unique_ptr<::vmsdk::ParamParser<query::VectorSearchParameters>> (*)();
-
-absl::Status HandlePrepareParseParam(
-    vmsdk::KeyValueParser<query::VectorSearchParameters> &parser,
-    absl::string_view param_variable, query::VectorSearchParameters &parameters,
-    FieldSetter field_setter, ValueParserGenerator value_parser_generator) {
-  if (param_variable.empty()) {
-    return absl::OkStatus();
-  }
-  if (param_variable.data()[0] == '$') {
-    parser.AddParamParser(
-        absl::string_view(param_variable.data() + 1, param_variable.size() - 1),
-        value_parser_generator());
-    return absl::OkStatus();
-  }
-  VMSDK_RETURN_IF_ERROR(field_setter(param_variable, parameters)).SetPrepend()
-      << "Error parsing vector similarity "
-         "parameters: ";
-  return absl::OkStatus();
-}
-
 std::unique_ptr<vmsdk::ParamParser<query::VectorSearchParameters>>
-ConstructParamsParser(const ParamVariables &param_variables) {
+ConstructParamsParser() {
   return std::make_unique<vmsdk::ParamParser<query::VectorSearchParameters>>(
-      [&param_variables](query::VectorSearchParameters &parameters,
-                         vmsdk::ArgsIterator &itr) -> absl::Status {
-        vmsdk::KeyValueParser<query::VectorSearchParameters> params_parser;
-
-        VMSDK_RETURN_IF_ERROR(
-            HandlePrepareParseParam(params_parser, param_variables.ef,
-                                    parameters, &SetEf, CreateEfParser));
-        VMSDK_RETURN_IF_ERROR(
-            HandlePrepareParseParam(params_parser, param_variables.k,
-                                    parameters, &SetK, CreateKParser));
-        VMSDK_RETURN_IF_ERROR(
-            HandlePrepareParseParam(params_parser, param_variables.query,
-                                    parameters, &SetQuery, CreateQueryParser));
-        int params{-1};
-        VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, params));
-        VMSDK_ASSIGN_OR_RETURN(auto params_itr, itr.SubIterator(params));
-
-        VMSDK_RETURN_IF_ERROR(params_parser.Parse(parameters, params_itr));
-        if (params_itr.DistanceEnd() != 0) {
-          VMSDK_ASSIGN_OR_RETURN(auto current, params_itr.Get());
-          return absl::InvalidArgumentError(absl::StrCat(
-              "Unexpected parameter `", vmsdk::ToStringView(current), "`"));
+      [](query::VectorSearchParameters &parameters,
+         vmsdk::ArgsIterator &itr) -> absl::Status {
+        unsigned count{0};
+        VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, count));
+        if (count & 1) {
+          return absl::InvalidArgumentError(
+              "Parameter count must be an even number.");
         }
-        itr.Next(params);
+        while (count > 0) {
+          VMSDK_ASSIGN_OR_RETURN(auto key_str, itr.Get());
+          itr.Next();
+          VMSDK_ASSIGN_OR_RETURN(auto value_str, itr.Get());
+          itr.Next();
+          absl::string_view key = vmsdk::ToStringView(key_str);
+          absl::string_view value = vmsdk::ToStringView(value_str);
+          auto [_, inserted] = parameters.parse_vars.params.insert(
+              std::make_pair(key, std::make_pair(0, value)));
+          if (!inserted) {
+            return absl::InvalidArgumentError(
+                absl::StrCat("Parameter ", key, " is already defined."));
+          }
+          count -= 2;
+        }
         return absl::OkStatus();
       });
 }
@@ -318,9 +265,9 @@ ConstructReturnParser() {
           return absl::OkStatus();
         }
         for (uint32_t i = 0; i < cnt; ++i) {
-          vmsdk::UniqueRedisString identifier;
+          vmsdk::UniqueValkeyString identifier;
           VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, identifier));
-          auto as_property = vmsdk::RetainUniqueRedisString(identifier.get());
+          auto as_property = vmsdk::RetainUniqueValkeyString(identifier.get());
           VMSDK_ASSIGN_OR_RETURN(
               auto res, vmsdk::ParseParam(kAsParam, false, itr, as_property));
           if (res) {
@@ -329,15 +276,22 @@ ConstructReturnParser() {
               return absl::InvalidArgumentError("Unexpected parameter `AS` ");
             }
           }
+          auto schema_identifier = parameters.index_schema->GetIdentifier(
+              vmsdk::ToStringView(identifier.get()));
+          vmsdk::UniqueValkeyString attribute_alias;
+          if (schema_identifier.ok()) {
+            attribute_alias = vmsdk::RetainUniqueValkeyString(identifier.get());
+            identifier = vmsdk::MakeUniqueValkeyString(*schema_identifier);
+          }
           parameters.return_attributes.emplace_back(query::ReturnAttribute{
-              std::move(identifier), std::move(as_property)});
+              std::move(identifier), std::move(attribute_alias),
+              std::move(as_property)});
         }
         return absl::OkStatus();
       });
 }
 
-vmsdk::KeyValueParser<query::VectorSearchParameters> CreateKeyValueParser(
-    const ParamVariables &param_variables) {
+vmsdk::KeyValueParser<query::VectorSearchParameters> CreateSearchParser() {
   vmsdk::KeyValueParser<query::VectorSearchParameters> parser;
   parser.AddParamParser(
       kDialectParam,
@@ -353,88 +307,80 @@ vmsdk::KeyValueParser<query::VectorSearchParameters> CreateKeyValueParser(
       kNoContentParam,
       GENERATE_FLAG_PARSER(query::VectorSearchParameters, no_content));
   parser.AddParamParser(kReturnParam, ConstructReturnParser());
-  parser.AddParamParser(kParamsParam, ConstructParamsParser(param_variables));
+  parser.AddParamParser(kParamsParam, ConstructParamsParser());
   return parser;
 }
-}  // namespace
-absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
-ParseVectorSearchParameters(RedisModuleCtx *ctx, RedisModuleString **argv,
-                            int argc, const SchemaManager &schema_manager) {
-  vmsdk::ArgsIterator itr{argv, argc};
-  auto parameters = std::make_unique<query::VectorSearchParameters>();
-  VMSDK_RETURN_IF_ERROR(
-      vmsdk::ParseParamValue(itr, parameters->index_schema_name));
-  VMSDK_ASSIGN_OR_RETURN(auto itr_arg, itr.Get());
-  itr.Next();
-  auto filter_expression = vmsdk::ToStringView(itr_arg);
+
+static vmsdk::KeyValueParser<query::VectorSearchParameters> SearchParser =
+    CreateSearchParser();
+
+absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
+  auto filter_expression =
+      absl::string_view(parameters.parse_vars.query_string);
   auto pos = filter_expression.find(kVectorFilterDelimiter);
   if (pos == absl::string_view::npos) {
     return absl::InvalidArgumentError(absl::StrCat(
         "Invalid filter format. Missing `", kVectorFilterDelimiter, "`"));
   }
-
-  VMSDK_ASSIGN_OR_RETURN(
-      parameters->index_schema,
-      SchemaManager::Instance().GetIndexSchema(RedisModule_GetSelectedDb(ctx),
-                                               parameters->index_schema_name));
   auto pre_filter =
       absl::StripAsciiWhitespace(filter_expression.substr(0, pos));
   VMSDK_ASSIGN_OR_RETURN(
-      parameters->filter_parse_results,
-      ParsePreFilter(*parameters->index_schema, pre_filter),
+      parameters.filter_parse_results,
+      ParsePreFilter(*parameters.index_schema, pre_filter),
       _.SetPrepend() << "Invalid filter expression: `" << pre_filter << "`. ");
-  if (parameters->filter_parse_results.root_predicate) {
+  if (parameters.filter_parse_results.root_predicate) {
     ++Metrics::GetStats().query_hybrid_requests_cnt;
   }
   auto vector_filter = absl::StripAsciiWhitespace(
       filter_expression.substr(pos + kVectorFilterDelimiter.size()));
-  static ParamVariables param_variables;
-  VMSDK_ASSIGN_OR_RETURN(param_variables, ParseParamVariables(vector_filter),
-                         _.SetPrepend()
-                             << "Error parsing vector similarity parameters: `"
-                             << vector_filter << "`. ");
-  parameters->attribute_alias = param_variables.attribute_alias;
+  VMSDK_RETURN_IF_ERROR(ParseKNN(parameters, vector_filter)).SetPrepend()
+      << "Error parsing vector similarity parameters: `" << vector_filter
+      << "`. ";
 
   // Validate the index exists and is a vector index.
-  VMSDK_ASSIGN_OR_RETURN(auto index, parameters->index_schema->GetIndex(
-                                         parameters->attribute_alias));
+  VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
+                                         parameters.attribute_alias));
   if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
       index->GetIndexerType() != indexes::IndexerType::kFlat) {
     return absl::InvalidArgumentError(absl::StrCat("Index field `",
-                                                   parameters->attribute_alias,
+                                                   parameters.attribute_alias,
                                                    "` is not a Vector index "));
   }
 
-  if (param_variables.score_as.empty()) {
-    VMSDK_ASSIGN_OR_RETURN(parameters->score_as,
-                           parameters->index_schema->DefaultReplyScoreAs(
-                               parameters->attribute_alias));
+  if (parameters.parse_vars.score_as_string.empty()) {
+    VMSDK_ASSIGN_OR_RETURN(parameters.score_as,
+                           parameters.index_schema->DefaultReplyScoreAs(
+                               parameters.attribute_alias));
   } else {
-    parameters->score_as =
-        vmsdk::MakeUniqueRedisString(param_variables.score_as);
+    parameters.score_as =
+        vmsdk::MakeUniqueValkeyString(parameters.parse_vars.score_as_string);
   }
+  return absl::OkStatus();
+}
+}  // namespace
 
-  static vmsdk::KeyValueParser<query::VectorSearchParameters> parser =
-      CreateKeyValueParser(param_variables);
-  VMSDK_RETURN_IF_ERROR(parser.Parse(*parameters, itr));
-  VMSDK_RETURN_IF_ERROR(Verify(*parameters));
-  if (parameters->timeout_ms > kMaxTimeoutMs) {
-    return absl::InvalidArgumentError(
-        absl::StrCat(kTimeoutParam,
-                     " must be a positive integer greater than 0 and "
-                     "cannot exceed ",
-                     kMaxTimeoutMs, "."));
-  }
-  if (parameters->dialect < 2 || parameters->dialect > 4) {
-    return absl::InvalidArgumentError(
-        "DIALECT requires a non negative integer >=2 and <= 4");
-  }
-
+absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
+ParseVectorSearchParameters(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                            int argc, const SchemaManager &schema_manager) {
+  vmsdk::ArgsIterator itr{argv, argc};
+  auto parameters = std::make_unique<query::VectorSearchParameters>();
+  VMSDK_RETURN_IF_ERROR(
+      vmsdk::ParseParamValue(itr, parameters->index_schema_name));
+  VMSDK_ASSIGN_OR_RETURN(
+      parameters->index_schema,
+      SchemaManager::Instance().GetIndexSchema(ValkeyModule_GetSelectedDb(ctx),
+                                               parameters->index_schema_name));
+  VMSDK_RETURN_IF_ERROR(
+      vmsdk::ParseParamValue(itr, parameters->parse_vars.query_string));
+  VMSDK_RETURN_IF_ERROR(SearchParser.Parse(*parameters, itr));
   if (itr.DistanceEnd() > 0) {
     return absl::InvalidArgumentError(
         absl::StrCat("Unexpected parameter at position ", (itr.Position() + 1),
                      ":", vmsdk::ToStringView(itr.Get().value())));
   }
+  VMSDK_RETURN_IF_ERROR(ParseQueryString(*parameters));
+  VMSDK_RETURN_IF_ERROR(Verify(*parameters));
+  parameters->parse_vars.ClearAtEndOfParse();
   return parameters;
 }
 }  // namespace valkey_search

@@ -1,30 +1,8 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef VMSDK_SRC_TESTING_INFRA_MODULE
@@ -53,263 +31,292 @@
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
-class MockRedisModule {
+class MockValkeyModule {
  public:
-  MockRedisModule() {
+  MockValkeyModule() {
     ON_CALL(*this, EventLoopAddOneShot)
         .WillByDefault(
-            [](RedisModuleEventLoopOneShotFunc callback, void *data) -> int {
+            [](ValkeyModuleEventLoopOneShotFunc callback, void *data) -> int {
               if (callback) {
                 callback(data);
               }
               return 0;
             });
   };
-  MOCK_METHOD(RedisModuleBlockedClient *, BlockClientOnAuth,
-              (RedisModuleCtx * ctx, RedisModuleAuthCallback reply_callback,
-               void (*free_privdata)(RedisModuleCtx *, void *)));
-  MOCK_METHOD(RedisModuleBlockedClient *, BlockClient,
-              (RedisModuleCtx * ctx, RedisModuleCmdFunc reply_callback,
-               RedisModuleCmdFunc timeout_callback,
-               void (*free_privdata)(RedisModuleCtx *, void *),
+  MOCK_METHOD(ValkeyModuleBlockedClient *, BlockClientOnAuth,
+              (ValkeyModuleCtx * ctx, ValkeyModuleAuthCallback reply_callback,
+               void (*free_privdata)(ValkeyModuleCtx *, void *)));
+  MOCK_METHOD(ValkeyModuleBlockedClient *, BlockClient,
+              (ValkeyModuleCtx * ctx, ValkeyModuleCmdFunc reply_callback,
+               ValkeyModuleCmdFunc timeout_callback,
+               void (*free_privdata)(ValkeyModuleCtx *, void *),
                long long timeout_ms));  // NOLINT
   MOCK_METHOD(void, Log,
-              (RedisModuleCtx * ctx, const char *levelstr, const char *msg));
+              (ValkeyModuleCtx * ctx, const char *levelstr, const char *msg));
   MOCK_METHOD(void, LogIOError,
-              (RedisModuleIO * io, const char *levelstr, const char *msg));
+              (ValkeyModuleIO * io, const char *levelstr, const char *msg));
   MOCK_METHOD(int, UnblockClient,
-              (RedisModuleBlockedClient * bc, void *privdata));
-  MOCK_METHOD(void *, GetBlockedClientPrivateData, (RedisModuleCtx * ctx));
+              (ValkeyModuleBlockedClient * bc, void *privdata));
+  MOCK_METHOD(void *, GetBlockedClientPrivateData, (ValkeyModuleCtx * ctx));
   MOCK_METHOD(int, AuthenticateClientWithACLUser,
-              (RedisModuleCtx * ctx, const char *name, size_t len,
-               RedisModuleUserChangedFunc callback, void *privdata,
+              (ValkeyModuleCtx * ctx, const char *name, size_t len,
+               ValkeyModuleUserChangedFunc callback, void *privdata,
                uint64_t *client_id));
   MOCK_METHOD(void, ACLAddLogEntryByUserName,
-              (RedisModuleCtx * ctx, RedisModuleString *user,
-               RedisModuleString *object, RedisModuleACLLogEntryReason reason));
+              (ValkeyModuleCtx * ctx, ValkeyModuleString *user,
+               ValkeyModuleString *object,
+               ValkeyModuleACLLogEntryReason reason));
   MOCK_METHOD(int, EventLoopAdd,
-              (int fd, int mask, RedisModuleEventLoopFunc func,
+              (int fd, int mask, ValkeyModuleEventLoopFunc func,
                void *user_data));
   MOCK_METHOD(int, EventLoopAddOneShot,
-              (RedisModuleEventLoopOneShotFunc func, void *user_data));
+              (ValkeyModuleEventLoopOneShotFunc func, void *user_data));
   MOCK_METHOD(int, EventLoopDel, (int fd, int mask));
-  MOCK_METHOD(RedisModuleTimerID, CreateTimer,
-              (RedisModuleCtx * ctx, mstime_t period,
-               RedisModuleTimerProc callback, void *data));
+  MOCK_METHOD(ValkeyModuleTimerID, CreateTimer,
+              (ValkeyModuleCtx * ctx, mstime_t period,
+               ValkeyModuleTimerProc callback, void *data));
   MOCK_METHOD(int, StopTimer,
-              (RedisModuleCtx * ctx, RedisModuleTimerID id, void **data));
-  MOCK_METHOD(void, SetModuleOptions, (RedisModuleCtx * ctx, int options));
+              (ValkeyModuleCtx * ctx, ValkeyModuleTimerID id, void **data));
+  MOCK_METHOD(void, SetModuleOptions, (ValkeyModuleCtx * ctx, int options));
   MOCK_METHOD(unsigned long long, GetClientId,  // NOLINT
-              (RedisModuleCtx *ctx));
+              (ValkeyModuleCtx *ctx));
   MOCK_METHOD(int, GetClientInfoById, (void *ci, uint64_t id));
   MOCK_METHOD(int, SubscribeToKeyspaceEvents,
-              (RedisModuleCtx * ctx, int types,
-               RedisModuleNotificationFunc cb));
-  MOCK_METHOD(int, KeyExists, (RedisModuleCtx * ctx, RedisModuleString *key));
-  MOCK_METHOD(RedisModuleKey *, OpenKey,
-              (RedisModuleCtx * ctx, RedisModuleString *key, int flags));
+              (ValkeyModuleCtx * ctx, int types,
+               ValkeyModuleNotificationFunc cb));
+  MOCK_METHOD(int, KeyExists, (ValkeyModuleCtx * ctx, ValkeyModuleString *key));
+  MOCK_METHOD(ValkeyModuleKey *, OpenKey,
+              (ValkeyModuleCtx * ctx, ValkeyModuleString *key, int flags));
   MOCK_METHOD(int, HashExternalize,
-              (RedisModuleKey * key, RedisModuleString *field,
-               RedisModuleHashExternCB fn, void *privdata));
+              (ValkeyModuleKey * key, ValkeyModuleString *field,
+               ValkeyModuleHashExternCB fn, void *privdata));
   MOCK_METHOD(int, GetApi, (const char *name, void *func));
   MOCK_METHOD(int, HashGet,
-              (RedisModuleKey * key, int flags, const char *field,
+              (ValkeyModuleKey * key, int flags, const char *field,
                int *exists_out, void *terminating_null));
   MOCK_METHOD(int, HashGet,
-              (RedisModuleKey * key, int flags, const char *field,
-               RedisModuleString **value_out, void *terminating_null));
+              (ValkeyModuleKey * key, int flags, const char *field,
+               ValkeyModuleString **value_out, void *terminating_null));
   MOCK_METHOD(int, HashSet,
-              (RedisModuleKey * key, int flags, RedisModuleString *field,
-               RedisModuleString *value_out, void *terminating_null));
-  MOCK_METHOD(void, CloseKey, (RedisModuleKey * key));
+              (ValkeyModuleKey * key, int flags, ValkeyModuleString *field,
+               ValkeyModuleString *value_out, void *terminating_null));
+  MOCK_METHOD(void, CloseKey, (ValkeyModuleKey * key));
   MOCK_METHOD(int, CreateCommand,
-              (RedisModuleCtx * ctx, const char *name,
-               RedisModuleCmdFunc cmdfunc, const char *strflags, int firstkey,
+              (ValkeyModuleCtx * ctx, const char *name,
+               ValkeyModuleCmdFunc cmdfunc, const char *strflags, int firstkey,
                int lastkey, int keystep));
-  MOCK_METHOD(int, KeyType, (RedisModuleKey * key));
+  MOCK_METHOD(int, KeyType, (ValkeyModuleKey * key));
   MOCK_METHOD(int, ModuleTypeSetValue,
-              (RedisModuleKey * key, RedisModuleType *mt, void *value));
-  MOCK_METHOD(int, DeleteKey, (RedisModuleKey * key));
+              (ValkeyModuleKey * key, ValkeyModuleType *mt, void *value));
+  MOCK_METHOD(int, DeleteKey, (ValkeyModuleKey * key));
   MOCK_METHOD(int, RegisterInfoFunc,
-              (RedisModuleCtx * ctx, RedisModuleInfoFunc cb));
+              (ValkeyModuleCtx * ctx, ValkeyModuleInfoFunc cb));
   MOCK_METHOD(int, Init,
-              (RedisModuleCtx * ctx, const char *name, int ver, int apiver));
-  MOCK_METHOD(int, ReplyWithArray, (RedisModuleCtx * ctx, long len));  // NOLINT
+              (ValkeyModuleCtx * ctx, const char *name, int ver, int apiver));
+  MOCK_METHOD(int, ReplyWithArray,
+              (ValkeyModuleCtx * ctx, long len));  // NOLINT
   MOCK_METHOD(void, ReplySetArrayLength,
-              (RedisModuleCtx * ctx, long len));  // NOLINT
+              (ValkeyModuleCtx * ctx, long len));  // NOLINT
   MOCK_METHOD(int, ReplyWithLongLong,
-              (RedisModuleCtx * ctx, long long ll));  // NOLINT
+              (ValkeyModuleCtx * ctx, long long ll));  // NOLINT
   MOCK_METHOD(int, ReplyWithSimpleString,
-              (RedisModuleCtx * ctx, const char *str));
+              (ValkeyModuleCtx * ctx, const char *str));
   MOCK_METHOD(int, ReplyWithString,
-              (RedisModuleCtx * ctx, RedisModuleString *str));
-  MOCK_METHOD(int, ReplyWithDouble, (RedisModuleCtx * ctx, double val));
-  MOCK_METHOD(int, ReplyWithCString, (RedisModuleCtx * ctx, const char *str));
+              (ValkeyModuleCtx * ctx, ValkeyModuleString *str));
+  MOCK_METHOD(int, ReplyWithDouble, (ValkeyModuleCtx * ctx, double val));
+  MOCK_METHOD(int, ReplyWithCString, (ValkeyModuleCtx * ctx, const char *str));
   MOCK_METHOD(int, ReplyWithStringBuffer,
-              (RedisModuleCtx * ctx, const char *buf, size_t len));
-  MOCK_METHOD(int, FreeString, (RedisModuleCtx * ctx, RedisModuleString *str));
-  MOCK_METHOD(RedisModuleType *, CreateDataType,
-              (RedisModuleCtx * ctx, const char *name, int encver,
-               RedisModuleTypeMethods *typemethods));
-  MOCK_METHOD(int, ReplyWithError, (RedisModuleCtx * ctx, const char *err));
+              (ValkeyModuleCtx * ctx, const char *buf, size_t len));
+  MOCK_METHOD(int, FreeString,
+              (ValkeyModuleCtx * ctx, ValkeyModuleString *str));
+  MOCK_METHOD(ValkeyModuleType *, CreateDataType,
+              (ValkeyModuleCtx * ctx, const char *name, int encver,
+               ValkeyModuleTypeMethods *typemethods));
+  MOCK_METHOD(int, ReplyWithError, (ValkeyModuleCtx * ctx, const char *err));
   MOCK_METHOD(int, ScanKey,
-              (RedisModuleKey * key, RedisModuleScanCursor *cursor,
-               RedisModuleScanKeyCB fn, void *privdata));
-  MOCK_METHOD(RedisModuleScanCursor *, ScanCursorCreate, ());
-  MOCK_METHOD(void, ScanCursorDestroy, (RedisModuleScanCursor * cursor));
+              (ValkeyModuleKey * key, ValkeyModuleScanCursor *cursor,
+               ValkeyModuleScanKeyCB fn, void *privdata));
+  MOCK_METHOD(ValkeyModuleScanCursor *, ScanCursorCreate, ());
+  MOCK_METHOD(void, ScanCursorDestroy, (ValkeyModuleScanCursor * cursor));
   MOCK_METHOD(int, SubscribeToServerEvent,
-              (RedisModuleCtx * ctx, RedisModuleEvent event,
-               RedisModuleEventCallback cb));
+              (ValkeyModuleCtx * ctx, ValkeyModuleEvent event,
+               ValkeyModuleEventCallback cb));
   MOCK_METHOD(int, Scan,
-              (RedisModuleCtx * ctx, RedisModuleScanCursor *cursor,
-               RedisModuleScanCB fn, void *privdata));
-  MOCK_METHOD(int, ReplicateVerbatim, (RedisModuleCtx * ctx));
-  MOCK_METHOD(RedisModuleType *, ModuleTypeGetType, (RedisModuleKey * key));
-  MOCK_METHOD(RedisModuleCtx *, GetDetachedThreadSafeContext,
-              (RedisModuleCtx * ctx));
-  MOCK_METHOD(void, FreeThreadSafeContext, (RedisModuleCtx * ctx));
-  MOCK_METHOD(int, SelectDb, (RedisModuleCtx * ctx, int newid));
-  MOCK_METHOD(int, GetSelectedDb, (RedisModuleCtx * ctx));
-  MOCK_METHOD(void *, ModuleTypeGetValue, (RedisModuleKey * key));
-  MOCK_METHOD(unsigned long long, DbSize, (RedisModuleCtx * ctx));  // NOLINT
-  MOCK_METHOD(int, InfoAddSection, (RedisModuleInfoCtx * ctx, const char *str));
+              (ValkeyModuleCtx * ctx, ValkeyModuleScanCursor *cursor,
+               ValkeyModuleScanCB fn, void *privdata));
+  MOCK_METHOD(int, ReplicateVerbatim, (ValkeyModuleCtx * ctx));
+  MOCK_METHOD(ValkeyModuleType *, ModuleTypeGetType, (ValkeyModuleKey * key));
+  MOCK_METHOD(ValkeyModuleCtx *, GetDetachedThreadSafeContext,
+              (ValkeyModuleCtx * ctx));
+  MOCK_METHOD(void, FreeThreadSafeContext, (ValkeyModuleCtx * ctx));
+  MOCK_METHOD(int, SelectDb, (ValkeyModuleCtx * ctx, int newid));
+  MOCK_METHOD(int, GetSelectedDb, (ValkeyModuleCtx * ctx));
+  MOCK_METHOD(void *, ModuleTypeGetValue, (ValkeyModuleKey * key));
+  MOCK_METHOD(unsigned long long, DbSize, (ValkeyModuleCtx * ctx));  // NOLINT
+  MOCK_METHOD(int, InfoAddSection,
+              (ValkeyModuleInfoCtx * ctx, const char *str));
   MOCK_METHOD(int, InfoBeginDictField,
-              (RedisModuleInfoCtx * ctx, const char *str));
-  MOCK_METHOD(int, InfoEndDictField, (RedisModuleInfoCtx * ctx));
+              (ValkeyModuleInfoCtx * ctx, const char *str));
+  MOCK_METHOD(int, InfoEndDictField, (ValkeyModuleInfoCtx * ctx));
   MOCK_METHOD(int, InfoAddFieldLongLong,
-              (RedisModuleInfoCtx * ctx, const char *str,
+              (ValkeyModuleInfoCtx * ctx, const char *str,
                long long field));  // NOLINT
   MOCK_METHOD(int, InfoAddFieldCString,
-              (RedisModuleInfoCtx * ctx, const char *str, const char *field));
+              (ValkeyModuleInfoCtx * ctx, const char *str, const char *field));
+  MOCK_METHOD(int, InfoAddFieldDouble,
+              (ValkeyModuleInfoCtx * ctx, const char *str, double field));
   MOCK_METHOD(int, RegisterStringConfig,
-              (RedisModuleCtx * ctx, const char *name, const char *default_val,
-               unsigned int flags, RedisModuleConfigGetStringFunc getfn,
-               RedisModuleConfigSetStringFunc setfn,
-               RedisModuleConfigApplyFunc applyfn, void *privdata));
+              (ValkeyModuleCtx * ctx, const char *name, const char *default_val,
+               unsigned int flags, ValkeyModuleConfigGetStringFunc getfn,
+               ValkeyModuleConfigSetStringFunc setfn,
+               ValkeyModuleConfigApplyFunc applyfn, void *privdata));
   MOCK_METHOD(int, RegisterEnumConfig,
-              (RedisModuleCtx * ctx, const char *name, int default_val,
+              (ValkeyModuleCtx * ctx, const char *name, int default_val,
                unsigned int flags, const char **enum_values,
                const int *int_values, int num_enum_vals,
-               RedisModuleConfigGetEnumFunc getfn,
-               RedisModuleConfigSetEnumFunc setfn,
-               RedisModuleConfigApplyFunc applyfn, void *privdata));
-  MOCK_METHOD(int, LoadConfigs, (RedisModuleCtx * ctx));
+               ValkeyModuleConfigGetEnumFunc getfn,
+               ValkeyModuleConfigSetEnumFunc setfn,
+               ValkeyModuleConfigApplyFunc applyfn, void *privdata));
+  MOCK_METHOD(int, RegisterNumericConfig,
+              (ValkeyModuleCtx * ctx, const char *name, long long default_val,
+               unsigned int flags, long long min, long long max,
+               ValkeyModuleConfigGetNumericFunc getfn,
+               ValkeyModuleConfigSetNumericFunc setfn,
+               ValkeyModuleConfigApplyFunc applyfn, void *privdata));
+  MOCK_METHOD(int, RegisterBoolConfig,
+              (ValkeyModuleCtx * ctx, const char *name, int default_val,
+               unsigned int flags, ValkeyModuleConfigGetBoolFunc getfn,
+               ValkeyModuleConfigSetBoolFunc setfn,
+               ValkeyModuleConfigApplyFunc applyfn, void *privdata));
+  MOCK_METHOD(int, LoadConfigs, (ValkeyModuleCtx * ctx));
   MOCK_METHOD(int, SetConnectionProperties,
-              (const RedisModuleConnectionProperty *properties, int length));
+              (const ValkeyModuleConnectionProperty *properties, int length));
   MOCK_METHOD(int, SetShardId, (const char *shard_id, int len));
   MOCK_METHOD(int, GetClusterInfo, (void *cli));
   MOCK_METHOD(const char *, GetMyShardID, ());
-  MOCK_METHOD(int, GetContextFlags, (RedisModuleCtx * ctx));
-  MOCK_METHOD(uint64_t, LoadUnsigned, (RedisModuleIO * io));
-  MOCK_METHOD(int64_t, LoadSigned, (RedisModuleIO * io));
-  MOCK_METHOD(double, LoadDouble, (RedisModuleIO * io));
-  MOCK_METHOD(char *, LoadStringBuffer, (RedisModuleIO * io, size_t *lenptr));
-  MOCK_METHOD(RedisModuleString *, LoadString, (RedisModuleIO * io));
-  MOCK_METHOD(void, SaveUnsigned, (RedisModuleIO * io, uint64_t val));
-  MOCK_METHOD(void, SaveSigned, (RedisModuleIO * io, int64_t val));
-  MOCK_METHOD(void, SaveDouble, (RedisModuleIO * io, double val));
+  MOCK_METHOD(int, GetContextFlags, (ValkeyModuleCtx * ctx));
+  MOCK_METHOD(uint64_t, LoadUnsigned, (ValkeyModuleIO * io));
+  MOCK_METHOD(int64_t, LoadSigned, (ValkeyModuleIO * io));
+  MOCK_METHOD(double, LoadDouble, (ValkeyModuleIO * io));
+  MOCK_METHOD(char *, LoadStringBuffer, (ValkeyModuleIO * io, size_t *lenptr));
+  MOCK_METHOD(ValkeyModuleString *, LoadString, (ValkeyModuleIO * io));
+  MOCK_METHOD(void, SaveUnsigned, (ValkeyModuleIO * io, uint64_t val));
+  MOCK_METHOD(void, SaveSigned, (ValkeyModuleIO * io, int64_t val));
+  MOCK_METHOD(void, SaveDouble, (ValkeyModuleIO * io, double val));
   MOCK_METHOD(void, SaveStringBuffer,
-              (RedisModuleIO * io, const char *str, size_t len));
-  MOCK_METHOD(int, IsIOError, (RedisModuleIO * io));
+              (ValkeyModuleIO * io, const char *str, size_t len));
+  MOCK_METHOD(int, IsIOError, (ValkeyModuleIO * io));
   MOCK_METHOD(int, ReplicationSetMasterCrossCluster,
-              (RedisModuleCtx * ctx, const char *ip, const int port));
-  MOCK_METHOD(int, ReplicationUnsetMasterCrossCluster, (RedisModuleCtx * ctx));
+              (ValkeyModuleCtx * ctx, const char *ip, const int port));
+  MOCK_METHOD(int, ReplicationUnsetMasterCrossCluster, (ValkeyModuleCtx * ctx));
   MOCK_METHOD(const char *, GetMyClusterID, ());
   MOCK_METHOD(int, GetClusterNodeInfo,
-              (RedisModuleCtx * ctx, const char *id, char *ip, char *master_id,
+              (ValkeyModuleCtx * ctx, const char *id, char *ip, char *master_id,
                int *port, int *flags));
   MOCK_METHOD(int, ReplicationSetSecondaryCluster,
-              (RedisModuleCtx * ctx, bool is_secondary_cluster));
-  MOCK_METHOD(RedisModuleCrossClusterReplicasList *,
+              (ValkeyModuleCtx * ctx, bool is_secondary_cluster));
+  MOCK_METHOD(ValkeyModuleCrossClusterReplicasList *,
               GetCrossClusterReplicasList, ());
   MOCK_METHOD(void, FreeCrossClusterReplicasList,
-              (RedisModuleCrossClusterReplicasList * list));
+              (ValkeyModuleCrossClusterReplicasList * list));
   MOCK_METHOD(void *, Alloc, (size_t size));
   MOCK_METHOD(void, Free, (void *ptr));
   MOCK_METHOD(void *, Realloc, (void *ptr, size_t size));
   MOCK_METHOD(void *, Calloc, (size_t nmemb, size_t size));
   MOCK_METHOD(size_t, MallocUsableSize, (void *ptr));
   MOCK_METHOD(size_t, GetClusterSize, ());
-  MOCK_METHOD(RedisModuleCallReply *, Call,
-              (RedisModuleCtx * ctx, const char *cmd, const char *fmt,
+  MOCK_METHOD(ValkeyModuleCallReply *, Call,
+              (ValkeyModuleCtx * ctx, const char *cmd, const char *fmt,
                const char *arg1, const char *arg2));
-  MOCK_METHOD(RedisModuleCallReply *, CallReplyArrayElement,
-              (RedisModuleCallReply * reply, int index));
+  MOCK_METHOD(ValkeyModuleCallReply *, Call,
+              (ValkeyModuleCtx * ctx, const char *cmd, const char *fmt,
+               const char *arg1));
+  MOCK_METHOD(ValkeyModuleCallReply *, CallReplyArrayElement,
+              (ValkeyModuleCallReply * reply, size_t index));
+  MOCK_METHOD(int, CallReplyMapElement,
+              (ValkeyModuleCallReply * reply, size_t index,
+               ValkeyModuleCallReply **key, ValkeyModuleCallReply **val));
   MOCK_METHOD(const char *, CallReplyStringPtr,
-              (RedisModuleCallReply * reply, size_t *len));
-  MOCK_METHOD(void, FreeCallReply, (RedisModuleCallReply * reply));
+              (ValkeyModuleCallReply * reply, size_t *len));
+  MOCK_METHOD(void, FreeCallReply, (ValkeyModuleCallReply * reply));
   MOCK_METHOD(void, RegisterClusterMessageReceiver,
-              (RedisModuleCtx * ctx, uint8_t type,
-               RedisModuleClusterMessageReceiver callback));
+              (ValkeyModuleCtx * ctx, uint8_t type,
+               ValkeyModuleClusterMessageReceiver callback));
   MOCK_METHOD(int, SendClusterMessage,
-              (RedisModuleCtx * ctx, const char *target_id, uint8_t type,
+              (ValkeyModuleCtx * ctx, const char *target_id, uint8_t type,
                const char *msg, uint32_t len));
   MOCK_METHOD(char **, GetClusterNodesList,
-              (RedisModuleCtx * ctx, size_t *numnodes));
-  MOCK_METHOD(RedisModuleCtx *, GetContextFromIO, (RedisModuleIO * rdb));
+              (ValkeyModuleCtx * ctx, size_t *numnodes));
+  MOCK_METHOD(ValkeyModuleCtx *, GetContextFromIO, (ValkeyModuleIO * rdb));
+  MOCK_METHOD(int, GetDbIdFromIO, (ValkeyModuleIO * rdb));
   MOCK_METHOD(void, FreeClusterNodesList, (char **ids));
-  MOCK_METHOD(int, CallReplyType, (RedisModuleCallReply * reply));
-  MOCK_METHOD(RedisModuleString *, CreateStringFromCallReply,
-              (RedisModuleCallReply * reply));
-  MOCK_METHOD(int, WrongArity, (RedisModuleCtx * ctx));
-  MOCK_METHOD(int, Fork, (RedisModuleForkDoneHandler cb, void *user_data));
+  MOCK_METHOD(int, CallReplyType, (ValkeyModuleCallReply * reply));
+  MOCK_METHOD(size_t, CallReplyLength, (ValkeyModuleCallReply * reply));
+  MOCK_METHOD(ValkeyModuleString *, CreateStringFromCallReply,
+              (ValkeyModuleCallReply * reply));
+  MOCK_METHOD(int, WrongArity, (ValkeyModuleCtx * ctx));
+  MOCK_METHOD(int, Fork, (ValkeyModuleForkDoneHandler cb, void *user_data));
   MOCK_METHOD(int, ExitFromChild, (int retcode));
-  MOCK_METHOD(RedisModuleRdbStream *, RdbStreamCreateFromRioHandler,
-              (const RedisModuleRIOHandler *handler));
+  MOCK_METHOD(ValkeyModuleRdbStream *, RdbStreamCreateFromRioHandler,
+              (const ValkeyModuleRIOHandler *handler));
   MOCK_METHOD(int, RdbLoad,
-              (RedisModuleCtx * ctx, RedisModuleRdbStream *stream, int flags));
+              (ValkeyModuleCtx * ctx, ValkeyModuleRdbStream *stream,
+               int flags));
   MOCK_METHOD(int, RdbSave,
-              (RedisModuleCtx * ctx, RedisModuleRdbStream *stream, int flags));
-  MOCK_METHOD(void, RdbStreamFree, (RedisModuleRdbStream * stream));
+              (ValkeyModuleCtx * ctx, ValkeyModuleRdbStream *stream,
+               int flags));
+  MOCK_METHOD(void, RdbStreamFree, (ValkeyModuleRdbStream * stream));
+  MOCK_METHOD(ValkeyModuleString *, GetCurrentUserName,
+              (ValkeyModuleCtx * ctx));
 };
+// NOLINTBEGIN(readability-identifier-naming)
+// Global kMockValkeyModule is a fake Valkey module used for static wrappers
+// around MockValkeyModule methods.
+MockValkeyModule *kMockValkeyModule VALKEYMODULE_ATTR;
 
-// Global kMockRedisModule is a fake Redis module used for static wrappers
-// around MockRedisModule methods.
-MockRedisModule *kMockRedisModule;  // NOLINT
-
-inline void TestRedisModule_Log(RedisModuleCtx *ctx [[maybe_unused]],
-                                const char *levelstr [[maybe_unused]],
-                                const char *fmt [[maybe_unused]], ...) {
+inline void TestValkeyModule_Log(ValkeyModuleCtx *ctx [[maybe_unused]],
+                                 const char *levelstr [[maybe_unused]],
+                                 const char *fmt [[maybe_unused]], ...) {
   char out[2048];
   va_list args;
   va_start(args, fmt);
   vsnprintf(out, sizeof(out), fmt, args);
   va_end(args);
-  printf("TestRedis[%s]: %s\n", levelstr, out);
-  kMockRedisModule->Log(ctx, levelstr, out);
+  printf("TestValkey[%s]: %s\n", levelstr, out);
+  kMockValkeyModule->Log(ctx, levelstr, out);
 }
 
-inline void TestRedisModule_LogIOError(RedisModuleIO *io [[maybe_unused]],
-                                       const char *levelstr [[maybe_unused]],
-                                       const char *fmt [[maybe_unused]], ...) {
+inline void TestValkeyModule_LogIOError(ValkeyModuleIO *io [[maybe_unused]],
+                                        const char *levelstr [[maybe_unused]],
+                                        const char *fmt [[maybe_unused]], ...) {
   char out[2048];
   va_list args;
   va_start(args, fmt);
   vsnprintf(out, sizeof(out), fmt, args);
   va_end(args);
-  printf("TestRedis[%s]: %s\n", levelstr, out);
-  kMockRedisModule->LogIOError(io, levelstr, out);
+  printf("TestValkey[%s]: %s\n", levelstr, out);
+  kMockValkeyModule->LogIOError(io, levelstr, out);
 }
 
-inline int TestRedisModule_BlockedClientMeasureTimeStart(
-    RedisModuleBlockedClient *bc [[maybe_unused]]) {
+inline int TestValkeyModule_BlockedClientMeasureTimeStart(
+    ValkeyModuleBlockedClient *bc [[maybe_unused]]) {
   return 0;
 }
 
-inline int TestRedisModule_BlockedClientMeasureTimeEnd(
-    RedisModuleBlockedClient *bc [[maybe_unused]]) {
+inline int TestValkeyModule_BlockedClientMeasureTimeEnd(
+    ValkeyModuleBlockedClient *bc [[maybe_unused]]) {
   return 0;
 }
 
-inline int TestRedisModule_UnblockClient(RedisModuleBlockedClient *bc,
-                                         void *privdata) {
-  return kMockRedisModule->UnblockClient(bc, privdata);
+inline int TestValkeyModule_UnblockClient(ValkeyModuleBlockedClient *bc,
+                                          void *privdata) {
+  return kMockValkeyModule->UnblockClient(bc, privdata);
 }
 
-struct RedisModuleBlockedClient {};
+struct ValkeyModuleBlockedClient {};
 
-// Simple test implementation of RedisModuleString
-struct RedisModuleString {
+// Simple test implementation of ValkeyModuleString
+struct ValkeyModuleString {
   std::string data;
   std::atomic<int> cnt{1};
 };
@@ -331,7 +338,7 @@ class ReplyCapture {
   void ReplyWithArray(long len) {  // NOLINT
     auto result = AllocateElement();
     result->array_value = ReplyArray{.target_length = len};
-    if (len == REDISMODULE_POSTPONED_ARRAY_LEN) {
+    if (len == VALKEYMODULE_POSTPONED_ARRAY_LEN) {
       curr_postponed_length_arrays.push_back(result);
     }
   }
@@ -348,7 +355,7 @@ class ReplyCapture {
     auto result = AllocateElement();
     result->simple_string_value = msg;
   }
-  void ReplyWithString(RedisModuleString *str) {
+  void ReplyWithString(ValkeyModuleString *str) {
     auto result = AllocateElement();
     result->string_value = vmsdk::ToStringView(str);
   }
@@ -410,7 +417,7 @@ class ReplyCapture {
         return result;
       }
     }
-    if (array.target_length == REDISMODULE_POSTPONED_ARRAY_LEN ||
+    if (array.target_length == VALKEYMODULE_POSTPONED_ARRAY_LEN ||
         array.elements.size() < (size_t)array.target_length) {
       array.elements.push_back(ReplyElement{});
       return &array.elements.back();
@@ -436,37 +443,46 @@ class ReplyCapture {
 struct RegisteredKey {
   std::string key;
   void *data;
-  RedisModuleType *module_type;
-
+  ValkeyModuleType *module_type;
   bool operator==(const RegisteredKey &other) const {
     return key == other.key && data == other.data &&
            module_type == other.module_type;
   }
 };
 
-struct RedisModuleCtx {
+struct ValkeyModuleCtx {
   ReplyCapture reply_capture;
   absl::flat_hash_map<std::string, RegisteredKey> registered_keys;
 };
 
-struct RedisModuleIO {};
+struct ValkeyModuleIO {};
 
 class InfoCapture {
  public:
   void InfoAddSection(const char *str) { info_ << str << std::endl; }
   void InfoAddFieldLongLong(const char *str, long long field,  // NOLINT
                             int in_dict_field) {
-    if (in_dict_field)
+    if (in_dict_field) {
       info_ << str << "=" << field << ",";
-    else
+    } else {
       info_ << str << ": " << field << std::endl;
+    }
   }
   void InfoAddFieldCString(const char *str, const char *field,
                            int in_dict_field) {
-    if (in_dict_field)
+    if (in_dict_field) {
       info_ << str << "=" << field << ",";
-    else
+    } else {
       info_ << str << ": '" << field << "'" << std::endl;
+    }
+  }
+  void InfoAddFieldDouble(const char *str, double field,
+                            int in_dict_field) {
+    if (in_dict_field) {
+      info_ << str << "=" << field << ",";
+    } else {
+      info_ << str << ": " << field << std::endl;
+    }
   }
   void InfoEndDictField() {
     if (!info_.str().empty() && info_.str().back() == ',') {
@@ -475,7 +491,9 @@ class InfoCapture {
     info_ << std::endl;
   }
   void InfoBeginDictField(const char *str, int in_dict_field) {
-    if (in_dict_field) InfoEndDictField();
+    if (in_dict_field) {
+      InfoEndDictField();
+    }
     info_ << str << ":";
   }
   std::string GetInfo() const { return info_.str(); }
@@ -484,392 +502,395 @@ class InfoCapture {
   std::stringstream info_;
 };
 
-struct RedisModuleInfoCtx {
+struct ValkeyModuleInfoCtx {
   InfoCapture info_capture;
   int in_dict_field = 0;
 };
 
-struct RedisModuleKey {
-  RedisModuleCtx *ctx;
+struct ValkeyModuleKey {
+  ValkeyModuleCtx *ctx;
   std::string key;
 };
 
-inline const char *TestRedisModule_StringPtrLen(const RedisModuleString *str,
-                                                size_t *len) {
-  if (len != nullptr) *len = str->data.size();
+inline const char *TestValkeyModule_StringPtrLen(const ValkeyModuleString *str,
+                                                 size_t *len) {
+  if (len != nullptr) {
+    *len = str->data.size();
+  }
   return str->data.c_str();
 }
 
-inline RedisModuleString *TestRedisModule_CreateStringPrintf(RedisModuleCtx *ctx
-                                                             [[maybe_unused]],
-                                                             const char *fmt,
-                                                             ...) {
+inline ValkeyModuleString *TestValkeyModule_CreateStringPrintf(
+    ValkeyModuleCtx *ctx [[maybe_unused]], const char *fmt, ...) {
   char out[1024];
   va_list args;
   va_start(args, fmt);
   vsnprintf(out, sizeof(out), fmt, args);
   va_end(args);
-  return new RedisModuleString{std::string(out)};
+  return new ValkeyModuleString{std::string(out)};
 }
 
-inline void *TestRedisModule_GetBlockedClientPrivateData(RedisModuleCtx *ctx) {
-  return kMockRedisModule->GetBlockedClientPrivateData(ctx);
+inline void *TestValkeyModule_GetBlockedClientPrivateData(
+    ValkeyModuleCtx *ctx) {
+  return kMockValkeyModule->GetBlockedClientPrivateData(ctx);
 }
 
-inline RedisModuleBlockedClient *TestRedisModule_BlockClientOnAuth(
-    RedisModuleCtx *ctx, RedisModuleAuthCallback reply_callback,
-    void (*free_privdata)(RedisModuleCtx *, void *)) {
-  return kMockRedisModule->BlockClientOnAuth(ctx, reply_callback,
-                                             free_privdata);
+inline ValkeyModuleBlockedClient *TestValkeyModule_BlockClientOnAuth(
+    ValkeyModuleCtx *ctx, ValkeyModuleAuthCallback reply_callback,
+    void (*free_privdata)(ValkeyModuleCtx *, void *)) {
+  return kMockValkeyModule->BlockClientOnAuth(ctx, reply_callback,
+                                              free_privdata);
 }
 
-inline RedisModuleBlockedClient *TestRedisModule_BlockClient(
-    RedisModuleCtx *ctx, RedisModuleCmdFunc reply_callback,
-    RedisModuleCmdFunc timeout_callback,
-    void (*free_privdata)(RedisModuleCtx *, void *),
+inline ValkeyModuleBlockedClient *TestValkeyModule_BlockClient(
+    ValkeyModuleCtx *ctx, ValkeyModuleCmdFunc reply_callback,
+    ValkeyModuleCmdFunc timeout_callback,
+    void (*free_privdata)(ValkeyModuleCtx *, void *),
     long long timeout_ms) {  // NOLINT
-  return kMockRedisModule->BlockClient(ctx, reply_callback, timeout_callback,
-                                       free_privdata, timeout_ms);
+  return kMockValkeyModule->BlockClient(ctx, reply_callback, timeout_callback,
+                                        free_privdata, timeout_ms);
 }
 
-inline int TestRedisModule_AuthenticateClientWithACLUser(
-    RedisModuleCtx *ctx, const char *name, size_t len,
-    RedisModuleUserChangedFunc callback, void *privdata, uint64_t *client_id) {
-  return kMockRedisModule->AuthenticateClientWithACLUser(
+inline int TestValkeyModule_AuthenticateClientWithACLUser(
+    ValkeyModuleCtx *ctx, const char *name, size_t len,
+    ValkeyModuleUserChangedFunc callback, void *privdata, uint64_t *client_id) {
+  return kMockValkeyModule->AuthenticateClientWithACLUser(
       ctx, name, len, callback, privdata, client_id);
 }
 
-inline void TestRedisModule_ACLAddLogEntryByUserName(
-    RedisModuleCtx *ctx, RedisModuleString *user, RedisModuleString *object,
-    RedisModuleACLLogEntryReason reason) {
-  return kMockRedisModule->ACLAddLogEntryByUserName(ctx, user, object, reason);
+inline void TestValkeyModule_ACLAddLogEntryByUserName(
+    ValkeyModuleCtx *ctx, ValkeyModuleString *user, ValkeyModuleString *object,
+    ValkeyModuleACLLogEntryReason reason) {
+  return kMockValkeyModule->ACLAddLogEntryByUserName(ctx, user, object, reason);
 }
 
-inline RedisModuleString *TestRedisModule_CreateString(RedisModuleCtx *ctx
-                                                       [[maybe_unused]],
-                                                       const char *ptr,
-                                                       size_t len) {
-  return new RedisModuleString{std::string(ptr, len)};
+inline ValkeyModuleString *TestValkeyModule_CreateString(ValkeyModuleCtx *ctx
+                                                         [[maybe_unused]],
+                                                         const char *ptr,
+                                                         size_t len) {
+  return new ValkeyModuleString{std::string(ptr, len)};
 }
 
-inline void TestRedisModule_FreeString(RedisModuleCtx *ctx [[maybe_unused]],
-                                       RedisModuleString *str) {
+inline void TestValkeyModule_FreeString(ValkeyModuleCtx *ctx [[maybe_unused]],
+                                        ValkeyModuleString *str) {
   str->cnt--;
   if (str->cnt == 0) {
     delete str;
   }
 }
 
-inline void TestRedisModule_RetainString(RedisModuleCtx *ctx [[maybe_unused]],
-                                         RedisModuleString *str) {
+inline void TestValkeyModule_RetainString(ValkeyModuleCtx *ctx [[maybe_unused]],
+                                          ValkeyModuleString *str) {
   str->cnt++;
 }
 
-inline int TestRedisModule_EventLoopAdd(int fd, int mask,
-                                        RedisModuleEventLoopFunc func,
-                                        void *user_data) {
-  return kMockRedisModule->EventLoopAdd(fd, mask, func, user_data);
+inline int TestValkeyModule_EventLoopAdd(int fd, int mask,
+                                         ValkeyModuleEventLoopFunc func,
+                                         void *user_data) {
+  return kMockValkeyModule->EventLoopAdd(fd, mask, func, user_data);
 }
 
-inline int TestRedisModule_EventLoopAddOneShot(
-    RedisModuleEventLoopOneShotFunc func, void *user_data) {
-  return kMockRedisModule->EventLoopAddOneShot(func, user_data);
+inline int TestValkeyModule_EventLoopAddOneShot(
+    ValkeyModuleEventLoopOneShotFunc func, void *user_data) {
+  return kMockValkeyModule->EventLoopAddOneShot(func, user_data);
 }
 
-inline int TestRedisModule_EventLoopDel(int fd, int mask) {
-  return kMockRedisModule->EventLoopDel(fd, mask);
+inline int TestValkeyModule_EventLoopDel(int fd, int mask) {
+  return kMockValkeyModule->EventLoopDel(fd, mask);
 }
 
-inline RedisModuleTimerID TestRedisModule_CreateTimer(
-    RedisModuleCtx *ctx, mstime_t period, RedisModuleTimerProc callback,
+inline ValkeyModuleTimerID TestValkeyModule_CreateTimer(
+    ValkeyModuleCtx *ctx, mstime_t period, ValkeyModuleTimerProc callback,
     void *data) {
-  return kMockRedisModule->CreateTimer(ctx, period, callback, data);
+  return kMockValkeyModule->CreateTimer(ctx, period, callback, data);
 }
 
-inline int TestRedisModule_StopTimer(RedisModuleCtx *ctx, RedisModuleTimerID id,
-                                     void **data) {
-  return kMockRedisModule->StopTimer(ctx, id, data);
+inline int TestValkeyModule_StopTimer(ValkeyModuleCtx *ctx,
+                                      ValkeyModuleTimerID id, void **data) {
+  return kMockValkeyModule->StopTimer(ctx, id, data);
 }
 
-inline void TestRedisModule_SetModuleOptions(RedisModuleCtx *ctx, int options) {
-  return kMockRedisModule->SetModuleOptions(ctx, options);
+inline void TestValkeyModule_SetModuleOptions(ValkeyModuleCtx *ctx,
+                                              int options) {
+  return kMockValkeyModule->SetModuleOptions(ctx, options);
 }
 
-inline unsigned long long TestRedisModule_GetClientId(  // NOLINT
-    RedisModuleCtx *ctx) {
-  return kMockRedisModule->GetClientId(ctx);
+inline unsigned long long TestValkeyModule_GetClientId(  // NOLINT
+    ValkeyModuleCtx *ctx) {
+  return kMockValkeyModule->GetClientId(ctx);
 }
 
-inline int TestRedisModule_GetClientInfoById(void *ci, uint64_t id) {
-  return kMockRedisModule->GetClientInfoById(ci, id);
+inline int TestValkeyModule_GetClientInfoById(void *ci, uint64_t id) {
+  return kMockValkeyModule->GetClientInfoById(ci, id);
 }
 
-inline int TestRedisModule_SubscribeToKeyspaceEvents(
-    RedisModuleCtx *ctx, int types, RedisModuleNotificationFunc cb) {
-  return kMockRedisModule->SubscribeToKeyspaceEvents(ctx, types, cb);
+inline int TestValkeyModule_SubscribeToKeyspaceEvents(
+    ValkeyModuleCtx *ctx, int types, ValkeyModuleNotificationFunc cb) {
+  return kMockValkeyModule->SubscribeToKeyspaceEvents(ctx, types, cb);
 }
 
-inline int TestRedisModule_KeyExistsDefaultImpl(RedisModuleCtx *ctx,
-                                                RedisModuleString *key) {
+inline int TestValkeyModule_KeyExistsDefaultImpl(ValkeyModuleCtx *ctx,
+                                                 ValkeyModuleString *key) {
   if (ctx != nullptr) {
     return ctx->registered_keys.contains(key->data) ? 1 : 0;
   }
   return 0;
 }
 
-inline int TestRedisModule_HashExternalizeDefaultImpl(
-    RedisModuleKey *key, RedisModuleString *field, RedisModuleHashExternCB fn,
-    void *privdata) {
-  return REDISMODULE_OK;
+inline int TestValkeyModule_HashExternalizeDefaultImpl(
+    ValkeyModuleKey *key, ValkeyModuleString *field,
+    ValkeyModuleHashExternCB fn, void *privdata) {
+  return VALKEYMODULE_OK;
 }
 
-inline int TestRedisModule_GetApiDefaultImpl(const char *name, void *func) {
-  return REDISMODULE_OK;
+inline int TestValkeyModule_GetApiDefaultImpl(const char *name, void *func) {
+  return VALKEYMODULE_OK;
 }
 
-inline int TestRedisModule_KeyExists(RedisModuleCtx *ctx,
-                                     RedisModuleString *key) {
-  return kMockRedisModule->KeyExists(ctx, key);
+inline int TestValkeyModule_KeyExists(ValkeyModuleCtx *ctx,
+                                      ValkeyModuleString *key) {
+  return kMockValkeyModule->KeyExists(ctx, key);
 }
 
-inline RedisModuleKey *TestRedisModule_OpenKeyDefaultImpl(
-    RedisModuleCtx *ctx, RedisModuleString *key, int flags) {
-  return new RedisModuleKey{ctx, key->data};
+inline ValkeyModuleKey *TestValkeyModule_OpenKeyDefaultImpl(
+    ValkeyModuleCtx *ctx, ValkeyModuleString *key, int flags) {
+  return new ValkeyModuleKey{ctx, key->data};
 }
 
-inline RedisModuleKey *TestRedisModule_OpenKey(RedisModuleCtx *ctx,
-                                               RedisModuleString *key,
-                                               int flags) {
-  return kMockRedisModule->OpenKey(ctx, key, flags);
+inline ValkeyModuleKey *TestValkeyModule_OpenKey(ValkeyModuleCtx *ctx,
+                                                 ValkeyModuleString *key,
+                                                 int flags) {
+  return kMockValkeyModule->OpenKey(ctx, key, flags);
 }
 
-inline int TestRedisModule_HashExternalize(RedisModuleKey *key,
-                                           RedisModuleString *field,
-                                           RedisModuleHashExternCB fn,
-                                           void *privdata) {
-  return kMockRedisModule->HashExternalize(key, field, fn, privdata);
+inline int TestValkeyModule_HashExternalize(ValkeyModuleKey *key,
+                                            ValkeyModuleString *field,
+                                            ValkeyModuleHashExternCB fn,
+                                            void *privdata) {
+  return kMockValkeyModule->HashExternalize(key, field, fn, privdata);
 }
 
-inline int TestRedisModule_GetApi(const char *name, void *func) {
-  return kMockRedisModule->GetApi(name, func);
+inline int TestValkeyModule_GetApi(const char *name, void *func) {
+  return kMockValkeyModule->GetApi(name, func);
 }
 
-inline int TestRedisModule_HashGet(RedisModuleKey *key, int flags, ...) {
+inline int TestValkeyModule_HashGet(ValkeyModuleKey *key, int flags, ...) {
   va_list args;
   va_start(args, flags);
 
   const char *field = va_arg(args, const char *);
   int result;
-  if (flags & REDISMODULE_HASH_EXISTS) {
+  if (flags & VALKEYMODULE_HASH_EXISTS) {
     int *exists_out = va_arg(args, int *);
     void *terminating_null = va_arg(args, void *);
-    result = kMockRedisModule->HashGet(key, flags, field, exists_out,
-                                       terminating_null);
+    result = kMockValkeyModule->HashGet(key, flags, field, exists_out,
+                                        terminating_null);
   } else {
-    RedisModuleString **value_out = va_arg(args, RedisModuleString **);
+    ValkeyModuleString **value_out = va_arg(args, ValkeyModuleString **);
     void *terminating_null = va_arg(args, void *);
-    result = kMockRedisModule->HashGet(key, flags, field, value_out,
-                                       terminating_null);
+    result = kMockValkeyModule->HashGet(key, flags, field, value_out,
+                                        terminating_null);
   }
 
   va_end(args);
   return result;
 }
 
-inline int TestRedisModule_HashSet(RedisModuleKey *key, int flags, ...) {
+inline int TestValkeyModule_HashSet(ValkeyModuleKey *key, int flags, ...) {
   va_list args;
   va_start(args, flags);
 
-  RedisModuleString *field = va_arg(args, RedisModuleString *);
-  RedisModuleString *value = va_arg(args, RedisModuleString *);
+  ValkeyModuleString *field = va_arg(args, ValkeyModuleString *);
+  ValkeyModuleString *value = va_arg(args, ValkeyModuleString *);
   void *terminating_null = va_arg(args, void *);
   int result =
-      kMockRedisModule->HashSet(key, flags, field, value, terminating_null);
+      kMockValkeyModule->HashSet(key, flags, field, value, terminating_null);
   va_end(args);
   return result;
 }
 
-struct RedisModuleScanCursor {
+struct ValkeyModuleScanCursor {
   int cursor{0};
 };
 
-inline int TestRedisModule_ScanKey(RedisModuleKey *key,
-                                   RedisModuleScanCursor *cursor,
-                                   RedisModuleScanKeyCB fn, void *privdata) {
-  return kMockRedisModule->ScanKey(key, cursor, fn, privdata);
+inline int TestValkeyModule_ScanKey(ValkeyModuleKey *key,
+                                    ValkeyModuleScanCursor *cursor,
+                                    ValkeyModuleScanKeyCB fn, void *privdata) {
+  return kMockValkeyModule->ScanKey(key, cursor, fn, privdata);
 }
 
-inline RedisModuleScanCursor *TestRedisModule_ScanCursorCreate() {
-  return new RedisModuleScanCursor();
+inline ValkeyModuleScanCursor *TestValkeyModule_ScanCursorCreate() {
+  return new ValkeyModuleScanCursor();
 }
 
-inline void TestRedisModule_ScanCursorDestroy(RedisModuleScanCursor *cursor) {
+inline void TestValkeyModule_ScanCursorDestroy(ValkeyModuleScanCursor *cursor) {
   delete cursor;
 }
 
-inline void TestRedisModule_CloseKeyDefaultImpl(RedisModuleKey *key) {
+inline void TestValkeyModule_CloseKeyDefaultImpl(ValkeyModuleKey *key) {
   delete key;
 }
 
-inline void TestRedisModule_CloseKey(RedisModuleKey *key) {
-  return kMockRedisModule->CloseKey(key);
+inline void TestValkeyModule_CloseKey(ValkeyModuleKey *key) {
+  return kMockValkeyModule->CloseKey(key);
 }
 
-inline int TestRedisModule_CreateCommand(RedisModuleCtx *ctx, const char *name,
-                                         RedisModuleCmdFunc cmdfunc,
-                                         const char *strflags, int firstkey,
-                                         int lastkey, int keystep) {
-  return kMockRedisModule->CreateCommand(ctx, name, cmdfunc, strflags, firstkey,
-                                         lastkey, keystep);
+inline int TestValkeyModule_CreateCommand(ValkeyModuleCtx *ctx,
+                                          const char *name,
+                                          ValkeyModuleCmdFunc cmdfunc,
+                                          const char *strflags, int firstkey,
+                                          int lastkey, int keystep) {
+  return kMockValkeyModule->CreateCommand(ctx, name, cmdfunc, strflags,
+                                          firstkey, lastkey, keystep);
 }
 
-inline int TestRedisModule_KeyTypeDefaultImpl(RedisModuleKey *key) {
+inline int TestValkeyModule_KeyTypeDefaultImpl(ValkeyModuleKey *key) {
   if (key->ctx && key->ctx->registered_keys.contains(key->key)) {
-    return REDISMODULE_KEYTYPE_MODULE;
+    return VALKEYMODULE_KEYTYPE_MODULE;
   }
-  return REDISMODULE_KEYTYPE_EMPTY;
+  return VALKEYMODULE_KEYTYPE_EMPTY;
 }
 
-inline int TestRedisModule_KeyType(RedisModuleKey *key) {
-  return kMockRedisModule->KeyType(key);
+inline int TestValkeyModule_KeyType(ValkeyModuleKey *key) {
+  return kMockValkeyModule->KeyType(key);
 }
 
-inline int TestRedisModule_ModuleTypeSetValueDefaultImpl(RedisModuleKey *key,
-                                                         RedisModuleType *mt,
-                                                         void *value) {
+inline int TestValkeyModule_ModuleTypeSetValueDefaultImpl(ValkeyModuleKey *key,
+                                                          ValkeyModuleType *mt,
+                                                          void *value) {
   key->ctx->registered_keys[key->key] = RegisteredKey{
       .key = key->key,
       .data = value,
       .module_type = mt,
   };
-  return REDISMODULE_OK;
+  return VALKEYMODULE_OK;
 }
 
-inline int TestRedisModule_ModuleTypeSetValue(RedisModuleKey *key,
-                                              RedisModuleType *mt,
-                                              void *value) {
-  return kMockRedisModule->ModuleTypeSetValue(key, mt, value);
+inline int TestValkeyModule_ModuleTypeSetValue(ValkeyModuleKey *key,
+                                               ValkeyModuleType *mt,
+                                               void *value) {
+  return kMockValkeyModule->ModuleTypeSetValue(key, mt, value);
 }
 
-inline int TestRedisModule_DeleteKeyDefaultImpl(RedisModuleKey *key) {
+inline int TestValkeyModule_DeleteKeyDefaultImpl(ValkeyModuleKey *key) {
   if (key->ctx != nullptr) {
     if (key->ctx->registered_keys.contains(key->key)) {
       key->ctx->registered_keys.erase(key->key);
-      return REDISMODULE_OK;
+      return VALKEYMODULE_OK;
     }
   }
-  return REDISMODULE_ERR;
+  return VALKEYMODULE_ERR;
 }
 
-inline int TestRedisModule_DeleteKey(RedisModuleKey *key) {
-  return kMockRedisModule->DeleteKey(key);
+inline int TestValkeyModule_DeleteKey(ValkeyModuleKey *key) {
+  return kMockValkeyModule->DeleteKey(key);
 }
 
-inline int TestRedisModule_ReplyWithArray(RedisModuleCtx *ctx,
-                                          long len) {  // NOLINT
+inline int TestValkeyModule_ReplyWithArray(ValkeyModuleCtx *ctx,
+                                           long len) {  // NOLINT
   if (ctx) {
     ctx->reply_capture.ReplyWithArray(len);
   }
-  return kMockRedisModule->ReplyWithArray(ctx, len);
+  return kMockValkeyModule->ReplyWithArray(ctx, len);
 }
 
-inline void TestRedisModule_ReplySetArrayLength(RedisModuleCtx *ctx,
-                                                long len) {  // NOLINT
+inline void TestValkeyModule_ReplySetArrayLength(ValkeyModuleCtx *ctx,
+                                                 long len) {  // NOLINT
   if (ctx) {
     ctx->reply_capture.ReplySetArrayLength(len);
   }
-  kMockRedisModule->ReplySetArrayLength(ctx, len);
+  kMockValkeyModule->ReplySetArrayLength(ctx, len);
 }
 
-inline int TestRedisModule_ReplyWithLongLong(RedisModuleCtx *ctx,
-                                             long long ll) {  // NOLINT
+inline int TestValkeyModule_ReplyWithLongLong(ValkeyModuleCtx *ctx,
+                                              long long ll) {  // NOLINT
   if (ctx) {
     ctx->reply_capture.ReplyWithLongLong(ll);
   }
-  return kMockRedisModule->ReplyWithLongLong(ctx, ll);
+  return kMockValkeyModule->ReplyWithLongLong(ctx, ll);
 }
 
-inline int TestRedisModule_ReplyWithSimpleString(RedisModuleCtx *ctx,
-                                                 const char *msg) {
+inline int TestValkeyModule_ReplyWithSimpleString(ValkeyModuleCtx *ctx,
+                                                  const char *msg) {
   if (ctx) {
     ctx->reply_capture.ReplyWithSimpleString(msg);
   }
-  return kMockRedisModule->ReplyWithSimpleString(ctx, msg);
+  return kMockValkeyModule->ReplyWithSimpleString(ctx, msg);
 }
 
-inline int TestRedisModule_ReplyWithString(RedisModuleCtx *ctx,
-                                           RedisModuleString *msg) {
+inline int TestValkeyModule_ReplyWithString(ValkeyModuleCtx *ctx,
+                                            ValkeyModuleString *msg) {
   if (ctx) {
     ctx->reply_capture.ReplyWithString(msg);
   }
-  return kMockRedisModule->ReplyWithString(ctx, msg);
+  return kMockValkeyModule->ReplyWithString(ctx, msg);
 }
 
-inline int TestRedisModule_ReplyWithDouble(RedisModuleCtx *ctx, double val) {
+inline int TestValkeyModule_ReplyWithDouble(ValkeyModuleCtx *ctx, double val) {
   if (ctx) {
     ctx->reply_capture.ReplyWithDouble(val);
   }
-  return kMockRedisModule->ReplyWithDouble(ctx, val);
+  return kMockValkeyModule->ReplyWithDouble(ctx, val);
 }
 
-inline int TestRedisModule_ReplyWithCString(RedisModuleCtx *ctx,
-                                            const char *str) {
+inline int TestValkeyModule_ReplyWithCString(ValkeyModuleCtx *ctx,
+                                             const char *str) {
   if (ctx) {
     ctx->reply_capture.ReplyWithCString(str);
   }
-  return kMockRedisModule->ReplyWithCString(ctx, str);
+  return kMockValkeyModule->ReplyWithCString(ctx, str);
 }
 
-inline int TestRedisModule_ReplyWithStringBuffer(RedisModuleCtx *ctx,
-                                                 const char *buf, size_t len) {
+inline int TestValkeyModule_ReplyWithStringBuffer(ValkeyModuleCtx *ctx,
+                                                  const char *buf, size_t len) {
   if (ctx) {
     ctx->reply_capture.ReplyWithStringBuffer(buf, len);
   }
-  return kMockRedisModule->ReplyWithStringBuffer(ctx, buf, len);
+  return kMockValkeyModule->ReplyWithStringBuffer(ctx, buf, len);
 }
 
-inline int TestRedisModule_RegisterInfoFunc(RedisModuleCtx *ctx,
-                                            RedisModuleInfoFunc cb) {
-  return kMockRedisModule->RegisterInfoFunc(ctx, cb);
+inline int TestValkeyModule_RegisterInfoFunc(ValkeyModuleCtx *ctx,
+                                             ValkeyModuleInfoFunc cb) {
+  return kMockValkeyModule->RegisterInfoFunc(ctx, cb);
 }
 
-inline int TestRedisModule_Init(RedisModuleCtx *ctx, const char *name, int ver,
-                                int apiver) {
-  return kMockRedisModule->Init(ctx, name, ver, apiver);
+inline int TestValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name,
+                                 int ver, int apiver) {
+  return kMockValkeyModule->Init(ctx, name, ver, apiver);
 }
 
-inline RedisModuleType *TestRedisModule_CreateDataType(
-    RedisModuleCtx *ctx, const char *name, int encver,
-    RedisModuleTypeMethods *typemethods) {
-  return kMockRedisModule->CreateDataType(ctx, name, encver, typemethods);
+inline ValkeyModuleType *TestValkeyModule_CreateDataType(
+    ValkeyModuleCtx *ctx, const char *name, int encver,
+    ValkeyModuleTypeMethods *typemethods) {
+  return kMockValkeyModule->CreateDataType(ctx, name, encver, typemethods);
 }
 
-inline int TestRedisModule_ReplyWithError(RedisModuleCtx *ctx,
-                                          const char *err) {
+inline int TestValkeyModule_ReplyWithError(ValkeyModuleCtx *ctx,
+                                           const char *err) {
   if (ctx) {
     ctx->reply_capture.ReplyWithError(err);
   }
-  return kMockRedisModule->ReplyWithError(ctx, err);
+  return kMockValkeyModule->ReplyWithError(ctx, err);
 }
 
-inline int TestRedisModule_SubscribeToServerEvent(RedisModuleCtx *ctx,
-                                                  RedisModuleEvent event,
-                                                  RedisModuleEventCallback cb) {
-  return kMockRedisModule->SubscribeToServerEvent(ctx, event, cb);
+inline int TestValkeyModule_SubscribeToServerEvent(
+    ValkeyModuleCtx *ctx, ValkeyModuleEvent event,
+    ValkeyModuleEventCallback cb) {
+  return kMockValkeyModule->SubscribeToServerEvent(ctx, event, cb);
 }
 
-inline int TestRedisModule_Scan(RedisModuleCtx *ctx,
-                                RedisModuleScanCursor *cursor,
-                                RedisModuleScanCB fn, void *privdata) {
-  return kMockRedisModule->Scan(ctx, cursor, fn, privdata);
+inline int TestValkeyModule_Scan(ValkeyModuleCtx *ctx,
+                                 ValkeyModuleScanCursor *cursor,
+                                 ValkeyModuleScanCB fn, void *privdata) {
+  return kMockValkeyModule->Scan(ctx, cursor, fn, privdata);
 }
 
-inline int TestRedisModule_ReplicateVerbatim(RedisModuleCtx *ctx) {
-  return kMockRedisModule->ReplicateVerbatim(ctx);
+inline int TestValkeyModule_ReplicateVerbatim(ValkeyModuleCtx *ctx) {
+  return kMockValkeyModule->ReplicateVerbatim(ctx);
 }
 
-inline RedisModuleType *TestRedisModule_ModuleTypeGetTypeDefaultImpl(
-    RedisModuleKey *key) {
+inline ValkeyModuleType *TestValkeyModule_ModuleTypeGetTypeDefaultImpl(
+    ValkeyModuleKey *key) {
   if (key->ctx->registered_keys.contains(key->key)) {
     return key->ctx->registered_keys[key->key].module_type;
   } else {
@@ -878,29 +899,30 @@ inline RedisModuleType *TestRedisModule_ModuleTypeGetTypeDefaultImpl(
   return key->ctx->registered_keys[key->key].module_type;
 }
 
-inline RedisModuleType *TestRedisModule_ModuleTypeGetType(RedisModuleKey *key) {
-  return kMockRedisModule->ModuleTypeGetType(key);
+inline ValkeyModuleType *TestValkeyModule_ModuleTypeGetType(
+    ValkeyModuleKey *key) {
+  return kMockValkeyModule->ModuleTypeGetType(key);
 }
 
-inline RedisModuleCtx *TestRedisModule_GetDetachedThreadSafeContext(
-    RedisModuleCtx *ctx) {
-  return kMockRedisModule->GetDetachedThreadSafeContext(ctx);
+inline ValkeyModuleCtx *TestValkeyModule_GetDetachedThreadSafeContext(
+    ValkeyModuleCtx *ctx) {
+  return kMockValkeyModule->GetDetachedThreadSafeContext(ctx);
 }
 
-inline void TestRedisModule_FreeThreadSafeContext(RedisModuleCtx *ctx) {
-  return kMockRedisModule->FreeThreadSafeContext(ctx);
+inline void TestValkeyModule_FreeThreadSafeContext(ValkeyModuleCtx *ctx) {
+  return kMockValkeyModule->FreeThreadSafeContext(ctx);
 }
 
-inline int TestRedisModule_SelectDb(RedisModuleCtx *ctx, int newid) {
-  return kMockRedisModule->SelectDb(ctx, newid);
+inline int TestValkeyModule_SelectDb(ValkeyModuleCtx *ctx, int newid) {
+  return kMockValkeyModule->SelectDb(ctx, newid);
 }
 
-inline int TestRedisModule_GetSelectedDb(RedisModuleCtx *ctx) {
-  return kMockRedisModule->GetSelectedDb(ctx);
+inline int TestValkeyModule_GetSelectedDb(ValkeyModuleCtx *ctx) {
+  return kMockValkeyModule->GetSelectedDb(ctx);
 }
 
-inline void *TestRedisModule_ModuleTypeGetValueDefaultImpl(
-    RedisModuleKey *key) {
+inline void *TestValkeyModule_ModuleTypeGetValueDefaultImpl(
+    ValkeyModuleKey *key) {
   if (key->ctx->registered_keys.contains(key->key)) {
     return key->ctx->registered_keys[key->key].data;
   } else {
@@ -908,83 +930,110 @@ inline void *TestRedisModule_ModuleTypeGetValueDefaultImpl(
   }
 }
 
-inline void *TestRedisModule_ModuleTypeGetValue(RedisModuleKey *key) {
-  return kMockRedisModule->ModuleTypeGetValue(key);
+inline void *TestValkeyModule_ModuleTypeGetValue(ValkeyModuleKey *key) {
+  return kMockValkeyModule->ModuleTypeGetValue(key);
 }
 
-inline unsigned long long TestRedisModule_DbSize(  // NOLINT
-    RedisModuleCtx *ctx) {
-  return kMockRedisModule->DbSize(ctx);
+inline unsigned long long TestValkeyModule_DbSize(  // NOLINT
+    ValkeyModuleCtx *ctx) {
+  return kMockValkeyModule->DbSize(ctx);
 }
 
-inline int TestRedisModule_InfoAddSection(RedisModuleInfoCtx *ctx,
-                                          const char *str) {
+inline int TestValkeyModule_InfoAddSection(ValkeyModuleInfoCtx *ctx,
+                                           const char *str) {
   if (ctx) {
     ctx->info_capture.InfoAddSection(str);
   }
-  return kMockRedisModule->InfoAddSection(ctx, str);
+  return kMockValkeyModule->InfoAddSection(ctx, str);
 }
 
-inline int TestRedisModule_InfoAddFieldLongLong(RedisModuleInfoCtx *ctx,
-                                                const char *str,
-                                                long long field) {  // NOLINT
+inline int TestValkeyModule_InfoAddFieldLongLong(ValkeyModuleInfoCtx *ctx,
+                                                 const char *str,
+                                                 long long field) {  // NOLINT
   if (ctx) {
     ctx->info_capture.InfoAddFieldLongLong(str, field, ctx->in_dict_field);
   }
-  return kMockRedisModule->InfoAddFieldLongLong(ctx, str, field);
+  return kMockValkeyModule->InfoAddFieldLongLong(ctx, str, field);
 }
 
-inline int TestRedisModule_InfoAddFieldCString(RedisModuleInfoCtx *ctx,
-                                               const char *str,
-                                               const char *field) {
+inline int TestValkeyModule_InfoAddFieldCString(ValkeyModuleInfoCtx *ctx,
+                                                const char *str,
+                                                const char *field) {
   if (ctx) {
     ctx->info_capture.InfoAddFieldCString(str, field, ctx->in_dict_field);
   }
-  return kMockRedisModule->InfoAddFieldCString(ctx, str, field);
+  return kMockValkeyModule->InfoAddFieldCString(ctx, str, field);
 }
 
-inline int TestRedisModule_InfoBeginDictField(RedisModuleInfoCtx *ctx,
-                                              const char *str) {
+inline int TestValkeyModule_InfoAddFieldDouble(ValkeyModuleInfoCtx *ctx,
+                                          const char *str,
+                                          double field) {
+  if (ctx) {
+    ctx->info_capture.InfoAddFieldDouble(str, field, ctx->in_dict_field);
+  }
+  return kMockValkeyModule->InfoAddFieldDouble(ctx, str, field);
+}
+
+inline int TestValkeyModule_InfoBeginDictField(ValkeyModuleInfoCtx *ctx,
+                                               const char *str) {
   if (ctx) {
     ctx->info_capture.InfoBeginDictField(str, ctx->in_dict_field);
     ctx->in_dict_field = 1;
   }
-  return kMockRedisModule->InfoBeginDictField(ctx, str);
+  return kMockValkeyModule->InfoBeginDictField(ctx, str);
 }
 
-inline int TestRedisModule_InfoEndDictField(RedisModuleInfoCtx *ctx) {
+inline int TestValkeyModule_InfoEndDictField(ValkeyModuleInfoCtx *ctx) {
   if (ctx) {
     ctx->info_capture.InfoEndDictField();
   }
   ctx->in_dict_field = 0;
-  return kMockRedisModule->InfoEndDictField(ctx);
+  return kMockValkeyModule->InfoEndDictField(ctx);
 }
 
-inline int TestRedisModule_RegisterStringConfig(
-    RedisModuleCtx *ctx, const char *name, const char *default_val,
-    unsigned int flags, RedisModuleConfigGetStringFunc getfn,
-    RedisModuleConfigSetStringFunc setfn, RedisModuleConfigApplyFunc applyfn,
+inline int TestValkeyModule_RegisterStringConfig(
+    ValkeyModuleCtx *ctx, const char *name, const char *default_val,
+    unsigned int flags, ValkeyModuleConfigGetStringFunc getfn,
+    ValkeyModuleConfigSetStringFunc setfn, ValkeyModuleConfigApplyFunc applyfn,
     void *privdata) {
-  return kMockRedisModule->RegisterStringConfig(
+  return kMockValkeyModule->RegisterStringConfig(
       ctx, name, default_val, flags, getfn, setfn, applyfn, privdata);
 }
 
-inline int TestRedisModule_RegisterEnumConfig(
-    RedisModuleCtx *ctx, const char *name, int default_val, unsigned int flags,
+inline int TestValkeyModule_RegisterEnumConfig(
+    ValkeyModuleCtx *ctx, const char *name, int default_val, unsigned int flags,
     const char **enum_values, const int *int_values, int num_enum_vals,
-    RedisModuleConfigGetEnumFunc getfn, RedisModuleConfigSetEnumFunc setfn,
-    RedisModuleConfigApplyFunc applyfn, void *privdata) {
-  return kMockRedisModule->RegisterEnumConfig(
+    ValkeyModuleConfigGetEnumFunc getfn, ValkeyModuleConfigSetEnumFunc setfn,
+    ValkeyModuleConfigApplyFunc applyfn, void *privdata) {
+  return kMockValkeyModule->RegisterEnumConfig(
       ctx, name, default_val, flags, enum_values, int_values, num_enum_vals,
       getfn, setfn, applyfn, privdata);
 }
 
-inline int TestRedisModule_LoadConfigs(RedisModuleCtx *ctx) {
-  return kMockRedisModule->LoadConfigs(ctx);
+inline int TestValkeyModule_RegisterNumericConfig(
+    ValkeyModuleCtx *ctx, const char *name, long long default_val,
+    unsigned int flags, long long min, long long max,
+    ValkeyModuleConfigGetNumericFunc getfn,
+    ValkeyModuleConfigSetNumericFunc setfn, ValkeyModuleConfigApplyFunc applyfn,
+    void *privdata) {
+  return kMockValkeyModule->RegisterNumericConfig(
+      ctx, name, default_val, flags, min, max, getfn, setfn, applyfn, privdata);
 }
 
-inline int TestRedisModule_StringCompare(RedisModuleString *a,
-                                         RedisModuleString *b) {
+inline int TestValkeyModule_RegisterBoolConfig(
+    ValkeyModuleCtx *ctx, const char *name, int default_val, unsigned int flags,
+    ValkeyModuleConfigGetBoolFunc getfn, ValkeyModuleConfigSetBoolFunc setfn,
+    ValkeyModuleConfigApplyFunc applyfn, void *privdata) {
+  return kMockValkeyModule->RegisterBoolConfig(ctx, name, default_val, flags,
+                                               getfn, setfn, applyfn, privdata);
+}
+
+inline int TestValkeyModule_LoadConfigs(ValkeyModuleCtx *ctx) {
+  return kMockValkeyModule->LoadConfigs(ctx);
+}
+
+inline int TestValkeyModule_StringCompare(ValkeyModuleString *a,
+                                          ValkeyModuleString *b) {
   if (a == nullptr && b == nullptr) {
     return 0;
   }
@@ -997,397 +1046,569 @@ inline int TestRedisModule_StringCompare(RedisModuleString *a,
   return strcmp(a->data.c_str(), b->data.c_str());
 }
 
-inline int TestRedisModule_SetConnectionProperties(
-    const RedisModuleConnectionProperty *properties, int length) {
-  return kMockRedisModule->SetConnectionProperties(properties, length);
+inline int TestValkeyModule_SetConnectionProperties(
+    const ValkeyModuleConnectionProperty *properties, int length) {
+  return kMockValkeyModule->SetConnectionProperties(properties, length);
 }
 
-inline int TestRedisModule_SetShardId(const char *shardId, int len) {
-  return kMockRedisModule->SetShardId(shardId, len);
+inline int TestValkeyModule_SetShardId(const char *shardId, int len) {
+  return kMockValkeyModule->SetShardId(shardId, len);
 }
 
-inline int TestRedisModule_GetClusterInfo(void *cli) {
-  return kMockRedisModule->GetClusterInfo(cli);
+inline int TestValkeyModule_GetClusterInfo(void *cli) {
+  return kMockValkeyModule->GetClusterInfo(cli);
 }
 
-inline const char *TestRedisModule_GetMyShardID() {
-  return kMockRedisModule->GetMyShardID();
+inline const char *TestValkeyModule_GetMyShardID() {
+  return kMockValkeyModule->GetMyShardID();
 }
 
-inline int TestRedisModule_GetContextFlags(RedisModuleCtx *ctx) {
-  return kMockRedisModule->GetContextFlags(ctx);
+inline int TestValkeyModule_GetContextFlags(ValkeyModuleCtx *ctx) {
+  return kMockValkeyModule->GetContextFlags(ctx);
 }
 
-inline uint64_t TestRedisModule_LoadUnsigned(RedisModuleIO *io) {
-  return kMockRedisModule->LoadUnsigned(io);
+inline uint64_t TestValkeyModule_LoadUnsigned(ValkeyModuleIO *io) {
+  return kMockValkeyModule->LoadUnsigned(io);
 }
 
-inline int64_t TestRedisModule_LoadSigned(RedisModuleIO *io) {
-  return kMockRedisModule->LoadSigned(io);
+inline int64_t TestValkeyModule_LoadSigned(ValkeyModuleIO *io) {
+  return kMockValkeyModule->LoadSigned(io);
 }
 
-inline double TestRedisModule_LoadDouble(RedisModuleIO *io) {
-  return kMockRedisModule->LoadDouble(io);
+inline double TestValkeyModule_LoadDouble(ValkeyModuleIO *io) {
+  return kMockValkeyModule->LoadDouble(io);
 }
 
-inline char *TestRedisModule_LoadStringBuffer(RedisModuleIO *io,
-                                              size_t *lenptr) {
-  return kMockRedisModule->LoadStringBuffer(io, lenptr);
+inline char *TestValkeyModule_LoadStringBuffer(ValkeyModuleIO *io,
+                                               size_t *lenptr) {
+  return kMockValkeyModule->LoadStringBuffer(io, lenptr);
 }
 
-inline RedisModuleString *TestRedisModule_LoadString(RedisModuleIO *io) {
-  return kMockRedisModule->LoadString(io);
+inline ValkeyModuleString *TestValkeyModule_LoadString(ValkeyModuleIO *io) {
+  return kMockValkeyModule->LoadString(io);
 }
 
-inline void TestRedisModule_SaveUnsigned(RedisModuleIO *io, uint64_t val) {
-  return kMockRedisModule->SaveUnsigned(io, val);
+inline void TestValkeyModule_SaveUnsigned(ValkeyModuleIO *io, uint64_t val) {
+  return kMockValkeyModule->SaveUnsigned(io, val);
 }
 
-inline void TestRedisModule_SaveSigned(RedisModuleIO *io, int64_t val) {
-  return kMockRedisModule->SaveSigned(io, val);
+inline void TestValkeyModule_SaveSigned(ValkeyModuleIO *io, int64_t val) {
+  return kMockValkeyModule->SaveSigned(io, val);
 }
 
-inline void TestRedisModule_SaveDouble(RedisModuleIO *io, double val) {
-  return kMockRedisModule->SaveDouble(io, val);
+inline void TestValkeyModule_SaveDouble(ValkeyModuleIO *io, double val) {
+  return kMockValkeyModule->SaveDouble(io, val);
 }
 
-inline void TestRedisModule_SaveStringBuffer(RedisModuleIO *io, const char *str,
-                                             size_t len) {
-  return kMockRedisModule->SaveStringBuffer(io, str, len);
+inline void TestValkeyModule_SaveStringBuffer(ValkeyModuleIO *io,
+                                              const char *str, size_t len) {
+  return kMockValkeyModule->SaveStringBuffer(io, str, len);
 }
 
-inline int TestRedisModule_IsIOError(RedisModuleIO *io) {
-  return kMockRedisModule->IsIOError(io);
+inline int TestValkeyModule_IsIOError(ValkeyModuleIO *io) {
+  return kMockValkeyModule->IsIOError(io);
 }
 
-inline int TestRedisModule_ReplicationSetMasterCrossCluster(RedisModuleCtx *ctx,
-                                                            const char *ip,
-                                                            int port) {
-  return kMockRedisModule->ReplicationSetMasterCrossCluster(ctx, ip, port);
+inline int TestValkeyModule_ReplicationSetMasterCrossCluster(
+    ValkeyModuleCtx *ctx, const char *ip, int port) {
+  return kMockValkeyModule->ReplicationSetMasterCrossCluster(ctx, ip, port);
 }
 
-inline int TestRedisModule_ReplicationUnsetMasterCrossCluster(
-    RedisModuleCtx *ctx) {
-  return kMockRedisModule->ReplicationUnsetMasterCrossCluster(ctx);
+inline int TestValkeyModule_ReplicationUnsetMasterCrossCluster(
+    ValkeyModuleCtx *ctx) {
+  return kMockValkeyModule->ReplicationUnsetMasterCrossCluster(ctx);
 }
 
-inline const char *TestRedisModule_GetMyClusterID() {
-  return kMockRedisModule->GetMyClusterID();
+inline const char *TestValkeyModule_GetMyClusterID() {
+  return kMockValkeyModule->GetMyClusterID();
 }
 
-inline int TestRedisModule_GetClusterNodeInfo(RedisModuleCtx *ctx,
-                                              const char *id, char *ip,
-                                              char *master_id, int *port,
-                                              int *flags) {
-  return kMockRedisModule->GetClusterNodeInfo(ctx, id, ip, master_id, port,
-                                              flags);
+inline int TestValkeyModule_GetClusterNodeInfo(ValkeyModuleCtx *ctx,
+                                               const char *id, char *ip,
+                                               char *master_id, int *port,
+                                               int *flags) {
+  return kMockValkeyModule->GetClusterNodeInfo(ctx, id, ip, master_id, port,
+                                               flags);
 }
 
-inline int TestRedisModule_ReplicationSetSecondaryCluster(
-    RedisModuleCtx *ctx, bool is_secondary_cluster) {
-  return kMockRedisModule->ReplicationSetSecondaryCluster(ctx,
-                                                          is_secondary_cluster);
+inline int TestValkeyModule_ReplicationSetSecondaryCluster(
+    ValkeyModuleCtx *ctx, bool is_secondary_cluster) {
+  return kMockValkeyModule->ReplicationSetSecondaryCluster(
+      ctx, is_secondary_cluster);
 }
 
-inline RedisModuleCrossClusterReplicasList *
-TestRedisModule_GetCrossClusterReplicasList() {
-  return kMockRedisModule->GetCrossClusterReplicasList();
+inline ValkeyModuleCrossClusterReplicasList *
+TestValkeyModule_GetCrossClusterReplicasList() {
+  return kMockValkeyModule->GetCrossClusterReplicasList();
 }
 
-inline void TestRedisModule_FreeCrossClusterReplicasList(
-    RedisModuleCrossClusterReplicasList *list) {
-  return kMockRedisModule->FreeCrossClusterReplicasList(list);
+inline void TestValkeyModule_FreeCrossClusterReplicasList(
+    ValkeyModuleCrossClusterReplicasList *list) {
+  return kMockValkeyModule->FreeCrossClusterReplicasList(list);
 }
 
-inline void *TestRedisModule_Alloc(size_t size) {
-  return kMockRedisModule->Alloc(size);
+inline void *TestValkeyModule_Alloc(size_t size) {
+  return kMockValkeyModule->Alloc(size);
 }
 
-inline void TestRedisModule_Free(void *ptr) {
-  return kMockRedisModule->Free(ptr);
+inline void TestValkeyModule_Free(void *ptr) {
+  return kMockValkeyModule->Free(ptr);
 }
 
-inline void *TestRedisModule_Realloc(void *ptr, size_t size) {
-  return kMockRedisModule->Realloc(ptr, size);
+inline void *TestValkeyModule_Realloc(void *ptr, size_t size) {
+  return kMockValkeyModule->Realloc(ptr, size);
 }
 
-inline void *TestRedisModule_Calloc(size_t nmemb, size_t size) {
-  return kMockRedisModule->Calloc(nmemb, size);
+inline void *TestValkeyModule_Calloc(size_t nmemb, size_t size) {
+  return kMockValkeyModule->Calloc(nmemb, size);
 }
 
-inline size_t TestRedisModule_MallocUsableSize(void *ptr) {
-  return kMockRedisModule->MallocUsableSize(ptr);
+inline size_t TestValkeyModule_MallocUsableSize(void *ptr) {
+  return kMockValkeyModule->MallocUsableSize(ptr);
 }
 
-inline size_t TestRedisModule_GetClusterSize() {
-  return kMockRedisModule->GetClusterSize();
+inline size_t TestValkeyModule_GetClusterSize() {
+  return kMockValkeyModule->GetClusterSize();
 }
 
-inline int TestRedisModule_WrongArity(RedisModuleCtx *ctx) {
-  return kMockRedisModule->WrongArity(ctx);
+inline int TestValkeyModule_WrongArity(ValkeyModuleCtx *ctx) {
+  return kMockValkeyModule->WrongArity(ctx);
 }
 
-inline int TestRedisModule_Fork(RedisModuleForkDoneHandler cb,
-                                void *user_data) {
-  return kMockRedisModule->Fork(cb, user_data);
+inline int TestValkeyModule_Fork(ValkeyModuleForkDoneHandler cb,
+                                 void *user_data) {
+  return kMockValkeyModule->Fork(cb, user_data);
 }
 
-inline int TestRedisModule_ExitFromChild(int retcode) {
-  return kMockRedisModule->ExitFromChild(retcode);
+inline int TestValkeyModule_ExitFromChild(int retcode) {
+  return kMockValkeyModule->ExitFromChild(retcode);
 }
 
-inline RedisModuleRdbStream *TestRedisModule_RdbStreamCreateFromRioHandler(
-    const RedisModuleRIOHandler *handler) {
-  return kMockRedisModule->RdbStreamCreateFromRioHandler(handler);
+inline ValkeyModuleRdbStream *TestValkeyModule_RdbStreamCreateFromRioHandler(
+    const ValkeyModuleRIOHandler *handler) {
+  return kMockValkeyModule->RdbStreamCreateFromRioHandler(handler);
 }
 
-inline void TestRedisModule_RdbStreamFree(RedisModuleRdbStream *stream) {
-  return kMockRedisModule->RdbStreamFree(stream);
+inline void TestValkeyModule_RdbStreamFree(ValkeyModuleRdbStream *stream) {
+  return kMockValkeyModule->RdbStreamFree(stream);
 }
 
-inline int TestRedisModule_RdbSave(RedisModuleCtx *ctx,
-                                   RedisModuleRdbStream *stream, int flags) {
-  return kMockRedisModule->RdbSave(ctx, stream, flags);
+inline int TestValkeyModule_RdbSave(ValkeyModuleCtx *ctx,
+                                    ValkeyModuleRdbStream *stream, int flags) {
+  return kMockValkeyModule->RdbSave(ctx, stream, flags);
 }
 
-inline int TestRedisModule_RdbLoad(RedisModuleCtx *ctx,
-                                   RedisModuleRdbStream *stream, int flags) {
-  return kMockRedisModule->RdbLoad(ctx, stream, flags);
+inline int TestValkeyModule_RdbLoad(ValkeyModuleCtx *ctx,
+                                    ValkeyModuleRdbStream *stream, int flags) {
+  return kMockValkeyModule->RdbLoad(ctx, stream, flags);
 }
 
-struct RedisModuleCallReply {
+/* The same order as the reply types in valkey_module.h */
+using CallReplyString = std::string;
+using CallReplyInteger = long long;
+using CallReplyArray = std::vector<std::unique_ptr<ValkeyModuleCallReply>>;
+using CallReplyNull = void *;
+using CallReplyMap =
+    std::vector<std::pair<std::unique_ptr<ValkeyModuleCallReply>,
+                          std::unique_ptr<ValkeyModuleCallReply>>>;
+using CallReplyDouble = double;
+
+using CallReplyVariant =
+    std::variant<CallReplyString, CallReplyInteger, CallReplyArray,
+                 CallReplyNull, CallReplyMap, CallReplyDouble>;
+
+struct ValkeyModuleCallReply {
+  int type = VALKEYMODULE_REPLY_UNKNOWN;
+  CallReplyVariant val;
   std::string msg;
 };
+std::unique_ptr<ValkeyModuleCallReply> default_reply VALKEYMODULE_ATTR;
 
-inline RedisModuleCallReply *TestRedisModule_Call(RedisModuleCtx *ctx,
-                                                  const char *cmdname,
-                                                  const char *fmt, ...) {
+inline std::unique_ptr<ValkeyModuleCallReply> CreateValkeyModuleCallReply(
+    CallReplyVariant value) {
+  std::unique_ptr<ValkeyModuleCallReply> reply{new ValkeyModuleCallReply{
+      .type = std::visit(
+          [&](auto &value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, CallReplyString>) {
+              return VALKEYMODULE_REPLY_STRING;
+            } else if constexpr (std::is_same_v<T, CallReplyInteger>) {
+              return VALKEYMODULE_REPLY_INTEGER;
+            } else if constexpr (std::is_same_v<T, CallReplyArray>) {
+              return VALKEYMODULE_REPLY_ARRAY;
+            } else if constexpr (std::is_same_v<T, CallReplyNull>) {
+              return VALKEYMODULE_REPLY_NULL;
+            } else if constexpr (std::is_same_v<T, CallReplyMap>) {
+              return VALKEYMODULE_REPLY_MAP;
+            } else if constexpr (std::is_same_v<T, CallReplyDouble>) {
+              return VALKEYMODULE_REPLY_DOUBLE;
+            }
+            return VALKEYMODULE_REPLY_UNKNOWN;
+          },
+          value),
+      .val = std::move(value)}};
+  return reply;
+}
+
+inline void AddElementToCallReplyMap(CallReplyMap &map, CallReplyVariant key,
+                                     CallReplyVariant val) {
+  std::unique_ptr<ValkeyModuleCallReply> k =
+      CreateValkeyModuleCallReply(std::move(key));
+  std::unique_ptr<ValkeyModuleCallReply> v =
+      CreateValkeyModuleCallReply(std::move(val));
+  map.emplace_back(std::pair<std::unique_ptr<ValkeyModuleCallReply>,
+                             std::unique_ptr<ValkeyModuleCallReply>>(
+      std::move(k), std::move(v)));
+}
+
+inline ValkeyModuleCallReply *TestValkeyModule_Call(ValkeyModuleCtx *ctx,
+                                                    const char *cmdname,
+                                                    const char *fmt, ...) {
   va_list args;
   va_start(args, fmt);
   std::string format(fmt);
+  if (format == "c") {
+    const char *arg1 = va_arg(args, const char *);
+    auto ret = kMockValkeyModule->Call(ctx, cmdname, fmt, arg1);
+    return ret;
+  }
   if (format == "cc") {
     const char *arg1 = va_arg(args, const char *);
     const char *arg2 = va_arg(args, const char *);
-    auto ret = kMockRedisModule->Call(ctx, cmdname, fmt, arg1, arg2);
+    auto ret = kMockValkeyModule->Call(ctx, cmdname, fmt, arg1, arg2);
+    return ret;
+  }
+  if (format == "cs3") {
+    const char *arg1 = va_arg(args, const char *);
+    std::string sub_command(arg1);
+    const ValkeyModuleString *arg2 = va_arg(args, ValkeyModuleString *);
+    std::string maybe_username(arg2->data);
+    if (sub_command == "GETUSER" && maybe_username == "default") {
+      CallReplyMap reply_map;
+      AddElementToCallReplyMap(reply_map, "commands", "+@all");
+      AddElementToCallReplyMap(reply_map, "keys", "~*");
+      default_reply = CreateValkeyModuleCallReply(std::move(reply_map));
+      return default_reply.get();
+    }
+    auto ret =
+        kMockValkeyModule->Call(ctx, cmdname, fmt, arg1, arg2->data.c_str());
     return ret;
   }
   CHECK(false && "Unsupported format specifier");
   return nullptr;
 }
 
-inline RedisModuleCallReply *TestRedisModule_CallReplyArrayElement(
-    RedisModuleCallReply *reply, size_t idx) {
-  return kMockRedisModule->CallReplyArrayElement(reply, idx);
+inline ValkeyModuleCallReply *TestValkeyModule_CallReplyArrayElement(
+    ValkeyModuleCallReply *reply, size_t idx) {
+  return kMockValkeyModule->CallReplyArrayElement(reply, idx);
+}
+inline ValkeyModuleCallReply *TestValkeyModule_CallReplyArrayElementImpl(
+    ValkeyModuleCallReply *reply, size_t idx) {
+  if (reply == nullptr || reply->type != VALKEYMODULE_REPLY_ARRAY) {
+    return nullptr;
+  }
+  CHECK(std::holds_alternative<CallReplyArray>(reply->val));
+  auto &list = std::get<CallReplyArray>(reply->val);
+  if (list.size() <= idx) {
+    return nullptr;
+  }
+  return list[idx].get();
 }
 
-inline const char *TestRedisModule_CallReplyStringPtr(
-    RedisModuleCallReply *reply, size_t *len) {
-  return kMockRedisModule->CallReplyStringPtr(reply, len);
+inline int TestValkeyModule_CallReplyMapElement(ValkeyModuleCallReply *reply,
+                                                size_t idx,
+                                                ValkeyModuleCallReply **key,
+                                                ValkeyModuleCallReply **val) {
+  return kMockValkeyModule->CallReplyMapElement(reply, idx, key, val);
+}
+inline int TestValkeyModule_CallReplyMapElementImpl(
+    ValkeyModuleCallReply *reply, size_t idx, ValkeyModuleCallReply **key,
+    ValkeyModuleCallReply **val) {
+  if (reply == nullptr || reply->type != VALKEYMODULE_REPLY_MAP) {
+    return VALKEYMODULE_ERR;
+  }
+  CHECK(std::holds_alternative<CallReplyMap>(reply->val));
+  auto &map = std::get<CallReplyMap>(reply->val);
+  if (map.size() <= idx) {
+    return VALKEYMODULE_ERR;
+  }
+
+  if (key != nullptr) {
+    *key = map[idx].first.get();
+  }
+  if (val != nullptr) {
+    *val = map[idx].second.get();
+  }
+  return VALKEYMODULE_OK;
 }
 
-inline void TestRedisModule_FreeCallReply(RedisModuleCallReply *reply) {
-  return kMockRedisModule->FreeCallReply(reply);
+inline const char *TestValkeyModule_CallReplyStringPtr(
+    ValkeyModuleCallReply *reply, size_t *len) {
+  return kMockValkeyModule->CallReplyStringPtr(reply, len);
+}
+inline const char *TestValkeyModule_CallReplyStringPtrImpl(
+    ValkeyModuleCallReply *reply, size_t *len) {
+  if (reply == nullptr || reply->type != VALKEYMODULE_REPLY_STRING) {
+    return nullptr;
+  }
+  CHECK(std::holds_alternative<std::string>(reply->val));
+  auto &s = std::get<std::string>(reply->val);
+  *len = s.size();
+  return s.c_str();
 }
 
-inline void TestRedisModule_RegisterClusterMessageReceiver(
-    RedisModuleCtx *ctx, uint8_t type,
-    RedisModuleClusterMessageReceiver callback) {
-  return kMockRedisModule->RegisterClusterMessageReceiver(ctx, type, callback);
+inline void TestValkeyModule_FreeCallReply(ValkeyModuleCallReply *reply) {
+  return kMockValkeyModule->FreeCallReply(reply);
 }
 
-inline int TestRedisModule_SendClusterMessage(RedisModuleCtx *ctx,
-                                              const char *target_id,
-                                              uint8_t type, const char *msg,
-                                              uint32_t len) {
-  return kMockRedisModule->SendClusterMessage(ctx, target_id, type, msg, len);
+inline void TestValkeyModule_RegisterClusterMessageReceiver(
+    ValkeyModuleCtx *ctx, uint8_t type,
+    ValkeyModuleClusterMessageReceiver callback) {
+  return kMockValkeyModule->RegisterClusterMessageReceiver(ctx, type, callback);
 }
 
-inline char **TestRedisModule_GetClusterNodesList(RedisModuleCtx *ctx,
-                                                  size_t *numnodes) {
-  return kMockRedisModule->GetClusterNodesList(ctx, numnodes);
+inline int TestValkeyModule_SendClusterMessage(ValkeyModuleCtx *ctx,
+                                               const char *target_id,
+                                               uint8_t type, const char *msg,
+                                               uint32_t len) {
+  return kMockValkeyModule->SendClusterMessage(ctx, target_id, type, msg, len);
 }
 
-inline RedisModuleCtx *TestRedisModule_GetContextFromIO(RedisModuleIO *rdb) {
-  return kMockRedisModule->GetContextFromIO(rdb);
+inline char **TestValkeyModule_GetClusterNodesList(ValkeyModuleCtx *ctx,
+                                                   size_t *numnodes) {
+  return kMockValkeyModule->GetClusterNodesList(ctx, numnodes);
 }
 
-inline void TestRedisModule_FreeClusterNodesList(char **ids) {
-  return kMockRedisModule->FreeClusterNodesList(ids);
+inline ValkeyModuleCtx *TestValkeyModule_GetContextFromIO(ValkeyModuleIO *rdb) {
+  return kMockValkeyModule->GetContextFromIO(rdb);
 }
 
-inline int TestRedisModule_CallReplyType(RedisModuleCallReply *reply) {
-  return kMockRedisModule->CallReplyType(reply);
+inline int TestValkeyModule_GetDbIdFromIO(ValkeyModuleIO *rdb) {
+  return kMockValkeyModule->GetDbIdFromIO(rdb);
 }
 
-inline RedisModuleString *TestRedisModule_CreateStringFromCallReply(
-    RedisModuleCallReply *reply) {
-  return kMockRedisModule->CreateStringFromCallReply(reply);
+inline void TestValkeyModule_FreeClusterNodesList(char **ids) {
+  return kMockValkeyModule->FreeClusterNodesList(ids);
 }
 
-// TestRedisModule_Init initializes the module API function table with mock
+inline int TestValkeyModule_CallReplyType(ValkeyModuleCallReply *reply) {
+  return kMockValkeyModule->CallReplyType(reply);
+}
+
+inline size_t TestValkeyModule_CallReplyLength(ValkeyModuleCallReply *reply) {
+  return kMockValkeyModule->CallReplyLength(reply);
+}
+
+inline int TestValkeyModule_CallReplyTypeImpl(ValkeyModuleCallReply *reply) {
+  return reply->type;
+}
+
+inline ValkeyModuleString *TestValkeyModule_CreateStringFromCallReply(
+    ValkeyModuleCallReply *reply) {
+  return kMockValkeyModule->CreateStringFromCallReply(reply);
+}
+
+inline ValkeyModuleString *TestValkeyModule_GetCurrentUserName(
+    ValkeyModuleCtx *ctx) {
+  return kMockValkeyModule->GetCurrentUserName(ctx);
+}
+
+inline ValkeyModuleString *TestValkeyModule_GetCurrentUserNameImpl(
+    ValkeyModuleCtx *ctx) {
+  return new ValkeyModuleString{std::string("default")};
+}
+
+// TestValkeyModule_Init initializes the module API function table with mock
 // implementations of functions to prevent segmentation faults when
-// executing tests and to allow validation of Redis module API calls.
-inline void TestRedisModule_Init() {
-  RedisModule_Log = &TestRedisModule_Log;
-  RedisModule_LogIOError = &TestRedisModule_LogIOError;
-  RedisModule_BlockClientOnAuth = &TestRedisModule_BlockClientOnAuth;
-  RedisModule_BlockedClientMeasureTimeEnd =
-      &TestRedisModule_BlockedClientMeasureTimeEnd;
-  RedisModule_BlockedClientMeasureTimeStart =
-      &TestRedisModule_BlockedClientMeasureTimeStart;
-  RedisModule_BlockClient = &TestRedisModule_BlockClient;
-  RedisModule_UnblockClient = &TestRedisModule_UnblockClient;
-  RedisModule_StringPtrLen = &TestRedisModule_StringPtrLen;
-  RedisModule_CreateStringPrintf = &TestRedisModule_CreateStringPrintf;
-  RedisModule_GetBlockedClientPrivateData =
-      &TestRedisModule_GetBlockedClientPrivateData;
-  RedisModule_AuthenticateClientWithACLUser =
-      &TestRedisModule_AuthenticateClientWithACLUser;
-  RedisModule_ACLAddLogEntryByUserName =
-      &TestRedisModule_ACLAddLogEntryByUserName;
-  RedisModule_CreateString = &TestRedisModule_CreateString;
-  RedisModule_FreeString = &TestRedisModule_FreeString;
-  RedisModule_RetainString = &TestRedisModule_RetainString;
-  RedisModule_EventLoopAdd = &TestRedisModule_EventLoopAdd;
-  RedisModule_EventLoopAddOneShot = &TestRedisModule_EventLoopAddOneShot;
-  RedisModule_EventLoopDel = &TestRedisModule_EventLoopDel;
-  RedisModule_CreateTimer = &TestRedisModule_CreateTimer;
-  RedisModule_StopTimer = &TestRedisModule_StopTimer;
-  RedisModule_SetModuleOptions = &TestRedisModule_SetModuleOptions;
-  RedisModule_GetClientId = &TestRedisModule_GetClientId;
-  RedisModule_GetClientInfoById = &TestRedisModule_GetClientInfoById;
-  RedisModule_SubscribeToKeyspaceEvents =
-      &TestRedisModule_SubscribeToKeyspaceEvents;
-  RedisModule_KeyExists = &TestRedisModule_KeyExists;
-  RedisModule_OpenKey = &TestRedisModule_OpenKey;
-  RedisModule_HashExternalize = &TestRedisModule_HashExternalize;
-  RedisModule_GetApi = &TestRedisModule_GetApi;
-  RedisModule_HashGet = &TestRedisModule_HashGet;
-  RedisModule_HashSet = &TestRedisModule_HashSet;
-  RedisModule_ScanKey = &TestRedisModule_ScanKey;
-  RedisModule_ScanCursorCreate = &TestRedisModule_ScanCursorCreate;
-  RedisModule_ScanCursorDestroy = &TestRedisModule_ScanCursorDestroy;
-  RedisModule_CloseKey = &TestRedisModule_CloseKey;
-  RedisModule_CreateCommand = &TestRedisModule_CreateCommand;
-  RedisModule_KeyType = &TestRedisModule_KeyType;
-  RedisModule_ModuleTypeSetValue = &TestRedisModule_ModuleTypeSetValue;
-  RedisModule_DeleteKey = &TestRedisModule_DeleteKey;
-  RedisModule_RegisterInfoFunc = &TestRedisModule_RegisterInfoFunc;
-  RedisModule_ReplyWithArray = &TestRedisModule_ReplyWithArray;
-  RedisModule_ReplySetArrayLength = &TestRedisModule_ReplySetArrayLength;
-  RedisModule_ReplyWithLongLong = &TestRedisModule_ReplyWithLongLong;
-  RedisModule_ReplyWithSimpleString = &TestRedisModule_ReplyWithSimpleString;
-  RedisModule_ReplyWithString = &TestRedisModule_ReplyWithString;
-  RedisModule_ReplyWithDouble = &TestRedisModule_ReplyWithDouble;
-  RedisModule_ReplyWithCString = &TestRedisModule_ReplyWithCString;
-  RedisModule_ReplyWithStringBuffer = &TestRedisModule_ReplyWithStringBuffer;
-  RedisModule_CreateDataType = &TestRedisModule_CreateDataType;
-  RedisModule_ReplyWithError = &TestRedisModule_ReplyWithError;
-  RedisModule_SubscribeToServerEvent = &TestRedisModule_SubscribeToServerEvent;
-  RedisModule_Scan = &TestRedisModule_Scan;
-  RedisModule_ReplicateVerbatim = &TestRedisModule_ReplicateVerbatim;
-  RedisModule_ModuleTypeGetType = &TestRedisModule_ModuleTypeGetType;
-  RedisModule_GetDetachedThreadSafeContext =
-      &TestRedisModule_GetDetachedThreadSafeContext;
-  RedisModule_FreeThreadSafeContext = &TestRedisModule_FreeThreadSafeContext;
-  RedisModule_SelectDb = &TestRedisModule_SelectDb;
-  RedisModule_GetSelectedDb = &TestRedisModule_GetSelectedDb;
-  RedisModule_ModuleTypeGetValue = &TestRedisModule_ModuleTypeGetValue;
-  RedisModule_DbSize = &TestRedisModule_DbSize;
-  RedisModule_InfoAddSection = &TestRedisModule_InfoAddSection;
-  RedisModule_InfoAddFieldLongLong = &TestRedisModule_InfoAddFieldLongLong;
-  RedisModule_InfoAddFieldCString = &TestRedisModule_InfoAddFieldCString;
-  RedisModule_InfoBeginDictField = &TestRedisModule_InfoBeginDictField;
-  RedisModule_InfoEndDictField = &TestRedisModule_InfoEndDictField;
-  RedisModule_RegisterStringConfig = &TestRedisModule_RegisterStringConfig;
-  RedisModule_RegisterEnumConfig = &TestRedisModule_RegisterEnumConfig;
-  RedisModule_LoadConfigs = &TestRedisModule_LoadConfigs;
-  RedisModule_SetConnectionProperties =
-      &TestRedisModule_SetConnectionProperties;
-  RedisModule_SetShardId = &TestRedisModule_SetShardId;
-  RedisModule_GetClusterInfo = &TestRedisModule_GetClusterInfo;
-  RedisModule_GetMyShardID = &TestRedisModule_GetMyShardID;
-  RedisModule_GetContextFlags = &TestRedisModule_GetContextFlags;
-  RedisModule_LoadUnsigned = &TestRedisModule_LoadUnsigned;
-  RedisModule_LoadSigned = &TestRedisModule_LoadSigned;
-  RedisModule_LoadDouble = &TestRedisModule_LoadDouble;
-  RedisModule_LoadStringBuffer = &TestRedisModule_LoadStringBuffer;
-  RedisModule_LoadString = &TestRedisModule_LoadString;
-  RedisModule_SaveUnsigned = &TestRedisModule_SaveUnsigned;
-  RedisModule_SaveSigned = &TestRedisModule_SaveSigned;
-  RedisModule_SaveDouble = &TestRedisModule_SaveDouble;
-  RedisModule_SaveStringBuffer = &TestRedisModule_SaveStringBuffer;
-  RedisModule_IsIOError = &TestRedisModule_IsIOError;
-  RedisModule_ReplicationSetMasterCrossCluster =
-      &TestRedisModule_ReplicationSetMasterCrossCluster;
-  RedisModule_ReplicationUnsetMasterCrossCluster =
-      &TestRedisModule_ReplicationUnsetMasterCrossCluster;
-  RedisModule_GetMyClusterID = &TestRedisModule_GetMyClusterID;
-  RedisModule_GetClusterNodeInfo = &TestRedisModule_GetClusterNodeInfo;
-  RedisModule_ReplicationSetSecondaryCluster =
-      &TestRedisModule_ReplicationSetSecondaryCluster;
-  RedisModule_GetCrossClusterReplicasList =
-      &TestRedisModule_GetCrossClusterReplicasList;
-  RedisModule_FreeCrossClusterReplicasList =
-      &TestRedisModule_FreeCrossClusterReplicasList;
-  RedisModule_Alloc = &TestRedisModule_Alloc;
-  RedisModule_Free = &TestRedisModule_Free;
-  RedisModule_Realloc = &TestRedisModule_Realloc;
-  RedisModule_Calloc = &TestRedisModule_Calloc;
-  RedisModule_MallocUsableSize = &TestRedisModule_MallocUsableSize;
-  RedisModule_GetClusterSize = &TestRedisModule_GetClusterSize;
-  RedisModule_Call = &TestRedisModule_Call;
-  RedisModule_CallReplyArrayElement = &TestRedisModule_CallReplyArrayElement;
-  RedisModule_CallReplyStringPtr = &TestRedisModule_CallReplyStringPtr;
-  RedisModule_FreeCallReply = &TestRedisModule_FreeCallReply;
-  RedisModule_RegisterClusterMessageReceiver =
-      &TestRedisModule_RegisterClusterMessageReceiver;
-  RedisModule_SendClusterMessage = &TestRedisModule_SendClusterMessage;
-  RedisModule_GetClusterNodesList = &TestRedisModule_GetClusterNodesList;
-  RedisModule_GetContextFromIO = &TestRedisModule_GetContextFromIO;
-  RedisModule_FreeClusterNodesList = &TestRedisModule_FreeClusterNodesList;
-  RedisModule_CallReplyType = &TestRedisModule_CallReplyType;
-  RedisModule_CreateStringFromCallReply =
-      &TestRedisModule_CreateStringFromCallReply;
-  RedisModule_WrongArity = &TestRedisModule_WrongArity;
-  RedisModule_Fork = &TestRedisModule_Fork;
-  RedisModule_ExitFromChild = &TestRedisModule_ExitFromChild;
-  RedisModule_RdbStreamCreateFromRioHandler =
-      &TestRedisModule_RdbStreamCreateFromRioHandler;
-  RedisModule_RdbStreamFree = &TestRedisModule_RdbStreamFree;
-  RedisModule_RdbSave = &TestRedisModule_RdbSave;
-  RedisModule_RdbLoad = &TestRedisModule_RdbLoad;
-  kMockRedisModule = new testing::NiceMock<MockRedisModule>();
+// executing tests and to allow validation of Valkey module API calls.
+inline void TestValkeyModule_Init() {
+  ValkeyModule_Log = &TestValkeyModule_Log;
+  ValkeyModule_LogIOError = &TestValkeyModule_LogIOError;
+  ValkeyModule_BlockClientOnAuth = &TestValkeyModule_BlockClientOnAuth;
+  ValkeyModule_BlockedClientMeasureTimeEnd =
+      &TestValkeyModule_BlockedClientMeasureTimeEnd;
+  ValkeyModule_BlockedClientMeasureTimeStart =
+      &TestValkeyModule_BlockedClientMeasureTimeStart;
+  ValkeyModule_BlockClient = &TestValkeyModule_BlockClient;
+  ValkeyModule_UnblockClient = &TestValkeyModule_UnblockClient;
+  ValkeyModule_StringPtrLen = &TestValkeyModule_StringPtrLen;
+  ValkeyModule_CreateStringPrintf = &TestValkeyModule_CreateStringPrintf;
+  ValkeyModule_GetBlockedClientPrivateData =
+      &TestValkeyModule_GetBlockedClientPrivateData;
+  ValkeyModule_AuthenticateClientWithACLUser =
+      &TestValkeyModule_AuthenticateClientWithACLUser;
+  ValkeyModule_ACLAddLogEntryByUserName =
+      &TestValkeyModule_ACLAddLogEntryByUserName;
+  ValkeyModule_CreateString = &TestValkeyModule_CreateString;
+  ValkeyModule_FreeString = &TestValkeyModule_FreeString;
+  ValkeyModule_RetainString = &TestValkeyModule_RetainString;
+  ValkeyModule_EventLoopAdd = &TestValkeyModule_EventLoopAdd;
+  ValkeyModule_EventLoopAddOneShot = &TestValkeyModule_EventLoopAddOneShot;
+  ValkeyModule_EventLoopDel = &TestValkeyModule_EventLoopDel;
+  ValkeyModule_CreateTimer = &TestValkeyModule_CreateTimer;
+  ValkeyModule_StopTimer = &TestValkeyModule_StopTimer;
+  ValkeyModule_SetModuleOptions = &TestValkeyModule_SetModuleOptions;
+  ValkeyModule_GetClientId = &TestValkeyModule_GetClientId;
+  ValkeyModule_GetClientInfoById = &TestValkeyModule_GetClientInfoById;
+  ValkeyModule_SubscribeToKeyspaceEvents =
+      &TestValkeyModule_SubscribeToKeyspaceEvents;
+  ValkeyModule_KeyExists = &TestValkeyModule_KeyExists;
+  ValkeyModule_OpenKey = &TestValkeyModule_OpenKey;
+  ValkeyModule_HashExternalize = &TestValkeyModule_HashExternalize;
+  ValkeyModule_GetApi = &TestValkeyModule_GetApi;
+  ValkeyModule_HashGet = &TestValkeyModule_HashGet;
+  ValkeyModule_HashSet = &TestValkeyModule_HashSet;
+  ValkeyModule_ScanKey = &TestValkeyModule_ScanKey;
+  ValkeyModule_ScanCursorCreate = &TestValkeyModule_ScanCursorCreate;
+  ValkeyModule_ScanCursorDestroy = &TestValkeyModule_ScanCursorDestroy;
+  ValkeyModule_CloseKey = &TestValkeyModule_CloseKey;
+  ValkeyModule_CreateCommand = &TestValkeyModule_CreateCommand;
+  ValkeyModule_KeyType = &TestValkeyModule_KeyType;
+  ValkeyModule_ModuleTypeSetValue = &TestValkeyModule_ModuleTypeSetValue;
+  ValkeyModule_DeleteKey = &TestValkeyModule_DeleteKey;
+  ValkeyModule_RegisterInfoFunc = &TestValkeyModule_RegisterInfoFunc;
+  ValkeyModule_ReplyWithArray = &TestValkeyModule_ReplyWithArray;
+  ValkeyModule_ReplySetArrayLength = &TestValkeyModule_ReplySetArrayLength;
+  ValkeyModule_ReplyWithLongLong = &TestValkeyModule_ReplyWithLongLong;
+  ValkeyModule_ReplyWithSimpleString = &TestValkeyModule_ReplyWithSimpleString;
+  ValkeyModule_ReplyWithString = &TestValkeyModule_ReplyWithString;
+  ValkeyModule_ReplyWithDouble = &TestValkeyModule_ReplyWithDouble;
+  ValkeyModule_ReplyWithCString = &TestValkeyModule_ReplyWithCString;
+  ValkeyModule_ReplyWithStringBuffer = &TestValkeyModule_ReplyWithStringBuffer;
+  ValkeyModule_CreateDataType = &TestValkeyModule_CreateDataType;
+  ValkeyModule_ReplyWithError = &TestValkeyModule_ReplyWithError;
+  ValkeyModule_SubscribeToServerEvent =
+      &TestValkeyModule_SubscribeToServerEvent;
+  ValkeyModule_Scan = &TestValkeyModule_Scan;
+  ValkeyModule_ReplicateVerbatim = &TestValkeyModule_ReplicateVerbatim;
+  ValkeyModule_ModuleTypeGetType = &TestValkeyModule_ModuleTypeGetType;
+  ValkeyModule_GetDetachedThreadSafeContext =
+      &TestValkeyModule_GetDetachedThreadSafeContext;
+  ValkeyModule_FreeThreadSafeContext = &TestValkeyModule_FreeThreadSafeContext;
+  ValkeyModule_SelectDb = &TestValkeyModule_SelectDb;
+  ValkeyModule_GetSelectedDb = &TestValkeyModule_GetSelectedDb;
+  ValkeyModule_ModuleTypeGetValue = &TestValkeyModule_ModuleTypeGetValue;
+  ValkeyModule_DbSize = &TestValkeyModule_DbSize;
+  ValkeyModule_InfoAddSection = &TestValkeyModule_InfoAddSection;
+  ValkeyModule_InfoAddFieldLongLong = &TestValkeyModule_InfoAddFieldLongLong;
+  ValkeyModule_InfoAddFieldCString = &TestValkeyModule_InfoAddFieldCString;
+  ValkeyModule_InfoAddFieldDouble = &TestValkeyModule_InfoAddFieldDouble;
+  ValkeyModule_InfoBeginDictField = &TestValkeyModule_InfoBeginDictField;
+  ValkeyModule_InfoEndDictField = &TestValkeyModule_InfoEndDictField;
+  ValkeyModule_RegisterStringConfig = &TestValkeyModule_RegisterStringConfig;
+  ValkeyModule_RegisterEnumConfig = &TestValkeyModule_RegisterEnumConfig;
+  ValkeyModule_LoadConfigs = &TestValkeyModule_LoadConfigs;
+  ValkeyModule_SetConnectionProperties =
+      &TestValkeyModule_SetConnectionProperties;
+  ValkeyModule_SetShardId = &TestValkeyModule_SetShardId;
+  ValkeyModule_GetClusterInfo = &TestValkeyModule_GetClusterInfo;
+  ValkeyModule_GetMyShardID = &TestValkeyModule_GetMyShardID;
+  ValkeyModule_GetContextFlags = &TestValkeyModule_GetContextFlags;
+  ValkeyModule_LoadUnsigned = &TestValkeyModule_LoadUnsigned;
+  ValkeyModule_LoadSigned = &TestValkeyModule_LoadSigned;
+  ValkeyModule_LoadDouble = &TestValkeyModule_LoadDouble;
+  ValkeyModule_LoadStringBuffer = &TestValkeyModule_LoadStringBuffer;
+  ValkeyModule_LoadString = &TestValkeyModule_LoadString;
+  ValkeyModule_SaveUnsigned = &TestValkeyModule_SaveUnsigned;
+  ValkeyModule_SaveSigned = &TestValkeyModule_SaveSigned;
+  ValkeyModule_SaveDouble = &TestValkeyModule_SaveDouble;
+  ValkeyModule_SaveStringBuffer = &TestValkeyModule_SaveStringBuffer;
+  ValkeyModule_IsIOError = &TestValkeyModule_IsIOError;
+  ValkeyModule_ReplicationSetMasterCrossCluster =
+      &TestValkeyModule_ReplicationSetMasterCrossCluster;
+  ValkeyModule_ReplicationUnsetMasterCrossCluster =
+      &TestValkeyModule_ReplicationUnsetMasterCrossCluster;
+  ValkeyModule_GetMyClusterID = &TestValkeyModule_GetMyClusterID;
+  ValkeyModule_GetClusterNodeInfo = &TestValkeyModule_GetClusterNodeInfo;
+  ValkeyModule_ReplicationSetSecondaryCluster =
+      &TestValkeyModule_ReplicationSetSecondaryCluster;
+  ValkeyModule_GetCrossClusterReplicasList =
+      &TestValkeyModule_GetCrossClusterReplicasList;
+  ValkeyModule_FreeCrossClusterReplicasList =
+      &TestValkeyModule_FreeCrossClusterReplicasList;
+  ValkeyModule_Alloc = &TestValkeyModule_Alloc;
+  ValkeyModule_Free = &TestValkeyModule_Free;
+  ValkeyModule_Realloc = &TestValkeyModule_Realloc;
+  ValkeyModule_Calloc = &TestValkeyModule_Calloc;
+  ValkeyModule_MallocUsableSize = &TestValkeyModule_MallocUsableSize;
+  ValkeyModule_GetClusterSize = &TestValkeyModule_GetClusterSize;
+  ValkeyModule_Call = &TestValkeyModule_Call;
+  ValkeyModule_CallReplyArrayElement = &TestValkeyModule_CallReplyArrayElement;
+  ValkeyModule_CallReplyMapElement = &TestValkeyModule_CallReplyMapElement;
+  ValkeyModule_CallReplyStringPtr = &TestValkeyModule_CallReplyStringPtr;
+  ValkeyModule_FreeCallReply = &TestValkeyModule_FreeCallReply;
+  ValkeyModule_RegisterClusterMessageReceiver =
+      &TestValkeyModule_RegisterClusterMessageReceiver;
+  ValkeyModule_SendClusterMessage = &TestValkeyModule_SendClusterMessage;
+  ValkeyModule_GetClusterNodesList = &TestValkeyModule_GetClusterNodesList;
+  ValkeyModule_GetContextFromIO = &TestValkeyModule_GetContextFromIO;
+  ValkeyModule_GetDbIdFromIO = &TestValkeyModule_GetDbIdFromIO;
+  ValkeyModule_FreeClusterNodesList = &TestValkeyModule_FreeClusterNodesList;
+  ValkeyModule_CallReplyType = &TestValkeyModule_CallReplyType;
+  ValkeyModule_CallReplyLength = &TestValkeyModule_CallReplyLength;
+  ValkeyModule_CreateStringFromCallReply =
+      &TestValkeyModule_CreateStringFromCallReply;
+  ValkeyModule_WrongArity = &TestValkeyModule_WrongArity;
+  ValkeyModule_Fork = &TestValkeyModule_Fork;
+  ValkeyModule_ExitFromChild = &TestValkeyModule_ExitFromChild;
+  ValkeyModule_RdbStreamCreateFromRioHandler =
+      &TestValkeyModule_RdbStreamCreateFromRioHandler;
+  ValkeyModule_RdbStreamFree = &TestValkeyModule_RdbStreamFree;
+  ValkeyModule_RdbSave = &TestValkeyModule_RdbSave;
+  ValkeyModule_RdbLoad = &TestValkeyModule_RdbLoad;
+  ValkeyModule_GetCurrentUserName = &TestValkeyModule_GetCurrentUserName;
+  ValkeyModule_RegisterNumericConfig = &TestValkeyModule_RegisterNumericConfig;
+  ValkeyModule_RegisterBoolConfig = &TestValkeyModule_RegisterBoolConfig;
+
+  kMockValkeyModule = new testing::NiceMock<MockValkeyModule>();
 
   // Implement basic key registration functions with simple implementations by
   // default.
-  ON_CALL(*kMockRedisModule, OpenKey(testing::_, testing::_, testing::_))
-      .WillByDefault(TestRedisModule_OpenKeyDefaultImpl);
-  ON_CALL(*kMockRedisModule, CloseKey(testing::_))
-      .WillByDefault(TestRedisModule_CloseKeyDefaultImpl);
-  ON_CALL(*kMockRedisModule,
+  ON_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .WillByDefault(TestValkeyModule_OpenKeyDefaultImpl);
+  ON_CALL(*kMockValkeyModule, CloseKey(testing::_))
+      .WillByDefault(TestValkeyModule_CloseKeyDefaultImpl);
+  ON_CALL(*kMockValkeyModule,
           ModuleTypeSetValue(testing::_, testing::_, testing::_))
-      .WillByDefault(TestRedisModule_ModuleTypeSetValueDefaultImpl);
-  ON_CALL(*kMockRedisModule, ModuleTypeGetValue(testing::_))
-      .WillByDefault(TestRedisModule_ModuleTypeGetValueDefaultImpl);
-  ON_CALL(*kMockRedisModule, ModuleTypeGetType(testing::_))
-      .WillByDefault(TestRedisModule_ModuleTypeGetTypeDefaultImpl);
-  ON_CALL(*kMockRedisModule, KeyType(testing::_))
-      .WillByDefault(TestRedisModule_KeyTypeDefaultImpl);
-  ON_CALL(*kMockRedisModule, DeleteKey(testing::_))
-      .WillByDefault(TestRedisModule_DeleteKeyDefaultImpl);
-  ON_CALL(*kMockRedisModule, KeyExists(testing::_, testing::_))
-      .WillByDefault(TestRedisModule_KeyExistsDefaultImpl);
-  ON_CALL(*kMockRedisModule,
+      .WillByDefault(TestValkeyModule_ModuleTypeSetValueDefaultImpl);
+  ON_CALL(*kMockValkeyModule, ModuleTypeGetValue(testing::_))
+      .WillByDefault(TestValkeyModule_ModuleTypeGetValueDefaultImpl);
+  ON_CALL(*kMockValkeyModule, ModuleTypeGetType(testing::_))
+      .WillByDefault(TestValkeyModule_ModuleTypeGetTypeDefaultImpl);
+  ON_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillByDefault(TestValkeyModule_KeyTypeDefaultImpl);
+  ON_CALL(*kMockValkeyModule, DeleteKey(testing::_))
+      .WillByDefault(TestValkeyModule_DeleteKeyDefaultImpl);
+  ON_CALL(*kMockValkeyModule, KeyExists(testing::_, testing::_))
+      .WillByDefault(TestValkeyModule_KeyExistsDefaultImpl);
+  ON_CALL(*kMockValkeyModule,
           HashExternalize(testing::_, testing::_, testing::_, testing::_))
-      .WillByDefault(TestRedisModule_HashExternalizeDefaultImpl);
-  ON_CALL(*kMockRedisModule, GetApi(testing::_, testing::_))
-      .WillByDefault(TestRedisModule_GetApiDefaultImpl);
+      .WillByDefault(TestValkeyModule_HashExternalizeDefaultImpl);
+  ON_CALL(*kMockValkeyModule, GetApi(testing::_, testing::_))
+      .WillByDefault(TestValkeyModule_GetApiDefaultImpl);
+
+  ON_CALL(*kMockValkeyModule, GetCurrentUserName(testing::_))
+      .WillByDefault(TestValkeyModule_GetCurrentUserNameImpl);
+
+  ON_CALL(*kMockValkeyModule, CallReplyType(testing::_))
+      .WillByDefault(TestValkeyModule_CallReplyTypeImpl);
+  ON_CALL(*kMockValkeyModule, CallReplyStringPtr(testing::_, testing::_))
+      .WillByDefault(TestValkeyModule_CallReplyStringPtrImpl);
+  ON_CALL(*kMockValkeyModule, CallReplyArrayElement(testing::_, testing::_))
+      .WillByDefault(TestValkeyModule_CallReplyArrayElementImpl);
+  ON_CALL(*kMockValkeyModule,
+          CallReplyMapElement(testing::_, testing::_, testing::_, testing::_))
+      .WillByDefault(TestValkeyModule_CallReplyMapElementImpl);
   static absl::once_flag flag;
   absl::call_once(flag, []() { vmsdk::TrackCurrentAsMainThread(); });
   CHECK(vmsdk::InitLogging(nullptr, "debug").ok());
 }
 
-inline void TestRedisModule_Teardown() { delete kMockRedisModule; }
+inline void TestValkeyModule_Teardown() {
+  delete kMockValkeyModule;
+  // Explicitly delete any remaining reference pointer from `default_reply`
+  default_reply.reset();
+}
 
+// NOLINTEND(readability-identifier-naming)
 #endif  // VMSDK_SRC_TESTING_INFRA_MODULE

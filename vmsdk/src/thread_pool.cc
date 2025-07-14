@@ -1,30 +1,8 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "vmsdk/src/thread_pool.h"
@@ -33,6 +11,7 @@
 #include <cstddef>
 #include <memory>
 #include <numeric>
+#include <ranges>
 #include <string>
 #include <utility>
 
@@ -42,11 +21,30 @@
 #include "absl/status/status.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
+#include "status/status_macros.h"
+#include "vmsdk/src/module_config.h"
+
 namespace {
 
+class ThreadRunContext {
+ public:
+  ThreadRunContext(vmsdk::ThreadPool *pool,
+                   std::shared_ptr<vmsdk::ThreadPool::Thread> thread)
+      : pool_{pool}, thread_{thread} {}
+
+  vmsdk::ThreadPool *GetPool() { return pool_; }
+  std::shared_ptr<vmsdk::ThreadPool::Thread> GetThread() { return thread_; }
+
+ private:
+  vmsdk::ThreadPool *pool_ = nullptr;
+  std::shared_ptr<vmsdk::ThreadPool::Thread> thread_ = nullptr;
+};
+
 void *RunWorkerThread(void *arg) {
-  vmsdk::ThreadPool *pool = static_cast<vmsdk::ThreadPool *>(arg);
-  pool->WorkerThread();
+  ThreadRunContext *ctx = static_cast<ThreadRunContext *>(arg);
+  ctx->GetThread()->InitThreadMonitor();
+  ctx->GetPool()->WorkerThread(ctx->GetThread());
+  delete ctx;  // shallow delete
   return nullptr;
 }
 }  // namespace
@@ -54,17 +52,36 @@ void *RunWorkerThread(void *arg) {
 namespace vmsdk {
 
 ThreadPool::ThreadPool(const std::string &name_prefix, size_t num_threads)
-    : threads_(num_threads),
+    : initial_thread_count_(num_threads),
       priority_tasks_(static_cast<int>(ThreadPool::Priority::kMax) + 1),
       name_prefix_(name_prefix) {}
 
 void ThreadPool::StartWorkers() {
   CHECK(!started_);
   started_ = true;
-  for (size_t i = 0; i < threads_.size(); ++i) {
-    pthread_create(&threads_[i], nullptr, RunWorkerThread, this);
-    pthread_setname_np(threads_[i], (name_prefix_ + std::to_string(i)).c_str());
+  IncrThreadCountBy(initial_thread_count_);
+}
+
+absl::StatusOr<double> ThreadPool::GetAvgCPUPercentage() {
+  std::vector<double> cpu_results;
+  absl::Status err = absl::OkStatus();
+  threads_.ForEach([&cpu_results, &err, this](auto thread) {
+    if(!err.ok()) {
+      return;
+    }
+    auto status = thread->thread_monitor_->GetThreadCPUPercentage();
+    if (!status.ok()) {
+      err = status.status();
+      return;
+    }
+    cpu_results.push_back(status.value());
+  });
+  VMSDK_RETURN_IF_ERROR(err);
+  double sum_all_cpus = std::accumulate(cpu_results.begin(), cpu_results.end(), 0.0);
+  if (cpu_results.empty()) {
+    return sum_all_cpus;
   }
+  return sum_all_cpus / cpu_results.size();
 }
 
 bool ThreadPool::Schedule(absl::AnyInvocable<void()> task, Priority priority) {
@@ -104,13 +121,17 @@ void ThreadPool::JoinWorkers() {
     }
     suspend_workers_ = false;
   }
-  if (!started_) {
-    return;
-  }
-  for (size_t i = 0; i < threads_.size(); ++i) {
-    pthread_join(threads_[i], nullptr);
-  }
+
+  threads_.ClearWithCallback(
+      [](auto thread) { pthread_join(thread->thread_id, nullptr); });
   started_ = false;
+
+  JoinTerminatedWorkers();
+}
+
+void ThreadPool::JoinTerminatedWorkers() {
+  pending_join_threads_.ClearWithCallback(
+      [](auto thread) { pthread_join(thread->thread_id, nullptr); });
 }
 
 absl::Status ThreadPool::SuspendWorkers() {
@@ -130,7 +151,7 @@ absl::Status ThreadPool::SuspendWorkers() {
     }
     suspend_workers_ = true;
     blocking_refcount_ =
-        std::make_unique<absl::BlockingCounter>(threads_.size());
+        std::make_unique<absl::BlockingCounter>(threads_.Size());
     condition_.SignalAll();
   }
   blocking_refcount_->Wait();
@@ -152,7 +173,7 @@ absl::Status ThreadPool::ResumeWorkers() {
     }
     suspend_workers_ = false;
     blocking_refcount_ =
-        std::make_unique<absl::BlockingCounter>(threads_.size());
+        std::make_unique<absl::BlockingCounter>(threads_.Size());
   }
 
   blocking_refcount_->Wait();
@@ -174,7 +195,7 @@ void ThreadPool::AwaitSuspensionCleared()
   }
 }
 
-void ThreadPool::WorkerThread() {
+void ThreadPool::WorkerThread(std::shared_ptr<Thread> thread) {
   while (true) {
     absl::AnyInvocable<void()> task;
     {
@@ -182,7 +203,17 @@ void ThreadPool::WorkerThread() {
       AwaitSuspensionCleared();
       auto condition = absl::Condition(this, &ThreadPool::QueueReady);
       while (!condition.Eval()) {
-        condition_.Wait(&queue_mutex_);
+        condition_.WaitWithTimeout(&queue_mutex_, absl::Seconds(1));
+        if (thread->IsShutdown()) {
+          thread->InvokeShutdownCallback();
+          // remove this thread from the threads list and place it in the
+          // pending join list
+          threads_.PopIf([thread](std::shared_ptr<Thread> t) {
+            return t->thread_id == thread->thread_id;
+          });
+          pending_join_threads_.Add(thread);
+          return;
+        }
       }
       if (stop_mode_.has_value() &&
           (stop_mode_.value() == StopMode::kAbrupt ||
@@ -193,11 +224,11 @@ void ThreadPool::WorkerThread() {
       if (suspend_workers_) {
         continue;
       }
-      for (auto it = priority_tasks_.rbegin(); it != priority_tasks_.rend();
-           ++it) {
-        if (!it->empty()) {
-          task = std::move(it->front());
-          it->pop();
+
+      for (auto &tasks : priority_tasks_ | std::views::reverse) {
+        if (!tasks.empty()) {
+          task = std::move(tasks.front());
+          tasks.pop();
           break;
         }
       }
@@ -213,4 +244,48 @@ size_t ThreadPool::QueueSize() const {
       [](size_t sum, const auto &tasks) { return sum + tasks.size(); });
 }
 
+void ThreadPool::IncrThreadCountBy(size_t count) {
+  for (size_t i = 0; i < count; ++i) {
+    std::shared_ptr<Thread> thread_ptr = std::make_shared<Thread>();
+    ThreadRunContext *context = new ThreadRunContext{this, thread_ptr};
+    pthread_create(&thread_ptr->thread_id, nullptr, RunWorkerThread, context);
+#ifndef __APPLE__
+    size_t thread_num = threads_.Size();
+    pthread_setname_np(thread_ptr->thread_id,
+                       (name_prefix_ + std::to_string(thread_num)).c_str());
+#endif
+    threads_.Add(thread_ptr);
+  }
+}
+
+void ThreadPool::DecrThreadCountBy(size_t count, bool sync) {
+  auto threads = threads_.PopBackMulti(count);
+  absl::BlockingCounter counter{static_cast<int>(threads.size())};
+  for (const auto &thread : threads) {
+    if (sync) {
+      thread->Shutdown([&counter]() {
+        counter.DecrementCount();
+      });  // signal the thread to exit
+    } else {
+      thread->Shutdown();
+    }
+  }
+
+  if (sync) {
+    counter.Wait();
+  }
+}
+
+void ThreadPool::Resize(size_t count, bool wait_for_resize) {
+  size_t current_size = Size();
+  if (count == current_size) {
+    return;
+  } else if (count > current_size) {
+    // We need to add more threads
+    IncrThreadCountBy(count - current_size);
+  } else {
+    // Shutdown "current_size - count" threads
+    DecrThreadCountBy(current_size - count, wait_for_resize);
+  }
+}
 }  // namespace vmsdk

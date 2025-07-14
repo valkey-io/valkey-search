@@ -1,30 +1,8 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/query/fanout.h"
@@ -100,14 +78,13 @@ struct SearchPartitionResultsTracker {
       RecordsMap attribute_contents;
       for (const auto &attribute_content :
            neighbor_entry->attribute_contents()) {
-        auto attribute_alias =
-            vmsdk::MakeUniqueRedisString(attribute_content.attribute_alias());
-        auto attribute_alias_view = vmsdk::ToStringView(attribute_alias.get());
+        auto identifier =
+            vmsdk::MakeUniqueValkeyString(attribute_content.identifier());
+        auto identifier_view = vmsdk::ToStringView(identifier.get());
         attribute_contents.emplace(
-            attribute_alias_view,
-            RecordsMapValue(
-                std::move(attribute_alias),
-                vmsdk::MakeUniqueRedisString(attribute_content.content())));
+            identifier_view, RecordsMapValue(std::move(identifier),
+                                             vmsdk::MakeUniqueValkeyString(
+                                                 attribute_content.content())));
       }
       indexes::Neighbor neighbor{
           std::make_shared<InternedString>(neighbor_entry->key()),
@@ -184,7 +161,7 @@ void PerformRemoteSearchRequestAsync(
 }
 
 absl::Status PerformSearchFanoutAsync(
-    RedisModuleCtx *ctx, std::vector<FanoutSearchTarget> &search_targets,
+    ValkeyModuleCtx *ctx, std::vector<FanoutSearchTarget> &search_targets,
     coordinator::ClientPool *coordinator_client_pool,
     std::unique_ptr<VectorSearchParameters> parameters,
     vmsdk::ThreadPool *thread_pool, query::SearchResponseCallback callback) {
@@ -192,13 +169,13 @@ absl::Status PerformSearchFanoutAsync(
   // There should be no limit for the fanout search, so put some safe values,
   // so that the default values are not used during the local search.
   request->mutable_limit()->set_first_index(0);
-  request->mutable_limit()->set_number(parameters->k.value());
+  request->mutable_limit()->set_number(parameters->k);
   auto tracker = std::make_shared<SearchPartitionResultsTracker>(
-      search_targets.size(), parameters->k.value(), std::move(callback),
+      search_targets.size(), parameters->k, std::move(callback),
       std::move(parameters));
   bool has_local_target = false;
   for (auto &node : search_targets) {
-    auto detached_ctx = vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx);
+    auto detached_ctx = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);
     if (node.type == FanoutSearchTarget::Type::kLocal) {
       // Defer the local target enqueue, since it will own the parameters from
       // then on.
@@ -242,38 +219,39 @@ absl::Status PerformSearchFanoutAsync(
   return absl::OkStatus();
 }
 
-// TODO(b/351726622) See if caching this improves performance.
-std::vector<FanoutSearchTarget> GetSearchTargetsForFanout(RedisModuleCtx *ctx) {
+// TODO See if caching this improves performance.
+std::vector<FanoutSearchTarget> GetSearchTargetsForFanout(
+    ValkeyModuleCtx *ctx) {
   size_t num_nodes;
-  auto nodes = vmsdk::MakeUniqueRedisClusterNodesList(ctx, &num_nodes);
+  auto nodes = vmsdk::MakeUniqueValkeyClusterNodesList(ctx, &num_nodes);
   absl::flat_hash_map<std::string, std::vector<FanoutSearchTarget>>
       shard_id_to_target;
   std::vector<FanoutSearchTarget> selected_targets;
   for (size_t i = 0; i < num_nodes; ++i) {
-    std::string node_id(nodes.get()[i], REDISMODULE_NODE_ID_LEN);
+    std::string node_id(nodes.get()[i], VALKEYMODULE_NODE_ID_LEN);
     char ip[INET6_ADDRSTRLEN] = "";
-    char master_id[REDISMODULE_NODE_ID_LEN] = "";
+    char master_id[VALKEYMODULE_NODE_ID_LEN] = "";
     int port;
     int flags;
-    if (RedisModule_GetClusterNodeInfo(ctx, node_id.c_str(), ip, master_id,
-                                       &port, &flags) != REDISMODULE_OK) {
+    if (ValkeyModule_GetClusterNodeInfo(ctx, node_id.c_str(), ip, master_id,
+                                        &port, &flags) != VALKEYMODULE_OK) {
       VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
           << "Failed to get node info for node " << node_id
           << ", skipping node...";
       continue;
     }
     // Master ID is not null terminated.
-    auto master_id_str = std::string(master_id, REDISMODULE_NODE_ID_LEN);
-    if (flags & REDISMODULE_NODE_PFAIL || flags & REDISMODULE_NODE_FAIL) {
+    auto master_id_str = std::string(master_id, VALKEYMODULE_NODE_ID_LEN);
+    if (flags & VALKEYMODULE_NODE_PFAIL || flags & VALKEYMODULE_NODE_FAIL) {
       VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
           << "Node " << node_id << " (" << ip
           << ") is failing, skipping for FT.SEARCH...";
       continue;
     }
-    if (flags & REDISMODULE_NODE_MASTER) {
+    if (flags & VALKEYMODULE_NODE_MASTER) {
       master_id_str = node_id;
     }
-    if (flags & REDISMODULE_NODE_MYSELF) {
+    if (flags & VALKEYMODULE_NODE_MYSELF) {
       shard_id_to_target[master_id_str].push_back(
           FanoutSearchTarget{.type = FanoutSearchTarget::Type::kLocal});
     } else {

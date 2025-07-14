@@ -1,30 +1,8 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/indexes/vector_base.h"
@@ -38,7 +16,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -64,7 +41,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
-#include "src/rdb_io_stream.h"
+#include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/vector_externalizer.h"
 #include "third_party/hnswlib/hnswlib.h"
@@ -129,10 +106,7 @@ T CopyAndNormalizeEmbedding(T *dst, T *src, size_t size) {
     magnitude += src[i] * src[i];
   }
   magnitude = std::sqrt(magnitude);
-  if (magnitude == 0.0f) {
-    return magnitude;
-  }
-  T norm = 1.0f / (magnitude);
+  T norm = (magnitude == 0.0f) ? 1.0f : (1.0f / magnitude);
   for (size_t i = 0; i < size; i++) {
     dst[i] = norm * src[i];
   }
@@ -245,8 +219,13 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
     return false;
   }
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalId(key));
-  VMSDK_RETURN_IF_ERROR(UpdateMetadata(
-      key, magnitude.value_or(kDefaultMagnitude), interned_vector));
+  VMSDK_ASSIGN_OR_RETURN(
+      bool res, UpdateMetadata(key, magnitude.value_or(kDefaultMagnitude),
+                               interned_vector));
+  if (!res) {
+    return false;
+  }
+
   auto modify_result = ModifyRecordImpl(internal_id, interned_vector->Str());
   if (!modify_result.ok()) {
     auto untrack_result = UnTrackKey(key);
@@ -257,7 +236,7 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
           << untrack_result.status().message();
     }
   }
-  return modify_result;
+  return true;
 }
 
 template <typename T>
@@ -271,7 +250,8 @@ absl::StatusOr<std::deque<Neighbor>> VectorBase::CreateReply(
       knn_res.pop();
       continue;
     }
-    ret.emplace_back(Neighbor{vector_key.value(), ele.first});
+    // Sorting in asc order.
+    ret.emplace_front(Neighbor{vector_key.value(), ele.first});
     knn_res.pop();
   }
   return ret;
@@ -340,7 +320,8 @@ absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
 char *VectorBase::TrackVector(uint64_t internal_id, char *vector, size_t len) {
   auto interned_vector = StringInternStore::Intern(
       absl::string_view(vector, len), vector_allocator_.get());
-  return TrackVector(internal_id, interned_vector);
+  TrackVector(internal_id, interned_vector);
+  return (char *)interned_vector->Str().data();
 }
 
 absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
@@ -353,84 +334,101 @@ absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
   auto id = inc_id_++;
   auto [_, succ] = tracked_metadata_by_key_.insert(
       {key, {.internal_id = id, .magnitude = magnitude}});
-  TrackVector(id, vector);
+
   if (!succ) {
     return absl::InvalidArgumentError(
         absl::StrCat("Embedding id already exists: ", key->Str()));
   }
+  TrackVector(id, vector);
   key_by_internal_id_.insert({id, key});
   return id;
 }
-
-absl::Status VectorBase::UpdateMetadata(const InternedStringPtr &key,
-                                        float magnitude,
-                                        const InternedStringPtr &vector) {
+// Return an error if the key is empty or not being tracked.
+// Return false if the tracked vector matches the input vector.
+// Otherwise, track the new vector and return true.
+absl::StatusOr<bool> VectorBase::UpdateMetadata(
+    const InternedStringPtr &key, float magnitude,
+    const InternedStringPtr &vector) {
   if (key->Str().empty()) {
     return absl::InvalidArgumentError("key can't be empty");
   }
-  absl::WriterMutexLock lock(&key_to_metadata_mutex_);
-  auto it = tracked_metadata_by_key_.find(key);
-  if (it == tracked_metadata_by_key_.end()) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Embedding id not found: ", key->Str()));
+  uint64_t internal_id;
+  {
+    absl::WriterMutexLock lock(&key_to_metadata_mutex_);
+    auto it = tracked_metadata_by_key_.find(key);
+    if (it == tracked_metadata_by_key_.end()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Embedding id not found: ", key->Str()));
+    }
+    it->second.magnitude = magnitude;
+    internal_id = it->second.internal_id;
   }
-  it->second.magnitude = magnitude;
-  TrackVector(it->second.internal_id, vector);
-  return absl::OkStatus();
+  if (IsVectorMatch(internal_id, vector)) {
+    return false;
+  }
+  TrackVector(internal_id, vector);
+  return true;
 }
 
-int VectorBase::RespondWithInfo(RedisModuleCtx *ctx) const {
-  RedisModule_ReplyWithSimpleString(ctx, "type");
-  RedisModule_ReplyWithSimpleString(ctx, "VECTOR");
-  RedisModule_ReplyWithSimpleString(ctx, "index");
+int VectorBase::RespondWithInfo(ValkeyModuleCtx *ctx) const {
+  ValkeyModule_ReplyWithSimpleString(ctx, "type");
+  ValkeyModule_ReplyWithSimpleString(ctx, "VECTOR");
+  ValkeyModule_ReplyWithSimpleString(ctx, "index");
 
-  RedisModule_ReplyWithArray(ctx, REDISMODULE_POSTPONED_ARRAY_LEN);
-  RedisModule_ReplyWithSimpleString(ctx, "capacity");
-  RedisModule_ReplyWithLongLong(ctx, GetCapacity());
-  RedisModule_ReplyWithSimpleString(ctx, "dimensions");
-  RedisModule_ReplyWithLongLong(ctx, dimensions_);
-  RedisModule_ReplyWithSimpleString(ctx, "distance_metric");
-  RedisModule_ReplyWithSimpleString(
+  ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+  ValkeyModule_ReplyWithSimpleString(ctx, "capacity");
+  ValkeyModule_ReplyWithLongLong(ctx, GetCapacity());
+  ValkeyModule_ReplyWithSimpleString(ctx, "dimensions");
+  ValkeyModule_ReplyWithLongLong(ctx, dimensions_);
+  ValkeyModule_ReplyWithSimpleString(ctx, "distance_metric");
+  ValkeyModule_ReplyWithSimpleString(
       ctx, LookupKeyByValue(*kDistanceMetricByStr, distance_metric_).data());
-  RedisModule_ReplyWithSimpleString(ctx, "size");
+  ValkeyModule_ReplyWithSimpleString(ctx, "size");
   {
     absl::MutexLock lock(&key_to_metadata_mutex_);
-    RedisModule_ReplyWithCString(
+    ValkeyModule_ReplyWithCString(
         ctx, std::to_string(key_by_internal_id_.size()).c_str());
   }
   int array_len = 8;
   array_len += RespondWithInfoImpl(ctx);
-  RedisModule_ReplySetArrayLength(ctx, array_len);
+  ValkeyModule_ReplySetArrayLength(ctx, array_len);
 
   return 4;
 }
 
-absl::Status VectorBase::SaveIndex(RDBOutputStream &rdb_stream) const {
-  VMSDK_RETURN_IF_ERROR(SaveIndexImpl(rdb_stream));
+absl::Status VectorBase::SaveIndex(RDBChunkOutputStream chunked_out) const {
+  VMSDK_RETURN_IF_ERROR(SaveIndexImpl(std::move(chunked_out)));
+  return absl::OkStatus();
+}
+
+absl::Status VectorBase::SaveTrackedKeys(
+    RDBChunkOutputStream chunked_out) const {
   absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
-  VMSDK_RETURN_IF_ERROR(rdb_stream.SaveSizeT(key_by_internal_id_.size()))
-      << "Error saving key_by_internal_id_ size";
-  for (const auto &[id, key] : key_by_internal_id_) {
-    VMSDK_RETURN_IF_ERROR(rdb_stream.SaveSizeT(id)) << "Error saving id";
+  for (const auto &[key, metadata] : tracked_metadata_by_key_) {
+    data_model::TrackedKeyMetadata metadata_pb;
+    metadata_pb.set_key(key->Str());
+    metadata_pb.set_internal_id(metadata.internal_id);
+    metadata_pb.set_magnitude(metadata.magnitude);
+    auto metadata_pb_str = metadata_pb.SerializeAsString();
     VMSDK_RETURN_IF_ERROR(
-        rdb_stream.SaveStringBuffer(key->Str().data(), key->Str().size()))
-        << "Error saving key";
+        chunked_out.SaveChunk(metadata_pb_str.data(), metadata_pb_str.size()))
+        << "Error saving key_by_internal_id_ entry";
   }
   return absl::OkStatus();
 }
 
-void VectorBase::ExternalizeVector(RedisModuleCtx *ctx,
+void VectorBase::ExternalizeVector(ValkeyModuleCtx *ctx,
                                    const AttributeDataType *attribute_data_type,
                                    absl::string_view key_cstr,
                                    absl::string_view attribute_identifier) {
-  auto key_obj = vmsdk::MakeUniqueRedisOpenKey(
-      ctx, vmsdk::MakeUniqueRedisString(key_cstr).get(),
-      REDISMODULE_OPEN_KEY_NOEFFECTS | REDISMODULE_READ);
+  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+      ctx, vmsdk::MakeUniqueValkeyString(key_cstr).get(),
+      VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
   if (!key_obj || !attribute_data_type->IsProperType(key_obj.get())) {
     return;
   }
   bool is_module_owned;
-  vmsdk::UniqueRedisString record = VectorExternalizer::Instance().GetRecord(
+  vmsdk::UniqueValkeyString record = VectorExternalizer::Instance().GetRecord(
       ctx, attribute_data_type, key_obj.get(), key_cstr, attribute_identifier,
       is_module_owned);
   CHECK(!is_module_owned);
@@ -446,10 +444,16 @@ void VectorBase::ExternalizeVector(RedisModuleCtx *ctx,
 }
 
 absl::Status VectorBase::LoadTrackedKeys(
-    RedisModuleCtx *ctx, const AttributeDataType *attribute_data_type,
-    const data_model::TrackedKeys &tracked_keys) {
+    ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
+    SupplementalContentChunkIter &&iter) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
-  for (const auto &tracked_key_metadata : tracked_keys.tracked_key_metadata()) {
+  while (iter.HasNext()) {
+    VMSDK_ASSIGN_OR_RETURN(auto metadata_str, iter.Next(),
+                           _ << "Error loading metadata");
+    data_model::TrackedKeyMetadata tracked_key_metadata;
+    if (!tracked_key_metadata.ParseFromString(metadata_str->binary_content())) {
+      return absl::InvalidArgumentError("Error parsing metadata from proto");
+    }
     auto interned_key = StringInternStore::Intern(tracked_key_metadata.key());
     tracked_metadata_by_key_.insert(
         {interned_key,
@@ -457,54 +461,9 @@ absl::Status VectorBase::LoadTrackedKeys(
           .magnitude = tracked_key_metadata.magnitude()}});
     key_by_internal_id_.insert(
         {tracked_key_metadata.internal_id(), interned_key});
-    inc_id_ = std::max(inc_id_, tracked_key_metadata.internal_id());
+    inc_id_ = std::max(
+        inc_id_, static_cast<uint64_t>(tracked_key_metadata.internal_id()));
     ExternalizeVector(ctx, attribute_data_type, tracked_key_metadata.key(),
-                      attribute_identifier_);
-  }
-  ++inc_id_;
-  return absl::OkStatus();
-}
-
-/* Simply consumes the RDB stream and does not save anything. */
-absl::Status VectorBase::ConsumeKeysAndInternalIdsForBackCompat(
-    RDBInputStream &rdb_stream) {
-  size_t keys_count;
-  VMSDK_RETURN_IF_ERROR(rdb_stream.LoadSizeT(keys_count))
-      << "Error loading keys count";
-  for (int i = 0; i < keys_count; ++i) {
-    size_t id;
-    VMSDK_RETURN_IF_ERROR(rdb_stream.LoadSizeT(id)) << "Error loading id";
-    VMSDK_ASSIGN_OR_RETURN(auto key, rdb_stream.LoadString(),
-                           _ << "Error loading key");
-  }
-  return absl::OkStatus();
-}
-
-absl::Status VectorBase::LoadKeysAndInternalIds(
-    RedisModuleCtx *ctx, const AttributeDataType *attribute_data_type,
-    RDBInputStream &rdb_stream) {
-  absl::WriterMutexLock lock(&key_to_metadata_mutex_);
-  size_t keys_count;
-  VMSDK_RETURN_IF_ERROR(rdb_stream.LoadSizeT(keys_count))
-      << "Error loading keys count";
-  for (size_t i = 0; i < keys_count; ++i) {
-    size_t id;
-    VMSDK_RETURN_IF_ERROR(rdb_stream.LoadSizeT(id)) << "Error loading id";
-    VMSDK_ASSIGN_OR_RETURN(auto key, rdb_stream.LoadString(),
-                           _ << "Error loading key");
-    auto interned_key =
-        StringInternStore::Intern(vmsdk::ToStringView(key.get()));
-    key_by_internal_id_.insert({id, interned_key});
-    tracked_metadata_by_key_.insert(
-        {interned_key,
-         {.internal_id = id,
-          // Use negative infinity as a placeholder for magnitude. It will be
-          // updated on backfill. In the meantime, we will need to fetch vector
-          // contents from the main dictionary if specified in the query RETURN.
-          .magnitude =
-              normalize_ ? std::numeric_limits<float>::lowest() : -1.0f}});
-    inc_id_ = std::max(inc_id_, id);
-    ExternalizeVector(ctx, attribute_data_type, interned_key->Str(),
                       attribute_identifier_);
   }
   ++inc_id_;
@@ -520,15 +479,6 @@ std::unique_ptr<data_model::Index> VectorBase::ToProto() const {
   vector_index->set_dimension_count(dimensions_);
   vector_index->set_initial_cap(GetCapacity());
   ToProtoImpl(vector_index.get());
-  vector_index->mutable_tracked_keys()->mutable_tracked_key_metadata()->Reserve(
-      tracked_metadata_by_key_.size());
-  for (const auto &[key, metadata] : tracked_metadata_by_key_) {
-    auto tracked_key_metadata =
-        vector_index->mutable_tracked_keys()->add_tracked_key_metadata();
-    tracked_key_metadata->set_key(*key);
-    tracked_key_metadata->set_internal_id(metadata.internal_id);
-    tracked_key_metadata->set_magnitude(metadata.magnitude);
-  }
   index_proto->set_allocated_vector_index(vector_index.release());
   return index_proto;
 }
@@ -560,20 +510,15 @@ void VectorBase::AddPrefilteredKey(
   }
 }
 
-absl::string_view TrimBrackets(absl::string_view input) {
-  if (absl::ConsumePrefix(&input, "[")) {
-    absl::ConsumeSuffix(&input, "]");
-    return TrimBrackets(input);
-  }
-  return input;
-}
-
-vmsdk::UniqueRedisString VectorBase::NormalizeStringRecord(
-    vmsdk::UniqueRedisString input) const {
+vmsdk::UniqueValkeyString VectorBase::NormalizeStringRecord(
+    vmsdk::UniqueValkeyString record) const {
   CHECK_EQ(GetDataTypeSize(), sizeof(float));
-  auto input_str = TrimBrackets(vmsdk::ToStringView(input.get()));
+  auto record_str = vmsdk::ToStringView(record.get());
+  if (absl::ConsumePrefix(&record_str, "[")) {
+    absl::ConsumeSuffix(&record_str, "]");
+  }
   std::vector<std::string> float_strings =
-      absl::StrSplit(input_str, ',', absl::SkipWhitespace());
+      absl::StrSplit(record_str, ',', absl::SkipWhitespace());
   std::string binary_string;
   binary_string.reserve(float_strings.size() * sizeof(float));
   for (const auto &float_str : float_strings) {
@@ -583,7 +528,7 @@ vmsdk::UniqueRedisString VectorBase::NormalizeStringRecord(
     }
     binary_string += std::string((char *)&value, sizeof(float));
   }
-  return vmsdk::MakeUniqueRedisString(binary_string);
+  return vmsdk::MakeUniqueValkeyString(binary_string);
 }
 
 uint64_t VectorBase::GetRecordCount() const {

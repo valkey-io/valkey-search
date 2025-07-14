@@ -1,30 +1,8 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef VALKEYSEARCH_TESTING_COMMON_H_
@@ -57,14 +35,16 @@
 #include "src/indexes/vector_base.h"
 #include "src/keyspace_event_manager.h"
 #include "src/query/search.h"
-#include "src/rdb_io_stream.h"
+#include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
 #include "src/server_events.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
+#include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "third_party/hnswlib/iostream.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -115,8 +95,8 @@ class MockIndex : public indexes::IndexBase {
               (const, override));
   MOCK_METHOD(std::unique_ptr<data_model::Index>, ToProto, (),
               (const, override));
-  MOCK_METHOD(int, RespondWithInfo, (RedisModuleCtx * ctx), (const, override));
-  MOCK_METHOD(absl::Status, SaveIndex, (RDBOutputStream & rdb_stream),
+  MOCK_METHOD(int, RespondWithInfo, (ValkeyModuleCtx * ctx), (const, override));
+  MOCK_METHOD(absl::Status, SaveIndex, (RDBChunkOutputStream chunked_out),
               (const, override));
   MOCK_METHOD((void), ForEachTrackedKey,
               (absl::AnyInvocable<void(const InternedStringPtr& key)> fn),
@@ -130,91 +110,92 @@ class MockKeyspaceEventSubscription : public KeyspaceEventSubscription {
   MOCK_METHOD(const std::vector<std::string>&, GetKeyPrefixes, (),
               (override, const));
   MOCK_METHOD(void, OnKeyspaceNotification,
-              (RedisModuleCtx * ctx, int type, const char* event,
-               RedisModuleString* key),
+              (ValkeyModuleCtx * ctx, int type, const char* event,
+               ValkeyModuleString* key),
               (override));
 };
 
 class MockAttributeDataType : public AttributeDataType {
  public:
-  MOCK_METHOD(absl::StatusOr<vmsdk::UniqueRedisString>, GetRecord,
-              (RedisModuleCtx * ctx, RedisModuleKey* open_key,
+  MOCK_METHOD(absl::StatusOr<vmsdk::UniqueValkeyString>, GetRecord,
+              (ValkeyModuleCtx * ctx, ValkeyModuleKey* open_key,
                absl::string_view key, absl::string_view identifier),
               (override, const));
-  MOCK_METHOD(int, GetRedisEventTypes, (), (override, const));
+  MOCK_METHOD(int, GetValkeyEventTypes, (), (override, const));
   MOCK_METHOD((absl::StatusOr<RecordsMap>), FetchAllRecords,
-              (RedisModuleCtx * ctx, const std::string& query_attribute_name,
+              (ValkeyModuleCtx * ctx, const std::string& query_attribute_name,
                absl::string_view key,
                const absl::flat_hash_set<absl::string_view>& identifiers),
               (override, const));
   MOCK_METHOD((data_model::AttributeDataType), ToProto, (), (override, const));
   MOCK_METHOD((std::string), ToString, (), (override, const));
-  MOCK_METHOD((bool), IsProperType, (RedisModuleKey * key), (override, const));
+  MOCK_METHOD((bool), IsProperType, (ValkeyModuleKey * key), (override, const));
   MOCK_METHOD(bool, RecordsProvidedAsString, (), (override, const));
 };
 
-class FakeRDBIOStream : public RDBInputStream, public RDBOutputStream {
+class FakeSafeRDB : public SafeRDB {
  public:
-  FakeRDBIOStream() = default;
-  FakeRDBIOStream(unsigned char dump_rdb[], size_t len) {
+  FakeSafeRDB() = default;
+  FakeSafeRDB(unsigned char dump_rdb[], size_t len) {
     buffer_.write((const char*)dump_rdb, len);
   }
-  ~FakeRDBIOStream() override = default;
-  absl::Status LoadSizeT(size_t& val) override { return LoadPOD(val); }
-  absl::Status LoadUnsigned(unsigned int& val) override { return LoadPOD(val); }
-  absl::Status LoadSigned(int& val) override { return LoadPOD(val); }
-  absl::Status LoadDouble(double& val) override { return LoadPOD(val); }
-
-  absl::StatusOr<hnswlib::StringBufferUniquePtr> LoadStringBuffer(
-      const size_t len) override {
-    size_t _len;
-    VMSDK_EXPECT_OK(LoadPOD(_len));
-    EXPECT_EQ(_len, len);
-    auto str = hnswlib::MakeStringBufferUniquePtr(len);
-    buffer_.read(str.get(), len);
-    EXPECT_TRUE(buffer_);
-    return str;
+  absl::StatusOr<size_t> LoadSizeT() override { return LoadPOD<size_t>(); }
+  absl::StatusOr<unsigned int> LoadUnsigned() override {
+    return LoadPOD<unsigned int>();
   }
+  absl::StatusOr<int> LoadSigned() override { return LoadPOD<int>(); }
+  absl::StatusOr<double> LoadDouble() override { return LoadPOD<double>(); }
 
-  absl::StatusOr<vmsdk::UniqueRedisString> LoadString() override {
-    size_t len;
-    VMSDK_EXPECT_OK(LoadPOD(len));
+  absl::StatusOr<vmsdk::UniqueValkeyString> LoadString() override {
+    auto len = LoadPOD<size_t>();
     auto _str = std::make_unique<char[]>(len);
     buffer_.read(_str.get(), len);
     EXPECT_TRUE(buffer_);
-    auto str = vmsdk::UniqueRedisString(
-        RedisModule_CreateString(nullptr, _str.get(), len));
+    auto str = vmsdk::UniqueValkeyString(
+        ValkeyModule_CreateString(nullptr, _str.get(), len));
     return str;
   }
 
-  absl::Status SaveSizeT(size_t val) override { return SavePOD(val); }
-  absl::Status SaveUnsigned(unsigned int val) override { return SavePOD(val); }
-  absl::Status SaveSigned(int val) override { return SavePOD(val); }
-  absl::Status SaveDouble(double val) override { return SavePOD(val); }
-
-  absl::Status SaveStringBuffer(const char* str, size_t len) override {
-    VMSDK_EXPECT_OK(SavePOD(len));
-    buffer_.write(str, len);
-    EXPECT_TRUE(buffer_);
+  absl::Status SaveSizeT(size_t val) override {
+    SavePOD(val);
+    return absl::OkStatus();
+  }
+  absl::Status SaveUnsigned(unsigned int val) override {
+    SavePOD(val);
+    return absl::OkStatus();
+  }
+  absl::Status SaveSigned(int val) override {
+    SavePOD(val);
+    return absl::OkStatus();
+  }
+  absl::Status SaveDouble(double val) override {
+    SavePOD(val);
     return absl::OkStatus();
   }
 
- private:
-  template <typename T>
-  absl::Status LoadPOD(T& val) {
-    buffer_.read((char*)&val, sizeof(T));
-    EXPECT_TRUE(buffer_);
-    return absl::OkStatus();
-  }
-
-  template <typename T>
-  absl::Status SavePOD(const T val) {
-    buffer_.write((char*)&val, sizeof(T));
+  absl::Status SaveStringBuffer(absl::string_view buf) override {
+    SavePOD(buf.size());
+    buffer_.write(buf.data(), buf.size());
     EXPECT_TRUE(buffer_);
     return absl::OkStatus();
   }
 
   std::stringstream buffer_;
+
+ private:
+  template <typename T>
+  T LoadPOD() {
+    T val;
+    buffer_.read((char*)&val, sizeof(T));
+    EXPECT_TRUE(buffer_);
+    return val;
+  }
+
+  template <typename T>
+  void SavePOD(const T val) {
+    buffer_.write((char*)&val, sizeof(T));
+    EXPECT_TRUE(buffer_);
+  }
 };
 
 data_model::VectorIndex CreateHNSWVectorIndexProto(
@@ -228,51 +209,48 @@ data_model::VectorIndex CreateFlatVectorIndexProto(
 class MockIndexSchema : public IndexSchema {
  public:
   static absl::StatusOr<std::shared_ptr<MockIndexSchema>> Create(
-      RedisModuleCtx* ctx, absl::string_view key,
+      ValkeyModuleCtx* ctx, absl::string_view key,
       const std::vector<absl::string_view>& subscribed_key_prefixes,
       std::unique_ptr<AttributeDataType> attribute_data_type,
-      RedisModuleType* module_type, vmsdk::ThreadPool* mutations_thread_pool) {
+      vmsdk::ThreadPool* mutations_thread_pool) {
     data_model::IndexSchema index_schema_proto;
     index_schema_proto.set_name(std::string(key));
     index_schema_proto.mutable_subscribed_key_prefixes()->Add(
         subscribed_key_prefixes.begin(), subscribed_key_prefixes.end());
     // NOLINTNEXTLINE
     auto res = std::shared_ptr<MockIndexSchema>(new MockIndexSchema(
-        ctx, index_schema_proto, std::move(attribute_data_type), module_type,
+        ctx, index_schema_proto, std::move(attribute_data_type),
         mutations_thread_pool));
     VMSDK_RETURN_IF_ERROR(res->Init(ctx));
     return res;
   }
-  MockIndexSchema(RedisModuleCtx* ctx,
+  MockIndexSchema(ValkeyModuleCtx* ctx,
                   const data_model::IndexSchema& index_schema_proto,
                   std::unique_ptr<AttributeDataType> attribute_data_type,
-                  RedisModuleType* module_type,
                   vmsdk::ThreadPool* mutations_thread_pool)
       : IndexSchema(ctx, index_schema_proto, std::move(attribute_data_type),
-                    module_type, mutations_thread_pool) {
+                    mutations_thread_pool) {
     ON_CALL(*this, OnLoadingEnded(testing::_))
-        .WillByDefault(testing::Invoke([this](RedisModuleCtx* ctx) {
+        .WillByDefault(testing::Invoke([this](ValkeyModuleCtx* ctx) {
           return IndexSchema::OnLoadingEnded(ctx);
         }));
     ON_CALL(*this, OnSwapDB(testing::_))
         .WillByDefault(
-            testing::Invoke([this](RedisModuleSwapDbInfo* swap_db_info) {
+            testing::Invoke([this](ValkeyModuleSwapDbInfo* swap_db_info) {
               return IndexSchema::OnSwapDB(swap_db_info);
             }));
     ON_CALL(*this, RDBSave(testing::_))
-        .WillByDefault(testing::Invoke([this](RDBOutputStream& rdb_os) {
-          return IndexSchema::RDBSave(rdb_os);
-        }));
+        .WillByDefault(testing::Invoke(
+            [this](SafeRDB* rdb) { return IndexSchema::RDBSave(rdb); }));
     ON_CALL(*this, GetIdentifier(testing::_))
         .WillByDefault(testing::Invoke([](absl::string_view attribute_name) {
           return std::string(attribute_name);
         }));
   }
-  MOCK_METHOD(void, OnLoadingEnded, (RedisModuleCtx * ctx), (override));
-  MOCK_METHOD(void, OnSwapDB, (RedisModuleSwapDbInfo * swap_db_info),
+  MOCK_METHOD(void, OnLoadingEnded, (ValkeyModuleCtx * ctx), (override));
+  MOCK_METHOD(void, OnSwapDB, (ValkeyModuleSwapDbInfo * swap_db_info),
               (override));
-  MOCK_METHOD(absl::Status, RDBSave, (RDBOutputStream & rdb_os),
-              (const, override));
+  MOCK_METHOD(absl::Status, RDBSave, (SafeRDB * rdb), (const, override));
   MOCK_METHOD(absl::StatusOr<std::string>, GetIdentifier,
               (absl::string_view attribute_name), (const, override));
 };
@@ -296,39 +274,19 @@ class TestableValkeySearch : public ValkeySearch {
 class TestableSchemaManager : public SchemaManager {
  public:
   TestableSchemaManager(
-      RedisModuleCtx* ctx,
+      ValkeyModuleCtx* ctx,
       absl::AnyInvocable<void()> server_events_callback = []() {},
       vmsdk::ThreadPool* writer_thread_pool = nullptr,
       bool coordinator_enabled = false)
       : SchemaManager(ctx, std::move(server_events_callback),
-                      writer_thread_pool, coordinator_enabled) {
-    index_schema_module_type_ = GetFakeIndexSchemaModuleType();
-    schema_manager_module_type_ = GetFakeSchemaManagerModuleType();
-  }
-  static RedisModuleType* GetFakeIndexSchemaModuleType() {
-    static RedisModuleType* index_schema_module_type =
-        (RedisModuleType*)0xBAADF00D;
-    return index_schema_module_type;
-  }
-  static RedisModuleType* GetFakeSchemaManagerModuleType() {
-    static RedisModuleType* schema_manager_module_type =
-        (RedisModuleType*)0xBADF00D1;
-    return schema_manager_module_type;
-  }
+                      writer_thread_pool, coordinator_enabled) {}
 };
 
 class TestableMetadataManager : public coordinator::MetadataManager {
  public:
-  TestableMetadataManager(RedisModuleCtx* ctx,
+  TestableMetadataManager(ValkeyModuleCtx* ctx,
                           coordinator::ClientPool& client_pool)
-      : coordinator::MetadataManager(ctx, client_pool) {
-    module_type_ = GetFakeMetadataManagerModuleType();
-  }
-  static RedisModuleType* GetFakeMetadataManagerModuleType() {
-    static RedisModuleType* metadata_manager_module_type =
-        (RedisModuleType*)0xBADF00D2;
-    return metadata_manager_module_type;
-  }
+      : coordinator::MetadataManager(ctx, client_pool) {}
 };
 
 inline void InitThreadPools(std::optional<size_t> readers,
@@ -338,12 +296,12 @@ inline void InitThreadPools(std::optional<size_t> readers,
 }
 
 absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateIndexSchema(
-    std::string index_schema_key, RedisModuleCtx* fake_ctx = nullptr,
+    std::string index_schema_key, ValkeyModuleCtx* fake_ctx = nullptr,
     vmsdk::ThreadPool* writer_thread_pool = nullptr,
     const std::vector<absl::string_view>* key_prefixes = nullptr,
     int32_t index_schema_db_num = 0);
 absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateVectorHNSWSchema(
-    std::string index_schema_key, RedisModuleCtx* fake_ctx = nullptr,
+    std::string index_schema_key, ValkeyModuleCtx* fake_ctx = nullptr,
     vmsdk::ThreadPool* writer_thread_pool = nullptr,
     const std::vector<absl::string_view>* key_prefixes = nullptr,
     int32_t index_schema_db_num = 0);
@@ -369,21 +327,21 @@ class MockThreadPool : public vmsdk::ThreadPool {
               (absl::AnyInvocable<void()> task, Priority priority), (override));
 };
 
-class ValkeySearchTest : public vmsdk::RedisTest {
+class ValkeySearchTest : public vmsdk::ValkeyTest {
  protected:
-  RedisModuleCtx fake_ctx_;
-  RedisModuleCtx registry_ctx_;
+  ValkeyModuleCtx fake_ctx_;
+  ValkeyModuleCtx registry_ctx_;
 
   void SetUp() override {
-    RedisTest::SetUp();
+    ValkeyTest::SetUp();
     ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
     KeyspaceEventManager::InitInstance(
         std::make_unique<TestableKeyspaceEventManager>());
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() { server_events::SubscribeToServerEvents(); }, nullptr,
         false));
-    ON_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(testing::_))
-        .WillByDefault([&](RedisModuleCtx* ctx) {
+    ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+        .WillByDefault([&](ValkeyModuleCtx* ctx) {
           return ctx == &registry_ctx_ ? ctx : nullptr;
         });
     VectorExternalizer::Instance().Init(&registry_ctx_);
@@ -393,7 +351,7 @@ class ValkeySearchTest : public vmsdk::RedisTest {
     ValkeySearch::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
     VectorExternalizer::Instance().Reset();
-    RedisTest::TearDown();
+    ValkeyTest::TearDown();
   }
 };
 
@@ -431,21 +389,21 @@ std::vector<NeighborTest> ToVectorNeighborTest(const T& neighbors) {
 }
 
 template <typename T>
-class ValkeySearchTestWithParam : public vmsdk::RedisTestWithParam<T> {
+class ValkeySearchTestWithParam : public vmsdk::ValkeyTestWithParam<T> {
  protected:
-  RedisModuleCtx fake_ctx_;
-  RedisModuleCtx registry_ctx_;
+  ValkeyModuleCtx fake_ctx_;
+  ValkeyModuleCtx registry_ctx_;
 
   void SetUp() override {
-    vmsdk::RedisTestWithParam<T>::SetUp();
+    vmsdk::ValkeyTestWithParam<T>::SetUp();
     ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
     KeyspaceEventManager::InitInstance(
         std::make_unique<TestableKeyspaceEventManager>());
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() { server_events::SubscribeToServerEvents(); }, nullptr,
         false));
-    ON_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(testing::_))
-        .WillByDefault([&](RedisModuleCtx* ctx) {
+    ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+        .WillByDefault([&](ValkeyModuleCtx* ctx) {
           return ctx == &registry_ctx_ ? ctx : nullptr;
         });
     VectorExternalizer::Instance().Init(&registry_ctx_);
@@ -455,7 +413,7 @@ class ValkeySearchTestWithParam : public vmsdk::RedisTestWithParam<T> {
     ValkeySearch::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
     VectorExternalizer::Instance().Reset();
-    vmsdk::RedisTestWithParam<T>::TearDown();
+    vmsdk::ValkeyTestWithParam<T>::TearDown();
   }
 };
 

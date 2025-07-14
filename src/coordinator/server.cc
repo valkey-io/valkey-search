@@ -1,30 +1,8 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/coordinator/server.h"
@@ -37,7 +15,6 @@
 
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
-#include "absl/time/time.h"
 #include "grpc/grpc.h"
 #include "grpcpp/completion_queue.h"
 #include "grpcpp/health_check_service_interface.h"
@@ -117,10 +94,10 @@ void SerializeNeighbors(SearchIndexPartitionResponse* response,
     neighbor_proto->set_score(neighbor.distance);
     if (neighbor.attribute_contents) {
       const auto& attribute_contents = neighbor.attribute_contents.value();
-      for (const auto& [attr_alias, attr_value] : attribute_contents) {
+      for (const auto& [identifier, record] : attribute_contents) {
         auto contents = neighbor_proto->add_attribute_contents();
-        contents->set_attribute_alias(attr_alias);
-        contents->set_content(vmsdk::ToStringView(attr_value.value.get()));
+        contents->set_identifier(identifier);
+        contents->set_content(vmsdk::ToStringView(record.value.get()));
       }
     }
   }
@@ -156,23 +133,24 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
           reactor->Finish(grpc::Status::OK);
           RecordSearchMetrics(false, std::move(latency_sample));
         } else {
-          vmsdk::RunByMain([parameters = std::move(parameters), response,
-                            reactor, latency_sample = std::move(latency_sample),
-                            neighbors =
-                                std::move(neighbors.value())]() mutable {
-            const auto& attribute_data_type =
-                parameters->index_schema->GetAttributeDataType();
-            auto ctx = RedisModule_GetThreadSafeContext(nullptr);
-            auto vector_identifier =
-                parameters->index_schema
-                    ->GetIdentifier(parameters->attribute_alias)
-                    .value();
-            query::ProcessNeighborsForReply(ctx, attribute_data_type, neighbors,
-                                            *parameters, vector_identifier);
-            SerializeNeighbors(response, neighbors);
-            reactor->Finish(grpc::Status::OK);
-            RecordSearchMetrics(false, std::move(latency_sample));
-          });
+          vmsdk::RunByMain(
+              [parameters = std::move(parameters), response, reactor,
+               latency_sample = std::move(latency_sample),
+               neighbors = std::move(neighbors.value())]() mutable {
+                const auto& attribute_data_type =
+                    parameters->index_schema->GetAttributeDataType();
+                auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
+                auto vector_identifier =
+                    parameters->index_schema
+                        ->GetIdentifier(parameters->attribute_alias)
+                        .value();
+                query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
+                                                neighbors, *parameters,
+                                                vector_identifier);
+                SerializeNeighbors(response, neighbors);
+                reactor->Finish(grpc::Status::OK);
+                RecordSearchMetrics(false, std::move(latency_sample));
+              });
         }
       },
       false);
@@ -193,13 +171,14 @@ ServerImpl::ServerImpl(std::unique_ptr<Service> coordinator_service,
       port_(port) {}
 
 std::unique_ptr<Server> ServerImpl::Create(
-    RedisModuleCtx* ctx, vmsdk::ThreadPool* reader_thread_pool, uint16_t port) {
+    ValkeyModuleCtx* ctx, vmsdk::ThreadPool* reader_thread_pool,
+    uint16_t port) {
   std::string server_address = absl::StrCat("[::]:", port);
   grpc::EnableDefaultHealthCheckService(true);
   std::shared_ptr<grpc::ServerCredentials> creds =
       grpc::InsecureServerCredentials();
   auto coordinator_service = std::make_unique<Service>(
-      vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx), reader_thread_pool);
+      vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx), reader_thread_pool);
   grpc::ServerBuilder builder;
   builder.AddListeningPort(server_address, creds);
   builder.RegisterService(coordinator_service.get());
@@ -208,8 +187,8 @@ std::unique_ptr<Server> ServerImpl::Create(
   builder.AddChannelArgument(GRPC_ARG_TCP_TX_ZEROCOPY_ENABLED, 1);
   auto server = builder.BuildAndStart();
   if (server == nullptr) {
-    VMSDK_LOG(NOTICE, ctx) << "Failed to start Coordinator Server on "
-                           << server_address;
+    VMSDK_LOG(WARNING, ctx)
+        << "Failed to start Coordinator Server on " << server_address;
     return nullptr;
   }
   VMSDK_LOG(NOTICE, ctx) << "Coordinator Server listening on "

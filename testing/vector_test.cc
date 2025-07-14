@@ -1,30 +1,8 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <cstddef>
@@ -135,10 +113,10 @@ auto IndexToKey = [](int i) {
 void VerifyResult(const absl::StatusOr<bool>& res,
                   ExpectedResults expected_result) {
   if (expected_result == ExpectedResults::kSuccess) {
-    VMSDK_EXPECT_OK(res.status());
+    VMSDK_EXPECT_OK(res);
     EXPECT_TRUE(res.value());
   } else if (expected_result == ExpectedResults::kSkipped) {
-    VMSDK_EXPECT_OK(res.status());
+    VMSDK_EXPECT_OK(res);
     EXPECT_FALSE(res.value());
   } else {
     EXPECT_FALSE(res.status().ok());
@@ -250,7 +228,7 @@ TEST_P(NormalizeStringRecordTest, NormalizeStringRecord) {
                                  kInitialCap, kM, kEFConstruction, kEFRuntime),
       "attribute_identifier_1",
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
-  auto record = vmsdk::MakeUniqueRedisString(params.record);
+  auto record = vmsdk::MakeUniqueValkeyString(params.record);
   auto norm_record = index.value()->NormalizeStringRecord(std::move(record));
   if (!params.success) {
     EXPECT_FALSE(norm_record.get());
@@ -325,8 +303,8 @@ TEST_F(VectorIndexTest, ResizeHNSW) ABSL_NO_THREAD_SAFETY_ANALYSIS {
                                    kM, kEFConstruction, kEFRuntime),
         "attribute_identifier_1",
         data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
-    const uint32_t block_size = 1024;
-    index.value()->SetBlockSize(block_size);
+    ValkeySearch::Instance().SetHNSWBlockSize(1024);
+    uint32_t block_size = ValkeySearch::Instance().GetHNSWBlockSize();
     EXPECT_EQ(index.value()->GetCapacity(), initial_cap);
     auto vectors = DeterministicallyGenerateVectors(
         initial_cap + block_size + 100, kDimensions, 10.0);
@@ -378,13 +356,13 @@ TEST_F(VectorIndexTest, ResizeFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   }
 }
 
-float CalcRecall(VectorFlat<float>* flat_index, VectorHNSW<float>* hsw_index,
-                uint64_t k, int dimensions, std::optional<size_t> ef_runtime) {
+float CalcRecall(VectorFlat<float>* flat_index, VectorHNSW<float>* hnsw_index,
+                 uint64_t k, int dimensions, std::optional<size_t> ef_runtime) {
   auto search_vectors = DeterministicallyGenerateVectors(50, dimensions, 1.5);
   int cnt = 0;
-  for (size_t i = 0; i < search_vectors.size(); ++i) {
-    absl::string_view vector = VectorToStr(search_vectors[i]);
-    auto res_hnsw = hsw_index->Search(vector, k, nullptr, ef_runtime);
+  for (const auto& search_vector : search_vectors) {
+    absl::string_view vector = VectorToStr(search_vector);
+    auto res_hnsw = hnsw_index->Search(vector, k, nullptr, ef_runtime);
     auto res_flat = flat_index->Search(vector, k);
     for (auto& label : *res_hnsw) {
       for (auto& real_label : *res_flat) {
@@ -423,11 +401,11 @@ TEST_F(VectorIndexTest, EfRuntimeRecall) {
     }
     uint64_t k = 10;
     auto no_ef_runtime_recall = CalcRecall(index_flat->get(), index_hnsw->get(),
-                                          k, kDimensions, std::nullopt);
+                                           k, kDimensions, std::nullopt);
     auto default_ef_runtime_recall = CalcRecall(
         index_flat->get(), index_hnsw->get(), k, kDimensions, kEFRuntime);
     auto ef_runtime_recall = CalcRecall(index_flat->get(), index_hnsw->get(), k,
-                                       kDimensions, kEFRuntime * 8);
+                                        kDimensions, kEFRuntime * 8);
     EXPECT_LE(no_ef_runtime_recall, ef_runtime_recall);
     EXPECT_GE(ef_runtime_recall, 0.96f);
     EXPECT_EQ(default_ef_runtime_recall, no_ef_runtime_recall);
@@ -439,7 +417,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
        {data_model::DISTANCE_METRIC_COSINE, data_model::DISTANCE_METRIC_L2}) {
     const int initial_cap = 1000;
     const uint64_t k = 10;
-    FakeRDBIOStream rdb_stream;
+    FakeSafeRDB rdb;
     auto vectors = DeterministicallyGenerateVectors(1000, kDimensions, 2.2);
     // Load the vectors into a Flat index. This will be used for computing the
     // recall later
@@ -465,133 +443,51 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
       if (distance_metric == data_model::DISTANCE_METRIC_COSINE) {
         EXPECT_TRUE((*index_hnsw)->GetNormalize());
       }
-      VMSDK_EXPECT_OK((*index_hnsw)->SaveIndex(rdb_stream));
+      VMSDK_EXPECT_OK((*index_hnsw)->SaveIndex(RDBChunkOutputStream(&rdb)));
+      VMSDK_EXPECT_OK(
+          (*index_hnsw)->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
       hnsw_proto = (*index_hnsw)->ToProto()->vector_index();
     }
 
     // Load the HNSW index, populate data, validate recall, save again
     {
       auto loaded_index_hnsw = VectorHNSW<float>::LoadFromRDB(
-          &fake_ctx_, &hash_attribute_data_type_, hnsw_proto, rdb_stream,
-          "attribute_identifier_3");
+          &fake_ctx_, &hash_attribute_data_type_, hnsw_proto,
+          "attribute_identifier_3", SupplementalContentChunkIter(&rdb));
       VMSDK_EXPECT_OK(loaded_index_hnsw);
+      VMSDK_EXPECT_OK(
+          (*loaded_index_hnsw)
+              ->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
+                                SupplementalContentChunkIter(&rdb)));
       for (size_t i = 0; i < vectors.size(); ++i) {
         VerifyAdd(loaded_index_hnsw->get(), vectors, i,
                   ExpectedResults::kSuccess);
       }
       auto default_ef_runtime_recall =
-          CalcRecall(index_flat->get(), loaded_index_hnsw->get(), k, kDimensions,
-                    kEFRuntime);
+          CalcRecall(index_flat->get(), loaded_index_hnsw->get(), k,
+                     kDimensions, kEFRuntime);
       EXPECT_GE(default_ef_runtime_recall, 0.96f);
-      VMSDK_EXPECT_OK((*loaded_index_hnsw)->SaveIndex(rdb_stream));
+      VMSDK_EXPECT_OK(
+          (*loaded_index_hnsw)->SaveIndex(RDBChunkOutputStream(&rdb)));
+      VMSDK_EXPECT_OK(
+          (*loaded_index_hnsw)->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
       hnsw_proto = (*loaded_index_hnsw)->ToProto()->vector_index();
     }
 
     // Load the HNSW index, run search queries and validate recall
     {
       auto loaded_index_hnsw = VectorHNSW<float>::LoadFromRDB(
-          &fake_ctx_, &hash_attribute_data_type_, hnsw_proto, rdb_stream,
-          "attribute_identifier_4");
+          &fake_ctx_, &hash_attribute_data_type_, hnsw_proto,
+          "attribute_identifier_4", SupplementalContentChunkIter(&rdb));
       VMSDK_EXPECT_OK(loaded_index_hnsw);
+      VMSDK_EXPECT_OK(
+          (*loaded_index_hnsw)
+              ->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
+                                SupplementalContentChunkIter(&rdb)));
       auto default_ef_runtime_recall =
-          CalcRecall(index_flat->get(), loaded_index_hnsw->get(), k, kDimensions,
-                    kEFRuntime);
+          CalcRecall(index_flat->get(), loaded_index_hnsw->get(), k,
+                     kDimensions, kEFRuntime);
       EXPECT_GE(default_ef_runtime_recall, 0.96f);
-    }
-  }
-}
-
-TEST_F(VectorIndexTest, SaveAndLoadHnswTrackedKeysNotInProto) {
-  for (auto& distance_metric :
-       {data_model::DISTANCE_METRIC_COSINE, data_model::DISTANCE_METRIC_L2}) {
-    const int initial_cap = 1000;
-    const uint64_t k = 10;
-    FakeRDBIOStream rdb_stream;
-    auto vectors = DeterministicallyGenerateVectors(1000, kDimensions, 2.2);
-    // Load the vectors into a Flat index. This will be used for computing the
-    // recall later
-    auto index_flat = VectorFlat<float>::Create(
-        CreateFlatVectorIndexProto(kDimensions, distance_metric, initial_cap,
-                                   kBlockSize),
-        "attribute_identifier_1",
-        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
-    VMSDK_EXPECT_OK(index_flat);
-    for (size_t i = 0; i < vectors.size(); ++i) {
-      VerifyAdd(index_flat->get(), vectors, i, ExpectedResults::kSuccess);
-    }
-
-    data_model::VectorIndex hnsw_proto =
-        CreateHNSWVectorIndexProto(kDimensions, distance_metric, initial_cap,
-                                   kM, kEFConstruction, kEFRuntime);
-    // Create and save empty HNSW index
-    {
-      auto index_hnsw = VectorHNSW<float>::Create(
-          hnsw_proto, "attribute_identifier_2",
-          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
-      VMSDK_EXPECT_OK(index_hnsw);
-      if (distance_metric == data_model::DISTANCE_METRIC_COSINE) {
-        EXPECT_TRUE((*index_hnsw)->GetNormalize());
-      }
-      VMSDK_EXPECT_OK((*index_hnsw)->SaveIndex(rdb_stream));
-    }
-
-    // Load the HNSW index, populate data, validate recall, save again
-    {
-      auto loaded_index_hnsw = VectorHNSW<float>::LoadFromRDB(
-          &fake_ctx_, &hash_attribute_data_type_, hnsw_proto, rdb_stream,
-          "attribute_identifier_3");
-      VMSDK_EXPECT_OK(loaded_index_hnsw);
-      for (size_t i = 0; i < vectors.size(); ++i) {
-        VerifyAdd(loaded_index_hnsw->get(), vectors, i,
-                  ExpectedResults::kSuccess);
-      }
-      auto default_ef_runtime_recall =
-          CalcRecall(index_flat->get(), loaded_index_hnsw->get(), k, kDimensions,
-                    kEFRuntime);
-      EXPECT_GE(default_ef_runtime_recall, 0.96f);
-      VMSDK_EXPECT_OK((*loaded_index_hnsw)->SaveIndex(rdb_stream));
-      auto new_proto = (*loaded_index_hnsw)->ToProto()->vector_index();
-      EXPECT_TRUE(new_proto.has_tracked_keys());
-    }
-
-    // Load the HNSW index, run search queries and validate recall
-    {
-      auto loaded_index_hnsw = VectorHNSW<float>::LoadFromRDB(
-          &fake_ctx_, &hash_attribute_data_type_, hnsw_proto, rdb_stream,
-          "attribute_identifier_3");
-      VMSDK_EXPECT_OK(loaded_index_hnsw);
-      auto default_ef_runtime_recall =
-          CalcRecall(index_flat->get(), loaded_index_hnsw->get(), k, kDimensions,
-                    kEFRuntime);
-      EXPECT_GE(default_ef_runtime_recall, 0.96f);
-      auto new_proto = (*loaded_index_hnsw)->ToProto()->vector_index();
-      for (const auto& tracked_key_metadata :
-           new_proto.tracked_keys().tracked_key_metadata()) {
-        if (new_proto.normalize()) {
-          // All magnitudes should be -inf since it wasn't included in the RDB.
-          EXPECT_EQ(tracked_key_metadata.magnitude(),
-                    std::numeric_limits<float>::lowest());
-        } else {
-          EXPECT_EQ(tracked_key_metadata.magnitude(), -1.0f);
-        }
-      }
-
-      // Re-insert the vectors
-      for (size_t i = 0; i < vectors.size(); ++i) {
-        VerifyModify(loaded_index_hnsw->get(), vectors[i], i,
-                     ExpectedResults::kSkipped, true);
-      }
-
-      new_proto = (*loaded_index_hnsw)->ToProto()->vector_index();
-      for (const auto& tracked_key_metadata :
-           new_proto.tracked_keys().tracked_key_metadata()) {
-        // All magnitudes should have a value since it was backfilled.
-        EXPECT_NE(tracked_key_metadata.magnitude(),
-                  std::numeric_limits<float>::lowest());
-        if (new_proto.normalize()) {
-          EXPECT_GT(tracked_key_metadata.magnitude(), 0.0f);
-        }
-      }
     }
   }
 }
@@ -601,7 +497,7 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
        {data_model::DISTANCE_METRIC_COSINE, data_model::DISTANCE_METRIC_L2}) {
     const int initial_cap = 1000;
     const uint64_t k = 10;
-    FakeRDBIOStream rdb_stream;
+    FakeSafeRDB rdb;
     auto vectors = DeterministicallyGenerateVectors(1000, kDimensions, 2.2);
     auto search_vectors =
         DeterministicallyGenerateVectors(50, kDimensions, 1.5);
@@ -617,26 +513,31 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
       if (distance_metric == data_model::DISTANCE_METRIC_COSINE) {
         EXPECT_TRUE(index.value()->GetNormalize());
       }
-      VMSDK_EXPECT_OK(index.value()->SaveIndex(rdb_stream));
+      VMSDK_EXPECT_OK(index.value()->SaveIndex(RDBChunkOutputStream(&rdb)));
+      VMSDK_EXPECT_OK((*index)->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
       flat_proto = (*index)->ToProto()->vector_index();
     }
 
     // Load the index, populate data, perform search, save the index again
     {
       auto index_pr = VectorFlat<float>::LoadFromRDB(
-          &fake_ctx_, &hash_attribute_data_type_, flat_proto, rdb_stream,
-          "attribute_identifier_2");
+          &fake_ctx_, &hash_attribute_data_type_, flat_proto,
+          "attribute_identifier_2", SupplementalContentChunkIter(&rdb));
       VMSDK_EXPECT_OK(index_pr);
       auto index = std::move(index_pr.value());
+      VMSDK_EXPECT_OK(
+          index->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
+                                 SupplementalContentChunkIter(&rdb)));
       for (size_t i = 0; i < vectors.size(); ++i) {
         VerifyAdd(index.get(), vectors, i, ExpectedResults::kSuccess);
       }
-      for (size_t i = 0; i < search_vectors.size(); ++i) {
-        absl::string_view vector = VectorToStr(search_vectors[i]);
+      for (const auto& search_vector : search_vectors) {
+        absl::string_view vector = VectorToStr(search_vector);
         auto res = index->Search(vector, k);
         expected_results.push_back(std::move(*res));
       }
-      VMSDK_EXPECT_OK(index->SaveIndex(rdb_stream));
+      VMSDK_EXPECT_OK(index->SaveIndex(RDBChunkOutputStream(&rdb)));
+      VMSDK_EXPECT_OK(index->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
       flat_proto = index->ToProto()->vector_index();
     }
 
@@ -644,10 +545,13 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
     // match the previous results
     {
       auto index_pr = VectorFlat<float>::LoadFromRDB(
-          &fake_ctx_, &hash_attribute_data_type_, flat_proto, rdb_stream,
-          "attribute_identifier_3");
+          &fake_ctx_, &hash_attribute_data_type_, flat_proto,
+          "attribute_identifier_3", SupplementalContentChunkIter(&rdb));
       VMSDK_EXPECT_OK(index_pr);
       auto index = std::move(index_pr.value());
+      VMSDK_EXPECT_OK(
+          index->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
+                                 SupplementalContentChunkIter(&rdb)));
       for (size_t i = 0; i < search_vectors.size(); ++i) {
         absl::string_view vector = VectorToStr(search_vectors[i]);
         auto res = index->Search(vector, k);
@@ -659,99 +563,6 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
       for (size_t i = 0; i < vectors.size(); ++i) {
         VerifyModify(index.get(), vectors[i], i, ExpectedResults::kSkipped,
                      true);
-      }
-    }
-  }
-}
-
-TEST_F(VectorIndexTest, SaveAndLoadFlatTrackedKeysNotInProto) {
-  for (auto& distance_metric :
-       {data_model::DISTANCE_METRIC_COSINE, data_model::DISTANCE_METRIC_L2}) {
-    const int initial_cap = 1000;
-    const uint64_t k = 10;
-    FakeRDBIOStream rdb_stream;
-    auto vectors = DeterministicallyGenerateVectors(1000, kDimensions, 2.2);
-    auto search_vectors =
-        DeterministicallyGenerateVectors(50, kDimensions, 1.5);
-    std::vector<std::deque<Neighbor>> expected_results;
-
-    data_model::VectorIndex flat_proto = CreateFlatVectorIndexProto(
-        kDimensions, distance_metric, initial_cap, kBlockSize);
-    // Create and save empty Flat index
-    {
-      auto index = VectorFlat<float>::Create(
-          flat_proto, "attribute_identifier_1",
-          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
-      if (distance_metric == data_model::DISTANCE_METRIC_COSINE) {
-        EXPECT_TRUE(index.value()->GetNormalize());
-      }
-      VMSDK_EXPECT_OK(index.value()->SaveIndex(rdb_stream));
-    }
-
-    // Load the index, populate data, perform search, save the index again
-    {
-      auto index_pr = VectorFlat<float>::LoadFromRDB(
-          &fake_ctx_, &hash_attribute_data_type_, flat_proto, rdb_stream,
-          "attribute_identifier_2");
-      VMSDK_EXPECT_OK(index_pr);
-      auto index = std::move(index_pr.value());
-      for (size_t i = 0; i < vectors.size(); ++i) {
-        VerifyAdd(index.get(), vectors, i, ExpectedResults::kSuccess);
-      }
-      for (size_t i = 0; i < search_vectors.size(); ++i) {
-        absl::string_view vector = VectorToStr(search_vectors[i]);
-        auto res = index->Search(vector, k);
-        expected_results.push_back(std::move(*res));
-      }
-      VMSDK_EXPECT_OK(index->SaveIndex(rdb_stream));
-      auto new_proto = index->ToProto()->vector_index();
-      EXPECT_TRUE(new_proto.has_tracked_keys());
-      EXPECT_EQ(new_proto.tracked_keys().tracked_key_metadata_size(),
-                vectors.size());
-    }
-
-    // Load the index, run search queries and validate that the search results
-    // match the previous results
-    {
-      auto index_pr = VectorFlat<float>::LoadFromRDB(
-          &fake_ctx_, &hash_attribute_data_type_, flat_proto, rdb_stream,
-          "attribute_identifier_3");
-      VMSDK_EXPECT_OK(index_pr);
-      auto index = std::move(index_pr.value());
-      for (size_t i = 0; i < search_vectors.size(); ++i) {
-        absl::string_view vector = VectorToStr(search_vectors[i]);
-        auto res = index->Search(vector, k);
-        EXPECT_EQ(ToVectorNeighborTest(*res),
-                  ToVectorNeighborTest(expected_results[i]));
-      }
-
-      auto new_proto = index->ToProto()->vector_index();
-      for (const auto& tracked_key_metadata :
-           new_proto.tracked_keys().tracked_key_metadata()) {
-        if (new_proto.normalize()) {
-          // All magnitudes should be -inf since it wasn't included in the RDB.
-          EXPECT_EQ(tracked_key_metadata.magnitude(),
-                    std::numeric_limits<float>::lowest());
-        } else {
-          EXPECT_EQ(tracked_key_metadata.magnitude(), -1.0f);
-        }
-      }
-
-      // Re-insert the vectors
-      for (size_t i = 0; i < vectors.size(); ++i) {
-        VerifyModify(index.get(), vectors[i], i, ExpectedResults::kSkipped,
-                     true);
-      }
-
-      new_proto = index->ToProto()->vector_index();
-      for (const auto& tracked_key_metadata :
-           new_proto.tracked_keys().tracked_key_metadata()) {
-        // All magnitudes should have a value since it was backfilled.
-        EXPECT_NE(tracked_key_metadata.magnitude(),
-                  std::numeric_limits<float>::lowest());
-        if (new_proto.normalize()) {
-          EXPECT_GT(tracked_key_metadata.magnitude(), 0.0f);
-        }
       }
     }
   }

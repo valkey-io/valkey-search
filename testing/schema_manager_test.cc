@@ -1,30 +1,8 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/schema_manager.h"
@@ -78,12 +56,14 @@ class SchemaManagerTest : public ValkeySearchTest {
     ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
         test_index_schema_proto_str, &test_index_schema_proto_));
     mock_client_pool_ = std::make_unique<coordinator::MockClientPool>();
-    ON_CALL(*kMockRedisModule, GetSelectedDb(&fake_ctx_))
+    ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
         .WillByDefault(testing::Return(db_num_));
-    ON_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(testing::_))
+    ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
         .WillByDefault(testing::Return(&fake_ctx_));
-    ON_CALL(*kMockRedisModule, FreeThreadSafeContext(testing::_))
+    ON_CALL(*kMockValkeyModule, FreeThreadSafeContext(testing::_))
         .WillByDefault(testing::Return());
+    ON_CALL(*kMockValkeyModule, SelectDb(testing::_, db_num_))
+        .WillByDefault(testing::Return(VALKEYMODULE_OK));
     test_metadata_manager_ = std::make_unique<coordinator::MetadataManager>(
         &fake_ctx_, *mock_client_pool_);
   }
@@ -242,153 +222,50 @@ TEST_F(SchemaManagerTest, TestOnFlushDB) {
   }
 }
 
-TEST_F(SchemaManagerTest, TestOnSavingStarted) {
-  for (bool coordinator_enabled : {true, false}) {
-    if (coordinator_enabled) {
-      coordinator::MetadataManager::InitInstance(
-          std::move(test_metadata_manager_));
-    }
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, coordinator_enabled));
-    VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
-        &fake_ctx_, test_index_schema_proto_));
-    auto index_schema =
-        SchemaManager::Instance().GetIndexSchema(db_num_, index_name_).value();
-    SchemaManager::Instance().OnSavingStarted(&fake_ctx_);
-    if (!coordinator_enabled) {
-      auto key_name = index_schema->GetKey();
-      EXPECT_THAT(
-          fake_ctx_.registered_keys,
-          testing::UnorderedElementsAre(
-              testing::Pair<std::string, RegisteredKey>(
-                  key_name,
-                  RegisteredKey{
-                      .key = key_name,
-                      .data = index_schema.get(),
-                      .module_type =
-                          TestableSchemaManager::GetFakeIndexSchemaModuleType(),
-                  })));
-    } else {
-      EXPECT_THAT(fake_ctx_.registered_keys, testing::IsEmpty());
-    }
-  }
-}
-
-TEST_F(SchemaManagerTest, TestOnSavingEnded) {
-  for (bool coordinator_enabled : {true, false}) {
-    if (coordinator_enabled) {
-      coordinator::MetadataManager::InitInstance(
-          std::move(test_metadata_manager_));
-    }
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, coordinator_enabled));
-    VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
-        &fake_ctx_, test_index_schema_proto_));
-    // First call it with no keys in the keyspace.
-    SchemaManager::Instance().OnSavingEnded(&fake_ctx_);
-    EXPECT_THAT(fake_ctx_.registered_keys, testing::IsEmpty());
-
-    // Next call it after saving them to the keyspace.
-    SchemaManager::Instance().OnSavingStarted(&fake_ctx_);
-    SchemaManager::Instance().OnSavingEnded(&fake_ctx_);
-    EXPECT_THAT(fake_ctx_.registered_keys, testing::IsEmpty());
-  }
-}
-
-TEST_F(SchemaManagerTest, TestOnLoadingEnded) {
-  for (bool coordinator_enabled : {true, false}) {
-    if (coordinator_enabled) {
-      coordinator::MetadataManager::InitInstance(
-          std::move(test_metadata_manager_));
-    }
-    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() {}, nullptr, coordinator_enabled));
-    VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
-        &fake_ctx_, test_index_schema_proto_));
-    // First call it with no keys in the keyspace.
-    SchemaManager::Instance().OnLoadingEnded(&fake_ctx_);
-    EXPECT_THAT(fake_ctx_.registered_keys, testing::IsEmpty());
-
-    // Next call it after saving them to the keyspace.
-    SchemaManager::Instance().OnSavingStarted(&fake_ctx_);
-    SchemaManager::Instance().OnLoadingEnded(&fake_ctx_);
-    EXPECT_THAT(fake_ctx_.registered_keys, testing::IsEmpty());
-  }
-}
-
-TEST_F(SchemaManagerTest, TestAuxSaveBeforeRDB) {
-  ON_CALL(*kMockRedisModule, GetContextFromIO(testing::_))
+TEST_F(SchemaManagerTest, TestSaveIndexesBeforeRDB) {
+  ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
       .WillByDefault(testing::Return(&fake_ctx_));
   auto schema =
       CreateIndexSchema(index_name_, &fake_ctx_, nullptr, {}, db_num_).value();
-  RedisModuleIO *fake_rdb = reinterpret_cast<RedisModuleIO *>(0xDEADBEEF);
-  EXPECT_CALL(*kMockRedisModule, SaveUnsigned(fake_rdb, testing::_)).Times(0);
+  ValkeyModuleIO *fake_rdb = reinterpret_cast<ValkeyModuleIO *>(0xDEADBEEF);
+  EXPECT_CALL(*kMockValkeyModule, SaveUnsigned(fake_rdb, testing::_)).Times(0);
   EXPECT_CALL(*schema, RDBSave(testing::_)).Times(0);
-  SchemaManager::Instance().AuxSave(fake_rdb, REDISMODULE_AUX_BEFORE_RDB);
+  SafeRDB fake_safe_rdb(fake_rdb);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().SaveIndexes(
+      &fake_ctx_, &fake_safe_rdb, VALKEYMODULE_AUX_BEFORE_RDB));
 }
 
-TEST_F(SchemaManagerTest, TestAuxSaveAfterRDB) {
-  ON_CALL(*kMockRedisModule, GetContextFromIO(testing::_))
+TEST_F(SchemaManagerTest, TestSaveIndexesAfterRDB) {
+  ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
       .WillByDefault(testing::Return(&fake_ctx_));
   auto schema =
       CreateIndexSchema(index_name_, &fake_ctx_, nullptr, {}, db_num_).value();
-  RedisModuleIO *fake_rdb = reinterpret_cast<RedisModuleIO *>(0xDEADBEEF);
-  EXPECT_CALL(*kMockRedisModule, SaveUnsigned(fake_rdb, 1))
-      .WillOnce(testing::Return());
+  ValkeyModuleIO *fake_rdb = reinterpret_cast<ValkeyModuleIO *>(0xDEADBEEF);
   EXPECT_CALL(*schema, RDBSave(testing::_))
       .WillOnce(testing::Return(absl::OkStatus()));
-  SchemaManager::Instance().AuxSave(fake_rdb, REDISMODULE_AUX_AFTER_RDB);
+  SafeRDB fake_safe_rdb(fake_rdb);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().SaveIndexes(
+      &fake_ctx_, &fake_safe_rdb, VALKEYMODULE_AUX_AFTER_RDB));
 }
 
-TEST_F(SchemaManagerTest, TestAuxLoadBeforeRDB) {
-  ON_CALL(*kMockRedisModule, GetContextFromIO(testing::_))
-      .WillByDefault(testing::Return(&fake_ctx_));
-  RedisModuleIO *fake_rdb = reinterpret_cast<RedisModuleIO *>(0xDEADBEEF);
-  EXPECT_CALL(*kMockRedisModule, LoadUnsigned(fake_rdb)).Times(0);
-  EXPECT_CALL(*kMockRedisModule, LoadString(testing::_)).Times(0);
-  VMSDK_EXPECT_OK(SchemaManager::Instance().AuxLoad(
-      fake_rdb, 0, REDISMODULE_AUX_BEFORE_RDB));
-  EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 0);
-}
-
-TEST_F(SchemaManagerTest, TestEmptyAuxLoadAfterRDBReplication) {
+TEST_F(SchemaManagerTest, TestLoadIndexDuringReplication) {
+  ValkeyModuleEvent eid;
   std::string existing_index_name = "test_key_2";
   auto test_index_schema_or = CreateVectorHNSWSchema(
       existing_index_name, &fake_ctx_, nullptr, {}, db_num_);
-  RedisModuleEvent eid;
-  SchemaManager::Instance().OnLoadingCallback(
-      &fake_ctx_, eid, REDISMODULE_SUBEVENT_LOADING_REPL_START, nullptr);
-  ON_CALL(*kMockRedisModule, GetContextFromIO(testing::_))
+  ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
       .WillByDefault(testing::Return(&fake_ctx_));
-  RedisModuleIO *fake_rdb = reinterpret_cast<RedisModuleIO *>(0xDEADBEEF);
-  EXPECT_CALL(*kMockRedisModule, LoadUnsigned(fake_rdb))
-      .WillOnce(testing::Return(0));
-  VMSDK_EXPECT_OK(SchemaManager::Instance().AuxLoad(fake_rdb, 0,
-                                                    REDISMODULE_AUX_AFTER_RDB));
-
-  // Calling loading callback again should result in no schemas.
   SchemaManager::Instance().OnLoadingCallback(
-      &fake_ctx_, eid, REDISMODULE_SUBEVENT_LOADING_ENDED, nullptr);
-  EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 0);
-}
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_REPL_START, nullptr);
 
-TEST_F(SchemaManagerTest, TestAuxLoadAfterRDBReplication) {
-  RedisModuleEvent eid;
-  std::string existing_index_name = "test_key_2";
-  auto test_index_schema_or = CreateVectorHNSWSchema(
-      existing_index_name, &fake_ctx_, nullptr, {}, db_num_);
-  ON_CALL(*kMockRedisModule, GetContextFromIO(testing::_))
-      .WillByDefault(testing::Return(&fake_ctx_));
-  RedisModuleIO *fake_rdb = reinterpret_cast<RedisModuleIO *>(0xDEADBEEF);
-  EXPECT_CALL(*kMockRedisModule, LoadUnsigned(fake_rdb))
-      .WillOnce(testing::Return(1));
-  EXPECT_CALL(*kMockRedisModule, LoadString(testing::_))
-      .WillOnce(testing::Return(
-          new RedisModuleString(test_index_schema_proto_.SerializeAsString())));
-  SchemaManager::Instance().OnLoadingCallback(
-      &fake_ctx_, eid, REDISMODULE_SUBEVENT_LOADING_REPL_START, nullptr);
-  VMSDK_EXPECT_OK(SchemaManager::Instance().AuxLoad(fake_rdb, 0,
-                                                    REDISMODULE_AUX_AFTER_RDB));
+  FakeSafeRDB fake_rdb;
+  auto section = std::make_unique<data_model::RDBSection>();
+  section->set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
+  section->mutable_index_schema_contents()->CopyFrom(test_index_schema_proto_);
+  section->set_supplemental_count(0);
+
+  VMSDK_EXPECT_OK(SchemaManager::Instance().LoadIndex(
+      &fake_ctx_, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
 
   // Should be staged, but not applied.
   VMSDK_EXPECT_OK(
@@ -398,9 +275,10 @@ TEST_F(SchemaManagerTest, TestAuxLoadAfterRDBReplication) {
                 .status()
                 .code(),
             absl::StatusCode::kNotFound);
+
   // Loading callback should apply the new schemas.
   SchemaManager::Instance().OnLoadingCallback(
-      &fake_ctx_, eid, REDISMODULE_SUBEVENT_LOADING_ENDED, nullptr);
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_ENDED, nullptr);
   EXPECT_EQ(SchemaManager::Instance()
                 .GetIndexSchema(db_num_, existing_index_name)
                 .status()
@@ -410,18 +288,19 @@ TEST_F(SchemaManagerTest, TestAuxLoadAfterRDBReplication) {
       SchemaManager::Instance().GetIndexSchema(db_num_, index_name_));
 }
 
-TEST_F(SchemaManagerTest, TestAuxLoadNoReplication) {
-  RedisModuleEvent eid;
-  ON_CALL(*kMockRedisModule, GetContextFromIO(testing::_))
+TEST_F(SchemaManagerTest, TestLoadIndexNoReplication) {
+  ValkeyModuleEvent eid;
+  ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
       .WillByDefault(testing::Return(&fake_ctx_));
-  RedisModuleIO *fake_rdb = reinterpret_cast<RedisModuleIO *>(0xDEADBEEF);
-  EXPECT_CALL(*kMockRedisModule, LoadUnsigned(fake_rdb))
-      .WillOnce(testing::Return(1));
-  EXPECT_CALL(*kMockRedisModule, LoadString(testing::_))
-      .WillOnce(testing::Return(
-          new RedisModuleString(test_index_schema_proto_.SerializeAsString())));
-  VMSDK_EXPECT_OK(SchemaManager::Instance().AuxLoad(fake_rdb, 0,
-                                                    REDISMODULE_AUX_AFTER_RDB));
+
+  FakeSafeRDB fake_rdb;
+  auto section = std::make_unique<data_model::RDBSection>();
+  section->set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
+  section->mutable_index_schema_contents()->CopyFrom(test_index_schema_proto_);
+  section->set_supplemental_count(0);
+
+  VMSDK_EXPECT_OK(SchemaManager::Instance().LoadIndex(
+      &fake_ctx_, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
 
   // Should be loaded already, no callback needed.
   VMSDK_EXPECT_OK(
@@ -429,63 +308,66 @@ TEST_F(SchemaManagerTest, TestAuxLoadNoReplication) {
 
   // Loading callback should not remove the new schemas.
   SchemaManager::Instance().OnLoadingCallback(
-      &fake_ctx_, eid, REDISMODULE_SUBEVENT_LOADING_ENDED, nullptr);
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_ENDED, nullptr);
   VMSDK_EXPECT_OK(
       SchemaManager::Instance().GetIndexSchema(db_num_, index_name_));
 }
 
-TEST_F(SchemaManagerTest, TestAuxLoadExistingData) {
-  RedisModuleEvent eid;
-  ON_CALL(*kMockRedisModule, GetContextFromIO(testing::_))
+TEST_F(SchemaManagerTest, TestLoadIndexExistingData) {
+  ValkeyModuleEvent eid;
+  ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))
       .WillByDefault(testing::Return(&fake_ctx_));
-  RedisModuleIO *fake_rdb = reinterpret_cast<RedisModuleIO *>(0xDEADBEEF);
 
   // Load two indices as existing
-  auto existing_1 = test_index_schema_proto_;
-  existing_1.set_name("existing_1");
-  auto existing_2 = test_index_schema_proto_;
-  existing_2.set_name("existing_2");
-  EXPECT_CALL(*kMockRedisModule, LoadUnsigned(fake_rdb))
-      .WillOnce(testing::Return(2));
-  EXPECT_CALL(*kMockRedisModule, LoadString(testing::_))
-      .WillOnce(testing::Return(
-          new RedisModuleString(existing_1.SerializeAsString())))
-      .WillOnce(testing::Return(
-          new RedisModuleString(existing_2.SerializeAsString())));
-  VMSDK_EXPECT_OK(SchemaManager::Instance().AuxLoad(fake_rdb, 0,
-                                                    REDISMODULE_AUX_AFTER_RDB));
+  FakeSafeRDB fake_rdb;
+  for (int i = 0; i < 2; i++) {
+    auto section = std::make_unique<data_model::RDBSection>();
+    section->set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
+    auto existing = test_index_schema_proto_;
+    existing.set_name(absl::StrFormat("existing_%d", i));
+    section->mutable_index_schema_contents()->CopyFrom(existing);
+    section->set_supplemental_count(0);
+
+    VMSDK_EXPECT_OK(SchemaManager::Instance().LoadIndex(
+        &fake_ctx_, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
+  }
   SchemaManager::Instance().OnLoadingCallback(
-      &fake_ctx_, eid, REDISMODULE_SUBEVENT_LOADING_ENDED, nullptr);
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_ENDED, nullptr);
   VMSDK_EXPECT_OK(
-      SchemaManager::Instance().GetIndexSchema(db_num_, existing_1.name()));
+      SchemaManager::Instance().GetIndexSchema(db_num_, "existing_0"));
   VMSDK_EXPECT_OK(
-      SchemaManager::Instance().GetIndexSchema(db_num_, existing_2.name()));
+      SchemaManager::Instance().GetIndexSchema(db_num_, "existing_1"));
 
   // Replace one index and add a new one.
-  auto existing_2_new = test_index_schema_proto_;
-  existing_2_new.set_name("existing_2");
-  existing_2_new.mutable_subscribed_key_prefixes()->Add("new_prefix");
-  auto load_1 = test_index_schema_proto_;
-  load_1.set_name("load_1");
-  EXPECT_CALL(*kMockRedisModule, LoadUnsigned(fake_rdb))
-      .WillOnce(testing::Return(2));
-  EXPECT_CALL(*kMockRedisModule, LoadString(testing::_))
-      .WillOnce(testing::Return(
-          new RedisModuleString(existing_2_new.SerializeAsString())))
-      .WillOnce(
-          testing::Return(new RedisModuleString(load_1.SerializeAsString())));
-  VMSDK_EXPECT_OK(SchemaManager::Instance().AuxLoad(fake_rdb, 0,
-                                                    REDISMODULE_AUX_AFTER_RDB));
+  for (int i = 1; i < 3; i++) {
+    auto section = std::make_unique<data_model::RDBSection>();
+    section->set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
+    auto existing = test_index_schema_proto_;
+    existing.set_name(absl::StrFormat("existing_%d", i));
+    existing.mutable_subscribed_key_prefixes()->Add("new_prefix");
+    section->mutable_index_schema_contents()->CopyFrom(existing);
+    section->set_supplemental_count(0);
+
+    VMSDK_EXPECT_OK(SchemaManager::Instance().LoadIndex(
+        &fake_ctx_, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
+  }
+
   SchemaManager::Instance().OnLoadingCallback(
-      &fake_ctx_, eid, REDISMODULE_SUBEVENT_LOADING_ENDED, nullptr);
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_LOADING_ENDED, nullptr);
   VMSDK_EXPECT_OK(
-      SchemaManager::Instance().GetIndexSchema(db_num_, existing_1.name()));
+      SchemaManager::Instance().GetIndexSchema(db_num_, "existing_0"));
   VMSDK_EXPECT_OK(
-      SchemaManager::Instance().GetIndexSchema(db_num_, load_1.name()));
+      SchemaManager::Instance().GetIndexSchema(db_num_, "existing_1"));
   VMSDK_EXPECT_OK(
-      SchemaManager::Instance().GetIndexSchema(db_num_, existing_2_new.name()));
+      SchemaManager::Instance().GetIndexSchema(db_num_, "existing_2"));
   EXPECT_EQ(SchemaManager::Instance()
-                .GetIndexSchema(db_num_, existing_2_new.name())
+                .GetIndexSchema(db_num_, "existing_1")
+                .value()
+                ->GetKeyPrefixes()
+                .size(),
+            2);
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(db_num_, "existing_2")
                 .value()
                 ->GetKeyPrefixes()
                 .size(),
@@ -496,7 +378,7 @@ TEST_F(SchemaManagerTest, OnServerCronCallback) {
   InitThreadPools(10, 5);
   auto test_index_schema_or = CreateVectorHNSWSchema(
       "index_schema_key", &fake_ctx_, nullptr, {}, db_num_);
-  RedisModuleEvent eid;
+  ValkeyModuleEvent eid;
   EXPECT_TRUE(SchemaManager::Instance().IsIndexingInProgress());
   SchemaManager::Instance().OnServerCronCallback(&fake_ctx_, eid, 0, nullptr);
   EXPECT_FALSE(SchemaManager::Instance().IsIndexingInProgress());
@@ -581,10 +463,10 @@ TEST_P(OnSwapDBCallbackTest, OnSwapDBCallback) {
   VMSDK_EXPECT_OK(test_index_schema_or);
   auto test_index_schema = test_index_schema_or.value();
   EXPECT_TRUE(SchemaManager::Instance().IsIndexingInProgress());
-  RedisModuleSwapDbInfo swap_db_info;
+  ValkeyModuleSwapDbInfo swap_db_info;
   swap_db_info.dbnum_first = test_case.swap_dbnum_first;
   swap_db_info.dbnum_second = test_case.swap_dbnum_second;
-  RedisModuleEvent eid;
+  ValkeyModuleEvent eid;
   int32_t expected_dbnum = -1;
   if (test_case.index_schema_db_num == test_case.swap_dbnum_first) {
     expected_dbnum = test_case.swap_dbnum_second;
@@ -594,13 +476,13 @@ TEST_P(OnSwapDBCallbackTest, OnSwapDBCallback) {
   if (test_case.is_backfill_in_progress) {
     if (expected_dbnum == -1) {
       EXPECT_CALL(
-          *kMockRedisModule,
+          *kMockValkeyModule,
           SelectDb(test_index_schema->backfill_job_.Get()->scan_ctx.get(),
                    test_case.index_schema_db_num))
           .Times(0);
     } else {
       EXPECT_CALL(
-          *kMockRedisModule,
+          *kMockValkeyModule,
           SelectDb(test_index_schema->backfill_job_.Get()->scan_ctx.get(),
                    expected_dbnum))
           .WillOnce(testing::Return(1));

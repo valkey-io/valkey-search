@@ -1,30 +1,8 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/query/response_generator.h"
@@ -88,15 +66,15 @@ RecordsMap ToRecordsMap(
   RecordsMap records_map;
   for (const auto &[key, value] : record_map) {
     records_map.emplace(key,
-                        RecordsMapValue(vmsdk::MakeUniqueRedisString(key),
-                                        vmsdk::MakeUniqueRedisString(value)));
+                        RecordsMapValue(vmsdk::MakeUniqueValkeyString(key),
+                                        vmsdk::MakeUniqueValkeyString(value)));
   }
   return records_map;
 }
 
 TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
   auto &params = GetParam();
-  RedisModuleCtx fake_ctx;
+  ValkeyModuleCtx fake_ctx;
 
   std::deque<indexes::Neighbor> expected_neighbors;
   for (const auto &external_id : params.external_id_neighbors) {
@@ -105,6 +83,7 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
         indexes::Neighbor(string_interned_external_id, 0));
   }
   std::vector<RecordsMap> expected_contents;
+  expected_contents.reserve(params.expected_contents.size());
   for (const auto &expected_content : params.expected_contents) {
     expected_contents.push_back(ToRecordsMap(expected_content));
   }
@@ -112,8 +91,8 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
   for (const auto &return_attribute : params.return_attributes) {
     parameters.return_attributes.push_back(
         {.identifier =
-             vmsdk::MakeUniqueRedisString(return_attribute.identifier),
-         .alias = vmsdk::MakeUniqueRedisString(return_attribute.alias)});
+             vmsdk::MakeUniqueValkeyString(return_attribute.identifier),
+         .alias = vmsdk::MakeUniqueValkeyString(return_attribute.alias)});
   }
   parameters.filter_parse_results.filter_identifiers =
       params.filter_identifiers;
@@ -131,7 +110,7 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
       });
 
   parameters.filter_parse_results.root_predicate = std::move(predicate);
-  parameters.attribute_alias = "some_addribute_name";
+  parameters.attribute_alias = "some_attribute_name";
 
   MockAttributeDataType data_type;
   EXPECT_CALL(data_type, ToProto()).WillRepeatedly([&params]() {
@@ -147,7 +126,7 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
                                 absl::string_view(*neighbor.external_id),
                                 expected_fetched_identifiers))
         .WillOnce([&params](
-                      RedisModuleCtx *ctx,
+                      ValkeyModuleCtx *ctx,
                       const std::string &query_attribute_alias,
                       absl::string_view key,
                       const absl::flat_hash_set<absl::string_view> &identifiers)

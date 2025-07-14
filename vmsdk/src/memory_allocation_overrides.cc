@@ -1,30 +1,8 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <cstddef>
@@ -44,7 +22,6 @@
 // We put this at the end since it will otherwise mangle the malloc symbols in
 // the dependencies.
 #include "vmsdk/src/memory_allocation_overrides.h"
-// clang-format on
 
 namespace vmsdk {
 
@@ -158,6 +135,7 @@ void* PerformAndTrackAlignedAlloc(size_t align, size_t size,
 extern "C" {
 // Our allocator doesn't support tracking system memory size, so we just
 // return 0.
+// NOLINTNEXTLINE
 __attribute__((weak)) size_t empty_usable_size(void* ptr) noexcept { return 0; }
 
 // For Valkey allocation - we need to ensure alignment by taking advantage of
@@ -180,8 +158,8 @@ void* __wrap_malloc(size_t size) noexcept {
   }
   // Forcing 16-byte alignment in Valkey, which may otherwise return 8-byte
   // aligned memory.
-  return vmsdk::PerformAndTrackMalloc(AlignSize(size), RedisModule_Alloc,
-                                      RedisModule_MallocUsableSize);
+  return vmsdk::PerformAndTrackMalloc(AlignSize(size), ValkeyModule_Alloc,
+                                      ValkeyModule_MallocUsableSize);
 }
 void __wrap_free(void* ptr) noexcept {
   if (ptr == nullptr) {
@@ -196,8 +174,8 @@ void __wrap_free(void* ptr) noexcept {
   if (was_tracked || !vmsdk::IsUsingValkeyAlloc()) {
     vmsdk::PerformAndTrackFree(ptr, __real_free, empty_usable_size);
   } else {
-    vmsdk::PerformAndTrackFree(ptr, RedisModule_Free,
-                               RedisModule_MallocUsableSize);
+    vmsdk::PerformAndTrackFree(ptr, ValkeyModule_Free,
+                               ValkeyModule_MallocUsableSize);
   }
 }
 // NOLINTNEXTLINE
@@ -208,8 +186,8 @@ void* __wrap_calloc(size_t __nmemb, size_t size) noexcept {
     vmsdk::SystemAllocTracker::GetInstance().TrackPointer(ptr);
     return ptr;
   }
-  return vmsdk::PerformAndTrackCalloc(__nmemb, size, RedisModule_Calloc,
-                                      RedisModule_MallocUsableSize);
+  return vmsdk::PerformAndTrackCalloc(__nmemb, AlignSize(size), ValkeyModule_Calloc,
+                                      ValkeyModule_MallocUsableSize);
 }
 
 void* __wrap_realloc(void* ptr, size_t size) noexcept {
@@ -221,8 +199,8 @@ void* __wrap_realloc(void* ptr, size_t size) noexcept {
     // Forcing 16-byte alignment in Valkey, which may otherwise return 8-byte
     // aligned memory.
     return vmsdk::PerformAndTrackRealloc(ptr, AlignSize(size),
-                                         RedisModule_Realloc,
-                                         RedisModule_MallocUsableSize);
+                                         ValkeyModule_Realloc,
+                                         ValkeyModule_MallocUsableSize);
   } else {
     auto new_ptr = vmsdk::PerformAndTrackRealloc(ptr, size, __real_realloc,
                                                  empty_usable_size);
@@ -240,21 +218,23 @@ void* __wrap_aligned_alloc(size_t __alignment, size_t __size) noexcept {
   }
 
   return vmsdk::PerformAndTrackMalloc(AlignSize(__size, __alignment),
-                                      RedisModule_Alloc,
-                                      RedisModule_MallocUsableSize);
+                                      ValkeyModule_Alloc,
+                                      ValkeyModule_MallocUsableSize);
 }
 
 int __wrap_malloc_usable_size(void* ptr) noexcept {
   if (vmsdk::SystemAllocTracker::GetInstance().IsTracked(ptr)) {
     return empty_usable_size(ptr);
   }
-  return RedisModule_MallocUsableSize(ptr);
+  return ValkeyModule_MallocUsableSize(ptr);
 }
+
 // NOLINTNEXTLINE
-int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size) {
+int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size) PMES {
   *r = __wrap_aligned_alloc(__alignment, __size);
   return 0;
 }
+
 void* __wrap_valloc(size_t size) noexcept {
   return __wrap_aligned_alloc(sysconf(_SC_PAGESIZE), size);
 }
@@ -268,6 +248,7 @@ size_t GetNewAllocSize(size_t size) {
   return size;
 }
 
+#ifndef ASAN_BUILD
 void* operator new(size_t size) noexcept(false) {
   return __wrap_malloc(GetNewAllocSize(size));
 }
@@ -337,3 +318,4 @@ void operator delete[](void* p, size_t size,
                        std::align_val_t alignment) noexcept {
   __wrap_free(p);
 }
+#endif // !ASAN_BUILD

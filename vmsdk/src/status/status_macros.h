@@ -1,30 +1,8 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef VMSDK_SRC_STATUS_STATUS_MACROS_H_
@@ -101,7 +79,7 @@
 
 // Executes an expression `rexpr` that returns a
 // `absl::StatusOr<T>`. On OK, extracts its value into the variable defined by
-// `lhs`, otherwise returns from the current function. By default the error
+// `lhs`; otherwise, returns from the current function. By default the error
 // status is returned unchanged, but it may be modified by an
 // `error_expression`. If there is an error, `lhs` is not evaluated; thus any
 // side effects that `lhs` may have only occur in the success case.
@@ -243,11 +221,11 @@ constexpr bool HasPotentialConditionalOperator(const char* lhs, int index) {
   VMSDK_STATUS_MACROS_IMPL_CONCAT_(VMSDK_STATUS_MACROS_IMPL_IF_, _Cond) \
   (_Then, _Else)
 
-// Expands to 1 if the input is parenthesized. Otherwise expands to 0.
+// Expands to 1 if the input is parenthesized. Otherwise, expands to 0.
 #define VMSDK_STATUS_MACROS_IMPL_IS_PARENTHESIZED(...) \
   VMSDK_STATUS_MACROS_IMPL_IS_EMPTY(VMSDK_STATUS_MACROS_IMPL_EAT __VA_ARGS__)
 
-// If the input is parenthesized, removes the parentheses. Otherwise expands to
+// If the input is parenthesized, removes the parentheses. Otherwise, expands to
 // the input unchanged.
 #define VMSDK_STATUS_MACROS_IMPL_UNPARENTHESIZE_IF_PARENTHESIZED(...) \
   VMSDK_STATUS_MACROS_IMPL_IF(                                        \

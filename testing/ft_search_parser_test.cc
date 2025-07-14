@@ -1,30 +1,8 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/commands/ft_search_parser.h"
@@ -94,15 +72,15 @@ struct FTSearchParserTestCase {
 class FTSearchParserTest
     : public ValkeySearchTestWithParam<FTSearchParserTestCase> {};
 
-std::vector<RedisModuleString *> FloatToRedisStringVector(
+std::vector<ValkeyModuleString *> FloatToValkeyStringVector(
     const std::vector<float> &floats) {
-  std::vector<RedisModuleString *> ret;
+  std::vector<ValkeyModuleString *> ret;
   const absl::string_view blob_str = "BLOB";
   ret.push_back(
-      RedisModule_CreateString(nullptr, blob_str.data(), blob_str.size()));
+      ValkeyModule_CreateString(nullptr, blob_str.data(), blob_str.size()));
   std::string vector_str((char *)(&floats[0]), floats.size() * sizeof(float));
-  ret.push_back(
-      RedisModule_CreateString(nullptr, vector_str.c_str(), vector_str.size()));
+  ret.push_back(ValkeyModule_CreateString(nullptr, vector_str.c_str(),
+                                          vector_str.size()));
   return ret;
 }
 
@@ -121,16 +99,17 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
   std::cerr << ", no_content: " << no_content << "\n";
 
   std::vector<float> floats = {0.1, 0.2, 0.3};
-  std::vector<RedisModuleString *> args;
+  std::vector<ValkeyModuleString *> args;
   const std::string key_str = "my_schema_name";
-  RedisModuleCtx fake_ctx;
+  ValkeyModuleCtx fake_ctx;
   SchemaManager::InitInstance(
       std::make_unique<TestableSchemaManager>(&fake_ctx));
   auto index_schema = CreateIndexSchema(key_str, &fake_ctx).value();
   EXPECT_CALL(
-      *kMockRedisModule,
-      OpenKey(testing::_, testing::An<RedisModuleString *>(), testing::_))
-      .WillRepeatedly(TestRedisModule_OpenKeyDefaultImpl);
+      *kMockValkeyModule,
+      OpenKey(testing::_, testing::An<ValkeyModuleString *>(), testing::_))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_)).Times(::testing::AnyNumber());
   data_model::VectorIndex vector_index_proto;
   vector_index_proto.set_dimension_count(3);
   vector_index_proto.set_initial_cap(100);
@@ -146,27 +125,25 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
                    .value();
   VMSDK_EXPECT_OK(
       index_schema->AddIndex(test_case.attribute_alias, "id1", index));
-  EXPECT_CALL(*kMockRedisModule, ModuleTypeGetValue(testing::_))
-      .WillRepeatedly(testing::Return(index_schema.get()));
   args.push_back(
-      RedisModule_CreateString(nullptr, key_str.data(), key_str.size()));
-  args.push_back(RedisModule_CreateString(nullptr, test_case.filter_str.data(),
-                                          test_case.filter_str.size()));
+      ValkeyModule_CreateString(nullptr, key_str.data(), key_str.size()));
+  args.push_back(ValkeyModule_CreateString(nullptr, test_case.filter_str.data(),
+                                           test_case.filter_str.size()));
   if (no_content) {
     const absl::string_view kNoContentParam = "NoContent";
-    args.push_back(RedisModule_CreateString(nullptr, kNoContentParam.data(),
-                                            kNoContentParam.size()));
+    args.push_back(ValkeyModule_CreateString(nullptr, kNoContentParam.data(),
+                                             kNoContentParam.size()));
   }
-  auto return_vec = vmsdk::ToRedisStringVector(test_case.return_str);
+  auto return_vec = vmsdk::ToValkeyStringVector(test_case.return_str);
   args.insert(args.end(), return_vec.begin(), return_vec.end());
   bool timeout_expected_success = true;
   if (timeout_ms.has_value()) {
     const absl::string_view kTimeoutParam = "Timeout";
-    args.push_back(RedisModule_CreateString(nullptr, kTimeoutParam.data(),
-                                            kTimeoutParam.size()));
+    args.push_back(ValkeyModule_CreateString(nullptr, kTimeoutParam.data(),
+                                             kTimeoutParam.size()));
     auto timeout_str = std::to_string(timeout_ms.value());
-    args.push_back(RedisModule_CreateString(nullptr, timeout_str.data(),
-                                            timeout_str.size()));
+    args.push_back(ValkeyModule_CreateString(nullptr, timeout_str.data(),
+                                             timeout_str.size()));
     if (timeout_ms.value() >= kMaxTimeoutMs + 1) {
       timeout_expected_success = false;
     }
@@ -174,37 +151,45 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
   bool limit_expected_success = true;
   if (!kLimitOptions[limit_itr].second.empty()) {
     auto limit_vec =
-        vmsdk::ToRedisStringVector(kLimitOptions[limit_itr].second);
+        vmsdk::ToValkeyStringVector(kLimitOptions[limit_itr].second);
     args.insert(args.end(), limit_vec.begin(), limit_vec.end());
     limit_expected_success = kLimitOptions[limit_itr].first;
   }
-  auto params_vec = vmsdk::ToRedisStringVector(test_case.params_str);
+  auto params_vec = vmsdk::ToValkeyStringVector(test_case.params_str);
   args.insert(args.end(), params_vec.begin(), params_vec.end());
-  auto floats_vec = FloatToRedisStringVector(floats);
+  auto floats_vec = FloatToValkeyStringVector(floats);
   bool dialect_expected_success = true;
   args.insert(args.end(), floats_vec.begin(), floats_vec.end());
 
   auto search_parameters_vec =
-      vmsdk::ToRedisStringVector(test_case.search_parameters_str);
+      vmsdk::ToValkeyStringVector(test_case.search_parameters_str);
   args.insert(args.end(), search_parameters_vec.begin(),
               search_parameters_vec.end());
 
   if (!kDialectOptions[dialect_itr].second.empty()) {
     auto dialect_vec =
-        vmsdk::ToRedisStringVector(kDialectOptions[dialect_itr].second);
+        vmsdk::ToValkeyStringVector(kDialectOptions[dialect_itr].second);
     args.insert(args.end(), dialect_vec.begin(), dialect_vec.end());
     dialect_expected_success = kDialectOptions[dialect_itr].first;
   }
   if (add_end_unexpected_param) {
     args.push_back(
-        RedisModule_CreateString(nullptr, "END_UNEXPECTED_PARAM", 0));
+        ValkeyModule_CreateString(nullptr, "END_UNEXPECTED_PARAM", 0));
   }
   auto &schema_manager = SchemaManager::Instance();
+
+  std::cerr << "Executing cmd: ";
+  for (auto &a : args) {
+    std::cerr << vmsdk::ToStringView(a) << " ";
+  }
+  std::cerr << "\n";
+
   auto search_params = ParseVectorSearchParameters(&fake_ctx, &args[0],
                                                    args.size(), schema_manager);
   bool expected_success = dialect_expected_success && limit_expected_success &&
                           test_case.success && !add_end_unexpected_param &&
                           timeout_expected_success;
+
   EXPECT_EQ(search_params.ok(), expected_success);
   if (search_params.ok()) {
     EXPECT_EQ(search_params.value()->index_schema_name, key_str);
@@ -212,9 +197,9 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
               test_case.attribute_alias);
     std::string vector_str((char *)(&floats[0]), floats.size() * sizeof(float));
     EXPECT_EQ(search_params.value()->query, vector_str.c_str());
-    EXPECT_EQ(search_params.value()->k.value(), test_case.k);
+    EXPECT_EQ(search_params.value()->k, test_case.k);
     EXPECT_EQ(search_params.value()->ef, test_case.ef);
-    auto score_as = vmsdk::MakeUniqueRedisString(test_case.score_as);
+    auto score_as = vmsdk::MakeUniqueValkeyString(test_case.score_as);
     if (test_case.score_as.empty()) {
       score_as =
           index_schema->DefaultReplyScoreAs(test_case.attribute_alias).value();
@@ -239,8 +224,8 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
       EXPECT_EQ(search_params.value()->timeout_ms, test_case.timeout_ms);
     }
   } else {
-    std::cerr << "Failed to parse command: " << search_params.status().message()
-              << "\n";
+    std::cerr << "Failed to parse command: `" << vmsdk::ToStringView(args[0])
+              << "` Because: " << search_params.status().message() << "\n";
     if (!test_case.expected_error_message.empty() &&
         !search_params.status().message().starts_with(
             test_case.expected_error_message)) {
@@ -261,13 +246,12 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
       } else {
         EXPECT_TRUE(add_end_unexpected_param || !test_case.success);
         EXPECT_TRUE(search_params.status().message().starts_with(
-            "Error parsing value for the parameter `PARAMS` - Unexpected "
-            "argument `DIALEC"));
+            "Error parsing vector similarity parameters"));
       }
     }
   }
   for (const auto &arg : args) {
-    TestRedisModule_FreeString(nullptr, arg);
+    TestValkeyModule_FreeString(nullptr, arg);
   }
 }
 
@@ -390,14 +374,13 @@ INSTANTIATE_TEST_SUITE_P(
                 "EF_RUNTIMe 10 AS]`. AS argument is missing",
         },
         {
-            .test_name = "as_before_ef_runtime",
-            .success = false,
+            .test_name = "happy_path_as_before_ef_runtime",
+            .success = true,
             .params_str = " PARAMS 4 EF 190",
             .filter_str = "(*)=>[KNN 10 @vec $BLOB As as_test EF_RUNTIMe $EF]",
-            .expected_error_message =
-                "Error parsing vector similarity parameters: `[KNN 10 @vec "
-                "$BLOB As as_test EF_RUNTIMe $EF]`. Unexpected argument "
-                "`EF_RUNTIMe`",
+            .k = 10,
+            .ef = 190,
+            .score_as = "as_test",
         },
         {
             .test_name = "empty_hash_field",
@@ -515,6 +498,31 @@ INSTANTIATE_TEST_SUITE_P(
                 "Error parsing vector similarity parameters: `[KNN 10 @vec ]`. "
                 "Blob attribute "
                 "argument is missing",
+        },
+        {
+            .test_name = "extra_blob",
+            .success = false,
+            .params_str = " PARAMS 4 EXTRABLOB 123",
+            .filter_str = " * => [KNN 10 @vec $BLOB]",
+            .expected_error_message = "Parameter `EXTRABLOB` not used.",
+        },
+        {
+            .test_name = "duplicate_blob",
+            .success = false,
+            .params_str = " PARAMS 6 EXTRABLOB 123 EXTRABLOB 123",
+            .filter_str = " * => [KNN 10 @vec $BLOB]",
+            .expected_error_message =
+                "Error parsing value for the parameter `PARAMS` - Parameter "
+                "EXTRABLOB is already defined.",
+        },
+        {
+            .test_name = "odd_param_count",
+            .success = false,
+            .params_str = " PARAMS 1",
+            .filter_str = " * => [KNN 10 @vec $BLOB]",
+            .expected_error_message =
+                "Error parsing value for the parameter `PARAMS` - Parameter "
+                "count must be an even number.",
         },
         {
             .test_name = "missing_hash_field",

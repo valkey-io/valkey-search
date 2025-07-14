@@ -1,30 +1,8 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/attribute_data_type.h"
@@ -68,15 +46,15 @@ class HashAttributeDataTypeTest
   void SetUp() override {
     ValkeySearchTestWithParam<
         ::testing::tuple<bool, bool, FetchAllRecordsTestCase>>::SetUp();
-    exists_key = vmsdk::MakeUniqueRedisString(std::string("exists_key"));
+    exists_key = vmsdk::MakeUniqueValkeyString(std::string("exists_key"));
     not_exists_key =
-        vmsdk::MakeUniqueRedisString(std::string("not_exists_key"));
-    EXPECT_CALL(*kMockRedisModule, OpenKey(&fake_ctx, testing::_, testing::_))
-        .WillRepeatedly(TestRedisModule_OpenKeyDefaultImpl);
+        vmsdk::MakeUniqueValkeyString(std::string("not_exists_key"));
+    EXPECT_CALL(*kMockValkeyModule, OpenKey(&fake_ctx, testing::_, testing::_))
+        .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
     opened_exists_key =
-        vmsdk::MakeUniqueRedisOpenKey(&fake_ctx, exists_key.get(), 0);
+        vmsdk::MakeUniqueValkeyOpenKey(&fake_ctx, exists_key.get(), 0);
     opened_not_exists_key =
-        vmsdk::MakeUniqueRedisOpenKey(&fake_ctx, not_exists_key.get(), 0);
+        vmsdk::MakeUniqueValkeyOpenKey(&fake_ctx, not_exists_key.get(), 0);
   }
   void TearDown() override {
     exists_key = nullptr;
@@ -86,20 +64,20 @@ class HashAttributeDataTypeTest
     ValkeySearchTestWithParam<
         ::testing::tuple<bool, bool, FetchAllRecordsTestCase>>::TearDown();
   }
-  RedisModuleCtx fake_ctx;
-  vmsdk::UniqueRedisString exists_key;
-  vmsdk::UniqueRedisString not_exists_key;
-  vmsdk::UniqueRedisOpenKey opened_exists_key;
-  vmsdk::UniqueRedisOpenKey opened_not_exists_key;
+  ValkeyModuleCtx fake_ctx;
+  vmsdk::UniqueValkeyString exists_key;
+  vmsdk::UniqueValkeyString not_exists_key;
+  vmsdk::UniqueValkeyOpenKey opened_exists_key;
+  vmsdk::UniqueValkeyOpenKey opened_not_exists_key;
   absl::string_view exists_identifier{"exists_identifier"};
   absl::string_view not_exists_identifier{"not_exists_identifier"};
   HashAttributeDataType hash_attribute_data_type;
 };
 
 TEST_F(HashAttributeDataTypeTest, HashBasic) {
-  EXPECT_EQ(hash_attribute_data_type.GetRedisEventTypes(),
-            REDISMODULE_NOTIFY_HASH | REDISMODULE_NOTIFY_GENERIC |
-                REDISMODULE_NOTIFY_EXPIRED | REDISMODULE_NOTIFY_EVICTED);
+  EXPECT_EQ(hash_attribute_data_type.GetValkeyEventTypes(),
+            VALKEYMODULE_NOTIFY_HASH | VALKEYMODULE_NOTIFY_GENERIC |
+                VALKEYMODULE_NOTIFY_EXPIRED | VALKEYMODULE_NOTIFY_EVICTED);
 
   EXPECT_EQ(hash_attribute_data_type.ToProto(),
             data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
@@ -112,15 +90,15 @@ TEST_F(HashAttributeDataTypeTest, HashHasRecord) {
     for (auto expect_exists_identifier : {true, false}) {
       absl::string_view identifier =
           expect_exists_identifier ? exists_identifier : not_exists_identifier;
-      EXPECT_CALL(*kMockRedisModule,
+      EXPECT_CALL(*kMockValkeyModule,
                   HashGet(testing::_,
-                          REDISMODULE_HASH_CFIELDS | REDISMODULE_HASH_EXISTS,
+                          VALKEYMODULE_HASH_CFIELDS | VALKEYMODULE_HASH_EXISTS,
                           testing::_, An<int *>(), TypedEq<void *>(nullptr)))
-          .WillOnce([&](RedisModuleKey *key, int flags, const char *identifier,
+          .WillOnce([&](ValkeyModuleKey *key, int flags, const char *identifier,
                         int *exists_out, void *terminating_null) {
             *exists_out = opened_exists_key.get() == key &&
                           absl::string_view(identifier) == exists_identifier;
-            return REDISMODULE_OK;
+            return VALKEYMODULE_OK;
           });
 
       EXPECT_EQ(HashHasRecord(key, identifier),
@@ -131,18 +109,18 @@ TEST_F(HashAttributeDataTypeTest, HashHasRecord) {
 
 TEST_F(HashAttributeDataTypeTest, HashGetRecord) {
   for (auto expect_found_record : {true, false}) {
-    RedisModuleString *found_record =
+    ValkeyModuleString *found_record =
         expect_found_record
-            ? TestRedisModule_CreateStringPrintf(nullptr, "found_record")
+            ? TestValkeyModule_CreateStringPrintf(nullptr, "found_record")
             : nullptr;
-    EXPECT_CALL(*kMockRedisModule,
-                HashGet(testing::_, REDISMODULE_HASH_CFIELDS, testing::_,
-                        An<RedisModuleString **>(), TypedEq<void *>(nullptr)))
+    EXPECT_CALL(*kMockValkeyModule,
+                HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
+                        An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
         .WillOnce([found_record](
-                      RedisModuleKey *key, int flags, const char *field,
-                      RedisModuleString **value_out, void *terminating_null) {
+                      ValkeyModuleKey *key, int flags, const char *field,
+                      ValkeyModuleString **value_out, void *terminating_null) {
           *value_out = found_record;
-          return REDISMODULE_OK;
+          return VALKEYMODULE_OK;
         });
     auto record = hash_attribute_data_type.GetRecord(
         &fake_ctx, opened_exists_key.get(),
@@ -186,33 +164,38 @@ TEST_P(HashAttributeDataTypeTest, HashFetchAllRecords) {
   auto expect_exists_identifier = std::get<1>(params);
   const FetchAllRecordsTestCase &test_case = std::get<2>(params);
   auto key = expect_exists_key ? exists_key.get() : not_exists_key.get();
-  EXPECT_CALL(*kMockRedisModule, OpenKey(&fake_ctx, testing::_, testing::_))
-      .WillOnce([&](RedisModuleCtx *ctx, RedisModuleString *key, int flags) {
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(&fake_ctx, testing::_, testing::_))
+      .WillOnce([&](ValkeyModuleCtx *ctx, ValkeyModuleString *key, int flags) {
         return vmsdk::ToStringView(key) == vmsdk::ToStringView(exists_key.get())
-                   ? TestRedisModule_OpenKeyDefaultImpl(&fake_ctx,
-                                                        exists_key.get(), 0)
+                   ? TestValkeyModule_OpenKeyDefaultImpl(&fake_ctx,
+                                                         exists_key.get(), 0)
                    : nullptr;
       });
   absl::string_view identifier =
       expect_exists_identifier ? exists_identifier : not_exists_identifier;
+  // Needed to make sure that the mocked fields/values generated by ScanKey
+  // outlive the lifetime of the returned RecordMap
+  std::list<vmsdk::UniqueValkeyString> values;
+  std::list<vmsdk::UniqueValkeyString> fields;
+  auto itr = test_case.expected_records_map.begin();
   if (expect_exists_key) {
-    EXPECT_CALL(
-        *kMockRedisModule,
-        HashGet(testing::_, REDISMODULE_HASH_CFIELDS | REDISMODULE_HASH_EXISTS,
-                testing::_, An<int *>(), TypedEq<void *>(nullptr)))
-        .WillOnce([&](RedisModuleKey *key, int flags, const char *identifier,
+    EXPECT_CALL(*kMockValkeyModule,
+                HashGet(testing::_,
+                        VALKEYMODULE_HASH_CFIELDS | VALKEYMODULE_HASH_EXISTS,
+                        testing::_, An<int *>(), TypedEq<void *>(nullptr)))
+        .WillOnce([&](ValkeyModuleKey *key, int flags, const char *identifier,
                       int *exists_out, void *terminating_null) {
           *exists_out = absl::string_view(identifier) == exists_identifier;
-          return REDISMODULE_OK;
+          return VALKEYMODULE_OK;
         });
     if (expect_exists_identifier) {
-      auto itr = test_case.expected_records_map.begin();
-      EXPECT_CALL(*kMockRedisModule,
-                  ScanKey(An<RedisModuleKey *>(), An<RedisModuleScanCursor *>(),
-                          An<RedisModuleScanKeyCB>(), An<void *>()))
-          .WillRepeatedly([&](RedisModuleKey *key,
-                              RedisModuleScanCursor *scan_cursor,
-                              RedisModuleScanKeyCB fn, void *privdata) {
+      EXPECT_CALL(
+          *kMockValkeyModule,
+          ScanKey(An<ValkeyModuleKey *>(), An<ValkeyModuleScanCursor *>(),
+                  An<ValkeyModuleScanKeyCB>(), An<void *>()))
+          .WillRepeatedly([&](ValkeyModuleKey *key,
+                              ValkeyModuleScanCursor *scan_cursor,
+                              ValkeyModuleScanKeyCB fn, void *privdata) {
             if (itr == test_case.expected_records_map.end()) {
               return 0;
             }
@@ -220,21 +203,24 @@ TEST_P(HashAttributeDataTypeTest, HashFetchAllRecords) {
             if (itr->first == identifier) {
               value = HexStringToBinary(itr->second);
             }
-            fn(key, vmsdk::MakeUniqueRedisString(itr->first).get(),
-               vmsdk::MakeUniqueRedisString(value).get(), privdata);
+            fields.push_back(vmsdk::MakeUniqueValkeyString(itr->first));
+            values.push_back(vmsdk::MakeUniqueValkeyString(value));
+            fn(key, fields.back().get(), values.back().get(), privdata);
             itr++;
             return 1;
           });
     }
   }
-
   auto identifiers = ToStringViewSet(test_case.identifiers);
+  EXPECT_EQ(identifiers.size(), test_case.identifiers.size());
   auto records = hash_attribute_data_type.FetchAllRecords(
       &fake_ctx, std::string(identifier), vmsdk::ToStringView(key),
       identifiers);
   if (expect_exists_key && expect_exists_identifier) {
     VMSDK_EXPECT_OK(records);
-    EXPECT_EQ(ToStringMap(records.value()), test_case.expected_records_map);
+    if (records.ok()) {
+      EXPECT_EQ(ToStringMap(records.value()), test_case.expected_records_map);
+    }
   } else {
     EXPECT_EQ(records.status().code(), absl::StatusCode::kNotFound);
   }
@@ -288,45 +274,45 @@ class JsonAttributeDataTypeTest
     : public ValkeySearchTestWithParam<
           ::testing::tuple<bool, FetchAllRecordsTestCase>> {
  protected:
-  RedisModuleCtx fake_ctx;
+  ValkeyModuleCtx fake_ctx;
   JsonAttributeDataType json_attribute_data_type;
 };
 
 TEST_F(JsonAttributeDataTypeTest, JsonBasic) {
-  EXPECT_EQ(json_attribute_data_type.GetRedisEventTypes(),
-            REDISMODULE_NOTIFY_MODULE | REDISMODULE_NOTIFY_GENERIC |
-                REDISMODULE_NOTIFY_EXPIRED | REDISMODULE_NOTIFY_EVICTED);
+  EXPECT_EQ(json_attribute_data_type.GetValkeyEventTypes(),
+            VALKEYMODULE_NOTIFY_MODULE | VALKEYMODULE_NOTIFY_GENERIC |
+                VALKEYMODULE_NOTIFY_EXPIRED | VALKEYMODULE_NOTIFY_EVICTED);
 
   EXPECT_EQ(json_attribute_data_type.ToProto(),
             data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON);
 }
 
 void CheckJsonGetRecord(
-    RedisModuleCtx &fake_ctx, absl::string_view identifier,
+    ValkeyModuleCtx &fake_ctx, absl::string_view identifier,
     int module_reply_type,
     const absl::flat_hash_map<std::string, std::string> &json_path_results) {
-  EXPECT_CALL(*kMockRedisModule,
+  EXPECT_CALL(*kMockValkeyModule,
               Call(&fake_ctx, testing::StrEq(kJsonCmd), testing::StrEq("cc"),
                    testing::_, testing::StrEq(identifier)))
       .WillOnce([identifier, json_path_results, module_reply_type](
-                    RedisModuleCtx *ctx, const char *cmd, const char *fmt,
+                    ValkeyModuleCtx *ctx, const char *cmd, const char *fmt,
                     const char *arg1,
-                    const char *arg2) -> RedisModuleCallReply * {
+                    const char *arg2) -> ValkeyModuleCallReply * {
         if (!json_path_results.contains(identifier)) {
           return nullptr;
         }
-        auto reply = new RedisModuleCallReply;
+        auto reply = new ValkeyModuleCallReply;
         reply->msg = json_path_results.at(identifier);
-        EXPECT_CALL(*kMockRedisModule, FreeCallReply(reply))
-            .WillOnce([](RedisModuleCallReply *reply) { delete reply; });
-        EXPECT_CALL(*kMockRedisModule, CallReplyType(reply))
-            .WillOnce([module_reply_type](RedisModuleCallReply *reply) {
+        EXPECT_CALL(*kMockValkeyModule, FreeCallReply(reply))
+            .WillOnce([](ValkeyModuleCallReply *reply) { delete reply; });
+        EXPECT_CALL(*kMockValkeyModule, CallReplyType(reply))
+            .WillOnce([module_reply_type](ValkeyModuleCallReply *reply) {
               return module_reply_type;
             });
-        if (module_reply_type == REDISMODULE_REPLY_STRING) {
-          EXPECT_CALL(*kMockRedisModule, CreateStringFromCallReply(reply))
-              .WillOnce([](RedisModuleCallReply *reply) {
-                return vmsdk::MakeUniqueRedisString(
+        if (module_reply_type == VALKEYMODULE_REPLY_STRING) {
+          EXPECT_CALL(*kMockValkeyModule, CreateStringFromCallReply(reply))
+              .WillOnce([](ValkeyModuleCallReply *reply) {
+                return vmsdk::MakeUniqueValkeyString(
                            absl::string_view(reply->msg))
                     .release();
               });
@@ -337,13 +323,13 @@ void CheckJsonGetRecord(
 
 TEST_F(JsonAttributeDataTypeTest, JsonGetRecord) {
   absl::flat_hash_map<std::string, std::string> json_path_results{
-      {"$", "res0"},
+      {"$", "[res0]"},
       {"json_path_results1", "res1"},
       {"json_path_results2", "res2"}};
   absl::flat_hash_set<std::string> identifiers{"$", "false"};
-  for (auto identifier : identifiers) {
-    for (int module_reply_type = REDISMODULE_REPLY_UNKNOWN;
-         module_reply_type < REDISMODULE_REPLY_ATTRIBUTE * 2;
+  for (const auto &identifier : identifiers) {
+    for (int module_reply_type = VALKEYMODULE_REPLY_UNKNOWN;
+         module_reply_type < VALKEYMODULE_REPLY_ATTRIBUTE * 2;
          module_reply_type++) {
       CheckJsonGetRecord(fake_ctx, identifier, module_reply_type,
                          json_path_results);
@@ -351,12 +337,12 @@ TEST_F(JsonAttributeDataTypeTest, JsonGetRecord) {
                                                        "key", identifier);
       if (record.ok()) {
         EXPECT_TRUE(json_path_results.contains(identifier));
-        EXPECT_EQ(module_reply_type, REDISMODULE_REPLY_STRING);
+        EXPECT_EQ(module_reply_type, VALKEYMODULE_REPLY_STRING);
         EXPECT_EQ(vmsdk::ToStringView(record.value().get()),
-                  json_path_results[identifier]);
+                  TrimBrackets(json_path_results[identifier]));
       } else {
         EXPECT_FALSE(json_path_results.contains(identifier) &&
-                     module_reply_type == REDISMODULE_REPLY_STRING);
+                     module_reply_type == VALKEYMODULE_REPLY_STRING);
         EXPECT_EQ(record.status().code(), absl::StatusCode::kNotFound);
       }
     }
@@ -365,34 +351,36 @@ TEST_F(JsonAttributeDataTypeTest, JsonGetRecord) {
 
 TEST_P(JsonAttributeDataTypeTest, JsonFetchAllRecords) {
   absl::flat_hash_map<std::string, std::string> json_path_results{
-      {"$", "res0"},
-      {"json_path_results1", "res1"},
-      {"json_path_results2", "res2"}};
-  RedisModuleCallReply reply;
+      {"$", "[res0]"},
+      {"json_path_results1", "[res1]"},
+      {"json_path_results2", "[res2]"}};
+  ValkeyModuleCallReply reply;
   auto &params = GetParam();
   auto expect_exists_key = std::get<0>(params);
   const FetchAllRecordsTestCase &test_case = std::get<1>(params);
   std::string query_attribute_name = "vector_json_path";
-  for (int module_reply_type = REDISMODULE_REPLY_UNKNOWN;
-       module_reply_type < REDISMODULE_REPLY_ATTRIBUTE * 2;
+  for (int module_reply_type = VALKEYMODULE_REPLY_UNKNOWN;
+       module_reply_type < VALKEYMODULE_REPLY_ATTRIBUTE * 2;
        module_reply_type++) {
     EXPECT_CALL(
-        *kMockRedisModule,
+        *kMockValkeyModule,
         Call(&fake_ctx, testing::StrEq(kJsonCmd), testing::StrEq("cc"),
              testing::StrEq("key"), testing::StrEq(query_attribute_name)))
-        .WillOnce([&](RedisModuleCtx *ctx, const char *cmd, const char *fmt,
+        .WillOnce([&](ValkeyModuleCtx *ctx, const char *cmd, const char *fmt,
                       const char *arg1,
-                      const char *arg2) -> RedisModuleCallReply * {
-          if (!expect_exists_key) return nullptr;
-          EXPECT_CALL(*kMockRedisModule, FreeCallReply(&reply))
-              .WillOnce([](RedisModuleCallReply *reply) {});
+                      const char *arg2) -> ValkeyModuleCallReply * {
+          if (!expect_exists_key) {
+            return nullptr;
+          }
+          EXPECT_CALL(*kMockValkeyModule, FreeCallReply(&reply))
+              .WillOnce([](ValkeyModuleCallReply *reply) {});
           return &reply;
         });
     if (expect_exists_key) {
-      EXPECT_CALL(*kMockRedisModule, CallReplyType(&reply))
+      EXPECT_CALL(*kMockValkeyModule, CallReplyType(&reply))
           .WillOnce(
-              [&](RedisModuleCallReply *reply) { return module_reply_type; });
-      if (module_reply_type == REDISMODULE_REPLY_STRING) {
+              [&](ValkeyModuleCallReply *reply) { return module_reply_type; });
+      if (module_reply_type == VALKEYMODULE_REPLY_STRING) {
         if (test_case.identifiers.empty()) {
           CheckJsonGetRecord(fake_ctx, kJsonRootElementQuery, module_reply_type,
                              json_path_results);
@@ -404,16 +392,15 @@ TEST_P(JsonAttributeDataTypeTest, JsonFetchAllRecords) {
         }
       }
     }
-
+    auto identifiers = ToStringViewSet(test_case.identifiers);
     auto records = json_attribute_data_type.FetchAllRecords(
-        &fake_ctx, query_attribute_name, "key",
-        ToStringViewSet(test_case.identifiers));
+        &fake_ctx, query_attribute_name, "key", identifiers);
     if (records.ok()) {
-      EXPECT_EQ(module_reply_type, REDISMODULE_REPLY_STRING);
+      EXPECT_EQ(module_reply_type, VALKEYMODULE_REPLY_STRING);
       EXPECT_EQ(ToStringMap(records.value()), test_case.expected_records_map);
     } else {
       EXPECT_FALSE(expect_exists_key &&
-                   module_reply_type == REDISMODULE_REPLY_STRING);
+                   module_reply_type == VALKEYMODULE_REPLY_STRING);
       EXPECT_EQ(records.status().code(), absl::StatusCode::kNotFound);
     }
   }

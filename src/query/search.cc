@@ -1,30 +1,8 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/query/search.h"
@@ -43,6 +21,7 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
@@ -98,7 +77,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
     auto vector_hnsw = dynamic_cast<indexes::VectorHNSW<float> *>(vector_index);
 
     auto latency_sample = SAMPLE_EVERY_N(100);
-    auto res = vector_hnsw->Search(parameters.query, parameters.k.value(),
+    auto res = vector_hnsw->Search(parameters.query, parameters.k,
                                    std::move(inline_filter), parameters.ef);
     Metrics::GetStats().hnsw_vector_index_search_latency.SubmitSample(
         std::move(latency_sample));
@@ -107,7 +86,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
   if (vector_index->GetIndexerType() == indexes::IndexerType::kFlat) {
     auto vector_flat = dynamic_cast<indexes::VectorFlat<float> *>(vector_index);
     auto latency_sample = SAMPLE_EVERY_N(100);
-    auto res = vector_flat->Search(parameters.query, parameters.k.value(),
+    auto res = vector_flat->Search(parameters.query, parameters.k,
                                    std::move(inline_filter));
     Metrics::GetStats().flat_vector_index_search_latency.SubmitSample(
         std::move(latency_sample));
@@ -200,7 +179,7 @@ struct PrefilteredKey {
 };
 
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
-CalcBestMatchingPrefiltereddKeys(
+CalcBestMatchingPrefilteredKeys(
     const VectorSearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index) {
@@ -217,13 +196,28 @@ CalcBestMatchingPrefiltereddKeys(
       // TODO: yairg - add bloom filter to ensure distinct keys are processed
       // just once.
       if (evaluator.Evaluate(*predicate, *key)) {
-        vector_index->AddPrefilteredKey(parameters.query, parameters.k.value(),
-                                        *key, results, top_keys);
+        vector_index->AddPrefilteredKey(parameters.query, parameters.k, *key,
+                                        results, top_keys);
       }
       iterator->Next();
     }
   }
   return results;
+}
+
+std::string StringFormatVector(std::vector<char> vector) {
+  if (vector.size() % sizeof(float) != 0) {
+    return {vector.data(), vector.size()};
+  }
+
+  std::vector<std::string> float_strings;
+  for (size_t i = 0; i < vector.size(); i += sizeof(float)) {
+    float value;
+    std::memcpy(&value, vector.data() + i, sizeof(float));
+    float_strings.push_back(absl::StrCat(value));
+  }
+
+  return absl::StrCat("[", absl::StrJoin(float_strings, ","), "]");
 }
 
 absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
@@ -241,11 +235,14 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
   };
   std::vector<AttributeInfo> attributes;
   for (auto &attribute : parameters.return_attributes) {
-    auto index = parameters.index_schema->GetIndex(
-        vmsdk::ToStringView(attribute.identifier.get()));
-    if (!index.ok()) {
+    if (!attribute.attribute_alias.get()) {
       // Any attribute that is not indexed will result in all attributes being
       // fetched from the main thread for consistency.
+      return results;
+    }
+    auto index = parameters.index_schema->GetIndex(
+        vmsdk::ToStringView(attribute.attribute_alias.get()));
+    if (!index.ok()) {
       return results;
     }
     attributes.push_back(AttributeInfo{&attribute, index.value().get()});
@@ -257,13 +254,13 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
     neighbor.attribute_contents = RecordsMap();
     bool any_value_missing = false;
     for (auto &attribute_info : attributes) {
-      vmsdk::UniqueRedisString attribute_value = nullptr;
+      vmsdk::UniqueValkeyString attribute_value = nullptr;
       switch (attribute_info.index->GetIndexerType()) {
         case indexes::IndexerType::kTag: {
           auto tag_index = dynamic_cast<indexes::Tag *>(attribute_info.index);
           auto tag_value_ptr = tag_index->GetRawValue(neighbor.external_id);
           if (tag_value_ptr != nullptr) {
-            attribute_value = vmsdk::MakeUniqueRedisString(*tag_value_ptr);
+            attribute_value = vmsdk::MakeUniqueValkeyString(*tag_value_ptr);
           }
           break;
         }
@@ -273,7 +270,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
           auto numeric = numeric_index->GetValue(neighbor.external_id);
           if (numeric != nullptr) {
             attribute_value =
-                vmsdk::MakeUniqueRedisString(absl::StrCat(*numeric));
+                vmsdk::MakeUniqueValkeyString(absl::StrCat(*numeric));
           }
           break;
         }
@@ -284,8 +281,15 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
               dynamic_cast<indexes::VectorBase *>(attribute_info.index);
           auto vector = vector_index->GetValue(neighbor.external_id);
           if (vector.ok()) {
-            attribute_value = vmsdk::UniqueRedisString(RedisModule_CreateString(
-                nullptr, vector->data(), vector->size()));
+            if (parameters.index_schema->GetAttributeDataType().ToProto() ==
+                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
+              attribute_value = vmsdk::MakeUniqueValkeyString(
+                  StringFormatVector(vector.value()));
+            } else {
+              attribute_value =
+                  vmsdk::UniqueValkeyString(ValkeyModule_CreateString(
+                      nullptr, vector->data(), vector->size()));
+            }
           } else {
             VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
                 << "Failed to get vector value during fetching through index "
@@ -300,12 +304,12 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
       }
 
       if (attribute_value != nullptr) {
-        auto attribute_alias = vmsdk::MakeUniqueRedisString(
-            vmsdk::ToStringView(attribute_info.attribute->alias.get()));
-        auto attribute_alias_view = vmsdk::ToStringView(attribute_alias.get());
+        auto identifier = vmsdk::MakeUniqueValkeyString(
+            vmsdk::ToStringView(attribute_info.attribute->identifier.get()));
+        auto identifier_view = vmsdk::ToStringView(identifier.get());
         neighbor.attribute_contents->emplace(
-            attribute_alias_view, RecordsMapValue(std::move(attribute_alias),
-                                                  std::move(attribute_value)));
+            identifier_view,
+            RecordsMapValue(std::move(identifier), std::move(attribute_value)));
       } else {
         // Mark this neighbor as needing content retrieval via the main thread
         // (e.g. the attribute value may exist but not be indexed due to type
@@ -348,8 +352,9 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
         << "Using pre-filter query execution, qualified entries="
         << qualified_entries;
     // Do an exact nearest neighbour search on the reduced search space.
-    auto results = CalcBestMatchingPrefiltereddKeys(
+    auto results = CalcBestMatchingPrefilteredKeys(
         parameters, entries_fetchers, vector_index);
+
     return vector_index->CreateReply(results);
   }
   if (is_local_search) {

@@ -164,11 +164,11 @@ struct Postings {
   };
 
   // The Position Iterator
-  struct KeyIterator {
+  struct PositionIterator {
     // Is valid?
     bool IsValid() const;
 
-    // Advance to next key
+    // Advance to next position
     void NextPosition();
 
     // Skip forward to next position that is equal to or greater than.

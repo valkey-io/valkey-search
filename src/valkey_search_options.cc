@@ -64,8 +64,8 @@ static auto query_string_depth =
                           UINT_MAX)                  // max size
         .Build();
 
-/// Register the "--query-string-bytes" flag. Controls the depth of the query
-/// string parsing from the FT.SEARCH cmd.
+/// Register the "--query-string-bytes" flag. Controls the length of the query
+/// string of the FT.SEARCH cmd.
 constexpr absl::string_view kQueryStringBytesConfig{"query-string-bytes"};
 constexpr uint32_t kDefaultQueryStringBytes{10240};
 constexpr uint32_t kMinimumQueryStringBytes{1};

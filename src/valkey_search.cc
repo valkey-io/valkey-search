@@ -118,7 +118,21 @@ static vmsdk::info_field::String background_indexing_status("indexing", "backgro
                      ? "IN_PROGRESS"
                      : "NO_ACTIVITY";
         })
-        );      
+        );
+
+static vmsdk::info_field::Float used_read_cpu(
+    "thread-pool", "used_read_cpu",
+    vmsdk::info_field::FloatBuilder().App().Computed([]() -> double {
+      auto reader_thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
+      return reader_thread_pool->GetAvgCPUPercentage().value_or(-1);
+    }));
+
+static vmsdk::info_field::Float used_write_cpu(
+    "thread-pool", "used_write_cpu",
+    vmsdk::info_field::FloatBuilder().App().Computed([]() -> double {
+      auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
+      return writer_thread_pool->GetAvgCPUPercentage().value_or(-1);
+    }));
 
 void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
   vmsdk::info_field::DoSection(ctx, "thread-pool", for_crash_report);
@@ -138,10 +152,6 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
   ValkeyModule_InfoAddFieldLongLong(
       ctx, "writer_suspension_expired_cnt",
       Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt);
-  ValkeyModule_InfoAddFieldDouble(ctx, "used_read_cpu",
-                                  reader_thread_pool_->GetAvgCPUPercentage().value_or(-1));
-  ValkeyModule_InfoAddFieldDouble(ctx, "used_write_cpu",
-                                  writer_thread_pool_->GetAvgCPUPercentage().value_or(-1));
 
   vmsdk::info_field::DoSection(ctx, "rdb", for_crash_report);
   ValkeyModule_InfoAddFieldLongLong(ctx, "rdb_load_success_cnt",

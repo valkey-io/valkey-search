@@ -78,7 +78,7 @@ absl::StatusOr<double> ThreadPool::GetAvgCPUPercentage() {
   });
   VMSDK_RETURN_IF_ERROR(err);
   double sum_all_cpus = std::accumulate(cpu_results.begin(), cpu_results.end(), 0.0);
-  if (cpu_results.size() == 0) {
+  if (cpu_results.empty()) {
     return sum_all_cpus;
   }
   return sum_all_cpus / cpu_results.size();

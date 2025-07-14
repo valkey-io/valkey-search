@@ -24,6 +24,7 @@
 #include "absl/synchronization/mutex.h"
 #include "gtest/gtest_prod.h"
 #include "vmsdk/src/thread_safe_vector.h"
+#include "vmsdk/src/thread_monitoring.h"
 
 namespace vmsdk {
 // Note google3/thread can't be used as it's not open source
@@ -82,12 +83,19 @@ class ThreadPool {
       }
     }
 
+    void InitThreadMonitor() {
+      thread_monitor_ = std::make_unique<ThreadMonitor>(thread_id);
+    }
+
     pthread_t thread_id = 0;
     std::atomic_bool shutdown_flag = false;
     /// If not null, the thread will call this callback when it exits via the
     /// shutdown_flag
     std::optional<absl::AnyInvocable<void()>> shutdown_callback = std::nullopt;
+    std::unique_ptr<vmsdk::ThreadMonitor> thread_monitor_;
   };
+
+  absl::StatusOr<double> GetAvgCPUPercentage();
 
   void WorkerThread(std::shared_ptr<Thread> thread)
       ABSL_LOCKS_EXCLUDED(queue_mutex_);

@@ -164,6 +164,8 @@ class EvaluateFilterAsPrimaryTest
 void InitIndexSchema(MockIndexSchema *index_schema) {
   data_model::NumericIndex numeric_index_proto;
 
+  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_)).Times(::testing::AnyNumber());
+
   auto numeric_index_100_10 =
       std::make_shared<MockNumeric>(numeric_index_proto);
   auto numeric_index_100_30 =
@@ -317,6 +319,7 @@ struct PerformVectorSearchTestCase {
 std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
     const IndexerType vector_indexer_type = indexes::IndexerType::kHNSW) {
   auto index_schema = CreateIndexSchema(kIndexSchemaName).value();
+  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_)).Times(::testing::AnyNumber());
 
   // Add vector index
   std::shared_ptr<indexes::IndexBase> vector_index;

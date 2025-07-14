@@ -366,6 +366,7 @@ float CalcRecall(VectorFlat<float>* flat_index, VectorHNSW<float>* hnsw_index,
     absl::string_view vector = VectorToStr(search_vector);
     auto res_hnsw = hnsw_index->Search(vector, k, cancel_never, nullptr, ef_runtime);
     auto res_flat = flat_index->Search(vector, k, cancel_never);
+>>>>>>> 6a82959 (Allenss fulltext docs (#226))
     for (auto& label : *res_hnsw) {
       for (auto& real_label : *res_flat) {
         if (label.external_id == real_label.external_id) {

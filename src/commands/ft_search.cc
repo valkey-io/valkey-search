@@ -222,7 +222,6 @@ int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
   CHECK(res != nullptr);
   res->parameters->cancellation_token->Cancel(); // Cancel to tell Free that it's been seen
   return ValkeyModule_ReplyWithSimpleString(ctx, "Request timed out");
-}
 
 
 int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -230,8 +229,6 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
       static_cast<Result *>(ValkeyModule_GetBlockedClientPrivateData(ctx));
   CHECK(res != nullptr);
   if (!res->neighbors.ok()) {
-    ++Metrics::GetStats().query_failed_requests_cnt;
-    return ValkeyModule_ReplyWithError(
         ctx, res->neighbors.status().message().data());
   }
   if (!EnablePartialResults.GetValue() && res->parameters->cancellation_token->IsCancelled()) {

@@ -1564,7 +1564,10 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_GetCurrentUserName = &TestValkeyModule_GetCurrentUserName;
   ValkeyModule_RegisterNumericConfig = &TestValkeyModule_RegisterNumericConfig;
   ValkeyModule_RegisterBoolConfig = &TestValkeyModule_RegisterBoolConfig;
+<<<<<<< HEAD
   ValkeyModule_Milliseconds = &TestValkeyModule_Milliseconds;
+=======
+>>>>>>> 6a82959 (Allenss fulltext docs (#226))
 
   kMockValkeyModule = new testing::NiceMock<MockValkeyModule>();
 
@@ -1605,10 +1608,13 @@ inline void TestValkeyModule_Init() {
   ON_CALL(*kMockValkeyModule,
           CallReplyMapElement(testing::_, testing::_, testing::_, testing::_))
       .WillByDefault(TestValkeyModule_CallReplyMapElementImpl);
+<<<<<<< HEAD
   ON_CALL(*kMockValkeyModule, Milliseconds()).WillByDefault([]() -> long long {
     static long long fake_time = 0;
     return ++fake_time;
    });
+=======
+>>>>>>> 6a82959 (Allenss fulltext docs (#226))
   static absl::once_flag flag;
   absl::call_once(flag, []() { vmsdk::TrackCurrentAsMainThread(); });
   CHECK(vmsdk::InitLogging(nullptr, "debug").ok());

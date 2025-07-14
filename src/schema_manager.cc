@@ -38,11 +38,33 @@
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
+
+constexpr absl::string_view kMaxIndexesConfig{"max-indexes"};
+constexpr uint32_t kMaxIndexes{10};
+
+namespace options {
+
+/// Register the "--max-indexes" flag. Controls the max number of indexes we can
+/// have.
+static auto max_indexes =
+    vmsdk::config::NumberBuilder(kMaxIndexesConfig,  // name
+                                 kMaxIndexes,        // default size
+                                 1,                  // min size
+                                 kMaxIndexes)        // max size
+        .WithValidationCallback(CHECK_RANGE(1, kMaxIndexes, kMaxIndexesConfig))
+        .Build();
+
+vmsdk::config::Number &GetMaxIndexes() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_indexes);
+}
+
+}  // namespace options
 
 // Randomly generated 32 bit key for fingerprinting the metadata.
 static constexpr highwayhash::HHKey kHashKey{
@@ -169,6 +191,19 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
 
 absl::Status SchemaManager::CreateIndexSchema(
     ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto) {
+  const auto max_indexes = options::GetMaxIndexes().GetValue();
+
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
+      SchemaManager::Instance().GetNumberOfIndexSchemas() + 1, std::nullopt,
+      max_indexes))
+      << "Maximum number of indexes reached (" << max_indexes
+      << "). Cannot create additional indexes.";
+
+  if (SchemaManager::Instance().GetNumberOfIndexSchemas() >= max_indexes) {
+    return absl::OutOfRangeError(
+        absl::StrCat("Maximum number of indexes reached (", max_indexes,
+                     "). Cannot create additional indexes."));
+  }
   if (coordinator_enabled_) {
     CHECK(index_schema_proto.db_num() == 0)
         << "In cluster mode, we only support DB 0";
@@ -624,20 +659,20 @@ void SchemaManager::OnServerCronCallback(ValkeyModuleCtx *ctx,
   SchemaManager::Instance().PerformBackfill(ctx, kIndexSchemaBackfillBatchSize);
 }
 
-static vmsdk::info_field::Integer number_of_indexes("index_stats", "number_of_indexes",
-  vmsdk::info_field::IntegerBuilder()
-    .App()
-    .Computed([] {return SchemaManager::Instance().GetNumberOfIndexSchemas(); })
-  );
-static vmsdk::info_field::Integer number_of_attributes("index_stats", "number_of_attributes",
-  vmsdk::info_field::IntegerBuilder()
-    .App()
-    .Computed([] {return SchemaManager::Instance().GetNumberOfAttributes(); })
-  );
-static vmsdk::info_field::Integer total_indexed_documents("index_stats", "total_indexed_documents",
-  vmsdk::info_field::IntegerBuilder()
-    .App()
-    .Computed([] {return SchemaManager::Instance().GetTotalIndexedDocuments(); })
-  );
+static vmsdk::info_field::Integer number_of_indexes(
+    "index_stats", "number_of_indexes",
+    vmsdk::info_field::IntegerBuilder().App().Computed([] {
+      return SchemaManager::Instance().GetNumberOfIndexSchemas();
+    }));
+static vmsdk::info_field::Integer number_of_attributes(
+    "index_stats", "number_of_attributes",
+    vmsdk::info_field::IntegerBuilder().App().Computed([] {
+      return SchemaManager::Instance().GetNumberOfAttributes();
+    }));
+static vmsdk::info_field::Integer total_indexed_documents(
+    "index_stats", "total_indexed_documents",
+    vmsdk::info_field::IntegerBuilder().App().Computed([] {
+      return SchemaManager::Instance().GetTotalIndexedDocuments();
+    }));
 
 }  // namespace valkey_search

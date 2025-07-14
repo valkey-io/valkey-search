@@ -53,11 +53,21 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
         bytes_fields = [
             "search_used_memory_human"
         ]
+        
+        double_fields = [
+            "search_used_read_cpu",
+            "search_used_write_cpu"
+        ]
 
         for field in integer_fields:
             assert field in info_data
             print (info_data)
             integer = int(info_data.get(field))
+        
+        for field in double_fields:
+            assert field in info_data
+            print (info_data)
+            double = float(info_data.get(field))
                           
         for field in string_fields:
             assert field in info_data

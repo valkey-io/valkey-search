@@ -199,11 +199,6 @@ absl::Status SchemaManager::CreateIndexSchema(
       << "Maximum number of indexes reached (" << max_indexes
       << "). Cannot create additional indexes.";
 
-  if (SchemaManager::Instance().GetNumberOfIndexSchemas() >= max_indexes) {
-    return absl::OutOfRangeError(
-        absl::StrCat("Maximum number of indexes reached (", max_indexes,
-                     "). Cannot create additional indexes."));
-  }
   if (coordinator_enabled_) {
     CHECK(index_schema_proto.db_num() == 0)
         << "In cluster mode, we only support DB 0";

@@ -64,6 +64,18 @@ static auto query_string_depth =
                           UINT_MAX)                  // max size
         .Build();
 
+/// Register the "--query-string-bytes" flag. Controls the depth of the query
+/// string parsing from the FT.SEARCH cmd.
+constexpr absl::string_view kQueryStringBytesConfig{"query-string-bytes"};
+constexpr uint32_t kDefaultQueryStringBytes{10240};
+constexpr uint32_t kMinimumQueryStringBytes{1};
+static auto query_string_bytes =
+    config::NumberBuilder(kQueryStringBytesConfig,   // name
+                          kDefaultQueryStringBytes,  // default size
+                          kMinimumQueryStringBytes,  // min size
+                          UINT_MAX)                  // max size
+        .Build();
+
 constexpr absl::string_view kHNSWBlockSizeConfig{"hnsw-block-size"};
 static auto hnsw_block_size =
     config::NumberBuilder(kHNSWBlockSizeConfig,   // name
@@ -152,6 +164,10 @@ static auto log_level =
 
 uint32_t GetQueryStringDepth() {
   return query_string_depth->GetValue();
+}
+
+uint32_t GetQueryStringBytes() {
+  return query_string_bytes->GetValue();
 }
 
 vmsdk::config::Number& GetHNSWBlockSize() {

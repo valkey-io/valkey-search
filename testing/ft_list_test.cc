@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <memory>
@@ -52,7 +30,7 @@ class FTListTest : public ValkeySearchTest {};
 TEST_F(FTListTest, basic) {
   // Set up the data structures for the test case.
   for (bool use_thread_pool : {true, false}) {
-    RedisModuleCtx fake_ctx;
+    ValkeyModuleCtx fake_ctx;
     vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() {}, use_thread_pool ? &mutations_thread_pool : nullptr,
@@ -103,7 +81,7 @@ TEST_F(FTListTest, basic) {
     VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
         &fake_ctx, different_db_index_schema));
 
-    EXPECT_CALL(*kMockRedisModule, GetSelectedDb(&fake_ctx))
+    EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx))
         .WillRepeatedly(testing::Return(0));
     VMSDK_EXPECT_OK(FTListCmd(&fake_ctx, nullptr, 0));
     EXPECT_THAT(fake_ctx.reply_capture.GetReply(),
@@ -119,7 +97,7 @@ TEST_F(FTListTest, basic) {
   }
 }
 TEST_F(FTListTest, no_indexes) {
-  EXPECT_CALL(*kMockRedisModule, ReplyWithArray(&fake_ctx_, 0));
+  EXPECT_CALL(*kMockValkeyModule, ReplyWithArray(&fake_ctx_, 0));
   VMSDK_EXPECT_OK(FTListCmd(&fake_ctx_, nullptr, 0));
 }
 

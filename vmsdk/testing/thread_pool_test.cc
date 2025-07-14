@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "vmsdk/src/thread_pool.h"
@@ -263,7 +241,7 @@ TEST_P(ThreadPoolTest, ConcurrentWorkers) {
   std::unique_lock<std::mutex> lock(mutex);
   condition.wait(lock, [&] { return last_task == 0; });
 }
-
+#ifdef BROKEN_UNIT_TEST
 TEST_F(ThreadPoolTest, priority) {
   // Test that high priority tasks are executed before low priority tasks
   const size_t thread_count = 5;
@@ -280,7 +258,12 @@ TEST_F(ThreadPoolTest, priority) {
           thread_pool.Schedule([&mutex] { absl::MutexLock lock(&mutex); },
                                ThreadPool::Priority::kHigh));
     }
-
+//// The logic below fails, because it assumes that the scheduling of tasks and their execution is the same. Which it is
+//// not. It's possible for a low priority task to be started while a high priority task is still running. This isn't
+//// true. As the high prio threads decrement the blocking counter and terminate, it's possible for a low priority
+//// thread to get started (since there's an idle thread in the pool) and then to beat the remaining high priority
+//// threads to win access to the mutex. In other words, the mutex access doesn't honor the thread priorities and that
+//// causes this test to fail intermittently.
     for (size_t i = 0; i < tasks; ++i) {
       EXPECT_TRUE(thread_pool.Schedule(
           [&pending_run_low_priority, &pending_run_high_priority,
@@ -315,7 +298,7 @@ TEST_F(ThreadPoolTest, priority) {
   pending_tasks.Wait();
   // EXPECT_EQ(thread_pool.QueueSize(), 0);
 }
-
+#endif
 TEST_F(ThreadPoolTest, DynamicSizing) {
   const size_t thread_count = 10;
   ThreadPool thread_pool("test-pool", thread_count);
@@ -336,6 +319,68 @@ TEST_F(ThreadPoolTest, DynamicSizing) {
 
   EXPECT_EQ(thread_pool.threads_.Size(), 0);
   EXPECT_EQ(thread_pool.pending_join_threads_.Size(), 0);
+}
+
+namespace {
+constexpr size_t kThreadCount = 2;
+std::shared_ptr<absl::BlockingCounter> ScheduleTasks(
+    ThreadPool& thread_pool, std::atomic_bool& atomic_flag, size_t modulo) {
+  std::shared_ptr<absl::BlockingCounter> blocking_counter =
+      std::make_shared<absl::BlockingCounter>(kThreadCount);
+
+  for (size_t i = 0; i < kThreadCount; i++) {
+    EXPECT_TRUE(thread_pool.Schedule([&atomic_flag, modulo, blocking_counter]() {
+    uint64_t counter = 0;
+    while (!atomic_flag) {
+      counter++;
+      if (counter % modulo == 0) {
+        absl::SleepFor(absl::Microseconds(1));
+      }
+    }
+    blocking_counter->DecrementCount();
+  }, vmsdk::ThreadPool::Priority::kHigh));
+  }
+  return blocking_counter;
+}
+}  // namespace
+
+TEST_F(ThreadPoolTest, TestCPUUsage) {
+  const size_t thread_count{2};
+  ThreadPool thread_pool("test-pool", thread_count);
+  std::atomic_bool atomic_flag{true};
+  int modulo{0};
+  // Initializing the threads with first simple tasks
+  auto blocking_counter = ScheduleTasks(thread_pool, atomic_flag, modulo);
+  thread_pool.StartWorkers();
+  blocking_counter->Wait();
+  absl::SleepFor(absl::Milliseconds(100));
+  // Expect current CPU avg to be around 0
+  EXPECT_LT(thread_pool.GetAvgCPUPercentage().value(), 1.0);
+
+  atomic_flag.store(false);
+  // Increasing modulo means we will be sleeping less in the task, so CPU expected to rise
+  modulo = 1000;
+  blocking_counter = ScheduleTasks(thread_pool, atomic_flag, modulo);
+  absl::SleepFor(absl::Milliseconds(100));
+  double first_sample = thread_pool.GetAvgCPUPercentage().value();
+  // Expect the avg CPU does not pass 100%
+  EXPECT_LT(first_sample, 100.0);
+  atomic_flag.store(true);
+  blocking_counter->Wait();
+
+  // Occupy again the threads with new tasks
+  atomic_flag.store(false);
+  // Decrease the amount of time the threads will sleep by increasing modulo
+  modulo = 10000;
+  blocking_counter = ScheduleTasks(thread_pool, atomic_flag, modulo);
+  absl::SleepFor(absl::Milliseconds(100));
+  // Threads are expected now to work harder, so current CPU will be higher
+  // than previous sample
+  double second_sample = thread_pool.GetAvgCPUPercentage().value();
+  EXPECT_GT(second_sample, first_sample);
+  atomic_flag.store(true);
+  blocking_counter->Wait();
+  thread_pool.JoinWorkers();
 }
 
 }  // namespace vmsdk

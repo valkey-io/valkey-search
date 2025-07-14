@@ -16,21 +16,19 @@ class TestQueryParser(ValkeySearchTestCaseBase):
         assert client.execute_command("CONFIG GET search.query-string-bytes") == [b"search.query-string-bytes", b"10240"]
         assert client.execute_command("FT.CREATE my_index ON HASH PREFIX 1 doc: SCHEMA price NUMERIC category TAG SEPARATOR | doc_embedding VECTOR FLAT 6 TYPE FLOAT32 DIM 128 DISTANCE_METRIC COSINE") == b"OK"
         query = "@price:[10 20] =>[KNN 10 @doc_embedding $BLOB]"
-        assert client.execute_command(f"CONFIG SET search.query-string-bytes {len(query) - 1}") == b"OK"
-        with pytest.raises(Exception, match="Query string is too long, max length is 45 bytes"):
-            client.execute_command(
-                "FT.SEARCH", "my_index",
-                query,
-                "PARAMS", 2, "BLOB", "<your_vector_blob>",
-                "RETURN", 1, "doc_embedding"
-            )
-        assert client.execute_command(f"CONFIG SET search.query-string-bytes {len(query)}") == b"OK"
-        assert client.execute_command(
+        command_args = [
             "FT.SEARCH", "my_index",
             query,
             "PARAMS", 2, "BLOB", "<your_vector_blob>",
             "RETURN", 1, "doc_embedding"
-        ) == [0]
+        ]
+        # Validate the query strings above the limit are rejected.
+        assert client.execute_command(f"CONFIG SET search.query-string-bytes {len(query) - 1}") == b"OK"
+        with pytest.raises(Exception, match="Query string is too long, max length is 45 bytes"):
+            client.execute_command(*command_args)
+        # Validate the query strings within the limit are rejected.
+        assert client.execute_command(f"CONFIG SET search.query-string-bytes {len(query)}") == b"OK"
+        assert client.execute_command(*command_args) == [0]
 
     def test_query_string_depth_limit(self):
         """

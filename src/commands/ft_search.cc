@@ -50,7 +50,10 @@ vmsdk::config::Boolean EnablePartialResults("enable-partial-results", false);
 vmsdk::info_field::Integer QueryTimeouts("Query Stats", "QueryTimeouts", 
     vmsdk::info_field::IntegerBuilder().CrashSafe().Cumulative().Dev());
 
-// FT.SEARCH idx "*=>[KNN 10 @vec $BLOB AS score]" PARAMS 2 BLOB
+vmsdk::info_field::Integer Disconnects("Query Stats", "Disconnects", 
+    vmsdk::info_field::IntegerBuilder().CrashSafe().Cumulative().Dev());
+
+    // FT.SEARCH idx "*=>[KNN 10 @vec $BLOB AS score]" PARAMS 2 BLOB
 // "\x12\xa9\xf5\x6c" DIALECT 2
 void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
                          const std::deque<indexes::Neighbor> &neighbors,
@@ -214,6 +217,10 @@ namespace async {
 int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
           [[maybe_unused]] int argc) {
   QueryTimeouts.Increment(1);
+  auto *res =
+      static_cast<Result *>(ValkeyModule_GetBlockedClientPrivateData(ctx));
+  CHECK(res != nullptr);
+  res->parameters->cancellation_token->Cancel(); // Cancel to tell Free that it's been seen
   return ValkeyModule_ReplyWithSimpleString(ctx, "Request timed out");
 }
 
@@ -231,12 +238,16 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return Timeout(ctx, argv, argc);
   } else {
     SendReply(ctx, res->neighbors.value(), *res->parameters);
+    res->parameters->cancellation_token->Cancel(); // Cancel to tell Free that it's been seen
   }
   return VALKEYMODULE_OK;
 }
 
 void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
   auto *result = static_cast<Result *>(privdata);
+  if (!result->parameters->cancellation_token->IsCancelled()) {
+    Disconnects.Increment(1);
+  }
   delete result;
 }
 

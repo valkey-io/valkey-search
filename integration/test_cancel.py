@@ -11,10 +11,18 @@ def print_result(name:str, result):
     for i in range(1,len(result)):
         print("Row ",i, result[i])
 
-class TestCMDCancel(ValkeySearchTestCaseBase):
+def canceller(client, client_id):
+    my_id = client.execute_command("client id")
+    assert my_id != client_id
+    client.execute_command("client kill id ", client_id)
 
+class TestCancel(ValkeySearchTestCaseBase):
+
+    def search_command(self, index:str) -> list[str]:
+        return ["FT.SEARCH", index, "*=>[KNN 10 @v $BLOB]", "PARAMS", "2", "BLOB", float_to_bytes([0.0, 0.0, 0.0])]
+    
     def search(self, client: valkey.client, index:str) -> list[tuple[str, float]]:
-        return client.execute_command(*["FT.SEARCH", index, "*=>[KNN 10 @v $BLOB]", "PARAMS", "2", "BLOB", float_to_bytes([0.0, 0.0, 0.0])])
+        return client.execute_command(*self.search_command(index))
 
     def test_timeout(self):
         """
@@ -49,9 +57,8 @@ class TestCMDCancel(ValkeySearchTestCaseBase):
         #
         # Now, force timeouts quickly
         #
-        client.execute_command("CONFIG SET search.debug-force-timeout yes") == b"OK"
+        client.execute_command("CONFIG SET search.test-force-timeout yes") == b"OK"
         client.execute_command("CONFIG SET search.timeout-poll-frequency 5") == b"OK"
-
 
         #
         # Enable timeout path, no error but message result
@@ -91,6 +98,4 @@ class TestCMDCancel(ValkeySearchTestCaseBase):
         assert client.info("SEARCH")["search_QueryTimeouts"] == 2
 
         assert flat_result[0] == 10
-
-
 

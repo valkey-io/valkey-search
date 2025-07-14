@@ -14,14 +14,17 @@ namespace valkey_search {
 namespace cancel {
 
 vmsdk::config::Number kPollFrequency("timeout-poll-frequency", 100, 1, std::numeric_limits<long long>::max());
-vmsdk::config::Boolean kForceTimeout("debug-force-timeout", false);
+vmsdk::config::Boolean kTestForceTimeout("test-force-timeout", false);
 vmsdk::info_field::Integer kTimeouts("timeouts", "cancel-timeouts", vmsdk::info_field::IntegerBuilder().Dev());
 
 bool OnTime::IsCancelled() {
   if (++count_ > kPollFrequency.GetValue()) {
     count_ = 0;
+    if (is_cancelled_) {
+      return true;
+    }
     long long now_us = ValkeyModule_Milliseconds();
-    if (now_us >= deadline_ms_ || kForceTimeout.GetValue()) {
+    if (now_us >= deadline_ms_ || kTestForceTimeout.GetValue()) {
       is_cancelled_ = true; // Operation should be cancelled
       kTimeouts.Increment(1);
     }

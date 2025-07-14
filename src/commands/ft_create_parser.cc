@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 #include "src/commands/ft_create_parser.h"
 
@@ -50,6 +28,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "vmsdk/src/command_parser.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
@@ -77,11 +56,118 @@ const absl::string_view kSeparatorParam{"SEPARATOR"};
 const absl::string_view kCaseSensitiveParam{"CASESENSITIVE"};
 const absl::string_view kScoreParam{"SCORE"};
 constexpr absl::string_view kSchemaParam{"SCHEMA"};
-constexpr size_t kMaxAttributes{50};
-constexpr int kMaxDimensions{32768};
+constexpr size_t kDefaultAttributesCountLimit{50};
+constexpr int kDefaultDimensionsCountLimit{32768};
+constexpr int kDefaultPrefixesCountLimit{8};
+constexpr int kDefaultTagFieldLenLimit{256};
+constexpr int kDefaultNumericFieldLenLimit{128};
+constexpr size_t kMaxAttributesCount{100};
+constexpr int kMaxDimensionsCount{64000};
 constexpr int kMaxM{2000000};
 constexpr int kMaxEfConstruction{4096};
 constexpr int kMaxEfRuntime{4096};
+constexpr int kMaxPrefixesCount{16};
+constexpr int kMaxTagFieldLen{10000};
+constexpr int kMaxNumericFieldLen{256};
+
+constexpr absl::string_view kMaxPrefixesConfig{"max-prefixes"};
+constexpr absl::string_view kMaxTagFieldLenConfig{"max-tag-field-length"};
+constexpr absl::string_view kMaxNumericFieldLenConfig{
+    "max-numeric-field-length"};
+constexpr absl::string_view kMaxAttributesConfig{"max-vector-attributes"};
+constexpr absl::string_view kMaxDimensionsConfig{"max-vector-dimensions"};
+constexpr absl::string_view kMaxMConfig{"max-vector-m"};
+constexpr absl::string_view kMaxEfConstructionConfig{
+    "max-vector-ef-construction"};
+constexpr absl::string_view kMaxEfRuntimeConfig{"max-vector-ef-runtime"};
+
+/// Register the "--max-prefixes" flag. Controls the max number of prefixes per
+/// index.
+static auto max_prefixes =
+    vmsdk::config::NumberBuilder(kMaxPrefixesConfig,          // name
+                                 kDefaultPrefixesCountLimit,  // default size
+                                 1,                           // min size
+                                 kMaxPrefixesCount)           // max size
+        .WithValidationCallback(
+            CHECK_RANGE(1, kMaxPrefixesCount, kMaxPrefixesConfig))
+        .Build();
+
+/// Register the "--max-tag-field-length" flag. Controls the max length of a tag
+/// field.
+static auto max_tag_field_len =
+    vmsdk::config::NumberBuilder(kMaxTagFieldLenConfig,     // name
+                                 kDefaultTagFieldLenLimit,  // default size
+                                 1,                         // min size
+                                 kMaxTagFieldLen)           // max size
+        .WithValidationCallback(
+            CHECK_RANGE(1, kMaxTagFieldLen, kMaxTagFieldLenConfig))
+        .Build();
+
+/// Register the "--max-numeric-field-length" flag. Controls the max length of a
+/// numeric field.
+static auto max_numeric_field_len =
+    vmsdk::config::NumberBuilder(kMaxNumericFieldLenConfig,     // name
+                                 kDefaultNumericFieldLenLimit,  // default size
+                                 1,                             // min size
+                                 kMaxNumericFieldLen)           // max size
+        .WithValidationCallback(
+            CHECK_RANGE(1, kMaxNumericFieldLen, kMaxNumericFieldLenConfig))
+        .Build();
+
+/// Register the "--max-attributes" flag. Controls the max number of attributes
+/// per index.
+static auto max_attributes =
+    vmsdk::config::NumberBuilder(kMaxAttributesConfig,          // name
+                                 kDefaultAttributesCountLimit,  // default size
+                                 1,                             // min size
+                                 kMaxAttributesCount)           // max size
+        .WithValidationCallback(
+            CHECK_RANGE(1, kMaxAttributesCount, kMaxAttributesConfig))
+        .Build();
+
+/// Register the "--max-dimensions" flag. Controls the max dimensions for vector
+/// indices.
+static auto max_dimensions =
+    vmsdk::config::NumberBuilder(kMaxDimensionsConfig,          // name
+                                 kDefaultDimensionsCountLimit,  // default size
+                                 1,                             // min size
+                                 kMaxDimensionsCount)           // max size
+        .WithValidationCallback(
+            CHECK_RANGE(1, kMaxDimensionsCount, kMaxDimensionsConfig))
+        .Build();
+
+/// Register the "--max-m" flag. Controls the max M parameter for HNSW
+/// algorithm.
+static auto max_m =
+    vmsdk::config::NumberBuilder(kMaxMConfig,  // name
+                                 kMaxM,        // default size
+                                 1,            // min size
+                                 kMaxM)        // max size
+        .WithValidationCallback(CHECK_RANGE(1, kMaxM, kMaxMConfig))
+        .Build();
+
+/// Register the "--max-ef-construction" flag. Controls the max EF construction
+/// parameter for HNSW algorithm.
+static auto max_ef_construction =
+    vmsdk::config::NumberBuilder(kMaxEfConstructionConfig,  // name
+                                 kMaxEfConstruction,        // default size
+                                 1,                         // min size
+                                 kMaxEfConstruction)        // max size
+        .WithValidationCallback(
+            CHECK_RANGE(1, kMaxEfConstruction, kMaxEfConstructionConfig))
+        .Build();
+
+/// Register the "--max-ef-runtime" flag. Controls the max EF runtime parameter
+/// for HNSW algorithm.
+static auto max_ef_runtime =
+    vmsdk::config::NumberBuilder(kMaxEfRuntimeConfig,  // name
+                                 kMaxEfRuntime,        // default size
+                                 1,                    // min size
+                                 kMaxEfRuntime)        // max size
+        .WithValidationCallback(
+            CHECK_RANGE(1, kMaxEfRuntime, kMaxEfRuntimeConfig))
+        .Build();
+
 const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::Language>>
     kLanguageByStr({{"ENGLISH", data_model::LANGUAGE_ENGLISH}});
@@ -102,6 +188,12 @@ absl::Status ParsePrefixes(vmsdk::ArgsIterator &itr,
         absl::StrCat("Bad arguments for PREFIX: `", prefixes_cnt,
                      "` is outside acceptable bounds"));
   }
+  // Check if the number of prefixes exceeds the configured maximum
+  const auto max_prefixes = options::GetMaxPrefixes().GetValue();
+  VMSDK_RETURN_IF_ERROR(
+      vmsdk::VerifyRange(prefixes_cnt, std::nullopt, max_prefixes))
+      << "Number of prefixes (" << prefixes_cnt
+      << ") exceeds the maximum allowed (" << max_prefixes << ")";
   for (uint32_t i = 0; i < prefixes_cnt; ++i) {
     VMSDK_ASSIGN_OR_RETURN(auto itr_arg, itr.Get());
     if (vmsdk::ParseHashTag(vmsdk::ToStringView(itr_arg))) {
@@ -218,7 +310,14 @@ absl::Status ParseVector(vmsdk::ArgsIterator &itr,
   return absl::OkStatus();
 }
 absl::Status ParseNumeric(vmsdk::ArgsIterator &itr,
-                          data_model::Index &index_proto) {
+                          data_model::Index &index_proto,
+                          absl::string_view attribute_identifier) {
+  const auto max_numeric_identifier_len =
+      options::GetMaxNumericFieldLen().GetValue();
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
+      attribute_identifier.length(), std::nullopt, max_numeric_identifier_len))
+      << "A numeric field can have a maximum length of "
+      << max_numeric_identifier_len << ".";
   auto numeric_index_proto = std::make_unique<data_model::NumericIndex>();
   index_proto.set_allocated_numeric_index(numeric_index_proto.release());
   return absl::OkStatus();
@@ -232,8 +331,13 @@ vmsdk::KeyValueParser<FTCreateTagParameters> CreateTagParser() {
       GENERATE_FLAG_PARSER(FTCreateTagParameters, case_sensitive));
   return parser;
 }
-absl::Status ParseTag(vmsdk::ArgsIterator &itr,
-                      data_model::Index &index_proto) {
+absl::Status ParseTag(vmsdk::ArgsIterator &itr, data_model::Index &index_proto,
+                      absl::string_view attribute_identifier) {
+  const auto max_tag_identifier_len = options::GetMaxTagFieldLen().GetValue();
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
+      attribute_identifier.length(), std::nullopt, max_tag_identifier_len))
+      << "A tag field can have a maximum length of " << max_tag_identifier_len
+      << ".";
   auto tag_index_proto = std::make_unique<data_model::TagIndex>();
   static auto parser = CreateTagParser();
   FTCreateTagParameters parameters;
@@ -280,9 +384,10 @@ absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
   if (index_type == indexes::IndexerType::kVector) {
     VMSDK_RETURN_IF_ERROR(ParseVector(itr, *index_proto));
   } else if (index_type == indexes::IndexerType::kTag) {
-    VMSDK_RETURN_IF_ERROR(ParseTag(itr, *index_proto));
+    VMSDK_RETURN_IF_ERROR(ParseTag(itr, *index_proto, attribute_identifier));
   } else if (index_type == indexes::IndexerType::kNumeric) {
-    VMSDK_RETURN_IF_ERROR(ParseNumeric(itr, *index_proto));
+    VMSDK_RETURN_IF_ERROR(
+        ParseNumeric(itr, *index_proto, attribute_identifier));
   } else {
     CHECK(false);
   }
@@ -303,7 +408,10 @@ bool HasVectorIndex(const data_model::IndexSchema &index_schema_proto) {
 
 }  // namespace
 absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
-    RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+  // Get configuration values
+  const auto max_attributes_value = options::GetMaxAttributes().GetValue();
+
   data_model::IndexSchema index_schema_proto;
   vmsdk::ArgsIterator itr{argv, argc};
   VMSDK_RETURN_IF_ERROR(
@@ -357,11 +465,11 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
       return absl::InvalidArgumentError(absl::StrCat(
           "Duplicate field in schema - ", attribute->identifier()));
     }
-    if (identifier_names.size() >= kMaxAttributes) {
-      return absl::InvalidArgumentError(
-          absl::StrCat("The maximum number of attributes cannot exceed ",
-                       kMaxAttributes, "."));
-    }
+    VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
+        identifier_names.size() + 1, std::nullopt, max_attributes_value))
+        << "The maximum number of attributes cannot exceed "
+        << max_attributes_value << ".";
+
     identifier_names.insert(attribute->identifier());
   }
   if (!HasVectorIndex(index_schema_proto)) {
@@ -383,12 +491,13 @@ absl::Status FTCreateVectorParameters::Verify() const {
   if (!dimensions) {
     return absl::InvalidArgumentError("Missing dimensions parameter.");
   }
-  if (dimensions.value() <= 0 || dimensions.value() >= kMaxDimensions) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "The dimensions value must be a positive integer greater than 0 and "
-        "less than or equal to ",
-        kMaxDimensions, "."));
-  }
+  const auto max_dimensions_value = options::GetMaxDimensions().GetValue();
+  VMSDK_RETURN_IF_ERROR(
+      vmsdk::VerifyRange(dimensions.value(), 1, max_dimensions_value))
+      << "The dimensions value must be a positive integer greater than 0 and "
+         "less than or equal to "
+      << max_dimensions_value << ".";
+
   if (initial_cap <= 0) {
     return absl::InvalidArgumentError(
         "INITIAL_CAP must be a positive integer greater than 0.");
@@ -414,26 +523,24 @@ std::unique_ptr<data_model::VectorIndex> HNSWParameters::ToProto() const {
 }
 absl::Status HNSWParameters::Verify() const {
   VMSDK_RETURN_IF_ERROR(FTCreateVectorParameters::Verify());
-  if (m <= 0 || m > kMaxM) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        kMParam,
-        " must be a positive integer greater than 0 and cannot exceed ", kMaxM,
-        "."));
-  }
-  if (ef_construction <= 0 || ef_construction > kMaxEfConstruction) {
-    return absl::InvalidArgumentError(
-        absl::StrCat(kEfConstructionParam,
-                     " must be a positive integer greater than 0 "
-                     "and cannot exceed ",
-                     kMaxEfConstruction, "."));
-  }
-  if (ef_runtime == 0 || ef_runtime > kMaxEfRuntime) {
-    return absl::InvalidArgumentError(
-        absl::StrCat(kEfRuntimeParam,
-                     " must be a positive integer greater than 0 and "
-                     "cannot exceed ",
-                     kMaxEfRuntime, "."));
-  }
+  const auto max_m_value = options::GetMaxM().GetValue();
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(m, 1, max_m_value))
+      << kMParam
+      << " must be a positive integer greater than 0 and cannot exceed "
+      << max_m_value << ".";
+
+  const auto max_ef_construction_value =
+      options::GetMaxEfConstruction().GetValue();
+  VMSDK_RETURN_IF_ERROR(
+      vmsdk::VerifyRange(ef_construction, 1, max_ef_construction_value))
+      << kEfConstructionParam
+      << " must be a positive integer greater than 0 and cannot exceed "
+      << max_ef_construction_value << ".";
+  const auto max_ef_runtime_value = options::GetMaxEfRuntime().GetValue();
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(ef_runtime, 1, max_ef_runtime_value))
+      << kEfRuntimeParam
+      << " must be a positive integer greater than 0 and cannot exceed "
+      << max_ef_runtime_value << ".";
   return absl::OkStatus();
 }
 std::unique_ptr<data_model::VectorIndex> FlatParameters::ToProto() const {
@@ -444,4 +551,39 @@ std::unique_ptr<data_model::VectorIndex> FlatParameters::ToProto() const {
       flat_algorithm_proto.release());
   return vector_index_proto;
 }
+
+namespace options {
+
+vmsdk::config::Number &GetMaxPrefixes() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_prefixes);
+}
+
+vmsdk::config::Number &GetMaxTagFieldLen() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_tag_field_len);
+}
+
+vmsdk::config::Number &GetMaxNumericFieldLen() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_numeric_field_len);
+}
+
+vmsdk::config::Number &GetMaxAttributes() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_attributes);
+}
+
+vmsdk::config::Number &GetMaxDimensions() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_dimensions);
+}
+
+vmsdk::config::Number &GetMaxM() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_m);
+}
+
+vmsdk::config::Number &GetMaxEfConstruction() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_ef_construction);
+}
+
+vmsdk::config::Number &GetMaxEfRuntime() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_ef_runtime);
+}
+}  // namespace options
 }  // namespace valkey_search

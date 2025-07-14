@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/valkey_search.h"
@@ -61,9 +39,9 @@ namespace valkey_search {
 struct LoadTestCase {
   std::string test_name;
   std::string args;
-  std::optional<int> tls_redis_port;
-  std::optional<int> redis_port;
-  bool use_redis_port{false};
+  std::optional<int> tls_valkey_port;
+  std::optional<int> valkey_port;
+  bool use_valkey_port{false};
   bool cluster_mode;
   bool use_coordinator{false};
   size_t expected_reader_thread_pool_size{0};
@@ -117,30 +95,32 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "use_coordinator_non_tls",
             .args = "--use-coordinator --writer-threads 10 "
                     "--reader-threads 20",
-            .tls_redis_port = 0,
-            .redis_port = 1000,
-            .use_redis_port = true,
+            .tls_valkey_port = 0,
+            .valkey_port = 1000,
+            .use_valkey_port = true,
             .cluster_mode = true,
             .use_coordinator = true,
             .expected_reader_thread_pool_size = 20,
             .expected_writer_thread_pool_size = 10,
             .expected_coordinator_started = true,
-            .expected_coordinator_port = 21294,  // 20294 larger than redis_port
+            .expected_coordinator_port =
+                21294,  // 20294 larger than valkey_port
             .expect_thread_pool_started = true,
         },
         {
             .test_name = "use_coordinator_tls",
             .args = "--use-coordinator --writer-threads 10 "
                     "--reader-threads 20",
-            .tls_redis_port = 1000,
-            .redis_port = 0,
-            .use_redis_port = true,
+            .tls_valkey_port = 1000,
+            .valkey_port = 0,
+            .use_valkey_port = true,
             .cluster_mode = true,
             .use_coordinator = true,
             .expected_reader_thread_pool_size = 20,
             .expected_writer_thread_pool_size = 10,
             .expected_coordinator_started = true,
-            .expected_coordinator_port = 21294,  // 20294 larger than redis_port
+            .expected_coordinator_port =
+                21294,  // 20294 larger than valkey_port
             .expect_thread_pool_started = true,
         },
         {
@@ -155,37 +135,39 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "use_coordinator_not_cluster_not_tls",
             .args = "--use-coordinator --writer-threads 10 "
                     "--reader-threads 20",
-            .tls_redis_port = 0,
-            .redis_port = 1000,
-            .use_redis_port = true,
+            .tls_valkey_port = 0,
+            .valkey_port = 1000,
+            .use_valkey_port = true,
             .cluster_mode = false,
             .use_coordinator = true,
             .expected_reader_thread_pool_size = 20,
             .expected_writer_thread_pool_size = 10,
             .expected_coordinator_started = true,
-            .expected_coordinator_port = 21294,  // 20294 larger than redis_port
+            .expected_coordinator_port =
+                21294,  // 20294 larger than valkey_port
             .expect_thread_pool_started = true,
         },
         {
             .test_name = "use_coordinator_not_cluster_tls",
             .args = "--use-coordinator --writer-threads 10 "
                     "--reader-threads 20",
-            .tls_redis_port = 1000,
-            .redis_port = 0,
-            .use_redis_port = true,
+            .tls_valkey_port = 1000,
+            .valkey_port = 0,
+            .use_valkey_port = true,
             .cluster_mode = false,
             .use_coordinator = true,
             .expected_reader_thread_pool_size = 20,
             .expected_writer_thread_pool_size = 10,
             .expected_coordinator_started = true,
-            .expected_coordinator_port = 21294,  // 20294 larger than redis_port
+            .expected_coordinator_port =
+                21294,  // 20294 larger than valkey_port
             .expect_thread_pool_started = true,
         },
         {
             .test_name = "use_coordinator_not_cluster_fail_to_get_port",
             .args = "--use-coordinator --writer-threads 10 "
                     "--reader-threads 20",
-            .use_redis_port = true,
+            .use_valkey_port = true,
             .cluster_mode = false,
             .use_coordinator = true,
             .expected_reader_thread_pool_size = 20,
@@ -197,7 +179,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "use_coordinator_fail_to_get_port",
             .args = "--use-coordinator --writer-threads 10 "
                     "--reader-threads 20",
-            .use_redis_port = true,
+            .use_valkey_port = true,
             .cluster_mode = true,
             .use_coordinator = true,
             .expected_reader_thread_pool_size = 20,
@@ -236,54 +218,54 @@ TEST_P(LoadTest, load) {
   const LoadTestCase& test_case = GetParam();
   std::string port_str, tls_port_str;
   int call_reply_count = 0;
-  auto args = vmsdk::ToRedisStringVector(test_case.args);
-  ON_CALL(*kMockRedisModule, GetDetachedThreadSafeContext(&fake_ctx_))
+  auto args = vmsdk::ToValkeyStringVector(test_case.args);
+  ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&fake_ctx_))
       .WillByDefault(testing::Return(&fake_ctx_));
   EXPECT_CALL(
-      *kMockRedisModule,
+      *kMockValkeyModule,
       CreateDataType(&fake_ctx_, testing::StrEq(kValkeySearchModuleTypeName),
                      testing::_, testing::_))
-      .WillOnce(testing::Return((RedisModuleType*)0xBADF00D));
+      .WillOnce(testing::Return((ValkeyModuleType*)0xBADF00D));
   if (test_case.expected_load_ret == 0) {
-    EXPECT_CALL(*kMockRedisModule,
+    EXPECT_CALL(*kMockValkeyModule,
                 Call(testing::_, testing::StrEq("MODULE"), testing::StrEq("c"),
                      testing::StrEq("LIST")))
         .WillOnce(testing::Return(nullptr));
     EXPECT_CALL(
-        *kMockRedisModule,
+        *kMockValkeyModule,
         SetModuleOptions(&fake_ctx_,
-                         REDISMODULE_OPTIONS_HANDLE_IO_ERRORS |
-                             REDISMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD |
-                             REDISMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED))
+                         VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS |
+                             VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD |
+                             VALKEYMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED))
         .Times(1);
   }
   if (test_case.use_coordinator) {
-    if (test_case.use_redis_port) {
-      RedisModuleCallReply tls_array_reply;
-      RedisModuleCallReply tls_string_reply;
-      RedisModuleCallReply non_tls_array_reply;
-      RedisModuleCallReply non_tls_string_reply;
-      if (test_case.tls_redis_port.has_value()) {
-        tls_port_str = std::to_string(test_case.tls_redis_port.value());
-        if (test_case.redis_port.has_value()) {
-          port_str = std::to_string(test_case.redis_port.value());
+    if (test_case.use_valkey_port) {
+      ValkeyModuleCallReply tls_array_reply;
+      ValkeyModuleCallReply tls_string_reply;
+      ValkeyModuleCallReply non_tls_array_reply;
+      ValkeyModuleCallReply non_tls_string_reply;
+      if (test_case.tls_valkey_port.has_value()) {
+        tls_port_str = std::to_string(test_case.tls_valkey_port.value());
+        if (test_case.valkey_port.has_value()) {
+          port_str = std::to_string(test_case.valkey_port.value());
         }
         EXPECT_CALL(
-            *kMockRedisModule,
+            *kMockValkeyModule,
             Call(testing::_, testing::StrEq("CONFIG"), testing::StrEq("cc"),
                  testing::StrEq("GET"), testing::_))
             .Times(testing::Between(1, 2))
             .WillOnce(testing::Return(&tls_array_reply))
             .WillOnce(testing::Return(&non_tls_array_reply));
-        EXPECT_CALL(*kMockRedisModule, CallReplyArrayElement(testing::_, 1))
+        EXPECT_CALL(*kMockValkeyModule, CallReplyArrayElement(testing::_, 1))
             .Times(testing::Between(1, 2))
             .WillOnce(testing::Return(&tls_string_reply))
             .WillOnce(testing::Return(&non_tls_string_reply));
 
-        EXPECT_CALL(*kMockRedisModule,
+        EXPECT_CALL(*kMockValkeyModule,
                     CallReplyStringPtr(testing::_, testing::_))
             .WillRepeatedly(
-                [&](RedisModuleCallReply* reply, size_t* len) -> const char* {
+                [&](ValkeyModuleCallReply* reply, size_t* len) -> const char* {
                   if (call_reply_count == 1) {
                     *len = port_str.size();
                     return port_str.c_str();
@@ -292,12 +274,12 @@ TEST_P(LoadTest, load) {
                   call_reply_count++;
                   return tls_port_str.c_str();
                 });
-        ON_CALL(*kMockRedisModule, GetMyClusterID())
+        ON_CALL(*kMockValkeyModule, GetMyClusterID())
             .WillByDefault(
                 testing::Return("a415b9df6ce0c3c757ad4270242ae432147cacbb"));
       } else {
         EXPECT_CALL(
-            *kMockRedisModule,
+            *kMockValkeyModule,
             Call(testing::_, testing::StrEq("CONFIG"), testing::StrEq("cc"),
                  testing::StrEq("GET"), testing::StrEq("tls-port")))
             .WillOnce(testing::Return(nullptr));
@@ -305,16 +287,16 @@ TEST_P(LoadTest, load) {
     }
   }
   if (test_case.cluster_mode) {
-    EXPECT_CALL(*kMockRedisModule, GetContextFlags(&fake_ctx_))
-        .WillRepeatedly(testing::Return(REDISMODULE_CTX_FLAGS_CLUSTER));
+    EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
+        .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_CLUSTER));
     EXPECT_CALL(
-        *kMockRedisModule,
+        *kMockValkeyModule,
         RegisterClusterMessageReceiver(
             &fake_ctx_, coordinator::kMetadataBroadcastClusterMessageReceiverId,
             testing::_))
         .Times(1);
   } else {
-    EXPECT_CALL(*kMockRedisModule, GetContextFlags(&fake_ctx_))
+    EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
         .WillRepeatedly(testing::Return(0));
   }
   vmsdk::module::Options options;
@@ -344,7 +326,7 @@ TEST_P(LoadTest, load) {
                 testing::IsNull());
   }
   for (const auto& arg : args) {
-    TestRedisModule_FreeString(nullptr, arg);
+    TestValkeyModule_FreeString(nullptr, arg);
   }
 }
 
@@ -364,8 +346,8 @@ TEST_F(ValkeySearchTest, FullSyncFork) {
   EXPECT_TRUE(writer_thread_pool->IsSuspended());
   EXPECT_FALSE(reader_thread_pool->IsSuspended());
   absl::SleepFor(absl::Seconds(5));
-  RedisModuleEvent eid;
-  RedisModuleCtx fake_ctx;
+  ValkeyModuleEvent eid;
+  ValkeyModuleCtx fake_ctx;
   ValkeySearch::Instance().OnServerCronCallback(&fake_ctx, eid, 0, nullptr);
   EXPECT_EQ(Metrics::GetStats().writer_worker_thread_pool_resumed_cnt, 1);
   EXPECT_EQ(
@@ -445,9 +427,11 @@ TEST_F(ValkeySearchTest, Info) {
   stats.coordinator_server_get_global_metadata_success_cnt = 26;
   stats.coordinator_server_search_index_partition_failure_cnt = 27;
   stats.coordinator_server_search_index_partition_success_cnt = 28;
+  stats.coordinator_bytes_out = 1000;
+  stats.coordinator_bytes_in = 2000;
   auto interned_key_1 = StringInternStore::Intern("key1");
   EXPECT_EQ(std::string(*interned_key_1), "key1");
-  RedisModuleInfoCtx fake_info_ctx;
+  ValkeyModuleInfoCtx fake_info_ctx;
   ValkeySearch::Instance().Info(&fake_info_ctx, false);
 #ifndef TESTING_TMP_DISABLED
   EXPECT_EQ(
@@ -476,7 +460,8 @@ TEST_F(ValkeySearchTest, Info) {
       "6\nhnsw_create_exceptions_count: "
       "7\nlatency\nhnsw_vector_index_search_latency_usec: "
       "'p50=100139.007,p99=200278.015,p99.9=200278.015'"
-      "\ncoordinator\ncoordinator_server_get_global_metadata_success_count: "
+      "\ncoordinator\ncoordinator_server_listening_port: "
+      "26673\ncoordinator_server_get_global_metadata_success_count: "
       "26\ncoordinator_server_get_global_metadata_failure_count: "
       "25\ncoordinator_server_search_index_partition_success_count: "
       "28\ncoordinator_server_search_index_partition_failure_count: "
@@ -484,7 +469,8 @@ TEST_F(ValkeySearchTest, Info) {
       "22\ncoordinator_client_get_global_metadata_failure_count: "
       "21\ncoordinator_client_search_index_partition_success_count: "
       "24\ncoordinator_client_search_index_partition_failure_count: "
-      "23\nstring_interning\nstring_interning_store_size: "
+      "23\ncoordinator_bytes_out: 1000\ncoordinator_bytes_in: 2000"
+      "\nstring_interning\nstring_interning_store_size: "
       "1\nvector_externing\nvector_externing_entry_count: "
       "0\nvector_externing_hash_extern_errors: "
       "0\nvector_externing_generated_value_cnt: "
@@ -498,13 +484,13 @@ TEST_F(ValkeySearchTest, OnForkChildCallback) {
   InitThreadPools(std::nullopt, 5);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
-  RedisModuleEvent eid;
+  ValkeyModuleEvent eid;
   Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt = 0;
   Metrics::GetStats().writer_worker_thread_pool_resumed_cnt = 0;
   ValkeySearch::Instance().OnForkChildCallback(&fake_ctx_, eid, 0, nullptr);
   EXPECT_TRUE(writer_thread_pool->IsSuspended());
   ValkeySearch::Instance().OnForkChildCallback(
-      &fake_ctx_, eid, REDISMODULE_SUBEVENT_FORK_CHILD_DIED, nullptr);
+      &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_FORK_CHILD_DIED, nullptr);
   EXPECT_FALSE(writer_thread_pool->IsSuspended());
   EXPECT_EQ(
       Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt, 0);

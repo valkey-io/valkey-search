@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef VALKEYSEARCH_SRC_COMMANDS_COMMANDS_H_
@@ -43,6 +21,7 @@ enum FTCommand {
   kInfo,
   kList,
   kSearch,
+  kDebug,
 };
 
 constexpr absl::string_view kSearchCategory{"@search"};
@@ -57,6 +36,7 @@ constexpr absl::string_view kDropIndexCommand{"FT.DROPINDEX"};
 constexpr absl::string_view kInfoCommand{"FT.INFO"};
 constexpr absl::string_view kListCommand{"FT._LIST"};
 constexpr absl::string_view kSearchCommand{"FT.SEARCH"};
+constexpr absl::string_view kDebugCommand{"FT._DEBUG"};
 
 const absl::flat_hash_set<absl::string_view> kCreateCmdPermissions{
     kSearchCategory, kWriteCategory, kFastCategory};
@@ -68,6 +48,9 @@ const absl::flat_hash_set<absl::string_view> kInfoCmdPermissions{
     kSearchCategory, kReadCategory, kFastCategory};
 const absl::flat_hash_set<absl::string_view> kListCmdPermissions{
     kSearchCategory, kReadCategory, kSlowCategory, kAdminCategory};
+const absl::flat_hash_set<absl::string_view> kDebugCmdPermissions{
+    kSearchCategory, kReadCategory, kSlowCategory, kAdminCategory};
+
 
 inline absl::flat_hash_set<absl::string_view> PrefixACLPermissions(
     const absl::flat_hash_set<absl::string_view> &cmd_permissions,
@@ -77,13 +60,17 @@ inline absl::flat_hash_set<absl::string_view> PrefixACLPermissions(
   return ret;
 }
 
-absl::Status FTCreateCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
+absl::Status FTCreateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc);
-absl::Status FTDropIndexCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
+absl::Status FTDropIndexCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc);
-absl::Status FTInfoCmd(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
-absl::Status FTListCmd(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
-absl::Status FTSearchCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
+absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                       int argc);
+absl::Status FTListCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                       int argc);
+absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                         int argc);
+absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc);
 }  // namespace valkey_search
 

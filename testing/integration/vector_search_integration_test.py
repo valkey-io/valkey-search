@@ -372,25 +372,26 @@ class VectorSearchIntegrationTest(VSSTestCase):
         logging.basicConfig(level=logging.DEBUG)
 
         # Get the logger used by redis-py
-        redis_logger = logging.getLogger("redis")
-        redis_logger.setLevel(logging.DEBUG)
+        valkey_logger = logging.getLogger("redis")
+        valkey_logger.setLevel(logging.DEBUG)
 
         # Optional: Stream to stderr explicitly
         handler = logging.StreamHandler()
         handler.setLevel(logging.DEBUG)
         formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
         handler.setFormatter(formatter)
-        redis_logger.addHandler(handler)
+        valkey_logger.addHandler(handler)
 
         valkey_server_stdout_dir = os.environ["TEST_UNDECLARED_OUTPUTS_DIR"]
         valkey_server_path = os.environ["VALKEY_SERVER_PATH"]
         valkey_cli_path = os.environ["VALKEY_CLI_PATH"]
         valkey_search_path = os.environ["VALKEY_SEARCH_PATH"]
 
+        cls.valkey_ports = [6379, 6380, 6381]
         cls.valkey_cluster_under_test = utils.start_valkey_cluster(
             valkey_server_path,
             valkey_cli_path,
-            [6379, 6380, 6381],
+            cls.valkey_ports,
             os.environ["TEST_TMPDIR"],
             valkey_server_stdout_dir,
             {
@@ -408,7 +409,7 @@ class VectorSearchIntegrationTest(VSSTestCase):
         cls.valkey_conn = utils.connect_to_valkey_cluster(
             [
                 valkey.cluster.ClusterNode("localhost", port)
-                for port in [6379, 6380, 6381]
+                for port in cls.valkey_ports
             ],
             True,
         )
@@ -636,6 +637,21 @@ class VectorSearchIntegrationTest(VSSTestCase):
                 store_data_type=utils.StoreDataType.HASH.name,
             )
             self.assertEqual(want, got)
+            
+    def test_coordinator_server_port(self):
+        for idx, port in enumerate(self.valkey_ports):
+            # Connect to each node in the cluster
+            valkey_conn = valkey.Valkey(
+                host="localhost",
+                port=port,
+                socket_timeout=1000,
+            )
+            if not valkey_conn:
+                self.fail("Failed to connect to valkey cluster")
+               
+            coordinator_port = valkey_conn.info(section="search")["search_coordinator_server_listening_port"]
+            assert int(coordinator_port) == port + 20294
+            
 
 
 if __name__ == "__main__":

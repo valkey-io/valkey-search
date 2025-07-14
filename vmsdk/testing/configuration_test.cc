@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <absl/strings/match.h>
@@ -38,9 +16,9 @@ namespace vmsdk {
 
 namespace {
 
-inline void FreeRedisArgs(std::vector<RedisModuleString *> &args) {
+inline void FreeValkeyArgs(std::vector<ValkeyModuleString *> &args) {
   for (const auto &arg : args) {
-    TestRedisModule_FreeString(nullptr, arg);
+    TestValkeyModule_FreeString(nullptr, arg);
   }
 }
 
@@ -49,11 +27,11 @@ using ::testing::Eq;
 using ::testing::StrEq;
 using vmsdk::config::ModuleConfigManager;
 
-class ConfigTest : public vmsdk::RedisTest {
+class ConfigTest : public vmsdk::ValkeyTest {
  protected:
-  RedisModuleCtx fake_ctx;
-  void SetUp() override { vmsdk::RedisTest::SetUp(); }
-  void TearDown() override { vmsdk::RedisTest::TearDown(); }
+  ValkeyModuleCtx fake_ctx;
+  void SetUp() override { vmsdk::ValkeyTest::SetUp(); }
+  void TearDown() override { vmsdk::ValkeyTest::TearDown(); }
 };
 
 TEST_F(ConfigTest, registration) {
@@ -61,12 +39,12 @@ TEST_F(ConfigTest, registration) {
   vmsdk::config::Boolean boolean("boolean", true);
 
   // 2 integer registration
-  EXPECT_CALL(*kMockRedisModule,
+  EXPECT_CALL(*kMockValkeyModule,
               RegisterNumericConfig(&fake_ctx, StrEq("number"), Eq(42), _,
                                     Eq(0), Eq(1024), _, _, _, Eq(&number)))
       .Times(testing::AtLeast(1));
 
-  EXPECT_CALL(*kMockRedisModule,
+  EXPECT_CALL(*kMockValkeyModule,
               RegisterBoolConfig(&fake_ctx, StrEq("boolean"), Eq(1), _, _, _, _,
                                  Eq(&boolean)))
       .Times(testing::AtLeast(1));
@@ -149,7 +127,7 @@ absl::Status CheckEnumValues(int new_value) {
 
 }  // namespace
 
-TEST_F(ConfigTest, CheckEumerator) {
+TEST_F(ConfigTest, CheckEnumerator) {
   auto enumerator = config::Builder<int>("my-enum", 2, kEnumNames, kEnumValues)
                         .WithValidationCallback(CheckEnumValues)
                         .Build();
@@ -185,7 +163,7 @@ TEST_F(ConfigTest, parseArgsHappyPath) {
 
   // Happy path
   auto args =
-      vmsdk::ToRedisStringVector("--my-bool no --my-number 10 --my-enum 4");
+      vmsdk::ToValkeyStringVector("--my-bool no --my-number 10 --my-enum 4");
   auto res = ModuleConfigManager::Instance().Init(&fake_ctx);
   EXPECT_TRUE(res.ok());
   res = ModuleConfigManager::Instance().ParseAndLoadArgv(&fake_ctx, args.data(),
@@ -196,11 +174,11 @@ TEST_F(ConfigTest, parseArgsHappyPath) {
   EXPECT_EQ(enumerator->GetValue(), 4);
   EXPECT_EQ(number_config->GetValue(), 10);
 
-  FreeRedisArgs(args);
+  FreeValkeyArgs(args);
 }
 
 TEST_F(ConfigTest, ParseArgsWithUnknownArgument) {
-  auto args = vmsdk::ToRedisStringVector("--my-bool no");
+  auto args = vmsdk::ToValkeyStringVector("--my-bool no");
   auto res = ModuleConfigManager::Instance().Init(&fake_ctx);
   EXPECT_TRUE(res.ok());
 
@@ -208,39 +186,39 @@ TEST_F(ConfigTest, ParseArgsWithUnknownArgument) {
                                                          args.size());
   EXPECT_FALSE(res.ok());
   EXPECT_TRUE(absl::IsUnknown(res));
-  FreeRedisArgs(args);
+  FreeValkeyArgs(args);
 }
 
 // we made an exception for --use-coordinator, test it
 TEST_F(ConfigTest, ParseArgsUseCoordinator) {
   auto use_coordinator =
       config::Builder<bool>("use-coordinator", false).Build();
-  auto args = vmsdk::ToRedisStringVector("--use-coordinator");
+  auto args = vmsdk::ToValkeyStringVector("--use-coordinator");
   auto res = ModuleConfigManager::Instance().Init(&fake_ctx);
   EXPECT_TRUE(res.ok());
   res = ModuleConfigManager::Instance().ParseAndLoadArgv(&fake_ctx, args.data(),
                                                          args.size());
   EXPECT_TRUE(res.ok());
   EXPECT_TRUE(use_coordinator->GetValue());
-  FreeRedisArgs(args);
+  FreeValkeyArgs(args);
 }
 
 TEST_F(ConfigTest, ParseArgsInvalidFormat) {
   auto boolean = config::Builder<bool>("enable-something", false).Build();
-  auto args = vmsdk::ToRedisStringVector("enable-something yes");
+  auto args = vmsdk::ToValkeyStringVector("enable-something yes");
   auto res = ModuleConfigManager::Instance().Init(&fake_ctx);
   EXPECT_TRUE(res.ok());
   res = ModuleConfigManager::Instance().ParseAndLoadArgv(&fake_ctx, args.data(),
                                                          args.size());
   // missing "--" prefix yields "InvalidArgument" error
   EXPECT_TRUE(absl::IsInvalidArgument(res));
-  FreeRedisArgs(args);
+  FreeValkeyArgs(args);
 }
 
 TEST_F(ConfigTest, ParseArgsMissingValue) {
   auto number =
       config::Builder<long long>("possible-answers", 42, 0, 1024).Build();
-  auto args = vmsdk::ToRedisStringVector("--possible-answers");
+  auto args = vmsdk::ToValkeyStringVector("--possible-answers");
   auto res = ModuleConfigManager::Instance().Init(&fake_ctx);
   EXPECT_TRUE(res.ok());
 
@@ -248,7 +226,7 @@ TEST_F(ConfigTest, ParseArgsMissingValue) {
                                                          args.size());
   // Missing value yields "NotFound" error
   EXPECT_TRUE(absl::IsNotFound(res));
-  FreeRedisArgs(args);
+  FreeValkeyArgs(args);
 }
 
 }  // namespace

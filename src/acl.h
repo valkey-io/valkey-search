@@ -29,12 +29,12 @@ Check if
     * according to the ACL rules defined in the server.
 */
 absl::Status AclPrefixCheck(
-    RedisModuleCtx *ctx,
+    ValkeyModuleCtx *ctx,
     const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
     const std::vector<std::string> &module_prefixes);
 
 absl::Status AclPrefixCheck(
-    RedisModuleCtx *ctx,
+    ValkeyModuleCtx *ctx,
     const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
     const data_model::IndexSchema &index_schema_proto);
 

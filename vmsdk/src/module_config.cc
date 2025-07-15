@@ -47,6 +47,32 @@ static int OnSetConfig(const char *config_name, T value, void *priv_data,
   return VALKEYMODULE_OK;
 }
 
+static ValkeyModuleString *OnGetStringConfig(const char *config_name,
+                                             void *priv_data) {
+  auto entry = static_cast<String *>(priv_data);
+  CHECK(entry) << "null private data";
+  return ValkeyModule_CreateString(nullptr, entry->GetString().c_str(),
+                                   entry->GetString().size());
+}
+
+static int OnSetStringConfig(const char *config_name, ValkeyModuleString *value,
+                             void *priv_data, ValkeyModuleString **err) {
+  auto entry = static_cast<String *>(priv_data);
+  CHECK(entry) << "null private data";
+  auto sv = vmsdk::ToStringView(value);
+  auto res = entry->SetValue(sv.data());  // Calls "Validate" internally
+  if (!res.ok()) {
+    if (err) {
+      *err =
+          ValkeyModule_CreateStringPrintf(nullptr, "%s", res.message().data());
+    }
+    return VALKEYMODULE_ERR;
+  }
+
+  entry->NotifyChanged();
+  return VALKEYMODULE_OK;
+}
+
 /// Convert `vector<string>` -> `vector<const char*>`
 /// IMPORTANT: `vec` must outlive the returned value
 std::vector<const char *> ToCharPtrPtrVec(const std::vector<std::string> &vec) {
@@ -266,6 +292,30 @@ absl::Status Boolean::FromString(std::string_view value) {
     return absl::InvalidArgumentError(
         absl::StrFormat("Invalid boolean value: '%s'", value));
   }
+  return absl::OkStatus();
+}
+
+String::String(std::string_view name, std::string_view default_value)
+    : ConfigBase(name), value_(default_value) {}
+
+absl::Status String::Register(ValkeyModuleCtx *ctx) {
+  if (ValkeyModule_RegisterStringConfig(ctx,
+                                        name_.data(),       // Name
+                                        value_.c_str(),     // Default value
+                                        flags_,             // Flags
+                                        OnGetStringConfig,  // Get callback
+                                        OnSetStringConfig,  // Set callback
+                                        nullptr,  // Apply callback (optional)
+                                        this      // privdata
+                                        ) != VALKEYMODULE_OK) {
+    return absl::InternalError(
+        absl::StrCat("Failed to register String configuration entry: ", name_));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status String::FromString(std::string_view value) {
+  SetValueOrLog(value.data(), WARNING);
   return absl::OkStatus();
 }
 

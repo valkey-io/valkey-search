@@ -150,6 +150,7 @@ export MODULE_PATH=${MODULE_PATH}
 export VALKEY_SERVER_PATH=${VALKEY_SERVER_PATH}
 export PYTHONPATH=${WD}/valkeytestframework:${WD}
 export JSON_MODULE_PATH=${JSON_MODULE_PATH}
+export SKIPLOGCLEAN=1
 
 FILTER_ARGS=""
 if [ ! -z "${TEST_PATTERN}" ]; then
@@ -159,4 +160,4 @@ else
     LOG_INFO "TEST_PATTERN is not set. Running all integration tests."
 fi
 LOG_INFO "Running: ${PYTHON_PATH} -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/"
-${PYTHON_PATH} -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/
+${PYTHON_PATH} -m pytest ${FILTER_ARGS} --log-cli-level=INFO --capture=sys --cache-clear -v ${ROOT_DIR}/integration/

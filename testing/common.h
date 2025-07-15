@@ -206,6 +206,11 @@ data_model::VectorIndex CreateFlatVectorIndexProto(
     int dimensions, data_model::DistanceMetric distance_metric, int initial_cap,
     uint32_t block_size);
 
+data_model::NumericIndex CreateNumericIndexProto();
+
+data_model::TagIndex CreateTagIndexProto(const std::string& separator = ",", 
+                                         bool case_sensitive = false);
+
 class MockIndexSchema : public IndexSchema {
  public:
   static absl::StatusOr<std::shared_ptr<MockIndexSchema>> Create(

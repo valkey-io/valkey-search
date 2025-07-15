@@ -43,6 +43,7 @@
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/vector_externalizer.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -64,7 +65,7 @@ IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
   ValkeyModule_SelectDb(scan_ctx.get(), db_num);
   db_size = ValkeyModule_DbSize(scan_ctx.get());
   VMSDK_LOG(NOTICE, ctx) << "Starting backfill for index schema in DB "
-                         << db_num << ": " << name;
+                         << db_num << ": " << name << " (size: " << db_size << ")";
 }
 
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
@@ -819,11 +820,30 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
     ValkeyModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,
     std::unique_ptr<data_model::IndexSchema> index_schema_proto,
     SupplementalContentIter &&supplemental_iter) {
-  // Attributes will be loaded from supplemental content.
+  // flag to skip loading attributes and indices
+  bool skip_loading_index_data = options::GetSkipIndexLoad().GetValue();
+  // When skipping index data, create attributes immediately (with empty indexes)
+  bool load_attributes_on_create = skip_loading_index_data; 
+  // Attributes will be loaded from supplemental content. if !load_attributes_on_create
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,
       IndexSchema::Create(ctx, *index_schema_proto, mutations_thread_pool,
-                          /*skip_attributes=*/true));
+                          !load_attributes_on_create));
+  
+  if (ABSL_PREDICT_FALSE(skip_loading_index_data)) {
+    VMSDK_LOG(NOTICE, ctx) << "Creating empty indexes for schema '" 
+                           << index_schema_proto->name() 
+                           << "' - will rebuild via backfill";
+    while (supplemental_iter.HasNext()) {
+      VMSDK_ASSIGN_OR_RETURN(auto supplemental_content, supplemental_iter.Next());
+      auto chunk_it = supplemental_iter.IterateChunks();
+      while (chunk_it.HasNext()) {
+        VMSDK_ASSIGN_OR_RETURN(auto chunk_result, chunk_it.Next());
+        (void)chunk_result; // Mark as intentionally unused
+      }
+    }    
+    return index_schema;
+  }
 
   // Supplemental content will include indices and any content for them
   while (supplemental_iter.HasNext()) {

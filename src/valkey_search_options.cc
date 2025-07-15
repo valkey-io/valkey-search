@@ -120,7 +120,7 @@ static auto writer_threads_count =
 constexpr absl::string_view kUseCoordinator{"use-coordinator"};
 static auto use_coordinator =
     config::BooleanBuilder(kUseCoordinator, false)
-        .WithFlags(VALKEYMODULE_CONFIG_HIDDEN)  // can only be set during
+        .WithFlags(VALKEYMODULE_CONFIG_IMMUTABLE)  // can only be set during
                                                 // start-up
         .Build();
 
@@ -135,6 +135,13 @@ static const std::vector<std::string_view> kLogLevelNames = {
 static const std::vector<int> kLogLevelValues = {
     static_cast<int>(LogLevel::kWarning), static_cast<int>(LogLevel::kNotice),
     static_cast<int>(LogLevel::kVerbose), static_cast<int>(LogLevel::kDebug)};
+
+
+/// Should this instance reindex vector index RDB loading?
+constexpr absl::string_view kReIndexVectorRDBLoad{"rdb-load-skip-index"};
+static auto rdb_load_skip_index =
+    config::BooleanBuilder(kReIndexVectorRDBLoad, false)
+        .Build();
 
 /// Control the modules log level verbosity
 constexpr absl::string_view kLogLevel{"log-level"};
@@ -186,12 +193,21 @@ const vmsdk::config::Boolean& GetUseCoordinator() {
   return dynamic_cast<const vmsdk::config::Boolean&>(*use_coordinator);
 }
 
+const vmsdk::config::Boolean& GetSkipIndexLoad() {
+  return dynamic_cast<const vmsdk::config::Boolean&>(*rdb_load_skip_index);
+}
+
+vmsdk::config::Boolean& GetSkipIndexLoadMutable() {
+  return dynamic_cast<vmsdk::config::Boolean&>(*rdb_load_skip_index);
+}
+
 vmsdk::config::Enum& GetLogLevel() {
   return dynamic_cast<vmsdk::config::Enum&>(*log_level);
 }
 
 absl::Status Reset() {
   VMSDK_RETURN_IF_ERROR(use_coordinator->SetValue(false));
+  VMSDK_RETURN_IF_ERROR(rdb_load_skip_index->SetValue(false));
   return absl::OkStatus();
 }
 

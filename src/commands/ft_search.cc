@@ -154,57 +154,25 @@ void SerializeNeighbors(RedisModuleCtx *ctx,
   }
 }
 
-// This is the function where we handle non-vector queries.
-// It processes the neighbors and replies with the attribute contents
-// without the vector score.
-// The part to extend here is other search libraries return all fields (not just those used in the query).
-// Currrently, we only return the fields usd in the query.
+// Handle non-vector queries by processing the neighbors and replying with the attribute contents.
 void SerializeNonVectorNeighbors(RedisModuleCtx *ctx,
                                 std::deque<indexes::Neighbor> &neighbors,
                                 const query::VectorSearchParameters &parameters) {
-    VMSDK_LOG(WARNING, nullptr) << "Starting SerializeNonVectorNeighbors";
-
-    ProcessNonVectorNeighborsForReply(ctx, parameters.index_schema->GetAttributeDataType(),
-                                     neighbors, parameters);
-
-    const size_t start_index = parameters.limit.first_index;
     const size_t available_results = neighbors.size();
-    VMSDK_LOG(WARNING, nullptr) << "Available results: " << available_results;
-
-    const size_t end_index = std::min(
-        start_index + (parameters.limit.number ? parameters.limit.number : available_results),
-        available_results);
-    VMSDK_LOG(WARNING, nullptr) << "End index: " << end_index;
-    RedisModule_ReplyWithArray(ctx, 2 * (end_index - start_index) + 1);
+    RedisModule_ReplyWithArray(ctx, 2 * available_results + 1);
+    // First element is the count of available results.
     RedisModule_ReplyWithLongLong(ctx, available_results);
-    for (auto i = start_index; i < end_index; ++i) {
-        VMSDK_LOG(WARNING, nullptr) << "Processing neighbor " << i;
-        if (!neighbors[i].external_id) {
-            VMSDK_LOG(WARNING, nullptr) << "Null external_id for neighbor " << i;
-            continue;
-        }
-        RedisModule_ReplyWithString(
-            ctx, vmsdk::MakeUniqueRedisString(*neighbors[i].external_id).get());
-        if (!neighbors[i].attribute_contents.has_value()) {
-            VMSDK_LOG(WARNING, nullptr) << "No attribute contents for neighbor " << i;
-            continue;
-        }
-        const auto& contents = neighbors[i].attribute_contents.value();
-        VMSDK_LOG(WARNING, nullptr) << "Contents size: " << contents.size();
-        // For non-vector queries, just return all contents without score
+    for (const auto& neighbor : neighbors) {
+        // Document ID
+        RedisModule_ReplyWithString(ctx, vmsdk::MakeUniqueRedisString(*neighbor.external_id).get());
+        const auto& contents = neighbor.attribute_contents.value();
+        // Fields and values as a flat array
         RedisModule_ReplyWithArray(ctx, 2 * contents.size());
         for (const auto &attribute_content : contents) {
-            if (!attribute_content.second.GetIdentifier() ||
-                !attribute_content.second.value) {
-                VMSDK_LOG(WARNING, nullptr) << "Null content identifiers";
-                continue;
-            }
-            RedisModule_ReplyWithString(ctx,
-                                      attribute_content.second.GetIdentifier());
+            RedisModule_ReplyWithString(ctx, attribute_content.second.GetIdentifier());
             RedisModule_ReplyWithString(ctx, attribute_content.second.value.get());
         }
     }
-    VMSDK_LOG(WARNING, nullptr) << "Finished SerializeNonVectorNeighbors";
 }
 
 }  // namespace
@@ -225,6 +193,8 @@ void SendReply(RedisModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
 
   // Support non-vector queries: no attribute_alias and k == 0
   if (parameters.attribute_alias.empty()) {
+    query::ProcessNonVectorNeighborsForReply(ctx, parameters.index_schema->GetAttributeDataType(),
+                                  neighbors, parameters);
     SerializeNonVectorNeighbors(ctx, neighbors, parameters);
     return;
   }

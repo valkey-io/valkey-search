@@ -148,10 +148,14 @@ message InfoIndexPartitionResponse {
   uint64 num_docs = 3;
   uint64 num_records = 4;
   uint64 hash_indexing_failures = 5;
-  float backfill_complete_percent = 6;
-  bool backfill_in_progress = 7;
-  uint64 mutation_queue_size = 8;
-  string state = 9;
-  string error = 10;
+  uint64 backfill_scanned_count = 6;
+  uint64 backfill_db_size = 7;
+  uint64 backfill_inqueue_tasks = 8;
+  float backfill_complete_percent = 9;
+  bool backfill_in_progress = 10;
+  uint64 mutation_queue_size = 11;
+  uint64 recent_mutations_queue_delay = 12;
+  string state = 13;
+  string error = 14;
 }
 

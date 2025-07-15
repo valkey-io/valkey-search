@@ -166,6 +166,18 @@ class IndexSchema : public KeyspaceEventSubscription,
     return stats_.mutation_queue_size_;
   }
 
+  vmsdk::ReaderMutexLock AcquireReadGuard() const {
+    return vmsdk::ReaderMutexLock(&time_sliced_mutex_);
+  }
+
+  bool IsBackfillInProgressNoMain() const;
+  float GetBackfillPercentNoMain() const;
+  std::string GetStateForInfoNoMain() const;
+  uint64_t GetBackfillScannedCount() const { return backfill_scanned_count_.load(std::memory_order_relaxed); }
+  uint64_t GetBackfillDbSize() const { return backfill_db_size_.load(std::memory_order_relaxed); }
+  uint64_t GetBackfillInqueueTasks() const { return stats_.backfill_inqueue_tasks.load(std::memory_order_relaxed); }
+  uint64_t GetRecentMutationsQueueDelay() const {return stats_.mutation_queue_size_ > 0 ? stats_.mutations_queue_delay_ /absl::Seconds(1): 0;}
+
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,
               const data_model::IndexSchema &index_schema_proto,
@@ -181,6 +193,10 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::unique_ptr<AttributeDataType> attribute_data_type_;
   std::string name_;
   uint32_t db_num_{0};
+  std::atomic<uint64_t> backfill_scanned_count_{0};
+  std::atomic<uint64_t> backfill_db_size_{0};
+  std::atomic<bool>     backfill_paused_by_oom_{false};
+  std::atomic<bool>     backfill_scan_done_{false};
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   InternedStringMap<DocumentMutation> tracked_mutated_records_

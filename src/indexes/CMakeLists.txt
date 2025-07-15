@@ -93,3 +93,13 @@ target_link_libraries(vector_flat PUBLIC log)
 target_link_libraries(vector_flat PUBLIC memory_allocation_overrides)
 target_link_libraries(vector_flat PUBLIC status_macros)
 target_link_libraries(vector_flat PUBLIC valkey_module)
+
+set(SRCS_TEXT_INDEX ${CMAKE_CURRENT_LIST_DIR}/text_index.cc
+                    ${CMAKE_CURRENT_LIST_DIR}/text_index.h)
+
+valkey_search_add_static_library(text_index "${SRCS_TEXT_INDEX}")
+target_include_directories(text_index PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(text_index PUBLIC index_base)
+target_link_libraries(text_index PUBLIC rdb_serialization)
+target_link_libraries(text_index PUBLIC string_interning)
+target_link_libraries(text_index PUBLIC valkey_module)

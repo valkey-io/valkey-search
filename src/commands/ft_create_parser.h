@@ -40,6 +40,22 @@ struct FTCreateVectorParameters {
   std::unique_ptr<data_model::VectorIndex> ToProto() const;
 };
 
+struct FTCreateTextParameters {
+  std::string punctuation;  // Default: should we use absl here
+  bool with_offsets{true};
+  bool with_suffix_trie{false};
+  bool no_stem{false};
+  std::vector<std::string> stop_words;
+  bool no_stop_words{false};
+  data_model::Language language{data_model::LANGUAGE_ENGLISH}; // see if this is needed
+  int min_stem_size{4};
+};
+
+struct GlobalTextDefaults {
+  FTCreateTextParameters defaults;
+};
+
+
 constexpr int kDefaultBlockSize{1024};
 constexpr int kDefaultM{16};
 constexpr int kDefaultEFConstruction{200};

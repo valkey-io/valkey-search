@@ -31,6 +31,20 @@ message IndexSchema {
   optional uint32 db_num = 8;
 }
 
+
+message TextIndex {
+  string punctuation = 1;
+  bool with_offsets = 2;
+  bool with_suffix_trie = 3;
+  bool no_stem = 4;
+  repeated string stop_words = 5;
+  bool no_stop_words = 6;
+  Language language = 7;
+  int32 min_stem_size = 8;
+}
+
+
+// why is there only vector index type
 enum AttributeIndexType {
   ATTRIBUTE_INDEX_TYPE_UNSPECIFIED = 0;
   ATTRIBUTE_INDEX_TYPE_VECTOR = 1;
@@ -47,6 +61,7 @@ message Index {
     VectorIndex vector_index = 1;
     NumericIndex numeric_index = 2;
     TagIndex tag_index = 3;
+    TextIndex text_index = 4;
   }
 }
 

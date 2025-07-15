@@ -36,6 +36,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text_index.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -79,6 +80,9 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     }
     case data_model::Index::IndexTypeCase::kNumericIndex: {
       return std::make_shared<indexes::Numeric>(index.numeric_index());
+    }
+    case data_model::Index::IndexTypeCase::kTextIndex: {
+      return std::make_shared<indexes::TextIndex>(index.text_index());
     }
     case data_model::Index::IndexTypeCase::kVectorIndex: {
       switch (index.vector_index().algorithm_case()) {

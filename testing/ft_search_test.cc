@@ -557,6 +557,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
               OpenKey(&fake_ctx_, An<ValkeyModuleString *>(), testing::_))
       .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
   auto index_schema = CreateVectorHNSWSchema(index_name, &fake_ctx_).value();
+  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_)).Times(::testing::AnyNumber());
   auto vectors = DeterministicallyGenerateVectors(100, dimensions, 10.0);
   AddVectors(vectors);
   RE2 reply_regex(R"(\*3\r\n:1\r\n\+\d+\r\n\*2\r\n\+score\r\n\+.*\r\n)");

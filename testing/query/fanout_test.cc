@@ -378,6 +378,7 @@ TEST_P(FanoutTest, TestFanout) {
 
   auto schema = CreateVectorHNSWSchema("test_index", &fake_ctx_);
   VMSDK_EXPECT_OK(schema);
+  EXPECT_CALL(**schema, GetIdentifier(::testing::_)).Times(::testing::AnyNumber());
 
   data_model::TagIndex tag_index;
   tag_index.set_separator(",");

@@ -199,7 +199,6 @@ void SendReply(RedisModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
     return;
   }
 
-  // @karsubba: Here, first_index is 10 by default. And k is 0 by default. k is only set with KNN queries which are not the case for vector search queries.
   if (parameters.limit.first_index >= static_cast<uint64_t>(parameters.k) ||
       parameters.limit.number == 0) {
     RedisModule_ReplyWithArray(ctx, 1);
@@ -210,7 +209,6 @@ void SendReply(RedisModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
     SendReplyNoContent(ctx, neighbors, parameters);
     return;
   }
-  // @karsubba: parameters.attribute_alias is empty for non-vector queries.
   auto identifier =
       parameters.index_schema->GetIdentifier(parameters.attribute_alias);
   if (!identifier.ok()) {
@@ -290,8 +288,6 @@ absl::Status FTSearchCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
 
     if (ValkeySearch::Instance().UsingCoordinator() &&
         ValkeySearch::Instance().IsCluster() && !parameters->local_only) {
-      VMSDK_LOG(DEBUG, nullptr)
-        << "Performing FT.SEARCH with fanout";
       auto search_targets = query::fanout::GetSearchTargetsForFanout(ctx);
       return query::fanout::PerformSearchFanoutAsync(
           ctx, search_targets,

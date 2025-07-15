@@ -345,6 +345,7 @@ absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
   auto pos = filter_expression.find(kVectorFilterDelimiter);
   absl::string_view pre_filter;
   absl::string_view vector_filter;
+  // If the delimiter is not found (ie - non vector query), treat the whole string as pre-filter.
   if (pos == absl::string_view::npos) {
     pre_filter = absl::StripAsciiWhitespace(filter_expression);
   } else {
@@ -359,7 +360,7 @@ absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
   if (parameters.filter_parse_results.root_predicate) {
     ++Metrics::GetStats().query_hybrid_requests_cnt;
   }
-
+  // Optionally parse the vector filter if it exists.
   if (!vector_filter.empty()) {
     VMSDK_RETURN_IF_ERROR(ParseKNN(parameters, vector_filter)).SetPrepend()
       << "Error parsing vector similarity parameters: `" << vector_filter

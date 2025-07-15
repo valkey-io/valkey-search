@@ -349,9 +349,8 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
 
 absl::StatusOr<std::deque<indexes::Neighbor>> Search(
     const VectorSearchParameters &parameters, bool is_local_search) {
-  // Check if attribute_alias is empty => non-vector query
+  // Handle non vector queries first where attribute_alias is empty.
   if (parameters.attribute_alias.empty()) {
-    // Non-vector search: just apply the filters
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
     size_t qualified_entries = EvaluateFilterAsPrimary(
         parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
@@ -365,9 +364,6 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
       auto iterator = fetcher->Begin();
       while (!iterator->Done()) {
         const InternedStringPtr& label = **iterator;
-        VMSDK_LOG(WARNING, nullptr)
-          << "Label="
-          << label->Str();
         neighbors.push_back(indexes::Neighbor{label, 0.0f});
         iterator->Next();
       }

@@ -608,6 +608,7 @@ void IndexSchema::BackfillScanCallback(ValkeyModuleCtx *ctx,
                                        ValkeyModuleKey *key, void *privdata) {
   IndexSchema *index_schema = reinterpret_cast<IndexSchema *>(privdata);
   index_schema->backfill_job_.Get()->scanned_key_count++;
+  index_schema->backfill_scanned_count_.store(index_schema->backfill_job_.Get()->scanned_key_count, std::memory_order_relaxed);
   auto key_prefixes = index_schema->GetKeyPrefixes();
   auto key_cstr = vmsdk::ToStringView(keyname);
   if (std::any_of(key_prefixes.begin(), key_prefixes.end(),
@@ -626,12 +627,14 @@ uint32_t IndexSchema::PerformBackfill(ValkeyModuleCtx *ctx,
   }
 
   backfill_job->paused_by_oom = false;
+  backfill_paused_by_oom_.store(false, std::memory_order_relaxed);
 
   // We need to ensure the DB size is monotonically increasing, since it could
   // change during the backfill, in which case we may show incorrect progress.
   backfill_job->db_size =
       std::max(backfill_job->db_size,
                (uint64_t)ValkeyModule_DbSize(backfill_job->scan_ctx.get()));
+  backfill_db_size_.store(backfill_job->db_size, std::memory_order_relaxed);
 
   uint64_t start_scan_count = backfill_job->scanned_key_count;
   uint64_t &current_scan_count = backfill_job->scanned_key_count;
@@ -639,6 +642,7 @@ uint32_t IndexSchema::PerformBackfill(ValkeyModuleCtx *ctx,
     auto ctx_flags = ValkeyModule_GetContextFlags(ctx);
     if (ctx_flags & VALKEYMODULE_CTX_FLAGS_OOM) {
       backfill_job->paused_by_oom = true;
+      backfill_paused_by_oom_.store(true, std::memory_order_relaxed);
       return 0;
     }
 
@@ -656,6 +660,8 @@ uint32_t IndexSchema::PerformBackfill(ValkeyModuleCtx *ctx,
           << absl::FormatDuration(backfill_job->stopwatch.Duration());
       uint32_t res = current_scan_count - start_scan_count;
       backfill_job->MarkScanAsDone();
+      backfill_scanned_count_.store(backfill_job->scanned_key_count, std::memory_order_relaxed);
+      backfill_scan_done_.store(true, std::memory_order_relaxed);
       return res;
     }
   }
@@ -1088,6 +1094,32 @@ void IndexSchema::VectorExternalizer(const InternedStringPtr &key,
   }
   VectorExternalizer::Instance().Remove(key, attribute_identifier,
                                         attribute_data_type_->ToProto());
+}
+
+bool IndexSchema::IsBackfillInProgressNoMain() const {
+  return !backfill_scan_done_.load(std::memory_order_acquire)
+         || stats_.backfill_inqueue_tasks.load(std::memory_order_relaxed) > 0;
+}
+
+float IndexSchema::GetBackfillPercentNoMain() const {
+  auto db = backfill_db_size_.load(std::memory_order_relaxed);
+  if (db == 0) {
+    return 1.0f;
+  }
+  auto scanned = backfill_scanned_count_.load(std::memory_order_relaxed);
+  auto queued  = stats_.backfill_inqueue_tasks.load(std::memory_order_relaxed);
+  auto done    = scanned > queued ? scanned - queued : 0;
+  return std::min(1.0f, float(done) / float(db));
+}
+
+std::string IndexSchema::GetStateForInfoNoMain() const {
+  if (backfill_scan_done_.load(std::memory_order_acquire)) {
+    return "ready";
+  }
+  if (backfill_paused_by_oom_.load(std::memory_order_relaxed)) {
+    return "backfill_paused_by_oom";
+  }
+  return "backfill_in_progress";
 }
 
 }  // namespace valkey_search

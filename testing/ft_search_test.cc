@@ -718,6 +718,10 @@ TEST_P(MaxLimitTest, MaxLimitTests) {
               test_case.expected_error_message);
 
     VMSDK_EXPECT_OK(test_case.reset_limit_func());
+
+    for (auto cmd_arg : cmd_argv) {
+      TestValkeyModule_FreeString(&fake_ctx_, cmd_arg);
+    }
   }
 }
 

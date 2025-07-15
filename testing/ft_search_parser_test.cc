@@ -577,7 +577,7 @@ INSTANTIATE_TEST_SUITE_P(
             .success = false,
             .params_str = " PARAMS 2",
             .filter_str = "(*)=[KNN 10 @vec $BLOB]",
-            .expected_error_message = "Invalid filter format. Missing `=>`",
+            .expected_error_message = "Invalid filter expression:",
         },
         {
             .test_name = "invalid_vector_parameters_1",

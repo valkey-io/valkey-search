@@ -8,6 +8,7 @@ from valkey.connection import Connection
 import random
 import string
 import logging
+import shutil
 
 
 class ValkeySearchTestCaseBase(ValkeyTestCase):
@@ -60,17 +61,11 @@ class ValkeySearchTestCaseBase(ValkeyTestCase):
 
 
 class ValkeySearchClusterTestCase(ValkeySearchTestCaseBase):
-    def dict_to_space_delimited(self, d):
-        result = []
-        for key, value in d.items():
-            result.append(f"--{key}")
-            result.append(str(value))
-        return " ".join(result)
-
-    def _start_server(self, port):
+    def _start_server(self, port, test_name):
         server_path = os.getenv("VALKEY_SERVER_PATH")
-        pid = os.getpid()
-        testdir = f"/tmp/valkey-search-clusters/{pid}/shard-{port}"
+        testdir_base = f"/tmp/valkey-search-clusters/{test_name}"
+        testdir = f"{testdir_base}/{port}"
+
         os.makedirs(testdir, exist_ok=True)
         curdir = os.getcwd()
         os.chdir(testdir)
@@ -81,7 +76,9 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseBase):
             f"dir {testdir}",
             "cluster-enabled yes",
         ]
-        with open(f"{testdir}/valkey.conf", "w+") as f:
+
+        conf_file = f"{testdir}/valkey.conf"
+        with open(conf_file, "w+") as f:
             for line in lines:
                 f.write(f"{line}\n")
             f.write("\n")
@@ -92,7 +89,7 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseBase):
             server_path=server_path,
             args="",
             port=port,
-            conf_file=f"{testdir}/valkey.conf",
+            conf_file=conf_file,
         )
         os.chdir(curdir)
         logfile = f"{testdir}/logfile_{port}"
@@ -116,9 +113,6 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseBase):
         for node_to_meet in range(0, primaries_count):
             if node_to_meet == node_idx:
                 continue
-            meet_command = (
-                f"MEET 127.0.0.1 {self.get_primary_port(node_to_meet)}"
-            )
             try:
                 client.execute_command(
                     " ".join(
@@ -143,7 +137,7 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseBase):
                 )
 
     @pytest.fixture(autouse=True)
-    def setup_test(self, setup):
+    def setup_test(self, request):
         self.servers = []
         ports = [
             self.get_bind_port(),
@@ -151,8 +145,14 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseBase):
             self.get_bind_port(),
         ]
 
+        testdir_base = f"/tmp/valkey-search-clusters/{request.node.name}"
+        if os.path.exists(testdir_base):
+            shutil.rmtree(testdir_base)
+
         for port in ports:
-            server, client, logfile = self._start_server(port)
+            server, client, logfile = self._start_server(
+                port, request.node.name
+            )
             self.servers.append(
                 {
                     "server": server,
@@ -174,12 +174,12 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseBase):
             self.cluster_meet(node_idx, 3)
 
         # Wait for the cluster to be up
-        logging.info("Waiting for cluster to change state...")
         for server in self.servers:
+            logging.info(f"Waiting for cluster to change state...{logfile}")
             self.wait_for_logfile(
                 server["logfile"], "Cluster state changed: ok"
             )
-        logging.info("Cluster is up and running!")
+            logging.info("Cluster is up and running!")
 
     def get_primary(self, index):
         return self.servers[index]["server"]

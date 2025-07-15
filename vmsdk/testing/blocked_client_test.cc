@@ -26,18 +26,25 @@ class BlockedClientTest
  protected:
 };
 
-std::vector<size_t> FetchTrackedBlockedClients() {
+std::vector<size_t> FetchTrackedBlockedClients(BlockedClientCategory category = BlockedClientCategory::kOther) {
   std::vector<size_t> tracked_bc_cnt;
-  for (auto &entry : TrackedBlockedClients()) {
+  const auto& category_map = BlockedClientTracker::Instance()[category];
+  for (auto &entry : category_map) {
     tracked_bc_cnt.push_back(entry.second.cnt);
   }
   return tracked_bc_cnt;
 }
 
+bool AreAllCategoriesEmpty() {
+  return BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kHash) == 0 &&
+         BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kJson) == 0 &&
+         BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kOther) == 0;
+}
+
 TEST_P(BlockedClientTest, EngineVersion) {
   const BlockedClientTestCase &test_case = GetParam();
   ValkeyModuleCtx fake_ctx;
-  EXPECT_TRUE(FetchTrackedBlockedClients().empty());
+  EXPECT_TRUE(AreAllCategoriesEmpty());
   std::vector<unsigned long long> client_ids(test_case.client_id_cnt);
   std::vector<ValkeyModuleBlockedClient> bc_ptr(test_case.client_id_cnt);
   {
@@ -85,7 +92,92 @@ TEST_P(BlockedClientTest, EngineVersion) {
     auto tracked_bc_cnt = FetchTrackedBlockedClients();
     EXPECT_EQ(tracked_bc_cnt, test_case.tracked_blocked_clients);
   }
-  EXPECT_TRUE(FetchTrackedBlockedClients().empty());
+  EXPECT_TRUE(AreAllCategoriesEmpty());
+}
+
+// Test for category tracking
+TEST_F(BlockedClientTest, CategoryTracking) {
+  ValkeyModuleCtx fake_ctx;
+  
+  // Verify initial counts are zero
+  EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kHash), 0);
+  EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kJson), 0);
+  EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kOther), 0);
+  
+  // Set up mock expectations
+  EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx))
+      .WillOnce(testing::Return(1))
+      .WillOnce(testing::Return(2))
+      .WillOnce(testing::Return(3));
+      
+  EXPECT_CALL(*kMockValkeyModule, BlockClient(&fake_ctx, nullptr, nullptr, nullptr, 0))
+      .WillOnce(testing::Return((ValkeyModuleBlockedClient*)0x1))
+      .WillOnce(testing::Return((ValkeyModuleBlockedClient*)0x2))
+      .WillOnce(testing::Return((ValkeyModuleBlockedClient*)0x3));
+  
+  EXPECT_CALL(*kMockValkeyModule, UnblockClient(testing::_, nullptr))
+      .Times(3);
+  
+  {
+    // Create clients with different categories
+    BlockedClient hash_client(&fake_ctx, true, BlockedClientCategory::kHash);
+    
+    // Check hash client count increased
+    EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kHash), 1);
+    EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kJson), 0);
+    EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kOther), 0);
+    
+    {
+      BlockedClient json_client(&fake_ctx, true, BlockedClientCategory::kJson);
+      
+      // Check json client count increased
+      EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kHash), 1);
+      EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kJson), 1);
+      EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kOther), 0);
+      
+      {
+        BlockedClient other_client(&fake_ctx, true, BlockedClientCategory::kOther);
+        
+        // Check other client count increased
+        EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kHash), 1);
+        EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kJson), 1);
+        EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kOther), 1);
+      }
+      
+      // Check other client count decreased
+      EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kHash), 1);
+      EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kJson), 1);
+      EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kOther), 0);
+    }
+    
+    // Check json client count decreased
+    EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kHash), 1);
+    EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kJson), 0);
+    EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kOther), 0);
+  }
+  
+  // Check all counts are zero
+  EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kHash), 0);
+  EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kJson), 0);
+  EXPECT_EQ(BlockedClientTracker::Instance().GetClientCount(BlockedClientCategory::kOther), 0);
+}
+
+// Test for GetCategory
+TEST_F(BlockedClientTest, GetCategory) {
+  ValkeyModuleCtx fake_ctx;
+  
+  BlockedClient hash_client(&fake_ctx, false, BlockedClientCategory::kHash);
+  EXPECT_EQ(hash_client.GetCategory(), BlockedClientCategory::kHash);
+  
+  BlockedClient json_client(&fake_ctx, false, BlockedClientCategory::kJson);
+  EXPECT_EQ(json_client.GetCategory(), BlockedClientCategory::kJson);
+  
+  BlockedClient other_client(&fake_ctx, false, BlockedClientCategory::kOther);
+  EXPECT_EQ(other_client.GetCategory(), BlockedClientCategory::kOther);
+  
+  // Test default category
+  BlockedClient default_client(&fake_ctx, false);
+  EXPECT_EQ(default_client.GetCategory(), BlockedClientCategory::kOther);
 }
 
 INSTANTIATE_TEST_SUITE_P(

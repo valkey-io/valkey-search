@@ -134,6 +134,56 @@ static vmsdk::info_field::Float used_write_cpu(
       return writer_thread_pool->GetAvgCPUPercentage().value_or(-1);
     }));
 
+static vmsdk::info_field::Integer ingest_hash_keys(
+    "global_ingestion", "ingest_hash_keys",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long { 
+      return Metrics::GetStats().ingest_hash_keys; }));
+
+static vmsdk::info_field::Integer ingest_hash_blocked(
+    "global_ingestion", "ingest_hash_blocked",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long { 
+      return vmsdk::BlockedClientTracker::Instance().GetClientCount(vmsdk::BlockedClientCategory::kHash); }));
+
+static vmsdk::info_field::Integer ingest_json_keys(
+    "global_ingestion", "ingest_json_keys",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long { 
+      return Metrics::GetStats().ingest_json_keys; }));
+
+static vmsdk::info_field::Integer ingest_json_blocked(
+    "global_ingestion", "ingest_json_blocked",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long { 
+      return vmsdk::BlockedClientTracker::Instance().GetClientCount(vmsdk::BlockedClientCategory::kJson); }));
+
+static vmsdk::info_field::Integer ingest_field_vector(
+    "global_ingestion", "ingest_field_vector",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long { 
+      return Metrics::GetStats().ingest_field_vector; }));
+
+static vmsdk::info_field::Integer ingest_field_numeric(
+    "global_ingestion", "ingest_field_numeric",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long { 
+      return Metrics::GetStats().ingest_field_numeric; }));
+
+static vmsdk::info_field::Integer ingest_field_tag(
+    "global_ingestion", "ingest_field_tag",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long { 
+      return Metrics::GetStats().ingest_field_tag; }));
+
+static vmsdk::info_field::Integer ingest_last_batch_size(
+    "global_ingestion", "ingest_last_batch_size",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long { 
+      return Metrics::GetStats().ingest_last_batch_size; }));
+
+static vmsdk::info_field::Integer ingest_total_batches(
+    "global_ingestion", "ingest_total_batches",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long { 
+      return Metrics::GetStats().ingest_total_batches; }));
+
+static vmsdk::info_field::Integer ingest_total_failures(
+    "global_ingestion", "ingest_total_failures",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long { 
+      return Metrics::GetStats().ingest_total_failures; }));
+
 void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
   vmsdk::info_field::DoSection(ctx, "thread-pool", for_crash_report);
   ValkeyModule_InfoAddFieldLongLong(ctx, "query_queue_size",

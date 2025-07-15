@@ -253,6 +253,7 @@ TEST_F(ConfigTest, CheckStringConfig) {
   EXPECT_EQ(
       res.code(),
       absl::StatusCode::kInvalidArgument);  // Failure reason: invalid argument
+  FreeValkeyArgs(args);
 }
 
 }  // namespace

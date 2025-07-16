@@ -34,6 +34,10 @@ class MockClient : public Client {
               (std::unique_ptr<SearchIndexPartitionRequest> request,
                SearchIndexPartitionCallback done),
               (override));
+  MOCK_METHOD(void, InfoIndexPartition,
+              (std::unique_ptr<InfoIndexPartitionRequest> request,
+               InfoIndexPartitionCallback done),
+              (override));
 };
 
 class MockServer : public Server {

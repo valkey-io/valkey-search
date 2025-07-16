@@ -165,4 +165,41 @@ void ClientImpl::SearchIndexPartition(
       });
 }
 
+void ClientImpl::InfoIndexPartition(
+    std::unique_ptr<InfoIndexPartitionRequest> request,
+    InfoIndexPartitionCallback done) {
+  struct InfoIndexPartitionArgs {
+    ::grpc::ClientContext context;
+    std::unique_ptr<InfoIndexPartitionRequest> request;
+    InfoIndexPartitionResponse response;
+    InfoIndexPartitionCallback callback;
+    std::unique_ptr<vmsdk::StopWatch> latency_sample;
+  };
+  auto args = std::make_unique<InfoIndexPartitionArgs>();
+  // Use a 5-second deadline (matches InfoParameters::timeout_ms default)
+  args->context.set_deadline(
+      absl::ToChronoTime(absl::Now() + absl::Seconds(5)));
+  args->callback = std::move(done);
+  args->request = std::move(request);
+  args->latency_sample = SAMPLE_EVERY_N(100);
+  auto args_raw = args.release();
+  Metrics::GetStats().coordinator_bytes_out.fetch_add(
+      args_raw->request->ByteSizeLong(), std::memory_order_relaxed);
+  stub_->async()->InfoIndexPartition(
+      &args_raw->context,
+      args_raw->request.get(),
+      &args_raw->response,
+      // std::function is not move-only
+      [args_raw](grpc::Status s) mutable {
+        GRPCSuspensionGuard guard(GRPCSuspender::Instance());
+        auto args = std::unique_ptr<InfoIndexPartitionArgs>(args_raw);
+        args->callback(s, args->response);
+        // (Optional) record metrics here
+        if (s.ok()) {
+          Metrics::GetStats().coordinator_bytes_in.fetch_add(
+            args->response.ByteSizeLong(), std::memory_order_relaxed);
+        }
+      });
+}
+
 }  // namespace valkey_search::coordinator

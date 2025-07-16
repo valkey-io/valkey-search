@@ -99,16 +99,16 @@ void AddLatencyStat(ValkeyModuleInfoCtx *ctx, absl::string_view stat_name,
 
  static vmsdk::info_field::Integer human_used_memory("memory", "used_memory_human", 
     vmsdk::info_field::IntegerBuilder()
-      .SIBytes()
-      .App()
-      .Computed(vmsdk::GetUsedMemoryCnt)
-      .CrashSafe());
+        .SIBytes()
+        .App()
+        .Computed(vmsdk::GetUsedMemoryCnt)
+        .CrashSafe());
 
  static vmsdk::info_field::Integer used_memory("memory", "used_memory_bytes", 
     vmsdk::info_field::IntegerBuilder()
-      .App()
-      .Computed(vmsdk::GetUsedMemoryCnt)
-      .CrashSafe());
+        .App()
+        .Computed(vmsdk::GetUsedMemoryCnt)
+        .CrashSafe());
 
 static vmsdk::info_field::String background_indexing_status("indexing", "background_indexing_status",
     vmsdk::info_field::StringBuilder()
@@ -137,9 +137,9 @@ static vmsdk::info_field::Float used_write_cpu(
 void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
   vmsdk::info_field::DoSection(ctx, "thread-pool", for_crash_report);
   ValkeyModule_InfoAddFieldLongLong(ctx, "query_queue_size",
-                                   reader_thread_pool_->QueueSize());
+                                    reader_thread_pool_->QueueSize());
   ValkeyModule_InfoAddFieldLongLong(ctx, "writer_queue_size",
-                                   writer_thread_pool_->QueueSize());
+                                    writer_thread_pool_->QueueSize());
   ValkeyModule_InfoAddFieldLongLong(
       ctx, "worker_pool_suspend_cnt",
       Metrics::GetStats().worker_thread_pool_suspend_cnt);
@@ -155,13 +155,13 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
 
   vmsdk::info_field::DoSection(ctx, "rdb", for_crash_report);
   ValkeyModule_InfoAddFieldLongLong(ctx, "rdb_load_success_cnt",
-                                   Metrics::GetStats().rdb_load_success_cnt);
+                                    Metrics::GetStats().rdb_load_success_cnt);
   ValkeyModule_InfoAddFieldLongLong(ctx, "rdb_load_failure_cnt",
-                                   Metrics::GetStats().rdb_load_failure_cnt);
+                                    Metrics::GetStats().rdb_load_failure_cnt);
   ValkeyModule_InfoAddFieldLongLong(ctx, "rdb_save_success_cnt",
-                                   Metrics::GetStats().rdb_save_success_cnt);
+                                    Metrics::GetStats().rdb_save_success_cnt);
   ValkeyModule_InfoAddFieldLongLong(ctx, "rdb_save_failure_cnt",
-                                   Metrics::GetStats().rdb_save_failure_cnt);
+                                    Metrics::GetStats().rdb_save_failure_cnt);
 
   vmsdk::info_field::DoSection(ctx, "query", for_crash_report);
   ValkeyModule_InfoAddFieldLongLong(
@@ -170,6 +170,9 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
   ValkeyModule_InfoAddFieldLongLong(
       ctx, "failure_requests_count",
       Metrics::GetStats().query_failed_requests_cnt);
+  ValkeyModule_InfoAddFieldLongLong(
+      ctx, "result_record_dropped_count",
+      Metrics::GetStats().query_result_record_dropped_cnt);
   ValkeyModule_InfoAddFieldLongLong(
       ctx, "hybrid_requests_count",
       Metrics::GetStats().query_hybrid_requests_cnt);
@@ -218,7 +221,7 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
   }
   vmsdk::info_field::DoSection(ctx, "hnswlib", for_crash_report);
   ValkeyModule_InfoAddFieldLongLong(ctx, "hnsw_add_exceptions_count",
-                                   Metrics::GetStats().hnsw_add_exceptions_cnt);
+      Metrics::GetStats().hnsw_add_exceptions_cnt);
   ValkeyModule_InfoAddFieldLongLong(
       ctx, "hnsw_remove_exceptions_count",
       Metrics::GetStats().hnsw_remove_exceptions_cnt);
@@ -242,7 +245,7 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
     vmsdk::info_field::DoSection(ctx, "coordinator", for_crash_report);
     ValkeyModule_InfoAddFieldLongLong(
         ctx, "coordinator_server_listening_port",
-        GetCoordinatorServer()->GetPort());
+                                      GetCoordinatorServer()->GetPort());
     ValkeyModule_InfoAddFieldLongLong(
         ctx, "coordinator_server_get_global_metadata_success_count",
         Metrics::GetStats().coordinator_server_get_global_metadata_success_cnt);

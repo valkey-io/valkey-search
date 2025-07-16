@@ -230,10 +230,10 @@ TEST_F(MRMWMutexTest, VerifyMayProlong) {
        &may_prolong_release_notification, &options]() {
         {
           ReaderMutexLock lock(&mrmw_mutex, true);
+          in_prolong_read = true;
+          may_prolong_notification.Notify();
           absl::SleepFor(options.read_quota_duration * 2);
         }
-        in_prolong_read = true;
-        may_prolong_notification.Notify();
         read_tasks_completed_notification.WaitForNotification();
         in_prolong_read = false;
         may_prolong_release_notification.Notify();
@@ -250,26 +250,25 @@ TEST_F(MRMWMutexTest, VerifyMayProlong) {
         write_tasks_completed_notification.Notify();
       },
       ThreadPool::Priority::kHigh);
-  may_prolong_notification.WaitForNotification();
+  may_prolong_notification.WaitForNotification();  
   EXPECT_TRUE(in_prolong_read);
   std::atomic<int> count = 0;
- 
 
   for (size_t i = 0; i < read_tasks; ++i) {
     thread_pool.Schedule(
-        [&mrmw_mutex, &count, &blocking_refcount]() {
+        [&mrmw_mutex, &run_write, &count, &blocking_refcount]() {
           ++count;
           {
             ReaderMutexLock lock(&mrmw_mutex, false);
             for (auto i = 0; i < 10; ++i) {
             }
+            EXPECT_FALSE(run_write);
           }
           blocking_refcount.DecrementCount();
         },
         ThreadPool::Priority::kHigh);
   }
   blocking_refcount.Wait();
-  EXPECT_FALSE(run_write);
   read_tasks_completed_notification.Notify();
   write_tasks_completed_notification.WaitForNotification();
   EXPECT_TRUE(thread_pool.MarkForStop(ThreadPool::StopMode::kGraceful).ok());

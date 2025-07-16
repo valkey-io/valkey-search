@@ -457,7 +457,7 @@ class FTSearchTest : public ValkeySearchTestWithParam<
 };
 
 std::string GetNodeId(int i) {
-  return std::string(VALKEYMODULE_NODE_ID_LEN, 'a' + i);
+  return {VALKEYMODULE_NODE_ID_LEN, static_cast<char>('a' + i)};
 }
 
 TEST_P(FTSearchTest, FTSearchTests) {

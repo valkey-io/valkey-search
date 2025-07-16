@@ -414,6 +414,9 @@ void IndexSchema::ProcessAttributeMutation(
     if (index->IsTracked(key)) {
       auto res = index->ModifyRecord(key, data_view);
       TrackResults(ctx, res, "Modify", stats_.subscription_modify);
+      if (res.ok() && res.value()) {
+        ++Metrics::GetStats().time_slice_upserts;
+      }
       return;
     }
     bool was_tracked = IsTrackedByAnyIndex(key);
@@ -421,6 +424,7 @@ void IndexSchema::ProcessAttributeMutation(
     TrackResults(ctx, res, "Add", stats_.subscription_add);
 
     if (res.ok() && res.value()) {
+      ++Metrics::GetStats().time_slice_upserts;
       // Increment the hash key count if it wasn't tracked and we successfully
       // added it to the index.
       if (!was_tracked) {
@@ -451,6 +455,7 @@ void IndexSchema::ProcessAttributeMutation(
   auto res = index->RemoveRecord(key, deletion_type);
   TrackResults(ctx, res, "Remove", stats_.subscription_remove);
   if (res.ok() && res.value()) {
+    ++Metrics::GetStats().time_slice_deletes;
     // Reduce the hash key count if nothing is tracking the key anymore.
     if (!IsTrackedByAnyIndex(key)) {
       --stats_.document_cnt;

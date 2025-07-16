@@ -34,6 +34,7 @@
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
 #include "src/keyspace_event_manager.h"
+#include "src/metrics.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
@@ -193,6 +194,12 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
         .skipped_cnt =
             index_schema->GetStats().subscription_modify.skipped_cnt};
     uint32_t document_cnt = index_schema->GetStats().document_cnt;
+    
+    // Capture initial Time Slice Mutex metrics
+    auto& global_stats = Metrics::GetStats();
+    uint64_t initial_upserts = global_stats.time_slice_upserts;
+    uint64_t initial_deletes = global_stats.time_slice_deletes;
+    
     index_schema->OnKeyspaceNotification(&fake_ctx, VALKEYMODULE_NOTIFY_HASH,
                                          "event", key_valkey_str.get());
     if (use_thread_pool) {
@@ -264,7 +271,25 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
         EXPECT_GT(metrics.ingest_hash_keys, initial_hash_keys);
       }
     }
-  }
+    // Verify Time Slice Mutex metrics for upserts and deletes
+    if (test_case.expect_index_add_w_result.has_value() && 
+        test_case.expect_index_add_w_result.value().ok() && 
+        test_case.expect_index_add_w_result.value().value()) {
+      EXPECT_EQ(global_stats.time_slice_upserts, initial_upserts + 1);
+    } else if (test_case.expect_index_modify_w_result.has_value() && 
+               test_case.expect_index_modify_w_result.value().ok() && 
+               test_case.expect_index_modify_w_result.value().value()) {
+      EXPECT_EQ(global_stats.time_slice_upserts, initial_upserts + 1);
+    } else if (test_case.expect_index_remove_w_result.has_value() && 
+               test_case.expect_index_remove_w_result.value().ok() && 
+               test_case.expect_index_remove_w_result.value().value()) {
+      EXPECT_EQ(global_stats.time_slice_deletes, initial_deletes + 1);
+    } else {
+      // No successful upsert or delete operation expected
+      EXPECT_EQ(global_stats.time_slice_upserts, initial_upserts);
+      EXPECT_EQ(global_stats.time_slice_deletes, initial_deletes);
+    }
+}
 }
 
 INSTANTIATE_TEST_SUITE_P(

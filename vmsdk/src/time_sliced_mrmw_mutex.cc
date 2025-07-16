@@ -18,6 +18,11 @@
 
 namespace vmsdk {
 
+TimeSlicedMRMWStats& GetGlobalTimeSlicedMRMWStats() {
+  static TimeSlicedMRMWStats global_stats;
+  return global_stats;
+}
+
 void ReaderMutexLock::SetMayProlong() {
   if (may_prolong_) {
     return;

@@ -265,8 +265,8 @@ export VALKEY_SEARCH_PATH=${VALKEY_SEARCH_PATH}
 export VALKEY_JSON_PATH="${VALKEY_JSON_PATH}"
 export TEST_UNDECLARED_OUTPUTS_DIR="$BUILD_DIR/output"
 if [[ "${SAN_BUILD}" != "no" ]]; then
-    export SAN_OPTIONS="detect_odr_violation=0:detect_leaks=1:halt_on_error=1"
-    export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/${SAN_BUILD}-san.supp"
+    export ASAN_OPTIONS="detect_odr_violation=0:detect_leaks=1:halt_on_error=1"
+    export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/asan.supp"
 fi
 
 rm -rf $TEST_UNDECLARED_OUTPUTS_DIR

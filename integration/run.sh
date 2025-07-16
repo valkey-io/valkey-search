@@ -13,7 +13,7 @@ Usage: run.sh [options...]
 
     --debug                 Run integration tests in debug mode.
     --asan                  When passed, the integration will load the module under .build-release-asan/ | .build-debug-asan/
-     --tsan                 When passed, the integration will load the module under .build-release-tsan/ | .build-debug-tsan/
+    --tsan                  When passed, the integration will load the module under .build-release-tsan/ | .build-debug-tsan/
     --help | -h             Print this help message and exit.
 
 EOF

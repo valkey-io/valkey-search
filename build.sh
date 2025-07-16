@@ -39,6 +39,7 @@ Usage: build.sh [options...]
     --run-integration-tests   Run integration tests.
     --use-system-modules      Use system's installed gRPC, Protobuf & Abseil dependencies.
     --asan                    Build with address sanitizer enabled.
+    --tsan                    Build with thread sanitizer enabled.
 
 Example usage:
 

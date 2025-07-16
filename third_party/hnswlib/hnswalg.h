@@ -1306,7 +1306,12 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
     std::unique_lock<std::mutex> templock(global);
     int maxlevelcopy = maxlevel_;
-    if (curlevel <= maxlevelcopy) templock.unlock();
+    if (curlevel <= maxlevelcopy) {
+      // Release lock_el first to prevent lock-order inversion violations.
+      // Then acquire the global lock to ensure mutual exclusion.
+      lock_el.release();
+      templock.unlock();
+    }
     tableint currObj = enterpoint_node_;
     tableint enterpoint_copy = enterpoint_node_;
 

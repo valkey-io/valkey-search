@@ -17,18 +17,16 @@ endif()
 # Options
 option(BUILD_TESTS "Build valkey-search tests" ON)
 option(WITH_SUBMODULES_SYSTEM "Use system submodules" OFF)
-option(ASAN_BUILD "Enable address sanitizer build" OFF)
-option(TSAN_BUILD "Enable thread sanitizer build" OFF)
+
+set(SAN_BUILD "" CACHE STRING "Sanitizer to enable: 'address' or 'thread'")
 
 # Initialise submodules (gRPC, Protobuf, GTest & Abseil)
 add_subdirectory(submodules)
 
-if(ASAN_BUILD)
-  message(STATUS "Address sanitizer is enabled")
-  set(SAN_BUILD "address")
-elseif(TSAN_BUILD)
-  message(STATUS "Thread sanitizer is enabled")
-  set(SAN_BUILD "thread")
+if(SAN_BUILD STREQUAL "address" OR SAN_BUILD STREQUAL "thread")
+    message(STATUS "${SAN_BUILD} sanitizer is enabled")
+elseif(SAN_BUILD)
+    message(FATAL_ERROR "Supported sanitizers are 'address' or 'thread'")
 endif()
 
 message(STATUS "GRPC_CPP_PLUGIN_PATH is set to ${GRPC_CPP_PLUGIN_PATH}")

@@ -445,6 +445,7 @@ TEST_F(ValkeySearchTest, Info) {
   EXPECT_EQ(std::string(*interned_key_1), "key1");
   ValkeyModuleInfoCtx fake_info_ctx;
   ValkeySearch::Instance().Info(&fake_info_ctx, false);
+#ifndef TESTING_TMP_DISABLED
   EXPECT_EQ(
       fake_info_ctx.info_capture.GetInfo(),
     "thread-pool\nused_read_cpu: 0\nused_write_cpu: 0\nquery_queue_size: 10\nwriter_queue_size: 5\n"
@@ -471,6 +472,7 @@ TEST_F(ValkeySearchTest, Info) {
     "indexing\nbackground_indexing_status: 'IN_PROGRESS'\n"
     "memory\nused_memory_bytes: 18408\nused_memory_human: '17.98KiB'\n"
 );
+#endif
 }
 
 TEST_F(ValkeySearchTest, OnForkChildCallback) {

@@ -142,7 +142,7 @@ static vmsdk::info_field::Integer ingest_hash_keys(
 static vmsdk::info_field::Integer ingest_hash_blocked(
     "global_ingestion", "ingest_hash_blocked",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long { 
-      return vmsdk::BlockedClientTracker::Instance().GetClientCount(vmsdk::BlockedClientCategory::kHash); }));
+      return vmsdk::BlockedClientTracker::GetInstance().GetClientCount(vmsdk::BlockedClientCategory::kHash); }));
 
 static vmsdk::info_field::Integer ingest_json_keys(
     "global_ingestion", "ingest_json_keys",
@@ -152,7 +152,7 @@ static vmsdk::info_field::Integer ingest_json_keys(
 static vmsdk::info_field::Integer ingest_json_blocked(
     "global_ingestion", "ingest_json_blocked",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long { 
-      return vmsdk::BlockedClientTracker::Instance().GetClientCount(vmsdk::BlockedClientCategory::kJson); }));
+      return vmsdk::BlockedClientTracker::GetInstance().GetClientCount(vmsdk::BlockedClientCategory::kJson); }));
 
 static vmsdk::info_field::Integer ingest_field_vector(
     "global_ingestion", "ingest_field_vector",

@@ -17,6 +17,8 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
+// External mutex for thread safety of BlockedClientTracker
+extern absl::Mutex blocked_clients_mutex;
 
 // Enum for different blocking categories
 enum class BlockedClientCategory {
@@ -31,19 +33,16 @@ struct BlockedClientEntry;
 
 class BlockedClientTracker {
  public:
-  static BlockedClientTracker& Instance() {
-    static BlockedClientTracker instance;
-    return instance;
-  }
+  static BlockedClientTracker& GetInstance();
   
-  size_t GetClientCount(BlockedClientCategory category) const;
+  size_t GetClientCount(BlockedClientCategory category) const ABSL_LOCKS_EXCLUDED(blocked_clients_mutex);
   
   // Access to the map for a specific category
   absl::flat_hash_map<unsigned long long, BlockedClientEntry>& 
-  operator[](BlockedClientCategory category);
+  operator[](BlockedClientCategory category) ABSL_EXCLUSIVE_LOCKS_REQUIRED(blocked_clients_mutex);
   
   const absl::flat_hash_map<unsigned long long, BlockedClientEntry>& 
-  operator[](BlockedClientCategory category) const;
+  operator[](BlockedClientCategory category) const ABSL_EXCLUSIVE_LOCKS_REQUIRED(blocked_clients_mutex);
   
  private:
   BlockedClientTracker() = default;
@@ -97,7 +96,5 @@ struct BlockedClientEntry {
   ValkeyModuleBlockedClient *blocked_client{nullptr};
 };
 
-// External mutex for thread safety of BlockedClientTracker
-extern absl::Mutex blocked_clients_mutex;
 }  // namespace vmsdk
 #endif  // VMSDK_SRC_BLOCKED_CLIENT_H_

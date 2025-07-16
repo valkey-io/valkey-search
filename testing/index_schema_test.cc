@@ -91,11 +91,11 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
   
   // Get initial metrics values to compare after operations
   auto& metrics = Metrics::GetStats();
-  uint64_t initial_field_vector = metrics.ingest_field_vector;
-  uint64_t initial_field_numeric = metrics.ingest_field_numeric;
-  uint64_t initial_field_tag = metrics.ingest_field_tag;
-  uint64_t initial_hash_keys = metrics.ingest_hash_keys;
-  uint64_t initial_total_failures = metrics.ingest_total_failures;
+  uint64_t initial_field_vector{metrics.ingest_field_vector};
+  uint64_t initial_field_numeric{metrics.ingest_field_numeric};
+  uint64_t initial_field_tag{metrics.ingest_field_tag};
+  uint64_t initial_hash_keys{metrics.ingest_hash_keys};
+  uint64_t initial_total_failures{metrics.ingest_total_failures};
   for (bool use_thread_pool : {true, false}) {
     ValkeyModuleCtx fake_ctx;
     std::vector<absl::string_view> key_prefixes = {"prefix:"};
@@ -613,9 +613,9 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
   EXPECT_EQ(mutations_thread_pool.QueueSize(), 1);
   VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
-  EXPECT_EQ(vmsdk::BlockedClientTracker::Instance().GetClientCount(vmsdk::BlockedClientCategory::kHash), 0);
-  EXPECT_EQ(vmsdk::BlockedClientTracker::Instance().GetClientCount(vmsdk::BlockedClientCategory::kJson), 0);
-  EXPECT_EQ(vmsdk::BlockedClientTracker::Instance().GetClientCount(vmsdk::BlockedClientCategory::kOther), 0);
+  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(vmsdk::BlockedClientCategory::kHash), 0);
+  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(vmsdk::BlockedClientCategory::kJson), 0);
+  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(vmsdk::BlockedClientCategory::kOther), 0);
 }
 
 TEST_P(IndexSchemaSubscriptionSimpleTest, EmptyKeyPrefixesTest) {

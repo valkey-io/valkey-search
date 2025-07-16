@@ -17,18 +17,26 @@ namespace vmsdk {
 absl::Mutex blocked_clients_mutex;
 
 // Implementation for BlockedClientTracker
-size_t BlockedClientTracker::GetClientCount(BlockedClientCategory category) const {
+BlockedClientTracker& BlockedClientTracker::GetInstance() {
+  static BlockedClientTracker instance;
+  return instance;
+}
+
+size_t BlockedClientTracker::GetClientCount(BlockedClientCategory category) const 
+  ABSL_LOCKS_EXCLUDED(blocked_clients_mutex) {
   absl::MutexLock lock(&blocked_clients_mutex);
   return tracked_blocked_clients_[static_cast<size_t>(category)]->size();
 }
 
 absl::flat_hash_map<unsigned long long, BlockedClientEntry>& 
-BlockedClientTracker::operator[](BlockedClientCategory category) {
+BlockedClientTracker::operator[](BlockedClientCategory category) 
+  ABSL_EXCLUSIVE_LOCKS_REQUIRED(blocked_clients_mutex) {
   return *tracked_blocked_clients_[static_cast<size_t>(category)];
 }
 
 const absl::flat_hash_map<unsigned long long, BlockedClientEntry>& 
-BlockedClientTracker::operator[](BlockedClientCategory category) const {
+BlockedClientTracker::operator[](BlockedClientCategory category) const 
+  ABSL_EXCLUSIVE_LOCKS_REQUIRED(blocked_clients_mutex) {
   return *tracked_blocked_clients_[static_cast<size_t>(category)];
 }
 
@@ -48,7 +56,7 @@ BlockedClient::BlockedClient(ValkeyModuleCtx *ctx, bool handle_duplication,
     unsigned long long tracked_client_id = ValkeyModule_GetClientId(ctx);
     if (tracked_client_id != 0) {
       absl::MutexLock lock(&blocked_clients_mutex);
-      auto& category_map = BlockedClientTracker::Instance()[category_];
+      auto& category_map = BlockedClientTracker::GetInstance()[category_];
       auto it = category_map.find(tracked_client_id);
       if (it == category_map.end()) {
         blocked_client_ =
@@ -107,7 +115,7 @@ void BlockedClient::UnblockClient() {
   
   if (tracked_client_id) {
     absl::MutexLock lock(&blocked_clients_mutex);
-    auto& category_map = BlockedClientTracker::Instance()[category];
+    auto& category_map = BlockedClientTracker::GetInstance()[category];
     auto itr = category_map.find(tracked_client_id);
     CHECK(itr != category_map.end());
     auto &cnt = itr->second.cnt;

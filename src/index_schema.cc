@@ -958,6 +958,17 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
                          << absl::FormatDuration(stop_watch.Duration());
 }
 
+vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
+  // Determine category based on data type
+  switch (attribute_data_type_->ToProto()) {
+    case data_model::ATTRIBUTE_DATA_TYPE_HASH:
+      return vmsdk::BlockedClientCategory::kHash;
+    case data_model::ATTRIBUTE_DATA_TYPE_JSON:
+      return vmsdk::BlockedClientCategory::kJson;
+    default:
+      return vmsdk::BlockedClientCategory::kOther;
+  }
+}
 // Returns true if the inserted key not exists otherwise false
 bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
                                      const InternedStringPtr &key,
@@ -971,18 +982,7 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
     itr->second.attributes.value() = std::move(mutated_attributes);
     itr->second.from_backfill = from_backfill;
     if (ABSL_PREDICT_TRUE(block_client)) {
-      // Determine category based on data type
-      vmsdk::BlockedClientCategory category;
-      switch (attribute_data_type_->ToProto()) {
-        case data_model::ATTRIBUTE_DATA_TYPE_HASH:
-          category = vmsdk::BlockedClientCategory::kHash;
-        case data_model::ATTRIBUTE_DATA_TYPE_JSON:
-          category = vmsdk::BlockedClientCategory::kJson;
-        default:
-          category = vmsdk::BlockedClientCategory::kOther;
-      }
-
-      vmsdk::BlockedClient blocked_client(ctx, true, category);
+      vmsdk::BlockedClient blocked_client(ctx, true, GetBlockedCategoryFromProto());
       blocked_client.MeasureTimeStart();
       itr->second.blocked_clients.emplace_back(std::move(blocked_client));
     }
@@ -996,18 +996,7 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
         std::move(mutated_attribute.second);
   }
   if (ABSL_PREDICT_TRUE(block_client)) {
-    // Determine category based on data type
-    vmsdk::BlockedClientCategory category;
-    switch (attribute_data_type_->ToProto()) {
-      case data_model::ATTRIBUTE_DATA_TYPE_HASH:
-        category = vmsdk::BlockedClientCategory::kHash;
-      case data_model::ATTRIBUTE_DATA_TYPE_JSON:
-        category = vmsdk::BlockedClientCategory::kJson;
-      default:
-        category = vmsdk::BlockedClientCategory::kOther;
-    }
-
-    vmsdk::BlockedClient blocked_client(ctx, true, category);
+    vmsdk::BlockedClient blocked_client(ctx, true, GetBlockedCategoryFromProto());
     blocked_client.MeasureTimeStart();
     itr->second.blocked_clients.emplace_back(std::move(blocked_client));
   }

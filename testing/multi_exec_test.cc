@@ -247,9 +247,9 @@ TEST_F(MultiExecTest, TrackMutationOverride) {
     EXPECT_GT(metrics.ingest_total_batches, initial_batches);
     EXPECT_EQ(metrics.ingest_last_batch_size, expected_keys.size());
   }
-  EXPECT_EQ(vmsdk::BlockedClientTracker::Instance().GetClientCount(vmsdk::BlockedClientCategory::kHash), 0);
-  EXPECT_EQ(vmsdk::BlockedClientTracker::Instance().GetClientCount(vmsdk::BlockedClientCategory::kJson), 0);
-  EXPECT_EQ(vmsdk::BlockedClientTracker::Instance().GetClientCount(vmsdk::BlockedClientCategory::kOther), 0);
+  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(vmsdk::BlockedClientCategory::kHash), 0);
+  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(vmsdk::BlockedClientCategory::kJson), 0);
+  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(vmsdk::BlockedClientCategory::kOther), 0);
   index_schema = nullptr;
 }
 

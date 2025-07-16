@@ -302,7 +302,7 @@ BUILD_RUNTIME=$((END_TIME - START_TIME))
 START_TIME=`date +%s`
 
 if [[ "${SAN_BUILD}" != "no" ]]; then
-    export SAN_OPTIONS="detect_odr_violation=0"
+    export ASAN_OPTIONS="detect_odr_violation=0"
 fi
 
 if [[ "${RUN_TEST}" == "all" ]]; then

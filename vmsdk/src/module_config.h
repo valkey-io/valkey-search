@@ -13,6 +13,7 @@
 
 #include "absl/log/check.h"
 #include "absl/status/status.h"
+#include "absl/synchronization/mutex.h"
 #include "gtest/gtest_prod.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -274,6 +275,32 @@ class Boolean : public ConfigBase<bool> {
   FRIEND_TEST(Builder, ConfigBuilder);
 };
 
+class String : public ConfigBase<std::string> {
+ public:
+  String(std::string_view name, std::string_view default_value);
+  ~String() override = default;
+  absl::Status FromString(std::string_view value) override;
+  const std::string &GetString() const { return value_; }
+
+ protected:
+  // Implementation specific
+  absl::Status Register(ValkeyModuleCtx *ctx) override;
+
+  std::string GetValueImpl() const override ABSL_LOCKS_EXCLUDED(mutex_) {
+    absl::MutexLock lock{&mutex_};
+    return value_;
+  }
+
+  void SetValueImpl(std::string val) override ABSL_LOCKS_EXCLUDED(mutex_) {
+    absl::MutexLock lock{&mutex_};
+    value_ = val;
+  }
+
+  mutable absl::Mutex mutex_;
+  std::string value_;
+  FRIEND_TEST(Builder, ConfigBuilder);
+};
+
 template <typename ValkeyT>
 class ConfigBuilder {
  public:
@@ -314,6 +341,7 @@ class ConfigBuilder {
 /// `int` -> Enum configuration.
 template <typename ValkeyT, typename... Args>
   requires(std::is_same<ValkeyT, long long>() == true ||
+           std::is_same<ValkeyT, std::string>() == true ||
            std::is_same<ValkeyT, int>() == true ||
            std::is_same<ValkeyT, bool>() == true)
 ConfigBuilder<ValkeyT> Builder(Args &&...args) {
@@ -326,6 +354,9 @@ ConfigBuilder<ValkeyT> Builder(Args &&...args) {
   } else if constexpr (std::is_same<ValkeyT, int>()) {
     // Boolean
     return ConfigBuilder<int>(new Enum(std::forward<Args>(args)...));
+  } else if constexpr (std::is_same<ValkeyT, std::string>()) {
+    // String
+    return ConfigBuilder<std::string>(new String(std::forward<Args>(args)...));
   } else {
     static_assert(!std::is_same_v<ValkeyT, ValkeyT>, "Unreachable");
   }
@@ -347,6 +378,12 @@ ConfigBuilder<int> EnumBuilder(Args &&...args) {
 template <typename... Args>
 ConfigBuilder<bool> BooleanBuilder(Args &&...args) {
   return Builder<bool>(std::forward<Args>(args)...);
+}
+
+/// Wrapper for building String
+template <typename... Args>
+ConfigBuilder<std::string> StringBuilder(Args &&...args) {
+  return Builder<std::string>(std::forward<Args>(args)...);
 }
 
 #define CHECK_RANGE(MIN, MAX, CONFIG_NAME)                         \

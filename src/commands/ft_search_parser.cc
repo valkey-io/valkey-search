@@ -29,6 +29,7 @@
 #include "src/metrics.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -372,6 +373,13 @@ ParseVectorSearchParameters(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                                                parameters->index_schema_name));
   VMSDK_RETURN_IF_ERROR(
       vmsdk::ParseParamValue(itr, parameters->parse_vars.query_string));
+  // Validate the query string's length.
+  if (parameters->parse_vars.query_string.length() >
+      options::GetQueryStringBytes()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Query string is too long, max length is ",
+                     options::GetQueryStringBytes(), " bytes."));
+  }
   VMSDK_RETURN_IF_ERROR(SearchParser.Parse(*parameters, itr));
   if (itr.DistanceEnd() > 0) {
     return absl::InvalidArgumentError(

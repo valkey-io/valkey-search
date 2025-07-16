@@ -109,6 +109,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
       *kMockValkeyModule,
       OpenKey(testing::_, testing::An<ValkeyModuleString *>(), testing::_))
       .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_)).Times(::testing::AnyNumber());
   data_model::VectorIndex vector_index_proto;
   vector_index_proto.set_dimension_count(3);
   vector_index_proto.set_initial_cap(100);

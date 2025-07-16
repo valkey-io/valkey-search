@@ -229,5 +229,32 @@ TEST_F(ConfigTest, ParseArgsMissingValue) {
   FreeValkeyArgs(args);
 }
 
+TEST_F(ConfigTest, CheckStringConfig) {
+  auto str =
+      config::StringBuilder("cpu-list", "1,2,3,4")
+          .WithValidationCallback([](std::string new_val) -> absl::Status {
+            if (new_val == "5,6") {
+              return absl::OkStatus();
+            } else {
+              return absl::InvalidArgumentError("We only accept 5,6");
+            }
+          })
+          .Build();
+  auto args = vmsdk::ToValkeyStringVector("--cpu-list 5,6");
+  auto res = ModuleConfigManager::Instance().Init(&fake_ctx);
+  EXPECT_TRUE(res.ok());
+  res = ModuleConfigManager::Instance().ParseAndLoadArgv(&fake_ctx, args.data(),
+                                                         args.size());
+  EXPECT_TRUE(res.ok());
+  EXPECT_EQ(str->GetValue(), "5,6");
+
+  res = str->SetValue("7,8");
+  EXPECT_FALSE(res.ok());  // should fail validation
+  EXPECT_EQ(
+      res.code(),
+      absl::StatusCode::kInvalidArgument);  // Failure reason: invalid argument
+  FreeValkeyArgs(args);
+}
+
 }  // namespace
 }  // namespace vmsdk

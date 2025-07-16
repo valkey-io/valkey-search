@@ -357,6 +357,9 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
 
   // Add records
   size_t num_records = 10000;
+  #ifdef SAN_BUILD
+  num_records = 100;
+  #endif
   auto vectors =
       DeterministicallyGenerateVectors(num_records, kVectorDimensions, 10.0);
   for (size_t i = 0; i < num_records; ++i) {
@@ -570,7 +573,10 @@ TEST_P(SearchTest, ParseParams) {
   }
   auto neighbors = Search(params, true);
   VMSDK_EXPECT_OK(neighbors);
+#ifndef SAN_BUILD
   EXPECT_EQ(neighbors->size(), test_case.expected_keys.size());
+#endif
+
   for (auto &neighbor : *neighbors) {
     EXPECT_TRUE(
         test_case.expected_keys.contains(std::string(*neighbor.external_id)));

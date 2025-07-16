@@ -13,6 +13,7 @@ Usage: run.sh [options...]
 
     --debug                 Run integration tests in debug mode.
     --asan                  When passed, the integration will load the module under .build-release-asan/ | .build-debug-asan/
+     --tsan                 When passed, the integration will load the module under .build-release-tsan/ | .build-debug-tsan/
     --help | -h             Print this help message and exit.
 
 EOF
@@ -38,8 +39,13 @@ do
         ;;
     --asan)
         shift || true
-        ASAN_SUFFIX="-asan"
+        SAN_SUFFIX="-asan"
         LOG_INFO "Assuming ASan build"
+        ;;
+    --tsan)
+        shift || true
+        SAN_SUFFIX="-tsan"
+        LOG_INFO "Assuming TSan build"
         ;;
     --help|-h)
         print_usage
@@ -52,7 +58,7 @@ do
     esac
 done
 
-BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}${ASAN_SUFFIX}
+BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}${SAN_SUFFIX}
 WD=${BUILD_DIR}/integration
 
 # Check for user provided module path

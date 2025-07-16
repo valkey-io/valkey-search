@@ -31,10 +31,12 @@ Usage: test.sh [options...]
     --test                   Specify the test name [stability|vector_search_integration]. Default all.
     --test-errors-stdout     When a test fails, dump the captured tests output to stdout.
     --asan                   Build the ASan version of the module.
+    --tsan                   Build the TSan version of the module.
 
 EOF
 }
-
+SAN_BUILD="no"
+san_suffix=""
 ## Parse command line arguments
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -44,7 +46,13 @@ while [[ $# -gt 0 ]]; do
         ;;
     --asan)
         shift || true
-        ASAN_BUILD="yes"
+        SAN_BUILD="address"
+        san_suffix="-asan"
+        ;;
+    --tsan)
+        shift || true
+        SAN_BUILD="thread"
+        san_suffix="-tsan"
         ;;
     --test)
         TEST="$2"
@@ -77,11 +85,10 @@ if [[ ! "${TEST}" == "stability" ]] && [[ ! "${TEST}" == "vector_search_integrat
     exit 1
 fi
 
-asan_suffix=""
-if [[ "${ASAN_BUILD}" == "yes" ]]; then
-    asan_suffix="-asan"
-    TEST="vector_search_integration" # for now, we only support this test with ASan
-    printf "${GREEN}Running integration tests with ASan support${RESET}\n"
+
+if [[ "${SAN_BUILD}" != "no" ]]; then
+    TEST="vector_search_integration" # for now, we only support this test with sanitizer
+    printf "${GREEN}Running integration tests with ${SAN_BUILD} sanitizer support${RESET}\n"
 fi
 
 function is_cmake_required() {
@@ -136,8 +143,8 @@ function configure() {
         cd ${VALKEY_SERVER_BUILD_DIR}
 
         VALKEY_CMAKE_EXTRA_ARGS=""
-        if [[ "${ASAN_BUILD}" == "yes" ]]; then
-            VALKEY_CMAKE_EXTRA_ARGS="-DBUILD_SANITIZER=address"
+        if [[ "${SAN_BUILD}" != "no" ]]; then
+            VALKEY_CMAKE_EXTRA_ARGS="-DBUILD_SANITIZER=${SAN_BUILD}"
         fi
 
         printf "${BOLD_PINK}Running valkey-server cmake:${RESET}cmake -DCMAKE_BUILD_TYPE=Release .. -GNinja ${VALKEY_CMAKE_EXTRA_ARGS}\n"
@@ -177,7 +184,7 @@ function build() {
     make
 }
 
-BUILD_DIR_BASENAME=.build-${BUILD_CONFIG}${asan_suffix}
+BUILD_DIR_BASENAME=.build-${BUILD_CONFIG}${san_suffix}
 BUILD_DIR=${ROOT_DIR}/${BUILD_DIR_BASENAME}
 VALKEY_SERVER_DIR=${BUILD_DIR}/valkey-${VALKEY_VERSION}
 VALKEY_SERVER_BUILD_DIR=${VALKEY_SERVER_DIR}/.build-release
@@ -224,14 +231,14 @@ function print_environment_var() {
     printf "${GRAY}${varname}${RESET} => ${GREEN}${value}${RESET}\n"
 }
 
-# Loop over valkey log files and search for "AddressSanitizer" lines
-function check_for_asan_errors() {
+# Loop over valkey log files and search for "AddressSanitizer" and "ThreadSanitizer" lines
+function check_for_san_errors() {
     valkey_logs=$(ls ${TEST_UNDECLARED_OUTPUTS_DIR}/*_stdout.txt | grep -v valkey_cli_stdout)
     local exit_with_error=0
     local files_to_dump=""
     for logfile in ${valkey_logs}; do
-        printf "Checking log file ${logfile} for ASan errors"
-        local errors_count=$(cat ${logfile}| grep -w AddressSanitizer|wc -l)
+        printf "Checking log file ${logfile} for ASan/TSan errors"
+        local errors_count=$(cat ${logfile}| grep -wE 'AddressSanitizer|ThreadSanitizer'|wc -l)
         if [[ ${errors_count} -eq 0 ]]; then
             printf "... ${GREEN}ok${RESET}\n"
         else
@@ -257,9 +264,9 @@ export MEMTIER_PATH=memtier_benchmark
 export VALKEY_SEARCH_PATH=${VALKEY_SEARCH_PATH}
 export VALKEY_JSON_PATH="${VALKEY_JSON_PATH}"
 export TEST_UNDECLARED_OUTPUTS_DIR="$BUILD_DIR/output"
-if [[ "${ASAN_BUILD}" == "yes" ]]; then
-    export ASAN_OPTIONS="detect_odr_violation=0:detect_leaks=1:halt_on_error=1"
-    export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/asan.supp"
+if [[ "${SAN_BUILD}" != "no" ]]; then
+    export SAN_OPTIONS="detect_odr_violation=0:detect_leaks=1:halt_on_error=1"
+    export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/${SAN_BUILD}-san.supp"
 fi
 
 rm -rf $TEST_UNDECLARED_OUTPUTS_DIR
@@ -289,11 +296,11 @@ else
 fi
 
 printf "Checking for errors...\n"
-if [[ "${ASAN_BUILD}" == "yes" ]]; then
+if [[ "${SAN_BUILD}" != "no" ]]; then
     # Terminate valkey-server so the logs will be flushed
     pkill valkey-server || true
     # Wait for 3 seconds making sure the processes terminated
     sleep 3
     # And now we can check the logs
-    check_for_asan_errors
+    check_for_san_errors
 fi

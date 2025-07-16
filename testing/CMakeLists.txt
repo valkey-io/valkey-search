@@ -139,7 +139,7 @@ set(SRCS_COMMON ${CMAKE_CURRENT_LIST_DIR}/common.cc
                 ${CMAKE_CURRENT_LIST_DIR}/common.h)
 
 add_library(testing_common STATIC ${SRCS_COMMON})
-valkey_search_target_update_asan_flags(testing_common)
+valkey_search_target_update_san_flags(testing_common)
 
 target_include_directories(testing_common PUBLIC ${HIGHWAY_HASH_INCLUDE_PATH})
 target_include_directories(testing_common PUBLIC ${CMAKE_CURRENT_LIST_DIR})

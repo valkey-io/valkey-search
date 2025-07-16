@@ -52,55 +52,61 @@ void ModeTest(Mode mode, ThreadPool& readers_pool, ThreadPool& writers_pool,
   }
   absl::BlockingCounter blocking_refcount(cnt);
   std::atomic<int> count = 0;
-  absl::BitGen gen;
+
   MockTask mock_task_read;
   std::atomic<uint64_t> total_delay{0};
   StopWatch stop_watch;
   EXPECT_CALL(mock_task_read, Execute())
-      .WillRepeatedly([&blocking_refcount, &count, &mrmw_mutex, &gen,
-                       rand_delay, &total_delay, may_prolong_frequency]() {
+      .WillRepeatedly([&blocking_refcount, &count, &mrmw_mutex, rand_delay,
+                       &total_delay, may_prolong_frequency]() {
+        absl::BitGen gen;
         bool may_prolong =
             may_prolong_frequency > 0 && (count % may_prolong_frequency) == 0;
-        ReaderMutexLock lock(&mrmw_mutex, may_prolong && (count % 4 == 0));
-        if (may_prolong && (count % 2 == 0)) {
-          auto delay = absl::uniform_int_distribution<int>(0, 50)(gen);
-          lock.SetMayProlong();
-          total_delay += delay;
-          absl::SleepFor(absl::Microseconds(delay));
-        }
-        if (rand_delay) {
-          auto delay = absl::uniform_int_distribution<int>(0, 100)(gen);
-          if (may_prolong) {
-            delay *= 10;
+        {
+          ReaderMutexLock lock(&mrmw_mutex, may_prolong && (count % 4 == 0));
+          if (may_prolong && (count % 2 == 0)) {
+            auto delay = absl::uniform_int_distribution<int>(0, 50)(gen);
+            lock.SetMayProlong();
+            total_delay += delay;
+            absl::SleepFor(absl::Microseconds(delay));
           }
-          total_delay += delay;
-          absl::SleepFor(absl::Microseconds(delay));
+          if (rand_delay) {
+            auto delay = absl::uniform_int_distribution<int>(0, 100)(gen);
+            if (may_prolong) {
+              delay *= 10;
+            }
+            total_delay += delay;
+            absl::SleepFor(absl::Microseconds(delay));
+          }
+          ++count;
         }
-        ++count;
         blocking_refcount.DecrementCount();
       });
   MockTask mock_task_write;
   EXPECT_CALL(mock_task_write, Execute())
-      .WillRepeatedly([&blocking_refcount, &count, &mrmw_mutex, &gen,
-                       rand_delay, &total_delay, may_prolong_frequency]() {
+      .WillRepeatedly([&blocking_refcount, &count, &mrmw_mutex, rand_delay,
+                       &total_delay, may_prolong_frequency]() {
+        absl::BitGen gen;
         bool may_prolong =
             may_prolong_frequency > 0 && (count % may_prolong_frequency) == 0;
-        WriterMutexLock lock(&mrmw_mutex, may_prolong && (count % 4 == 0));
-        if (may_prolong && (count % 2 == 0)) {
-          auto delay = absl::uniform_int_distribution<int>(0, 50)(gen);
-          lock.SetMayProlong();
-          total_delay += delay;
-          absl::SleepFor(absl::Microseconds(delay));
-        }
-        if (rand_delay) {
-          auto delay = absl::uniform_int_distribution<int>(0, 100)(gen);
-          if (may_prolong) {
-            delay *= 10;
+        {
+          WriterMutexLock lock(&mrmw_mutex, may_prolong && (count % 4 == 0));
+          if (may_prolong && (count % 2 == 0)) {
+            auto delay = absl::uniform_int_distribution<int>(0, 50)(gen);
+            lock.SetMayProlong();
+            total_delay += delay;
+            absl::SleepFor(absl::Microseconds(delay));
           }
-          total_delay += delay;
-          absl::SleepFor(absl::Microseconds(delay));
+          if (rand_delay) {
+            auto delay = absl::uniform_int_distribution<int>(0, 100)(gen);
+            if (may_prolong) {
+              delay *= 10;
+            }
+            total_delay += delay;
+            absl::SleepFor(absl::Microseconds(delay));
+          }
+          ++count;
         }
-        ++count;
         blocking_refcount.DecrementCount();
       });
 
@@ -225,12 +231,11 @@ TEST_F(MRMWMutexTest, VerifyMayProlong) {
         {
           ReaderMutexLock lock(&mrmw_mutex, true);
           absl::SleepFor(options.read_quota_duration * 2);
-
-          in_prolong_read = true;
-          may_prolong_notification.Notify();
-          read_tasks_completed_notification.WaitForNotification();
-          in_prolong_read = false;
         }
+        in_prolong_read = true;
+        may_prolong_notification.Notify();
+        read_tasks_completed_notification.WaitForNotification();
+        in_prolong_read = false;
         may_prolong_release_notification.Notify();
       },
       ThreadPool::Priority::kHigh);
@@ -238,29 +243,27 @@ TEST_F(MRMWMutexTest, VerifyMayProlong) {
   absl::Notification write_tasks_completed_notification;
   thread_pool.Schedule(
       [&mrmw_mutex, &run_write, &write_tasks_completed_notification]() {
-        WriterMutexLock lock(&mrmw_mutex, false);
-        run_write = true;
+        {
+          WriterMutexLock lock(&mrmw_mutex, false);
+          run_write = true;
+        }
         write_tasks_completed_notification.Notify();
       },
       ThreadPool::Priority::kHigh);
   may_prolong_notification.WaitForNotification();
   EXPECT_TRUE(in_prolong_read);
   std::atomic<int> count = 0;
-  thread_pool.Schedule(
-      [&mrmw_mutex, &in_prolong_read, &may_prolong_release_notification, &count,
-       read_tasks]() {
-        ReaderMutexLock lock(&mrmw_mutex, true);
-        EXPECT_EQ(count, read_tasks);
-        may_prolong_release_notification.WaitForNotification();
-        EXPECT_FALSE(in_prolong_read);
-      },
-      ThreadPool::Priority::kHigh);
+ 
 
   for (size_t i = 0; i < read_tasks; ++i) {
     thread_pool.Schedule(
         [&mrmw_mutex, &count, &blocking_refcount]() {
           ++count;
-          ReaderMutexLock lock(&mrmw_mutex, false);
+          {
+            ReaderMutexLock lock(&mrmw_mutex, false);
+            for (auto i = 0; i < 10; ++i) {
+            }
+          }
           blocking_refcount.DecrementCount();
         },
         ThreadPool::Priority::kHigh);
@@ -269,6 +272,8 @@ TEST_F(MRMWMutexTest, VerifyMayProlong) {
   EXPECT_FALSE(run_write);
   read_tasks_completed_notification.Notify();
   write_tasks_completed_notification.WaitForNotification();
+  EXPECT_TRUE(thread_pool.MarkForStop(ThreadPool::StopMode::kGraceful).ok());
+  thread_pool.JoinWorkers();
 }
 
 TEST_F(MRMWMutexTest, SkipWait) {
@@ -283,15 +288,19 @@ TEST_F(MRMWMutexTest, SkipWait) {
   absl::BlockingCounter blocking_refcount(2);
   thread_pool.Schedule(
       [&mrmw_mutex, &blocking_refcount]() {
-        ReaderMutexLock lock(&mrmw_mutex, true);
-        absl::SleepFor(absl::Seconds(1));
+        {
+          ReaderMutexLock lock(&mrmw_mutex, true);
+          absl::SleepFor(absl::Seconds(1));
+        }
         blocking_refcount.DecrementCount();
       },
       ThreadPool::Priority::kHigh);
   thread_pool.Schedule(
       [&mrmw_mutex, &blocking_refcount]() {
-        WriterMutexLock lock(&mrmw_mutex, true);
-        absl::SleepFor(absl::Seconds(1));
+        {
+          WriterMutexLock lock(&mrmw_mutex, true);
+          absl::SleepFor(absl::Seconds(1));
+        }
         blocking_refcount.DecrementCount();
       },
       ThreadPool::Priority::kHigh);

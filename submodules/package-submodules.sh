@@ -22,13 +22,10 @@ done
 if [[ "${SAN_BUILD}" == "address" ]]; then
     san_suffix="-asan"
     echo "Building with ASAN enabled"
-fi
-
-if [[ "${SAN_BUILD}" == "thread" ]]; then
+elif [[ "${SAN_BUILD}" == "thread" ]]; then
     san_suffix="-tsan"
     echo "Building with TSAN enabled"
 fi
-
 
 ROOT_DIR=$(readlink -f $(dirname $0)/..)
 BUILD_DIR=$(readlink -f $(dirname $0))/.build-release${san_suffix}

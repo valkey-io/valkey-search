@@ -276,6 +276,7 @@ if [[ "${SAN_BUILD}" != "no" ]]; then
         BUILD_DIR=${BUILD_DIR}-asan
     else
         BUILD_DIR=${BUILD_DIR}-tsan
+        export TSAN_OPTIONS="suppressions=${ROOT_DIR}/ci/tsan.supp"
     fi
 fi
 

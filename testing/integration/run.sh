@@ -266,7 +266,11 @@ export VALKEY_JSON_PATH="${VALKEY_JSON_PATH}"
 export TEST_UNDECLARED_OUTPUTS_DIR="$BUILD_DIR/output"
 if [[ "${SAN_BUILD}" != "no" ]]; then
     export ASAN_OPTIONS="detect_odr_violation=0:detect_leaks=1:halt_on_error=1"
-    export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/asan.supp"
+    if [[ "${SAN_BUILD}" == "address" ]]; then
+        export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/asan.supp"
+    else
+        export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/tsan.supp"
+    fi
 fi
 
 rm -rf $TEST_UNDECLARED_OUTPUTS_DIR

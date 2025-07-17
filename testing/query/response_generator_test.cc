@@ -23,6 +23,7 @@
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/vector_base.h"
+#include "src/metrics.h"
 #include "src/query/predicate.h"
 #include "src/query/search.h"
 #include "src/utils/string_interning.h"
@@ -147,6 +148,130 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
     EXPECT_EQ(ToStringMap(expected_neighbors[i].attribute_contents.value()),
               ToStringMap(expected_contents[i]));
   }
+}
+
+TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
+  ValkeyModuleCtx fake_ctx;
+
+  // Set up a small content size limit for testing
+  const size_t test_size_limit = 100;
+  VMSDK_EXPECT_OK(
+      options::GetMaxSearchResultRecordSize().SetValue(test_size_limit));
+
+  // Set up a small content fields limit for testing
+  const size_t test_fields_limit = 2;
+  VMSDK_EXPECT_OK(
+      options::GetMaxSearchResultFieldsCount().SetValue(test_fields_limit));
+
+  // Create neighbors with different content sizes and field counts
+  std::deque<indexes::Neighbor> neighbors;
+  auto small_external_id = StringInternStore::Intern("small_content_id");
+  auto large_external_id = StringInternStore::Intern("large_content_id");
+  auto many_fields_id = StringInternStore::Intern("many_fields_id");
+
+  neighbors.push_back(indexes::Neighbor(small_external_id, 0));
+  neighbors.push_back(indexes::Neighbor(large_external_id, 0));
+  neighbors.push_back(indexes::Neighbor(many_fields_id, 0));
+
+  // Set up parameters
+  query::VectorSearchParameters parameters;
+  parameters.return_attributes.push_back(
+      {.identifier = vmsdk::MakeUniqueValkeyString("content"),
+       .alias = vmsdk::MakeUniqueValkeyString("content_alias")});
+  parameters.return_attributes.push_back(
+      {.identifier = vmsdk::MakeUniqueValkeyString("field1"),
+       .alias = vmsdk::MakeUniqueValkeyString("field1_alias")});
+  parameters.return_attributes.push_back(
+      {.identifier = vmsdk::MakeUniqueValkeyString("field2"),
+       .alias = vmsdk::MakeUniqueValkeyString("field2_alias")});
+  parameters.attribute_alias = "test_attribute";
+
+  // Mock data type
+  MockAttributeDataType data_type;
+  EXPECT_CALL(data_type, ToProto()).WillRepeatedly([]() {
+    return data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH;
+  });
+
+  // Mock FetchAllRecords to return different sized content
+  EXPECT_CALL(data_type, FetchAllRecords(&fake_ctx, parameters.attribute_alias,
+                                         absl::string_view("small_content_id"),
+                                         testing::_))
+      .WillOnce([](ValkeyModuleCtx *ctx,
+                   const std::string &query_attribute_alias,
+                   absl::string_view key,
+                   const absl::flat_hash_set<absl::string_view> &identifiers)
+                    -> absl::StatusOr<RecordsMap> {
+        // Return small content (within both size and field limits)
+        RecordsMap small_content;
+        small_content.emplace(
+            "content", RecordsMapValue(vmsdk::MakeUniqueValkeyString("content"),
+                                       vmsdk::MakeUniqueValkeyString("small")));
+        small_content.emplace(
+            "field1", RecordsMapValue(vmsdk::MakeUniqueValkeyString("field1"),
+                                      vmsdk::MakeUniqueValkeyString("value1")));
+        return small_content;
+      });
+
+  EXPECT_CALL(data_type, FetchAllRecords(&fake_ctx, parameters.attribute_alias,
+                                         absl::string_view("large_content_id"),
+                                         testing::_))
+      .WillOnce([test_size_limit](
+                    ValkeyModuleCtx *ctx,
+                    const std::string &query_attribute_alias,
+                    absl::string_view key,
+                    const absl::flat_hash_set<absl::string_view> &identifiers)
+                    -> absl::StatusOr<RecordsMap> {
+        // Return large content (exceeds size limit)
+        RecordsMap large_content;
+        std::string large_value(test_size_limit + 10,
+                                'x');  // Exceed the size limit by 10 bytes
+        large_content.emplace(
+            "content",
+            RecordsMapValue(vmsdk::MakeUniqueValkeyString("content"),
+                            vmsdk::MakeUniqueValkeyString(large_value)));
+        return large_content;
+      });
+
+  EXPECT_CALL(data_type,
+              FetchAllRecords(&fake_ctx, parameters.attribute_alias,
+                              absl::string_view("many_fields_id"), testing::_))
+      .WillOnce([](ValkeyModuleCtx *ctx,
+                   const std::string &query_attribute_alias,
+                   absl::string_view key,
+                   const absl::flat_hash_set<absl::string_view> &identifiers)
+                    -> absl::StatusOr<RecordsMap> {
+        // Return content with many fields (exceeds field count limit)
+        RecordsMap many_fields_content;
+        many_fields_content.emplace(
+            "content", RecordsMapValue(vmsdk::MakeUniqueValkeyString("content"),
+                                       vmsdk::MakeUniqueValkeyString("data")));
+        many_fields_content.emplace(
+            "field1", RecordsMapValue(vmsdk::MakeUniqueValkeyString("field1"),
+                                      vmsdk::MakeUniqueValkeyString("value1")));
+        many_fields_content.emplace(
+            "field2", RecordsMapValue(vmsdk::MakeUniqueValkeyString("field2"),
+                                      vmsdk::MakeUniqueValkeyString("value2")));
+        return many_fields_content;
+      });
+
+  ProcessNeighborsForReply(&fake_ctx, data_type, neighbors, parameters,
+                           parameters.attribute_alias);
+
+  // Verify that only the neighbor with small content remains
+  // (both large content and many fields neighbors should be filtered out)
+  EXPECT_EQ(neighbors.size(), 1);
+  EXPECT_EQ(std::string(*neighbors[0].external_id), "small_content_id");
+  EXPECT_TRUE(neighbors[0].attribute_contents.has_value());
+
+  // Verify the content is correct
+  auto content_map = ToStringMap(neighbors[0].attribute_contents.value());
+  EXPECT_EQ(content_map["content"], "small");
+  EXPECT_EQ(content_map["field1"], "value1");
+  EXPECT_EQ(content_map.size(), 2);
+
+  // Verify that the metric was incremented correctly
+  // Should be incremented by 2: once for large content, once for many fields
+  EXPECT_EQ( Metrics::GetStats().query_result_record_dropped_cnt, 2);
 }
 
 INSTANTIATE_TEST_SUITE_P(

@@ -52,15 +52,15 @@ absl::Status ValidateLogLevel(const int value) {
 // Configuration entries
 namespace config = vmsdk::config;
 
-/// Register the "--query-string-depth" flag. Controls the depth of the query
-/// string parsing from the FT.SEARCH cmd.
-constexpr absl::string_view kQueryStringDepthConfig{"query-string-depth"};
-constexpr uint32_t kDefaultQueryStringDepth{1000};
-constexpr uint32_t kMinimumQueryStringDepth{1};
-static auto query_string_depth =
-    config::NumberBuilder(kQueryStringDepthConfig,   // name
-                          kDefaultQueryStringDepth,  // default size
-                          kMinimumQueryStringDepth,  // min size
+/// Register the "--query-string-bytes" flag. Controls the length of the query
+/// string of the FT.SEARCH cmd.
+constexpr absl::string_view kQueryStringBytesConfig{"query-string-bytes"};
+constexpr uint32_t kDefaultQueryStringBytes{10240};
+constexpr uint32_t kMinimumQueryStringBytes{1};
+static auto query_string_bytes =
+    config::NumberBuilder(kQueryStringBytesConfig,   // name
+                          kDefaultQueryStringBytes,  // default size
+                          kMinimumQueryStringBytes,  // min size
                           UINT_MAX)                  // max size
         .Build();
 
@@ -150,9 +150,7 @@ static auto log_level =
         .WithValidationCallback(ValidateLogLevel)
         .Build();
 
-uint32_t GetQueryStringDepth() {
-  return query_string_depth->GetValue();
-}
+uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
   return dynamic_cast<vmsdk::config::Number&>(*hnsw_block_size);

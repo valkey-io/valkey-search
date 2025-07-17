@@ -155,8 +155,8 @@ void SerializeNeighbors(RedisModuleCtx *ctx,
 }
 
 // Handle non-vector queries by processing the neighbors and replying with the attribute contents.
-void SerializeNonVectorNeighbors(RedisModuleCtx *ctx,
-                                std::deque<indexes::Neighbor> &neighbors,
+void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
+                                const std::deque<indexes::Neighbor> &neighbors,
                                 const query::VectorSearchParameters &parameters) {
     const size_t available_results = neighbors.size();
     RedisModule_ReplyWithArray(ctx, 2 * available_results + 1);

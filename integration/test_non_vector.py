@@ -19,8 +19,8 @@ hash_docs = [
     ["HSET", "product:4", "category", "books", "name", "Book", "price", "19.99", "rating", "4.8", "desc", "Excellent"]
 ]
 numeric_query = ["FT.SEARCH", "products", "@price:[300 1000] @rating:[4.4 +inf]"]
-exepected_hash_key = b'product:1'
-exepected_hash_value = {
+expected_hash_key = b'product:1'
+expected_hash_value = {
     b'name': b"Laptop",
     b'price': b'999.99',
     b'rating': b'4.5',
@@ -79,10 +79,10 @@ def validate_non_vector_queries(client: Valkey):
     result = client.execute_command(*numeric_query)
     assert len(result) == 3
     assert result[0] == 1  # Number of documents found
-    assert result[1] == exepected_hash_key
+    assert result[1] == expected_hash_key
     document = result[2]
     doc_fields = dict(zip(document[::2], document[1::2]))
-    assert doc_fields == exepected_hash_value
+    assert doc_fields == expected_hash_value
     # Validate a numeric query on JSON documents.
     result = client.execute_command(*numeric_query_on_json)
     assert len(result) == 3

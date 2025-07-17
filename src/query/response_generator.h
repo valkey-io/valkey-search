@@ -15,8 +15,20 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/search.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
+namespace valkey_search::options {
+
+/// Return the configuration entry that allows the caller to control the
+/// maximum content size for a record in the search response
+vmsdk::config::Number &GetMaxSearchResultRecordSize();
+
+/// Return the configuration entry that allows the caller to control the
+/// maximum number of fields in the content of the search response
+vmsdk::config::Number &GetMaxSearchResultFieldsCount();
+
+}  // namespace valkey_search::options
 namespace valkey_search::query {
 
 // Adds all local content for neighbors to the list of neighbors.

@@ -81,6 +81,7 @@ class IndexTeser : public T {
 class MockIndex : public indexes::IndexBase {
  public:
   MockIndex() : indexes::IndexBase(indexes::IndexerType::kNone) {}
+  MockIndex(indexes::IndexerType type) : indexes::IndexBase(type) {}
   MOCK_METHOD(absl::StatusOr<bool>, AddRecord,
               (const InternedStringPtr& key, absl::string_view data),
               (override));

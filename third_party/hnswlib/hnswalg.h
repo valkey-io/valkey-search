@@ -1298,15 +1298,15 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       label_lookup_[label] = cur_c;
     }
 
+    std::unique_lock<std::mutex> templock(global);
+    int maxlevelcopy = maxlevel_;
     std::unique_lock<std::mutex> lock_el(link_list_locks_[cur_c]);
     int curlevel = getRandomLevel(mult_);
     if (level > 0) curlevel = level;
-
+    if (curlevel <= maxlevelcopy) {
+      templock.unlock();
+    }
     element_levels_[cur_c] = curlevel;
-
-    std::unique_lock<std::mutex> templock(global);
-    int maxlevelcopy = maxlevel_;
-    if (curlevel <= maxlevelcopy) templock.unlock();
     tableint currObj = enterpoint_node_;
     tableint enterpoint_copy = enterpoint_node_;
 

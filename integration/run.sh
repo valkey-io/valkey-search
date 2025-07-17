@@ -13,6 +13,7 @@ Usage: run.sh [options...]
 
     --debug                 Run integration tests in debug mode.
     --asan                  When passed, the integration will load the module under .build-release-asan/ | .build-debug-asan/
+    --tsan                  When passed, the integration will load the module under .build-release-tsan/ | .build-debug-tsan/
     --help | -h             Print this help message and exit.
 
 EOF
@@ -38,8 +39,13 @@ do
         ;;
     --asan)
         shift || true
-        ASAN_SUFFIX="-asan"
+        SAN_SUFFIX="-asan"
         LOG_INFO "Assuming ASan build"
+        ;;
+    --tsan)
+        shift || true
+        SAN_SUFFIX="-tsan"
+        LOG_INFO "Assuming TSan build"
         ;;
     --help|-h)
         print_usage
@@ -52,7 +58,7 @@ do
     esac
 done
 
-BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}${ASAN_SUFFIX}
+BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}${SAN_SUFFIX}
 WD=${BUILD_DIR}/integration
 
 # Check for user provided module path
@@ -89,6 +95,15 @@ function setup_python() {
         PYTHON_PATH=${WD}/env/bin/python3
         PIP_PATH=${WD}/env/bin/pip3
     fi
+}
+
+function zap() {
+    echo "Zapping $1...";
+    pids=$(ps -ef|grep $1|grep -v grep |awk '{print $2;}');
+    for pid in $pids;
+    do
+        kill -9 $pid;
+    done
 }
 
 function install_test_framework() {
@@ -150,6 +165,7 @@ export MODULE_PATH=${MODULE_PATH}
 export VALKEY_SERVER_PATH=${VALKEY_SERVER_PATH}
 export PYTHONPATH=${WD}/valkeytestframework:${WD}
 export JSON_MODULE_PATH=${JSON_MODULE_PATH}
+export SKIPLOGCLEAN=1
 
 FILTER_ARGS=""
 if [ ! -z "${TEST_PATTERN}" ]; then
@@ -158,5 +174,7 @@ if [ ! -z "${TEST_PATTERN}" ]; then
 else
     LOG_INFO "TEST_PATTERN is not set. Running all integration tests."
 fi
+
+zap valkey-server
 LOG_INFO "Running: ${PYTHON_PATH} -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/"
-${PYTHON_PATH} -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/
+${PYTHON_PATH} -m pytest ${FILTER_ARGS} --log-cli-level=INFO --capture=sys --cache-clear -v ${ROOT_DIR}/integration/

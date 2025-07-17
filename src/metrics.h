@@ -29,6 +29,7 @@ class Metrics {
   struct Stats {
     uint64_t query_successful_requests_cnt{0};
     uint64_t query_failed_requests_cnt{0};
+    uint64_t query_result_record_dropped_cnt{0};
     uint64_t query_hybrid_requests_cnt{0};
     uint64_t query_inline_filtering_requests_cnt{0};
     std::atomic<uint64_t> hnsw_add_exceptions_cnt{0};
@@ -69,6 +70,18 @@ class Metrics {
         0};
     std::atomic<uint64_t> coordinator_bytes_out{0};
     std::atomic<uint64_t> coordinator_bytes_in{0};
+    
+    // Global ingestion stats (counts across all indexes)
+    std::atomic<uint64_t> ingest_hash_keys{0};
+    std::atomic<uint64_t> ingest_hash_blocked{0};
+    std::atomic<uint64_t> ingest_json_keys{0};
+    std::atomic<uint64_t> ingest_json_blocked{0};
+    std::atomic<uint64_t> ingest_field_vector{0};
+    std::atomic<uint64_t> ingest_field_numeric{0};
+    std::atomic<uint64_t> ingest_field_tag{0};
+    std::atomic<uint64_t> ingest_last_batch_size{0};
+    std::atomic<uint64_t> ingest_total_batches{0};
+    std::atomic<uint64_t> ingest_total_failures{0};
     vmsdk::LatencySampler
         coordinator_client_get_global_metadata_failure_latency{
             absl::ToInt64Nanoseconds(absl::Nanoseconds(1)),

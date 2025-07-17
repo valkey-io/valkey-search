@@ -83,7 +83,17 @@ struct IndexSchemaSubscriptionTestCase {
 };
 
 class IndexSchemaSubscriptionTest
-    : public ValkeySearchTestWithParam<IndexSchemaSubscriptionTestCase> {};
+    : public ValkeySearchTestWithParam<IndexSchemaSubscriptionTestCase> {
+ protected:
+  // Helper functions to check operation success/failure patterns
+  static bool IsOperationSuccessful(const absl::optional<absl::StatusOr<bool>>& result) {
+    return result.has_value() && result.value().ok() && result.value().value();
+  }
+  
+  static bool IsOperationFailed(const absl::optional<absl::StatusOr<bool>>& result) {
+    return result.has_value() && !result.value().ok();
+  }
+};
 
 TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
   const IndexSchemaSubscriptionTestCase &test_case = GetParam();
@@ -227,65 +237,56 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
     EXPECT_EQ(index_schema->GetStats().document_cnt - document_cnt,
               test_case.expected_document_cnt_delta);
     
-    // Check field type metrics based on test case's index_type and success/failure
-    if (test_case.expect_index_add_w_result.has_value() && 
-        test_case.expect_index_add_w_result.value().ok() &&
-        test_case.expect_index_add_w_result.value().value()) {
-      // For successful additions, check the appropriate field type metric
+    // Determine operation success/failure states using helper functions
+    bool successful_add = IsOperationSuccessful(test_case.expect_index_add_w_result);
+    bool successful_modify = IsOperationSuccessful(test_case.expect_index_modify_w_result);
+    bool successful_remove = IsOperationSuccessful(test_case.expect_index_remove_w_result);
+    
+    bool failed_operation = IsOperationFailed(test_case.expect_index_add_w_result) ||
+                           IsOperationFailed(test_case.expect_index_modify_w_result) ||
+                           IsOperationFailed(test_case.expect_index_remove_w_result);
+    
+    bool successful_upsert = successful_add || successful_modify;
+    bool is_hash_operation = !test_case.open_key_fail && 
+                            test_case.open_key_type == VALKEYMODULE_KEYTYPE_HASH &&
+                            test_case.valkey_hash_data.has_value();
+    
+    // Check field type metrics for successful operations with document count increase
+    if (successful_upsert && test_case.expected_document_cnt_delta > 0) {
       switch (test_case.index_type) {
         case indexes::IndexerType::kVector:
-          // Only check if document count increased (real vector field indexed)
-          if (test_case.expected_document_cnt_delta > 0) {
-            EXPECT_GT(metrics.ingest_field_vector, initial_field_vector);
-          }
+          EXPECT_GT(metrics.ingest_field_vector, initial_field_vector);
           break;
         case indexes::IndexerType::kNumeric:
-          if (test_case.expected_document_cnt_delta > 0) {
-            EXPECT_GT(metrics.ingest_field_numeric, initial_field_numeric);
-          }
+          EXPECT_GT(metrics.ingest_field_numeric, initial_field_numeric);
           break;
         case indexes::IndexerType::kTag:
-          if (test_case.expected_document_cnt_delta > 0) {
-            EXPECT_GT(metrics.ingest_field_tag, initial_field_tag);
-          }
+          EXPECT_GT(metrics.ingest_field_tag, initial_field_tag);
           break;
         default:
           break;
       }
     }
     
-    // Check for failure metrics
-    if ((test_case.expect_index_add_w_result.has_value() && 
-         !test_case.expect_index_add_w_result.value().ok()) ||
-        (test_case.expect_index_modify_w_result.has_value() && 
-         !test_case.expect_index_modify_w_result.value().ok()) ||
-        (test_case.expect_index_remove_w_result.has_value() && 
-         !test_case.expect_index_remove_w_result.value().ok())) {
-      // For failures, verify the total failures metric increased
+    // Check failure metrics
+    if (failed_operation) {
       EXPECT_GT(metrics.ingest_total_failures, initial_total_failures);
     }
     
-    // Check for hash keys metrics
-    if (!test_case.open_key_fail && test_case.open_key_type == VALKEYMODULE_KEYTYPE_HASH) {
-      if (test_case.valkey_hash_data.has_value()) {
-        EXPECT_GT(metrics.ingest_hash_keys, initial_hash_keys);
-      }
+    // Check hash keys metrics
+    if (is_hash_operation) {
+      EXPECT_GT(metrics.ingest_hash_keys, initial_hash_keys);
     }
-    // Verify Time Slice Mutex metrics for upserts and deletes
-    if (test_case.expect_index_add_w_result.has_value() && 
-        test_case.expect_index_add_w_result.value().ok() && 
-        test_case.expect_index_add_w_result.value().value()) {
+    
+    // Verify Time Slice Mutex metrics
+    if (successful_upsert) {
       EXPECT_EQ(global_stats.time_slice_upserts, initial_upserts + 1);
-    } else if (test_case.expect_index_modify_w_result.has_value() && 
-               test_case.expect_index_modify_w_result.value().ok() && 
-               test_case.expect_index_modify_w_result.value().value()) {
-      EXPECT_EQ(global_stats.time_slice_upserts, initial_upserts + 1);
-    } else if (test_case.expect_index_remove_w_result.has_value() && 
-               test_case.expect_index_remove_w_result.value().ok() && 
-               test_case.expect_index_remove_w_result.value().value()) {
+      EXPECT_EQ(global_stats.time_slice_deletes, initial_deletes);
+    } else if (successful_remove) {
       EXPECT_EQ(global_stats.time_slice_deletes, initial_deletes + 1);
+      EXPECT_EQ(global_stats.time_slice_upserts, initial_upserts);
     } else {
-      // No successful upsert or delete operation expected
+      // No successful operation expected
       EXPECT_EQ(global_stats.time_slice_upserts, initial_upserts);
       EXPECT_EQ(global_stats.time_slice_deletes, initial_deletes);
     }

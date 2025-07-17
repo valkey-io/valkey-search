@@ -183,6 +183,7 @@ static vmsdk::info_field::Integer ingest_total_failures(
     "global_ingestion", "ingest_total_failures",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long { 
       return Metrics::GetStats().ingest_total_failures; }));
+
 static vmsdk::info_field::Integer time_slice_read_periods(
     "time_slice_mutex", "time_slice_read_periods",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {

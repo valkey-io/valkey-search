@@ -113,7 +113,7 @@ TEST_P(StringInterningTest, WithAllocator) {
 }
 
 TEST_F(StringInterningTest, MemoryTrackingIsolation) {
-  std::atomic<int64_t> caller_pool{0};
+  MemoryPool caller_pool{0};
   std::shared_ptr<InternedString> interned_str;
 
   NestedMemoryScope scope{caller_pool};
@@ -122,13 +122,13 @@ TEST_F(StringInterningTest, MemoryTrackingIsolation) {
 
   interned_str = StringInternStore::Intern("test_string", allocator.get());
 
-  EXPECT_EQ(caller_pool.load(), 0);
+  EXPECT_EQ(caller_pool.GetUsage(), 0);
   EXPECT_EQ(StringInternStore::GetMemoryUsage(), 12);
   EXPECT_EQ(vmsdk::GetMemoryDelta(), before_memory_delta);
 
   interned_str.reset();
 
-  EXPECT_EQ(caller_pool.load(), 0);
+  EXPECT_EQ(caller_pool.GetUsage(), 0);
   EXPECT_EQ(StringInternStore::GetMemoryUsage(), 0);
 }
 

@@ -18,7 +18,7 @@
 
 namespace valkey_search {
 
-std::atomic<int64_t> StringInternStore::memory_pool_{0};
+MemoryPool StringInternStore::memory_pool_{0};
 
 InternedString::InternedString(absl::string_view str, bool shared)
     : length_(str.length()), is_shared_(shared), is_data_owner_(true) {
@@ -31,12 +31,12 @@ InternedString::InternedString(char* data, size_t length)
     : data_(data), length_(length), is_shared_(true), is_data_owner_(false) {}
 
 InternedString::~InternedString() {
+  // NOTE: isolate memory tracking for deallocation.
+  IsolatedMemoryScope scope {StringInternStore::memory_pool_};
+
   if (is_shared_) {
     StringInternStore::Instance().Release(this);
   }
-  
-  // NOTE: isolate memory tracking for deallocation.
-  IsolatedMemoryScope scope {StringInternStore::memory_pool_};
   
   if (is_data_owner_) {
     delete[] data_;
@@ -67,6 +67,8 @@ std::shared_ptr<InternedString> StringInternStore::Intern(
 
 std::shared_ptr<InternedString> StringInternStore::InternImpl(
     absl::string_view str, Allocator* allocator) {
+  IsolatedMemoryScope scope {memory_pool_};
+
   absl::MutexLock lock(&mutex_);
   auto it = str_to_interned_.find(str);
   if (it != str_to_interned_.end()) {
@@ -74,8 +76,6 @@ std::shared_ptr<InternedString> StringInternStore::InternImpl(
       return locked;
     }
   }
-
-  IsolatedMemoryScope scope {memory_pool_};
 
   std::shared_ptr<InternedString> interned_string;
   if (allocator) {
@@ -93,7 +93,7 @@ std::shared_ptr<InternedString> StringInternStore::InternImpl(
 }
 
 int64_t StringInternStore::GetMemoryUsage() {
-  return memory_pool_.load();
+  return memory_pool_.GetUsage();
 }
 
 }  // namespace valkey_search

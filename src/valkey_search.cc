@@ -134,6 +134,13 @@ static vmsdk::info_field::Float used_write_cpu(
       return writer_thread_pool->GetAvgCPUPercentage().value_or(-1);
     }));
 
+static vmsdk::info_field::Integer string_interning_memory("string_interning", "string_interning_memory",
+    vmsdk::info_field::IntegerBuilder()
+        .SIBytes()
+        .App()
+        .Computed(StringInternStore::GetMemoryUsage)
+        .CrashSafe());
+
 void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
   vmsdk::info_field::DoSection(ctx, "thread-pool", for_crash_report);
   ValkeyModule_InfoAddFieldLongLong(ctx, "query_queue_size",
@@ -316,10 +323,6 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
     vmsdk::info_field::DoSection(ctx, "string_interning", for_crash_report);
     ValkeyModule_InfoAddFieldLongLong(ctx, "string_interning_store_size",
                                      StringInternStore::Instance().Size());
-    char buffer[100];
-    vmsdk::DisplayAsSIBytes(StringInternStore::GetMemoryUsage(), buffer, sizeof(buffer));
-    ValkeyModule_InfoAddFieldCString(
-        ctx, "string_interning_memory_mb", buffer);
 
     vmsdk::info_field::DoSection(ctx, "vector_externing", for_crash_report);
     auto vector_externing_stats = VectorExternalizer::Instance().GetStats();

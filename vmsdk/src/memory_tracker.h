@@ -33,9 +33,29 @@
 #include <atomic>
 #include "vmsdk/src/utils.h"
 
+class MemoryPool {
+public:
+    explicit MemoryPool(int64_t initial_value = 0) : counter_(initial_value) {}
+    
+    int64_t GetUsage() const {
+        return counter_.load();
+    }
+
+    void Add(int64_t delta) {
+        counter_.fetch_add(delta);
+    }
+
+    void Reset() {
+        counter_.store(0);
+    }
+    
+private:
+    std::atomic<int64_t> counter_;
+};
+
 class MemoryScope {
 public:
-    explicit MemoryScope(std::atomic<int64_t>& pool);
+    explicit MemoryScope(MemoryPool& pool);
     virtual ~MemoryScope() = default;
 
     VMSDK_NON_COPYABLE_NON_MOVABLE(MemoryScope);
@@ -45,7 +65,7 @@ public:
     int64_t GetBaselineMemory() const { return baseline_memory_; }
 
 protected:
-    std::atomic<int64_t>& target_pool_;
+    MemoryPool& target_pool_;
     int64_t baseline_memory_ = 0;
 
 private:
@@ -54,7 +74,7 @@ private:
 
 class IsolatedMemoryScope final : public MemoryScope {
 public:
-    explicit IsolatedMemoryScope(std::atomic<int64_t>& pool);
+    explicit IsolatedMemoryScope(MemoryPool& pool);
     ~IsolatedMemoryScope() override;
     
     VMSDK_NON_COPYABLE_NON_MOVABLE(IsolatedMemoryScope);
@@ -62,7 +82,7 @@ public:
 
 class NestedMemoryScope final : public MemoryScope {
 public:
-    explicit NestedMemoryScope(std::atomic<int64_t>& pool);
+    explicit NestedMemoryScope(MemoryPool& pool);
     ~NestedMemoryScope() override;
     
     VMSDK_NON_COPYABLE_NON_MOVABLE(NestedMemoryScope);

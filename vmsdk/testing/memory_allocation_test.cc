@@ -409,7 +409,7 @@ TEST_F(MemoryAllocationTest, VallocOverride) {
 TEST_F(MemoryAllocationTest, IsolatedMemoryScopeAllocationIsolation) {
   vmsdk::UseValkeyAlloc();
 
-  std::atomic<int64_t> pool{0};
+  MemoryPool pool{0};
 
   void* outer_ptr = nullptr;
   void* inner_ptr = nullptr;
@@ -463,7 +463,7 @@ TEST_F(MemoryAllocationTest, IsolatedMemoryScopeFreeIsolation) {
   EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
   EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
   
-  std::atomic<int64_t> pool{0};
+  MemoryPool pool{0};
   void* ptr = nullptr;
   
   IsolatedMemoryScope scope{&pool};
@@ -493,7 +493,7 @@ TEST_F(MemoryAllocationTest, IsolatedMemoryScopeFreeIsolation) {
 TEST_F(MemoryAllocationTest, NestedMemoryScopeAllocation) {
   vmsdk::UseValkeyAlloc();
 
-  std::atomic<int64_t> pool{0};
+  MemoryPool pool{0};
 
   void* outer_ptr = nullptr;
   void* inner_ptr = nullptr;
@@ -545,7 +545,7 @@ TEST_F(MemoryAllocationTest, NestedMemoryScopeFree) {
   EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
   EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
   
-  std::atomic<int64_t> pool{0};
+  MemoryPool pool{0};
   void* ptr = nullptr;
   
   NestedMemoryScope scope{&pool};

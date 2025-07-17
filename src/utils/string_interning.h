@@ -18,6 +18,8 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/utils/allocator.h"
+#include "vmsdk/src/memory_tracker.h"
+#include "gtest/gtest_prod.h"
 
 namespace valkey_search {
 
@@ -36,18 +38,13 @@ class StringInternStore {
 
   static int64_t GetMemoryUsage();
 
-  // Testing utility to set memory pool value for predictable test results
-  static void SetMemoryUsageForTesting(int64_t value) {
-    memory_pool_.store(value);
-  }
-
   size_t Size() const {
     absl::MutexLock lock(&mutex_);
     return str_to_interned_.size();
   }
 
  private:
-  static std::atomic<int64_t> memory_pool_;
+  static MemoryPool memory_pool_;
 
   StringInternStore() = default;
   std::shared_ptr<InternedString> InternImpl(absl::string_view str,
@@ -56,6 +53,13 @@ class StringInternStore {
   absl::flat_hash_map<absl::string_view, std::weak_ptr<InternedString>>
       str_to_interned_ ABSL_GUARDED_BY(mutex_);
   mutable absl::Mutex mutex_;
+
+  static void SetMemoryUsage(int64_t value) {
+    memory_pool_.Reset();
+    memory_pool_.Add(value);
+  }
+
+  FRIEND_TEST(ValkeySearchTest, Info);
 };
 
 class InternedString {

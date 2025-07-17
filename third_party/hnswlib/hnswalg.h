@@ -20,6 +20,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "hnswlib.h"
+#include "src/metrics.h"
 #include "iostream.h"
 #include "third_party/hnswlib/index.pb.h"
 #include "visited_list_pool.h"
@@ -897,6 +898,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     for (size_t i = 0; i < cur_element_count_; i++) {
       if (isMarkedDeleted(i)) {
         num_deleted_ += 1;
+        valkey_search::Metrics::GetStats().reclaimable_memory += vector_size_;
         if (allow_replace_deleted_) {
           deleted_elements.insert(i);
         }
@@ -963,6 +965,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       unsigned char *ll_cur = ((unsigned char *)get_linklist0(internalId)) + 2;
       *ll_cur |= DELETE_MARK;
       num_deleted_ += 1;
+      valkey_search::Metrics::GetStats().reclaimable_memory += vector_size_;
       if (allow_replace_deleted_) {
         std::unique_lock<std::mutex> lock_deleted_elements(
             deleted_elements_lock);
@@ -1006,6 +1009,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       unsigned char *ll_cur = ((unsigned char *)get_linklist0(internalId)) + 2;
       *ll_cur &= ~DELETE_MARK;
       num_deleted_ -= 1;
+      valkey_search::Metrics::GetStats().reclaimable_memory -= vector_size_;
       if (allow_replace_deleted_) {
         std::unique_lock<std::mutex> lock_deleted_elements(
             deleted_elements_lock);

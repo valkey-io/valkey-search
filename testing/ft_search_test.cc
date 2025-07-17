@@ -658,7 +658,7 @@ struct MaxLimitTestCase {
   std::string expected_error_message;
 };
 
-class MaxLimitTest : public ValkeySearchTestWithParam<MaxLimitTestCase> {
+class FTSearchMaxLimitTest : public ValkeySearchTestWithParam<MaxLimitTestCase> {
  public:
   void AddVectors(const std::vector<std::vector<float>> &vectors) {
     auto index_schema =
@@ -684,7 +684,7 @@ class MaxLimitTest : public ValkeySearchTestWithParam<MaxLimitTestCase> {
   int db_num = 0;
 };
 
-TEST_P(MaxLimitTest, MaxLimitTests) {
+TEST_P(FTSearchMaxLimitTest, FTSearchMaxLimitTest) {
   const MaxLimitTestCase &test_case = GetParam();
 
   // Set the limit to the specified value for this test
@@ -726,7 +726,7 @@ TEST_P(MaxLimitTest, MaxLimitTests) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    MaxLimitTests, MaxLimitTest,
+    FTSearchMaxLimitTests, FTSearchMaxLimitTest,
     ValuesIn<MaxLimitTestCase>({
         {
             .test_name = "MaxKnnLimit",

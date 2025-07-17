@@ -6,7 +6,7 @@
 For each entry in the inverted term index, there is an instance of
 this structure which is used to contain the key/field/position information for each
 word. It is expected that there will be a very large number of these objects
-most of which will have only a small nmber of key/field/position entries. However,
+most of which will have only a small number of key/field/position entries. However,
 there will be a small number of instances where the number of key/field/position
 entries is quite large. Thus it's likely that the fully optimized version of
 this object will have two or more encodings for its contents. This optimization

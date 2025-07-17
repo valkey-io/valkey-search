@@ -28,6 +28,7 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
+#include "src/metrics.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_flat.h"
@@ -80,6 +81,7 @@ struct IndexSchemaSubscriptionTestCase {
   IndexSchema::Stats::ResultCnt<uint64_t> expected_modify_cnt_delta;
   indexes::DeletionType expected_deletion_type = indexes::DeletionType::kNone;
   int expected_document_cnt_delta;
+  indexes::IndexerType index_type = indexes::IndexerType::kNone;
 };
 
 class IndexSchemaSubscriptionTest
@@ -89,6 +91,14 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
   const IndexSchemaSubscriptionTestCase &test_case = GetParam();
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
+  
+  // Get initial metrics values to compare after operations
+  auto& metrics = Metrics::GetStats();
+  uint64_t initial_field_vector{metrics.ingest_field_vector};
+  uint64_t initial_field_numeric{metrics.ingest_field_numeric};
+  uint64_t initial_field_tag{metrics.ingest_field_tag};
+  uint64_t initial_hash_keys{metrics.ingest_hash_keys};
+  uint64_t initial_total_failures{metrics.ingest_total_failures};
   for (bool use_thread_pool : {true, false}) {
     ValkeyModuleCtx fake_ctx;
     std::vector<absl::string_view> key_prefixes = {"prefix:"};
@@ -100,7 +110,7 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
                             .value();
     EXPECT_TRUE(
         KeyspaceEventManager::Instance().HasSubscription(index_schema.get()));
-    auto mock_index = std::make_shared<MockIndex>();
+    auto mock_index = std::make_shared<MockIndex>(test_case.index_type);
     VMSDK_EXPECT_OK(index_schema->AddIndex("attribute_name",
                                            test_case.hash_field, mock_index));
 
@@ -212,6 +222,51 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
     }
     EXPECT_EQ(index_schema->GetStats().document_cnt - document_cnt,
               test_case.expected_document_cnt_delta);
+    
+    // Check field type metrics based on test case's index_type and success/failure
+    if (test_case.expect_index_add_w_result.has_value() && 
+        test_case.expect_index_add_w_result.value().ok() &&
+        test_case.expect_index_add_w_result.value().value()) {
+      // For successful additions, check the appropriate field type metric
+      switch (test_case.index_type) {
+        case indexes::IndexerType::kVector:
+          // Only check if document count increased (real vector field indexed)
+          if (test_case.expected_document_cnt_delta > 0) {
+            EXPECT_GT(metrics.ingest_field_vector, initial_field_vector);
+          }
+          break;
+        case indexes::IndexerType::kNumeric:
+          if (test_case.expected_document_cnt_delta > 0) {
+            EXPECT_GT(metrics.ingest_field_numeric, initial_field_numeric);
+          }
+          break;
+        case indexes::IndexerType::kTag:
+          if (test_case.expected_document_cnt_delta > 0) {
+            EXPECT_GT(metrics.ingest_field_tag, initial_field_tag);
+          }
+          break;
+        default:
+          break;
+      }
+    }
+    
+    // Check for failure metrics
+    if ((test_case.expect_index_add_w_result.has_value() && 
+         !test_case.expect_index_add_w_result.value().ok()) ||
+        (test_case.expect_index_modify_w_result.has_value() && 
+         !test_case.expect_index_modify_w_result.value().ok()) ||
+        (test_case.expect_index_remove_w_result.has_value() && 
+         !test_case.expect_index_remove_w_result.value().ok())) {
+      // For failures, verify the total failures metric increased
+      EXPECT_GT(metrics.ingest_total_failures, initial_total_failures);
+    }
+    
+    // Check for hash keys metrics
+    if (!test_case.open_key_fail && test_case.open_key_type == VALKEYMODULE_KEYTYPE_HASH) {
+      if (test_case.valkey_hash_data.has_value()) {
+        EXPECT_GT(metrics.ingest_hash_keys, initial_hash_keys);
+      }
+    }
   }
 }
 
@@ -232,6 +287,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .success_cnt = 1,
                 },
             .expected_document_cnt_delta = 1,
+            .index_type = indexes::IndexerType::kVector,
         },
         {
             .test_name = "happy_path_remove_key",
@@ -275,6 +331,7 @@ INSTANTIATE_TEST_SUITE_P(
                 IndexSchema::Stats::ResultCnt<uint64_t>{
                     .success_cnt = 1,
                 },
+            .index_type = indexes::IndexerType::kVector,
         },
         {
             .test_name = "untracked_and_record_does_not_exist",
@@ -316,6 +373,7 @@ INSTANTIATE_TEST_SUITE_P(
                 IndexSchema::Stats::ResultCnt<uint64_t>{
                     .failure_cnt = 1,
                 },
+            .index_type = indexes::IndexerType::kVector,
         },
         {
             .test_name = "modify_failure",
@@ -330,6 +388,99 @@ INSTANTIATE_TEST_SUITE_P(
                 IndexSchema::Stats::ResultCnt<uint64_t>{
                     .failure_cnt = 1,
                 },
+            .index_type = indexes::IndexerType::kVector,
+        },
+        {
+            .test_name = "happy_path_add_numeric",
+            .hash_field = "numeric",
+            .open_key_fail = false,
+            .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
+            .valkey_hash_data = std::make_pair("numeric", "numeric_buffer"),
+            .is_tracked = false,
+            .expect_index_add_w_result = true,
+            .expected_vector_buffer = "numeric_buffer",
+            .expected_add_cnt_delta =
+                IndexSchema::Stats::ResultCnt<uint64_t>{
+                    .success_cnt = 1,
+                },
+            .expected_document_cnt_delta = 1,
+            .index_type = indexes::IndexerType::kNumeric,
+        },
+        {
+            .test_name = "happy_path_modify_numeric",
+            .hash_field = "numeric",
+            .open_key_fail = false,
+            .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
+            .valkey_hash_data = std::make_pair("numeric", "numeric_buffer"),
+            .is_tracked = true,
+            .expect_index_modify_w_result = true,
+            .expected_vector_buffer = "numeric_buffer",
+            .expected_modify_cnt_delta =
+                IndexSchema::Stats::ResultCnt<uint64_t>{
+                    .success_cnt = 1,
+                },
+            .index_type = indexes::IndexerType::kNumeric,
+        },
+        {
+            .test_name = "add_failure_numeric",
+            .hash_field = "numeric",
+            .open_key_fail = false,
+            .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
+            .valkey_hash_data = std::make_pair("numeric", "numeric_buffer"),
+            .is_tracked = false,
+            .expect_index_add_w_result = absl::InternalError("error"),
+            .expected_vector_buffer = "numeric_buffer",
+            .expected_add_cnt_delta =
+                IndexSchema::Stats::ResultCnt<uint64_t>{
+                    .failure_cnt = 1,
+                },
+            .index_type = indexes::IndexerType::kNumeric,
+        },
+        {
+            .test_name = "happy_path_add_tag",
+            .hash_field = "tag",
+            .open_key_fail = false,
+            .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
+            .valkey_hash_data = std::make_pair("tag", "tag_buffer"),
+            .is_tracked = false,
+            .expect_index_add_w_result = true,
+            .expected_vector_buffer = "tag_buffer",
+            .expected_add_cnt_delta =
+                IndexSchema::Stats::ResultCnt<uint64_t>{
+                    .success_cnt = 1,
+                },
+            .expected_document_cnt_delta = 1,
+            .index_type = indexes::IndexerType::kTag,
+        },
+        {
+            .test_name = "happy_path_modify_tag",
+            .hash_field = "tag",
+            .open_key_fail = false,
+            .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
+            .valkey_hash_data = std::make_pair("tag", "tag_buffer"),
+            .is_tracked = true,
+            .expect_index_modify_w_result = true,
+            .expected_vector_buffer = "tag_buffer",
+            .expected_modify_cnt_delta =
+                IndexSchema::Stats::ResultCnt<uint64_t>{
+                    .success_cnt = 1,
+                },
+            .index_type = indexes::IndexerType::kTag,
+        },
+        {
+            .test_name = "add_failure_tag",
+            .hash_field = "tag",
+            .open_key_fail = false,
+            .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
+            .valkey_hash_data = std::make_pair("tag", "tag_buffer"),
+            .is_tracked = false,
+            .expect_index_add_w_result = absl::InternalError("error"),
+            .expected_vector_buffer = "tag_buffer",
+            .expected_add_cnt_delta =
+                IndexSchema::Stats::ResultCnt<uint64_t>{
+                    .failure_cnt = 1,
+                },
+            .index_type = indexes::IndexerType::kTag,
         },
         {
             .test_name = "remove_failure",
@@ -465,7 +616,9 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
   EXPECT_EQ(mutations_thread_pool.QueueSize(), 1);
   VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());
   WaitWorkerTasksAreCompleted(mutations_thread_pool);
-  EXPECT_TRUE(vmsdk::TrackedBlockedClients().empty());
+  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(vmsdk::BlockedClientCategory::kHash), 0);
+  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(vmsdk::BlockedClientCategory::kJson), 0);
+  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(vmsdk::BlockedClientCategory::kOther), 0);
 }
 
 TEST_P(IndexSchemaSubscriptionSimpleTest, EmptyKeyPrefixesTest) {

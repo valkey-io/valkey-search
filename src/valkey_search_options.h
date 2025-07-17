@@ -13,9 +13,6 @@ namespace options {
 
 namespace config = vmsdk::config;
 
-/// Return the value of the Query String Depth configuration
-uint32_t GetQueryStringDepth();
-
 /// Return the value of the Query String Bytes configuration
 uint32_t GetQueryStringBytes();
 

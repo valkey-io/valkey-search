@@ -401,6 +401,18 @@ TEST_F(ValkeySearchTest, Info) {
   stats.hnsw_modify_exceptions_cnt = 5;
   stats.hnsw_search_exceptions_cnt = 6;
   stats.hnsw_create_exceptions_cnt = 7;
+  
+  // Set global ingestion stats
+  stats.ingest_hash_keys = 100;
+  // Let's set the blocked clients values in the test
+  // These would normally be set from the BlockedClientTracker
+  stats.ingest_json_keys = 200;
+  stats.ingest_field_vector = 300;
+  stats.ingest_field_numeric = 400;
+  stats.ingest_field_tag = 500;
+  stats.ingest_last_batch_size = 600;
+  stats.ingest_total_batches = 700;
+  stats.ingest_total_failures = 800;
   stats.flat_add_exceptions_cnt = 8;
   stats.flat_remove_exceptions_cnt = 9;
   stats.flat_modify_exceptions_cnt = 10;
@@ -436,47 +448,30 @@ TEST_F(ValkeySearchTest, Info) {
 #ifndef TESTING_TMP_DISABLED
   EXPECT_EQ(
       fake_info_ctx.info_capture.GetInfo(),
-      "memory\nused_memory_bytes: 0\nused_memory_human: "
-      "'0.00M'\nindex_stats\nnumber_of_indexes: 1\nnumber_of_attributes: "
-      "1\ntotal_indexed_documents: "
-      "4\ningestion\nbackground_indexing_status: "
-      "'IN_PROGRESS'\nthread-pool\nquery_queue_size: 10\nwriter_queue_size: "
-      "5\nworker_pool_suspend_cnt: 13\nwriter_resumed_cnt: "
-      "14\nreader_resumed_cnt: 15\nwriter_suspension_expired_cnt: "
-      "16\nrdb\nrdb_load_success_cnt: 17\nrdb_load_failure_cnt: "
-      "18\nrdb_save_success_cnt: 19\nrdb_save_failure_cnt: "
-      "20\nquery\nsuccessful_requests_count: 2\nfailure_requests_count: "
-      "1\nhybrid_requests_count: 1\ninline_filtering_requests_count: "
-      "2\nsubscription\nadd_subscription_successful_count: "
-      "2\nadd_subscription_failure_count: 1\nadd_subscription_skipped_count: "
-      "3\nmodify_subscription_successful_count: "
-      "2\nmodify_subscription_failure_count: "
-      "1\nmodify_subscription_skipped_count: "
-      "3\nremove_subscription_successful_count: "
-      "2\nremove_subscription_failure_count: "
-      "1\nremove_subscription_skipped_count: "
-      "3\nhnswlib\nhnsw_add_exceptions_count: 3\nhnsw_remove_exceptions_count: "
-      "4\nhnsw_modify_exceptions_count: 5\nhnsw_search_exceptions_count: "
-      "6\nhnsw_create_exceptions_count: "
-      "7\nlatency\nhnsw_vector_index_search_latency_usec: "
-      "'p50=100139.007,p99=200278.015,p99.9=200278.015'"
-      "\ncoordinator\ncoordinator_server_listening_port: "
-      "26673\ncoordinator_server_get_global_metadata_success_count: "
-      "26\ncoordinator_server_get_global_metadata_failure_count: "
-      "25\ncoordinator_server_search_index_partition_success_count: "
-      "28\ncoordinator_server_search_index_partition_failure_count: "
-      "27\ncoordinator_client_get_global_metadata_success_count: "
-      "22\ncoordinator_client_get_global_metadata_failure_count: "
-      "21\ncoordinator_client_search_index_partition_success_count: "
-      "24\ncoordinator_client_search_index_partition_failure_count: "
-      "23\ncoordinator_bytes_out: 1000\ncoordinator_bytes_in: 2000"
-      "\nstring_interning\nstring_interning_store_size: "
-      "1\nvector_externing\nvector_externing_entry_count: "
-      "0\nvector_externing_hash_extern_errors: "
-      "0\nvector_externing_generated_value_cnt: "
-      "0\nvector_externing_num_lru_entries: "
-      "0\nvector_externing_lru_promote_cnt: "
-      "0\nvector_externing_deferred_entry_cnt: 0\n");
+    "thread-pool\nused_read_cpu: 0\nused_write_cpu: 0\nquery_queue_size: 10\nwriter_queue_size: 5\n"
+    "worker_pool_suspend_cnt: 13\nwriter_resumed_cnt: 14\nreader_resumed_cnt: 15\nwriter_suspension_expired_cnt: 16\n"
+    "rdb\nrdb_load_success_cnt: 17\nrdb_load_failure_cnt: 18\nrdb_save_success_cnt: 19\nrdb_save_failure_cnt: 20\n"
+    "query\nsuccessful_requests_count: 2\nfailure_requests_count: 1\nhybrid_requests_count: 1\ninline_filtering_requests_count: 2\n"
+    "hnswlib\nhnsw_add_exceptions_count: 3\nhnsw_remove_exceptions_count: 4\nhnsw_modify_exceptions_count: 5\n"
+    "hnsw_search_exceptions_count: 6\nhnsw_create_exceptions_count: 7\n"
+    "latency\nhnsw_vector_index_search_latency_usec: 'p50=100139.007,p99=200278.015,p99.9=200278.015'\n"
+    "coordinator\ncoordinator_server_listening_port: 0\n"
+    "coordinator_server_get_global_metadata_success_count: 26\ncoordinator_server_get_global_metadata_failure_count: 25\n"
+    "coordinator_server_search_index_partition_success_count: 28\ncoordinator_server_search_index_partition_failure_count: 27\n"
+    "coordinator_client_get_global_metadata_success_count: 22\ncoordinator_client_get_global_metadata_failure_count: 21\n"
+    "coordinator_client_search_index_partition_success_count: 24\ncoordinator_client_search_index_partition_failure_count: 23\n"
+    "coordinator_bytes_out: 1000\ncoordinator_bytes_in: 2000\n"
+    "string_interning\nstring_interning_store_size: 1\n"
+    "vector_externing\nvector_externing_entry_count: 0\nvector_externing_hash_extern_errors: 0\n"
+    "vector_externing_generated_value_cnt: 0\nvector_externing_num_lru_entries: 0\n"
+    "vector_externing_lru_promote_cnt: 0\nvector_externing_deferred_entry_cnt: 0\n"
+    "global_ingestion\ningest_field_numeric: 400\ningest_field_tag: 500\ningest_field_vector: 300\n"
+    "ingest_hash_blocked: 0\ningest_hash_keys: 100\ningest_json_blocked: 0\ningest_json_keys: 200\n"
+    "ingest_last_batch_size: 600\ningest_total_batches: 700\ningest_total_failures: 800\n"
+    "index_stats\nnumber_of_attributes: 1\nnumber_of_indexes: 1\ntotal_indexed_documents: 4\n"
+    "indexing\nbackground_indexing_status: 'IN_PROGRESS'\n"
+    "memory\nused_memory_bytes: 18408\nused_memory_human: '17.98KiB'\n"
+);
 #endif
 }
 

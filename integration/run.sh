@@ -97,6 +97,15 @@ function setup_python() {
     fi
 }
 
+function zap() {
+    echo "Zapping $1...";
+    pids=$(ps -ef|grep $1|grep -v grep |awk '{print $2;}');
+    for pid in $pids;
+    do
+        kill -9 $pid;
+    done
+}
+
 function install_test_framework() {
     local test_framework_url="https://github.com/valkey-io/valkey-test-framework"
     local test_framework_path="${WD}/valkey-test-framework"
@@ -156,6 +165,7 @@ export MODULE_PATH=${MODULE_PATH}
 export VALKEY_SERVER_PATH=${VALKEY_SERVER_PATH}
 export PYTHONPATH=${WD}/valkeytestframework:${WD}
 export JSON_MODULE_PATH=${JSON_MODULE_PATH}
+export SKIPLOGCLEAN=1
 
 FILTER_ARGS=""
 if [ ! -z "${TEST_PATTERN}" ]; then
@@ -164,5 +174,7 @@ if [ ! -z "${TEST_PATTERN}" ]; then
 else
     LOG_INFO "TEST_PATTERN is not set. Running all integration tests."
 fi
+
+zap valkey-server
 LOG_INFO "Running: ${PYTHON_PATH} -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/"
-${PYTHON_PATH} -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/
+${PYTHON_PATH} -m pytest ${FILTER_ARGS} --log-cli-level=INFO --capture=sys --cache-clear -v ${ROOT_DIR}/integration/

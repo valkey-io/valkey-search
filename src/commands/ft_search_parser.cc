@@ -23,19 +23,44 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
+#include "ft_create_parser.h"
 #include "src/commands/filter_parser.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/metrics.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
+
+constexpr absl::string_view kMaxKnnConfig{"max-vector-knn"};
+constexpr int kDefaultKnnLimit{128};
+constexpr int kMaxKnn{1000};
+
+/// Register the "--max-knn" flag. Controls the max KNN parameter for vector
+/// search.
+static auto max_knn =
+    vmsdk::config::NumberBuilder(kMaxKnnConfig,     // name
+                                 kDefaultKnnLimit,  // default size
+                                 1,                 // min size
+                                 kMaxKnn)           // max size
+        .WithValidationCallback(CHECK_RANGE(1, kMaxKnn, kMaxKnnConfig))
+        .Build();
+
+namespace options {
+vmsdk::config::Number &GetMaxKnn() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_knn);
+}
+
+}  // namespace options
+
 namespace {
 
 constexpr absl::string_view kParamsParam{"PARAMS"};
@@ -180,12 +205,19 @@ absl::Status Verify(query::VectorSearchParameters &parameters) {
   if (parameters.query.empty()) {
     return absl::InvalidArgumentError("missing vector parameter");
   }
-  if (parameters.ef.has_value() && parameters.ef <= 0) {
-    return absl::InvalidArgumentError("`EF` value must be positive");
+  if (parameters.ef.has_value()) {
+    auto max_ef_runtime_value = options::GetMaxEfRuntime().GetValue();
+    VMSDK_RETURN_IF_ERROR(
+        vmsdk::VerifyRange(parameters.ef.value(), 1, max_ef_runtime_value))
+        << "`EF_RUNTIME` must be a positive integer greater than 0 and cannot "
+           "exceed "
+        << max_ef_runtime_value << ".";
   }
-  if (parameters.k <= 0) {
-    return absl::InvalidArgumentError("k must be positive");
-  }
+  auto max_knn_value = options::GetMaxKnn().GetValue();
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(parameters.k, 1, max_knn_value))
+      << "KNN parameter must be a positive integer greater than 0 and cannot "
+         "exceed "
+      << max_knn_value << ".";
   if (parameters.timeout_ms > kMaxTimeoutMs) {
     return absl::InvalidArgumentError(
         absl::StrCat(kTimeoutParam,
@@ -372,6 +404,13 @@ ParseVectorSearchParameters(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                                                parameters->index_schema_name));
   VMSDK_RETURN_IF_ERROR(
       vmsdk::ParseParamValue(itr, parameters->parse_vars.query_string));
+  // Validate the query string's length.
+  if (parameters->parse_vars.query_string.length() >
+      options::GetQueryStringBytes()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Query string is too long, max length is ",
+                     options::GetQueryStringBytes(), " bytes."));
+  }
   VMSDK_RETURN_IF_ERROR(SearchParser.Parse(*parameters, itr));
   if (itr.DistanceEnd() > 0) {
     return absl::InvalidArgumentError(

@@ -31,10 +31,10 @@
 #include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
-#include "src/schema_manager.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "valkey_search_options.h"
+#include "src/schema_manager.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -186,54 +186,37 @@ grpc::ServerUnaryReactor* Service::InfoIndexPartition(
   GRPCSuspensionGuard guard(GRPCSuspender::Instance());
   auto latency_sample = SAMPLE_EVERY_N(100);
   grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
-  
-  // Copy the index name to avoid potential lifetime issues
-  std::string index_name = request->index_name();
-  
-  auto status_or_schema = SchemaManager::Instance().GetIndexSchema(0, index_name);
-  if (!status_or_schema.ok()) {
-    response->set_exists(false);
-    response->set_index_name(index_name);
-    response->set_error(status_or_schema.status().ToString());
-    reactor->Finish(grpc::Status::OK);
-    return reactor;
-  }
 
-  // Keep the shared_ptr alive for the entire operation
-  auto schema = std::move(status_or_schema.value());
-  if (!schema) {
-    response->set_exists(false);
-    response->set_index_name(index_name);
-    response->set_error("Schema is null");
-    reactor->Finish(grpc::Status::OK);
-    return reactor;
-  }
+  vmsdk::RunByMain([reactor, response, idx = request->index_name(),
+                    latency_sample = std::move(latency_sample)]() mutable {
+    auto status_or_schema =
+        SchemaManager::Instance().GetIndexSchema(/*db=*/0, idx);
 
-  // Acquire read guard and ensure it stays alive
-  auto read_guard = schema->AcquireReadGuard();
+    if (!status_or_schema.ok()) {
+      response->set_exists(false);
+      response->set_index_name(idx);
+      response->set_error(status_or_schema.status().ToString());
+      reactor->Finish(grpc::Status::OK);
+      return;
+    }
 
-  // Collect all data while holding the lock to ensure consistency
-  try {
+    auto schema = std::move(status_or_schema.value());
     response->set_exists(true);
-    response->set_index_name(index_name);
+    response->set_index_name(idx);
     response->set_num_docs(schema->GetNumDocs());
     response->set_num_records(schema->CountRecords());
     response->set_hash_indexing_failures(schema->GetHashIndexingFailures());
-    response->set_backfill_scanned_count(schema->GetBackfillScannedCount());
+    response->set_backfill_scanned_count(schema->GetBackfillScannedKeyCount());
     response->set_backfill_db_size(schema->GetBackfillDbSize());
     response->set_backfill_inqueue_tasks(schema->GetBackfillInqueueTasks());
-    response->set_backfill_complete_percent(schema->GetBackfillPercentNoMain());
-    response->set_backfill_in_progress(schema->IsBackfillInProgressNoMain());
+    response->set_backfill_complete_percent(schema->GetBackfillPercent());
+    response->set_backfill_in_progress(schema->IsBackfillInProgress());
     response->set_mutation_queue_size(schema->GetMutationQueueSize());
     response->set_recent_mutations_queue_delay(schema->GetRecentMutationsQueueDelay());
-    response->set_state(schema->GetStateForInfoNoMain());
-  } catch (const std::exception& e) {
-    response->set_exists(false);
-    response->set_index_name(index_name);
-    response->set_error(std::string("Error collecting schema info: ") + e.what());
-  }
-
-  reactor->Finish(grpc::Status::OK);
+    response->set_state(std::string(schema->GetStateForInfo()));
+    
+    reactor->Finish(grpc::Status::OK);
+  });
   return reactor;
 }
 
@@ -251,7 +234,8 @@ std::unique_ptr<Server> ServerImpl::Create(
   std::shared_ptr<grpc::ServerCredentials> creds =
       grpc::InsecureServerCredentials();
   auto coordinator_service = std::make_unique<Service>(
-      vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx), reader_thread_pool);
+      vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx),
+      reader_thread_pool);
   grpc::ServerBuilder builder;
   builder.AddListeningPort(server_address, creds);
   builder.RegisterService(coordinator_service.get());

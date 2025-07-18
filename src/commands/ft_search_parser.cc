@@ -376,7 +376,6 @@ absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
     VMSDK_RETURN_IF_ERROR(ParseKNN(parameters, vector_filter)).SetPrepend()
       << "Error parsing vector similarity parameters: `" << vector_filter
       << "`. ";
-<<<<<<< HEAD
       // Validate the index exists and is a vector index.
     VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
                                           parameters.attribute_alias));
@@ -392,28 +391,8 @@ absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
                                 parameters.attribute_alias));
     } else {
       parameters.score_as =
-          vmsdk::MakeUniqueRedisString(parameters.parse_vars.score_as_string);
+          vmsdk::MakeUniqueValkeyString(parameters.parse_vars.score_as_string);
     }
-=======
-
-  // Validate the index exists and is a vector index.
-  VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
-                                         parameters.attribute_alias));
-  if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
-      index->GetIndexerType() != indexes::IndexerType::kFlat) {
-    return absl::InvalidArgumentError(absl::StrCat("Index field `",
-                                                   parameters.attribute_alias,
-                                                   "` is not a Vector index "));
-  }
-
-  if (parameters.parse_vars.score_as_string.empty()) {
-    VMSDK_ASSIGN_OR_RETURN(parameters.score_as,
-                           parameters.index_schema->DefaultReplyScoreAs(
-                               parameters.attribute_alias));
-  } else {
-    parameters.score_as =
-        vmsdk::MakeUniqueValkeyString(parameters.parse_vars.score_as_string);
->>>>>>> main
   }
   return absl::OkStatus();
 }

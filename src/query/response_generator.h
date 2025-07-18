@@ -43,7 +43,7 @@ void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
                               const std::string &identifier);
 
 void ProcessNonVectorNeighborsForReply(
-    RedisModuleCtx *ctx, const AttributeDataType &attribute_data_type,
+    ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     std::deque<indexes::Neighbor> &neighbors,
     const query::VectorSearchParameters &parameters);
 

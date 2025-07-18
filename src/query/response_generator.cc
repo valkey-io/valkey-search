@@ -204,7 +204,7 @@ absl::StatusOr<RecordsMap> GetContent(
 
 // Adds all local content for neighbors to the list of neighbors.
 // This function is meant to be used for non-vector queries.
-void ProcessNonVectorNeighborsForReply(RedisModuleCtx *ctx,
+void ProcessNonVectorNeighborsForReply(ValkeyModuleCtx *ctx,
                                       const AttributeDataType &attribute_data_type,
                                       std::deque<indexes::Neighbor> &neighbors,
                                       const query::VectorSearchParameters &parameters) {

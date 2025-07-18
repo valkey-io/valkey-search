@@ -484,7 +484,7 @@ struct GetTargetsTestParam {
 class GetTargetsTest : public ValkeySearchTestWithParam<GetTargetsTestParam> {};
 
 std::string GetNodeId(int i) {
-  return {VALKEYMODULE_NODE_ID_LEN, static_cast<char>('a' + i)};
+  return std::string(VALKEYMODULE_NODE_ID_LEN, 'a' + i);
 }
 
 INSTANTIATE_TEST_SUITE_P(

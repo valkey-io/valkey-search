@@ -367,12 +367,15 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
   }
   if (added) {
     // Track key modifications by data type
-    if (attribute_data_type_->ToProto() ==
-        data_model::ATTRIBUTE_DATA_TYPE_HASH) {
-      Metrics::GetStats().ingest_hash_keys++;
-    } else if (attribute_data_type_->ToProto() ==
-               data_model::ATTRIBUTE_DATA_TYPE_JSON) {
-      Metrics::GetStats().ingest_json_keys++;
+    switch (attribute_data_type_->ToProto()) {
+      case data_model::ATTRIBUTE_DATA_TYPE_HASH:
+        Metrics::GetStats().ingest_hash_keys++;
+        break;
+      case data_model::ATTRIBUTE_DATA_TYPE_JSON:
+        Metrics::GetStats().ingest_json_keys++;
+        break;
+      default:
+        CHECK(false);
     }
     ProcessMutation(ctx, mutated_attributes, interned_key, from_backfill);
   }

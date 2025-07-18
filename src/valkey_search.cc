@@ -190,6 +190,48 @@ static vmsdk::info_field::Integer ingest_total_failures(
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long { 
       return Metrics::GetStats().ingest_total_failures; }));
 
+static vmsdk::info_field::Integer time_slice_read_periods(
+    "time_slice_mutex", "time_slice_read_periods",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return vmsdk::GetGlobalTimeSlicedMRMWStats().read_periods;
+    }));
+
+static vmsdk::info_field::Integer time_slice_read_time(
+    "time_slice_mutex", "time_slice_read_time",
+    vmsdk::info_field::IntegerBuilder().App().Units(vmsdk::info_field::Units::kMicroSeconds).Computed([]() -> long long {
+      return vmsdk::GetGlobalTimeSlicedMRMWStats().read_time_microseconds;
+    }));
+
+static vmsdk::info_field::Integer time_slice_write_periods(
+    "time_slice_mutex", "time_slice_write_periods",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return vmsdk::GetGlobalTimeSlicedMRMWStats().write_periods;
+    }));
+
+static vmsdk::info_field::Integer time_slice_write_time(
+    "time_slice_mutex", "time_slice_write_time",
+    vmsdk::info_field::IntegerBuilder().App().Units(vmsdk::info_field::Units::kMicroSeconds).Computed([]() -> long long {
+      return vmsdk::GetGlobalTimeSlicedMRMWStats().write_time_microseconds;
+    }));   
+
+static vmsdk::info_field::Integer time_slice_queries(
+    "time_slice_mutex", "time_slice_queries",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().time_slice_queries;
+    }));
+
+static vmsdk::info_field::Integer time_slice_upserts(
+    "time_slice_mutex", "time_slice_upserts",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().time_slice_upserts;
+    }));
+
+static vmsdk::info_field::Integer time_slice_deletes(
+    "time_slice_mutex", "time_slice_deletes",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().time_slice_deletes;
+    }));
+
 void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
   vmsdk::info_field::DoSection(ctx, "thread-pool", for_crash_report);
   ValkeyModule_InfoAddFieldLongLong(ctx, "query_queue_size",

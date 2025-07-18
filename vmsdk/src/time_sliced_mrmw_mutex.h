@@ -18,6 +18,16 @@
 
 namespace vmsdk {
 
+struct TimeSlicedMRMWStats {
+  std::atomic<uint64_t> read_periods{0};
+  std::atomic<uint64_t> read_time_microseconds{0};  // cumulative
+  std::atomic<uint64_t> write_periods{0};
+  std::atomic<uint64_t> write_time_microseconds{0}; // cumulative
+};
+
+// Global statistics for all TimeSlicedMRMWMutex instances
+TimeSlicedMRMWStats& GetGlobalTimeSlicedMRMWStats();
+
 struct MRMWMutexOptions {
   absl::Duration read_quota_duration;
   absl::Duration read_switch_grace_period;
@@ -124,6 +134,8 @@ class ABSL_SCOPED_LOCKABLE ReaderMutexLock {
   explicit ReaderMutexLock(TimeSlicedMRMWMutex* mutex, bool may_prolong = false)
       ABSL_SHARED_LOCK_FUNCTION(mutex)
       : mutex_(mutex), may_prolong_(may_prolong) {
+    ++GetGlobalTimeSlicedMRMWStats().read_periods;
+    timer_.Reset();
     mutex->ReaderLock(may_prolong_);
   }
 
@@ -132,11 +144,16 @@ class ABSL_SCOPED_LOCKABLE ReaderMutexLock {
   ReaderMutexLock& operator=(const ReaderMutexLock&) = delete;
   ReaderMutexLock& operator=(ReaderMutexLock&&) = delete;
   void SetMayProlong();
-  ~ReaderMutexLock() ABSL_UNLOCK_FUNCTION() { mutex_->Unlock(may_prolong_); }
+  ~ReaderMutexLock() ABSL_UNLOCK_FUNCTION() { 
+    mutex_->Unlock(may_prolong_);
+    GetGlobalTimeSlicedMRMWStats().read_time_microseconds += 
+        absl::ToInt64Microseconds(timer_.Duration());
+  }
 
  private:
   TimeSlicedMRMWMutex* const mutex_;
   bool may_prolong_;
+  vmsdk::StopWatch timer_;
 };
 
 class ABSL_SCOPED_LOCKABLE WriterMutexLock {
@@ -144,6 +161,8 @@ class ABSL_SCOPED_LOCKABLE WriterMutexLock {
   explicit WriterMutexLock(TimeSlicedMRMWMutex* mutex, bool may_prolong = false)
       ABSL_SHARED_LOCK_FUNCTION(mutex)
       : mutex_(mutex), may_prolong_(may_prolong) {
+    ++GetGlobalTimeSlicedMRMWStats().write_periods;
+    timer_.Reset();
     mutex->WriterLock(may_prolong_);
   }
 
@@ -152,11 +171,16 @@ class ABSL_SCOPED_LOCKABLE WriterMutexLock {
   WriterMutexLock& operator=(const WriterMutexLock&) = delete;
   WriterMutexLock& operator=(WriterMutexLock&&) = delete;
   void SetMayProlong();
-  ~WriterMutexLock() ABSL_UNLOCK_FUNCTION() { mutex_->Unlock(may_prolong_); }
+  ~WriterMutexLock() ABSL_UNLOCK_FUNCTION() { 
+    mutex_->Unlock(may_prolong_);
+    GetGlobalTimeSlicedMRMWStats().write_time_microseconds += 
+        absl::ToInt64Microseconds(timer_.Duration());
+  }
 
  private:
   TimeSlicedMRMWMutex* const mutex_;
   bool may_prolong_;
+  vmsdk::StopWatch timer_;
 };
 
 }  // namespace vmsdk

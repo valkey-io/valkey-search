@@ -76,6 +76,9 @@ struct VectorSearchParameters {
       assert(params.empty());
     }
   } parse_vars;
+  bool IsNonVectorQuery() const {
+    return attribute_alias.empty();
+  }
 };
 
 // Callback to be called when the search is done.

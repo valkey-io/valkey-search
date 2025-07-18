@@ -171,7 +171,7 @@ void SendReply(ValkeyModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
   ++Metrics::GetStats().query_successful_requests_cnt;
 
   // Support non-vector queries: no attribute_alias and k == 0
-  if (parameters.attribute_alias.empty()) {
+  if (parameters.IsNonVectorQuery()) {
     query::ProcessNonVectorNeighborsForReply(ctx, parameters.index_schema->GetAttributeDataType(),
                                   neighbors, parameters);
     SerializeNonVectorNeighbors(ctx, neighbors, parameters);

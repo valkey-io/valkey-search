@@ -203,9 +203,9 @@ absl::Status ParseKNN(query::VectorSearchParameters &parameters,
 
 absl::Status Verify(query::VectorSearchParameters &parameters) {
   // Only verify the vector KNN parameters for vector based queries.
-  if (!parameters.attribute_alias.empty()) {
+  if (!parameters.IsNonVectorQuery()) {
     if (parameters.query.empty()) {
-      return absl::InvalidArgumentError("missing vector parameter");
+      return absl::InvalidArgumentError("Invalid Query Syntax");
     }
     if (parameters.ef.has_value()) {
       auto max_ef_runtime_value = options::GetMaxEfRuntime().GetValue();

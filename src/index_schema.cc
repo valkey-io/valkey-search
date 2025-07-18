@@ -234,7 +234,7 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexSchema::GetIndex(
   auto itr = attributes_.find(std::string{attribute_alias});
   if (ABSL_PREDICT_FALSE(itr == attributes_.end())) {
     return absl::NotFoundError(
-        absl::StrCat("Index field `", attribute_alias, "` not exists"));
+        absl::StrCat("Index field `", attribute_alias, "` does not exists"));
   }
   return itr->second.GetIndex();
 }
@@ -244,7 +244,7 @@ absl::StatusOr<std::string> IndexSchema::GetIdentifier(
   auto itr = attributes_.find(std::string{attribute_alias});
   if (itr == attributes_.end()) {
     return absl::NotFoundError(
-        absl::StrCat("Index field `", attribute_alias, "` not exists"));
+        absl::StrCat("Index field `", attribute_alias, "` does not exists"));
   }
   return itr->second.GetIdentifier();
 }
@@ -254,7 +254,7 @@ absl::StatusOr<vmsdk::UniqueValkeyString> IndexSchema::DefaultReplyScoreAs(
   auto itr = attributes_.find(std::string{attribute_alias});
   if (ABSL_PREDICT_FALSE(itr == attributes_.end())) {
     return absl::NotFoundError(
-        absl::StrCat("Index field `", attribute_alias, "` not exists"));
+        absl::StrCat("Index field `", attribute_alias, "` does not exists"));
   }
   return itr->second.DefaultReplyScoreAs();
 }

@@ -27,6 +27,7 @@ class Metrics {
   ~Metrics() = default;
 
   struct Stats {
+    uint64_t reclaimable_memory{0};
     uint64_t query_successful_requests_cnt{0};
     uint64_t query_failed_requests_cnt{0};
     uint64_t query_result_record_dropped_cnt{0};

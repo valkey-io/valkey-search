@@ -43,7 +43,8 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             "search_number_of_attributes",
             "search_number_of_indexes",
             "search_total_indexed_documents",
-            "search_used_memory_bytes"
+            "search_used_memory_bytes",
+            "search_index_reclaimable_memory"
         ]
 
         string_fields = [

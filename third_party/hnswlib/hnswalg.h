@@ -20,8 +20,8 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "hnswlib.h"
-#include "src/metrics.h"
 #include "iostream.h"
+#include "src/metrics.h"
 #include "third_party/hnswlib/index.pb.h"
 #include "visited_list_pool.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -186,6 +186,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       }
       linkLists_->clear();
     }
+    valkey_search::Metrics::GetStats().reclaimable_memory -=
+        num_deleted_ * vector_size_;
     cur_element_count_ = 0;
     visited_list_pool_.reset(nullptr);
   }

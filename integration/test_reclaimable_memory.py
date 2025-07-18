@@ -21,6 +21,7 @@ class TestReclaimableMemory(ValkeySearchTestCaseBase):
         2. Insert vectors
         3. Delete some vectors
         4. Check if reclaimable_memory increases
+        5. Drop the index and mark sure reclaimable memory is 0.
         """
 
         client: Valkey = self.server.get_new_client()
@@ -86,6 +87,14 @@ class TestReclaimableMemory(ValkeySearchTestCaseBase):
         # We deleted 3 vectors, so reclaimable memory should increase by 3 * 12 = 36 bytes
         expected_reclaimable = after_insert_reclaimable + (3 * 3 * 4)  # 3 vectors * 3 dimensions * 4 bytes per float32
         assert after_delete_reclaimable == expected_reclaimable
+        
+        # Drop the index
+        client.execute_command("FT.DROPINDEX", index_name)
+        
+        # Check that reclaimable memory is 0 after dropping the index
+        info_data = client.info("SEARCH")
+        after_drop_reclaimable = int(info_data["search_index_reclaimable_memory"])
+        assert after_drop_reclaimable == 0
 
 
     def test_reclaimable_memory_multiple_indexes(self):

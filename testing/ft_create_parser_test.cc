@@ -551,12 +551,34 @@ INSTANTIATE_TEST_SUITE_P(
                           }}},
          },
          {
-             .test_name = "missing_vector_index",
-             .success = false,
+             .test_name = "happy_path_numeric_index_on_hash",
+             .success = true,
              .command_str = "idx1 on HASH SChema hash_field1 as "
                             "hash_field11 numeric ",
-             .expected_error_message =
-                 "At least one attribute must be indexed as a vector",
+             .expected = {.index_schema_name = "idx1",
+                        .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                        .attributes = {{
+                            .identifier = "hash_field1",
+                            .attribute_alias = "hash_field11",
+                            .indexer_type = indexes::IndexerType::kNumeric,
+                        }}},
+         },
+        {
+             .test_name = "happy_path_tag_index_on_hash",
+             .success = true,
+             .command_str = "idx1 on HASH SCHEMA hash_field1 as "
+                            "hash_field11 tag ",
+            .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                        .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                        .attributes = {{
+                            .identifier = "hash_field1",
+                            .attribute_alias = "hash_field11",
+                            .indexer_type = indexes::IndexerType::kTag,
+                        }}},
          },
          {
              .test_name = "invalid_separator",

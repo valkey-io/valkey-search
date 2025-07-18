@@ -11,7 +11,7 @@ set(SRCS_SERVER ${CMAKE_CURRENT_LIST_DIR}/server.cc
 
 valkey_search_add_static_library(server "${SRCS_SERVER}")
 target_include_directories(server PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_include_directories(server PRIVATE ${CMAKE_BINARY_DIR}/src/coordinator)
+target_include_directories(server PRIVATE ${CMAKE_BINARY_DIR})
 target_link_libraries(server PUBLIC coordinator_cc_proto)
 target_link_libraries(server PUBLIC grpc_suspender)
 target_link_libraries(server PUBLIC metadata_manager)

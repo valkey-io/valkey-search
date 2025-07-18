@@ -51,6 +51,20 @@ using FreeFunc = void (*)(void *);
 class IndexSchema : public KeyspaceEventSubscription,
                     public std::enable_shared_from_this<IndexSchema> {
  public:
+  struct InfoIndexPartitionData {
+    uint64_t num_docs;
+    uint64_t num_records;
+    uint64_t hash_indexing_failures;
+    uint64_t backfill_scanned_count;
+    uint64_t backfill_db_size;
+    uint64_t backfill_inqueue_tasks;
+    float backfill_complete_percent;
+    bool backfill_in_progress;
+    uint64_t mutation_queue_size;
+    uint64_t recent_mutations_queue_delay;
+    std::string state;
+  };
+
   struct Stats {
     template <typename T>
     struct ResultCnt {
@@ -66,6 +80,9 @@ class IndexSchema : public KeyspaceEventSubscription,
     uint64_t mutation_queue_size_ ABSL_GUARDED_BY(mutex_){0};
     absl::Duration mutations_queue_delay_ ABSL_GUARDED_BY(mutex_);
     mutable absl::Mutex mutex_;
+
+    // Single interface to get all stats data
+    InfoIndexPartitionData GetStats() const;
   };
   std::shared_ptr<IndexSchema> GetSharedPtr() { return shared_from_this(); }
   std::weak_ptr<IndexSchema> GetWeakPtr() { return weak_from_this(); }
@@ -150,40 +167,9 @@ class IndexSchema : public KeyspaceEventSubscription,
   void ProcessMultiQueue();
   void SubscribeToVectorExternalizer(absl::string_view attribute_identifier,
                                      indexes::VectorBase *vector_index);
-  // number of documents (what FT.INFO num_docs returns)
-  uint64_t GetNumDocs() const {
-    return stats_.document_cnt;
-  }
-
-  // how many skip‐on‐add (hash_indexing_failures)
-  uint64_t GetHashIndexingFailures() const {
-    return stats_.subscription_add.skipped_cnt;
-  }
-
-  // current size of the mutation queue
-  uint64_t GetMutationQueueSize() const {
-    absl::MutexLock lock(&stats_.mutex_);
-    return stats_.mutation_queue_size_;
-  }
-
-  // backfill scanned key count
-  uint64_t GetBackfillScannedKeyCount() const {
-    const auto &backfill_job = backfill_job_.Get();
-    return backfill_job.has_value() ? backfill_job->scanned_key_count : 0;
-  }
-
-  // backfill database size
-  uint64_t GetBackfillDbSize() const {
-    const auto &backfill_job = backfill_job_.Get();
-    return backfill_job.has_value() ? backfill_job->db_size : 0;
-  }
-
-  // backfill inqueue tasks count
-  uint64_t GetBackfillInqueueTasks() const {
-    return stats_.backfill_inqueue_tasks;
-  }
-
-  uint64_t GetRecentMutationsQueueDelay() const {return stats_.mutation_queue_size_ > 0 ? stats_.mutations_queue_delay_ / absl::Seconds(1): 0;}
+  uint64_t GetBackfillScannedKeyCount() const;
+  uint64_t GetBackfillDbSize() const;
+  InfoIndexPartitionData GetInfoIndexPartitionData() const;
 
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,

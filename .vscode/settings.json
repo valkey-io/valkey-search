@@ -17,5 +17,8 @@
         "--query-driver=**"
     ],
     "clangd.inactiveRegions.useBackgroundHighlight": true,
-    "clangd.enableCodeCompletion": true
+    "clangd.enableCodeCompletion": true,
+    "files.associations": {
+        "optional": "cpp"
+    }
 }

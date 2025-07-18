@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/commands/filter_parser.h"
@@ -48,9 +26,64 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/status/status_macros.h"
 
 namespace valkey_search {
+
+namespace options {
+
+/// Register the "--query-string-depth" flag. Controls the depth of the query
+/// string parsing from the FT.SEARCH cmd.
+constexpr absl::string_view kQueryStringDepthConfig{"query-string-depth"};
+constexpr uint32_t kDefaultQueryStringDepth{1000};
+constexpr uint32_t kMinimumQueryStringDepth{1};
+static auto query_string_depth =
+    config::NumberBuilder(kQueryStringDepthConfig,   // name
+                          kDefaultQueryStringDepth,  // default size
+                          kMinimumQueryStringDepth,  // min size
+                          UINT_MAX)                  // max size
+        .WithValidationCallback(CHECK_RANGE(kMinimumQueryStringDepth, UINT_MAX,
+                                            kQueryStringDepthConfig))
+        .Build();
+
+/// Register the "query-string-terms-count" flag. Controls the size of the
+/// query string parsing from the FT.SEARCH cmd. The number of nodes in the
+/// predicate tree.
+constexpr absl::string_view kQueryStringTermsCountConfig{
+    "query-string-terms-count"};
+constexpr uint32_t kDefaultQueryTermsCount{16};
+constexpr uint32_t kMaxQueryTermsCount{32};
+static auto query_terms_count =
+    config::NumberBuilder(kQueryStringTermsCountConfig,  // name
+                          kDefaultQueryTermsCount,       // default size
+                          1,                             // min size
+                          kMaxQueryTermsCount)           // max size
+        .WithValidationCallback(
+            CHECK_RANGE(1, kMaxQueryTermsCount, kQueryStringTermsCountConfig))
+        .Build();
+
+vmsdk::config::Number& GetQueryStringDepth() {
+  return dynamic_cast<vmsdk::config::Number&>(*query_string_depth);
+}
+
+vmsdk::config::Number& GetQueryStringTermsCount() {
+  return dynamic_cast<vmsdk::config::Number&>(*query_terms_count);
+}
+
+}  // namespace options
+
+namespace {
+#if defined(__clang__)
+//  std::numeric_limits<..>::infinity() can not be used with clang when
+// -ffast-math is enabled
+constexpr double kPositiveInf = std::numeric_limits<double>::max();
+constexpr double kNegativeInf = std::numeric_limits<double>::lowest();
+#else
+constexpr double kPositiveInf = std::numeric_limits<double>::infinity();
+constexpr double kNegativeInf = -std::numeric_limits<double>::infinity();
+#endif
+}  // namespace
 
 FilterParser::FilterParser(const IndexSchema& index_schema,
                            absl::string_view expression)
@@ -108,9 +141,9 @@ absl::StatusOr<std::string> FilterParser::ParseFieldName() {
 absl::StatusOr<double> FilterParser::ParseNumber() {
   SkipWhitespace();
   if (MatchInsensitive("-inf")) {
-    return std::numeric_limits<double>::infinity() * -1;
+    return kNegativeInf;
   } else if (MatchInsensitive("+inf") || MatchInsensitive("inf")) {
-    return std::numeric_limits<double>::infinity();
+    return kPositiveInf;
   }
   std::string number_str;
   double value;
@@ -262,7 +295,7 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   }
   filter_identifiers_.clear();
   pos_ = 0;
-  VMSDK_ASSIGN_OR_RETURN(auto predicate, ParseExpression());
+  VMSDK_ASSIGN_OR_RETURN(auto predicate, ParseExpression(0));
   if (!IsEnd()) {
     return UnexpectedChar(expression_, pos_);
   }
@@ -309,8 +342,11 @@ std::unique_ptr<query::Predicate> WrapPredicate(
 // than 100 is expressed as [(100 inf].
 // 10. Numeric filters are inclusive. Exclusive min or max are expressed with (
 // prepended to the number, for example, [(100 (200].
-absl::StatusOr<std::unique_ptr<query::Predicate>>
-FilterParser::ParseExpression() {
+absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseExpression(
+    uint32_t level) {
+  if (level++ >= options::GetQueryStringDepth().GetValue()) {
+    return absl::InvalidArgumentError("Query string is too complex");
+  }
   std::unique_ptr<query::Predicate> prev_predicate;
 
   SkipWhitespace();
@@ -322,11 +358,14 @@ FilterParser::ParseExpression() {
     bool negate = Match('-');
 
     if (Match('(')) {
-      VMSDK_ASSIGN_OR_RETURN(predicate, ParseExpression());
+      VMSDK_ASSIGN_OR_RETURN(predicate, ParseExpression(level));
       if (!Match(')')) {
         return absl::InvalidArgumentError(
             absl::StrCat("Expected ')' after expression got '",
                          expression_.substr(pos_, 1), "'. Position: ", pos_));
+      }
+      if (prev_predicate) {
+        node_count_++;  // Count the ComposedPredicate Node
       }
       prev_predicate =
           WrapPredicate(std::move(prev_predicate), std::move(predicate), negate,
@@ -335,26 +374,39 @@ FilterParser::ParseExpression() {
       if (negate) {
         return UnexpectedChar(expression_, pos_ - 1);
       }
-      VMSDK_ASSIGN_OR_RETURN(predicate, ParseExpression());
+      VMSDK_ASSIGN_OR_RETURN(predicate, ParseExpression(level));
+      if (prev_predicate) {
+        node_count_++;  // Count the ComposedPredicate Node
+      }
       prev_predicate =
           WrapPredicate(std::move(prev_predicate), std::move(predicate), negate,
                         query::LogicalOperator::kOr);
     } else {
       VMSDK_ASSIGN_OR_RETURN(auto field_name, ParseFieldName());
       if (Match('[')) {
+        node_count_++;  // Count the NumericPredicate Node
         VMSDK_ASSIGN_OR_RETURN(predicate, ParseNumericPredicate(field_name));
       } else if (Match('{')) {
+        node_count_++;  // Count the TagPredicate Node
         VMSDK_ASSIGN_OR_RETURN(predicate, ParseTagPredicate(field_name));
       } else {
         return absl::InvalidArgumentError(
             absl::StrCat("Expected '[', '{', got '",
                          expression_.substr(pos_, 1), "'. Position: ", pos_));
       }
+      if (prev_predicate) {
+        node_count_++;  // Count the ComposedPredicate Node
+      }
       prev_predicate =
           WrapPredicate(std::move(prev_predicate), std::move(predicate), negate,
                         query::LogicalOperator::kAnd);
     }
     SkipWhitespace();
+    auto max_node_count = options::GetQueryStringTermsCount().GetValue();
+    VMSDK_RETURN_IF_ERROR(
+        vmsdk::VerifyRange(node_count_, std::nullopt, max_node_count))
+        << "Query string is too complex: max number of terms can't exceed "
+        << max_node_count;
   }
   return prev_predicate;
 }

@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/query/response_generator.h"
@@ -44,12 +22,58 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/vector_base.h"
+#include "src/metrics.h"
 #include "src/query/predicate.h"
 #include "src/query/search.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+
+namespace valkey_search::options {
+
+constexpr absl::string_view kMaxSearchResultRecordSizeConfig{
+    "max-search-result-record-size"};
+constexpr int kMaxSearchResultRecordSize{10 * 1024 * 1024};  // 10MB
+constexpr int kMinSearchResultRecordSize{100};
+constexpr absl::string_view kMaxSearchResultFieldsCountConfig{
+    "max-search-result-record-size"};
+constexpr int kMaxSearchResultFieldsCount{1000};
+
+/// Register the "--max-search-result-record-size" flag. Controls the max
+/// content size for a record in the search response
+static auto max_search_result_record_size =
+    vmsdk::config::NumberBuilder(
+        kMaxSearchResultRecordSizeConfig,  // name
+        kMaxSearchResultRecordSize / 2,    // default size
+        kMinSearchResultRecordSize,        // min size
+        kMaxSearchResultRecordSize)        // max size
+        .WithValidationCallback(CHECK_RANGE(kMinSearchResultRecordSize,
+                                            kMaxSearchResultRecordSize,
+                                            kMaxSearchResultRecordSizeConfig))
+        .Build();
+
+/// Register the "--max-search-result-fields-count" flag. Controls the max
+/// number of fields in the content of the search response
+static auto max_search_result_fields_count =
+    vmsdk::config::NumberBuilder(
+        kMaxSearchResultFieldsCountConfig,  // name
+        kMaxSearchResultFieldsCount / 2,    // default size
+        1,                                  // min size
+        kMaxSearchResultFieldsCount)        // max size
+        .WithValidationCallback(CHECK_RANGE(1, kMaxSearchResultFieldsCount,
+                                            kMaxSearchResultFieldsCountConfig))
+        .Build();
+
+vmsdk::config::Number &GetMaxSearchResultRecordSize() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_search_result_record_size);
+}
+vmsdk::config::Number &GetMaxSearchResultFieldsCount() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_search_result_fields_count);
+}
+
+}  // namespace valkey_search::options
 
 namespace valkey_search::query {
 
@@ -99,7 +123,7 @@ bool VerifyFilter(const query::Predicate *predicate,
 }
 
 absl::StatusOr<RecordsMap> GetContentNoReturnJson(
-    RedisModuleCtx *ctx, const AttributeDataType &attribute_data_type,
+    ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::VectorSearchParameters &parameters, absl::string_view key,
     const std::string &vector_identifier) {
   absl::flat_hash_set<absl::string_view> identifiers;
@@ -119,8 +143,8 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     return absl::NotFoundError("Verify filter failed");
   }
   RecordsMap return_content;
-  static const vmsdk::UniqueRedisString kJsonRootElementQueryPtr =
-      vmsdk::MakeUniqueRedisString(kJsonRootElementQuery);
+  static const vmsdk::UniqueValkeyString kJsonRootElementQueryPtr =
+      vmsdk::MakeUniqueValkeyString(kJsonRootElementQuery);
   return_content.emplace(
       kJsonRootElementQuery,
       RecordsMapValue(
@@ -130,7 +154,7 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
 }
 
 absl::StatusOr<RecordsMap> GetContent(
-    RedisModuleCtx *ctx, const AttributeDataType &attribute_data_type,
+    ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::VectorSearchParameters &parameters, absl::string_view key,
     const std::string &vector_identifier) {
   if (attribute_data_type.ToProto() ==
@@ -173,7 +197,7 @@ absl::StatusOr<RecordsMap> GetContent(
         vmsdk::ToStringView(return_attribute.identifier.get()),
         RecordsMapValue(
             return_attribute.identifier.get(),
-            vmsdk::RetainUniqueRedisString(itr->second.value.get())));
+            vmsdk::RetainUniqueValkeyString(itr->second.value.get())));
   }
   return return_content;
 }
@@ -191,11 +215,15 @@ void ProcessNonVectorNeighborsForReply(RedisModuleCtx *ctx,
 //
 // Any neighbors already contained in the attribute content map will be skipped.
 // Any data not found locally will be skipped.
-void ProcessNeighborsForReply(RedisModuleCtx *ctx,
+void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
                               const AttributeDataType &attribute_data_type,
                               std::deque<indexes::Neighbor> &neighbors,
                               const query::VectorSearchParameters &parameters,
                               const std::string &identifier) {
+  const auto max_content_size =
+      options::GetMaxSearchResultRecordSize().GetValue();
+  const auto max_content_fields =
+      options::GetMaxSearchResultFieldsCount().GetValue();
   for (auto &neighbor : neighbors) {
     // neighbors which were added from remote nodes already have attribute
     // content
@@ -207,7 +235,37 @@ void ProcessNeighborsForReply(RedisModuleCtx *ctx,
     if (!content.ok()) {
       continue;
     }
-    neighbor.attribute_contents = std::move(content.value());
+
+    // Check content size before assigning
+
+    size_t total_size = 0;
+    bool size_exceeded = false;
+    if (content.value().size() > max_content_fields) {
+      ++Metrics::GetStats().query_result_record_dropped_cnt;
+      VMSDK_LOG(WARNING, ctx)
+          << "Content field number exceeds configured limit of "
+          << max_content_fields
+          << " for neighbor with ID: " << (*neighbor.external_id).Str();
+      continue;
+    }
+
+    for (const auto &item : content.value()) {
+      total_size += item.first.size();
+      total_size += vmsdk::ToStringView(item.second.value.get()).size();
+      if (total_size > max_content_size) {
+        ++Metrics::GetStats().query_result_record_dropped_cnt;
+        VMSDK_LOG(WARNING, ctx)
+            << "Content size exceeds configured limit of " << max_content_size
+            << " bytes for neighbor with ID: " << (*neighbor.external_id).Str();
+        size_exceeded = true;
+        break;
+      }
+    }
+
+    // Only assign content if it's within size limit
+    if (!size_exceeded) {
+      neighbor.attribute_contents = std::move(content.value());
+    }
   }
   // Remove all entries that don't have content now.
   // TODO: incorporate a retry in case of removal.

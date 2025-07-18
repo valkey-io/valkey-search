@@ -1,0 +1,3 @@
+# Temporarily suppressing HNSWLib race reports, which occur on the write path.
+# Fixing these may impact performance due to added synchronization. 
+race:hnswalg.h

@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef VALKEYSEARCH_SRC_COMMANDS_FILTER_PARSER_H_
@@ -39,6 +17,7 @@
 #include "src/index_schema.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
+#include "vmsdk/src/module_config.h"
 
 namespace valkey_search {
 namespace indexes {
@@ -58,10 +37,12 @@ class FilterParser {
   const IndexSchema& index_schema_;
   absl::string_view expression_;
   size_t pos_{0};
+  size_t node_count_{0};
   absl::flat_hash_set<std::string> filter_identifiers_;
 
   absl::StatusOr<bool> IsMatchAllExpression();
-  absl::StatusOr<std::unique_ptr<query::Predicate>> ParseExpression();
+  absl::StatusOr<std::unique_ptr<query::Predicate>> ParseExpression(
+      uint32_t level);
   absl::StatusOr<std::unique_ptr<query::NumericPredicate>>
   ParseNumericPredicate(const std::string& attribute_alias);
   absl::StatusOr<std::unique_ptr<query::TagPredicate>> ParseTagPredicate(
@@ -82,6 +63,16 @@ class FilterParser {
   absl::StatusOr<absl::flat_hash_set<absl::string_view>> ParseTags(
       absl::string_view tag_string, indexes::Tag* tag_index) const;
 };
+
+namespace options {
+
+/// Return the value of the Query String Depth configuration
+vmsdk::config::Number& GetQueryStringDepth();
+
+/// Return the value of the Query String Terms Count configuration
+vmsdk::config::Number& GetQueryStringTermsCount();
+
+}  // namespace options
 
 }  // namespace valkey_search
 #endif  // VALKEYSEARCH_SRC_COMMANDS_FILTER_PARSER_H_

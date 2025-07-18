@@ -60,15 +60,16 @@ function(valkey_search_add_static_library name sources)
   target_link_libraries(${name} PRIVATE GTest::gtest)
 endfunction()
 
-function(valkey_search_target_update_asan_flags TARGET)
-  if(ASAN_BUILD)
-    # For ASAN build, it is recommended to have at least -O1 and enable
-    # fno-omit-frame-pointer to get nicer stack traces
+function(valkey_search_target_update_san_flags TARGET)
+  if(SAN_BUILD)
+    # For sanitizer build, it is recommended to have at least -O1 and enable
+    # -fno-omit-frame-pointer to get nicer stack traces
     target_compile_options(${TARGET} PRIVATE -O1)
     target_compile_options(${TARGET} PRIVATE -fno-omit-frame-pointer)
-    target_compile_options(${TARGET} PRIVATE -fsanitize=address)
+    target_compile_options(${TARGET} PRIVATE "-fsanitize=${SAN_BUILD}")
+   
     target_compile_options(${TARGET} PRIVATE -fno-lto)
-    target_compile_definitions(${TARGET} PRIVATE ASAN_BUILD=1)
+    target_compile_definitions(${TARGET} PRIVATE "SAN_BUILD=${SAN_BUILD}")
   endif()
 endfunction()
 
@@ -85,8 +86,8 @@ function(valkey_search_add_shared_library name sources)
                                            "${CMAKE_BINARY_DIR}")
   # Needed for gtest_prod.h
   target_link_libraries(${name} PRIVATE GTest::gtest)
-  if(ASAN_BUILD)
-    target_link_options(${name} PRIVATE -fsanitize=address)
+  if(SAN_BUILD)
+    target_link_options(${name} PRIVATE "-fsanitize=${SAN_BUILD}")
   endif()
 endfunction()
 
@@ -116,14 +117,16 @@ function(valkey_search_target_update_compile_flags TARGET)
   target_compile_options(${TARGET} PRIVATE -ffast-math)
   target_compile_options(${TARGET} PRIVATE -funroll-loops)
   target_compile_options(${TARGET} PRIVATE -ftree-vectorize)
-  target_compile_options(${TARGET} PRIVATE -fopenmp)
+  if(UNIX AND NOT APPLE)
+    target_compile_options(${TARGET} PRIVATE -fopenmp)
+  endif()
   target_compile_options(${TARGET} PRIVATE -ffp-contract=off)
   target_compile_options(${TARGET} PRIVATE -flax-vector-conversions)
   target_compile_options(${TARGET} PRIVATE -Wno-unknown-pragmas)
   target_compile_options(${TARGET} PRIVATE -fPIC)
   target_compile_definitions(${TARGET} PRIVATE TESTING_TMP_DISABLED)
-  if(ASAN_BUILD)
-    valkey_search_target_update_asan_flags(${TARGET})
+  if(SAN_BUILD)
+    valkey_search_target_update_san_flags(${TARGET})
   elseif(VALKEY_SEARCH_DEBUG_BUILD)
     target_compile_options(${TARGET} PRIVATE -O0)
     target_compile_options(${TARGET} PRIVATE -fno-omit-frame-pointer)
@@ -146,35 +149,52 @@ function(valkey_search_target_update_compile_flags TARGET)
   endif()
 endfunction()
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-missing-requires")
+if(UNIX AND NOT APPLE)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-missing-requires")
+endif()
 
-include(protobuf_generate)
+message(
+  STATUS
+    "Including file ${CMAKE_SOURCE_DIR}/cmake/Modules/protobuf_generate.cmake")
+include(${CMAKE_SOURCE_DIR}/cmake/Modules/protobuf_generate.cmake)
 include(linux_utils)
 
 # HACK: in order to force CMake to put "-Wl,--end-group" as the last argument we
 # use a fake library "lib_to_add_end_group_flag"
 add_library(lib_to_add_end_group_flag INTERFACE "")
-target_link_libraries(lib_to_add_end_group_flag INTERFACE "-Wl,--end-group")
+if(UNIX AND NOT APPLE)
+  target_link_libraries(lib_to_add_end_group_flag INTERFACE "-Wl,--end-group")
+endif()
 
 macro(finalize_test_flags __TARGET)
   # --end-group will added by our fake target "lib_to_add_end_group_flag"
-  target_link_options(${__TARGET} PRIVATE "LINKER:--start-group")
+  if(UNIX AND NOT APPLE)
+    target_link_options(${__TARGET} PRIVATE "LINKER:--start-group")
+  endif()
   foreach(__lib ${THIRD_PARTY_LIBS})
     target_link_libraries(${__TARGET} PRIVATE ${__lib})
   endforeach()
 
-  target_link_options(${__TARGET} PRIVATE "LINKER:--allow-multiple-definition")
+  if(UNIX AND NOT APPLE)
+    target_link_options(${__TARGET} PRIVATE
+                        "LINKER:--allow-multiple-definition")
+  endif()
+
   target_compile_options(${__TARGET} PRIVATE -O1)
   valkey_search_target_update_compile_flags(${__TARGET})
   set_target_properties(${__TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
                                                "${CMAKE_BINARY_DIR}/tests")
-  target_link_libraries(${__TARGET} PRIVATE lib_to_add_end_group_flag)
+  if(UNIX AND NOT APPLE)
+    target_link_libraries(${__TARGET} PRIVATE lib_to_add_end_group_flag)
+  endif()
+
   if(VALKEY_SEARCH_IS_ARM)
     target_link_libraries(${__TARGET} PRIVATE pthread)
   endif()
   target_link_libraries(${__TARGET} PRIVATE GTest::gtest GTest::gtest_main
                                             GTest::gmock)
-  if(ASAN_BUILD)
-    target_link_options(${__TARGET} PRIVATE -fsanitize=address)
+  if(SAN_BUILD)
+  target_link_options(${__TARGET} PRIVATE "-fsanitize=${SAN_BUILD}")
+   
   endif()
 endmacro()

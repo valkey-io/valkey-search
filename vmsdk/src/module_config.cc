@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 #include "vmsdk/src/module_config.h"
 
@@ -53,20 +31,46 @@ static T OnGetConfig(const char *config_name, void *priv_data) {
 
 template <typename T>
 static int OnSetConfig(const char *config_name, T value, void *priv_data,
-                       RedisModuleString **err) {
+                       ValkeyModuleString **err) {
   auto entry = static_cast<ConfigBase<T> *>(priv_data);
   CHECK(entry) << "null private data for configuration Number entry.";
   auto res = entry->SetValue(value);  // Calls "Validate" internally
   if (!res.ok()) {
     if (err) {
       *err =
-          RedisModule_CreateStringPrintf(nullptr, "%s", res.message().data());
+          ValkeyModule_CreateStringPrintf(nullptr, "%s", res.message().data());
     }
-    return REDISMODULE_ERR;
+    return VALKEYMODULE_ERR;
   }
 
   entry->NotifyChanged();
-  return REDISMODULE_OK;
+  return VALKEYMODULE_OK;
+}
+
+static ValkeyModuleString *OnGetStringConfig(const char *config_name,
+                                             void *priv_data) {
+  auto entry = static_cast<String *>(priv_data);
+  CHECK(entry) << "null private data";
+  return ValkeyModule_CreateString(nullptr, entry->GetString().c_str(),
+                                   entry->GetString().size());
+}
+
+static int OnSetStringConfig(const char *config_name, ValkeyModuleString *value,
+                             void *priv_data, ValkeyModuleString **err) {
+  auto entry = static_cast<String *>(priv_data);
+  CHECK(entry) << "null private data";
+  auto sv = vmsdk::ToStringView(value);
+  auto res = entry->SetValue(sv.data());  // Calls "Validate" internally
+  if (!res.ok()) {
+    if (err) {
+      *err =
+          ValkeyModule_CreateStringPrintf(nullptr, "%s", res.message().data());
+    }
+    return VALKEYMODULE_ERR;
+  }
+
+  entry->NotifyChanged();
+  return VALKEYMODULE_OK;
 }
 
 /// Convert `vector<string>` -> `vector<const char*>`
@@ -94,7 +98,7 @@ void ModuleConfigManager::UnregisterConfig(Registerable *config_item) {
   entries_.erase(config_item->GetName());
 }
 
-absl::Status ModuleConfigManager::Init(RedisModuleCtx *ctx) {
+absl::Status ModuleConfigManager::Init(ValkeyModuleCtx *ctx) {
   for (const auto &[_, entry] : entries_) {
     if (entry->IsHidden()) {
       continue;
@@ -104,8 +108,8 @@ absl::Status ModuleConfigManager::Init(RedisModuleCtx *ctx) {
   return absl::OkStatus();
 }
 
-absl::Status ModuleConfigManager::ParseAndLoadArgv(RedisModuleCtx *ctx,
-                                                   RedisModuleString **argv,
+absl::Status ModuleConfigManager::ParseAndLoadArgv(ValkeyModuleCtx *ctx,
+                                                   ValkeyModuleString **argv,
                                                    int argc) {
   vmsdk::ArgsIterator iter{argv, argc};
   while (iter.HasNext()) {
@@ -136,7 +140,7 @@ absl::Status ModuleConfigManager::ParseAndLoadArgv(RedisModuleCtx *ctx,
 }
 
 absl::Status ModuleConfigManager::UpdateConfigFromKeyVal(
-    RedisModuleCtx *ctx, std::string_view key, std::string_view value) {
+    ValkeyModuleCtx *ctx, std::string_view key, std::string_view value) {
   if (!key.starts_with("--")) {
     return absl::InvalidArgumentError(absl::StrFormat(
         "Command line argument: '%s' must start with '--'", key));
@@ -166,18 +170,19 @@ Number::Number(std::string_view name, int64_t default_value, int64_t min_value,
       max_value_(max_value),
       current_value_(default_value) {}
 
-absl::Status Number::Register(RedisModuleCtx *ctx) {
-  if (RedisModule_RegisterNumericConfig(ctx,
-                                        name_.data(),    // Name
-                                        default_value_,  // Default value
-                                        flags_,          // Flags
-                                        min_value_,      // Minimum value
-                                        max_value_,      // Maximum value
-                                        OnGetConfig<long long>,  // Get callback
-                                        OnSetConfig<long long>,  // Set callback
-                                        nullptr,  // Apply callback (optional)
-                                        this      // privdata
-                                        ) != REDISMODULE_OK) {
+absl::Status Number::Register(ValkeyModuleCtx *ctx) {
+  if (ValkeyModule_RegisterNumericConfig(
+          ctx,
+          name_.data(),            // Name
+          default_value_,          // Default value
+          flags_,                  // Flags
+          min_value_,              // Minimum value
+          max_value_,              // Maximum value
+          OnGetConfig<long long>,  // Get callback
+          OnSetConfig<long long>,  // Set callback
+          nullptr,                 // Apply callback (optional)
+          this                     // privdata
+          ) != VALKEYMODULE_OK) {
     return absl::InternalError(absl::StrCat(
         "Failed to register numeric configuration entry: ", name_));
   }
@@ -214,20 +219,20 @@ Enum::Enum(std::string_view name, int default_value,
         }) != values_.end());
 }
 
-absl::Status Enum::Register(RedisModuleCtx *ctx) {
+absl::Status Enum::Register(ValkeyModuleCtx *ctx) {
   auto names_array = ToCharPtrPtrVec(names_);
-  if (RedisModule_RegisterEnumConfig(ctx,
-                                     name_.data(),        // Name
-                                     default_value_,      // Default value
-                                     flags_,              // Flags
-                                     names_array.data(),  // enumerator names
-                                     values_.data(),      // enumerator values
-                                     names_.size(),     // number of enumerators
-                                     OnGetConfig<int>,  // Get callback
-                                     OnSetConfig<int>,  // Set callback
-                                     nullptr,  // Apply callback (optional)
-                                     this      // privdata
-                                     ) != REDISMODULE_OK) {
+  if (ValkeyModule_RegisterEnumConfig(ctx,
+                                      name_.data(),        // Name
+                                      default_value_,      // Default value
+                                      flags_,              // Flags
+                                      names_array.data(),  // enumerator names
+                                      values_.data(),      // enumerator values
+                                      names_.size(),  // number of enumerators
+                                      OnGetConfig<int>,  // Get callback
+                                      OnSetConfig<int>,  // Set callback
+                                      nullptr,  // Apply callback (optional)
+                                      this      // privdata
+                                      ) != VALKEYMODULE_OK) {
     return absl::InternalError(absl::StrCat(
         "Failed to register enumerator configuration entry: ", name_));
   }
@@ -257,16 +262,16 @@ Boolean::Boolean(std::string_view name, bool default_value)
       default_value_(default_value),
       current_value_(default_value) {}
 
-absl::Status Boolean::Register(RedisModuleCtx *ctx) {
-  if (RedisModule_RegisterBoolConfig(ctx,
-                                     name_.data(),      // Name
-                                     default_value_,    // Default value
-                                     flags_,            // Flags
-                                     OnGetConfig<int>,  // Get callback
-                                     OnSetConfig<int>,  // Set callback
-                                     nullptr,  // Apply callback (optional)
-                                     this      // privdata
-                                     ) != REDISMODULE_OK) {
+absl::Status Boolean::Register(ValkeyModuleCtx *ctx) {
+  if (ValkeyModule_RegisterBoolConfig(ctx,
+                                      name_.data(),      // Name
+                                      default_value_,    // Default value
+                                      flags_,            // Flags
+                                      OnGetConfig<int>,  // Get callback
+                                      OnSetConfig<int>,  // Set callback
+                                      nullptr,  // Apply callback (optional)
+                                      this      // privdata
+                                      ) != VALKEYMODULE_OK) {
     return absl::InternalError(absl::StrCat(
         "Failed to register boolean configuration entry: ", name_));
   }
@@ -287,6 +292,30 @@ absl::Status Boolean::FromString(std::string_view value) {
     return absl::InvalidArgumentError(
         absl::StrFormat("Invalid boolean value: '%s'", value));
   }
+  return absl::OkStatus();
+}
+
+String::String(std::string_view name, std::string_view default_value)
+    : ConfigBase(name), value_(default_value) {}
+
+absl::Status String::Register(ValkeyModuleCtx *ctx) {
+  if (ValkeyModule_RegisterStringConfig(ctx,
+                                        name_.data(),       // Name
+                                        value_.c_str(),     // Default value
+                                        flags_,             // Flags
+                                        OnGetStringConfig,  // Get callback
+                                        OnSetStringConfig,  // Set callback
+                                        nullptr,  // Apply callback (optional)
+                                        this      // privdata
+                                        ) != VALKEYMODULE_OK) {
+    return absl::InternalError(
+        absl::StrCat("Failed to register String configuration entry: ", name_));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status String::FromString(std::string_view value) {
+  SetValueOrLog(value.data(), WARNING);
   return absl::OkStatus();
 }
 

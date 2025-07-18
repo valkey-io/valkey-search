@@ -1,30 +1,8 @@
 /*
- * Copyright (c) 2025, ValkeySearch contributors
+ * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/index_schema.h"
@@ -65,6 +43,7 @@
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/vector_externalizer.h"
+#include "src/metrics.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -79,18 +58,18 @@ namespace valkey_search {
 
 LogLevel GetLogSeverity(bool ok) { return ok ? DEBUG : WARNING; }
 
-IndexSchema::BackfillJob::BackfillJob(RedisModuleCtx *ctx,
+IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
                                       absl::string_view name, int db_num)
-    : cursor(vmsdk::MakeUniqueRedisScanCursor()) {
-  scan_ctx = vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx);
-  RedisModule_SelectDb(scan_ctx.get(), db_num);
-  db_size = RedisModule_DbSize(scan_ctx.get());
+    : cursor(vmsdk::MakeUniqueValkeyScanCursor()) {
+  scan_ctx = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);
+  ValkeyModule_SelectDb(scan_ctx.get(), db_num);
+  db_size = ValkeyModule_DbSize(scan_ctx.get());
   VMSDK_LOG(NOTICE, ctx) << "Starting backfill for index schema in DB "
                          << db_num << ": " << name;
 }
 
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
-    RedisModuleCtx *ctx, IndexSchema *index_schema,
+    ValkeyModuleCtx *ctx, IndexSchema *index_schema,
     const data_model::Attribute &attribute,
     std::optional<SupplementalContentChunkIter> iter) {
   const auto &index = attribute.index();
@@ -164,7 +143,7 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
 }
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
-    RedisModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto,
+    ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto,
     vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes) {
   std::unique_ptr<AttributeDataType> attribute_data_type;
   switch (index_schema_proto.attribute_data_type()) {
@@ -206,18 +185,18 @@ vmsdk::MRMWMutexOptions CreateMrmwMutexOptions() {
   return options;
 }
 
-IndexSchema::IndexSchema(RedisModuleCtx *ctx,
+IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
                          const data_model::IndexSchema &index_schema_proto,
                          std::unique_ptr<AttributeDataType> attribute_data_type,
                          vmsdk::ThreadPool *mutations_thread_pool)
-    : detached_ctx_(vmsdk::MakeUniqueRedisDetachedThreadSafeContext(ctx)),
+    : detached_ctx_(vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx)),
       keyspace_event_manager_(&KeyspaceEventManager::Instance()),
       attribute_data_type_(std::move(attribute_data_type)),
       name_(std::string(index_schema_proto.name())),
       db_num_(index_schema_proto.db_num()),
       mutations_thread_pool_(mutations_thread_pool),
       time_sliced_mutex_(CreateMrmwMutexOptions()) {
-  RedisModule_SelectDb(detached_ctx_.get(), db_num_);
+  ValkeyModule_SelectDb(detached_ctx_.get(), db_num_);
   if (index_schema_proto.subscribed_key_prefixes().empty()) {
     subscribed_key_prefixes_.push_back("");
     return;
@@ -232,7 +211,7 @@ IndexSchema::IndexSchema(RedisModuleCtx *ctx,
   stats_.document_cnt = index_schema_proto.stats().documents_count();
 }
 
-absl::Status IndexSchema::Init(RedisModuleCtx *ctx) {
+absl::Status IndexSchema::Init(ValkeyModuleCtx *ctx) {
   VMSDK_RETURN_IF_ERROR(keyspace_event_manager_->InsertSubscription(ctx, this));
   backfill_job_ = std::make_optional<BackfillJob>(ctx, name_, db_num_);
   return absl::OkStatus();
@@ -269,7 +248,7 @@ absl::StatusOr<std::string> IndexSchema::GetIdentifier(
   return itr->second.GetIdentifier();
 }
 
-absl::StatusOr<vmsdk::UniqueRedisString> IndexSchema::DefaultReplyScoreAs(
+absl::StatusOr<vmsdk::UniqueValkeyString> IndexSchema::DefaultReplyScoreAs(
     absl::string_view attribute_alias) const {
   auto itr = attributes_.find(std::string{attribute_alias});
   if (ABSL_PREDICT_FALSE(itr == attributes_.end())) {
@@ -292,11 +271,13 @@ absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
 }
 
 void TrackResults(
-    RedisModuleCtx *ctx, const absl::StatusOr<bool> &status,
+    ValkeyModuleCtx *ctx, const absl::StatusOr<bool> &status,
     const char *operation_str,
     IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>> &counter) {
   if (ABSL_PREDICT_FALSE(!status.ok())) {
     ++counter.failure_cnt;
+    // Track global ingestion failures
+    Metrics::GetStats().ingest_total_failures++;
   } else if (status.value()) {
     ++counter.success_cnt;
   } else {
@@ -314,9 +295,9 @@ void TrackResults(
   }
 }
 
-void IndexSchema::OnKeyspaceNotification(RedisModuleCtx *ctx, int type,
+void IndexSchema::OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
                                          const char *event,
-                                         RedisModuleString *key) {
+                                         ValkeyModuleString *key) {
   if (ABSL_PREDICT_FALSE(!IsInCurrentDB(ctx))) {
     return;
   }
@@ -326,7 +307,7 @@ void IndexSchema::OnKeyspaceNotification(RedisModuleCtx *ctx, int type,
 bool AddAttributeData(IndexSchema::MutatedAttributes &mutated_attributes,
                       const Attribute &attribute,
                       AttributeDataType &attribute_data_type,
-                      vmsdk::UniqueRedisString record) {
+                      vmsdk::UniqueValkeyString record) {
   if (record) {
     if (attribute_data_type.RecordsProvidedAsString()) {
       auto normalized_record =
@@ -345,15 +326,15 @@ bool AddAttributeData(IndexSchema::MutatedAttributes &mutated_attributes,
   return true;
 }
 
-void IndexSchema::ProcessKeyspaceNotification(RedisModuleCtx *ctx,
-                                              RedisModuleString *key,
+void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
+                                              ValkeyModuleString *key,
                                               bool from_backfill) {
   auto key_cstr = vmsdk::ToStringView(key);
   if (key_cstr.empty()) {
     return;
   }
-  auto key_obj = vmsdk::MakeUniqueRedisOpenKey(
-      ctx, key, REDISMODULE_OPEN_KEY_NOEFFECTS | REDISMODULE_READ);
+  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+      ctx, key, VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
   // Fail fast if the key type does not match the data type.
   if (key_obj && !GetAttributeDataType().IsProperType(key_obj.get())) {
     return;
@@ -370,7 +351,7 @@ void IndexSchema::ProcessKeyspaceNotification(RedisModuleCtx *ctx,
       continue;
     }
     bool is_module_owned;
-    vmsdk::UniqueRedisString record = VectorExternalizer::Instance().GetRecord(
+    vmsdk::UniqueValkeyString record = VectorExternalizer::Instance().GetRecord(
         ctx, attribute_data_type_.get(), key_obj.get(), key_cstr,
         attribute.GetIdentifier(), is_module_owned);
     if (!is_module_owned) {
@@ -384,6 +365,12 @@ void IndexSchema::ProcessKeyspaceNotification(RedisModuleCtx *ctx,
     }
   }
   if (added) {
+    // Track key modifications by data type
+    if (attribute_data_type_->ToProto() == data_model::ATTRIBUTE_DATA_TYPE_HASH) {
+      Metrics::GetStats().ingest_hash_keys++;
+    } else if (attribute_data_type_->ToProto() == data_model::ATTRIBUTE_DATA_TYPE_JSON) {
+      Metrics::GetStats().ingest_json_keys++;
+    }
     ProcessMutation(ctx, mutated_attributes, interned_key, from_backfill);
   }
 }
@@ -395,7 +382,7 @@ bool IndexSchema::IsTrackedByAnyIndex(const InternedStringPtr &key) const {
                      });
 }
 
-void IndexSchema::SyncProcessMutation(RedisModuleCtx *ctx,
+void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
                                       const InternedStringPtr &key) {
   vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
@@ -411,8 +398,8 @@ void IndexSchema::SyncProcessMutation(RedisModuleCtx *ctx,
 }
 
 void IndexSchema::ProcessAttributeMutation(
-    RedisModuleCtx *ctx, const Attribute &attribute,
-    const InternedStringPtr &key, vmsdk::UniqueRedisString data,
+    ValkeyModuleCtx *ctx, const Attribute &attribute,
+    const InternedStringPtr &key, vmsdk::UniqueValkeyString data,
     indexes::DeletionType deletion_type) {
   auto index = attribute.GetIndex();
   if (data) {
@@ -432,6 +419,24 @@ void IndexSchema::ProcessAttributeMutation(
       // added it to the index.
       if (!was_tracked) {
         ++stats_.document_cnt;
+      }
+
+      // Track field type counters
+      switch (index->GetIndexerType()) {
+        case indexes::IndexerType::kVector:
+        case indexes::IndexerType::kHNSW:
+        case indexes::IndexerType::kFlat:
+          Metrics::GetStats().ingest_field_vector++;
+          break;
+        case indexes::IndexerType::kNumeric:
+          Metrics::GetStats().ingest_field_numeric++;
+          break;
+        case indexes::IndexerType::kTag:
+          Metrics::GetStats().ingest_field_tag++;
+          break;
+        default:
+          // Shouldn't happen
+          break;
       }
     }
     return;
@@ -466,6 +471,11 @@ void IndexSchema::ProcessMultiQueue() {
   if (ABSL_PREDICT_TRUE(multi_mutations.keys.empty())) {
     return;
   }
+  
+  // Track batch metrics
+  Metrics::GetStats().ingest_last_batch_size = multi_mutations.keys.size();
+  Metrics::GetStats().ingest_total_batches++;
+  
   multi_mutations.blocking_counter =
       std::make_unique<absl::BlockingCounter>(multi_mutations.keys.size());
   vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
@@ -525,12 +535,12 @@ void IndexSchema::ScheduleMutation(bool from_backfill,
       priority);
 }
 
-bool ShouldBlockClient(RedisModuleCtx *ctx, bool inside_multi_exec,
+bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
                        bool from_backfill) {
   return !inside_multi_exec && !from_backfill && vmsdk::IsRealUserClient(ctx);
 }
 
-void IndexSchema::ProcessMutation(RedisModuleCtx *ctx,
+void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
                                   MutatedAttributes &mutated_attributes,
                                   const InternedStringPtr &interned_key,
                                   bool from_backfill) {
@@ -559,7 +569,7 @@ void IndexSchema::ProcessMutation(RedisModuleCtx *ctx,
   ScheduleMutation(from_backfill, interned_key, priority, nullptr);
 }
 
-void IndexSchema::ProcessSingleMutationAsync(RedisModuleCtx *ctx,
+void IndexSchema::ProcessSingleMutationAsync(ValkeyModuleCtx *ctx,
                                              bool from_backfill,
                                              const InternedStringPtr &key,
                                              vmsdk::StopWatch *delay_capturer) {
@@ -582,9 +592,9 @@ void IndexSchema::ProcessSingleMutationAsync(RedisModuleCtx *ctx,
   }
 }
 
-void IndexSchema::BackfillScanCallback(RedisModuleCtx *ctx,
-                                       RedisModuleString *keyname,
-                                       RedisModuleKey *key, void *privdata) {
+void IndexSchema::BackfillScanCallback(ValkeyModuleCtx *ctx,
+                                       ValkeyModuleString *keyname,
+                                       ValkeyModuleKey *key, void *privdata) {
   IndexSchema *index_schema = reinterpret_cast<IndexSchema *>(privdata);
   index_schema->backfill_job_.Get()->scanned_key_count++;
   auto key_prefixes = index_schema->GetKeyPrefixes();
@@ -597,7 +607,7 @@ void IndexSchema::BackfillScanCallback(RedisModuleCtx *ctx,
   }
 }
 
-uint32_t IndexSchema::PerformBackfill(RedisModuleCtx *ctx,
+uint32_t IndexSchema::PerformBackfill(ValkeyModuleCtx *ctx,
                                       uint32_t batch_size) {
   auto &backfill_job = backfill_job_.Get();
   if (!backfill_job.has_value() || backfill_job->IsScanDone()) {
@@ -610,13 +620,13 @@ uint32_t IndexSchema::PerformBackfill(RedisModuleCtx *ctx,
   // change during the backfill, in which case we may show incorrect progress.
   backfill_job->db_size =
       std::max(backfill_job->db_size,
-               (uint64_t)RedisModule_DbSize(backfill_job->scan_ctx.get()));
+               (uint64_t)ValkeyModule_DbSize(backfill_job->scan_ctx.get()));
 
   uint64_t start_scan_count = backfill_job->scanned_key_count;
   uint64_t &current_scan_count = backfill_job->scanned_key_count;
   while (current_scan_count - start_scan_count < batch_size) {
-    auto ctx_flags = RedisModule_GetContextFlags(ctx);
-    if (ctx_flags & REDISMODULE_CTX_FLAGS_OOM) {
+    auto ctx_flags = ValkeyModule_GetContextFlags(ctx);
+    if (ctx_flags & VALKEYMODULE_CTX_FLAGS_OOM) {
       backfill_job->paused_by_oom = true;
       return 0;
     }
@@ -626,9 +636,9 @@ uint32_t IndexSchema::PerformBackfill(RedisModuleCtx *ctx,
     // end of the current iteration. Because of this, we use the scanned key
     // count to know how many keys we have scanned in total (either zero or
     // one).
-    if (!RedisModule_Scan(backfill_job->scan_ctx.get(),
-                          backfill_job->cursor.get(), BackfillScanCallback,
-                          (void *)this)) {
+    if (!ValkeyModule_Scan(backfill_job->scan_ctx.get(),
+                           backfill_job->cursor.get(), BackfillScanCallback,
+                           (void *)this)) {
       VMSDK_LOG(NOTICE, ctx)
           << "Index schema " << name_ << " finished backfill. Scanned "
           << backfill_job->scanned_key_count << " keys in "
@@ -682,67 +692,67 @@ uint64_t IndexSchema::CountRecords() const {
   return record_cnt;
 }
 
-void IndexSchema::RespondWithInfo(RedisModuleCtx *ctx) const {
-  RedisModule_ReplyWithArray(ctx, 26);
-  RedisModule_ReplyWithSimpleString(ctx, "index_name");
-  RedisModule_ReplyWithSimpleString(ctx, name_.data());
-  RedisModule_ReplyWithSimpleString(ctx, "index_options");
-  RedisModule_ReplyWithArray(ctx, 0);
+void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
+  ValkeyModule_ReplyWithArray(ctx, 26);
+  ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
+  ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
+  ValkeyModule_ReplyWithSimpleString(ctx, "index_options");
+  ValkeyModule_ReplyWithArray(ctx, 0);
 
-  RedisModule_ReplyWithSimpleString(ctx, "index_definition");
-  RedisModule_ReplyWithArray(ctx, 6);
-  RedisModule_ReplyWithSimpleString(ctx, "key_type");
-  RedisModule_ReplyWithSimpleString(ctx,
-                                    attribute_data_type_->ToString().c_str());
-  RedisModule_ReplyWithSimpleString(ctx, "prefixes");
-  RedisModule_ReplyWithArray(ctx, subscribed_key_prefixes_.size());
+  ValkeyModule_ReplyWithSimpleString(ctx, "index_definition");
+  ValkeyModule_ReplyWithArray(ctx, 6);
+  ValkeyModule_ReplyWithSimpleString(ctx, "key_type");
+  ValkeyModule_ReplyWithSimpleString(ctx,
+                                     attribute_data_type_->ToString().c_str());
+  ValkeyModule_ReplyWithSimpleString(ctx, "prefixes");
+  ValkeyModule_ReplyWithArray(ctx, subscribed_key_prefixes_.size());
   for (const auto &prefix : subscribed_key_prefixes_) {
-    RedisModule_ReplyWithSimpleString(ctx, prefix.c_str());
+    ValkeyModule_ReplyWithSimpleString(ctx, prefix.c_str());
   }
   // hard-code default score of 1 as it's the only value we currently
   // supported.
-  RedisModule_ReplyWithSimpleString(ctx, "default_score");
-  RedisModule_ReplyWithCString(ctx, "1");
+  ValkeyModule_ReplyWithSimpleString(ctx, "default_score");
+  ValkeyModule_ReplyWithCString(ctx, "1");
 
-  RedisModule_ReplyWithSimpleString(ctx, "attributes");
-  RedisModule_ReplyWithArray(ctx, REDISMODULE_POSTPONED_ARRAY_LEN);
+  ValkeyModule_ReplyWithSimpleString(ctx, "attributes");
+  ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
   int attribute_array_len = 0;
   for (const auto &attribute : attributes_) {
     attribute_array_len += attribute.second.RespondWithInfo(ctx);
   }
-  RedisModule_ReplySetArrayLength(ctx, attribute_array_len);
+  ValkeyModule_ReplySetArrayLength(ctx, attribute_array_len);
 
-  RedisModule_ReplyWithSimpleString(ctx, "num_docs");
-  RedisModule_ReplyWithCString(ctx,
-                               std::to_string(stats_.document_cnt).c_str());
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_docs");
+  ValkeyModule_ReplyWithCString(ctx,
+                                std::to_string(stats_.document_cnt).c_str());
   // hard-code num_terms to 0 as it's related to fulltext indexes:
-  RedisModule_ReplyWithSimpleString(ctx, "num_terms");
-  RedisModule_ReplyWithCString(ctx, "0");
-  RedisModule_ReplyWithSimpleString(ctx, "num_records");
-  RedisModule_ReplyWithCString(ctx, std::to_string(CountRecords()).c_str());
-  RedisModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
-  RedisModule_ReplyWithCString(
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_terms");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
+  ValkeyModule_ReplyWithCString(ctx, std::to_string(CountRecords()).c_str());
+  ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
+  ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%lu", stats_.subscription_add.skipped_cnt).c_str());
-  RedisModule_ReplyWithSimpleString(ctx, "backfill_in_progress");
-  RedisModule_ReplyWithCString(
+  ValkeyModule_ReplyWithSimpleString(ctx, "backfill_in_progress");
+  ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%d", IsBackfillInProgress() ? 1 : 0).c_str());
-  RedisModule_ReplyWithSimpleString(ctx, "backfill_complete_percent");
-  RedisModule_ReplyWithCString(
+  ValkeyModule_ReplyWithSimpleString(ctx, "backfill_complete_percent");
+  ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%f", GetBackfillPercent()).c_str());
 
   absl::MutexLock lock(&stats_.mutex_);
-  RedisModule_ReplyWithSimpleString(ctx, "mutation_queue_size");
-  RedisModule_ReplyWithCString(
+  ValkeyModule_ReplyWithSimpleString(ctx, "mutation_queue_size");
+  ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%lu", stats_.mutation_queue_size_).c_str());
-  RedisModule_ReplyWithSimpleString(ctx, "recent_mutations_queue_delay");
-  RedisModule_ReplyWithCString(
+  ValkeyModule_ReplyWithSimpleString(ctx, "recent_mutations_queue_delay");
+  ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%lu sec", (stats_.mutation_queue_size_ > 0
                                            ? stats_.mutations_queue_delay_ /
                                                  absl::Seconds(1)
                                            : 0))
                .c_str());
-  RedisModule_ReplyWithSimpleString(ctx, "state");
-  RedisModule_ReplyWithSimpleString(ctx, GetStateForInfo().data());
+  ValkeyModule_ReplyWithSimpleString(ctx, "state");
+  ValkeyModule_ReplyWithSimpleString(ctx, GetStateForInfo().data());
 }
 
 bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {
@@ -838,7 +848,7 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
 }
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
-    RedisModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,
+    ValkeyModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,
     std::unique_ptr<data_model::IndexSchema> index_schema_proto,
     SupplementalContentIter &&supplemental_iter) {
   // Attributes will be loaded from supplemental content.
@@ -889,11 +899,11 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
   return index_schema;
 }
 
-bool IndexSchema::IsInCurrentDB(RedisModuleCtx *ctx) const {
-  return RedisModule_GetSelectedDb(ctx) == db_num_;
+bool IndexSchema::IsInCurrentDB(ValkeyModuleCtx *ctx) const {
+  return ValkeyModule_GetSelectedDb(ctx) == db_num_;
 }
 
-void IndexSchema::OnSwapDB(RedisModuleSwapDbInfo *swap_db_info) {
+void IndexSchema::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
   uint32_t curr_db = db_num_;
   uint32_t db_to_swap_to;
   if (curr_db == swap_db_info->dbnum_first) {
@@ -906,15 +916,15 @@ void IndexSchema::OnSwapDB(RedisModuleSwapDbInfo *swap_db_info) {
   db_num_ = db_to_swap_to;
   auto &backfill_job = backfill_job_.Get();
   if (IsBackfillInProgress() && !backfill_job->IsScanDone()) {
-    RedisModule_SelectDb(backfill_job->scan_ctx.get(), db_to_swap_to);
+    ValkeyModule_SelectDb(backfill_job->scan_ctx.get(), db_to_swap_to);
   }
 }
 
-void IndexSchema::OnLoadingEnded(RedisModuleCtx *ctx) {
+void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
   // Clean up any potentially stale index entries that can arise from pending
   // record deletions being lost during RDB save.
   vmsdk::StopWatch stop_watch;
-  RedisModule_SelectDb(ctx, db_num_);  // Make sure we are in the right DB.
+  ValkeyModule_SelectDb(ctx, db_num_);  // Make sure we are in the right DB.
   absl::flat_hash_map<std::string, MutatedAttributes> deletion_attributes;
   for (const auto &attribute : attributes_) {
     const auto &index = attribute.second.GetIndex();
@@ -923,8 +933,8 @@ void IndexSchema::OnLoadingEnded(RedisModuleCtx *ctx) {
     uint64_t stale_entries = 0;
     index->ForEachTrackedKey([ctx, &deletion_attributes, &key_size, &attribute,
                               &stale_entries](const InternedStringPtr &key) {
-      auto r_str = vmsdk::MakeUniqueRedisString(*key);
-      if (!RedisModule_KeyExists(ctx, r_str.get())) {
+      auto r_str = vmsdk::MakeUniqueValkeyString(*key);
+      if (!ValkeyModule_KeyExists(ctx, r_str.get())) {
         deletion_attributes[std::string(*key)][attribute.second.GetAlias()] = {
             nullptr, indexes::DeletionType::kRecord};
         stale_entries++;
@@ -948,8 +958,19 @@ void IndexSchema::OnLoadingEnded(RedisModuleCtx *ctx) {
                          << absl::FormatDuration(stop_watch.Duration());
 }
 
+vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
+  // Determine category based on data type
+  switch (attribute_data_type_->ToProto()) {
+    case data_model::ATTRIBUTE_DATA_TYPE_HASH:
+      return vmsdk::BlockedClientCategory::kHash;
+    case data_model::ATTRIBUTE_DATA_TYPE_JSON:
+      return vmsdk::BlockedClientCategory::kJson;
+    default:
+      return vmsdk::BlockedClientCategory::kOther;
+  }
+}
 // Returns true if the inserted key not exists otherwise false
-bool IndexSchema::TrackMutatedRecord(RedisModuleCtx *ctx,
+bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
                                      const InternedStringPtr &key,
                                      MutatedAttributes &&mutated_attributes,
                                      bool from_backfill, bool block_client) {
@@ -961,7 +982,7 @@ bool IndexSchema::TrackMutatedRecord(RedisModuleCtx *ctx,
     itr->second.attributes.value() = std::move(mutated_attributes);
     itr->second.from_backfill = from_backfill;
     if (ABSL_PREDICT_TRUE(block_client)) {
-      vmsdk::BlockedClient blocked_client(ctx, true);
+      vmsdk::BlockedClient blocked_client(ctx, true, GetBlockedCategoryFromProto());
       blocked_client.MeasureTimeStart();
       itr->second.blocked_clients.emplace_back(std::move(blocked_client));
     }
@@ -975,7 +996,7 @@ bool IndexSchema::TrackMutatedRecord(RedisModuleCtx *ctx,
         std::move(mutated_attribute.second);
   }
   if (ABSL_PREDICT_TRUE(block_client)) {
-    vmsdk::BlockedClient blocked_client(ctx, true);
+    vmsdk::BlockedClient blocked_client(ctx, true, GetBlockedCategoryFromProto());
     blocked_client.MeasureTimeStart();
     itr->second.blocked_clients.emplace_back(std::move(blocked_client));
   }
@@ -1035,7 +1056,7 @@ void IndexSchema::SubscribeToVectorExternalizer(
 
 void IndexSchema::VectorExternalizer(const InternedStringPtr &key,
                                      absl::string_view attribute_identifier,
-                                     vmsdk::UniqueRedisString &record) {
+                                     vmsdk::UniqueValkeyString &record) {
   auto it = vector_externalizer_subscriptions_.find(attribute_identifier);
   if (it == vector_externalizer_subscriptions_.end()) {
     return;

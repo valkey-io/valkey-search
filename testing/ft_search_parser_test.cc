@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "src/commands/ft_search_parser.h"
@@ -96,15 +74,15 @@ struct FTSearchParserTestCase {
 class FTSearchParserTest
     : public ValkeySearchTestWithParam<FTSearchParserTestCase> {};
 
-std::vector<RedisModuleString *> FloatToRedisStringVector(
+std::vector<ValkeyModuleString *> FloatToValkeyStringVector(
     const std::vector<float> &floats) {
-  std::vector<RedisModuleString *> ret;
+  std::vector<ValkeyModuleString *> ret;
   const absl::string_view blob_str = "BLOB";
   ret.push_back(
-      RedisModule_CreateString(nullptr, blob_str.data(), blob_str.size()));
+      ValkeyModule_CreateString(nullptr, blob_str.data(), blob_str.size()));
   std::string vector_str((char *)(&floats[0]), floats.size() * sizeof(float));
-  ret.push_back(
-      RedisModule_CreateString(nullptr, vector_str.c_str(), vector_str.size()));
+  ret.push_back(ValkeyModule_CreateString(nullptr, vector_str.c_str(),
+                                          vector_str.size()));
   return ret;
 }
 
@@ -123,9 +101,9 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
   std::cerr << ", no_content: " << no_content << "\n";
 
   std::vector<float> floats = {0.1, 0.2, 0.3};
-  std::vector<RedisModuleString *> args;
+  std::vector<ValkeyModuleString *> args;
   const std::string key_str = "my_schema_name";
-  RedisModuleCtx fake_ctx;
+  ValkeyModuleCtx fake_ctx;
   SchemaManager::InitInstance(
       std::make_unique<TestableSchemaManager>(&fake_ctx));
   auto index_schema = CreateIndexSchema(key_str, &fake_ctx).value();
@@ -134,6 +112,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
       OpenKey(testing::_, testing::An<ValkeyModuleString *>(), testing::_))
       .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
   EXPECT_CALL(*index_schema, GetIdentifier(::testing::_)).Times(::testing::AnyNumber());
+<<<<<<< HEAD
   if (test_case.vector_query) {
     // Vector index setup
     data_model::VectorIndex vector_index_proto;
@@ -162,25 +141,42 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("attribute_identifier_2", "id2", tag_index));
   }
+=======
+  data_model::VectorIndex vector_index_proto;
+  vector_index_proto.set_dimension_count(3);
+  vector_index_proto.set_initial_cap(100);
+  vector_index_proto.set_vector_data_type(
+      data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32);
+  auto flat_algorithm_proto = std::make_unique<data_model::FlatAlgorithm>();
+  flat_algorithm_proto->set_block_size(100);
+  vector_index_proto.set_allocated_flat_algorithm(
+      flat_algorithm_proto.release());
+  auto index = indexes::VectorFlat<float>::Create(
+                   vector_index_proto, "attribute_identifier_1",
+                   data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+                   .value();
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex(test_case.attribute_alias, "id1", index));
+>>>>>>> main
   args.push_back(
-      RedisModule_CreateString(nullptr, key_str.data(), key_str.size()));
-  args.push_back(RedisModule_CreateString(nullptr, test_case.filter_str.data(),
-                                          test_case.filter_str.size()));
+      ValkeyModule_CreateString(nullptr, key_str.data(), key_str.size()));
+  args.push_back(ValkeyModule_CreateString(nullptr, test_case.filter_str.data(),
+                                           test_case.filter_str.size()));
   if (no_content) {
     const absl::string_view kNoContentParam = "NoContent";
-    args.push_back(RedisModule_CreateString(nullptr, kNoContentParam.data(),
-                                            kNoContentParam.size()));
+    args.push_back(ValkeyModule_CreateString(nullptr, kNoContentParam.data(),
+                                             kNoContentParam.size()));
   }
-  auto return_vec = vmsdk::ToRedisStringVector(test_case.return_str);
+  auto return_vec = vmsdk::ToValkeyStringVector(test_case.return_str);
   args.insert(args.end(), return_vec.begin(), return_vec.end());
   bool timeout_expected_success = true;
   if (timeout_ms.has_value()) {
     const absl::string_view kTimeoutParam = "Timeout";
-    args.push_back(RedisModule_CreateString(nullptr, kTimeoutParam.data(),
-                                            kTimeoutParam.size()));
+    args.push_back(ValkeyModule_CreateString(nullptr, kTimeoutParam.data(),
+                                             kTimeoutParam.size()));
     auto timeout_str = std::to_string(timeout_ms.value());
-    args.push_back(RedisModule_CreateString(nullptr, timeout_str.data(),
-                                            timeout_str.size()));
+    args.push_back(ValkeyModule_CreateString(nullptr, timeout_str.data(),
+                                             timeout_str.size()));
     if (timeout_ms.value() >= kMaxTimeoutMs + 1) {
       timeout_expected_success = false;
     }
@@ -188,12 +184,16 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
   bool limit_expected_success = true;
   if (!kLimitOptions[limit_itr].second.empty()) {
     auto limit_vec =
-        vmsdk::ToRedisStringVector(kLimitOptions[limit_itr].second);
+        vmsdk::ToValkeyStringVector(kLimitOptions[limit_itr].second);
     args.insert(args.end(), limit_vec.begin(), limit_vec.end());
     limit_expected_success = kLimitOptions[limit_itr].first;
   }
-  auto params_vec = vmsdk::ToRedisStringVector(test_case.params_str);
+  auto params_vec = vmsdk::ToValkeyStringVector(test_case.params_str);
   args.insert(args.end(), params_vec.begin(), params_vec.end());
+<<<<<<< HEAD
+=======
+  auto floats_vec = FloatToValkeyStringVector(floats);
+>>>>>>> main
   bool dialect_expected_success = true;
   if (test_case.vector_query) {
     auto floats_vec = FloatToValkeyStringVector(floats);
@@ -203,16 +203,29 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
     args.insert(args.end(), search_parameters_vec.begin(),
                 search_parameters_vec.end());
 
+<<<<<<< HEAD
     if (!kDialectOptions[dialect_itr].second.empty()) {
         auto dialect_vec =
             vmsdk::ToValkeyStringVector(kDialectOptions[dialect_itr].second);
         args.insert(args.end(), dialect_vec.begin(), dialect_vec.end());
         dialect_expected_success = kDialectOptions[dialect_itr].first;
     }
+=======
+  auto search_parameters_vec =
+      vmsdk::ToValkeyStringVector(test_case.search_parameters_str);
+  args.insert(args.end(), search_parameters_vec.begin(),
+              search_parameters_vec.end());
+
+  if (!kDialectOptions[dialect_itr].second.empty()) {
+    auto dialect_vec =
+        vmsdk::ToValkeyStringVector(kDialectOptions[dialect_itr].second);
+    args.insert(args.end(), dialect_vec.begin(), dialect_vec.end());
+    dialect_expected_success = kDialectOptions[dialect_itr].first;
+>>>>>>> main
   }
   if (add_end_unexpected_param) {
     args.push_back(
-        RedisModule_CreateString(nullptr, "END_UNEXPECTED_PARAM", 0));
+        ValkeyModule_CreateString(nullptr, "END_UNEXPECTED_PARAM", 0));
   }
   auto &schema_manager = SchemaManager::Instance();
 
@@ -231,6 +244,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
   EXPECT_EQ(search_params.ok(), expected_success);
   if (search_params.ok()) {
     EXPECT_EQ(search_params.value()->index_schema_name, key_str);
+<<<<<<< HEAD
     if (test_case.vector_query) {
         // Vector query specific checks
         std::string vector_str((char *)(&floats[0]), floats.size() * sizeof(float));
@@ -251,6 +265,18 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
         EXPECT_EQ(search_params.value()->k, 0);
         EXPECT_FALSE(search_params.value()->ef.has_value());
         EXPECT_TRUE(search_params.value()->attribute_alias.empty());
+=======
+    EXPECT_EQ(search_params.value()->attribute_alias,
+              test_case.attribute_alias);
+    std::string vector_str((char *)(&floats[0]), floats.size() * sizeof(float));
+    EXPECT_EQ(search_params.value()->query, vector_str.c_str());
+    EXPECT_EQ(search_params.value()->k, test_case.k);
+    EXPECT_EQ(search_params.value()->ef, test_case.ef);
+    auto score_as = vmsdk::MakeUniqueValkeyString(test_case.score_as);
+    if (test_case.score_as.empty()) {
+      score_as =
+          index_schema->DefaultReplyScoreAs(test_case.attribute_alias).value();
+>>>>>>> main
     }
     EXPECT_EQ(search_params.value()->no_content,
               no_content || test_case.no_content);
@@ -297,7 +323,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
     }
   }
   for (const auto &arg : args) {
-    TestRedisModule_FreeString(nullptr, arg);
+    TestValkeyModule_FreeString(nullptr, arg);
   }
 }
 

@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef VALKEYSEARCH_SRC_INDEX_SCHEMA_H_
@@ -64,10 +42,10 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
-bool ShouldBlockClient(RedisModuleCtx *ctx, bool inside_multi_exec,
+bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
                        bool from_backfill);
 
-using RDBLoadFunc = void *(*)(RedisModuleIO *, int);
+using RDBLoadFunc = void *(*)(ValkeyModuleIO *, int);
 using FreeFunc = void (*)(void *);
 
 class IndexSchema : public KeyspaceEventSubscription,
@@ -93,20 +71,20 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::weak_ptr<IndexSchema> GetWeakPtr() { return weak_from_this(); }
 
   static absl::StatusOr<std::shared_ptr<IndexSchema>> Create(
-      RedisModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto,
+      ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto,
       vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes = false);
   ~IndexSchema() override;
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
       absl::string_view attribute_alias) const;
   virtual absl::StatusOr<std::string> GetIdentifier(
       absl::string_view attribute_alias) const;
-  absl::StatusOr<vmsdk::UniqueRedisString> DefaultReplyScoreAs(
+  absl::StatusOr<vmsdk::UniqueValkeyString> DefaultReplyScoreAs(
       absl::string_view attribute_alias) const;
   absl::Status AddIndex(absl::string_view attribute_alias,
                         absl::string_view identifier,
                         std::shared_ptr<indexes::IndexBase> index);
 
-  void RespondWithInfo(RedisModuleCtx *ctx) const;
+  void RespondWithInfo(ValkeyModuleCtx *ctx) const;
 
   inline const AttributeDataType &GetAttributeDataType() const override {
     return *attribute_data_type_;
@@ -119,10 +97,10 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline const std::string &GetName() const { return name_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
 
-  void OnKeyspaceNotification(RedisModuleCtx *ctx, int type, const char *event,
-                              RedisModuleString *key) override;
+  void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type, const char *event,
+                              ValkeyModuleString *key) override;
 
-  uint32_t PerformBackfill(RedisModuleCtx *ctx, uint32_t batch_size);
+  uint32_t PerformBackfill(ValkeyModuleCtx *ctx, uint32_t batch_size);
 
   bool IsBackfillInProgress() const {
     auto &backfill_job = backfill_job_.Get();
@@ -139,23 +117,23 @@ class IndexSchema : public KeyspaceEventSubscription,
   virtual absl::Status RDBSave(SafeRDB *rdb) const;
 
   static absl::StatusOr<std::shared_ptr<IndexSchema>> LoadFromRDB(
-      RedisModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,
+      ValkeyModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,
       std::unique_ptr<data_model::IndexSchema> index_schema_proto,
       SupplementalContentIter &&supplemental_iter);
 
-  bool IsInCurrentDB(RedisModuleCtx *ctx) const;
+  bool IsInCurrentDB(ValkeyModuleCtx *ctx) const;
 
-  virtual void OnSwapDB(RedisModuleSwapDbInfo *swap_db_info);
-  virtual void OnLoadingEnded(RedisModuleCtx *ctx);
+  virtual void OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info);
+  virtual void OnLoadingEnded(ValkeyModuleCtx *ctx);
 
   inline const Stats &GetStats() const { return stats_; }
-  void ProcessSingleMutationAsync(RedisModuleCtx *ctx, bool from_backfill,
+  void ProcessSingleMutationAsync(ValkeyModuleCtx *ctx, bool from_backfill,
                                   const InternedStringPtr &key,
                                   vmsdk::StopWatch *delay_capturer);
   std::unique_ptr<data_model::IndexSchema> ToProto() const;
   struct DocumentMutation {
     struct AttributeData {
-      vmsdk::UniqueRedisString data;
+      vmsdk::UniqueValkeyString data;
       indexes::DeletionType deletion_type{indexes::DeletionType::kNone};
     };
     std::optional<absl::flat_hash_map<std::string, AttributeData>> attributes;
@@ -174,14 +152,14 @@ class IndexSchema : public KeyspaceEventSubscription,
                                      indexes::VectorBase *vector_index);
 
  protected:
-  IndexSchema(RedisModuleCtx *ctx,
+  IndexSchema(ValkeyModuleCtx *ctx,
               const data_model::IndexSchema &index_schema_proto,
               std::unique_ptr<AttributeDataType> attribute_data_type,
               vmsdk::ThreadPool *mutations_thread_pool);
-  absl::Status Init(RedisModuleCtx *ctx);
+  absl::Status Init(ValkeyModuleCtx *ctx);
 
  private:
-  vmsdk::UniqueRedisDetachedThreadSafeContext detached_ctx_;
+  vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
   absl::flat_hash_map<std::string, Attribute> attributes_;
   KeyspaceEventManager *keyspace_event_manager_;
   std::vector<std::string> subscribed_key_prefixes_;
@@ -197,14 +175,14 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   struct BackfillJob {
     BackfillJob() = delete;
-    BackfillJob(RedisModuleCtx *ctx, absl::string_view name, int db_num);
+    BackfillJob(ValkeyModuleCtx *ctx, absl::string_view name, int db_num);
     bool IsScanDone() const { return scan_ctx.get() == nullptr; }
     void MarkScanAsDone() {
       scan_ctx.reset();
       cursor.reset();
     }
-    vmsdk::UniqueRedisDetachedThreadSafeContext scan_ctx;
-    vmsdk::UniqueRedisScanCursor cursor;
+    vmsdk::UniqueValkeyDetachedThreadSafeContext scan_ctx;
+    vmsdk::UniqueValkeyScanCursor cursor;
     uint64_t scanned_key_count{0};
     uint64_t db_size;
     vmsdk::StopWatch stopwatch;
@@ -216,14 +194,14 @@ class IndexSchema : public KeyspaceEventSubscription,
       vector_externalizer_subscriptions_;
   void VectorExternalizer(const InternedStringPtr &key,
                           absl::string_view attribute_identifier,
-                          vmsdk::UniqueRedisString &record);
+                          vmsdk::UniqueValkeyString &record);
 
   mutable Stats stats_;
 
-  void ProcessKeyspaceNotification(RedisModuleCtx *ctx, RedisModuleString *key,
-                                   bool from_backfill);
+  void ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
+                                   ValkeyModuleString *key, bool from_backfill);
 
-  void ProcessMutation(RedisModuleCtx *ctx,
+  void ProcessMutation(ValkeyModuleCtx *ctx,
                        MutatedAttributes &mutated_attributes,
                        const InternedStringPtr &interned_key,
                        bool from_backfill);
@@ -233,20 +211,21 @@ class IndexSchema : public KeyspaceEventSubscription,
   void EnqueueMultiMutation(const InternedStringPtr &key);
 
   bool IsTrackedByAnyIndex(const InternedStringPtr &key) const;
-  void SyncProcessMutation(RedisModuleCtx *ctx,
+  void SyncProcessMutation(ValkeyModuleCtx *ctx,
                            MutatedAttributes &mutated_attributes,
                            const InternedStringPtr &key);
-  void ProcessAttributeMutation(RedisModuleCtx *ctx, const Attribute &attribute,
+  void ProcessAttributeMutation(ValkeyModuleCtx *ctx,
+                                const Attribute &attribute,
                                 const InternedStringPtr &key,
-                                vmsdk::UniqueRedisString data,
+                                vmsdk::UniqueValkeyString data,
                                 indexes::DeletionType deletion_type);
-  static void BackfillScanCallback(RedisModuleCtx *ctx,
-                                   RedisModuleString *keyname,
-                                   RedisModuleKey *key, void *privdata);
-  bool DeleteIfNotInRedisDict(RedisModuleCtx *ctx, RedisModuleString *key,
-                              const Attribute &attribute);
-
-  bool TrackMutatedRecord(RedisModuleCtx *ctx, const InternedStringPtr &key,
+  static void BackfillScanCallback(ValkeyModuleCtx *ctx,
+                                   ValkeyModuleString *keyname,
+                                   ValkeyModuleKey *key, void *privdata);
+  bool DeleteIfNotInValkeyDict(ValkeyModuleCtx *ctx, ValkeyModuleString *key,
+                               const Attribute &attribute);
+  vmsdk::BlockedClientCategory GetBlockedCategoryFromProto() const;
+  bool TrackMutatedRecord(ValkeyModuleCtx *ctx, const InternedStringPtr &key,
                           MutatedAttributes &&mutated_attributes,
                           bool from_backfill, bool block_client)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);

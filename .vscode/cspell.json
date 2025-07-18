@@ -13,20 +13,22 @@
     // words - list of words to be always considered correct
     "words": [
         "absl",
-        "vmsdk",
-        "redis",
-        "Valkey",
-        "nonexistentkey",
-        "valkeysearch",
-        "hnsw",
-        "hnswlib",
-        "MRMW",
+        "bazel",
         "Externalizer",
         "highwayhash",
+        "hnsw",
+        "hnswlib",
+        "Inorder",
+        "MRMW",
         "mstime",
         "NOLINTNEXTLINE",
+        "nonexistentkey",
+        "redis",
+        "Redisearch",
         "synchronistically",
-        "bazel",
+        "Valkey",
+        "valkeysearch",
+        "vmsdk"
     ],
     // flagWords - list of words to be always considered incorrect
     // This is useful for offensive words and common spelling errors.

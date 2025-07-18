@@ -10,8 +10,8 @@ RUN_TEST=""
 RUN_BUILD="yes"
 DUMP_TEST_ERRORS_STDOUT="no"
 NINJA_TOOL="ninja"
-INTEGRETION_TEST="no"
-ASAN_BUILD="no"
+INTEGRATION_TEST="no"
+SAN_BUILD="no"
 ARGV=$@
 EXIT_CODE=0
 
@@ -39,6 +39,7 @@ Usage: build.sh [options...]
     --run-integration-tests   Run integration tests.
     --use-system-modules      Use system's installed gRPC, Protobuf & Abseil dependencies.
     --asan                    Build with address sanitizer enabled.
+    --tsan                    Build with thread sanitizer enabled.
 
 Example usage:
 
@@ -87,7 +88,7 @@ do
         echo "Running test ${RUN_TEST}"
         ;;
     --run-integration-tests)
-        INTEGRETION_TEST="yes"
+        INTEGRATION_TEST="yes"
         shift || true
         echo "Running integration tests"
         ;;
@@ -102,8 +103,14 @@ do
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
     --asan)
-        CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DASAN_BUILD=ON"
-        ASAN_BUILD="yes"
+        CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DSAN_BUILD=address"
+        SAN_BUILD="address"
+        shift || true
+        echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
+        ;;
+     --tsan)
+        CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DSAN_BUILD=thread"
+        SAN_BUILD="thread"
         shift || true
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
@@ -123,11 +130,21 @@ do
     esac
 done
 
+# Capitalize a word. This method is compatible with bash-3 and bash-4
+function capitalize_string() {
+    local string=$1
+    local first_char=${string:0:1}
+    local remainder=${string:1}
+    first_char=$(echo "${first_char}" | tr '[:lower:]' '[:upper:]')
+    remainder=$(echo "${remainder}" | tr '[:upper:]' '[:lower:]')
+    echo ${first_char}${remainder}
+}
+
 function configure() {
     printf "${BOLD_PINK}Running cmake...${RESET}\n"
     mkdir -p ${BUILD_DIR}
     cd $_
-    local BUILD_TYPE=$(echo ${BUILD_CONFIG^})
+    local BUILD_TYPE=$(capitalize_string ${BUILD_CONFIG})
     rm -f CMakeCache.txt
     printf "Running: cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -GNinja ${CMAKE_EXTRA_ARGS}\n"
     cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -GNinja ${CMAKE_EXTRA_ARGS}
@@ -175,9 +192,9 @@ function print_test_error_and_exit() {
         cp /dev/null ${TEST_OUTPUT_FILE}
     fi
 
-    # When running tests with ASan enabled, do not terminate the execution after the first failure continue
+    # When running tests with sanitizer enabled, do not terminate the execution after the first failure continue
     # running the remainder of the tests
-    if [[ "${ASAN_BUILD}" == "no" ]]; then
+    if [[ "${SAN_BUILD}" == "no" ]]; then
         print_test_summary
         exit 1
     else
@@ -201,13 +218,19 @@ function check_tools() {
         check_tool ${tool}
     done
 
-    # Check for ninja. On RedHat based Linux, it is called ninja-build, while on Debian based Linux, it is simply ninja
-    # Ubuntu / Mint et al will report "ID_LIKE=debian"
-    local debian_output=$(cat /etc/*-release|grep -i debian|wc -l)
-    if [ ${debian_output} -gt 0 ]; then
+    os_name=$(uname -s)
+    if [[ "${os_name}" == "Darwin" ]]; then
+        # ninja is can be installed via "brew"
         NINJA_TOOL="ninja"
     else
-        NINJA_TOOL="ninja-build"
+        # Check for ninja. On RedHat based Linux, it is called ninja-build, while on Debian based Linux, it is simply ninja
+        # Ubuntu / Mint et al will report "ID_LIKE=debian"
+        local debian_output=$(cat /etc/*-release|grep -i debian|wc -l)
+        if [ ${debian_output} -gt 0 ]; then
+            NINJA_TOOL="ninja"
+        else
+            NINJA_TOOL="ninja-build"
+        fi
     fi
     check_tool ${NINJA_TOOL}
 }
@@ -226,10 +249,10 @@ function is_configure_required() {
         echo "yes"
         return
     fi
-    local build_file_lastmodified=$(stat --printf "%Y" ${ninja_build_file})
+    local build_file_lastmodified=$(date -r ${ninja_build_file} +%s)
     local cmake_files=$(find ${ROOT_DIR} -name "CMakeLists.txt" -o -name "*.cmake"| grep -v ".build-release" | grep -v ".build-debug")
     for cmake_file in ${cmake_files}; do
-        local cmake_file_modified=$(stat --printf "%Y" ${cmake_file})
+        local cmake_file_modified=$(date -r ${cmake_file} +%s)
         if [ ${cmake_file_modified} -gt ${build_file_lastmodified} ]; then
             echo "yes"
             return
@@ -247,9 +270,14 @@ cleanup() {
 trap cleanup EXIT
 
 BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
-if [[ "${ASAN_BUILD}" == "yes" ]]; then
-    printf "${BOLD_PINK}ASAN build is enabled${RESET}\n"
-    BUILD_DIR=${BUILD_DIR}-asan
+if [[ "${SAN_BUILD}" != "no" ]]; then
+    printf "${BOLD_PINK}${SAN_BUILD} sanitizer build is enabled${RESET}\n"
+    if [[ "${SAN_BUILD}" == "address" ]]; then
+        BUILD_DIR=${BUILD_DIR}-asan
+    else
+        BUILD_DIR=${BUILD_DIR}-tsan
+        export TSAN_OPTIONS="suppressions=${ROOT_DIR}/ci/tsan.supp"
+    fi
 fi
 
 TESTS_DIR=${BUILD_DIR}/tests
@@ -274,7 +302,7 @@ BUILD_RUNTIME=$((END_TIME - START_TIME))
 
 START_TIME=`date +%s`
 
-if [[ "${ASAN_BUILD}" == "yes" ]]; then
+if [[ "${SAN_BUILD}" != "no" ]]; then
     export ASAN_OPTIONS="detect_odr_violation=0"
 fi
 
@@ -295,7 +323,7 @@ elif [ ! -z "${RUN_TEST}" ]; then
     print_test_prefix "${TESTS_DIR}/${RUN_TEST}"
     (${TESTS_DIR}/${RUN_TEST} && print_test_ok) || print_test_error_and_exit
     print_test_summary
-elif [[ "${INTEGRETION_TEST}" == "yes" ]]; then
+elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     cd testing/integration
     params=""
     if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
@@ -305,8 +333,11 @@ elif [[ "${INTEGRETION_TEST}" == "yes" ]]; then
         params="${params} --debug"
     fi
 
-    if [[ "${ASAN_BUILD}" == "yes" ]]; then
+    if [[ "${SAN_BUILD}" == "address" ]]; then
         params="${params} --asan"
+    fi
+    if [[ "${SAN_BUILD}" == "thread" ]]; then
+        params="${params} --tsan"
     fi
     ./run.sh ${params}
 fi

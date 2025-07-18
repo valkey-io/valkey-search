@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef VMSDK_SRC_TYPE_CONVERSIONS_H_
@@ -113,17 +91,17 @@ inline absl::StatusOr<int> To(absl::string_view str) {
   return ToNumeric<int>(str);
 }
 
-inline absl::string_view ToStringView(const RedisModuleString *str) {
+inline absl::string_view ToStringView(const ValkeyModuleString *str) {
   if (!str) {
     return {};
   }
   size_t length = 0;
-  const char *str_ptr = RedisModule_StringPtrLen(str, &length);
+  const char *str_ptr = ValkeyModule_StringPtrLen(str, &length);
   return {str_ptr, length};
 }
 
 template <typename T>
-inline absl::StatusOr<T> To(const RedisModuleString *str) {
+inline absl::StatusOr<T> To(const ValkeyModuleString *str) {
   return To<T>(ToStringView(str));
 }
 
@@ -136,6 +114,13 @@ template <>
 inline absl::StatusOr<uint64_t> To(absl::string_view str) {
   return ToNumeric<uint64_t>(str);
 }
+
+#if defined(__clang__)
+template <>
+inline absl::StatusOr<unsigned long> To(absl::string_view str) {
+  return ToNumeric<uint64_t>(str);
+}
+#endif
 
 template <>
 inline absl::StatusOr<double> To(absl::string_view str) {
@@ -177,7 +162,7 @@ inline absl::StatusOr<T> ToEnum(
 
 template <typename T>
 inline absl::StatusOr<T> ToEnum(
-    const RedisModuleString *param,
+    const ValkeyModuleString *param,
     const absl::flat_hash_map<absl::string_view, T> &map) {
   if (!param) {
     return absl::InvalidArgumentError("unexpected nullptr");

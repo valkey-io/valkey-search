@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 #pragma once
 
@@ -35,6 +13,7 @@
 
 #include "absl/log/check.h"
 #include "absl/status/status.h"
+#include "absl/synchronization/mutex.h"
 #include "gtest/gtest_prod.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -45,14 +24,14 @@ namespace config {
 /// Flags to further specify the behavior of the config
 /// These can be specified using the Builder().WithFlags(...) method (see below)
 enum Flags {
-  kDefault = REDISMODULE_CONFIG_DEFAULT,
-  kImmutable = REDISMODULE_CONFIG_IMMUTABLE,
-  kSensitive = REDISMODULE_CONFIG_SENSITIVE,
-  kHidden = REDISMODULE_CONFIG_HIDDEN,
-  kProtected = REDISMODULE_CONFIG_PROTECTED,
-  kDenyLoading = REDISMODULE_CONFIG_DENY_LOADING,
-  kMemory = REDISMODULE_CONFIG_MEMORY,
-  kBitFlags = REDISMODULE_CONFIG_BITFLAGS,
+  kDefault = VALKEYMODULE_CONFIG_DEFAULT,
+  kImmutable = VALKEYMODULE_CONFIG_IMMUTABLE,
+  kSensitive = VALKEYMODULE_CONFIG_SENSITIVE,
+  kHidden = VALKEYMODULE_CONFIG_HIDDEN,
+  kProtected = VALKEYMODULE_CONFIG_PROTECTED,
+  kDenyLoading = VALKEYMODULE_CONFIG_DENY_LOADING,
+  kMemory = VALKEYMODULE_CONFIG_MEMORY,
+  kBitFlags = VALKEYMODULE_CONFIG_BITFLAGS,
 };
 
 /// Support Valkey configuration entries in a one-liner.
@@ -82,7 +61,7 @@ enum Flags {
 ///            [](const long long new_value) -> absl::Status {
 ///              return absl::OkStatus();
 ///            })
-///        .WithFlags(REDISMODULE_CONFIG_DEFAULT)
+///        .WithFlags(VALKEYMODULE_CONFIG_DEFAULT)
 ///        .Build();
 /// ```
 ///
@@ -102,10 +81,10 @@ class ModuleConfigManager {
 
   /// Do the actual registration with Valkey for all configuration items that
   /// previously registered themselves with this manager
-  absl::Status Init(RedisModuleCtx *ctx);
+  absl::Status Init(ValkeyModuleCtx *ctx);
 
   /// Parse and load command line arguments
-  absl::Status ParseAndLoadArgv(RedisModuleCtx *ctx, RedisModuleString **argv,
+  absl::Status ParseAndLoadArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                                 int argc);
   /// Call this method to register a configuration item with this manager. This
   /// method is mainly used by the constructor of `ConfigBase` so users should
@@ -118,7 +97,8 @@ class ModuleConfigManager {
   void UnregisterConfig(Registerable *config_item);
 
  private:
-  absl::Status UpdateConfigFromKeyVal(RedisModuleCtx *ctx, std::string_view key,
+  absl::Status UpdateConfigFromKeyVal(ValkeyModuleCtx *ctx,
+                                      std::string_view key,
                                       std::string_view value);
   absl::flat_hash_map<std::string, Registerable *> entries_;
   friend class Configbase;
@@ -130,7 +110,7 @@ class Registerable {
   Registerable(std::string_view name) : name_(name) {}
   virtual ~Registerable() = default;
 
-  virtual absl::Status Register(RedisModuleCtx *ctx) = 0;
+  virtual absl::Status Register(ValkeyModuleCtx *ctx) = 0;
   /// Attempt to initialize the value from a string. For example, a subclass of
   /// `Boolean` should check that `value` is one of: [`yes`, `no`, `true`,
   /// `false`] otherwise return an error status code
@@ -139,7 +119,7 @@ class Registerable {
 
   // bitwise OR'ed flags of `Flags`
   inline void SetFlags(size_t flags) { flags_ = flags; }
-  inline bool IsHidden() const { return flags_ & REDISMODULE_CONFIG_HIDDEN; }
+  inline bool IsHidden() const { return flags_ & VALKEYMODULE_CONFIG_HIDDEN; }
 
  protected:
   std::string name_;
@@ -229,7 +209,7 @@ class Number : public ConfigBase<long long> {
 
  protected:
   // Implementation specific
-  absl::Status Register(RedisModuleCtx *ctx) override;
+  absl::Status Register(ValkeyModuleCtx *ctx) override;
   long long GetValueImpl() const override {
     return current_value_.load(std::memory_order_relaxed);
   }
@@ -256,7 +236,7 @@ class Enum : public ConfigBase<int> {
 
  protected:
   // Implementation specific
-  absl::Status Register(RedisModuleCtx *ctx) override;
+  absl::Status Register(ValkeyModuleCtx *ctx) override;
   int GetValueImpl() const override {
     return current_value_.load(std::memory_order_relaxed);
   }
@@ -280,7 +260,7 @@ class Boolean : public ConfigBase<bool> {
 
  protected:
   // Implementation specific
-  absl::Status Register(RedisModuleCtx *ctx) override;
+  absl::Status Register(ValkeyModuleCtx *ctx) override;
   bool GetValueImpl() const override {
     return current_value_.load(std::memory_order_relaxed);
   }
@@ -292,6 +272,32 @@ class Boolean : public ConfigBase<bool> {
   bool default_value_{false};
   std::atomic_bool current_value_{0};
 
+  FRIEND_TEST(Builder, ConfigBuilder);
+};
+
+class String : public ConfigBase<std::string> {
+ public:
+  String(std::string_view name, std::string_view default_value);
+  ~String() override = default;
+  absl::Status FromString(std::string_view value) override;
+  const std::string &GetString() const { return value_; }
+
+ protected:
+  // Implementation specific
+  absl::Status Register(ValkeyModuleCtx *ctx) override;
+
+  std::string GetValueImpl() const override ABSL_LOCKS_EXCLUDED(mutex_) {
+    absl::MutexLock lock{&mutex_};
+    return value_;
+  }
+
+  void SetValueImpl(std::string val) override ABSL_LOCKS_EXCLUDED(mutex_) {
+    absl::MutexLock lock{&mutex_};
+    value_ = val;
+  }
+
+  mutable absl::Mutex mutex_;
+  std::string value_;
   FRIEND_TEST(Builder, ConfigBuilder);
 };
 
@@ -335,6 +341,7 @@ class ConfigBuilder {
 /// `int` -> Enum configuration.
 template <typename ValkeyT, typename... Args>
   requires(std::is_same<ValkeyT, long long>() == true ||
+           std::is_same<ValkeyT, std::string>() == true ||
            std::is_same<ValkeyT, int>() == true ||
            std::is_same<ValkeyT, bool>() == true)
 ConfigBuilder<ValkeyT> Builder(Args &&...args) {
@@ -347,6 +354,9 @@ ConfigBuilder<ValkeyT> Builder(Args &&...args) {
   } else if constexpr (std::is_same<ValkeyT, int>()) {
     // Boolean
     return ConfigBuilder<int>(new Enum(std::forward<Args>(args)...));
+  } else if constexpr (std::is_same<ValkeyT, std::string>()) {
+    // String
+    return ConfigBuilder<std::string>(new String(std::forward<Args>(args)...));
   } else {
     static_assert(!std::is_same_v<ValkeyT, ValkeyT>, "Unreachable");
   }
@@ -369,6 +379,21 @@ template <typename... Args>
 ConfigBuilder<bool> BooleanBuilder(Args &&...args) {
   return Builder<bool>(std::forward<Args>(args)...);
 }
+
+/// Wrapper for building String
+template <typename... Args>
+ConfigBuilder<std::string> StringBuilder(Args &&...args) {
+  return Builder<std::string>(std::forward<Args>(args)...);
+}
+
+#define CHECK_RANGE(MIN, MAX, CONFIG_NAME)                         \
+  [](const int value) {                                            \
+    if (value < MIN || value > MAX) {                              \
+      return absl::OutOfRangeError(absl::StrFormat(                \
+          "%s must be between %u and %u", CONFIG_NAME, MIN, MAX)); \
+    }                                                              \
+    return absl::OkStatus();                                       \
+  }
 
 }  // namespace config
 }  // namespace vmsdk

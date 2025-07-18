@@ -1,30 +1,8 @@
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
  */
 #include "valkey_search_options.h"
 
@@ -38,15 +16,6 @@ namespace options {
 
 constexpr uint32_t kHNSWDefaultBlockSize{10240};
 constexpr uint32_t kHNSWMinimumBlockSize{0};
-constexpr uint32_t kMaxThreadsCount{1024};
-
-constexpr absl::string_view kHNSWBlockSizeConfig{"hnsw-block-size"};
-constexpr absl::string_view kReaderThreadsConfig{"reader-threads"};
-constexpr absl::string_view kWriterThreadsConfig{"writer-threads"};
-constexpr absl::string_view kUseCoordinator{"use-coordinator"};
-constexpr absl::string_view kLogLevel{"log-level"};
-
-static const int64_t kDefaultThreadsCount = vmsdk::GetPhysicalCPUCoresCount();
 
 namespace {
 
@@ -83,18 +52,19 @@ absl::Status ValidateLogLevel(const int value) {
 // Configuration entries
 namespace config = vmsdk::config;
 
-// Register an enumerator for the log level
-static const std::vector<std::string_view> kLogLevelNames = {
-    REDISMODULE_LOGLEVEL_WARNING,
-    REDISMODULE_LOGLEVEL_NOTICE,
-    REDISMODULE_LOGLEVEL_VERBOSE,
-    REDISMODULE_LOGLEVEL_DEBUG,
-};
+/// Register the "--query-string-bytes" flag. Controls the length of the query
+/// string of the FT.SEARCH cmd.
+constexpr absl::string_view kQueryStringBytesConfig{"query-string-bytes"};
+constexpr uint32_t kDefaultQueryStringBytes{10240};
+constexpr uint32_t kMinimumQueryStringBytes{1};
+static auto query_string_bytes =
+    config::NumberBuilder(kQueryStringBytesConfig,   // name
+                          kDefaultQueryStringBytes,  // default size
+                          kMinimumQueryStringBytes,  // min size
+                          UINT_MAX)                  // max size
+        .Build();
 
-static const std::vector<int> kLogLevelValues = {
-    static_cast<int>(LogLevel::kWarning), static_cast<int>(LogLevel::kNotice),
-    static_cast<int>(LogLevel::kVerbose), static_cast<int>(LogLevel::kDebug)};
-
+constexpr absl::string_view kHNSWBlockSizeConfig{"hnsw-block-size"};
 static auto hnsw_block_size =
     config::NumberBuilder(kHNSWBlockSizeConfig,   // name
                           kHNSWDefaultBlockSize,  // default size
@@ -103,7 +73,11 @@ static auto hnsw_block_size =
         .WithValidationCallback(ValidateHNSWBlockSize)
         .Build();
 
+static const int64_t kDefaultThreadsCount = vmsdk::GetPhysicalCPUCoresCount();
+constexpr uint32_t kMaxThreadsCount{1024};
+
 /// Register the "--reader-threads" flag. Controls the readers thread pool
+constexpr absl::string_view kReaderThreadsConfig{"reader-threads"};
 static auto reader_threads_count =
     config::NumberBuilder(kReaderThreadsConfig,  // name
                           kDefaultThreadsCount,  // default size
@@ -117,6 +91,7 @@ static auto reader_threads_count =
         .Build();
 
 /// Register the "--reader-threads" flag. Controls the writer thread pool
+constexpr absl::string_view kWriterThreadsConfig{"writer-threads"};
 static auto writer_threads_count =
     config::NumberBuilder(kWriterThreadsConfig,  // name
                           kDefaultThreadsCount,  // default size
@@ -130,13 +105,27 @@ static auto writer_threads_count =
         .Build();
 
 /// Should this instance use coordinator?
+constexpr absl::string_view kUseCoordinator{"use-coordinator"};
 static auto use_coordinator =
     config::BooleanBuilder(kUseCoordinator, false)
-        .WithFlags(REDISMODULE_CONFIG_HIDDEN)  // can only be set during
-                                               // start-up
+        .WithFlags(VALKEYMODULE_CONFIG_HIDDEN)  // can only be set during
+                                                // start-up
         .Build();
 
+// Register an enumerator for the log level
+static const std::vector<std::string_view> kLogLevelNames = {
+    VALKEYMODULE_LOGLEVEL_WARNING,
+    VALKEYMODULE_LOGLEVEL_NOTICE,
+    VALKEYMODULE_LOGLEVEL_VERBOSE,
+    VALKEYMODULE_LOGLEVEL_DEBUG,
+};
+
+static const std::vector<int> kLogLevelValues = {
+    static_cast<int>(LogLevel::kWarning), static_cast<int>(LogLevel::kNotice),
+    static_cast<int>(LogLevel::kVerbose), static_cast<int>(LogLevel::kDebug)};
+
 /// Control the modules log level verbosity
+constexpr absl::string_view kLogLevel{"log-level"};
 static auto log_level =
     config::EnumBuilder(kLogLevel, static_cast<int>(LogLevel::kNotice),
                         kLogLevelNames, kLogLevelValues)
@@ -160,6 +149,8 @@ static auto log_level =
         })
         .WithValidationCallback(ValidateLogLevel)
         .Build();
+
+uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
   return dynamic_cast<vmsdk::config::Number&>(*hnsw_block_size);

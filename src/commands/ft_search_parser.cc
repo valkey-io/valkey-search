@@ -214,7 +214,6 @@ absl::Status Verify(query::VectorSearchParameters &parameters) {
           << "`EF_RUNTIME` must be a positive integer greater than 0 and cannot "
             "exceed "
           << max_ef_runtime_value << ".";
-
     }
     auto max_knn_value = options::GetMaxKnn().GetValue();
     VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(parameters.k, 1, max_knn_value))

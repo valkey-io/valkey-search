@@ -172,7 +172,6 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
   }
   auto params_vec = vmsdk::ToValkeyStringVector(test_case.params_str);
   args.insert(args.end(), params_vec.begin(), params_vec.end());
-  auto floats_vec = FloatToValkeyStringVector(floats);
   bool dialect_expected_success = true;
   if (test_case.vector_query) {
     auto floats_vec = FloatToValkeyStringVector(floats);

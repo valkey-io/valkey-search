@@ -40,10 +40,10 @@
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
 #include "src/keyspace_event_manager.h"
+#include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/vector_externalizer.h"
-#include "src/metrics.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -366,9 +366,11 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
   }
   if (added) {
     // Track key modifications by data type
-    if (attribute_data_type_->ToProto() == data_model::ATTRIBUTE_DATA_TYPE_HASH) {
+    if (attribute_data_type_->ToProto() ==
+        data_model::ATTRIBUTE_DATA_TYPE_HASH) {
       Metrics::GetStats().ingest_hash_keys++;
-    } else if (attribute_data_type_->ToProto() == data_model::ATTRIBUTE_DATA_TYPE_JSON) {
+    } else if (attribute_data_type_->ToProto() ==
+               data_model::ATTRIBUTE_DATA_TYPE_JSON) {
       Metrics::GetStats().ingest_json_keys++;
     }
     ProcessMutation(ctx, mutated_attributes, interned_key, from_backfill);
@@ -471,11 +473,11 @@ void IndexSchema::ProcessMultiQueue() {
   if (ABSL_PREDICT_TRUE(multi_mutations.keys.empty())) {
     return;
   }
-  
+
   // Track batch metrics
   Metrics::GetStats().ingest_last_batch_size = multi_mutations.keys.size();
   Metrics::GetStats().ingest_total_batches++;
-  
+
   multi_mutations.blocking_counter =
       std::make_unique<absl::BlockingCounter>(multi_mutations.keys.size());
   vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
@@ -982,7 +984,8 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
     itr->second.attributes.value() = std::move(mutated_attributes);
     itr->second.from_backfill = from_backfill;
     if (ABSL_PREDICT_TRUE(block_client)) {
-      vmsdk::BlockedClient blocked_client(ctx, true, GetBlockedCategoryFromProto());
+      vmsdk::BlockedClient blocked_client(ctx, true,
+                                          GetBlockedCategoryFromProto());
       blocked_client.MeasureTimeStart();
       itr->second.blocked_clients.emplace_back(std::move(blocked_client));
     }
@@ -996,7 +999,8 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
         std::move(mutated_attribute.second);
   }
   if (ABSL_PREDICT_TRUE(block_client)) {
-    vmsdk::BlockedClient blocked_client(ctx, true, GetBlockedCategoryFromProto());
+    vmsdk::BlockedClient blocked_client(ctx, true,
+                                        GetBlockedCategoryFromProto());
     blocked_client.MeasureTimeStart();
     itr->second.blocked_clients.emplace_back(std::move(blocked_client));
   }
@@ -1075,6 +1079,43 @@ void IndexSchema::VectorExternalizer(const InternedStringPtr &key,
   }
   VectorExternalizer::Instance().Remove(key, attribute_identifier,
                                         attribute_data_type_->ToProto());
+}
+
+IndexSchema::InfoIndexPartitionData IndexSchema::Stats::GetStats() const {
+  absl::MutexLock lock(&mutex_);
+  return InfoIndexPartitionData{
+      .num_docs = document_cnt,
+      .hash_indexing_failures = subscription_add.skipped_cnt,
+      .backfill_inqueue_tasks = backfill_inqueue_tasks,
+      .mutation_queue_size = mutation_queue_size_,
+      .recent_mutations_queue_delay =
+          mutation_queue_size_ > 0
+              ? static_cast<uint64_t>(mutations_queue_delay_ / absl::Seconds(1))
+              : 0};
+}
+
+// backfill scanned key count
+uint64_t IndexSchema::GetBackfillScannedKeyCount() const {
+  const auto &backfill_job = backfill_job_.Get();
+  return backfill_job.has_value() ? backfill_job->scanned_key_count : 0;
+}
+
+// backfill database size
+uint64_t IndexSchema::GetBackfillDbSize() const {
+  const auto &backfill_job = backfill_job_.Get();
+  return backfill_job.has_value() ? backfill_job->db_size : 0;
+}
+
+IndexSchema::InfoIndexPartitionData IndexSchema::GetInfoIndexPartitionData()
+    const {
+  InfoIndexPartitionData data = stats_.GetStats();
+  data.num_records = CountRecords();
+  data.backfill_scanned_count = GetBackfillScannedKeyCount();
+  data.backfill_db_size = GetBackfillDbSize();
+  data.backfill_complete_percent = GetBackfillPercent();
+  data.backfill_in_progress = IsBackfillInProgress();
+  data.state = std::string(GetStateForInfo());
+  return data;
 }
 
 }  // namespace valkey_search

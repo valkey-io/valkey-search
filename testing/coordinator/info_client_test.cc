@@ -23,7 +23,7 @@
 namespace valkey_search::coordinator {
 
 // Unit test that verifies InfoIndexPartition client byte counting works correctly
-class InfoIndexPartitionClientTest : public ::testing::Test {
+class InfoClientTest : public ::testing::Test {
  protected:
   void SetUp() override {
     // Reset metrics before each test
@@ -38,7 +38,7 @@ class InfoIndexPartitionClientTest : public ::testing::Test {
 };
 
 // Test that we correctly count bytes for InfoIndexPartition requests
-TEST_F(InfoIndexPartitionClientTest, CountsCorrectBytesOnSuccess) {
+TEST_F(InfoClientTest, CountsCorrectBytesOnSuccess) {
   // Create a real InfoIndexPartitionRequest with data
   auto request = std::make_unique<InfoIndexPartitionRequest>();
   request->set_index_name("test_index_for_byte_counting");
@@ -94,7 +94,7 @@ TEST_F(InfoIndexPartitionClientTest, CountsCorrectBytesOnSuccess) {
 }
 
 // Test that we don't count incoming bytes for error responses
-TEST_F(InfoIndexPartitionClientTest, DoesNotCountResponseBytesOnError) {
+TEST_F(InfoClientTest, DoesNotCountResponseBytesOnError) {
   // Create a real InfoIndexPartitionRequest with data
   auto request = std::make_unique<InfoIndexPartitionRequest>();
   request->set_index_name("test_index_error");

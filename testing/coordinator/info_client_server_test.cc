@@ -103,7 +103,7 @@ class FakeCoordinatorService final : public Coordinator::Service {
 };
 
 // Integration test that uses a real gRPC server with fake service
-class InfoIndexPartitionIntegrationTest : public ValkeySearchTest {
+class InfoClientServerTest : public ValkeySearchTest {
  protected:
   void SetUp() override {
     ValkeySearchTest::SetUp();
@@ -155,7 +155,7 @@ class InfoIndexPartitionIntegrationTest : public ValkeySearchTest {
 };
 
 // Test with existing index
-TEST_F(InfoIndexPartitionIntegrationTest, ExistingIndex) {
+TEST_F(InfoClientServerTest, ExistingIndex) {
   auto request = std::make_unique<InfoIndexPartitionRequest>();
   request->set_index_name("existing_index");
   
@@ -202,7 +202,7 @@ TEST_F(InfoIndexPartitionIntegrationTest, ExistingIndex) {
 }
 
 // Test with non-existent index
-TEST_F(InfoIndexPartitionIntegrationTest, NonExistentIndex) {
+TEST_F(InfoClientServerTest, NonExistentIndex) {
   auto request = std::make_unique<InfoIndexPartitionRequest>();
   request->set_index_name("non_existent_index");
   
@@ -238,7 +238,7 @@ TEST_F(InfoIndexPartitionIntegrationTest, NonExistentIndex) {
 }
 
 // Test with empty index
-TEST_F(InfoIndexPartitionIntegrationTest, EmptyIndex) {
+TEST_F(InfoClientServerTest, EmptyIndex) {
   auto request = std::make_unique<InfoIndexPartitionRequest>();
   request->set_index_name("empty_index");
   
@@ -275,7 +275,7 @@ TEST_F(InfoIndexPartitionIntegrationTest, EmptyIndex) {
 }
 
 // Test server error handling
-TEST_F(InfoIndexPartitionIntegrationTest, ServerError) {
+TEST_F(InfoClientServerTest, ServerError) {
   auto request = std::make_unique<InfoIndexPartitionRequest>();
   request->set_index_name("error_index");
   
@@ -310,7 +310,7 @@ TEST_F(InfoIndexPartitionIntegrationTest, ServerError) {
 }
 
 // Test multiple concurrent requests
-TEST_F(InfoIndexPartitionIntegrationTest, ConcurrentRequests) {
+TEST_F(InfoClientServerTest, ConcurrentRequests) {
   const int num_requests = 5;
   std::vector<std::promise<InfoIndexPartitionResponse>> response_promises(num_requests);
   std::vector<std::promise<grpc::Status>> status_promises(num_requests);

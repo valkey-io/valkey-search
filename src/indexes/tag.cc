@@ -307,7 +307,7 @@ std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
         PatriciaNodeIndex* node = it.Value();
         if (node != nullptr) {
           auto res = entries.insert(node);
-          if (res.second) {
+          if (res.second && node->value.has_value()) {
             size += node->value.value().size();
           }
         }
@@ -317,7 +317,7 @@ std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
       PatriciaNodeIndex* node = tree_.ExactMatcher(tag);
       if (node != nullptr) {
         auto res = entries.insert(node);
-        if (res.second) {
+        if (res.second && node->value.has_value()) {
           size += node->value.value().size();
         }
       }

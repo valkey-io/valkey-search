@@ -452,7 +452,7 @@ INSTANTIATE_TEST_SUITE_P(
             .params_str = " PARAMS 2",
             .filter_str = "* =>[KNN 5 @vec1 $BLOB]",
             .k = 5,
-            .expected_error_message = "Index field `vec1` not exists",
+            .expected_error_message = "Index field `vec1` does not exists",
         },
         {
             .test_name = "missing_index_field_w_score_as",
@@ -461,7 +461,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter_str = "* =>[KNN 5 @vec1 $BLOB]",
             .k = 5,
             .score_as = "as_test_1",
-            .expected_error_message = "Index field `vec1` not exists",
+            .expected_error_message = "Index field `vec1` does not exists",
         },
         {
             .test_name = "missing_return_1",

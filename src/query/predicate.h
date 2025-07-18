@@ -73,9 +73,9 @@ class NegatePredicate : public Predicate {
 
 class NumericPredicate : public Predicate {
  public:
-  NumericPredicate(const indexes::Numeric* index, absl::string_view identifier,
-                   double start, bool is_inclusive_start, double end,
-                   bool is_inclusive_end);
+  NumericPredicate(const indexes::Numeric* index, absl::string_view alias,
+                   absl::string_view identifier, double start,
+                   bool is_inclusive_start, double end, bool is_inclusive_end);
   const indexes::Numeric* GetIndex() const { return index_; }
   absl::string_view GetIdentifier() const {
     return vmsdk::ToStringView(identifier_.get());
@@ -83,6 +83,7 @@ class NumericPredicate : public Predicate {
   vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
     return vmsdk::RetainUniqueValkeyString(identifier_.get());
   }
+  absl::string_view GetAlias() const { return alias_; }
   double GetStart() const { return start_; }
   bool IsStartInclusive() const { return is_inclusive_start_; }
   double GetEnd() const { return end_; }
@@ -92,6 +93,7 @@ class NumericPredicate : public Predicate {
 
  private:
   const indexes::Numeric* index_;
+  std::string alias_;
   vmsdk::UniqueValkeyString identifier_;
   double start_;
   bool is_inclusive_start_;
@@ -101,13 +103,14 @@ class NumericPredicate : public Predicate {
 
 class TagPredicate : public Predicate {
  public:
-  TagPredicate(const indexes::Tag* index, absl::string_view identifier,
-               absl::string_view raw_tag_string,
+  TagPredicate(const indexes::Tag* index, absl::string_view alias,
+               absl::string_view identifier, absl::string_view raw_tag_string,
                const absl::flat_hash_set<absl::string_view>& tags);
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const absl::flat_hash_set<absl::string_view>* tags,
                 bool case_sensitive) const;
   const indexes::Tag* GetIndex() const { return index_; }
+  absl::string_view GetAlias() const { return alias_; }
   absl::string_view GetIdentifier() const {
     return vmsdk::ToStringView(identifier_.get());
   }
@@ -120,6 +123,7 @@ class TagPredicate : public Predicate {
  private:
   const indexes::Tag* index_;
   vmsdk::UniqueValkeyString identifier_;
+  std::string alias_;
   std::string raw_tag_string_;
   absl::flat_hash_set<std::string> tags_;
 };

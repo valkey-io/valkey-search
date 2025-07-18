@@ -43,16 +43,17 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
             absl::StrCat("`", predicate.tag().attribute_alias(),
                          "` is not indexed as a tag field"));
       }
-      attribute_identifiers.insert(
-          index_schema->GetIdentifier(predicate.tag().attribute_alias())
-              .value());
+      VMSDK_ASSIGN_OR_RETURN(
+          auto identifier,
+          index_schema->GetIdentifier(predicate.tag().attribute_alias()));
+      attribute_identifiers.insert(identifier);
       auto tag_index = dynamic_cast<indexes::Tag*>(index.get());
       VMSDK_ASSIGN_OR_RETURN(
           auto parsed_tags,
           tag_index->ParseSearchTags(predicate.tag().raw_tag_string(),
                                      tag_index->GetSeparator()));
       auto tag_predicate = std::make_unique<query::TagPredicate>(
-          tag_index, predicate.tag().attribute_alias(),
+          tag_index, predicate.tag().attribute_alias(), identifier,
           predicate.tag().raw_tag_string(), parsed_tags);
       return tag_predicate;
     }
@@ -65,12 +66,13 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
             absl::StrCat("`", predicate.numeric().attribute_alias(),
                          "` is not indexed as a numeric field"));
       }
-      attribute_identifiers.insert(predicate.numeric().attribute_alias());
+      VMSDK_ASSIGN_OR_RETURN(
+          auto identifier,
+          index_schema->GetIdentifier(predicate.numeric().attribute_alias()));
+      attribute_identifiers.insert(identifier);
       auto numeric_index = dynamic_cast<indexes::Numeric*>(index.get());
       auto numeric_predicate = std::make_unique<query::NumericPredicate>(
-          numeric_index,
-          index_schema->GetIdentifier(predicate.numeric().attribute_alias())
-              .value(),
+          numeric_index, predicate.numeric().attribute_alias(), identifier,
           predicate.numeric().start(), predicate.numeric().is_inclusive_start(),
           predicate.numeric().end(), predicate.numeric().is_inclusive_end());
       return numeric_predicate;
@@ -159,7 +161,7 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
       auto tag_predicate = dynamic_cast<const query::TagPredicate*>(&predicate);
       auto tag_predicate_proto = std::make_unique<Predicate>();
       tag_predicate_proto->mutable_tag()->set_attribute_alias(
-          tag_predicate->GetIdentifier());
+          tag_predicate->GetAlias());
       tag_predicate_proto->mutable_tag()->set_raw_tag_string(
           tag_predicate->GetTagString());
       return tag_predicate_proto;
@@ -169,7 +171,7 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
           dynamic_cast<const query::NumericPredicate*>(&predicate);
       auto numeric_predicate_proto = std::make_unique<Predicate>();
       numeric_predicate_proto->mutable_numeric()->set_attribute_alias(
-          numeric_predicate->GetIdentifier());
+          std::string(numeric_predicate->GetAlias()));
       numeric_predicate_proto->mutable_numeric()->set_start(
           numeric_predicate->GetStart());
       numeric_predicate_proto->mutable_numeric()->set_is_inclusive_start(

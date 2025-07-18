@@ -40,10 +40,10 @@
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
 #include "src/keyspace_event_manager.h"
+#include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/vector_externalizer.h"
-#include "src/metrics.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -243,7 +243,8 @@ absl::StatusOr<std::string> IndexSchema::GetIdentifier(
     absl::string_view attribute_alias) const {
   auto itr = attributes_.find(std::string{attribute_alias});
   if (itr == attributes_.end()) {
-    return absl::NotFoundError("Index field not exists");
+    return absl::NotFoundError(
+        absl::StrCat("Index field `", attribute_alias, "` not exists"));
   }
   return itr->second.GetIdentifier();
 }
@@ -366,9 +367,11 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
   }
   if (added) {
     // Track key modifications by data type
-    if (attribute_data_type_->ToProto() == data_model::ATTRIBUTE_DATA_TYPE_HASH) {
+    if (attribute_data_type_->ToProto() ==
+        data_model::ATTRIBUTE_DATA_TYPE_HASH) {
       Metrics::GetStats().ingest_hash_keys++;
-    } else if (attribute_data_type_->ToProto() == data_model::ATTRIBUTE_DATA_TYPE_JSON) {
+    } else if (attribute_data_type_->ToProto() ==
+               data_model::ATTRIBUTE_DATA_TYPE_JSON) {
       Metrics::GetStats().ingest_json_keys++;
     }
     ProcessMutation(ctx, mutated_attributes, interned_key, from_backfill);
@@ -471,11 +474,11 @@ void IndexSchema::ProcessMultiQueue() {
   if (ABSL_PREDICT_TRUE(multi_mutations.keys.empty())) {
     return;
   }
-  
+
   // Track batch metrics
   Metrics::GetStats().ingest_last_batch_size = multi_mutations.keys.size();
   Metrics::GetStats().ingest_total_batches++;
-  
+
   multi_mutations.blocking_counter =
       std::make_unique<absl::BlockingCounter>(multi_mutations.keys.size());
   vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
@@ -982,7 +985,8 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
     itr->second.attributes.value() = std::move(mutated_attributes);
     itr->second.from_backfill = from_backfill;
     if (ABSL_PREDICT_TRUE(block_client)) {
-      vmsdk::BlockedClient blocked_client(ctx, true, GetBlockedCategoryFromProto());
+      vmsdk::BlockedClient blocked_client(ctx, true,
+                                          GetBlockedCategoryFromProto());
       blocked_client.MeasureTimeStart();
       itr->second.blocked_clients.emplace_back(std::move(blocked_client));
     }
@@ -996,7 +1000,8 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
         std::move(mutated_attribute.second);
   }
   if (ABSL_PREDICT_TRUE(block_client)) {
-    vmsdk::BlockedClient blocked_client(ctx, true, GetBlockedCategoryFromProto());
+    vmsdk::BlockedClient blocked_client(ctx, true,
+                                        GetBlockedCategoryFromProto());
     blocked_client.MeasureTimeStart();
     itr->second.blocked_clients.emplace_back(std::move(blocked_client));
   }

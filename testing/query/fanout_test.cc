@@ -313,7 +313,7 @@ INSTANTIATE_TEST_SUITE_P(
                       negate: {
                         predicate: {
                           tag: {
-                            attribute_alias: "tag"
+                            attribute_alias: "tag_alias"
                             raw_tag_string: "content1"
                           }
                         }
@@ -323,13 +323,13 @@ INSTANTIATE_TEST_SUITE_P(
                       or: {
                         lhs: {
                           tag: {
-                            attribute_alias: "tag"
+                            attribute_alias: "tag_alias"
                             raw_tag_string: "content2,content3"
                           }
                         }
                         rhs: {
                           numeric: {
-                            attribute_alias: "numeric"
+                            attribute_alias: "numeric_alias"
                             start: 0.1
                             is_inclusive_start: true
                             end: 0.2
@@ -378,17 +378,19 @@ TEST_P(FanoutTest, TestFanout) {
 
   auto schema = CreateVectorHNSWSchema("test_index", &fake_ctx_);
   VMSDK_EXPECT_OK(schema);
-  EXPECT_CALL(**schema, GetIdentifier(::testing::_)).Times(::testing::AnyNumber());
+  EXPECT_CALL(**schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
 
   data_model::TagIndex tag_index;
   tag_index.set_separator(",");
   tag_index.set_case_sensitive(false);
   VMSDK_EXPECT_OK(schema.value()->AddIndex(
-      "tag", "tag", std::make_shared<indexes::Tag>(tag_index)));
+      "tag_alias", "tag_id", std::make_shared<indexes::Tag>(tag_index)));
 
   data_model::NumericIndex numeric_index;
   VMSDK_EXPECT_OK(schema.value()->AddIndex(
-      "numeric", "numeric", std::make_shared<indexes::Numeric>(numeric_index)));
+      "numeric_alias", "numeric_id",
+      std::make_shared<indexes::Numeric>(numeric_index)));
 
   InitThreadPools(5, 0);
   auto mock_coordinator_client_pool =
@@ -482,7 +484,7 @@ struct GetTargetsTestParam {
 class GetTargetsTest : public ValkeySearchTestWithParam<GetTargetsTestParam> {};
 
 std::string GetNodeId(int i) {
-  return std::string(VALKEYMODULE_NODE_ID_LEN, 'a' + i);
+  return {VALKEYMODULE_NODE_ID_LEN, static_cast<char>('a' + i)};
 }
 
 INSTANTIATE_TEST_SUITE_P(

@@ -224,6 +224,53 @@ def generate_test_cases():
             ),
         ),
         dict(
+            testcase_name="happy_case_all_returns_with_alias",
+            config=dict(
+                index_name="test_index_1",
+                vector_attribute_name="embedding",
+                search_index="test_index_1",
+                vector_search_attribute="embedding",
+                search_vector=generate_test_vector(100, 0),
+                filter="@numeric_alias:[1 2]",
+                knn=3,
+                score_as="score",
+                tag_alias="tag_alias",
+                numeric_alias="numeric_alias",
+                returns=None,
+                expected_error=None,
+                expected_result=[
+                    2,
+                    "2",
+                    [
+                        "score",
+                        "0.552786409855",
+                        "embedding",
+                        generate_test_vector(100, 2).tobytes(),
+                        "numeric",
+                        "2",
+                        "tag",
+                        "2",
+                        "not_indexed",
+                        "2",
+                    ],
+                    "1",
+                    [
+                        "score",
+                        "0.292893230915",
+                        "embedding",
+                        generate_test_vector(100, 1).tobytes(),
+                        "numeric",
+                        "1",
+                        "tag",
+                        "1",
+                        "not_indexed",
+                        "1",
+                    ],
+                ],
+                no_content=False,
+            ),
+        ),
+        dict(
             testcase_name="happy_case_just_embeddings",
             config=dict(
                 index_name="test_index",
@@ -256,7 +303,8 @@ def generate_test_cases():
                 ],
                 no_content=False,
             ),
-        )]
+        )
+        ]
     test_cases = []
     for store_data_type in utils.StoreDataType:
         for vector_index_type in utils.VectorIndexType:
@@ -562,7 +610,9 @@ class VectorSearchIntegrationTest(VSSTestCase):
                 config["index_name"],
                 config["store_data_type"],
                 attributes={
-                    config["vector_attribute_name"]: vector_definitions
+                    config["vector_attribute_name"]: vector_definitions,
+                    "tag": utils.TagDefinition(alias=config.get("tag_alias")),
+                    "numeric": utils.NumericDefinition(alias=config.get("numeric_alias")),
                 },
             ),
         )

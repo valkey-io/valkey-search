@@ -29,6 +29,7 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
+#include "src/index_schema.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "src/query/response_generator.h"
@@ -191,7 +192,6 @@ grpc::ServerUnaryReactor* Service::InfoIndexPartition(
                     latency_sample = std::move(latency_sample)]() mutable {
     auto status_or_schema =
         SchemaManager::Instance().GetIndexSchema(/*db=*/0, idx);
-
     if (!status_or_schema.ok()) {
       response->set_exists(false);
       response->set_index_name(idx);
@@ -199,22 +199,23 @@ grpc::ServerUnaryReactor* Service::InfoIndexPartition(
       reactor->Finish(grpc::Status::OK);
       return;
     }
-
     auto schema = std::move(status_or_schema.value());
+    IndexSchema::InfoIndexPartitionData data =
+        schema->GetInfoIndexPartitionData();
     response->set_exists(true);
     response->set_index_name(idx);
-    response->set_num_docs(schema->GetNumDocs());
-    response->set_num_records(schema->CountRecords());
-    response->set_hash_indexing_failures(schema->GetHashIndexingFailures());
-    response->set_backfill_scanned_count(schema->GetBackfillScannedKeyCount());
-    response->set_backfill_db_size(schema->GetBackfillDbSize());
-    response->set_backfill_inqueue_tasks(schema->GetBackfillInqueueTasks());
-    response->set_backfill_complete_percent(schema->GetBackfillPercent());
-    response->set_backfill_in_progress(schema->IsBackfillInProgress());
-    response->set_mutation_queue_size(schema->GetMutationQueueSize());
-    response->set_recent_mutations_queue_delay(schema->GetRecentMutationsQueueDelay());
-    response->set_state(std::string(schema->GetStateForInfo()));
-    
+    response->set_num_docs(data.num_docs);
+    response->set_num_records(data.num_records);
+    response->set_hash_indexing_failures(data.hash_indexing_failures);
+    response->set_backfill_scanned_count(data.backfill_scanned_count);
+    response->set_backfill_db_size(data.backfill_db_size);
+    response->set_backfill_inqueue_tasks(data.backfill_inqueue_tasks);
+    response->set_backfill_complete_percent(data.backfill_complete_percent);
+    response->set_backfill_in_progress(data.backfill_in_progress);
+    response->set_mutation_queue_size(data.mutation_queue_size);
+    response->set_recent_mutations_queue_delay(
+        data.recent_mutations_queue_delay);
+    response->set_state(data.state);
     reactor->Finish(grpc::Status::OK);
   });
   return reactor;

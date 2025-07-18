@@ -1172,4 +1172,41 @@ void IndexSchema::VectorExternalizer(const InternedStringPtr &key,
                                         attribute_data_type_->ToProto());
 }
 
+IndexSchema::InfoIndexPartitionData IndexSchema::Stats::GetStats() const {
+  absl::MutexLock lock(&mutex_);
+  return InfoIndexPartitionData{
+      .num_docs = document_cnt,
+      .hash_indexing_failures = subscription_add.skipped_cnt,
+      .backfill_inqueue_tasks = backfill_inqueue_tasks,
+      .mutation_queue_size = mutation_queue_size_,
+      .recent_mutations_queue_delay =
+          mutation_queue_size_ > 0
+              ? static_cast<uint64_t>(mutations_queue_delay_ / absl::Seconds(1))
+              : 0};
+}
+
+// backfill scanned key count
+uint64_t IndexSchema::GetBackfillScannedKeyCount() const {
+  const auto &backfill_job = backfill_job_.Get();
+  return backfill_job.has_value() ? backfill_job->scanned_key_count : 0;
+}
+
+// backfill database size
+uint64_t IndexSchema::GetBackfillDbSize() const {
+  const auto &backfill_job = backfill_job_.Get();
+  return backfill_job.has_value() ? backfill_job->db_size : 0;
+}
+
+IndexSchema::InfoIndexPartitionData IndexSchema::GetInfoIndexPartitionData()
+    const {
+  InfoIndexPartitionData data = stats_.GetStats();
+  data.num_records = CountRecords();
+  data.backfill_scanned_count = GetBackfillScannedKeyCount();
+  data.backfill_db_size = GetBackfillDbSize();
+  data.backfill_complete_percent = GetBackfillPercent();
+  data.backfill_in_progress = IsBackfillInProgress();
+  data.state = std::string(GetStateForInfo());
+  return data;
+}
+
 }  // namespace valkey_search

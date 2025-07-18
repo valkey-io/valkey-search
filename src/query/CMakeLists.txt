@@ -78,7 +78,8 @@ target_link_libraries(fanout PUBLIC status_macros)
 target_link_libraries(fanout PUBLIC valkey_module)
 
 set(SRCS_RESPONSE_GENERATOR ${CMAKE_CURRENT_LIST_DIR}/response_generator.cc
-                            ${CMAKE_CURRENT_LIST_DIR}/response_generator.h)
+                            ${CMAKE_CURRENT_LIST_DIR}/response_generator.h
+                            ${CMAKE_CURRENT_LIST_DIR}/info_fanout.cc)
 
 valkey_search_add_static_library(response_generator
                                  "${SRCS_RESPONSE_GENERATOR}")

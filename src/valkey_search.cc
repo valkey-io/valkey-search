@@ -190,6 +190,13 @@ static vmsdk::info_field::Integer ingest_total_failures(
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long { 
       return Metrics::GetStats().ingest_total_failures; }));
 
+static vmsdk::info_field::Integer string_interning_memory("string_interning", "string_interning_memory",
+  vmsdk::info_field::IntegerBuilder()
+      .SIBytes()
+      .App()
+      .Computed(StringInternStore::GetMemoryUsage)
+      .CrashSafe());
+
 void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
   vmsdk::info_field::DoSection(ctx, "thread-pool", for_crash_report);
   ValkeyModule_InfoAddFieldLongLong(ctx, "query_queue_size",

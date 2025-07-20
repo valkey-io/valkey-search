@@ -506,6 +506,184 @@ static vmsdk::info_field::Integer coordinator_bytes_in(
           return ValkeySearch::Instance().UsingCoordinator();
         }));
 
+static vmsdk::info_field::String
+    coordinator_client_get_global_metadata_success_latency_usec(
+        "coordinator",
+        "coordinator_client_get_global_metadata_success_latency_usec",
+        vmsdk::info_field::StringBuilder()
+            .App()
+            .ComputedString([]() -> std::string {
+              auto &sampler =
+                  Metrics::GetStats()
+                      .coordinator_client_get_global_metadata_success_latency;
+              return sampler.GetStatsString();
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator() &&
+                     Metrics::GetStats()
+                         .coordinator_client_get_global_metadata_success_latency
+                         .HasSamples();
+            }));
+
+static vmsdk::info_field::String
+    coordinator_client_get_global_metadata_failure_latency_usec(
+        "coordinator",
+        "coordinator_client_get_global_metadata_failure_latency_usec",
+        vmsdk::info_field::StringBuilder()
+            .App()
+            .ComputedString([]() -> std::string {
+              auto &sampler =
+                  Metrics::GetStats()
+                      .coordinator_client_get_global_metadata_failure_latency;
+              return sampler.GetStatsString();
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator() &&
+                     Metrics::GetStats()
+                         .coordinator_client_get_global_metadata_failure_latency
+                         .HasSamples();
+            }));
+
+static vmsdk::info_field::String
+    coordinator_client_search_index_partition_success_latency_usec(
+        "coordinator",
+        "coordinator_client_search_index_partition_success_latency_usec",
+        vmsdk::info_field::StringBuilder()
+            .App()
+            .ComputedString([]() -> std::string {
+              auto &sampler =
+                  Metrics::GetStats()
+                      .coordinator_client_search_index_partition_success_latency;
+              return sampler.GetStatsString();
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator() &&
+                     Metrics::GetStats()
+                         .coordinator_client_search_index_partition_success_latency
+                         .HasSamples();
+            }));
+
+static vmsdk::info_field::String
+    coordinator_client_search_index_partition_failure_latency_usec(
+        "coordinator",
+        "coordinator_client_search_index_partition_failure_latency_usec",
+        vmsdk::info_field::StringBuilder()
+            .App()
+            .ComputedString([]() -> std::string {
+              auto &sampler =
+                  Metrics::GetStats()
+                      .coordinator_client_search_index_partition_failure_latency;
+              return sampler.GetStatsString();
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator() &&
+                     Metrics::GetStats()
+                         .coordinator_client_search_index_partition_failure_latency
+                         .HasSamples();
+            }));
+
+static vmsdk::info_field::String
+    coordinator_server_get_global_metadata_success_latency_usec(
+        "coordinator",
+        "coordinator_server_get_global_metadata_success_latency_usec",
+        vmsdk::info_field::StringBuilder()
+            .App()
+            .ComputedString([]() -> std::string {
+              auto &sampler =
+                  Metrics::GetStats()
+                      .coordinator_server_get_global_metadata_success_latency;
+              return sampler.GetStatsString();
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator() &&
+                     Metrics::GetStats()
+                         .coordinator_server_get_global_metadata_success_latency
+                         .HasSamples();
+            }));
+
+static vmsdk::info_field::String
+    coordinator_server_get_global_metadata_failure_latency_usec(
+        "coordinator",
+        "coordinator_server_get_global_metadata_failure_latency_usec",
+        vmsdk::info_field::StringBuilder()
+            .App()
+            .ComputedString([]() -> std::string {
+              auto &sampler =
+                  Metrics::GetStats()
+                      .coordinator_server_get_global_metadata_failure_latency;
+              return sampler.GetStatsString();
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator() &&
+                     Metrics::GetStats()
+                         .coordinator_server_get_global_metadata_failure_latency
+                         .HasSamples();
+            }));
+
+static vmsdk::info_field::String
+    coordinator_server_search_index_partition_success_latency_usec(
+        "coordinator",
+        "coordinator_server_search_index_partition_success_latency_usec",
+        vmsdk::info_field::StringBuilder()
+            .App()
+            .ComputedString([]() -> std::string {
+              auto &sampler =
+                  Metrics::GetStats()
+                      .coordinator_server_search_index_partition_success_latency;
+              return sampler.GetStatsString();
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator() &&
+                     Metrics::GetStats()
+                         .coordinator_server_search_index_partition_success_latency
+                         .HasSamples();
+            }));
+
+static vmsdk::info_field::String
+    coordinator_server_search_index_partition_failure_latency_usec(
+        "coordinator",
+        "coordinator_server_search_index_partition_failure_latency_usec",
+        vmsdk::info_field::StringBuilder()
+            .App()
+            .ComputedString([]() -> std::string {
+              auto &sampler =
+                  Metrics::GetStats()
+                      .coordinator_server_search_index_partition_failure_latency;
+              return sampler.GetStatsString();
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator() &&
+                     Metrics::GetStats()
+                         .coordinator_server_search_index_partition_failure_latency
+                         .HasSamples();
+            }));
+
+static vmsdk::info_field::String hnsw_vector_index_search_latency_usec(
+    "latency", "hnsw_vector_index_search_latency_usec",
+    vmsdk::info_field::StringBuilder()
+        .App()
+        .ComputedString([]() -> std::string {
+          auto &sampler = Metrics::GetStats().hnsw_vector_index_search_latency;
+          return sampler.GetStatsString();
+        })
+        .VisibleIf([]() -> bool {
+          return Metrics::GetStats()
+              .hnsw_vector_index_search_latency.HasSamples();
+        }));
+
+static vmsdk::info_field::String flat_vector_index_search_latency_usec(
+    "latency", "flat_vector_index_search_latency_usec",
+    vmsdk::info_field::StringBuilder()
+        .App()
+        .ComputedString([]() -> std::string {
+          auto &sampler = Metrics::GetStats().flat_vector_index_search_latency;
+          return sampler.GetStatsString();
+        })
+        .VisibleIf([]() -> bool {
+          return Metrics::GetStats()
+              .flat_vector_index_search_latency.HasSamples();
+        }));
+
 #ifdef DEBUG_INFO
 // Helper function to create subscription info fields with maximum deduplication
 template <typename StatsSelector>
@@ -576,46 +754,7 @@ static vmsdk::info_field::Integer &remove_subscription_skipped_count =
 
 #endif
 void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
-  vmsdk::info_field::DoSection(ctx, "latency", for_crash_report);
-  AddLatencyStat(ctx, "hnsw_vector_index_search_latency_usec",
-                 Metrics::GetStats().hnsw_vector_index_search_latency);
-  AddLatencyStat(ctx, "flat_vector_index_search_latency_usec",
-                 Metrics::GetStats().flat_vector_index_search_latency);
-  if (UsingCoordinator()) {
-    AddLatencyStat(
-        ctx, "coordinator_client_get_global_metadata_success_latency_usec",
-        Metrics::GetStats()
-            .coordinator_client_get_global_metadata_success_latency);
-    AddLatencyStat(
-        ctx, "coordinator_client_get_global_metadata_failure_latency_usec",
-        Metrics::GetStats()
-            .coordinator_client_get_global_metadata_failure_latency);
-    AddLatencyStat(
-        ctx, "coordinator_client_search_index_partition_success_latency_usec",
-        Metrics::GetStats()
-            .coordinator_client_search_index_partition_success_latency);
-    AddLatencyStat(
-        ctx, "coordinator_client_search_index_partition_failure_latency_usec",
-        Metrics::GetStats()
-            .coordinator_client_search_index_partition_failure_latency);
-    AddLatencyStat(
-        ctx, "coordinator_server_get_global_metadata_success_latency_usec",
-        Metrics::GetStats()
-            .coordinator_server_get_global_metadata_success_latency);
-    AddLatencyStat(
-        ctx, "coordinator_server_get_global_metadata_failure_latency_usec",
-        Metrics::GetStats()
-            .coordinator_server_get_global_metadata_failure_latency);
-    AddLatencyStat(
-        ctx, "coordinator_server_search_index_partition_success_latency_usec",
-        Metrics::GetStats()
-            .coordinator_server_search_index_partition_success_latency);
-    AddLatencyStat(
-        ctx, "coordinator_server_search_index_partition_failure_latency_usec",
-        Metrics::GetStats()
-            .coordinator_server_search_index_partition_failure_latency);
-  }
-  vmsdk::info_field::DoRemainingSections(ctx, for_crash_report);
+  vmsdk::info_field::DoSections(ctx, for_crash_report);
 }
 
 // Beside the thread which initiates the fork, no other threads are present

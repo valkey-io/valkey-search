@@ -365,6 +365,147 @@ static vmsdk::info_field::Integer vector_externing_deferred_entry_cnt(
       return VectorExternalizer::Instance().GetStats().deferred_entry_cnt;
     }));
 
+static vmsdk::info_field::Integer coordinator_server_listening_port(
+    "coordinator", "coordinator_server_listening_port",
+    vmsdk::info_field::IntegerBuilder()
+        .App()
+        .Computed([]() -> long long {
+          return ValkeySearch::Instance().GetCoordinatorServer()->GetPort();
+        })
+        .VisibleIf([]() -> bool {
+          return ValkeySearch::Instance().UsingCoordinator();
+        }));
+
+static vmsdk::info_field::Integer
+    coordinator_server_get_global_metadata_success_count(
+        "coordinator", "coordinator_server_get_global_metadata_success_count",
+        vmsdk::info_field::IntegerBuilder()
+            .App()
+            .Computed([]() -> long long {
+              return Metrics::GetStats()
+                  .coordinator_server_get_global_metadata_success_cnt;
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator();
+            }));
+
+static vmsdk::info_field::Integer
+    coordinator_server_get_global_metadata_failure_count(
+        "coordinator", "coordinator_server_get_global_metadata_failure_count",
+        vmsdk::info_field::IntegerBuilder()
+            .App()
+            .Computed([]() -> long long {
+              return Metrics::GetStats()
+                  .coordinator_server_get_global_metadata_failure_cnt;
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator();
+            }));
+
+static vmsdk::info_field::Integer
+    coordinator_server_search_index_partition_success_count(
+        "coordinator",
+        "coordinator_server_search_index_partition_success_count",
+        vmsdk::info_field::IntegerBuilder()
+            .App()
+            .Computed([]() -> long long {
+              return Metrics::GetStats()
+                  .coordinator_server_search_index_partition_success_cnt;
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator();
+            }));
+
+static vmsdk::info_field::Integer
+    coordinator_server_search_index_partition_failure_count(
+        "coordinator",
+        "coordinator_server_search_index_partition_failure_count",
+        vmsdk::info_field::IntegerBuilder()
+            .App()
+            .Computed([]() -> long long {
+              return Metrics::GetStats()
+                  .coordinator_server_search_index_partition_failure_cnt;
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator();
+            }));
+
+static vmsdk::info_field::Integer
+    coordinator_client_get_global_metadata_success_count(
+        "coordinator", "coordinator_client_get_global_metadata_success_count",
+        vmsdk::info_field::IntegerBuilder()
+            .App()
+            .Computed([]() -> long long {
+              return Metrics::GetStats()
+                  .coordinator_client_get_global_metadata_success_cnt;
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator();
+            }));
+
+static vmsdk::info_field::Integer
+    coordinator_client_get_global_metadata_failure_count(
+        "coordinator", "coordinator_client_get_global_metadata_failure_count",
+        vmsdk::info_field::IntegerBuilder()
+            .App()
+            .Computed([]() -> long long {
+              return Metrics::GetStats()
+                  .coordinator_client_get_global_metadata_failure_cnt;
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator();
+            }));
+
+static vmsdk::info_field::Integer
+    coordinator_client_search_index_partition_success_count(
+        "coordinator",
+        "coordinator_client_search_index_partition_success_count",
+        vmsdk::info_field::IntegerBuilder()
+            .App()
+            .Computed([]() -> long long {
+              return Metrics::GetStats()
+                  .coordinator_client_search_index_partition_success_cnt;
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator();
+            }));
+
+static vmsdk::info_field::Integer
+    coordinator_client_search_index_partition_failure_count(
+        "coordinator",
+        "coordinator_client_search_index_partition_failure_count",
+        vmsdk::info_field::IntegerBuilder()
+            .App()
+            .Computed([]() -> long long {
+              return Metrics::GetStats()
+                  .coordinator_client_search_index_partition_failure_cnt;
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator();
+            }));
+
+static vmsdk::info_field::Integer coordinator_bytes_out(
+    "coordinator", "coordinator_bytes_out",
+    vmsdk::info_field::IntegerBuilder()
+        .App()
+        .Computed([]() -> long long {
+          return Metrics::GetStats().coordinator_bytes_out;
+        })
+        .VisibleIf([]() -> bool {
+          return ValkeySearch::Instance().UsingCoordinator();
+        }));
+
+static vmsdk::info_field::Integer coordinator_bytes_in(
+    "coordinator", "coordinator_bytes_in",
+    vmsdk::info_field::IntegerBuilder()
+        .App()
+        .Computed([]() -> long long {
+          return Metrics::GetStats().coordinator_bytes_in;
+        })
+        .VisibleIf([]() -> bool {
+          return ValkeySearch::Instance().UsingCoordinator();
+        }));
+
 #ifdef DEBUG_INFO
 // Helper function to create subscription info fields with maximum deduplication
 template <typename StatsSelector>
@@ -441,42 +582,6 @@ void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
   AddLatencyStat(ctx, "flat_vector_index_search_latency_usec",
                  Metrics::GetStats().flat_vector_index_search_latency);
   if (UsingCoordinator()) {
-    vmsdk::info_field::DoSection(ctx, "coordinator", for_crash_report);
-    ValkeyModule_InfoAddFieldLongLong(ctx, "coordinator_server_listening_port",
-                                      GetCoordinatorServer()->GetPort());
-    ValkeyModule_InfoAddFieldLongLong(
-        ctx, "coordinator_server_get_global_metadata_success_count",
-        Metrics::GetStats().coordinator_server_get_global_metadata_success_cnt);
-    ValkeyModule_InfoAddFieldLongLong(
-        ctx, "coordinator_server_get_global_metadata_failure_count",
-        Metrics::GetStats().coordinator_server_get_global_metadata_failure_cnt);
-    ValkeyModule_InfoAddFieldLongLong(
-        ctx, "coordinator_server_search_index_partition_success_count",
-        Metrics::GetStats()
-            .coordinator_server_search_index_partition_success_cnt);
-    ValkeyModule_InfoAddFieldLongLong(
-        ctx, "coordinator_server_search_index_partition_failure_count",
-        Metrics::GetStats()
-            .coordinator_server_search_index_partition_failure_cnt);
-    ValkeyModule_InfoAddFieldLongLong(
-        ctx, "coordinator_client_get_global_metadata_success_count",
-        Metrics::GetStats().coordinator_client_get_global_metadata_success_cnt);
-    ValkeyModule_InfoAddFieldLongLong(
-        ctx, "coordinator_client_get_global_metadata_failure_count",
-        Metrics::GetStats().coordinator_client_get_global_metadata_failure_cnt);
-    ValkeyModule_InfoAddFieldLongLong(
-        ctx, "coordinator_client_search_index_partition_success_count",
-        Metrics::GetStats()
-            .coordinator_client_search_index_partition_success_cnt);
-    ValkeyModule_InfoAddFieldLongLong(
-        ctx, "coordinator_client_search_index_partition_failure_count",
-        Metrics::GetStats()
-            .coordinator_client_search_index_partition_failure_cnt);
-    ValkeyModule_InfoAddFieldLongLong(
-        ctx, "coordinator_bytes_out",
-        Metrics::GetStats().coordinator_bytes_out);
-    ValkeyModule_InfoAddFieldLongLong(ctx, "coordinator_bytes_in",
-                                      Metrics::GetStats().coordinator_bytes_in);
     AddLatencyStat(
         ctx, "coordinator_client_get_global_metadata_success_latency_usec",
         Metrics::GetStats()

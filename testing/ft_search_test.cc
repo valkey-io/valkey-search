@@ -505,7 +505,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
           delete[] ids;
         });
     for (size_t i = 0; i < node_ids.size(); ++i) {
-      auto node_id = node_ids[i];
+      const auto& node_id = node_ids[i];
       EXPECT_CALL(
           *kMockValkeyModule,
           GetClusterNodeInfo(testing::_, testing::StrEq(node_id), testing::_,

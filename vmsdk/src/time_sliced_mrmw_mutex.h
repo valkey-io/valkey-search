@@ -25,8 +25,13 @@ struct TimeSlicedMRMWStats {
   std::atomic<uint64_t> write_time_microseconds{0}; // cumulative
 };
 
-// Global statistics for all TimeSlicedMRMWMutex instances
-TimeSlicedMRMWStats& GetGlobalTimeSlicedMRMWStats();
+// Forward declaration for global statistics
+extern TimeSlicedMRMWStats global_stats;
+
+// Global statistics accessor function
+inline const TimeSlicedMRMWStats& GetGlobalTimeSlicedMRMWStats() {
+  return global_stats;
+}
 
 struct MRMWMutexOptions {
   absl::Duration read_quota_duration;
@@ -134,7 +139,7 @@ class ABSL_SCOPED_LOCKABLE ReaderMutexLock {
   explicit ReaderMutexLock(TimeSlicedMRMWMutex* mutex, bool may_prolong = false)
       ABSL_SHARED_LOCK_FUNCTION(mutex)
       : mutex_(mutex), may_prolong_(may_prolong) {
-    ++GetGlobalTimeSlicedMRMWStats().read_periods;
+    ++global_stats.read_periods;
     timer_.Reset();
     mutex->ReaderLock(may_prolong_);
   }
@@ -146,7 +151,7 @@ class ABSL_SCOPED_LOCKABLE ReaderMutexLock {
   void SetMayProlong();
   ~ReaderMutexLock() ABSL_UNLOCK_FUNCTION() { 
     mutex_->Unlock(may_prolong_);
-    GetGlobalTimeSlicedMRMWStats().read_time_microseconds += 
+    global_stats.read_time_microseconds += 
         absl::ToInt64Microseconds(timer_.Duration());
   }
 
@@ -161,7 +166,7 @@ class ABSL_SCOPED_LOCKABLE WriterMutexLock {
   explicit WriterMutexLock(TimeSlicedMRMWMutex* mutex, bool may_prolong = false)
       ABSL_SHARED_LOCK_FUNCTION(mutex)
       : mutex_(mutex), may_prolong_(may_prolong) {
-    ++GetGlobalTimeSlicedMRMWStats().write_periods;
+    ++global_stats.write_periods;
     timer_.Reset();
     mutex->WriterLock(may_prolong_);
   }
@@ -173,7 +178,7 @@ class ABSL_SCOPED_LOCKABLE WriterMutexLock {
   void SetMayProlong();
   ~WriterMutexLock() ABSL_UNLOCK_FUNCTION() { 
     mutex_->Unlock(may_prolong_);
-    GetGlobalTimeSlicedMRMWStats().write_time_microseconds += 
+    global_stats.write_time_microseconds += 
         absl::ToInt64Microseconds(timer_.Duration());
   }
 

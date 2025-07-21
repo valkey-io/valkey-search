@@ -28,81 +28,6 @@ class PostingTest : public testing::Test {
   Postings* positional_postings_;
 };
 
-// Test FieldMask factory and basic operations
-TEST_F(PostingTest, FieldMaskFactory) {
-  // Test single field mask
-  auto mask1 = FieldMask::Create(1);
-  EXPECT_EQ(mask1->MaxFields(), 1);
-  
-  // Test byte field mask
-  auto mask8 = FieldMask::Create(8);
-  EXPECT_EQ(mask8->MaxFields(), 8);
-  
-  // Test uint64 field mask
-  auto mask64 = FieldMask::Create(64);
-  EXPECT_EQ(mask64->MaxFields(), 64);
-  
-  // Test error cases
-  EXPECT_THROW(FieldMask::Create(0), std::invalid_argument);
-  EXPECT_THROW(FieldMask::Create(65), std::invalid_argument);
-}
-
-TEST_F(PostingTest, FieldMaskBasicOperations) {
-  auto mask = FieldMask::Create(5);
-  
-  // Initially no fields set
-  EXPECT_EQ(mask->CountSetFields(), 0);
-  EXPECT_FALSE(mask->HasField(0));
-  EXPECT_FALSE(mask->HasField(4));
-  
-  // Set some fields
-  mask->SetField(0);
-  mask->SetField(2);
-  mask->SetField(4);
-  
-  EXPECT_EQ(mask->CountSetFields(), 3);
-  EXPECT_TRUE(mask->HasField(0));
-  EXPECT_FALSE(mask->HasField(1));
-  EXPECT_TRUE(mask->HasField(2));
-  EXPECT_FALSE(mask->HasField(3));
-  EXPECT_TRUE(mask->HasField(4));
-  
-  // Clear a field
-  mask->ClearField(2);
-  EXPECT_EQ(mask->CountSetFields(), 2);
-  EXPECT_FALSE(mask->HasField(2));
-  
-  // Set all fields
-  mask->SetAllFields();
-  EXPECT_EQ(mask->CountSetFields(), 5);
-  for (size_t i = 0; i < 5; ++i) {
-    EXPECT_TRUE(mask->HasField(i));
-  }
-  
-  // Clear all fields
-  mask->ClearAllFields();
-  EXPECT_EQ(mask->CountSetFields(), 0);
-  for (size_t i = 0; i < 5; ++i) {
-    EXPECT_FALSE(mask->HasField(i));
-  }
-}
-
-TEST_F(PostingTest, FieldMaskClone) {
-  auto original = FieldMask::Create(3);
-  original->SetField(0);
-  original->SetField(2);
-  
-  auto clone = original->Clone();
-  EXPECT_EQ(clone->CountSetFields(), 2);
-  EXPECT_TRUE(clone->HasField(0));
-  EXPECT_FALSE(clone->HasField(1));
-  EXPECT_TRUE(clone->HasField(2));
-  
-  // Verify independence
-  original->SetField(1);
-  EXPECT_FALSE(clone->HasField(1));
-}
-
 TEST_F(PostingTest, PostingEmptyOperations) {
   EXPECT_TRUE(boolean_postings_->IsEmpty());
   EXPECT_EQ(boolean_postings_->GetKeyCount(), 0);
@@ -110,82 +35,58 @@ TEST_F(PostingTest, PostingEmptyOperations) {
   EXPECT_EQ(boolean_postings_->GetTotalTermFrequency(), 0);
 }
 
-TEST_F(PostingTest, BooleanSearchSetKey) {
-  // Test valid boolean search mode
-  boolean_postings_->SetKey("doc1");
-  boolean_postings_->SetKey("doc2");
+TEST_F(PostingTest, BooleanSearchInsertPosting) {
+  // Test boolean search mode - positions are ignored
+  boolean_postings_->InsertPosting("doc1", 0);        // field 0, position ignored
+  boolean_postings_->InsertPosting("doc1", 1, 100);   // field 1, position 100 ignored
+  boolean_postings_->InsertPosting("doc2", 2);        // field 2, position ignored
   
   EXPECT_FALSE(boolean_postings_->IsEmpty());
   EXPECT_EQ(boolean_postings_->GetKeyCount(), 2);
-  EXPECT_EQ(boolean_postings_->GetPostingCount(), 2); // One position per key
-  
-  // Test error when using SetKey in positional mode
-  EXPECT_THROW(positional_postings_->SetKey("doc1"), std::invalid_argument);
+  EXPECT_EQ(boolean_postings_->GetPostingCount(), 2); // One position per key (always position 0)
+  EXPECT_EQ(boolean_postings_->GetTotalTermFrequency(), 3); // Three field occurrences total
 }
 
-TEST_F(PostingTest, AddPositionForField) {
-  // Add positions for different documents and fields
-  positional_postings_->AddPositionForField("doc1", 10, 0); // field 0, position 10
-  positional_postings_->AddPositionForField("doc1", 20, 1); // field 1, position 20
-  positional_postings_->AddPositionForField("doc1", 10, 2); // field 2, position 10 (same position, different field)
+TEST_F(PostingTest, PositionalSearchInsertPosting) {
+  // Test positional search mode - positions are respected
+  positional_postings_->InsertPosting("doc1", 0, 10); // field 0, position 10
+  positional_postings_->InsertPosting("doc1", 1, 20); // field 1, position 20
+  positional_postings_->InsertPosting("doc1", 2, 10); // field 2, position 10 (same position, different field)
   
   EXPECT_EQ(positional_postings_->GetKeyCount(), 1);
   EXPECT_EQ(positional_postings_->GetPostingCount(), 2); // Two unique positions (10, 20)
   EXPECT_EQ(positional_postings_->GetTotalTermFrequency(), 3); // Three field occurrences total
   
   // Add second document
-  positional_postings_->AddPositionForField("doc2", 5, 0);
-  positional_postings_->AddPositionForField("doc2", 15, 0);
+  positional_postings_->InsertPosting("doc2", 0, 5);
+  positional_postings_->InsertPosting("doc2", 0, 15);
   
   EXPECT_EQ(positional_postings_->GetKeyCount(), 2);
   EXPECT_EQ(positional_postings_->GetPostingCount(), 4); // Two positions per document
   EXPECT_EQ(positional_postings_->GetTotalTermFrequency(), 5); // Five field occurrences total
+}
+
+TEST_F(PostingTest, InsertPostingDefaultPosition) {
+  // Test that default position works correctly for boolean postings
+  boolean_postings_->InsertPosting("doc1", 0); // Default position ignored in boolean mode
+  boolean_postings_->InsertPosting("doc1", 1); // Default position ignored in boolean mode
   
+  EXPECT_EQ(boolean_postings_->GetKeyCount(), 1);
+  EXPECT_EQ(boolean_postings_->GetPostingCount(), 1); // Only one position (0)
+  EXPECT_EQ(boolean_postings_->GetTotalTermFrequency(), 2); // Two field occurrences at position 0
+}
+
+TEST_F(PostingTest, InsertPostingFieldValidation) {
   // Test field index bounds
-  EXPECT_THROW(positional_postings_->AddPositionForField("doc3", 1, 5), std::out_of_range);
+  EXPECT_THROW(positional_postings_->InsertPosting("doc1", 5, 10), std::out_of_range);
+  EXPECT_THROW(boolean_postings_->InsertPosting("doc1", 3), std::out_of_range);
 }
 
-TEST_F(PostingTest, SetKeyWithFieldPositions) {
-  // Test batch position setting (replace mode)
-  std::vector<std::pair<Position, size_t>> positions = {
-    {10, 0}, {10, 1}, {20, 2}, {30, 0}
-  };
-  
-  positional_postings_->SetKeyWithFieldPositions("doc1", positions);
-  
-  EXPECT_EQ(positional_postings_->GetKeyCount(), 1);
-  EXPECT_EQ(positional_postings_->GetPostingCount(), 3); // Three unique positions (10, 20, 30)
-  EXPECT_EQ(positional_postings_->GetTotalTermFrequency(), 4); // Four field occurrences
-  
-  // Test replace behavior - should clear previous positions
-  std::vector<std::pair<Position, size_t>> new_positions = {{5, 1}};
-  positional_postings_->SetKeyWithFieldPositions("doc1", positions);
-  positional_postings_->SetKeyWithFieldPositions("doc1", new_positions);
-  
-  EXPECT_EQ(positional_postings_->GetPostingCount(), 1); // Only one position remains
-  EXPECT_EQ(positional_postings_->GetTotalTermFrequency(), 1); // Only one field occurrence
-}
-
-TEST_F(PostingTest, UpdateKeyWithFieldPositions) {
-  // Set initial positions
-  std::vector<std::pair<Position, size_t>> initial_positions = {{10, 0}, {20, 1}};
-  positional_postings_->SetKeyWithFieldPositions("doc1", initial_positions);
-  
-  EXPECT_EQ(positional_postings_->GetPostingCount(), 2);
-  EXPECT_EQ(positional_postings_->GetTotalTermFrequency(), 2);
-  
-  // Update with additional positions (merge mode)
-  std::vector<std::pair<Position, size_t>> additional_positions = {{30, 2}, {10, 1}};
-  positional_postings_->UpdateKeyWithFieldPositions("doc1", additional_positions);
-  
-  EXPECT_EQ(positional_postings_->GetPostingCount(), 3); // Three unique positions (10, 20, 30)
-  EXPECT_EQ(positional_postings_->GetTotalTermFrequency(), 4); // position 10 now has 2 fields, others have 1 each
-}
 
 TEST_F(PostingTest, RemoveKey) {
   // Add some data
-  positional_postings_->AddPositionForField("doc1", 10, 0);
-  positional_postings_->AddPositionForField("doc2", 20, 1);
+  positional_postings_->InsertPosting("doc1", 0, 10);
+  positional_postings_->InsertPosting("doc2", 1, 20);
   
   EXPECT_EQ(positional_postings_->GetKeyCount(), 2);
   
@@ -205,8 +106,8 @@ TEST_F(PostingTest, RemoveKey) {
 
 TEST_F(PostingTest, CopyConstructorAndAssignment) {
   // Set up original posting
-  positional_postings_->AddPositionForField("doc1", 10, 0);
-  positional_postings_->AddPositionForField("doc1", 20, 1);
+  positional_postings_->InsertPosting("doc1", 0, 10);
+  positional_postings_->InsertPosting("doc1", 1, 20);
   
   // Test copy constructor
   Postings copy_constructed(*positional_postings_);
@@ -215,7 +116,7 @@ TEST_F(PostingTest, CopyConstructorAndAssignment) {
   EXPECT_EQ(copy_constructed.GetTotalTermFrequency(), 2);
   
   // Test independence
-  positional_postings_->AddPositionForField("doc2", 30, 2);
+  positional_postings_->InsertPosting("doc2", 2, 30);
   EXPECT_EQ(copy_constructed.GetKeyCount(), 1); // Should not change
   EXPECT_EQ(positional_postings_->GetKeyCount(), 2); // Original should change
   
@@ -232,19 +133,11 @@ TEST_F(PostingTest, CopyConstructorAndAssignment) {
 
 TEST_F(PostingTest, ErrorHandling) {
   // Test field index validation
-  EXPECT_THROW(positional_postings_->AddPositionForField("doc1", 1, 5), std::out_of_range);
-  EXPECT_THROW(positional_postings_->AddPositionForField("doc1", 1, SIZE_MAX), std::out_of_range);
+  EXPECT_THROW(positional_postings_->InsertPosting("doc1", 5, 1), std::out_of_range);
+  EXPECT_THROW(positional_postings_->InsertPosting("doc1", SIZE_MAX, 1), std::out_of_range);
   
-  // Test batch operations field validation
-  std::vector<std::pair<Position, size_t>> invalid_positions = {{10, 10}};
-  EXPECT_THROW(positional_postings_->SetKeyWithFieldPositions("doc1", invalid_positions), std::out_of_range);
-  EXPECT_THROW(positional_postings_->UpdateKeyWithFieldPositions("doc1", invalid_positions), std::out_of_range);
-  
-  // Test FieldMask bounds
-  auto mask = FieldMask::Create(3);
-  EXPECT_THROW(mask->SetField(3), std::out_of_range);
-  EXPECT_THROW(mask->ClearField(3), std::out_of_range);
-  EXPECT_FALSE(mask->HasField(3)); // Out of range should return false, not throw
+  // Test position validation in positional mode
+  EXPECT_THROW(positional_postings_->InsertPosting("doc1", 0), std::invalid_argument);
 }
 
 TEST_F(PostingTest, LargeScaleOperations) {
@@ -252,13 +145,62 @@ TEST_F(PostingTest, LargeScaleOperations) {
   for (int doc = 0; doc < 100; ++doc) {
     std::string key = "doc" + std::to_string(doc);
     for (int pos = 0; pos < 10; ++pos) {
-      positional_postings_->AddPositionForField(key, pos * 10, pos % 5);
+      positional_postings_->InsertPosting(key, pos % 5, pos * 10);
     }
   }
   
   EXPECT_EQ(positional_postings_->GetKeyCount(), 100);
   EXPECT_EQ(positional_postings_->GetPostingCount(), 1000); // 100 docs * 10 positions each
   EXPECT_EQ(positional_postings_->GetTotalTermFrequency(), 1000); // One field per position
+}
+
+TEST_F(PostingTest, SingleFieldOptimization) {
+  // Test posting with single field (uses SingleFieldMask optimization internally)
+  Postings single_field_posting(true, 1);  // 1 field only
+  
+  // Add some postings - all will use field 0
+  single_field_posting.InsertPosting("doc1", 0, 10);
+  single_field_posting.InsertPosting("doc1", 0, 20);
+  single_field_posting.InsertPosting("doc2", 0, 5);
+  
+  // Verify posting works correctly with single field optimization
+  EXPECT_EQ(single_field_posting.GetKeyCount(), 2);
+  EXPECT_EQ(single_field_posting.GetPostingCount(), 3);
+  EXPECT_EQ(single_field_posting.GetTotalTermFrequency(), 3);
+  
+  // Test that field index validation still works
+  EXPECT_THROW(single_field_posting.InsertPosting("doc3", 1, 1), std::out_of_range);
+}
+
+TEST_F(PostingTest, BooleanVsPositionalBehavior) {
+  // Test that boolean and positional modes behave differently for positions
+  
+  // Boolean mode: positions ignored, all stored at position 0
+  boolean_postings_->InsertPosting("doc1", 0, 100);  // position 100 ignored
+  boolean_postings_->InsertPosting("doc1", 1, 200);  // position 200 ignored
+  boolean_postings_->InsertPosting("doc1", 2, 300);  // position 300 ignored
+  
+  EXPECT_EQ(boolean_postings_->GetPostingCount(), 1); // All at position 0
+  EXPECT_EQ(boolean_postings_->GetTotalTermFrequency(), 3); // Three fields
+  
+  // Positional mode: positions respected
+  positional_postings_->InsertPosting("doc1", 0, 100);
+  positional_postings_->InsertPosting("doc1", 1, 200);
+  positional_postings_->InsertPosting("doc1", 2, 300);
+  
+  EXPECT_EQ(positional_postings_->GetPostingCount(), 3); // Three different positions
+  EXPECT_EQ(positional_postings_->GetTotalTermFrequency(), 3); // Three fields
+}
+
+TEST_F(PostingTest, MultipleInsertPostingCalls) {
+  // Test multiple InsertPosting calls on same document
+  positional_postings_->InsertPosting("doc1", 0, 10);
+  positional_postings_->InsertPosting("doc1", 1, 20);
+  positional_postings_->InsertPosting("doc1", 2, 30);
+  positional_postings_->InsertPosting("doc1", 1, 10); // Add field 1 to position 10
+  
+  EXPECT_EQ(positional_postings_->GetPostingCount(), 3); // Three unique positions (10, 20, 30)
+  EXPECT_EQ(positional_postings_->GetTotalTermFrequency(), 4); // Four field occurrences
 }
 
 }  // namespace valkey_search::text

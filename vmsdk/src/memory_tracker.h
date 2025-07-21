@@ -60,18 +60,24 @@ public:
 
     VMSDK_NON_COPYABLE_NON_MOVABLE(MemoryScope);
 
-    static MemoryScope* GetCurrentScope();
-
     int64_t GetBaselineMemory() const { return baseline_memory_; }
 
 protected:
     MemoryPool& target_pool_;
     int64_t baseline_memory_ = 0;
-
-private:
-    static thread_local MemoryScope* current_scope_;
 };
 
+/**
+ * A memory scope that isolates memory changes within its lifetime.
+ * 
+ * When this scope is destroyed, it calculates the net memory change during its
+ * lifetime and adds it to the target pool, then resets the global memory delta
+ * back to the baseline. This effectively "isolates" the memory tracking within
+ * this scope, preventing memory changes from propagating to outer scopes.
+ * 
+ * Use this when you want to track memory usage for a specific operation
+ * without affecting the memory tracking of surrounding code.
+ */
 class IsolatedMemoryScope final : public MemoryScope {
 public:
     explicit IsolatedMemoryScope(MemoryPool& pool);
@@ -80,6 +86,17 @@ public:
     VMSDK_NON_COPYABLE_NON_MOVABLE(IsolatedMemoryScope);
 };
 
+/**
+ * A memory scope that allows memory changes to propagate to outer scopes.
+ * 
+ * When this scope is destroyed, it calculates the net memory change during its
+ * lifetime and adds it to the target pool, but does NOT reset the global memory
+ * delta. This allows memory changes to "nest" and propagate to any outer scopes
+ * that might be tracking memory usage.
+ * 
+ * Use this when you want to track memory usage for a specific operation while
+ * still allowing those changes to be visible to surrounding tracking code.
+ */
 class NestedMemoryScope final : public MemoryScope {
 public:
     explicit NestedMemoryScope(MemoryPool& pool);

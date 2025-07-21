@@ -30,16 +30,8 @@
 #include "memory_tracker.h"
 #include "vmsdk/src/memory_allocation.h"
 
-thread_local MemoryScope* MemoryScope::current_scope_ = nullptr;
-
 MemoryScope::MemoryScope(MemoryPool& pool)
-    : target_pool_(pool), baseline_memory_(vmsdk::GetMemoryDelta()) {
-    current_scope_ = this;
-}
-
-MemoryScope* MemoryScope::GetCurrentScope() {
-    return current_scope_;
-}
+    : target_pool_(pool), baseline_memory_(vmsdk::GetMemoryDelta()) {}
 
 IsolatedMemoryScope::IsolatedMemoryScope(MemoryPool& pool)
     : MemoryScope(pool) {

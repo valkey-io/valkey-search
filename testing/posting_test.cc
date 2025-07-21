@@ -203,4 +203,137 @@ TEST_F(PostingTest, MultipleInsertPostingCalls) {
   EXPECT_EQ(positional_postings_->GetTotalTermFrequency(), 4); // Four field occurrences
 }
 
+TEST_F(PostingTest, KeyIteratorBasic) {
+  // Add some test data
+  positional_postings_->InsertPosting("doc1", 0, 10);
+  positional_postings_->InsertPosting("doc2", 1, 20);
+  positional_postings_->InsertPosting("doc3", 2, 30);
+  
+  // Test key iteration
+  auto key_iter = positional_postings_->GetKeyIterator();
+  
+  EXPECT_TRUE(key_iter.IsValid());
+  EXPECT_EQ(key_iter.GetKey(), "doc1");  // Keys should be in sorted order
+  
+  key_iter.NextKey();
+  EXPECT_TRUE(key_iter.IsValid());
+  EXPECT_EQ(key_iter.GetKey(), "doc2");
+  
+  key_iter.NextKey();
+  EXPECT_TRUE(key_iter.IsValid());
+  EXPECT_EQ(key_iter.GetKey(), "doc3");
+  
+  key_iter.NextKey();
+  EXPECT_FALSE(key_iter.IsValid());  // End of iteration
+}
+
+TEST_F(PostingTest, KeyIteratorSkipForward) {
+  // Add test data
+  positional_postings_->InsertPosting("doc1", 0, 10);
+  positional_postings_->InsertPosting("doc3", 1, 20);
+  positional_postings_->InsertPosting("doc5", 2, 30);
+  
+  auto key_iter = positional_postings_->GetKeyIterator();
+  
+  // Skip to exact match
+  EXPECT_TRUE(key_iter.SkipForwardKey("doc3"));
+  EXPECT_TRUE(key_iter.IsValid());
+  EXPECT_EQ(key_iter.GetKey(), "doc3");
+  
+  // Skip to non-existent key (should land on next greater key)
+  EXPECT_FALSE(key_iter.SkipForwardKey("doc4"));
+  EXPECT_TRUE(key_iter.IsValid());
+  EXPECT_EQ(key_iter.GetKey(), "doc5");
+  
+  // Skip beyond all keys
+  EXPECT_FALSE(key_iter.SkipForwardKey("doc9"));
+  EXPECT_FALSE(key_iter.IsValid());
+}
+
+TEST_F(PostingTest, PositionIteratorBasic) {
+  // Add test data with multiple positions for one key
+  positional_postings_->InsertPosting("doc1", 0, 10);
+  positional_postings_->InsertPosting("doc1", 1, 20);
+  positional_postings_->InsertPosting("doc1", 2, 30);
+  
+  // Get key iterator and position iterator
+  auto key_iter = positional_postings_->GetKeyIterator();
+  EXPECT_TRUE(key_iter.IsValid());
+  EXPECT_EQ(key_iter.GetKey(), "doc1");
+  
+  auto pos_iter = key_iter.GetPositionIterator();
+  
+  // Test position iteration
+  EXPECT_TRUE(pos_iter.IsValid());
+  EXPECT_EQ(pos_iter.GetPosition(), 10);
+  EXPECT_EQ(pos_iter.GetFieldMask(), 1ULL);  // Field 0 set (bit 0)
+  
+  pos_iter.NextPosition();
+  EXPECT_TRUE(pos_iter.IsValid());
+  EXPECT_EQ(pos_iter.GetPosition(), 20);
+  EXPECT_EQ(pos_iter.GetFieldMask(), 2ULL);  // Field 1 set (bit 1)
+  
+  pos_iter.NextPosition();
+  EXPECT_TRUE(pos_iter.IsValid());
+  EXPECT_EQ(pos_iter.GetPosition(), 30);
+  EXPECT_EQ(pos_iter.GetFieldMask(), 4ULL);  // Field 2 set (bit 2)
+  
+  pos_iter.NextPosition();
+  EXPECT_FALSE(pos_iter.IsValid());  // End of iteration
+}
+
+TEST_F(PostingTest, PositionIteratorSkipForward) {
+  // Add test data with gaps in positions
+  positional_postings_->InsertPosting("doc1", 0, 10);
+  positional_postings_->InsertPosting("doc1", 1, 30);
+  positional_postings_->InsertPosting("doc1", 2, 50);
+  
+  auto key_iter = positional_postings_->GetKeyIterator();
+  auto pos_iter = key_iter.GetPositionIterator();
+  
+  // Skip to exact position match
+  EXPECT_TRUE(pos_iter.SkipForwardPosition(30));
+  EXPECT_TRUE(pos_iter.IsValid());
+  EXPECT_EQ(pos_iter.GetPosition(), 30);
+  EXPECT_EQ(pos_iter.GetFieldMask(), 2ULL);
+  
+  // Skip to non-existent position (should land on next greater position)
+  EXPECT_FALSE(pos_iter.SkipForwardPosition(40));
+  EXPECT_TRUE(pos_iter.IsValid());
+  EXPECT_EQ(pos_iter.GetPosition(), 50);
+  
+  // Skip beyond all positions
+  EXPECT_FALSE(pos_iter.SkipForwardPosition(100));
+  EXPECT_FALSE(pos_iter.IsValid());
+}
+
+TEST_F(PostingTest, IteratorWithMultipleFields) {
+  // Test position with multiple fields set
+  positional_postings_->InsertPosting("doc1", 0, 10);  // Field 0 at position 10
+  positional_postings_->InsertPosting("doc1", 2, 10);  // Field 2 at position 10
+  positional_postings_->InsertPosting("doc1", 1, 20);  // Field 1 at position 20
+  
+  auto key_iter = positional_postings_->GetKeyIterator();
+  auto pos_iter = key_iter.GetPositionIterator();
+  
+  // First position should have fields 0 and 2 set (bits 0 and 2)
+  EXPECT_TRUE(pos_iter.IsValid());
+  EXPECT_EQ(pos_iter.GetPosition(), 10);
+  EXPECT_EQ(pos_iter.GetFieldMask(), 5ULL);  // Binary: 101 (fields 0 and 2)
+  
+  pos_iter.NextPosition();
+  EXPECT_TRUE(pos_iter.IsValid());
+  EXPECT_EQ(pos_iter.GetPosition(), 20);
+  EXPECT_EQ(pos_iter.GetFieldMask(), 2ULL);  // Binary: 010 (field 1)
+}
+
+TEST_F(PostingTest, EmptyPostingIterators) {
+  // Test iterators on empty posting
+  auto key_iter = positional_postings_->GetKeyIterator();
+  EXPECT_FALSE(key_iter.IsValid());
+  
+  auto pos_iter = key_iter.GetPositionIterator();
+  EXPECT_FALSE(pos_iter.IsValid());
+}
+
 }  // namespace valkey_search::text

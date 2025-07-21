@@ -12,8 +12,53 @@
 #include <memory>
 #include <stdexcept>
 #include <type_traits>
+#include <vector>
 
 namespace valkey_search::text {
+
+// Internal FieldMask classes - not part of external interface
+// Field mask interface optimized for different field counts
+class FieldMask {
+public:
+  static std::unique_ptr<FieldMask> Create(size_t num_fields);
+  virtual ~FieldMask() = default;
+  virtual void SetField(size_t field_index) = 0;
+  virtual void ClearField(size_t field_index) = 0;
+  virtual bool HasField(size_t field_index) const = 0;
+  virtual void SetAllFields() = 0;
+  virtual void ClearAllFields() = 0;
+  virtual size_t CountSetFields() const = 0;
+  virtual uint64_t AsUint64() const = 0;
+  virtual std::unique_ptr<FieldMask> Clone() const = 0;
+  virtual size_t MaxFields() const = 0;
+};
+
+// Template implementation for field mask with optimized storage
+template<typename MaskType, size_t MAX_FIELDS>
+class FieldMaskImpl : public FieldMask {
+public:
+  explicit FieldMaskImpl(size_t num_fields = MAX_FIELDS);
+  void SetField(size_t field_index) override;
+  void ClearField(size_t field_index) override;
+  bool HasField(size_t field_index) const override;
+  void SetAllFields() override;
+  void ClearAllFields() override;
+  size_t CountSetFields() const override;
+  uint64_t AsUint64() const override;
+  std::unique_ptr<FieldMask> Clone() const override;
+  size_t MaxFields() const override { return MAX_FIELDS; }
+private:
+  MaskType mask_;
+  size_t num_fields_;
+};
+
+// Empty placeholder type that takes no space
+struct EmptyFieldMask {};
+
+// Optimized implementations for different field counts
+using SingleFieldMask = FieldMaskImpl<EmptyFieldMask, 1>;
+using ByteFieldMask = FieldMaskImpl<uint8_t, 8>;
+using Uint64FieldMask = FieldMaskImpl<uint64_t, 64>;
 
 // Field Mask Implementation
   
@@ -25,7 +70,7 @@ std::unique_ptr<FieldMask> FieldMask::Create(size_t num_fields) {
   
   // Select most memory-efficient implementation
   if (num_fields <= 1) {
-    return std::make_unique<SingleFieldMask>();  // bool (1 byte)
+    return std::make_unique<SingleFieldMask>();  // EmptyFieldMask (no storage)
   } else if (num_fields <= 8) {
     return std::make_unique<ByteFieldMask>(num_fields);  // uint8_t (1 byte)
   } else if (num_fields <= 64) {
@@ -38,9 +83,13 @@ std::unique_ptr<FieldMask> FieldMask::Create(size_t num_fields) {
 // Initialize field mask with specified field count
 template<typename MaskType, size_t MAX_FIELDS>
 FieldMaskImpl<MaskType, MAX_FIELDS>::FieldMaskImpl(size_t num_fields) 
-    : mask_(MaskType{}), num_fields_(num_fields) {
+    : num_fields_(num_fields) {
   if (num_fields > MAX_FIELDS) {
     throw std::invalid_argument("Field count exceeds maximum for this mask type");
+  }
+  
+  if constexpr (!std::is_same_v<MaskType, EmptyFieldMask>) {
+    mask_ = MaskType{};
   }
 }
 
@@ -51,9 +100,7 @@ void FieldMaskImpl<MaskType, MAX_FIELDS>::SetField(size_t field_index) {
     throw std::out_of_range("Field index out of range");
   }
   
-  if constexpr (std::is_same_v<MaskType, bool>) {
-    mask_ = true;
-  } else {
+  if constexpr (!std::is_same_v<MaskType, EmptyFieldMask>) {
     mask_ |= (MaskType(1) << field_index);
   }
 }
@@ -65,9 +112,7 @@ void FieldMaskImpl<MaskType, MAX_FIELDS>::ClearField(size_t field_index) {
     throw std::out_of_range("Field index out of range");
   }
   
-  if constexpr (std::is_same_v<MaskType, bool>) {
-    mask_ = false;
-  } else {
+  if constexpr (!std::is_same_v<MaskType, EmptyFieldMask>) {
     mask_ &= ~(MaskType(1) << field_index);
   }
 }
@@ -79,8 +124,8 @@ bool FieldMaskImpl<MaskType, MAX_FIELDS>::HasField(size_t field_index) const {
     return false;
   }
   
-  if constexpr (std::is_same_v<MaskType, bool>) {
-    return mask_;
+  if constexpr (std::is_same_v<MaskType, EmptyFieldMask>) {
+    return true;  // Single field case: presence of object implies field is set
   } else {
     return (mask_ & (MaskType(1) << field_index)) != 0;
   }
@@ -89,28 +134,28 @@ bool FieldMaskImpl<MaskType, MAX_FIELDS>::HasField(size_t field_index) const {
 // Set all field bits to true
 template<typename MaskType, size_t MAX_FIELDS>
 void FieldMaskImpl<MaskType, MAX_FIELDS>::SetAllFields() {
-  if constexpr (std::is_same_v<MaskType, bool>) {
-    mask_ = true;
+  if constexpr (std::is_same_v<MaskType, EmptyFieldMask>) {
+    // No-op: field is already implicitly set by object presence
+  } else if (num_fields_ == MAX_FIELDS && MAX_FIELDS == 64) {
+    mask_ = ~MaskType(0);  // Special case: avoid undefined behavior for 64-bit shift
   } else {
-    if (num_fields_ == MAX_FIELDS && MAX_FIELDS == 64) {
-      mask_ = ~MaskType(0);  // Special case: avoid undefined behavior for 64-bit shift
-    } else {
-      mask_ = (MaskType(1) << num_fields_) - 1;  // Set num_fields_ bits
-    }
+    mask_ = (MaskType(1) << num_fields_) - 1;  // Set num_fields_ bits
   }
 }
 
 // Clear all field bits
 template<typename MaskType, size_t MAX_FIELDS>
 void FieldMaskImpl<MaskType, MAX_FIELDS>::ClearAllFields() {
-  mask_ = MaskType{};  // Zero-initialize
+  if constexpr (!std::is_same_v<MaskType, EmptyFieldMask>) {
+    mask_ = MaskType{};  // Zero-initialize
+  }
 }
 
 // Count number of set field bits
 template<typename MaskType, size_t MAX_FIELDS>
 size_t FieldMaskImpl<MaskType, MAX_FIELDS>::CountSetFields() const {
-  if constexpr (std::is_same_v<MaskType, bool>) {
-    return mask_ ? 1 : 0;  // Single field case: either 0 or 1
+  if constexpr (std::is_same_v<MaskType, EmptyFieldMask>) {
+    return 1;  // Single field case: presence of object implies field is set
   } else if constexpr (std::is_same_v<MaskType, uint8_t>) {
     return __builtin_popcount(static_cast<unsigned int>(mask_));  // Count bits in uint8_t
   } else if constexpr (std::is_same_v<MaskType, uint64_t>) {
@@ -123,8 +168,8 @@ size_t FieldMaskImpl<MaskType, MAX_FIELDS>::CountSetFields() const {
 // Convert field mask to standard uint64_t representation
 template<typename MaskType, size_t MAX_FIELDS>
 uint64_t FieldMaskImpl<MaskType, MAX_FIELDS>::AsUint64() const {
-  if constexpr (std::is_same_v<MaskType, bool>) {
-    return mask_ ? 1ULL : 0ULL;  // Convert bool to 0/1
+  if constexpr (std::is_same_v<MaskType, EmptyFieldMask>) {
+    return 1ULL;  // Single field case: presence of object implies field is set
   } else {
     return static_cast<uint64_t>(mask_);  // Cast integer types to uint64_t
   }
@@ -134,12 +179,14 @@ uint64_t FieldMaskImpl<MaskType, MAX_FIELDS>::AsUint64() const {
 template<typename MaskType, size_t MAX_FIELDS>
 std::unique_ptr<FieldMask> FieldMaskImpl<MaskType, MAX_FIELDS>::Clone() const {
   auto clone = std::make_unique<FieldMaskImpl<MaskType, MAX_FIELDS>>(num_fields_);
-  clone->mask_ = mask_;
+  if constexpr (!std::is_same_v<MaskType, EmptyFieldMask>) {
+    clone->mask_ = mask_;
+  }
   return clone;
 }
 
 // Explicit template instantiations
-template class FieldMaskImpl<bool, 1>;
+template class FieldMaskImpl<EmptyFieldMask, 1>;
 template class FieldMaskImpl<uint8_t, 8>;
 template class FieldMaskImpl<uint64_t, 64>;
 
@@ -210,92 +257,41 @@ bool Postings::IsEmpty() const {
   return impl_->key_to_positions_.empty();
 }
 
-// Add document key for boolean search (no position tracking)
-void Postings::SetKey(const Key& key) {
-  // This function is designed for boolean search (save_positions=false mode)
-  if (impl_->save_positions_) {
-    throw std::invalid_argument("SetKey() is only for boolean search mode (save_positions=false). Use AddPositionForField() instead.");
-  }
-  
-  // Just record document presence with assumed position 0 and empty field mask
-  auto& pos_map = impl_->key_to_positions_[key];
-  pos_map.clear();
-  
-  // Store single dummy position with empty field mask - now creates actual FieldMask object!
-  pos_map[0] = FieldMask::Create(impl_->num_text_fields_);  // Position 0, no fields set
-}
-
-// Add term occurrence at specific position and field
-void Postings::AddPositionForField(const Key& key, Position position, size_t field_index) {
+// Insert a posting entry for a key and field
+void Postings::InsertPosting(const Key& key, size_t field_index, Position position) {
   if (field_index >= impl_->num_text_fields_) {
     throw std::out_of_range("Field index out of range");
+  }
+  
+  Position effective_position;
+  
+  if (impl_->save_positions_) {
+    // In positional mode, position must be explicitly provided
+    if (position == UINT32_MAX) {
+      throw std::invalid_argument("Position must be provided in positional mode");
+    }
+    effective_position = position;
+  } else {
+    // For boolean search mode, always use position 0 regardless of input
+    effective_position = 0;
   }
   
   auto& pos_map = impl_->key_to_positions_[key];
   
   // Check if position already exists
-  auto it = pos_map.find(position);
+  auto it = pos_map.find(effective_position);
   
   if (it != pos_map.end()) {
-    // Position exists - directly add field to existing FieldMask object (much cleaner!)
+    // Position exists - add field to existing FieldMask object
     it->second->SetField(field_index);
   } else {
-    // New position - create entry with only this field
+    // New position - create entry with this field
     auto field_mask = FieldMask::Create(impl_->num_text_fields_);
     field_mask->SetField(field_index);
-    pos_map[position] = std::move(field_mask);
+    pos_map[effective_position] = std::move(field_mask);
   }
 }
 
-// Replace all positions for a key with new position/field pairs
-void Postings::SetKeyWithFieldPositions(const Key& key, std::span<std::pair<Position, size_t>> position_field_pairs) {
-  auto& pos_map = impl_->key_to_positions_[key];
-  pos_map.clear();  // Replace existing positions
-  
-  // Group positions by position value
-  std::map<Position, std::unique_ptr<FieldMask>> position_masks;
-  
-  for (const auto& [pos, field_idx] : position_field_pairs) {
-    if (field_idx >= impl_->num_text_fields_) {
-      throw std::out_of_range("Field index out of range");
-    }
-    
-    if (position_masks.find(pos) == position_masks.end()) {
-      position_masks[pos] = FieldMask::Create(impl_->num_text_fields_);
-    }
-    position_masks[pos]->SetField(field_idx);
-  }
-  
-  // Move FieldMask objects to PositionMap (automatically maintains sorted order)
-  for (auto& [pos, mask] : position_masks) {
-    pos_map[pos] = std::move(mask);
-  }
-}
-
-// Merge new position/field pairs with existing positions for a key
-void Postings::UpdateKeyWithFieldPositions(const Key& key, std::span<std::pair<Position, size_t>> position_field_pairs) {
-  auto& pos_map = impl_->key_to_positions_[key];
-  // NO pos_map.clear() - preserve existing positions!
-  
-  for (const auto& [pos, field_idx] : position_field_pairs) {
-    if (field_idx >= impl_->num_text_fields_) {
-      throw std::out_of_range("Field index out of range");
-    }
-    
-    // Check if position already exists
-    auto it = pos_map.find(pos);
-    
-    if (it != pos_map.end()) {
-      // Position exists - add field to existing FieldMask
-      it->second->SetField(field_idx);
-    } else {
-      // New position - create entry with only this field
-      auto field_mask = FieldMask::Create(impl_->num_text_fields_);
-      field_mask->SetField(field_idx);
-      pos_map[pos] = std::move(field_mask);
-    }
-  }
-}
 
 // Remove a document key and all its positions
 void Postings::RemoveKey(const Key& key) {

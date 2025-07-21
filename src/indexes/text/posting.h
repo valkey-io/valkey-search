@@ -33,10 +33,10 @@ A PositionIterator is provided to iterate over the positions of an individual Ke
 // Will add later when lexer and text are implemented so that posting_test.cc works 
 // #include "src/indexes/text/lexer.h"
 // #include "src/indexes/text/text.h"
-#include <span>
-#include <memory>
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace valkey_search::text {
 
@@ -45,45 +45,6 @@ namespace valkey_search::text {
 using Key = std::string;
 using Position = uint32_t;
 
-// Field mask interface optimized for different field counts
-class FieldMask {
-public:
-  static std::unique_ptr<FieldMask> Create(size_t num_fields);
-  virtual ~FieldMask() = default;
-  virtual void SetField(size_t field_index) = 0;
-  virtual void ClearField(size_t field_index) = 0;
-  virtual bool HasField(size_t field_index) const = 0;
-  virtual void SetAllFields() = 0;
-  virtual void ClearAllFields() = 0;
-  virtual size_t CountSetFields() const = 0;
-  virtual uint64_t AsUint64() const = 0;
-  virtual std::unique_ptr<FieldMask> Clone() const = 0;
-  virtual size_t MaxFields() const = 0;
-};
-
-// Template implementation for field mask with optimized storage
-template<typename MaskType, size_t MAX_FIELDS>
-class FieldMaskImpl : public FieldMask {
-public:
-  explicit FieldMaskImpl(size_t num_fields = MAX_FIELDS);
-  void SetField(size_t field_index) override;
-  void ClearField(size_t field_index) override;
-  bool HasField(size_t field_index) const override;
-  void SetAllFields() override;
-  void ClearAllFields() override;
-  size_t CountSetFields() const override;
-  uint64_t AsUint64() const override;
-  std::unique_ptr<FieldMask> Clone() const override;
-  size_t MaxFields() const override { return MAX_FIELDS; }
-private:
-  MaskType mask_;
-  size_t num_fields_;
-};
-
-// Optimized implementations for different field counts
-using SingleFieldMask = FieldMaskImpl<bool, 1>;
-using ByteFieldMask = FieldMaskImpl<uint8_t, 8>;
-using Uint64FieldMask = FieldMaskImpl<uint64_t, 64>;
 
 //
 // this is the logical view of a posting. 
@@ -113,18 +74,10 @@ struct Postings {
   // Are there any postings in this object?
   bool IsEmpty() const;
 
-  // Add a key for boolean search (save_positions=false mode only)
-  // Sets document presence with assumed position 0 and empty field mask
-  void SetKey(const Key& key);
-  
-  // Add a posting entry for a specific position and field
-  void AddPositionForField(const Key& key, Position position, size_t field_index);
-  
-  // Add multiple posting entries for specific positions and fields (replaces existing positions)
-  void SetKeyWithFieldPositions(const Key& key, std::span<std::pair<Position, size_t>> position_field_pairs);
-  
-  // Update key by adding/merging positions with existing ones (preserves existing positions)
-  void UpdateKeyWithFieldPositions(const Key& key, std::span<std::pair<Position, size_t>> position_field_pairs);
+  // Insert a posting entry for a key and field
+  // If save_positions=false: Only key and field are stored (position ignored if provided)
+  // If save_positions=true: Key, position, and field are stored (position must be provided)
+  void InsertPosting(const Key& key, size_t field_index, Position position = UINT32_MAX);
 
   // Remove a key and all positions for it
   void RemoveKey(const Key& key);

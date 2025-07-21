@@ -95,7 +95,7 @@ static auto show_developer =
 //
 // No locks or memory allocations are permitted here.
 //
-void DoRemainingSections(ValkeyModuleInfoCtx* ctx, int for_crash_report) {
+void DoSections(ValkeyModuleInfoCtx* ctx, int for_crash_report) {
   SectionMap& section_map = GetSectionMap();
 
   //

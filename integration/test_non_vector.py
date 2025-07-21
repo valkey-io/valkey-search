@@ -28,7 +28,7 @@ expected_hash_value = {
     b'category': b"electronics"
 }
 
-numeric_tag_index_on_json = "FT.CREATE jsonproducts ON JSON PREFIX 1 jsonproduct: SCHEMA $.category TAG $.price NUMERIC $.rating NUMERIC"
+numeric_tag_index_on_json = "FT.CREATE jsonproducts ON JSON PREFIX 1 jsonproduct: SCHEMA $.category as category TAG $.price as price NUMERIC $.rating as rating NUMERIC"
 json_docs = [
     ['JSON.SET', 'jsonproduct:1', '$',
             '{"category":"electronics","name":"Laptop","price":999.99,"rating":4.5,"desc":"Great"}'],
@@ -41,7 +41,7 @@ json_docs = [
 ]
 numeric_query_on_json = [
     "FT.SEARCH", "jsonproducts",
-    "@$.price:[300 2000] @$.rating:[4.4 +inf]"
+    "@price:[300 2000] @rating:[4.4 +inf]"
 ]
 expected_numeric_json_key = b'jsonproduct:1'
 expected_numeric_json_value = {
@@ -53,7 +53,7 @@ expected_numeric_json_value = {
 }
 numeric_tag_query_on_json = [
     "FT.SEARCH", "jsonproducts",
-    "@$.category:{books} @$.price:[10 30] @$.rating:[4.7 +inf]"
+    "@category:{books} @price:[10 30] @rating:[4.7 +inf]"
 ]
 expected_numeric_tag_json_key = b'jsonproduct:4'
 expected_numeric_tag_json_value = {

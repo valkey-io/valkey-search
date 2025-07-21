@@ -329,80 +329,132 @@ Postings* Postings::Defrag() {
   return this;
 }
 
+// Iterator Implementation Structures
+struct KeyIteratorImpl {
+  const std::map<Key, PositionMap>* key_map;
+  std::map<Key, PositionMap>::const_iterator current;
+  std::map<Key, PositionMap>::const_iterator end;
+  
+  KeyIteratorImpl(const std::map<Key, PositionMap>* map) 
+    : key_map(map), current(map->begin()), end(map->end()) {}
+};
+
+struct PositionIteratorImpl {
+  const PositionMap* position_map;
+  PositionMap::const_iterator current;
+  PositionMap::const_iterator end;
+  
+  PositionIteratorImpl(const PositionMap* map) 
+    : position_map(map), current(map->begin()), end(map->end()) {}
+};
+
 // Iterators Implementation
 
-// Placeholder for GetKeyIterator - will be implemented when iterators are added
+// Get a Key iterator
 Postings::KeyIterator Postings::GetKeyIterator() const {
-  // TODO: Implement when KeyIterator is added
-  static KeyIterator dummy;
-  return dummy;
+  KeyIterator iterator;
+  iterator.impl_data_ = new KeyIteratorImpl(&impl_->key_to_positions_);
+  return iterator;
 }
 
-// Placeholder implementations for KeyIterator
+// KeyIterator implementations
 bool Postings::KeyIterator::IsValid() const {
-  // TODO: Implement when KeyIterator is added
-  return false;
+  if (!impl_data_) return false;
+  auto* impl = static_cast<KeyIteratorImpl*>(impl_data_);
+  return impl->current != impl->end;
 }
 
 void Postings::KeyIterator::NextKey() {
-  // TODO: Implement when KeyIterator is added
+  if (!impl_data_) return;
+  auto* impl = static_cast<KeyIteratorImpl*>(impl_data_);
+  if (impl->current != impl->end) {
+    ++impl->current;
+  }
 }
 
 bool Postings::KeyIterator::SkipForwardKey(const Key& key) {
-  // TODO: Implement when KeyIterator is added
-  return false;
+  if (!impl_data_) return false;
+  auto* impl = static_cast<KeyIteratorImpl*>(impl_data_);
+  
+  // Use lower_bound for efficient binary search since map is ordered
+  impl->current = impl->key_map->lower_bound(key);
+  
+  // Return true if we landed on exact key match
+  return (impl->current != impl->end && impl->current->first == key);
 }
 
 const Key& Postings::KeyIterator::GetKey() const {
-  // TODO: Implement when KeyIterator is added
-  static Key dummy_key;
-  return dummy_key;
+  if (!impl_data_) {
+    static Key dummy_key;
+    return dummy_key;
+  }
+  auto* impl = static_cast<KeyIteratorImpl*>(impl_data_);
+  if (impl->current == impl->end) {
+    static Key dummy_key;
+    return dummy_key;
+  }
+  return impl->current->first;
 }
 
 Postings::PositionIterator Postings::KeyIterator::GetPositionIterator() const {
-  // TODO: Implement when KeyIterator is added
-  static PositionIterator dummy;
-  return dummy;
+  PositionIterator pos_iterator;
+  if (!impl_data_) {
+    pos_iterator.impl_data_ = nullptr;
+    return pos_iterator;
+  }
+  
+  auto* impl = static_cast<KeyIteratorImpl*>(impl_data_);
+  if (impl->current == impl->end) {
+    pos_iterator.impl_data_ = nullptr;
+    return pos_iterator;
+  }
+  
+  pos_iterator.impl_data_ = new PositionIteratorImpl(&impl->current->second);
+  return pos_iterator;
 }
 
-// Placeholder implementations for PositionIterator
+// PositionIterator implementations
 bool Postings::PositionIterator::IsValid() const {
-  // TODO: Implement when PositionIterator is added
-  return false;
+  if (!impl_data_) return false;
+  auto* impl = static_cast<PositionIteratorImpl*>(impl_data_);
+  return impl->current != impl->end;
 }
 
 void Postings::PositionIterator::NextPosition() {
-  // TODO: Implement when PositionIterator is added
+  if (!impl_data_) return;
+  auto* impl = static_cast<PositionIteratorImpl*>(impl_data_);
+  if (impl->current != impl->end) {
+    ++impl->current;
+  }
 }
 
 bool Postings::PositionIterator::SkipForwardPosition(const Position& position) {
-  // TODO: Implement when PositionIterator is added
-  return false;
+  if (!impl_data_) return false;
+  auto* impl = static_cast<PositionIteratorImpl*>(impl_data_);
+  
+  // Use lower_bound for efficient binary search since map is ordered
+  impl->current = impl->position_map->lower_bound(position);
+  
+  // Return true if we landed on exact position match
+  return (impl->current != impl->end && impl->current->first == position);
 }
 
 const Position& Postings::PositionIterator::GetPosition() const {
-  // TODO: Implement when PositionIterator is added
-  static Position dummy_position = 0;
-  return dummy_position;
+  if (!impl_data_) {
+    static Position dummy_position = 0;
+    return dummy_position;
+  }
+  auto* impl = static_cast<PositionIteratorImpl*>(impl_data_);
+  if (impl->current == impl->end) {
+    static Position dummy_position = 0;
+    return dummy_position;
+  }
+  return impl->current->first;
 }
 
 uint64_t Postings::PositionIterator::GetFieldMask() const {
-  // TODO: Implement when PositionIterator is added
-  return 0;
-}
-
-// Placeholder implementations for Posting struct
-const Key& Posting::GetKey() const {
-  static Key dummy_key;
-  return dummy_key;
-}
-
-uint64_t Posting::GetFieldMask() const {
-  return 0;
-}
-
-uint32_t Posting::GetPosition() const {
-  return 0;
-}
-
+  if (!impl_data_) return 0;
+  auto* impl = static_cast<PositionIteratorImpl*>(impl_data_);
+  if (impl->current == impl->end) return 0;
+  return impl->current->second->AsUint64();
 }

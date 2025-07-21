@@ -114,6 +114,12 @@ struct Postings {
 
     // Get Position Iterator
     PositionIterator GetPositionIterator() const;
+
+  private:
+    friend struct Postings;
+    
+    // Internal implementation details
+    void* impl_data_;
   };
 
   // The Position Iterator
@@ -133,6 +139,12 @@ struct Postings {
     
     // Get field mask for current position
     uint64_t GetFieldMask() const;
+
+  private:
+    friend struct KeyIterator;
+    
+    // Internal implementation details
+    void* impl_data_;
   };
 
 private:

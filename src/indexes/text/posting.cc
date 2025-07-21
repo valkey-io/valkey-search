@@ -458,3 +458,5 @@ uint64_t Postings::PositionIterator::GetFieldMask() const {
   if (impl->current == impl->end) return 0;
   return impl->current->second->AsUint64();
 }
+
+}  // namespace valkey_search::text

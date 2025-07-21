@@ -28,10 +28,12 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
+#include "src/index_schema.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
+#include "src/schema_manager.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -164,6 +166,47 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
   return reactor;
 }
 
+grpc::ServerUnaryReactor* Service::InfoIndexPartition(
+    grpc::CallbackServerContext* context,
+    const InfoIndexPartitionRequest* request,
+    InfoIndexPartitionResponse* response) {
+  GRPCSuspensionGuard guard(GRPCSuspender::Instance());
+  auto latency_sample = SAMPLE_EVERY_N(100);
+  grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
+
+  vmsdk::RunByMain([reactor, response, idx = request->index_name(),
+                    latency_sample = std::move(latency_sample)]() mutable {
+    auto status_or_schema =
+        SchemaManager::Instance().GetIndexSchema(/*db=*/0, idx);
+    if (!status_or_schema.ok()) {
+      response->set_exists(false);
+      response->set_index_name(idx);
+      response->set_error(status_or_schema.status().ToString());
+      reactor->Finish(grpc::Status::OK);
+      return;
+    }
+    auto schema = std::move(status_or_schema.value());
+    IndexSchema::InfoIndexPartitionData data =
+        schema->GetInfoIndexPartitionData();
+    response->set_exists(true);
+    response->set_index_name(idx);
+    response->set_num_docs(data.num_docs);
+    response->set_num_records(data.num_records);
+    response->set_hash_indexing_failures(data.hash_indexing_failures);
+    response->set_backfill_scanned_count(data.backfill_scanned_count);
+    response->set_backfill_db_size(data.backfill_db_size);
+    response->set_backfill_inqueue_tasks(data.backfill_inqueue_tasks);
+    response->set_backfill_complete_percent(data.backfill_complete_percent);
+    response->set_backfill_in_progress(data.backfill_in_progress);
+    response->set_mutation_queue_size(data.mutation_queue_size);
+    response->set_recent_mutations_queue_delay(
+        data.recent_mutations_queue_delay);
+    response->set_state(data.state);
+    reactor->Finish(grpc::Status::OK);
+  });
+  return reactor;
+}
+
 ServerImpl::ServerImpl(std::unique_ptr<Service> coordinator_service,
                        std::unique_ptr<grpc::Server> server, uint16_t port)
     : coordinator_service_(std::move(coordinator_service)),
@@ -178,7 +221,8 @@ std::unique_ptr<Server> ServerImpl::Create(
   std::shared_ptr<grpc::ServerCredentials> creds =
       grpc::InsecureServerCredentials();
   auto coordinator_service = std::make_unique<Service>(
-      vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx), reader_thread_pool);
+      vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx),
+      reader_thread_pool);
   grpc::ServerBuilder builder;
   builder.AddListeningPort(server_address, creds);
   builder.RegisterService(coordinator_service.get());

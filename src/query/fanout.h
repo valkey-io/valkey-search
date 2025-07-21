@@ -20,29 +20,9 @@
 #include "src/query/search.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "src/query/fanout_template.h"
 
 namespace valkey_search::query::fanout {
-
-struct FanoutSearchTarget {
-  enum Type {
-    kLocal,
-    kRemote,
-  };
-  Type type;
-  // Empty string if type is kLocal.
-  std::string address;
-
-  bool operator==(const FanoutSearchTarget& other) const {
-    return type == other.type && address == other.address;
-  }
-
-  friend std::ostream& operator<<(std::ostream& os,
-                                  const FanoutSearchTarget& target) {
-    os << "FanoutSearchTarget{type: " << target.type
-       << ", address: " << target.address << "}";
-    return os;
-  }
-};
 
 absl::Status PerformSearchFanoutAsync(
     ValkeyModuleCtx* ctx, std::vector<FanoutSearchTarget>& search_targets,

@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "src/coordinator/client_pool.h"
@@ -24,19 +25,26 @@ namespace valkey_search::query::info_fanout {
 
 struct InfoParameters {
   std::string index_name;
-  uint64_t timeout_ms = 5000;
 };
 
 struct InfoResult {
+  bool exists = false;
+  std::string index_name;
   uint64_t num_docs = 0;
   uint64_t num_records = 0;
   uint64_t hash_indexing_failures = 0;
-  uint64_t mutation_queue_size = 0;
-  bool backfill_in_progress = false;
+  uint64_t backfill_scanned_count = 0;
+  uint64_t backfill_db_size = 0;
+  uint64_t backfill_inqueue_tasks = 0;
   float backfill_complete_percent = 0.0f;
+  bool backfill_in_progress = false;
+  uint64_t mutation_queue_size = 0;
+  uint64_t recent_mutations_queue_delay = 0;
+  std::string state;
+  std::string error;
 };
 
-using InfoResponseCallback = std::function<void(absl::StatusOr<InfoResult>, std::unique_ptr<InfoParameters>)>;
+using InfoResponseCallback = absl::AnyInvocable<void(absl::StatusOr<InfoResult>, std::unique_ptr<InfoParameters>)>;
 
 absl::Status PerformInfoFanoutAsync(
     ValkeyModuleCtx* ctx, 

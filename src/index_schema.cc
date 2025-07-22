@@ -373,6 +373,16 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     }
   }
   if (added) {
+    // switch (attribute_data_type_->ToProto()) {
+    //   case data_model::ATTRIBUTE_DATA_TYPE_HASH:
+    //     Metrics::GetStats().ingest_hash_keys++;
+    //     break;
+    //   case data_model::ATTRIBUTE_DATA_TYPE_JSON:
+    //     Metrics::GetStats().ingest_json_keys++;
+    //     break;
+    //   default:
+    //     break;
+    // }
     // Track key modifications by data type
     switch (attribute_data_type_->ToProto()) {
       case data_model::ATTRIBUTE_DATA_TYPE_HASH:

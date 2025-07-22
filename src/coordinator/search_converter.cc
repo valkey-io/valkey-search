@@ -117,7 +117,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
 }
 
 absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
-GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request) {
+GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request, grpc::CallbackServerContext *context) {
   auto parameters = std::make_unique<query::VectorSearchParameters>();
   parameters->index_schema_name = request.index_schema_name();
   parameters->attribute_alias = request.attribute_alias();
@@ -138,6 +138,7 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request) {
   parameters->limit = query::LimitParameter{request.limit().first_index(),
                                             request.limit().number()};
   parameters->timeout_ms = request.timeout_ms();
+  parameters->cancellation_token = cancel::Make(request.timeout_ms(), context);
   parameters->no_content = request.no_content();
   if (request.has_root_filter_predicate()) {
     VMSDK_ASSIGN_OR_RETURN(

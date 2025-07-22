@@ -259,7 +259,7 @@ absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     VMSDK_ASSIGN_OR_RETURN(
         auto parameters,
         ParseVectorSearchParameters(ctx, argv + 1, argc - 1, schema_manager));
-    parameters->cancellation_token = cancel::OnTime::Make(parameters->timeout_ms);
+    parameters->cancellation_token = cancel::Make(parameters->timeout_ms, nullptr);
     static const auto permissions =
         PrefixACLPermissions(kSearchCmdPermissions, kSearchCommand);
     VMSDK_RETURN_IF_ERROR(AclPrefixCheck(

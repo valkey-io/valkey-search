@@ -54,7 +54,7 @@ const absl::flat_hash_map<data_model::DistanceMetric, std::string>
         {data_model::DISTANCE_METRIC_IP, typeid(kInnerProductSpace).name()},
         {data_model::DISTANCE_METRIC_L2, typeid(kL2Space).name()},
 };
-static cancel::Token cancel_never = cancel::OnTime::Make(100000);
+static cancel::Token cancel_never = cancel::Make(100000, nullptr);
 
 class VectorIndexTest : public ValkeySearchTest {
  public:

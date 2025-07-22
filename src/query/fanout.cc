@@ -205,7 +205,7 @@ absl::Status PerformSearchFanoutAsync(
   if (has_local_target) {
     VMSDK_ASSIGN_OR_RETURN(
         auto local_parameters,
-        coordinator::GRPCSearchRequestToParameters(*request));
+        coordinator::GRPCSearchRequestToParameters(*request, nullptr));
     VMSDK_RETURN_IF_ERROR(query::SearchAsync(
         std::move(local_parameters), thread_pool,
         [tracker](absl::StatusOr<std::deque<indexes::Neighbor>> &neighbors,

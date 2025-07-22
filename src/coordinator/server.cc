@@ -110,12 +110,14 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
   GRPCSuspensionGuard guard(GRPCSuspender::Instance());
   auto latency_sample = SAMPLE_EVERY_N(100);
   grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
-  auto vector_search_parameters = GRPCSearchRequestToParameters(*request);
+  auto vector_search_parameters = GRPCSearchRequestToParameters(*request, context);
   if (!vector_search_parameters.ok()) {
     reactor->Finish(ToGrpcStatus(vector_search_parameters.status()));
     RecordSearchMetrics(true, std::move(latency_sample));
     return reactor;
   }
+
+  (*vector_search_parameters)->cancellation_token = cancel::Make((*vector_search_parameters)->timeout_ms, context);
 
   // Enqueue into the thread pool
   auto status = query::SearchAsync(

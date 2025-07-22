@@ -13,33 +13,61 @@
 namespace valkey_search {
 namespace cancel {
 
-vmsdk::config::Number kPollFrequency("timeout-poll-frequency", 100, 1, std::numeric_limits<long long>::max());
-vmsdk::config::Boolean kTestForceTimeout("test-force-timeout", false);
-vmsdk::info_field::Integer kTimeouts("timeouts", "cancel-timeouts", vmsdk::info_field::IntegerBuilder().Dev());
+static vmsdk::config::Number kPollFrequency("timeout-poll-frequency", 100, 1, std::numeric_limits<long long>::max());
+static vmsdk::config::Boolean kTestForceTimeoutForeground("test-force-timeout-foreground", false);
+static vmsdk::config::Boolean kTestForceTimeoutBackground("test-force-timeout-background", false);
 
-bool OnTime::IsCancelled() {
-  if (++count_ > kPollFrequency.GetValue()) {
-    count_ = 0;
-    if (is_cancelled_) {
-      return true;
-    }
-    long long now_us = ValkeyModule_Milliseconds();
-    if (now_us >= deadline_ms_ || kTestForceTimeout.GetValue()) {
-      is_cancelled_ = true; // Operation should be cancelled
-      kTimeouts.Increment(1);
-    }
+static vmsdk::info_field::Integer kTimeouts("timeouts", "cancel-timeouts", vmsdk::info_field::IntegerBuilder().Dev());
+static vmsdk::info_field::Integer kgRPCCancels("timeouts", "cancel-grpc", vmsdk::info_field::IntegerBuilder().Dev());
+static vmsdk::info_field::Integer kForceCancelsForeground("timeouts", "cancel-forced-foreground", vmsdk::info_field::IntegerBuilder().Dev());
+static vmsdk::info_field::Integer kForceCancelsBackground("timeouts", "cancel-forced-background", vmsdk::info_field::IntegerBuilder().Dev());
+
+//
+// A Concrete implementation of Token that can be used to cancel  
+// operations based on a timeout and optionally a gRPC server handle
+//
+struct TokenImpl : public Base {
+  TokenImpl(long long deadline_ms, grpc::CallbackServerContext *context) : deadline_ms_(deadline_ms), context_(context) {}
+
+  void Cancel() override {
+    is_cancelled_ = true; // Once cancelled, stay cancelled
   }
-  return is_cancelled_;
-}
 
-void OnTime::Cancel() {
-  is_cancelled_ = true; // Once cancelled, stay cancelled
-}
+  bool IsCancelled() override {
+    if (++count_ > kPollFrequency.GetValue()) {
+      count_ = 0;
+      if (!is_cancelled_) {
+        if (ValkeyModule_Milliseconds() >= deadline_ms_) {
+          is_cancelled_ = true; // Operation should be cancelled
+          kTimeouts.Increment(1);
+        } else if (context_ && context_->IsCancelled()) {
+          is_cancelled_ = true; // Operation should be cancelled
+          kgRPCCancels.Increment(1);
+        } else if (!context_ && kTestForceTimeoutForeground.GetValue()) {
+          is_cancelled_ = true; // Operation should be cancelled
+          kForceCancelsForeground.Increment(1);
+          VMSDK_LOG(WARNING, nullptr) << "Foreground Timeout forced";
+        } else if (context_ && kTestForceTimeoutBackground.GetValue()) {
+          is_cancelled_ = true; // Operation should be cancelled
+          kForceCancelsBackground.Increment(1);
+          VMSDK_LOG(WARNING, nullptr) << "Background Timeout forced";
+        }
+      }
+    }
+    return is_cancelled_;
+  }
 
-OnTime::OnTime(long long timeout_ms) : deadline_ms_(timeout_ms + ValkeyModule_Milliseconds()) {}
+  bool is_cancelled_{false}; // Once cancelled, stay cancelled
 
-Token OnTime::Make(long long timeout_ms) {
-  return std::shared_ptr<OnTime>(new OnTime(timeout_ms));
+  long long deadline_ms_;
+  grpc::CallbackServerContext *context_;
+  int count_{0};
+};
+
+Token Make(long long timeout_ms, grpc::CallbackServerContext *context) {
+  long long deadline_ms = timeout_ms + ValkeyModule_Milliseconds();
+  VMSDK_LOG(WARNING, nullptr) << " Creating timeout " << timeout_ms;
+  return std::make_shared<TokenImpl>(deadline_ms, context);
 }
 
 } // namespace cancel

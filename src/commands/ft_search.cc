@@ -133,6 +133,27 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
   }
 }
 
+// Handle non-vector queries by processing the neighbors and replying with the attribute contents.
+void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
+                                const std::deque<indexes::Neighbor> &neighbors,
+                                const query::VectorSearchParameters &parameters) {
+    const size_t available_results = neighbors.size();
+    ValkeyModule_ReplyWithArray(ctx, 2 * available_results + 1);
+    // First element is the count of available results.
+    ValkeyModule_ReplyWithLongLong(ctx, available_results);
+    for (const auto& neighbor : neighbors) {
+        // Document ID
+        ValkeyModule_ReplyWithString(ctx, vmsdk::MakeUniqueValkeyString(*neighbor.external_id).get());
+        const auto& contents = neighbor.attribute_contents.value();
+        // Fields and values as a flat array
+        ValkeyModule_ReplyWithArray(ctx, 2 * contents.size());
+        for (const auto &attribute_content : contents) {
+            ValkeyModule_ReplyWithString(ctx, attribute_content.second.GetIdentifier());
+            ValkeyModule_ReplyWithString(ctx, attribute_content.second.value.get());
+        }
+    }
+}
+
 }  // namespace
 // The reply structure is an array which consists of:
 // 1. The amount of response elements
@@ -148,6 +169,15 @@ void SendReply(ValkeyModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
                const query::VectorSearchParameters &parameters) {
   // Increment success counter.
   ++Metrics::GetStats().query_successful_requests_cnt;
+
+  // Support non-vector queries: no attribute_alias and k == 0
+  if (parameters.IsNonVectorQuery()) {
+    query::ProcessNonVectorNeighborsForReply(ctx, parameters.index_schema->GetAttributeDataType(),
+                                  neighbors, parameters);
+    SerializeNonVectorNeighbors(ctx, neighbors, parameters);
+    return;
+  }
+
   if (parameters.limit.first_index >= static_cast<uint64_t>(parameters.k) ||
       parameters.limit.number == 0) {
     ValkeyModule_ReplyWithArray(ctx, 1);

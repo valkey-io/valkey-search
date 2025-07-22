@@ -22,7 +22,7 @@
 
 namespace valkey_search {
 
-namespace async {
+namespace info_async {
 
 struct InfoAsyncResult {
   absl::StatusOr<query::info_fanout::InfoResult> info;
@@ -163,39 +163,18 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 
     // Wrap the ctx in a BlockedClient so it stays alive until we explicitly
     // reply:
-    vmsdk::BlockedClient blocked_client(ctx, async::Reply, async::Timeout,
-                                        async::Free, 5000);
+    vmsdk::BlockedClient blocked_client(ctx, info_async::Reply, info_async::Timeout,
+                                        info_async::Free, 5000);
     blocked_client.MeasureTimeStart();
 
     auto on_done = [blocked_client = std::move(blocked_client)](
                        absl::StatusOr<query::info_fanout::InfoResult> result,
                        std::unique_ptr<query::info_fanout::InfoParameters>
                            params) mutable {
-      auto payload = std::make_unique<async::InfoAsyncResult>(
+      auto payload = std::make_unique<info_async::InfoAsyncResult>(
           std::move(result), std::move(params));
       blocked_client.SetReplyPrivateData(payload.release());
     };
-
-    // // 3) STUB: build a dummy InfoResult right now
-    // query::info_fanout::InfoResult dummy;
-    // dummy.index_name = parameters->index_name;
-    // dummy.exists = true;
-    // dummy.num_docs = 42;
-    // dummy.num_records = 100;
-    // dummy.hash_indexing_failures = 0;
-    // dummy.backfill_scanned_count = 0;
-    // dummy.backfill_db_size = 0;
-    // dummy.backfill_inqueue_tasks = 0;
-    // dummy.mutation_queue_size = 0;
-    // dummy.recent_mutations_queue_delay = 0;
-    // dummy.backfill_in_progress = false;
-    // dummy.backfill_complete_percent = 0.0;
-    // dummy.state = "READY";
-    // // no error
-
-    // // 4) Immediately invoke the callback with our dummy
-    // on_done(absl::StatusOr<query::info_fanout::InfoResult>(std::move(dummy)),
-    //         std::move(parameters));
 
     return query::info_fanout::PerformInfoFanoutAsync(
         ctx, targets, ValkeySearch::Instance().GetCoordinatorClientPool(),

@@ -23,6 +23,7 @@
 #include "grpcpp/server_context.h"
 #include "grpcpp/support/server_callback.h"
 #include "grpcpp/support/status.h"
+#include "module_config.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/grpc_suspender.h"
 #include "src/coordinator/metadata_manager.h"
@@ -32,6 +33,7 @@
 #include "src/metrics.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
+#include "valkey_search_options.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -130,6 +132,12 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
           RecordSearchMetrics(true, std::move(latency_sample));
           return;
         }
+        if (parameters->cancellation_token->IsCancelled() && !valkey_search::options::GetEnablePartialResults().GetValue()) {
+          reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
+                          "Search operation cancelled due to timeout"});
+          RecordSearchMetrics(true, std::move(latency_sample));
+          return;
+        }
         if (parameters->no_content) {
           SerializeNeighbors(response, neighbors.value());
           reactor->Finish(grpc::Status::OK);
@@ -204,4 +212,4 @@ std::unique_ptr<Server> ServerImpl::Create(
       new ServerImpl(std::move(coordinator_service), std::move(server), port));
 }
 
-}  // namespace valkey_search::coordinator
+} // namespace valkey_search::coordinator

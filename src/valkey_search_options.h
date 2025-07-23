@@ -38,5 +38,9 @@ config::Enum& GetLogLevel();
 
 /// Reset the state of the options (mainly needed for testing)
 absl::Status Reset();
+
+/// Allow delivery of partial results when timeout occurs
+const config::Boolean& GetEnablePartialResults();
+
 }  // namespace options
 }  // namespace valkey_search

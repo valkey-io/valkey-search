@@ -36,6 +36,7 @@
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
+#include "valkey_search_options.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -43,15 +44,7 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
-
 namespace {
-
-vmsdk::config::Boolean EnablePartialResults("enable-partial-results", false);
-vmsdk::info_field::Integer QueryTimeouts("Query Stats", "QueryTimeouts", 
-    vmsdk::info_field::IntegerBuilder().CrashSafe().Cumulative().Dev());
-
-vmsdk::info_field::Integer Disconnects("Query Stats", "Disconnects", 
-    vmsdk::info_field::IntegerBuilder().CrashSafe().Cumulative().Dev());
 
     // FT.SEARCH idx "*=>[KNN 10 @vec $BLOB AS score]" PARAMS 2 BLOB
 // "\x12\xa9\xf5\x6c" DIALECT 2
@@ -177,6 +170,13 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
 // SendReply respects the Limit, see https://valkey.io/commands/ft.search/
 void SendReply(ValkeyModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
                const query::VectorSearchParameters &parameters) {
+
+  if (!options::GetEnablePartialResults().GetValue() &&
+      parameters.cancellation_token->IsCancelled()) {
+    ValkeyModule_ReplyWithError(ctx, "Search operation cancelled due to timeout");
+    ++Metrics::GetStats().query_failed_requests_cnt;
+    return;
+  }
   // Increment success counter.
   ++Metrics::GetStats().query_successful_requests_cnt;
 
@@ -216,12 +216,11 @@ namespace async {
 
 int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
           [[maybe_unused]] int argc) {
-  QueryTimeouts.Increment(1);
   auto *res =
       static_cast<Result *>(ValkeyModule_GetBlockedClientPrivateData(ctx));
   CHECK(res != nullptr);
   res->parameters->cancellation_token->Cancel(); // Cancel to tell Free that it's been seen
-  return ValkeyModule_ReplyWithSimpleString(ctx, "Request timed out");
+  return ValkeyModule_ReplyWithError(ctx, "Request timed out");
 }
 
 int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -233,20 +232,12 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return ValkeyModule_ReplyWithError(
         ctx, res->neighbors.status().message().data());
   }
-  if (!EnablePartialResults.GetValue() && res->parameters->cancellation_token->IsCancelled()) {
-    return Timeout(ctx, argv, argc);
-  } else {
-    SendReply(ctx, res->neighbors.value(), *res->parameters);
-    res->parameters->cancellation_token->Cancel(); // Cancel to tell Free that it's been seen
-  }
+  SendReply(ctx, res->neighbors.value(), *res->parameters);
   return VALKEYMODULE_OK;
 }
 
 void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
   auto *result = static_cast<Result *>(privdata);
-  if (!result->parameters->cancellation_token->IsCancelled()) {
-    Disconnects.Increment(1);
-  }
   delete result;
 }
 

@@ -36,6 +36,7 @@
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
+#include "valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -335,8 +336,13 @@ absl::StatusOr<std::deque<Neighbor>> VectorHNSW<T>::Search(
       -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
     try {
       CancelCondition cancel_condition(cancellation_token);
-      return algo_->searchKnn((T *)query.data(), count, ef_runtime,
+      auto res = algo_->searchKnn((T *)query.data(), count, ef_runtime,
                               filter.get(), &cancel_condition);
+      if (!valkey_search::options::GetEnablePartialResults().GetValue() &&
+          cancellation_token->IsCancelled()) {
+        return absl::CancelledError("Search operation cancelled due to timeout");
+      }
+      return res;
     } catch (const std::exception &e) {
       Metrics::GetStats().hnsw_search_exceptions_cnt.fetch_add(
           1, std::memory_order_relaxed);

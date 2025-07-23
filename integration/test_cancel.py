@@ -14,8 +14,16 @@ def canceller(client, client_id):
 def search_command(index:str) -> list[str]:
     return ["FT.SEARCH", index, "*=>[KNN 10 @v $BLOB]", "PARAMS", "2", "BLOB", float_to_bytes([0.0, 0.0, 0.0])]
     
-def search(client: valkey.client, index:str) -> list[tuple[str, float]]:
-    return client.execute_command(*search_command(index))
+def search(client: valkey.client, index:str, timeout: bool) -> list[tuple[str, float]]:
+    if not timeout:
+        return client.execute_command(*search_command(index))
+    else:
+        try:
+            x = client.execute_command(*search_command(index))
+            assert False, "Expected timeout, but got result: " + str(x)
+        except ResponseError as e:
+            assert str(e) == "Search operation cancelled due to timeout"
+        return []
 
 
 class TestCancelCMD(ValkeySearchTestCaseBase):
@@ -34,16 +42,15 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
        
         hnsw_index.create(client)
         flat_index.create(client)
-        hnsw_index.load_data(client, 100)
+        hnsw_index.load_data(client, 1000)
 
         #
         # Nominal case
         #
-        hnsw_result = search(client, "hnsw")
-        flat_result = search(client, "flat")
+        hnsw_result = search(client, "hnsw", False)
+        flat_result = search(client, "flat", False)
 
         assert client.info("SEARCH")["search_cancel-timeouts"] == 0
-        assert client.info("SEARCH")["search_QueryTimeouts"] == 0
 
         assert hnsw_result[0] == 10
         assert flat_result[0] == 10
@@ -51,27 +58,19 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
         #
         # Now, force timeouts quickly
         #
-        client.execute_command("CONFIG SET search.test-force-timeout-foreground yes") == b"OK"
-        client.execute_command("CONFIG SET search.timeout-poll-frequency 5") == b"OK"
+        assert client.execute_command("CONFIG SET search.test-force-timeout-foreground yes") == b"OK"
+        assert client.execute_command("CONFIG SET search.timeout-poll-frequency 5") == b"OK"
 
         #
         # Enable timeout path, no error but message result
         #
-        client.execute_command("CONFIG SET search.enable-partial-results no") == b"OK"
+        assert client.execute_command("CONFIG SET search.enable-partial-results no") == b"OK"
 
-        hnsw_result = search(client, "hnsw")
-
+        hnsw_result = search(client, "hnsw", True)
         assert client.info("SEARCH")["search_cancel-forced-foreground"] == 1
-        assert client.info("SEARCH")["search_QueryTimeouts"] == 1
 
-        assert hnsw_result == b"Request timed out"
-
-        flat_result = search(client, "flat")
-
+        flat_result = search(client, "flat", True)
         assert client.info("SEARCH")["search_cancel-forced-foreground"] == 2
-        assert client.info("SEARCH")["search_QueryTimeouts"] == 2
-
-        assert flat_result == b"Request timed out"
 
         #
         # Enable partial results
@@ -79,17 +78,15 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
 
         assert client.execute_command("CONFIG SET search.enable-partial-results yes") == b"OK"
 
-        hnsw_result = search(client, "hnsw")
+        hnsw_result = search(client, "hnsw", False)
 
         assert client.info("SEARCH")["search_cancel-forced-foreground"] == 3
-        assert client.info("SEARCH")["search_QueryTimeouts"] == 2
 
         assert hnsw_result[0] == 10
 
-        flat_result = search(client, "flat")
+        flat_result = search(client, "flat", False)
 
         assert client.info("SEARCH")["search_cancel-forced-foreground"] == 4
-        assert client.info("SEARCH")["search_QueryTimeouts"] == 2
 
         assert flat_result[0] == 10
 
@@ -99,7 +96,7 @@ class TestCancelCME(ValkeySearchClusterTestCase):
         return [self.client_for_primary(i).execute_command(*command) for i in range(len(self.servers))]
 
     def config_set(self, config: str, value: str):
-        self.execute_all(["config set", config, value]) == [b"OK"] * len(self.servers)
+        assert self.execute_all(["config set", config, value]) == [b"OK"] * len(self.servers)
 
     def check_info(self, name: str, value: str|int):
         results = self.execute_all(["INFO","SEARCH"])

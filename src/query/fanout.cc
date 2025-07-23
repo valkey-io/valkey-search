@@ -227,7 +227,7 @@ absl::Status PerformSearchFanoutAsync(
 
 // TODO See if caching this improves performance.
 std::vector<FanoutSearchTarget> GetSearchTargetsForFanout(
-    ValkeyModuleCtx *ctx) {
+    ValkeyModuleCtx *ctx, bool primary_only) {
   return FanoutTemplate::GetTargets<FanoutSearchTarget>(
       ctx,
       []() { return FanoutSearchTarget{.type = FanoutSearchTarget::Type::kLocal}; },
@@ -236,7 +236,8 @@ std::vector<FanoutSearchTarget> GetSearchTargetsForFanout(
             .type = FanoutSearchTarget::Type::kRemote,
             .address = address
         };
-      });
+      },
+      primary_only);
 }
 
 

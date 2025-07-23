@@ -286,7 +286,8 @@ std::vector<fanout::FanoutSearchTarget> GetInfoTargetsForFanout(
     ValkeyModuleCtx* ctx) {
   // TODO: Implement target discovery
   // For now, reuse existing search fanout logic
-  return fanout::GetSearchTargetsForFanout(ctx);
+  // Set primary_only to true for info operations to get info from all primary nodes
+  return fanout::GetSearchTargetsForFanout(ctx, true);
 }
 
 }  // namespace valkey_search::query::info_fanout

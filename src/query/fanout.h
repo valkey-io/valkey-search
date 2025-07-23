@@ -30,7 +30,7 @@ absl::Status PerformSearchFanoutAsync(
     std::unique_ptr<query::VectorSearchParameters> parameters,
     vmsdk::ThreadPool* thread_pool, query::SearchResponseCallback callback);
 
-std::vector<FanoutSearchTarget> GetSearchTargetsForFanout(ValkeyModuleCtx* ctx);
+std::vector<FanoutSearchTarget> GetSearchTargetsForFanout(ValkeyModuleCtx* ctx, bool primary_only = false);
 
 }  // namespace valkey_search::query::fanout
 

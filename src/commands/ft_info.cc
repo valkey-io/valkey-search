@@ -43,9 +43,11 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   const auto &info = res->info.value();
   const auto index_name = res->parameters->index_name.c_str();
 
-  // Check if index exists - if not, return error immediately (same as local mode)
+  // Check if index exists - if not, return error immediately (same as local
+  // mode)
   if (!info.exists) {
-    std::string error_msg = absl::StrFormat("Index with name '%s' not found", index_name);
+    std::string error_msg =
+        absl::StrFormat("Index with name '%s' not found", index_name);
     return ValkeyModule_ReplyWithError(ctx, error_msg.c_str());
   }
 
@@ -62,26 +64,34 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
   ValkeyModule_ReplyWithCString(ctx, std::to_string(info.num_records).c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
-  ValkeyModule_ReplyWithCString(ctx, std::to_string(info.hash_indexing_failures).c_str());
+  ValkeyModule_ReplyWithCString(
+      ctx, std::to_string(info.hash_indexing_failures).c_str());
 
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_scanned_count");
-  ValkeyModule_ReplyWithCString(ctx, std::to_string(info.backfill_scanned_count).c_str());
+  ValkeyModule_ReplyWithCString(
+      ctx, std::to_string(info.backfill_scanned_count).c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_db_size");
-  ValkeyModule_ReplyWithCString(ctx, std::to_string(info.backfill_db_size).c_str());
+  ValkeyModule_ReplyWithCString(ctx,
+                                std::to_string(info.backfill_db_size).c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_inqueue_tasks");
-  ValkeyModule_ReplyWithCString(ctx, std::to_string(info.backfill_inqueue_tasks).c_str());
+  ValkeyModule_ReplyWithCString(
+      ctx, std::to_string(info.backfill_inqueue_tasks).c_str());
 
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_in_progress");
   ValkeyModule_ReplyWithCString(ctx, info.backfill_in_progress ? "1" : "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_complete_percent");
-  ValkeyModule_ReplyWithCString(ctx, absl::StrFormat("%f", info.backfill_complete_percent).c_str());
+  ValkeyModule_ReplyWithCString(
+      ctx, absl::StrFormat("%f", info.backfill_complete_percent).c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "mutation_queue_size");
-  ValkeyModule_ReplyWithCString(ctx, std::to_string(info.mutation_queue_size).c_str());
+  ValkeyModule_ReplyWithCString(
+      ctx, std::to_string(info.mutation_queue_size).c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "recent_mutations_queue_delay");
-  ValkeyModule_ReplyWithCString(ctx, absl::StrFormat("%lu sec", info.recent_mutations_queue_delay).c_str());
+  ValkeyModule_ReplyWithCString(
+      ctx,
+      absl::StrFormat("%lu sec", info.recent_mutations_queue_delay).c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "state");
   ValkeyModule_ReplyWithSimpleString(ctx, info.state.c_str());
-  
+
   return VALKEYMODULE_OK;
 }
 
@@ -93,7 +103,7 @@ int Timeout(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   return ValkeyModule_ReplyWithSimpleString(ctx, "Request timed out");
 }
 
-}  // namespace async
+}  // namespace info_async
 
 absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                        int argc) {
@@ -112,7 +122,6 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   if (argc == 2) {
     // Only 1 parameter provided (index name), default to LOCAL
     is_global = false;
-    VMSDK_LOG(NOTICE, ctx) << "==========Using Local Scope==========";
   } else if (argc == 3) {
     // 2 parameters provided, validate the second parameter
     itr.Next();
@@ -120,7 +129,6 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     auto scope = vmsdk::ToStringView(scope_arg);
 
     if (absl::EqualsIgnoreCase(scope, "LOCAL")) {
-      VMSDK_LOG(NOTICE, ctx) << "==========Using Local Scope==========";
       is_global = false;
     } else if (absl::EqualsIgnoreCase(scope, "GLOBAL")) {
       // Check if we're in cluster mode and using coordinator
@@ -132,22 +140,6 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
         return absl::OkStatus();
       }
       is_global = true;
-
-      VMSDK_LOG(NOTICE, ctx) << "==========Using Global Scope==========";
-
-      // Get and print fanout targets
-      auto targets = query::info_fanout::GetInfoTargetsForFanout(ctx);
-      VMSDK_LOG(NOTICE, ctx)
-          << "Found " << targets.size() << " fanout targets:";
-
-      for (const auto &target : targets) {
-        VMSDK_LOG(NOTICE, ctx)
-            << "  Target type: "
-            << (target.type == query::fanout::FanoutSearchTarget::Type::kLocal
-                    ? "LOCAL"
-                    : "REMOTE")
-            << ", address: " << target.address;
-      }
     } else {
       // Invalid scope parameter
       ValkeyModule_ReplyWithError(
@@ -161,16 +153,27 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   }
 
   if (is_global) {
+    VMSDK_LOG(NOTICE, ctx) << "==========Using Global Scope==========";
     // Global info fanout - aggregate info from all cluster nodes
     auto parameters = std::make_unique<query::info_fanout::InfoParameters>();
     parameters->index_name = std::string(index_schema_name);
 
     auto targets = query::info_fanout::GetInfoTargetsForFanout(ctx);
+    VMSDK_LOG(NOTICE, ctx) << "Found " << targets.size() << " fanout targets:";
+
+    for (const auto &target : targets) {
+      VMSDK_LOG(NOTICE, ctx)
+          << "  Target type: "
+          << (target.type == query::fanout::FanoutSearchTarget::Type::kLocal
+                  ? "LOCAL"
+                  : "REMOTE")
+          << ", address: " << target.address;
+    }
 
     // Wrap the ctx in a BlockedClient so it stays alive until we explicitly
     // reply:
-    vmsdk::BlockedClient blocked_client(ctx, info_async::Reply, info_async::Timeout,
-                                        info_async::Free, 5000);
+    vmsdk::BlockedClient blocked_client(
+        ctx, info_async::Reply, info_async::Timeout, info_async::Free, 5000);
     blocked_client.MeasureTimeStart();
 
     auto on_done = [blocked_client = std::move(blocked_client)](
@@ -188,6 +191,7 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
         std::move(on_done));
 
   } else {
+    VMSDK_LOG(NOTICE, ctx) << "==========Using Local Scope==========";
     // Local info - existing implementation
     VMSDK_ASSIGN_OR_RETURN(
         auto index_schema,

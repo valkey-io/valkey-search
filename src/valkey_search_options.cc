@@ -64,18 +64,6 @@ static auto query_string_bytes =
                           UINT_MAX)                  // max size
         .Build();
 
-/// Register the "--query-string-bytes" flag. Controls the length of the query
-/// string of the FT.SEARCH cmd.
-constexpr absl::string_view kQueryStringBytesConfig{"query-string-bytes"};
-constexpr uint32_t kDefaultQueryStringBytes{10240};
-constexpr uint32_t kMinimumQueryStringBytes{1};
-static auto query_string_bytes =
-    config::NumberBuilder(kQueryStringBytesConfig,   // name
-                          kDefaultQueryStringBytes,  // default size
-                          kMinimumQueryStringBytes,  // min size
-                          UINT_MAX)                  // max size
-        .Build();
-
 constexpr absl::string_view kHNSWBlockSizeConfig{"hnsw-block-size"};
 static auto hnsw_block_size =
     config::NumberBuilder(kHNSWBlockSizeConfig,   // name
@@ -162,9 +150,13 @@ static auto log_level =
         .WithValidationCallback(ValidateLogLevel)
         .Build();
 
-uint32_t GetQueryStringBytes() {
-  return query_string_bytes->GetValue();
-}
+/// Should this instance use coordinator?
+constexpr absl::string_view kEnablePartialResults{"enable-partial-results"};
+static auto enable_partial_results =
+    config::BooleanBuilder(kEnablePartialResults, true)
+        .Build();
+
+uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
   return dynamic_cast<vmsdk::config::Number&>(*hnsw_block_size);

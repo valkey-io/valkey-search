@@ -1,11 +1,3 @@
-set(SRCS_CANCEL 
-    ${CMAKE_CURRENT_LIST_DIR}/cancel.h
-    ${CMAKE_CURRENT_LIST_DIR}/cancel.cc
-  )
-valkey_search_add_static_library(cancel "${SRCS_CANCEL}")
-target_include_directories(cancel PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(cancel PUBLIC allocator)
-
 set(SRCS_PATRICIA_TREE ${CMAKE_CURRENT_LIST_DIR}/patricia_tree.h)
 
 add_library(patricia_tree INTERFACE ${SRCS_PATRICIA_TREE})
@@ -24,7 +16,10 @@ target_include_directories(string_interning PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(string_interning PUBLIC allocator)
 
 set(SRCS_ALLOCATOR ${CMAKE_CURRENT_LIST_DIR}/allocator.cc
-                   ${CMAKE_CURRENT_LIST_DIR}/allocator.h)
+                   ${CMAKE_CURRENT_LIST_DIR}/allocator.h
+                   ${CMAKE_CURRENT_LIST_DIR}/cancel.h
+                   ${CMAKE_CURRENT_LIST_DIR}/cancel.cc
+                   )
 
 valkey_search_add_static_library(allocator "${SRCS_ALLOCATOR}")
 target_include_directories(allocator PUBLIC ${CMAKE_CURRENT_LIST_DIR})

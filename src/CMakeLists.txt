@@ -20,7 +20,6 @@ target_link_libraries(libsearch PUBLIC commands)
 target_link_libraries(libsearch PUBLIC module)
 target_link_libraries(libsearch PUBLIC valkey_module)
 target_link_libraries(libsearch PUBLIC server_events)
-target_link_libraries(libsearch PUBLIC cancel)
 
 list(APPEND THIRD_PARTY_LIBS coordinator_grpc_proto)
 list(APPEND THIRD_PARTY_LIBS coordinator_cc_proto)

@@ -48,6 +48,10 @@ namespace valkey_search {
 constexpr absl::string_view kMaxIndexesConfig{"max-indexes"};
 constexpr uint32_t kMaxIndexes{10};
 
+constexpr absl::string_view kIndexSchemaBackfillBatchSizeConfig(
+    "backfill-batch-size");
+constexpr uint32_t kIndexSchemaBackfillBatchSize{10240};
+
 namespace options {
 
 /// Register the "--max-indexes" flag. Controls the max number of indexes we can
@@ -62,6 +66,21 @@ static auto max_indexes =
 
 vmsdk::config::Number &GetMaxIndexes() {
   return dynamic_cast<vmsdk::config::Number &>(*max_indexes);
+}
+
+/// Register the "--backfill-batch-size" flag. Controls the max number of
+/// indexes we can have.
+static auto backfill_batch_size =
+    vmsdk::config::NumberBuilder(kIndexSchemaBackfillBatchSizeConfig,
+                                 kIndexSchemaBackfillBatchSize, 1,
+                                 std::numeric_limits<int32_t>::max())
+        .WithValidationCallback(
+            CHECK_RANGE(1, std::numeric_limits<int32_t>::max(),
+                        kIndexSchemaBackfillBatchSizeConfig))
+        .Build();
+
+vmsdk::config::Number &GetBackfillBatchSize() {
+  return dynamic_cast<vmsdk::config::Number &>(*backfill_batch_size);
 }
 
 }  // namespace options
@@ -115,8 +134,6 @@ SchemaManager::SchemaManager(
             -> absl::Status { return this->OnMetadataCallback(id, metadata); });
   }
 }
-
-constexpr uint32_t kIndexSchemaBackfillBatchSize{10240};
 
 absl::Status GenerateIndexNotFoundError(absl::string_view name) {
   return absl::NotFoundError(
@@ -651,7 +668,7 @@ void SchemaManager::OnServerCronCallback(ValkeyModuleCtx *ctx,
                                          [[maybe_unused]] ValkeyModuleEvent eid,
                                          [[maybe_unused]] uint64_t subevent,
                                          [[maybe_unused]] void *data) {
-  SchemaManager::Instance().PerformBackfill(ctx, kIndexSchemaBackfillBatchSize);
+  SchemaManager::Instance().PerformBackfill(ctx, options::GetBackfillBatchSize().GetValue());
 }
 
 static vmsdk::info_field::Integer number_of_indexes(

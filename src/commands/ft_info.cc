@@ -7,6 +7,7 @@
 
 #include "absl/status/status.h"
 #include "absl/strings/ascii.h"
+#include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "src/acl.h"
 #include "src/commands/commands.h"
@@ -40,42 +41,47 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
                                        res->info.status().message().data());
   }
   const auto &info = res->info.value();
+  const auto index_name = res->parameters->index_name.c_str();
 
-  // Emit the same fields as LOCAL FT.INFO, postponing array length:
-  ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
+  // Check if index exists - if not, return error immediately (same as local mode)
+  if (!info.exists) {
+    std::string error_msg = absl::StrFormat("Index with name '%s' not found", index_name);
+    return ValkeyModule_ReplyWithError(ctx, error_msg.c_str());
+  }
+
+  // Add a line at the top highlighting this is the global info
+  ValkeyModule_ReplyWithArray(ctx, 28);
+  ValkeyModule_ReplyWithSimpleString(ctx, "global_info");
+  ValkeyModule_ReplyWithSimpleString(ctx, "true");
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
-  ValkeyModule_ReplyWithSimpleString(ctx, info.index_name.c_str());
-  ValkeyModule_ReplyWithSimpleString(ctx, "exists");
-  ValkeyModule_ReplyWithSimpleString(ctx, info.exists ? "true" : "false");
+  ValkeyModule_ReplyWithSimpleString(ctx, index_name);
   ValkeyModule_ReplyWithSimpleString(ctx, "num_docs");
-  ValkeyModule_ReplyWithLongLong(ctx, info.num_docs);
+  ValkeyModule_ReplyWithCString(ctx, std::to_string(info.num_docs).c_str());
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_terms");
+  ValkeyModule_ReplyWithCString(ctx, "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
-  ValkeyModule_ReplyWithLongLong(ctx, info.num_records);
+  ValkeyModule_ReplyWithCString(ctx, std::to_string(info.num_records).c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
-  ValkeyModule_ReplyWithLongLong(ctx, info.hash_indexing_failures);
+  ValkeyModule_ReplyWithCString(ctx, std::to_string(info.hash_indexing_failures).c_str());
+
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_scanned_count");
-  ValkeyModule_ReplyWithLongLong(ctx, info.backfill_scanned_count);
+  ValkeyModule_ReplyWithCString(ctx, std::to_string(info.backfill_scanned_count).c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_db_size");
-  ValkeyModule_ReplyWithLongLong(ctx, info.backfill_db_size);
+  ValkeyModule_ReplyWithCString(ctx, std::to_string(info.backfill_db_size).c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_inqueue_tasks");
-  ValkeyModule_ReplyWithLongLong(ctx, info.backfill_inqueue_tasks);
-  ValkeyModule_ReplyWithSimpleString(ctx, "mutation_queue_size");
-  ValkeyModule_ReplyWithLongLong(ctx, info.mutation_queue_size);
-  ValkeyModule_ReplyWithSimpleString(ctx, "recent_mutations_queue_delay");
-  ValkeyModule_ReplyWithLongLong(ctx, info.recent_mutations_queue_delay);
+  ValkeyModule_ReplyWithCString(ctx, std::to_string(info.backfill_inqueue_tasks).c_str());
+
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_in_progress");
-  ValkeyModule_ReplyWithSimpleString(
-      ctx, info.backfill_in_progress ? "true" : "false");
+  ValkeyModule_ReplyWithCString(ctx, info.backfill_in_progress ? "1" : "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_complete_percent");
-  ValkeyModule_ReplyWithDouble(ctx, info.backfill_complete_percent);
+  ValkeyModule_ReplyWithCString(ctx, absl::StrFormat("%f", info.backfill_complete_percent).c_str());
+  ValkeyModule_ReplyWithSimpleString(ctx, "mutation_queue_size");
+  ValkeyModule_ReplyWithCString(ctx, std::to_string(info.mutation_queue_size).c_str());
+  ValkeyModule_ReplyWithSimpleString(ctx, "recent_mutations_queue_delay");
+  ValkeyModule_ReplyWithCString(ctx, absl::StrFormat("%lu sec", info.recent_mutations_queue_delay).c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "state");
   ValkeyModule_ReplyWithSimpleString(ctx, info.state.c_str());
-  if (!info.error.empty()) {
-    ValkeyModule_ReplyWithSimpleString(ctx, "error");
-    ValkeyModule_ReplyWithSimpleString(ctx, info.error.c_str());
-  }
-  // Now set the correct length (13 fields×2, plus optional error)
-  ValkeyModule_ReplySetArrayLength(ctx, info.error.empty() ? 26 : 28);
+  
   return VALKEYMODULE_OK;
 }
 

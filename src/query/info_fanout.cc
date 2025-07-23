@@ -273,13 +273,6 @@ absl::Status PerformInfoFanoutAsync(
   }
 
   if (has_local_target) {
-    // Handle local info collection in thread pool
-    // thread_pool->Schedule(
-    //     [ctx, index_name = tracker->parameters->index_name, tracker]() {
-    //       auto local_result = GetLocalInfoResult(ctx, index_name);
-    //       tracker->AddResults(local_result);
-    //     },
-    //     vmsdk::ThreadPool::Priority::kHigh);
     vmsdk::RunByMain([ctx, index_name = tracker->parameters->index_name, tracker]() {
       auto local_result = GetLocalInfoResult(ctx, index_name);
       tracker->AddResults(local_result);

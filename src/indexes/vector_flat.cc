@@ -211,7 +211,9 @@ class CancelCondition : public hnswlib::BaseCancellationFunctor {
   public:
   explicit CancelCondition(cancel::Token &token)
       : token_(token) { CHECK(&token); }
-  bool isCancelled() override { return token_->IsCancelled(); }
+  bool isCancelled() override { 
+    return token_->IsCancelled();
+  }
 
   private:
   cancel::Token &token_;

@@ -14,13 +14,11 @@ namespace valkey_search {
 namespace cancel {
 
 static vmsdk::config::Number kPollFrequency("timeout-poll-frequency", 100, 1, std::numeric_limits<long long>::max());
-static vmsdk::config::Boolean kTestForceTimeoutForeground("test-force-timeout-foreground", false);
-static vmsdk::config::Boolean kTestForceTimeoutBackground("test-force-timeout-background", false);
+static vmsdk::config::Boolean kTestForceTimeout("test-force-timeout", false);
 
 static vmsdk::info_field::Integer kTimeouts("timeouts", "cancel-timeouts", vmsdk::info_field::IntegerBuilder().Dev());
 static vmsdk::info_field::Integer kgRPCCancels("timeouts", "cancel-grpc", vmsdk::info_field::IntegerBuilder().Dev());
-static vmsdk::info_field::Integer kForceCancelsForeground("timeouts", "cancel-forced-foreground", vmsdk::info_field::IntegerBuilder().Dev());
-static vmsdk::info_field::Integer kForceCancelsBackground("timeouts", "cancel-forced-background", vmsdk::info_field::IntegerBuilder().Dev());
+static vmsdk::info_field::Integer kForceCancels("timeouts", "cancel-forced", vmsdk::info_field::IntegerBuilder().Dev());
 
 //
 // A Concrete implementation of Token that can be used to cancel  
@@ -40,17 +38,15 @@ struct TokenImpl : public Base {
         if (ValkeyModule_Milliseconds() >= deadline_ms_) {
           is_cancelled_ = true; // Operation should be cancelled
           kTimeouts.Increment(1);
+          VMSDK_LOG(DEBUG, nullptr) << "CANCEL: Timeout reached, cancelling operation";
         } else if (context_ && context_->IsCancelled()) {
           is_cancelled_ = true; // Operation should be cancelled
           kgRPCCancels.Increment(1);
-        } else if (!context_ && kTestForceTimeoutForeground.GetValue()) {
+          VMSDK_LOG(DEBUG, nullptr) << "CANCEL: gRPC context cancelled";
+        } else if (kTestForceTimeout.GetValue()) {
           is_cancelled_ = true; // Operation should be cancelled
-          kForceCancelsForeground.Increment(1);
-          VMSDK_LOG(WARNING, nullptr) << "Foreground Timeout forced";
-        } else if (context_ && kTestForceTimeoutBackground.GetValue()) {
-          is_cancelled_ = true; // Operation should be cancelled
-          kForceCancelsBackground.Increment(1);
-          VMSDK_LOG(WARNING, nullptr) << "Background Timeout forced";
+          kForceCancels.Increment(1);
+          VMSDK_LOG(WARNING, nullptr) << "CANCEL: Timeout forced";
         }
       }
     }

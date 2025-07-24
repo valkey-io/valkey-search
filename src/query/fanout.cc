@@ -35,6 +35,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/query/search.h"
 #include "src/utils/string_interning.h"
+#include "valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -70,7 +71,22 @@ struct SearchPartitionResultsTracker {
         callback(std::move(callback)),
         parameters(std::move(parameters)) {}
 
-  void AddResults(coordinator::SearchIndexPartitionResponse &response) {
+  void HandleResponse(coordinator::SearchIndexPartitionResponse &response,
+                      const std::string &address,
+                      const grpc::Status &status) {
+
+    if (!status.ok()) {
+      if (!options::GetEnablePartialResults().GetValue()) {
+        parameters->cancellation_token->Cancel();
+      }
+      if (status.error_code() != grpc::StatusCode::DEADLINE_EXCEEDED) {
+        VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+            << "Error during handling of FT.SEARCH on node " << address
+            << ": " << status.error_message();
+      }
+      return;
+    }
+                       
     absl::MutexLock lock(&mutex);
     while (response.neighbors_size() > 0) {
       auto neighbor_entry = std::unique_ptr<coordinator::NeighborEntry>(
@@ -140,13 +156,7 @@ void PerformRemoteSearchRequest(
       [tracker, address = std::string(address)](
           grpc::Status status,
           coordinator::SearchIndexPartitionResponse &response) mutable {
-        if (status.ok()) {
-          tracker->AddResults(response);
-        } else {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-              << "Error during handling of FT.SEARCH on node " << address
-              << ": " << status.error_message();
-        }
+        tracker->HandleResponse(response, address, status);
       });
 }
 

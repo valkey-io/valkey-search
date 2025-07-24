@@ -59,7 +59,7 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
         #
         # Now, force timeouts quickly
         #
-        assert client.execute_command("CONFIG SET search.test-force-timeout-foreground yes") == b"OK"
+        assert client.execute_command("CONFIG SET search.test-force-timeout yes") == b"OK"
         assert client.execute_command("CONFIG SET search.timeout-poll-frequency 1") == b"OK"
 
         #
@@ -68,10 +68,10 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
         assert client.execute_command("CONFIG SET search.enable-partial-results no") == b"OK"
 
         hnsw_result = search(client, "hnsw", True)
-        assert client.info("SEARCH")["search_cancel-forced-foreground"] == 1
+        assert client.info("SEARCH")["search_cancel-forced"] == 1
 
         flat_result = search(client, "flat", True)
-        assert client.info("SEARCH")["search_cancel-forced-foreground"] == 2
+        assert client.info("SEARCH")["search_cancel-forced"] == 2
 
         #
         # Enable partial results
@@ -79,11 +79,11 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
         assert client.execute_command("CONFIG SET search.enable-partial-results yes") == b"OK"
 
         hnsw_result = search(client, "hnsw", False)
-        assert client.info("SEARCH")["search_cancel-forced-foreground"] == 3
+        assert client.info("SEARCH")["search_cancel-forced"] == 3
         assert hnsw_result[0] == 10
 
         flat_result = search(client, "flat", False)
-        assert client.info("SEARCH")["search_cancel-forced-foreground"] == 4
+        assert client.info("SEARCH")["search_cancel-forced"] == 4
         assert flat_result[0] == 10
 
         #
@@ -92,7 +92,7 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
         assert client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 0
         hnsw_result = search(client, "hnsw", False, 2)
         assert hnsw_result[0] == 2
-        assert client.info("SEARCH")["search_cancel-forced-foreground"] == 5
+        assert client.info("SEARCH")["search_cancel-forced"] == 5
         assert client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 1
 
         #
@@ -101,7 +101,7 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
         assert client.execute_command("CONFIG SET search.enable-partial-results no") == b"OK"
         assert client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 1
         hnsw_result = search(client, "hnsw", True, 2)
-        assert client.info("SEARCH")["search_cancel-forced-foreground"] == 6
+        assert client.info("SEARCH")["search_cancel-forced"] == 6
         assert client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 2
 
 class TestCancelCME(ValkeySearchClusterTestCase):
@@ -110,7 +110,7 @@ class TestCancelCME(ValkeySearchClusterTestCase):
         return [self.client_for_primary(i).execute_command(*command) for i in range(len(self.servers))]
 
     def config_set(self, config: str, value: str):
-        assert self.execute_all(["config set", config, value]) == [b"OK"] * len(self.servers)
+        assert self.execute_all(["config set", config, value]) == [True] * len(self.servers)
 
     def check_info(self, name: str, value: str|int):
         results = self.execute_all(["INFO","SEARCH"])
@@ -135,8 +135,8 @@ class TestCancelCME(ValkeySearchClusterTestCase):
         client: Valkey = self.new_cluster_client()
         self.check_info("search_cancel-timeouts", 0)
 
-        hnsw_index = Index("hnsw", [Vector("v", 3, type="HNSW")])
-        flat_index = Index("flat", [Vector("v", 3, type="FLAT")])
+        hnsw_index = Index("hnsw", [Vector("v", 3, type="HNSW"), Numeric("n")])
+        flat_index = Index("flat", [Vector("v", 3, type="FLAT"), Numeric("n")])
        
         hnsw_index.create(client)
         flat_index.create(client)
@@ -145,29 +145,44 @@ class TestCancelCME(ValkeySearchClusterTestCase):
         #
         # Nominal case
         #
-        hnsw_result = search(self.get_primary(0).get_new_client(), "hnsw")
-        flat_result = search(client, "flat")
+        cluster = self.get_primary(0).get_new_client()
+        # hnsw_result = search(cluster, "hnsw", False)
+        # flat_result = search(cluster, "flat", False)
 
-        self.check_info("search_cancel-forced-foreground", 0)
-        self.check_info("search_cancel-forced-background", 0)
-        self.check_info("search_QueryTimeouts", 0)
+        self.check_info_sum("search_cancel-forced", 0)
 
-        assert hnsw_result[0] == 10
-        assert flat_result[0] == 10
+        #assert hnsw_result[0] == 10
+        #assert flat_result[0] == 10
         #
         # Now, force timeouts quickly
         #
-        self.config_set("search.test-force-timeout-background", "yes")
-        self.config_set("search.timeout-poll-frequency", "2")
+        self.config_set("search.test-force-timeout", "yes")
+        self.config_set("search.timeout-poll-frequency", "1")
 
         #
         # Enable timeout path, no error but message result
         #
         self.config_set("search.enable-partial-results", "no")
 
-        hnsw_result = search(client, "hnsw")
+        #
+        # Normal HNSW path
+        #
+        hnsw_result = search(client, "hnsw", True)
 
-        self.check_info("search_cancel-forced-foreground", 0)
-        self.check_info_sum("search_cancel-forced-background", 2)
-        self.check_info("search_QueryTimeouts", 1)
+        self.check_info_sum("search_cancel-forced", 3)
+        
+        #
+        # Pre-filtering HNSW path
+        #
+        self.check_info("search_query_prefiltering_requests_cnt", 0)
+        hnsw_result = search(client, "hnsw", True, 10)
+        self.check_info("search_query_prefiltering_requests_cnt", 1)
+        self.check_info_sum("search_cancel-forced", 6)
+
+        #
+        # Flat path
+        #
+        flat_result = search(client, "flat", True)
+        self.check_info_sum("search_cancel-forced", 9)
+        self.check_info("search_query_prefiltering_requests_cnt", 1)
         

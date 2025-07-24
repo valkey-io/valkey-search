@@ -961,18 +961,18 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message = "",
          },
          {
-             .test_name = "happy_path_text_with_parameters",
+             .test_name = "happy_path_text_with_field_parameters",
              .success = true,
-             .command_str = "idx1 on HASH SCHEMA text_field TEXT PUNCTUATION \",.;\" WITHOFFSETS NOSTEM MINSTEMSIZE 2",
+             .command_str = "idx1 on HASH SCHEMA text_field TEXT WITHSUFFIXTRIE MINSTEMSIZE 2",
              .too_many_attributes = false,
              .hnsw_parameters = {},
              .flat_parameters = {},
              .tag_parameters = {},
              .text_parameters = {{
-                 .punctuation = ",.;",
+                 .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
                  .with_offsets = true,
-                 .with_suffix_trie = false,
-                 .no_stem = true,
+                 .with_suffix_trie = true,
+                 .no_stem = false,
                  .no_stop_words = false,
                  .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 2,
@@ -989,9 +989,38 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message = "",
          },
          {
-             .test_name = "happy_path_text_with_stopwords",
+             .test_name = "happy_path_text_with_global_parameters",
              .success = true,
-             .command_str = "idx1 on HASH SCHEMA text_field TEXT STOPWORDS 3 the and or",
+             .command_str = "idx1 on HASH PUNCTUATION \",.;\" WITHOFFSETS NOSTEM STOPWORDS 3 the and or SCHEMA text_field TEXT",
+             .too_many_attributes = false,
+             .hnsw_parameters = {},
+             .flat_parameters = {},
+             .tag_parameters = {},
+             .text_parameters = {{
+                 .punctuation = ",.;",
+                 .with_offsets = true,
+                 .with_suffix_trie = false,
+                 .no_stem = true,
+                 .no_stop_words = false,
+                 .language = data_model::LANGUAGE_ENGLISH,
+                 .min_stem_size = 4,
+                 .stop_words = {"the", "and", "or"},
+             }},
+             .expected = {
+                 .index_schema_name = "idx1",
+                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                 .attributes = {{
+                     .identifier = "text_field",
+                     .attribute_alias = "text_field",
+                     .indexer_type = indexes::IndexerType::kText,
+                 }}
+             },
+             .expected_error_message = "",
+         },
+         {
+             .test_name = "happy_path_text_global_nostopwords",
+             .success = true,
+             .command_str = "idx1 on HASH NOSTOPWORDS SCHEMA text_field TEXT",
              .too_many_attributes = false,
              .hnsw_parameters = {},
              .flat_parameters = {},
@@ -1001,8 +1030,7 @@ INSTANTIATE_TEST_SUITE_P(
                  .with_offsets = true,
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .stop_words = {"the", "and", "or"},
-                 .no_stop_words = false,
+                 .no_stop_words = true,
                  .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 4,
              }},
@@ -1018,9 +1046,9 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message = "",
          },
          {
-             .test_name = "happy_path_text_no_stopwords",
+             .test_name = "happy_path_text_global_stopwords_zero",
              .success = true,
-             .command_str = "idx1 on HASH SCHEMA text_field TEXT STOPWORDS 0",
+             .command_str = "idx1 on HASH STOPWORDS 0 SCHEMA text_field TEXT",
              .too_many_attributes = false,
              .hnsw_parameters = {},
              .flat_parameters = {},
@@ -1092,7 +1120,7 @@ INSTANTIATE_TEST_SUITE_P(
          },
          {
              .test_name = "text_only_schema_valid",
-             .success = true,
+             .success = false,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT NOSTOPWORDS",
              .too_many_attributes = false,
              .hnsw_parameters = {},
@@ -1119,16 +1147,16 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message = "",
          },
          {
-             .test_name = "invalid_text_empty_punctuation",
+             .test_name = "invalid_text_empty_punctuation_global",
              .success = false,
-             .command_str = "idx1 on HASH SCHEMA text_field TEXT PUNCTUATION \"\"",
+             .command_str = "idx1 on HASH PUNCTUATION \"\" SCHEMA text_field TEXT",
              .too_many_attributes = false,
              .hnsw_parameters = {},
              .flat_parameters = {},
              .tag_parameters = {},
              .text_parameters = {},
              .expected = {},
-             .expected_error_message = "Invalid field type for field `text_field`: PUNCTUATION string cannot be empty",
+             .expected_error_message = "PUNCTUATION string cannot be empty",
          },
          {
              .test_name = "invalid_text_negative_minstemsize",
@@ -1140,7 +1168,7 @@ INSTANTIATE_TEST_SUITE_P(
              .tag_parameters = {},
              .text_parameters = {},
              .expected = {},
-             .expected_error_message = "Invalid field type for field `text_field`: MINSTEMSIZE must be positive",
+             .expected_error_message = "Invalid field type for field `text_field`: Error parsing value for the parameter `MINSTEMSIZE` - MINSTEMSIZE must be positive",
          },
          {
              .test_name = "invalid_text_zero_minstemsize",
@@ -1152,12 +1180,36 @@ INSTANTIATE_TEST_SUITE_P(
              .tag_parameters = {},
              .text_parameters = {},
              .expected = {},
-             .expected_error_message = "Invalid field type for field `text_field`: MINSTEMSIZE must be positive",
+             .expected_error_message = "Invalid field type for field `text_field`: Error parsing value for the parameter `MINSTEMSIZE` - MINSTEMSIZE must be positive",
+         },
+         {
+             .test_name = "invalid_global_stopwords_before_schema",
+             .success = false,
+             .command_str = "idx1 on HASH STOPWORDS -1 SCHEMA text_field TEXT",
+             .too_many_attributes = false,
+             .hnsw_parameters = {},
+             .flat_parameters = {},
+             .tag_parameters = {},
+             .text_parameters = {},
+             .expected = {},
+             .expected_error_message = "`-1` is outside acceptable bounds",
+         },
+         {
+             .test_name = "invalid_global_stopwords_missing_words",
+             .success = false,
+             .command_str = "idx1 on HASH STOPWORDS 3 the and SCHEMA text_field TEXT",
+             .too_many_attributes = false,
+             .hnsw_parameters = {},
+             .flat_parameters = {},
+             .tag_parameters = {},
+             .text_parameters = {},
+             .expected = {},
+             .expected_error_message = "Missing argument",
          },
          // Additional TEXT field edge case tests
          {
              .test_name = "text_punctuation_single_quote",
-             .success = true,
+             .success = false,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT PUNCTUATION '.,;'",
              .text_parameters = {{
                  .punctuation = ".,;",
@@ -1180,7 +1232,7 @@ INSTANTIATE_TEST_SUITE_P(
          },
          {
              .test_name = "text_punctuation_unquoted",
-             .success = true,
+             .success = false,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT PUNCTUATION .,;",
              .text_parameters = {{
                  .punctuation = ".,;",
@@ -1202,28 +1254,28 @@ INSTANTIATE_TEST_SUITE_P(
              },
          },
          {
-             .test_name = "text_nooffsets_flag",
-             .success = true,
-             .command_str = "idx1 on HASH SCHEMA text_field TEXT NOOFFSETS",
-             .text_parameters = {{
-                 .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
-                 .with_offsets = false,
-                 .with_suffix_trie = false,
-                 .no_stem = false,
-                 .no_stop_words = false,
-                 .language = data_model::LANGUAGE_ENGLISH,
-                 .min_stem_size = 4,
-             }},
-             .expected = {
-                 .index_schema_name = "idx1",
-                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
-                 .attributes = {{
-                     .identifier = "text_field",
-                     .attribute_alias = "text_field",
-                     .indexer_type = indexes::IndexerType::kText,
-                 }}
-             },
-         },
+            .test_name = "text_nooffsets_flag",
+            .success = true,
+            .command_str = "idx1 on HASH NOOFFSETS SCHEMA text_field TEXT",
+            .text_parameters = {{
+                .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
+                .with_offsets = false,
+                .with_suffix_trie = false,
+                .no_stem = false,
+                .no_stop_words = false,
+                .language = data_model::LANGUAGE_ENGLISH,
+                .min_stem_size = 4,
+            }},
+            .expected = {
+                .index_schema_name = "idx1",
+                .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                .attributes = {{
+                    .identifier = "text_field",
+                    .attribute_alias = "text_field",
+                    .indexer_type = indexes::IndexerType::kText,
+                }}
+            },
+        },
          {
              .test_name = "text_withsuffixtrie_flag",
              .success = true,
@@ -1271,9 +1323,9 @@ INSTANTIATE_TEST_SUITE_P(
              },
          },
          {
-             .test_name = "text_combined_flags",
+             .test_name = "text_combined_global_and_field_flags",
              .success = true,
-             .command_str = "idx1 on HASH SCHEMA text_field TEXT NOOFFSETS WITHSUFFIXTRIE NOSTEM MINSTEMSIZE 2",
+             .command_str = "idx1 on HASH NOOFFSETS NOSTEM LANGUAGE ENGLISH SCHEMA text_field TEXT WITHSUFFIXTRIE MINSTEMSIZE 2",
              .text_parameters = {{
                  .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
                  .with_offsets = false,
@@ -1294,18 +1346,18 @@ INSTANTIATE_TEST_SUITE_P(
              },
          },
          {
-             .test_name = "text_large_stopwords_list",
-             .success = true,
+             .test_name = "text_large_stopwords_list_field",
+             .success = false,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT STOPWORDS 10 a an and are as at be but by for",
              .text_parameters = {{
                  .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
                  .with_offsets = true,
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .stop_words = {"a", "an", "and", "are", "as", "at", "be", "but", "by", "for"},
                  .no_stop_words = false,
                  .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 4,
+                 .stop_words = {"a", "an", "and", "are", "as", "at", "be", "but", "by", "for"},
              }},
              .expected = {
                  .index_schema_name = "idx1",
@@ -1317,6 +1369,30 @@ INSTANTIATE_TEST_SUITE_P(
                  }}
              },
          },
+         {
+            .test_name = "text_large_stopwords_list_global",
+            .success = true, 
+            .command_str = "idx1 on HASH STOPWORDS 10 a an and are as at be but by for SCHEMA text_field TEXT",
+            .text_parameters = {{
+                .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
+                .with_offsets = true,
+                .with_suffix_trie = false,
+                .no_stem = false,
+                .no_stop_words = false,
+                .language = data_model::LANGUAGE_ENGLISH,
+                .min_stem_size = 4,
+                .stop_words = {"a", "an", "and", "are", "as", "at", "be", "but", "by", "for"},
+            }},
+            .expected = {
+                .index_schema_name = "idx1",
+                .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                .attributes = {{
+                    .identifier = "text_field",
+                    .attribute_alias = "text_field",
+                    .indexer_type = indexes::IndexerType::kText,
+                }}
+            },
+        },
          {
              .test_name = "text_max_minstemsize",
              .success = true,
@@ -1341,8 +1417,8 @@ INSTANTIATE_TEST_SUITE_P(
              },
          },
          {
-             .test_name = "text_special_characters_punctuation",
-             .success = true,
+             .test_name = "text_special_characters_punctuation_field",
+             .success = false,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT PUNCTUATION \"!@#$%^&*()_+-=[]{}|;':,.<>?\"",
              .text_parameters = {{
                  .punctuation = "!@#$%^&*()_+-=[]{}|;':,.<>?",
@@ -1364,12 +1440,35 @@ INSTANTIATE_TEST_SUITE_P(
              },
          },
          {
+            .test_name = "text_special_characters_punctuation_global",
+            .success = true,
+            .command_str = "idx1 on HASH PUNCTUATION \"!@#$%^&*()_+-=[]{}|;':,.<>?\" SCHEMA text_field TEXT",
+            .text_parameters = {{
+                .punctuation = "!@#$%^&*()_+-=[]{}|;':,.<>?",
+                .with_offsets = true,
+                .with_suffix_trie = false,
+                .no_stem = false,
+                .no_stop_words = false,
+                .language = data_model::LANGUAGE_ENGLISH,
+                .min_stem_size = 4,
+            }},
+            .expected = {
+                .index_schema_name = "idx1",
+                .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                .attributes = {{
+                    .identifier = "text_field",
+                    .attribute_alias = "text_field",
+                    .indexer_type = indexes::IndexerType::kText,
+                }}
+            },
+        },
+         {
              .test_name = "text_multiple_fields_different_configs",
              .success = true,
-             .command_str = "idx1 on HASH SCHEMA text1 TEXT NOSTOPWORDS text2 TEXT PUNCTUATION '.,;' MINSTEMSIZE 2",
+             .command_str = "idx1 on HASH NOSTOPWORDS PUNCTUATION '.,;' SCHEMA text1 TEXT text2 TEXT MINSTEMSIZE 2",
              .text_parameters = {
                  {
-                     .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
+                     .punctuation = ".,;",
                      .with_offsets = true,
                      .with_suffix_trie = false,
                      .no_stem = false,
@@ -1382,7 +1481,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .with_offsets = true,
                      .with_suffix_trie = false,
                      .no_stem = false,
-                     .no_stop_words = false,
+                     .no_stop_words = true,
                      .language = data_model::LANGUAGE_ENGLISH,
                      .min_stem_size = 2,
                  }
@@ -1406,23 +1505,34 @@ INSTANTIATE_TEST_SUITE_P(
          },
          // Error cases for TEXT fields
          {
-             .test_name = "invalid_text_single_quote_empty",
-             .success = false,
-             .command_str = "idx1 on HASH SCHEMA text_field TEXT PUNCTUATION ''",
-             .expected_error_message = "Invalid field type for field `text_field`: PUNCTUATION string cannot be empty",
-         },
+            .test_name = "invalid_text_single_quote_empty_global",
+            .success = false,
+            .command_str = "idx1 on HASH PUNCTUATION '' SCHEMA text_field TEXT",  // Moved PUNCTUATION before SCHEMA
+            .expected_error_message = "PUNCTUATION string cannot be empty",  // Simplified error message
+        },
          {
-             .test_name = "invalid_text_stopwords_negative_count",
-             .success = false,
-             .command_str = "idx1 on HASH SCHEMA text_field TEXT STOPWORDS -1",
-             .expected_error_message = "Invalid field type for field `text_field`: `-1` is outside acceptable bounds",
-         },
+            .test_name = "invalid_text_stopwords_negative_count_global",
+            .success = false,
+            .command_str = "idx1 on HASH STOPWORDS -1 SCHEMA text_field TEXT",  // Moved STOPWORDS before SCHEMA
+            .expected_error_message = "`-1` is outside acceptable bounds",  // Simplified error message
+        },
          {
-             .test_name = "invalid_text_stopwords_missing_words",
+             .test_name = "invalid_text_stopwords_missing_words_field",
              .success = false,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT STOPWORDS 3 the and",
-             .expected_error_message = "Invalid field type for field `text_field`: Missing argument",
          },
+         {
+            .test_name = "invalid_text_stopwords_missing_words_global",
+            .success = false,
+            .command_str = "idx1 on HASH STOPWORDS 3 the and SCHEMA text_field TEXT",
+            .expected_error_message = "Missing argument",
+        },
+        {
+            .test_name = "invalid_text_field_parameters_global",
+            .success = false,
+            .command_str = "idx1 on HASH WITHSUFFIXTRIE MINSTEMSIZE 2 SCHEMA text_field TEXT",  // Moved parameters before SCHEMA
+            .expected_error_message = "Unexpected parameter `WITHSUFFIXTRIE`, expecting `SCHEMA`",  // Error for unsupported global parameter
+        },
          {
              .test_name = "invalid_text_minstemsize_too_large",
              .success = true,  // Should succeed as there's no upper limit defined
@@ -1455,12 +1565,35 @@ INSTANTIATE_TEST_SUITE_P(
          {
              .test_name = "text_case_insensitive_parameters",
              .success = true,
-             .command_str = "idx1 on HASH SCHEMA text_field text punctuation '.,;' withoffsets nostem",
+             .command_str = "idx1 on HASH punctuation '.,;' withoffsets nostem SCHEMA text_field text",
              .text_parameters = {{
                  .punctuation = ".,;",
                  .with_offsets = true,
                  .with_suffix_trie = false,
                  .no_stem = true,
+                 .no_stop_words = false,
+                 .language = data_model::LANGUAGE_ENGLISH,
+                 .min_stem_size = 4,
+             }},
+             .expected = {
+                 .index_schema_name = "idx1",
+                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                 .attributes = {{
+                     .identifier = "text_field",
+                     .attribute_alias = "text_field",
+                     .indexer_type = indexes::IndexerType::kText,
+                 }}
+             },
+         },
+         {
+             .test_name = "text_global_and_field_parameters_mixed",
+             .success = true,
+             .command_str = "idx1 on HASH LANGUAGE english PUNCTUATION '.,;' SCHEMA text_field TEXT WITHSUFFIXTRIE",
+             .text_parameters = {{
+                 .punctuation = ".,;",
+                 .with_offsets = true,
+                 .with_suffix_trie = true,
+                 .no_stem = false,
                  .no_stop_words = false,
                  .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 4,

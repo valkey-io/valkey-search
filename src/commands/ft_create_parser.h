@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
+#include <vector>
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -40,19 +42,31 @@ struct FTCreateVectorParameters {
   std::unique_ptr<data_model::VectorIndex> ToProto() const;
 };
 
-struct FTCreateTextParameters {
+// Global text parameters (per-index)
+struct GlobalTextParameters {
   std::string punctuation;  // Default: should we use absl here
   bool with_offsets{true};
-  bool with_suffix_trie{false};
   bool no_stem{false};
   std::vector<std::string> stop_words;
   bool no_stop_words{false};
-  data_model::Language language{data_model::LANGUAGE_ENGLISH}; // see if this is needed
+  data_model::Language language{data_model::LANGUAGE_ENGLISH};
+};
+
+// Per-field text parameters
+struct FTCreateTextParameters {
+  std::string punctuation{",.<>{}[]\"':;!@#$%^&*()-+=~/\\|"};
+  bool with_offsets{true};
+  bool with_suffix_trie{false};
+  bool no_stem{false};  // Can be overridden per field
+  bool no_stop_words{false};
+  data_model::Language language{data_model::LANGUAGE_ENGLISH};
   int min_stem_size{4};
+  std::vector<std::string> stop_words;
 };
 
 struct GlobalTextDefaults {
-  FTCreateTextParameters defaults;
+  GlobalTextParameters global;
+  FTCreateTextParameters field;
 };
 
 

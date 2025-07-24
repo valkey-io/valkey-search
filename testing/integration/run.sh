@@ -16,6 +16,7 @@ BOLD_PINK='\e[35;1m'
 RESET='\e[0m'
 GREEN='\e[32;1m'
 RED='\e[31;1m'
+YELLOW='\e[33;1m'
 BLUE='\e[34;1m'
 GRAY='\e[90;1m'
 
@@ -140,8 +141,8 @@ function configure() {
             VALKEY_CMAKE_EXTRA_ARGS="-DBUILD_SANITIZER=address"
         fi
 
-        printf "${BOLD_PINK}Running valkey-server cmake:${RESET}cmake -DCMAKE_BUILD_TYPE=Release .. -GNinja ${VALKEY_CMAKE_EXTRA_ARGS}\n"
-        cmake -DCMAKE_BUILD_TYPE=Release .. -GNinja ${VALKEY_CMAKE_EXTRA_ARGS}
+        printf "${BOLD_PINK}Running valkey-server cmake:${RESET}cmake -DCMAKE_BUILD_TYPE=Release .. -GNinja ${VALKEY_CMAKE_EXTRA_ARGS} -DCMAKE_C_FLAGS='-fno-lto' -DCMAKE_EXE_LINKER_FLAGS='-fno-lto -lgcc_s'\n"
+        cmake -DCMAKE_BUILD_TYPE=Release .. -GNinja ${VALKEY_CMAKE_EXTRA_ARGS} -DCMAKE_C_FLAGS="-fno-lto" -DCMAKE_EXE_LINKER_FLAGS="-fno-lto -lgcc_s"
         ninja
         cd ${ROOT_DIR}
     fi
@@ -214,8 +215,9 @@ configure
 build
 
 if ! command -v memtier_benchmark &> /dev/null; then
-    printf "\n${RED}Error: memtier_benchmark is not installed or not in PATH.${RESET}\n\n" >&2
-    exit 1
+    printf "\n${YELLOW}Warning: memtier_benchmark is not installed or not in PATH. Some tests may be skipped.${RESET}\n\n" >&2
+    # Continue without exiting
+    export SKIP_MEMTIER_TESTS=1
 fi
 
 function print_environment_var() {

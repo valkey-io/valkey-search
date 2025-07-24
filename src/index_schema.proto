@@ -33,6 +33,7 @@ message IndexSchema {
 
 
 message TextIndex {
+  // look into this in slack channel --> put per index in message index
   string punctuation = 1;
   bool with_offsets = 2;
   bool with_suffix_trie = 3;

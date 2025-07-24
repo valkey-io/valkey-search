@@ -1,5 +1,5 @@
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_TEXT_H
-#define _VALKSY_SEARCH_INDEXES_TEXT_TEXT_H
+#define _VALKEY_SEARCH_INDEXES_TEXT_TEXT_H
 
 /*
 
@@ -46,8 +46,8 @@ struct TextFieldIndex : public indexes::IndexBase {
   // by the Postings object to identify fields.
   size_t text_field_number;
   // The per-index text index.
-  std::shared_ptr<TextIndex> text_
-}
+  std::shared_ptr<TextIndex> text_;
+};
 
 struct TextIndex {
   //
@@ -67,7 +67,7 @@ struct TextIndex {
 //
 // this is a logical extension of the index-schema. could easily be merged into that object.
 //
-struct IndexSchemaText
+struct IndexSchemaText {
   //
   // This is the main index of all Text fields in this index schema
   //
@@ -78,7 +78,7 @@ struct IndexSchemaText
   //
   // This object must also ensure that updates of this object are multi-thread safe.
   //
-  absl::flat_hash_map<Key, TextIndex>> by_key_;
+  absl::flat_hash_map<Key, TextIndex> by_key_;
 };
 
 }  // namespace text

@@ -30,7 +30,27 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_TEXT_H_
 #define VALKEYSEARCH_SRC_INDEXES_TEXT_H_
 
-#include "src/text/text.h"
+#include <cstdint>
+#include <memory>
+#include <string>
+
+#include "absl/container/flat_hash_map.h"
+#include "absl/base/thread_annotations.h"
+#include "absl/functional/any_invocable.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
+#include "src/index_schema.pb.h"
+#include "src/indexes/index_base.h"
+#include "src/rdb_serialization.h"
+#include "src/utils/string_interning.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
+
+// Forward declarations
+namespace valkey_search::query {
+class TextPredicate;
+}
 
 namespace valkey_search::indexes {
 
@@ -47,16 +67,16 @@ class Text : public IndexBase {
   absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
                                     absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  int RespondWithInfo(RedisModuleCtx* ctx) const override;
+  int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
   bool IsTracked(const InternedStringPtr& key) const override;
-  absl::Status SaveIndex(RDBOutputStream& rdb_stream) const override {
+  absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
     return absl::OkStatus();
   }
 
   inline void ForEachTrackedKey(
       absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override {
     absl::MutexLock lock(&index_mutex_);
-    for (const auto& [key, _] : tracked_tags_by_keys_) {
+    for (const auto& [key, _] : tracked_keys_) {
       fn(key);
     }
   }
@@ -89,6 +109,7 @@ class Text : public IndexBase {
 
  private:
   mutable absl::Mutex index_mutex_;
+  absl::flat_hash_map<InternedStringPtr, std::string> tracked_keys_;
 };
 }  // namespace valkey_search::indexes
 

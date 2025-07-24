@@ -11,15 +11,17 @@ def canceller(client, client_id):
     assert my_id != client_id
     client.execute_command("client kill id ", client_id)
 
-def search_command(index:str) -> list[str]:
-    return ["FT.SEARCH", index, "*=>[KNN 10 @v $BLOB]", "PARAMS", "2", "BLOB", float_to_bytes([0.0, 0.0, 0.0])]
+def search_command(index:str, filter: int|None) -> list[str]:
+    predicate = "*" if filter is None else f"(@n:[0 {filter}])"
+    return ["FT.SEARCH", index, predicate+"=>[KNN 10 @v $BLOB]", "PARAMS", "2", "BLOB", float_to_bytes([0.0, 0.0, 0.0])]
     
-def search(client: valkey.client, index:str, timeout: bool) -> list[tuple[str, float]]:
+def search(client: valkey.client, index:str, timeout: bool, filter: int|None = None) -> list[tuple[str, float]]:
+    print("Search command: ", search_command(index, filter))
     if not timeout:
-        return client.execute_command(*search_command(index))
+        return client.execute_command(*search_command(index, filter))
     else:
         try:
-            x = client.execute_command(*search_command(index))
+            x = client.execute_command(*search_command(index, filter))
             assert False, "Expected timeout, but got result: " + str(x)
         except ResponseError as e:
             assert str(e) == "Search operation cancelled due to timeout"
@@ -37,8 +39,8 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
         # po
         assert client.execute_command("CONFIG SET search.info-developer-visible yes") == b"OK"
         assert client.info("SEARCH")["search_cancel-timeouts"] == 0
-        hnsw_index = Index("hnsw", [Vector("v", 3, type="HNSW")])
-        flat_index = Index("flat", [Vector("v", 3, type="FLAT")])
+        hnsw_index = Index("hnsw", [Vector("v", 3, type="HNSW"), Numeric("n")])
+        flat_index = Index("flat", [Vector("v", 3, type="FLAT"), Numeric("n")])
        
         hnsw_index.create(client)
         flat_index.create(client)
@@ -51,7 +53,6 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
         flat_result = search(client, "flat", False)
 
         assert client.info("SEARCH")["search_cancel-timeouts"] == 0
-
         assert hnsw_result[0] == 10
         assert flat_result[0] == 10
 
@@ -59,7 +60,7 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
         # Now, force timeouts quickly
         #
         assert client.execute_command("CONFIG SET search.test-force-timeout-foreground yes") == b"OK"
-        assert client.execute_command("CONFIG SET search.timeout-poll-frequency 5") == b"OK"
+        assert client.execute_command("CONFIG SET search.timeout-poll-frequency 1") == b"OK"
 
         #
         # Enable timeout path, no error but message result
@@ -75,20 +76,33 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
         #
         # Enable partial results
         #
-
         assert client.execute_command("CONFIG SET search.enable-partial-results yes") == b"OK"
 
         hnsw_result = search(client, "hnsw", False)
-
         assert client.info("SEARCH")["search_cancel-forced-foreground"] == 3
-
         assert hnsw_result[0] == 10
 
         flat_result = search(client, "flat", False)
-
         assert client.info("SEARCH")["search_cancel-forced-foreground"] == 4
-
         assert flat_result[0] == 10
+
+        #
+        # Now, test pre-filtering case.
+        #
+        assert client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 0
+        hnsw_result = search(client, "hnsw", False, 2)
+        assert hnsw_result[0] == 2
+        assert client.info("SEARCH")["search_cancel-forced-foreground"] == 5
+        assert client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 1
+
+        #
+        # Disable partial results, and force timeout with pre-filtering
+        #
+        assert client.execute_command("CONFIG SET search.enable-partial-results no") == b"OK"
+        assert client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 1
+        hnsw_result = search(client, "hnsw", True, 2)
+        assert client.info("SEARCH")["search_cancel-forced-foreground"] == 6
+        assert client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 2
 
 class TestCancelCME(ValkeySearchClusterTestCase):
 

@@ -384,9 +384,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
 
     return vector_index->CreateReply(results);
   }
-  if (is_local_search) {
-    ++Metrics::GetStats().query_inline_filtering_requests_cnt;
-  }
+  ++Metrics::GetStats().query_inline_filtering_requests_cnt;
   lock.SetMayProlong();
   return MaybeAddIndexedContent(PerformVectorSearch(vector_index, parameters),
                                 parameters);

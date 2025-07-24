@@ -22,7 +22,7 @@ class Field:
             return [self.name]
         
     # @abstractmethod
-    def add_value(self, row:int, column:int) -> Tuple[str, str|bytes]:
+    def make_value(self, row:int, column:int) -> str|bytes:
         pass
 
 class Vector(Field):
@@ -51,9 +51,9 @@ class Vector(Field):
                 extra += ["INITIAL_CAP", str(self.initialcap)]
         return super().create() + ["VECTOR", self.type, str(6+len(extra)), "TYPE", "FLOAT32", "DIM", str(self.dim), "DISTANCE_METRIC", self.distance] + extra
 
-    def add_value(self, row:int, column:int) -> Tuple[str, str|bytes]:
+    def make_value(self, row:int, column:int) -> str|bytes:
         data = [float(i+row+column) for i in range(self.dim)]
-        return (self.name, float_to_bytes(data))
+        return float_to_bytes(data)
 
 class Numeric(Field):
     def __init__(self, name: str, alias: str|None = None):
@@ -61,6 +61,9 @@ class Numeric(Field):
     
     def create(self):
         return super().create() + ["NUMERIC"]
+    
+    def make_value(self, row:int, column:int) -> str|bytes:  
+        return str(row + column)
     
 class Tag(Field):
     def __init__(self, name: str, alias: str|None = None, separator:str|None = None):
@@ -70,8 +73,8 @@ class Tag(Field):
     def create(self):
         return super().create() + ["SEPARATOR", self.separator] if self.separator else [] 
     
-    def add_value(self, row:int, column:int) -> Tuple[str, str|bytes]:
-        return (self.name, str(f"Tag:{row}:{column}"))
+    def make_value(self, row:int, column:int) -> str|bytes:
+        return f"Tag:{row}:{column}"
 
 class Index:
     def __init__(self, name: str, fields:list[Field], prefixes:list[str] = [], type:str = "HASH"):
@@ -89,16 +92,16 @@ class Index:
 
     def load_data(self, client: valkey.client, rows:int):
         for i in range(0, rows):
-            client.hset(self.keyname(i), *self.make_data(i))
+            data = self.make_data(i)
+            client.hset(self.keyname(i), mapping=data)
 
     def keyname(self, row:int) -> str:
         prefix = self.prefixes[row % len(self.prefixes)] if self.prefixes else ""
         return f"{prefix}:{row:08d}"
 
-    def make_data(self, row:int) -> list[str|bytes]:
+    def make_data(self, row:int) -> dict[str, str|bytes]:
         ''' Make data for a particular row'''
-        hash: list[str|bytes] = []
+        d: dict[str, str|bytes] = {}
         for (col, f) in enumerate(self.fields):
-            pair = f.add_value(row, col)
-            hash += [pair[0], pair[1]]
-        return hash
+            d[f.name] = f.make_value(row, col)
+        return d

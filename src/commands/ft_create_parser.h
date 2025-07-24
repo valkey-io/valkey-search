@@ -72,6 +72,9 @@ vmsdk::config::Number& GetMaxEfConstruction();
 /// Return the maximum EF runtime parameter value allowed for HNSW algorithm.
 vmsdk::config::Number& GetMaxEfRuntime();
 
+/// Return the current default timeout in milliseconds for FT.CREATE
+vmsdk::config::Number& GetDefaultTimeoutMs();
+
 }  // namespace options
 
 struct HNSWParameters : public FTCreateVectorParameters {

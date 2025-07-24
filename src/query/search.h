@@ -57,10 +57,10 @@ struct VectorSearchParameters {
   std::string query;
   uint32_t dialect{2};
   bool local_only{false};
-  int k;
+  int k{0};
   std::optional<unsigned> ef;
   LimitParameter limit;
-  uint64_t timeout_ms{kTimeoutMS};
+  uint64_t timeout_ms;
   bool no_content{false};
   FilterParseResults filter_parse_results;
   std::vector<ReturnAttribute> return_attributes;
@@ -81,6 +81,8 @@ struct VectorSearchParameters {
   bool IsNonVectorQuery() const {
     return attribute_alias.empty();
   }
+  VectorSearchParameters(uint64_t timeout, grpc::CallbackServerContext *context)
+      : timeout_ms(timeout), cancellation_token(cancel::Make(timeout, context)) {}
 };
 
 // Callback to be called when the search is done.

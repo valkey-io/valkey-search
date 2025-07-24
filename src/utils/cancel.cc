@@ -62,7 +62,6 @@ struct TokenImpl : public Base {
 
 Token Make(long long timeout_ms, grpc::CallbackServerContext *context) {
   long long deadline_ms = timeout_ms + ValkeyModule_Milliseconds();
-  VMSDK_LOG(WARNING, nullptr) << " Creating timeout " << timeout_ms;
   return std::make_shared<TokenImpl>(deadline_ms, context);
 }
 

@@ -131,8 +131,8 @@ void ClientImpl::SearchIndexPartition(
     std::unique_ptr<vmsdk::StopWatch> latency_sample;
   };
   auto args = std::make_unique<SearchIndexPartitionArgs>();
-  args->context.set_deadline(absl::ToChronoTime(
-      absl::Now() + absl::Milliseconds(request->timeout_ms())));
+  args->context.set_deadline(
+      absl::ToChronoTime(absl::Now() + absl::Seconds(120)));
   args->callback = std::move(done);
   args->request = std::move(request);
   args->latency_sample = SAMPLE_EVERY_N(100);

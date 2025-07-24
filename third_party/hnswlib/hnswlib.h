@@ -142,6 +142,17 @@ class BaseFilterFunctor {
   virtual ~BaseFilterFunctor(){};
 };
 
+// VALKEYSEARCH BEGIN
+//
+// When true, early cancellation is requested
+//
+class BaseCancellationFunctor {
+  public:
+  virtual bool isCancelled() { return false; }
+  virtual ~BaseCancellationFunctor(){};
+};
+// VALKEYSEARCH END
+
 template <typename dist_t>
 class BaseSearchStopCondition {
  public:
@@ -203,12 +214,16 @@ class AlgorithmInterface {
                         bool replace_deleted = false) = 0;
 
   virtual std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
-      const void *, size_t, BaseFilterFunctor *isIdAllowed = nullptr) const = 0;
+      const void *, size_t, BaseFilterFunctor *isIdAllowed = nullptr,
+      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
+    ) const = 0;
 
   // Return k nearest neighbor in the order of closer fist
   virtual std::vector<std::pair<dist_t, labeltype>> searchKnnCloserFirst(
       const void *query_data, size_t k,
-      BaseFilterFunctor *isIdAllowed = nullptr) const;
+      BaseFilterFunctor *isIdAllowed = nullptr,
+      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
+    ) const;
 
   virtual absl::Status SaveIndex(OutputStream &output) = 0;
   virtual ~AlgorithmInterface() {}
@@ -217,11 +232,13 @@ class AlgorithmInterface {
 template <typename dist_t>
 std::vector<std::pair<dist_t, labeltype>>
 AlgorithmInterface<dist_t>::searchKnnCloserFirst(
-    const void *query_data, size_t k, BaseFilterFunctor *isIdAllowed) const {
+    const void *query_data, size_t k, BaseFilterFunctor *isIdAllowed,
+    BaseCancellationFunctor *isCancelled // VALKEYSEARCH
+  ) const {
   std::vector<std::pair<dist_t, labeltype>> result;
 
   // here searchKnn returns the result in the order of further first
-  auto ret = searchKnn(query_data, k, isIdAllowed);
+  auto ret = searchKnn(query_data, k, isIdAllowed, isCancelled); // VALKEYSEARCH
   {
     size_t sz = ret.size();
     result.resize(sz);

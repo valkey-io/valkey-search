@@ -114,7 +114,6 @@ std::optional<absl::string_view> ParseHashTag(absl::string_view s) {
 // can be part of a crash dump.
 //
 size_t DisplayAsSIBytes(size_t bytes, char *buffer, size_t buffer_size) {
-  VMSDK_LOG(WARNING, nullptr) << "DISPLAY AS SI BYTES " << bytes;
   double value = bytes;
   const size_t Ki = 1024;
   const size_t Mi = 1024 * Ki;

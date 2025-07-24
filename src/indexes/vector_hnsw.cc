@@ -36,6 +36,7 @@
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
+#include "valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -305,9 +306,22 @@ absl::Status VectorHNSW<T>::RemoveRecordImpl(uint64_t internal_id) {
   return absl::OkStatus();
 }
 
+// Paper over the impedance mismatch between the
+// cancel::Token and hnswlib::BaseCancellationFunctor.
+class CancelCondition : public hnswlib::BaseCancellationFunctor {
+  public:
+  explicit CancelCondition(cancel::Token &token)
+      : token_(token) {}
+  bool isCancelled() override { return token_->IsCancelled(); }
+
+  private:
+  cancel::Token &token_;
+};
+
 template <typename T>
 absl::StatusOr<std::deque<Neighbor>> VectorHNSW<T>::Search(
     absl::string_view query, uint64_t count,
+    cancel::Token& cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
     std::optional<size_t> ef_runtime) {
   if (!IsValidSizeVector(query)) {
@@ -317,12 +331,18 @@ absl::StatusOr<std::deque<Neighbor>> VectorHNSW<T>::Search(
         dimensions_ * GetDataTypeSize(), ")."));
   }
   auto perform_search =
-      [this, count, &filter, &ef_runtime](absl::string_view query)
+      [this, count, &filter, &ef_runtime, &cancellation_token](absl::string_view query)
           ABSL_NO_THREAD_SAFETY_ANALYSIS
       -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
     try {
-      return algo_->searchKnn((T *)query.data(), count, ef_runtime,
-                              filter.get());
+      CancelCondition cancel_condition(cancellation_token);
+      auto res = algo_->searchKnn((T *)query.data(), count, ef_runtime,
+                              filter.get(), &cancel_condition);
+      if (!valkey_search::options::GetEnablePartialResults().GetValue() &&
+          cancellation_token->IsCancelled()) {
+        return absl::CancelledError("Search operation cancelled due to timeout");
+      }
+      return res;
     } catch (const std::exception &e) {
       Metrics::GetStats().hnsw_search_exceptions_cnt.fetch_add(
           1, std::memory_order_relaxed);

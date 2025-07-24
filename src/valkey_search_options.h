@@ -16,6 +16,9 @@ namespace config = vmsdk::config;
 /// Return the value of the Query String Bytes configuration
 uint32_t GetQueryStringBytes();
 
+/// Return the value of the Query String Bytes configuration
+uint32_t GetQueryStringBytes();
+
 /// Return a mutable reference to the HNSW resize configuration parameter
 config::Number& GetHNSWBlockSize();
 
@@ -35,5 +38,9 @@ config::Enum& GetLogLevel();
 
 /// Reset the state of the options (mainly needed for testing)
 absl::Status Reset();
+
+/// Allow delivery of partial results when timeout occurs
+const config::Boolean& GetEnablePartialResults();
+
 }  // namespace options
 }  // namespace valkey_search

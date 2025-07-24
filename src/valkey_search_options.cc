@@ -150,6 +150,12 @@ static auto log_level =
         .WithValidationCallback(ValidateLogLevel)
         .Build();
 
+/// Should timeouts return partial results OR generate a TIMEOUT error?
+constexpr absl::string_view kEnablePartialResults{"enable-partial-results"};
+static auto enable_partial_results =
+    config::BooleanBuilder(kEnablePartialResults, true)
+        .Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -175,6 +181,10 @@ vmsdk::config::Enum& GetLogLevel() {
 absl::Status Reset() {
   VMSDK_RETURN_IF_ERROR(use_coordinator->SetValue(false));
   return absl::OkStatus();
+}
+
+const vmsdk::config::Boolean& GetEnablePartialResults() {
+  return static_cast<vmsdk::config::Boolean&>(*enable_partial_results);
 }
 
 }  // namespace options

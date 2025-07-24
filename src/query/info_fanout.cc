@@ -36,15 +36,12 @@ struct InfoPartitionResultsTracker {
         callback(std::move(callback)),
         parameters(std::move(parameters)) {}
 
-  // Handle remote gRPC response
   void AddResults(coordinator::InfoIndexPartitionResponse& response) {
     absl::MutexLock lock(&mutex);
 
     if (response.exists()) {
       aggregated_result.exists = true;
       aggregated_result.index_name = response.index_name();
-
-      // Aggregate numeric fields by summing them
       aggregated_result.num_docs += response.num_docs();
       aggregated_result.num_records += response.num_records();
       aggregated_result.hash_indexing_failures +=
@@ -58,22 +55,45 @@ struct InfoPartitionResultsTracker {
       aggregated_result.recent_mutations_queue_delay +=
           response.recent_mutations_queue_delay();
 
-      // For backfill progress, we take the average across nodes
       if (response.backfill_in_progress()) {
         aggregated_result.backfill_in_progress = true;
-        // Simple average - can be improved with weighted average later
-        aggregated_result.backfill_complete_percent =
-            (aggregated_result.backfill_complete_percent +
-             response.backfill_complete_percent()) /
-            2.0f;
+        if (aggregated_result.backfill_complete_percent_max == 0.0f &&
+            aggregated_result.backfill_complete_percent_min == 0.0f) {
+          aggregated_result.backfill_complete_percent_min =
+              response.backfill_complete_percent();
+          aggregated_result.backfill_complete_percent_max =
+              response.backfill_complete_percent();
+        } else {
+          aggregated_result.backfill_complete_percent_min =
+              std::min(aggregated_result.backfill_complete_percent_min,
+                       response.backfill_complete_percent());
+          aggregated_result.backfill_complete_percent_max =
+              std::max(aggregated_result.backfill_complete_percent_max,
+                       response.backfill_complete_percent());
+        }
+      } else {
+        if (aggregated_result.backfill_complete_percent_max == 0.0f &&
+            aggregated_result.backfill_complete_percent_min == 0.0f) {
+          aggregated_result.backfill_complete_percent_min = 1.0f;
+          aggregated_result.backfill_complete_percent_max = 1.0f;
+        } else {
+          aggregated_result.backfill_complete_percent_min =
+              std::min(aggregated_result.backfill_complete_percent_min, 1.0f);
+          aggregated_result.backfill_complete_percent_max =
+              std::max(aggregated_result.backfill_complete_percent_max, 1.0f);
+        }
       }
 
-      // For state and error, we could concatenate or take the first non-empty
       if (!response.state().empty()) {
-        if (aggregated_result.state.empty()) {
-          aggregated_result.state = response.state();
-        } else if (aggregated_result.state != response.state()) {
-          aggregated_result.state += "," + response.state();
+        std::string current_state = response.state();
+        if (current_state == "backfill_paused_by_oom") {
+          aggregated_result.state = current_state;
+        } else if (current_state == "backfill_in_progress" &&
+                   aggregated_result.state != "backfill_paused_by_oom") {
+          aggregated_result.state = current_state;
+        } else if (current_state == "ready" &&
+                   aggregated_result.state.empty()) {
+          aggregated_result.state = current_state;
         }
       }
 
@@ -85,7 +105,6 @@ struct InfoPartitionResultsTracker {
         }
       }
     }
-    // Don't call callback here - let destructor handle it like search fanout
   }
 
   // Handle local result (similar to how search handles
@@ -96,8 +115,6 @@ struct InfoPartitionResultsTracker {
     if (local_result.exists) {
       aggregated_result.exists = true;
       aggregated_result.index_name = local_result.index_name;
-
-      // Aggregate numeric fields by summing them
       aggregated_result.num_docs += local_result.num_docs;
       aggregated_result.num_records += local_result.num_records;
       aggregated_result.hash_indexing_failures +=
@@ -113,18 +130,43 @@ struct InfoPartitionResultsTracker {
 
       if (local_result.backfill_in_progress) {
         aggregated_result.backfill_in_progress = true;
-        aggregated_result.backfill_complete_percent =
-            (aggregated_result.backfill_complete_percent +
-             local_result.backfill_complete_percent) /
-            2.0f;
+        if (aggregated_result.backfill_complete_percent_max == 0.0f &&
+            aggregated_result.backfill_complete_percent_min == 0.0f) {
+          aggregated_result.backfill_complete_percent_min =
+              local_result.backfill_complete_percent;
+          aggregated_result.backfill_complete_percent_max =
+              local_result.backfill_complete_percent;
+        } else {
+          aggregated_result.backfill_complete_percent_min =
+              std::min(aggregated_result.backfill_complete_percent_min,
+                       local_result.backfill_complete_percent);
+          aggregated_result.backfill_complete_percent_max =
+              std::max(aggregated_result.backfill_complete_percent_max,
+                       local_result.backfill_complete_percent);
+        }
+      } else {
+        if (aggregated_result.backfill_complete_percent_max == 0.0f &&
+            aggregated_result.backfill_complete_percent_min == 0.0f) {
+          aggregated_result.backfill_complete_percent_min = 1.0f;
+          aggregated_result.backfill_complete_percent_max = 1.0f;
+        } else {
+          aggregated_result.backfill_complete_percent_min =
+              std::min(aggregated_result.backfill_complete_percent_min, 1.0f);
+          aggregated_result.backfill_complete_percent_max =
+              std::max(aggregated_result.backfill_complete_percent_max, 1.0f);
+        }
       }
 
-      // Handle state and error fields
       if (!local_result.state.empty()) {
-        if (aggregated_result.state.empty()) {
-          aggregated_result.state = local_result.state;
-        } else if (aggregated_result.state != local_result.state) {
-          aggregated_result.state += "," + local_result.state;
+        std::string current_state = local_result.state;
+        if (current_state == "backfill_paused_by_oom") {
+          aggregated_result.state = current_state;
+        } else if (current_state == "backfill_in_progress" &&
+                   aggregated_result.state != "backfill_paused_by_oom") {
+          aggregated_result.state = current_state;
+        } else if (current_state == "ready" &&
+                   aggregated_result.state.empty()) {
+          aggregated_result.state = current_state;
         }
       }
 
@@ -136,7 +178,6 @@ struct InfoPartitionResultsTracker {
         }
       }
     }
-    // Don't call callback here - let destructor handle it like search fanout
   }
 
   void HandleError(const std::string& error_message) {
@@ -145,19 +186,15 @@ struct InfoPartitionResultsTracker {
     VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
         << "Error during info fanout: " << error_message;
 
-    // Add error to aggregated result
     if (aggregated_result.error.empty()) {
       aggregated_result.error = error_message;
     } else {
       aggregated_result.error += ";" + error_message;
     }
-    // Don't call callback here - let destructor handle it like search fanout
   }
 
   ~InfoPartitionResultsTracker() {
     absl::MutexLock lock(&mutex);
-    // Final callback when tracker is destroyed (following search fanout
-    // pattern)
     absl::StatusOr<InfoResult> result = aggregated_result;
     callback(result, std::move(parameters));
   }
@@ -181,7 +218,6 @@ void PerformRemoteInfoRequest(
           VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
               << "Error during handling of FT.INFO on node " << address << ": "
               << status.error_message();
-          // Still decrement outstanding requests even on error
           tracker->HandleError("gRPC error on node " + address + ": " +
                                status.error_message());
         }
@@ -273,10 +309,11 @@ absl::Status PerformInfoFanoutAsync(
   }
 
   if (has_local_target) {
-    vmsdk::RunByMain([ctx, index_name = tracker->parameters->index_name, tracker]() {
-      auto local_result = GetLocalInfoResult(ctx, index_name);
-      tracker->AddResults(local_result);
-    });
+    vmsdk::RunByMain(
+        [ctx, index_name = tracker->parameters->index_name, tracker]() {
+          auto local_result = GetLocalInfoResult(ctx, index_name);
+          tracker->AddResults(local_result);
+        });
   }
 
   return absl::OkStatus();
@@ -284,9 +321,6 @@ absl::Status PerformInfoFanoutAsync(
 
 std::vector<fanout::FanoutSearchTarget> GetInfoTargetsForFanout(
     ValkeyModuleCtx* ctx) {
-  // TODO: Implement target discovery
-  // For now, reuse existing search fanout logic
-  // Set primary_only to true for info operations to get info from all primary nodes
   return fanout::GetSearchTargetsForFanout(ctx, true);
 }
 

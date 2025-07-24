@@ -49,6 +49,11 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return ValkeyModule_ReplyWithError(ctx, error_msg.c_str());
   }
 
+  if (info.has_schema_mismatch) {
+    return ValkeyModule_ReplyWithError(
+        ctx, "ERR found index schema inconsistency in the cluster");
+  }
+
   ValkeyModule_ReplyWithArray(ctx, 18);
   ValkeyModule_ReplyWithSimpleString(ctx, "global_info");
   ValkeyModule_ReplyWithSimpleString(ctx, "true");

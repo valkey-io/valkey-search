@@ -40,6 +40,27 @@ struct InfoPartitionResultsTracker {
     absl::MutexLock lock(&mutex);
 
     if (response.exists()) {
+      // Log fingerprint for debugging
+      VMSDK_LOG(NOTICE, nullptr) 
+          << "Remote node fingerprint for index '" << response.index_name() 
+          << "': " << response.schema_fingerprint();
+      
+      // Check fingerprint consistency first
+      if (aggregated_result.schema_fingerprint == 0) {
+        aggregated_result.schema_fingerprint = response.schema_fingerprint();
+        VMSDK_LOG(NOTICE, nullptr) 
+            << "Set reference fingerprint to: " << aggregated_result.schema_fingerprint;
+      } else if (aggregated_result.schema_fingerprint !=
+                 response.schema_fingerprint()) {
+        VMSDK_LOG(WARNING, nullptr) 
+            << "Schema fingerprint mismatch detected! Reference: " 
+            << aggregated_result.schema_fingerprint 
+            << ", Remote node: " << response.schema_fingerprint();
+        aggregated_result.has_schema_mismatch = true;
+        aggregated_result.error =
+            "found index schema inconsistency in the cluster";
+        return;
+      }
       aggregated_result.exists = true;
       aggregated_result.index_name = response.index_name();
       aggregated_result.num_docs += response.num_docs();
@@ -113,6 +134,27 @@ struct InfoPartitionResultsTracker {
     absl::MutexLock lock(&mutex);
 
     if (local_result.exists) {
+      // Log fingerprint for debugging
+      VMSDK_LOG(NOTICE, nullptr) 
+          << "Local node fingerprint for index '" << local_result.index_name 
+          << "': " << local_result.schema_fingerprint;
+      
+      // Check fingerprint consistency first
+      if (aggregated_result.schema_fingerprint == 0) {
+        aggregated_result.schema_fingerprint = local_result.schema_fingerprint;
+        VMSDK_LOG(NOTICE, nullptr) 
+            << "Set reference fingerprint to: " << aggregated_result.schema_fingerprint;
+      } else if (aggregated_result.schema_fingerprint !=
+                 local_result.schema_fingerprint) {
+        VMSDK_LOG(WARNING, nullptr) 
+            << "Schema fingerprint mismatch detected! Reference: " 
+            << aggregated_result.schema_fingerprint 
+            << ", Local node: " << local_result.schema_fingerprint;
+        aggregated_result.has_schema_mismatch = true;
+        aggregated_result.error =
+            "found index schema inconsistency in the cluster";
+        return;
+      }
       aggregated_result.exists = true;
       aggregated_result.index_name = local_result.index_name;
       aggregated_result.num_docs += local_result.num_docs;
@@ -251,6 +293,26 @@ InfoResult GetLocalInfoResult(ValkeyModuleCtx* ctx,
     auto index_schema = index_schema_result.value();
     IndexSchema::InfoIndexPartitionData data =
         index_schema->GetInfoIndexPartitionData();
+    
+    // Compute schema fingerprint
+    uint64_t fingerprint = 0;
+    auto schema_proto = index_schema->ToProto();
+    if (schema_proto) {
+      // Log the protobuf content for debugging
+      VMSDK_LOG(NOTICE, ctx) << "Schema proto for fingerprint calculation: " 
+                             << schema_proto->DebugString();
+      
+      google::protobuf::Any any_proto;
+      any_proto.PackFrom(*schema_proto);
+      auto fingerprint_result = SchemaManager::ComputeFingerprint(any_proto);
+      if (fingerprint_result.ok()) {
+        fingerprint = fingerprint_result.value();
+      } else {
+        VMSDK_LOG(WARNING, ctx) << "Failed to compute schema fingerprint: " 
+                                << fingerprint_result.status().message();
+      }
+    }
+    
     result.exists = true;
     result.index_name = index_name;
     result.num_docs = data.num_docs;
@@ -265,9 +327,11 @@ InfoResult GetLocalInfoResult(ValkeyModuleCtx* ctx,
     result.backfill_complete_percent = data.backfill_complete_percent;
     result.state = data.state;
     result.error = "";
+    result.schema_fingerprint = fingerprint;
   } else {
     result.exists = false;
     result.index_name = index_name;
+    result.schema_fingerprint = 0;
     result.error = std::string("Index not found: ") +
                    std::string(index_schema_result.status().message());
   }

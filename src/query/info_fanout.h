@@ -44,6 +44,8 @@ struct InfoResult {
   uint64_t recent_mutations_queue_delay = 0;
   std::string state;
   std::string error;
+  uint64_t schema_fingerprint = 0;
+  bool has_schema_mismatch = false;
 };
 
 using InfoResponseCallback = absl::AnyInvocable<void(absl::StatusOr<InfoResult>, std::unique_ptr<InfoParameters>)>;

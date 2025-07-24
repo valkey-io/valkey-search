@@ -196,12 +196,33 @@ grpc::ServerUnaryReactor* Service::InfoIndexPartition(
       response->set_exists(false);
       response->set_index_name(idx);
       response->set_error(status_or_schema.status().ToString());
+      response->set_schema_fingerprint(0);
       reactor->Finish(grpc::Status::OK);
       return;
     }
     auto schema = std::move(status_or_schema.value());
     IndexSchema::InfoIndexPartitionData data =
         schema->GetInfoIndexPartitionData();
+
+    // compute schema fingerprint
+    uint64_t fingerprint = 0;
+    auto schema_proto = schema->ToProto();
+    if (schema_proto) {
+      // Log the protobuf content for debugging
+      VMSDK_LOG(NOTICE, nullptr) << "Remote node schema proto for fingerprint calculation: " 
+                                 << schema_proto->DebugString();
+      
+      google::protobuf::Any any_proto;
+      any_proto.PackFrom(*schema_proto);
+      auto fingerprint_result = SchemaManager::ComputeFingerprint(any_proto);
+      if (fingerprint_result.ok()) {
+        fingerprint = fingerprint_result.value();
+      } else {
+        VMSDK_LOG(WARNING, nullptr) << "Failed to compute schema fingerprint on remote node: " 
+                                    << fingerprint_result.status().message();
+      }
+    }
+
     response->set_exists(true);
     response->set_index_name(idx);
     response->set_num_docs(data.num_docs);
@@ -216,6 +237,7 @@ grpc::ServerUnaryReactor* Service::InfoIndexPartition(
     response->set_recent_mutations_queue_delay(
         data.recent_mutations_queue_delay);
     response->set_state(data.state);
+    response->set_schema_fingerprint(fingerprint);
     reactor->Finish(grpc::Status::OK);
   });
   return reactor;

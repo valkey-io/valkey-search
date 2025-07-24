@@ -37,6 +37,8 @@ struct InfoResult {
   uint64_t backfill_db_size = 0;
   uint64_t backfill_inqueue_tasks = 0;
   float backfill_complete_percent = 0.0f;
+  float backfill_complete_percent_max = 0.0f;
+  float backfill_complete_percent_min = 0.0f;
   bool backfill_in_progress = false;
   uint64_t mutation_queue_size = 0;
   uint64_t recent_mutations_queue_delay = 0;

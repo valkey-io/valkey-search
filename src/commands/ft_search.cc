@@ -44,9 +44,9 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
-namespace {
 
-    // FT.SEARCH idx "*=>[KNN 10 @vec $BLOB AS score]" PARAMS 2 BLOB
+namespace {
+// FT.SEARCH idx "*=>[KNN 10 @vec $BLOB AS score]" PARAMS 2 BLOB
 // "\x12\xa9\xf5\x6c" DIALECT 2
 void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
                          const std::deque<indexes::Neighbor> &neighbors,

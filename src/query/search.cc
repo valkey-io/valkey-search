@@ -333,7 +333,6 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
 absl::StatusOr<std::deque<indexes::Neighbor>> Search(
     const VectorSearchParameters &parameters, bool is_local_search) {
   // Handle non vector queries first where attribute_alias is empty.
-  VMSDK_LOG(WARNING,nullptr) << "Search: is_local: " << is_local_search;
   if (parameters.IsNonVectorQuery()) {
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
     size_t qualified_entries = EvaluateFilterAsPrimary(

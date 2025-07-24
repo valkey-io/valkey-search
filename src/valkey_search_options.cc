@@ -150,7 +150,7 @@ static auto log_level =
         .WithValidationCallback(ValidateLogLevel)
         .Build();
 
-/// Should this instance use coordinator?
+/// Should timeouts return partial results OR generate a TIMEOUT error?
 constexpr absl::string_view kEnablePartialResults{"enable-partial-results"};
 static auto enable_partial_results =
     config::BooleanBuilder(kEnablePartialResults, true)

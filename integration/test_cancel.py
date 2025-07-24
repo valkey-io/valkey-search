@@ -185,4 +185,3 @@ class TestCancelCME(ValkeySearchClusterTestCase):
         flat_result = search(client, "flat", True)
         self.check_info_sum("search_cancel-forced", 9)
         self.check_info("search_query_prefiltering_requests_cnt", 1)
-        

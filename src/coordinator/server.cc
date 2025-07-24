@@ -119,8 +119,6 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
     return reactor;
   }
 
-  (*vector_search_parameters)->cancellation_token = cancel::Make((*vector_search_parameters)->timeout_ms, context);
-
   // Enqueue into the thread pool
   auto status = query::SearchAsync(
       std::move(*vector_search_parameters), reader_thread_pool_,

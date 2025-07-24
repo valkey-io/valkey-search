@@ -173,12 +173,12 @@ static auto max_ef_runtime =
         .Build();
 
 /// Register the "--default-timeout-ms" flag. Controls the default timeout
-/// in milliseconds for FT.CREATE.
+/// in milliseconds for FT.SEARCH.
 static auto default_timeout_ms =
     vmsdk::config::NumberBuilder(kDefaultTimeoutMs,  // name
-                                 kTimeoutMs,            // default size
-                                 kMinTimeoutMs,         // min size
-                                 kMaxTimeoutMs)         // max size
+                                 kTimeoutMs,            // default timeout
+                                 kMinTimeoutMs,         // min timeout
+                                 kMaxTimeoutMs)         // max timeout
         .Build();
 
 const absl::NoDestructor<

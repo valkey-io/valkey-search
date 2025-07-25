@@ -33,7 +33,6 @@ message IndexSchema {
 
 
 message TextIndex {
-  // look into this in slack channel --> put per index in message index
   string punctuation = 1;
   bool with_offsets = 2;
   bool with_suffix_trie = 3;
@@ -45,7 +44,6 @@ message TextIndex {
 }
 
 
-// why is there only vector index type
 enum AttributeIndexType {
   ATTRIBUTE_INDEX_TYPE_UNSPECIFIED = 0;
   ATTRIBUTE_INDEX_TYPE_VECTOR = 1;

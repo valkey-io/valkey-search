@@ -135,29 +135,29 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
           reactor->Finish(grpc::Status::OK);
           RecordSearchMetrics(false, std::move(latency_sample));
         } else {
-          vmsdk::RunByMain(
-              [parameters = std::move(parameters), response, reactor,
-               latency_sample = std::move(latency_sample),
-               neighbors = std::move(neighbors.value())]() mutable {
-                const auto& attribute_data_type =
-                    parameters->index_schema->GetAttributeDataType();
-                auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-                if (parameters->attribute_alias.empty()) {
-                    query::ProcessNonVectorNeighborsForReply(ctx.get(), attribute_data_type,
-                                            neighbors, *parameters);
-                } else {
-                  auto vector_identifier =
-                      parameters->index_schema
-                          ->GetIdentifier(parameters->attribute_alias)
-                          .value();
-                    query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
-                                                    neighbors, *parameters,
-                                                    vector_identifier);
-                }
-                SerializeNeighbors(response, neighbors);
-                reactor->Finish(grpc::Status::OK);
-                RecordSearchMetrics(false, std::move(latency_sample));
-              });
+          vmsdk::RunByMain([parameters = std::move(parameters), response,
+                            reactor, latency_sample = std::move(latency_sample),
+                            neighbors =
+                                std::move(neighbors.value())]() mutable {
+            const auto& attribute_data_type =
+                parameters->index_schema->GetAttributeDataType();
+            auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
+            if (parameters->attribute_alias.empty()) {
+              query::ProcessNonVectorNeighborsForReply(
+                  ctx.get(), attribute_data_type, neighbors, *parameters);
+            } else {
+              auto vector_identifier =
+                  parameters->index_schema
+                      ->GetIdentifier(parameters->attribute_alias)
+                      .value();
+              query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
+                                              neighbors, *parameters,
+                                              vector_identifier);
+            }
+            SerializeNeighbors(response, neighbors);
+            reactor->Finish(grpc::Status::OK);
+            RecordSearchMetrics(false, std::move(latency_sample));
+          });
         }
       },
       false);
@@ -197,20 +197,12 @@ grpc::ServerUnaryReactor* Service::InfoIndexPartition(
 
     // compute schema fingerprint
     uint64_t fingerprint = 0;
-    auto schema_proto = schema->ToProto();
-    if (schema_proto) {
-      // Log the protobuf content for debugging
-      VMSDK_LOG(NOTICE, nullptr) << "Remote node schema proto for fingerprint calculation: " 
-                                 << schema_proto->DebugString();
-      
-      google::protobuf::Any any_proto;
-      any_proto.PackFrom(*schema_proto);
-      auto fingerprint_result = SchemaManager::ComputeFingerprint(any_proto);
+    auto stored_proto = coordinator::MetadataManager::Instance().GetEntry(
+        kSchemaManagerMetadataTypeName, idx);
+    if (stored_proto.ok()) {
+      auto fingerprint_result = SchemaManager::ComputeFingerprint(stored_proto.value());
       if (fingerprint_result.ok()) {
         fingerprint = fingerprint_result.value();
-      } else {
-        VMSDK_LOG(WARNING, nullptr) << "Failed to compute schema fingerprint on remote node: " 
-                                    << fingerprint_result.status().message();
       }
     }
 

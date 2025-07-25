@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>  // For std::once_flag
 #include <set>
 #include <string>
 
@@ -36,6 +37,14 @@
 
 namespace valkey_search {
 namespace {
+
+// Default stop words set
+const std::vector<std::string> kDefaultStopWords{
+    "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by", "for",
+    "if", "in", "into", "it", "no", "not", "of", "on", "or", "such", "that", "their",
+    "then", "there", "these", "they", "this", "to", "was", "will", "with"
+};
+
 constexpr absl::string_view kInitialCapParam{"INITIAL_CAP"};
 constexpr absl::string_view kBlockSizeParam{"BLOCK_SIZE"};
 constexpr absl::string_view kMParam{"M"};
@@ -84,6 +93,18 @@ constexpr absl::string_view kMaxEfConstructionConfig{
     "max-vector-ef-construction"};
 constexpr absl::string_view kMaxEfRuntimeConfig{"max-vector-ef-runtime"};
 constexpr absl::string_view kDefaultTimeoutMs{"default-timeout-ms"};
+
+// FullText variables
+constexpr absl::string_view kTextParam{"TEXT"};
+constexpr absl::string_view kPunctuationParam{"PUNCTUATION"};
+constexpr absl::string_view kWithOffsetsParam{"WITHOFFSETS"};
+constexpr absl::string_view kNoOffsetsParam{"NOOFFSETS"};
+constexpr absl::string_view kWithSuffixTrieParam{"WITHSUFFIXTRIE"};
+constexpr absl::string_view kNoSuffixTrieParam{"NOSUFFIXTRIE"};
+constexpr absl::string_view kNoStopWordsParam{"NOSTOPWORDS"};
+constexpr absl::string_view kStopWordsParam{"STOPWORDS"};
+constexpr absl::string_view kNoStemParam{"NOSTEM"};
+constexpr absl::string_view kMinStemSizeParam{"MINSTEMSIZE"};
 
 /// Register the "--max-prefixes" flag. Controls the max number of prefixes per
 /// index.
@@ -372,6 +393,141 @@ absl::Status ParseTag(vmsdk::ArgsIterator &itr, data_model::Index &index_proto,
   index_proto.set_allocated_tag_index(tag_index_proto.release());
   return absl::OkStatus();
 }
+
+
+vmsdk::KeyValueParser<FTCreateTextParameters> CreateTextFieldParser() {
+  vmsdk::KeyValueParser<FTCreateTextParameters> parser;
+  // Field-level parameters only: WITHSUFFIXTRIE, NOSUFFIXTRIE, NOSTEM, MINSTEMSIZE
+  parser.AddParamParser(
+      kWithSuffixTrieParam, GENERATE_FLAG_PARSER(FTCreateTextParameters, with_suffix_trie));
+  parser.AddParamParser(
+      kNoSuffixTrieParam, 
+      std::make_unique<vmsdk::ParamParser<FTCreateTextParameters>>(
+          [](FTCreateTextParameters &params, vmsdk::ArgsIterator &itr) -> absl::Status {
+            params.with_suffix_trie = false;
+            return absl::OkStatus();
+          }));
+  parser.AddParamParser(
+      kNoStemParam, GENERATE_FLAG_PARSER(FTCreateTextParameters, no_stem));
+  parser.AddParamParser(
+      kMinStemSizeParam, 
+      std::make_unique<vmsdk::ParamParser<FTCreateTextParameters>>(
+          [](FTCreateTextParameters &params, vmsdk::ArgsIterator &itr) -> absl::Status {
+            int value;
+            VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, value));
+            if (value <= 0) {
+              return absl::InvalidArgumentError("MINSTEMSIZE must be positive");
+            }
+            params.min_stem_size = value;
+            return absl::OkStatus();
+          }));
+  return parser;
+}
+
+absl::Status ParseStopWords(vmsdk::ArgsIterator &itr, GlobalTextParameters &params) {
+  uint32_t count;
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, count));
+  if (count == 0) {
+    params.no_stop_words = true;
+    return absl::OkStatus();
+  }
+  
+  // Check if we have enough arguments remaining
+  if (static_cast<uint32_t>(itr.DistanceEnd()) < count) {
+    return absl::OutOfRangeError("Missing argument");
+  }
+  
+  params.stop_words.clear();
+  for (uint32_t i = 0; i < count; ++i) {
+    if (!itr.HasNext()) {
+      return absl::OutOfRangeError("Missing argument");
+    }
+    
+    // Check if the next argument is a reserved keyword that should not be consumed
+    VMSDK_ASSIGN_OR_RETURN(auto next_arg, itr.Get());
+    absl::string_view next_word = vmsdk::ToStringView(next_arg);
+    if (absl::EqualsIgnoreCase(next_word, kSchemaParam)) {
+      return absl::OutOfRangeError("Missing argument");
+    }
+    
+    std::string word;
+    VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, word));
+    params.stop_words.push_back(word);
+  }
+  return absl::OkStatus();
+}
+
+absl::Status ParseText(vmsdk::ArgsIterator &itr, data_model::Index &index_proto,
+                       const GlobalTextParameters &global_defaults) {
+  // Start with field-specific defaults, then parse field-level parameters
+  FTCreateTextParameters field_params;
+  field_params.with_suffix_trie = false;
+  field_params.no_stem = global_defaults.no_stem;  // Can be overridden
+  field_params.min_stem_size = global_defaults.min_stem_size;  // Can be overridden
+  
+  // Parse field-level parameters (WITHSUFFIXTRIE, NOSUFFIXTRIE, NOSTEM, MINSTEMSIZE)
+  static auto field_parser = CreateTextFieldParser();
+  VMSDK_RETURN_IF_ERROR(field_parser.Parse(field_params, itr, false));
+  
+  // Create and populate the TextIndex object (field-specific parameters only)
+  auto text_index_proto = std::make_unique<data_model::TextIndex>();
+  text_index_proto->set_with_suffix_trie(field_params.with_suffix_trie);
+  text_index_proto->set_no_stem(field_params.no_stem);
+  text_index_proto->set_min_stem_size(field_params.min_stem_size);
+  
+  // Set the text_index in the index_proto
+  index_proto.set_allocated_text_index(text_index_proto.release());
+  
+  return absl::OkStatus();
+}
+
+vmsdk::KeyValueParser<GlobalTextParameters> CreateGlobalTextParser() {
+  vmsdk::KeyValueParser<GlobalTextParameters> parser;
+  parser.AddParamParser(
+      kPunctuationParam, GENERATE_VALUE_PARSER(GlobalTextParameters, punctuation));
+  parser.AddParamParser(
+      kWithOffsetsParam, GENERATE_FLAG_PARSER(GlobalTextParameters, with_offsets));
+  parser.AddParamParser(
+      kNoOffsetsParam, 
+      std::make_unique<vmsdk::ParamParser<GlobalTextParameters>>(
+          [](GlobalTextParameters &params, vmsdk::ArgsIterator &itr) -> absl::Status {
+            params.with_offsets = false;
+            return absl::OkStatus();
+          }));
+  parser.AddParamParser(
+      kNoStemParam, GENERATE_FLAG_PARSER(GlobalTextParameters, no_stem));
+  parser.AddParamParser(
+      kNoStopWordsParam, GENERATE_FLAG_PARSER(GlobalTextParameters, no_stop_words));
+  return parser;
+}
+
+absl::Status ParseGlobalTextDefaults(vmsdk::ArgsIterator &itr, GlobalTextParameters &defaults) {
+  static auto parser = CreateGlobalTextParser();
+  VMSDK_RETURN_IF_ERROR(parser.Parse(defaults, itr, false));
+  
+  VMSDK_ASSIGN_OR_RETURN(auto res, vmsdk::IsParamKeyMatch(kStopWordsParam, false, itr));
+  if (res) {
+    VMSDK_RETURN_IF_ERROR(ParseStopWords(itr, defaults));
+  }
+  
+  // Handle LANGUAGE parameter for global text defaults
+  VMSDK_ASSIGN_OR_RETURN(res, vmsdk::ParseParam(kLanguageParam, false, itr,
+                                               defaults.language, *kLanguageByStr));
+  
+  // Validate punctuation is not empty after parsing
+  if (defaults.punctuation.length() >= 2 && 
+      ((defaults.punctuation.front() == '"' && defaults.punctuation.back() == '"') ||
+       (defaults.punctuation.front() == '\'' && defaults.punctuation.back() == '\''))) {
+    defaults.punctuation = defaults.punctuation.substr(1, defaults.punctuation.length() - 2);
+  }
+  
+  // Check if punctuation is empty after quote removal
+  if (defaults.punctuation.empty()) {
+    return absl::InvalidArgumentError("PUNCTUATION string cannot be empty");
+  }
+  
+  return absl::OkStatus();
+}
 absl::StatusOr<indexes::IndexerType> ParseIndexerType(
     vmsdk::ArgsIterator &itr) {
   absl::string_view index_type_str;
@@ -383,7 +539,8 @@ absl::StatusOr<indexes::IndexerType> ParseIndexerType(
 }
 absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
     vmsdk::ArgsIterator &itr, absl::string_view attribute_identifier,
-    data_model::IndexSchema &index_schema_proto) {
+    data_model::IndexSchema &index_schema_proto,
+    const GlobalTextParameters &global_text_defaults) {
   auto attribute_proto = index_schema_proto.add_attributes();
   attribute_proto->set_identifier(attribute_identifier);
   VMSDK_ASSIGN_OR_RETURN(auto res,
@@ -401,6 +558,8 @@ absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
   } else if (index_type == indexes::IndexerType::kNumeric) {
     VMSDK_RETURN_IF_ERROR(
         ParseNumeric(itr, *index_proto, attribute_identifier));
+  } else if (index_type == indexes::IndexerType::kText) {
+    VMSDK_RETURN_IF_ERROR(ParseText(itr, *index_proto, global_text_defaults));
   } else {
     CHECK(false);
   }
@@ -413,6 +572,17 @@ bool HasVectorIndex(const data_model::IndexSchema &index_schema_proto) {
     const auto &index = attribute.index();
     if (index.index_type_case() ==
         data_model::Index::IndexTypeCase::kVectorIndex) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool HasTextIndex(const data_model::IndexSchema &index_schema_proto) {
+  for (const auto &attribute : index_schema_proto.attributes()) {
+    const auto &index = attribute.index();
+    if (index.index_type_case() ==
+        data_model::Index::IndexTypeCase::kTextIndex) {
       return true;
     }
   }
@@ -454,6 +624,33 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     return absl::InvalidArgumentError(
         NotSupportedParamErrorMsg(kPayloadFieldParam));
   }
+  
+  // Parse global text parameters before SCHEMA
+  GlobalTextParameters global_text_defaults;
+  // Initialize with defaults for each parse call
+  global_text_defaults.punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|";
+  global_text_defaults.min_stem_size = 4;
+  global_text_defaults.with_offsets = true;
+  global_text_defaults.no_stem = false;
+  global_text_defaults.no_stop_words = false;
+  global_text_defaults.language = data_model::LANGUAGE_ENGLISH;
+  global_text_defaults.stop_words = kDefaultStopWords;
+  
+  VMSDK_RETURN_IF_ERROR(ParseGlobalTextDefaults(itr, global_text_defaults));
+  
+  // Set global text parameters in IndexSchema
+  index_schema_proto.set_language(global_text_defaults.language);
+  index_schema_proto.set_punctuation(global_text_defaults.punctuation);
+  index_schema_proto.set_with_offsets(global_text_defaults.with_offsets);
+  index_schema_proto.set_no_stop_words(global_text_defaults.no_stop_words);
+  index_schema_proto.set_nostem(global_text_defaults.no_stem);
+  index_schema_proto.set_min_stem_size(global_text_defaults.min_stem_size);
+  
+  // Add stop words to the schema
+  for (const auto& word : global_text_defaults.stop_words) {
+    index_schema_proto.add_stop_words(word);
+  }
+  
   absl::string_view schema;
   VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, schema));
   if (!absl::EqualsIgnoreCase(schema, kSchemaParam)) {
@@ -470,7 +667,7 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, attribute_identifier));
     VMSDK_ASSIGN_OR_RETURN(
         auto attribute,
-        ParseAttributeArgs(itr, attribute_identifier, index_schema_proto),
+        ParseAttributeArgs(itr, attribute_identifier, index_schema_proto, global_text_defaults),
         _.SetPrepend() << "Invalid field type for field `"
                        << attribute_identifier << "`: ");
     if (identifier_names.find(attribute->identifier()) !=
@@ -484,6 +681,15 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
         << max_attributes_value << ".";
 
     identifier_names.insert(attribute->identifier());
+  }
+  
+  // Check if the schema has at least one required index type (vector or text)
+  bool has_vector = HasVectorIndex(index_schema_proto);
+  bool has_text = HasTextIndex(index_schema_proto);
+  
+  if (!has_vector && !has_text) {
+    return absl::InvalidArgumentError(
+        "At least one attribute must be indexed as a vector or text field");
   }
   return index_schema_proto;
 }

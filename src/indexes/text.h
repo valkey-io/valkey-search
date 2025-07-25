@@ -35,20 +35,49 @@ namespace valkey_search::indexes {
 
 class Text : public IndexBase {
  public:
-  explicit Text(const data_model::TextIndex& text_index_proto);
+  explicit Text(const data_model::TextIndex& text_index_proto) : IndexBase(IndexerType::kText) {
+    // TODO: Parse configuration from text_index_proto
+  }
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view data) override
-      ABSL_LOCKS_EXCLUDED(index_mutex_);
+      ABSL_LOCKS_EXCLUDED(index_mutex_) {
+    absl::MutexLock lock(&index_mutex_);
+    tracked_keys_[key] = std::string(data);
+    return true;
+  }
   absl::StatusOr<bool> RemoveRecord(
       const InternedStringPtr& key,
       DeletionType deletion_type = DeletionType::kNone) override
-      ABSL_LOCKS_EXCLUDED(index_mutex_);
+      ABSL_LOCKS_EXCLUDED(index_mutex_) {
+    absl::MutexLock lock(&index_mutex_);
+    auto it = tracked_keys_.find(key);
+    if (it == tracked_keys_.end()) {
+      return false;
+    }
+    tracked_keys_.erase(it);
+    return true;
+  }
   absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
                                     absl::string_view data) override
-      ABSL_LOCKS_EXCLUDED(index_mutex_);
-  int RespondWithInfo(RedisModuleCtx* ctx) const override;
-  bool IsTracked(const InternedStringPtr& key) const override;
-  absl::Status SaveIndex(RDBOutputStream& rdb_stream) const override {
+      ABSL_LOCKS_EXCLUDED(index_mutex_) {
+    absl::MutexLock lock(&index_mutex_);
+    auto it = tracked_keys_.find(key);
+    if (it == tracked_keys_.end()) {
+      return false;
+    }
+    it->second = std::string(data);
+    return true;
+  }
+  int RespondWithInfo(ValkeyModuleCtx* ctx) const override {
+    ValkeyModule_ReplyWithSimpleString(ctx, "index_type");
+    ValkeyModule_ReplyWithSimpleString(ctx, "TEXT");
+    return 2;
+  }
+  bool IsTracked(const InternedStringPtr& key) const override {
+    absl::MutexLock lock(&index_mutex_);
+    return tracked_keys_.find(key) != tracked_keys_.end();
+  }
+  absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
     return absl::OkStatus();
   }
 
@@ -62,39 +91,67 @@ class Text : public IndexBase {
   inline void ForEachTrackedKey(
       absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override {
     absl::MutexLock lock(&index_mutex_);
-    for (const auto& [key, _] : tracked_tags_by_keys_) {
+    for (const auto& [key, _] : tracked_keys_) {
       fn(key);
     }
   }
-  uint64_t GetRecordCount() const override;
-  std::unique_ptr<data_model::Index> ToProto() const override;
+  uint64_t GetRecordCount() const override {
+    absl::MutexLock lock(&index_mutex_);
+    return tracked_keys_.size();
+  }
+  std::unique_ptr<data_model::Index> ToProto() const override {
+    auto index = std::make_unique<data_model::Index>();
+    auto text_index = std::make_unique<data_model::TextIndex>();
+    index->set_allocated_text_index(text_index.release());
+    return index;
+  }
 
   InternedStringPtr GetRawValue(const InternedStringPtr& key) const
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    auto it = tracked_keys_.find(key);
+    if (it == tracked_keys_.end()) {
+      return nullptr;
+    }
+    return StringInternStore::Intern(it->second);
+  }
 
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
    public:
-    bool Done() const override;
-    void Next() override;
-    const InternedStringPtr& operator*() const override;
+    bool Done() const override {
+      return true;
+    }
+    void Next() override {
+      // TODO: Implement iterator logic
+    }
+    const InternedStringPtr& operator*() const override {
+      static InternedStringPtr empty_ptr;
+      return empty_ptr;
+    }
 
    private:
   };
 
   class EntriesFetcher : public EntriesFetcherBase {
    public:
-    size_t Size() const override;
-    std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
+    size_t Size() const override {
+      return 0;
+    }
+    std::unique_ptr<EntriesFetcherIteratorBase> Begin() override {
+      return std::make_unique<EntriesFetcherIterator>();
+    }
 
    private:
   };
 
   virtual std::unique_ptr<EntriesFetcher> Search(
       const query::TextPredicate& predicate,
-      bool negate) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      bool negate) const ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    return std::make_unique<EntriesFetcher>();
+  }
 
  private:
   mutable absl::Mutex index_mutex_;
+  absl::flat_hash_map<InternedStringPtr, std::string> tracked_keys_;
 };
 }  // namespace valkey_search::indexes
 

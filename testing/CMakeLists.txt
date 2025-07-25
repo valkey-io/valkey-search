@@ -3,7 +3,7 @@ set(SRCS_COMMON ${CMAKE_CURRENT_LIST_DIR}/common.cc
                 ${CMAKE_CURRENT_LIST_DIR}/common.h)
 
 add_library(testing_common_base STATIC ${SRCS_COMMON})
-valkey_search_target_update_san_flags(testing_common_base)
+valkey_search_target_update_asan_flags(testing_common_base)
 
 target_include_directories(testing_common_base PUBLIC ${HIGHWAY_HASH_INCLUDE_PATH})
 target_include_directories(testing_common_base PUBLIC ${CMAKE_CURRENT_LIST_DIR})

@@ -29,18 +29,20 @@ message IndexSchema {
   repeated Attribute attributes = 6;
   Stats stats = 7;
   optional uint32 db_num = 8;
+
+  string punctuation = 9;
+  bool with_offsets = 10;
+  repeated string stop_words = 11;
+  bool no_stop_words = 12;
+  bool nostem = 13;
+  int32 min_stem_size = 14;
 }
 
 
 message TextIndex {
-  string punctuation = 1;
-  bool with_offsets = 2;
-  bool with_suffix_trie = 3;
-  bool no_stem = 4;
-  repeated string stop_words = 5;
-  bool no_stop_words = 6;
-  Language language = 7;
-  int32 min_stem_size = 8;
+  bool with_suffix_trie = 1;
+  bool no_stem = 2;
+  int32 min_stem_size = 3;
 }
 
 

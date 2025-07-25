@@ -42,31 +42,22 @@ struct FTCreateVectorParameters {
   std::unique_ptr<data_model::VectorIndex> ToProto() const;
 };
 
-// Global text parameters (per-index)
+// Global text parameters (per-index) - populated in IndexSchema
 struct GlobalTextParameters {
-  std::string punctuation;  // Default: should we use absl here
+  std::string punctuation{",.<>{}[]\"':;!@#$%^&*()-+=~/\\\\"};
   bool with_offsets{true};
   bool no_stem{false};
   std::vector<std::string> stop_words;
   bool no_stop_words{false};
   data_model::Language language{data_model::LANGUAGE_ENGLISH};
+  int min_stem_size{4};
 };
 
-// Per-field text parameters
+// Field-specific text parameters (per text field) - populated in TextIndex
 struct FTCreateTextParameters {
-  std::string punctuation{",.<>{}[]\"':;!@#$%^&*()-+=~/\\|"};
-  bool with_offsets{true};
   bool with_suffix_trie{false};
   bool no_stem{false};  // Can be overridden per field
-  bool no_stop_words{false};
-  data_model::Language language{data_model::LANGUAGE_ENGLISH};
   int min_stem_size{4};
-  std::vector<std::string> stop_words;
-};
-
-struct GlobalTextDefaults {
-  GlobalTextParameters global;
-  FTCreateTextParameters field;
 };
 
 

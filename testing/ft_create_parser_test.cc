@@ -163,17 +163,9 @@ TEST_P(FTCreateParserTest, ParseParams) {
         if (text_index < test_case.text_parameters.size()) {
           auto text_proto = index_schema_proto->attributes(i).index().text_index();
           const auto& expected_text = test_case.text_parameters[text_index];
-          EXPECT_EQ(text_proto.punctuation(), expected_text.punctuation);
-          EXPECT_EQ(text_proto.with_offsets(), expected_text.with_offsets);
           EXPECT_EQ(text_proto.with_suffix_trie(), expected_text.with_suffix_trie);
           EXPECT_EQ(text_proto.no_stem(), expected_text.no_stem);
-          EXPECT_EQ(text_proto.no_stop_words(), expected_text.no_stop_words);
-          EXPECT_EQ(text_proto.language(), expected_text.language);
           EXPECT_EQ(text_proto.min_stem_size(), expected_text.min_stem_size);
-          EXPECT_EQ(text_proto.stop_words_size(), expected_text.stop_words.size());
-          for (int j = 0; j < text_proto.stop_words_size(); ++j) {
-            EXPECT_EQ(text_proto.stop_words(j), expected_text.stop_words[j]);
-          }
         }
         ++text_index;
       } else {
@@ -202,8 +194,9 @@ TEST_P(FTCreateParserTest, ParseParams) {
 
 INSTANTIATE_TEST_SUITE_P(
     FTCreateParserTests, FTCreateParserTest,
-    ValuesIn<FTCreateParserTestCase>(
-        {{
+    ValuesIn(
+        std::vector<FTCreateParserTestCase>{
+         {
              .test_name = "happy_path_hnsw",
              .success = true,
              .command_str = " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
@@ -941,12 +934,8 @@ INSTANTIATE_TEST_SUITE_P(
              .flat_parameters = {},
              .tag_parameters = {},
              .text_parameters = {{
-                 .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
-                 .with_offsets = true,
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .no_stop_words = false,
-                 .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 4,
              }},
              .expected = {
@@ -969,12 +958,8 @@ INSTANTIATE_TEST_SUITE_P(
              .flat_parameters = {},
              .tag_parameters = {},
              .text_parameters = {{
-                 .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
-                 .with_offsets = true,
                  .with_suffix_trie = true,
                  .no_stem = false,
-                 .no_stop_words = false,
-                 .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 2,
              }},
              .expected = {
@@ -997,14 +982,9 @@ INSTANTIATE_TEST_SUITE_P(
              .flat_parameters = {},
              .tag_parameters = {},
              .text_parameters = {{
-                 .punctuation = ",.;",
-                 .with_offsets = true,
                  .with_suffix_trie = false,
                  .no_stem = true,
-                 .no_stop_words = false,
-                 .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 4,
-                 .stop_words = {"the", "and", "or"},
              }},
              .expected = {
                  .index_schema_name = "idx1",
@@ -1026,12 +1006,8 @@ INSTANTIATE_TEST_SUITE_P(
              .flat_parameters = {},
              .tag_parameters = {},
              .text_parameters = {{
-                 .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
-                 .with_offsets = true,
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .no_stop_words = true,
-                 .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 4,
              }},
              .expected = {
@@ -1054,12 +1030,8 @@ INSTANTIATE_TEST_SUITE_P(
              .flat_parameters = {},
              .tag_parameters = {},
              .text_parameters = {{
-                 .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
-                 .with_offsets = true,
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .no_stop_words = true,
-                 .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 4,
              }},
              .expected = {
@@ -1092,12 +1064,8 @@ INSTANTIATE_TEST_SUITE_P(
              .flat_parameters = {},
              .tag_parameters = {},
              .text_parameters = {{
-                 .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
-                 .with_offsets = true,
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .no_stop_words = false,
-                 .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 4,
              }},
              .expected = {
@@ -1127,12 +1095,8 @@ INSTANTIATE_TEST_SUITE_P(
              .flat_parameters = {},
              .tag_parameters = {},
              .text_parameters = {{
-                 .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
-                 .with_offsets = true,
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .no_stop_words = true,
-                 .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 4,
              }},
              .expected = {
@@ -1212,12 +1176,8 @@ INSTANTIATE_TEST_SUITE_P(
              .success = false,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT PUNCTUATION '.,;'",
              .text_parameters = {{
-                 .punctuation = ".,;",
-                 .with_offsets = true,
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .no_stop_words = false,
-                 .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 4,
              }},
              .expected = {
@@ -1235,12 +1195,8 @@ INSTANTIATE_TEST_SUITE_P(
              .success = false,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT PUNCTUATION .,;",
              .text_parameters = {{
-                 .punctuation = ".,;",
-                 .with_offsets = true,
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .no_stop_words = false,
-                 .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 4,
              }},
              .expected = {
@@ -1258,12 +1214,8 @@ INSTANTIATE_TEST_SUITE_P(
             .success = true,
             .command_str = "idx1 on HASH NOOFFSETS SCHEMA text_field TEXT",
             .text_parameters = {{
-                .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
-                .with_offsets = false,
                 .with_suffix_trie = false,
                 .no_stem = false,
-                .no_stop_words = false,
-                .language = data_model::LANGUAGE_ENGLISH,
                 .min_stem_size = 4,
             }},
             .expected = {
@@ -1281,12 +1233,8 @@ INSTANTIATE_TEST_SUITE_P(
              .success = true,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT WITHSUFFIXTRIE",
              .text_parameters = {{
-                 .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
-                 .with_offsets = true,
                  .with_suffix_trie = true,
                  .no_stem = false,
-                 .no_stop_words = false,
-                 .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 4,
              }},
              .expected = {
@@ -1304,12 +1252,8 @@ INSTANTIATE_TEST_SUITE_P(
              .success = true,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT NOSUFFIXTRIE",
              .text_parameters = {{
-                 .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
-                 .with_offsets = true,
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .no_stop_words = false,
-                 .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 4,
              }},
              .expected = {
@@ -1327,12 +1271,8 @@ INSTANTIATE_TEST_SUITE_P(
              .success = true,
              .command_str = "idx1 on HASH NOOFFSETS NOSTEM LANGUAGE ENGLISH SCHEMA text_field TEXT WITHSUFFIXTRIE MINSTEMSIZE 2",
              .text_parameters = {{
-                 .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
-                 .with_offsets = false,
                  .with_suffix_trie = true,
                  .no_stem = true,
-                 .no_stop_words = false,
-                 .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 2,
              }},
              .expected = {
@@ -1350,14 +1290,9 @@ INSTANTIATE_TEST_SUITE_P(
              .success = false,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT STOPWORDS 10 a an and are as at be but by for",
              .text_parameters = {{
-                 .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
-                 .with_offsets = true,
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .no_stop_words = false,
-                 .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 4,
-                 .stop_words = {"a", "an", "and", "are", "as", "at", "be", "but", "by", "for"},
              }},
              .expected = {
                  .index_schema_name = "idx1",
@@ -1374,14 +1309,9 @@ INSTANTIATE_TEST_SUITE_P(
             .success = true, 
             .command_str = "idx1 on HASH STOPWORDS 10 a an and are as at be but by for SCHEMA text_field TEXT",
             .text_parameters = {{
-                .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
-                .with_offsets = true,
                 .with_suffix_trie = false,
                 .no_stem = false,
-                .no_stop_words = false,
-                .language = data_model::LANGUAGE_ENGLISH,
                 .min_stem_size = 4,
-                .stop_words = {"a", "an", "and", "are", "as", "at", "be", "but", "by", "for"},
             }},
             .expected = {
                 .index_schema_name = "idx1",
@@ -1398,12 +1328,8 @@ INSTANTIATE_TEST_SUITE_P(
              .success = true,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT MINSTEMSIZE 100",
              .text_parameters = {{
-                 .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
-                 .with_offsets = true,
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .no_stop_words = false,
-                 .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 100,
              }},
              .expected = {
@@ -1421,12 +1347,8 @@ INSTANTIATE_TEST_SUITE_P(
              .success = false,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT PUNCTUATION \"!@#$%^&*()_+-=[]{}|;':,.<>?\"",
              .text_parameters = {{
-                 .punctuation = "!@#$%^&*()_+-=[]{}|;':,.<>?",
-                 .with_offsets = true,
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .no_stop_words = false,
-                 .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 4,
              }},
              .expected = {
@@ -1444,12 +1366,8 @@ INSTANTIATE_TEST_SUITE_P(
             .success = true,
             .command_str = "idx1 on HASH PUNCTUATION \"!@#$%^&*()_+-=[]{}|;':,.<>?\" SCHEMA text_field TEXT",
             .text_parameters = {{
-                .punctuation = "!@#$%^&*()_+-=[]{}|;':,.<>?",
-                .with_offsets = true,
                 .with_suffix_trie = false,
                 .no_stem = false,
-                .no_stop_words = false,
-                .language = data_model::LANGUAGE_ENGLISH,
                 .min_stem_size = 4,
             }},
             .expected = {
@@ -1468,21 +1386,13 @@ INSTANTIATE_TEST_SUITE_P(
              .command_str = "idx1 on HASH NOSTOPWORDS PUNCTUATION '.,;' SCHEMA text1 TEXT text2 TEXT MINSTEMSIZE 2",
              .text_parameters = {
                  {
-                     .punctuation = ".,;",
-                     .with_offsets = true,
                      .with_suffix_trie = false,
                      .no_stem = false,
-                     .no_stop_words = true,
-                     .language = data_model::LANGUAGE_ENGLISH,
                      .min_stem_size = 4,
                  },
                  {
-                     .punctuation = ".,;",
-                     .with_offsets = true,
                      .with_suffix_trie = false,
                      .no_stem = false,
-                     .no_stop_words = true,
-                     .language = data_model::LANGUAGE_ENGLISH,
                      .min_stem_size = 2,
                  }
              },
@@ -1538,12 +1448,8 @@ INSTANTIATE_TEST_SUITE_P(
              .success = true,  // Should succeed as there's no upper limit defined
              .command_str = "idx1 on HASH SCHEMA text_field TEXT MINSTEMSIZE 999999",
              .text_parameters = {{
-                 .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
-                 .with_offsets = true,
                  .with_suffix_trie = false,
                  .no_stem = false,
-                 .no_stop_words = false,
-                 .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 999999,
              }},
              .expected = {
@@ -1567,12 +1473,8 @@ INSTANTIATE_TEST_SUITE_P(
              .success = true,
              .command_str = "idx1 on HASH punctuation '.,;' withoffsets nostem SCHEMA text_field text",
              .text_parameters = {{
-                 .punctuation = ".,;",
-                 .with_offsets = true,
                  .with_suffix_trie = false,
                  .no_stem = true,
-                 .no_stop_words = false,
-                 .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 4,
              }},
              .expected = {
@@ -1590,12 +1492,8 @@ INSTANTIATE_TEST_SUITE_P(
              .success = true,
              .command_str = "idx1 on HASH LANGUAGE english PUNCTUATION '.,;' SCHEMA text_field TEXT WITHSUFFIXTRIE",
              .text_parameters = {{
-                 .punctuation = ".,;",
-                 .with_offsets = true,
                  .with_suffix_trie = true,
                  .no_stem = false,
-                 .no_stop_words = false,
-                 .language = data_model::LANGUAGE_ENGLISH,
                  .min_stem_size = 4,
              }},
              .expected = {

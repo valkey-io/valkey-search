@@ -16,7 +16,7 @@
 #include "src/utils/intrusive_ref_count.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
-#ifndef ASAN_BUILD
+#ifndef SAN_BUILD
 namespace valkey_search {
 
 namespace {

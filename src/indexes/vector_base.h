@@ -155,11 +155,11 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
         dimensions_(dimensions),
         attribute_identifier_(attribute_identifier),
         attribute_data_type_(attribute_data_type)
-#ifndef ASAN_BUILD
+#ifndef SAN_BUILD
         ,
         vector_allocator_(CREATE_UNIQUE_PTR(
             FixedSizeAllocator, dimensions * sizeof(float) + 1, true))
-#endif  // !ASAN_BUILD
+#endif  // !SAN_BUILD
   {
   }
 

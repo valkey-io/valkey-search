@@ -753,6 +753,14 @@ static vmsdk::info_field::Integer &remove_subscription_skipped_count =
     remove_subscription_fields[2];
 
 #endif
+
+static vmsdk::info_field::Integer string_interning_memory("string_interning", "string_interning_memory",
+  vmsdk::info_field::IntegerBuilder()
+      .SIBytes()
+      .App()
+      .Computed(StringInternStore::GetMemoryUsage)
+      .CrashSafe());
+
 void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
   vmsdk::info_field::DoSections(ctx, for_crash_report);
 }

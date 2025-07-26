@@ -21,6 +21,7 @@
 #include "absl/strings/str_cat.h"
 #include "hnswlib.h"
 #include "iostream.h"
+#include "src/metrics.h"
 #include "third_party/hnswlib/index.pb.h"
 #include "visited_list_pool.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -185,6 +186,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       }
       linkLists_->clear();
     }
+    valkey_search::Metrics::GetStats().reclaimable_memory -=
+        num_deleted_ * vector_size_;
     cur_element_count_ = 0;
     visited_list_pool_.reset(nullptr);
   }
@@ -897,6 +900,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     for (size_t i = 0; i < cur_element_count_; i++) {
       if (isMarkedDeleted(i)) {
         num_deleted_ += 1;
+        valkey_search::Metrics::GetStats().reclaimable_memory += vector_size_;
         if (allow_replace_deleted_) {
           deleted_elements.insert(i);
         }
@@ -963,6 +967,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       unsigned char *ll_cur = ((unsigned char *)get_linklist0(internalId)) + 2;
       *ll_cur |= DELETE_MARK;
       num_deleted_ += 1;
+      valkey_search::Metrics::GetStats().reclaimable_memory += vector_size_;
       if (allow_replace_deleted_) {
         std::unique_lock<std::mutex> lock_deleted_elements(
             deleted_elements_lock);
@@ -1006,6 +1011,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       unsigned char *ll_cur = ((unsigned char *)get_linklist0(internalId)) + 2;
       *ll_cur &= ~DELETE_MARK;
       num_deleted_ -= 1;
+      valkey_search::Metrics::GetStats().reclaimable_memory -= vector_size_;
       if (allow_replace_deleted_) {
         std::unique_lock<std::mutex> lock_deleted_elements(
             deleted_elements_lock);
@@ -1298,15 +1304,15 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       label_lookup_[label] = cur_c;
     }
 
+    std::unique_lock<std::mutex> templock(global);
+    int maxlevelcopy = maxlevel_;
     std::unique_lock<std::mutex> lock_el(link_list_locks_[cur_c]);
     int curlevel = getRandomLevel(mult_);
     if (level > 0) curlevel = level;
-
+    if (curlevel <= maxlevelcopy) {
+      templock.unlock();
+    }
     element_levels_[cur_c] = curlevel;
-
-    std::unique_lock<std::mutex> templock(global);
-    int maxlevelcopy = maxlevel_;
-    if (curlevel <= maxlevelcopy) templock.unlock();
     tableint currObj = enterpoint_node_;
     tableint enterpoint_copy = enterpoint_node_;
 

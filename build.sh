@@ -11,7 +11,7 @@ RUN_BUILD="yes"
 DUMP_TEST_ERRORS_STDOUT="no"
 NINJA_TOOL="ninja"
 INTEGRATION_TEST="no"
-ASAN_BUILD="no"
+SAN_BUILD="no"
 ARGV=$@
 EXIT_CODE=0
 
@@ -39,6 +39,7 @@ Usage: build.sh [options...]
     --run-integration-tests   Run integration tests.
     --use-system-modules      Use system's installed gRPC, Protobuf & Abseil dependencies.
     --asan                    Build with address sanitizer enabled.
+    --tsan                    Build with thread sanitizer enabled.
 
 Example usage:
 
@@ -102,8 +103,14 @@ do
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
     --asan)
-        CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DASAN_BUILD=ON"
-        ASAN_BUILD="yes"
+        CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DSAN_BUILD=address"
+        SAN_BUILD="address"
+        shift || true
+        echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
+        ;;
+     --tsan)
+        CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DSAN_BUILD=thread"
+        SAN_BUILD="thread"
         shift || true
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
@@ -185,9 +192,9 @@ function print_test_error_and_exit() {
         cp /dev/null ${TEST_OUTPUT_FILE}
     fi
 
-    # When running tests with ASan enabled, do not terminate the execution after the first failure continue
+    # When running tests with sanitizer enabled, do not terminate the execution after the first failure continue
     # running the remainder of the tests
-    if [[ "${ASAN_BUILD}" == "no" ]]; then
+    if [[ "${SAN_BUILD}" == "no" ]]; then
         print_test_summary
         exit 1
     else
@@ -263,9 +270,14 @@ cleanup() {
 trap cleanup EXIT
 
 BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
-if [[ "${ASAN_BUILD}" == "yes" ]]; then
-    printf "${BOLD_PINK}ASAN build is enabled${RESET}\n"
-    BUILD_DIR=${BUILD_DIR}-asan
+if [[ "${SAN_BUILD}" != "no" ]]; then
+    printf "${BOLD_PINK}${SAN_BUILD} sanitizer build is enabled${RESET}\n"
+    if [[ "${SAN_BUILD}" == "address" ]]; then
+        BUILD_DIR=${BUILD_DIR}-asan
+    else
+        BUILD_DIR=${BUILD_DIR}-tsan
+        export TSAN_OPTIONS="suppressions=${ROOT_DIR}/ci/tsan.supp"
+    fi
 fi
 
 TESTS_DIR=${BUILD_DIR}/tests
@@ -290,7 +302,7 @@ BUILD_RUNTIME=$((END_TIME - START_TIME))
 
 START_TIME=`date +%s`
 
-if [[ "${ASAN_BUILD}" == "yes" ]]; then
+if [[ "${SAN_BUILD}" != "no" ]]; then
     export ASAN_OPTIONS="detect_odr_violation=0"
 fi
 
@@ -321,8 +333,11 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
         params="${params} --debug"
     fi
 
-    if [[ "${ASAN_BUILD}" == "yes" ]]; then
+    if [[ "${SAN_BUILD}" == "address" ]]; then
         params="${params} --asan"
+    fi
+    if [[ "${SAN_BUILD}" == "thread" ]]; then
+        params="${params} --tsan"
     fi
     ./run.sh ${params}
 fi

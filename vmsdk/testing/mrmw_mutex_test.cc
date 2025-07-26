@@ -306,6 +306,197 @@ TEST_F(MRMWMutexTest, SkipWait) {
   blocking_refcount.Wait();
 }
 
+TEST_F(MRMWMutexTest, ReaderLockMetrics) {
+  MRMWMutexOptions options;
+  options.read_quota_duration = absl::Seconds(1000);
+  options.read_switch_grace_period = absl::Microseconds(100);
+  options.write_quota_duration = absl::Microseconds(500);
+  options.write_switch_grace_period = absl::Microseconds(50);
+  TimeSlicedMRMWMutex mrmw_mutex(options);
+
+  auto& stats = GetGlobalTimeSlicedMRMWStats();
+  uint64_t initial_read_periods = stats.read_periods;
+  uint64_t initial_read_time = stats.read_time_microseconds;
+
+  {
+    ReaderMutexLock lock(&mrmw_mutex);
+    // Add small delay to ensure time accumulation
+    absl::SleepFor(absl::Microseconds(100));
+  }
+
+  EXPECT_EQ(stats.read_periods, initial_read_periods + 1);
+  EXPECT_GT(stats.read_time_microseconds, initial_read_time);
+  // Verify timing is reasonable (should be at least 100 microseconds)
+  EXPECT_GE(stats.read_time_microseconds - initial_read_time, 90);
+}
+
+TEST_F(MRMWMutexTest, WriterLockMetrics) {
+  MRMWMutexOptions options;
+  options.read_quota_duration = absl::Seconds(1000);
+  options.read_switch_grace_period = absl::Microseconds(100);
+  options.write_quota_duration = absl::Microseconds(500);
+  options.write_switch_grace_period = absl::Microseconds(50);
+  TimeSlicedMRMWMutex mrmw_mutex(options);
+
+  auto& stats = GetGlobalTimeSlicedMRMWStats();
+  uint64_t initial_write_periods = stats.write_periods;
+  uint64_t initial_write_time = stats.write_time_microseconds;
+
+  {
+    WriterMutexLock lock(&mrmw_mutex);
+    // Add small delay to ensure time accumulation
+    absl::SleepFor(absl::Microseconds(150));
+  }
+
+  EXPECT_EQ(stats.write_periods, initial_write_periods + 1);
+  EXPECT_GT(stats.write_time_microseconds, initial_write_time);
+  // Verify timing is reasonable (should be at least 150 microseconds)
+  EXPECT_GE(stats.write_time_microseconds - initial_write_time, 140);
+}
+
+TEST_F(MRMWMutexTest, MultipleLockMetrics) {
+  MRMWMutexOptions options;
+  options.read_quota_duration = absl::Seconds(1000);
+  options.read_switch_grace_period = absl::Microseconds(100);
+  options.write_quota_duration = absl::Microseconds(500);
+  options.write_switch_grace_period = absl::Microseconds(50);
+  TimeSlicedMRMWMutex mrmw_mutex(options);
+
+  auto& stats = GetGlobalTimeSlicedMRMWStats();
+  uint64_t initial_read_periods = stats.read_periods;
+  uint64_t initial_write_periods = stats.write_periods;
+  uint64_t initial_read_time = stats.read_time_microseconds;
+  uint64_t initial_write_time = stats.write_time_microseconds;
+
+  // Multiple read locks
+  for (int i = 0; i < 3; ++i) {
+    ReaderMutexLock lock(&mrmw_mutex);
+    absl::SleepFor(absl::Microseconds(50));
+  }
+
+  // Multiple write locks
+  for (int i = 0; i < 2; ++i) {
+    WriterMutexLock lock(&mrmw_mutex);
+    absl::SleepFor(absl::Microseconds(75));
+  }
+
+  EXPECT_EQ(stats.read_periods, initial_read_periods + 3);
+  EXPECT_EQ(stats.write_periods, initial_write_periods + 2);
+  EXPECT_GT(stats.read_time_microseconds, initial_read_time);
+  EXPECT_GT(stats.write_time_microseconds, initial_write_time);
+  
+  // Verify accumulated timing
+  EXPECT_GE(stats.read_time_microseconds - initial_read_time, 140);  // ~3 * 50
+  EXPECT_GE(stats.write_time_microseconds - initial_write_time, 140); // ~2 * 75
+}
+
+TEST_F(MRMWMutexTest, ConcurrentMetrics) {
+  MRMWMutexOptions options;
+  options.read_quota_duration = absl::Seconds(1000);
+  options.read_switch_grace_period = absl::Microseconds(100);
+  options.write_quota_duration = absl::Microseconds(500);
+  options.write_switch_grace_period = absl::Microseconds(50);
+  TimeSlicedMRMWMutex mrmw_mutex(options);
+
+  ThreadPool thread_pool("test-pool-", 4);
+  thread_pool.StartWorkers();
+
+  auto& stats = GetGlobalTimeSlicedMRMWStats();
+  uint64_t initial_read_periods = stats.read_periods;
+  uint64_t initial_write_periods = stats.write_periods;
+
+  const int num_read_tasks = 10;
+  const int num_write_tasks = 5;
+  absl::BlockingCounter counter(num_read_tasks + num_write_tasks);
+
+  // Schedule read tasks
+  for (int i = 0; i < num_read_tasks; ++i) {
+    thread_pool.Schedule([&mrmw_mutex, &counter]() {
+      ReaderMutexLock lock(&mrmw_mutex);
+      absl::SleepFor(absl::Microseconds(10));
+      counter.DecrementCount();
+    }, ThreadPool::Priority::kHigh);
+  }
+
+  // Schedule write tasks
+  for (int i = 0; i < num_write_tasks; ++i) {
+    thread_pool.Schedule([&mrmw_mutex, &counter]() {
+      WriterMutexLock lock(&mrmw_mutex);
+      absl::SleepFor(absl::Microseconds(20));
+      counter.DecrementCount();
+    }, ThreadPool::Priority::kHigh);
+  }
+
+  counter.Wait();
+
+  EXPECT_EQ(stats.read_periods, initial_read_periods + num_read_tasks);
+  EXPECT_EQ(stats.write_periods, initial_write_periods + num_write_tasks);
+}
+
+TEST_F(MRMWMutexTest, GlobalStatisticsVerification) {
+  MRMWMutexOptions options;
+  options.read_quota_duration = absl::Seconds(1000);
+  options.read_switch_grace_period = absl::Microseconds(100);
+  options.write_quota_duration = absl::Microseconds(500);
+  options.write_switch_grace_period = absl::Microseconds(50);
+  
+  TimeSlicedMRMWMutex mutex1(options);
+  TimeSlicedMRMWMutex mutex2(options);
+
+  auto& stats = GetGlobalTimeSlicedMRMWStats();
+  uint64_t initial_read_periods = stats.read_periods;
+  uint64_t initial_write_periods = stats.write_periods;
+
+  // Test that multiple mutex instances contribute to same global stats
+  {
+    ReaderMutexLock lock1(&mutex1);
+    absl::SleepFor(absl::Microseconds(50));
+  }
+  
+  {
+    WriterMutexLock lock2(&mutex2);
+    absl::SleepFor(absl::Microseconds(50));
+  }
+
+  EXPECT_EQ(stats.read_periods, initial_read_periods + 1);
+  EXPECT_EQ(stats.write_periods, initial_write_periods + 1);
+
+  // Verify GetGlobalTimeSlicedMRMWStats returns the same instance
+  auto& stats2 = GetGlobalTimeSlicedMRMWStats();
+  EXPECT_EQ(&stats, &stats2);
+}
+
+TEST_F(MRMWMutexTest, TimingAccuracy) {
+  MRMWMutexOptions options;
+  options.read_quota_duration = absl::Seconds(1000);
+  options.read_switch_grace_period = absl::Microseconds(100);
+  options.write_quota_duration = absl::Microseconds(500);
+  options.write_switch_grace_period = absl::Microseconds(50);
+  TimeSlicedMRMWMutex mrmw_mutex(options);
+
+  auto& stats = GetGlobalTimeSlicedMRMWStats();
+  
+  // Test different sleep durations
+  const std::vector<int> sleep_durations = {100, 200, 500};
+  
+  for (int sleep_micros : sleep_durations) {
+    uint64_t initial_read_time = stats.read_time_microseconds;
+    
+    StopWatch timer;
+    {
+      ReaderMutexLock lock(&mrmw_mutex);
+      absl::SleepFor(absl::Microseconds(sleep_micros));
+    }
+    auto actual_duration = absl::ToInt64Microseconds(timer.Duration());
+    
+    uint64_t measured_time = stats.read_time_microseconds - initial_read_time;
+    
+    // Allow for some timing variance (±50 microseconds)
+    EXPECT_GE(measured_time, sleep_micros - 50);
+    EXPECT_LE(measured_time, actual_duration + 50);
+  }
+}
+
 }  // namespace
 
 }  // namespace vmsdk

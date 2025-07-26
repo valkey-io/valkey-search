@@ -18,6 +18,9 @@
 
 namespace vmsdk {
 
+// Define the global statistics variable
+TimeSlicedMRMWStats global_stats;
+
 void ReaderMutexLock::SetMayProlong() {
   if (may_prolong_) {
     return;

@@ -152,9 +152,7 @@ static auto log_level =
 
 /// Should timeouts return partial results OR generate a TIMEOUT error?
 constexpr absl::string_view kEnablePartialResults{"enable-partial-results"};
-static auto enable_partial_results =
-    config::BooleanBuilder(kEnablePartialResults, true)
-        .Build();
+static config::Boolean enable_partial_results(kEnablePartialResults, true);
 
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
@@ -184,7 +182,7 @@ absl::Status Reset() {
 }
 
 const vmsdk::config::Boolean& GetEnablePartialResults() {
-  return static_cast<vmsdk::config::Boolean&>(*enable_partial_results);
+  return static_cast<vmsdk::config::Boolean&>(enable_partial_results);
 }
 
 }  // namespace options

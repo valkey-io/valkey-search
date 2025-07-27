@@ -23,6 +23,7 @@
 #include "grpcpp/security/credentials.h"
 #include "grpcpp/support/channel_arguments.h"
 #include "grpcpp/support/status.h"
+#include "module_config.h"
 #include "src/coordinator/coordinator.grpc.pb.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/grpc_suspender.h"
@@ -52,6 +53,17 @@ constexpr absl::string_view kRetryPolicy =
     "    }"
     "}]}";
 // clang-format on
+
+static constexpr absl::string_view kCoordinatorQueryTimeout{"coordinator-query-timeout-secs"};
+static constexpr int kCoordinatorQueryDefaultTimeout{120};
+static constexpr int kCoordinatorQueryMinTimeout{1};
+static constexpr int kCoordinatorQueryMaxTimeout{3600};
+
+static auto query_connection_timeout = vmsdk::config::NumberBuilder(kCoordinatorQueryTimeout,
+  kCoordinatorQueryDefaultTimeout,
+  kCoordinatorQueryMinTimeout,
+  kCoordinatorQueryMaxTimeout
+).Build();
 
 grpc::ChannelArguments& GetChannelArgs() {
   static absl::once_flag once;
@@ -132,7 +144,7 @@ void ClientImpl::SearchIndexPartition(
   };
   auto args = std::make_unique<SearchIndexPartitionArgs>();
   args->context.set_deadline(
-      absl::ToChronoTime(absl::Now() + absl::Seconds(120)));
+      absl::ToChronoTime(absl::Now() + absl::Seconds(query_connection_timeout->GetValue())));
   args->callback = std::move(done);
   args->request = std::move(request);
   args->latency_sample = SAMPLE_EVERY_N(100);

@@ -24,7 +24,6 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
-#include "info.h"
 #include "module_config.h"
 #include "src/acl.h"
 #include "src/commands/commands.h"

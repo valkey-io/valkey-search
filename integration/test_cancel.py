@@ -13,7 +13,7 @@ def canceller(client, client_id):
 
 def search_command(index:str, filter: int|None) -> list[str]:
     predicate = "*" if filter is None else f"(@n:[0 {filter}])"
-    return ["FT.SEARCH", index, predicate+"=>[KNN 10 @v $BLOB]", "PARAMS", "2", "BLOB", float_to_bytes([0.0, 0.0, 0.0])]
+    return ["FT.SEARCH", index, predicate+"=>[KNN 10 @v $BLOB]", "PARAMS", "2", "BLOB", float_to_bytes([10.0, 10.0, 10.0])]
     
 def search(client: valkey.client, index:str, timeout: bool, filter: int|None = None) -> list[tuple[str, float]]:
     print("Search command: ", search_command(index, filter))
@@ -39,7 +39,7 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
         # po
         assert client.execute_command("CONFIG SET search.info-developer-visible yes") == b"OK"
         assert client.info("SEARCH")["search_cancel-timeouts"] == 0
-        hnsw_index = Index("hnsw", [Vector("v", 3, type="HNSW"), Numeric("n")])
+        hnsw_index = Index("hnsw", [Vector("v", 3, type="HNSW", m=2, efc=1), Numeric("n")])
         flat_index = Index("flat", [Vector("v", 3, type="FLAT"), Numeric("n")])
        
         hnsw_index.create(client)
@@ -49,12 +49,12 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
         #
         # Nominal case
         #
-        hnsw_result = search(client, "hnsw", False)
-        flat_result = search(client, "flat", False)
+        nominal_hnsw_result = search(client, "hnsw", False)
+        nominal_flat_result = search(client, "flat", False)
 
         assert client.info("SEARCH")["search_cancel-timeouts"] == 0
-        assert hnsw_result[0] == 10
-        assert flat_result[0] == 10
+        assert nominal_hnsw_result[0] == 10
+        assert nominal_flat_result[0] == 10
 
         #
         # Now, force timeouts quickly
@@ -80,11 +80,11 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
 
         hnsw_result = search(client, "hnsw", False)
         assert client.info("SEARCH")["search_cancel-forced"] == 3
-        assert hnsw_result[0] == 10
+        assert hnsw_result != nominal_hnsw_result
 
         flat_result = search(client, "flat", False)
         assert client.info("SEARCH")["search_cancel-forced"] == 4
-        assert flat_result[0] == 10
+        assert flat_result != nominal_flat_result
 
         #
         # Now, test pre-filtering case.
@@ -103,6 +103,7 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
         hnsw_result = search(client, "hnsw", True, 2)
         assert client.info("SEARCH")["search_cancel-forced"] == 6
         assert client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 2
+        assert hnsw_result != nominal_hnsw_result
 
 class TestCancelCME(ValkeySearchClusterTestCase):
 

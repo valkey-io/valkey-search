@@ -391,7 +391,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         flag_stop_search = candidate_dist > lowerBound;
       } else {
         if (isCancelled && isCancelled->isCancelled()) { // VALKEYSEARCH
-          flag_stop_search == true; // VALKEYSEARCH
+          flag_stop_search = true; // VALKEYSEARCH
         } else // VALKEYSEARCH
         if (stop_condition) {
           flag_stop_search =

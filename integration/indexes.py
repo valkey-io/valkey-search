@@ -27,7 +27,7 @@ class Field:
 
 class Vector(Field):
     def __init__(self, name: str, dim:int, alias: str|None=None,
-                 type:str = "HNSW", distance:str="COSINE", 
+                 type:str = "HNSW", distance:str="L2", 
                  m:int|None=None, ef:int|None=None, efc:int|None=None, initialcap:int|None=None):
         super().__init__(name, alias)
         self.dim = dim

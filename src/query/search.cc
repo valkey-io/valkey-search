@@ -363,6 +363,8 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
   auto vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
   auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
   vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
+  ++Metrics::GetStats().time_slice_queries;
+  
   if (!parameters.filter_parse_results.root_predicate) {
     return MaybeAddIndexedContent(PerformVectorSearch(vector_index, parameters),
                                   parameters);

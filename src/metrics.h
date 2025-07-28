@@ -116,6 +116,14 @@ class Metrics {
         coordinator_server_search_index_partition_success_latency{
             absl::ToInt64Nanoseconds(absl::Nanoseconds(1)),
             absl::ToInt64Nanoseconds(absl::Seconds(1)), LATENCY_PRECISION};
+    // Time Slice Mutex metrics
+    std::atomic<uint64_t> time_slice_read_periods{0};
+    std::atomic<uint64_t> time_slice_read_time{0};      // microseconds, cumulative
+    std::atomic<uint64_t> time_slice_queries{0};
+    std::atomic<uint64_t> time_slice_write_periods{0};
+    std::atomic<uint64_t> time_slice_write_time{0};     // microseconds, cumulative
+    std::atomic<uint64_t> time_slice_upserts{0};
+    std::atomic<uint64_t> time_slice_deletes{0};
   };
   static Stats& GetStats() { return GetInstance().stats_; }
 

@@ -179,7 +179,8 @@ void ClientImpl::SearchIndexPartition(
 
 void ClientImpl::InfoIndexPartition(
     std::unique_ptr<InfoIndexPartitionRequest> request,
-    InfoIndexPartitionCallback done) {
+    InfoIndexPartitionCallback done,
+    int timeout_ms) {
   struct InfoIndexPartitionArgs {
     ::grpc::ClientContext context;
     std::unique_ptr<InfoIndexPartitionRequest> request;
@@ -188,9 +189,8 @@ void ClientImpl::InfoIndexPartition(
     std::unique_ptr<vmsdk::StopWatch> latency_sample;
   };
   auto args = std::make_unique<InfoIndexPartitionArgs>();
-  // Use a 5-second deadline (matches InfoParameters::timeout_ms default)
   args->context.set_deadline(
-      absl::ToChronoTime(absl::Now() + absl::Seconds(5)));
+      absl::ToChronoTime(absl::Now() + absl::Milliseconds(timeout_ms)));
   args->callback = std::move(done);
   args->request = std::move(request);
   args->latency_sample = SAMPLE_EVERY_N(100);

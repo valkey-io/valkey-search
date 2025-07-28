@@ -36,7 +36,8 @@ class Client {
       SearchIndexPartitionCallback done) = 0;
   virtual void InfoIndexPartition(
       std::unique_ptr<InfoIndexPartitionRequest> request,
-      InfoIndexPartitionCallback done) = 0;
+      InfoIndexPartitionCallback done,
+      int timeout_ms = 5000) = 0;
 };
 
 class ClientImpl : public Client {
@@ -57,7 +58,8 @@ class ClientImpl : public Client {
       SearchIndexPartitionCallback done) override;
   void InfoIndexPartition(
       std::unique_ptr<InfoIndexPartitionRequest> request,
-      InfoIndexPartitionCallback done) override;
+      InfoIndexPartitionCallback done,
+      int timeout_ms = 5000) override;
 
  private:
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;

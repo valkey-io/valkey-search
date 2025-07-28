@@ -250,6 +250,12 @@ void PerformRemoteInfoRequest(
     std::shared_ptr<InfoPartitionResultsTracker> tracker) {
   auto client = coordinator_client_pool->GetClient(address);
 
+  int timeout_ms;
+  {
+    absl::MutexLock lock(&tracker->mutex);
+    timeout_ms = tracker->parameters->timeout_ms;
+  }
+
   client->InfoIndexPartition(
       std::move(request),
       [tracker, address = std::string(address)](
@@ -264,7 +270,8 @@ void PerformRemoteInfoRequest(
           tracker->HandleError("gRPC error on node " + address + ": " +
                                status.error_message());
         }
-      });
+      },
+      timeout_ms);
 }
 
 void PerformRemoteInfoRequestAsync(
@@ -339,7 +346,7 @@ absl::Status PerformInfoFanoutAsync(
     std::unique_ptr<InfoParameters> parameters, vmsdk::ThreadPool* thread_pool,
     InfoResponseCallback callback) {
   auto request =
-      coordinator::CreateInfoIndexPartitionRequest(parameters->index_name);
+      coordinator::CreateInfoIndexPartitionRequest(parameters->index_name, parameters->timeout_ms);
   auto tracker = std::make_shared<InfoPartitionResultsTracker>(
       info_targets.size(), std::move(callback), std::move(parameters));
 

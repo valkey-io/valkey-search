@@ -85,7 +85,7 @@ void Free(ValkeyModuleCtx *ctx, void *privdata) {
 }
 
 int Timeout(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
-  return ValkeyModule_ReplyWithSimpleString(ctx, "Request timed out");
+  return ValkeyModule_ReplyWithError(ctx, "Request timed out");
 }
 
 }  // namespace info_async
@@ -132,17 +132,27 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return absl::OkStatus();
   }
 
+  // ACL check
+  VMSDK_ASSIGN_OR_RETURN(
+      auto index_schema,
+      SchemaManager::Instance().GetIndexSchema(
+          ValkeyModule_GetSelectedDb(ctx), index_schema_name));
+  static const auto permissions =
+      PrefixACLPermissions(kInfoCmdPermissions, kInfoCommand);
+  VMSDK_RETURN_IF_ERROR(
+      AclPrefixCheck(ctx, permissions, index_schema->GetKeyPrefixes()));
+
   if (is_global) {
-    VMSDK_LOG(NOTICE, ctx) << "==========Using Global Scope==========";
+    VMSDK_LOG(DEBUG, ctx) << "==========Using Global Scope==========";
     // Global info fanout - aggregate info from all cluster nodes
     auto parameters = std::make_unique<query::info_fanout::InfoParameters>();
     parameters->index_name = std::string(index_schema_name);
 
     auto targets = query::info_fanout::GetInfoTargetsForFanout(ctx);
-    VMSDK_LOG(NOTICE, ctx) << "Found " << targets.size() << " fanout targets:";
+    VMSDK_LOG(DEBUG, ctx) << "Found " << targets.size() << " fanout targets:";
 
     for (const auto &target : targets) {
-      VMSDK_LOG(NOTICE, ctx)
+      VMSDK_LOG(DEBUG, ctx)
           << "  Target type: "
           << (target.type == query::fanout::FanoutSearchTarget::Type::kLocal
                   ? "LOCAL"
@@ -169,15 +179,8 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
         std::move(on_done));
 
   } else {
-    VMSDK_LOG(NOTICE, ctx) << "==========Using Local Scope==========";
-    VMSDK_ASSIGN_OR_RETURN(
-        auto index_schema,
-        SchemaManager::Instance().GetIndexSchema(
-            ValkeyModule_GetSelectedDb(ctx), index_schema_name));
-    static const auto permissions =
-        PrefixACLPermissions(kInfoCmdPermissions, kInfoCommand);
-    VMSDK_RETURN_IF_ERROR(
-        AclPrefixCheck(ctx, permissions, index_schema->GetKeyPrefixes()));
+    VMSDK_LOG(DEBUG, ctx) << "==========Using Local Scope==========";
+    // index_schema already retrieved above for ACL check
     index_schema->RespondWithInfo(ctx);
   }
 

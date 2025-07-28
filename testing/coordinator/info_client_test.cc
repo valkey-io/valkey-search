@@ -58,9 +58,9 @@ TEST_F(InfoClientTest, CountsCorrectBytesOnSuccess) {
   ASSERT_GT(actual_response_size, 0);
   
   // Mock the InfoIndexPartition method to simulate the real implementation
-  EXPECT_CALL(*mock_client_, InfoIndexPartition(testing::_, testing::_))
+  EXPECT_CALL(*mock_client_, InfoIndexPartition(testing::_, testing::_, testing::_))
       .WillOnce([&](std::unique_ptr<InfoIndexPartitionRequest> req,
-                   InfoIndexPartitionCallback done) {
+                   InfoIndexPartitionCallback done, int timeout_ms) {
         // Verify we're working with the same request
         EXPECT_EQ(req->index_name(), "test_index_for_byte_counting");
         
@@ -84,7 +84,8 @@ TEST_F(InfoClientTest, CountsCorrectBytesOnSuccess) {
       [&callback_called](grpc::Status status, InfoIndexPartitionResponse& resp) {
         EXPECT_TRUE(status.ok());
         callback_called = true;
-      });
+      },
+      5000);  // 5 second timeout
       
   EXPECT_TRUE(callback_called);
   
@@ -110,9 +111,9 @@ TEST_F(InfoClientTest, DoesNotCountResponseBytesOnError) {
   response.set_error("Service error");
   
   // Mock the InfoIndexPartition method to simulate the real implementation
-  EXPECT_CALL(*mock_client_, InfoIndexPartition(testing::_, testing::_))
+  EXPECT_CALL(*mock_client_, InfoIndexPartition(testing::_, testing::_, testing::_))
       .WillOnce([&](std::unique_ptr<InfoIndexPartitionRequest> req,
-                   InfoIndexPartitionCallback done) {
+                   InfoIndexPartitionCallback done, int timeout_ms) {
         // Verify we're working with the same request
         EXPECT_EQ(req->index_name(), "test_index_error");
         
@@ -134,7 +135,8 @@ TEST_F(InfoClientTest, DoesNotCountResponseBytesOnError) {
       [&callback_called](grpc::Status status, InfoIndexPartitionResponse& resp) {
         EXPECT_FALSE(status.ok());
         callback_called = true;
-      });
+      },
+      5000);  // 5 second timeout
       
   EXPECT_TRUE(callback_called);
   

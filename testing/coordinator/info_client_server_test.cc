@@ -167,7 +167,8 @@ TEST_F(InfoClientServerTest, ExistingIndex) {
       [&](grpc::Status status, InfoIndexPartitionResponse& response) {
         status_promise.set_value(status);
         response_promise.set_value(response);
-      });
+      },
+      5000);  // 5 second timeout
   
   // Wait for callback with timeout
   auto status_future = status_promise.get_future();
@@ -214,7 +215,8 @@ TEST_F(InfoClientServerTest, NonExistentIndex) {
       [&](grpc::Status status, InfoIndexPartitionResponse& response) {
         status_promise.set_value(status);
         response_promise.set_value(response);
-      });
+      },
+      5000);  // 5 second timeout
   
   // Wait for callback with timeout
   auto status_future = status_promise.get_future();
@@ -250,7 +252,8 @@ TEST_F(InfoClientServerTest, EmptyIndex) {
       [&](grpc::Status status, InfoIndexPartitionResponse& response) {
         status_promise.set_value(status);
         response_promise.set_value(response);
-      });
+      },
+      5000);  // 5 second timeout
   
   // Wait for callback with timeout
   auto status_future = status_promise.get_future();
@@ -287,7 +290,8 @@ TEST_F(InfoClientServerTest, ServerError) {
       [&](grpc::Status status, InfoIndexPartitionResponse& response) {
         status_promise.set_value(status);
         response_promise.set_value(response);
-      });
+      },
+      5000);  // 5 second timeout
   
   // Wait for callback with timeout
   auto status_future = status_promise.get_future();
@@ -325,7 +329,8 @@ TEST_F(InfoClientServerTest, ConcurrentRequests) {
         [&, i](grpc::Status status, InfoIndexPartitionResponse& response) {
           status_promises[i].set_value(status);
           response_promises[i].set_value(response);
-        });
+        },
+        5000);  // 5 second timeout
   }
   
   // Wait for all callbacks

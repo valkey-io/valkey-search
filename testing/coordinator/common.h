@@ -36,7 +36,8 @@ class MockClient : public Client {
               (override));
   MOCK_METHOD(void, InfoIndexPartition,
               (std::unique_ptr<InfoIndexPartitionRequest> request,
-               InfoIndexPartitionCallback done),
+               InfoIndexPartitionCallback done,
+               int timeout_ms),
               (override));
 };
 

@@ -12,6 +12,7 @@
 #include "src/acl.h"
 #include "src/commands/commands.h"
 #include "src/query/info_fanout.h"
+#include "src/query/primary_info_fanout.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
 #include "vmsdk/src/command_parser.h"
@@ -90,6 +91,64 @@ int Timeout(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 
 }  // namespace info_async
 
+namespace primary_info_async {
+
+struct PrimaryInfoAsyncResult {
+  absl::StatusOr<query::primary_info_fanout::PrimaryInfoResult> info;
+  std::unique_ptr<query::primary_info_fanout::PrimaryInfoParameters> parameters;
+  PrimaryInfoAsyncResult(
+      absl::StatusOr<query::primary_info_fanout::PrimaryInfoResult> i,
+      std::unique_ptr<query::primary_info_fanout::PrimaryInfoParameters> p)
+      : info(std::move(i)), parameters(std::move(p)) {}
+};
+
+int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+  auto *res = static_cast<PrimaryInfoAsyncResult *>(
+      ValkeyModule_GetBlockedClientPrivateData(ctx));
+  if (!res->info.ok()) {
+    return ValkeyModule_ReplyWithError(ctx,
+                                       res->info.status().message().data());
+  }
+  const auto &info = res->info.value();
+  const auto index_name = res->parameters->index_name.c_str();
+
+  if (!info.exists) {
+    std::string error_msg =
+        absl::StrFormat("Primary index with name '%s' not found", index_name);
+    return ValkeyModule_ReplyWithError(ctx, error_msg.c_str());
+  }
+
+  if (info.has_schema_mismatch) {
+    return ValkeyModule_ReplyWithError(
+        ctx, "ERR found primary index schema inconsistency in the cluster");
+  }
+
+  ValkeyModule_ReplyWithArray(ctx, 10);
+  ValkeyModule_ReplyWithSimpleString(ctx, "global");
+  ValkeyModule_ReplyWithSimpleString(ctx, "true");
+  ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
+  ValkeyModule_ReplyWithSimpleString(ctx, index_name);
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_docs");
+  ValkeyModule_ReplyWithCString(ctx, std::to_string(info.num_docs).c_str());
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
+  ValkeyModule_ReplyWithCString(ctx, std::to_string(info.num_records).c_str());
+  ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
+  ValkeyModule_ReplyWithCString(
+      ctx, std::to_string(info.hash_indexing_failures).c_str());
+
+  return VALKEYMODULE_OK;
+}
+
+void Free(ValkeyModuleCtx *ctx, void *privdata) {
+  delete static_cast<PrimaryInfoAsyncResult *>(privdata);
+}
+
+int Timeout(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+  return ValkeyModule_ReplyWithError(ctx, "Primary info request timed out");
+}
+
+}  // namespace primary_info_async
+
 absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                        int argc) {
   if (argc < 2) {
@@ -103,6 +162,7 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   auto index_schema_name = vmsdk::ToStringView(itr_arg);
 
   bool is_global = false;
+  bool is_primary = false;
   if (argc == 2) {
     is_global = false;
   } else if (argc == 3) {
@@ -121,6 +181,15 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
         return absl::OkStatus();
       }
       is_global = true;
+    } else if (absl::EqualsIgnoreCase(scope, "PRIMARY")) {
+      if (!ValkeySearch::Instance().IsCluster() ||
+          !ValkeySearch::Instance().UsingCoordinator()) {
+        ValkeyModule_ReplyWithError(ctx,
+                                    "ERR PRIMARY keyword requires cluster mode "
+                                    "with coordinator enabled");
+        return absl::OkStatus();
+      }
+      is_primary = true;
     } else {
       ValkeyModule_ReplyWithError(
           ctx, "ERR Invalid scope parameter. Must be LOCAL or GLOBAL");
@@ -135,8 +204,8 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   // ACL check
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,
-      SchemaManager::Instance().GetIndexSchema(
-          ValkeyModule_GetSelectedDb(ctx), index_schema_name));
+      SchemaManager::Instance().GetIndexSchema(ValkeyModule_GetSelectedDb(ctx),
+                                               index_schema_name));
   static const auto permissions =
       PrefixACLPermissions(kInfoCmdPermissions, kInfoCommand);
   VMSDK_RETURN_IF_ERROR(
@@ -174,6 +243,43 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     };
 
     return query::info_fanout::PerformInfoFanoutAsync(
+        ctx, targets, ValkeySearch::Instance().GetCoordinatorClientPool(),
+        std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),
+        std::move(on_done));
+
+  } else if (is_primary) {
+    VMSDK_LOG(DEBUG, ctx) << "==========Using Primary Scope==========";
+    auto parameters =
+        std::make_unique<query::primary_info_fanout::PrimaryInfoParameters>();
+    parameters->index_name = std::string(index_schema_name);
+    auto targets =
+        query::primary_info_fanout::GetPrimaryInfoTargetsForFanout(ctx);
+    VMSDK_LOG(DEBUG, ctx) << "Found " << targets.size() << " fanout targets:";
+
+    for (const auto &target : targets) {
+      VMSDK_LOG(DEBUG, ctx)
+          << "  Target type: "
+          << (target.type == query::fanout::FanoutSearchTarget::Type::kLocal
+                  ? "LOCAL"
+                  : "REMOTE")
+          << ", address: " << target.address;
+    }
+    vmsdk::BlockedClient blocked_client(ctx, primary_info_async::Reply,
+                                        primary_info_async::Timeout,
+                                        primary_info_async::Free, 5000);
+    blocked_client.MeasureTimeStart();
+    auto on_done =
+        [blocked_client = std::move(blocked_client)](
+            absl::StatusOr<query::primary_info_fanout::PrimaryInfoResult>
+                result,
+            std::unique_ptr<query::primary_info_fanout::PrimaryInfoParameters>
+                params) mutable {
+          auto payload =
+              std::make_unique<primary_info_async::PrimaryInfoAsyncResult>(
+                  std::move(result), std::move(params));
+          blocked_client.SetReplyPrivateData(payload.release());
+        };
+    return query::primary_info_fanout::PerformPrimaryInfoFanoutAsync(
         ctx, targets, ValkeySearch::Instance().GetCoordinatorClientPool(),
         std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),
         std::move(on_done));

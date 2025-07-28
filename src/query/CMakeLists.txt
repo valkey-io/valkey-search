@@ -96,3 +96,14 @@ target_link_libraries(info_fanout PUBLIC query_base)
 target_link_libraries(info_fanout PUBLIC fanout)
 target_link_libraries(info_fanout PUBLIC info_converter)
 target_link_libraries(info_fanout PUBLIC schema_manager)
+
+# 7. Primary Info Fanout
+set(SRCS_PRIMARY_INFO_FANOUT ${CMAKE_CURRENT_LIST_DIR}/primary_info_fanout.cc
+                             ${CMAKE_CURRENT_LIST_DIR}/primary_info_fanout.h)
+
+valkey_search_add_static_library(primary_info_fanout "${SRCS_PRIMARY_INFO_FANOUT}")
+target_include_directories(primary_info_fanout PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(primary_info_fanout PUBLIC query_base)
+target_link_libraries(primary_info_fanout PUBLIC fanout)
+target_link_libraries(primary_info_fanout PUBLIC info_converter)
+target_link_libraries(primary_info_fanout PUBLIC schema_manager)

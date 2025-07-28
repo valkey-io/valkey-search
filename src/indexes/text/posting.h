@@ -38,6 +38,8 @@ A PositionIterator is provided to iterate over the positions of an individual Ke
 #include <string>
 #include <vector>
 
+#include "src/index_schema.h"
+
 namespace valkey_search::text {
 
 // Will remove later when lexer and text are implemented so that posting_test.cc works 
@@ -62,14 +64,10 @@ struct Postings {
   // are inserted have an assumed single position of 0.
   // The "num_text_fields" entry identifies how many bits of the field-mask are required
   // and is used to select the representation.
-  Postings(bool save_positions, size_t num_text_fields);
+  explicit Postings(const valkey_search::IndexSchema& index_schema);
   
   // Destructor
   ~Postings();
-  
-  // Copy constructor and assignment operator
-  Postings(const Postings& other);
-  Postings& operator=(const Postings& other);
 
   // Are there any postings in this object?
   bool IsEmpty() const;

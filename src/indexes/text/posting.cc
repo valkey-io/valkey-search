@@ -6,7 +6,9 @@
  */
 
 #include "src/indexes/text/posting.h"
+#include "src/index_schema.h"
 
+#include <cassert>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -203,54 +205,14 @@ public:
   
   Impl(bool save_positions, size_t num_text_fields)
       : save_positions_(save_positions), num_text_fields_(num_text_fields) {}
-  
-  Impl(const Impl& other) 
-      : save_positions_(other.save_positions_), num_text_fields_(other.num_text_fields_) {
-    for (const auto& [key, pos_map] : other.key_to_positions_) {
-      PositionMap cloned_pos_map;
-      for (const auto& [pos, field_mask] : pos_map) {
-        cloned_pos_map[pos] = field_mask->Clone();
-      }
-      key_to_positions_[key] = std::move(cloned_pos_map);
-    }
-  }
-  
-  Impl& operator=(const Impl& other) {
-    if (this != &other) {
-      save_positions_ = other.save_positions_;
-      num_text_fields_ = other.num_text_fields_;
-      key_to_positions_.clear();
-      
-      for (const auto& [key, pos_map] : other.key_to_positions_) {
-        PositionMap cloned_pos_map;
-        for (const auto& [pos, field_mask] : pos_map) {
-          cloned_pos_map[pos] = field_mask->Clone();
-        }
-        key_to_positions_[key] = std::move(cloned_pos_map);
-      }
-    }
-    return *this;
-  }
 };
 
-Postings::Postings(bool save_positions, size_t num_text_fields) 
-    : impl_(std::make_unique<Impl>(save_positions, num_text_fields)) {
+Postings::Postings(const valkey_search::IndexSchema& index_schema) 
+    : impl_(std::make_unique<Impl>(index_schema.GetSavePositions(), index_schema.GetNumTextFields())) {
 }
 
 // Automatic cleanup via unique_ptr
 Postings::~Postings() = default;
-
-// Deep copy of all posting data
-Postings::Postings(const Postings& other) 
-    : impl_(std::make_unique<Impl>(*other.impl_)) {}
-
-// Safe replacement with deep copy
-Postings& Postings::operator=(const Postings& other) {
-  if (this != &other) {
-    impl_ = std::make_unique<Impl>(*other.impl_);
-  }
-  return *this;
-}
 
 // Check if posting list contains any documents
 bool Postings::IsEmpty() const {
@@ -384,31 +346,18 @@ bool Postings::KeyIterator::SkipForwardKey(const Key& key) {
 }
 
 const Key& Postings::KeyIterator::GetKey() const {
-  if (!impl_data_) {
-    static Key dummy_key;
-    return dummy_key;
-  }
+  assert(impl_data_ && "Iterator has no implementation data");
   auto* impl = static_cast<KeyIteratorImpl*>(impl_data_);
-  if (impl->current == impl->end) {
-    static Key dummy_key;
-    return dummy_key;
-  }
+  assert(impl->current != impl->end && "Iterator has reached end - no more keys available");
   return impl->current->first;
 }
 
 Postings::PositionIterator Postings::KeyIterator::GetPositionIterator() const {
-  PositionIterator pos_iterator;
-  if (!impl_data_) {
-    pos_iterator.impl_data_ = nullptr;
-    return pos_iterator;
-  }
-  
+  assert(impl_data_ && "Iterator has no implementation data");
   auto* impl = static_cast<KeyIteratorImpl*>(impl_data_);
-  if (impl->current == impl->end) {
-    pos_iterator.impl_data_ = nullptr;
-    return pos_iterator;
-  }
+  assert(impl->current != impl->end && "Iterator has reached end - no positions available");
   
+  PositionIterator pos_iterator;
   pos_iterator.impl_data_ = new PositionIteratorImpl(&impl->current->second);
   return pos_iterator;
 }
@@ -440,22 +389,16 @@ bool Postings::PositionIterator::SkipForwardPosition(const Position& position) {
 }
 
 const Position& Postings::PositionIterator::GetPosition() const {
-  if (!impl_data_) {
-    static Position dummy_position = 0;
-    return dummy_position;
-  }
+  assert(impl_data_ && "Iterator has no implementation data");
   auto* impl = static_cast<PositionIteratorImpl*>(impl_data_);
-  if (impl->current == impl->end) {
-    static Position dummy_position = 0;
-    return dummy_position;
-  }
+  assert(impl->current != impl->end && "Iterator has reached end - no more positions available");
   return impl->current->first;
 }
 
 uint64_t Postings::PositionIterator::GetFieldMask() const {
-  if (!impl_data_) return 0;
+  assert(impl_data_ && "Iterator has no implementation data");
   auto* impl = static_cast<PositionIteratorImpl*>(impl_data_);
-  if (impl->current == impl->end) return 0;
+  assert(impl->current != impl->end && "Iterator has reached end - no field mask available");
   return impl->current->second->AsUint64();
 }
 

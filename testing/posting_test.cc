@@ -6,24 +6,49 @@
  */
 
 #include "src/indexes/text/posting.h"
+#include "testing/common.h"
 
 #include "gtest/gtest.h"
 
 namespace valkey_search::text {
 
-class PostingTest : public testing::Test {
+class PostingTest : public ValkeySearchTest {
  protected:
   void SetUp() override {
-    // Create postings with different configurations for testing
-    boolean_postings_ = new Postings(false, 3);  // Boolean search, 3 fields
-    positional_postings_ = new Postings(true, 5); // Positional search, 5 fields
+    ValkeySearchTest::SetUp();
+    
+    // Create MockIndexSchema instances like other tests
+    std::vector<absl::string_view> key_prefixes = {"test:"};
+    boolean_schema_ = MockIndexSchema::Create(&fake_ctx_, "boolean_schema", key_prefixes,
+                                            std::make_unique<MockAttributeDataType>(),
+                                            nullptr).value();
+    boolean_schema_->SetTextConfiguration(false, 3);  // Boolean search, 3 fields
+    
+    positional_schema_ = MockIndexSchema::Create(&fake_ctx_, "positional_schema", key_prefixes,
+                                               std::make_unique<MockAttributeDataType>(),
+                                               nullptr).value();
+    positional_schema_->SetTextConfiguration(true, 5);  // Positional search, 5 fields
+    
+    // Create postings with different configurations for testing using IndexSchema
+    boolean_postings_ = new Postings(*boolean_schema_);  // Boolean search, 3 fields
+    positional_postings_ = new Postings(*positional_schema_); // Positional search, 5 fields
   }
   
   void TearDown() override {
     delete boolean_postings_;
     delete positional_postings_;
+    boolean_postings_ = nullptr;
+    positional_postings_ = nullptr;
+    
+    // Reset schemas before calling base teardown
+    boolean_schema_.reset();
+    positional_schema_.reset();
+    
+    ValkeySearchTest::TearDown();
   }
   
+  std::shared_ptr<MockIndexSchema> boolean_schema_;
+  std::shared_ptr<MockIndexSchema> positional_schema_;
   Postings* boolean_postings_;
   Postings* positional_postings_;
 };
@@ -104,32 +129,6 @@ TEST_F(PostingTest, RemoveKey) {
   EXPECT_TRUE(positional_postings_->IsEmpty());
 }
 
-TEST_F(PostingTest, CopyConstructorAndAssignment) {
-  // Set up original posting
-  positional_postings_->InsertPosting("doc1", 0, 10);
-  positional_postings_->InsertPosting("doc1", 1, 20);
-  
-  // Test copy constructor
-  Postings copy_constructed(*positional_postings_);
-  EXPECT_EQ(copy_constructed.GetKeyCount(), 1);
-  EXPECT_EQ(copy_constructed.GetPostingCount(), 2);
-  EXPECT_EQ(copy_constructed.GetTotalTermFrequency(), 2);
-  
-  // Test independence
-  positional_postings_->InsertPosting("doc2", 2, 30);
-  EXPECT_EQ(copy_constructed.GetKeyCount(), 1); // Should not change
-  EXPECT_EQ(positional_postings_->GetKeyCount(), 2); // Original should change
-  
-  // Test copy assignment
-  Postings copy_assigned(false, 3);
-  copy_assigned = *positional_postings_;
-  EXPECT_EQ(copy_assigned.GetKeyCount(), 2);
-  EXPECT_EQ(copy_assigned.GetPostingCount(), 3);
-  
-  // Test self-assignment
-  copy_assigned = copy_assigned;
-  EXPECT_EQ(copy_assigned.GetKeyCount(), 2);
-}
 
 TEST_F(PostingTest, ErrorHandling) {
   // Test field index validation
@@ -156,7 +155,12 @@ TEST_F(PostingTest, LargeScaleOperations) {
 
 TEST_F(PostingTest, SingleFieldOptimization) {
   // Test posting with single field (uses SingleFieldMask optimization internally)
-  Postings single_field_posting(true, 1);  // 1 field only
+  std::vector<absl::string_view> single_key_prefixes = {"single:"};
+  auto single_field_schema = MockIndexSchema::Create(&fake_ctx_, "single_field_schema", single_key_prefixes,
+                                                    std::make_unique<MockAttributeDataType>(),
+                                                    nullptr).value();
+  single_field_schema->SetTextConfiguration(true, 1);  // 1 field only
+  Postings single_field_posting(*single_field_schema);
   
   // Add some postings - all will use field 0
   single_field_posting.InsertPosting("doc1", 0, 10);

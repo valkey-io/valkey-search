@@ -5,7 +5,9 @@
  *
  */
 
-#include "src/query/info_fanout.h"
+#include "src/query/primary_info_fanout.h"
+
+#include <algorithm>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/status/status.h"
@@ -14,25 +16,26 @@
 #include "src/coordinator/info_converter.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/query/fanout.h"
+#include "src/query/info_fanout.h"
 #include "src/schema_manager.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/thread_pool.h"
 
-namespace valkey_search::query::info_fanout {
+namespace valkey_search::query::primary_info_fanout {
 
 // InfoPartitionResultsTracker is a thread-safe class that tracks the results
 // of an info fanout. It aggregates the results from multiple nodes and returns
 // the aggregated result to the callback.
-struct InfoPartitionResultsTracker {
+struct PrimaryInfoPartitionResultsTracker {
   absl::Mutex mutex;
-  InfoResult aggregated_result ABSL_GUARDED_BY(mutex);
+  PrimaryInfoResult aggregated_result ABSL_GUARDED_BY(mutex);
   int outstanding_requests ABSL_GUARDED_BY(mutex);
-  InfoResponseCallback callback;
-  std::unique_ptr<InfoParameters> parameters ABSL_GUARDED_BY(mutex);
+  PrimaryInfoResponseCallback callback;
+  std::unique_ptr<PrimaryInfoParameters> parameters ABSL_GUARDED_BY(mutex);
 
-  InfoPartitionResultsTracker(int outstanding_requests,
-                              InfoResponseCallback callback,
-                              std::unique_ptr<InfoParameters> parameters)
+  PrimaryInfoPartitionResultsTracker(
+      int outstanding_requests, PrimaryInfoResponseCallback callback,
+      std::unique_ptr<PrimaryInfoParameters> parameters)
       : outstanding_requests(outstanding_requests),
         callback(std::move(callback)),
         parameters(std::move(parameters)) {}
@@ -42,18 +45,18 @@ struct InfoPartitionResultsTracker {
 
     if (response.exists()) {
       // Log fingerprint for debugging
-      VMSDK_LOG(NOTICE, nullptr)
+      VMSDK_LOG(DEBUG, nullptr)
           << "Remote node fingerprint for index '" << response.index_name()
           << "': " << response.schema_fingerprint();
 
       // Check fingerprint consistency first
       if (aggregated_result.schema_fingerprint == 0) {
         aggregated_result.schema_fingerprint = response.schema_fingerprint();
-        VMSDK_LOG(NOTICE, nullptr) << "Set reference fingerprint to: "
+        VMSDK_LOG(DEBUG, nullptr) << "Set reference fingerprint to: "
                                    << aggregated_result.schema_fingerprint;
       } else if (aggregated_result.schema_fingerprint !=
                  response.schema_fingerprint()) {
-        VMSDK_LOG(WARNING, nullptr)
+        VMSDK_LOG(DEBUG, nullptr)
             << "Schema fingerprint mismatch detected! Reference: "
             << aggregated_result.schema_fingerprint
             << ", Remote node: " << response.schema_fingerprint();
@@ -68,56 +71,6 @@ struct InfoPartitionResultsTracker {
       aggregated_result.num_records += response.num_records();
       aggregated_result.hash_indexing_failures +=
           response.hash_indexing_failures();
-      aggregated_result.backfill_scanned_count +=
-          response.backfill_scanned_count();
-      aggregated_result.backfill_db_size += response.backfill_db_size();
-      aggregated_result.backfill_inqueue_tasks +=
-          response.backfill_inqueue_tasks();
-      aggregated_result.mutation_queue_size += response.mutation_queue_size();
-      aggregated_result.recent_mutations_queue_delay +=
-          response.recent_mutations_queue_delay();
-
-      if (response.backfill_in_progress()) {
-        aggregated_result.backfill_in_progress = true;
-        if (aggregated_result.backfill_complete_percent_max == 0.0f &&
-            aggregated_result.backfill_complete_percent_min == 0.0f) {
-          aggregated_result.backfill_complete_percent_min =
-              response.backfill_complete_percent();
-          aggregated_result.backfill_complete_percent_max =
-              response.backfill_complete_percent();
-        } else {
-          aggregated_result.backfill_complete_percent_min =
-              std::min(aggregated_result.backfill_complete_percent_min,
-                       response.backfill_complete_percent());
-          aggregated_result.backfill_complete_percent_max =
-              std::max(aggregated_result.backfill_complete_percent_max,
-                       response.backfill_complete_percent());
-        }
-      } else {
-        if (aggregated_result.backfill_complete_percent_max == 0.0f &&
-            aggregated_result.backfill_complete_percent_min == 0.0f) {
-          aggregated_result.backfill_complete_percent_min = 1.0f;
-          aggregated_result.backfill_complete_percent_max = 1.0f;
-        } else {
-          aggregated_result.backfill_complete_percent_min =
-              std::min(aggregated_result.backfill_complete_percent_min, 1.0f);
-          aggregated_result.backfill_complete_percent_max =
-              std::max(aggregated_result.backfill_complete_percent_max, 1.0f);
-        }
-      }
-
-      if (!response.state().empty()) {
-        std::string current_state = response.state();
-        if (current_state == "backfill_paused_by_oom") {
-          aggregated_result.state = current_state;
-        } else if (current_state == "backfill_in_progress" &&
-                   aggregated_result.state != "backfill_paused_by_oom") {
-          aggregated_result.state = current_state;
-        } else if (current_state == "ready" &&
-                   aggregated_result.state.empty()) {
-          aggregated_result.state = current_state;
-        }
-      }
 
       if (!response.error().empty()) {
         if (aggregated_result.error.empty()) {
@@ -131,19 +84,20 @@ struct InfoPartitionResultsTracker {
 
   // Handle local result (similar to how search handles
   // std::deque<indexes::Neighbor>)
-  void AddResults(InfoResult& local_result) {
+  void AddResults(valkey_search::query::primary_info_fanout::PrimaryInfoResult&
+                      local_result) {
     absl::MutexLock lock(&mutex);
 
     if (local_result.exists) {
       // Log fingerprint for debugging
-      VMSDK_LOG(NOTICE, nullptr)
+      VMSDK_LOG(DEBUG, nullptr)
           << "Local node fingerprint for index '" << local_result.index_name
           << "': " << local_result.schema_fingerprint;
 
       // Check fingerprint consistency first
       if (aggregated_result.schema_fingerprint == 0) {
         aggregated_result.schema_fingerprint = local_result.schema_fingerprint;
-        VMSDK_LOG(NOTICE, nullptr) << "Set reference fingerprint to: "
+        VMSDK_LOG(DEBUG, nullptr) << "Set reference fingerprint to: "
                                    << aggregated_result.schema_fingerprint;
       } else if (aggregated_result.schema_fingerprint !=
                  local_result.schema_fingerprint) {
@@ -162,56 +116,6 @@ struct InfoPartitionResultsTracker {
       aggregated_result.num_records += local_result.num_records;
       aggregated_result.hash_indexing_failures +=
           local_result.hash_indexing_failures;
-      aggregated_result.backfill_scanned_count +=
-          local_result.backfill_scanned_count;
-      aggregated_result.backfill_db_size += local_result.backfill_db_size;
-      aggregated_result.backfill_inqueue_tasks +=
-          local_result.backfill_inqueue_tasks;
-      aggregated_result.mutation_queue_size += local_result.mutation_queue_size;
-      aggregated_result.recent_mutations_queue_delay +=
-          local_result.recent_mutations_queue_delay;
-
-      if (local_result.backfill_in_progress) {
-        aggregated_result.backfill_in_progress = true;
-        if (aggregated_result.backfill_complete_percent_max == 0.0f &&
-            aggregated_result.backfill_complete_percent_min == 0.0f) {
-          aggregated_result.backfill_complete_percent_min =
-              local_result.backfill_complete_percent;
-          aggregated_result.backfill_complete_percent_max =
-              local_result.backfill_complete_percent;
-        } else {
-          aggregated_result.backfill_complete_percent_min =
-              std::min(aggregated_result.backfill_complete_percent_min,
-                       local_result.backfill_complete_percent);
-          aggregated_result.backfill_complete_percent_max =
-              std::max(aggregated_result.backfill_complete_percent_max,
-                       local_result.backfill_complete_percent);
-        }
-      } else {
-        if (aggregated_result.backfill_complete_percent_max == 0.0f &&
-            aggregated_result.backfill_complete_percent_min == 0.0f) {
-          aggregated_result.backfill_complete_percent_min = 1.0f;
-          aggregated_result.backfill_complete_percent_max = 1.0f;
-        } else {
-          aggregated_result.backfill_complete_percent_min =
-              std::min(aggregated_result.backfill_complete_percent_min, 1.0f);
-          aggregated_result.backfill_complete_percent_max =
-              std::max(aggregated_result.backfill_complete_percent_max, 1.0f);
-        }
-      }
-
-      if (!local_result.state.empty()) {
-        std::string current_state = local_result.state;
-        if (current_state == "backfill_paused_by_oom") {
-          aggregated_result.state = current_state;
-        } else if (current_state == "backfill_in_progress" &&
-                   aggregated_result.state != "backfill_paused_by_oom") {
-          aggregated_result.state = current_state;
-        } else if (current_state == "ready" &&
-                   aggregated_result.state.empty()) {
-          aggregated_result.state = current_state;
-        }
-      }
 
       if (!local_result.error.empty()) {
         if (aggregated_result.error.empty()) {
@@ -236,18 +140,18 @@ struct InfoPartitionResultsTracker {
     }
   }
 
-  ~InfoPartitionResultsTracker() {
+  ~PrimaryInfoPartitionResultsTracker() {
     absl::MutexLock lock(&mutex);
-    absl::StatusOr<InfoResult> result = aggregated_result;
+    absl::StatusOr<PrimaryInfoResult> result = aggregated_result;
     callback(result, std::move(parameters));
   }
 };
 
-void PerformRemoteInfoRequest(
+void PerformRemotePrimaryInfoRequest(
     std::unique_ptr<coordinator::InfoIndexPartitionRequest> request,
     const std::string& address,
     coordinator::ClientPool* coordinator_client_pool,
-    std::shared_ptr<InfoPartitionResultsTracker> tracker) {
+    std::shared_ptr<PrimaryInfoPartitionResultsTracker> tracker) {
   auto client = coordinator_client_pool->GetClient(address);
 
   int timeout_ms;
@@ -274,26 +178,25 @@ void PerformRemoteInfoRequest(
       timeout_ms);
 }
 
-void PerformRemoteInfoRequestAsync(
+void PerformRemotePrimaryInfoRequestAsync(
     std::unique_ptr<coordinator::InfoIndexPartitionRequest> request,
     const std::string& address,
     coordinator::ClientPool* coordinator_client_pool,
-    std::shared_ptr<InfoPartitionResultsTracker> tracker,
+    std::shared_ptr<PrimaryInfoPartitionResultsTracker> tracker,
     vmsdk::ThreadPool* thread_pool) {
   thread_pool->Schedule(
       [coordinator_client_pool, address = std::string(address),
        request = std::move(request), tracker]() mutable {
-        PerformRemoteInfoRequest(std::move(request), address,
-                                 coordinator_client_pool, tracker);
+        PerformRemotePrimaryInfoRequest(std::move(request), address,
+                                        coordinator_client_pool, tracker);
       },
       vmsdk::ThreadPool::Priority::kHigh);
 }
 
-InfoResult GetLocalInfoResult(ValkeyModuleCtx* ctx,
-                              const std::string& index_name) {
-  InfoResult result;
+PrimaryInfoResult GetLocalPrimaryInfoResult(ValkeyModuleCtx* ctx,
+                                            const std::string& index_name) {
+  PrimaryInfoResult result;
 
-  // Get local index schema and extract info
   auto index_schema_result = SchemaManager::Instance().GetIndexSchema(
       ValkeyModule_GetSelectedDb(ctx), index_name);
 
@@ -302,7 +205,6 @@ InfoResult GetLocalInfoResult(ValkeyModuleCtx* ctx,
     IndexSchema::InfoIndexPartitionData data =
         index_schema->GetInfoIndexPartitionData();
 
-    // Compute schema fingerprint
     uint64_t fingerprint = 0;
     auto stored_proto = coordinator::MetadataManager::Instance().GetEntry(
         kSchemaManagerMetadataTypeName, index_name);
@@ -319,14 +221,6 @@ InfoResult GetLocalInfoResult(ValkeyModuleCtx* ctx,
     result.num_docs = data.num_docs;
     result.num_records = data.num_records;
     result.hash_indexing_failures = data.hash_indexing_failures;
-    result.backfill_scanned_count = data.backfill_scanned_count;
-    result.backfill_db_size = data.backfill_db_size;
-    result.backfill_inqueue_tasks = data.backfill_inqueue_tasks;
-    result.mutation_queue_size = data.mutation_queue_size;
-    result.recent_mutations_queue_delay = data.recent_mutations_queue_delay;
-    result.backfill_in_progress = data.backfill_in_progress;
-    result.backfill_complete_percent = data.backfill_complete_percent;
-    result.state = data.state;
     result.error = "";
     result.schema_fingerprint = fingerprint;
   } else {
@@ -336,18 +230,17 @@ InfoResult GetLocalInfoResult(ValkeyModuleCtx* ctx,
     result.error = std::string("Index not found: ") +
                    std::string(index_schema_result.status().message());
   }
-
   return result;
 }
 
-absl::Status PerformInfoFanoutAsync(
+absl::Status PerformPrimaryInfoFanoutAsync(
     ValkeyModuleCtx* ctx, std::vector<fanout::FanoutSearchTarget>& info_targets,
     coordinator::ClientPool* coordinator_client_pool,
-    std::unique_ptr<InfoParameters> parameters, vmsdk::ThreadPool* thread_pool,
-    InfoResponseCallback callback) {
-  auto request =
-      coordinator::CreateInfoIndexPartitionRequest(parameters->index_name, parameters->timeout_ms);
-  auto tracker = std::make_shared<InfoPartitionResultsTracker>(
+    std::unique_ptr<PrimaryInfoParameters> parameters,
+    vmsdk::ThreadPool* thread_pool, PrimaryInfoResponseCallback callback) {
+  auto request = coordinator::CreateInfoIndexPartitionRequest(
+      parameters->index_name, parameters->timeout_ms);
+  auto tracker = std::make_shared<PrimaryInfoPartitionResultsTracker>(
       info_targets.size(), std::move(callback), std::move(parameters));
 
   bool has_local_target = false;
@@ -364,19 +257,19 @@ absl::Status PerformInfoFanoutAsync(
 
     // Use async scheduling for better performance with many nodes
     if (info_targets.size() >= 30 && thread_pool->Size() > 1) {
-      PerformRemoteInfoRequestAsync(std::move(request_copy), node.address,
-                                    coordinator_client_pool, tracker,
-                                    thread_pool);
+      PerformRemotePrimaryInfoRequestAsync(
+          std::move(request_copy), node.address, coordinator_client_pool,
+          tracker, thread_pool);
     } else {
-      PerformRemoteInfoRequest(std::move(request_copy), node.address,
-                               coordinator_client_pool, tracker);
+      PerformRemotePrimaryInfoRequest(std::move(request_copy), node.address,
+                                      coordinator_client_pool, tracker);
     }
   }
 
   if (has_local_target) {
     vmsdk::RunByMain(
         [ctx, index_name = tracker->parameters->index_name, tracker]() {
-          auto local_result = GetLocalInfoResult(ctx, index_name);
+          auto local_result = GetLocalPrimaryInfoResult(ctx, index_name);
           tracker->AddResults(local_result);
         });
   }
@@ -384,9 +277,9 @@ absl::Status PerformInfoFanoutAsync(
   return absl::OkStatus();
 }
 
-std::vector<fanout::FanoutSearchTarget> GetInfoTargetsForFanout(
-    ValkeyModuleCtx* ctx) {
+std::vector<fanout::FanoutSearchTarget> GetPrimaryInfoTargetsForFanout(
+    ValkeyModuleCtx *ctx) {
   return fanout::FanoutTemplate::GetTargets(ctx, true);
 }
 
-}  // namespace valkey_search::query::info_fanout
+}  // namespace valkey_search::query::primary_info_fanout

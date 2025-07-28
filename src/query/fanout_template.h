@@ -41,6 +41,22 @@ struct FanoutSearchTarget {
 // Template class for fanout operations across cluster nodes
 class FanoutTemplate {
  public:
+  // Convenience method for FanoutSearchTarget with default lambdas
+  static std::vector<FanoutSearchTarget> GetTargets(
+      ValkeyModuleCtx *ctx,
+      bool primary_only) {
+    return GetTargets<FanoutSearchTarget>(
+        ctx,
+        []() { return FanoutSearchTarget{.type = FanoutSearchTarget::Type::kLocal}; },
+        [](const std::string& address) {
+          return FanoutSearchTarget{
+              .type = FanoutSearchTarget::Type::kRemote,
+              .address = address
+          };
+        },
+        primary_only);
+  }
+
   template<typename TargetType>
   static std::vector<TargetType> GetTargets(
       ValkeyModuleCtx *ctx,

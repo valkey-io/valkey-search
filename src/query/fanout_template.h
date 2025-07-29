@@ -17,6 +17,13 @@
 
 namespace valkey_search::query::fanout {
 
+// Enumeration for fanout target modes
+enum class FanoutTargetMode {
+  kRandom,   // Default: randomly select one node per shard
+  kPrimary,  // Select all primary (master) nodes
+  kAll       // Select all nodes (both primary and replica)
+};
+
 struct FanoutSearchTarget {
   enum Type {
     kLocal,
@@ -44,7 +51,7 @@ class FanoutTemplate {
   // Convenience method for FanoutSearchTarget with default lambdas
   static std::vector<FanoutSearchTarget> GetTargets(
       ValkeyModuleCtx *ctx,
-      const std::string& target_mode) {
+      FanoutTargetMode target_mode = FanoutTargetMode::kRandom) {
     return GetTargets<FanoutSearchTarget>(
         ctx,
         []() { return FanoutSearchTarget{.type = FanoutSearchTarget::Type::kLocal}; },
@@ -62,13 +69,13 @@ class FanoutTemplate {
       ValkeyModuleCtx *ctx,
       std::function<TargetType()> create_local_target,
       std::function<TargetType(const std::string&)> create_remote_target,
-      const std::string& target_mode = "random") {
+      FanoutTargetMode target_mode = FanoutTargetMode::kRandom) {
     size_t num_nodes;
     auto nodes = vmsdk::MakeUniqueValkeyClusterNodesList(ctx, &num_nodes);
     
     std::vector<TargetType> selected_targets;
     
-    if (target_mode == "primary") {
+    if (target_mode == FanoutTargetMode::kPrimary) {
       // Select all primary (master) nodes directly
       for (size_t i = 0; i < num_nodes; ++i) {
         std::string node_id(nodes.get()[i], VALKEYMODULE_NODE_ID_LEN);
@@ -101,7 +108,7 @@ class FanoutTemplate {
           }
         }
       }
-    } else if (target_mode == "all") {
+    } else if (target_mode == FanoutTargetMode::kAll) {
       // Select all nodes (both primary and replica)
       for (size_t i = 0; i < num_nodes; ++i) {
         std::string node_id(nodes.get()[i], VALKEYMODULE_NODE_ID_LEN);

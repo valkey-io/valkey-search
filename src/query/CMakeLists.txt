@@ -77,8 +77,7 @@ target_link_libraries(fanout PUBLIC search)
 
 # 5. Response Generator
 set(SRCS_RESPONSE_GENERATOR ${CMAKE_CURRENT_LIST_DIR}/response_generator.cc
-                            ${CMAKE_CURRENT_LIST_DIR}/response_generator.h
-                            ${CMAKE_CURRENT_LIST_DIR}/info_fanout.cc)
+                            ${CMAKE_CURRENT_LIST_DIR}/response_generator.h)
 
 valkey_search_add_static_library(response_generator "${SRCS_RESPONSE_GENERATOR}")
 target_include_directories(response_generator PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -86,18 +85,7 @@ target_link_libraries(response_generator PUBLIC query_base)
 target_link_libraries(response_generator PUBLIC predicate_header)
 target_link_libraries(response_generator PUBLIC search_header)
 
-# 6. Info Fanout
-set(SRCS_INFO_FANOUT ${CMAKE_CURRENT_LIST_DIR}/info_fanout.cc
-                     ${CMAKE_CURRENT_LIST_DIR}/info_fanout.h)
-
-valkey_search_add_static_library(info_fanout "${SRCS_INFO_FANOUT}")
-target_include_directories(info_fanout PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(info_fanout PUBLIC query_base)
-target_link_libraries(info_fanout PUBLIC fanout)
-target_link_libraries(info_fanout PUBLIC info_converter)
-target_link_libraries(info_fanout PUBLIC schema_manager)
-
-# 7. Primary Info Fanout
+# 6. Primary Info Fanout
 set(SRCS_PRIMARY_INFO_FANOUT ${CMAKE_CURRENT_LIST_DIR}/primary_info_fanout.cc
                              ${CMAKE_CURRENT_LIST_DIR}/primary_info_fanout.h)
 
@@ -107,3 +95,14 @@ target_link_libraries(primary_info_fanout PUBLIC query_base)
 target_link_libraries(primary_info_fanout PUBLIC fanout)
 target_link_libraries(primary_info_fanout PUBLIC info_converter)
 target_link_libraries(primary_info_fanout PUBLIC schema_manager)
+
+# 7. Cluster Info Fanout
+set(SRCS_CLUSTER_INFO_FANOUT ${CMAKE_CURRENT_LIST_DIR}/cluster_info_fanout.cc
+                             ${CMAKE_CURRENT_LIST_DIR}/cluster_info_fanout.h)
+
+valkey_search_add_static_library(cluster_info_fanout "${SRCS_CLUSTER_INFO_FANOUT}")
+target_include_directories(cluster_info_fanout PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(cluster_info_fanout PUBLIC query_base)
+target_link_libraries(cluster_info_fanout PUBLIC fanout)
+target_link_libraries(cluster_info_fanout PUBLIC info_converter)
+target_link_libraries(cluster_info_fanout PUBLIC schema_manager)

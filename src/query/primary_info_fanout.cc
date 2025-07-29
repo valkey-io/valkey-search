@@ -299,7 +299,7 @@ absl::Status PerformPrimaryInfoFanoutAsync(
 
 std::vector<fanout::FanoutSearchTarget> GetPrimaryInfoTargetsForFanout(
     ValkeyModuleCtx* ctx) {
-  return fanout::FanoutTemplate::GetTargets(ctx, true);
+  return fanout::FanoutTemplate::GetTargets(ctx, "primary");
 }
 
 }  // namespace valkey_search::query::primary_info_fanout

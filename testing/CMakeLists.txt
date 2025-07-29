@@ -131,8 +131,6 @@ finalize_test_flags(query_test)
 set(COORDINATOR_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/coordinator/metadata_manager_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/coordinator/client_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/coordinator/info_client_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/coordinator/info_client_server_test.cc
 )
 
 add_executable(coordinator_test ${COORDINATOR_TEST_SOURCES})

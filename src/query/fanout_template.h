@@ -44,7 +44,7 @@ class FanoutTemplate {
   // Convenience method for FanoutSearchTarget with default lambdas
   static std::vector<FanoutSearchTarget> GetTargets(
       ValkeyModuleCtx *ctx,
-      bool primary_only) {
+      const std::string& target_mode) {
     return GetTargets<FanoutSearchTarget>(
         ctx,
         []() { return FanoutSearchTarget{.type = FanoutSearchTarget::Type::kLocal}; },
@@ -54,7 +54,7 @@ class FanoutTemplate {
               .address = address
           };
         },
-        primary_only);
+        target_mode);
   }
 
   template<typename TargetType>
@@ -62,14 +62,14 @@ class FanoutTemplate {
       ValkeyModuleCtx *ctx,
       std::function<TargetType()> create_local_target,
       std::function<TargetType(const std::string&)> create_remote_target,
-      bool primary_only = false) {
+      const std::string& target_mode = "random") {
     size_t num_nodes;
     auto nodes = vmsdk::MakeUniqueValkeyClusterNodesList(ctx, &num_nodes);
     
     std::vector<TargetType> selected_targets;
     
-    if (primary_only) {
-      // When primary_only is true, select all primary (master) nodes directly
+    if (target_mode == "primary") {
+      // Select all primary (master) nodes directly
       for (size_t i = 0; i < num_nodes; ++i) {
         std::string node_id(nodes.get()[i], VALKEYMODULE_NODE_ID_LEN);
         char ip[INET6_ADDRSTRLEN] = "";
@@ -99,6 +99,37 @@ class FanoutTemplate {
             selected_targets.push_back(create_remote_target(
                 absl::StrCat(ip, ":", coordinator::GetCoordinatorPort(port))));
           }
+        }
+      }
+    } else if (target_mode == "all") {
+      // Select all nodes (both primary and replica)
+      for (size_t i = 0; i < num_nodes; ++i) {
+        std::string node_id(nodes.get()[i], VALKEYMODULE_NODE_ID_LEN);
+        char ip[INET6_ADDRSTRLEN] = "";
+        char master_id[VALKEYMODULE_NODE_ID_LEN] = "";
+        int port;
+        int flags;
+        if (ValkeyModule_GetClusterNodeInfo(ctx, node_id.c_str(), ip, master_id,
+                                            &port, &flags) != VALKEYMODULE_OK) {
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+              << "Failed to get node info for node " << node_id
+              << ", skipping node...";
+          continue;
+        }
+        
+        if (flags & VALKEYMODULE_NODE_PFAIL || flags & VALKEYMODULE_NODE_FAIL) {
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+              << "Node " << node_id << " (" << ip
+              << ") is failing, skipping for fanout...";
+          continue;
+        }
+        
+        // Select all nodes (both master and replica)
+        if (flags & VALKEYMODULE_NODE_MYSELF) {
+          selected_targets.push_back(create_local_target());
+        } else {
+          selected_targets.push_back(create_remote_target(
+              absl::StrCat(ip, ":", coordinator::GetCoordinatorPort(port))));
         }
       }
     } else {

@@ -402,11 +402,7 @@ vmsdk::KeyValueParser<FTCreateTextParameters> CreateTextFieldParser() {
       kWithSuffixTrieParam, GENERATE_FLAG_PARSER(FTCreateTextParameters, with_suffix_trie));
   parser.AddParamParser(
       kNoSuffixTrieParam, 
-      std::make_unique<vmsdk::ParamParser<FTCreateTextParameters>>(
-          [](FTCreateTextParameters &params, vmsdk::ArgsIterator &itr) -> absl::Status {
-            params.with_suffix_trie = false;
-            return absl::OkStatus();
-          }));
+      GENERATE_NEGATIVE_FLAG_PARSER(FTCreateTextParameters, with_suffix_trie));
   parser.AddParamParser(
       kNoStemParam, GENERATE_FLAG_PARSER(FTCreateTextParameters, no_stem));
   parser.AddParamParser(
@@ -485,20 +481,12 @@ vmsdk::KeyValueParser<GlobalTextParameters> CreateGlobalTextParser() {
       kWithOffsetsParam, GENERATE_FLAG_PARSER(GlobalTextParameters, with_offsets));
   parser.AddParamParser(
       kNoOffsetsParam, 
-      std::make_unique<vmsdk::ParamParser<GlobalTextParameters>>(
-          [](GlobalTextParameters &params, vmsdk::ArgsIterator &itr) -> absl::Status {
-            params.with_offsets = false;
-            return absl::OkStatus();
-          }));
+      GENERATE_NEGATIVE_FLAG_PARSER(GlobalTextParameters, with_offsets));
   parser.AddParamParser(
       kNoStemParam, GENERATE_FLAG_PARSER(GlobalTextParameters, no_stem));
   parser.AddParamParser(
       kNoStopWordsParam, 
-      std::make_unique<vmsdk::ParamParser<GlobalTextParameters>>(
-          [](GlobalTextParameters &params, vmsdk::ArgsIterator &itr) -> absl::Status {
-            params.stop_words.clear();
-            return absl::OkStatus();
-          }));
+      GENERATE_CLEAR_CONTAINER_PARSER(GlobalTextParameters, stop_words));
   return parser;
 }
 

@@ -34,6 +34,18 @@ struct AttributeParameters {
   indexes::IndexerType indexer_type{indexes::IndexerType::kNone};
 };
 
+struct ExpectedGlobalTextParameters {
+  std::string punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|";  // Default punctuation
+  std::vector<std::string> stop_words = {
+      "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by", "for",
+      "if", "in", "into", "it", "no", "not", "of", "on", "or", "such", "that", "their",
+      "then", "there", "these", "they", "this", "to", "was", "will", "with"};  // Default stop words
+  data_model::Language language = data_model::Language::LANGUAGE_ENGLISH;
+  bool with_offsets = true;
+  bool no_stem = false;
+  int min_stem_size = 4;
+};
+
 struct FTCreateParameters {
   absl::string_view index_schema_name;
   data_model::AttributeDataType on_data_type{
@@ -43,6 +55,7 @@ struct FTCreateParameters {
   absl::string_view score_field;
   absl::string_view payload_field;
   std::vector<AttributeParameters> attributes;
+  ExpectedGlobalTextParameters global_text_params;
 };
 
 struct FTCreateParserTestCase {
@@ -100,6 +113,41 @@ TEST_P(FTCreateParserTest, ParseParams) {
     EXPECT_EQ(prefixes, test_case.expected.prefixes);
     EXPECT_EQ(index_schema_proto->attributes().size(),
               test_case.expected.attributes.size());
+              
+    // Verify schema-level text parameters if we have text fields
+    bool has_text_fields = false;
+    for (const auto& attr : test_case.expected.attributes) {
+      if (attr.indexer_type == indexes::IndexerType::kText) {
+        has_text_fields = true;
+        break;
+      }
+    }
+    
+    // Verify global text parameters in IndexSchema proto
+    if (has_text_fields && test_case.success) {
+      // Verify punctuation
+      EXPECT_EQ(index_schema_proto->punctuation(), test_case.expected.global_text_params.punctuation);
+      
+      // Verify language
+      EXPECT_EQ(index_schema_proto->language(), test_case.expected.global_text_params.language);
+      
+      // Verify with_offsets
+      EXPECT_EQ(index_schema_proto->with_offsets(), test_case.expected.global_text_params.with_offsets);
+      
+      // Verify no_stem
+      EXPECT_EQ(index_schema_proto->nostem(), test_case.expected.global_text_params.no_stem);
+      
+      // Verify min_stem_size
+      EXPECT_EQ(index_schema_proto->min_stem_size(), test_case.expected.global_text_params.min_stem_size);
+      
+      // Verify stop words
+      std::vector<std::string> actual_stop_words;
+      for (const auto& word : index_schema_proto->stop_words()) {
+        actual_stop_words.push_back(word);
+      }
+      EXPECT_EQ(actual_stop_words, test_case.expected.global_text_params.stop_words);
+    }
+    
     auto hnsw_index = 0;
     auto flat_index = 0;
     auto tag_index = 0;
@@ -993,7 +1041,15 @@ INSTANTIATE_TEST_SUITE_P(
                      .identifier = "text_field",
                      .attribute_alias = "text_field",
                      .indexer_type = indexes::IndexerType::kText,
-                 }}
+                 }},
+                 .global_text_params = {
+                     .punctuation = ",.;",
+                     .stop_words = {"the", "and", "or"},
+                     .language = data_model::Language::LANGUAGE_ENGLISH,
+                     .with_offsets = true,
+                     .no_stem = true,
+                     .min_stem_size = 4,
+                 }
              },
              .expected_error_message = "",
          },
@@ -1017,7 +1073,15 @@ INSTANTIATE_TEST_SUITE_P(
                      .identifier = "text_field",
                      .attribute_alias = "text_field",
                      .indexer_type = indexes::IndexerType::kText,
-                 }}
+                 }},
+                 .global_text_params = {
+                     .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
+                     .stop_words = {},  // Empty due to NOSTOPWORDS
+                     .language = data_model::Language::LANGUAGE_ENGLISH,
+                     .with_offsets = true,
+                     .no_stem = false,
+                     .min_stem_size = 4,
+                 }
              },
              .expected_error_message = "",
          },
@@ -1041,7 +1105,15 @@ INSTANTIATE_TEST_SUITE_P(
                      .identifier = "text_field",
                      .attribute_alias = "text_field",
                      .indexer_type = indexes::IndexerType::kText,
-                 }}
+                 }},
+                 .global_text_params = {
+                     .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
+                     .stop_words = {},  // Empty due to STOPWORDS 0
+                     .language = data_model::Language::LANGUAGE_ENGLISH,
+                     .with_offsets = true,
+                     .no_stem = false,
+                     .min_stem_size = 4,
+                 }
              },
              .expected_error_message = "",
          },
@@ -1225,7 +1297,18 @@ INSTANTIATE_TEST_SUITE_P(
                     .identifier = "text_field",
                     .attribute_alias = "text_field",
                     .indexer_type = indexes::IndexerType::kText,
-                }}
+                }},
+                .global_text_params = {
+                    .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
+                    .stop_words = {
+                        "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by", "for",
+                        "if", "in", "into", "it", "no", "not", "of", "on", "or", "such", "that", "their",
+                        "then", "there", "these", "they", "this", "to", "was", "will", "with"},
+                    .language = data_model::Language::LANGUAGE_ENGLISH,
+                    .with_offsets = false,  // NOOFFSETS should set this to false
+                    .no_stem = false,
+                    .min_stem_size = 4,
+                }
             },
         },
          {

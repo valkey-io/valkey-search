@@ -331,8 +331,8 @@ INSTANTIATE_TEST_SUITE_P(
                     {
                         .argv = {"FT.Info"},
                         .expect_return_failure = true,
-                        .expected_output = "$49\r\nERR wrong number of "
-                                           "arguments for FT.INFO command\r\n",
+                        .expected_output = "$51\r\nERR wrong number of "
+                                           "arguments for 'FT.INFO' command\r\n",
                     },
                 },
         },

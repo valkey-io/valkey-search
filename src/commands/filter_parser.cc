@@ -200,9 +200,9 @@ FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
   }
   auto numeric_index =
       dynamic_cast<const indexes::Numeric*>(index.value().get());
-  return std::make_unique<query::NumericPredicate>(numeric_index, identifier,
-                                                   start, is_inclusive_start,
-                                                   end, is_inclusive_end);
+  return std::make_unique<query::NumericPredicate>(
+      numeric_index, attribute_alias, identifier, start, is_inclusive_start,
+      end, is_inclusive_end);
 }
 
 absl::StatusOr<absl::string_view> FilterParser::ParseTagString() {
@@ -235,8 +235,8 @@ FilterParser::ParseTagPredicate(const std::string& attribute_alias) {
   auto tag_index = dynamic_cast<indexes::Tag*>(index.value().get());
   VMSDK_ASSIGN_OR_RETURN(auto tag_string, ParseTagString());
   VMSDK_ASSIGN_OR_RETURN(auto parsed_tags, ParseTags(tag_string, tag_index));
-  return std::make_unique<query::TagPredicate>(tag_index, identifier,
-                                               tag_string, parsed_tags);
+  return std::make_unique<query::TagPredicate>(
+      tag_index, attribute_alias, identifier, tag_string, parsed_tags);
 }
 
 absl::Status UnexpectedChar(absl::string_view expression, size_t pos) {

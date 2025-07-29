@@ -70,7 +70,7 @@ int RunByMain(absl::AnyInvocable<void()> fn, bool force_async) {
 }
 
 std::string WrongArity(absl::string_view cmd) {
-  return absl::StrCat("ERR wrong number of arguments for ", cmd, " command");
+  return absl::StrCat("ERR wrong number of arguments for '", cmd, "' command");
 }
 
 bool IsRealUserClient(ValkeyModuleCtx *ctx) {

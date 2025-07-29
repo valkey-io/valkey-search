@@ -362,6 +362,27 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_return = absl::PermissionDeniedError(
                 "The user doesn't have a permission to execute a command"),
         },
+        {
+            .test_name = "several_prefixes_allowed_only_one",
+            .module_allowed_commands = {"@search"},
+            .prefixes = {"abc:", "xyz:"},
+            .acls = {{
+                .cmds = "+@all",
+                .keys = "~abc:*",
+            }},
+            .expected_return = absl::PermissionDeniedError(
+                "The user doesn't have a permission to execute a command"),
+        },
+        {
+            .test_name = "several_prefixes_allowed_all",
+            .module_allowed_commands = {"@search"},
+            .prefixes = {"abc:", "xyz:"},
+            .acls = {{
+                .cmds = "+@all",
+                .keys = "~abc:* ~xyz:*",
+            }},
+            .expected_return = absl::OkStatus(),
+        },
     }),
     [](const TestParamInfo<AclPrefixCheckTestCase> &info) {
       return info.param.test_name;

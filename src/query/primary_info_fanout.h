@@ -38,6 +38,8 @@ struct PrimaryInfoResult {
   std::string error;
   std::optional<uint64_t> schema_fingerprint;
   bool has_schema_mismatch = false;
+  std::optional<uint32_t> encoding_version;
+  bool has_version_mismatch = false;
 };
 
 using PrimaryInfoResponseCallback = absl::AnyInvocable<void(

@@ -33,9 +33,8 @@ message IndexSchema {
   string punctuation = 9;
   bool with_offsets = 10;
   repeated string stop_words = 11;
-  bool no_stop_words = 12;
-  bool nostem = 13;
-  int32 min_stem_size = 14;
+  bool nostem = 12;
+  int32 min_stem_size = 13;
 }
 
 

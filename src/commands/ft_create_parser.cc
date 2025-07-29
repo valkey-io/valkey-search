@@ -428,27 +428,23 @@ absl::Status ParseStopWords(vmsdk::ArgsIterator &itr, GlobalTextParameters &para
   uint32_t count;
   VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, count));
   if (count == 0) {
-    params.no_stop_words = true;
+    params.stop_words.clear();
     return absl::OkStatus();
   }
   
   // Check if we have enough arguments remaining
   if (static_cast<uint32_t>(itr.DistanceEnd()) < count) {
-    return absl::OutOfRangeError("Missing argument");
+    return absl::OutOfRangeError("Missing argument for STOPWORDS. The count does not match the number of arguments provided for STOPWORDS");
   }
   
   params.stop_words.clear();
   for (uint32_t i = 0; i < count; ++i) {
-    if (!itr.HasNext()) {
-      return absl::OutOfRangeError("Missing argument");
-    }
-    
     // Check if the next argument is a reserved keyword that should not be consumed
-    VMSDK_ASSIGN_OR_RETURN(auto next_arg, itr.Get());
-    absl::string_view next_word = vmsdk::ToStringView(next_arg);
-    if (absl::EqualsIgnoreCase(next_word, kSchemaParam)) {
-      return absl::OutOfRangeError("Missing argument");
-    }
+    // VMSDK_ASSIGN_OR_RETURN(auto next_arg, itr.Get());
+    // absl::string_view next_word = vmsdk::ToStringView(next_arg);
+    // if (absl::EqualsIgnoreCase(next_word, kSchemaParam)) {
+    //   return absl::OutOfRangeError("Missing argument for STOPWORDS. The count does not match the number of arguments provided for STOPWORDS");
+    // }
     
     std::string word;
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, word));
@@ -497,7 +493,12 @@ vmsdk::KeyValueParser<GlobalTextParameters> CreateGlobalTextParser() {
   parser.AddParamParser(
       kNoStemParam, GENERATE_FLAG_PARSER(GlobalTextParameters, no_stem));
   parser.AddParamParser(
-      kNoStopWordsParam, GENERATE_FLAG_PARSER(GlobalTextParameters, no_stop_words));
+      kNoStopWordsParam, 
+      std::make_unique<vmsdk::ParamParser<GlobalTextParameters>>(
+          [](GlobalTextParameters &params, vmsdk::ArgsIterator &itr) -> absl::Status {
+            params.stop_words.clear();
+            return absl::OkStatus();
+          }));
   return parser;
 }
 
@@ -567,27 +568,27 @@ absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
   return attribute_proto;
 }
 
-bool HasVectorIndex(const data_model::IndexSchema &index_schema_proto) {
-  for (const auto &attribute : index_schema_proto.attributes()) {
-    const auto &index = attribute.index();
-    if (index.index_type_case() ==
-        data_model::Index::IndexTypeCase::kVectorIndex) {
-      return true;
-    }
-  }
-  return false;
-}
+// bool HasVectorIndex(const data_model::IndexSchema &index_schema_proto) {
+//   for (const auto &attribute : index_schema_proto.attributes()) {
+//     const auto &index = attribute.index();
+//     if (index.index_type_case() ==
+//         data_model::Index::IndexTypeCase::kVectorIndex) {
+//       return true;
+//     }
+//   }
+//   return false;
+// }
 
-bool HasTextIndex(const data_model::IndexSchema &index_schema_proto) {
-  for (const auto &attribute : index_schema_proto.attributes()) {
-    const auto &index = attribute.index();
-    if (index.index_type_case() ==
-        data_model::Index::IndexTypeCase::kTextIndex) {
-      return true;
-    }
-  }
-  return false;
-}
+// bool HasTextIndex(const data_model::IndexSchema &index_schema_proto) {
+//   for (const auto &attribute : index_schema_proto.attributes()) {
+//     const auto &index = attribute.index();
+//     if (index.index_type_case() ==
+//         data_model::Index::IndexTypeCase::kTextIndex) {
+//       return true;
+//     }
+//   }
+//   return false;
+// }
 
 }  // namespace
 absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
@@ -632,7 +633,6 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   global_text_defaults.min_stem_size = 4;
   global_text_defaults.with_offsets = true;
   global_text_defaults.no_stem = false;
-  global_text_defaults.no_stop_words = false;
   global_text_defaults.language = data_model::LANGUAGE_ENGLISH;
   global_text_defaults.stop_words = kDefaultStopWords;
   
@@ -642,7 +642,6 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   index_schema_proto.set_language(global_text_defaults.language);
   index_schema_proto.set_punctuation(global_text_defaults.punctuation);
   index_schema_proto.set_with_offsets(global_text_defaults.with_offsets);
-  index_schema_proto.set_no_stop_words(global_text_defaults.no_stop_words);
   index_schema_proto.set_nostem(global_text_defaults.no_stem);
   index_schema_proto.set_min_stem_size(global_text_defaults.min_stem_size);
   
@@ -683,14 +682,6 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     identifier_names.insert(attribute->identifier());
   }
   
-  // Check if the schema has at least one required index type (vector or text)
-  bool has_vector = HasVectorIndex(index_schema_proto);
-  bool has_text = HasTextIndex(index_schema_proto);
-  
-  if (!has_vector && !has_text) {
-    return absl::InvalidArgumentError(
-        "At least one attribute must be indexed as a vector or text field");
-  }
   return index_schema_proto;
 }
 std::unique_ptr<data_model::VectorIndex> FTCreateVectorParameters::ToProto()

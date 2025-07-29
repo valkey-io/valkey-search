@@ -1168,7 +1168,7 @@ INSTANTIATE_TEST_SUITE_P(
              .tag_parameters = {},
              .text_parameters = {},
              .expected = {},
-             .expected_error_message = "Missing argument",
+             .expected_error_message = "Unexpected parameter `text_field`, expecting `SCHEMA`",
          },
          // Additional TEXT field edge case tests
          {
@@ -1435,7 +1435,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "invalid_text_stopwords_missing_words_global",
             .success = false,
             .command_str = "idx1 on HASH STOPWORDS 3 the and SCHEMA text_field TEXT",
-            .expected_error_message = "Missing argument",
+            .expected_error_message = "Unexpected parameter `text_field`, expecting `SCHEMA`",
         },
         {
             .test_name = "invalid_text_field_parameters_global",

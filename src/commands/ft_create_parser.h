@@ -48,7 +48,6 @@ struct GlobalTextParameters {
   bool with_offsets{true};
   bool no_stem{false};
   std::vector<std::string> stop_words;
-  bool no_stop_words{false};
   data_model::Language language{data_model::LANGUAGE_ENGLISH};
   int min_stem_size{4};
 };

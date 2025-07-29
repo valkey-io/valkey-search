@@ -44,19 +44,12 @@ struct PrimaryInfoPartitionResultsTracker {
     absl::MutexLock lock(&mutex);
 
     if (response.exists()) {
-      // Log fingerprint for debugging
-      VMSDK_LOG(DEBUG, nullptr)
-          << "Remote node fingerprint for index '" << response.index_name()
-          << "': " << response.schema_fingerprint();
-
       // Check fingerprint consistency first
       if (!aggregated_result.schema_fingerprint.has_value()) {
         aggregated_result.schema_fingerprint = response.schema_fingerprint();
-        VMSDK_LOG(DEBUG, nullptr) << "Set reference fingerprint to: "
-                                   << aggregated_result.schema_fingerprint.value();
       } else if (aggregated_result.schema_fingerprint.value() !=
                  response.schema_fingerprint()) {
-        VMSDK_LOG(DEBUG, nullptr)
+        VMSDK_LOG(WARNING, nullptr)
             << "Schema fingerprint mismatch detected! Reference: "
             << aggregated_result.schema_fingerprint.value()
             << ", Remote node: " << response.schema_fingerprint();
@@ -65,6 +58,22 @@ struct PrimaryInfoPartitionResultsTracker {
             "found index schema inconsistency in the cluster";
         return;
       }
+
+      // Check version consistency
+      if (!aggregated_result.encoding_version.has_value()) {
+        aggregated_result.encoding_version = response.encoding_version();
+      } else if (aggregated_result.encoding_version.value() !=
+                 response.encoding_version()) {
+        VMSDK_LOG(WARNING, nullptr)
+            << "Encoding version mismatch detected! Reference: "
+            << aggregated_result.encoding_version.value()
+            << ", Remote node: " << response.encoding_version();
+        aggregated_result.has_version_mismatch = true;
+        aggregated_result.error =
+            "found index schema version inconsistency in the cluster";
+        return;
+      }
+
       aggregated_result.exists = true;
       aggregated_result.index_name = response.index_name();
       aggregated_result.num_docs += response.num_docs();
@@ -89,27 +98,12 @@ struct PrimaryInfoPartitionResultsTracker {
     absl::MutexLock lock(&mutex);
 
     if (local_result.exists) {
-      // Log fingerprint for debugging
-      if (local_result.schema_fingerprint.has_value()) {
-        VMSDK_LOG(DEBUG, nullptr)
-            << "Local node fingerprint for index '" << local_result.index_name
-            << "': " << local_result.schema_fingerprint.value();
-      } else {
-        VMSDK_LOG(DEBUG, nullptr)
-            << "Local node fingerprint for index '" << local_result.index_name
-            << "': <not set>";
-      }
-
       // Check fingerprint consistency first
       if (!aggregated_result.schema_fingerprint.has_value()) {
         aggregated_result.schema_fingerprint = local_result.schema_fingerprint;
-        if (local_result.schema_fingerprint.has_value()) {
-          VMSDK_LOG(DEBUG, nullptr) << "Set reference fingerprint to: "
-                                     << local_result.schema_fingerprint.value();
-        }
       } else if (local_result.schema_fingerprint.has_value() &&
                  aggregated_result.schema_fingerprint.value() !=
-                 local_result.schema_fingerprint.value()) {
+                     local_result.schema_fingerprint.value()) {
         VMSDK_LOG(WARNING, nullptr)
             << "Schema fingerprint mismatch detected! Reference: "
             << aggregated_result.schema_fingerprint.value()
@@ -119,6 +113,23 @@ struct PrimaryInfoPartitionResultsTracker {
             "found index schema inconsistency in the cluster";
         return;
       }
+
+      // Check version consistency
+      if (!aggregated_result.encoding_version.has_value()) {
+        aggregated_result.encoding_version = local_result.encoding_version;
+      } else if (local_result.encoding_version.has_value() &&
+                 aggregated_result.encoding_version.value() !=
+                     local_result.encoding_version.value()) {
+        VMSDK_LOG(WARNING, nullptr)
+            << "Encoding version mismatch detected! Reference: "
+            << aggregated_result.encoding_version.value()
+            << ", Local node: " << local_result.encoding_version.value();
+        aggregated_result.has_version_mismatch = true;
+        aggregated_result.error =
+            "found index schema version inconsistency in the cluster";
+        return;
+      }
+
       aggregated_result.exists = true;
       aggregated_result.index_name = local_result.index_name;
       aggregated_result.num_docs += local_result.num_docs;
@@ -287,7 +298,7 @@ absl::Status PerformPrimaryInfoFanoutAsync(
 }
 
 std::vector<fanout::FanoutSearchTarget> GetPrimaryInfoTargetsForFanout(
-    ValkeyModuleCtx *ctx) {
+    ValkeyModuleCtx* ctx) {
   return fanout::FanoutTemplate::GetTargets(ctx, true);
 }
 

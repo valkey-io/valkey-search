@@ -123,6 +123,11 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
         ctx, "ERR found primary index schema inconsistency in the cluster");
   }
 
+  if (info.has_version_mismatch) {
+    return ValkeyModule_ReplyWithError(
+        ctx, "ERR found index schema version inconsistency in the cluster");
+  }
+
   ValkeyModule_ReplyWithArray(ctx, 10);
   ValkeyModule_ReplyWithSimpleString(ctx, "global");
   ValkeyModule_ReplyWithSimpleString(ctx, "true");

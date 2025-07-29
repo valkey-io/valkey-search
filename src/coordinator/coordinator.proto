@@ -159,5 +159,6 @@ message InfoIndexPartitionResponse {
   string state = 13;
   string error = 14;
   uint64 schema_fingerprint = 15;
+  uint32 encoding_version = 16;
 }
 

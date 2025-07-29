@@ -26,11 +26,13 @@ bool NegatePredicate::Evaluate(Evaluator& evaluator) const {
 }
 
 NumericPredicate::NumericPredicate(const indexes::Numeric* index,
+                                   absl::string_view alias,
                                    absl::string_view identifier, double start,
                                    bool is_inclusive_start, double end,
                                    bool is_inclusive_end)
     : Predicate(PredicateType::kNumeric),
       index_(index),
+      alias_(alias),
       identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
       start_(start),
       is_inclusive_start_(is_inclusive_start),
@@ -50,12 +52,13 @@ bool NumericPredicate::Evaluate(const double* value) const {
           (is_inclusive_end_ && *value == end_));
 }
 
-TagPredicate::TagPredicate(const indexes::Tag* index,
+TagPredicate::TagPredicate(const indexes::Tag* index, absl::string_view alias,
                            absl::string_view identifier,
                            absl::string_view raw_tag_string,
                            const absl::flat_hash_set<absl::string_view>& tags)
     : Predicate(PredicateType::kTag),
       index_(index),
+      alias_(alias),
       identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
       raw_tag_string_(raw_tag_string),
       tags_(tags.begin(), tags.end()) {}

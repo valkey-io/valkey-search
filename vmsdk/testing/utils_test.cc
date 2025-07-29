@@ -145,6 +145,30 @@ TEST_F(UtilsTest, DisplayAsSIBytes) {
   }
 }
 
+TEST_F(UtilsTest, WrongArity) {
+  // Test standard FT commands
+  EXPECT_EQ(WrongArity("FT.INFO"), 
+            "ERR wrong number of arguments for 'FT.INFO' command");
+  EXPECT_EQ(WrongArity("FT.SEARCH"), 
+            "ERR wrong number of arguments for 'FT.SEARCH' command");
+  EXPECT_EQ(WrongArity("FT.DROPINDEX"), 
+            "ERR wrong number of arguments for 'FT.DROPINDEX' command");
+  EXPECT_EQ(WrongArity("FT._LIST"), 
+            "ERR wrong number of arguments for 'FT._LIST' command");
+  
+  // Test edge cases
+  EXPECT_EQ(WrongArity(""), 
+            "ERR wrong number of arguments for '' command");
+  EXPECT_EQ(WrongArity("SINGLE"), 
+            "ERR wrong number of arguments for 'SINGLE' command");
+  
+  // Test with special characters
+  EXPECT_EQ(WrongArity("CMD.WITH-DASH"), 
+            "ERR wrong number of arguments for 'CMD.WITH-DASH' command");
+  EXPECT_EQ(WrongArity("CMD_WITH_UNDERSCORE"), 
+            "ERR wrong number of arguments for 'CMD_WITH_UNDERSCORE' command");
+}
+
 }  // namespace
 
 }  // namespace vmsdk

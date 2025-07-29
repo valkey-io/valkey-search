@@ -276,22 +276,32 @@ class FlatVectorDefinition(AttributeDefinition):
 
 
 class TagDefinition(AttributeDefinition):
-    def __init__(self, separator=","):
+    def __init__(self, separator=",", alias=None):
         self.separator = separator
+        self.alias = alias
 
     def to_arguments(self) -> List[Any]:
-        return [
+        args = []
+        if self.alias:
+            args += ["AS", self.alias]
+        args += [
             "TAG",
             "SEPARATOR",
             self.separator,
         ]
+        return args
 
 
 class NumericDefinition(AttributeDefinition):
-    def to_arguments(self) -> List[Any]:
-        return [
-            "NUMERIC",
-        ]
+     def __init__(self, alias=None):
+        self.alias = alias
+
+     def to_arguments(self) -> List[Any]:
+        args = []
+        if self.alias:
+            args += ["AS", self.alias]
+        args += ["NUMERIC"]
+        return args
 
 
 def create_index(
@@ -318,13 +328,16 @@ def create_index(
         "SCHEMA",
     ]
     for name, definition in attributes.items():
-        
+        def_args = definition.to_arguments()
         if store_data_type == StoreDataType.JSON.name:
             args.append("$." + name)
-            args.append("AS")
-          
-        args.append(name)
-        args.extend(definition.to_arguments())
+            if def_args[0] != "AS":
+                args.append("AS")
+                args.append(name)
+        else:          
+            args.append(name)
+        
+        args.extend(def_args)
 
     return client.execute_command(*args, target_nodes=target_nodes)
 

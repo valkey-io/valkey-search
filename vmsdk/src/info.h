@@ -351,7 +351,7 @@ bool Validate(ValkeyModuleCtx* ctx);
 //
 void DoSection(ValkeyModuleInfoCtx* ctx, absl::string_view section,
                int for_crash_report);
-void DoRemainingSections(ValkeyModuleInfoCtx* ctx, int for_crash_report);
+void DoSections(ValkeyModuleInfoCtx* ctx, int for_crash_report);
 absl::Status ShowInfo(ValkeyModuleCtx* ctx, vmsdk::ArgsIterator& itr,
                       const vmsdk::module::Options& options);
 

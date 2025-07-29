@@ -327,6 +327,27 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
 
 absl::StatusOr<std::deque<indexes::Neighbor>> Search(
     const VectorSearchParameters &parameters, bool is_local_search) {
+  // Handle non vector queries first where attribute_alias is empty.
+  if (parameters.IsNonVectorQuery()) {
+    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
+    size_t qualified_entries = EvaluateFilterAsPrimary(
+        parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
+        false);
+    // Collect matching keys
+    std::deque<indexes::Neighbor> neighbors;
+    indexes::InlineVectorEvaluator evaluator;
+    while (!entries_fetchers.empty()) {
+      auto fetcher = std::move(entries_fetchers.front());
+      entries_fetchers.pop();
+      auto iterator = fetcher->Begin();
+      while (!iterator->Done()) {
+        const InternedStringPtr& label = **iterator;
+        neighbors.push_back(indexes::Neighbor{label, 0.0f});
+        iterator->Next();
+      }
+    }
+    return neighbors;
+  }
   VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
                                          parameters.attribute_alias));
   if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
@@ -337,6 +358,8 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
   auto vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
   auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
   vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
+  ++Metrics::GetStats().time_slice_queries;
+  
   if (!parameters.filter_parse_results.root_predicate) {
     return MaybeAddIndexedContent(PerformVectorSearch(vector_index, parameters),
                                   parameters);

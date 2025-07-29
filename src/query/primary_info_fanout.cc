@@ -16,7 +16,6 @@
 #include "src/coordinator/info_converter.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/query/fanout.h"
-#include "src/query/info_fanout.h"
 #include "src/schema_manager.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/thread_pool.h"
@@ -226,13 +225,16 @@ PrimaryInfoResult GetLocalPrimaryInfoResult(ValkeyModuleCtx* ctx,
         index_schema->GetInfoIndexPartitionData();
 
     uint64_t fingerprint = 0;
-    auto stored_proto = coordinator::MetadataManager::Instance().GetEntry(
-        kSchemaManagerMetadataTypeName, index_name);
-    if (stored_proto.ok()) {
-      auto fingerprint_result =
-          SchemaManager::ComputeFingerprint(stored_proto.value());
-      if (fingerprint_result.ok()) {
-        fingerprint = fingerprint_result.value();
+    uint32_t encoding_version = 0;
+
+    // Get the full metadata to access both fingerprint and encoding_version
+    auto global_metadata = coordinator::MetadataManager::Instance().GetGlobalMetadata();
+    if (global_metadata->type_namespace_map().contains(kSchemaManagerMetadataTypeName)) {
+      const auto& entry_map = global_metadata->type_namespace_map().at(kSchemaManagerMetadataTypeName);
+      if (entry_map.entries().contains(index_name)) {
+        const auto& entry = entry_map.entries().at(index_name);
+        fingerprint = entry.fingerprint();
+        encoding_version = entry.encoding_version();
       }
     }
 
@@ -243,10 +245,12 @@ PrimaryInfoResult GetLocalPrimaryInfoResult(ValkeyModuleCtx* ctx,
     result.hash_indexing_failures = data.hash_indexing_failures;
     result.error = "";
     result.schema_fingerprint = fingerprint;
+    result.encoding_version = encoding_version;
   } else {
     result.exists = false;
     result.index_name = index_name;
     result.schema_fingerprint = std::nullopt;
+    result.encoding_version = std::nullopt;
     result.error = std::string("Index not found: ") +
                    std::string(index_schema_result.status().message());
   }
@@ -295,11 +299,6 @@ absl::Status PerformPrimaryInfoFanoutAsync(
   }
 
   return absl::OkStatus();
-}
-
-std::vector<fanout::FanoutSearchTarget> GetPrimaryInfoTargetsForFanout(
-    ValkeyModuleCtx* ctx) {
-  return fanout::FanoutTemplate::GetTargets(ctx, "primary");
 }
 
 }  // namespace valkey_search::query::primary_info_fanout

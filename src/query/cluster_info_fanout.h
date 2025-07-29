@@ -5,8 +5,8 @@
  *
  */
 
-#ifndef VALKEYSEARCH_SRC_QUERY_PRIMARY_INFO_FANOUT_H_
-#define VALKEYSEARCH_SRC_QUERY_PRIMARY_INFO_FANOUT_H_
+#ifndef VALKEYSEARCH_SRC_QUERY_CLUSTER_INFO_FANOUT_H_
+#define VALKEYSEARCH_SRC_QUERY_CLUSTER_INFO_FANOUT_H_
 
 #include <functional>
 #include <memory>
@@ -22,19 +22,21 @@
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
-namespace valkey_search::query::primary_info_fanout {
+namespace valkey_search::query::cluster_info_fanout {
 
-struct PrimaryInfoParameters {
+struct ClusterInfoParameters {
   std::string index_name;
   int timeout_ms = 5000;  // Default 5 second timeout
 };
 
-struct PrimaryInfoResult {
+struct ClusterInfoResult {
   bool exists = false;
   std::string index_name;
-  uint64_t num_docs = 0;
-  uint64_t num_records = 0;
-  uint64_t hash_indexing_failures = 0;
+  float backfill_complete_percent = 0.0f;
+  float backfill_complete_percent_max = 0.0f;
+  float backfill_complete_percent_min = 0.0f;
+  bool backfill_in_progress = false;
+  std::string state;
   std::string error;
   std::optional<uint64_t> schema_fingerprint;
   bool has_schema_mismatch = false;
@@ -42,15 +44,15 @@ struct PrimaryInfoResult {
   bool has_version_mismatch = false;
 };
 
-using PrimaryInfoResponseCallback = absl::AnyInvocable<void(
-    absl::StatusOr<PrimaryInfoResult>, std::unique_ptr<PrimaryInfoParameters>)>;
+using ClusterInfoResponseCallback = absl::AnyInvocable<void(
+    absl::StatusOr<ClusterInfoResult>, std::unique_ptr<ClusterInfoParameters>)>;
 
-absl::Status PerformPrimaryInfoFanoutAsync(
+absl::Status PerformClusterInfoFanoutAsync(
     ValkeyModuleCtx* ctx, std::vector<fanout::FanoutSearchTarget>& info_targets,
     coordinator::ClientPool* coordinator_client_pool,
-    std::unique_ptr<PrimaryInfoParameters> parameters,
-    vmsdk::ThreadPool* thread_pool, PrimaryInfoResponseCallback callback);
+    std::unique_ptr<ClusterInfoParameters> parameters,
+    vmsdk::ThreadPool* thread_pool, ClusterInfoResponseCallback callback);
 
-}  // namespace valkey_search::query::primary_info_fanout
+}  // namespace valkey_search::query::cluster_info_fanout
 
-#endif  // VALKEYSEARCH_SRC_QUERY_PRIMARY_INFO_FANOUT_H_
+#endif  // VALKEYSEARCH_SRC_QUERY_CLUSTER_INFO_FANOUT_H_

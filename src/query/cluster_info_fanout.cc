@@ -5,7 +5,9 @@
  *
  */
 
-#include "src/query/info_fanout.h"
+#include "src/query/cluster_info_fanout.h"
+
+#include <algorithm>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/status/status.h"
@@ -18,21 +20,21 @@
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/thread_pool.h"
 
-namespace valkey_search::query::info_fanout {
+namespace valkey_search::query::cluster_info_fanout {
 
 // InfoPartitionResultsTracker is a thread-safe class that tracks the results
 // of an info fanout. It aggregates the results from multiple nodes and returns
 // the aggregated result to the callback.
-struct InfoPartitionResultsTracker {
+struct ClusterInfoPartitionResultsTracker {
   absl::Mutex mutex;
-  InfoResult aggregated_result ABSL_GUARDED_BY(mutex);
+  ClusterInfoResult aggregated_result ABSL_GUARDED_BY(mutex);
   int outstanding_requests ABSL_GUARDED_BY(mutex);
-  InfoResponseCallback callback;
-  std::unique_ptr<InfoParameters> parameters ABSL_GUARDED_BY(mutex);
+  ClusterInfoResponseCallback callback;
+  std::unique_ptr<ClusterInfoParameters> parameters ABSL_GUARDED_BY(mutex);
 
-  InfoPartitionResultsTracker(int outstanding_requests,
-                              InfoResponseCallback callback,
-                              std::unique_ptr<InfoParameters> parameters)
+  ClusterInfoPartitionResultsTracker(
+      int outstanding_requests, ClusterInfoResponseCallback callback,
+      std::unique_ptr<ClusterInfoParameters> parameters)
       : outstanding_requests(outstanding_requests),
         callback(std::move(callback)),
         parameters(std::move(parameters)) {}
@@ -41,16 +43,9 @@ struct InfoPartitionResultsTracker {
     absl::MutexLock lock(&mutex);
 
     if (response.exists()) {
-      // Log fingerprint for debugging
-      VMSDK_LOG(NOTICE, nullptr)
-          << "Remote node fingerprint for index '" << response.index_name()
-          << "': " << response.schema_fingerprint();
-
       // Check fingerprint consistency first
       if (!aggregated_result.schema_fingerprint.has_value()) {
         aggregated_result.schema_fingerprint = response.schema_fingerprint();
-        VMSDK_LOG(NOTICE, nullptr) << "Set reference fingerprint to: "
-                                   << aggregated_result.schema_fingerprint.value();
       } else if (aggregated_result.schema_fingerprint.value() !=
                  response.schema_fingerprint()) {
         VMSDK_LOG(WARNING, nullptr)
@@ -62,20 +57,24 @@ struct InfoPartitionResultsTracker {
             "found index schema inconsistency in the cluster";
         return;
       }
+
+      // Check version consistency
+      if (!aggregated_result.encoding_version.has_value()) {
+        aggregated_result.encoding_version = response.encoding_version();
+      } else if (aggregated_result.encoding_version.value() !=
+                 response.encoding_version()) {
+        VMSDK_LOG(WARNING, nullptr)
+            << "Encoding version mismatch detected! Reference: "
+            << aggregated_result.encoding_version.value()
+            << ", Remote node: " << response.encoding_version();
+        aggregated_result.has_version_mismatch = true;
+        aggregated_result.error =
+            "found index schema version inconsistency in the cluster";
+        return;
+      }
+
       aggregated_result.exists = true;
       aggregated_result.index_name = response.index_name();
-      aggregated_result.num_docs += response.num_docs();
-      aggregated_result.num_records += response.num_records();
-      aggregated_result.hash_indexing_failures +=
-          response.hash_indexing_failures();
-      aggregated_result.backfill_scanned_count +=
-          response.backfill_scanned_count();
-      aggregated_result.backfill_db_size += response.backfill_db_size();
-      aggregated_result.backfill_inqueue_tasks +=
-          response.backfill_inqueue_tasks();
-      aggregated_result.mutation_queue_size += response.mutation_queue_size();
-      aggregated_result.recent_mutations_queue_delay +=
-          response.recent_mutations_queue_delay();
 
       if (response.backfill_in_progress()) {
         aggregated_result.backfill_in_progress = true;
@@ -131,31 +130,17 @@ struct InfoPartitionResultsTracker {
 
   // Handle local result (similar to how search handles
   // std::deque<indexes::Neighbor>)
-  void AddResults(InfoResult& local_result) {
+  void AddResults(valkey_search::query::cluster_info_fanout::ClusterInfoResult&
+                      local_result) {
     absl::MutexLock lock(&mutex);
 
     if (local_result.exists) {
-      // Log fingerprint for debugging
-      if (local_result.schema_fingerprint.has_value()) {
-        VMSDK_LOG(NOTICE, nullptr)
-            << "Local node fingerprint for index '" << local_result.index_name
-            << "': " << local_result.schema_fingerprint.value();
-      } else {
-        VMSDK_LOG(NOTICE, nullptr)
-            << "Local node fingerprint for index '" << local_result.index_name
-            << "': <not set>";
-      }
-
       // Check fingerprint consistency first
       if (!aggregated_result.schema_fingerprint.has_value()) {
         aggregated_result.schema_fingerprint = local_result.schema_fingerprint;
-        if (local_result.schema_fingerprint.has_value()) {
-          VMSDK_LOG(NOTICE, nullptr) << "Set reference fingerprint to: "
-                                     << local_result.schema_fingerprint.value();
-        }
       } else if (local_result.schema_fingerprint.has_value() &&
                  aggregated_result.schema_fingerprint.value() !=
-                 local_result.schema_fingerprint.value()) {
+                     local_result.schema_fingerprint.value()) {
         VMSDK_LOG(WARNING, nullptr)
             << "Schema fingerprint mismatch detected! Reference: "
             << aggregated_result.schema_fingerprint.value()
@@ -165,20 +150,25 @@ struct InfoPartitionResultsTracker {
             "found index schema inconsistency in the cluster";
         return;
       }
+
+      // Check version consistency
+      if (!aggregated_result.encoding_version.has_value()) {
+        aggregated_result.encoding_version = local_result.encoding_version;
+      } else if (local_result.encoding_version.has_value() &&
+                 aggregated_result.encoding_version.value() !=
+                     local_result.encoding_version.value()) {
+        VMSDK_LOG(WARNING, nullptr)
+            << "Encoding version mismatch detected! Reference: "
+            << aggregated_result.encoding_version.value()
+            << ", Local node: " << local_result.encoding_version.value();
+        aggregated_result.has_version_mismatch = true;
+        aggregated_result.error =
+            "found index schema version inconsistency in the cluster";
+        return;
+      }
+
       aggregated_result.exists = true;
       aggregated_result.index_name = local_result.index_name;
-      aggregated_result.num_docs += local_result.num_docs;
-      aggregated_result.num_records += local_result.num_records;
-      aggregated_result.hash_indexing_failures +=
-          local_result.hash_indexing_failures;
-      aggregated_result.backfill_scanned_count +=
-          local_result.backfill_scanned_count;
-      aggregated_result.backfill_db_size += local_result.backfill_db_size;
-      aggregated_result.backfill_inqueue_tasks +=
-          local_result.backfill_inqueue_tasks;
-      aggregated_result.mutation_queue_size += local_result.mutation_queue_size;
-      aggregated_result.recent_mutations_queue_delay +=
-          local_result.recent_mutations_queue_delay;
 
       if (local_result.backfill_in_progress) {
         aggregated_result.backfill_in_progress = true;
@@ -236,7 +226,7 @@ struct InfoPartitionResultsTracker {
     absl::MutexLock lock(&mutex);
 
     VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-        << "Error during info fanout: " << error_message;
+        << "Error during cluster info fanout: " << error_message;
 
     if (aggregated_result.error.empty()) {
       aggregated_result.error = error_message;
@@ -245,18 +235,18 @@ struct InfoPartitionResultsTracker {
     }
   }
 
-  ~InfoPartitionResultsTracker() {
+  ~ClusterInfoPartitionResultsTracker() {
     absl::MutexLock lock(&mutex);
-    absl::StatusOr<InfoResult> result = aggregated_result;
+    absl::StatusOr<ClusterInfoResult> result = aggregated_result;
     callback(result, std::move(parameters));
   }
 };
 
-void PerformRemoteInfoRequest(
+void PerformRemoteClusterInfoRequest(
     std::unique_ptr<coordinator::InfoIndexPartitionRequest> request,
     const std::string& address,
     coordinator::ClientPool* coordinator_client_pool,
-    std::shared_ptr<InfoPartitionResultsTracker> tracker) {
+    std::shared_ptr<ClusterInfoPartitionResultsTracker> tracker) {
   auto client = coordinator_client_pool->GetClient(address);
 
   int timeout_ms;
@@ -283,26 +273,25 @@ void PerformRemoteInfoRequest(
       timeout_ms);
 }
 
-void PerformRemoteInfoRequestAsync(
+void PerformRemoteClusterInfoRequestAsync(
     std::unique_ptr<coordinator::InfoIndexPartitionRequest> request,
     const std::string& address,
     coordinator::ClientPool* coordinator_client_pool,
-    std::shared_ptr<InfoPartitionResultsTracker> tracker,
+    std::shared_ptr<ClusterInfoPartitionResultsTracker> tracker,
     vmsdk::ThreadPool* thread_pool) {
   thread_pool->Schedule(
       [coordinator_client_pool, address = std::string(address),
        request = std::move(request), tracker]() mutable {
-        PerformRemoteInfoRequest(std::move(request), address,
-                                 coordinator_client_pool, tracker);
+        PerformRemoteClusterInfoRequest(std::move(request), address,
+                                        coordinator_client_pool, tracker);
       },
       vmsdk::ThreadPool::Priority::kHigh);
 }
 
-InfoResult GetLocalInfoResult(ValkeyModuleCtx* ctx,
-                              const std::string& index_name) {
-  InfoResult result;
+ClusterInfoResult GetLocalClusterInfoResult(ValkeyModuleCtx* ctx,
+                                            const std::string& index_name) {
+  ClusterInfoResult result;
 
-  // Get local index schema and extract info
   auto index_schema_result = SchemaManager::Instance().GetIndexSchema(
       ValkeyModule_GetSelectedDb(ctx), index_name);
 
@@ -311,33 +300,28 @@ InfoResult GetLocalInfoResult(ValkeyModuleCtx* ctx,
     IndexSchema::InfoIndexPartitionData data =
         index_schema->GetInfoIndexPartitionData();
 
-    // Compute schema fingerprint
     uint64_t fingerprint = 0;
-    auto stored_proto = coordinator::MetadataManager::Instance().GetEntry(
-        kSchemaManagerMetadataTypeName, index_name);
-    if (stored_proto.ok()) {
-      auto fingerprint_result =
-          SchemaManager::ComputeFingerprint(stored_proto.value());
-      if (fingerprint_result.ok()) {
-        fingerprint = fingerprint_result.value();
+    uint32_t encoding_version = 0;
+    
+    // Get the full metadata to access both fingerprint and encoding_version
+    auto global_metadata = coordinator::MetadataManager::Instance().GetGlobalMetadata();
+    if (global_metadata->type_namespace_map().contains(kSchemaManagerMetadataTypeName)) {
+      const auto& entry_map = global_metadata->type_namespace_map().at(kSchemaManagerMetadataTypeName);
+      if (entry_map.entries().contains(index_name)) {
+        const auto& entry = entry_map.entries().at(index_name);
+        fingerprint = entry.fingerprint();
+        encoding_version = entry.encoding_version();
       }
     }
 
     result.exists = true;
     result.index_name = index_name;
-    result.num_docs = data.num_docs;
-    result.num_records = data.num_records;
-    result.hash_indexing_failures = data.hash_indexing_failures;
-    result.backfill_scanned_count = data.backfill_scanned_count;
-    result.backfill_db_size = data.backfill_db_size;
-    result.backfill_inqueue_tasks = data.backfill_inqueue_tasks;
-    result.mutation_queue_size = data.mutation_queue_size;
-    result.recent_mutations_queue_delay = data.recent_mutations_queue_delay;
     result.backfill_in_progress = data.backfill_in_progress;
     result.backfill_complete_percent = data.backfill_complete_percent;
     result.state = data.state;
     result.error = "";
     result.schema_fingerprint = fingerprint;
+    result.encoding_version = encoding_version;
   } else {
     result.exists = false;
     result.index_name = index_name;
@@ -345,18 +329,17 @@ InfoResult GetLocalInfoResult(ValkeyModuleCtx* ctx,
     result.error = std::string("Index not found: ") +
                    std::string(index_schema_result.status().message());
   }
-
   return result;
 }
 
-absl::Status PerformInfoFanoutAsync(
+absl::Status PerformClusterInfoFanoutAsync(
     ValkeyModuleCtx* ctx, std::vector<fanout::FanoutSearchTarget>& info_targets,
     coordinator::ClientPool* coordinator_client_pool,
-    std::unique_ptr<InfoParameters> parameters, vmsdk::ThreadPool* thread_pool,
-    InfoResponseCallback callback) {
-  auto request =
-      coordinator::CreateInfoIndexPartitionRequest(parameters->index_name, parameters->timeout_ms);
-  auto tracker = std::make_shared<InfoPartitionResultsTracker>(
+    std::unique_ptr<ClusterInfoParameters> parameters,
+    vmsdk::ThreadPool* thread_pool, ClusterInfoResponseCallback callback) {
+  auto request = coordinator::CreateInfoIndexPartitionRequest(
+      parameters->index_name, parameters->timeout_ms);
+  auto tracker = std::make_shared<ClusterInfoPartitionResultsTracker>(
       info_targets.size(), std::move(callback), std::move(parameters));
 
   bool has_local_target = false;
@@ -373,19 +356,19 @@ absl::Status PerformInfoFanoutAsync(
 
     // Use async scheduling for better performance with many nodes
     if (info_targets.size() >= 30 && thread_pool->Size() > 1) {
-      PerformRemoteInfoRequestAsync(std::move(request_copy), node.address,
-                                    coordinator_client_pool, tracker,
-                                    thread_pool);
+      PerformRemoteClusterInfoRequestAsync(
+          std::move(request_copy), node.address, coordinator_client_pool,
+          tracker, thread_pool);
     } else {
-      PerformRemoteInfoRequest(std::move(request_copy), node.address,
-                               coordinator_client_pool, tracker);
+      PerformRemoteClusterInfoRequest(std::move(request_copy), node.address,
+                                      coordinator_client_pool, tracker);
     }
   }
 
   if (has_local_target) {
     vmsdk::RunByMain(
         [ctx, index_name = tracker->parameters->index_name, tracker]() {
-          auto local_result = GetLocalInfoResult(ctx, index_name);
+          auto local_result = GetLocalClusterInfoResult(ctx, index_name);
           tracker->AddResults(local_result);
         });
   }
@@ -393,9 +376,4 @@ absl::Status PerformInfoFanoutAsync(
   return absl::OkStatus();
 }
 
-std::vector<fanout::FanoutSearchTarget> GetInfoTargetsForFanout(
-    ValkeyModuleCtx* ctx) {
-  return fanout::FanoutTemplate::GetTargets(ctx, "primary");
-}
-
-}  // namespace valkey_search::query::info_fanout
+}  // namespace valkey_search::query::cluster_info_fanout

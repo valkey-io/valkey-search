@@ -22,6 +22,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "src/indexes/global_metrics.h"
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
@@ -43,6 +44,13 @@ Numeric::Numeric(const data_model::NumericIndex& numeric_index_proto)
   index_ = std::make_unique<BTreeNumericIndex>();
 }
 
+Numeric::~Numeric() {
+  absl::MutexLock lock(&index_mutex_);
+  if (!tracked_keys_.empty()) {
+    GlobalIndexStats::Instance().Decr(MetricType::kNumericRecords, tracked_keys_.size());
+  }
+}
+
 absl::StatusOr<bool> Numeric::AddRecord(const InternedStringPtr& key,
                                         absl::string_view data) {
   auto value = ParseNumber(data);
@@ -58,6 +66,7 @@ absl::StatusOr<bool> Numeric::AddRecord(const InternedStringPtr& key,
   }
   untracked_keys_.erase(key);
   index_->Add(key, *value);
+  GlobalIndexStats::Instance().Incr(MetricType::kNumericRecords);
   return true;
 }
 
@@ -97,6 +106,7 @@ absl::StatusOr<bool> Numeric::RemoveRecord(const InternedStringPtr& key,
   }
 
   index_->Remove(it->first, it->second);
+  GlobalIndexStats::Instance().Decr(MetricType::kNumericRecords);
   tracked_keys_.erase(it);
   return true;
 }

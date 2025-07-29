@@ -98,6 +98,7 @@ set(CORE_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/vector_externalizer_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/acl_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/rdb_serialization_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/global_metrics_test.cc
 )
 
 add_executable(core_test ${CORE_TEST_SOURCES})

@@ -29,6 +29,7 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
+#include "src/indexes/global_metrics.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
@@ -158,6 +159,7 @@ absl::Status VectorFlat<T>::AddRecordImpl(uint64_t internal_id,
       absl::ReaderMutexLock lock(&resize_mutex_);
 
       algo_->addPoint((T *)record.data(), internal_id);
+      GlobalIndexStats::Instance().Incr(MetricType::kFlatNodes);
     } catch (const std::exception &e) {
       ++Metrics::GetStats().flat_add_exceptions_cnt;
       std::string error_msg = e.what();
@@ -196,6 +198,7 @@ absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
     algo_->removePoint(internal_id);
+    GlobalIndexStats::Instance().Decr(MetricType::kFlatNodes);
   } catch (const std::exception &e) {
     ++Metrics::GetStats().flat_remove_exceptions_cnt;
     return absl::InternalError(

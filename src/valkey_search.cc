@@ -29,6 +29,8 @@
 #include "src/coordinator/server.h"
 #include "src/coordinator/util.h"
 #include "src/index_schema.h"
+#include "src/indexes/index_base.h"
+#include "src/indexes/global_metrics.h"
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
@@ -683,6 +685,12 @@ static vmsdk::info_field::String flat_vector_index_search_latency_usec(
           return Metrics::GetStats()
               .flat_vector_index_search_latency.HasSamples();
         }));
+
+// Global metrics info fields
+static auto global_metrics_fields = []() {
+  indexes::CreateGlobalMetricsInfoFields<vmsdk::info_field::Integer>();
+  return true;
+}();
 
 #ifdef DEBUG_INFO
 // Helper function to create subscription info fields with maximum deduplication

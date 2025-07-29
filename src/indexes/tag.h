@@ -32,6 +32,7 @@ namespace valkey_search::indexes {
 class Tag : public IndexBase {
  public:
   explicit Tag(const data_model::TagIndex& tag_index_proto);
+  ~Tag() override;
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);

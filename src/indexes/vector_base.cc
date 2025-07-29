@@ -37,6 +37,7 @@
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/global_metrics.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
@@ -150,9 +151,9 @@ std::shared_ptr<InternedString> VectorBase::InternVector(
         NormalizeEmbedding(record, GetDataTypeSize(), &magnitude.value());
     return StringInternStore::Intern(
         absl::string_view((const char *)norm_record.data(), norm_record.size()),
-        vector_allocator_.get());
+        vector_allocator_.get(), MetricType::kVectorsMemory);
   }
-  return StringInternStore::Intern(record, vector_allocator_.get());
+  return StringInternStore::Intern(record, vector_allocator_.get(), MetricType::kVectorsMemory);
 }
 
 absl::StatusOr<bool> VectorBase::AddRecord(const InternedStringPtr &key,
@@ -433,7 +434,7 @@ void VectorBase::ExternalizeVector(ValkeyModuleCtx *ctx,
       is_module_owned);
   CHECK(!is_module_owned);
   std::optional<float> magnitude;
-  auto interned_key = StringInternStore::Intern(key_cstr);
+  auto interned_key = StringInternStore::Intern(key_cstr, nullptr, indexes::MetricType::kKeysMemory);
   auto interned_vector =
       InternVector(vmsdk::ToStringView(record.get()), magnitude);
   if (interned_vector) {
@@ -454,7 +455,7 @@ absl::Status VectorBase::LoadTrackedKeys(
     if (!tracked_key_metadata.ParseFromString(metadata_str->binary_content())) {
       return absl::InvalidArgumentError("Error parsing metadata from proto");
     }
-    auto interned_key = StringInternStore::Intern(tracked_key_metadata.key());
+    auto interned_key = StringInternStore::Intern(tracked_key_metadata.key(), nullptr, indexes::MetricType::kKeysMemory);
     tracked_metadata_by_key_.insert(
         {interned_key,
          {.internal_id = tracked_key_metadata.internal_id(),

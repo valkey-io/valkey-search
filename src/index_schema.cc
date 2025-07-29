@@ -342,7 +342,7 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
   }
   MutatedAttributes mutated_attributes;
   bool added = false;
-  auto interned_key = StringInternStore::Intern(key_cstr);
+  auto interned_key = StringInternStore::Intern(key_cstr, nullptr, indexes::MetricType::kKeysMemory);
   for (const auto &attribute_itr : attributes_) {
     auto &attribute = attribute_itr.second;
     if (!key_obj) {

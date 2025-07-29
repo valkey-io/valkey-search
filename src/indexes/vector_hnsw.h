@@ -42,7 +42,7 @@ class VectorHNSW : public VectorBase {
       const data_model::VectorIndex& vector_index_proto,
       absl::string_view attribute_identifier,
       SupplementalContentChunkIter&& iter) ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  ~VectorHNSW() override = default;
+  ~VectorHNSW() override;
   size_t GetDataTypeSize() const override { return sizeof(T); }
 
   const hnswlib::SpaceInterface<float>* GetSpace() const {

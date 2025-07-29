@@ -35,6 +35,7 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
+#include "src/metrics.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
@@ -47,6 +48,7 @@
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/thread_pool.h"
+#include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
@@ -503,7 +505,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
           delete[] ids;
         });
     for (size_t i = 0; i < node_ids.size(); ++i) {
-      auto node_id = node_ids[i];
+      const auto& node_id = node_ids[i];
       EXPECT_CALL(
           *kMockValkeyModule,
           GetClusterNodeInfo(testing::_, testing::StrEq(node_id), testing::_,
@@ -563,6 +565,14 @@ TEST_P(FTSearchTest, FTSearchTests) {
       .Times(::testing::AnyNumber());
   auto vectors = DeterministicallyGenerateVectors(100, dimensions, 10.0);
   AddVectors(vectors);
+  
+  // Capture initial metrics before starting searches
+  auto& stats = Metrics::GetStats();
+  auto& mrmw_stats = vmsdk::GetGlobalTimeSlicedMRMWStats();
+  uint64_t initial_queries = stats.time_slice_queries;
+  uint64_t initial_read_periods = mrmw_stats.read_periods;
+  uint64_t initial_read_time = mrmw_stats.read_time_microseconds;
+  
   RE2 reply_regex(R"(\*3\r\n:1\r\n\+\d+\r\n\*2\r\n\+score\r\n\+.*\r\n)");
   uint64_t i = 0;
   for (auto &vector : vectors) {
@@ -616,6 +626,11 @@ TEST_P(FTSearchTest, FTSearchTests) {
       TestValkeyModule_FreeString(&fake_ctx_, cmd_arg);
     }
   }
+  
+  // Verify that metrics were incremented correctly
+  EXPECT_EQ(stats.time_slice_queries, initial_queries + vectors.size());
+  EXPECT_GT(mrmw_stats.read_periods, initial_read_periods);
+  EXPECT_GT(mrmw_stats.read_time_microseconds, initial_read_time);
 }
 
 INSTANTIATE_TEST_SUITE_P(

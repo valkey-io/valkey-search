@@ -341,17 +341,20 @@ absl::Status AclPrefixCheck(
 
   // If no index prefixes are given from the module, it should have permission
   // to access ALL keys.
-  if (module_prefixes.empty() && IsPrefixAllowed("", acl_keys)) {
-    return absl::OkStatus();
+  if (module_prefixes.empty() && !IsPrefixAllowed("", acl_keys)) {
+    return absl::PermissionDeniedError(
+          "The user doesn't have a permission to execute a command");
   }
 
+  // We allow the user to execute command only if the user has permissions for
+  // ALL of the prefixes of the index
   for (const auto &module_prefix : module_prefixes) {
-    if (IsPrefixAllowed(module_prefix, acl_keys)) {
-      return absl::OkStatus();
+    if (!IsPrefixAllowed(module_prefix, acl_keys)) {
+      return absl::PermissionDeniedError(
+          "The user doesn't have a permission to execute a command");
     }
   }
-  return absl::PermissionDeniedError(
-      "The user doesn't have a permission to execute a command");
+  return absl::OkStatus();
 }
 
 absl::Status AclPrefixCheck(

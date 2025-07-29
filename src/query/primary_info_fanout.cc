@@ -50,15 +50,15 @@ struct PrimaryInfoPartitionResultsTracker {
           << "': " << response.schema_fingerprint();
 
       // Check fingerprint consistency first
-      if (aggregated_result.schema_fingerprint == 0) {
+      if (!aggregated_result.schema_fingerprint.has_value()) {
         aggregated_result.schema_fingerprint = response.schema_fingerprint();
         VMSDK_LOG(DEBUG, nullptr) << "Set reference fingerprint to: "
-                                   << aggregated_result.schema_fingerprint;
-      } else if (aggregated_result.schema_fingerprint !=
+                                   << aggregated_result.schema_fingerprint.value();
+      } else if (aggregated_result.schema_fingerprint.value() !=
                  response.schema_fingerprint()) {
         VMSDK_LOG(DEBUG, nullptr)
             << "Schema fingerprint mismatch detected! Reference: "
-            << aggregated_result.schema_fingerprint
+            << aggregated_result.schema_fingerprint.value()
             << ", Remote node: " << response.schema_fingerprint();
         aggregated_result.has_schema_mismatch = true;
         aggregated_result.error =
@@ -90,21 +90,30 @@ struct PrimaryInfoPartitionResultsTracker {
 
     if (local_result.exists) {
       // Log fingerprint for debugging
-      VMSDK_LOG(DEBUG, nullptr)
-          << "Local node fingerprint for index '" << local_result.index_name
-          << "': " << local_result.schema_fingerprint;
+      if (local_result.schema_fingerprint.has_value()) {
+        VMSDK_LOG(DEBUG, nullptr)
+            << "Local node fingerprint for index '" << local_result.index_name
+            << "': " << local_result.schema_fingerprint.value();
+      } else {
+        VMSDK_LOG(DEBUG, nullptr)
+            << "Local node fingerprint for index '" << local_result.index_name
+            << "': <not set>";
+      }
 
       // Check fingerprint consistency first
-      if (aggregated_result.schema_fingerprint == 0) {
+      if (!aggregated_result.schema_fingerprint.has_value()) {
         aggregated_result.schema_fingerprint = local_result.schema_fingerprint;
-        VMSDK_LOG(DEBUG, nullptr) << "Set reference fingerprint to: "
-                                   << aggregated_result.schema_fingerprint;
-      } else if (aggregated_result.schema_fingerprint !=
-                 local_result.schema_fingerprint) {
+        if (local_result.schema_fingerprint.has_value()) {
+          VMSDK_LOG(DEBUG, nullptr) << "Set reference fingerprint to: "
+                                     << local_result.schema_fingerprint.value();
+        }
+      } else if (local_result.schema_fingerprint.has_value() &&
+                 aggregated_result.schema_fingerprint.value() !=
+                 local_result.schema_fingerprint.value()) {
         VMSDK_LOG(WARNING, nullptr)
             << "Schema fingerprint mismatch detected! Reference: "
-            << aggregated_result.schema_fingerprint
-            << ", Local node: " << local_result.schema_fingerprint;
+            << aggregated_result.schema_fingerprint.value()
+            << ", Local node: " << local_result.schema_fingerprint.value();
         aggregated_result.has_schema_mismatch = true;
         aggregated_result.error =
             "found index schema inconsistency in the cluster";
@@ -226,7 +235,7 @@ PrimaryInfoResult GetLocalPrimaryInfoResult(ValkeyModuleCtx* ctx,
   } else {
     result.exists = false;
     result.index_name = index_name;
-    result.schema_fingerprint = 0;
+    result.schema_fingerprint = std::nullopt;
     result.error = std::string("Index not found: ") +
                    std::string(index_schema_result.status().message());
   }

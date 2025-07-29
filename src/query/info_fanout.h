@@ -10,6 +10,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -45,7 +46,7 @@ struct InfoResult {
   uint64_t recent_mutations_queue_delay = 0;
   std::string state;
   std::string error;
-  uint64_t schema_fingerprint = 0;
+  std::optional<uint64_t> schema_fingerprint;
   bool has_schema_mismatch = false;
 };
 

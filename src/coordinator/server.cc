@@ -196,7 +196,6 @@ grpc::ServerUnaryReactor* Service::InfoIndexPartition(
       response->set_exists(false);
       response->set_index_name(idx);
       response->set_error(status_or_schema.status().ToString());
-      response->set_schema_fingerprint(0);
       reactor->Finish(grpc::Status::OK);
       return;
     }
@@ -204,7 +203,6 @@ grpc::ServerUnaryReactor* Service::InfoIndexPartition(
     IndexSchema::InfoIndexPartitionData data =
         schema->GetInfoIndexPartitionData();
 
-    // compute schema fingerprint
     uint64_t fingerprint = 0;
     auto stored_proto = coordinator::MetadataManager::Instance().GetEntry(
         kSchemaManagerMetadataTypeName, idx);

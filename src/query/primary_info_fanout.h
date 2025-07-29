@@ -10,6 +10,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -35,7 +36,7 @@ struct PrimaryInfoResult {
   uint64_t num_records = 0;
   uint64_t hash_indexing_failures = 0;
   std::string error;
-  uint64_t schema_fingerprint = 0;
+  std::optional<uint64_t> schema_fingerprint;
   bool has_schema_mismatch = false;
 };
 

@@ -175,7 +175,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::string name_;
   uint32_t db_num_{0};
   bool save_positions_{true};
-  size_t num_text_fields_{3};
+  size_t num_text_fields_{0};
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   InternedStringMap<DocumentMutation> tracked_mutated_records_

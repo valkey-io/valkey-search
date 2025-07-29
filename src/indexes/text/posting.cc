@@ -8,7 +8,7 @@
 #include "src/indexes/text/posting.h"
 #include "src/index_schema.h"
 
-#include <cassert>
+#include "absl/log/check.h"
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -66,19 +66,16 @@ using Uint64FieldMask = FieldMaskImpl<uint64_t, 64>;
   
 // Factory method to create optimal field mask based on field count
 std::unique_ptr<FieldMask> FieldMask::Create(size_t num_fields) {
-  if (num_fields == 0) {
-    throw std::invalid_argument("num_fields must be greater than 0");
-  }
+  CHECK(num_fields > 0) << "num_fields must be greater than 0";
+  CHECK(num_fields <= 64) << "Too many text fields (max 64 supported)";
   
   // Select most memory-efficient implementation
   if (num_fields <= 1) {
     return std::make_unique<SingleFieldMask>();  // EmptyFieldMask (no storage)
   } else if (num_fields <= 8) {
     return std::make_unique<ByteFieldMask>(num_fields);  // uint8_t (1 byte)
-  } else if (num_fields <= 64) {
-    return std::make_unique<Uint64FieldMask>(num_fields);  // uint64_t (8 bytes)
   } else {
-    throw std::invalid_argument("Too many text fields (max 64 supported)");
+    return std::make_unique<Uint64FieldMask>(num_fields);  // uint64_t (8 bytes)
   }
 }
 
@@ -86,9 +83,7 @@ std::unique_ptr<FieldMask> FieldMask::Create(size_t num_fields) {
 template<typename MaskType, size_t MAX_FIELDS>
 FieldMaskImpl<MaskType, MAX_FIELDS>::FieldMaskImpl(size_t num_fields) 
     : num_fields_(num_fields) {
-  if (num_fields > MAX_FIELDS) {
-    throw std::invalid_argument("Field count exceeds maximum for this mask type");
-  }
+  CHECK(num_fields <= MAX_FIELDS) << "Field count exceeds maximum for this mask type";
   
   if constexpr (!std::is_same_v<MaskType, EmptyFieldMask>) {
     mask_ = MaskType{};
@@ -98,9 +93,7 @@ FieldMaskImpl<MaskType, MAX_FIELDS>::FieldMaskImpl(size_t num_fields)
 // Set a specific field bit to true
 template<typename MaskType, size_t MAX_FIELDS>
 void FieldMaskImpl<MaskType, MAX_FIELDS>::SetField(size_t field_index) {
-  if (field_index >= num_fields_) {
-    throw std::out_of_range("Field index out of range");
-  }
+  CHECK(field_index < num_fields_) << "Field index out of range";
   
   if constexpr (!std::is_same_v<MaskType, EmptyFieldMask>) {
     mask_ |= (MaskType(1) << field_index);
@@ -110,9 +103,7 @@ void FieldMaskImpl<MaskType, MAX_FIELDS>::SetField(size_t field_index) {
 // Clear a specific field bit
 template<typename MaskType, size_t MAX_FIELDS>
 void FieldMaskImpl<MaskType, MAX_FIELDS>::ClearField(size_t field_index) {
-  if (field_index >= num_fields_) {
-    throw std::out_of_range("Field index out of range");
-  }
+  CHECK(field_index < num_fields_) << "Field index out of range";
   
   if constexpr (!std::is_same_v<MaskType, EmptyFieldMask>) {
     mask_ &= ~(MaskType(1) << field_index);
@@ -163,7 +154,7 @@ size_t FieldMaskImpl<MaskType, MAX_FIELDS>::CountSetFields() const {
   } else if constexpr (std::is_same_v<MaskType, uint64_t>) {
     return __builtin_popcountll(mask_);  // Count bits in uint64_t
   } else {
-    throw std::invalid_argument("Unsupported mask type for CountSetFields");
+    CHECK(false) << "Unsupported mask type for CountSetFields";
   }
 }
 
@@ -209,6 +200,7 @@ public:
 
 Postings::Postings(const valkey_search::IndexSchema& index_schema) 
     : impl_(std::make_unique<Impl>(index_schema.GetSavePositions(), index_schema.GetNumTextFields())) {
+  CHECK(impl_ != nullptr) << "Failed to create Postings implementation";
 }
 
 // Automatic cleanup via unique_ptr
@@ -221,17 +213,13 @@ bool Postings::IsEmpty() const {
 
 // Insert a posting entry for a key and field
 void Postings::InsertPosting(const Key& key, size_t field_index, Position position) {
-  if (field_index >= impl_->num_text_fields_) {
-    throw std::out_of_range("Field index out of range");
-  }
+  CHECK(field_index < impl_->num_text_fields_) << "Field index out of range";
   
   Position effective_position;
   
   if (impl_->save_positions_) {
     // In positional mode, position must be explicitly provided
-    if (position == UINT32_MAX) {
-      throw std::invalid_argument("Position must be provided in positional mode");
-    }
+    CHECK(position != UINT32_MAX) << "Position must be provided in positional mode";
     effective_position = position;
   } else {
     // For boolean search mode, always use position 0 regardless of input
@@ -291,115 +279,86 @@ Postings* Postings::Defrag() {
   return this;
 }
 
-// Iterator Implementation Structures
-struct KeyIteratorImpl {
-  const std::map<Key, PositionMap>* key_map;
-  std::map<Key, PositionMap>::const_iterator current;
-  std::map<Key, PositionMap>::const_iterator end;
-  
-  KeyIteratorImpl(const std::map<Key, PositionMap>* map) 
-    : key_map(map), current(map->begin()), end(map->end()) {}
-};
-
-struct PositionIteratorImpl {
-  const PositionMap* position_map;
-  PositionMap::const_iterator current;
-  PositionMap::const_iterator end;
-  
-  PositionIteratorImpl(const PositionMap* map) 
-    : position_map(map), current(map->begin()), end(map->end()) {}
-};
-
 // Iterators Implementation
 
 // Get a Key iterator
 Postings::KeyIterator Postings::GetKeyIterator() const {
   KeyIterator iterator;
-  iterator.impl_data_ = new KeyIteratorImpl(&impl_->key_to_positions_);
+  iterator.key_map_ = &impl_->key_to_positions_;
+  iterator.current_ = iterator.key_map_->begin();
+  iterator.end_ = iterator.key_map_->end();
   return iterator;
 }
 
 // KeyIterator implementations
 bool Postings::KeyIterator::IsValid() const {
-  if (!impl_data_) return false;
-  auto* impl = static_cast<KeyIteratorImpl*>(impl_data_);
-  return impl->current != impl->end;
+  CHECK(key_map_ != nullptr) << "KeyIterator is invalid";
+  return current_ != end_;
 }
 
 void Postings::KeyIterator::NextKey() {
-  if (!impl_data_) return;
-  auto* impl = static_cast<KeyIteratorImpl*>(impl_data_);
-  if (impl->current != impl->end) {
-    ++impl->current;
+  CHECK(key_map_ != nullptr) << "KeyIterator is invalid";
+  if (current_ != end_) {
+    ++current_;
   }
 }
 
 bool Postings::KeyIterator::SkipForwardKey(const Key& key) {
-  if (!impl_data_) return false;
-  auto* impl = static_cast<KeyIteratorImpl*>(impl_data_);
+  CHECK(key_map_ != nullptr) << "KeyIterator is invalid";
   
   // Use lower_bound for efficient binary search since map is ordered
-  impl->current = impl->key_map->lower_bound(key);
+  current_ = key_map_->lower_bound(key);
   
   // Return true if we landed on exact key match
-  return (impl->current != impl->end && impl->current->first == key);
+  return (current_ != end_ && current_->first == key);
 }
 
 const Key& Postings::KeyIterator::GetKey() const {
-  assert(impl_data_ && "Iterator has no implementation data");
-  auto* impl = static_cast<KeyIteratorImpl*>(impl_data_);
-  assert(impl->current != impl->end && "Iterator has reached end - no more keys available");
-  return impl->current->first;
+  CHECK(key_map_ != nullptr && current_ != end_) << "KeyIterator is invalid or exhausted";
+  return current_->first;
 }
 
 Postings::PositionIterator Postings::KeyIterator::GetPositionIterator() const {
-  assert(impl_data_ && "Iterator has no implementation data");
-  auto* impl = static_cast<KeyIteratorImpl*>(impl_data_);
-  assert(impl->current != impl->end && "Iterator has reached end - no positions available");
+  CHECK(key_map_ != nullptr && current_ != end_) << "KeyIterator is invalid or exhausted";
   
   PositionIterator pos_iterator;
-  pos_iterator.impl_data_ = new PositionIteratorImpl(&impl->current->second);
+  pos_iterator.position_map_ = &current_->second;
+  pos_iterator.current_ = pos_iterator.position_map_->begin();
+  pos_iterator.end_ = pos_iterator.position_map_->end();
   return pos_iterator;
 }
 
 // PositionIterator implementations
 bool Postings::PositionIterator::IsValid() const {
-  if (!impl_data_) return false;
-  auto* impl = static_cast<PositionIteratorImpl*>(impl_data_);
-  return impl->current != impl->end;
+  CHECK(position_map_ != nullptr) << "PositionIterator is invalid";
+  return current_ != end_;
 }
 
 void Postings::PositionIterator::NextPosition() {
-  if (!impl_data_) return;
-  auto* impl = static_cast<PositionIteratorImpl*>(impl_data_);
-  if (impl->current != impl->end) {
-    ++impl->current;
+  CHECK(position_map_ != nullptr) << "PositionIterator is invalid";
+  if (current_ != end_) {
+    ++current_;
   }
 }
 
 bool Postings::PositionIterator::SkipForwardPosition(const Position& position) {
-  if (!impl_data_) return false;
-  auto* impl = static_cast<PositionIteratorImpl*>(impl_data_);
+  CHECK(position_map_ != nullptr) << "PositionIterator is invalid";
   
   // Use lower_bound for efficient binary search since map is ordered
-  impl->current = impl->position_map->lower_bound(position);
+  current_ = position_map_->lower_bound(position);
   
   // Return true if we landed on exact position match
-  return (impl->current != impl->end && impl->current->first == position);
+  return (current_ != end_ && current_->first == position);
 }
 
 const Position& Postings::PositionIterator::GetPosition() const {
-  assert(impl_data_ && "Iterator has no implementation data");
-  auto* impl = static_cast<PositionIteratorImpl*>(impl_data_);
-  assert(impl->current != impl->end && "Iterator has reached end - no more positions available");
-  return impl->current->first;
+  CHECK(position_map_ != nullptr && current_ != end_) << "PositionIterator is invalid or exhausted";
+  return current_->first;
 }
 
 uint64_t Postings::PositionIterator::GetFieldMask() const {
-  assert(impl_data_ && "Iterator has no implementation data");
-  auto* impl = static_cast<PositionIteratorImpl*>(impl_data_);
-  assert(impl->current != impl->end && "Iterator has reached end - no field mask available");
-  return impl->current->second->AsUint64();
+  CHECK(position_map_ != nullptr && current_ != end_) << "PositionIterator is invalid or exhausted";
+  return current_->second->AsUint64();
 }
 
 }  // namespace valkey_search::text

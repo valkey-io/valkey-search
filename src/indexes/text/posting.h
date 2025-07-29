@@ -30,20 +30,20 @@ A PositionIterator is provided to iterate over the positions of an individual Ke
 
 */
 
-// Will add later when lexer and text are implemented so that posting_test.cc works 
+// TODO: Add this once lexer and text are implemented
 // #include "src/indexes/text/lexer.h"
-// #include "src/indexes/text/text.h"
+// #include "src/indexes/text.h"
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
+#include <map>
 
 #include "src/index_schema.h"
 
 namespace valkey_search::text {
 
-// Will remove later when lexer and text are implemented so that posting_test.cc works 
-// Basic type definitions needed for posting system
+// TODO: Remove this once text.h is implemented
 using Key = std::string;
 using Position = uint32_t;
 
@@ -116,8 +116,11 @@ struct Postings {
   private:
     friend struct Postings;
     
-    // Internal implementation details
-    void* impl_data_;
+    // Iterator state - pointer to key_to_positions map
+    using PositionMap = std::map<Position, std::unique_ptr<class FieldMask>>;
+    const std::map<Key, PositionMap>* key_map_;
+    std::map<Key, PositionMap>::const_iterator current_;
+    std::map<Key, PositionMap>::const_iterator end_;
   };
 
   // The Position Iterator
@@ -141,8 +144,11 @@ struct Postings {
   private:
     friend struct KeyIterator;
     
-    // Internal implementation details
-    void* impl_data_;
+    // Iterator state - pointer to positions map
+    using PositionMap = std::map<Position, std::unique_ptr<class FieldMask>>;
+    const PositionMap* position_map_;
+    PositionMap::const_iterator current_;
+    PositionMap::const_iterator end_;
   };
 
 private:

@@ -4,7 +4,7 @@
 namespace valkey_search {
 namespace indexes {
 
-struct Text : public IndexBase {
+struct Text {
   // Constructor
   Text(const data_model& text_index_proto);
 

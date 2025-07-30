@@ -31,7 +31,6 @@ public:
   virtual void ClearAllFields() = 0;
   virtual size_t CountSetFields() const = 0;
   virtual uint64_t AsUint64() const = 0;
-  virtual std::unique_ptr<FieldMask> Clone() const = 0;
   virtual size_t MaxFields() const = 0;
 };
 
@@ -47,7 +46,6 @@ public:
   void ClearAllFields() override;
   size_t CountSetFields() const override;
   uint64_t AsUint64() const override;
-  std::unique_ptr<FieldMask> Clone() const override;
   size_t MaxFields() const override { return MAX_FIELDS; }
 private:
   MaskType mask_;

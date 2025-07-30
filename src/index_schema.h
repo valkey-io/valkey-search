@@ -97,6 +97,14 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline const std::string &GetName() const { return name_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
 
+  bool GetSavePositions() const { return save_positions_; }
+  size_t GetNumTextFields() const { return num_text_fields_; }
+  // TODO: Change this after query support is added for full text search
+  void SetTextConfiguration(bool save_positions, size_t num_text_fields) {
+    save_positions_ = save_positions;
+    num_text_fields_ = num_text_fields;
+  }
+
   void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type, const char *event,
                               ValkeyModuleString *key) override;
 
@@ -166,6 +174,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::unique_ptr<AttributeDataType> attribute_data_type_;
   std::string name_;
   uint32_t db_num_{0};
+  bool save_positions_{true};
+  size_t num_text_fields_{0};
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   InternedStringMap<DocumentMutation> tracked_mutated_records_

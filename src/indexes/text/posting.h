@@ -1,5 +1,12 @@
-#ifndef _VALKEY_SEARCH_INDEXES_TEXT_POSTING_H_
-#define _VALKEY_SEARCH_INDEXES_TEXT_POSTING_H_
+/*
+ * Copyright (c) 2025, valkey-search contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ *
+ */
+
+#ifndef VALKEYSEARCH_SRC_INDEXES_TEXT_POSTING_H_
+#define VALKEYSEARCH_SRC_INDEXES_TEXT_POSTING_H_
 
 /*
 
@@ -23,10 +30,23 @@ A PositionIterator is provided to iterate over the positions of an individual Ke
 
 */
 
-#include "src/indexes/text/lexer.h"
-#include "src/text/text.h"
+// TODO: Add this once lexer and text are implemented
+// #include "src/indexes/text/lexer.h"
+// #include "src/indexes/text.h"
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
+#include <map>
+
+#include "src/index_schema.h"
 
 namespace valkey_search::text {
+
+// TODO: Remove this once text.h is implemented
+using Key = std::string;
+using Position = uint32_t;
+
 
 //
 // this is the logical view of a posting. 
@@ -44,13 +64,18 @@ struct Postings {
   // are inserted have an assumed single position of 0.
   // The "num_text_fields" entry identifies how many bits of the field-mask are required
   // and is used to select the representation.
-  Postings(bool save_positions, size_t num_text_fields);
+  explicit Postings(const valkey_search::IndexSchema& index_schema);
+  
+  // Destructor
+  ~Postings();
 
   // Are there any postings in this object?
   bool IsEmpty() const;
 
-  // Add a posting
-  void SetKey(const Key& key, std::span<Position> positions);
+  // Insert a posting entry for a key and field
+  // If save_positions=false: Only key and field are stored (position ignored if provided)
+  // If save_positions=true: Key, position, and field are stored (position must be provided)
+  void InsertPosting(const Key& key, size_t field_index, Position position = UINT32_MAX);
 
   // Remove a key and all positions for it
   void RemoveKey(const Key& key);
@@ -60,6 +85,9 @@ struct Postings {
 
   // Total number of postings for all keys
   size_t GetPostingCount() const;
+  
+  // Total frequency of the term across all keys and positions
+  size_t GetTotalTermFrequency() const;
 
   // Defrag this contents of this object. Returns the updated "this" pointer.
   Postings *Defrag();
@@ -84,14 +112,23 @@ struct Postings {
 
     // Get Position Iterator
     PositionIterator GetPositionIterator() const;
+
+  private:
+    friend struct Postings;
+    
+    // Iterator state - pointer to key_to_positions map
+    using PositionMap = std::map<Position, std::unique_ptr<class FieldMask>>;
+    const std::map<Key, PositionMap>* key_map_;
+    std::map<Key, PositionMap>::const_iterator current_;
+    std::map<Key, PositionMap>::const_iterator end_;
   };
 
   // The Position Iterator
-  struct KeyIterator {
+  struct PositionIterator {
     // Is valid?
     bool IsValid() const;
 
-    // Advance to next key
+    // Advance to next position
     void NextPosition();
 
     // Skip forward to next position that is equal to or greater than.
@@ -100,8 +137,23 @@ struct Postings {
 
     // Get Current Position
     const Position& GetPosition() const;
+    
+    // Get field mask for current position
+    uint64_t GetFieldMask() const;
+
+  private:
+    friend struct KeyIterator;
+    
+    // Iterator state - pointer to positions map
+    using PositionMap = std::map<Position, std::unique_ptr<class FieldMask>>;
+    const PositionMap* position_map_;
+    PositionMap::const_iterator current_;
+    PositionMap::const_iterator end_;
   };
 
+private:
+  class Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace valkey_search::text

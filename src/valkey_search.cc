@@ -796,7 +796,13 @@ static vmsdk::info_field::Integer &remove_subscription_skipped_count =
 
 #endif
 
-static vmsdk::info_field::Integer string_interning_memory("string_interning", "string_interning_memory",
+static vmsdk::info_field::Integer string_interning_memory_bytes("string_interning", "string_interning_memory_bytes",
+  vmsdk::info_field::IntegerBuilder()
+      .App()
+      .Computed(StringInternStore::GetMemoryUsage)
+      .CrashSafe());
+
+static vmsdk::info_field::Integer string_interning_memory_human("string_interning", "string_interning_memory_human",
   vmsdk::info_field::IntegerBuilder()
       .SIBytes()
       .App()

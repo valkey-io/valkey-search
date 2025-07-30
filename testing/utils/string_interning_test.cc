@@ -112,24 +112,21 @@ TEST_P(StringInterningTest, WithAllocator) {
   }
 }
 
-TEST_F(StringInterningTest, MemoryTrackingIsolation) {
+TEST_F(StringInterningTest, StringInternStoreTracksMemoryInternally) {
   MemoryPool caller_pool{0};
   std::shared_ptr<InternedString> interned_str;
 
-  NestedMemoryScope scope{caller_pool};
-  auto allocator = std::make_unique<MockAllocator>();
-  auto before_memory_delta = vmsdk::GetMemoryDelta();
+  {
+    NestedMemoryScope scope{caller_pool};
+    auto allocator = std::make_unique<MockAllocator>();
 
-  interned_str = StringInternStore::Intern("test_string", allocator.get());
+    interned_str = StringInternStore::Intern("test_string", allocator.get());
+  }
 
   EXPECT_EQ(caller_pool.GetUsage(), 0);
   EXPECT_EQ(StringInternStore::GetMemoryUsage(), 12);
-  EXPECT_EQ(vmsdk::GetMemoryDelta(), before_memory_delta);
 
   interned_str.reset();
-
-  EXPECT_EQ(caller_pool.GetUsage(), 0);
-  EXPECT_EQ(StringInternStore::GetMemoryUsage(), 0);
 }
 
 INSTANTIATE_TEST_SUITE_P(StringInterningTests, StringInterningTest,

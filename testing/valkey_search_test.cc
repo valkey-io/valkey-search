@@ -464,7 +464,7 @@ TEST_F(ValkeySearchTest, Info) {
     "coordinator_client_get_global_metadata_success_count: 22\ncoordinator_client_get_global_metadata_failure_count: 21\n"
     "coordinator_client_search_index_partition_success_count: 24\ncoordinator_client_search_index_partition_failure_count: 23\n"
     "coordinator_bytes_out: 1000\ncoordinator_bytes_in: 2000\n"
-    "string_interning\nstring_interning_store_size: 1\nstring_interning_memory: '2.00MiB'\n"
+    "string_interning\nstring_interning_store_size: 1\nstring_interning_memory_bytes: 2097152\nstring_interning_memory_human: '2.00MiB'\n"
     "vector_externing\nvector_externing_entry_count: 0\nvector_externing_hash_extern_errors: 0\n"
     "vector_externing_generated_value_cnt: 0\nvector_externing_num_lru_entries: 0\n"
     "vector_externing_lru_promote_cnt: 0\nvector_externing_deferred_entry_cnt: 0\n"

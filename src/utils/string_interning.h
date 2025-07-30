@@ -54,6 +54,7 @@ class StringInternStore {
       str_to_interned_ ABSL_GUARDED_BY(mutex_);
   mutable absl::Mutex mutex_;
 
+  // Used for testing.
   static void SetMemoryUsage(int64_t value) {
     memory_pool_.Reset();
     memory_pool_.Add(value);

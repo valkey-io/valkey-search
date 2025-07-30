@@ -616,8 +616,13 @@ INSTANTIATE_TEST_SUITE_P(
              .success = true,
              .command_str = "idx1 on HASH SChema hash_field1 as "
                             "hash_field11 numeric ",
-             .expected_error_message =
-                 "At least one attribute must be indexed as a vector or text field",
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field11",
+                              .indexer_type = indexes::IndexerType::kNumeric,
+                          }}},
          },
          {
              .test_name = "invalid_separator",
@@ -1365,8 +1370,19 @@ INSTANTIATE_TEST_SUITE_P(
                      .identifier = "text_field",
                      .attribute_alias = "text_field",
                      .indexer_type = indexes::IndexerType::kText,
-                 }}
-             },
+                 }},
+                 .global_text_params = {
+                     .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
+                     .stop_words = {
+                         "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by", "for",
+                         "if", "in", "into", "it", "no", "not", "of", "on", "or", "such", "that", "their",
+                         "then", "there", "these", "they", "this", "to", "was", "will", "with"},
+                     .language = data_model::Language::LANGUAGE_ENGLISH,
+                     .with_offsets = false,  // NOOFFSETS should set this to false
+                     .no_stem = true,        // NOSTEM should set this to true
+                     .min_stem_size = 4,
+                 }
+             }
          },
          {
              .test_name = "text_large_stopwords_list_field",
@@ -1403,7 +1419,15 @@ INSTANTIATE_TEST_SUITE_P(
                     .identifier = "text_field",
                     .attribute_alias = "text_field",
                     .indexer_type = indexes::IndexerType::kText,
-                }}
+                }},
+                .global_text_params = {
+                    .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
+                    .stop_words = {"a", "an", "and", "are", "as", "at", "be", "but", "by", "for"},
+                    .language = data_model::Language::LANGUAGE_ENGLISH,
+                    .with_offsets = true,
+                    .no_stem = false,
+                    .min_stem_size = 4,
+                }
             },
         },
          {
@@ -1460,7 +1484,18 @@ INSTANTIATE_TEST_SUITE_P(
                     .identifier = "text_field",
                     .attribute_alias = "text_field",
                     .indexer_type = indexes::IndexerType::kText,
-                }}
+                }},
+                .global_text_params = {
+                    .punctuation = "!@#$%^&*()_+-=[]{}|;':,.<>?",
+                    .stop_words = {
+                        "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by", "for",
+                        "if", "in", "into", "it", "no", "not", "of", "on", "or", "such", "that", "their",
+                        "then", "there", "these", "they", "this", "to", "was", "will", "with"},
+                    .language = data_model::Language::LANGUAGE_ENGLISH,
+                    .with_offsets = true,
+                    .no_stem = false,
+                    .min_stem_size = 4,
+                }
             },
         },
          {
@@ -1493,6 +1528,14 @@ INSTANTIATE_TEST_SUITE_P(
                          .attribute_alias = "text2",
                          .indexer_type = indexes::IndexerType::kText,
                      }
+                 },
+                 .global_text_params = {
+                     .punctuation = ".,;",
+                     .stop_words = {},  // Empty due to NOSTOPWORDS
+                     .language = data_model::Language::LANGUAGE_ENGLISH,
+                     .with_offsets = true,
+                     .no_stem = false,
+                     .min_stem_size = 4,
                  }
              },
          },
@@ -1567,7 +1610,18 @@ INSTANTIATE_TEST_SUITE_P(
                      .identifier = "text_field",
                      .attribute_alias = "text_field",
                      .indexer_type = indexes::IndexerType::kText,
-                 }}
+                 }},
+                 .global_text_params = {
+                     .punctuation = ".,;",
+                     .stop_words = {
+                         "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by", "for",
+                         "if", "in", "into", "it", "no", "not", "of", "on", "or", "such", "that", "their",
+                         "then", "there", "these", "they", "this", "to", "was", "will", "with"},
+                     .language = data_model::Language::LANGUAGE_ENGLISH,
+                     .with_offsets = true,
+                     .no_stem = true,
+                     .min_stem_size = 4,
+                 }
              },
          },
          {
@@ -1586,7 +1640,18 @@ INSTANTIATE_TEST_SUITE_P(
                      .identifier = "text_field",
                      .attribute_alias = "text_field",
                      .indexer_type = indexes::IndexerType::kText,
-                 }}
+                 }},
+                 .global_text_params = {
+                     .punctuation = ".,;",
+                     .stop_words = {
+                         "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by", "for",
+                         "if", "in", "into", "it", "no", "not", "of", "on", "or", "such", "that", "their",
+                         "then", "there", "these", "they", "this", "to", "was", "will", "with"},
+                     .language = data_model::Language::LANGUAGE_ENGLISH,
+                     .with_offsets = true,
+                     .no_stem = false,
+                     .min_stem_size = 4,
+                 }
              },
          }}),
     [](const TestParamInfo<FTCreateParserTestCase> &info) {

@@ -377,16 +377,9 @@ absl::Status ParseTag(vmsdk::ArgsIterator &itr, data_model::Index &index_proto,
   FTCreateTagParameters parameters;
   VMSDK_RETURN_IF_ERROR(parser.Parse(parameters, itr, false));
   if (parameters.separator.length() != 1) {
-    if (parameters.separator.length() == 3 &&
-        ((parameters.separator[0] == '"' && parameters.separator[2] == '"') ||
-         (parameters.separator[0] == '\'' &&
-          parameters.separator[2] == '\''))) {
-      parameters.separator = parameters.separator.substr(1, 1);
-    } else {
-      return absl::InvalidArgumentError(
-          absl::StrCat("The separator must be a single character, but got `",
-                       parameters.separator, "`"));
-    }
+    return absl::InvalidArgumentError(
+        absl::StrCat("The separator must be a single character, but got `",
+                     parameters.separator, "`"));
   }
   tag_index_proto->set_separator(parameters.separator);
   tag_index_proto->set_case_sensitive(parameters.case_sensitive);
@@ -420,7 +413,7 @@ vmsdk::KeyValueParser<FTCreateTextParameters> CreateTextFieldParser() {
   return parser;
 }
 
-absl::Status ParseStopWords(vmsdk::ArgsIterator &itr, GlobalTextParameters &params) {
+absl::Status ParseStopWords(vmsdk::ArgsIterator &itr, SchemaGlobTextParams &params) {
   uint32_t count;
   VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, count));
   if (count == 0) {
@@ -450,7 +443,7 @@ absl::Status ParseStopWords(vmsdk::ArgsIterator &itr, GlobalTextParameters &para
 }
 
 absl::Status ParseText(vmsdk::ArgsIterator &itr, data_model::Index &index_proto,
-                       const GlobalTextParameters &global_defaults) {
+                       const SchemaGlobTextParams &global_defaults) {
   // Start with field-specific defaults, then parse field-level parameters
   FTCreateTextParameters field_params;
   field_params.with_suffix_trie = false;
@@ -473,25 +466,25 @@ absl::Status ParseText(vmsdk::ArgsIterator &itr, data_model::Index &index_proto,
   return absl::OkStatus();
 }
 
-vmsdk::KeyValueParser<GlobalTextParameters> CreateGlobalTextParser() {
-  vmsdk::KeyValueParser<GlobalTextParameters> parser;
+vmsdk::KeyValueParser<SchemaGlobTextParams> SchemaGlobTextParameters() {
+  vmsdk::KeyValueParser<SchemaGlobTextParams> parser;
   parser.AddParamParser(
-      kPunctuationParam, GENERATE_VALUE_PARSER(GlobalTextParameters, punctuation));
+      kPunctuationParam, GENERATE_VALUE_PARSER(SchemaGlobTextParams, punctuation));
   parser.AddParamParser(
-      kWithOffsetsParam, GENERATE_FLAG_PARSER(GlobalTextParameters, with_offsets));
+      kWithOffsetsParam, GENERATE_FLAG_PARSER(SchemaGlobTextParams, with_offsets));
   parser.AddParamParser(
       kNoOffsetsParam, 
-      GENERATE_NEGATIVE_FLAG_PARSER(GlobalTextParameters, with_offsets));
+      GENERATE_NEGATIVE_FLAG_PARSER(SchemaGlobTextParams, with_offsets));
   parser.AddParamParser(
-      kNoStemParam, GENERATE_FLAG_PARSER(GlobalTextParameters, no_stem));
+      kNoStemParam, GENERATE_FLAG_PARSER(SchemaGlobTextParams, no_stem));
   parser.AddParamParser(
       kNoStopWordsParam, 
-      GENERATE_CLEAR_CONTAINER_PARSER(GlobalTextParameters, stop_words));
+      GENERATE_CLEAR_CONTAINER_PARSER(SchemaGlobTextParams, stop_words));
   return parser;
 }
 
-absl::Status ParseGlobalTextDefaults(vmsdk::ArgsIterator &itr, GlobalTextParameters &defaults) {
-  static auto parser = CreateGlobalTextParser();
+absl::Status ParseSchemaGlobalTextDefaults(vmsdk::ArgsIterator &itr, SchemaGlobTextParams &defaults) {
+  static auto parser = SchemaGlobTextParameters();
   VMSDK_RETURN_IF_ERROR(parser.Parse(defaults, itr, false));
   
   VMSDK_ASSIGN_OR_RETURN(auto res, vmsdk::IsParamKeyMatch(kStopWordsParam, false, itr));
@@ -503,14 +496,7 @@ absl::Status ParseGlobalTextDefaults(vmsdk::ArgsIterator &itr, GlobalTextParamet
   VMSDK_ASSIGN_OR_RETURN(res, vmsdk::ParseParam(kLanguageParam, false, itr,
                                                defaults.language, *kLanguageByStr));
   
-  // Validate punctuation is not empty after parsing
-  if (defaults.punctuation.length() >= 2 && 
-      ((defaults.punctuation.front() == '"' && defaults.punctuation.back() == '"') ||
-       (defaults.punctuation.front() == '\'' && defaults.punctuation.back() == '\''))) {
-    defaults.punctuation = defaults.punctuation.substr(1, defaults.punctuation.length() - 2);
-  }
-  
-  // Check if punctuation is empty after quote removal
+  // Check if punctuation is empty
   if (defaults.punctuation.empty()) {
     return absl::InvalidArgumentError("PUNCTUATION string cannot be empty");
   }
@@ -529,7 +515,7 @@ absl::StatusOr<indexes::IndexerType> ParseIndexerType(
 absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
     vmsdk::ArgsIterator &itr, absl::string_view attribute_identifier,
     data_model::IndexSchema &index_schema_proto,
-    const GlobalTextParameters &global_text_defaults) {
+    const SchemaGlobTextParams &global_text_defaults) {
   auto attribute_proto = index_schema_proto.add_attributes();
   attribute_proto->set_identifier(attribute_identifier);
   VMSDK_ASSIGN_OR_RETURN(auto res,
@@ -615,7 +601,7 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   }
   
   // Parse global text parameters before SCHEMA
-  GlobalTextParameters global_text_defaults;
+  SchemaGlobTextParams global_text_defaults;
   // Initialize with defaults for each parse call
   global_text_defaults.punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|";
   global_text_defaults.min_stem_size = 4;
@@ -624,7 +610,7 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   global_text_defaults.language = data_model::LANGUAGE_ENGLISH;
   global_text_defaults.stop_words = kDefaultStopWords;
   
-  VMSDK_RETURN_IF_ERROR(ParseGlobalTextDefaults(itr, global_text_defaults));
+  VMSDK_RETURN_IF_ERROR(ParseSchemaGlobalTextDefaults(itr, global_text_defaults));
   
   // Set global text parameters in IndexSchema
   index_schema_proto.set_language(global_text_defaults.language);

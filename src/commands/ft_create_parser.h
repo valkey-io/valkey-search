@@ -43,7 +43,7 @@ struct FTCreateVectorParameters {
 };
 
 // Global text parameters (per-index) - populated in IndexSchema
-struct GlobalTextParameters {
+struct SchemaGlobTextParams {
   std::string punctuation{",.<>{}[]\"':;!@#$%^&*()-+=~/\\\\"};
   bool with_offsets{true};
   bool no_stem{false};

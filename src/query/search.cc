@@ -346,7 +346,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
       entries_fetchers.pop();
       auto iterator = fetcher->Begin();
       while (!iterator->Done()) {
-        const InternedStringPtr& label = **iterator;
+        const InternedStringPtr &label = **iterator;
         neighbors.push_back(indexes::Neighbor{label, 0.0f});
         iterator->Next();
       }
@@ -399,7 +399,17 @@ absl::Status SearchAsync(std::unique_ptr<VectorSearchParameters> parameters,
   thread_pool->Schedule(
       [parameters = std::move(parameters), callback = std::move(callback),
        is_local_search]() mutable {
-        auto res = Search(*parameters, is_local_search);
+        // Handle OOM for search requests, mainly defends against request
+        // coming from the coordinator
+        auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
+        auto ctx_flags = ValkeyModule_GetContextFlags(ctx.get());
+        absl::StatusOr<std::deque<indexes::Neighbor>> res;
+        if (ctx_flags & VALKEYMODULE_CTX_FLAGS_OOM) {
+          res = absl::ResourceExhaustedError(
+              "OOM command not allowed when used memory > 'maxmemory'");
+        } else {
+          res = Search(*parameters, is_local_search);
+        }
         callback(res, std::move(parameters));
       },
       vmsdk::ThreadPool::Priority::kHigh);

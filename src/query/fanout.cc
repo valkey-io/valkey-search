@@ -63,6 +63,7 @@ struct SearchPartitionResultsTracker {
   int outstanding_requests ABSL_GUARDED_BY(mutex);
   query::SearchResponseCallback callback;
   std::unique_ptr<VectorSearchParameters> parameters ABSL_GUARDED_BY(mutex);
+  std::atomic_bool reached_oom{false};
 
   SearchPartitionResultsTracker(
       int outstanding_requests, int k, query::SearchResponseCallback callback,
@@ -120,8 +121,8 @@ struct SearchPartitionResultsTracker {
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex) {
     // For non-vector queries, we can add the result directly.
     if (parameters->attribute_alias.empty()) {
-        results.emplace(std::move(neighbor));
-        return;
+      results.emplace(std::move(neighbor));
+      return;
     }
     if (results.size() < parameters->k) {
       results.emplace(std::move(neighbor));
@@ -135,10 +136,15 @@ struct SearchPartitionResultsTracker {
     absl::MutexLock lock(&mutex);
     absl::StatusOr<std::deque<indexes::Neighbor>> result =
         std::deque<indexes::Neighbor>();
-    while (!results.empty()) {
-      result->push_back(
-          std::move(const_cast<indexes::Neighbor &>(results.top())));
-      results.pop();
+    if (reached_oom) {
+      result = absl::ResourceExhaustedError(
+          "OOM command not allowed when used memory > 'maxmemory'");
+    } else {
+      while (!results.empty()) {
+        result->push_back(
+            std::move(const_cast<indexes::Neighbor &>(results.top())));
+        results.pop();
+      }
     }
     callback(result, std::move(parameters));
   }
@@ -156,7 +162,16 @@ void PerformRemoteSearchRequest(
       [tracker, address = std::string(address)](
           grpc::Status status,
           coordinator::SearchIndexPartitionResponse &response) mutable {
-        tracker->HandleResponse(response, address, status);
+        if (status.ok()) {
+          tracker->HandleResponse(response, address, status);
+        } else {
+          if (status.error_code() == grpc::RESOURCE_EXHAUSTED) {
+            tracker->reached_oom.store(true);
+          }
+          VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+              << "Error during handling of FT.SEARCH on node " << address
+              << ": " << status.error_message();
+        }
       });
 }
 
@@ -223,6 +238,10 @@ absl::Status PerformSearchFanoutAsync(
           if (neighbors.ok()) {
             tracker->AddResults(*neighbors);
           } else {
+            if (neighbors.status().code() ==
+                absl::StatusCode::kResourceExhausted) {
+              tracker->reached_oom.store(true);
+            }
             VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
                 << "Error during local handling of FT.SEARCH: "
                 << neighbors.status().message();

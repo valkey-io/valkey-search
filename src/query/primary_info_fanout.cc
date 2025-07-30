@@ -184,14 +184,14 @@ void PerformRemotePrimaryInfoRequest(
       [tracker, address = std::string(address)](
           grpc::Status status,
           coordinator::InfoIndexPartitionResponse& response) mutable {
-        if (status.ok()) {
-          tracker->AddResults(response);
-        } else {
+        if (!status.ok()) {
           VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
               << "Error during handling of FT.INFO on node " << address << ": "
               << status.error_message();
           tracker->HandleError("gRPC error on node " + address + ": " +
                                status.error_message());
+        } else {
+          tracker->AddResults(response);
         }
       },
       timeout_ms);
@@ -219,7 +219,14 @@ PrimaryInfoResult GetLocalPrimaryInfoResult(ValkeyModuleCtx* ctx,
   auto index_schema_result = SchemaManager::Instance().GetIndexSchema(
       ValkeyModule_GetSelectedDb(ctx), index_name);
 
-  if (index_schema_result.ok()) {
+  if (!index_schema_result.ok()) {
+    result.exists = false;
+    result.index_name = index_name;
+    result.schema_fingerprint = std::nullopt;
+    result.encoding_version = std::nullopt;
+    result.error = std::string("Index not found: ") +
+                   std::string(index_schema_result.status().message());
+  } else {
     auto index_schema = index_schema_result.value();
     IndexSchema::InfoIndexPartitionData data =
         index_schema->GetInfoIndexPartitionData();
@@ -228,9 +235,12 @@ PrimaryInfoResult GetLocalPrimaryInfoResult(ValkeyModuleCtx* ctx,
     uint32_t encoding_version = 0;
 
     // Get the full metadata to access both fingerprint and encoding_version
-    auto global_metadata = coordinator::MetadataManager::Instance().GetGlobalMetadata();
-    if (global_metadata->type_namespace_map().contains(kSchemaManagerMetadataTypeName)) {
-      const auto& entry_map = global_metadata->type_namespace_map().at(kSchemaManagerMetadataTypeName);
+    auto global_metadata =
+        coordinator::MetadataManager::Instance().GetGlobalMetadata();
+    if (global_metadata->type_namespace_map().contains(
+            kSchemaManagerMetadataTypeName)) {
+      const auto& entry_map = global_metadata->type_namespace_map().at(
+          kSchemaManagerMetadataTypeName);
       if (entry_map.entries().contains(index_name)) {
         const auto& entry = entry_map.entries().at(index_name);
         fingerprint = entry.fingerprint();
@@ -246,13 +256,6 @@ PrimaryInfoResult GetLocalPrimaryInfoResult(ValkeyModuleCtx* ctx,
     result.error = "";
     result.schema_fingerprint = fingerprint;
     result.encoding_version = encoding_version;
-  } else {
-    result.exists = false;
-    result.index_name = index_name;
-    result.schema_fingerprint = std::nullopt;
-    result.encoding_version = std::nullopt;
-    result.error = std::string("Index not found: ") +
-                   std::string(index_schema_result.status().message());
   }
   return result;
 }

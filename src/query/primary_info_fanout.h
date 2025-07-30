@@ -26,7 +26,7 @@ namespace valkey_search::query::primary_info_fanout {
 
 struct PrimaryInfoParameters {
   std::string index_name;
-  int timeout_ms = 5000;  // Default 5 second timeout
+  int timeout_ms;
 };
 
 struct PrimaryInfoResult {

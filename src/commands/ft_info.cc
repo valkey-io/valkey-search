@@ -17,12 +17,34 @@
 #include "src/valkey_search.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/log.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
+
+constexpr absl::string_view kFTInfoTimeoutMsConfig{"ft-info-timeout-ms"};
+constexpr uint32_t kDefaultFTInfoTimeoutMs{5000};
+constexpr uint32_t kMinimumFTInfoTimeoutMs{100};
+constexpr uint32_t kMaximumFTInfoTimeoutMs{300000};  // 5 minutes max
+
+namespace options {
+
+/// Register the "--ft-info-timeout-ms" flag. Controls the timeout for FT.INFO operations
+static auto ft_info_timeout_ms =
+    vmsdk::config::NumberBuilder(kFTInfoTimeoutMsConfig,   // name
+                                 kDefaultFTInfoTimeoutMs,  // default timeout (5 seconds)
+                                 kMinimumFTInfoTimeoutMs,  // min timeout (100ms)
+                                 kMaximumFTInfoTimeoutMs)  // max timeout (5 minutes)
+        .Build();
+
+vmsdk::config::Number& GetFTInfoTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number&>(*ft_info_timeout_ms);
+}
+
+}  // namespace options
 
 namespace primary_info_async {
 
@@ -62,8 +84,8 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   }
 
   ValkeyModule_ReplyWithArray(ctx, 10);
-  ValkeyModule_ReplyWithSimpleString(ctx, "global");
-  ValkeyModule_ReplyWithSimpleString(ctx, "true");
+  ValkeyModule_ReplyWithSimpleString(ctx, "mode");
+  ValkeyModule_ReplyWithSimpleString(ctx, "primary");
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, index_name);
   ValkeyModule_ReplyWithSimpleString(ctx, "num_docs");
@@ -126,8 +148,8 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   }
 
   ValkeyModule_ReplyWithArray(ctx, 12);
+  ValkeyModule_ReplyWithSimpleString(ctx, "mode");
   ValkeyModule_ReplyWithSimpleString(ctx, "cluster");
-  ValkeyModule_ReplyWithSimpleString(ctx, "true");
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, index_name);
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_in_progress");
@@ -169,6 +191,8 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   bool is_global = false;
   bool is_primary = false;
   bool is_cluster = false;
+  int timeout_ms = options::GetFTInfoTimeoutMs().GetValue();
+
   if (argc == 2) {
     is_global = false;
   } else if (argc == 3) {
@@ -181,18 +205,16 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     } else if (absl::EqualsIgnoreCase(scope, "PRIMARY")) {
       if (!ValkeySearch::Instance().IsCluster() ||
           !ValkeySearch::Instance().UsingCoordinator()) {
-        ValkeyModule_ReplyWithError(ctx,
-                                    "ERR PRIMARY keyword requires cluster mode "
-                                    "with coordinator enabled");
+        ValkeyModule_ReplyWithError(
+            ctx, "ERR PRIMARY option is not valid in this configuration");
         return absl::OkStatus();
       }
       is_primary = true;
     } else if (absl::EqualsIgnoreCase(scope, "CLUSTER")) {
       if (!ValkeySearch::Instance().IsCluster() ||
           !ValkeySearch::Instance().UsingCoordinator()) {
-        ValkeyModule_ReplyWithError(ctx,
-                                    "ERR CLUSTER keyword requires cluster mode "
-                                    "with coordinator enabled");
+        ValkeyModule_ReplyWithError(
+            ctx, "ERR CLUSTER option is not valid in this configuration");
         return absl::OkStatus();
       }
       is_cluster = true;
@@ -203,7 +225,7 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
       return absl::OkStatus();
     }
   } else {
-    // More than 2 parameters provided
+    // Invalid number of parameters
     ValkeyModule_ReplyWithError(ctx, vmsdk::WrongArity(kInfoCommand).c_str());
     return absl::OkStatus();
   }
@@ -223,6 +245,7 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     auto parameters =
         std::make_unique<query::primary_info_fanout::PrimaryInfoParameters>();
     parameters->index_name = std::string(index_schema_name);
+    parameters->timeout_ms = timeout_ms;
     auto targets = query::fanout::FanoutTemplate::GetTargets(
         ctx, query::fanout::FanoutTargetMode::kPrimary);
     VMSDK_LOG(DEBUG, ctx) << "Found " << targets.size() << " fanout targets:";
@@ -235,9 +258,9 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                   : "REMOTE")
           << ", address: " << target.address;
     }
-    vmsdk::BlockedClient blocked_client(ctx, primary_info_async::Reply,
-                                        primary_info_async::Timeout,
-                                        primary_info_async::Free, 5000);
+    vmsdk::BlockedClient blocked_client(
+        ctx, primary_info_async::Reply, primary_info_async::Timeout,
+        primary_info_async::Free, parameters->timeout_ms);
     blocked_client.MeasureTimeStart();
     auto on_done =
         [blocked_client = std::move(blocked_client)](
@@ -260,6 +283,7 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     auto parameters =
         std::make_unique<query::cluster_info_fanout::ClusterInfoParameters>();
     parameters->index_name = std::string(index_schema_name);
+    parameters->timeout_ms = timeout_ms;
     auto targets = query::fanout::FanoutTemplate::GetTargets(
         ctx, query::fanout::FanoutTargetMode::kAll);
     VMSDK_LOG(DEBUG, ctx) << "Found " << targets.size() << " fanout targets:";
@@ -272,9 +296,9 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                   : "REMOTE")
           << ", address: " << target.address;
     }
-    vmsdk::BlockedClient blocked_client(ctx, cluster_info_async::Reply,
-                                        cluster_info_async::Timeout,
-                                        cluster_info_async::Free, 5000);
+    vmsdk::BlockedClient blocked_client(
+        ctx, cluster_info_async::Reply, cluster_info_async::Timeout,
+        cluster_info_async::Free, parameters->timeout_ms);
     blocked_client.MeasureTimeStart();
     auto on_done =
         [blocked_client = std::move(blocked_client)](

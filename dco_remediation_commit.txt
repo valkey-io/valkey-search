@@ -1,31 +1,31 @@
-Miles Song <sbd20010626@outlook.com>
-DCO Remediation Commit for Miles Song <sbd20010626@outlook.com>
+DCO Remediation Commit for Miles Song <bodasong@amazon.com>
 
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: be41f96e414881f2a3ab66c9503f8c2217b1ae87
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: 9496249d83ba3cc8b814853201d1ba2ecdd77671
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: 8b7477795601e30efe86c4e3c81ef85863b72204
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: 54a35bb873a733fba2eafc362c3c2ddc0e8bce1a
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: 7bea895f33b40d0ce076aaf570a2b1e7a0e9f9ff
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: 0260b2be92b08a5aabe8d71d7245120bb7e7b666
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: aee901f864332de9056b569a2274add4b19c6ed2
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: 6b5cd413309d2a3640c34a12dcb6b41d4bd059d4
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: 236fe279b8ed16b22f910c405323c00dcd488223
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: f173af231eda9983d42ce016ec1eb8197047b808
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: 491a2c5061fdd60fe4d2c3698dc41b1184b355b4
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: c9a57fa4c52ac0a4762eefa1b435956a4548a409
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: b6262d9cf2ee93d75f418927d5cedb86a539de78
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: 3a49895662b00f3be766f72ca06b205c4994d96a
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: 6fcc911b96f660c00c83aee1b12d84fcc36afb33
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: 280f2f3ea710ed33d16b41b5c775f6b5d9dcdb48
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: cd5fbac92918d83d1f9f7ca1dc78a08cd719a5f9
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: 766c33a82125072ee8616c51c3587b487c96ffa8
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: 5a002d5ab475e561fb9fb7c3e0aca5da9a5cd072
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: eec6ea8c5ee10896149a3ef16e5ef7ead1c34ccc
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: 851f1c5b12a0a53ad3a262257123b8120cfc5fb7
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: 7f52d632a94c579d4e655f827be3079d709150ea
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: 56963d8ad9b2ebe6ce8f85b785f32695f36cceb6
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: 5d8479018dc13bbb30699ea72db12c1feb1dcbcb
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: 76fec7f429d13d3d016b772508caef7e835a886a
-I, Miles Song <sbd20010626@outlook.com>, hereby add my Signed-off-by to this commit: 12d5cec1d030531bbca44a0afc9e36ea2ea7e0a8
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: be41f96e414881f2a3ab66c9503f8c2217b1ae87
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 9496249d83ba3cc8b814853201d1ba2ecdd77671
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 8b7477795601e30efe86c4e3c81ef85863b72204
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 54a35bb873a733fba2eafc362c3c2ddc0e8bce1a
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 7bea895f33b40d0ce076aaf570a2b1e7a0e9f9ff
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 0260b2be92b08a5aabe8d71d7245120bb7e7b666
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: aee901f864332de9056b569a2274add4b19c6ed2
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 6b5cd413309d2a3640c34a12dcb6b41d4bd059d4
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 236fe279b8ed16b22f910c405323c00dcd488223
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: f173af231eda9983d42ce016ec1eb8197047b808
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 491a2c5061fdd60fe4d2c3698dc41b1184b355b4
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: c9a57fa4c52ac0a4762eefa1b435956a4548a409
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: b6262d9cf2ee93d75f418927d5cedb86a539de78
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 3a49895662b00f3be766f72ca06b205c4994d96a
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 6fcc911b96f660c00c83aee1b12d84fcc36afb33
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 280f2f3ea710ed33d16b41b5c775f6b5d9dcdb48
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: cd5fbac92918d83d1f9f7ca1dc78a08cd719a5f9
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 766c33a82125072ee8616c51c3587b487c96ffa8
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 5a002d5ab475e561fb9fb7c3e0aca5da9a5cd072
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: eec6ea8c5ee10896149a3ef16e5ef7ead1c34ccc
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 851f1c5b12a0a53ad3a262257123b8120cfc5fb7
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 7f52d632a94c579d4e655f827be3079d709150ea
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 56963d8ad9b2ebe6ce8f85b785f32695f36cceb6
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 5d8479018dc13bbb30699ea72db12c1feb1dcbcb
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 76fec7f429d13d3d016b772508caef7e835a886a
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 12d5cec1d030531bbca44a0afc9e36ea2ea7e0a8
+I, Miles Song <bodasong@amazon.com>, hereby add my Signed-off-by to this commit: 472039f16f0fc067ae552090854da0851383fe77
 
-Signed-off-by: Miles Song <sbd20010626@outlook.com>
+Signed-off-by: Miles Song <bodasong@amazon.com>

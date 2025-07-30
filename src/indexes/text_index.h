@@ -1,17 +1,9 @@
 #ifndef VALKEY_SEARCH_INDEXES_TEXT_TEXT_H_
-#define VALKEY_SEARCH_INDEXES_TEXT_TEXT_H_
+#define VALKEY_SEARCH_INDEXES_TEXT_TEST_H_
 
-#include <optional>
-#include "absl/container/flat_hash_map.h"
-#include "absl/container/flat_hash_set.h"
-#include "absl/status/status.h"
-#include "absl/status/statusor.h"
-#include "absl/strings/string_view.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
-#include "src/attribute_data_type.h"
-#include "src/index_schema.pb.h"
-#include "src/indexes/index_base.h"
-#include "src/rdb_serialization.h"
+#include <concepts>
+#include <memory>
+
 #include "src/utils/string_interning.h"
 
 #include <concepts>
@@ -20,17 +12,6 @@
 #include "src/utils/string_interning.h"
 
 namespace valkey_search {
-
-// Forward declare the types
-namespace text {
-class RadixTree {
-public:
-  RadixTree() = default;
-};
-}
-
-using Key = InternedStringPtr;
-
 namespace indexes {
 
   using Key = vmsdk::InternedStringPtr;
@@ -47,18 +28,9 @@ struct TextIndex {
   // Constructor
   Text(const data_model::TextIndex& text_index_proto);
 
-  // Virtual methods from IndexBase
-  absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
-                                 absl::string_view data) override;
-  absl::StatusOr<bool> RemoveRecord(const InternedStringPtr& key,
-                                    DeletionType deletion_type) override;
-  absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
-                                    absl::string_view data) override;
-  int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
-  bool IsTracked(const InternedStringPtr& key) const override;
-  absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override;
-  std::unique_ptr<data_model::Index> ToProto() const override;
-  uint64_t GetRecordCount() const override;
+struct TextIndex {
+  // Constructor
+  Text(const data_model& text_index_proto);
 
   text::RadixTree prefix_;
 
@@ -75,9 +47,23 @@ struct TextIndex {
   std::shared_ptr<RadixTree<std::unique_ptr<Postings *>, false>>> prefix_;
   std::optional<text::RadixTree> suffix_;
 
-  absl::flat_hash_map<Key, text::RadixTree> reverse_;
+  absl::hashmap<Key, text::RadixTree> reverse_;
 
-  absl::flat_hash_set<Key> untracked_keys_;
+  absl::hashset<Key> untracked_keys_;
+};
+
+struct IndexSchemaText{
+  //
+  // This is the main index of all Text fields in this index schema
+  //
+  TextIndex corpus_;
+  //
+  // To support the Delete record and the post-filtering case, there is a separate
+  // table of postings that are indexed by Key.
+  //
+  // This object must also ensure that updates of this object are multi-thread safe.
+  //
+  absl::flat_hash_map<Key, TextIndex>> by_key_;
 };
 
 struct IndexSchemaText{

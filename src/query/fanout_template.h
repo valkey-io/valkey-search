@@ -85,14 +85,14 @@ class FanoutTemplate {
         int flags;
         if (ValkeyModule_GetClusterNodeInfo(ctx, node_id.c_str(), ip, master_id,
                                             &port, &flags) != VALKEYMODULE_OK) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+          VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
               << "Failed to get node info for node " << node_id
               << ", skipping node...";
           continue;
         }
         
         if (flags & ( VALKEYMODULE_NODE_PFAIL | VALKEYMODULE_NODE_FAIL)) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+          VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
               << "Node " << node_id << " (" << ip
               << ") is failing, skipping for fanout...";
           continue;
@@ -118,14 +118,14 @@ class FanoutTemplate {
         int flags;
         if (ValkeyModule_GetClusterNodeInfo(ctx, node_id.c_str(), ip, master_id,
                                             &port, &flags) != VALKEYMODULE_OK) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+          VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
               << "Failed to get node info for node " << node_id
               << ", skipping node...";
           continue;
         }
         
         if (flags & (VALKEYMODULE_NODE_PFAIL | VALKEYMODULE_NODE_FAIL)) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+          VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
               << "Node " << node_id << " (" << ip
               << ") is failing, skipping for fanout...";
           continue;
@@ -151,14 +151,14 @@ class FanoutTemplate {
         int flags;
         if (ValkeyModule_GetClusterNodeInfo(ctx, node_id.c_str(), ip, master_id,
                                             &port, &flags) != VALKEYMODULE_OK) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+          VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
               << "Failed to get node info for node " << node_id
               << ", skipping node...";
           continue;
         }
         auto master_id_str = std::string(master_id, VALKEYMODULE_NODE_ID_LEN);
         if (flags & (VALKEYMODULE_NODE_PFAIL | VALKEYMODULE_NODE_FAIL)) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+          VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
               << "Node " << node_id << " (" << ip
               << ") is failing, skipping for fanout...";
           continue;

@@ -168,16 +168,6 @@ uint64_t FieldMaskImpl<MaskType, MAX_FIELDS>::AsUint64() const {
   }
 }
 
-// Create deep copy of field mask
-template<typename MaskType, size_t MAX_FIELDS>
-std::unique_ptr<FieldMask> FieldMaskImpl<MaskType, MAX_FIELDS>::Clone() const {
-  auto clone = std::make_unique<FieldMaskImpl<MaskType, MAX_FIELDS>>(num_fields_);
-  if constexpr (!std::is_same_v<MaskType, EmptyFieldMask>) {
-    clone->mask_ = mask_;
-  }
-  return clone;
-}
-
 // Explicit template instantiations
 template class FieldMaskImpl<EmptyFieldMask, 1>;
 template class FieldMaskImpl<uint8_t, 8>;

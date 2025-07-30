@@ -42,13 +42,22 @@ struct ClusterInfoPartitionResultsTracker {
   void AddResults(coordinator::InfoIndexPartitionResponse& response) {
     absl::MutexLock lock(&mutex);
 
+    if (!response.error().empty()) {
+      if (aggregated_result.error.empty()) {
+        aggregated_result.error = response.error();
+      } else {
+        aggregated_result.error += ";" + response.error();
+      }
+      return;
+    }
+
     if (response.exists()) {
       // Check fingerprint consistency first
       if (!aggregated_result.schema_fingerprint.has_value()) {
         aggregated_result.schema_fingerprint = response.schema_fingerprint();
       } else if (aggregated_result.schema_fingerprint.value() !=
                  response.schema_fingerprint()) {
-        VMSDK_LOG(WARNING, nullptr)
+        VMSDK_LOG(DEBUG, nullptr)
             << "Schema fingerprint mismatch detected! Reference: "
             << aggregated_result.schema_fingerprint.value()
             << ", Remote node: " << response.schema_fingerprint();
@@ -63,7 +72,7 @@ struct ClusterInfoPartitionResultsTracker {
         aggregated_result.encoding_version = response.encoding_version();
       } else if (aggregated_result.encoding_version.value() !=
                  response.encoding_version()) {
-        VMSDK_LOG(WARNING, nullptr)
+        VMSDK_LOG(DEBUG, nullptr)
             << "Encoding version mismatch detected! Reference: "
             << aggregated_result.encoding_version.value()
             << ", Remote node: " << response.encoding_version();
@@ -117,14 +126,6 @@ struct ClusterInfoPartitionResultsTracker {
           aggregated_result.state = current_state;
         }
       }
-
-      if (!response.error().empty()) {
-        if (aggregated_result.error.empty()) {
-          aggregated_result.error = response.error();
-        } else {
-          aggregated_result.error += ";" + response.error();
-        }
-      }
     }
   }
 
@@ -134,6 +135,15 @@ struct ClusterInfoPartitionResultsTracker {
                       local_result) {
     absl::MutexLock lock(&mutex);
 
+    if (!local_result.error.empty()) {
+      if (aggregated_result.error.empty()) {
+        aggregated_result.error = local_result.error;
+      } else {
+        aggregated_result.error += ";" + local_result.error;
+      }
+      return;
+    }
+
     if (local_result.exists) {
       // Check fingerprint consistency first
       if (!aggregated_result.schema_fingerprint.has_value()) {
@@ -141,7 +151,7 @@ struct ClusterInfoPartitionResultsTracker {
       } else if (local_result.schema_fingerprint.has_value() &&
                  aggregated_result.schema_fingerprint.value() !=
                      local_result.schema_fingerprint.value()) {
-        VMSDK_LOG(WARNING, nullptr)
+        VMSDK_LOG(DEBUG, nullptr)
             << "Schema fingerprint mismatch detected! Reference: "
             << aggregated_result.schema_fingerprint.value()
             << ", Local node: " << local_result.schema_fingerprint.value();
@@ -157,7 +167,7 @@ struct ClusterInfoPartitionResultsTracker {
       } else if (local_result.encoding_version.has_value() &&
                  aggregated_result.encoding_version.value() !=
                      local_result.encoding_version.value()) {
-        VMSDK_LOG(WARNING, nullptr)
+        VMSDK_LOG(DEBUG, nullptr)
             << "Encoding version mismatch detected! Reference: "
             << aggregated_result.encoding_version.value()
             << ", Local node: " << local_result.encoding_version.value();
@@ -211,22 +221,11 @@ struct ClusterInfoPartitionResultsTracker {
           aggregated_result.state = current_state;
         }
       }
-
-      if (!local_result.error.empty()) {
-        if (aggregated_result.error.empty()) {
-          aggregated_result.error = local_result.error;
-        } else {
-          aggregated_result.error += ";" + local_result.error;
-        }
-      }
     }
   }
 
   void HandleError(const std::string& error_message) {
     absl::MutexLock lock(&mutex);
-
-    VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-        << "Error during cluster info fanout: " << error_message;
 
     if (aggregated_result.error.empty()) {
       aggregated_result.error = error_message;
@@ -261,9 +260,6 @@ void PerformRemoteClusterInfoRequest(
           grpc::Status status,
           coordinator::InfoIndexPartitionResponse& response) mutable {
         if (!status.ok()) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-              << "Error during handling of FT.INFO on node " << address << ": "
-              << status.error_message();
           tracker->HandleError("gRPC error on node " + address + ": " +
                                status.error_message());
         } else {
@@ -271,21 +267,6 @@ void PerformRemoteClusterInfoRequest(
         }
       },
       timeout_ms);
-}
-
-void PerformRemoteClusterInfoRequestAsync(
-    std::unique_ptr<coordinator::InfoIndexPartitionRequest> request,
-    const std::string& address,
-    coordinator::ClientPool* coordinator_client_pool,
-    std::shared_ptr<ClusterInfoPartitionResultsTracker> tracker,
-    vmsdk::ThreadPool* thread_pool) {
-  thread_pool->Schedule(
-      [coordinator_client_pool, address = std::string(address),
-       request = std::move(request), tracker]() mutable {
-        PerformRemoteClusterInfoRequest(std::move(request), address,
-                                        coordinator_client_pool, tracker);
-      },
-      vmsdk::ThreadPool::Priority::kHigh);
 }
 
 ClusterInfoResult GetLocalClusterInfoResult(ValkeyModuleCtx* ctx,
@@ -357,15 +338,8 @@ absl::Status PerformClusterInfoFanoutAsync(
         std::make_unique<coordinator::InfoIndexPartitionRequest>();
     request_copy->CopyFrom(*request);
 
-    // Use async scheduling for better performance with many nodes
-    if (info_targets.size() >= 30 && thread_pool->Size() > 1) {
-      PerformRemoteClusterInfoRequestAsync(
-          std::move(request_copy), node.address, coordinator_client_pool,
-          tracker, thread_pool);
-    } else {
-      PerformRemoteClusterInfoRequest(std::move(request_copy), node.address,
-                                      coordinator_client_pool, tracker);
-    }
+    PerformRemoteClusterInfoRequest(std::move(request_copy), node.address,
+                                    coordinator_client_pool, tracker);
   }
 
   if (has_local_target) {

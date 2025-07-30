@@ -26,7 +26,7 @@ namespace valkey_search::query::cluster_info_fanout {
 
 struct ClusterInfoParameters {
   std::string index_name;
-  int timeout_ms = 5000;  // Default 5 second timeout
+  int timeout_ms;
 };
 
 struct ClusterInfoResult {

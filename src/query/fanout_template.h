@@ -91,7 +91,7 @@ class FanoutTemplate {
           continue;
         }
         
-        if (flags & VALKEYMODULE_NODE_PFAIL || flags & VALKEYMODULE_NODE_FAIL) {
+        if (flags & ( VALKEYMODULE_NODE_PFAIL | VALKEYMODULE_NODE_FAIL)) {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << "Node " << node_id << " (" << ip
               << ") is failing, skipping for fanout...";
@@ -124,7 +124,7 @@ class FanoutTemplate {
           continue;
         }
         
-        if (flags & VALKEYMODULE_NODE_PFAIL || flags & VALKEYMODULE_NODE_FAIL) {
+        if (flags & (VALKEYMODULE_NODE_PFAIL | VALKEYMODULE_NODE_FAIL)) {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << "Node " << node_id << " (" << ip
               << ") is failing, skipping for fanout...";
@@ -157,7 +157,7 @@ class FanoutTemplate {
           continue;
         }
         auto master_id_str = std::string(master_id, VALKEYMODULE_NODE_ID_LEN);
-        if (flags & VALKEYMODULE_NODE_PFAIL || flags & VALKEYMODULE_NODE_FAIL) {
+        if (flags & (VALKEYMODULE_NODE_PFAIL | VALKEYMODULE_NODE_FAIL)) {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << "Node " << node_id << " (" << ip
               << ") is failing, skipping for fanout...";

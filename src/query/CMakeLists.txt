@@ -106,3 +106,22 @@ target_link_libraries(cluster_info_fanout PUBLIC query_base)
 target_link_libraries(cluster_info_fanout PUBLIC fanout)
 target_link_libraries(cluster_info_fanout PUBLIC info_converter)
 target_link_libraries(cluster_info_fanout PUBLIC schema_manager)
+
+# 8. Fanout Operation Base (Header-only)
+set(SRCS_FANOUT_OPERATION_BASE ${CMAKE_CURRENT_LIST_DIR}/fanout_operation_base.h)
+
+add_library(fanout_operation_base INTERFACE ${SRCS_FANOUT_OPERATION_BASE})
+target_include_directories(fanout_operation_base INTERFACE ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(fanout_operation_base INTERFACE query_base)
+target_link_libraries(fanout_operation_base INTERFACE fanout)
+
+# 9. Primary Info Fanout Operation
+set(SRCS_PRIMARY_INFO_FANOUT_OPERATION
+    ${CMAKE_CURRENT_LIST_DIR}/primary_info_fanout_operation.cc
+    ${CMAKE_CURRENT_LIST_DIR}/primary_info_fanout_operation.h)
+
+valkey_search_add_static_library(primary_info_fanout_operation "${SRCS_PRIMARY_INFO_FANOUT_OPERATION}")
+target_include_directories(primary_info_fanout_operation PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(primary_info_fanout_operation PUBLIC fanout_operation_base)
+target_link_libraries(primary_info_fanout_operation PUBLIC primary_info_fanout)
+target_link_libraries(primary_info_fanout_operation PUBLIC coordinator_cc_proto)

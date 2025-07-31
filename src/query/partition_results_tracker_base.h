@@ -17,6 +17,7 @@ class PartitionResultsTrackerBase {
   PartitionResultsTrackerBase(const PartitionResultsTrackerBase&) = delete;
   PartitionResultsTrackerBase& operator=(const PartitionResultsTrackerBase&) =
       delete;
+  virtual ~PartitionResultsTrackerBase() = default;
 
   // Called when a remote response arrives
   void AddResults(const ResponseProto& resp) {
@@ -35,8 +36,6 @@ class PartitionResultsTrackerBase {
     absl::MutexLock lock(&mutex_);
     OnError(err);
   }
-
-  virtual ~PartitionResultsTrackerBase() = default;
 
  protected:
   // Called under lock by the derived destructor to finish up.

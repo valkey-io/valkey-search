@@ -704,7 +704,7 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithArray(ctx, 26);
+  ValkeyModule_ReplyWithArray(ctx, 28);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
   ValkeyModule_ReplyWithSimpleString(ctx, "index_options");
@@ -734,13 +734,15 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplySetArrayLength(ctx, attribute_array_len);
 
   ValkeyModule_ReplyWithSimpleString(ctx, "num_docs");
-  ValkeyModule_ReplyWithCString(ctx,
-                                std::to_string(stats_.document_cnt).c_str());
+  ValkeyModule_ReplyWithLongLong(ctx, stats_.document_cnt);
+  // hard-code num_terms to 0 we will update how to get it:
+  ValkeyModule_ReplyWithSimpleString(ctx, "max_doc_id");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
   // hard-code num_terms to 0 as it's related to fulltext indexes:
   ValkeyModule_ReplyWithSimpleString(ctx, "num_terms");
-  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
   ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
-  ValkeyModule_ReplyWithCString(ctx, std::to_string(CountRecords()).c_str());
+  ValkeyModule_ReplyWithLongLong(ctx, CountRecords());
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%lu", stats_.subscription_add.skipped_cnt).c_str());

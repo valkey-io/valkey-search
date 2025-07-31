@@ -99,6 +99,13 @@ bool InlineVectorEvaluator::EvaluateNumeric(
   return predicate.Evaluate(value);
 }
 
+bool InlineVectorEvaluator::EvaluateText(
+    const query::TextPredicate &predicate) {
+  // TODO: Implement text evaluation logic
+  // For now, return true as a placeholder
+  return true;
+}
+
 template <typename T>
 T CopyAndNormalizeEmbedding(T *dst, T *src, size_t size) {
   T magnitude = 0.0f;

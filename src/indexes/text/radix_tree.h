@@ -49,15 +49,19 @@ into the codebase efficiently enough to be deployed in production code.
 
 #include <memory>
 #include <span>
+#include <optional>
 
+#include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
-#include "src/text/text.h"
+#include "src/indexes/text.h"
 
 template <typename Target, bool reverse>
 struct RadixTree {
   struct WordIterator;
   struct PathIterator;
-  RadixTree();
+  RadixTree() {
+    // TODO: Initialize RadixTree data structures
+  }
 
   //
   // This function is the only way to mutate the RadixTree, all other functions
@@ -77,24 +81,38 @@ struct RadixTree {
   //
   //
   void Mutate(absl::string_view word,
-              absl::invokeable<std::option<Target>>(std::option<Target>) >
-                  mutate);
+              absl::FunctionRef<std::optional<Target>(std::optional<Target>)>
+                  mutate) {
+    // TODO: Implement RadixTree mutation
+  }
 
   // Get the number of words that have the specified prefix in O(len(prefix))
   // time.
-  size_t GetWordCount(absl::string_view prefix) const;
+  size_t GetWordCount(absl::string_view prefix) const {
+    // TODO: Implement word count
+    return 0;
+  }
 
   // Get the length of the longest word in the RadixTree, this can be used to
   // pre-size arrays and strings that are used when iterating on this RadixTree.
-  size_t GetLongestWord() const;
+  size_t GetLongestWord() const {
+    // TODO: Implement longest word calculation
+    return 0;
+  }
 
   // Create a word Iterator over the sequence of words that start with the
   // prefix. The iterator will automatically be positioned to the lexically
   // smallest word and will end with the last word that shares the suffix.
-  WordIterator GetWordIterator(absl::string_view prefix) const;
+  WordIterator GetWordIterator(absl::string_view prefix) const {
+    // TODO: Implement word iterator creation
+    return WordIterator{};
+  }
 
   // Create a Path iterator at a specific starting prefix
-  PathIterator GetPathIterator(absl::string_view prefix) const;
+  PathIterator GetPathIterator(absl::string_view prefix) const {
+    // TODO: Implement path iterator creation
+    return PathIterator{};
+  }
 
   //
   // The Word Iterator provides access to sequences of Words and the associated
@@ -102,21 +120,41 @@ struct RadixTree {
   //
   struct WordIterator {
     // Is iterator valid?
-    bool Done() const;
+    bool Done() const {
+      // TODO: Implement iterator validity check
+      return true;
+    }
 
     // Advance to next word in lexical order
-    void Next();
+    void Next() {
+      // TODO: Implement iterator advancement
+    }
 
     // Seek forward to the next word that's greater or equal to the specified
     // word. If the prefix of this word doesn't match the prefix that created
     // this iterator, then it immediately becomes invalid. The return boolean
     // indicates if the landing spot is equal to the specified word (true) or
     // greater (false).
-    bool SeekForward(absl::string_view word);
+    bool SeekForward(absl::string_view word) {
+      // TODO: Implement seek forward
+      return false;
+    }
 
     // Access the current location, asserts if !IsValid()
-    absl::string_view GetWord() const;
-    Postings& GetPostings() const;
+    absl::string_view GetWord() const {
+      // TODO: Implement word access
+      static absl::string_view empty;
+      return empty;
+    }
+    
+    valkey_search::text::Postings& GetPostings() const {
+      // TODO: Implement postings access
+      static std::unique_ptr<valkey_search::text::Postings> dummy_postings;
+      if (!dummy_postings) {
+        dummy_postings = std::make_unique<valkey_search::text::Postings>();
+      }
+      return *dummy_postings;
+    }
   };
 
   //
@@ -127,35 +165,65 @@ struct RadixTree {
   //
   struct PathIterator {
     // Is the iterator itself pointing to a valid node?
-    bool Done() const;
+    bool Done() const {
+      // TODO: Implement iterator validity check
+      return true;
+    }
 
     // Is there a word at the current position?
-    bool IsWord() const;
+    bool IsWord() const {
+      // TODO: Implement word check
+      return false;
+    }
 
     // Advance to the next character at this level of the RadixTree
-    void Next();
+    void Next() {
+      // TODO: Implement iterator advancement
+    }
 
     // Seek to the char that's greater than or equal
     // returns true if target char is present, false otherwise
-    bool SeekForward(char target);
+    bool SeekForward(char target) {
+      // TODO: Implement seek forward
+      return false;
+    }
 
     // Is there a node under the current path?
-    bool CanDescend() const;
+    bool CanDescend() const {
+      // TODO: Implement descent check
+      return false;
+    }
 
     // Create a new PathIterator automatically descending from the current
     // position asserts if !CanDescend()
-    PathIterator DescendNew() const;
+    PathIterator DescendNew() const {
+      // TODO: Implement descend
+      return PathIterator{};
+    }
 
     // get current Path. If IsWord is true, then there's a word here....
-    absl::string_view GetPath();
+    absl::string_view GetPath() {
+      // TODO: Implement path access
+      static absl::string_view empty;
+      return empty;
+    }
 
     // Get Postings for this word, will assert if !IsWord()
-    Postings& GetPostings() const;
+    valkey_search::text::Postings& GetPostings() const {
+      // TODO: Implement postings access
+      static std::unique_ptr<valkey_search::text::Postings> dummy_postings;
+      if (!dummy_postings) {
+        dummy_postings = std::make_unique<valkey_search::text::Postings>();
+      }
+      return *dummy_postings;
+    }
 
     // Defrag the current Node and then defrag the Postings if this points to
     // one.
-    void Defrag();
-  }
+    void Defrag() {
+      // TODO: Implement defragmentation
+    }
+  };
 };
 
 #endif

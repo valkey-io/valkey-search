@@ -21,6 +21,7 @@
 namespace valkey_search::indexes {
 class Numeric;
 class Tag;
+class Text;
 }  // namespace valkey_search::indexes
 
 namespace valkey_search::query {
@@ -28,6 +29,7 @@ namespace valkey_search::query {
 enum class PredicateType {
   kTag,
   kNumeric,
+  kText,
   kComposedAnd,
   kComposedOr,
   kNegate,
@@ -36,11 +38,13 @@ enum class PredicateType {
 
 class TagPredicate;
 class NumericPredicate;
+class TextPredicate;
 class Evaluator {
  public:
   virtual ~Evaluator() = default;
   virtual bool EvaluateTags(const TagPredicate& predicate) = 0;
   virtual bool EvaluateNumeric(const NumericPredicate& predicate) = 0;
+  virtual bool EvaluateText(const TextPredicate& predicate) = 0;
 };
 
 class Predicate;
@@ -127,6 +131,29 @@ class TagPredicate : public Predicate {
   std::string raw_tag_string_;
   absl::flat_hash_set<std::string> tags_;
 };
+
+class TextPredicate : public Predicate {
+ public:
+  TextPredicate(const indexes::Text* index, absl::string_view alias,
+                absl::string_view identifier, absl::string_view query_text);
+  bool Evaluate(Evaluator& evaluator) const override;
+  const indexes::Text* GetIndex() const { return index_; }
+  absl::string_view GetAlias() const { return alias_; }
+  absl::string_view GetIdentifier() const {
+    return vmsdk::ToStringView(identifier_.get());
+  }
+  vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
+    return vmsdk::RetainUniqueValkeyString(identifier_.get());
+  }
+  const std::string& GetQueryText() const { return query_text_; }
+
+ private:
+  const indexes::Text* index_;
+  std::string alias_;
+  vmsdk::UniqueValkeyString identifier_;
+  std::string query_text_;
+};
+
 enum class LogicalOperator { kAnd, kOr };
 // Composed Predicate (AND/OR)
 class ComposedPredicate : public Predicate {

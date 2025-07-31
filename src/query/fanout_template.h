@@ -1,19 +1,21 @@
 #pragma once
 
+#include <netinet/in.h>
+
 #include <functional>
+#include <ostream>
 #include <string>
 #include <vector>
-#include <ostream>
-#include <netinet/in.h> 
 
-#include "absl/status/status.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/random/random.h"
+#include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "src/coordinator/util.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "src/coordinator/client_pool.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::query::fanout {
 
@@ -50,31 +52,30 @@ class FanoutTemplate {
  public:
   // Convenience method for FanoutSearchTarget with default lambdas
   static std::vector<FanoutSearchTarget> GetTargets(
-      ValkeyModuleCtx *ctx,
+      ValkeyModuleCtx* ctx,
       FanoutTargetMode target_mode = FanoutTargetMode::kRandom) {
     return GetTargets<FanoutSearchTarget>(
         ctx,
-        []() { return FanoutSearchTarget{.type = FanoutSearchTarget::Type::kLocal}; },
+        []() {
+          return FanoutSearchTarget{.type = FanoutSearchTarget::Type::kLocal};
+        },
         [](const std::string& address) {
-          return FanoutSearchTarget{
-              .type = FanoutSearchTarget::Type::kRemote,
-              .address = address
-          };
+          return FanoutSearchTarget{.type = FanoutSearchTarget::Type::kRemote,
+                                    .address = address};
         },
         target_mode);
   }
 
-  template<typename TargetType>
+  template <typename TargetType>
   static std::vector<TargetType> GetTargets(
-      ValkeyModuleCtx *ctx,
-      std::function<TargetType()> create_local_target,
+      ValkeyModuleCtx* ctx, std::function<TargetType()> create_local_target,
       std::function<TargetType(const std::string&)> create_remote_target,
       FanoutTargetMode target_mode = FanoutTargetMode::kRandom) {
     size_t num_nodes;
     auto nodes = vmsdk::MakeUniqueValkeyClusterNodesList(ctx, &num_nodes);
-    
+
     std::vector<TargetType> selected_targets;
-    
+
     if (target_mode == FanoutTargetMode::kPrimary) {
       // Select all primary (master) nodes directly
       for (size_t i = 0; i < num_nodes; ++i) {
@@ -90,14 +91,14 @@ class FanoutTemplate {
               << ", skipping node...";
           continue;
         }
-        
-        if (flags & ( VALKEYMODULE_NODE_PFAIL | VALKEYMODULE_NODE_FAIL)) {
+
+        if (flags & (VALKEYMODULE_NODE_PFAIL | VALKEYMODULE_NODE_FAIL)) {
           VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
               << "Node " << node_id << " (" << ip
               << ") is failing, skipping for fanout...";
           continue;
         }
-        
+
         // Only select master nodes
         if (flags & VALKEYMODULE_NODE_MASTER) {
           if (flags & VALKEYMODULE_NODE_MYSELF) {
@@ -123,14 +124,14 @@ class FanoutTemplate {
               << ", skipping node...";
           continue;
         }
-        
+
         if (flags & (VALKEYMODULE_NODE_PFAIL | VALKEYMODULE_NODE_FAIL)) {
           VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
               << "Node " << node_id << " (" << ip
               << ") is failing, skipping for fanout...";
           continue;
         }
-        
+
         // Select all nodes (both master and replica)
         if (flags & VALKEYMODULE_NODE_MYSELF) {
           selected_targets.push_back(create_local_target());
@@ -140,9 +141,11 @@ class FanoutTemplate {
         }
       }
     } else {
-      // Original logic: group master and replica into shards and randomly select one
-      absl::flat_hash_map<std::string, std::vector<size_t>> shard_id_to_node_indices;
-      
+      // Original logic: group master and replica into shards and randomly
+      // select one
+      absl::flat_hash_map<std::string, std::vector<size_t>>
+          shard_id_to_node_indices;
+
       for (size_t i = 0; i < num_nodes; ++i) {
         std::string node_id(nodes.get()[i], VALKEYMODULE_NODE_ID_LEN);
         char ip[INET6_ADDRSTRLEN] = "";
@@ -166,19 +169,20 @@ class FanoutTemplate {
         if (flags & VALKEYMODULE_NODE_MASTER) {
           master_id_str = node_id;
         }
-        
+
         // Store only the node index
         shard_id_to_node_indices[master_id_str].push_back(i);
       }
-      
+
       // Random selection first, then create only the selected target objects
       absl::BitGen gen;
-      for (const auto &[shard_id, node_indices] : shard_id_to_node_indices) {
+      for (const auto& [shard_id, node_indices] : shard_id_to_node_indices) {
         size_t index = absl::Uniform(gen, 0u, node_indices.size());
         size_t selected_node_index = node_indices.at(index);
-        
+
         // Re-fetch node info only for the selected node
-        std::string node_id(nodes.get()[selected_node_index], VALKEYMODULE_NODE_ID_LEN);
+        std::string node_id(nodes.get()[selected_node_index],
+                            VALKEYMODULE_NODE_ID_LEN);
         char ip[INET6_ADDRSTRLEN] = "";
         char master_id[VALKEYMODULE_NODE_ID_LEN] = "";
         int port;
@@ -187,7 +191,7 @@ class FanoutTemplate {
                                             &port, &flags) != VALKEYMODULE_OK) {
           continue;
         }
-        
+
         // Create target object only for the selected node
         if (flags & VALKEYMODULE_NODE_MYSELF) {
           selected_targets.push_back(create_local_target());
@@ -198,6 +202,28 @@ class FanoutTemplate {
       }
     }
     return selected_targets;
+  }
+
+  template <typename RequestT, typename ResponseT, typename TrackerT>
+  void PerformRemoteRequest(
+      std::unique_ptr<RequestT> request, const std::string& address,
+      coordinator::ClientPool* coordinator_client_pool,
+      std::shared_ptr<TrackerT> tracker,
+      std::function<void(coordinator::Client*, std::unique_ptr<RequestT>,
+                         std::function<void(grpc::Status, ResponseT&)>, int)>
+          grpc_invoker,
+      std::function<void(const grpc::Status&, ResponseT&,
+                         std::shared_ptr<TrackerT>, const std::string&)>
+          callback_logic,
+      int timeout_ms = -1) {
+    auto client = coordinator_client_pool->GetClient(address);
+
+    grpc_invoker(
+        client, std::move(request),
+        [tracker, address, callback_logic](grpc::Status status, ResponseT& response) mutable {
+          callback_logic(status, response, tracker, address);
+        },
+        timeout_ms);
   }
 };
 

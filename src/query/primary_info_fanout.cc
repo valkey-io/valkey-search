@@ -16,151 +16,112 @@
 #include "src/coordinator/info_converter.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/query/fanout.h"
+#include "src/query/partition_results_tracker_base.h"
 #include "src/schema_manager.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/thread_pool.h"
 
 namespace valkey_search::query::primary_info_fanout {
 
-// InfoPartitionResultsTracker is a thread-safe class that tracks the results
-// of an info fanout. It aggregates the results from multiple nodes and returns
-// the aggregated result to the callback.
-struct PrimaryInfoPartitionResultsTracker {
-  absl::Mutex mutex;
-  PrimaryInfoResult aggregated_result ABSL_GUARDED_BY(mutex);
-  int outstanding_requests ABSL_GUARDED_BY(mutex);
-  PrimaryInfoResponseCallback callback;
-  std::unique_ptr<PrimaryInfoParameters> parameters ABSL_GUARDED_BY(mutex);
-
+class PrimaryInfoPartitionResultsTracker
+  : public fanout::PartitionResultsTrackerBase<
+        PrimaryInfoResult,
+        coordinator::InfoIndexPartitionResponse,
+        PrimaryInfoResult,
+        PrimaryInfoParameters> {
+ public:
   PrimaryInfoPartitionResultsTracker(
-      int outstanding_requests, PrimaryInfoResponseCallback callback,
-      std::unique_ptr<PrimaryInfoParameters> parameters)
-      : outstanding_requests(outstanding_requests),
-        callback(std::move(callback)),
-        parameters(std::move(parameters)) {}
+      PrimaryInfoResponseCallback callback,
+      std::unique_ptr<PrimaryInfoParameters> params)
+    : fanout::PartitionResultsTrackerBase<
+          PrimaryInfoResult,
+          coordinator::InfoIndexPartitionResponse,
+          PrimaryInfoResult,
+          PrimaryInfoParameters>(std::move(callback), std::move(params)) {}
 
-  void AddResults(coordinator::InfoIndexPartitionResponse& response) {
-    absl::MutexLock lock(&mutex);
-
-    if (!response.error().empty()) {
-      if (aggregated_result.error.empty()) {
-        aggregated_result.error = response.error();
+ protected:
+  void AggregateFromResponse(
+      const coordinator::InfoIndexPartitionResponse& resp,
+      PrimaryInfoResult& result) override {
+    // copy old logic:
+    if (!resp.error().empty()) {
+      if (result.error.empty()) {
+        result.error = resp.error();
       } else {
-        aggregated_result.error += ";" + response.error();
+        result.error += ";" + resp.error();
       }
       return;
     }
-
-    if (response.exists()) {
-      // Check fingerprint consistency first
-      if (!aggregated_result.schema_fingerprint.has_value()) {
-        aggregated_result.schema_fingerprint = response.schema_fingerprint();
-      } else if (aggregated_result.schema_fingerprint.value() !=
-                 response.schema_fingerprint()) {
-        VMSDK_LOG(DEBUG, nullptr)
-            << "Schema fingerprint mismatch detected! Reference: "
-            << aggregated_result.schema_fingerprint.value()
-            << ", Remote node: " << response.schema_fingerprint();
-        aggregated_result.has_schema_mismatch = true;
-        aggregated_result.error =
-            "found index schema inconsistency in the cluster";
+    if (resp.exists()) {
+      // fingerprint
+      if (!result.schema_fingerprint.has_value()) {
+        result.schema_fingerprint = resp.schema_fingerprint();
+      } else if (result.schema_fingerprint.value() != resp.schema_fingerprint()) {
+        result.has_schema_mismatch = true;
+        result.error = "found index schema inconsistency in the cluster";
         return;
       }
-
-      // Check version consistency
-      if (!aggregated_result.encoding_version.has_value()) {
-        aggregated_result.encoding_version = response.encoding_version();
-      } else if (aggregated_result.encoding_version.value() !=
-                 response.encoding_version()) {
-        VMSDK_LOG(DEBUG, nullptr)
-            << "Encoding version mismatch detected! Reference: "
-            << aggregated_result.encoding_version.value()
-            << ", Remote node: " << response.encoding_version();
-        aggregated_result.has_version_mismatch = true;
-        aggregated_result.error =
-            "found index schema version inconsistency in the cluster";
+      // version
+      if (!result.encoding_version.has_value()) {
+        result.encoding_version = resp.encoding_version();
+      } else if (result.encoding_version.value() != resp.encoding_version()) {
+        result.has_version_mismatch = true;
+        result.error = "found index schema version inconsistency in the cluster";
         return;
       }
-
-      aggregated_result.exists = true;
-      aggregated_result.index_name = response.index_name();
-      aggregated_result.num_docs += response.num_docs();
-      aggregated_result.num_records += response.num_records();
-      aggregated_result.hash_indexing_failures +=
-          response.hash_indexing_failures();
+      result.exists = true;
+      result.index_name = resp.index_name();
+      result.num_docs += resp.num_docs();
+      result.num_records += resp.num_records();
+      result.hash_indexing_failures += resp.hash_indexing_failures();
     }
   }
 
-  // Handle local result (similar to how search handles
-  // std::deque<indexes::Neighbor>)
-  void AddResults(valkey_search::query::primary_info_fanout::PrimaryInfoResult&
-                      local_result) {
-    absl::MutexLock lock(&mutex);
-
-    if (!local_result.error.empty()) {
-      if (aggregated_result.error.empty()) {
-        aggregated_result.error = local_result.error;
+  void AggregateFromLocal(
+      const PrimaryInfoResult& local,
+      PrimaryInfoResult& result) override {
+    // same as AddResults(local)
+    if (!local.error.empty()) {
+      if (result.error.empty()) {
+        result.error = local.error;
       } else {
-        aggregated_result.error += ";" + local_result.error;
+        result.error += ";" + local.error;
       }
       return;
     }
-
-    if (local_result.exists) {
-      // Check fingerprint consistency first
-      if (!aggregated_result.schema_fingerprint.has_value()) {
-        aggregated_result.schema_fingerprint = local_result.schema_fingerprint;
-      } else if (local_result.schema_fingerprint.has_value() &&
-                 aggregated_result.schema_fingerprint.value() !=
-                     local_result.schema_fingerprint.value()) {
-        VMSDK_LOG(DEBUG, nullptr)
-            << "Schema fingerprint mismatch detected! Reference: "
-            << aggregated_result.schema_fingerprint.value()
-            << ", Local node: " << local_result.schema_fingerprint.value();
-        aggregated_result.has_schema_mismatch = true;
-        aggregated_result.error =
-            "found index schema inconsistency in the cluster";
+    if (local.exists) {
+      if (!result.schema_fingerprint.has_value()) {
+        result.schema_fingerprint = local.schema_fingerprint;
+      } else if (local.schema_fingerprint.has_value() &&
+                 result.schema_fingerprint.value() != local.schema_fingerprint.value()) {
+        result.has_schema_mismatch = true;
+        result.error = "found index schema inconsistency in the cluster";
         return;
       }
-
-      // Check version consistency
-      if (!aggregated_result.encoding_version.has_value()) {
-        aggregated_result.encoding_version = local_result.encoding_version;
-      } else if (local_result.encoding_version.has_value() &&
-                 aggregated_result.encoding_version.value() !=
-                     local_result.encoding_version.value()) {
-        VMSDK_LOG(DEBUG, nullptr)
-            << "Encoding version mismatch detected! Reference: "
-            << aggregated_result.encoding_version.value()
-            << ", Local node: " << local_result.encoding_version.value();
-        aggregated_result.has_version_mismatch = true;
-        aggregated_result.error =
-            "found index schema version inconsistency in the cluster";
+      if (!result.encoding_version.has_value()) {
+        result.encoding_version = local.encoding_version;
+      } else if (local.encoding_version.has_value() &&
+                 result.encoding_version.value() != local.encoding_version.value()) {
+        result.has_version_mismatch = true;
+        result.error = "found index schema version inconsistency in the cluster";
         return;
       }
-
-      aggregated_result.exists = true;
-      aggregated_result.index_name = local_result.index_name;
-      aggregated_result.num_docs += local_result.num_docs;
-      aggregated_result.num_records += local_result.num_records;
-      aggregated_result.hash_indexing_failures +=
-          local_result.hash_indexing_failures;
+      result.exists = true;
+      result.index_name = local.index_name;
+      result.num_docs += local.num_docs;
+      result.num_records += local.num_records;
+      result.hash_indexing_failures += local.hash_indexing_failures;
     }
   }
 
-  void HandleError(const std::string& error_message) {
-    absl::MutexLock lock(&mutex);
-    if (aggregated_result.error.empty()) {
-      aggregated_result.error = error_message;
+  void AggregateError(
+      const std::string& err,
+      PrimaryInfoResult& result) override {
+    if (result.error.empty()) {
+      result.error = err;
     } else {
-      aggregated_result.error += ";" + error_message;
+      result.error += ";" + err;
     }
-  }
-
-  ~PrimaryInfoPartitionResultsTracker() {
-    absl::MutexLock lock(&mutex);
-    absl::StatusOr<PrimaryInfoResult> result = aggregated_result;
-    callback(result, std::move(parameters));
   }
 };
 
@@ -173,8 +134,8 @@ void PerformRemotePrimaryInfoRequest(
 
   int timeout_ms;
   {
-    absl::MutexLock lock(&tracker->mutex);
-    timeout_ms = tracker->parameters->timeout_ms;
+    absl::MutexLock lock(&tracker->GetMutex());
+    timeout_ms = tracker->GetParameters()->timeout_ms;
   }
 
   client->InfoIndexPartition(
@@ -248,7 +209,7 @@ absl::Status PerformPrimaryInfoFanoutAsync(
   auto request = coordinator::CreateInfoIndexPartitionRequest(
       parameters->index_name, parameters->timeout_ms);
   auto tracker = std::make_shared<PrimaryInfoPartitionResultsTracker>(
-      info_targets.size(), std::move(callback), std::move(parameters));
+      std::move(callback), std::move(parameters));
 
   bool has_local_target = false;
 
@@ -268,7 +229,7 @@ absl::Status PerformPrimaryInfoFanoutAsync(
 
   if (has_local_target) {
     vmsdk::RunByMain(
-        [ctx, index_name = tracker->parameters->index_name, tracker]() {
+        [ctx, index_name = tracker->GetParameters()->index_name, tracker]() {
           auto local_result = GetLocalPrimaryInfoResult(ctx, index_name);
           tracker->AddResults(local_result);
         });

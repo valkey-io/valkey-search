@@ -30,6 +30,12 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_TEXT_H_
 #define VALKEYSEARCH_SRC_INDEXES_TEXT_H_
 
+#include "absl/synchronization/mutex.h"
+#include "absl/functional/any_invocable.h"
+#include "src/indexes/index_base.h"
+#include "src/indexes/text_index.h"
+#include "src/query/predicate.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
 
@@ -46,25 +52,23 @@ class Text : public IndexBase {
   absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
                                     absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  int RespondWithInfo(RedisModuleCtx* ctx) const override;
+  int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
   bool IsTracked(const InternedStringPtr& key) const override;
-  absl::Status SaveIndex(RDBOutputStream& rdb_stream) const override {
+  absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
     return absl::OkStatus();
   }
 
   private:
   // Each text field is assigned a unique number within the containing index, this is used
   // by the Postings object to identify fields.
-  size_t text_field_number;
+  size_t text_field_number_;
   std::shared_ptr<TextIndex> text_;
 
 
   inline void ForEachTrackedKey(
       absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override {
     absl::MutexLock lock(&index_mutex_);
-    for (const auto& [key, _] : tracked_tags_by_keys_) {
-      fn(key);
-    }
+    // TODO: Implement proper key tracking
   }
   uint64_t GetRecordCount() const override;
   std::unique_ptr<data_model::Index> ToProto() const override;
@@ -72,6 +76,7 @@ class Text : public IndexBase {
   InternedStringPtr GetRawValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
+ public:
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
    public:
     bool Done() const override;

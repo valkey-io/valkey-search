@@ -1,29 +1,30 @@
-#ifndef VALKEY_SEARCH_INDEXES_TEXT_TEXT_H_
-#define VALKEY_SEARCH_INDEXES_TEXT_TEST_H_
+#ifndef VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
+#define VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 
-#include <concepts>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <optional>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "src/utils/string_interning.h"
+#include "src/index_schema.pb.h"
+#include "src/indexes/text/posting.h"
+#include "src/indexes/text/radix_tree.h"
+
 
 namespace valkey_search {
 namespace indexes {
 
-  using Key = vmsdk::InternedStringPtr;
-  using Position = uint32_t;
-
-  // Each text field is assigned a unique number within the containing index, this is used
-  // by the Postings object to identify fields.
-  size_t text_field_number;
-  std::shared_ptr<TextIndex> text_
+using Key = InternedStringPtr;
+using Position = uint32_t;
 
 
 
 struct TextIndex {
   // Constructor
-  Text(const data_model& text_index_proto);
-
-  text::RadixTree prefix_;
+  TextIndex(const data_model::TextIndex& text_index_proto);
 
   //
   // The main query data structure maps Words into Postings objects. This
@@ -35,15 +36,13 @@ struct TextIndex {
   // thus this object becomes responsible for cross-tree locking issues.
   // Multiple locking strategies are possible. TBD (a shared-ed word lock table should work well)
   //
-  std::shared_ptr<RadixTree<std::unique_ptr<Postings *>, false>>> prefix_;
-  std::optional<text::RadixTree> suffix_;
+  std::shared_ptr<RadixTree<std::unique_ptr<valkey_search::text::Postings>, false>> prefix_;
+  std::optional<std::shared_ptr<RadixTree<std::unique_ptr<valkey_search::text::Postings>, true>>> suffix_;
 
-  absl::hashmap<Key, text::RadixTree> reverse_;
-
-  absl::hashset<Key> untracked_keys_;
+  absl::flat_hash_set<Key> untracked_keys_;
 };
 
-struct IndexSchemaText{
+struct IndexSchemaText {
   //
   // This is the main index of all Text fields in this index schema
   //
@@ -54,10 +53,10 @@ struct IndexSchemaText{
   //
   // This object must also ensure that updates of this object are multi-thread safe.
   //
-  absl::flat_hash_map<Key, TextIndex>> by_key_;
+  absl::flat_hash_map<Key, TextIndex> by_key_;
 };
 
 }  // namespace indexes
 }  // namespace valkey_search
 
-#endif
+#endif  // VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_

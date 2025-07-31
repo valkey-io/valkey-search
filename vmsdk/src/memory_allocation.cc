@@ -29,6 +29,7 @@ namespace vmsdk {
 // state.
 thread_local static bool thread_using_valkey_module_alloc = false;
 static std::atomic<bool> use_valkey_module_alloc_switch = false;
+thread_local static int64_t memory_delta = 0;
 
 bool IsUsingValkeyAlloc() {
   if (!thread_using_valkey_module_alloc &&
@@ -47,19 +48,33 @@ void ResetValkeyAlloc() {
   use_valkey_module_alloc_switch.store(false, std::memory_order_relaxed);
   thread_using_valkey_module_alloc = false;
   used_memory_bytes.store(0, std::memory_order_relaxed);
+  memory_delta = 0;
 }
 
 uint64_t GetUsedMemoryCnt() { return used_memory_bytes; }
 
 void ReportAllocMemorySize(uint64_t size) {
   vmsdk::used_memory_bytes.fetch_add(size, std::memory_order_relaxed);
+
+  memory_delta += static_cast<int64_t>(size);
 }
+
 void ReportFreeMemorySize(uint64_t size) {
   if (size > used_memory_bytes) {
     vmsdk::used_memory_bytes.store(0, std::memory_order_relaxed);
   } else {
     vmsdk::used_memory_bytes.fetch_sub(size, std::memory_order_relaxed);
   }
+
+  memory_delta -= static_cast<int64_t>(size);
+}
+
+int64_t GetMemoryDelta() {
+  return memory_delta;
+}
+
+void SetMemoryDelta(int64_t delta) {
+  memory_delta = delta;
 }
 
 }  // namespace vmsdk

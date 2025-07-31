@@ -36,7 +36,7 @@ class TestQueryParser(ValkeySearchTestCaseBase):
         """
         client: Valkey = self.server.get_new_client()
         # Test that the default query string limit is 1000
-        assert client.execute_command("CONFIG GET search.query-string-depth") == [b"search.query-string-depth", b"1000"]
+        assert client.execute_command("CONFIG GET search.query-string-depth") == [b"search.query-string-depth", b"16"]
         # Test that we can set the query string limit to 1
         assert client.execute_command("CONFIG SET search.query-string-depth 1") == b"OK"
         assert client.execute_command("FT.CREATE my_index ON HASH PREFIX 1 doc: SCHEMA price NUMERIC category TAG SEPARATOR | doc_embedding VECTOR FLAT 6 TYPE FLOAT32 DIM 128 DISTANCE_METRIC COSINE") == b"OK"
@@ -83,17 +83,17 @@ class TestQueryParser(ValkeySearchTestCaseBase):
             assert False
         except ResponseError as e:
             assert str(e) == "Invalid filter expression: `((((((((((@price:[10 20]))))))))))`. Query string is too complex"
-        # Test that the config ranges from 1 to 4294967295
+        # Test that the config ranges from 1 to 16
         try:
             client.execute_command("CONFIG SET search.query-string-depth 0")
             assert False
         except ResponseError as e:
-            assert "argument must be between 1 and 4294967295 inclusive" in str(e)
+            assert "argument must be between 1 and 16 inclusive" in str(e)
         try:
-            client.execute_command("CONFIG SET search.query-string-depth 4294967296")
+            client.execute_command("CONFIG SET search.query-string-depth 17")
             assert False
         except ResponseError as e:
-            assert "argument must be between 1 and 4294967295 inclusive" in str(e)
+            assert "argument must be between 1 and 16 inclusive" in str(e)
             
     def test_query_string_terms_count_limit(self):
         """

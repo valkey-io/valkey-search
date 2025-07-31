@@ -36,14 +36,14 @@ namespace options {
 /// Register the "--query-string-depth" flag. Controls the depth of the query
 /// string parsing from the FT.SEARCH cmd.
 constexpr absl::string_view kQueryStringDepthConfig{"query-string-depth"};
-constexpr uint32_t kDefaultQueryStringDepth{1000};
+constexpr uint32_t kMaxQueryStringDepth{16};
 constexpr uint32_t kMinimumQueryStringDepth{1};
 static auto query_string_depth =
     config::NumberBuilder(kQueryStringDepthConfig,   // name
-                          kDefaultQueryStringDepth,  // default size
+                          kMaxQueryStringDepth,  // default size
                           kMinimumQueryStringDepth,  // min size
-                          UINT_MAX)                  // max size
-        .WithValidationCallback(CHECK_RANGE(kMinimumQueryStringDepth, UINT_MAX,
+                          kMaxQueryStringDepth)                  // max size
+        .WithValidationCallback(CHECK_RANGE(kMinimumQueryStringDepth, kMaxQueryStringDepth,
                                             kQueryStringDepthConfig))
         .Build();
 

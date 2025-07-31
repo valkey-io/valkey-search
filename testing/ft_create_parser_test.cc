@@ -653,7 +653,7 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message =
                  "Invalid field type for field `hash_field1`: Invalid range: "
                  "Value below minimum; M must be a positive integer greater "
-                 "than 0 and cannot exceed 2000000.",
+                 "than 0 and cannot exceed 256.",
          },
          {
              .test_name = "invalid_m_too_big",
@@ -664,7 +664,7 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message =
                  "Invalid field type for field `hash_field1`: Invalid range: "
                  "Value above maximum; M must be a positive integer greater "
-                 "than 0 and cannot exceed 2000000.",
+                 "than 0 and cannot exceed 256.",
          },
          {
              .test_name = "invalid_ef_construction_zero",

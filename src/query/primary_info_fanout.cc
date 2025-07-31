@@ -24,119 +24,118 @@
 namespace valkey_search::query::primary_info_fanout {
 
 class PrimaryInfoPartitionResultsTracker
-  : public fanout::PartitionResultsTrackerBase<
-        PrimaryInfoResult,
-        coordinator::InfoIndexPartitionResponse,
-        PrimaryInfoResult,
-        PrimaryInfoParameters> {
+    : public fanout::PartitionResultsTrackerBase<
+          coordinator::InfoIndexPartitionResponse, PrimaryInfoResult> {
  public:
   PrimaryInfoPartitionResultsTracker(
       PrimaryInfoResponseCallback callback,
       std::unique_ptr<PrimaryInfoParameters> params)
-    : fanout::PartitionResultsTrackerBase<
-          PrimaryInfoResult,
-          coordinator::InfoIndexPartitionResponse,
-          PrimaryInfoResult,
-          PrimaryInfoParameters>(std::move(callback), std::move(params)) {}
+      : callback_(std::move(callback)), parameters_(std::move(params)) {}
+  ~PrimaryInfoPartitionResultsTracker() override { FinishUnderLock(); }
 
  protected:
-  void AggregateFromResponse(
-      const coordinator::InfoIndexPartitionResponse& resp,
-      PrimaryInfoResult& result) override {
-    // copy old logic:
+  // gRPC transport error
+  void OnError(const std::string& err) override {
+    if (aggregated_.error.empty())
+      aggregated_.error = err;
+    else
+      aggregated_.error += ";" + err;
+  }
+
+  void OnResponse(
+      const coordinator::InfoIndexPartitionResponse& resp) override {
+    // logic errors
     if (!resp.error().empty()) {
-      if (result.error.empty()) {
-        result.error = resp.error();
-      } else {
-        result.error += ";" + resp.error();
-      }
+      if (aggregated_.error.empty())
+        aggregated_.error = resp.error();
+      else
+        aggregated_.error += ";" + resp.error();
       return;
     }
+
     if (resp.exists()) {
       // fingerprint
-      if (!result.schema_fingerprint.has_value()) {
-        result.schema_fingerprint = resp.schema_fingerprint();
-      } else if (result.schema_fingerprint.value() != resp.schema_fingerprint()) {
-        result.has_schema_mismatch = true;
-        result.error = "found index schema inconsistency in the cluster";
+      if (!aggregated_.schema_fingerprint.has_value()) {
+        aggregated_.schema_fingerprint = resp.schema_fingerprint();
+      } else if (aggregated_.schema_fingerprint.value() !=
+                 resp.schema_fingerprint()) {
+        aggregated_.has_schema_mismatch = true;
+        aggregated_.error = "found index schema inconsistency in the cluster";
         return;
       }
       // version
-      if (!result.encoding_version.has_value()) {
-        result.encoding_version = resp.encoding_version();
-      } else if (result.encoding_version.value() != resp.encoding_version()) {
-        result.has_version_mismatch = true;
-        result.error = "found index schema version inconsistency in the cluster";
+      if (!aggregated_.encoding_version.has_value()) {
+        aggregated_.encoding_version = resp.encoding_version();
+      } else if (aggregated_.encoding_version.value() !=
+                 resp.encoding_version()) {
+        aggregated_.has_version_mismatch = true;
+        aggregated_.error =
+            "found index schema version inconsistency in the cluster";
         return;
       }
-      result.exists = true;
-      result.index_name = resp.index_name();
-      result.num_docs += resp.num_docs();
-      result.num_records += resp.num_records();
-      result.hash_indexing_failures += resp.hash_indexing_failures();
+      // accumulate stats
+      aggregated_.exists = true;
+      aggregated_.index_name = resp.index_name();
+      aggregated_.num_docs += resp.num_docs();
+      aggregated_.num_records += resp.num_records();
+      aggregated_.hash_indexing_failures += resp.hash_indexing_failures();
     }
   }
 
-  void AggregateFromLocal(
-      const PrimaryInfoResult& local,
-      PrimaryInfoResult& result) override {
-    // same as AddResults(local)
+  void OnLocal(const PrimaryInfoResult& local) override {
     if (!local.error.empty()) {
-      if (result.error.empty()) {
-        result.error = local.error;
-      } else {
-        result.error += ";" + local.error;
-      }
+      if (aggregated_.error.empty())
+        aggregated_.error = local.error;
+      else
+        aggregated_.error += ";" + local.error;
       return;
     }
     if (local.exists) {
-      if (!result.schema_fingerprint.has_value()) {
-        result.schema_fingerprint = local.schema_fingerprint;
+      if (!aggregated_.schema_fingerprint.has_value()) {
+        aggregated_.schema_fingerprint = local.schema_fingerprint;
       } else if (local.schema_fingerprint.has_value() &&
-                 result.schema_fingerprint.value() != local.schema_fingerprint.value()) {
-        result.has_schema_mismatch = true;
-        result.error = "found index schema inconsistency in the cluster";
+                 aggregated_.schema_fingerprint.value() !=
+                     local.schema_fingerprint.value()) {
+        aggregated_.has_schema_mismatch = true;
+        aggregated_.error = "found index schema inconsistency in the cluster";
         return;
       }
-      if (!result.encoding_version.has_value()) {
-        result.encoding_version = local.encoding_version;
+      if (!aggregated_.encoding_version.has_value()) {
+        aggregated_.encoding_version = local.encoding_version;
       } else if (local.encoding_version.has_value() &&
-                 result.encoding_version.value() != local.encoding_version.value()) {
-        result.has_version_mismatch = true;
-        result.error = "found index schema version inconsistency in the cluster";
+                 aggregated_.encoding_version.value() !=
+                     local.encoding_version.value()) {
+        aggregated_.has_version_mismatch = true;
+        aggregated_.error =
+            "found index schema version inconsistency in the cluster";
         return;
       }
-      result.exists = true;
-      result.index_name = local.index_name;
-      result.num_docs += local.num_docs;
-      result.num_records += local.num_records;
-      result.hash_indexing_failures += local.hash_indexing_failures;
+      aggregated_.exists = true;
+      aggregated_.index_name = local.index_name;
+      aggregated_.num_docs += local.num_docs;
+      aggregated_.num_records += local.num_records;
+      aggregated_.hash_indexing_failures += local.hash_indexing_failures;
     }
   }
 
-  void AggregateError(
-      const std::string& err,
-      PrimaryInfoResult& result) override {
-    if (result.error.empty()) {
-      result.error = err;
-    } else {
-      result.error += ";" + err;
-    }
+  // Invoked by FinishUnderLock() in the derived dtor:
+  void OnFinished() override {
+    callback_(absl::StatusOr<PrimaryInfoResult>(std::move(aggregated_)),
+              std::move(parameters_));
   }
+
+ private:
+  PrimaryInfoResult aggregated_;
+  PrimaryInfoResponseCallback callback_;
+  std::unique_ptr<PrimaryInfoParameters> parameters_;
 };
 
 void PerformRemotePrimaryInfoRequest(
     std::unique_ptr<coordinator::InfoIndexPartitionRequest> request,
     const std::string& address,
-    coordinator::ClientPool* coordinator_client_pool,
+    coordinator::ClientPool* coordinator_client_pool, int timeout_ms,
     std::shared_ptr<PrimaryInfoPartitionResultsTracker> tracker) {
   auto client = coordinator_client_pool->GetClient(address);
-
-  int timeout_ms;
-  {
-    absl::MutexLock lock(&tracker->GetMutex());
-    timeout_ms = tracker->GetParameters()->timeout_ms;
-  }
 
   client->InfoIndexPartition(
       std::move(request),
@@ -206,8 +205,10 @@ absl::Status PerformPrimaryInfoFanoutAsync(
     coordinator::ClientPool* coordinator_client_pool,
     std::unique_ptr<PrimaryInfoParameters> parameters,
     vmsdk::ThreadPool* thread_pool, PrimaryInfoResponseCallback callback) {
+  std::string index_name = parameters->index_name;
+  int timeout_ms = parameters->timeout_ms;
   auto request = coordinator::CreateInfoIndexPartitionRequest(
-      parameters->index_name, parameters->timeout_ms);
+      parameters->index_name, timeout_ms);
   auto tracker = std::make_shared<PrimaryInfoPartitionResultsTracker>(
       std::move(callback), std::move(parameters));
 
@@ -224,15 +225,15 @@ absl::Status PerformPrimaryInfoFanoutAsync(
     request_copy->CopyFrom(*request);
 
     PerformRemotePrimaryInfoRequest(std::move(request_copy), node.address,
-                                    coordinator_client_pool, tracker);
+                                    coordinator_client_pool, timeout_ms,
+                                    tracker);
   }
 
   if (has_local_target) {
-    vmsdk::RunByMain(
-        [ctx, index_name = tracker->GetParameters()->index_name, tracker]() {
-          auto local_result = GetLocalPrimaryInfoResult(ctx, index_name);
-          tracker->AddResults(local_result);
-        });
+    vmsdk::RunByMain([ctx, tracker, index_name]() {
+      auto local_result = GetLocalPrimaryInfoResult(ctx, index_name);
+      tracker->AddResults(local_result);
+    });
   }
 
   return absl::OkStatus();

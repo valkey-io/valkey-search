@@ -11,3 +11,4 @@ build-*
 build/
 .build-*
 debs/*.deb
+.vscode/

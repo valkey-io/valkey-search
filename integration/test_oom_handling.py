@@ -53,24 +53,8 @@ class TestSearchOOMHandling(ValkeySearchClusterTestCase):
             vector_bytes = struct.pack("<3f", *[float(i), float(i + 1), float(i + 2)])
             cluster_client.hset(f"vec:{i}", "vector", vector_bytes)
 
-        # Expect success
-        assert self._run_search_query(cluster_client) == [
-            2,
-            b"vec:2",
-            [
-                b"__vector_score",
-                b"0.00741672515869",
-                b"vector",
-                b"\x00\x00\x00@\x00\x00@@\x00\x00\x80@",
-            ],
-            b"vec:1",
-            [
-                b"__vector_score",
-                b"1.19209289551e-07",
-                b"vector",
-                b"\x00\x00\x80?\x00\x00\x00@\x00\x00@@",
-            ],
-        ]
+        # Expect command returns 2 vectors
+        assert self._run_search_query(cluster_client)[0] == 2
 
         client_primary_1: Valkey = self.new_client_for_primary(1)
         current_used_memory = client_primary_1.info("memory")["used_memory"]

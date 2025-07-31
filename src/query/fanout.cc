@@ -77,10 +77,11 @@ struct SearchPartitionResultsTracker {
                       const grpc::Status &status) {
 
     if (!status.ok()) {
-      if (!options::GetEnablePartialResults().GetValue()) {
+      if (status.error_code() == grpc::RESOURCE_EXHAUSTED) {
+        reached_oom.store(true);
+      } else if (!options::GetEnablePartialResults().GetValue()) {
         parameters->cancellation_token->Cancel();
-      }
-      if (status.error_code() != grpc::StatusCode::DEADLINE_EXCEEDED) {
+      } else {
         VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
             << "Error during handling of FT.SEARCH on node " << address
             << ": " << status.error_message();
@@ -137,8 +138,7 @@ struct SearchPartitionResultsTracker {
     absl::StatusOr<std::deque<indexes::Neighbor>> result =
         std::deque<indexes::Neighbor>();
     if (reached_oom) {
-      result = absl::ResourceExhaustedError(
-          "OOM command not allowed when used memory > 'maxmemory'");
+      result = absl::ResourceExhaustedError(kOOMMsg);
     } else {
       while (!results.empty()) {
         result->push_back(
@@ -162,16 +162,7 @@ void PerformRemoteSearchRequest(
       [tracker, address = std::string(address)](
           grpc::Status status,
           coordinator::SearchIndexPartitionResponse &response) mutable {
-        if (status.ok()) {
-          tracker->HandleResponse(response, address, status);
-        } else {
-          if (status.error_code() == grpc::RESOURCE_EXHAUSTED) {
-            tracker->reached_oom.store(true);
-          }
-          VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-              << "Error during handling of FT.SEARCH on node " << address
-              << ": " << status.error_message();
-        }
+        tracker->HandleResponse(response, address, status);
       });
 }
 
@@ -238,8 +229,7 @@ absl::Status PerformSearchFanoutAsync(
           if (neighbors.ok()) {
             tracker->AddResults(*neighbors);
           } else {
-            if (neighbors.status().code() ==
-                absl::StatusCode::kResourceExhausted) {
+            if (absl::IsResourceExhausted(neighbors.status())) {
               tracker->reached_oom.store(true);
             }
             VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)

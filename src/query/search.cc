@@ -405,8 +405,7 @@ absl::Status SearchAsync(std::unique_ptr<VectorSearchParameters> parameters,
         auto ctx_flags = ValkeyModule_GetContextFlags(ctx.get());
         absl::StatusOr<std::deque<indexes::Neighbor>> res;
         if (ctx_flags & VALKEYMODULE_CTX_FLAGS_OOM) {
-          res = absl::ResourceExhaustedError(
-              "OOM command not allowed when used memory > 'maxmemory'");
+          res = absl::ResourceExhaustedError(kOOMMsg);
         } else {
           res = Search(*parameters, is_local_search);
         }

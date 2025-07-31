@@ -6,11 +6,6 @@
 
 #include "src/utils/string_interning.h"
 
-#include <concepts>
-#include <memory>
-
-#include "src/utils/string_interning.h"
-
 namespace valkey_search {
 namespace indexes {
 
@@ -23,10 +18,6 @@ namespace indexes {
   std::shared_ptr<TextIndex> text_
 
 
-
-struct TextIndex {
-  // Constructor
-  Text(const data_model::TextIndex& text_index_proto);
 
 struct TextIndex {
   // Constructor
@@ -50,20 +41,6 @@ struct TextIndex {
   absl::hashmap<Key, text::RadixTree> reverse_;
 
   absl::hashset<Key> untracked_keys_;
-};
-
-struct IndexSchemaText{
-  //
-  // This is the main index of all Text fields in this index schema
-  //
-  TextIndex corpus_;
-  //
-  // To support the Delete record and the post-filtering case, there is a separate
-  // table of postings that are indexed by Key.
-  //
-  // This object must also ensure that updates of this object are multi-thread safe.
-  //
-  absl::flat_hash_map<Key, TextIndex>> by_key_;
 };
 
 struct IndexSchemaText{

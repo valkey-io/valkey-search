@@ -21,7 +21,9 @@
 #include "absl/strings/str_cat.h"
 #include "hnswlib.h"
 #include "iostream.h"
+#include "src/indexes/global_metrics.h"
 #include "src/metrics.h"
+#include "src/utils/string_interning.h"
 #include "third_party/hnswlib/index.pb.h"
 #include "visited_list_pool.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -35,6 +37,9 @@
 #define htole64(x) OSSwapHostToLittleInt64(x)
 #define le64toh(x) OSSwapLittleToHostInt64(x)
 #endif
+
+using GlobalStats = valkey_search::indexes::GlobalIndexStats;
+using MetricType = valkey_search::indexes::MetricType;
 
 namespace hnswlib {
 typedef unsigned int tableint;
@@ -188,6 +193,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     }
     valkey_search::Metrics::GetStats().reclaimable_memory -=
         num_deleted_ * vector_size_;
+    GlobalStats::Instance().Decr(MetricType::kHnswNodesMarkedDeleted, num_deleted_);
+    GlobalStats::Instance().Decr(MetricType::kHnswEdgesMarkedDeleted, num_deleted_ * M_);
     cur_element_count_ = 0;
     visited_list_pool_.reset(nullptr);
   }
@@ -905,6 +912,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       if (isMarkedDeleted(i)) {
         num_deleted_ += 1;
         valkey_search::Metrics::GetStats().reclaimable_memory += vector_size_;
+        GlobalStats::Instance().Incr(MetricType::kHnswNodesMarkedDeleted);
+        GlobalStats::Instance().Incr(MetricType::kHnswEdgesMarkedDeleted, M_);
         if (allow_replace_deleted_) {
           deleted_elements.insert(i);
         }
@@ -972,6 +981,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       *ll_cur |= DELETE_MARK;
       num_deleted_ += 1;
       valkey_search::Metrics::GetStats().reclaimable_memory += vector_size_;
+      char* vector_data = getDataByInternalId(internalId);
+      absl::string_view record(vector_data, vector_size_);
+      valkey_search::StringInternStore::Instance().MarkDelete(record);
+      GlobalStats::Instance().Incr(MetricType::kHnswNodesMarkedDeleted);
+      GlobalStats::Instance().Incr(MetricType::kHnswEdgesMarkedDeleted, M_);
       if (allow_replace_deleted_) {
         std::unique_lock<std::mutex> lock_deleted_elements(
             deleted_elements_lock);
@@ -1016,6 +1030,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       *ll_cur &= ~DELETE_MARK;
       num_deleted_ -= 1;
       valkey_search::Metrics::GetStats().reclaimable_memory -= vector_size_;
+      char* vector_data = getDataByInternalId(internalId);
+      absl::string_view record(vector_data, vector_size_);
+      valkey_search::StringInternStore::Instance().UnmarkDelete(record);
+      GlobalStats::Instance().Decr(MetricType::kHnswNodesMarkedDeleted);
+      GlobalStats::Instance().Decr(MetricType::kHnswEdgesMarkedDeleted, M_);
       if (allow_replace_deleted_) {
         std::unique_lock<std::mutex> lock_deleted_elements(
             deleted_elements_lock);
@@ -1060,6 +1079,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     std::unique_lock<std::mutex> lock_label(getLabelOpMutex(label));
     if (!replace_deleted) {
       addPoint(data_point, label, -1);
+      GlobalStats::Instance().Incr(MetricType::kHnswEdges, M_);
       return;
     }
     // check if there is vacant place

@@ -4,9 +4,11 @@ on:
   pull_request: # This triggers the workflow for pull requests
     branches:
       - main    # Run tests for pull requests targeting the "main" branch
+      - fulltext
   push:
     branches:
       - main    # Optional: Run tests for direct pushes to "main"
+      - fulltext
   workflow_dispatch: # allow manual triggering
 
 concurrency:

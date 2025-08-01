@@ -16,6 +16,7 @@
 #include "absl/strings/string_view.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 
@@ -108,6 +109,18 @@ ComposedPredicate::ComposedPredicate(std::unique_ptr<Predicate> lhs_predicate,
                     : PredicateType::kComposedOr),
       lhs_predicate_(std::move(lhs_predicate)),
       rhs_predicate_(std::move(rhs_predicate)) {}
+
+TextPredicate::TextPredicate(const indexes::Text* index, absl::string_view alias,
+                             absl::string_view identifier, absl::string_view query_text)
+    : Predicate(PredicateType::kText),
+      index_(index),
+      alias_(alias),
+      identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
+      query_text_(query_text) {}
+
+bool TextPredicate::Evaluate(Evaluator& evaluator) const {
+  return evaluator.EvaluateText(*this);
+}
 
 bool ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   if (GetType() == PredicateType::kComposedAnd) {

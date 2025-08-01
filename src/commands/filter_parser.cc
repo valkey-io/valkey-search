@@ -21,7 +21,6 @@
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
-#include "src/valkey_search_options.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"

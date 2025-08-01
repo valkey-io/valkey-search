@@ -49,15 +49,20 @@ into the codebase efficiently enough to be deployed in production code.
 
 #include <memory>
 #include <span>
+#include <optional>
 
+#include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
-#include "src/text/text.h"
+#include "src/indexes/text.h"
+#include "src/indexes/text/posting.h"
 
 template <typename Target, bool reverse>
 struct RadixTree {
   struct WordIterator;
   struct PathIterator;
-  RadixTree();
+  RadixTree() {
+    // TODO: Initialize RadixTree data structures
+  }
 
   //
   // This function is the only way to mutate the RadixTree, all other functions
@@ -77,7 +82,7 @@ struct RadixTree {
   //
   //
   void Mutate(absl::string_view word,
-              absl::invokeable<std::option<Target>>(std::option<Target>) >
+              absl::FunctionRef<std::optional<Target>(std::optional<Target>)>
                   mutate);
 
   // Get the number of words that have the specified prefix in O(len(prefix))
@@ -116,7 +121,8 @@ struct RadixTree {
 
     // Access the current location, asserts if !IsValid()
     absl::string_view GetWord() const;
-    Postings& GetPostings() const;
+    
+    valkey_search::text::Postings& GetPostings();
   };
 
   //
@@ -150,12 +156,12 @@ struct RadixTree {
     absl::string_view GetPath();
 
     // Get Postings for this word, will assert if !IsWord()
-    Postings& GetPostings() const;
+    valkey_search::text::Postings& GetPostings() const;
 
     // Defrag the current Node and then defrag the Postings if this points to
     // one.
     void Defrag();
-  }
+  };
 };
 
 #endif

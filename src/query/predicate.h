@@ -142,9 +142,7 @@ class TextPredicate : public Predicate {
   absl::string_view GetIdentifier() const {
     return vmsdk::ToStringView(identifier_.get());
   }
-  vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
-    return vmsdk::RetainUniqueValkeyString(identifier_.get());
-  }
+  vmsdk::UniqueValkeyString GetRetainedIdentifier() const;
   const std::string& GetQueryText() const { return query_text_; }
 
  private:

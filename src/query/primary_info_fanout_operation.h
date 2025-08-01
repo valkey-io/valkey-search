@@ -63,13 +63,17 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
 
   void OnCompletion() override;
 
-  void PerformLocalCall(const fanout::FanoutSearchTarget& target,
-                        const coordinator::InfoIndexPartitionRequest& request,
-                        int timeout_ms) override;
+  void FillLocalResponse(const coordinator::InfoIndexPartitionRequest& request,
+                         coordinator::InfoIndexPartitionResponse& resp,
+                         const fanout::FanoutSearchTarget&) override;
 
-  void PerformRemoteCall(const fanout::FanoutSearchTarget& target,
-                         const coordinator::InfoIndexPartitionRequest& request,
-                         int timeout_ms) override;
+  void InvokeRemoteRpc(
+      coordinator::Client* client,
+      std::unique_ptr<coordinator::InfoIndexPartitionRequest> request_ptr,
+      std::function<void(grpc::Status,
+                         coordinator::InfoIndexPartitionResponse&)>
+          callback,
+      int timeout_ms) override;
 
  private:
   // Resources & config

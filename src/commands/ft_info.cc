@@ -12,7 +12,7 @@
 #include "src/acl.h"
 #include "src/commands/commands.h"
 #include "src/query/cluster_info_fanout.h"
-#include "src/query/primary_info_fanout.h"
+#include "src/query/primary_info_fanout_operation.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
 #include "vmsdk/src/command_parser.h"
@@ -32,16 +32,18 @@ constexpr uint32_t kMaximumFTInfoTimeoutMs{300000};  // 5 minutes max
 
 namespace options {
 
-/// Register the "--ft-info-timeout-ms" flag. Controls the timeout for FT.INFO operations
+/// Register the "--ft-info-timeout-ms" flag. Controls the timeout for FT.INFO
+/// operations
 static auto ft_info_timeout_ms =
-    vmsdk::config::NumberBuilder(kFTInfoTimeoutMsConfig,   // name
-                                 kDefaultFTInfoTimeoutMs,  // default timeout (5 seconds)
-                                 kMinimumFTInfoTimeoutMs,  // min timeout (100ms)
-                                 kMaximumFTInfoTimeoutMs)  // max timeout (5 minutes)
+    vmsdk::config::NumberBuilder(
+        kFTInfoTimeoutMsConfig,   // name
+        kDefaultFTInfoTimeoutMs,  // default timeout (5 seconds)
+        kMinimumFTInfoTimeoutMs,  // min timeout (100ms)
+        kMaximumFTInfoTimeoutMs)  // max timeout (5 minutes)
         .Build();
 
-vmsdk::config::Number& GetFTInfoTimeoutMs() {
-  return dynamic_cast<vmsdk::config::Number&>(*ft_info_timeout_ms);
+vmsdk::config::Number &GetFTInfoTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number &>(*ft_info_timeout_ms);
 }
 
 }  // namespace options
@@ -60,6 +62,14 @@ struct PrimaryInfoAsyncResult {
 int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   auto *res = static_cast<PrimaryInfoAsyncResult *>(
       ValkeyModule_GetBlockedClientPrivateData(ctx));
+
+  if (!res) {
+    VMSDK_LOG(NOTICE, ctx)
+        << "FT.INFO PRIMARY: Reply called with null private data!";
+    return ValkeyModule_ReplyWithError(
+        ctx, "INTERNAL ERR: no reply data from async operation");
+  }
+
   if (!res->info.ok()) {
     return ValkeyModule_ReplyWithError(ctx,
                                        res->info.status().message().data());
@@ -241,28 +251,18 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
       AclPrefixCheck(ctx, permissions, index_schema->GetKeyPrefixes()));
 
   if (is_primary) {
-    VMSDK_LOG(DEBUG, ctx) << "==========Using Primary Scope==========";
     auto parameters =
         std::make_unique<query::primary_info_fanout::PrimaryInfoParameters>();
     parameters->index_name = std::string(index_schema_name);
     parameters->timeout_ms = timeout_ms;
-    auto targets = query::fanout::FanoutTemplate::GetTargets(
-        ctx, query::fanout::FanoutTargetMode::kPrimary);
-    VMSDK_LOG(DEBUG, ctx) << "Found " << targets.size() << " fanout targets:";
-
-    for (const auto &target : targets) {
-      VMSDK_LOG(DEBUG, ctx)
-          << "  Target type: "
-          << (target.type == query::fanout::FanoutSearchTarget::Type::kLocal
-                  ? "LOCAL"
-                  : "REMOTE")
-          << ", address: " << target.address;
-    }
-    vmsdk::BlockedClient blocked_client(
+    auto blocked_client = std::make_unique<vmsdk::BlockedClient>(
         ctx, primary_info_async::Reply, primary_info_async::Timeout,
         primary_info_async::Free, parameters->timeout_ms);
-    blocked_client.MeasureTimeStart();
-    auto on_done =
+    blocked_client->MeasureTimeStart();
+    vmsdk::BlockedClient *blocked_client_ptr = blocked_client.get();
+    auto op = new query::primary_info_fanout::PrimaryInfoFanoutOperation(
+        ctx, ValkeySearch::Instance().GetCoordinatorClientPool(),
+        std::move(parameters),
         [blocked_client = std::move(blocked_client)](
             absl::StatusOr<query::primary_info_fanout::PrimaryInfoResult>
                 result,
@@ -271,13 +271,11 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
           auto payload =
               std::make_unique<primary_info_async::PrimaryInfoAsyncResult>(
                   std::move(result), std::move(params));
-          blocked_client.SetReplyPrivateData(payload.release());
-        };
-    return query::primary_info_fanout::PerformPrimaryInfoFanoutAsync(
-        ctx, targets, ValkeySearch::Instance().GetCoordinatorClientPool(),
-        std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),
-        std::move(on_done));
-
+          blocked_client->SetReplyPrivateData(payload.release());
+          blocked_client->UnblockClient();
+        });
+    op->StartOperation();
+    return absl::OkStatus();
   } else if (is_cluster) {
     VMSDK_LOG(DEBUG, ctx) << "==========Using Cluster Scope==========";
     auto parameters =

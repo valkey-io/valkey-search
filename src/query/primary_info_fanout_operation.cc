@@ -40,125 +40,130 @@ PrimaryInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&,
 }
 
 void PrimaryInfoFanoutOperation::OnResponse(
-    const coordinator::InfoIndexPartitionResponse& /*resp*/,
+    const coordinator::InfoIndexPartitionResponse& resp,
     const fanout::FanoutSearchTarget& /*target*/) {
-  // Stub: add aggregation logic later
-}
+  absl::MutexLock lock(&mutex_);
 
-void PrimaryInfoFanoutOperation::OnError(
-    const std::string& /*error*/,
-    const fanout::FanoutSearchTarget& /*target*/) {
-  // Stub: add error aggregation logic later
-}
+  if (!resp.error().empty()) {
+    if (error_.empty()) {
+      error_ = resp.error();
+    } else {
+      error_ += ";" + resp.error();
+    }
+    return;
+  }
 
-void PrimaryInfoFanoutOperation::OnCompletion() {
-  // Stub: call the callback with dummy result for now
-  if (callback_) {
-    PrimaryInfoResult result;
-    result.index_name = index_name_;
-    callback_(absl::StatusOr<PrimaryInfoResult>(result),
-              std::move(parameters_));
+  if (resp.exists()) {
+    if (!schema_fingerprint_.has_value()) {
+      schema_fingerprint_ = resp.schema_fingerprint();
+    } else if (schema_fingerprint_.value() != resp.schema_fingerprint()) {
+      has_schema_mismatch_ = true;
+      error_ = "found index schema inconsistency in the cluster";
+      return;
+    }
+    if (!encoding_version_.has_value()) {
+      encoding_version_ = resp.encoding_version();
+    } else if (encoding_version_.value() != resp.encoding_version()) {
+      has_version_mismatch_ = true;
+      error_ = "found index schema version inconsistency in the cluster";
+      return;
+    }
+    exists_ = true;
+    index_name_ = resp.index_name();
+    num_docs_ += resp.num_docs();
+    num_records_ += resp.num_records();
+    hash_indexing_failures_ += resp.hash_indexing_failures();
   }
 }
 
-void PrimaryInfoFanoutOperation::PerformLocalCall(
-    const fanout::FanoutSearchTarget& target,
-    const coordinator::InfoIndexPartitionRequest& request, int /*timeout_ms*/) {
-  vmsdk::RunByMain([this, target, request]() {
-    PrimaryInfoResult local_result;
-
-    // 1. Look up the local index schema.
-    auto index_schema_result = SchemaManager::Instance().GetIndexSchema(
-        ValkeyModule_GetSelectedDb(ctx_), request.index_name());
-
-    if (!index_schema_result.ok()) {
-      // Index not found locally.
-      local_result.exists = false;
-      local_result.index_name = request.index_name();
-      local_result.error = std::string("Index not found: ") +
-                           std::string(index_schema_result.status().message());
-      // Aggregate as an error.
-      this->OnError(local_result.error, target);
-      this->RpcDone();
-      return;
-    }
-
-    // 2. Gather info/stats from schema and global metadata.
-    auto index_schema = index_schema_result.value();
-    IndexSchema::InfoIndexPartitionData data =
-        index_schema->GetInfoIndexPartitionData();
-
-    uint64_t fingerprint = 0;
-    uint32_t encoding_version = 0;
-
-    auto global_metadata =
-        coordinator::MetadataManager::Instance().GetGlobalMetadata();
-    if (global_metadata->type_namespace_map().contains(
-            kSchemaManagerMetadataTypeName)) {
-      const auto& entry_map = global_metadata->type_namespace_map().at(
-          kSchemaManagerMetadataTypeName);
-      if (entry_map.entries().contains(request.index_name())) {
-        const auto& entry = entry_map.entries().at(request.index_name());
-        fingerprint = entry.fingerprint();
-        encoding_version = entry.encoding_version();
-      }
-    }
-
-    local_result.exists = true;
-    local_result.index_name = request.index_name();
-    local_result.num_docs = data.num_docs;
-    local_result.num_records = data.num_records;
-    local_result.hash_indexing_failures = data.hash_indexing_failures;
-    local_result.error = "";
-    local_result.schema_fingerprint = fingerprint;
-    local_result.encoding_version = encoding_version;
-
-    // 3. Convert to proto for aggregation.
-    coordinator::InfoIndexPartitionResponse resp;
-    resp.set_exists(local_result.exists);
-    resp.set_index_name(local_result.index_name);
-    resp.set_num_docs(local_result.num_docs);
-    resp.set_num_records(local_result.num_records);
-    resp.set_hash_indexing_failures(local_result.hash_indexing_failures);
-    if (local_result.schema_fingerprint) {
-      resp.set_schema_fingerprint(*local_result.schema_fingerprint);
-    }
-    if (local_result.encoding_version) {
-      resp.set_encoding_version(*local_result.encoding_version);
-    }
-    resp.set_error(local_result.error);
-
-    // 4. Aggregate into operation (even if error is empty).
-    this->OnResponse(resp, target);
-    this->RpcDone();
-  });
+void PrimaryInfoFanoutOperation::OnError(
+    const std::string& error, const fanout::FanoutSearchTarget& /*target*/) {
+  absl::MutexLock lock(&mutex_);
+  if (error_.empty()) {
+    error_ = error;
+  } else {
+    error_ += ";" + error;
+  }
 }
 
-void PrimaryInfoFanoutOperation::PerformRemoteCall(
-    const fanout::FanoutSearchTarget& target,
-    const coordinator::InfoIndexPartitionRequest& request, int timeout_ms) {
-  // Get the remote client for the target address
-  auto client = client_pool_->GetClient(target.address);
+void PrimaryInfoFanoutOperation::OnCompletion() {
+  absl::MutexLock lock(&mutex_);
 
-  // Create a unique_ptr copy of the request for the RPC call
-  auto request_ptr =
-      std::make_unique<coordinator::InfoIndexPartitionRequest>(request);
+  PrimaryInfoResult result;
+  result.exists = exists_;
+  result.index_name = index_name_;
+  result.num_docs = num_docs_;
+  result.num_records = num_records_;
+  result.hash_indexing_failures = hash_indexing_failures_;
+  result.error = error_;
+  result.schema_fingerprint = schema_fingerprint_;
+  result.has_schema_mismatch = has_schema_mismatch_;
+  result.encoding_version = encoding_version_;
+  result.has_version_mismatch = has_version_mismatch_;
 
-  // Issue the async RPC call
-  client->InfoIndexPartition(
-      std::move(request_ptr),
-      [this, target](grpc::Status status,
-                     coordinator::InfoIndexPartitionResponse& response) {
-        if (status.ok()) {
-          this->OnResponse(response, target);
-        } else {
-          this->OnError("gRPC error on node " + target.address + ": " +
-                            status.error_message(),
-                        target);
-        }
-        this->RpcDone();
-      },
-      timeout_ms);
+  if (callback_) {
+    callback_(absl::StatusOr<PrimaryInfoResult>(result),
+              std::move(parameters_));
+  }
+  delete this;
+}
+
+void PrimaryInfoFanoutOperation::FillLocalResponse(const coordinator::InfoIndexPartitionRequest& request,
+                       coordinator::InfoIndexPartitionResponse& resp,
+                       const fanout::FanoutSearchTarget& /*target*/) {
+  auto index_schema_result = SchemaManager::Instance().GetIndexSchema(
+      ValkeyModule_GetSelectedDb(ctx_), request.index_name());
+
+  if (!index_schema_result.ok()) {
+    resp.set_exists(false);
+    resp.set_index_name(request.index_name());
+    resp.set_error(std::string("Index not found: ") +
+                   std::string(index_schema_result.status().message()));
+    return;
+  }
+
+  auto index_schema = index_schema_result.value();
+  IndexSchema::InfoIndexPartitionData data =
+      index_schema->GetInfoIndexPartitionData();
+
+  uint64_t fingerprint = 0;
+  uint32_t encoding_version = 0;
+
+  auto global_metadata =
+      coordinator::MetadataManager::Instance().GetGlobalMetadata();
+  if (global_metadata->type_namespace_map().contains(
+          kSchemaManagerMetadataTypeName)) {
+    const auto& entry_map = global_metadata->type_namespace_map().at(
+        kSchemaManagerMetadataTypeName);
+    if (entry_map.entries().contains(request.index_name())) {
+      const auto& entry = entry_map.entries().at(request.index_name());
+      fingerprint = entry.fingerprint();
+      encoding_version = entry.encoding_version();
+    }
+  }
+
+  resp.set_exists(true);
+  resp.set_index_name(request.index_name());
+  resp.set_num_docs(data.num_docs);
+  resp.set_num_records(data.num_records);
+  resp.set_hash_indexing_failures(data.hash_indexing_failures);
+  if (fingerprint) {
+    resp.set_schema_fingerprint(fingerprint);
+  }
+  if (encoding_version) {
+    resp.set_encoding_version(encoding_version);
+  }
+  resp.set_error("");
+}
+
+void PrimaryInfoFanoutOperation::InvokeRemoteRpc(
+    coordinator::Client* client,
+    std::unique_ptr<coordinator::InfoIndexPartitionRequest> request_ptr,
+    std::function<void(grpc::Status, coordinator::InfoIndexPartitionResponse&)>
+        callback,
+    int timeout_ms) {
+  client->InfoIndexPartition(std::move(request_ptr), std::move(callback),
+                             timeout_ms);
 }
 
 }  // namespace valkey_search::query::primary_info_fanout

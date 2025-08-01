@@ -9,7 +9,11 @@
 
 #include <grpcpp/grpcpp.h>
 
+#include "absl/synchronization/mutex.h"
+#include "src/coordinator/client_pool.h"
 #include "src/query/fanout_template.h"
+#include "src/valkey_search.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::query::fanout {
@@ -40,11 +44,12 @@ class FanoutOperationBase {
     return false;
   }
 
-  virtual void PerformLocalCall(const FanoutSearchTarget& target,
-                                const Request& request, int timeout_ms) = 0;
+  virtual void FillLocalResponse(const Request&, Response&,
+                                 const FanoutSearchTarget&) = 0;
 
-  virtual void PerformRemoteCall(const FanoutSearchTarget& target,
-                                 const Request& request, int timeout_ms) = 0;
+  virtual void InvokeRemoteRpc(coordinator::Client*, std::unique_ptr<Request>,
+                               std::function<void(grpc::Status, Response&)>,
+                               int timeout_ms) = 0;
 
   virtual int GetTimeoutMs() const = 0;
   virtual Request GenerateRequest(const FanoutSearchTarget&,
@@ -55,10 +60,40 @@ class FanoutOperationBase {
 
   void IssueRpc(const FanoutSearchTarget& target, const Request& request,
                 int timeout_ms) {
+    coordinator::ClientPool* client_pool_ =
+        ValkeySearch::Instance().GetCoordinatorClientPool();
     if (target.type == FanoutSearchTarget::Type::kLocal) {
-      PerformLocalCall(target, request, timeout_ms);
+      vmsdk::RunByMain([this, target, request]() {
+        Response resp;
+        this->FillLocalResponse(request, resp, target);
+        if (!resp.error().empty()) {
+          this->OnError(resp.error(), target);
+        } else {
+          this->OnResponse(resp, target);
+        }
+        this->RpcDone();
+      });
     } else {
-      PerformRemoteCall(target, request, timeout_ms);
+      auto client = client_pool_->GetClient(target.address);
+      if (!client) {
+        this->OnError("No client found for " + target.address, target);
+        this->RpcDone();
+        return;
+      }
+      auto req_ptr = std::make_unique<Request>(request);
+      this->InvokeRemoteRpc(
+          client.get(), std::move(req_ptr),
+          [this, target](grpc::Status status, Response& resp) {
+            if (status.ok()) {
+              this->OnResponse(resp, target);
+            } else {
+              this->OnError("gRPC error on node " + target.address + ": " +
+                                status.error_message(),
+                            target);
+            }
+            this->RpcDone();
+          },
+          timeout_ms);
     }
   }
 
@@ -70,6 +105,7 @@ class FanoutOperationBase {
 
   ValkeyModuleCtx* ctx_;
   int outstanding_{0};
+  absl::Mutex mutex_;
 };
 
 }  // namespace valkey_search::query::fanout

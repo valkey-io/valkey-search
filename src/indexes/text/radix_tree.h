@@ -47,15 +47,17 @@ into the codebase efficiently enough to be deployed in production code.
 
 */
 
+#include <deque>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <optional>
 #include <span>
-#include <stack>
+#include <tuple>
 #include <variant>
 
 #include "absl/functional/function_ref.h"
+#include "absl/log/check.h"
 #include "absl/strings/string_view.h"
 
 namespace valkey_search {
@@ -197,24 +199,19 @@ struct RadixTree {
 
     // Access the current location, asserts if !IsValid()
     absl::string_view GetWord() const;
-    Target& GetTarget() const;
+    const Target& GetTarget() const;
 
    private:
     friend struct RadixTree;
-    explicit WordIterator(Node* node, absl::string_view prefix)
-        : curr_(node), word_(prefix) {
-      if (curr_ && !curr_->target.has_value()) {
-        Next();
-      }
-    }
+    explicit WordIterator(const Node* node, absl::string_view prefix);
 
-    using MapIterator = std::map<Byte, std::unique_ptr<Node>>::iterator;
-    std::stack<std::pair<uint32_t,               // depth
-                         std::pair<MapIterator,  // next sibling iterator
-                                   MapIterator   // end iterator
-                                   >>>
+    using MapIterator = std::map<Byte, std::unique_ptr<Node>>::const_iterator;
+    std::deque<std::tuple<uint32_t,     // depth
+                          MapIterator,  // next sibling iterator
+                          MapIterator   // end iterator
+                          >>
         stack_;
-    Node* curr_;
+    const Node* curr_;
     std::string word_;
   };
 
@@ -249,7 +246,7 @@ struct RadixTree {
     absl::string_view GetPath();
 
     // Get the target for this word, will assert if !IsWord()
-    Target& GetTarget() const;
+    const Target& GetTarget() const;
 
     // Defrag the current Node and then defrag the Postings if this points to
     // one.
@@ -261,7 +258,7 @@ template <typename Target, bool reverse>
 void RadixTree<Target, reverse>::Mutate(
     absl::string_view word,
     absl::FunctionRef<std::optional<Target>(std::optional<Target>)> mutate) {
-  assert(!word.empty());
+  CHECK(!word.empty()) << "Can't mutate the target at an empty word";
   Node* n = &root_;
   absl::string_view remaining = word;
   while (!remaining.empty()) {
@@ -367,36 +364,42 @@ typename RadixTree<Target, reverse>::WordIterator
 RadixTree<Target, reverse>::GetWordIterator(absl::string_view prefix) const {
   const Node* n = &root_;
   absl::string_view remaining = prefix;
-  bool exit = false;
+  bool no_match = false;
+
+  // Find the highest node in the sub-branch that matches the prefix
   while (!remaining.empty()) {
     std::visit(
         overloaded{
-            [&](const std::monostate&) { exit = true; },
+            [&](const std::monostate&) { no_match = true; },
             [&](const std::map<Byte, std::unique_ptr<Node>>& children) {
               const auto it = children.find(remaining[0]);
               if (it != children.end()) {
                 n = it->second.get();
+                remaining.remove_prefix(1);
               } else {
-                exit = true;
+                no_match = true;
+                return;
               }
-              remaining.remove_prefix(1);
             },
             [&](const std::pair<BytePath, std::unique_ptr<Node>>& child) {
               const BytePath& path = child.first;
               if (remaining.starts_with(path)) {
-                n = child.second.get();
                 remaining.remove_prefix(path.length());
+              } else if (path.starts_with(remaining)) {
+                remaining.remove_prefix(remaining.length());
               } else {
-                exit = true;
+                no_match = true;
+                return;
               }
+              n = child.second.get();
             }},
         n->children);
-    if (exit) {
+    if (no_match) {
       n = nullptr;
       break;
     }
   }
-  return WordIterator(const_cast<Node*>(n), prefix);
+  return WordIterator(n, prefix);
 }
 
 template <typename Target, bool reverse>
@@ -409,6 +412,14 @@ RadixTree<Target, reverse>::GetPathIterator(absl::string_view prefix) const {
 /*** WordIterator ***/
 
 template <typename Target, bool reverse>
+RadixTree<Target, reverse>::WordIterator::WordIterator(const Node* node, absl::string_view prefix)
+    : curr_(node), word_(prefix) {
+  if (curr_ && !curr_->target.has_value()) {
+    Next();
+  }
+}
+
+template <typename Target, bool reverse>
 bool RadixTree<Target, reverse>::WordIterator::Done() const {
   return curr_ == nullptr;
 }
@@ -417,42 +428,42 @@ template <typename Target, bool reverse>
 void RadixTree<Target, reverse>::WordIterator::Next() {
   do {
     std::visit(
-        overloaded{[&](std::monostate&) {
-                     if (stack_.empty()) {
-                       curr_ = nullptr;
-                       return;
-                     }
-                     auto [depth, iters] = stack_.top();
-                     stack_.pop();
-                     auto& [it, end_it] = iters;
-                     if (std::next(it) != end_it) {
-                       // There are more siblings to search
-                       stack_.push({1, {std::next(it), end_it}});
-                     } else if (!stack_.empty()) {
-                       stack_.top().first += 1;
-                     }
-                     curr_ = it->second.get();
-                     word_.resize(word_.size() - depth);
-                     word_ += it->first;
-                   },
-                   [&](std::map<Byte, std::unique_ptr<Node>>& children) {
-                     auto it = children.begin();
-                     if (std::next(it) != children.end()) {
-                       // There are more siblings to search
-                       stack_.push({1, {std::next(it), children.end()}});
-                     } else if (!stack_.empty()) {
-                       stack_.top().first += 1;
-                     }
-                     curr_ = it->second.get();
-                     word_ += it->first;
-                   },
-                   [&](std::pair<BytePath, std::unique_ptr<Node>>& child) {
-                     curr_ = child.second.get();
-                     word_ += child.first;
-                     if (!stack_.empty()) {
-                       stack_.top().first += child.first.length();
-                     }
-                   }},
+        overloaded{
+            [&](const std::monostate&) {
+              if (stack_.empty()) {
+                curr_ = nullptr;
+                return;
+              }
+              auto const [depth, it, end_it] = stack_.back();
+              stack_.pop_back();
+              if (std::next(it) != end_it) {
+                // There are more siblings to search
+                stack_.push_back({1, std::next(it), end_it});
+              } else if (!stack_.empty()) {
+                std::get<0>(stack_.back()) += 1;
+              }
+              curr_ = it->second.get();
+              word_.resize(word_.size() - depth);
+              word_ += it->first;
+            },
+            [&](const std::map<Byte, std::unique_ptr<Node>>& children) {
+              auto it = children.begin();
+              if (std::next(it) != children.end()) {
+                // There are more siblings to search
+                stack_.push_back({1, std::next(it), children.end()});
+              } else if (!stack_.empty()) {
+                std::get<0>(stack_.back()) += 1;
+              }
+              curr_ = it->second.get();
+              word_ += it->first;
+            },
+            [&](const std::pair<BytePath, std::unique_ptr<Node>>& child) {
+              curr_ = child.second.get();
+              word_ += child.first;
+              if (!stack_.empty()) {
+                std::get<0>(stack_.back()) += child.first.length();
+              }
+            }},
         curr_->children);
   } while (curr_ && !curr_->target.has_value());
 }
@@ -469,10 +480,7 @@ absl::string_view RadixTree<Target, reverse>::WordIterator::GetWord() const {
 }
 
 template <typename Target, bool reverse>
-Target& RadixTree<Target, reverse>::WordIterator::GetTarget() const {
-  if (curr_ == nullptr) {
-    throw std::runtime_error("Iterator reached the end");
-  }
+const Target& RadixTree<Target, reverse>::WordIterator::GetTarget() const {
   return curr_->target.value();
 }
 
@@ -515,7 +523,7 @@ absl::string_view RadixTree<Target, reverse>::PathIterator::GetPath() {
 }
 
 template <typename Target, bool reverse>
-Target& RadixTree<Target, reverse>::PathIterator::GetTarget() const {
+const Target& RadixTree<Target, reverse>::PathIterator::GetTarget() const {
   throw std::logic_error("TODO");
 }
 

@@ -109,6 +109,10 @@ class PredicateEvaluator : public query::Evaluator {
     return predicate.Evaluate(&out_numeric.value());
   }
 
+  bool EvaluateText(const query::TextPredicate &predicate) override {
+    return false;
+  }
+
  private:
   const RecordsMap &records_;
 };

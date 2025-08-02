@@ -30,6 +30,8 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_TEXT_H_
 #define VALKEYSEARCH_SRC_INDEXES_TEXT_H_
 
+// Commenting out because this file does not compile correctly yet.
+// #include "src/indexes/text/text.h"
 
 namespace valkey_search::indexes {
 
@@ -89,6 +91,8 @@ class Text : public IndexBase {
    private:
   };
 
+  // TODO: Handle TextPredicate in the .c file.
+  // This is needed for the FT.SEARCH command's core search fn.
   virtual std::unique_ptr<EntriesFetcher> Search(
       const query::TextPredicate& predicate,
       bool negate) const ABSL_NO_THREAD_SAFETY_ANALYSIS;

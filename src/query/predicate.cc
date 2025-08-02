@@ -15,6 +15,8 @@
 #include "absl/strings/match.h"
 #include "absl/strings/string_view.h"
 #include "src/indexes/numeric.h"
+// TODO: Commenting out because this file does not compile correctly yet.
+// #include "src/indexes/text.h"
 #include "src/indexes/tag.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -23,6 +25,57 @@ namespace valkey_search::query {
 
 bool NegatePredicate::Evaluate(Evaluator& evaluator) const {
   return !predicate_->Evaluate(evaluator);
+}
+
+TextPredicate::TextPredicate(const indexes::Text* index,
+                           absl::string_view identifier,
+                           absl::string_view raw_text_string,
+                           Operation op,
+                           double fuzzy_distance)
+    : Predicate(PredicateType::kText),
+      index_(index),
+      identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
+      raw_text_string_(raw_text_string),
+      operation_(op),
+      fuzzy_distance_(fuzzy_distance) {}
+
+bool TextPredicate::Evaluate(Evaluator& evaluator) const {
+  return evaluator.EvaluateText(*this);
+}
+
+bool TextPredicate::Evaluate(absl::string_view text) const {
+  switch (operation_) {
+    case Operation::kExact:
+      return EvaluateExact(text);
+    case Operation::kPrefix:
+      return EvaluatePrefix(text);
+    case Operation::kFuzzy:
+      return EvaluateFuzzy(text);
+    case Operation::kWildcard:
+      return EvaluateWildcard(text);
+    default:
+      return false;
+  }
+}
+
+bool TextPredicate::EvaluateExact(absl::string_view text) const {
+  return text == raw_text_string_;
+}
+
+bool TextPredicate::EvaluatePrefix(absl::string_view text) const {
+  return absl::StartsWith(text, raw_text_string_);
+}
+
+bool TextPredicate::EvaluateFuzzy(absl::string_view text) const {
+  // TODO: Implement Levenshtein distance calculation
+  // Return true if distance <= fuzzy_distance_
+  return false;
+}
+
+bool TextPredicate::EvaluateWildcard(absl::string_view text) const {
+  // TODO: Implement wildcard pattern matching
+  // Support * and ? wildcards
+  return false;
 }
 
 NumericPredicate::NumericPredicate(const indexes::Numeric* index,

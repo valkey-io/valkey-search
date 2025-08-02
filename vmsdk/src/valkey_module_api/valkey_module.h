@@ -394,6 +394,7 @@ typedef struct ValkeyModuleCommandArg {
   int flags; /* The VALKEYMODULE_CMD_ARG_* macros. */
   const char *deprecated_since;
   struct ValkeyModuleCommandArg *subargs;
+  const char *display_text;
 } ValkeyModuleCommandArg;
 
 typedef struct {

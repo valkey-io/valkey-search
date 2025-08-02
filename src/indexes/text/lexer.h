@@ -17,9 +17,12 @@ natural character that is part of a word.
 #include <vector>
 
 #include "absl/status/statusor.h"
-#include "src/text/text.h"
+#include "absl/strings/string_view.h"
 
 namespace valkey_search::text {
+
+// Forward declaration
+struct LexerOutput;
 
 /*
 
@@ -51,6 +54,9 @@ struct Lexer {
   // May fail if there are non-UTF-8 characters present.
   //
   absl::StatusOr<LexerOutput> ProcessString(absl::string_view s) const;
+
+ private:
+  std::string punctuation_;
 };
 
 //
@@ -71,9 +77,14 @@ struct LexerOutput {
   const std::vector<Word>& GetWords() const;
 
  private:
+  friend struct Lexer;
+  
   // Storage for escaped words
   std::vector<std::string> escaped_words_;
-}
+  
+  // Vector of words
+  std::vector<Word> words_;
+};
 
 }  // namespace valkey_search::text
 

@@ -30,7 +30,6 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_TEXT_H_
 #define VALKEYSEARCH_SRC_INDEXES_TEXT_H_
 
-#include "src/text/text.h"
 
 namespace valkey_search::indexes {
 
@@ -52,6 +51,13 @@ class Text : public IndexBase {
   absl::Status SaveIndex(RDBOutputStream& rdb_stream) const override {
     return absl::OkStatus();
   }
+
+  private:
+  // Each text field is assigned a unique number within the containing index, this is used
+  // by the Postings object to identify fields.
+  size_t text_field_number;
+  std::shared_ptr<TextIndex> text_;
+
 
   inline void ForEachTrackedKey(
       absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override {

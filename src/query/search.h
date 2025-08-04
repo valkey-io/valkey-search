@@ -36,7 +36,8 @@ namespace valkey_search::query {
 
 constexpr int64_t kTimeoutMS{50000};
 const size_t kMaxTimeoutMs{60000};
-constexpr absl::string_view kOOMMsg{"OOM command not allowed when used memory > 'maxmemory'"};
+constexpr absl::string_view kOOMMsg{
+    "OOM command not allowed when used memory > 'maxmemory'"};
 
 struct LimitParameter {
   uint64_t first_index{0};

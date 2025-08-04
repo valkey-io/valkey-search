@@ -332,6 +332,14 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
 
 absl::StatusOr<std::deque<indexes::Neighbor>> Search(
     const VectorSearchParameters &parameters, bool is_local_search) {
+  // Handle OOM for search requests, mainly defends against request
+  // coming from the coordinator
+  auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
+  auto ctx_flags = ValkeyModule_GetContextFlags(ctx.get());
+  absl::StatusOr<std::deque<indexes::Neighbor>> res;
+  if (ctx_flags & VALKEYMODULE_CTX_FLAGS_OOM) {
+    return absl::ResourceExhaustedError(kOOMMsg);
+  }
   // Handle non vector queries first where attribute_alias is empty.
   if (parameters.IsNonVectorQuery()) {
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
@@ -399,16 +407,7 @@ absl::Status SearchAsync(std::unique_ptr<VectorSearchParameters> parameters,
   thread_pool->Schedule(
       [parameters = std::move(parameters), callback = std::move(callback),
        is_local_search]() mutable {
-        // Handle OOM for search requests, mainly defends against request
-        // coming from the coordinator
-        auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-        auto ctx_flags = ValkeyModule_GetContextFlags(ctx.get());
-        absl::StatusOr<std::deque<indexes::Neighbor>> res;
-        if (ctx_flags & VALKEYMODULE_CTX_FLAGS_OOM) {
-          res = absl::ResourceExhaustedError(kOOMMsg);
-        } else {
-          res = Search(*parameters, is_local_search);
-        }
+        auto res = Search(*parameters, is_local_search);
         callback(res, std::move(parameters));
       },
       vmsdk::ThreadPool::Priority::kHigh);

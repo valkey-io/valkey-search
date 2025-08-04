@@ -107,7 +107,7 @@ TEST_F(VectorIndexTest, InitializationFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
 enum class ExpectedResults { kSuccess, kSkipped, kError };
 
 auto IndexToKey = [](int i) {
-  return StringInternStore::Intern(std::to_string(i) + "_key");
+  return StringInternStore::Intern(std::to_string(i) + "_key", StringType::KEY);
 };
 
 void VerifyResult(const absl::StatusOr<bool>& res,

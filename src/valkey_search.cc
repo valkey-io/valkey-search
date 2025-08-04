@@ -116,7 +116,9 @@ static vmsdk::info_field::Integer used_memory(
  static vmsdk::info_field::Integer reclaimable_memory("memory", "index_reclaimable_memory", 
     vmsdk::info_field::IntegerBuilder()
       .App()
-      .Computed([]() -> uint64_t { return Metrics::GetStats().reclaimable_memory; })
+      .Computed([]() -> uint64_t { 
+        return indexes::GlobalIndexStats::Instance().GetCount(indexes::MetricType::kVectorsMemoryMarkedDeleted); 
+      })
       .CrashSafe());
 
 static vmsdk::info_field::String background_indexing_status("indexing", "background_indexing_status",

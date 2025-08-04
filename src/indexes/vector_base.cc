@@ -151,9 +151,9 @@ std::shared_ptr<InternedString> VectorBase::InternVector(
         NormalizeEmbedding(record, GetDataTypeSize(), &magnitude.value());
     return StringInternStore::Intern(
         absl::string_view((const char *)norm_record.data(), norm_record.size()),
-        vector_allocator_.get(), MetricType::kVectorsMemory);
+        StringType::VECTOR, vector_allocator_.get());
   }
-  return StringInternStore::Intern(record, vector_allocator_.get(), MetricType::kVectorsMemory);
+  return StringInternStore::Intern(record, StringType::VECTOR, vector_allocator_.get());
 }
 
 absl::StatusOr<bool> VectorBase::AddRecord(const InternedStringPtr &key,
@@ -320,7 +320,7 @@ absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
 
 char *VectorBase::TrackVector(uint64_t internal_id, char *vector, size_t len) {
   auto interned_vector = StringInternStore::Intern(
-      absl::string_view(vector, len), vector_allocator_.get());
+      absl::string_view(vector, len), StringType::VECTOR, vector_allocator_.get());
   TrackVector(internal_id, interned_vector);
   return (char *)interned_vector->Str().data();
 }
@@ -434,7 +434,7 @@ void VectorBase::ExternalizeVector(ValkeyModuleCtx *ctx,
       is_module_owned);
   CHECK(!is_module_owned);
   std::optional<float> magnitude;
-  auto interned_key = StringInternStore::Intern(key_cstr, nullptr, indexes::MetricType::kKeysMemory);
+  auto interned_key = StringInternStore::Intern(key_cstr, StringType::KEY);
   auto interned_vector =
       InternVector(vmsdk::ToStringView(record.get()), magnitude);
   if (interned_vector) {
@@ -455,7 +455,7 @@ absl::Status VectorBase::LoadTrackedKeys(
     if (!tracked_key_metadata.ParseFromString(metadata_str->binary_content())) {
       return absl::InvalidArgumentError("Error parsing metadata from proto");
     }
-    auto interned_key = StringInternStore::Intern(tracked_key_metadata.key(), nullptr, indexes::MetricType::kKeysMemory);
+    auto interned_key = StringInternStore::Intern(tracked_key_metadata.key(), StringType::KEY);
     tracked_metadata_by_key_.insert(
         {interned_key,
          {.internal_id = tracked_key_metadata.internal_id(),

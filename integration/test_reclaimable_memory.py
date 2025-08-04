@@ -120,7 +120,7 @@ class TestReclaimableMemory(ValkeySearchTestCaseBase):
         info_data = client.info("SEARCH")
         initial_reclaimable = int(info_data["search_index_reclaimable_memory"])
         assert initial_reclaimable == 0
-        
+
         # Add vectors to both indexes
         for idx_name in indexes:
             for i in range(5):
@@ -141,9 +141,15 @@ class TestReclaimableMemory(ValkeySearchTestCaseBase):
         
         # Check reclaimable memory (should be global across all indexes)
         info_data = client.info("SEARCH")
-        final_reclaimable = int(info_data["search_index_reclaimable_memory"])
         
-        # Each vector is 2 float32 values = 2 * 4 = 8 bytes
-        # We deleted 3 vectors, so reclaimable memory should increase by 3 * 8 = 24 bytes
-        expected_reclaimable = after_insert_reclaimable + (3 * 2 * 4)  # 3 vectors * 2 dimensions * 4 bytes per float32
-        assert final_reclaimable == expected_reclaimable
+        # The vectors are still in use
+        assert int(info_data["search_index_reclaimable_memory"]) == 0
+
+        # Delete vectors from second index
+        for i in range(3):
+            client.delete(f"multi_idx_2:{i}")
+
+        # Check reclaimable memory 
+        info_data = client.info("SEARCH")
+        # The vectors are no longer in use
+        assert int(info_data["search_index_reclaimable_memory"]) == 24

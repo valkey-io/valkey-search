@@ -145,7 +145,7 @@ data_model::VectorIndex CreateFlatVectorIndexProto(
 
 indexes::Neighbor ToIndexesNeighbor(const NeighborTest &neighbor_test) {
   auto string_interned_external_id =
-      StringInternStore::Intern(neighbor_test.external_id);
+      StringInternStore::Intern(neighbor_test.external_id, StringType::KEY);
   indexes::Neighbor neighbor(string_interned_external_id,
                              neighbor_test.distance);
   if (neighbor_test.attribute_contents.has_value()) {

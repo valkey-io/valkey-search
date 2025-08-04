@@ -111,7 +111,7 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
     VMSDK_EXPECT_OK(index_schema->AddIndex("attribute_name",
                                            test_case.hash_field, mock_index));
 
-    auto key = StringInternStore::Intern("key");
+    auto key = StringInternStore::Intern("key", StringType::KEY);
     auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str().data());
     EXPECT_CALL(*mock_index, IsTracked(key))
         .WillRepeatedly(Return(test_case.is_tracked));
@@ -571,7 +571,7 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("attribute_name", "vector", mock_index));
 
-    auto key = StringInternStore::Intern("key");
+    auto key = StringInternStore::Intern("key", StringType::KEY);
     auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str().data());
     EXPECT_CALL(*mock_index, IsTracked(key)).WillRepeatedly(Return(false));
 
@@ -1154,7 +1154,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
       vmsdk::UniqueValkeyString data =
           vmsdk::MakeUniqueValkeyString(absl::string_view(
               (char *)&vectors[i][0], dimensions * sizeof(float)));
-      auto interned_key = StringInternStore::Intern("key" + std::to_string(i));
+      auto interned_key = StringInternStore::Intern("key" + std::to_string(i), StringType::KEY);
       index_schema->ProcessAttributeMutation(&fake_ctx_, itr->second,
                                              interned_key, std::move(data),
                                              indexes::DeletionType::kNone);
@@ -1232,7 +1232,7 @@ TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
         .WillOnce([&keys_in_index](
                       absl::AnyInvocable<void(const InternedStringPtr &)> fn) {
           for (const auto &[key, internal_id] : keys_in_index) {
-            InternedStringPtr interned_key = StringInternStore::Intern(key);
+            InternedStringPtr interned_key = StringInternStore::Intern(key, StringType::KEY);
             fn(interned_key);
           }
         });
@@ -1321,7 +1321,7 @@ class IndexSchemaFriendTest : public ValkeySearchTest {
   std::shared_ptr<IndexSchema> index_schema;
   std::shared_ptr<indexes::VectorHNSW<float>> hnsw_index;
   const std::string attribute_identifier{"hnsw_id"};
-  InternedStringPtr key = StringInternStore::Intern("my_key_");
+  InternedStringPtr key = StringInternStore::Intern("my_key_", StringType::KEY);
 };
 
 IndexSchema::MutatedAttributes CreateMutatedAttributes(
@@ -1465,7 +1465,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
         absl::string_view((char *)&vectors[0][0], dimensions * sizeof(float)));
     IndexSchema::MutatedAttributes mutated_attributes;
     mutated_attributes[itr->second.GetIdentifier()].data = std::move(data);
-    auto key_interned = StringInternStore::Intern(std::string(*key) + "0");
+    auto key_interned = StringInternStore::Intern(std::string(*key) + "0", StringType::KEY);
     index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
                                   false);
     EXPECT_EQ(mutations_thread_pool.QueueSize(), 1);
@@ -1482,7 +1482,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
       IndexSchema::MutatedAttributes mutated_attributes;
       mutated_attributes[attribute_identifier].data = std::move(data);
       auto key_interned =
-          StringInternStore::Intern(std::string(*key) + std::to_string(i));
+          StringInternStore::Intern(std::string(*key) + std::to_string(i), StringType::KEY);
       index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
                                     false);
     }
@@ -1492,7 +1492,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
     IndexSchema::MutatedAttributes mutated_attributes;
     mutated_attributes[attribute_identifier].data = std::move(data);
     auto key_interned =
-        StringInternStore::Intern(std::string(*key) + std::to_string(i));
+        StringInternStore::Intern(std::string(*key) + std::to_string(i), StringType::KEY);
     index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
                                   false);
   }
@@ -1501,7 +1501,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0);
   for (size_t i = 0; i < vectors.size(); ++i) {
     auto interned_key =
-        StringInternStore::Intern(std::string(*key) + std::to_string(i));
+        StringInternStore::Intern(std::string(*key) + std::to_string(i), StringType::KEY);
     EXPECT_FALSE(hnsw_index->IsTracked(interned_key));
   }
 
@@ -1519,7 +1519,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
       IndexSchema::MutatedAttributes mutated_attributes;
       mutated_attributes[attribute_identifier].data = std::move(data);
       auto key_interned =
-          StringInternStore::Intern(std::string(*key) + std::to_string(i));
+          StringInternStore::Intern(std::string(*key) + std::to_string(i), StringType::KEY);
       index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
                                     false);
     }
@@ -1530,7 +1530,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
     IndexSchema::MutatedAttributes mutated_attributes;
     mutated_attributes[attribute_identifier].data = std::move(data);
     auto key_interned =
-        StringInternStore::Intern(std::string(*key) + std::to_string(i));
+        StringInternStore::Intern(std::string(*key) + std::to_string(i), StringType::KEY);
     index_schema->ProcessMutation(&fake_ctx, mutated_attributes, key_interned,
                                   false);
   }
@@ -1543,7 +1543,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
             vectors.size() * 0.1);
   for (size_t i = 0; i < vectors.size(); ++i) {
     auto interned_key =
-        StringInternStore::Intern(std::string(*key) + std::to_string(i));
+        StringInternStore::Intern(std::string(*key) + std::to_string(i), StringType::KEY);
     EXPECT_TRUE(hnsw_index->IsTracked(interned_key));
   }
   EXPECT_EQ(stats.subscription_add.failure_cnt, 0);

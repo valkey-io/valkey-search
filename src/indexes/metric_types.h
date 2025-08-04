@@ -10,29 +10,30 @@
 
 namespace valkey_search::indexes {
 
+#define METRIC_TYPES_TABLE \
+  METRIC_ENTRY(kNone, "") \
+  METRIC_ENTRY(kVectorsMemory, "vectors_memory") \
+  METRIC_ENTRY(kVectorsMemoryMarkedDeleted, "vectors_memory_marked_deleted") \
+  METRIC_ENTRY(kVectorsMarkedDeleted, "vectors_marked_deleted") \
+  METRIC_ENTRY(kHnswNodes, "hnsw_nodes") \
+  METRIC_ENTRY(kHnswNodesMarkedDeleted, "hnsw_nodes_marked_deleted") \
+  METRIC_ENTRY(kHnswEdges, "hnsw_edges") \
+  METRIC_ENTRY(kHnswEdgesMarkedDeleted, "hnsw_edges_marked_deleted") \
+  METRIC_ENTRY(kFlatNodes, "flat_nodes") \
+  METRIC_ENTRY(kTags, "tags") \
+  METRIC_ENTRY(kTagsMemory, "tags_memory") \
+  METRIC_ENTRY(kNumericRecords, "numeric_records") \
+  METRIC_ENTRY(kInternedStrings, "interned_strings") \
+  METRIC_ENTRY(kInternedStringsMemory, "interned_strings_memory") \
+  METRIC_ENTRY(kKeysMemory, "keys_memory")
+
+// Generate the enum from the table above
 enum class MetricType {
-  kNone,  // Indicates no metric type set
-  kVectorsMemory,
-  kVectorsMemoryMarkedDeleted,
+#define METRIC_ENTRY(name, str) name,
+  METRIC_TYPES_TABLE
+#undef METRIC_ENTRY
   
-  kHnswNodes,
-  kHnswNodesMarkedDeleted,
-  kHnswEdges,
-  kHnswEdgesMarkedDeleted,
-  
-  kFlatNodes,
-  
-  kTags,
-  kTagsMemory,
-  
-  kNumericRecords,
-  
-  kInternedStrings,
-  kInternedStringsMarkedDeleted,
-  kInternedStringsMemory,
-  
-  kKeysMemory,
-  
+  // Sentinel value for array bounds checking
   kMetricTypeCount
 };
 

@@ -56,7 +56,7 @@ Tag::~Tag() {
 
 absl::StatusOr<bool> Tag::AddRecord(const InternedStringPtr& key,
                                     absl::string_view data) {
-  auto interned_data = StringInternStore::Intern(data, nullptr, MetricType::kTagsMemory);
+  auto interned_data = StringInternStore::Intern(data, StringType::TAG);
   auto parsed_tags = ParseRecordTags(*interned_data, separator_);
   absl::MutexLock lock(&index_mutex_);
   if (parsed_tags.empty()) {
@@ -119,7 +119,7 @@ absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
 absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
                                        absl::string_view data) {
   // TODO: implement operator [] in patricia_tree.
-  auto interned_data = StringInternStore::Intern(data);
+  auto interned_data = StringInternStore::Intern(data, StringType::TAG);
   auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
   if (new_parsed_tags.empty()) {
     [[maybe_unused]] auto res =

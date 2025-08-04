@@ -342,7 +342,7 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
   }
   MutatedAttributes mutated_attributes;
   bool added = false;
-  auto interned_key = StringInternStore::Intern(key_cstr, nullptr, indexes::MetricType::kKeysMemory);
+  auto interned_key = StringInternStore::Intern(key_cstr, StringType::KEY);
   for (const auto &attribute_itr : attributes_) {
     auto &attribute = attribute_itr.second;
     if (!key_obj) {
@@ -956,7 +956,7 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
                          << " stale entries for {Index: " << name_ << "}";
 
   for (auto &[key, attributes] : deletion_attributes) {
-    auto interned_key = std::make_shared<InternedString>(key);
+    auto interned_key = std::make_shared<InternedString>(key, StringType::KEY);
     ProcessMutation(ctx, attributes, interned_key, true);
   }
   VMSDK_LOG(NOTICE, ctx) << "Scanned index schema " << name_

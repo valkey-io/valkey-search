@@ -58,22 +58,22 @@ class IndexTeser : public T {
   explicit IndexTeser(K proto) : T(K(proto)) {}
   absl::StatusOr<bool> AddRecord(absl::string_view key,
                                  absl::string_view data) {
-    auto interned_key = StringInternStore::Intern(key);
+    auto interned_key = StringInternStore::Intern(key, StringType::KEY);
     return T::AddRecord(interned_key, data);
   }
   absl::StatusOr<bool> RemoveRecord(
       absl::string_view key,
       indexes::DeletionType deletion_type = indexes::DeletionType::kNone) {
-    auto interned_key = StringInternStore::Intern(key);
+    auto interned_key = StringInternStore::Intern(key, StringType::KEY);
     return T::RemoveRecord(interned_key, deletion_type);
   }
   absl::StatusOr<bool> ModifyRecord(absl::string_view key,
                                     absl::string_view data) {
-    auto interned_key = StringInternStore::Intern(key);
+    auto interned_key = StringInternStore::Intern(key, StringType::KEY);
     return T::ModifyRecord(interned_key, data);
   }
   bool IsTracked(absl::string_view key) const {
-    auto interned_key = StringInternStore::Intern(key);
+    auto interned_key = StringInternStore::Intern(key, StringType::KEY);
     return T::IsTracked(interned_key);
   }
 };

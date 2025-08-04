@@ -87,7 +87,7 @@ struct SearchPartitionResultsTracker {
                                                  attribute_content.content())));
       }
       indexes::Neighbor neighbor{
-          std::make_shared<InternedString>(neighbor_entry->key()),
+          std::make_shared<InternedString>(neighbor_entry->key(), StringType::KEY),
           neighbor_entry->score(), std::move(attribute_contents)};
       AddResult(neighbor);
     }

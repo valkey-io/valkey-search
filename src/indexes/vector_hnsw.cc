@@ -112,7 +112,6 @@ void VectorHNSW<T>::TrackVector(uint64_t internal_id,
                                 const InternedStringPtr &vector) {
   absl::MutexLock lock(&tracked_vectors_mutex_);
   tracked_vectors_.push_back(vector);
-  OnInternedStringIncrUsed(vector);
 }
 
 template <typename T>
@@ -182,16 +181,6 @@ VectorHNSW<T>::VectorHNSW(int dimensions,
 
 template <typename T>
 VectorHNSW<T>::~VectorHNSW() {
-  if (algo_) {
-    // Call UnmarkDelete for vector strings of all deleted elements
-    for (hnswlib::tableint i = 0; i < algo_->cur_element_count_; i++) {
-      if (algo_->isMarkedDeleted(i)) {
-        char* vector_data = algo_->getDataByInternalId(i);
-        absl::string_view record(vector_data, algo_->vector_size_);
-        valkey_search::StringInternStore::Instance().UnmarkDelete(record);
-      }
-    }
-    
     // Decrement node count for all current elements (including deleted ones)
     size_t current_nodes = algo_->getCurrentElementCount();
     if (current_nodes > 0) {
@@ -202,7 +191,6 @@ VectorHNSW<T>::~VectorHNSW() {
     if (total_edges > 0) {
       GlobalIndexStats::Instance().Decr(MetricType::kHnswEdges, total_edges);
     }
-  }
 }
 
 template <typename T>
@@ -213,7 +201,6 @@ absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
       absl::ReaderMutexLock lock(&resize_mutex_);
 
       algo_->addPoint((T *)record.data(), internal_id);
-      GlobalIndexStats::Instance().Incr(MetricType::kHnswNodes);
       return absl::OkStatus();
     } catch (const std::exception &e) {
       std::string error_msg = e.what();

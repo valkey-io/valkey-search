@@ -115,6 +115,7 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     RDBChunkInputStream input(std::move(iter));
     VMSDK_RETURN_IF_ERROR(
         index->algo_->LoadIndex(input, index->space_.get(), index.get()));
+    GlobalIndexStats::Instance().Incr(MetricType::kFlatNodes, index->algo_->cur_element_count_);
     return index;
   } catch (const std::exception &e) {
     ++Metrics::GetStats().flat_create_exceptions_cnt;
@@ -131,6 +132,17 @@ VectorFlat<T>::VectorFlat(
     : VectorBase(IndexerType::kFlat, dimensions, attribute_data_type,
                  attribute_identifier),
       block_size_(block_size) {}
+
+template <typename T>
+VectorFlat<T>::~VectorFlat() {
+  if (algo_) {
+    // Decrement flat node count for all current elements
+    size_t current_nodes = algo_->cur_element_count_;
+    if (current_nodes > 0) {
+      GlobalIndexStats::Instance().Decr(MetricType::kFlatNodes, current_nodes);
+    }
+  }
+}
 
 template <typename T>
 absl::Status VectorFlat<T>::ResizeIfFull() {

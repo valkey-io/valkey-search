@@ -10,7 +10,7 @@ set(LIBSTEMMER_SOURCES
   ${SNOWBALL_SOURCE_DIR}/runtime/utilities.c
 )
 
-# Generated stemmer sources (UTF-8 versions for common languages)
+# Generated stemmer sources (UTF-8 versions for supported languages)
 set(STEMMER_SOURCES
   ${SNOWBALL_SOURCE_DIR}/src_c/stem_UTF_8_english.c
 )
@@ -19,7 +19,7 @@ set(STEMMER_SOURCES
 add_library(snowball STATIC ${LIBSTEMMER_SOURCES} ${STEMMER_SOURCES})
 
 # Set include directories
-target_include_directories(snowball PUBLIC 
+target_include_directories(snowball PUBLIC
   ${SNOWBALL_SOURCE_DIR}/include
   ${SNOWBALL_SOURCE_DIR}
 )

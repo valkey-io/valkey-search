@@ -4,7 +4,54 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMP_DIR=$(mktemp -d)
 
-echo "Updating existing Snowball language binaries..."
+# Function to get the latest stable version
+get_latest_stable_version() {
+    git ls-remote --tags https://github.com/snowballstem/snowball.git | \
+    grep 'refs/tags/v[0-9]' | \
+    grep -v '\^{}' | \
+    sed 's/.*refs\/tags\///' | \
+    sort -V | \
+    tail -1
+}
+
+# Parse command line arguments
+VERSION=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --version|-v)
+            VERSION="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [--version|-v VERSION]"
+            echo "  If version is not specified, updates to latest stable version"
+            exit 1
+            ;;
+    esac
+done
+
+# Determine version to use
+if [ -z "$VERSION" ]; then
+    echo "Getting latest stable version..."
+    VERSION=$(get_latest_stable_version)
+    if [ -z "$VERSION" ]; then
+        echo "Error: Could not determine latest stable version"
+        exit 1
+    fi
+    echo "Latest stable version: $VERSION"
+    
+    # Update VERSION file
+    echo "$VERSION" > "$SCRIPT_DIR/VERSION"
+    echo "Updated VERSION file to $VERSION"
+else
+    echo "Using specified version: $VERSION"
+    # Update VERSION file with specified version
+    echo "$VERSION" > "$SCRIPT_DIR/VERSION"
+    echo "Updated VERSION file to $VERSION"
+fi
+
+echo "Updating existing Snowball language binaries to version $VERSION..."
 
 # Get list of currently supported languages
 CURRENT_LANGS=()
@@ -22,18 +69,20 @@ fi
 
 echo "Found languages: ${CURRENT_LANGS[*]}"
 
-# Setup Snowball compiler
+# Setup Snowball compiler from specific version
 cd "$TEMP_DIR"
-echo "Downloading latest Snowball compiler..."
-git clone --depth=1 https://github.com/snowballstem/snowball.git >/dev/null 2>&1
+echo "Downloading Snowball compiler version $VERSION..."
+git clone https://github.com/snowballstem/snowball.git >/dev/null 2>&1
 cd snowball
+git checkout "$VERSION" >/dev/null 2>&1
+echo "Checked out version: $(git describe --tags)"
 make snowball >/dev/null 2>&1
 
 # Update each language
 echo "Updating language files..."
 for lang in "${CURRENT_LANGS[@]}"; do
     if [ ! -f "algorithms/${lang}.sbl" ]; then
-        echo "Warning: Language '$lang' not found in current Snowball repository, skipping"
+        echo "Warning: Language '$lang' not found in Snowball version $VERSION, skipping"
         continue
     fi
     
@@ -48,6 +97,7 @@ echo "Updating CMakeLists.txt..."
 {
     echo "# Snowball stemming library"
     echo "# Build the libstemmer C library"
+    echo "# Version: $VERSION"
     echo
     echo "set(SNOWBALL_SOURCE_DIR \${CMAKE_CURRENT_SOURCE_DIR})"
     echo
@@ -60,9 +110,11 @@ echo "Updating CMakeLists.txt..."
     echo
     echo "# Generated stemmer sources (UTF-8 versions for supported languages)"
     echo "set(STEMMER_SOURCES"
-    for f in src_c/stem_UTF_8_*.c; do
-        lang=$(basename "$f" .c | sed 's/stem_UTF_8_//')
-        echo "  \${SNOWBALL_SOURCE_DIR}/src_c/stem_UTF_8_${lang}.c"
+    for f in "$SCRIPT_DIR/src_c/stem_UTF_8_"*.c; do
+        if [ -f "$f" ]; then
+            lang=$(basename "$f" .c | sed 's/stem_UTF_8_//')
+            echo "  \${SNOWBALL_SOURCE_DIR}/src_c/stem_UTF_8_${lang}.c"
+        fi
     done
     echo ")"
     echo
@@ -83,10 +135,10 @@ echo "Updating CMakeLists.txt..."
     echo "  POSITION_INDEPENDENT_CODE ON"
     echo "  CXX_STANDARD 20"
     echo ")"
-} > CMakeLists.txt
+} > "$SCRIPT_DIR/CMakeLists.txt"
 
 rm -rf "$TEMP_DIR"
-echo "Successfully updated all language binaries to latest Snowball versions"
+echo "Successfully updated all language binaries to Snowball version $VERSION"
 echo "Languages updated: ${CURRENT_LANGS[*]}"
 echo "Note: modules.h was not modified. Language list and aliases remain unchanged."
 echo "CMakeLists.txt was updated for consistency."

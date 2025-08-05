@@ -336,7 +336,6 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
   // coming from the coordinator
   auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
   auto ctx_flags = ValkeyModule_GetContextFlags(ctx.get());
-  absl::StatusOr<std::deque<indexes::Neighbor>> res;
   if (ctx_flags & VALKEYMODULE_CTX_FLAGS_OOM) {
     return absl::ResourceExhaustedError(kOOMMsg);
   }

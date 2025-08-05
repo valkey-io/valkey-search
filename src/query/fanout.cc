@@ -73,22 +73,25 @@ struct SearchPartitionResultsTracker {
         parameters(std::move(parameters)) {}
 
   void HandleResponse(coordinator::SearchIndexPartitionResponse &response,
-                      const std::string &address,
-                      const grpc::Status &status) {
-
+                      const std::string &address, const grpc::Status &status) {
     if (!status.ok()) {
+      bool should_cancel = status.error_code() == grpc::RESOURCE_EXHAUSTED ||
+                           !options::GetEnablePartialResults().GetValue();
       if (status.error_code() == grpc::RESOURCE_EXHAUSTED) {
         reached_oom.store(true);
-      } else if (!options::GetEnablePartialResults().GetValue()) {
+      }
+      if (should_cancel) {
         parameters->cancellation_token->Cancel();
-      } else {
+      }
+      if (status.error_code() != grpc::DEADLINE_EXCEEDED &&
+          status.error_code() != grpc::RESOURCE_EXHAUSTED) {
         VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-            << "Error during handling of FT.SEARCH on node " << address
-            << ": " << status.error_message();
+            << "Error during handling of FT.SEARCH on node " << address << ": "
+            << status.error_message();
       }
       return;
     }
-                       
+
     absl::MutexLock lock(&mutex);
     while (response.neighbors_size() > 0) {
       auto neighbor_entry = std::unique_ptr<coordinator::NeighborEntry>(

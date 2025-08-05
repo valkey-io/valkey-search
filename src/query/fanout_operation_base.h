@@ -13,12 +13,14 @@
 #include "src/coordinator/client_pool.h"
 #include "src/query/fanout_template.h"
 #include "src/valkey_search.h"
+#include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::query::fanout {
 
-template <typename Request, typename Response, FanoutTargetMode kTargetMode>
+template <typename Request, typename Response, FanoutTargetMode kTargetMode,
+          typename AsyncResultT>
 class FanoutOperationBase {
  public:
   explicit FanoutOperationBase() = default;
@@ -26,6 +28,10 @@ class FanoutOperationBase {
   virtual ~FanoutOperationBase() = default;
 
   void StartOperation(ValkeyModuleCtx* ctx) {
+    blocked_client_ = std::make_unique<vmsdk::BlockedClient>(
+        ctx, &Reply, &Timeout, &Free, GetTimeoutMs());
+    blocked_client_->MeasureTimeStart();
+
     auto targets = GetTargets(ctx);
     outstanding_ = targets.size();
     int timeout_ms = GetTimeoutMs();
@@ -36,6 +42,27 @@ class FanoutOperationBase {
   }
 
  protected:
+  static int Reply(ValkeyModuleCtx* ctx, ValkeyModuleString** argv, int argc) {
+    auto* res = static_cast<AsyncResultT*>(
+        ValkeyModule_GetBlockedClientPrivateData(ctx));
+    if (!res) {
+      return ValkeyModule_ReplyWithError(
+          ctx, "INTERNAL ERR: no reply data from async operation");
+    }
+    return AsyncResultT::DoReply(ctx, res, argv, argc);
+  }
+
+  static int Timeout(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,
+                     int argc) {
+    return ValkeyModule_ReplyWithError(ctx, "Request timed out");
+  }
+
+  static void Free(ValkeyModuleCtx* ctx, void* privdata) {
+    delete static_cast<AsyncResultT*>(privdata);
+  }
+
+  virtual void* CreateAsyncResult() = 0;
+
   std::vector<FanoutSearchTarget> GetTargets(ValkeyModuleCtx* ctx) const {
     return query::fanout::FanoutTemplate::GetTargets(ctx, kTargetMode);
   }
@@ -53,7 +80,14 @@ class FanoutOperationBase {
                           [[maybe_unused]] const FanoutSearchTarget&) = 0;
   virtual void OnError(const std::string&,
                        [[maybe_unused]] const FanoutSearchTarget&) = 0;
-  virtual void OnCompletion() = 0;
+
+  virtual void OnCompletion() {
+    if (blocked_client_) {
+      void* async_result = CreateAsyncResult();
+      blocked_client_->SetReplyPrivateData(async_result);
+      blocked_client_->UnblockClient();
+    }
+  }
 
   void IssueRpc(ValkeyModuleCtx* ctx, const FanoutSearchTarget& target,
                 const Request& request, int timeout_ms) {
@@ -101,6 +135,7 @@ class FanoutOperationBase {
 
   unsigned outstanding_{0};
   absl::Mutex mutex_;
+  std::unique_ptr<vmsdk::BlockedClient> blocked_client_;
 };
 
 }  // namespace valkey_search::query::fanout

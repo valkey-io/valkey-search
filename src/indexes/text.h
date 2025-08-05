@@ -30,6 +30,108 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_TEXT_H_
 #define VALKEYSEARCH_SRC_INDEXES_TEXT_H_
 
+#include "absl/base/thread_annotations.h"
+#include "absl/synchronization/mutex.h"
+#include <concepts>
+#include <memory>
+#include <optional>
+
+#include "absl/functional/any_invocable.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "src/indexes/index_base.h"
+#include "src/index_schema.pb.h"
+#include "src/indexes/text_index.h"
+#include "src/rdb_serialization.h"
+#include "src/utils/string_interning.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "src/indexes/text/lexer.h"
+
+// Forward declaration
+namespace valkey_search::indexes {
+enum class DeletionType;
+enum class IndexerType;
+}
+
+namespace valkey_search {
+namespace text {
+
+using Byte = uint8_t;
+using Char = uint32_t;
+
+struct TextFieldIndex {
+    TextFieldIndex(const data_model::TextIndex& text_index_proto,
+                 const data_model::IndexSchema* index_schema_proto = nullptr,
+                 std::string field_identifier = "") 
+      : text_index_proto_(text_index_proto),
+        index_schema_proto_(index_schema_proto),
+        field_identifier_(field_identifier),
+        // Initialize lexer in the constructor's initialization list
+        lexer_(index_schema_proto_ ? 
+              Lexer(text_index_proto_, *index_schema_proto_) : 
+              Lexer(text_index_proto_, data_model::IndexSchema())) {
+    // Initialize text index structures
+    text_ = std::make_shared<TextIndex>();
+  }
+
+  // Return the field identifier
+  const std::string& GetFieldIdentifier() const {
+    return field_identifier_;
+  }
+  ~TextFieldIndex() = default;
+
+  absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
+                                 absl::string_view data);
+  absl::StatusOr<bool> RemoveRecord(const InternedStringPtr& key,
+                                    indexes::DeletionType deletion_type) {
+    return false; // Placeholder 
+  }
+  absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
+                                    absl::string_view data) {
+    return false; // Placeholder 
+  }
+  int RespondWithInfo(ValkeyModuleCtx* ctx) const {
+    return 0; // Placeholder 
+  }
+  bool IsTracked(const InternedStringPtr& key) const {
+    return false; // Placeholder 
+  }
+  absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const {
+    return absl::OkStatus(); // Placeholder 
+  }
+
+  std::unique_ptr<data_model::Index> ToProto() const {
+    auto index_proto = std::make_unique<data_model::Index>();
+    index_proto->mutable_text_index();
+    return index_proto;
+  }
+  void ForEachTrackedKey(
+      absl::AnyInvocable<void(const InternedStringPtr&)> fn) const {
+    // Placeholder 
+  }
+
+  uint64_t GetRecordCount() const {
+    return 0; // Placeholder 
+  }
+
+ private:
+  // Each text field is assigned a unique number within the containing index
+  size_t text_field_number = 0;
+  // The per-index text index
+  std::shared_ptr<TextIndex> text_;
+  // Store references to configuration protos
+  const data_model::TextIndex& text_index_proto_;
+  const data_model::IndexSchema* index_schema_proto_;
+  // Field identifier (name or alias)
+  std::string field_identifier_;
+  // Lexer for text processing
+  text::Lexer lexer_;
+};
+
+
+}  // namespace text
+}  // namespace valkey_search
 
 namespace valkey_search::indexes {
 

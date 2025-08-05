@@ -93,6 +93,27 @@ target_link_libraries(vector_flat PUBLIC log)
 target_link_libraries(vector_flat PUBLIC memory_allocation_overrides)
 target_link_libraries(vector_flat PUBLIC status_macros)
 target_link_libraries(vector_flat PUBLIC valkey_module)
+# TODO: Remove this after rest of tokenization is ready, currently just for testing stemming functionality
+
+
+set(SRCS_STEMMER ${CMAKE_CURRENT_LIST_DIR}/stemmer.cc
+                 ${CMAKE_CURRENT_LIST_DIR}/stemmer.h)
+
+valkey_search_add_static_library(stemmer "${SRCS_STEMMER}")
+target_include_directories(stemmer PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(stemmer PUBLIC snowball)
+target_link_libraries(stemmer PUBLIC log)
+target_link_libraries(stemmer PUBLIC status_macros)
+
+# Add stemmer self-test executable
+add_executable(stemmer_test ${SRCS_STEMMER})
+target_compile_definitions(stemmer_test PRIVATE STEMMER_SELF_TEST)
+target_include_directories(stemmer_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(stemmer_test PUBLIC snowball)
+target_link_libraries(stemmer_test PUBLIC log)
+target_link_libraries(stemmer_test PUBLIC status_macros)
+target_link_libraries(stemmer_test PUBLIC utils)
+target_link_libraries(stemmer_test PUBLIC valkey_module)
 
 set(SRCS_TEXT ${CMAKE_CURRENT_LIST_DIR}/text/text_index.h
               ${CMAKE_CURRENT_LIST_DIR}/text.cc
@@ -109,3 +130,5 @@ target_link_libraries(text PUBLIC index_schema_cc_proto)
 target_link_libraries(text PUBLIC rdb_serialization)
 target_link_libraries(text PUBLIC string_interning)
 target_link_libraries(text PUBLIC valkey_module)
+target_link_libraries(text PUBLIC snowball)
+target_link_libraries(text PUBLIC stemmer)

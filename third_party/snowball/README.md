@@ -12,19 +12,19 @@ We integrate only the minimal Snowball runtime (128KB) with UTF-8 language suppo
 ```bash
 ./add_language.sh french german spanish
 ```
-Adds new stemming languages by downloading the latest Snowball compiler, generating language-specific C code, and updating modules.h with proper aliases.
+Adds new stemming languages by downloading the latest Snowball compiler, generating language-specific C code, and updating both modules.h and CMakeLists.txt with the new languages.
 
 ### Remove Language Support  
 ```bash
 ./remove_language.sh french german
 ```
-Removes specified languages and regenerates modules.h to exclude removed languages.
+Removes specified languages and regenerates both modules.h and CMakeLists.txt to exclude removed languages.
 
 ### Update Existing Languages
 ```bash
 ./update_languages.sh
 ```
-Updates all currently installed language binaries to the latest versions from the Snowball repository. This is useful for getting algorithm improvements and bug fixes without changing the language list.
+Updates all currently installed language binaries to the latest versions from the Snowball repository. This is useful for getting algorithm improvements and bug fixes without changing the language list. Also updates CMakeLists.txt for consistency.
 
 ### List Available Languages
 **Currently supported**: english (add more via scripts)

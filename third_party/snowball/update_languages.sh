@@ -43,7 +43,50 @@ for lang in "${CURRENT_LANGS[@]}"; do
     cp "stem_UTF_8_${lang}.h" "$SCRIPT_DIR/src_c/"
 done
 
+# Update CMakeLists.txt to ensure consistency (language list unchanged)
+echo "Updating CMakeLists.txt..."
+{
+    echo "# Snowball stemming library"
+    echo "# Build the libstemmer C library"
+    echo
+    echo "set(SNOWBALL_SOURCE_DIR \${CMAKE_CURRENT_SOURCE_DIR})"
+    echo
+    echo "# Source files for libstemmer"
+    echo "set(LIBSTEMMER_SOURCES"
+    echo "  \${SNOWBALL_SOURCE_DIR}/libstemmer/libstemmer.c"
+    echo "  \${SNOWBALL_SOURCE_DIR}/runtime/api.c"
+    echo "  \${SNOWBALL_SOURCE_DIR}/runtime/utilities.c"
+    echo ")"
+    echo
+    echo "# Generated stemmer sources (UTF-8 versions for supported languages)"
+    echo "set(STEMMER_SOURCES"
+    for f in src_c/stem_UTF_8_*.c; do
+        lang=$(basename "$f" .c | sed 's/stem_UTF_8_//')
+        echo "  \${SNOWBALL_SOURCE_DIR}/src_c/stem_UTF_8_${lang}.c"
+    done
+    echo ")"
+    echo
+    echo "# Create the snowball library"
+    echo "add_library(snowball STATIC \${LIBSTEMMER_SOURCES} \${STEMMER_SOURCES})"
+    echo
+    echo "# Set include directories"
+    echo "target_include_directories(snowball PUBLIC" 
+    echo "  \${SNOWBALL_SOURCE_DIR}/include"
+    echo "  \${SNOWBALL_SOURCE_DIR}"
+    echo ")"
+    echo
+    echo "# Set compile flags to match the original build"
+    echo "target_compile_options(snowball PRIVATE -w) # Suppress warnings from third-party code"
+    echo
+    echo "# Export the target"
+    echo "set_target_properties(snowball PROPERTIES"
+    echo "  POSITION_INDEPENDENT_CODE ON"
+    echo "  CXX_STANDARD 20"
+    echo ")"
+} > CMakeLists.txt
+
 rm -rf "$TEMP_DIR"
 echo "Successfully updated all language binaries to latest Snowball versions"
 echo "Languages updated: ${CURRENT_LANGS[*]}"
 echo "Note: modules.h was not modified. Language list and aliases remain unchanged."
+echo "CMakeLists.txt was updated for consistency."

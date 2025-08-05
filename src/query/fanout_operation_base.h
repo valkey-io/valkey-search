@@ -21,51 +21,48 @@ namespace valkey_search::query::fanout {
 template <typename Request, typename Response, FanoutTargetMode kTargetMode>
 class FanoutOperationBase {
  public:
-  explicit FanoutOperationBase(ValkeyModuleCtx* ctx) : ctx_(ctx) {}
+  explicit FanoutOperationBase() = default;
 
   virtual ~FanoutOperationBase() = default;
 
-  void StartOperation() {
-    auto targets = GetTargets();
+  void StartOperation(ValkeyModuleCtx* ctx) {
+    auto targets = GetTargets(ctx);
     outstanding_ = targets.size();
     int timeout_ms = GetTimeoutMs();
     for (const auto& target : targets) {
       auto req = GenerateRequest(target, timeout_ms);
-      IssueRpc(target, req, timeout_ms);
+      IssueRpc(ctx, target, req, timeout_ms);
     }
   }
 
  protected:
-  std::vector<FanoutSearchTarget> GetTargets() const {
-    return query::fanout::FanoutTemplate::GetTargets(ctx_, kTargetMode);
+  std::vector<FanoutSearchTarget> GetTargets(ValkeyModuleCtx* ctx) const {
+    return query::fanout::FanoutTemplate::GetTargets(ctx, kTargetMode);
   }
 
-  virtual bool GetLocalResponse(const Request& request, Response& response) {
-    return false;
-  }
+  virtual void FillLocalResponse(ValkeyModuleCtx* ctx, const Request&,
+                                 Response&, const FanoutSearchTarget&) = 0;
 
-  virtual void FillLocalResponse(const Request&, Response&,
-                                 const FanoutSearchTarget&) = 0;
-
-  virtual void InvokeRemoteRpc(coordinator::Client*, std::unique_ptr<Request>,
+  virtual void InvokeRemoteRpc(coordinator::Client*, const Request&,
                                std::function<void(grpc::Status, Response&)>,
                                int timeout_ms) = 0;
-
   virtual int GetTimeoutMs() const = 0;
-  virtual Request GenerateRequest(const FanoutSearchTarget&,
+  virtual Request GenerateRequest([[maybe_unused]] const FanoutSearchTarget&,
                                   int timeout_ms) = 0;
-  virtual void OnResponse(const Response&, const FanoutSearchTarget&) = 0;
-  virtual void OnError(const std::string&, const FanoutSearchTarget&) = 0;
+  virtual void OnResponse(const Response&,
+                          [[maybe_unused]] const FanoutSearchTarget&) = 0;
+  virtual void OnError(const std::string&,
+                       [[maybe_unused]] const FanoutSearchTarget&) = 0;
   virtual void OnCompletion() = 0;
 
-  void IssueRpc(const FanoutSearchTarget& target, const Request& request,
-                int timeout_ms) {
+  void IssueRpc(ValkeyModuleCtx* ctx, const FanoutSearchTarget& target,
+                const Request& request, int timeout_ms) {
     coordinator::ClientPool* client_pool_ =
         ValkeySearch::Instance().GetCoordinatorClientPool();
     if (target.type == FanoutSearchTarget::Type::kLocal) {
-      vmsdk::RunByMain([this, target, request]() {
+      vmsdk::RunByMain([this, ctx, target, request]() {
         Response resp;
-        this->FillLocalResponse(request, resp, target);
+        this->FillLocalResponse(ctx, request, resp, target);
         if (!resp.error().empty()) {
           this->OnError(resp.error(), target);
         } else {
@@ -80,9 +77,8 @@ class FanoutOperationBase {
         this->RpcDone();
         return;
       }
-      auto req_ptr = std::make_unique<Request>(request);
       this->InvokeRemoteRpc(
-          client.get(), std::move(req_ptr),
+          client.get(), request,
           [this, target](grpc::Status status, Response& resp) {
             if (status.ok()) {
               this->OnResponse(resp, target);
@@ -103,8 +99,7 @@ class FanoutOperationBase {
     }
   }
 
-  ValkeyModuleCtx* ctx_;
-  int outstanding_{0};
+  unsigned outstanding_{0};
   absl::Mutex mutex_;
 };
 

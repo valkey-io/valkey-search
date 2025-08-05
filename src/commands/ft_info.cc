@@ -51,11 +51,19 @@ vmsdk::config::Number &GetFTInfoTimeoutMs() {
 namespace primary_info_async {
 
 struct PrimaryInfoAsyncResult {
-  absl::StatusOr<query::primary_info_fanout::PrimaryInfoResult> info;
-  std::unique_ptr<query::primary_info_fanout::PrimaryInfoParameters> parameters;
+  absl::StatusOr<
+      query::primary_info_fanout::PrimaryInfoFanoutOperation::PrimaryInfoResult>
+      info;
+  std::unique_ptr<query::primary_info_fanout::PrimaryInfoFanoutOperation::
+                      PrimaryInfoParameters>
+      parameters;
   PrimaryInfoAsyncResult(
-      absl::StatusOr<query::primary_info_fanout::PrimaryInfoResult> i,
-      std::unique_ptr<query::primary_info_fanout::PrimaryInfoParameters> p)
+      absl::StatusOr<query::primary_info_fanout::PrimaryInfoFanoutOperation::
+                         PrimaryInfoResult>
+          i,
+      std::unique_ptr<query::primary_info_fanout::PrimaryInfoFanoutOperation::
+                          PrimaryInfoParameters>
+          p)
       : info(std::move(i)), parameters(std::move(p)) {}
 };
 
@@ -251,22 +259,21 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
       AclPrefixCheck(ctx, permissions, index_schema->GetKeyPrefixes()));
 
   if (is_primary) {
-    auto parameters =
-        std::make_unique<query::primary_info_fanout::PrimaryInfoParameters>();
-    parameters->index_name = std::string(index_schema_name);
-    parameters->timeout_ms = timeout_ms;
     auto blocked_client = std::make_unique<vmsdk::BlockedClient>(
         ctx, primary_info_async::Reply, primary_info_async::Timeout,
-        primary_info_async::Free, parameters->timeout_ms);
+        primary_info_async::Free, timeout_ms);
     blocked_client->MeasureTimeStart();
     vmsdk::BlockedClient *blocked_client_ptr = blocked_client.get();
     auto op = new query::primary_info_fanout::PrimaryInfoFanoutOperation(
-        ctx, ValkeySearch::Instance().GetCoordinatorClientPool(),
-        std::move(parameters),
+        std::string(index_schema_name), timeout_ms,
+        ValkeySearch::Instance().GetCoordinatorClientPool(),
         [blocked_client = std::move(blocked_client)](
-            absl::StatusOr<query::primary_info_fanout::PrimaryInfoResult>
+            absl::StatusOr<query::primary_info_fanout::
+                               PrimaryInfoFanoutOperation::PrimaryInfoResult>
                 result,
-            std::unique_ptr<query::primary_info_fanout::PrimaryInfoParameters>
+            std::unique_ptr<
+                query::primary_info_fanout::PrimaryInfoFanoutOperation::
+                    PrimaryInfoParameters>
                 params) mutable {
           auto payload =
               std::make_unique<primary_info_async::PrimaryInfoAsyncResult>(
@@ -274,7 +281,7 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
           blocked_client->SetReplyPrivateData(payload.release());
           blocked_client->UnblockClient();
         });
-    op->StartOperation();
+    op->StartOperation(ctx);
     return absl::OkStatus();
   } else if (is_cluster) {
     VMSDK_LOG(DEBUG, ctx) << "==========Using Cluster Scope==========";

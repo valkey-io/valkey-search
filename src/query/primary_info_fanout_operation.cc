@@ -13,29 +13,26 @@
 namespace valkey_search::query::primary_info_fanout {
 
 PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
-    ValkeyModuleCtx* ctx, coordinator::ClientPool* client_pool,
-    std::unique_ptr<PrimaryInfoParameters> params,
-    PrimaryInfoResponseCallback callback)
+    std::string index_name, int timeout_ms,
+    coordinator::ClientPool* client_pool, PrimaryInfoResponseCallback callback)
     : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
                                   coordinator::InfoIndexPartitionResponse,
-                                  fanout::FanoutTargetMode::kPrimary>(ctx),
+                                  fanout::FanoutTargetMode::kPrimary>(),
+      index_name_(index_name),
+      timeout_ms_(timeout_ms),
       client_pool_(client_pool),
-      parameters_(std::move(params)),
-      callback_(std::move(callback)),
-      index_name_(parameters_ ? parameters_->index_name : "") {}
+      callback_(std::move(callback)) {}
 
 int PrimaryInfoFanoutOperation::GetTimeoutMs() const {
-  return parameters_ ? parameters_->timeout_ms : 5000;
+  return timeout_ms_.value_or(5000);
 }
 
 coordinator::InfoIndexPartitionRequest
 PrimaryInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&,
                                             int timeout_ms) {
   coordinator::InfoIndexPartitionRequest req;
-  if (parameters_) {
-    req.set_index_name(parameters_->index_name);
-    req.set_timeout_ms(timeout_ms);
-  }
+  req.set_index_name(index_name_);
+  req.set_timeout_ms(timeout_ms);
   return req;
 }
 
@@ -102,17 +99,21 @@ void PrimaryInfoFanoutOperation::OnCompletion() {
   result.has_version_mismatch = has_version_mismatch_;
 
   if (callback_) {
-    callback_(absl::StatusOr<PrimaryInfoResult>(result),
-              std::move(parameters_));
+    std::unique_ptr<PrimaryInfoParameters> parameters =
+        std::make_unique<PrimaryInfoParameters>();
+    parameters->index_name = index_name_;
+    parameters->timeout_ms = timeout_ms_.value_or(5000);
+    callback_(absl::StatusOr<PrimaryInfoResult>(result), std::move(parameters));
   }
   delete this;
 }
 
-void PrimaryInfoFanoutOperation::FillLocalResponse(const coordinator::InfoIndexPartitionRequest& request,
-                       coordinator::InfoIndexPartitionResponse& resp,
-                       const fanout::FanoutSearchTarget& /*target*/) {
+void PrimaryInfoFanoutOperation::FillLocalResponse(
+    ValkeyModuleCtx* ctx, const coordinator::InfoIndexPartitionRequest& request,
+    coordinator::InfoIndexPartitionResponse& resp,
+    const fanout::FanoutSearchTarget& /*target*/) {
   auto index_schema_result = SchemaManager::Instance().GetIndexSchema(
-      ValkeyModule_GetSelectedDb(ctx_), request.index_name());
+      ValkeyModule_GetSelectedDb(ctx), request.index_name());
 
   if (!index_schema_result.ok()) {
     resp.set_exists(false);
@@ -158,10 +159,12 @@ void PrimaryInfoFanoutOperation::FillLocalResponse(const coordinator::InfoIndexP
 
 void PrimaryInfoFanoutOperation::InvokeRemoteRpc(
     coordinator::Client* client,
-    std::unique_ptr<coordinator::InfoIndexPartitionRequest> request_ptr,
+    const coordinator::InfoIndexPartitionRequest& request,
     std::function<void(grpc::Status, coordinator::InfoIndexPartitionResponse&)>
         callback,
     int timeout_ms) {
+  std::unique_ptr<coordinator::InfoIndexPartitionRequest> request_ptr =
+      std::make_unique<coordinator::InfoIndexPartitionRequest>(request);
   client->InfoIndexPartition(std::move(request_ptr), std::move(callback),
                              timeout_ms);
 }

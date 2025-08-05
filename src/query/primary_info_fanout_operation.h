@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <optional>
 
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
@@ -14,40 +15,36 @@
 
 namespace valkey_search::query::primary_info_fanout {
 
-// --- Parameter and Result Structs ---
-
-struct PrimaryInfoParameters {
-  std::string index_name;
-  int timeout_ms;
-};
-
-struct PrimaryInfoResult {
-  bool exists = false;
-  std::string index_name;
-  uint64_t num_docs = 0;
-  uint64_t num_records = 0;
-  uint64_t hash_indexing_failures = 0;
-  std::string error;
-  std::optional<uint64_t> schema_fingerprint;
-  bool has_schema_mismatch = false;
-  std::optional<uint32_t> encoding_version;
-  bool has_version_mismatch = false;
-};
-
-// --- Callback Type ---
-
-using PrimaryInfoResponseCallback = absl::AnyInvocable<void(
-    absl::StatusOr<PrimaryInfoResult>, std::unique_ptr<PrimaryInfoParameters>)>;
-
 // Operation object for primary info fanout (primary node aggregation)
 class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
                                        coordinator::InfoIndexPartitionRequest,
                                        coordinator::InfoIndexPartitionResponse,
                                        fanout::FanoutTargetMode::kPrimary> {
  public:
-  PrimaryInfoFanoutOperation(ValkeyModuleCtx* ctx,
+  struct PrimaryInfoParameters {
+    std::string index_name;
+    int timeout_ms;
+  };
+
+  struct PrimaryInfoResult {
+    bool exists = false;
+    std::string index_name;
+    uint64_t num_docs = 0;
+    uint64_t num_records = 0;
+    uint64_t hash_indexing_failures = 0;
+    std::string error;
+    std::optional<uint64_t> schema_fingerprint;
+    bool has_schema_mismatch = false;
+    std::optional<uint32_t> encoding_version;
+    bool has_version_mismatch = false;
+  };
+
+  using PrimaryInfoResponseCallback =
+      absl::AnyInvocable<void(absl::StatusOr<PrimaryInfoResult>,
+                              std::unique_ptr<PrimaryInfoParameters>)>;
+
+  PrimaryInfoFanoutOperation(std::string index_name, int timeout_ms,
                              coordinator::ClientPool* client_pool,
-                             std::unique_ptr<PrimaryInfoParameters> params,
                              PrimaryInfoResponseCallback callback);
 
   int GetTimeoutMs() const override;
@@ -63,13 +60,14 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
 
   void OnCompletion() override;
 
-  void FillLocalResponse(const coordinator::InfoIndexPartitionRequest& request,
+  void FillLocalResponse(ValkeyModuleCtx* ctx,
+                         const coordinator::InfoIndexPartitionRequest& request,
                          coordinator::InfoIndexPartitionResponse& resp,
                          const fanout::FanoutSearchTarget&) override;
 
   void InvokeRemoteRpc(
       coordinator::Client* client,
-      std::unique_ptr<coordinator::InfoIndexPartitionRequest> request_ptr,
+      const coordinator::InfoIndexPartitionRequest& request,
       std::function<void(grpc::Status,
                          coordinator::InfoIndexPartitionResponse&)>
           callback,
@@ -78,7 +76,6 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
  private:
   // Resources & config
   coordinator::ClientPool* client_pool_;
-  std::unique_ptr<PrimaryInfoParameters> parameters_;
   PrimaryInfoResponseCallback callback_;
 
   // Aggregation state
@@ -89,6 +86,7 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
   bool has_version_mismatch_ = false;
   std::string error_;
   std::string index_name_;
+  std::optional<int> timeout_ms_;
   uint64_t num_docs_ = 0;
   uint64_t num_records_ = 0;
   uint64_t hash_indexing_failures_ = 0;

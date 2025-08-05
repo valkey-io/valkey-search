@@ -254,6 +254,7 @@ absl::Status ParseLanguage(vmsdk::ArgsIterator &itr,
     return absl::InvalidArgumentError(
         NotSupportedParamErrorMsg(kLanguageFieldParam));
   }
+  index_schema_proto.set_language(language);
   return absl::OkStatus();
 }
 absl::Status ParseScore(vmsdk::ArgsIterator &itr,
@@ -466,43 +467,6 @@ absl::Status ParseText(vmsdk::ArgsIterator &itr, data_model::Index &index_proto,
   return absl::OkStatus();
 }
 
-vmsdk::KeyValueParser<SchemaGlobTextParams> SchemaGlobTextParameters() {
-  vmsdk::KeyValueParser<SchemaGlobTextParams> parser;
-  parser.AddParamParser(
-      kPunctuationParam, GENERATE_VALUE_PARSER(SchemaGlobTextParams, punctuation));
-  parser.AddParamParser(
-      kWithOffsetsParam, GENERATE_FLAG_PARSER(SchemaGlobTextParams, with_offsets));
-  parser.AddParamParser(
-      kNoOffsetsParam, 
-      GENERATE_NEGATIVE_FLAG_PARSER(SchemaGlobTextParams, with_offsets));
-  parser.AddParamParser(
-      kNoStemParam, GENERATE_FLAG_PARSER(SchemaGlobTextParams, no_stem));
-  parser.AddParamParser(
-      kNoStopWordsParam, 
-      GENERATE_CLEAR_CONTAINER_PARSER(SchemaGlobTextParams, stop_words));
-  return parser;
-}
-
-absl::Status ParseSchemaGlobalTextDefaults(vmsdk::ArgsIterator &itr, SchemaGlobTextParams &defaults) {
-  static auto parser = SchemaGlobTextParameters();
-  VMSDK_RETURN_IF_ERROR(parser.Parse(defaults, itr, false));
-  
-  VMSDK_ASSIGN_OR_RETURN(auto res, vmsdk::IsParamKeyMatch(kStopWordsParam, false, itr));
-  if (res) {
-    VMSDK_RETURN_IF_ERROR(ParseStopWords(itr, defaults));
-  }
-  
-  // Handle LANGUAGE parameter for global text defaults
-  VMSDK_ASSIGN_OR_RETURN(res, vmsdk::ParseParam(kLanguageParam, false, itr,
-                                               defaults.language, *kLanguageByStr));
-  
-  // Check if punctuation is empty
-  if (defaults.punctuation.empty()) {
-    return absl::InvalidArgumentError("PUNCTUATION string cannot be empty");
-  }
-  
-  return absl::OkStatus();
-}
 absl::StatusOr<indexes::IndexerType> ParseIndexerType(
     vmsdk::ArgsIterator &itr) {
   absl::string_view index_type_str;
@@ -591,15 +555,6 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   if (res) {
     return absl::InvalidArgumentError(NotSupportedParamErrorMsg(kFilterParam));
   }
-  VMSDK_RETURN_IF_ERROR(ParseLanguage(itr, index_schema_proto));
-  VMSDK_RETURN_IF_ERROR(ParseScore(itr, index_schema_proto));
-  VMSDK_ASSIGN_OR_RETURN(
-      res, vmsdk::IsParamKeyMatch(kPayloadFieldParam, false, itr));
-  if (res) {
-    return absl::InvalidArgumentError(
-        NotSupportedParamErrorMsg(kPayloadFieldParam));
-  }
-  
   // Parse global text parameters before SCHEMA
   SchemaGlobTextParams global_text_defaults;
   // Initialize with defaults for each parse call
@@ -609,10 +564,117 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   global_text_defaults.no_stem = false;
   global_text_defaults.language = data_model::LANGUAGE_ENGLISH;
   global_text_defaults.stop_words = kDefaultStopWords;
+
+  // Parse pre-SCHEMA parameters in flexible order
+  while (itr.HasNext()) {
+    // Peek at the next parameter to see if it's SCHEMA
+    VMSDK_ASSIGN_OR_RETURN(auto next_arg, itr.Get());
+    absl::string_view next_param = vmsdk::ToStringView(next_arg);
+    
+    // If we encounter SCHEMA, break out of the loop
+    if (absl::EqualsIgnoreCase(next_param, kSchemaParam)) {
+      break;
+    }
+    
+    // Track current position to detect if no parameter was consumed
+    auto initial_distance = itr.DistanceEnd();
+    
+    // Try SCORE parameter
+    auto score_status = ParseScore(itr, index_schema_proto);
+    if (!score_status.ok()) {
+      return score_status;  // Return the score error immediately
+    }
+    if (itr.DistanceEnd() < initial_distance) {
+      continue; // Parameter was consumed, continue to next iteration
+    }
+    
+    // Try LANGUAGE parameter
+    auto language_status = ParseLanguage(itr, index_schema_proto);
+    if (!language_status.ok()) {
+      return language_status;  // Return the language error immediately
+    }
+    if (itr.DistanceEnd() < initial_distance) {
+      global_text_defaults.language = index_schema_proto.language();
+      continue; // Parameter was consumed, continue to next iteration
+    }
+    
+    // Try unsupported field parameters
+    VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kPayloadFieldParam, false, itr));
+    if (res) {
+      return absl::InvalidArgumentError(NotSupportedParamErrorMsg(kPayloadFieldParam));
+    }
+    
+    VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kLanguageFieldParam, false, itr));
+    if (res) {
+      return absl::InvalidArgumentError(NotSupportedParamErrorMsg(kLanguageFieldParam));
+    }
+    
+    VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kScoreFieldParam, false, itr));
+    if (res) {
+      return absl::InvalidArgumentError(NotSupportedParamErrorMsg(kScoreFieldParam));
+    }
+    
+    // Try individual global text parameters
+    VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kPunctuationParam, false, itr));
+    if (res) {
+      VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, global_text_defaults.punctuation));
+      continue;
+    }
+    
+    VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kWithOffsetsParam, false, itr));
+    if (res) {
+      global_text_defaults.with_offsets = true;
+      continue;
+    }
+    
+    VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kNoOffsetsParam, false, itr));
+    if (res) {
+      global_text_defaults.with_offsets = false;
+      continue;
+    }
+    
+    VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kNoStemParam, false, itr));
+    if (res) {
+      global_text_defaults.no_stem = true;
+      continue;
+    }
+    
+    VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kNoStopWordsParam, false, itr));
+    if (res) {
+      global_text_defaults.stop_words.clear();
+      continue;
+    }
+    
+    VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kStopWordsParam, false, itr));
+    if (res) {
+      VMSDK_RETURN_IF_ERROR(ParseStopWords(itr, global_text_defaults));
+      continue;
+    }
+    
+    // Try MINSTEMSIZE parameter
+    VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kMinStemSizeParam, false, itr));
+    if (res) {
+      int min_stem_size;
+      VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, min_stem_size));
+      if (min_stem_size <= 0) {
+        return absl::InvalidArgumentError("MINSTEMSIZE must be positive");
+      }
+      global_text_defaults.min_stem_size = min_stem_size;
+      continue;
+    }
+    
+    // If no parameter was recognized and consumed, break to avoid infinite loop
+    if (itr.DistanceEnd() == initial_distance) {
+      break;
+    }
+  }
   
-  VMSDK_RETURN_IF_ERROR(ParseSchemaGlobalTextDefaults(itr, global_text_defaults));
+  // Validate global text parameters
+  if (global_text_defaults.punctuation.empty()) {
+    return absl::InvalidArgumentError("PUNCTUATION string cannot be empty");
+  }
   
-  // Set global text parameters in IndexSchema
+  // Apply global text defaults to the schema
   index_schema_proto.set_language(global_text_defaults.language);
   index_schema_proto.set_punctuation(global_text_defaults.punctuation);
   index_schema_proto.set_with_offsets(global_text_defaults.with_offsets);

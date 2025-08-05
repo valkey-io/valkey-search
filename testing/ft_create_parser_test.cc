@@ -1570,7 +1570,7 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_error_message = "Unexpected parameter `WITHSUFFIXTRIE`, expecting `SCHEMA`",  // Error for unsupported global parameter
         },
          {
-             .test_name = "invalid_text_minstemsize_too_large",
+             .test_name = "valid_text_minstemsize_too_large",
              .success = true,  // Should succeed as there's no upper limit defined
              .command_str = "idx1 on HASH SCHEMA text_field TEXT MINSTEMSIZE 999999",
              .text_parameters = {{

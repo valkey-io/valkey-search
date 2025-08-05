@@ -137,15 +137,11 @@ class TextPredicate : public Predicate {
   TextPredicate(const indexes::Text* index, absl::string_view alias,
                 absl::string_view identifier, absl::string_view query_text);
   bool Evaluate(Evaluator& evaluator) const override;
-  const indexes::Text* GetIndex() const { return index_; }
-  absl::string_view GetAlias() const { return alias_; }
-  absl::string_view GetIdentifier() const {
-    return vmsdk::ToStringView(identifier_.get());
-  }
-  vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
-    return vmsdk::RetainUniqueValkeyString(identifier_.get());
-  }
-  const std::string& GetQueryText() const { return query_text_; }
+  const indexes::Text* GetIndex() const;
+  absl::string_view GetAlias() const;
+  absl::string_view GetIdentifier() const;
+  vmsdk::UniqueValkeyString GetRetainedIdentifier() const;
+  const std::string& GetQueryText() const;
 
  private:
   const indexes::Text* index_;

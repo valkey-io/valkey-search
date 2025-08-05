@@ -75,6 +75,7 @@ IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     ValkeyModuleCtx *ctx, IndexSchema *index_schema,
     const data_model::Attribute &attribute,
+    const data_model::IndexSchema *index_schema_proto,
     std::optional<SupplementalContentChunkIter> iter) {
   const auto &index = attribute.index();
   switch (index.index_type_case()) {
@@ -85,10 +86,17 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
       return std::make_shared<indexes::Numeric>(index.numeric_index());
     }
     case data_model::Index::IndexTypeCase::kTextIndex: {
-      // Create or reuse shared TextIndexSchema
       if (!index_schema->GetTextIndexSchema()) {
-        // TODO : get the index_schema_proto the right way here to pass schema level properties
-        index_schema->CreateTextIndexSchema();
+        std::vector<std::string> stop_words(
+            index_schema_proto->stop_words().begin(),
+            index_schema_proto->stop_words().end()
+        );
+        index_schema->CreateTextIndexSchema(
+            index_schema_proto->language(),
+            index_schema_proto->punctuation(),
+            index_schema_proto->with_offsets(),
+            stop_words
+        );
       }
       return std::make_shared<indexes::Text>(index.text_index(),
                                              index_schema->GetTextIndexSchema());
@@ -181,7 +189,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
     for (const auto &attribute : index_schema_proto.attributes()) {
       VMSDK_ASSIGN_OR_RETURN(
           std::shared_ptr<indexes::IndexBase> index,
-          IndexFactory(ctx, res.get(), attribute, std::nullopt));
+          IndexFactory(ctx, res.get(), attribute, &index_schema_proto, std::nullopt));
       VMSDK_RETURN_IF_ERROR(
           res->AddIndex(attribute.alias(), attribute.identifier(), index));
     }
@@ -222,6 +230,7 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       }
     }
   }
+
   // The protobuf has volatile fields that get save/restores in the RDB. here we
   // reconcile the source of the index_schema_proto (reload or not) and restore those fields
   if (reload) {
@@ -851,6 +860,14 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   index_schema_proto->mutable_subscribed_key_prefixes()->Add(
       subscribed_key_prefixes_.begin(), subscribed_key_prefixes_.end());
   index_schema_proto->set_attribute_data_type(attribute_data_type_->ToProto());
+
+  // Get text configurations from TextIndexSchema for RDB serialization
+  if (this->text_index_schema_) {
+    index_schema_proto->set_language(this->text_index_schema_->GetLanguage());
+    index_schema_proto->set_punctuation(this->text_index_schema_->GetPunctuation());
+    index_schema_proto->set_with_offsets(this->text_index_schema_->GetWithOffsets());
+  }
+
   auto stats = index_schema_proto->mutable_stats();
   stats->set_documents_count(stats_.document_cnt);
   std::transform(
@@ -957,7 +974,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           supplemental_content->index_content_header().attribute();
       VMSDK_ASSIGN_OR_RETURN(std::shared_ptr<indexes::IndexBase> index,
                              IndexFactory(ctx, index_schema.get(), attribute,
-                                          supplemental_iter.IterateChunks()));
+                                          index_schema_proto.get(), supplemental_iter.IterateChunks()));
       VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
           attribute.alias(), attribute.identifier(), index));
     } else if (ABSL_PREDICT_TRUE(!skip_loading_index_data) &&

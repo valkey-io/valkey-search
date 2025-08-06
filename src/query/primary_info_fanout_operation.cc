@@ -15,8 +15,7 @@ namespace valkey_search::query::primary_info_fanout {
 PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
     std::string index_name, int timeout_ms,
     coordinator::ClientPool* client_pool)
-    : fanout::FanoutOperationBase<PrimaryInfoFanoutOperation,
-                                  coordinator::InfoIndexPartitionRequest,
+    : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
                                   coordinator::InfoIndexPartitionResponse,
                                   fanout::FanoutTargetMode::kPrimary>(),
       index_name_(index_name),
@@ -83,19 +82,21 @@ void PrimaryInfoFanoutOperation::OnError(
   }
 }
 
-void PrimaryInfoFanoutOperation::FillLocalResponse(
+coordinator::InfoIndexPartitionResponse
+PrimaryInfoFanoutOperation::GetLocalResponse(
     ValkeyModuleCtx* ctx, const coordinator::InfoIndexPartitionRequest& request,
-    coordinator::InfoIndexPartitionResponse& resp,
     const fanout::FanoutSearchTarget& /*target*/) {
   auto index_schema_result = SchemaManager::Instance().GetIndexSchema(
       ValkeyModule_GetSelectedDb(ctx), request.index_name());
+
+  coordinator::InfoIndexPartitionResponse resp;
 
   if (!index_schema_result.ok()) {
     resp.set_exists(false);
     resp.set_index_name(request.index_name());
     resp.set_error(std::string("Index not found: ") +
                    std::string(index_schema_result.status().message()));
-    return;
+    return resp;
   }
 
   auto index_schema = index_schema_result.value();
@@ -130,6 +131,7 @@ void PrimaryInfoFanoutOperation::FillLocalResponse(
     resp.set_encoding_version(encoding_version);
   }
   resp.set_error("");
+  return resp;
 }
 
 void PrimaryInfoFanoutOperation::InvokeRemoteRpc(

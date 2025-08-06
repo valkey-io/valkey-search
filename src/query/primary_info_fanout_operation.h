@@ -14,30 +14,11 @@
 
 namespace valkey_search::query::primary_info_fanout {
 
-class PrimaryInfoFanoutOperation
-    : public fanout::FanoutOperationBase<
-          PrimaryInfoFanoutOperation, coordinator::InfoIndexPartitionRequest,
-          coordinator::InfoIndexPartitionResponse,
-          fanout::FanoutTargetMode::kPrimary> {
+class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
+                                       coordinator::InfoIndexPartitionRequest,
+                                       coordinator::InfoIndexPartitionResponse,
+                                       fanout::FanoutTargetMode::kPrimary> {
  public:
-  struct PrimaryInfoParameters {
-    std::string index_name;
-    int timeout_ms;
-  };
-
-  struct PrimaryInfoResult {
-    bool exists = false;
-    std::string index_name;
-    uint64_t num_docs = 0;
-    uint64_t num_records = 0;
-    uint64_t hash_indexing_failures = 0;
-    std::string error;
-    std::optional<uint64_t> schema_fingerprint;
-    bool has_schema_mismatch = false;
-    std::optional<uint32_t> encoding_version;
-    bool has_version_mismatch = false;
-  };
-
   PrimaryInfoFanoutOperation(std::string index_name, int timeout_ms,
                              coordinator::ClientPool* client_pool);
 
@@ -52,10 +33,10 @@ class PrimaryInfoFanoutOperation
   void OnError(const std::string& error,
                const fanout::FanoutSearchTarget&) override;
 
-  void FillLocalResponse(ValkeyModuleCtx* ctx,
-                         const coordinator::InfoIndexPartitionRequest& request,
-                         coordinator::InfoIndexPartitionResponse& resp,
-                         const fanout::FanoutSearchTarget&) override;
+  coordinator::InfoIndexPartitionResponse GetLocalResponse(
+      ValkeyModuleCtx* ctx,
+      const coordinator::InfoIndexPartitionRequest& request,
+      const fanout::FanoutSearchTarget&) override;
 
   void InvokeRemoteRpc(
       coordinator::Client* client,

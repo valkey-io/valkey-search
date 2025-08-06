@@ -19,8 +19,7 @@
 
 namespace valkey_search::query::fanout {
 
-template <typename Derived, typename Request, typename Response,
-          FanoutTargetMode kTargetMode>
+template <typename Request, typename Response, FanoutTargetMode kTargetMode>
 class FanoutOperationBase {
  public:
   explicit FanoutOperationBase() = default;
@@ -43,8 +42,8 @@ class FanoutOperationBase {
 
  protected:
   static int Reply(ValkeyModuleCtx* ctx, ValkeyModuleString** argv, int argc) {
-    auto* op =
-        static_cast<Derived*>(ValkeyModule_GetBlockedClientPrivateData(ctx));
+    auto* op = static_cast<FanoutOperationBase*>(
+        ValkeyModule_GetBlockedClientPrivateData(ctx));
     if (!op) {
       return ValkeyModule_ReplyWithError(ctx, "No reply data");
     }
@@ -57,15 +56,15 @@ class FanoutOperationBase {
   }
 
   static void Free(ValkeyModuleCtx* ctx, void* privdata) {
-    delete static_cast<Derived*>(privdata);
+    delete static_cast<FanoutOperationBase*>(privdata);
   }
 
   std::vector<FanoutSearchTarget> GetTargets(ValkeyModuleCtx* ctx) const {
     return query::fanout::FanoutTemplate::GetTargets(ctx, kTargetMode);
   }
 
-  virtual void FillLocalResponse(ValkeyModuleCtx* ctx, const Request&,
-                                 Response&, const FanoutSearchTarget&) = 0;
+  virtual Response GetLocalResponse(ValkeyModuleCtx* ctx, const Request&,
+                                    const FanoutSearchTarget&) = 0;
 
   virtual void InvokeRemoteRpc(coordinator::Client*, const Request&,
                                std::function<void(grpc::Status, Response&)>,
@@ -91,8 +90,7 @@ class FanoutOperationBase {
         ValkeySearch::Instance().GetCoordinatorClientPool();
     if (target.type == FanoutSearchTarget::Type::kLocal) {
       vmsdk::RunByMain([this, ctx, target, request]() {
-        Response resp;
-        this->FillLocalResponse(ctx, request, resp, target);
+        Response resp = this->GetLocalResponse(ctx, request, target);
         if (!resp.error().empty()) {
           this->OnError(resp.error(), target);
         } else {

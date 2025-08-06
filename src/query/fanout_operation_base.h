@@ -131,10 +131,7 @@ class FanoutOperationBase {
   }
 
   virtual void OnCompletion() {
-    if (!blocked_client_) {
-      ValkeyModule_ReplyWithError("Blocked client is empty");
-      return;
-    }
+    CHECK(blocked_client_);
     blocked_client_->SetReplyPrivateData(this);
     blocked_client_->UnblockClient();
   }

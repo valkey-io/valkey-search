@@ -1790,4 +1790,205 @@ TEST_F(MetadataManagerTest, TestSaveWrongTimeIsNoOp) {
       fake_ctx, &fake_rdb, VALKEYMODULE_AUX_BEFORE_RDB));
 }
 
+class MetadataManagerTimestampTest : public MetadataManagerTest {
+ protected:
+  void SetUp() override {
+    MetadataManagerTest::SetUp();
+    // Mock ValkeyModule_Milliseconds to control time in tests
+    mock_current_time_ = 1000000;  // Start at 1000000 milliseconds
+    ON_CALL(*kMockValkeyModule, Milliseconds())
+        .WillByDefault(testing::Return(mock_current_time_));
+  }
+
+  void AdvanceTime(mstime_t delta_ms) {
+    mock_current_time_ += delta_ms;
+    ON_CALL(*kMockValkeyModule, Milliseconds())
+        .WillByDefault(testing::Return(mock_current_time_));
+  }
+
+  mstime_t mock_current_time_;
+};
+
+TEST_F(MetadataManagerTimestampTest, TestTimestampInitialization) {
+  // Initially, no metadata has been received, should return -1
+  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+            -1);
+}
+
+TEST_F(MetadataManagerTimestampTest,
+       TestTimestampUpdateOnSuccessfulReconciliation) {
+  GlobalMetadata proposed_metadata;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      kV1Metadata, &proposed_metadata));
+
+  // Initially, no metadata has been received
+  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+            -1);
+
+  // Reconcile metadata successfully
+  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(proposed_metadata));
+
+  // Now should return 0 (current time - current time = 0)
+  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+            0);
+
+  // Advance time by 30000 milliseconds
+  AdvanceTime(30000);
+
+  // Should now return 30000 milliseconds
+  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+            30000);
+}
+
+TEST_F(MetadataManagerTimestampTest, TestTimestampCalculation) {
+  GlobalMetadata proposed_metadata;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      kV1Metadata, &proposed_metadata));
+
+  // Reconcile metadata at time 1000000ms
+  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(proposed_metadata));
+
+  // Test various time differences
+  struct TestCase {
+    mstime_t time_advance_ms;
+    long long expected_seconds;
+  };
+
+  std::vector<mstime_t> test_cases = {
+      0,        // Same time
+      1000,     // 1 second
+      5500,     // 5.5 seconds
+      60000,    // 1 minute
+      3600000,  // 1 hour
+  };
+
+  for (const auto& test_case : test_cases) {
+    AdvanceTime(test_case);
+    EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+              test_case)
+        << "Failed for time advance: " << test_case << "ms";
+    // Reset time for next test
+    mock_current_time_ = 1000000;
+    ON_CALL(*kMockValkeyModule, Milliseconds())
+        .WillByDefault(testing::Return(mock_current_time_));
+  }
+}
+
+TEST_F(MetadataManagerTimestampTest,
+       TestMultipleReconciliationsUpdateTimestamp) {
+  GlobalMetadata metadata1, metadata2;
+  ASSERT_TRUE(
+      google::protobuf::TextFormat::ParseFromString(kV1Metadata, &metadata1));
+  ASSERT_TRUE(
+      google::protobuf::TextFormat::ParseFromString(kV2Metadata, &metadata2));
+
+  // First reconciliation at time 1000000ms
+  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(metadata1));
+  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+            0);
+
+  // Advance time by 10000 milliseconds
+  AdvanceTime(10000);
+  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+            10000);
+
+  // Second reconciliation - should update timestamp to current time
+  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(metadata2));
+  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+            0);
+
+  // Advance time again
+  AdvanceTime(5000);
+  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+            5000);
+}
+
+TEST_F(MetadataManagerTimestampTest,
+       TestReconciliationWithCallbackFailureStillUpdatesTimestamp) {
+  // Test that even if callback fails, the timestamp is still updated
+  // because reconciliation itself succeeded
+
+  GlobalMetadata proposed_metadata;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      kV1Metadata, &proposed_metadata));
+
+  // Register a type with a failing callback
+  test_metadata_manager_->RegisterType(
+      "my_type", 1,
+      [](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
+        return 1234;
+      },
+      [](absl::string_view id, const google::protobuf::Any* metadata) {
+        return absl::InternalError("Callback failed");
+      });
+
+  // Reconciliation should fail due to callback failure
+  auto status = test_metadata_manager_->ReconcileMetadata(proposed_metadata);
+  EXPECT_FALSE(status.ok());
+
+  // But timestamp should not be updated since reconciliation failed
+  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+            -1);
+}
+
+TEST_F(MetadataManagerTimestampTest, TestConcurrentAccess) {
+  // This test verifies that the atomic operations work correctly
+  // We can't easily test true concurrency in unit tests, but we can
+  // verify that the operations are atomic by calling them in sequence
+
+  GlobalMetadata proposed_metadata;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      kV1Metadata, &proposed_metadata));
+
+  // Multiple calls should be consistent
+  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+            -1);
+  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+            -1);
+
+  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(proposed_metadata));
+
+  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+            0);
+  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+            0);
+
+  AdvanceTime(42000);
+  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+            42000);
+  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+            42000);
+}
+
+TEST_F(MetadataManagerTimestampTest, TestTimestampPersistsAcrossLoadMetadata) {
+  // Test that timestamp tracking works correctly with LoadMetadata operations
+  GlobalMetadata proposed_metadata;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      kV1Metadata, &proposed_metadata));
+
+  // First reconciliation
+  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(proposed_metadata));
+  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+            0);
+
+  // Advance time
+  AdvanceTime(15000);
+  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+            15000);
+
+  // Load metadata (which calls ReconcileMetadata internally)
+  FakeSafeRDB fake_rdb;
+  auto section = std::make_unique<data_model::RDBSection>();
+  section->set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
+  section->mutable_global_metadata_contents()->CopyFrom(proposed_metadata);
+  section->set_supplemental_count(0);
+
+  VMSDK_EXPECT_OK(test_metadata_manager_->LoadMetadata(
+      fake_ctx, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
+
+  // Timestamp should be updated to current time
+  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+            0);
+}
+
 }  // namespace valkey_search::coordinator

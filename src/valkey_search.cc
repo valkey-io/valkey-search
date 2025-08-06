@@ -111,16 +111,19 @@ static vmsdk::info_field::Integer used_memory(
         .Computed(vmsdk::GetUsedMemoryCnt)
         .CrashSafe());
 
- static vmsdk::info_field::Integer reclaimable_memory("memory", "index_reclaimable_memory", 
+static vmsdk::info_field::Integer reclaimable_memory(
+    "memory", "index_reclaimable_memory",
     vmsdk::info_field::IntegerBuilder()
-      .App()
-      .Computed([]() -> uint64_t { return Metrics::GetStats().reclaimable_memory; })
-      .CrashSafe());
-
-static vmsdk::info_field::String background_indexing_status("indexing", "background_indexing_status",
-    vmsdk::info_field::StringBuilder()
         .App()
-        .ComputedCharPtr([]() -> const char * {
+        .Computed([]() -> uint64_t {
+          return Metrics::GetStats().reclaimable_memory;
+        })
+        .CrashSafe());
+
+static vmsdk::info_field::String background_indexing_status(
+    "indexing", "background_indexing_status",
+    vmsdk::info_field::StringBuilder().App().ComputedCharPtr(
+        []() -> const char * {
           return SchemaManager::Instance().IsIndexingInProgress()
                      ? "IN_PROGRESS"
                      : "NO_ACTIVITY";
@@ -210,9 +213,12 @@ static vmsdk::info_field::Integer time_slice_read_periods(
 
 static vmsdk::info_field::Integer time_slice_read_time(
     "time_slice_mutex", "time_slice_read_time",
-    vmsdk::info_field::IntegerBuilder().Dev().Units(vmsdk::info_field::Units::kMicroSeconds).Computed([]() -> long long {
-      return vmsdk::GetGlobalTimeSlicedMRMWStats().read_time_microseconds;
-    }));
+    vmsdk::info_field::IntegerBuilder()
+        .Dev()
+        .Units(vmsdk::info_field::Units::kMicroSeconds)
+        .Computed([]() -> long long {
+          return vmsdk::GetGlobalTimeSlicedMRMWStats().read_time_microseconds;
+        }));
 
 static vmsdk::info_field::Integer time_slice_write_periods(
     "time_slice_mutex", "time_slice_write_periods",
@@ -222,9 +228,12 @@ static vmsdk::info_field::Integer time_slice_write_periods(
 
 static vmsdk::info_field::Integer time_slice_write_time(
     "time_slice_mutex", "time_slice_write_time",
-    vmsdk::info_field::IntegerBuilder().Dev().Units(vmsdk::info_field::Units::kMicroSeconds).Computed([]() -> long long {
-      return vmsdk::GetGlobalTimeSlicedMRMWStats().write_time_microseconds;
-    }));   
+    vmsdk::info_field::IntegerBuilder()
+        .Dev()
+        .Units(vmsdk::info_field::Units::kMicroSeconds)
+        .Computed([]() -> long long {
+          return vmsdk::GetGlobalTimeSlicedMRMWStats().write_time_microseconds;
+        }));
 
 static vmsdk::info_field::Integer time_slice_queries(
     "time_slice_mutex", "time_slice_queries",
@@ -549,6 +558,19 @@ static vmsdk::info_field::Integer coordinator_bytes_in(
         .App()
         .Computed([]() -> long long {
           return Metrics::GetStats().coordinator_bytes_in;
+        })
+        .VisibleIf([]() -> bool {
+          return ValkeySearch::Instance().UsingCoordinator();
+        }));
+
+static vmsdk::info_field::Integer coordinator_last_time_since_healthy_metadata(
+    "coordinator", "coordinator_last_time_since_healthy_metadata",
+    vmsdk::info_field::IntegerBuilder()
+        .Dev()
+        .Units(vmsdk::info_field::Units::kMilliSeconds)
+        .Computed([]() -> long long {
+          return coordinator::MetadataManager::Instance()
+              .GetMilliSecondsSinceLastHealthyMetadata();
         })
         .VisibleIf([]() -> bool {
           return ValkeySearch::Instance().UsingCoordinator();

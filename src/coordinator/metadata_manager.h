@@ -8,6 +8,7 @@
 #ifndef VALKEYSEARCH_SRC_COORDINATOR_METADATA_MANAGER_H_
 #define VALKEYSEARCH_SRC_COORDINATOR_METADATA_MANAGER_H_
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -133,6 +134,8 @@ class MetadataManager {
                             SupplementalContentIter &&supplemental_iter);
   void RegisterForClusterMessages(ValkeyModuleCtx *ctx);
 
+  long long GetMilliSecondsSinceLastHealthyMetadata() const;
+
   static bool IsInitialized();
   static void InitInstance(std::unique_ptr<MetadataManager> instance);
   static MetadataManager &Instance();
@@ -155,6 +158,7 @@ class MetadataManager {
       registered_types_;
   coordinator::ClientPool &client_pool_;
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
+  std::atomic<mstime_t> last_healthy_metadata_time_{0};
 };
 }  // namespace valkey_search::coordinator
 

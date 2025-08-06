@@ -170,3 +170,9 @@ target_link_libraries(valkey_utils_test PRIVATE intrusive_list)
 target_link_libraries(valkey_utils_test PRIVATE lru)
 target_link_libraries(valkey_utils_test PRIVATE segment_tree)
 finalize_test_flags(valkey_utils_test)
+
+# 7. Text Index Test Suite
+add_executable(text_index_test ${CMAKE_CURRENT_LIST_DIR}/radix_test.cc)
+target_include_directories(text_index_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(text_index_test PRIVATE testing_common_base)
+finalize_test_flags(text_index_test)

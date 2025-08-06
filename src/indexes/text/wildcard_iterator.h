@@ -1,3 +1,10 @@
+/*
+ * Copyright (c) 2025, valkey-search contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ *
+ */
+
 #ifndef VALKEY_SEARCH_INDEXES_TREE_WILDCARD_ITERATOR_H_
 #define VALKEY_SEARCH_INDEXES_TREE_WILDCARD_ITERATOR_H_
 
@@ -38,8 +45,7 @@ This algorithm operates in time O(#SuffixMatches)
 #include "absl/string/string_view.h"
 #include "src/text/text.h"
 
-namespace valkey_search {
-namespace text {
+namespace valkey_search::indexes::text {
 
 struct WildCardIterator : public WordIterator {
   using Posting = typename Postings::Posting;
@@ -76,7 +82,6 @@ struct WildCardIterator : public WordIterator {
   std::shared_ptr<RadixTree<Postings *>> radix_tree_;
 };
 
-}  // namespace text
-}  // namespace valkey_search
+}  // namespace valkey_search::indexes::text
 
 #endif

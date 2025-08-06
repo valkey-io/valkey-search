@@ -81,6 +81,7 @@ class Metrics {
     std::atomic<uint64_t> ingest_field_vector{0};
     std::atomic<uint64_t> ingest_field_numeric{0};
     std::atomic<uint64_t> ingest_field_tag{0};
+    std::atomic<uint64_t> ingest_field_text{0};
     std::atomic<uint64_t> ingest_last_batch_size{0};
     std::atomic<uint64_t> ingest_total_batches{0};
     std::atomic<uint64_t> ingest_total_failures{0};

@@ -15,37 +15,13 @@ namespace valkey_search::query::primary_info_fanout {
 PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
     std::string index_name, int timeout_ms,
     coordinator::ClientPool* client_pool)
-    : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
+    : fanout::FanoutOperationBase<PrimaryInfoFanoutOperation,
+                                  coordinator::InfoIndexPartitionRequest,
                                   coordinator::InfoIndexPartitionResponse,
-                                  fanout::FanoutTargetMode::kPrimary,
-                                  PrimaryInfoAsyncResult>(),
+                                  fanout::FanoutTargetMode::kPrimary>(),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
       client_pool_(client_pool) {}
-
-void* PrimaryInfoFanoutOperation::CreateAsyncResult() {
-  auto result = PrimaryInfoResult{
-      .exists = exists_,
-      .index_name = index_name_,
-      .num_docs = num_docs_,
-      .num_records = num_records_,
-      .hash_indexing_failures = hash_indexing_failures_,
-      .error = error_,
-      .schema_fingerprint = schema_fingerprint_,
-      .has_schema_mismatch = has_schema_mismatch_,
-      .encoding_version = encoding_version_,
-      .has_version_mismatch = has_version_mismatch_,
-  };
-
-  auto async_result = new PrimaryInfoAsyncResult;
-  async_result->info = absl::StatusOr<PrimaryInfoResult>(std::move(result));
-  auto params = std::make_unique<PrimaryInfoParameters>();
-  params->index_name = index_name_;
-  params->timeout_ms = timeout_ms_.value_or(5000);
-  async_result->parameters = std::move(params);
-
-  return async_result;
-}
 
 int PrimaryInfoFanoutOperation::GetTimeoutMs() const {
   return timeout_ms_.value_or(5000);
@@ -168,9 +144,40 @@ void PrimaryInfoFanoutOperation::InvokeRemoteRpc(
                              timeout_ms);
 }
 
+int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
+                                              ValkeyModuleString** argv,
+                                              int argc) {
+  if (!exists_) {
+    std::string error_msg = absl::StrFormat(
+        "Primary index with name '%s' not found", index_name_.c_str());
+    return ValkeyModule_ReplyWithError(ctx, error_msg.c_str());
+  }
+  if (has_schema_mismatch_) {
+    return ValkeyModule_ReplyWithError(
+        ctx, "ERR found primary index schema inconsistency in the cluster");
+  }
+  if (has_version_mismatch_) {
+    return ValkeyModule_ReplyWithError(
+        ctx, "ERR found index schema version inconsistency in the cluster");
+  }
+
+  ValkeyModule_ReplyWithArray(ctx, 10);
+  ValkeyModule_ReplyWithSimpleString(ctx, "mode");
+  ValkeyModule_ReplyWithSimpleString(ctx, "primary");
+  ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
+  ValkeyModule_ReplyWithSimpleString(ctx, index_name_.c_str());
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_docs");
+  ValkeyModule_ReplyWithCString(ctx, std::to_string(num_docs_).c_str());
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
+  ValkeyModule_ReplyWithCString(ctx, std::to_string(num_records_).c_str());
+  ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
+  ValkeyModule_ReplyWithCString(
+      ctx, std::to_string(hash_indexing_failures_).c_str());
+  return VALKEYMODULE_OK;
+}
+
 void PrimaryInfoFanoutOperation::OnCompletion() {
   FanoutOperationBase::OnCompletion();
-  delete this;
 }
 
 }  // namespace valkey_search::query::primary_info_fanout

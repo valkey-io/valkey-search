@@ -134,7 +134,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*42\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -147,7 +147,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "m\r\n:240\r\n+ef_construction\r\n:400\r\n+ef_"
                             "runtime\r\n:30\r\n+num_docs\r\n:0\r\n+max_doc_id\r\n:0\r\n+num_"
                             "terms\r\n:0\r\n+num_records\r\n:0\r\n+inverted_sz_mb\r\n$1\r\n0\r\n+vector_index_sz_mb\r\n$1\r\n0\r\n+"
-                            "hash_indexing_failures\r\n$1\r\n0\r\n+backfill_in_"
+                            "total_inverted_index_blocks\r\n:0\r\n+offset_vectors_sz_mb\r\n$1\r\n0\r\n+doc_table_size_mb\r\n$1\r\n0\r\n+"
+			    "sortable_values_size_mb\r\n$1\r\n0\r\n+key_table_size_mb\r\n$1\r\n0\r\n+hash_indexing_failures\r\n$1\r\n0\r\n+backfill_in_"
                             "progress\r\n$1\r\n0\r\n+backfill_complete_"
                             "percent\r\n$8\r\n1.000000\r\n+mutation_queue_"
                             "size\r\n$1\r\n0\r\n+recent_mutations_queue_"
@@ -185,7 +186,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*42\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -196,7 +197,10 @@ INSTANTIATE_TEST_SUITE_P(
                             "COSINE\r\n+size\r\n$1\r\n0\r\n+data_type\r\n+"
                             "FLOAT32\r\n+algorithm\r\n*4\r\n+name\r\n+FLAT\r\n+"
                             "block_size\r\n:1024\r\n+num_docs\r\n:0\r\n+max_doc_id\r\n:0\r\n+"
-                            "num_terms\r\n:0\r\n+num_records\r\n:0\r\n+inverted_sz_mb\r\n$1\r\n0\r\n+vector_index_sz_mb\r\n$1\r\n0\r\n+hash_indexing_failures\r\n$1\r\n0\r\n+"
+                            "num_terms\r\n:0\r\n+num_records\r\n:0\r\n+inverted_sz_mb\r\n$1\r\n0\r\n+"
+			    "vector_index_sz_mb\r\n$1\r\n0\r\n+total_inverted_index_blocks\r\n:0\r\n+"
+			    "offset_vectors_sz_mb\r\n$1\r\n0\r\n+doc_table_size_mb\r\n$1\r\n0\r\n+"
+                            "sortable_values_size_mb\r\n$1\r\n0\r\n+key_table_size_mb\r\n$1\r\n0\r\n+hash_indexing_failures\r\n$1\r\n0\r\n+"
                             "backfill_in_progress\r\n$1\r\n0\r\n+backfill_"
                             "complete_percent\r\n$8\r\n1.000000\r\n+mutation_"
                             "queue_size\r\n$1\r\n0\r\n+recent_mutations_queue_"
@@ -227,7 +231,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*42\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -235,7 +239,10 @@ INSTANTIATE_TEST_SUITE_P(
                             "attribute\r\n+test_attribute_1\r\n+type\r\n+"
                             "TAG\r\n+SEPARATOR\r\n+@\r\n+size\r\n$1\r\n0\r\n+"
                             "num_docs\r\n:0\r\n+max_doc_id\r\n:0\r\n+num_terms\r\n:0\r\n+"
-                            "num_records\r\n:0\r\n+inverted_sz_mb\r\n$1\r\n0\r\n+vector_index_sz_mb\r\n$1\r\n0\r\n+hash_indexing_"
+                            "num_records\r\n:0\r\n+inverted_sz_mb\r\n$1\r\n0\r\n+vector_index_sz_mb\r\n$1\r\n0\r\n+"
+			    "total_inverted_index_blocks\r\n:0\r\n+offset_vectors_sz_mb\r\n$1\r\n0\r\n+"
+			    "doc_table_size_mb\r\n$1\r\n0\r\n+"
+                            "sortable_values_size_mb\r\n$1\r\n0\r\n+key_table_size_mb\r\n$1\r\n0\r\n+hash_indexing_"
                             "failures\r\n$1\r\n0\r\n+backfill_in_progress\r\n$"
                             "1\r\n0\r\n+backfill_complete_percent\r\n$8\r\n1."
                             "000000\r\n+mutation_queue_size\r\n$1\r\n0\r\n+"
@@ -268,7 +275,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*42\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -277,7 +284,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "TAG\r\n+SEPARATOR\r\n+@\r\n+CASESENSITIVE\r\n+"
                             "size\r\n$1\r\n0\r\n+num_docs\r\n:0\r\n+max_doc_id\r\n:0\r\n+num_"
                             "terms\r\n:0\r\n+num_records\r\n:0\r\n+inverted_sz_mb\r\n$1\r\n0\r\n+vector_index_sz_mb\r\n$1\r\n0\r\n+"
-                            "hash_indexing_failures\r\n$1\r\n0\r\n+backfill_in_"
+                            "total_inverted_index_blocks\r\n:0\r\n+offset_vectors_sz_mb\r\n$1\r\n0\r\n+doc_table_size_mb\r\n$1\r\n0\r\n+"
+                            "sortable_values_size_mb\r\n$1\r\n0\r\n+key_table_size_mb\r\n$1\r\n0\r\n+hash_indexing_failures\r\n$1\r\n0\r\n+backfill_in_"
                             "progress\r\n$1\r\n0\r\n+backfill_complete_"
                             "percent\r\n$8\r\n1.000000\r\n+mutation_queue_"
                             "size\r\n$1\r\n0\r\n+recent_mutations_queue_"
@@ -306,14 +314,16 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*42\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
                             "8\r\n+identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+type\r\n+"
                             "NUMERIC\r\n+size\r\n$1\r\n0\r\n+num_docs\r\n:0\r\n+max_doc_id\r\n:0\r\n+num_terms\r\n:0\r\n+num_"
-                            "records\r\n:0\r\n+inverted_sz_mb\r\n$1\r\n0\r\n+vector_index_sz_mb\r\n$1\r\n0\r\n+hash_indexing_failures\r\n$"
+                            "records\r\n:0\r\n+inverted_sz_mb\r\n$1\r\n0\r\n+vector_index_sz_mb\r\n$1\r\n0\r\n+"
+			    "total_inverted_index_blocks\r\n:0\r\n+offset_vectors_sz_mb\r\n$1\r\n0\r\n+doc_table_size_mb\r\n$1\r\n0\r\n+"
+                            "sortable_values_size_mb\r\n$1\r\n0\r\n+key_table_size_mb\r\n$1\r\n0\r\n+hash_indexing_failures\r\n$"
                             "1\r\n0\r\n+backfill_in_progress\r\n$1\r\n0\r\n+"
                             "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
                             "mutation_queue_size\r\n$1\r\n0\r\n+recent_"

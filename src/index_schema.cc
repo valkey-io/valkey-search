@@ -706,7 +706,7 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithArray(ctx, 28);
+  ValkeyModule_ReplyWithArray(ctx, 42);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
   ValkeyModule_ReplyWithSimpleString(ctx, "index_options");
@@ -744,12 +744,12 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithLongLong(ctx, 0);
   ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
   ValkeyModule_ReplyWithLongLong(ctx, CountRecords());
-  
   ValkeyModule_ReplyWithSimpleString(ctx, "inverted_sz_mb");
   ValkeyModule_ReplyWithCString(ctx, "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "vector_index_sz_mb");
   ValkeyModule_ReplyWithCString(ctx, "0");
-  /*
+
+
   ValkeyModule_ReplyWithSimpleString(ctx, "total_inverted_index_blocks");
   ValkeyModule_ReplyWithLongLong(ctx, CountRecords());
   ValkeyModule_ReplyWithSimpleString(ctx, "offset_vectors_sz_mb");
@@ -760,6 +760,8 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithCString(ctx, "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "key_table_size_mb");
   ValkeyModule_ReplyWithCString(ctx, "0");
+
+  /*
   ValkeyModule_ReplyWithSimpleString(ctx, "tag_overhead_sz_mb");
   ValkeyModule_ReplyWithCString(ctx, "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "text_overhead_sz_mb");

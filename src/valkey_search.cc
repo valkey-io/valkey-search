@@ -568,7 +568,7 @@ static vmsdk::info_field::Integer coordinator_last_time_since_healthy_metadata(
     vmsdk::info_field::IntegerBuilder()
         .Dev()
         .Units(vmsdk::info_field::Units::kMilliSeconds)
-        .Computed([]() -> long long {
+        .Computed([]() -> int64_t {
           return coordinator::MetadataManager::Instance()
               .GetMilliSecondsSinceLastHealthyMetadata();
         })

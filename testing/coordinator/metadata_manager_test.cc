@@ -11,6 +11,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -1932,32 +1933,57 @@ TEST_F(MetadataManagerTimestampTest,
 }
 
 TEST_F(MetadataManagerTimestampTest, TestConcurrentAccess) {
-  // This test verifies that the atomic operations work correctly
-  // We can't easily test true concurrency in unit tests, but we can
-  // verify that the operations are atomic by calling them in sequence
-
+  // This test verifies that the atomic operations work correctly with real
+  // concurrent access
   GlobalMetadata proposed_metadata;
   ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
       kV1Metadata, &proposed_metadata));
 
-  // Multiple calls should be consistent
-  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
-            -1);
-  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
-            -1);
-
+  // First, reconcile some metadata so we have a valid timestamp
   VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(proposed_metadata));
 
-  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
-            0);
-  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
-            0);
+  constexpr int kNumThreads = 8;
+  constexpr int kCallsPerThread = 100;
 
-  AdvanceTime(42000);
-  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
-            42000);
-  EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
-            42000);
+  std::vector<std::thread> threads;
+  threads.reserve(kNumThreads);
+  std::vector<std::vector<long long>> results(kNumThreads);
+
+  // Launch multiple threads that concurrently read the timestamp
+  for (int i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back([&, i]() {
+      for (int j = 0; j < kCallsPerThread; ++j) {
+        results[i].push_back(
+            test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata());
+        // Small delay to allow for potential timing differences
+        std::this_thread::sleep_for(std::chrono::microseconds(1));
+      }
+    });
+  }
+
+  // Wait for all threads to complete
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  // Verify that all results are valid (>= 0) and increasing over time
+  // Since we use absl::Now(), values should be monotonically increasing
+  for (int i = 0; i < kNumThreads; ++i) {
+    for (long long result : results[i]) {
+      EXPECT_GE(result, 0) << "Thread " << i << " got invalid timestamp";
+    }
+    // Check that within each thread, timestamps are non-decreasing
+    for (size_t j = 1; j < results[i].size(); ++j) {
+      EXPECT_GE(results[i][j], results[i][j - 1])
+          << "Thread " << i
+          << " got decreasing timestamps: " << results[i][j - 1] << " -> "
+          << results[i][j];
+    }
+  }
+
+  // Test that the timestamp getter remains thread-safe and valid
+  EXPECT_GE(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
+            0);
 }
 
 TEST_F(MetadataManagerTimestampTest, TestTimestampPersistsAcrossLoadMetadata) {

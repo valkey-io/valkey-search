@@ -134,7 +134,7 @@ class MetadataManager {
                             SupplementalContentIter &&supplemental_iter);
   void RegisterForClusterMessages(ValkeyModuleCtx *ctx);
 
-  long long GetMilliSecondsSinceLastHealthyMetadata() const;
+  int64_t GetMilliSecondsSinceLastHealthyMetadata() const;
 
   static bool IsInitialized();
   static void InitInstance(std::unique_ptr<MetadataManager> instance);
@@ -158,7 +158,7 @@ class MetadataManager {
       registered_types_;
   coordinator::ClientPool &client_pool_;
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
-  std::atomic<mstime_t> last_healthy_metadata_time_{0};
+  std::atomic_int64_t last_healthy_metadata_millis_{0};
 };
 }  // namespace valkey_search::coordinator
 

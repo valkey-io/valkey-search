@@ -135,13 +135,14 @@ class TagPredicate : public Predicate {
 class TextPredicate : public Predicate {
  public:
   enum class Operation {
-    kExact,      // Exact phrase match
-    kPrefix,     // Prefix match
+    kExact,      // Exact term / exact phrase match.
+    kPrefix,     // Prefix Wildcard match
+    kSuffix,     // kSuffix Wildcard match
+    kInfix,      // kInfix Wildcard match
     kFuzzy,      // Fuzzy match
-    kWildcard,   // Wildcard match
   };
 
-  TextPredicate(const indexes::Text* index,
+  TextPredicate(const indexes::Text* index, absl::string_view alias,
                 absl::string_view identifier,
                 absl::string_view raw_text_string,
                 Operation op = Operation::kExact,
@@ -150,6 +151,7 @@ class TextPredicate : public Predicate {
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(absl::string_view raw_text_string) const;
   const indexes::Text* GetIndex() const { return index_; }
+  absl::string_view GetAlias() const { return alias_; }
   absl::string_view GetIdentifier() const {
     return vmsdk::ToStringView(identifier_.get());
   }
@@ -163,6 +165,7 @@ class TextPredicate : public Predicate {
  private:
   const indexes::Text* index_;
   vmsdk::UniqueValkeyString identifier_;
+  std::string alias_; // Attribute alias will be NULL for default text fields.
   std::string raw_text_string_;
   Operation operation_;
   double fuzzy_distance_;
@@ -170,8 +173,9 @@ class TextPredicate : public Predicate {
   // Private evaluation methods
   bool EvaluateExact(absl::string_view text) const;
   bool EvaluatePrefix(absl::string_view text) const;
+  bool EvaluateSuffix(absl::string_view text) const;
+  bool EvaluateInfix(absl::string_view text) const;
   bool EvaluateFuzzy(absl::string_view text) const;
-  bool EvaluateWildcard(absl::string_view text) const;
 };
 
 enum class LogicalOperator { kAnd, kOr };

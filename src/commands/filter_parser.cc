@@ -223,7 +223,6 @@ absl::StatusOr<absl::string_view> FilterParser::ParseTagString() {
 absl::StatusOr<std::unique_ptr<query::TextPredicate>> FilterParser::ParseTextPredicate(
     const std::string& field_name) {
   // Check for modifiers
-  bool exact_match = Match('=');  // Handle verbatim/exact match modifier
   std::string text_value;
   bool in_quotes = Match('"');
   while (!IsEnd()) {
@@ -252,6 +251,7 @@ absl::StatusOr<std::unique_ptr<query::TextPredicate>> FilterParser::ParseTextPre
   //   return absl::InvalidArgumentError(
   //       absl::StrCat("Field '", field_name, "' is not a text field"));
   // }
+  // If `in_quotes`, we use Exact Matching.
   // return std::make_unique<query::TextPredicate>(text_index, field_name, text_value);
 }
 

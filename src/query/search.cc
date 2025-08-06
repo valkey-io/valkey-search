@@ -167,6 +167,13 @@ size_t EvaluateFilterAsPrimary(
     entries_fetchers.push(std::move(fetcher));
     return size;
   }
+  if (predicate->GetType() == PredicateType::kText) {
+    // auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
+    // auto fetcher = text_predicate->GetIndex()->Search(*text_predicate, negate);
+    // size_t size = fetcher->Size();
+    // entries_fetchers.push(std::move(fetcher));
+    // return size;
+  }
   if (predicate->GetType() == PredicateType::kNegate) {
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
     return EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
@@ -340,7 +347,6 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
         false);
     // Collect matching keys
     std::deque<indexes::Neighbor> neighbors;
-    indexes::InlineVectorEvaluator evaluator;
     while (!entries_fetchers.empty()) {
       auto fetcher = std::move(entries_fetchers.front());
       entries_fetchers.pop();

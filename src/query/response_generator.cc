@@ -110,6 +110,7 @@ class PredicateEvaluator : public query::Evaluator {
   }
 
   bool EvaluateText(const query::TextPredicate &predicate) override {
+    // TODO: Implement TextPredicate evaluation.
     return false;
   }
 

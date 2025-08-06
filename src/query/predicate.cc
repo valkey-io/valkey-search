@@ -27,13 +27,14 @@ bool NegatePredicate::Evaluate(Evaluator& evaluator) const {
   return !predicate_->Evaluate(evaluator);
 }
 
-TextPredicate::TextPredicate(const indexes::Text* index,
+TextPredicate::TextPredicate(const indexes::Text* index, absl::string_view alias,
                            absl::string_view identifier,
                            absl::string_view raw_text_string,
                            Operation op,
                            double fuzzy_distance)
     : Predicate(PredicateType::kText),
       index_(index),
+      alias_(alias),
       identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
       raw_text_string_(raw_text_string),
       operation_(op),
@@ -49,10 +50,12 @@ bool TextPredicate::Evaluate(absl::string_view text) const {
       return EvaluateExact(text);
     case Operation::kPrefix:
       return EvaluatePrefix(text);
+    case Operation::kSuffix:
+      return EvaluateSuffix(text);
+    case Operation::kInfix:
+      return EvaluateInfix(text);
     case Operation::kFuzzy:
       return EvaluateFuzzy(text);
-    case Operation::kWildcard:
-      return EvaluateWildcard(text);
     default:
       return false;
   }
@@ -63,18 +66,23 @@ bool TextPredicate::EvaluateExact(absl::string_view text) const {
 }
 
 bool TextPredicate::EvaluatePrefix(absl::string_view text) const {
+  // TODO: Implement prefix wildcard match using WordIterator.
   return absl::StartsWith(text, raw_text_string_);
 }
 
-bool TextPredicate::EvaluateFuzzy(absl::string_view text) const {
-  // TODO: Implement Levenshtein distance calculation
-  // Return true if distance <= fuzzy_distance_
+bool TextPredicate::EvaluateSuffix(absl::string_view text) const {
+  // TODO: Implement suffix wildcard match using WordIterator.
+  return absl::EndsWith(text, raw_text_string_);
+}
+
+bool TextPredicate::EvaluateInfix(absl::string_view text) const {
+  // TODO: Implement infix wildcard match using WordIterator.
   return false;
 }
 
-bool TextPredicate::EvaluateWildcard(absl::string_view text) const {
-  // TODO: Implement wildcard pattern matching
-  // Support * and ? wildcards
+bool TextPredicate::EvaluateFuzzy(absl::string_view text) const {
+  // TODO: Implement Levenshtein distance calculation using the PathIterator.
+  // Return true if distance <= fuzzy_distance_
   return false;
 }
 

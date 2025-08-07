@@ -26,6 +26,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -168,11 +169,11 @@ size_t EvaluateFilterAsPrimary(
     return size;
   }
   if (predicate->GetType() == PredicateType::kText) {
-    // auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
-    // auto fetcher = text_predicate->GetIndex()->Search(*text_predicate, negate);
-    // size_t size = fetcher->Size();
-    // entries_fetchers.push(std::move(fetcher));
-    // return size;
+    auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
+    auto fetcher = text_predicate->GetIndex()->Search(*text_predicate, negate);
+    size_t size = fetcher->Size();
+    entries_fetchers.push(std::move(fetcher));
+    return size;
   }
   if (predicate->GetType() == PredicateType::kNegate) {
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);

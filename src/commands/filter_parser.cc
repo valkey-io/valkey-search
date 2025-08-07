@@ -24,9 +24,7 @@
 #include "src/valkey_search_options.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
-// TODO: This needs the text index definition to be implemented correctly.
-// The header file below does not compile correctly. Hence commented out.
-// #include "src/indexes/text.h"
+#include "src/indexes/text.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
@@ -222,6 +220,14 @@ absl::StatusOr<absl::string_view> FilterParser::ParseTagString() {
 
 absl::StatusOr<std::unique_ptr<query::TextPredicate>> FilterParser::ParseTextPredicate(
     const std::string& field_name) {
+  auto index = index_schema_.GetIndex(field_name);
+  if (!index.ok() ||
+      index.value()->GetIndexerType() != indexes::IndexerType::kText) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "`", field_name, "` is not indexed as a numeric field"));
+  }
+  auto identifier = index_schema_.GetIdentifier(field_name).value();
+  filter_identifiers_.insert(identifier);
   // Currently, we do not support default field text predicates (ie - without a field specified).
   std::string text_value;
   bool in_quotes = Match('"');
@@ -242,15 +248,13 @@ absl::StatusOr<std::unique_ptr<query::TextPredicate>> FilterParser::ParseTextPre
   if (text_value.empty()) {
     return absl::InvalidArgumentError("Empty text predicate");
   }
-  return absl::InvalidArgumentError("Temporarily Rejecting TextPredicates");
-  // TODO: We need the index to be created correctly before we can use it.
-  // auto text_index = dynamic_cast<const indexes::Text*>(index.value().get());
-  // if (!text_index) {
-  //   return absl::InvalidArgumentError(
-  //       absl::StrCat("Field '", field_name, "' is not a text field"));
-  // }
+  auto text_index = dynamic_cast<const indexes::Text*>(index.value().get());
+  if (!text_index) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Field '", field_name, "' is not a text field"));
+  }
   // If in quotes, it is an exact match.
-  // return std::make_unique<query::TextPredicate>(text_index, field_name, text_value, TextPredicate::Operation::kExact, 0);
+  return std::make_unique<query::TextPredicate>(text_index, field_name, identifier, text_value, query::TextPredicate::Operation::kExact, 0);
 }
 
 absl::StatusOr<absl::flat_hash_set<absl::string_view>> FilterParser::ParseTags(

@@ -81,9 +81,61 @@ std::unique_ptr<data_model::Index> Text::ToProto() const {
   throw std::runtime_error("Text::ToProto not implemented");
 }
 
+// std::unique_ptr<Text::EntriesFetcher> Text::Search(
+//     const query::TextPredicate& predicate, bool negate) const {
+//   throw std::runtime_error("Text::Search not implemented");
+// }
+
+size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
+  switch (predicate.GetOperation()) {
+    case query::TextPredicate::Operation::kExact: {
+      // TODO: Handle phrase matching.
+      auto word = predicate.GetTextString();
+      if (word.empty()) return 0;
+      return 0;
+    }
+    // Other operations...
+    default:
+      return 0;
+  }
+}
+
 std::unique_ptr<Text::EntriesFetcher> Text::Search(
-    const query::TextPredicate& predicate, bool negate) const {
-  throw std::runtime_error("Text::Search not implemented");
+    const query::TextPredicate& predicate,
+    bool negate) const {
+  auto fetcher = std::make_unique<EntriesFetcher>(
+    CalculateSize(predicate),
+    negate ? &untracked_keys_ : nullptr);
+  fetcher->operation_ = predicate.GetOperation();
+  // Currently, we support a single word exact match.
+  fetcher->data_ = predicate.GetTextString();
+  return fetcher;
+}
+
+
+size_t Text::EntriesFetcher::Size() const { return size_; }
+
+std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
+  // // Numeric.
+  // // auto itr = std::make_unique<EntriesFetcherIterator>(
+  // //     entries_range_, additional_entries_range_, untracked_keys_);
+  // // itr->Next();
+  // // return itr;
+  // switch (operation_) {
+  //   case TextPredicate::Operation::kExact:
+  //     auto iter = text_.prefix_.GetWordIterator(data_);
+  //     std::vector<WordIterator> iterVec = {iter};
+  //     bool slop = 0;
+  //     bool in_order = true;
+  //     // TODO: Implement PhraseIterator in the .cc and .h files.
+  //     auto itr = std::make_unique<text::PhraseIterator>(iterVec, slop, in_order, untracked_keys_);
+  //     itr->Next();
+  //     return itr;
+  //   default:
+  //     CHECK(false) << "Unsupported TextPredicate operation: " << static_cast<int>(operation_);
+  //     return nullptr;  // Should never reach here.
+  // }
+  return nullptr;
 }
 
 }  // namespace valkey_search::indexes

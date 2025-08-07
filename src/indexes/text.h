@@ -43,6 +43,8 @@ class Text : public IndexBase {
   // size_t text_field_number_; - TODO
   // 
   std::shared_ptr<text::TextIndex> text_index_; // Class 2
+  // untracked keys is needed to support negate filtering
+  InternedStringSet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);
 
   inline void ForEachTrackedKey(
       absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override {
@@ -74,18 +76,20 @@ class Text : public IndexBase {
                 const InternedStringSet* untracked_keys = nullptr)
     : size_(size), untracked_keys_(untracked_keys) {}
 
-    size_t Size() const override { return size_; }
+    size_t Size() const override;
 
     // Factory method that creates the appropriate iterator
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 
-   private:
-      size_t size_;
-      const InternedStringSet* untracked_keys_;
-      query::TextPredicate::Operation operation_;
-      absl::string_view data_;
-      bool no_field_{false};
+    size_t size_;
+    const InternedStringSet* untracked_keys_;
+    query::TextPredicate::Operation operation_;
+    absl::string_view data_;
+    bool no_field_{false};
   };
+
+  // Calculate size based on the predicate.
+  size_t CalculateSize(const query::TextPredicate& predicate) const;
 
   // This is needed for the FT.SEARCH command's core search fn.
   virtual std::unique_ptr<EntriesFetcher> Search(const query::TextPredicate& predicate,
@@ -98,58 +102,3 @@ class Text : public IndexBase {
 }  // namespace valkey_search::indexes
 
 #endif  // VALKEYSEARCH_SRC_INDEXES_TEXT_H_
-
-// WIP below:
-
-// std::unique_ptr<Text::EntriesFetcher> Text::Search(
-//     const query::TextPredicate& predicate,
-//     bool negate) const {
-//   // TODO: Calculate Size based on number of document key names found.
-//   auto fetcher = std::make_unique<EntriesFetcher>(
-//     CalculateSize(predicate),
-//     negate ? &untracked_keys_ : nullptr);
-//   fetcher->operation_ = predicate.GetOperation();
-//   // Currently, we support a single word exact match.
-//   fetcher->data_ = predicate.GetTextString();
-//   return fetcher;
-// }
-
-// size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
-//   switch (predicate.GetOperation()) {
-//     case TextPredicate::Operation::kExact: {
-//       // TODO: Handle phrase matching.
-//       std::vector<WordIterator> iterVec = {iter};
-//       auto word = predicate.GetTextString();
-//       if (words.empty()) return 0;
-//       return 0;
-//     }
-//     // Other operations...
-//     default:
-//       return 0;
-//   }
-// }
-
-
-// size_t Text::EntriesFetcher::Size() const { return size_; }
-
-// std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
-//   // Numeric.
-//   // auto itr = std::make_unique<EntriesFetcherIterator>(
-//   //     entries_range_, additional_entries_range_, untracked_keys_);
-//   // itr->Next();
-//   // return itr;
-//   switch (operation_) {
-//     case TextPredicate::Operation::kExact:
-//       auto iter = text_.prefix_.GetWordIterator(data_);
-//       std::vector<WordIterator> iterVec = {iter};
-//       bool slop = 0;
-//       bool in_order = true;
-//       // TODO: Implement PhraseIterator in the .cc and .h files.
-//       auto itr = std::make_unique<text::PhraseIterator>(iterVec, slop, in_order, untracked_keys_);
-//       itr->Next();
-//       return itr;
-//     default:
-//       CHECK(false) << "Unsupported TextPredicate operation: " << static_cast<int>(operation_);
-//       return nullptr;  // Should never reach here.
-//   }
-// }

@@ -127,7 +127,6 @@ class TagPredicate : public Predicate {
   std::string raw_tag_string_;
   absl::flat_hash_set<std::string> tags_;
 };
-
 enum class LogicalOperator { kAnd, kOr };
 // Composed Predicate (AND/OR)
 class ComposedPredicate : public Predicate {

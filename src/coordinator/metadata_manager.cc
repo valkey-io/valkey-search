@@ -470,6 +470,10 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
     BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
   }
 
+  // Update the timestamp of the last successful metadata reconciliation
+  last_healthy_metadata_millis_.store(ValkeyModule_Milliseconds(),
+                                      std::memory_order_relaxed);
+
   return absl::OkStatus();
 }
 
@@ -629,6 +633,18 @@ void MetadataManager::OnLoadingCallback(ValkeyModuleCtx *ctx,
       subevent == VALKEYMODULE_SUBEVENT_LOADING_REPL_START) {
     MetadataManager::Instance().OnLoadingStarted(ctx);
   }
+}
+
+int64_t MetadataManager::GetMilliSecondsSinceLastHealthyMetadata() const {
+  int64_t last_millis =
+      last_healthy_metadata_millis_.load(std::memory_order_relaxed);
+  if (last_millis == 0) {
+    // No metadata has been successfully received yet
+    return -1;
+  }
+
+  int64_t current_millis = ValkeyModule_Milliseconds();
+  return current_millis - last_millis;
 }
 
 void MetadataManager::RegisterForClusterMessages(ValkeyModuleCtx *ctx) {

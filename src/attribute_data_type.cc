@@ -214,8 +214,8 @@ bool IsJsonModuleSupported(ValkeyModuleCtx *ctx) {
   if (!is_json_loaded.value()) {
     return false;
   }
-  json_get = (int (*)(ValkeyModuleKey *, const char *, ValkeyModuleString **))
-      ValkeyModule_GetSharedAPI(ctx, "JSON_GetValue");
+  json_get =
+      (JsonSharedAPIGetValueFn)ValkeyModule_GetSharedAPI(ctx, "JSON_GetValue");
   // Note: In cluster mode, replicas must have the JSON module loaded to access
   // the JSON shared API. Otherwise, invoking commands via ValkeyModule_Call
   // from a replica will result in a MOVED response.

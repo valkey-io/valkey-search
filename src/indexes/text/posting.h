@@ -41,10 +41,9 @@ A PositionIterator is provided to iterate over the positions of an individual Ke
 
 #include "src/index_schema.h"
 
-namespace valkey_search::text {
+namespace valkey_search::indexes::text {
 
-// TODO: Remove this once text.h is implemented
-using Key = std::string;
+using Key = InternedStringPtr;
 using Position = uint32_t;
 
 
@@ -156,6 +155,6 @@ private:
   std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace valkey_search::text
+}  // namespace valkey_search::indexes::text
 
 #endif

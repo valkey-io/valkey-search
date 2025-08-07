@@ -36,7 +36,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
-// #include "src/indexes/text.h"
+#include "src/indexes/text.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -84,8 +84,13 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
       return std::make_shared<indexes::Numeric>(index.numeric_index());
     }
     case data_model::Index::IndexTypeCase::kTextIndex: {
-      // return std::make_shared<indexes::Text>(index.text_index());
-      return absl::InvalidArgumentError("Text Index is yet to be defined");
+      // TODO: make this TextIndex a proper schema-level object
+      std::shared_ptr<indexes::text::TextIndex> index_structure =
+          std::make_shared<indexes::text::TextIndex>(
+              indexes::text::TextIndex());
+      // TODO: pass in a unique text field ID number
+      return std::make_shared<indexes::Text>(index.text_index(),
+                                             index_structure);
     }
     case data_model::Index::IndexTypeCase::kVectorIndex: {
       switch (index.vector_index().algorithm_case()) {
@@ -450,6 +455,9 @@ void IndexSchema::ProcessAttributeMutation(
           break;
         case indexes::IndexerType::kTag:
           Metrics::GetStats().ingest_field_tag++;
+          break;
+        case indexes::IndexerType::kText:
+          Metrics::GetStats().ingest_field_text++;
           break;
         default:
           // Shouldn't happen
@@ -884,9 +892,10 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
   // Supplemental content will include indices and any content for them
   while (supplemental_iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto supplemental_content, supplemental_iter.Next());
-    if (ABSL_PREDICT_TRUE(!skip_loading_index_data) && supplemental_content->type() ==
-        data_model::SupplementalContentType::
-            SUPPLEMENTAL_CONTENT_INDEX_CONTENT) {
+    if (ABSL_PREDICT_TRUE(!skip_loading_index_data) &&
+        supplemental_content->type() ==
+            data_model::SupplementalContentType::
+                SUPPLEMENTAL_CONTENT_INDEX_CONTENT) {
       auto &attribute =
           supplemental_content->index_content_header().attribute();
       VMSDK_ASSIGN_OR_RETURN(std::shared_ptr<indexes::IndexBase> index,
@@ -894,9 +903,10 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
                                           supplemental_iter.IterateChunks()));
       VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
           attribute.alias(), attribute.identifier(), index));
-    } else if (ABSL_PREDICT_TRUE(!skip_loading_index_data) && supplemental_content->type() ==
-               data_model::SupplementalContentType::
-                   SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP) {
+    } else if (ABSL_PREDICT_TRUE(!skip_loading_index_data) &&
+               supplemental_content->type() ==
+                   data_model::SupplementalContentType::
+                       SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP) {
       auto &attribute =
           supplemental_content->key_to_id_map_header().attribute();
       VMSDK_ASSIGN_OR_RETURN(auto index,
@@ -914,11 +924,13 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           ctx, &index_schema->GetAttributeDataType(),
           supplemental_iter.IterateChunks()));
     } else {
-      if (ABSL_PREDICT_FALSE(skip_loading_index_data) && (
-          supplemental_content->type() == data_model::SupplementalContentType::
-              SUPPLEMENTAL_CONTENT_INDEX_CONTENT ||
-          supplemental_content->type() == data_model::SupplementalContentType::
-              SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP)) {
+      if (ABSL_PREDICT_FALSE(skip_loading_index_data) &&
+          (supplemental_content->type() ==
+               data_model::SupplementalContentType::
+                   SUPPLEMENTAL_CONTENT_INDEX_CONTENT ||
+           supplemental_content->type() ==
+               data_model::SupplementalContentType::
+                   SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP)) {
         VMSDK_LOG(NOTICE, ctx) << "Skipping supplemental content type: "
                                << data_model::SupplementalContentType_Name(
                                       supplemental_content->type());

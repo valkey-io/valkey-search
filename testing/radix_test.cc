@@ -10,7 +10,7 @@
 #include "gtest/gtest.h"
 #include "src/indexes/text/radix_tree.h"
 
-namespace valkey_search::text {
+namespace valkey_search::indexes::text {
 namespace {
 
 // Simple test target type
@@ -404,4 +404,4 @@ TEST_F(RadixTreeTest, WordIteratorLargeScale) {
 }
 
 }  // namespace
-}  // namespace valkey_search::text
+}  // namespace valkey_search::indexes::text

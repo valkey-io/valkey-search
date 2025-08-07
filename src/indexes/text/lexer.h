@@ -1,3 +1,10 @@
+/*
+ * Copyright (c) 2025, valkey-search contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ *
+ */
+
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_LEXER_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_LEXER_H_
 
@@ -17,9 +24,8 @@ natural character that is part of a word.
 #include <vector>
 
 #include "absl/status/statusor.h"
-#include "src/text/text.h"
 
-namespace valkey_search::text {
+namespace valkey_search::indexes::text {
 
 /*
 
@@ -75,6 +81,6 @@ struct LexerOutput {
   std::vector<std::string> escaped_words_;
 }
 
-}  // namespace valkey_search::text
+}  // namespace valkey_search::indexes::text
 
 #endif

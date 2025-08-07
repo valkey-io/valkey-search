@@ -1,8 +1,14 @@
+/*
+ * Copyright (c) 2025, valkey-search contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ *
+ */
+
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_FUZZY_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_FUZZY_H_
 
-namespace valkey_search {
-namespace text {
+namespace valkey_search::indexes::text {
 
 //
 // Fuzzy iterator that returns keys
@@ -31,7 +37,7 @@ struct FuzzyWordIterator : public WordIterator {
   absl::string_view operator*() const { return GetWord(); }
 };
 
-};  // namespace text
+};
 
-}  // namespace valkey_search
+}  // namespace valkey_search::indexes::text
 #endif

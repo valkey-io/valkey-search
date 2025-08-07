@@ -34,16 +34,18 @@ struct AttributeParameters {
   indexes::IndexerType indexer_type{indexes::IndexerType::kNone};
 };
 
-struct ExpectedGlobalTextParameters {
+// Default stop words
+const std::vector<std::string> kDefStopWords{
+    "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by", "for",
+    "if", "in", "into", "it", "no", "not", "of", "on", "or", "such", "that", "their",
+    "then", "there", "these", "they", "this", "to", "was", "will", "with"
+};
+
+struct ExpectedPerIndexTextParameters {
   std::string punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|";  // Default punctuation
-  std::vector<std::string> stop_words = {
-      "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by", "for",
-      "if", "in", "into", "it", "no", "not", "of", "on", "or", "such", "that", "their",
-      "then", "there", "these", "they", "this", "to", "was", "will", "with"};  // Default stop words
+  std::vector<std::string> stop_words = {kDefStopWords};  // Default stop words
   data_model::Language language = data_model::Language::LANGUAGE_ENGLISH;
   bool with_offsets = true;
-  bool no_stem = false;
-  int min_stem_size = 4;
 };
 
 struct FTCreateParameters {
@@ -55,7 +57,7 @@ struct FTCreateParameters {
   absl::string_view score_field;
   absl::string_view payload_field;
   std::vector<AttributeParameters> attributes;
-  ExpectedGlobalTextParameters global_text_params;
+  ExpectedPerIndexTextParameters per_index_text_params;
 };
 
 struct FTCreateParserTestCase {
@@ -66,7 +68,7 @@ struct FTCreateParserTestCase {
   std::vector<HNSWParameters> hnsw_parameters;
   std::vector<FlatParameters> flat_parameters;
   std::vector<FTCreateTagParameters> tag_parameters;
-  std::vector<FTCreateTextParameters> text_parameters;
+  std::vector<PerFieldTextParams> text_parameters;
   FTCreateParameters expected;
   std::string expected_error_message;
 };
@@ -126,26 +128,20 @@ TEST_P(FTCreateParserTest, ParseParams) {
     // Verify global text parameters in IndexSchema proto
     if (has_text_fields && test_case.success) {
       // Verify punctuation
-      EXPECT_EQ(index_schema_proto->punctuation(), test_case.expected.global_text_params.punctuation);
+      EXPECT_EQ(index_schema_proto->punctuation(), test_case.expected.per_index_text_params.punctuation);
       
       // Verify language
-      EXPECT_EQ(index_schema_proto->language(), test_case.expected.global_text_params.language);
+      EXPECT_EQ(index_schema_proto->language(), test_case.expected.per_index_text_params.language);
       
       // Verify with_offsets
-      EXPECT_EQ(index_schema_proto->with_offsets(), test_case.expected.global_text_params.with_offsets);
-      
-      // Verify no_stem
-      EXPECT_EQ(index_schema_proto->nostem(), test_case.expected.global_text_params.no_stem);
-      
-      // Verify min_stem_size
-      EXPECT_EQ(index_schema_proto->min_stem_size(), test_case.expected.global_text_params.min_stem_size);
+      EXPECT_EQ(index_schema_proto->with_offsets(), test_case.expected.per_index_text_params.with_offsets);
       
       // Verify stop words
       std::vector<std::string> actual_stop_words;
       for (const auto& word : index_schema_proto->stop_words()) {
         actual_stop_words.push_back(word);
       }
-      EXPECT_EQ(actual_stop_words, test_case.expected.global_text_params.stop_words);
+      EXPECT_EQ(actual_stop_words, test_case.expected.per_index_text_params.stop_words);
     }
     
     auto hnsw_index = 0;
@@ -242,8 +238,8 @@ TEST_P(FTCreateParserTest, ParseParams) {
 
 INSTANTIATE_TEST_SUITE_P(
     FTCreateParserTests, FTCreateParserTest,
-    ValuesIn(
-        std::vector<FTCreateParserTestCase>{
+    ValuesIn<FTCreateParserTestCase>(
+        {
          {
              .test_name = "happy_path_hnsw",
              .success = true,
@@ -623,6 +619,23 @@ INSTANTIATE_TEST_SUITE_P(
                               .attribute_alias = "hash_field11",
                               .indexer_type = indexes::IndexerType::kNumeric,
                           }}},
+         },
+         {
+             .test_name = "happy_path_tag_index_on_hash",
+             .success = true,
+             .command_str = "idx1 on HASH SCHEMA hash_field1 as "
+                            "hash_field11 tag ",
+            .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                        .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                        .attributes = {{
+                            .identifier = "hash_field1",
+                            .attribute_alias = "hash_field11",
+                            .indexer_type = indexes::IndexerType::kTag,
+                        }}},
          },
          {
              .test_name = "invalid_separator",
@@ -1027,7 +1040,7 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message = "",
          },
          {
-             .test_name = "happy_path_text_with_global_parameters",
+             .test_name = "happy_path_text_with_per_index_parameters",
              .success = true,
              .command_str = "idx1 on HASH PUNCTUATION \",.;\" WITHOFFSETS NOSTEM STOPWORDS 3 the and or SCHEMA text_field TEXT",
              .too_many_attributes = false,
@@ -1047,19 +1060,17 @@ INSTANTIATE_TEST_SUITE_P(
                      .attribute_alias = "text_field",
                      .indexer_type = indexes::IndexerType::kText,
                  }},
-                 .global_text_params = {
+                 .per_index_text_params = {
                      .punctuation = ",.;",
                      .stop_words = {"the", "and", "or"},
                      .language = data_model::Language::LANGUAGE_ENGLISH,
                      .with_offsets = true,
-                     .no_stem = true,
-                     .min_stem_size = 4,
                  }
              },
              .expected_error_message = "",
          },
          {
-             .test_name = "happy_path_text_global_nostopwords",
+             .test_name = "happy_path_text_per_index_nostopwords",
              .success = true,
              .command_str = "idx1 on HASH NOSTOPWORDS SCHEMA text_field TEXT",
              .too_many_attributes = false,
@@ -1079,19 +1090,17 @@ INSTANTIATE_TEST_SUITE_P(
                      .attribute_alias = "text_field",
                      .indexer_type = indexes::IndexerType::kText,
                  }},
-                 .global_text_params = {
+                 .per_index_text_params = {
                      .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
                      .stop_words = {},  // Empty due to NOSTOPWORDS
                      .language = data_model::Language::LANGUAGE_ENGLISH,
                      .with_offsets = true,
-                     .no_stem = false,
-                     .min_stem_size = 4,
                  }
              },
              .expected_error_message = "",
          },
          {
-             .test_name = "happy_path_text_global_stopwords_zero",
+             .test_name = "happy_path_text_per_index_stopwords_zero",
              .success = true,
              .command_str = "idx1 on HASH STOPWORDS 0 SCHEMA text_field TEXT",
              .too_many_attributes = false,
@@ -1111,13 +1120,11 @@ INSTANTIATE_TEST_SUITE_P(
                      .attribute_alias = "text_field",
                      .indexer_type = indexes::IndexerType::kText,
                  }},
-                 .global_text_params = {
+                 .per_index_text_params = {
                      .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
                      .stop_words = {},  // Empty due to STOPWORDS 0
                      .language = data_model::Language::LANGUAGE_ENGLISH,
                      .with_offsets = true,
-                     .no_stem = false,
-                     .min_stem_size = 4,
                  }
              },
              .expected_error_message = "",
@@ -1164,31 +1171,19 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message = "",
          },
          {
-             .test_name = "text_only_schema_valid",
+             .test_name = "text_field_nostopwords_invalid",
              .success = false,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT NOSTOPWORDS",
              .too_many_attributes = false,
              .hnsw_parameters = {},
              .flat_parameters = {},
              .tag_parameters = {},
-             .text_parameters = {{
-                 .with_suffix_trie = false,
-                 .no_stem = false,
-                 .min_stem_size = 4,
-             }},
-             .expected = {
-                 .index_schema_name = "idx1",
-                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
-                 .attributes = {{
-                     .identifier = "text_field",
-                     .attribute_alias = "text_field",
-                     .indexer_type = indexes::IndexerType::kText,
-                 }}
-             },
-             .expected_error_message = "",
+             .text_parameters = {},
+             .expected = {},
+             .expected_error_message = "Invalid field type for field `NOSTOPWORDS`: Missing argument",
          },
          {
-             .test_name = "invalid_text_empty_punctuation_global",
+             .test_name = "invalid_text_empty_punctuation_per_index",
              .success = false,
              .command_str = "idx1 on HASH PUNCTUATION \"\" SCHEMA text_field TEXT",
              .too_many_attributes = false,
@@ -1224,7 +1219,7 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message = "Invalid field type for field `text_field`: Error parsing value for the parameter `MINSTEMSIZE` - MINSTEMSIZE must be positive",
          },
          {
-             .test_name = "invalid_global_stopwords_before_schema",
+             .test_name = "invalid_per_index_stopwords_before_schema",
              .success = false,
              .command_str = "idx1 on HASH STOPWORDS -1 SCHEMA text_field TEXT",
              .too_many_attributes = false,
@@ -1236,7 +1231,7 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message = "`-1` is outside acceptable bounds",
          },
          {
-             .test_name = "invalid_global_stopwords_missing_words",
+             .test_name = "invalid_per_index_stopwords_missing_words",
              .success = false,
              .command_str = "idx1 on HASH STOPWORDS 3 the and SCHEMA text_field TEXT",
              .too_many_attributes = false,
@@ -1249,42 +1244,24 @@ INSTANTIATE_TEST_SUITE_P(
          },
          // Additional TEXT field edge case tests
          {
-             .test_name = "text_punctuation_single_quote",
+             .test_name = "text_field_punctuation_single_quote_invalid",
              .success = false,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT PUNCTUATION '.,;'",
-             .text_parameters = {{
-                 .with_suffix_trie = false,
-                 .no_stem = false,
-                 .min_stem_size = 4,
-             }},
-             .expected = {
-                 .index_schema_name = "idx1",
-                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
-                 .attributes = {{
-                     .identifier = "text_field",
-                     .attribute_alias = "text_field",
-                     .indexer_type = indexes::IndexerType::kText,
-                 }}
-             },
+             .too_many_attributes = false,
+             .hnsw_parameters = {},
+             .flat_parameters = {},
+             .tag_parameters = {},
+             .text_parameters = {},
+             .expected = {},
+             .expected_error_message = "Invalid field type for field `PUNCTUATION`: Unknown argument `.,;`",
          },
          {
-             .test_name = "text_punctuation_unquoted",
+             .test_name = "text_field_punctuation_unquoted_invalid",
              .success = false,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT PUNCTUATION .,;",
-             .text_parameters = {{
-                 .with_suffix_trie = false,
-                 .no_stem = false,
-                 .min_stem_size = 4,
-             }},
-             .expected = {
-                 .index_schema_name = "idx1",
-                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
-                 .attributes = {{
-                     .identifier = "text_field",
-                     .attribute_alias = "text_field",
-                     .indexer_type = indexes::IndexerType::kText,
-                 }}
-             },
+             .text_parameters = {},
+             .expected = {},
+             .expected_error_message = "Invalid field type for field `PUNCTUATION`: Unknown argument `.,;`",
          },
          {
             .test_name = "text_nooffsets_flag",
@@ -1303,16 +1280,11 @@ INSTANTIATE_TEST_SUITE_P(
                     .attribute_alias = "text_field",
                     .indexer_type = indexes::IndexerType::kText,
                 }},
-                .global_text_params = {
+                .per_index_text_params = {
                     .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
-                    .stop_words = {
-                        "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by", "for",
-                        "if", "in", "into", "it", "no", "not", "of", "on", "or", "such", "that", "their",
-                        "then", "there", "these", "they", "this", "to", "was", "will", "with"},
+                    .stop_words = {kDefStopWords},
                     .language = data_model::Language::LANGUAGE_ENGLISH,
                     .with_offsets = false,  // NOOFFSETS should set this to false
-                    .no_stem = false,
-                    .min_stem_size = 4,
                 }
             },
         },
@@ -1355,7 +1327,7 @@ INSTANTIATE_TEST_SUITE_P(
              },
          },
          {
-             .test_name = "text_combined_global_and_field_flags",
+             .test_name = "text_combined_per_index_and_field_flags",
              .success = true,
              .command_str = "idx1 on HASH NOOFFSETS NOSTEM LANGUAGE ENGLISH SCHEMA text_field TEXT WITHSUFFIXTRIE MINSTEMSIZE 2",
              .text_parameters = {{
@@ -1371,16 +1343,11 @@ INSTANTIATE_TEST_SUITE_P(
                      .attribute_alias = "text_field",
                      .indexer_type = indexes::IndexerType::kText,
                  }},
-                 .global_text_params = {
+                 .per_index_text_params = {
                      .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
-                     .stop_words = {
-                         "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by", "for",
-                         "if", "in", "into", "it", "no", "not", "of", "on", "or", "such", "that", "their",
-                         "then", "there", "these", "they", "this", "to", "was", "will", "with"},
+                     .stop_words = {kDefStopWords},
                      .language = data_model::Language::LANGUAGE_ENGLISH,
-                     .with_offsets = false,  // NOOFFSETS should set this to false
-                     .no_stem = true,        // NOSTEM should set this to true
-                     .min_stem_size = 4,
+                     .with_offsets = false,
                  }
              }
          },
@@ -1388,23 +1355,12 @@ INSTANTIATE_TEST_SUITE_P(
              .test_name = "text_large_stopwords_list_field",
              .success = false,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT STOPWORDS 10 a an and are as at be but by for",
-             .text_parameters = {{
-                 .with_suffix_trie = false,
-                 .no_stem = false,
-                 .min_stem_size = 4,
-             }},
-             .expected = {
-                 .index_schema_name = "idx1",
-                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
-                 .attributes = {{
-                     .identifier = "text_field",
-                     .attribute_alias = "text_field",
-                     .indexer_type = indexes::IndexerType::kText,
-                 }}
-             },
+             .text_parameters = {},
+             .expected = {},
+             .expected_error_message = "Invalid field type for field `STOPWORDS`: Unknown argument `10`",
          },
          {
-            .test_name = "text_large_stopwords_list_global",
+            .test_name = "text_large_stopwords_list_per_index",
             .success = true, 
             .command_str = "idx1 on HASH STOPWORDS 10 a an and are as at be but by for SCHEMA text_field TEXT",
             .text_parameters = {{
@@ -1420,13 +1376,11 @@ INSTANTIATE_TEST_SUITE_P(
                     .attribute_alias = "text_field",
                     .indexer_type = indexes::IndexerType::kText,
                 }},
-                .global_text_params = {
+                .per_index_text_params = {
                     .punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|",
                     .stop_words = {"a", "an", "and", "are", "as", "at", "be", "but", "by", "for"},
                     .language = data_model::Language::LANGUAGE_ENGLISH,
                     .with_offsets = true,
-                    .no_stem = false,
-                    .min_stem_size = 4,
                 }
             },
         },
@@ -1450,26 +1404,15 @@ INSTANTIATE_TEST_SUITE_P(
              },
          },
          {
-             .test_name = "text_special_characters_punctuation_field",
+             .test_name = "text_field_special_characters_punctuation_invalid",
              .success = false,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT PUNCTUATION \"!@#$%^&*()_+-=[]{}|;':,.<>?\"",
-             .text_parameters = {{
-                 .with_suffix_trie = false,
-                 .no_stem = false,
-                 .min_stem_size = 4,
-             }},
-             .expected = {
-                 .index_schema_name = "idx1",
-                 .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
-                 .attributes = {{
-                     .identifier = "text_field",
-                     .attribute_alias = "text_field",
-                     .indexer_type = indexes::IndexerType::kText,
-                 }}
-             },
+             .text_parameters = {},
+             .expected = {},
+             .expected_error_message = "Invalid field type for field `PUNCTUATION`: Unknown argument `!@#$%^&*()_+-=[]{}|;':,.<>?`",
          },
          {
-            .test_name = "text_special_characters_punctuation_global",
+            .test_name = "text_special_characters_punctuation_per_index",
             .success = true,
             .command_str = "idx1 on HASH PUNCTUATION \"!@#$%^&*()_+-=[]{}|;':,.<>?\" SCHEMA text_field TEXT",
             .text_parameters = {{
@@ -1485,16 +1428,11 @@ INSTANTIATE_TEST_SUITE_P(
                     .attribute_alias = "text_field",
                     .indexer_type = indexes::IndexerType::kText,
                 }},
-                .global_text_params = {
+                .per_index_text_params = {
                     .punctuation = "!@#$%^&*()_+-=[]{}|;':,.<>?",
-                    .stop_words = {
-                        "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by", "for",
-                        "if", "in", "into", "it", "no", "not", "of", "on", "or", "such", "that", "their",
-                        "then", "there", "these", "they", "this", "to", "was", "will", "with"},
+                    .stop_words = {kDefStopWords},
                     .language = data_model::Language::LANGUAGE_ENGLISH,
                     .with_offsets = true,
-                    .no_stem = false,
-                    .min_stem_size = 4,
                 }
             },
         },
@@ -1529,25 +1467,23 @@ INSTANTIATE_TEST_SUITE_P(
                          .indexer_type = indexes::IndexerType::kText,
                      }
                  },
-                 .global_text_params = {
+                 .per_index_text_params = {
                      .punctuation = ".,;",
                      .stop_words = {},  // Empty due to NOSTOPWORDS
                      .language = data_model::Language::LANGUAGE_ENGLISH,
                      .with_offsets = true,
-                     .no_stem = false,
-                     .min_stem_size = 4,
                  }
              },
          },
          // Error cases for TEXT fields
          {
-            .test_name = "invalid_text_single_quote_empty_global",
+            .test_name = "invalid_text_single_quote_empty_per_index",
             .success = false,
             .command_str = "idx1 on HASH PUNCTUATION '' SCHEMA text_field TEXT",  // Moved PUNCTUATION before SCHEMA
             .expected_error_message = "PUNCTUATION string cannot be empty",  // Simplified error message
         },
          {
-            .test_name = "invalid_text_stopwords_negative_count_global",
+            .test_name = "invalid_text_stopwords_negative_count_per_index",
             .success = false,
             .command_str = "idx1 on HASH STOPWORDS -1 SCHEMA text_field TEXT",  // Moved STOPWORDS before SCHEMA
             .expected_error_message = "`-1` is outside acceptable bounds",  // Simplified error message
@@ -1556,15 +1492,16 @@ INSTANTIATE_TEST_SUITE_P(
              .test_name = "invalid_text_stopwords_missing_words_field",
              .success = false,
              .command_str = "idx1 on HASH SCHEMA text_field TEXT STOPWORDS 3 the and",
+             .expected_error_message = "Invalid field type for field `STOPWORDS`: Unknown argument `3`",
          },
          {
-            .test_name = "invalid_text_stopwords_missing_words_global",
+            .test_name = "invalid_text_stopwords_missing_words_per_index",
             .success = false,
             .command_str = "idx1 on HASH STOPWORDS 3 the and SCHEMA text_field TEXT",
             .expected_error_message = "Unexpected parameter `text_field`, expecting `SCHEMA`",
         },
         {
-            .test_name = "invalid_text_field_parameters_global",
+            .test_name = "invalid_text_field_parameters_per_index",
             .success = false,
             .command_str = "idx1 on HASH WITHSUFFIXTRIE MINSTEMSIZE 2 SCHEMA text_field TEXT",  // Moved parameters before SCHEMA
             .expected_error_message = "Unexpected parameter `WITHSUFFIXTRIE`, expecting `SCHEMA`",  // Error for unsupported global parameter
@@ -1611,21 +1548,16 @@ INSTANTIATE_TEST_SUITE_P(
                      .attribute_alias = "text_field",
                      .indexer_type = indexes::IndexerType::kText,
                  }},
-                 .global_text_params = {
+                 .per_index_text_params = {
                      .punctuation = ".,;",
-                     .stop_words = {
-                         "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by", "for",
-                         "if", "in", "into", "it", "no", "not", "of", "on", "or", "such", "that", "their",
-                         "then", "there", "these", "they", "this", "to", "was", "will", "with"},
+                     .stop_words = {kDefStopWords},
                      .language = data_model::Language::LANGUAGE_ENGLISH,
                      .with_offsets = true,
-                     .no_stem = true,
-                     .min_stem_size = 4,
                  }
              },
          },
          {
-             .test_name = "text_global_and_field_parameters_mixed",
+             .test_name = "text_per_index_and_field_parameters_mixed",
              .success = true,
              .command_str = "idx1 on HASH LANGUAGE english PUNCTUATION '.,;' SCHEMA text_field TEXT WITHSUFFIXTRIE",
              .text_parameters = {{
@@ -1641,16 +1573,11 @@ INSTANTIATE_TEST_SUITE_P(
                      .attribute_alias = "text_field",
                      .indexer_type = indexes::IndexerType::kText,
                  }},
-                 .global_text_params = {
+                 .per_index_text_params = {
                      .punctuation = ".,;",
-                     .stop_words = {
-                         "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by", "for",
-                         "if", "in", "into", "it", "no", "not", "of", "on", "or", "such", "that", "their",
-                         "then", "there", "these", "they", "this", "to", "was", "will", "with"},
+                     .stop_words = {kDefStopWords},
                      .language = data_model::Language::LANGUAGE_ENGLISH,
                      .with_offsets = true,
-                     .no_stem = false,
-                     .min_stem_size = 4,
                  }
              },
          }}),

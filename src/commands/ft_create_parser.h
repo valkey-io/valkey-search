@@ -24,6 +24,8 @@
 
 namespace valkey_search {
 
+static constexpr absl::string_view kDefaultPunctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|";
+
 struct FTCreateTagParameters {
   absl::string_view separator{","};
   bool case_sensitive{false};
@@ -43,8 +45,8 @@ struct FTCreateVectorParameters {
 };
 
 // Global text parameters (per-index) - populated in IndexSchema
-struct SchemaGlobTextParams {
-  std::string punctuation{",.<>{}[]\"':;!@#$%^&*()-+=~/\\\\"};
+struct PerIndexTextParams {
+  std::string punctuation{kDefaultPunctuation};
   bool with_offsets{true};
   bool no_stem{false};
   std::vector<std::string> stop_words;
@@ -53,7 +55,7 @@ struct SchemaGlobTextParams {
 };
 
 // Field-specific text parameters (per text field) - populated in TextIndex
-struct FTCreateTextParameters {
+struct PerFieldTextParams {
   bool with_suffix_trie{false};
   bool no_stem{false};  // Can be overridden per field
   int min_stem_size{4};

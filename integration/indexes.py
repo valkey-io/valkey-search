@@ -76,6 +76,35 @@ class Tag(Field):
     def make_value(self, row:int, column:int) -> str|bytes:
         return f"Tag:{row}:{column}"
 
+class Text(Field):
+    def __init__(self, name: str, alias: str|None = None, 
+                 with_offsets: bool = True, 
+                 no_stem: bool = False,
+                 min_stem_size: int|None = None,
+                 with_suffix_trie: bool = False):
+        super().__init__(name, alias)
+        self.with_offsets = with_offsets
+        self.no_stem = no_stem
+        self.min_stem_size = min_stem_size
+        self.with_suffix_trie = with_suffix_trie
+
+    def create(self):
+        result = super().create() + ["TEXT"]
+        
+        if not self.with_offsets:
+            result += ["NOOFFSETS"]
+        if self.no_stem:
+            result += ["NOSTEM"]
+        if self.min_stem_size is not None:
+            result += ["MINSTEMSIZE", str(self.min_stem_size)]
+        if self.with_suffix_trie:
+            result += ["WITHSUFFIXTRIE"]
+            
+        return result
+    
+    def make_value(self, row: int, column: int) -> str|bytes:
+        return f"Text content for document {row}:{column}"
+
 class Index:
     def __init__(self, name: str, fields:list[Field], prefixes:list[str] = [], type:str = "HASH"):
         self.name = name

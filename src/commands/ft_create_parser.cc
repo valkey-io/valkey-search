@@ -435,6 +435,53 @@ absl::Status ParseStopWords(vmsdk::ArgsIterator &itr, PerIndexTextParams &params
   return absl::OkStatus();
 }
 
+vmsdk::KeyValueParser<PerIndexTextParams> CreateSchemaTextParser() {
+  vmsdk::KeyValueParser<PerIndexTextParams> parser;
+  
+  parser.AddParamParser(
+      kPunctuationParam,
+      GENERATE_VALUE_PARSER(PerIndexTextParams, punctuation));
+  
+  parser.AddParamParser(
+      kWithOffsetsParam,
+      GENERATE_FLAG_PARSER(PerIndexTextParams, with_offsets));
+  
+  parser.AddParamParser(
+      kNoOffsetsParam,
+      GENERATE_NEGATIVE_FLAG_PARSER(PerIndexTextParams, with_offsets));
+  
+  parser.AddParamParser(
+      kNoStemParam,
+      GENERATE_FLAG_PARSER(PerIndexTextParams, no_stem));
+  
+  parser.AddParamParser(
+      kNoStopWordsParam,
+      GENERATE_CLEAR_CONTAINER_PARSER(PerIndexTextParams, stop_words));
+  
+  parser.AddParamParser(
+      kStopWordsParam,
+      std::make_unique<vmsdk::ParamParser<PerIndexTextParams>>(
+          [](PerIndexTextParams &params, vmsdk::ArgsIterator &itr) -> absl::Status {
+            VMSDK_RETURN_IF_ERROR(ParseStopWords(itr, params));
+            return absl::OkStatus();
+          }));
+  
+  parser.AddParamParser(
+      kMinStemSizeParam,
+      std::make_unique<vmsdk::ParamParser<PerIndexTextParams>>(
+          [](PerIndexTextParams &params, vmsdk::ArgsIterator &itr) -> absl::Status {
+            int min_stem_size;
+            VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, min_stem_size));
+            if (min_stem_size <= 0) {
+              return absl::InvalidArgumentError("MINSTEMSIZE must be positive");
+            }
+            params.min_stem_size = min_stem_size;
+            return absl::OkStatus();
+          }));
+  
+  return parser;
+}
+
 absl::Status ParseText(vmsdk::ArgsIterator &itr, data_model::Index &index_proto,
                        const PerIndexTextParams &schema_text_defaults) {
   // Start with field-specific defaults, then parse field-level parameters
@@ -553,6 +600,8 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   schema_text_defaults.stop_words = kDefaultStopWords;
 
   // Parse pre-SCHEMA parameters in flexible order
+  static auto schema_text_parser = CreateSchemaTextParser();
+  
   while (itr.HasNext()) {
     // Peek at the next parameter to see if it's SCHEMA
     VMSDK_ASSIGN_OR_RETURN(auto next_arg, itr.Get());
@@ -587,54 +636,8 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
       return absl::InvalidArgumentError(NotSupportedParamErrorMsg(kPayloadFieldParam));
     }
     
-    // Try individual global text parameters
-    VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kPunctuationParam, false, itr));
-    if (res) {
-      VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, schema_text_defaults.punctuation));
-      continue;
-    }
-    
-    VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kWithOffsetsParam, false, itr));
-    if (res) {
-      schema_text_defaults.with_offsets = true;
-      continue;
-    }
-    
-    VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kNoOffsetsParam, false, itr));
-    if (res) {
-      schema_text_defaults.with_offsets = false;
-      continue;
-    }
-    
-    VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kNoStemParam, false, itr));
-    if (res) {
-      schema_text_defaults.no_stem = true;
-      continue;
-    }
-    
-    VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kNoStopWordsParam, false, itr));
-    if (res) {
-      schema_text_defaults.stop_words.clear();
-      continue;
-    }
-    
-    VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kStopWordsParam, false, itr));
-    if (res) {
-      VMSDK_RETURN_IF_ERROR(ParseStopWords(itr, schema_text_defaults));
-      continue;
-    }
-    
-    // Try MINSTEMSIZE parameter
-    VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kMinStemSizeParam, false, itr));
-    if (res) {
-      int min_stem_size;
-      VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, min_stem_size));
-      if (min_stem_size <= 0) {
-        return absl::InvalidArgumentError("MINSTEMSIZE must be positive");
-      }
-      schema_text_defaults.min_stem_size = min_stem_size;
-      continue;
-    }
+    // Try schema text parameters using the KeyValue parser
+    VMSDK_RETURN_IF_ERROR(schema_text_parser.Parse(schema_text_defaults, itr, false));
     
     // If no parameter was recognized and consumed, break to avoid infinite loop
     if (itr.DistanceEnd() == initial_distance) {

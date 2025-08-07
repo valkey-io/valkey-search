@@ -21,6 +21,7 @@ if "LOGS_DIR" in os.environ:
     LOGS_DIR = os.environ["LOGS_DIR"]
 
 
+<<<<<<< HEAD
 class Node:
     """This class represents a valkey server instance, regardless of its role"""
 
@@ -268,6 +269,37 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
             f"dir {testdir}",
             f"loadmodule {os.getenv('MODULE_PATH')}",
         ]
+=======
+class ValkeySearchTestCaseBase(ValkeyTestCase):
+    @pytest.fixture(autouse=True)
+    def setup_test(self, setup):
+
+       
+        use_external = os.environ.get("VALKEY_EXTERNAL_SERVER", "false").lower() == "true"
+        
+        if use_external:
+            # Use external server
+            external_host = os.environ.get("VALKEY_HOST", "localhost")
+            external_port = int(os.environ.get("VALKEY_PORT", "6379"))
+            self.server, self.client = self.create_server(
+                testdir=self.testdir,
+                bind_ip=external_host,
+                port=external_port,
+                external_server=True
+            )
+        else:
+            loadmodule = f"{os.getenv('MODULE_PATH')} --loadmodule {os.getenv('JSON_MODULE_PATH')}"
+            args = {
+                "enable-debug-command": "yes",
+                "loadmodule": loadmodule,
+            }
+            server_path = os.getenv("VALKEY_SERVER_PATH")
+
+            self.server, self.client = self.create_server(
+                testdir=self.testdir, server_path=server_path, args=args
+            )
+            logging.info("startup args are: %s", args)
+>>>>>>> 152ccfb (Adding support for external servers)
 
     def verify_error_response(self, client, cmd, expected_err_reply):
         try:

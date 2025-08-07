@@ -63,6 +63,7 @@ struct SearchPartitionResultsTracker {
   int outstanding_requests ABSL_GUARDED_BY(mutex);
   query::SearchResponseCallback callback;
   std::unique_ptr<VectorSearchParameters> parameters ABSL_GUARDED_BY(mutex);
+  std::atomic_bool reached_oom{false};
 
   SearchPartitionResultsTracker(
       int outstanding_requests, int k, query::SearchResponseCallback callback,
@@ -72,21 +73,25 @@ struct SearchPartitionResultsTracker {
         parameters(std::move(parameters)) {}
 
   void HandleResponse(coordinator::SearchIndexPartitionResponse &response,
-                      const std::string &address,
-                      const grpc::Status &status) {
-
+                      const std::string &address, const grpc::Status &status) {
     if (!status.ok()) {
-      if (!options::GetEnablePartialResults().GetValue()) {
+      bool should_cancel = status.error_code() == grpc::RESOURCE_EXHAUSTED ||
+                           !options::GetEnablePartialResults().GetValue();
+      if (status.error_code() == grpc::RESOURCE_EXHAUSTED) {
+        reached_oom.store(true);
+      }
+      if (should_cancel) {
         parameters->cancellation_token->Cancel();
       }
-      if (status.error_code() != grpc::StatusCode::DEADLINE_EXCEEDED) {
+      if (status.error_code() != grpc::DEADLINE_EXCEEDED &&
+          status.error_code() != grpc::RESOURCE_EXHAUSTED) {
         VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-            << "Error during handling of FT.SEARCH on node " << address
-            << ": " << status.error_message();
+            << "Error during handling of FT.SEARCH on node " << address << ": "
+            << status.error_message();
       }
       return;
     }
-                       
+
     absl::MutexLock lock(&mutex);
     while (response.neighbors_size() > 0) {
       auto neighbor_entry = std::unique_ptr<coordinator::NeighborEntry>(
@@ -120,8 +125,8 @@ struct SearchPartitionResultsTracker {
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex) {
     // For non-vector queries, we can add the result directly.
     if (parameters->attribute_alias.empty()) {
-        results.emplace(std::move(neighbor));
-        return;
+      results.emplace(std::move(neighbor));
+      return;
     }
     if (results.size() < parameters->k) {
       results.emplace(std::move(neighbor));
@@ -135,10 +140,14 @@ struct SearchPartitionResultsTracker {
     absl::MutexLock lock(&mutex);
     absl::StatusOr<std::deque<indexes::Neighbor>> result =
         std::deque<indexes::Neighbor>();
-    while (!results.empty()) {
-      result->push_back(
-          std::move(const_cast<indexes::Neighbor &>(results.top())));
-      results.pop();
+    if (reached_oom) {
+      result = absl::ResourceExhaustedError(kOOMMsg);
+    } else {
+      while (!results.empty()) {
+        result->push_back(
+            std::move(const_cast<indexes::Neighbor &>(results.top())));
+        results.pop();
+      }
     }
     callback(result, std::move(parameters));
   }
@@ -223,6 +232,9 @@ absl::Status PerformSearchFanoutAsync(
           if (neighbors.ok()) {
             tracker->AddResults(*neighbors);
           } else {
+            if (absl::IsResourceExhausted(neighbors.status())) {
+              tracker->reached_oom.store(true);
+            }
             VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
                 << "Error during local handling of FT.SEARCH: "
                 << neighbors.status().message();

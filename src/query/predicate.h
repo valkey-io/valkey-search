@@ -21,7 +21,6 @@
 namespace valkey_search::indexes {
 class Numeric;
 class Tag;
-class Text;
 }  // namespace valkey_search::indexes
 
 namespace valkey_search::query {
@@ -29,7 +28,6 @@ namespace valkey_search::query {
 enum class PredicateType {
   kTag,
   kNumeric,
-  kText,
   kComposedAnd,
   kComposedOr,
   kNegate,
@@ -38,7 +36,6 @@ enum class PredicateType {
 
 class TagPredicate;
 class NumericPredicate;
-class TextPredicate;
 class Evaluator {
  public:
   virtual ~Evaluator() = default;
@@ -130,24 +127,6 @@ class TagPredicate : public Predicate {
   std::string raw_tag_string_;
   absl::flat_hash_set<std::string> tags_;
 };
-
-// class TextPredicate : public Predicate {
-//  public:
-//   TextPredicate(const indexes::Text* index, absl::string_view alias,
-//                 absl::string_view identifier, absl::string_view query_text);
-//   bool Evaluate(Evaluator& evaluator) const override;
-//   const indexes::Text* GetIndex() const;
-//   absl::string_view GetAlias() const;
-//   absl::string_view GetIdentifier() const;
-//   vmsdk::UniqueValkeyString GetRetainedIdentifier() const;
-//   const std::string& GetQueryText() const;
-
-//  private:
-//   const indexes::Text* index_;
-//   std::string alias_;
-//   vmsdk::UniqueValkeyString identifier_;
-//   std::string query_text_;
-// };
 
 enum class LogicalOperator { kAnd, kOr };
 // Composed Predicate (AND/OR)

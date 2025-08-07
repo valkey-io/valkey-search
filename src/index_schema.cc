@@ -215,8 +215,6 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
   // reconcile the source of the index_schema_proto (reload or not) and restore those fields
   if (reload) {
     stats_.document_cnt = index_schema_proto.stats().documents_count();
-  } else {
-    stats_.document_cnt = 0;
   }
 }
 

@@ -153,7 +153,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
       attribute_data_type = std::make_unique<HashAttributeDataType>();
       break;
     case data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON:
-      if (!IsJsonModuleLoaded(ctx)) {
+      if (!IsJsonModuleSupported(ctx)) {
         return absl::InvalidArgumentError("JSON module is not loaded");
       }
       attribute_data_type = std::make_unique<JsonAttributeDataType>();
@@ -879,9 +879,10 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
   // Supplemental content will include indices and any content for them
   while (supplemental_iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto supplemental_content, supplemental_iter.Next());
-    if (ABSL_PREDICT_TRUE(!skip_loading_index_data) && supplemental_content->type() ==
-        data_model::SupplementalContentType::
-            SUPPLEMENTAL_CONTENT_INDEX_CONTENT) {
+    if (ABSL_PREDICT_TRUE(!skip_loading_index_data) &&
+        supplemental_content->type() ==
+            data_model::SupplementalContentType::
+                SUPPLEMENTAL_CONTENT_INDEX_CONTENT) {
       auto &attribute =
           supplemental_content->index_content_header().attribute();
       VMSDK_ASSIGN_OR_RETURN(std::shared_ptr<indexes::IndexBase> index,
@@ -889,9 +890,10 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
                                           supplemental_iter.IterateChunks()));
       VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
           attribute.alias(), attribute.identifier(), index));
-    } else if (ABSL_PREDICT_TRUE(!skip_loading_index_data) && supplemental_content->type() ==
-               data_model::SupplementalContentType::
-                   SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP) {
+    } else if (ABSL_PREDICT_TRUE(!skip_loading_index_data) &&
+               supplemental_content->type() ==
+                   data_model::SupplementalContentType::
+                       SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP) {
       auto &attribute =
           supplemental_content->key_to_id_map_header().attribute();
       VMSDK_ASSIGN_OR_RETURN(auto index,
@@ -909,11 +911,13 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           ctx, &index_schema->GetAttributeDataType(),
           supplemental_iter.IterateChunks()));
     } else {
-      if (ABSL_PREDICT_FALSE(skip_loading_index_data) && (
-          supplemental_content->type() == data_model::SupplementalContentType::
-              SUPPLEMENTAL_CONTENT_INDEX_CONTENT ||
-          supplemental_content->type() == data_model::SupplementalContentType::
-              SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP)) {
+      if (ABSL_PREDICT_FALSE(skip_loading_index_data) &&
+          (supplemental_content->type() ==
+               data_model::SupplementalContentType::
+                   SUPPLEMENTAL_CONTENT_INDEX_CONTENT ||
+           supplemental_content->type() ==
+               data_model::SupplementalContentType::
+                   SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP)) {
         VMSDK_LOG(NOTICE, ctx) << "Skipping supplemental content type: "
                                << data_model::SupplementalContentType_Name(
                                       supplemental_content->type());

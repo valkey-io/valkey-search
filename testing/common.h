@@ -125,7 +125,7 @@ class MockAttributeDataType : public AttributeDataType {
   MOCK_METHOD(int, GetValkeyEventTypes, (), (override, const));
   MOCK_METHOD((absl::StatusOr<RecordsMap>), FetchAllRecords,
               (ValkeyModuleCtx * ctx, const std::string& query_attribute_name,
-               absl::string_view key,
+               ValkeyModuleKey* open_key, absl::string_view key,
                const absl::flat_hash_set<absl::string_view>& identifiers),
               (override, const));
   MOCK_METHOD((data_model::AttributeDataType), ToProto, (), (override, const));

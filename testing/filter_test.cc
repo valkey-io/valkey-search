@@ -102,7 +102,7 @@ TEST_P(FilterTest, ParseParams) {
               test_case.create_expected_error_message);
     return;
   }
-  auto interned_key = StringInternStore::Intern(test_case.key);
+  auto interned_key = StringInternStore::Intern(test_case.key, valkey_search::StringType::KEY);
   EXPECT_EQ(
       test_case.evaluate_success,
       evaluator_.Evaluate(*parse_results.value().root_predicate, interned_key));

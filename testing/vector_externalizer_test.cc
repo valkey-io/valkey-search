@@ -53,7 +53,7 @@ void ExternalizeVectors(const std::vector<std::vector<float>> &vectors,
                         bool expect_externalize_success = true) {
   auto &vector_externalizer = VectorExternalizer::Instance();
   for (size_t i = externalize_offset; i < vectors.size(); ++i) {
-    auto interned_key = StringInternStore::Intern(absl::StrCat("key-", i));
+    auto interned_key = StringInternStore::Intern(absl::StrCat("key-", i), StringType::KEY);
     absl::string_view vector = VectorToStr(vectors[i]);
     if (normalize) {
       float magnitude;
@@ -61,14 +61,14 @@ void ExternalizeVectors(const std::vector<std::vector<float>> &vectors,
           indexes::NormalizeEmbedding(vector, sizeof(float), &magnitude);
       vector = absl::string_view((const char *)norm_vector.data(),
                                  norm_vector.size());
-      auto interned_vector = StringInternStore::Intern(vector, allocator);
+      auto interned_vector = StringInternStore::Intern(vector, StringType::VECTOR, allocator);
       EXPECT_EQ(vector_externalizer.Externalize(
                     interned_key, "attribute_identifier_1",
                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
                     interned_vector, magnitude),
                 expect_externalize_success);
     } else {
-      auto interned_vector = StringInternStore::Intern(vector, allocator);
+      auto interned_vector = StringInternStore::Intern(vector, StringType::VECTOR, allocator);
       EXPECT_EQ(vector_externalizer.Externalize(
                     interned_key, "attribute_identifier_1",
                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,

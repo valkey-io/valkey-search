@@ -21,7 +21,9 @@
 #include "absl/strings/str_cat.h"
 #include "hnswlib.h"
 #include "iostream.h"
+#include "src/indexes/global_metrics.h"
 #include "src/metrics.h"
+#include "src/utils/string_interning.h"
 #include "third_party/hnswlib/index.pb.h"
 #include "visited_list_pool.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -35,6 +37,9 @@
 #define htole64(x) OSSwapHostToLittleInt64(x)
 #define le64toh(x) OSSwapLittleToHostInt64(x)
 #endif
+
+using GlobalStats = valkey_search::indexes::GlobalIndexStats;
+using MetricType = valkey_search::indexes::MetricType;
 
 namespace hnswlib {
 typedef unsigned int tableint;
@@ -186,8 +191,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       }
       linkLists_->clear();
     }
-    valkey_search::Metrics::GetStats().reclaimable_memory -=
-        num_deleted_ * vector_size_;
+    GlobalStats::Instance().Decr(MetricType::kHnswNodesMarkedDeleted, num_deleted_);
+    GlobalStats::Instance().Decr(MetricType::kHnswEdgesMarkedDeleted, num_deleted_ * M_);
     cur_element_count_ = 0;
     visited_list_pool_.reset(nullptr);
   }
@@ -899,12 +904,18 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         memcpy(*reinterpret_cast<char **>((*linkLists_)[i]),
                link_list_chunk->data(), link_list_chunk->size());
       }
+      valkey_search::StringInternStore::Instance().SetDeleteMark(getDataByInternalId(i), vector_size_, false);
     }
+
+    GlobalStats::Instance().Incr(MetricType::kHnswEdges, M_*cur_element_count_);
+    GlobalStats::Instance().Incr(MetricType::kHnswNodes, cur_element_count_);
 
     for (size_t i = 0; i < cur_element_count_; i++) {
       if (isMarkedDeleted(i)) {
         num_deleted_ += 1;
-        valkey_search::Metrics::GetStats().reclaimable_memory += vector_size_;
+        valkey_search::StringInternStore::Instance().SetDeleteMark(getDataByInternalId(i), vector_size_, true);
+        GlobalStats::Instance().Incr(MetricType::kHnswNodesMarkedDeleted);
+        GlobalStats::Instance().Incr(MetricType::kHnswEdgesMarkedDeleted, M_);
         if (allow_replace_deleted_) {
           deleted_elements.insert(i);
         }
@@ -971,7 +982,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       unsigned char *ll_cur = ((unsigned char *)get_linklist0(internalId)) + 2;
       *ll_cur |= DELETE_MARK;
       num_deleted_ += 1;
-      valkey_search::Metrics::GetStats().reclaimable_memory += vector_size_;
+      valkey_search::StringInternStore::Instance().SetDeleteMark(getDataByInternalId(internalId), vector_size_, true);
+      GlobalStats::Instance().Incr(MetricType::kHnswNodesMarkedDeleted);
+      GlobalStats::Instance().Incr(MetricType::kHnswEdgesMarkedDeleted, M_);
       if (allow_replace_deleted_) {
         std::unique_lock<std::mutex> lock_deleted_elements(
             deleted_elements_lock);
@@ -1015,7 +1028,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       unsigned char *ll_cur = ((unsigned char *)get_linklist0(internalId)) + 2;
       *ll_cur &= ~DELETE_MARK;
       num_deleted_ -= 1;
-      valkey_search::Metrics::GetStats().reclaimable_memory -= vector_size_;
+      GlobalStats::Instance().Decr(MetricType::kHnswNodesMarkedDeleted);
+      GlobalStats::Instance().Decr(MetricType::kHnswEdgesMarkedDeleted, M_);
       if (allow_replace_deleted_) {
         std::unique_lock<std::mutex> lock_deleted_elements(
             deleted_elements_lock);
@@ -1088,6 +1102,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
       unmarkDeletedInternal(internal_id_replaced);
       updatePoint(data_point, internal_id_replaced, 1.0);
+      valkey_search::StringInternStore::Instance().SetDeleteMark(static_cast<const char*>(data_point), vector_size_, false);
     }
   }
 
@@ -1292,9 +1307,12 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
         if (isMarkedDeleted(existingInternalId)) {
           unmarkDeletedInternal(existingInternalId);
+        } else {
+          // mark the old vector as deleted before updating the point
+          valkey_search::StringInternStore::Instance().SetDeleteMark(getDataByInternalId(existingInternalId), vector_size_, true);
         }
         updatePoint(data_point, existingInternalId, 1.0);
-
+        valkey_search::StringInternStore::Instance().SetDeleteMark(static_cast<const char*>(data_point), vector_size_, false);
         return existingInternalId;
       }
 
@@ -1305,6 +1323,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
       cur_c = cur_element_count_;
       cur_element_count_++;
+      GlobalStats::Instance().Incr(MetricType::kHnswNodes);
+      GlobalStats::Instance().Incr(MetricType::kHnswEdges, M_);
+      valkey_search::StringInternStore::Instance().SetDeleteMark(static_cast<const char*>(data_point), vector_size_, false);
       label_lookup_[label] = cur_c;
     }
 

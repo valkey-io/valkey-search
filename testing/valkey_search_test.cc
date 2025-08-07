@@ -441,7 +441,7 @@ TEST_F(ValkeySearchTest, Info) {
   stats.coordinator_server_search_index_partition_success_cnt = 28;
   stats.coordinator_bytes_out = 1000;
   stats.coordinator_bytes_in = 2000;
-  auto interned_key_1 = StringInternStore::Intern("key1");
+  auto interned_key_1 = StringInternStore::Intern("key1", StringType::KEY);
   EXPECT_EQ(std::string(*interned_key_1), "key1");
   ValkeyModuleInfoCtx fake_info_ctx;
   ValkeySearch::Instance().Info(&fake_info_ctx, false);

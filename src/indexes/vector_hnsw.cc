@@ -30,6 +30,7 @@
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
 #include "src/attribute_data_type.h"
+#include "src/indexes/global_metrics.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
@@ -178,6 +179,20 @@ VectorHNSW<T>::VectorHNSW(int dimensions,
                           data_model::AttributeDataType attribute_data_type)
     : VectorBase(IndexerType::kHNSW, dimensions, attribute_data_type,
                  attribute_identifier) {}
+
+template <typename T>
+VectorHNSW<T>::~VectorHNSW() {
+    // Decrement node count for all current elements (including deleted ones)
+    size_t current_nodes = algo_->getCurrentElementCount();
+    if (current_nodes > 0) {
+      GlobalIndexStats::Instance().Decr(MetricType::kHnswNodes, current_nodes);
+    }
+    
+    size_t total_edges = current_nodes * algo_->M_;
+    if (total_edges > 0) {
+      GlobalIndexStats::Instance().Decr(MetricType::kHnswEdges, total_edges);
+    }
+}
 
 template <typename T>
 absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,

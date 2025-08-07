@@ -342,6 +342,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
   // Handle non vector queries first where attribute_alias is empty.
   if (parameters.IsNonVectorQuery()) {
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
+    // entries_fetchers gets populated below.
     size_t qualified_entries = EvaluateFilterAsPrimary(
         parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
         false);

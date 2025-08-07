@@ -27,12 +27,12 @@ class Tag;
 namespace valkey_search::query {
 
 enum class PredicateType {
-  kText,
   kTag,
   kNumeric,
   kComposedAnd,
   kComposedOr,
   kNegate,
+  kText,
   kNone
 };
 
@@ -146,7 +146,7 @@ class TextPredicate : public Predicate {
                 absl::string_view identifier,
                 absl::string_view raw_text_string,
                 Operation op = Operation::kExact,
-                double fuzzy_distance = 1.0);
+                uint32_t fuzzy_distance = 0);
 
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(absl::string_view raw_text_string) const;
@@ -160,7 +160,7 @@ class TextPredicate : public Predicate {
   }
   const std::string& GetTextString() const { return raw_text_string_; }
   Operation GetOperation() const { return operation_; }
-  double GetFuzzyDistance() const { return fuzzy_distance_; }
+  uint32_t GetFuzzyDistance() const { return fuzzy_distance_; }
 
  private:
   const indexes::Text* index_;
@@ -168,7 +168,7 @@ class TextPredicate : public Predicate {
   std::string alias_; // Attribute alias will be NULL for default text fields.
   std::string raw_text_string_;
   Operation operation_;
-  double fuzzy_distance_;
+  uint32_t fuzzy_distance_;
 
   // Private evaluation methods
   bool EvaluateExact(absl::string_view text) const;

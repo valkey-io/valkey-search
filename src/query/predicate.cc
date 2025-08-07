@@ -31,7 +31,7 @@ TextPredicate::TextPredicate(const indexes::Text* index, absl::string_view alias
                            absl::string_view identifier,
                            absl::string_view raw_text_string,
                            Operation op,
-                           double fuzzy_distance)
+                            uint32_t fuzzy_distance)
     : Predicate(PredicateType::kText),
       index_(index),
       alias_(alias),

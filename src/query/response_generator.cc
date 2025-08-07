@@ -111,7 +111,7 @@ class PredicateEvaluator : public query::Evaluator {
 
   bool EvaluateText(const query::TextPredicate &predicate) override {
     // TODO: Implement TextPredicate evaluation.
-    return false;
+    return true;
   }
 
  private:
@@ -143,6 +143,7 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
   if (parameters.filter_parse_results.filter_identifiers.empty()) {
     return content;
   }
+  // Query String is `root_predicate`.
   if (!VerifyFilter(parameters.filter_parse_results.root_predicate.get(),
                     content)) {
     return absl::NotFoundError("Verify filter failed");

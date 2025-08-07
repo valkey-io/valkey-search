@@ -51,12 +51,8 @@ struct PhraseIterator : public indexes::EntriesFetcherIteratorBase {
 
   virtual bool Done() const override;
   virtual void Next() = override;
-  // TODO: Should this return a Key or an InternedStringPtr?
   virtual const Key& operator*() const override;
-  private:
-    std::vector<WordIterator *> words_;
-    size_t slop_{0};
-    bool in_order_{true};
+
 };
 
 

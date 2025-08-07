@@ -101,7 +101,7 @@ bool InlineVectorEvaluator::EvaluateNumeric(
 
 bool InlineVectorEvaluator::EvaluateText(const query::TextPredicate &predicate) {
   // TODO
-  return false;
+  return true;
 }
 
 template <typename T>

@@ -222,16 +222,14 @@ absl::StatusOr<absl::string_view> FilterParser::ParseTagString() {
 
 absl::StatusOr<std::unique_ptr<query::TextPredicate>> FilterParser::ParseTextPredicate(
     const std::string& field_name) {
-  // Check for modifiers
+  // Currently, we do not support default field text predicates (ie - without a field specified).
   std::string text_value;
   bool in_quotes = Match('"');
   while (!IsEnd()) {
     char c = Peek();
-    if (in_quotes) {
-      if (c == '"') {
-        pos_++;
-        break;
-      }
+    if (in_quotes && c == '"') {
+      pos_++;
+      break;
     } else if (c == ' ' || c == ')' || c == '|') {
       break;
     }
@@ -251,8 +249,8 @@ absl::StatusOr<std::unique_ptr<query::TextPredicate>> FilterParser::ParseTextPre
   //   return absl::InvalidArgumentError(
   //       absl::StrCat("Field '", field_name, "' is not a text field"));
   // }
-  // If `in_quotes`, we use Exact Matching.
-  // return std::make_unique<query::TextPredicate>(text_index, field_name, text_value);
+  // If in quotes, it is an exact match.
+  // return std::make_unique<query::TextPredicate>(text_index, field_name, text_value, TextPredicate::Operation::kExact, 0);
 }
 
 absl::StatusOr<absl::flat_hash_set<absl::string_view>> FilterParser::ParseTags(

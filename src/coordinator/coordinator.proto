@@ -34,6 +34,7 @@ message LimitParameter {
   uint64 number = 2;
 }
 
+// Add TextPredicate for CME support.
 message TagPredicate {
   string attribute_alias = 1;
   string raw_tag_string = 2;

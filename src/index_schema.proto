@@ -29,7 +29,19 @@ message IndexSchema {
   repeated Attribute attributes = 6;
   Stats stats = 7;
   optional uint32 db_num = 8;
+
+  string punctuation = 9;
+  bool with_offsets = 10;
+  repeated string stop_words = 11;
 }
+
+
+message TextIndex {
+  bool with_suffix_trie = 1;
+  bool no_stem = 2;
+  int32 min_stem_size = 3;
+}
+
 
 enum AttributeIndexType {
   ATTRIBUTE_INDEX_TYPE_UNSPECIFIED = 0;
@@ -47,6 +59,7 @@ message Index {
     VectorIndex vector_index = 1;
     NumericIndex numeric_index = 2;
     TagIndex tag_index = 3;
+    TextIndex text_index = 4;
   }
 }
 

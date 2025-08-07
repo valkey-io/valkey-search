@@ -202,13 +202,13 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
   ValkeyModule_SelectDb(detached_ctx_.get(), db_num_);
   if (index_schema_proto.subscribed_key_prefixes().empty()) {
     subscribed_key_prefixes_.push_back("");
-    return;
-  }
-  for (const auto &key_prefix : index_schema_proto.subscribed_key_prefixes()) {
-    if (!std::any_of(
-            subscribed_key_prefixes_.begin(), subscribed_key_prefixes_.end(),
-            [&](const std::string &s) { return key_prefix.starts_with(s); })) {
-      subscribed_key_prefixes_.push_back(std::string(key_prefix));
+  } else {
+    for (const auto &key_prefix : index_schema_proto.subscribed_key_prefixes()) {
+      if (!std::any_of(
+              subscribed_key_prefixes_.begin(), subscribed_key_prefixes_.end(),
+              [&](const std::string &s) { return key_prefix.starts_with(s); })) {
+        subscribed_key_prefixes_.push_back(std::string(key_prefix));
+      }
     }
   }
   // The protobuf has volatile fields that get save/restores in the RDB. here we

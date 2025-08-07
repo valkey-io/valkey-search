@@ -108,5 +108,4 @@ class Index:
     
     def info(self, client:valkey.client) -> dict[str,str]:
         res = client.execute_command("FT.INFO", self.name)
-        print("Got info result of ", res)
         return {res[i]: res[i+1] for i in range(len(res), 2)}

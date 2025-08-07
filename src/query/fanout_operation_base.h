@@ -10,6 +10,7 @@
 #include <grpcpp/grpcpp.h>
 
 #include "absl/synchronization/mutex.h"
+#include "grpcpp/support/status.h"
 #include "src/coordinator/client_pool.h"
 #include "src/query/fanout_template.h"
 #include "src/valkey_search.h"
@@ -33,7 +34,7 @@ class FanoutOperationBase {
 
     auto targets = GetTargets(ctx);
     outstanding_ = targets.size();
-    int timeout_ms = GetTimeoutMs();
+    unsigned timeout_ms = GetTimeoutMs();
     for (const auto& target : targets) {
       auto req = GenerateRequest(target, timeout_ms);
       IssueRpc(ctx, target, req, timeout_ms);
@@ -68,31 +69,32 @@ class FanoutOperationBase {
 
   virtual void InvokeRemoteRpc(coordinator::Client*, const Request&,
                                std::function<void(grpc::Status, Response&)>,
-                               int timeout_ms) = 0;
+                               unsigned timeout_ms) = 0;
 
-  virtual int GetTimeoutMs() const = 0;
+  virtual unsigned GetTimeoutMs() const = 0;
 
   virtual Request GenerateRequest([[maybe_unused]] const FanoutSearchTarget&,
-                                  int timeout_ms) = 0;
+                                  unsigned timeout_ms) = 0;
 
   virtual void OnResponse(const Response&,
                           [[maybe_unused]] const FanoutSearchTarget&) = 0;
 
-  virtual void OnError(const std::string&,
+  virtual void OnError(grpc::Status status,
                        [[maybe_unused]] const FanoutSearchTarget&) = 0;
 
   virtual int GenerateReply(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,
                             int argc) = 0;
 
   void IssueRpc(ValkeyModuleCtx* ctx, const FanoutSearchTarget& target,
-                const Request& request, int timeout_ms) {
+                const Request& request, unsigned timeout_ms) {
     coordinator::ClientPool* client_pool_ =
         ValkeySearch::Instance().GetCoordinatorClientPool();
     if (target.type == FanoutSearchTarget::Type::kLocal) {
       vmsdk::RunByMain([this, ctx, target, request]() {
         Response resp = this->GetLocalResponse(ctx, request, target);
         if (!resp.error().empty()) {
-          this->OnError(resp.error(), target);
+          this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, resp.error()),
+                        target);
         } else {
           this->OnResponse(resp, target);
         }
@@ -101,7 +103,9 @@ class FanoutOperationBase {
     } else {
       auto client = client_pool_->GetClient(target.address);
       if (!client) {
-        this->OnError("No client found for " + target.address, target);
+        this->OnError(grpc::Status(grpc::StatusCode::INTERNAL,
+                                   "No client found for " + target.address),
+                      target);
         this->RpcDone();
         return;
       }
@@ -111,9 +115,11 @@ class FanoutOperationBase {
             if (status.ok()) {
               this->OnResponse(resp, target);
             } else {
-              this->OnError("gRPC error on node " + target.address + ": " +
-                                status.error_message(),
-                            target);
+              this->OnError(
+                  grpc::Status(grpc::StatusCode::INTERNAL,
+                               "gRPC error on node " + target.address + ": " +
+                                   status.error_message()),
+                  target);
             }
             this->RpcDone();
           },

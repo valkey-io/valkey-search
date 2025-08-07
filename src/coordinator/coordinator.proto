@@ -158,7 +158,7 @@ message InfoIndexPartitionResponse {
   uint64 recent_mutations_queue_delay = 12;
   string state = 13;
   string error = 14;
-  uint64 schema_fingerprint = 15;
-  uint32 encoding_version = 16;
+  optional uint64 schema_fingerprint = 15;
+  optional uint32 encoding_version = 16;
 }
 

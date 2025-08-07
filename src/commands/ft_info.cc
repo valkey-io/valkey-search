@@ -130,7 +130,7 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   bool is_global = false;
   bool is_primary = false;
   bool is_cluster = false;
-  int timeout_ms = options::GetFTInfoTimeoutMs().GetValue();
+  unsigned timeout_ms = options::GetFTInfoTimeoutMs().GetValue();
 
   if (argc == 2) {
     is_global = false;
@@ -181,8 +181,7 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 
   if (is_primary) {
     auto op = new query::primary_info_fanout::PrimaryInfoFanoutOperation(
-        std::string(index_schema_name), timeout_ms,
-        ValkeySearch::Instance().GetCoordinatorClientPool());
+        std::string(index_schema_name), timeout_ms);
     op->StartOperation(ctx);
     return absl::OkStatus();
   } else if (is_cluster) {

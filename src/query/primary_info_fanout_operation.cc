@@ -12,23 +12,21 @@
 
 namespace valkey_search::query::primary_info_fanout {
 
-PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
-    std::string index_name, int timeout_ms,
-    coordinator::ClientPool* client_pool)
+PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(std::string index_name,
+                                                       unsigned timeout_ms)
     : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
                                   coordinator::InfoIndexPartitionResponse,
                                   fanout::FanoutTargetMode::kPrimary>(),
       index_name_(index_name),
-      timeout_ms_(timeout_ms),
-      client_pool_(client_pool) {}
+      timeout_ms_(timeout_ms) {}
 
-int PrimaryInfoFanoutOperation::GetTimeoutMs() const {
+unsigned PrimaryInfoFanoutOperation::GetTimeoutMs() const {
   return timeout_ms_.value_or(5000);
 }
 
 coordinator::InfoIndexPartitionRequest
 PrimaryInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&,
-                                            int timeout_ms) {
+                                            unsigned timeout_ms) {
   coordinator::InfoIndexPartitionRequest req;
   req.set_index_name(index_name_);
   req.set_timeout_ms(timeout_ms);
@@ -37,49 +35,52 @@ PrimaryInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&,
 
 void PrimaryInfoFanoutOperation::OnResponse(
     const coordinator::InfoIndexPartitionResponse& resp,
-    const fanout::FanoutSearchTarget& /*target*/) {
+    const fanout::FanoutSearchTarget& target) {
   absl::MutexLock lock(&mutex_);
 
   if (!resp.error().empty()) {
-    if (error_.empty()) {
-      error_ = resp.error();
-    } else {
-      error_ += ";" + resp.error();
-    }
+    grpc::Status status =
+        grpc::Status(grpc::StatusCode::INTERNAL, resp.error());
+    OnError(status, target);
     return;
   }
 
-  if (resp.exists()) {
-    if (!schema_fingerprint_.has_value()) {
-      schema_fingerprint_ = resp.schema_fingerprint();
-    } else if (schema_fingerprint_.value() != resp.schema_fingerprint()) {
-      has_schema_mismatch_ = true;
-      error_ = "found index schema inconsistency in the cluster";
-      return;
-    }
-    if (!encoding_version_.has_value()) {
-      encoding_version_ = resp.encoding_version();
-    } else if (encoding_version_.value() != resp.encoding_version()) {
-      has_version_mismatch_ = true;
-      error_ = "found index schema version inconsistency in the cluster";
-      return;
-    }
-    exists_ = true;
-    index_name_ = resp.index_name();
-    num_docs_ += resp.num_docs();
-    num_records_ += resp.num_records();
-    hash_indexing_failures_ += resp.hash_indexing_failures();
+  if (!resp.exists()) {
+    grpc::Status status =
+        grpc::Status(grpc::StatusCode::INTERNAL, "Index does not exists");
+    OnError(status, target);
+    return;
   }
+
+  if (!schema_fingerprint_.has_value()) {
+    schema_fingerprint_ = resp.schema_fingerprint();
+  } else if (schema_fingerprint_.value() != resp.schema_fingerprint()) {
+    grpc::Status status =
+        grpc::Status(grpc::StatusCode::INTERNAL,
+                     "Cluster not in a consistent state, please retry.");
+    OnError(status, target);
+    return;
+  }
+  if (!encoding_version_.has_value()) {
+    encoding_version_ = resp.encoding_version();
+  } else if (encoding_version_.value() != resp.encoding_version()) {
+    grpc::Status status =
+        grpc::Status(grpc::StatusCode::INTERNAL,
+                     "Cluster not in a consistent state, please retry.");
+    OnError(status, target);
+    return;
+  }
+  exists_ = true;
+  index_name_ = resp.index_name();
+  num_docs_ += resp.num_docs();
+  num_records_ += resp.num_records();
+  hash_indexing_failures_ += resp.hash_indexing_failures();
 }
 
 void PrimaryInfoFanoutOperation::OnError(
-    const std::string& error, const fanout::FanoutSearchTarget& /*target*/) {
+    grpc::Status status, const fanout::FanoutSearchTarget& /*target*/) {
   absl::MutexLock lock(&mutex_);
-  if (error_.empty()) {
-    error_ = error;
-  } else {
-    error_ += ";" + error;
-  }
+  errors_.push_back(status.error_message());
 }
 
 coordinator::InfoIndexPartitionResponse
@@ -103,8 +104,8 @@ PrimaryInfoFanoutOperation::GetLocalResponse(
   IndexSchema::InfoIndexPartitionData data =
       index_schema->GetInfoIndexPartitionData();
 
-  uint64_t fingerprint = 0;
-  uint32_t encoding_version = 0;
+  std::optional<uint64_t> fingerprint;
+  std::optional<uint32_t> encoding_version;
 
   auto global_metadata =
       coordinator::MetadataManager::Instance().GetGlobalMetadata();
@@ -119,17 +120,21 @@ PrimaryInfoFanoutOperation::GetLocalResponse(
     }
   }
 
+  if (!fingerprint.has_value() || !encoding_version.has_value()) {
+    resp.set_exists(false);
+    resp.set_index_name(request.index_name());
+    resp.set_error(
+        std::string("Cluster not in a consistent state, please retry.") +
+        std::string(index_schema_result.status().message()));
+    return resp;
+  }
   resp.set_exists(true);
   resp.set_index_name(request.index_name());
   resp.set_num_docs(data.num_docs);
   resp.set_num_records(data.num_records);
   resp.set_hash_indexing_failures(data.hash_indexing_failures);
-  if (fingerprint) {
-    resp.set_schema_fingerprint(fingerprint);
-  }
-  if (encoding_version) {
-    resp.set_encoding_version(encoding_version);
-  }
+  resp.set_schema_fingerprint(fingerprint.value());
+  resp.set_encoding_version(encoding_version.value());
   resp.set_error("");
   return resp;
 }
@@ -139,7 +144,7 @@ void PrimaryInfoFanoutOperation::InvokeRemoteRpc(
     const coordinator::InfoIndexPartitionRequest& request,
     std::function<void(grpc::Status, coordinator::InfoIndexPartitionResponse&)>
         callback,
-    int timeout_ms) {
+    unsigned timeout_ms) {
   std::unique_ptr<coordinator::InfoIndexPartitionRequest> request_ptr =
       std::make_unique<coordinator::InfoIndexPartitionRequest>(request);
   client->InfoIndexPartition(std::move(request_ptr), std::move(callback),
@@ -149,18 +154,15 @@ void PrimaryInfoFanoutOperation::InvokeRemoteRpc(
 int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
                                               ValkeyModuleString** argv,
                                               int argc) {
-  if (!exists_) {
-    std::string error_msg = absl::StrFormat(
-        "Primary index with name '%s' not found", index_name_.c_str());
-    return ValkeyModule_ReplyWithError(ctx, error_msg.c_str());
-  }
-  if (has_schema_mismatch_) {
-    return ValkeyModule_ReplyWithError(
-        ctx, "ERR found primary index schema inconsistency in the cluster");
-  }
-  if (has_version_mismatch_) {
-    return ValkeyModule_ReplyWithError(
-        ctx, "ERR found index schema version inconsistency in the cluster");
+  if (!errors_.empty()) {
+    std::string all_errors;
+    for (const auto& error : errors_) {
+      if (!all_errors.empty()) {
+        all_errors += "\n";
+      }
+      all_errors += error;
+    }
+    return ValkeyModule_ReplyWithError(ctx, all_errors.c_str());
   }
 
   ValkeyModule_ReplyWithArray(ctx, 10);

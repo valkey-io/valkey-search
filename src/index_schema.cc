@@ -711,7 +711,7 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithArray(ctx, 26);
+  ValkeyModule_ReplyWithArray(ctx, 28);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
   ValkeyModule_ReplyWithSimpleString(ctx, "index_options");
@@ -751,6 +751,29 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%lu", stats_.subscription_add.skipped_cnt).c_str());
+
+
+  ValkeyModule_ReplyWithSimpleString(ctx, "gc_stats");
+  ValkeyModule_ReplyWithArray(ctx, 14);
+  ValkeyModule_ReplyWithSimpleString(ctx, "bytes_collected");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "total_ms_run");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  
+  ValkeyModule_ReplyWithSimpleString(ctx, "total_cycles");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "average_cycle_time_ms");
+  ValkeyModule_ReplyWithCString(ctx, "nan");
+  
+  ValkeyModule_ReplyWithSimpleString(ctx, "last_run_time_ms");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "gc_numeric_trees_missed");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "gc_blocks_denied");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+
+
+
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_in_progress");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%d", IsBackfillInProgress() ? 1 : 0).c_str());

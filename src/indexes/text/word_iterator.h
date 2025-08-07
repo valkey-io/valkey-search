@@ -1,11 +1,17 @@
+/*
+ * Copyright (c) 2025, valkey-search contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ *
+ */
+
 #ifndef VALKEY_SEARCH_INDEXES_TEXT_WORD_ITERATOR_H_
 #define VALKEY_SEARCH_INDEXES_TEXT_WORD_ITERATOR_H_
 
 #include <memory>
 #include "absl/strings/string_view.h"
 
-namespace valkey_search {
-namespace text {
+namespace valkey_search::indexes::text {
 
 /*
 
@@ -21,6 +27,5 @@ struct WordIterator {
   absl::string_view operator*() const = { return GetWord(); }
 };
 
-}
-}
+}  // namespace valkey_search::indexes::text
 #endif

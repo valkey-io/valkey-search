@@ -1,8 +1,14 @@
+/*
+ * Copyright (c) 2025, valkey-search contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ *
+ */
+
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
 
-namespace valkey_search {
-namespace text {
+namespace valkey_search::indexes::text {
 
 /*
 
@@ -60,6 +66,6 @@ struct PhraseIterator : public indexes::EntriesFetcherIteratorBase {
 };
 
 
-}
+}  // namespace valkey_search::indexes::text
 
 #endif

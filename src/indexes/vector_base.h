@@ -249,7 +249,6 @@ class InlineVectorEvaluator : public query::Evaluator {
  private:
   bool EvaluateTags(const query::TagPredicate& predicate) override;
   bool EvaluateNumeric(const query::NumericPredicate& predicate) override;
-  bool EvaluateText(const query::TextPredicate& predicate) override;
   const InternedStringPtr* key_{nullptr};
 };
 

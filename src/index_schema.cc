@@ -36,7 +36,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
-#include "src/indexes/text.h"
+// #include "src/indexes/text.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -84,7 +84,8 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
       return std::make_shared<indexes::Numeric>(index.numeric_index());
     }
     case data_model::Index::IndexTypeCase::kTextIndex: {
-      return std::make_shared<indexes::Text>(index.text_index());
+      // return std::make_shared<indexes::Text>(index.text_index());
+      return absl::InvalidArgumentError("Text Index is yet to be defined");
     }
     case data_model::Index::IndexTypeCase::kVectorIndex: {
       switch (index.vector_index().algorithm_case()) {

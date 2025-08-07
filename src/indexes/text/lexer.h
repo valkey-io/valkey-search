@@ -17,7 +17,7 @@ natural character that is part of a word.
 #include <vector>
 
 #include "absl/status/statusor.h"
-#include "src/indexes/text.h"
+#include "src/text/text.h"
 
 namespace valkey_search::text {
 

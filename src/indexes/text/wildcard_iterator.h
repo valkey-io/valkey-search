@@ -36,7 +36,7 @@ This algorithm operates in time O(#SuffixMatches)
 */
 
 #include "absl/string/string_view.h"
-#include "src/indexes/text.h"
+#include "src/text/text.h"
 
 namespace valkey_search {
 namespace text {

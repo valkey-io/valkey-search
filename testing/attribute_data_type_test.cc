@@ -7,6 +7,8 @@
 
 #include "src/attribute_data_type.h"
 
+#include <absl/strings/strip.h>
+
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -294,9 +296,9 @@ class JsonAttributeDataTypeTest
   vmsdk::UniqueValkeyOpenKey key_obj;
   const std::string query_attribute_name = "vector_json_path";
   absl::flat_hash_map<std::string, std::string> json_path_results = {
-      {"$", "[res0]"},
-      {"json_path_results1", "[res1]"},
-      {"json_path_results2", "[res2]"}};
+      {"$", "[\"res0\"]"},
+      {"json_path_results1", "[\"res1\"]"},
+      {"json_path_results2", "[\"res2\"]"}};
   ;
 };
 
@@ -356,6 +358,16 @@ int MyJsonSharedAPIGetValue(ValkeyModuleKey *key, const char *path,
   return VALKEYMODULE_OK;
 }
 
+absl::string_view NormalizeValue(absl::string_view record) {
+  if (absl::ConsumePrefix(&record, "[")) {
+    absl::ConsumeSuffix(&record, "]");
+  }
+  if (absl::ConsumePrefix(&record, "\"")) {
+      absl::ConsumeSuffix(&record, "\"");
+  }
+  return record;
+}
+
 TEST_P(JsonAttributeDataTypeTest, JsonGetRecord) {
   auto &params = GetParam();
   auto use_shared_api = std::get<1>(params);
@@ -377,7 +389,7 @@ TEST_P(JsonAttributeDataTypeTest, JsonGetRecord) {
         EXPECT_TRUE(json_path_results.contains(identifier));
         auto res_str = std::string(json_path_results.find(identifier)->second);
         EXPECT_EQ(vmsdk::ToStringView(record.value().get()),
-                  TrimBrackets(res_str));
+                  NormalizeValue(res_str));
       } else {
         EXPECT_FALSE(json_path_results.contains(identifier));
         EXPECT_EQ(record.status().code(), absl::StatusCode::kNotFound);
@@ -398,7 +410,7 @@ TEST_P(JsonAttributeDataTypeTest, JsonGetRecord) {
         EXPECT_EQ(module_reply_type, VALKEYMODULE_REPLY_STRING);
         auto res_str = std::string(json_path_results.find(identifier)->second);
         EXPECT_EQ(vmsdk::ToStringView(record.value().get()),
-                  TrimBrackets(res_str));
+                  NormalizeValue(res_str));
       } else {
         EXPECT_FALSE(json_path_results.contains(identifier) &&
                      module_reply_type == VALKEYMODULE_REPLY_STRING);
@@ -406,6 +418,16 @@ TEST_P(JsonAttributeDataTypeTest, JsonGetRecord) {
       }
     }
   }
+}
+
+std::unordered_map<std::string, std::string> NormalizeExpected(
+    const std::unordered_map<std::string, std::string> &map) {
+  auto ret = map;
+  for (const auto &entry : ret) {
+    absl::string_view value = NormalizeValue(entry.second);
+    ret[entry.first] = std::string(value);
+  }
+  return ret;
 }
 
 TEST_P(JsonAttributeDataTypeTest, JsonFetchAllRecords) {
@@ -427,7 +449,8 @@ TEST_P(JsonAttributeDataTypeTest, JsonFetchAllRecords) {
         &fake_ctx, query_attribute_name, key_obj.get(),
         vmsdk::ToStringView(key_str.get()).data(), identifiers);
     if (records.ok()) {
-      EXPECT_EQ(ToStringMap(records.value()), test_case.expected_records_map);
+      EXPECT_EQ(ToStringMap(records.value()),
+                NormalizeExpected(test_case.expected_records_map));
       return;
     }
     EXPECT_EQ(records.status().code(), absl::StatusCode::kNotFound);
@@ -472,7 +495,7 @@ TEST_P(JsonAttributeDataTypeTest, JsonFetchAllRecords) {
         vmsdk::ToStringView(key_str.get()).data(), identifiers);
     if (records.ok()) {
       EXPECT_EQ(module_reply_type, VALKEYMODULE_REPLY_STRING);
-      EXPECT_EQ(ToStringMap(records.value()), test_case.expected_records_map);
+      EXPECT_EQ(ToStringMap(records.value()), NormalizeExpected(test_case.expected_records_map));
       return;
     }
     EXPECT_FALSE(expect_exists_key &&

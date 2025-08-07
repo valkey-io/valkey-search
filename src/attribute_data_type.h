@@ -119,7 +119,6 @@ class JsonAttributeDataType : public AttributeDataType {
 bool IsJsonModuleSupported(ValkeyModuleCtx *ctx);
 using JsonSharedAPIGetValueFn = int (*)(ValkeyModuleKey *key, const char *path,
                                         ValkeyModuleString **result);
-absl::string_view TrimBrackets(absl::string_view record);
 // Used just for testing
 void ResetJsonLoadedCache();
 }  // namespace valkey_search

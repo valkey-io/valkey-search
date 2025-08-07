@@ -102,13 +102,6 @@ absl::StatusOr<RecordsMap> HashAttributeDataType::FetchAllRecords(
   return std::move(callback_data.key_value_content);
 }
 
-absl::string_view TrimBrackets(absl::string_view record) {
-  if (absl::ConsumePrefix(&record, "[")) {
-    absl::ConsumeSuffix(&record, "]");
-  }
-  return record;
-}
-
 absl::Status NormalizeJsonRecord(absl::string_view record,
                                  vmsdk::UniqueValkeyString &out_record) {
   if (!record.empty() && record[0] != '[') {
@@ -150,10 +143,10 @@ absl::Status GetJsonRecord(ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
       return absl::NotFoundError(
           absl::StrCat("No such record with identifier: `", identifier, "`"));
     }
+    auto record_tmp = vmsdk::UniqueValkeyString(record_str);
     if (!record) {
       return absl::OkStatus();
     }
-    auto record_tmp = vmsdk::UniqueValkeyString(record_str);
     return NormalizeJsonRecord(vmsdk::ToStringView(record_tmp.get()), *record);
   }
   auto reply = vmsdk::UniquePtrValkeyCallReply(ValkeyModule_Call(
@@ -167,11 +160,11 @@ absl::Status GetJsonRecord(ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
     return absl::NotFoundError(
         absl::StrCat(kJsonCmd.data(), " returned a non string value"));
   }
+  auto reply_str = vmsdk::UniqueValkeyString(
+      ValkeyModule_CreateStringFromCallReply(reply.get()));
   if (!record) {
     return absl::OkStatus();
   }
-  auto reply_str = vmsdk::UniqueValkeyString(
-      ValkeyModule_CreateStringFromCallReply(reply.get()));
   return NormalizeJsonRecord(vmsdk::ToStringView(reply_str.get()), *record);
 }
 

@@ -290,6 +290,13 @@ class JsonAttributeDataTypeTest
         VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
     vmsdk::SetModuleLoaded("json");
   }
+
+  void TearDown() override {
+    key_str.reset();
+    key_obj.reset();
+    ValkeySearchTestWithParam::TearDown();
+  }
+  
   ValkeyModuleCtx fake_ctx;
   JsonAttributeDataType json_attribute_data_type;
   vmsdk::UniqueValkeyString key_str;

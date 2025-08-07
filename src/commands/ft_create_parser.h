@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
+#include <vector>
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -21,6 +23,8 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
+
+static constexpr absl::string_view kDefaultPunctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|";
 
 struct FTCreateTagParameters {
   absl::string_view separator{","};
@@ -39,6 +43,24 @@ struct FTCreateVectorParameters {
   absl::Status Verify() const;
   std::unique_ptr<data_model::VectorIndex> ToProto() const;
 };
+
+// Global text parameters (per-index) - populated in IndexSchema
+struct PerIndexTextParams {
+  std::string punctuation{kDefaultPunctuation};
+  bool with_offsets{true};
+  bool no_stem{false};
+  std::vector<std::string> stop_words;
+  data_model::Language language{data_model::LANGUAGE_ENGLISH};
+  int min_stem_size{4};
+};
+
+// Field-specific text parameters (per text field) - populated in TextIndex
+struct PerFieldTextParams {
+  bool with_suffix_trie{false};
+  bool no_stem{false};  // Can be overridden per field
+  int min_stem_size{4};
+};
+
 
 constexpr int kDefaultBlockSize{1024};
 constexpr int kDefaultM{16};

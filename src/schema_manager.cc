@@ -178,7 +178,7 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
 
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,
-      IndexSchema::Create(ctx, index_schema_proto, mutations_thread_pool_));
+      IndexSchema::Create(ctx, index_schema_proto, mutations_thread_pool_, false, false));
 
   db_to_index_schemas_[db_num][name] = std::move(index_schema);
 

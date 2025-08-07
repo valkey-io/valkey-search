@@ -146,7 +146,7 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
     ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto,
-    vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes) {
+    vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes, bool reload) {
   std::unique_ptr<AttributeDataType> attribute_data_type;
   switch (index_schema_proto.attribute_data_type()) {
     case data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH:
@@ -164,7 +164,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
 
   auto res = std::shared_ptr<IndexSchema>(
       new IndexSchema(ctx, index_schema_proto, std::move(attribute_data_type),
-                      mutations_thread_pool));
+                      mutations_thread_pool, reload));
   VMSDK_RETURN_IF_ERROR(res->Init(ctx));
   if (!skip_attributes) {
     for (const auto &attribute : index_schema_proto.attributes()) {
@@ -190,7 +190,8 @@ vmsdk::MRMWMutexOptions CreateMrmwMutexOptions() {
 IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
                          const data_model::IndexSchema &index_schema_proto,
                          std::unique_ptr<AttributeDataType> attribute_data_type,
-                         vmsdk::ThreadPool *mutations_thread_pool)
+                         vmsdk::ThreadPool *mutations_thread_pool,
+                         bool reload)
     : detached_ctx_(vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx)),
       keyspace_event_manager_(&KeyspaceEventManager::Instance()),
       attribute_data_type_(std::move(attribute_data_type)),
@@ -210,7 +211,13 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       subscribed_key_prefixes_.push_back(std::string(key_prefix));
     }
   }
-  stats_.document_cnt = index_schema_proto.stats().documents_count();
+  // The protobuf has volatile fields that get save/restores in the RDB. here we
+  // reconcile the source of the index_schema_proto (reload or not) and restore those fields
+  if (reload) {
+    stats_.document_cnt = index_schema_proto.stats().documents_count();
+  } else {
+    stats_.document_cnt = 0;
+  }
 }
 
 absl::Status IndexSchema::Init(ValkeyModuleCtx *ctx) {
@@ -874,7 +881,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,
       IndexSchema::Create(ctx, *index_schema_proto, mutations_thread_pool,
-                          !load_attributes_on_create));
+                          !load_attributes_on_create, true));
 
   // Supplemental content will include indices and any content for them
   while (supplemental_iter.HasNext()) {

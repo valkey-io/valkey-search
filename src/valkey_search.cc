@@ -142,105 +142,105 @@ static vmsdk::info_field::Float used_write_cpu(
 
 static vmsdk::info_field::Integer ingest_hash_keys(
     "global_ingestion", "ingest_hash_keys",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_hash_keys;
     }));
 
 static vmsdk::info_field::Integer ingest_hash_blocked(
     "global_ingestion", "ingest_hash_blocked",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
           vmsdk::BlockedClientCategory::kHash);
     }));
 
 static vmsdk::info_field::Integer ingest_json_keys(
     "global_ingestion", "ingest_json_keys",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_json_keys;
     }));
 
 static vmsdk::info_field::Integer ingest_json_blocked(
     "global_ingestion", "ingest_json_blocked",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
           vmsdk::BlockedClientCategory::kJson);
     }));
 
 static vmsdk::info_field::Integer ingest_field_vector(
     "global_ingestion", "ingest_field_vector",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_field_vector;
     }));
 
 static vmsdk::info_field::Integer ingest_field_numeric(
     "global_ingestion", "ingest_field_numeric",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_field_numeric;
     }));
 
 static vmsdk::info_field::Integer ingest_field_tag(
     "global_ingestion", "ingest_field_tag",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_field_tag;
     }));
 
 static vmsdk::info_field::Integer ingest_last_batch_size(
     "global_ingestion", "ingest_last_batch_size",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_last_batch_size;
     }));
 
 static vmsdk::info_field::Integer ingest_total_batches(
     "global_ingestion", "ingest_total_batches",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_total_batches;
     }));
 
 static vmsdk::info_field::Integer ingest_total_failures(
     "global_ingestion", "ingest_total_failures",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_total_failures;
     }));
 
 static vmsdk::info_field::Integer time_slice_read_periods(
     "time_slice_mutex", "time_slice_read_periods",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return vmsdk::GetGlobalTimeSlicedMRMWStats().read_periods;
     }));
 
 static vmsdk::info_field::Integer time_slice_read_time(
     "time_slice_mutex", "time_slice_read_time",
-    vmsdk::info_field::IntegerBuilder().App().Units(vmsdk::info_field::Units::kMicroSeconds).Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Units(vmsdk::info_field::Units::kMicroSeconds).Computed([]() -> long long {
       return vmsdk::GetGlobalTimeSlicedMRMWStats().read_time_microseconds;
     }));
 
 static vmsdk::info_field::Integer time_slice_write_periods(
     "time_slice_mutex", "time_slice_write_periods",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return vmsdk::GetGlobalTimeSlicedMRMWStats().write_periods;
     }));
 
 static vmsdk::info_field::Integer time_slice_write_time(
     "time_slice_mutex", "time_slice_write_time",
-    vmsdk::info_field::IntegerBuilder().App().Units(vmsdk::info_field::Units::kMicroSeconds).Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Units(vmsdk::info_field::Units::kMicroSeconds).Computed([]() -> long long {
       return vmsdk::GetGlobalTimeSlicedMRMWStats().write_time_microseconds;
     }));   
 
 static vmsdk::info_field::Integer time_slice_queries(
     "time_slice_mutex", "time_slice_queries",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().time_slice_queries;
     }));
 
 static vmsdk::info_field::Integer time_slice_upserts(
     "time_slice_mutex", "time_slice_upserts",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().time_slice_upserts;
     }));
 
 static vmsdk::info_field::Integer time_slice_deletes(
     "time_slice_mutex", "time_slice_deletes",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().time_slice_deletes;
     }));
 

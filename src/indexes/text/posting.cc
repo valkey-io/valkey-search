@@ -16,7 +16,7 @@
 #include <type_traits>
 #include <vector>
 
-namespace valkey_search::text {
+namespace valkey_search::indexes::text {
 
 // Internal FieldMask classes - not part of external interface
 // Field mask interface optimized for different field counts
@@ -349,4 +349,4 @@ uint64_t Postings::PositionIterator::GetFieldMask() const {
   return current_->second->AsUint64();
 }
 
-}  // namespace valkey_search::text
+}  // namespace valkey_search::indexes::text

@@ -109,3 +109,4 @@ message HNSWAlgorithm {
 message FlatAlgorithm {
   uint32 block_size = 1;
 }
+

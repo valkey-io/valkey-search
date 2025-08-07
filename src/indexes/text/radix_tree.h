@@ -1,3 +1,10 @@
+/*
+ * Copyright (c) 2025, valkey-search contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ *
+ */
+
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_RADIX_TREE_H
 #define _VALKEY_SEARCH_INDEXES_TEXT_RADIX_TREE_H
 
@@ -60,8 +67,7 @@ into the codebase efficiently enough to be deployed in production code.
 #include "absl/log/check.h"
 #include "absl/strings/string_view.h"
 
-namespace valkey_search {
-namespace text {
+namespace valkey_search::indexes::text {
 
 // Needed for std::visit
 template <class... Ts>
@@ -532,7 +538,7 @@ void RadixTree<Target, reverse>::PathIterator::Defrag() {
   throw std::logic_error("TODO");
 }
 
-}  // namespace text
-}  // namespace valkey_search
+}  // namespace valkey_search::indexes::text
 
 #endif
+

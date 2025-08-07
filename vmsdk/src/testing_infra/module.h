@@ -230,6 +230,7 @@ class MockValkeyModule {
   MOCK_METHOD(ValkeyModuleCallReply *, Call,
               (ValkeyModuleCtx * ctx, const char *cmd, const char *fmt,
                const char *arg1, const char *arg2));
+  MOCK_METHOD(void *, GetSharedAPI, (ValkeyModuleCtx * ctx, const char *arg1));
   MOCK_METHOD(ValkeyModuleCallReply *, Call,
               (ValkeyModuleCtx * ctx, const char *cmd, const char *fmt,
                const char *arg1));
@@ -1176,7 +1177,10 @@ inline size_t TestValkeyModule_MallocUsableSize(void *ptr) {
 inline size_t TestValkeyModule_GetClusterSize() {
   return kMockValkeyModule->GetClusterSize();
 }
-
+inline void *TestValkeyModule_GetSharedAPI(ValkeyModuleCtx *ctx,
+                                           const char *arg1) {
+  return kMockValkeyModule->GetSharedAPI(ctx, arg1);
+}
 inline int TestValkeyModule_WrongArity(ValkeyModuleCtx *ctx) {
   return kMockValkeyModule->WrongArity(ctx);
 }
@@ -1543,6 +1547,7 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_Calloc = &TestValkeyModule_Calloc;
   ValkeyModule_MallocUsableSize = &TestValkeyModule_MallocUsableSize;
   ValkeyModule_GetClusterSize = &TestValkeyModule_GetClusterSize;
+  ValkeyModule_GetSharedAPI = &TestValkeyModule_GetSharedAPI;
   ValkeyModule_Call = &TestValkeyModule_Call;
   ValkeyModule_CallReplyArrayElement = &TestValkeyModule_CallReplyArrayElement;
   ValkeyModule_CallReplyMapElement = &TestValkeyModule_CallReplyMapElement;

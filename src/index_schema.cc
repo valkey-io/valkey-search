@@ -154,7 +154,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
       attribute_data_type = std::make_unique<HashAttributeDataType>();
       break;
     case data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON:
-      if (!IsJsonModuleLoaded(ctx)) {
+      if (!IsJsonModuleSupported(ctx)) {
         return absl::InvalidArgumentError("JSON module is not loaded");
       }
       attribute_data_type = std::make_unique<JsonAttributeDataType>();

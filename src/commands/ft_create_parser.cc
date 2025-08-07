@@ -437,7 +437,7 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   VMSDK_ASSIGN_OR_RETURN(auto res, ParseParam(kOnParam, false, itr,
                                               on_data_type, *kOnDataTypeByStr));
   if (on_data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON &&
-      !IsJsonModuleLoaded(ctx)) {
+      !IsJsonModuleSupported(ctx)) {
     return absl::InvalidArgumentError("JSON module is not loaded.");
   }
   index_schema_proto.set_attribute_data_type(on_data_type);

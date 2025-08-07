@@ -15,6 +15,7 @@
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
+#include "vmsdk/src/command_info.h"
 #include "vmsdk/src/utils.h"  // IWYU pragma: keep
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -58,6 +59,7 @@ struct CommandOptions {
   int first_key{0};
   int last_key{0};
   int key_step{0};
+  std::optional<vmsdk::command_info::Info> command_info;
 };
 
 struct Options {

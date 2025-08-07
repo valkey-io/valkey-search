@@ -64,8 +64,9 @@ class FanoutOperationBase {
     return query::fanout::FanoutTemplate::GetTargets(ctx, kTargetMode);
   }
 
-  virtual Response GetLocalResponse(ValkeyModuleCtx* ctx, const Request&,
-                                    const FanoutSearchTarget&) = 0;
+  virtual Response GetLocalResponse(
+      ValkeyModuleCtx* ctx, const Request&,
+      [[maybe_unused]] const FanoutSearchTarget&) = 0;
 
   virtual void InvokeRemoteRpc(coordinator::Client*, const Request&,
                                std::function<void(grpc::Status, Response&)>,
@@ -115,11 +116,7 @@ class FanoutOperationBase {
             if (status.ok()) {
               this->OnResponse(resp, target);
             } else {
-              this->OnError(
-                  grpc::Status(grpc::StatusCode::INTERNAL,
-                               "gRPC error on node " + target.address + ": " +
-                                   status.error_message()),
-                  target);
+              this->OnError(status, target);
             }
             this->RpcDone();
           },

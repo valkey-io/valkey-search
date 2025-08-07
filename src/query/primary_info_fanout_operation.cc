@@ -18,7 +18,11 @@ PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(std::string index_name,
                                   coordinator::InfoIndexPartitionResponse,
                                   fanout::FanoutTargetMode::kPrimary>(),
       index_name_(index_name),
-      timeout_ms_(timeout_ms) {}
+      timeout_ms_(timeout_ms),
+      exists_(false),
+      num_docs_(0),
+      num_records_(0),
+      hash_indexing_failures_(0) {}
 
 unsigned PrimaryInfoFanoutOperation::GetTimeoutMs() const {
   return timeout_ms_.value_or(5000);
@@ -35,23 +39,20 @@ PrimaryInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&,
 
 void PrimaryInfoFanoutOperation::OnResponse(
     const coordinator::InfoIndexPartitionResponse& resp,
-    const fanout::FanoutSearchTarget& target) {
+    [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
   absl::MutexLock lock(&mutex_);
-
   if (!resp.error().empty()) {
     grpc::Status status =
         grpc::Status(grpc::StatusCode::INTERNAL, resp.error());
     OnError(status, target);
     return;
   }
-
   if (!resp.exists()) {
     grpc::Status status =
         grpc::Status(grpc::StatusCode::INTERNAL, "Index does not exists");
     OnError(status, target);
     return;
   }
-
   if (!schema_fingerprint_.has_value()) {
     schema_fingerprint_ = resp.schema_fingerprint();
   } else if (schema_fingerprint_.value() != resp.schema_fingerprint()) {
@@ -70,15 +71,22 @@ void PrimaryInfoFanoutOperation::OnResponse(
     OnError(status, target);
     return;
   }
+  if (resp.index_name() != index_name_) {
+    grpc::Status status =
+        grpc::Status(grpc::StatusCode::INTERNAL,
+                     "Cluster not in a consistent state, please retry.");
+    OnError(status, target);
+    return;
+  }
   exists_ = true;
-  index_name_ = resp.index_name();
   num_docs_ += resp.num_docs();
   num_records_ += resp.num_records();
   hash_indexing_failures_ += resp.hash_indexing_failures();
 }
 
 void PrimaryInfoFanoutOperation::OnError(
-    grpc::Status status, const fanout::FanoutSearchTarget& /*target*/) {
+    grpc::Status status,
+    [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
   absl::MutexLock lock(&mutex_);
   errors_.push_back(status.error_message());
 }
@@ -86,7 +94,7 @@ void PrimaryInfoFanoutOperation::OnError(
 coordinator::InfoIndexPartitionResponse
 PrimaryInfoFanoutOperation::GetLocalResponse(
     ValkeyModuleCtx* ctx, const coordinator::InfoIndexPartitionRequest& request,
-    const fanout::FanoutSearchTarget& /*target*/) {
+    [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
   auto index_schema_result = SchemaManager::Instance().GetIndexSchema(
       ValkeyModule_GetSelectedDb(ctx), request.index_name());
 

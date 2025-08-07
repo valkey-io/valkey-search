@@ -28,14 +28,15 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
       const fanout::FanoutSearchTarget&, unsigned timeout_ms) override;
 
   void OnResponse(const coordinator::InfoIndexPartitionResponse& resp,
-                  const fanout::FanoutSearchTarget&) override;
+                  [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
 
-  void OnError(grpc::Status status, const fanout::FanoutSearchTarget&) override;
+  void OnError(grpc::Status status,
+               [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
 
   coordinator::InfoIndexPartitionResponse GetLocalResponse(
       ValkeyModuleCtx* ctx,
       const coordinator::InfoIndexPartitionRequest& request,
-      const fanout::FanoutSearchTarget&) override;
+      [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
 
   void InvokeRemoteRpc(
       coordinator::Client* client,
@@ -51,15 +52,15 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
   void OnCompletion() override;
 
  private:
-  bool exists_ = false;
+  bool exists_;
   std::optional<uint64_t> schema_fingerprint_;
   std::optional<uint32_t> encoding_version_;
   std::vector<std::string> errors_;
   std::string index_name_;
   std::optional<unsigned> timeout_ms_;
-  uint64_t num_docs_ = 0;
-  uint64_t num_records_ = 0;
-  uint64_t hash_indexing_failures_ = 0;
+  uint64_t num_docs_;
+  uint64_t num_records_;
+  uint64_t hash_indexing_failures_;
 };
 
 }  // namespace valkey_search::query::primary_info_fanout

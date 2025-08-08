@@ -711,7 +711,7 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithArray(ctx, 30);
+  ValkeyModule_ReplyWithArray(ctx, 32);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
   ValkeyModule_ReplyWithSimpleString(ctx, "index_options");
@@ -780,6 +780,17 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "index_capacity");
   ValkeyModule_ReplyWithLongLong(ctx, 0);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_total");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
+
+  ValkeyModule_ReplyWithSimpleString(ctx, "dialect_stats");
+  ValkeyModule_ReplyWithArray(ctx, 8);
+  ValkeyModule_ReplyWithSimpleString(ctx, "dialect_1");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "dialect_2");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "dialect_3");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "dialect_4");
   ValkeyModule_ReplyWithLongLong(ctx, 0);
 
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_in_progress");

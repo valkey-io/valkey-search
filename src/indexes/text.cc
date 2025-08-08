@@ -17,7 +17,7 @@
 namespace valkey_search::indexes {
 
 Text::Text(const data_model::TextIndex& text_index_proto,
-           std::shared_ptr<TextIndexSchema> text_index_schema,
+           std::shared_ptr<text::TextIndexSchema> text_index_schema,
            size_t text_field_number)
     : IndexBase(IndexerType::kText), 
       text_index_schema_(text_index_schema),

@@ -98,8 +98,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline const std::string &GetName() const { return name_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
 
-  std::shared_ptr<indexes::TextIndexSchema> GetTextIndexSchema() const { return text_index_schema_; }
-  void SetTextIndexSchema(std::shared_ptr<indexes::TextIndexSchema> schema) { text_index_schema_ = schema; }
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const { return text_index_schema_; }
+  void CreateTextIndexSchema() { text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(); }
 
   void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type, const char *event,
                               ValkeyModuleString *key) override;
@@ -172,7 +172,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint32_t db_num_{0};
   bool save_positions_{true};
   size_t num_text_fields_{0};
-  std::shared_ptr<indexes::TextIndexSchema> text_index_schema_;
+  std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   InternedStringMap<DocumentMutation> tracked_mutated_records_

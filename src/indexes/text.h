@@ -29,7 +29,7 @@ namespace valkey_search::indexes {
 class Text : public IndexBase {
  public:
   explicit Text(const data_model::TextIndex& text_index_proto,
-                std::shared_ptr<TextIndexSchema> text_index_schema,
+                std::shared_ptr<text::TextIndexSchema> text_index_schema,
                 size_t text_field_number);
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view data) override
@@ -84,17 +84,15 @@ class Text : public IndexBase {
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  private:
-  // Each text field is assigned a unique number within the containing index, this is used
+  // Each text field index within the schema is assigned a unique number, this is used
   // by the Postings object to identify fields.
   size_t text_field_number_;
   
   // Reference to the shared text index schema
-  std::shared_ptr<TextIndexSchema> text_index_schema_;
+  std::shared_ptr<text::TextIndexSchema> text_index_schema_;
   
-  // Map to track which keys are indexed and their raw data
-  absl::flat_hash_map<InternedStringPtr, InternedStringPtr> tracked_tags_by_keys_
-      ABSL_GUARDED_BY(index_mutex_);
-  
+  // TODO: Map to track which keys are indexed and their raw data
+
   mutable absl::Mutex index_mutex_;
 };
 }  // namespace valkey_search::indexes

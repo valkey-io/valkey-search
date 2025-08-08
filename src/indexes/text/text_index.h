@@ -1,3 +1,10 @@
+/*
+ * Copyright (c) 2025, valkey-search contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ *
+ */
+
 #ifndef VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 #define VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 
@@ -11,18 +18,12 @@
 #include "src/indexes/text/posting.h"
 #include "src/index_schema.pb.h"
 
-namespace valkey_search::indexes {
+namespace valkey_search::indexes::text {
 
 using Key = valkey_search::InternedStringPtr;
 using Position = uint32_t;
 
-// Forward declaration from text namespace
-namespace text {
-  struct Postings;
-}
-
-class TextIndex {
- public:
+struct TextIndex {
   TextIndex() = default;
   ~TextIndex() = default;
   //
@@ -38,22 +39,21 @@ class TextIndex {
   //
 
   // Prefix tree
-  text::RadixTree<std::shared_ptr<text::Postings>, false> prefix_;
+  RadixTree<std::shared_ptr<Postings>, false> prefix_;
   
   // Suffix tree
-  std::optional<text::RadixTree<std::shared_ptr<text::Postings>, true>> suffix_;
+  std::optional<RadixTree<std::shared_ptr<Postings>, true>> suffix_;
 };
 
-class TextIndexSchema {
- public:
-  //
-  // This is the main index of all Text fields in this index schema
-  //
+struct TextIndexSchema {
   TextIndexSchema() : num_text_fields_(0), text_index_(std::make_shared<TextIndex>()) {}
   ~TextIndexSchema() = default;
 
   uint8_t num_text_fields_;
-  std::shared_ptr<indexes::TextIndex> text_index_;
+  //
+  // This is the main index of all Text fields in this index schema
+  //
+  std::shared_ptr<TextIndex> text_index_;
   //
   // To support the Delete record and the post-filtering case, there is a
   // separate table of postings that are indexed by Key.

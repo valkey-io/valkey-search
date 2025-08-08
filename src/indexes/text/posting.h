@@ -26,7 +26,7 @@ Conceptually, this object holds an ordered list of Keys and for each Key there i
 an ordered list of Positions. Each position is tagged with a bitmask of fields.
 
 A KeyIterator is provided to iterate over the keys within this object.
-A PositionIterator is provided to iterate over the positions of an individual Key.
+A PositionIterator is provided to iterate over the positions of an individual Key. 
 
 */
 

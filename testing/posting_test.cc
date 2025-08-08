@@ -23,16 +23,14 @@ class PostingTest : public ValkeySearchTest {
     boolean_schema_ = MockIndexSchema::Create(&fake_ctx_, "boolean_schema", key_prefixes,
                                             std::make_unique<MockAttributeDataType>(),
                                             nullptr).value();
-    boolean_schema_->SetTextConfiguration(false, 3);  // Boolean search, 3 fields
     
     positional_schema_ = MockIndexSchema::Create(&fake_ctx_, "positional_schema", key_prefixes,
                                                std::make_unique<MockAttributeDataType>(),
                                                nullptr).value();
-    positional_schema_->SetTextConfiguration(true, 5);  // Positional search, 5 fields
     
     // Create postings with different configurations for testing using IndexSchema
-    boolean_postings_ = new Postings(*boolean_schema_);  // Boolean search, 3 fields
-    positional_postings_ = new Postings(*positional_schema_); // Positional search, 5 fields
+    boolean_postings_ = new Postings(false, 3);  // Boolean search, 3 fields
+    positional_postings_ = new Postings(true, 5); // Positional search, 5 fields
   }
   
   // Helper function to create InternedStringPtr from string
@@ -149,8 +147,7 @@ TEST_F(PostingTest, SingleFieldOptimization) {
   auto single_field_schema = MockIndexSchema::Create(&fake_ctx_, "single_field_schema", single_key_prefixes,
                                                     std::make_unique<MockAttributeDataType>(),
                                                     nullptr).value();
-  single_field_schema->SetTextConfiguration(true, 1);  // 1 field only
-  Postings single_field_posting(*single_field_schema);
+  Postings single_field_posting(true, 1);
   
   // Add some postings - all will use field 0
   single_field_posting.InsertPosting(InternKey("doc1"), 0, 10);

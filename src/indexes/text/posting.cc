@@ -186,8 +186,8 @@ public:
       : save_positions_(save_positions), num_text_fields_(num_text_fields) {}
 };
 
-Postings::Postings(const valkey_search::IndexSchema& index_schema) 
-    : impl_(std::make_unique<Impl>(index_schema.GetSavePositions(), index_schema.GetNumTextFields())) {
+Postings::Postings(bool save_positions, size_t num_text_fields) 
+    : impl_(std::make_unique<Impl>(save_positions, num_text_fields)) {
   CHECK(impl_ != nullptr) << "Failed to create Postings implementation";
 }
 

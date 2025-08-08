@@ -112,14 +112,14 @@ size_t EvaluateFilterAsPrimary(
 
 // Defined in the header to support testing
 absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
-    indexes::VectorBase* vector_index,
+    indexes::VectorBaseField* vector_index,
     const VectorSearchParameters& parameters);
 
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
     const VectorSearchParameters& parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
-    indexes::VectorBase* vector_index);
+    indexes::VectorBaseField* vector_index);
 
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

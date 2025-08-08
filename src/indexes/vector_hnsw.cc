@@ -80,13 +80,13 @@ std::optional<hnswlib::tableint> GetInternalIdDuringSearch(
 namespace valkey_search::indexes {
 
 template <typename T>
-absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
+absl::StatusOr<std::shared_ptr<VectorHNSWField<T>>> VectorHNSWField<T>::Create(
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier,
     data_model::AttributeDataType attribute_data_type) {
   try {
-    auto index = std::shared_ptr<VectorHNSW<T>>(
-        new VectorHNSW<T>(vector_index_proto.dimension_count(),
+    auto index = std::shared_ptr<VectorHNSWField<T>>(
+        new VectorHNSWField<T>(vector_index_proto.dimension_count(),
                           attribute_identifier, attribute_data_type));
     index->Init(vector_index_proto.dimension_count(),
                 vector_index_proto.distance_metric(), index->space_);
@@ -108,14 +108,14 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
 }
 
 template <typename T>
-void VectorHNSW<T>::TrackVector(uint64_t internal_id,
+void VectorHNSWField<T>::TrackVector(uint64_t internal_id,
                                 const InternedStringPtr &vector) {
   absl::MutexLock lock(&tracked_vectors_mutex_);
   tracked_vectors_.push_back(vector);
 }
 
 template <typename T>
-bool VectorHNSW<T>::IsVectorMatch(uint64_t internal_id,
+bool VectorHNSWField<T>::IsVectorMatch(uint64_t internal_id,
                                   const InternedStringPtr &vector) {
   absl::ReaderMutexLock lock(&resize_mutex_);
   {
@@ -134,16 +134,16 @@ bool VectorHNSW<T>::IsVectorMatch(uint64_t internal_id,
 // UnTrackVector does not delete the vector in VectorHNSW, as vectors are never
 // physically removed from the graph—only marked as deleted.
 template <typename T>
-void VectorHNSW<T>::UnTrackVector(uint64_t internal_id) {}
+void VectorHNSWField<T>::UnTrackVector(uint64_t internal_id) {}
 
 template <typename T>
-absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
+absl::StatusOr<std::shared_ptr<VectorHNSWField<T>>> VectorHNSWField<T>::LoadFromRDB(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier,
     SupplementalContentChunkIter &&iter) {
   try {
-    auto index = std::shared_ptr<VectorHNSW<T>>(new VectorHNSW<T>(
+    auto index = std::shared_ptr<VectorHNSWField<T>>(new VectorHNSWField<T>(
         vector_index_proto.dimension_count(), attribute_identifier,
         attribute_data_type->ToProto()));
     index->Init(vector_index_proto.dimension_count(),
@@ -173,14 +173,14 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
 }
 
 template <typename T>
-VectorHNSW<T>::VectorHNSW(int dimensions,
+VectorHNSWField<T>::VectorHNSWField(int dimensions,
                           absl::string_view attribute_identifier,
                           data_model::AttributeDataType attribute_data_type)
-    : VectorBase(IndexerType::kHNSW, dimensions, attribute_data_type,
-                 attribute_identifier) {}
+    : VectorBaseField(IndexerType::kHNSW, dimensions, attribute_data_type,
+                      attribute_identifier) {}
 
 template <typename T>
-absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
+absl::Status VectorHNSWField<T>::AddRecordImpl(uint64_t internal_id,
                                           absl::string_view record) {
   do {
     try {
@@ -204,7 +204,7 @@ absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
 }
 
 template <typename T>
-int VectorHNSW<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
+int VectorHNSWField<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "data_type");
   if constexpr (std::is_same_v<T, float>) {
     ValkeyModule_ReplyWithSimpleString(
@@ -234,14 +234,14 @@ int VectorHNSW<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
 }
 
 template <typename T>
-absl::Status VectorHNSW<T>::SaveIndexImpl(
+absl::Status VectorHNSWField<T>::SaveIndexImpl(
     RDBChunkOutputStream chunked_out) const {
   absl::ReaderMutexLock lock(&resize_mutex_);
   return algo_->SaveIndex(chunked_out);
 }
 
 template <typename T>
-absl::Status VectorHNSW<T>::ResizeIfFull() {
+absl::Status VectorHNSWField<T>::ResizeIfFull() {
   {
     absl::ReaderMutexLock lock(&resize_mutex_);
     if (algo_->getCurrentElementCount() < algo_->getMaxElements() ||
@@ -276,7 +276,7 @@ absl::Status VectorHNSW<T>::ResizeIfFull() {
 }
 
 template <typename T>
-absl::Status VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
+absl::Status VectorHNSWField<T>::ModifyRecordImpl(uint64_t internal_id,
                                              absl::string_view record) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
@@ -294,7 +294,7 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
 }
 
 template <typename T>
-absl::Status VectorHNSW<T>::RemoveRecordImpl(uint64_t internal_id) {
+absl::Status VectorHNSWField<T>::RemoveRecordImpl(uint64_t internal_id) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
     algo_->markDelete(internal_id);
@@ -319,7 +319,7 @@ class CancelCondition : public hnswlib::BaseCancellationFunctor {
 };
 
 template <typename T>
-absl::StatusOr<std::deque<Neighbor>> VectorHNSW<T>::Search(
+absl::StatusOr<std::deque<Neighbor>> VectorHNSWField<T>::Search(
     absl::string_view query, uint64_t count,
     cancel::Token& cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
@@ -362,7 +362,7 @@ absl::StatusOr<std::deque<Neighbor>> VectorHNSW<T>::Search(
 }
 
 template <typename T>
-void VectorHNSW<T>::ToProtoImpl(
+void VectorHNSWField<T>::ToProtoImpl(
     data_model::VectorIndex *vector_index_proto) const {
   data_model::VectorDataType data_type;
   if constexpr (std::is_same_v<T, float>) {
@@ -383,7 +383,7 @@ void VectorHNSW<T>::ToProtoImpl(
 
 template <typename T>
 absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-VectorHNSW<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
+VectorHNSWField<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
                                              absl::string_view query) const {
   auto id =
       hnswlib_helpers::GetInternalIdDuringSearch(algo_.get(), internal_id);
@@ -397,6 +397,6 @@ VectorHNSW<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
       internal_id};
 }
 
-template class VectorHNSW<float>;
+template class VectorHNSWField<float>;
 
 }  // namespace valkey_search::indexes

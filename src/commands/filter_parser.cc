@@ -200,7 +200,7 @@ FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
                      pos_));
   }
   auto numeric_index =
-      dynamic_cast<const indexes::Numeric*>(index.value().get());
+      dynamic_cast<const indexes::NumericField*>(index.value().get());
   return std::make_unique<query::NumericPredicate>(
       numeric_index, attribute_alias, identifier, start, is_inclusive_start,
       end, is_inclusive_end);
@@ -218,8 +218,8 @@ absl::StatusOr<absl::string_view> FilterParser::ParseTagString() {
 }
 
 absl::StatusOr<absl::flat_hash_set<absl::string_view>> FilterParser::ParseTags(
-    absl::string_view tag_string, indexes::Tag* tag_index) const {
-  return indexes::Tag::ParseSearchTags(tag_string, tag_index->GetSeparator());
+    absl::string_view tag_string, indexes::TagField* tag_index) const {
+  return indexes::TagField::ParseSearchTags(tag_string, tag_index->GetSeparator());
 }
 
 absl::StatusOr<std::unique_ptr<query::TagPredicate>>
@@ -233,7 +233,7 @@ FilterParser::ParseTagPredicate(const std::string& attribute_alias) {
   auto identifier = index_schema_.GetIdentifier(attribute_alias).value();
   filter_identifiers_.insert(identifier);
 
-  auto tag_index = dynamic_cast<indexes::Tag*>(index.value().get());
+  auto tag_index = dynamic_cast<indexes::TagField*>(index.value().get());
   VMSDK_ASSIGN_OR_RETURN(auto tag_string, ParseTagString());
   VMSDK_ASSIGN_OR_RETURN(auto parsed_tags, ParseTags(tag_string, tag_index));
   return std::make_unique<query::TagPredicate>(

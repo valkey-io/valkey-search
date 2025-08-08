@@ -19,8 +19,8 @@
 #include "vmsdk/src/type_conversions.h"
 
 namespace valkey_search::indexes {
-class Numeric;
-class Tag;
+class NumericField;
+class TagField;
 }  // namespace valkey_search::indexes
 
 namespace valkey_search::query {
@@ -73,10 +73,10 @@ class NegatePredicate : public Predicate {
 
 class NumericPredicate : public Predicate {
  public:
-  NumericPredicate(const indexes::Numeric* index, absl::string_view alias,
+  NumericPredicate(const indexes::NumericField* index, absl::string_view alias,
                    absl::string_view identifier, double start,
                    bool is_inclusive_start, double end, bool is_inclusive_end);
-  const indexes::Numeric* GetIndex() const { return index_; }
+  const indexes::NumericField* GetIndex() const { return index_; }
   absl::string_view GetIdentifier() const {
     return vmsdk::ToStringView(identifier_.get());
   }
@@ -92,7 +92,7 @@ class NumericPredicate : public Predicate {
   bool Evaluate(const double* value) const;
 
  private:
-  const indexes::Numeric* index_;
+  const indexes::NumericField* index_;
   std::string alias_;
   vmsdk::UniqueValkeyString identifier_;
   double start_;
@@ -103,13 +103,13 @@ class NumericPredicate : public Predicate {
 
 class TagPredicate : public Predicate {
  public:
-  TagPredicate(const indexes::Tag* index, absl::string_view alias,
+  TagPredicate(const indexes::TagField* index, absl::string_view alias,
                absl::string_view identifier, absl::string_view raw_tag_string,
                const absl::flat_hash_set<absl::string_view>& tags);
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const absl::flat_hash_set<absl::string_view>* tags,
                 bool case_sensitive) const;
-  const indexes::Tag* GetIndex() const { return index_; }
+  const indexes::TagField* GetIndex() const { return index_; }
   absl::string_view GetAlias() const { return alias_; }
   absl::string_view GetIdentifier() const {
     return vmsdk::ToStringView(identifier_.get());
@@ -121,7 +121,7 @@ class TagPredicate : public Predicate {
   const absl::flat_hash_set<std::string>& GetTags() const { return tags_; }
 
  private:
-  const indexes::Tag* index_;
+  const indexes::TagField* index_;
   vmsdk::UniqueValkeyString identifier_;
   std::string alias_;
   std::string raw_tag_string_;

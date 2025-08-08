@@ -77,7 +77,7 @@ absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateVectorHNSWSchema(
                         key_prefixes, index_schema_db_num));
 
   auto dimensions = 100;
-  auto index = indexes::VectorHNSW<float>::Create(
+  auto index = indexes::VectorHNSWField<float>::Create(
       CreateHNSWVectorIndexProto(dimensions, data_model::DISTANCE_METRIC_COSINE,
                                  1000, 10, 300, 30),
       "vector_identifier",

@@ -77,10 +77,10 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
   const auto &index = attribute.index();
   switch (index.index_type_case()) {
     case data_model::Index::IndexTypeCase::kTagIndex: {
-      return std::make_shared<indexes::Tag>(index.tag_index());
+      return std::make_shared<indexes::TagField>(index.tag_index());
     }
     case data_model::Index::IndexTypeCase::kNumericIndex: {
-      return std::make_shared<indexes::Numeric>(index.numeric_index());
+      return std::make_shared<indexes::NumericField>(index.numeric_index());
     }
     case data_model::Index::IndexTypeCase::kVectorIndex: {
       switch (index.vector_index().algorithm_case()) {
@@ -90,11 +90,11 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
               VMSDK_ASSIGN_OR_RETURN(
                   auto index,
                   (iter.has_value())
-                      ? indexes::VectorHNSW<float>::LoadFromRDB(
+                      ? indexes::VectorHNSWField<float>::LoadFromRDB(
                             ctx, &index_schema->GetAttributeDataType(),
                             index.vector_index(), attribute.identifier(),
                             std::move(*iter))
-                      : indexes::VectorHNSW<float>::Create(
+                      : indexes::VectorHNSWField<float>::Create(
                             index.vector_index(), attribute.identifier(),
                             index_schema->GetAttributeDataType().ToProto()));
               index_schema->SubscribeToVectorExternalizer(
@@ -115,11 +115,11 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
               VMSDK_ASSIGN_OR_RETURN(
                   auto index,
                   (iter.has_value())
-                      ? indexes::VectorFlat<float>::LoadFromRDB(
+                      ? indexes::VectorFlatField<float>::LoadFromRDB(
                             ctx, &index_schema->GetAttributeDataType(),
                             index.vector_index(), attribute.identifier(),
                             std::move(*iter))
-                      : indexes::VectorFlat<float>::Create(
+                      : indexes::VectorFlatField<float>::Create(
                             index.vector_index(), attribute.identifier(),
                             index_schema->GetAttributeDataType().ToProto()));
               index_schema->SubscribeToVectorExternalizer(
@@ -855,7 +855,7 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
           << this->name_ << " attribute: " << attribute.first << " to RDB";
       RDBChunkOutputStream key_to_id_chunked_out(rdb);
       VMSDK_RETURN_IF_ERROR(
-          dynamic_cast<const indexes::VectorBase *>(
+          dynamic_cast<const indexes::VectorBaseField *>(
               attribute.second.GetIndex().get())
               ->SaveTrackedKeys(std::move(key_to_id_chunked_out)))
           << "IO error while saving Key to ID mapping (index name: "
@@ -909,7 +909,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
                             "(index: %s, attribute: %s)",
                             index_schema->GetName(), attribute.alias()));
       }
-      auto vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
+      auto vector_index = dynamic_cast<indexes::VectorBaseField *>(index.get());
       VMSDK_RETURN_IF_ERROR(vector_index->LoadTrackedKeys(
           ctx, &index_schema->GetAttributeDataType(),
           supplemental_iter.IterateChunks()));
@@ -1092,7 +1092,7 @@ size_t IndexSchema::GetMutatedRecordsSize() const {
 }
 
 void IndexSchema::SubscribeToVectorExternalizer(
-    absl::string_view attribute_identifier, indexes::VectorBase *vector_index) {
+    absl::string_view attribute_identifier, indexes::VectorBaseField *vector_index) {
   vector_externalizer_subscriptions_[attribute_identifier] = vector_index;
 }
 

@@ -711,7 +711,7 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithArray(ctx, 32);
+  ValkeyModule_ReplyWithArray(ctx, 34);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
   ValkeyModule_ReplyWithSimpleString(ctx, "index_options");
@@ -792,6 +792,17 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithLongLong(ctx, 0);
   ValkeyModule_ReplyWithSimpleString(ctx, "dialect_4");
   ValkeyModule_ReplyWithLongLong(ctx, 0);
+
+  ValkeyModule_ReplyWithSimpleString(ctx, "Index Errors");
+  ValkeyModule_ReplyWithArray(ctx, 8);
+  ValkeyModule_ReplyWithSimpleString(ctx, "indexing failures");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "last indexing error");
+  ValkeyModule_ReplyWithSimpleString(ctx, "N/A");
+  ValkeyModule_ReplyWithSimpleString(ctx, "last indexing error key");
+  ValkeyModule_ReplyWithCString(ctx, "N/A");
+  ValkeyModule_ReplyWithSimpleString(ctx, "background indexing status");
+  ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_in_progress");
   ValkeyModule_ReplyWithCString(

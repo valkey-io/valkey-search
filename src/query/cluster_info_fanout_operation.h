@@ -18,14 +18,14 @@
 #include "src/query/fanout_operation_base.h"
 #include "src/query/fanout_template.h"
 
-namespace valkey_search::query::primary_info_fanout {
+namespace valkey_search::query::cluster_info_fanout {
 
-class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
+class ClusterInfoFanoutOperation : public fanout::FanoutOperationBase<
                                        coordinator::InfoIndexPartitionRequest,
                                        coordinator::InfoIndexPartitionResponse,
-                                       fanout::FanoutTargetMode::kPrimary> {
+                                       fanout::FanoutTargetMode::kAll> {
  public:
-  PrimaryInfoFanoutOperation(std::string index_name, unsigned timeout_ms);
+  ClusterInfoFanoutOperation(std::string index_name, unsigned timeout_ms);
 
   unsigned GetTimeoutMs() const override;
 
@@ -61,9 +61,10 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
   std::vector<std::string> errors_;
   std::string index_name_;
   std::optional<unsigned> timeout_ms_;
-  uint64_t num_docs_;
-  uint64_t num_records_;
-  uint64_t hash_indexing_failures_;
+  float backfill_complete_percent_max_;
+  float backfill_complete_percent_min_;
+  bool backfill_in_progress_;
+  std::string state_;
 };
 
-}  // namespace valkey_search::query::primary_info_fanout
+}  // namespace valkey_search::query::cluster_info_fanout

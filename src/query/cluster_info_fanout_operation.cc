@@ -5,31 +5,31 @@
  *
  */
 
-#include "src/query/primary_info_fanout_operation.h"
+#include "src/query/cluster_info_fanout_operation.h"
 
 #include "src/coordinator/metadata_manager.h"
 #include "src/schema_manager.h"
 
-namespace valkey_search::query::primary_info_fanout {
+namespace valkey_search::query::cluster_info_fanout {
 
-PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(std::string index_name,
+ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(std::string index_name,
                                                        unsigned timeout_ms)
     : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
                                   coordinator::InfoIndexPartitionResponse,
-                                  fanout::FanoutTargetMode::kPrimary>(),
+                                  fanout::FanoutTargetMode::kAll>(),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
       exists_(false),
-      num_docs_(0),
-      num_records_(0),
-      hash_indexing_failures_(0) {}
+      backfill_complete_percent_max_(0.0f),
+      backfill_complete_percent_min_(0.0f),
+      backfill_in_progress_(false) {}
 
-unsigned PrimaryInfoFanoutOperation::GetTimeoutMs() const {
+unsigned ClusterInfoFanoutOperation::GetTimeoutMs() const {
   return timeout_ms_.value_or(5000);
 }
 
 coordinator::InfoIndexPartitionRequest
-PrimaryInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&,
+ClusterInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&,
                                             unsigned timeout_ms) {
   coordinator::InfoIndexPartitionRequest req;
   req.set_index_name(index_name_);
@@ -37,7 +37,7 @@ PrimaryInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&,
   return req;
 }
 
-void PrimaryInfoFanoutOperation::OnResponse(
+void ClusterInfoFanoutOperation::OnResponse(
     const coordinator::InfoIndexPartitionResponse& resp,
     [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
   absl::MutexLock lock(&mutex_);
@@ -79,12 +79,27 @@ void PrimaryInfoFanoutOperation::OnResponse(
     return;
   }
   exists_ = true;
-  num_docs_ += resp.num_docs();
-  num_records_ += resp.num_records();
-  hash_indexing_failures_ += resp.hash_indexing_failures();
+  float node_percent = resp.backfill_complete_percent();
+  if (backfill_complete_percent_max_ < node_percent) {
+    backfill_complete_percent_max_ = node_percent;
+  }
+  if (backfill_complete_percent_min_ == 0.0f ||
+      backfill_complete_percent_min_ > node_percent) {
+    backfill_complete_percent_min_ = node_percent;
+  }
+  backfill_in_progress_ = backfill_in_progress_ || resp.backfill_in_progress();
+  std::string current_state = resp.state();
+  if (current_state == "backfill_paused_by_oom") {
+    state_ = current_state;
+  } else if (current_state == "backfill_in_progress" &&
+             state_ != "backfill_paused_by_oom") {
+    state_ = current_state;
+  } else if (current_state == "ready" && state_.empty()) {
+    state_ = current_state;
+  }
 }
 
-void PrimaryInfoFanoutOperation::OnError(
+void ClusterInfoFanoutOperation::OnError(
     grpc::Status status,
     [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
   absl::MutexLock lock(&mutex_);
@@ -92,7 +107,7 @@ void PrimaryInfoFanoutOperation::OnError(
 }
 
 coordinator::InfoIndexPartitionResponse
-PrimaryInfoFanoutOperation::GetLocalResponse(
+ClusterInfoFanoutOperation::GetLocalResponse(
     ValkeyModuleCtx* ctx, const coordinator::InfoIndexPartitionRequest& request,
     [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
   auto index_schema_result = SchemaManager::Instance().GetIndexSchema(
@@ -138,16 +153,16 @@ PrimaryInfoFanoutOperation::GetLocalResponse(
   }
   resp.set_exists(true);
   resp.set_index_name(request.index_name());
-  resp.set_num_docs(data.num_docs);
-  resp.set_num_records(data.num_records);
-  resp.set_hash_indexing_failures(data.hash_indexing_failures);
+  resp.set_backfill_complete_percent(data.backfill_complete_percent);
+  resp.set_backfill_in_progress(data.backfill_in_progress);
+  resp.set_state(data.state);
   resp.set_schema_fingerprint(fingerprint.value());
   resp.set_encoding_version(encoding_version.value());
   resp.set_error("");
   return resp;
 }
 
-void PrimaryInfoFanoutOperation::InvokeRemoteRpc(
+void ClusterInfoFanoutOperation::InvokeRemoteRpc(
     coordinator::Client* client,
     const coordinator::InfoIndexPartitionRequest& request,
     std::function<void(grpc::Status, coordinator::InfoIndexPartitionResponse&)>
@@ -159,7 +174,7 @@ void PrimaryInfoFanoutOperation::InvokeRemoteRpc(
                              timeout_ms);
 }
 
-int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
+int ClusterInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
                                               ValkeyModuleString** argv,
                                               int argc) {
   if (!errors_.empty()) {
@@ -173,19 +188,22 @@ int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
     return ValkeyModule_ReplyWithError(ctx, all_errors.c_str());
   }
 
-  ValkeyModule_ReplyWithArray(ctx, 10);
+  ValkeyModule_ReplyWithArray(ctx, 12);
   ValkeyModule_ReplyWithSimpleString(ctx, "mode");
-  ValkeyModule_ReplyWithSimpleString(ctx, "primary");
+  ValkeyModule_ReplyWithSimpleString(ctx, "cluster");
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, index_name_.c_str());
-  ValkeyModule_ReplyWithSimpleString(ctx, "num_docs");
-  ValkeyModule_ReplyWithCString(ctx, std::to_string(num_docs_).c_str());
-  ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
-  ValkeyModule_ReplyWithCString(ctx, std::to_string(num_records_).c_str());
-  ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
+  ValkeyModule_ReplyWithSimpleString(ctx, "backfill_in_progress");
+  ValkeyModule_ReplyWithCString(ctx, backfill_in_progress_ ? "1" : "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "backfill_complete_percent_max");
   ValkeyModule_ReplyWithCString(
-      ctx, std::to_string(hash_indexing_failures_).c_str());
+      ctx, std::to_string(backfill_complete_percent_max_).c_str());
+  ValkeyModule_ReplyWithSimpleString(ctx, "backfill_complete_percent_min");
+  ValkeyModule_ReplyWithCString(
+      ctx, std::to_string(backfill_complete_percent_min_).c_str());
+  ValkeyModule_ReplyWithSimpleString(ctx, "state");
+  ValkeyModule_ReplyWithSimpleString(ctx, state_.c_str());
   return VALKEYMODULE_OK;
 }
 
-}  // namespace valkey_search::query::primary_info_fanout
+}  // namespace valkey_search::query::cluster_info_fanout

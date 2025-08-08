@@ -11,7 +11,7 @@
 #include "absl/strings/string_view.h"
 #include "src/acl.h"
 #include "src/commands/commands.h"
-#include "src/query/cluster_info_fanout.h"
+#include "src/query/cluster_info_fanout_operation.h"
 #include "src/query/primary_info_fanout_operation.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
@@ -47,73 +47,6 @@ vmsdk::config::Number &GetFTInfoTimeoutMs() {
 }
 
 }  // namespace options
-
-namespace cluster_info_async {
-
-struct ClusterInfoAsyncResult {
-  absl::StatusOr<query::cluster_info_fanout::ClusterInfoResult> info;
-  std::unique_ptr<query::cluster_info_fanout::ClusterInfoParameters> parameters;
-  ClusterInfoAsyncResult(
-      absl::StatusOr<query::cluster_info_fanout::ClusterInfoResult> i,
-      std::unique_ptr<query::cluster_info_fanout::ClusterInfoParameters> p)
-      : info(std::move(i)), parameters(std::move(p)) {}
-};
-
-int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
-  auto *res = static_cast<ClusterInfoAsyncResult *>(
-      ValkeyModule_GetBlockedClientPrivateData(ctx));
-  if (!res->info.ok()) {
-    return ValkeyModule_ReplyWithError(ctx,
-                                       res->info.status().message().data());
-  }
-  const auto &info = res->info.value();
-  const auto index_name = res->parameters->index_name.c_str();
-
-  if (!info.exists) {
-    std::string error_msg =
-        absl::StrFormat("Cluster index with name '%s' not found", index_name);
-    return ValkeyModule_ReplyWithError(ctx, error_msg.c_str());
-  }
-
-  if (info.has_schema_mismatch) {
-    return ValkeyModule_ReplyWithError(
-        ctx, "ERR found cluster index schema inconsistency in the cluster");
-  }
-
-  if (info.has_version_mismatch) {
-    return ValkeyModule_ReplyWithError(
-        ctx,
-        "ERR found cluster index schema version inconsistency in the cluster");
-  }
-
-  ValkeyModule_ReplyWithArray(ctx, 12);
-  ValkeyModule_ReplyWithSimpleString(ctx, "mode");
-  ValkeyModule_ReplyWithSimpleString(ctx, "cluster");
-  ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
-  ValkeyModule_ReplyWithSimpleString(ctx, index_name);
-  ValkeyModule_ReplyWithSimpleString(ctx, "backfill_in_progress");
-  ValkeyModule_ReplyWithCString(ctx, info.backfill_in_progress ? "1" : "0");
-  ValkeyModule_ReplyWithSimpleString(ctx, "backfill_complete_percent_max");
-  ValkeyModule_ReplyWithCString(
-      ctx, absl::StrFormat("%f", info.backfill_complete_percent_max).c_str());
-  ValkeyModule_ReplyWithSimpleString(ctx, "backfill_complete_percent_min");
-  ValkeyModule_ReplyWithCString(
-      ctx, absl::StrFormat("%f", info.backfill_complete_percent_min).c_str());
-  ValkeyModule_ReplyWithSimpleString(ctx, "state");
-  ValkeyModule_ReplyWithSimpleString(ctx, info.state.c_str());
-
-  return VALKEYMODULE_OK;
-}
-
-void Free(ValkeyModuleCtx *ctx, void *privdata) {
-  delete static_cast<ClusterInfoAsyncResult *>(privdata);
-}
-
-int Timeout(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
-  return ValkeyModule_ReplyWithError(ctx, "Cluster info request timed out");
-}
-
-}  // namespace cluster_info_async
 
 absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                        int argc) {
@@ -183,50 +116,14 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     auto op = new query::primary_info_fanout::PrimaryInfoFanoutOperation(
         std::string(index_schema_name), timeout_ms);
     op->StartOperation(ctx);
-    return absl::OkStatus();
   } else if (is_cluster) {
-    VMSDK_LOG(DEBUG, ctx) << "==========Using Cluster Scope==========";
-    auto parameters =
-        std::make_unique<query::cluster_info_fanout::ClusterInfoParameters>();
-    parameters->index_name = std::string(index_schema_name);
-    parameters->timeout_ms = timeout_ms;
-    auto targets = query::fanout::FanoutTemplate::GetTargets(
-        ctx, query::fanout::FanoutTargetMode::kAll);
-    VMSDK_LOG(DEBUG, ctx) << "Found " << targets.size() << " fanout targets:";
-
-    for (const auto &target : targets) {
-      VMSDK_LOG(DEBUG, ctx)
-          << "  Target type: "
-          << (target.type == query::fanout::FanoutSearchTarget::Type::kLocal
-                  ? "LOCAL"
-                  : "REMOTE")
-          << ", address: " << target.address;
-    }
-    vmsdk::BlockedClient blocked_client(
-        ctx, cluster_info_async::Reply, cluster_info_async::Timeout,
-        cluster_info_async::Free, parameters->timeout_ms);
-    blocked_client.MeasureTimeStart();
-    auto on_done =
-        [blocked_client = std::move(blocked_client)](
-            absl::StatusOr<query::cluster_info_fanout::ClusterInfoResult>
-                result,
-            std::unique_ptr<query::cluster_info_fanout::ClusterInfoParameters>
-                params) mutable {
-          auto payload =
-              std::make_unique<cluster_info_async::ClusterInfoAsyncResult>(
-                  std::move(result), std::move(params));
-          blocked_client.SetReplyPrivateData(payload.release());
-        };
-    return query::cluster_info_fanout::PerformClusterInfoFanoutAsync(
-        ctx, targets, ValkeySearch::Instance().GetCoordinatorClientPool(),
-        std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),
-        std::move(on_done));
-
+    auto op = new query::cluster_info_fanout::ClusterInfoFanoutOperation(
+        std::string(index_schema_name), timeout_ms);
+    op->StartOperation(ctx);
   } else {
     VMSDK_LOG(DEBUG, ctx) << "==========Using Local Scope==========";
     index_schema->RespondWithInfo(ctx);
   }
-
   return absl::OkStatus();
 }
 

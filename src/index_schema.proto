@@ -39,7 +39,7 @@ message IndexSchema {
 message TextIndex {
   bool with_suffix_trie = 1;
   bool no_stem = 2;
-  int32 min_stem_size = 3;
+  uint32 min_stem_size = 3;
 }
 
 

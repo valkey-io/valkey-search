@@ -134,7 +134,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -151,7 +151,9 @@ INSTANTIATE_TEST_SUITE_P(
 			    "bytes_collected\r\n$1\r\n0\r\n+total_ms_run\r\n$1\r\n0\r\n+"
 			    "total_cycles\r\n$1\r\n0\r\n+average_cycle_time_ms\r\n$3\r\nnan\r\n+"
 			    "last_run_time_ms\r\n$1\r\n0\r\n+gc_numeric_trees_missed\r\n$1\r\n0\r\n+"
-			    "gc_blocks_denied\r\n$1\r\n0\r\n+"
+			    "gc_blocks_denied\r\n$1\r\n0\r\n+cursor_stats\r\n*8\r\n+"
+                            "global_idle\r\n:0\r\n+global_total\r\n:0\r\n+"
+                            "index_capacity\r\n:0\r\n+index_total\r\n:0\r\n+"
 			    "backfill_in_"
                             "progress\r\n$1\r\n0\r\n+backfill_complete_"
                             "percent\r\n$8\r\n1.000000\r\n+mutation_queue_"
@@ -190,7 +192,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -207,7 +209,9 @@ INSTANTIATE_TEST_SUITE_P(
                             "bytes_collected\r\n$1\r\n0\r\n+total_ms_run\r\n$1\r\n0\r\n+"
 			    "total_cycles\r\n$1\r\n0\r\n+average_cycle_time_ms\r\n$3\r\nnan\r\n+"
 			    "last_run_time_ms\r\n$1\r\n0\r\n+gc_numeric_trees_missed\r\n$1\r\n0\r\n+"
-			    "gc_blocks_denied\r\n$1\r\n0\r\n+"
+			    "gc_blocks_denied\r\n$1\r\n0\r\n+cursor_stats\r\n*8\r\n+"
+                            "global_idle\r\n:0\r\n+global_total\r\n:0\r\n+"
+                            "index_capacity\r\n:0\r\n+index_total\r\n:0\r\n+"
                             "backfill_in_progress\r\n$1\r\n0\r\n+backfill_"
                             "complete_percent\r\n$8\r\n1.000000\r\n+mutation_"
                             "queue_size\r\n$1\r\n0\r\n+recent_mutations_queue_"
@@ -238,7 +242,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -250,7 +254,9 @@ INSTANTIATE_TEST_SUITE_P(
                             "bytes_collected\r\n$1\r\n0\r\n+total_ms_run\r\n$1\r\n0\r\n+"
 			    "total_cycles\r\n$1\r\n0\r\n+average_cycle_time_ms\r\n$3\r\nnan\r\n+"
 			    "last_run_time_ms\r\n$1\r\n0\r\n+gc_numeric_trees_missed\r\n$1\r\n0\r\n+"
-			    "gc_blocks_denied\r\n$1\r\n0\r\n+"
+			    "gc_blocks_denied\r\n$1\r\n0\r\n+cursor_stats\r\n*8\r\n+"
+                            "global_idle\r\n:0\r\n+global_total\r\n:0\r\n+"
+                            "index_capacity\r\n:0\r\n+index_total\r\n:0\r\n+"
 			    "backfill_in_progress\r\n$"
                             "1\r\n0\r\n+backfill_complete_percent\r\n$8\r\n1."
                             "000000\r\n+mutation_queue_size\r\n$1\r\n0\r\n+"
@@ -283,7 +289,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -296,7 +302,9 @@ INSTANTIATE_TEST_SUITE_P(
                             "bytes_collected\r\n$1\r\n0\r\n+total_ms_run\r\n$1\r\n0\r\n+"
 			    "total_cycles\r\n$1\r\n0\r\n+average_cycle_time_ms\r\n$3\r\nnan\r\n+"
 			    "last_run_time_ms\r\n$1\r\n0\r\n+gc_numeric_trees_missed\r\n$1\r\n0\r\n+"
-			    "gc_blocks_denied\r\n$1\r\n0\r\n+"
+			    "gc_blocks_denied\r\n$1\r\n0\r\n+cursor_stats\r\n*8\r\n+"
+                            "global_idle\r\n:0\r\n+global_total\r\n:0\r\n+"
+                            "index_capacity\r\n:0\r\n+index_total\r\n:0\r\n+"
                             "backfill_in_"
                             "progress\r\n$1\r\n0\r\n+backfill_complete_"
                             "percent\r\n$8\r\n1.000000\r\n+mutation_queue_"
@@ -326,7 +334,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*28\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -339,7 +347,9 @@ INSTANTIATE_TEST_SUITE_P(
                             "bytes_collected\r\n$1\r\n0\r\n+total_ms_run\r\n$1\r\n0\r\n+"
 			    "total_cycles\r\n$1\r\n0\r\n+average_cycle_time_ms\r\n$3\r\nnan\r\n+"
 			    "last_run_time_ms\r\n$1\r\n0\r\n+gc_numeric_trees_missed\r\n$1\r\n0\r\n+"
-			    "gc_blocks_denied\r\n$1\r\n0\r\n+"
+			    "gc_blocks_denied\r\n$1\r\n0\r\n+cursor_stats\r\n*8\r\n+"
+                            "global_idle\r\n:0\r\n+global_total\r\n:0\r\n+"
+                            "index_capacity\r\n:0\r\n+index_total\r\n:0\r\n+"
                             "backfill_in_progress\r\n$1\r\n0\r\n+"
                             "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
                             "mutation_queue_size\r\n$1\r\n0\r\n+recent_"

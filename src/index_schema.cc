@@ -711,7 +711,7 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithArray(ctx, 28);
+  ValkeyModule_ReplyWithArray(ctx, 30);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
   ValkeyModule_ReplyWithSimpleString(ctx, "index_options");
@@ -759,12 +759,10 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithCString(ctx, "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "total_ms_run");
   ValkeyModule_ReplyWithCString(ctx, "0");
-  
   ValkeyModule_ReplyWithSimpleString(ctx, "total_cycles");
   ValkeyModule_ReplyWithCString(ctx, "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "average_cycle_time_ms");
   ValkeyModule_ReplyWithCString(ctx, "nan");
-  
   ValkeyModule_ReplyWithSimpleString(ctx, "last_run_time_ms");
   ValkeyModule_ReplyWithCString(ctx, "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "gc_numeric_trees_missed");
@@ -773,6 +771,16 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithCString(ctx, "0");
 
 
+  ValkeyModule_ReplyWithSimpleString(ctx, "cursor_stats");
+  ValkeyModule_ReplyWithArray(ctx, 8);
+  ValkeyModule_ReplyWithSimpleString(ctx, "global_idle");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "global_total");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "index_capacity");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "index_total");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
 
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_in_progress");
   ValkeyModule_ReplyWithCString(

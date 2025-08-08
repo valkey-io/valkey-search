@@ -76,7 +76,8 @@ class PhraseIterator : public indexes::EntriesFetcherIteratorBase {
   std::vector<WordIterator> words_;
   std::shared_ptr<Postings> target_posting_;
   Postings::KeyIterator key_iter_;
-  uint32_t current_word_idx_ = 0;
+  uint32_t current_idx_ = 0;
+  bool begin_ = true;  // Used to track if we are at the beginning of the iterator.
   size_t slop_;
   bool in_order_;
   const InternedStringSet* untracked_keys_;

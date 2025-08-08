@@ -169,6 +169,7 @@ size_t EvaluateFilterAsPrimary(
     return size;
   }
   if (predicate->GetType() == PredicateType::kText) {
+    VMSDK_LOG(NOTICE, nullptr) << "Evaluating text predicate";
     auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
     auto fetcher = text_predicate->GetIndex()->Search(*text_predicate, negate);
     size_t size = fetcher->Size();
@@ -352,11 +353,16 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
     while (!entries_fetchers.empty()) {
       auto fetcher = std::move(entries_fetchers.front());
       entries_fetchers.pop();
+      VMSDK_LOG(NOTICE, nullptr) << "Before begin";;
       auto iterator = fetcher->Begin();
+      VMSDK_LOG(NOTICE, nullptr) << "After begin";;
       while (!iterator->Done()) {
+        // TODO: Log
+        VMSDK_LOG(NOTICE, nullptr) << "Processing key: " << **iterator;
         const InternedStringPtr& label = **iterator;
         neighbors.push_back(indexes::Neighbor{label, 0.0f});
         iterator->Next();
+        break;
       }
     }
     return neighbors;

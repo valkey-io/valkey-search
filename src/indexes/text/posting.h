@@ -40,6 +40,7 @@ A PositionIterator is provided to iterate over the positions of an individual Ke
 #include <map>
 
 #include "src/utils/string_interning.h"
+#include "src/indexes/index_base.h"
 
 namespace valkey_search::indexes::text {
 

@@ -104,7 +104,10 @@ size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
       auto word = predicate.GetTextString();
       if (word.empty()) return 0;
       // TODO: Check the number of documents in the postings obj for the word.
-      return 0;
+      auto iter = text_index_schema_->text_index_->prefix_.GetWordIterator(word);
+      auto target_posting = iter.GetTarget();
+      VMSDK_LOG(NOTICE, nullptr) << "Size: " << target_posting->GetKeyCount();
+      return target_posting->GetKeyCount();
     }
     default:
       return 0;
@@ -116,11 +119,15 @@ std::unique_ptr<Text::EntriesFetcher> Text::Search(
     bool negate) const {
   auto fetcher = std::make_unique<EntriesFetcher>(
     CalculateSize(predicate),
-    text_index_,
+    text_index_schema_->text_index_,
     negate ? &untracked_keys_ : nullptr);
   fetcher->operation_ = predicate.GetOperation();
   // Currently, we support a single word exact match.
   fetcher->data_ = predicate.GetTextString();
+  // TODO: Add log:
+  VMSDK_LOG(NOTICE, nullptr) << "Searching for text: " << fetcher->data_
+                             << " with operation: "
+                             << static_cast<int>(fetcher->operation_);
   return fetcher;
 }
 
@@ -130,7 +137,9 @@ size_t Text::EntriesFetcher::Size() const { return size_; }
 std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
   switch (operation_) {
     case query::TextPredicate::Operation::kExact: {
-      auto iter = text_index_schema_.text_index_->prefix_.GetWordIterator(data_);
+      // TODO: Add log:
+      VMSDK_LOG(NOTICE, nullptr) << "Creating PhraseIterator for exact match";
+      auto iter = text_index_->prefix_.GetWordIterator(data_);
       std::vector<WordIterator> iterVec = {iter};
       bool slop = 0;
       bool in_order = true;

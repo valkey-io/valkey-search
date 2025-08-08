@@ -23,7 +23,7 @@
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "src/indexes/text/phrase.h"
-
+#include "src/query/predicate.h" 
 
 namespace valkey_search::indexes {
 
@@ -111,7 +111,7 @@ class Text : public IndexBase {
   
   // Reference to the shared text index schema
   std::shared_ptr<text::TextIndexSchema> text_index_schema_;
-  
+  InternedStringSet untracked_keys_;
   // TextIndex proto-derived configuration fields
   bool with_suffix_trie_;
   bool no_stem_;

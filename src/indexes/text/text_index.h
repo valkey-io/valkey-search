@@ -5,20 +5,27 @@
  *
  */
 
-#ifndef VALKEY_SEARCH_INDEXES_TEXT_TEXT_H_
-#define VALKEY_SEARCH_INDEXES_TEXT_TEST_H_
+#ifndef VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
+#define VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 
-#include <concepts>
 #include <memory>
+#include <optional>
 
-#include "src/index_schema.pb.h"
-#include "src/indexes/text/posting.h"
+#include "absl/strings/string_view.h"
+#include "absl/functional/function_ref.h"
+#include "absl/container/flat_hash_map.h"
 #include "src/indexes/text/radix_tree.h"
-#include "src/utils/string_interning.h"
+#include "src/indexes/text/posting.h"
+#include "src/index_schema.pb.h"
 
 namespace valkey_search::indexes::text {
 
+using Key = valkey_search::InternedStringPtr;
+using Position = uint32_t;
+
 struct TextIndex {
+  TextIndex() = default;
+  ~TextIndex() = default;
   //
   // The main query data structure maps Words into Postings objects. This
   // is always done with a prefix tree. Optionally, a suffix tree can also be
@@ -30,15 +37,30 @@ struct TextIndex {
   // becomes responsible for cross-tree locking issues. Multiple locking
   // strategies are possible. TBD (a shared-ed word lock table should work well)
   //
+
+  // Prefix tree
   RadixTree<std::shared_ptr<Postings>, false> prefix_;
+  
+  // Suffix tree
   std::optional<RadixTree<std::shared_ptr<Postings>, true>> suffix_;
 };
 
-struct IndexSchemaText {
+struct TextIndexSchema {
+  TextIndexSchema() : num_text_fields_(1), text_index_(std::make_shared<TextIndex>()) {}
+  TextIndexSchema(const data_model::IndexSchema& index_schema_proto) 
+      : num_text_fields_(1), 
+        text_index_(std::make_shared<TextIndex>()),
+        language_(index_schema_proto.language()),
+        punctuation_(index_schema_proto.punctuation()),
+        with_offsets_(index_schema_proto.with_offsets()),
+        stop_words_(index_schema_proto.stop_words().begin(), index_schema_proto.stop_words().end()) {}
+  ~TextIndexSchema() = default;
+
+  uint8_t num_text_fields_;
   //
   // This is the main index of all Text fields in this index schema
   //
-  std::shared_ptr<TextIndex> corpus_;
+  std::shared_ptr<TextIndex> text_index_;
   //
   // To support the Delete record and the post-filtering case, there is a
   // separate table of postings that are indexed by Key.
@@ -47,6 +69,12 @@ struct IndexSchemaText {
   // safe.
   //
   absl::flat_hash_map<Key, TextIndex> by_key_;
+
+  // IndexSchema proto-derived configuration fields
+  data_model::Language language_ = data_model::LANGUAGE_UNSPECIFIED;
+  std::string punctuation_;
+  bool with_offsets_ = false;
+  std::vector<std::string> stop_words_;
 };
 
 }  // namespace valkey_search::indexes::text

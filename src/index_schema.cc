@@ -6,6 +6,7 @@
  */
 
 #include "src/index_schema.h"
+#include "src/indexes/text/text_index.h"
 
 #include <algorithm>
 #include <atomic>
@@ -84,13 +85,16 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
       return std::make_shared<indexes::Numeric>(index.numeric_index());
     }
     case data_model::Index::IndexTypeCase::kTextIndex: {
-      // TODO: make this TextIndex a proper schema-level object
-      std::shared_ptr<indexes::text::TextIndex> index_structure =
-          std::make_shared<indexes::text::TextIndex>(
-              indexes::text::TextIndex());
-      // TODO: pass in a unique text field ID number
+      // Create or reuse shared TextIndexSchema
+      if (!index_schema->GetTextIndexSchema()) {
+        // TODO : get the index_schema_proto the right way here to pass schema level properties
+        index_schema->CreateTextIndexSchema();
+      }
+      //TODO : Increment logic 
+      //index_schema->text_index_schema_->num_text_fields_++;
+      // TODO: pass in a unique text field ID number 
       return std::make_shared<indexes::Text>(index.text_index(),
-                                             index_structure);
+                                             index_schema->GetTextIndexSchema(), 0);
     }
     case data_model::Index::IndexTypeCase::kVectorIndex: {
       switch (index.vector_index().algorithm_case()) {

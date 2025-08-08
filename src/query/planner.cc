@@ -19,7 +19,7 @@ constexpr double kPreFilteringThresholdRatio = 0.001;  // 0.1%
 // The query planner decides whether to use pre or inline filtering based on
 // heuristics.
 bool UsePreFiltering(size_t estimated_num_of_keys,
-                     indexes::VectorBase *vector_index) {
+                     indexes::VectorBaseField *vector_index) {
   if (vector_index->GetIndexerType() == indexes::IndexerType::kFlat) {
     /* With a flat index, the search needs to go through all the vectors,
     taking O(N*log(k)). With pre-filtering, we can do the same search on the

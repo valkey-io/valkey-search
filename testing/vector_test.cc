@@ -70,7 +70,7 @@ void TestInitializationHNSW(int dimensions,
                             const std::string& distance_metric_name,
                             int initial_cap, int m, int ef_construction,
                             size_t ef_runtime) ABSL_NO_THREAD_SAFETY_ANALYSIS {
-  auto index = VectorHNSW<float>::Create(
+  auto index = VectorHNSWField<float>::Create(
       CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap, m,
                                  ef_construction, ef_runtime),
       "attribute_identifier_1",
@@ -95,7 +95,7 @@ TEST_F(VectorIndexTest, InitializationHNSW) {
 }
 TEST_F(VectorIndexTest, InitializationFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   for (auto& distance_metric : kExpectedSpaces) {
-    auto index = VectorFlat<float>::Create(
+    auto index = VectorFlatField<float>::Create(
         CreateFlatVectorIndexProto(kDimensions, distance_metric.first,
                                    kInitialCap, kBlockSize),
         "attribute_identifier_1",
@@ -229,7 +229,7 @@ class NormalizeStringRecordTest
 TEST_P(NormalizeStringRecordTest, NormalizeStringRecord) {
   auto& params = GetParam();
 
-  auto index = VectorHNSW<float>::Create(
+  auto index = VectorHNSWField<float>::Create(
       CreateHNSWVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
                                  kInitialCap, kM, kEFConstruction, kEFRuntime),
       "attribute_identifier_1",
@@ -279,24 +279,24 @@ INSTANTIATE_TEST_SUITE_P(
 TEST_F(VectorIndexTest, BasicHNSW) {
   for (auto& distance_metric :
        {data_model::DISTANCE_METRIC_COSINE, data_model::DISTANCE_METRIC_L2}) {
-    auto index = VectorHNSW<float>::Create(
+    auto index = VectorHNSWField<float>::Create(
         CreateHNSWVectorIndexProto(kDimensions, distance_metric, kInitialCap,
                                    kM, kEFConstruction, kEFRuntime),
         "attribute_identifier_1",
         data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
-    TestIndex<VectorHNSW<float>>(index->get(), kDimensions, 100);
+    TestIndex<VectorHNSWField<float>>(index->get(), kDimensions, 100);
   }
 }
 
 TEST_F(VectorIndexTest, BasicFlat) {
   for (auto& distance_metric :
        {data_model::DISTANCE_METRIC_COSINE, data_model::DISTANCE_METRIC_L2}) {
-    auto index = VectorFlat<float>::Create(
+    auto index = VectorFlatField<float>::Create(
         CreateFlatVectorIndexProto(kDimensions, distance_metric, kInitialCap,
                                    kBlockSize),
         "attribute_identifier_1",
         data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
-    TestIndex<VectorFlat<float>>(index->get(), kDimensions, 100);
+    TestIndex<VectorFlatField<float>>(index->get(), kDimensions, 100);
   }
 }
 
@@ -304,7 +304,7 @@ TEST_F(VectorIndexTest, ResizeHNSW) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   for (auto& distance_metric :
        {data_model::DISTANCE_METRIC_COSINE, data_model::DISTANCE_METRIC_L2}) {
     const int initial_cap = 10;
-    auto index = VectorHNSW<float>::Create(
+    auto index = VectorHNSWField<float>::Create(
         CreateHNSWVectorIndexProto(kDimensions, distance_metric, initial_cap,
                                    kM, kEFConstruction, kEFRuntime),
         "attribute_identifier_1",
@@ -338,7 +338,7 @@ TEST_F(VectorIndexTest, ResizeFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   for (auto& distance_metric :
        {data_model::DISTANCE_METRIC_COSINE, data_model::DISTANCE_METRIC_L2}) {
     const int initial_cap = 10;
-    auto index = VectorFlat<float>::Create(
+    auto index = VectorFlatField<float>::Create(
         CreateFlatVectorIndexProto(kDimensions, distance_metric, initial_cap,
                                    kBlockSize),
         "attribute_identifier_1",
@@ -362,7 +362,7 @@ TEST_F(VectorIndexTest, ResizeFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   }
 }
 
-float CalcRecall(VectorFlat<float>* flat_index, VectorHNSW<float>* hnsw_index,
+float CalcRecall(VectorFlatField<float>* flat_index, VectorHNSWField<float>* hnsw_index,
                  uint64_t k, int dimensions, std::optional<size_t> ef_runtime) {
   auto search_vectors = DeterministicallyGenerateVectors(50, dimensions, 1.5);
   int cnt = 0;
@@ -387,7 +387,7 @@ TEST_F(VectorIndexTest, EfRuntimeRecall) {
   for (auto& distance_metric : {data_model::DISTANCE_METRIC_L2}) {
     // Use a large cap to make sure chunked array is properly exercised
     const int initial_cap = 31000;
-    auto index_hnsw = VectorHNSW<float>::Create(
+    auto index_hnsw = VectorHNSWField<float>::Create(
         CreateHNSWVectorIndexProto(kDimensions, distance_metric, initial_cap,
                                    kM, kEFConstruction, kEFRuntime),
         "attribute_identifier_1",
@@ -397,7 +397,7 @@ TEST_F(VectorIndexTest, EfRuntimeRecall) {
       VerifyAdd(index_hnsw->get(), vectors, i, ExpectedResults::kSuccess);
     }
 
-    auto index_flat = VectorFlat<float>::Create(
+    auto index_flat = VectorFlatField<float>::Create(
         CreateFlatVectorIndexProto(kDimensions, distance_metric, initial_cap,
                                    kBlockSize),
         "attribute_identifier_1",
@@ -427,7 +427,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
     auto vectors = DeterministicallyGenerateVectors(1000, kDimensions, 2.2);
     // Load the vectors into a Flat index. This will be used for computing the
     // recall later
-    auto index_flat = VectorFlat<float>::Create(
+    auto index_flat = VectorFlatField<float>::Create(
         CreateFlatVectorIndexProto(kDimensions, distance_metric, initial_cap,
                                    kBlockSize),
         "attribute_identifier_1",
@@ -442,7 +442,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
                                    kM, kEFConstruction, kEFRuntime);
     // Create and save empty HNSW index
     {
-      auto index_hnsw = VectorHNSW<float>::Create(
+      auto index_hnsw = VectorHNSWField<float>::Create(
           hnsw_proto, "attribute_identifier_2",
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
       VMSDK_EXPECT_OK(index_hnsw);
@@ -457,7 +457,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
 
     // Load the HNSW index, populate data, validate recall, save again
     {
-      auto loaded_index_hnsw = VectorHNSW<float>::LoadFromRDB(
+      auto loaded_index_hnsw = VectorHNSWField<float>::LoadFromRDB(
           &fake_ctx_, &hash_attribute_data_type_, hnsw_proto,
           "attribute_identifier_3", SupplementalContentChunkIter(&rdb));
       VMSDK_EXPECT_OK(loaded_index_hnsw);
@@ -482,7 +482,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
 
     // Load the HNSW index, run search queries and validate recall
     {
-      auto loaded_index_hnsw = VectorHNSW<float>::LoadFromRDB(
+      auto loaded_index_hnsw = VectorHNSWField<float>::LoadFromRDB(
           &fake_ctx_, &hash_attribute_data_type_, hnsw_proto,
           "attribute_identifier_4", SupplementalContentChunkIter(&rdb));
       VMSDK_EXPECT_OK(loaded_index_hnsw);
@@ -513,7 +513,7 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
         kDimensions, distance_metric, initial_cap, kBlockSize);
     // Create and save empty Flat index
     {
-      auto index = VectorFlat<float>::Create(
+      auto index = VectorFlatField<float>::Create(
           flat_proto, "attribute_identifier_1",
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
       if (distance_metric == data_model::DISTANCE_METRIC_COSINE) {
@@ -526,7 +526,7 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
 
     // Load the index, populate data, perform search, save the index again
     {
-      auto index_pr = VectorFlat<float>::LoadFromRDB(
+      auto index_pr = VectorFlatField<float>::LoadFromRDB(
           &fake_ctx_, &hash_attribute_data_type_, flat_proto,
           "attribute_identifier_2", SupplementalContentChunkIter(&rdb));
       VMSDK_EXPECT_OK(index_pr);
@@ -550,7 +550,7 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
     // Load the index, run search queries and validate that the search results
     // match the previous results
     {
-      auto index_pr = VectorFlat<float>::LoadFromRDB(
+      auto index_pr = VectorFlatField<float>::LoadFromRDB(
           &fake_ctx_, &hash_attribute_data_type_, flat_proto,
           "attribute_identifier_3", SupplementalContentChunkIter(&rdb));
       VMSDK_EXPECT_OK(index_pr);

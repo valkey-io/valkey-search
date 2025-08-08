@@ -31,19 +31,19 @@
 namespace valkey_search::indexes {
 
 template <typename T>
-class VectorHNSW : public VectorBase {
+class VectorHNSWField : public VectorBaseField {
  public:
-  static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> Create(
+  static absl::StatusOr<std::shared_ptr<VectorHNSWField<T>>> Create(
       const data_model::VectorIndex& vector_index_proto,
       absl::string_view attribute_identifier,
       data_model::AttributeDataType attribute_data_type)
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> LoadFromRDB(
+  static absl::StatusOr<std::shared_ptr<VectorHNSWField<T>>> LoadFromRDB(
       ValkeyModuleCtx* ctx, const AttributeDataType* attribute_data_type,
       const data_model::VectorIndex& vector_index_proto,
       absl::string_view attribute_identifier,
       SupplementalContentChunkIter&& iter) ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  ~VectorHNSW() override = default;
+  ~VectorHNSWField() override = default;
   size_t GetDataTypeSize() const override { return sizeof(T); }
 
   const hnswlib::SpaceInterface<float>* GetSpace() const {
@@ -103,8 +103,8 @@ class VectorHNSW : public VectorBase {
       ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
 
  private:
-  VectorHNSW(int dimensions, absl::string_view attribute_identifier,
-             data_model::AttributeDataType attribute_data_type);
+  VectorHNSWField(int dimensions, absl::string_view attribute_identifier,
+                  data_model::AttributeDataType attribute_data_type);
   std::unique_ptr<hnswlib::HierarchicalNSW<T>> algo_
       ABSL_GUARDED_BY(resize_mutex_);
   std::unique_ptr<hnswlib::SpaceInterface<T>> space_;

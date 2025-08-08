@@ -66,11 +66,11 @@ auto VectorToStr = [](const std::vector<float> &v) {
   return absl::string_view((char *)v.data(), v.size() * sizeof(float));
 };
 
-class MockNumeric : public indexes::Numeric {
+class MockNumeric : public indexes::NumericField {
  public:
   MockNumeric(const data_model::NumericIndex &numeric_index_proto)
-      : indexes::Numeric(numeric_index_proto) {}
-  MOCK_METHOD(std::unique_ptr<indexes::Numeric::EntriesFetcher>, Search,
+      : indexes::NumericField(numeric_index_proto) {}
+  MOCK_METHOD(std::unique_ptr<indexes::NumericField::EntriesFetcher>, Search,
               (const query::NumericPredicate &predicate, bool negate),
               (const, override));
 };
@@ -91,16 +91,16 @@ class TestedNumericEntriesFetcherIterator
 // Mock Numeric EntriesFetcher.
 // It fetches keys in the range provided at construction time. For example, when
 // key_range <1, 3> is provided, it will fetch keys "1", "2", "3".
-class TestedNumericEntriesFetcher : public indexes::Numeric::EntriesFetcher {
+class TestedNumericEntriesFetcher : public indexes::NumericField::EntriesFetcher {
  public:
-  TestedNumericEntriesFetcher(indexes::Numeric::EntriesRange &entries_range,
+  TestedNumericEntriesFetcher(indexes::NumericField::EntriesRange &entries_range,
                               std::pair<size_t, size_t> key_range)
-      : indexes::Numeric::EntriesFetcher(
+      : indexes::NumericField::EntriesFetcher(
             entries_range, key_range.second - key_range.first + 1),
         key_range_(key_range) {}
-  TestedNumericEntriesFetcher(indexes::Numeric::EntriesRange &entries_range,
+  TestedNumericEntriesFetcher(indexes::NumericField::EntriesRange &entries_range,
                               size_t size)
-      : indexes::Numeric::EntriesFetcher(entries_range, size) {
+      : indexes::NumericField::EntriesFetcher(entries_range, size) {
     key_range_ = std::make_pair(0, size - 1);
   }
   size_t Size() const override {
@@ -122,16 +122,16 @@ class TestedNumericEntriesFetcher : public indexes::Numeric::EntriesFetcher {
   std::pair<size_t, size_t> key_range_;
 };
 
-class MockTag : public indexes::Tag {
+class MockTag : public indexes::TagField {
  public:
   MockTag(const data_model::TagIndex &tag_index_proto)
-      : indexes::Tag(tag_index_proto) {}
-  MOCK_METHOD(std::unique_ptr<indexes::Tag::EntriesFetcher>, Search,
+      : indexes::TagField(tag_index_proto) {}
+  MOCK_METHOD(std::unique_ptr<indexes::TagField::EntriesFetcher>, Search,
               (const query::TagPredicate &predicate, bool negate),
               (const, override));
 };
 
-class TestedTagEntriesFetcher : public indexes::Tag::EntriesFetcher {
+class TestedTagEntriesFetcher : public indexes::TagField::EntriesFetcher {
  public:
   TestedTagEntriesFetcher(
       size_t size,
@@ -140,7 +140,7 @@ class TestedTagEntriesFetcher : public indexes::Tag::EntriesFetcher {
       absl::flat_hash_set<PatriciaNode<InternedStringPtr, InternedStringPtrHash,
                                        InternedStringPtrEqual> *> &entries,
       bool negate, InternedStringSet &untracked_keys)
-      : indexes::Tag::EntriesFetcher(tree, entries, size, negate,
+      : indexes::TagField::EntriesFetcher(tree, entries, size, negate,
                                      untracked_keys),
         size_(size) {}
 
@@ -174,7 +174,7 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
       "numeric_index_100_10", "numeric_index_100_10", numeric_index_100_10));
   VMSDK_EXPECT_OK(index_schema->AddIndex(
       "numeric_index_100_30", "numeric_index_100_30", numeric_index_100_30));
-  indexes::Numeric::EntriesRange entries_range;
+  indexes::NumericField::EntriesRange entries_range;
 
   EXPECT_CALL(*numeric_index_100_10, Search(_, false))
       .WillRepeatedly(Return(ByMove(
@@ -324,7 +324,7 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
   // Add vector index
   std::shared_ptr<indexes::IndexBase> vector_index;
   if (vector_indexer_type == IndexerType::kHNSW) {
-    vector_index = indexes::VectorHNSW<float>::Create(
+    vector_index = indexes::VectorHNSWField<float>::Create(
                        CreateHNSWVectorIndexProto(
                            kVectorDimensions, data_model::DISTANCE_METRIC_L2,
                            1000, 10, 300, 30),
@@ -333,7 +333,7 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
                        .value();
   } else {
     vector_index =
-        indexes::VectorFlat<float>::Create(
+        indexes::VectorFlatField<float>::Create(
             CreateFlatVectorIndexProto(
                 kVectorDimensions, data_model::DISTANCE_METRIC_L2, 1000, 250),
             "vector_attribute_identifier",
@@ -345,14 +345,14 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
 
   // Add numeric index
   data_model::NumericIndex numeric_index_proto;
-  auto numeric_index = std::make_shared<indexes::Numeric>(numeric_index_proto);
+  auto numeric_index = std::make_shared<indexes::NumericField>(numeric_index_proto);
   VMSDK_EXPECT_OK(index_schema->AddIndex("numeric", "numeric", numeric_index));
 
   // Add tag index
   data_model::TagIndex tag_index_proto;
   tag_index_proto.set_separator(",");
   tag_index_proto.set_case_sensitive(false);
-  auto tag_index = std::make_shared<indexes::Tag>(tag_index_proto);
+  auto tag_index = std::make_shared<indexes::TagField>(tag_index_proto);
   VMSDK_EXPECT_OK(index_schema->AddIndex("tag", "tag", tag_index));
 
   // Add records
@@ -407,7 +407,7 @@ TEST_P(PerformVectorSearchTest, PerformVectorSearchTest) {
   params.query = VectorToStr(query_vector);
   FilterParser parser(*index_schema, test_case.filter);
   params.filter_parse_results = std::move(parser.Parse().value());
-  auto vector_index = dynamic_cast<indexes::VectorBase *>(
+  auto vector_index = dynamic_cast<indexes::VectorBaseField *>(
       index_schema->GetIndex(kVectorAttributeAlias)->get());
   auto neighbors = PerformVectorSearch(vector_index, params);
   VMSDK_EXPECT_OK(neighbors);
@@ -476,7 +476,7 @@ class FetchFilteredKeysTest
 
 TEST_P(FetchFilteredKeysTest, ParseParams) {
   auto index_schema = CreateIndexSchemaWithMultipleAttributes();
-  auto vector_index = dynamic_cast<indexes::VectorBase *>(
+  auto vector_index = dynamic_cast<indexes::VectorBaseField *>(
       index_schema->GetIndex(kVectorAttributeAlias)->get());
   const FetchFilteredKeysTestCase &test_case = GetParam();
   query::VectorSearchParameters params(100000, nullptr);
@@ -487,7 +487,7 @@ TEST_P(FetchFilteredKeysTest, ParseParams) {
   params.query =
       std::string((char *)vectors[0].data(), vectors[0].size() * sizeof(float));
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
-  indexes::Numeric::EntriesRange entries_range;
+  indexes::NumericField::EntriesRange entries_range;
   for (auto key_range : test_case.fetched_key_ranges) {
     entries_fetchers.push(std::make_unique<TestedNumericEntriesFetcher>(
         entries_range, std::make_pair(key_range.first, key_range.second)));
@@ -783,7 +783,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
         data_model::VectorIndex vector_index_proto = CreateHNSWVectorIndexProto(
             kVectorDimensions, distance_metric, 1000, 10, 300, 30);
         auto vector_index =
-            indexes::VectorHNSW<float>::Create(
+            indexes::VectorHNSWField<float>::Create(
                 vector_index_proto, "attribute_identifier_1",
                 data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
                 .value();
@@ -796,7 +796,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
         data_model::VectorIndex vector_index_proto = CreateFlatVectorIndexProto(
             kVectorDimensions, distance_metric, 1000, 250);
         auto flat_index =
-            indexes::VectorFlat<float>::Create(
+            indexes::VectorFlatField<float>::Create(
                 vector_index_proto, "attribute_identifier_1",
                 data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
                 .value();
@@ -809,7 +809,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
         data_model::TagIndex tag_index_proto;
         tag_index_proto.set_separator(",");
         tag_index_proto.set_case_sensitive(false);
-        auto tag_index = std::make_shared<indexes::Tag>(tag_index_proto);
+        auto tag_index = std::make_shared<indexes::TagField>(tag_index_proto);
         VMSDK_EXPECT_OK(index_schema->AddIndex(
             index.attribute_alias, index.attribute_identifier, tag_index));
         index_base = tag_index;
@@ -818,7 +818,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
       case IndexerType::kNumeric: {
         data_model::NumericIndex numeric_index_proto;
         auto numeric_index =
-            std::make_shared<indexes::Numeric>(numeric_index_proto);
+            std::make_shared<indexes::NumericField>(numeric_index_proto);
         VMSDK_EXPECT_OK(index_schema->AddIndex(
             index.attribute_alias, index.attribute_identifier, numeric_index));
         index_base = numeric_index;

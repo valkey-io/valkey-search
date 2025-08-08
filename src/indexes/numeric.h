@@ -79,9 +79,9 @@ class BTreeNumeric {
   utils::SegmentTree segment_tree_;
 };
 
-class Numeric : public IndexBase {
+class NumericField : public IndexBase {
  public:
-  explicit Numeric(const data_model::NumericIndex& numeric_index_proto);
+  explicit NumericField(const data_model::NumericIndex& numeric_index_proto);
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
@@ -126,7 +126,7 @@ class Numeric : public IndexBase {
 
    private:
     static bool NextKeys(
-        const Numeric::EntriesRange& range,
+        const NumericField::EntriesRange& range,
         BTreeNumericIndex::ConstIterator& iter,
         std::optional<InternedStringSet::const_iterator>& keys_iter);
     const EntriesRange& entries_range_;

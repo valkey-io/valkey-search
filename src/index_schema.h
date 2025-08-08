@@ -149,7 +149,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   void MarkAsDestructing();
   void ProcessMultiQueue();
   void SubscribeToVectorExternalizer(absl::string_view attribute_identifier,
-                                     indexes::VectorBase *vector_index);
+                                     indexes::VectorBaseField *vector_index);
 
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,
@@ -190,7 +190,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   };
 
   vmsdk::MainThreadAccessGuard<std::optional<BackfillJob>> backfill_job_;
-  absl::flat_hash_map<std::string, indexes::VectorBase *>
+  absl::flat_hash_map<std::string, indexes::VectorBaseField *>
       vector_externalizer_subscriptions_;
   void VectorExternalizer(const InternedStringPtr &key,
                           absl::string_view attribute_identifier,

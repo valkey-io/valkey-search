@@ -47,7 +47,7 @@ namespace valkey_search::query {
 class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
   InlineVectorFilter(query::Predicate *filter_predicate,
-                     indexes::VectorBase *vector_index)
+                     indexes::VectorBaseField *vector_index)
       : filter_predicate_(filter_predicate), vector_index_(vector_index) {}
   ~InlineVectorFilter() override = default;
 
@@ -62,10 +62,10 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
 
  private:
   query::Predicate *filter_predicate_;
-  indexes::VectorBase *vector_index_;
+  indexes::VectorBaseField *vector_index_;
 };
 absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
-    indexes::VectorBase *vector_index,
+    indexes::VectorBaseField *vector_index,
     const VectorSearchParameters &parameters) {
   std::unique_ptr<InlineVectorFilter> inline_filter;
   if (parameters.filter_parse_results.root_predicate != nullptr) {
@@ -74,7 +74,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
     VMSDK_LOG(DEBUG, nullptr) << "Performing vector search with inline filter";
   }
   if (vector_index->GetIndexerType() == indexes::IndexerType::kHNSW) {
-    auto vector_hnsw = dynamic_cast<indexes::VectorHNSW<float> *>(vector_index);
+    auto vector_hnsw = dynamic_cast<indexes::VectorHNSWField<float> *>(vector_index);
 
     auto latency_sample = SAMPLE_EVERY_N(100);
     auto res = vector_hnsw->Search(parameters.query, parameters.k,
@@ -85,7 +85,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
     return res;
   }
   if (vector_index->GetIndexerType() == indexes::IndexerType::kFlat) {
-    auto vector_flat = dynamic_cast<indexes::VectorFlat<float> *>(vector_index);
+    auto vector_flat = dynamic_cast<indexes::VectorFlatField<float> *>(vector_index);
     auto latency_sample = SAMPLE_EVERY_N(100);
     auto res = vector_flat->Search(parameters.query, parameters.k,
                                     parameters.cancellation_token,
@@ -184,7 +184,7 @@ std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
     const VectorSearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    indexes::VectorBase *vector_index) {
+    indexes::VectorBaseField *vector_index) {
   std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
   absl::flat_hash_set<hnswlib::labeltype> top_keys;
   auto predicate = parameters.filter_parse_results.root_predicate.get();
@@ -262,7 +262,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
       vmsdk::UniqueValkeyString attribute_value = nullptr;
       switch (attribute_info.index->GetIndexerType()) {
         case indexes::IndexerType::kTag: {
-          auto tag_index = dynamic_cast<indexes::Tag *>(attribute_info.index);
+          auto tag_index = dynamic_cast<indexes::TagField *>(attribute_info.index);
           auto tag_value_ptr = tag_index->GetRawValue(neighbor.external_id);
           if (tag_value_ptr != nullptr) {
             attribute_value = vmsdk::MakeUniqueValkeyString(*tag_value_ptr);
@@ -271,7 +271,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
         }
         case indexes::IndexerType::kNumeric: {
           auto numeric_index =
-              dynamic_cast<indexes::Numeric *>(attribute_info.index);
+              dynamic_cast<indexes::NumericField *>(attribute_info.index);
           auto numeric = numeric_index->GetValue(neighbor.external_id);
           if (numeric != nullptr) {
             attribute_value =
@@ -283,7 +283,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
         case indexes::IndexerType::kHNSW:
         case indexes::IndexerType::kFlat: {
           auto vector_index =
-              dynamic_cast<indexes::VectorBase *>(attribute_info.index);
+              dynamic_cast<indexes::VectorBaseField *>(attribute_info.index);
           auto vector = vector_index->GetValue(neighbor.external_id);
           if (vector.ok()) {
             if (parameters.index_schema->GetAttributeDataType().ToProto() ==
@@ -367,7 +367,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
     return absl::InvalidArgumentError(
         absl::StrCat(parameters.attribute_alias, " is not a Vector index "));
   }
-  auto vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
+  auto vector_index = dynamic_cast<indexes::VectorBaseField *>(index.get());
   auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
   vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
   ++Metrics::GetStats().time_slice_queries;

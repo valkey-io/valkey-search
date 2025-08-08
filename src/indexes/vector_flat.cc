@@ -50,13 +50,13 @@
 namespace valkey_search::indexes {
 
 template <typename T>
-absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
+absl::StatusOr<std::shared_ptr<VectorFlatField<T>>> VectorFlatField<T>::Create(
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier,
     data_model::AttributeDataType attribute_data_type) {
   try {
-    auto index = std::shared_ptr<VectorFlat<T>>(
-        new VectorFlat<T>(vector_index_proto.dimension_count(),
+    auto index = std::shared_ptr<VectorFlatField<T>>(
+        new VectorFlatField<T>(vector_index_proto.dimension_count(),
                           vector_index_proto.distance_metric(),
                           vector_index_proto.flat_algorithm().block_size(),
                           attribute_identifier, attribute_data_type));
@@ -73,14 +73,14 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
 }
 
 template <typename T>
-void VectorFlat<T>::TrackVector(uint64_t internal_id,
+void VectorFlatField<T>::TrackVector(uint64_t internal_id,
                                 const InternedStringPtr &vector) {
   absl::MutexLock lock(&tracked_vectors_mutex_);
   tracked_vectors_[internal_id] = vector;
 }
 
 template <typename T>
-bool VectorFlat<T>::IsVectorMatch(uint64_t internal_id,
+bool VectorFlatField<T>::IsVectorMatch(uint64_t internal_id,
                                   const InternedStringPtr &vector) {
   absl::MutexLock lock(&tracked_vectors_mutex_);
   auto it = tracked_vectors_.find(internal_id);
@@ -91,19 +91,19 @@ bool VectorFlat<T>::IsVectorMatch(uint64_t internal_id,
 }
 
 template <typename T>
-void VectorFlat<T>::UnTrackVector(uint64_t internal_id) {
+void VectorFlatField<T>::UnTrackVector(uint64_t internal_id) {
   absl::MutexLock lock(&tracked_vectors_mutex_);
   tracked_vectors_.erase(internal_id);
 }
 
 template <typename T>
-absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
+absl::StatusOr<std::shared_ptr<VectorFlatField<T>>> VectorFlatField<T>::LoadFromRDB(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier,
     SupplementalContentChunkIter &&iter) {
   try {
-    auto index = std::shared_ptr<VectorFlat<T>>(new VectorFlat<T>(
+    auto index = std::shared_ptr<VectorFlatField<T>>(new VectorFlatField<T>(
         vector_index_proto.dimension_count(),
         vector_index_proto.distance_metric(),
         vector_index_proto.flat_algorithm().block_size(), attribute_identifier,
@@ -124,16 +124,16 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
 }
 
 template <typename T>
-VectorFlat<T>::VectorFlat(
+VectorFlatField<T>::VectorFlatField(
     int dimensions, valkey_search::data_model::DistanceMetric distance_metric,
     uint32_t block_size, absl::string_view attribute_identifier,
     data_model::AttributeDataType attribute_data_type)
-    : VectorBase(IndexerType::kFlat, dimensions, attribute_data_type,
-                 attribute_identifier),
+    : VectorBaseField(IndexerType::kFlat, dimensions, attribute_data_type,
+                      attribute_identifier),
       block_size_(block_size) {}
 
 template <typename T>
-absl::Status VectorFlat<T>::ResizeIfFull() {
+absl::Status VectorFlatField<T>::ResizeIfFull() {
   {
     absl::ReaderMutexLock lock(&resize_mutex_);
     if (algo_->cur_element_count_ < GetCapacity()) {
@@ -152,7 +152,7 @@ absl::Status VectorFlat<T>::ResizeIfFull() {
 }
 
 template <typename T>
-absl::Status VectorFlat<T>::AddRecordImpl(uint64_t internal_id,
+absl::Status VectorFlatField<T>::AddRecordImpl(uint64_t internal_id,
                                           absl::string_view record) {
   do {
     try {
@@ -176,7 +176,7 @@ absl::Status VectorFlat<T>::AddRecordImpl(uint64_t internal_id,
 }
 
 template <typename T>
-absl::Status VectorFlat<T>::ModifyRecordImpl(uint64_t internal_id,
+absl::Status VectorFlatField<T>::ModifyRecordImpl(uint64_t internal_id,
                                              absl::string_view record) {
   absl::ReaderMutexLock lock(&resize_mutex_);
   std::unique_lock<std::mutex> index_lock(algo_->index_lock);
@@ -193,7 +193,7 @@ absl::Status VectorFlat<T>::ModifyRecordImpl(uint64_t internal_id,
   return absl::OkStatus();
 }
 template <typename T>
-absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
+absl::Status VectorFlatField<T>::RemoveRecordImpl(uint64_t internal_id) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
     algo_->removePoint(internal_id);
@@ -221,7 +221,7 @@ class CancelCondition : public hnswlib::BaseCancellationFunctor {
 
 
 template <typename T>
-absl::StatusOr<std::deque<Neighbor>> VectorFlat<T>::Search(
+absl::StatusOr<std::deque<Neighbor>> VectorFlatField<T>::Search(
     absl::string_view query, uint64_t count,
     cancel::Token &cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
@@ -261,7 +261,7 @@ absl::StatusOr<std::deque<Neighbor>> VectorFlat<T>::Search(
 
 template <typename T>
 absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-VectorFlat<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
+VectorFlatField<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
                                              absl::string_view query) const {
   absl::ReaderMutexLock lock(&resize_mutex_);
   auto search = algo_->dict_external_to_internal.find(internal_id);
@@ -277,7 +277,7 @@ VectorFlat<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
 }
 
 template <typename T>
-void VectorFlat<T>::ToProtoImpl(
+void VectorFlatField<T>::ToProtoImpl(
     data_model::VectorIndex *vector_index_proto) const {
   data_model::VectorDataType data_type;
   if constexpr (std::is_same_v<T, float>) {
@@ -295,7 +295,7 @@ void VectorFlat<T>::ToProtoImpl(
 }
 
 template <typename T>
-int VectorFlat<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
+int VectorFlatField<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "data_type");
   if constexpr (std::is_same_v<T, float>) {
     ValkeyModule_ReplyWithSimpleString(
@@ -321,12 +321,12 @@ int VectorFlat<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
 }
 
 template <typename T>
-absl::Status VectorFlat<T>::SaveIndexImpl(
+absl::Status VectorFlatField<T>::SaveIndexImpl(
     RDBChunkOutputStream chunked_out) const {
   absl::ReaderMutexLock lock(&resize_mutex_);
   return algo_->SaveIndex(chunked_out);
 }
 
-template class VectorFlat<float>;
+template class VectorFlatField<float>;
 
 }  // namespace valkey_search::indexes

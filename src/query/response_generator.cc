@@ -87,7 +87,7 @@ class PredicateEvaluator : public query::Evaluator {
       return false;
     }
     auto index = predicate.GetIndex();
-    auto tags = indexes::Tag::ParseSearchTags(
+    auto tags = indexes::TagField::ParseSearchTags(
         vmsdk::ToStringView(it->second.value.get()), index->GetSeparator());
     if (!tags.ok()) {
       return false;

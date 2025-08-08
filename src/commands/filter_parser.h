@@ -21,7 +21,7 @@
 
 namespace valkey_search {
 namespace indexes {
-class Tag;
+class TagField;
 }  // namespace indexes
 struct FilterParseResults {
   std::unique_ptr<query::Predicate> root_predicate;
@@ -61,7 +61,7 @@ class FilterParser {
   absl::StatusOr<absl::string_view> ParseTagString();
 
   absl::StatusOr<absl::flat_hash_set<absl::string_view>> ParseTags(
-      absl::string_view tag_string, indexes::Tag* tag_index) const;
+      absl::string_view tag_string, indexes::TagField* tag_index) const;
 };
 
 namespace options {

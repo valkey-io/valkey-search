@@ -25,7 +25,7 @@ bool NegatePredicate::Evaluate(Evaluator& evaluator) const {
   return !predicate_->Evaluate(evaluator);
 }
 
-NumericPredicate::NumericPredicate(const indexes::Numeric* index,
+NumericPredicate::NumericPredicate(const indexes::NumericField* index,
                                    absl::string_view alias,
                                    absl::string_view identifier, double start,
                                    bool is_inclusive_start, double end,
@@ -52,7 +52,7 @@ bool NumericPredicate::Evaluate(const double* value) const {
           (is_inclusive_end_ && *value == end_));
 }
 
-TagPredicate::TagPredicate(const indexes::Tag* index, absl::string_view alias,
+TagPredicate::TagPredicate(const indexes::TagField* index, absl::string_view alias,
                            absl::string_view identifier,
                            absl::string_view raw_tag_string,
                            const absl::flat_hash_set<absl::string_view>& tags)

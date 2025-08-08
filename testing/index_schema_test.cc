@@ -1167,7 +1167,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
                             .value();
 
     auto hnsw_index =
-        indexes::VectorHNSW<float>::Create(
+        indexes::VectorHNSWField<float>::Create(
             CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
                                        m, ef_construction, ef_runtime),
             "hnsw_attribute",
@@ -1190,7 +1190,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
     }
 
     auto flat_index =
-        indexes::VectorFlat<float>::Create(
+        indexes::VectorFlatField<float>::Create(
             CreateFlatVectorIndexProto(dimensions, distance_metric, initial_cap,
                                        block_size),
             "flat_identifier",
@@ -1224,7 +1224,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   EXPECT_TRUE(dynamic_cast<const HashAttributeDataType *>(
       &index_schema->GetAttributeDataType()));
   VMSDK_EXPECT_OK(index_schema->GetIndex("hnsw_attribute"));
-  auto hnsw_index = dynamic_cast<indexes::VectorHNSW<float> *>(
+  auto hnsw_index = dynamic_cast<indexes::VectorHNSWField<float> *>(
       index_schema->GetIndex("hnsw_attribute").value().get());
   EXPECT_TRUE(hnsw_index != nullptr);
   EXPECT_EQ(hnsw_index->GetDimensions(), dimensions);
@@ -1236,7 +1236,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   EXPECT_EQ(hnsw_index->GetEfRuntime(), ef_runtime);
 
   VMSDK_EXPECT_OK(index_schema->GetIndex("flat_attribute"));
-  auto flat_index = dynamic_cast<indexes::VectorFlat<float> *>(
+  auto flat_index = dynamic_cast<indexes::VectorFlatField<float> *>(
       index_schema->GetIndex("flat_attribute").value().get());
   EXPECT_TRUE(flat_index != nullptr);
   EXPECT_EQ(flat_index->GetDimensions(), dimensions);
@@ -1320,7 +1320,7 @@ class IndexSchemaFriendTest : public ValkeySearchTest {
                                 &mutations_thread_pool)
             .value();
     hnsw_index =
-        indexes::VectorHNSW<float>::Create(
+        indexes::VectorHNSWField<float>::Create(
             CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
                                        m, ef_construction, ef_runtime),
             attribute_identifier,
@@ -1348,7 +1348,7 @@ class IndexSchemaFriendTest : public ValkeySearchTest {
   ValkeyModuleCtx fake_ctx;
   vmsdk::ThreadPool mutations_thread_pool{"writer-thread-pool-", 10};
   std::shared_ptr<IndexSchema> index_schema;
-  std::shared_ptr<indexes::VectorHNSW<float>> hnsw_index;
+  std::shared_ptr<indexes::VectorHNSWField<float>> hnsw_index;
   const std::string attribute_identifier{"hnsw_id"};
   InternedStringPtr key = StringInternStore::Intern("my_key_");
 };
@@ -1625,7 +1625,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
                             std::make_unique<HashAttributeDataType>(), nullptr)
                             .value();
 
-    auto hnsw_index = indexes::VectorHNSW<float>::Create(
+    auto hnsw_index = indexes::VectorHNSWField<float>::Create(
         CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
                                    m, ef_construction, ef_runtime),
         "embedding", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
@@ -1756,7 +1756,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
                             .value();
 
     // Add vector index
-    auto hnsw_index = indexes::VectorHNSW<float>::Create(
+    auto hnsw_index = indexes::VectorHNSWField<float>::Create(
         CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
                                    m, ef_construction, ef_runtime),
         "embedding", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
@@ -1764,12 +1764,12 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     VMSDK_EXPECT_OK(index_schema->AddIndex("embedding", "emb_id", hnsw_index));
 
     // Add numeric index
-    auto numeric_index = std::make_shared<indexes::Numeric>(
+    auto numeric_index = std::make_shared<indexes::NumericField>(
         CreateNumericIndexProto());
     VMSDK_EXPECT_OK(index_schema->AddIndex("price", "price_id", numeric_index));
 
     // Add tag index
-    auto tag_index = std::make_shared<indexes::Tag>(
+    auto tag_index = std::make_shared<indexes::TagField>(
         CreateTagIndexProto(",", false));
     VMSDK_EXPECT_OK(index_schema->AddIndex("category", "cat_id", tag_index));
 
@@ -1931,21 +1931,21 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
                             .value();
 
     // Create 3 vector indexes (original + 2 additional)
-    auto hnsw_index1 = indexes::VectorHNSW<float>::Create(
+    auto hnsw_index1 = indexes::VectorHNSWField<float>::Create(
         CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
                                    m, ef_construction, ef_runtime),
         "embedding1", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
         .value();
     VMSDK_EXPECT_OK(index_schema->AddIndex("embedding1", "emb1_id", hnsw_index1));
 
-    auto hnsw_index2 = indexes::VectorHNSW<float>::Create(
+    auto hnsw_index2 = indexes::VectorHNSWField<float>::Create(
         CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
                                    m, ef_construction, ef_runtime),
         "embedding2", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
         .value();
     VMSDK_EXPECT_OK(index_schema->AddIndex("embedding2", "emb2_id", hnsw_index2));
 
-    auto flat_index = indexes::VectorFlat<float>::Create(
+    auto flat_index = indexes::VectorFlatField<float>::Create(
         CreateFlatVectorIndexProto(dimensions, distance_metric, initial_cap, block_size),
         "embedding3", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
         .value();

@@ -34,9 +34,9 @@
 
 namespace valkey_search::indexes {
 
-class Text : public IndexBase {
+class TextField : public IndexBase {
  public:
-  explicit Text(const data_model::TextIndex& text_index_proto);
+  explicit TextField(const data_model::TextIndex& text_index_proto);
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);

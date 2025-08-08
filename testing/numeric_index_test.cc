@@ -26,7 +26,7 @@ namespace {
 class NumericIndexTest : public vmsdk::ValkeyTest {
  protected:
   data_model::NumericIndex numeric_index_proto;
-  IndexTeser<Numeric, data_model::NumericIndex> index{numeric_index_proto};
+  IndexTeser<NumericField, data_model::NumericIndex> index{numeric_index_proto};
 };
 
 std::vector<std::string> Fetch(

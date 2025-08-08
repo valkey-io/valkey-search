@@ -101,7 +101,7 @@ absl::string_view LookupKeyByValue(
   }
 }
 
-class VectorBase : public IndexBase, public hnswlib::VectorTracker {
+class VectorBaseField : public IndexBase, public hnswlib::VectorTracker {
  public:
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view record) override;
@@ -148,9 +148,9 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
                                                std::optional<float>& magnitude);
 
  protected:
-  VectorBase(IndexerType indexer_type, int dimensions,
-             data_model::AttributeDataType attribute_data_type,
-             absl::string_view attribute_identifier)
+  VectorBaseField(IndexerType indexer_type, int dimensions,
+                  data_model::AttributeDataType attribute_data_type,
+                  absl::string_view attribute_identifier)
       : IndexBase(indexer_type),
         dimensions_(dimensions),
         attribute_identifier_(attribute_identifier),

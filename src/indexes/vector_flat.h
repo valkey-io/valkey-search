@@ -32,19 +32,19 @@
 namespace valkey_search::indexes {
 
 template <typename T>
-class VectorFlat : public VectorBase {
+class VectorFlatField : public VectorBaseField {
  public:
-  static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> Create(
+  static absl::StatusOr<std::shared_ptr<VectorFlatField<T>>> Create(
       const data_model::VectorIndex& vector_index_proto,
       absl::string_view attribute_identifier,
       data_model::AttributeDataType attribute_data_type)
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> LoadFromRDB(
+  static absl::StatusOr<std::shared_ptr<VectorFlatField<T>>> LoadFromRDB(
       ValkeyModuleCtx* ctx, const AttributeDataType* attribute_data_type,
       const data_model::VectorIndex& vector_index_proto,
       absl::string_view attribute_identifier,
       SupplementalContentChunkIter&& iter) ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  ~VectorFlat() override = default;
+  ~VectorFlatField() override = default;
   size_t GetDataTypeSize() const override { return sizeof(T); }
 
   const hnswlib::SpaceInterface<float>* GetSpace() const {
@@ -93,9 +93,9 @@ class VectorFlat : public VectorBase {
       ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
 
  private:
-  VectorFlat(int dimensions, data_model::DistanceMetric distance_metric,
-             uint32_t block_size, absl::string_view attribute_identifier,
-             data_model::AttributeDataType attribute_data_type);
+  VectorFlatField(int dimensions, data_model::DistanceMetric distance_metric,
+                  uint32_t block_size, absl::string_view attribute_identifier,
+                  data_model::AttributeDataType attribute_data_type);
   std::unique_ptr<hnswlib::BruteforceSearch<T>> algo_
       ABSL_GUARDED_BY(resize_mutex_);
   std::unique_ptr<hnswlib::SpaceInterface<T>> space_;

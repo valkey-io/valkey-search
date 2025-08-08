@@ -1228,7 +1228,7 @@ INSTANTIATE_TEST_SUITE_P(
              .tag_parameters = {},
              .text_parameters = {},
              .expected = {},
-             .expected_error_message = "`-1` is outside acceptable bounds",
+             .expected_error_message = "Error parsing value for the parameter `STOPWORDS` - `-1` is outside acceptable bounds",
          },
          {
              .test_name = "invalid_per_index_stopwords_missing_words",
@@ -1486,7 +1486,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "invalid_text_stopwords_negative_count_per_index",
             .success = false,
             .command_str = "idx1 on HASH STOPWORDS -1 SCHEMA text_field TEXT",  // Moved STOPWORDS before SCHEMA
-            .expected_error_message = "`-1` is outside acceptable bounds",  // Simplified error message
+            .expected_error_message = "Error parsing value for the parameter `STOPWORDS` - `-1` is outside acceptable bounds",  // Simplified error message
         },
          {
              .test_name = "invalid_text_stopwords_missing_words_field",

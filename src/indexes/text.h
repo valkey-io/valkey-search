@@ -23,10 +23,6 @@
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
-// Forward declarations
-namespace valkey_search::query {
-class TextPredicate;
-}
 
 namespace valkey_search::indexes {
 

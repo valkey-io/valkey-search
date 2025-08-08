@@ -17,7 +17,6 @@
 namespace valkey_search::indexes {
 
 Text::Text(const data_model::TextIndex& text_index_proto,
-           const data_model::IndexSchema& index_schema_proto,
            std::shared_ptr<text::TextIndexSchema> text_index_schema,
            size_t text_field_number)
     : IndexBase(IndexerType::kText), 
@@ -25,11 +24,7 @@ Text::Text(const data_model::TextIndex& text_index_proto,
       text_index_schema_(text_index_schema),
       with_suffix_trie_(text_index_proto.with_suffix_trie()),
       no_stem_(text_index_proto.no_stem()),
-      min_stem_size_(text_index_proto.min_stem_size()),
-      language_(index_schema_proto.language()),
-      punctuation_(index_schema_proto.punctuation()),
-      with_offsets_(index_schema_proto.with_offsets()),
-      stop_words_(index_schema_proto.stop_words().begin(), index_schema_proto.stop_words().end()) {   
+      min_stem_size_(text_index_proto.min_stem_size()) {   
 }
 
 absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
@@ -85,7 +80,7 @@ int Text::RespondWithInfo(ValkeyModuleCtx* ctx) const {
 }
 
 bool Text::IsTracked(const InternedStringPtr& key) const {
-  throw std::runtime_error("Text::IsTracked not implemented");
+  return false;
 }
 
 uint64_t Text::GetRecordCount() const {

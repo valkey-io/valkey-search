@@ -47,6 +47,13 @@ struct TextIndex {
 
 struct TextIndexSchema {
   TextIndexSchema() : num_text_fields_(0), text_index_(std::make_shared<TextIndex>()) {}
+  TextIndexSchema(const data_model::IndexSchema& index_schema_proto) 
+      : num_text_fields_(0), 
+        text_index_(std::make_shared<TextIndex>()),
+        language_(index_schema_proto.language()),
+        punctuation_(index_schema_proto.punctuation()),
+        with_offsets_(index_schema_proto.with_offsets()),
+        stop_words_(index_schema_proto.stop_words().begin(), index_schema_proto.stop_words().end()) {}
   ~TextIndexSchema() = default;
 
   uint8_t num_text_fields_;
@@ -62,6 +69,12 @@ struct TextIndexSchema {
   // safe.
   //
   absl::flat_hash_map<Key, TextIndex> by_key_;
+
+  // IndexSchema proto-derived configuration fields
+  data_model::Language language_ = data_model::LANGUAGE_UNSPECIFIED;
+  std::string punctuation_;
+  bool with_offsets_ = false;
+  std::vector<std::string> stop_words_;
 };
 
 }  // namespace valkey_search::indexes::text

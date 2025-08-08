@@ -87,8 +87,8 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     case data_model::Index::IndexTypeCase::kTextIndex: {
       // Create or reuse shared TextIndexSchema
       if (!index_schema->GetTextIndexSchema()) {
-        auto index_schema_proto = index_schema->ToProto();
-        index_schema->CreateTextIndexSchema(*index_schema_proto);
+        // TODO : get the index_schema_proto the right way here to pass schema level properties
+        index_schema->CreateTextIndexSchema();
       }
       //TODO : Increment logic 
       //index_schema->text_index_schema_->num_text_fields_++;

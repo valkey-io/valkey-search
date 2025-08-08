@@ -99,8 +99,12 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline std::uint32_t GetDBNum() const { return db_num_; }
 
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const { return text_index_schema_; }
-  void CreateTextIndexSchema(const data_model::IndexSchema& index_schema_proto) { 
-    text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(index_schema_proto); 
+  void CreateTextIndexSchema(const data_model::IndexSchema* index_schema_proto = nullptr) { 
+    if (index_schema_proto) {
+      text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(*index_schema_proto); 
+    } else {
+      text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(); 
+    }
   }
 
   void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type, const char *event,

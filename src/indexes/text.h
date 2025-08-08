@@ -29,6 +29,7 @@ namespace valkey_search::indexes {
 class Text : public IndexBase {
  public:
   explicit Text(const data_model::TextIndex& text_index_proto,
+                const data_model::IndexSchema& index_schema_proto,
                 std::shared_ptr<text::TextIndexSchema> text_index_schema,
                 size_t text_field_number);
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
@@ -90,6 +91,17 @@ class Text : public IndexBase {
   
   // Reference to the shared text index schema
   std::shared_ptr<text::TextIndexSchema> text_index_schema_;
+  
+  // TextIndex proto-derived configuration fields
+  bool with_suffix_trie_;
+  bool no_stem_;
+  int32_t min_stem_size_;
+  
+  // IndexSchema proto-derived configuration fields
+  data_model::Language language_;
+  std::string punctuation_;
+  bool with_offsets_;
+  std::vector<std::string> stop_words_;
   
   // TODO: Map to track which keys are indexed and their raw data
 

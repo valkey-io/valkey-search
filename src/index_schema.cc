@@ -92,7 +92,9 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
       //TODO : Increment logic 
       //index_schema->text_index_schema_->num_text_fields_++;
       // TODO: pass in a unique text field ID number 
+      auto index_schema_proto = index_schema->ToProto();
       return std::make_shared<indexes::Text>(index.text_index(),
+                                             *index_schema_proto,
                                              index_schema->GetTextIndexSchema(), 0);
     }
     case data_model::Index::IndexTypeCase::kVectorIndex: {

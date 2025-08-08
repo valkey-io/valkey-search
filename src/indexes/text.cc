@@ -17,11 +17,19 @@
 namespace valkey_search::indexes {
 
 Text::Text(const data_model::TextIndex& text_index_proto,
+           const data_model::IndexSchema& index_schema_proto,
            std::shared_ptr<text::TextIndexSchema> text_index_schema,
            size_t text_field_number)
     : IndexBase(IndexerType::kText), 
+      text_field_number_(text_field_number),
       text_index_schema_(text_index_schema),
-      text_field_number_(text_field_number) {   
+      with_suffix_trie_(text_index_proto.with_suffix_trie()),
+      no_stem_(text_index_proto.no_stem()),
+      min_stem_size_(text_index_proto.min_stem_size()),
+      language_(index_schema_proto.language()),
+      punctuation_(index_schema_proto.punctuation()),
+      with_offsets_(index_schema_proto.with_offsets()),
+      stop_words_(index_schema_proto.stop_words().begin(), index_schema_proto.stop_words().end()) {   
 }
 
 absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
@@ -50,7 +58,7 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
                 postings = std::make_shared<text::Postings>(save_positions, num_text_fields);
               }
               
-              // Add the key and position to postings using correct API
+              // Add the key and position to postings
               postings->InsertPosting(key, text_field_number_, position);
               return postings;
             });
@@ -85,7 +93,13 @@ uint64_t Text::GetRecordCount() const {
 }
 
 std::unique_ptr<data_model::Index> Text::ToProto() const {
-  throw std::runtime_error("Text::ToProto not implemented");
+  auto index_proto = std::make_unique<data_model::Index>();
+  auto text_index = std::make_unique<data_model::TextIndex>();
+  text_index->set_with_suffix_trie(with_suffix_trie_);
+  text_index->set_no_stem(no_stem_);
+  text_index->set_min_stem_size(min_stem_size_);
+  index_proto->set_allocated_text_index(text_index.release());
+  return index_proto;
 }
 
 std::unique_ptr<Text::EntriesFetcher> Text::Search(

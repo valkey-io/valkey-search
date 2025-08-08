@@ -64,6 +64,6 @@ struct TextIndexSchema {
   absl::flat_hash_map<Key, TextIndex> by_key_;
 };
 
-}  // namespace valkey_search::indexes
+}  // namespace valkey_search::indexes::text
 
 #endif

@@ -112,7 +112,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
     }
     case Predicate::PREDICATE_NOT_SET:
       return absl::InvalidArgumentError("Predicate not set");
-    // TODO: Handle TextPredicate
+    // TODO: Support CME Fanouts of TextPredicate
   }
   CHECK(false);
 }
@@ -157,7 +157,7 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request, grpc::
 std::unique_ptr<Predicate> PredicateToGRPCPredicate(
     const query::Predicate& predicate) {
   switch (predicate.GetType()) {
-    // TODO: Handle TextPredicate
+    // TODO: Support CME Fanouts of TextPredicate
     case query::PredicateType::kTag: {
       auto tag_predicate = dynamic_cast<const query::TagPredicate*>(&predicate);
       auto tag_predicate_proto = std::make_unique<Predicate>();

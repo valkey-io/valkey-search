@@ -280,9 +280,6 @@ Postings::KeyIterator Postings::GetKeyIterator() const {
 
 // KeyIterator implementations
 bool Postings::KeyIterator::IsValid() const {
-  // TODO: Log
-  // VMSDK_LOG(NOTICE, nullptr) << "KeyIterator::IsValid()" << " current_=" << current_ 
-  //                            << " end_=" << end_;
   CHECK(key_map_ != nullptr) << "KeyIterator is invalid";
   return current_ != end_;
 }

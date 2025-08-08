@@ -15,8 +15,6 @@
 #include "absl/strings/match.h"
 #include "absl/strings/string_view.h"
 #include "src/indexes/numeric.h"
-// TODO: Commenting out because this file does not compile correctly yet.
-// #include "src/indexes/text.h"
 #include "src/indexes/tag.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"

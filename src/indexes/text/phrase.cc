@@ -15,34 +15,22 @@ PhraseIterator::PhraseIterator(const std::vector<WordIterator>& words,
 }
 
 bool PhraseIterator::Done() const {
-  // 1. Check if we are at the end of the Posting Interator.
-  // return key_iter_.IsValid();
-  // target_posting_ = words_[0].GetTarget();
-  // key_iter_ = target_posting_->GetKeyIterator();
-  VMSDK_LOG(NOTICE, nullptr) << "Inside PhraseIterator::Done()" << " current_idx_=" << current_idx_
-                             << " target_posting_->GetKeyCount()="
-                             << (target_posting_ ? target_posting_->GetKeyCount() : 0);
   return current_idx_ >= target_posting_->GetKeyCount();
 }
 
 void PhraseIterator::Next() {
-  VMSDK_LOG(NOTICE, nullptr) << "Inside PhraseIterator::Next()";
+  // On a Begin() call, we initialize the target_posting_ and key_iter_.
   if (begin_) {
     target_posting_ = words_[0].GetTarget();
     key_iter_ = target_posting_->GetKeyIterator();
     begin_ = false;  // Set to false after the first call to Next.
     return;
   }
-  // TODO: Implement
-  // 1. Get the Posting from the WordIterator of the idx 1 (we only support single word).
-  // 2. Get the Posting Iterator. 
-  // 3. Store the ref to the Posting Iterator.
-  // 4. Move to the next position in the Posting Iterator.
-  // NOTE: We should skip the word if the attribute field mask does not match the required fields.
-  VMSDK_LOG(NOTICE, nullptr) << "target_posting_.GetKeyCount(): " << target_posting_->GetKeyCount();
-  // while (key_iter_.IsValid()) {
+  // On subsequent calls, we advance the key iterator.
+  // Note: In the current implementation, we support an exact term match.
+  // There is also no consideration into the attribute (field) to see that it matches
+  // the query used. Currently, all matches are returned.
   while (current_idx_ < target_posting_->GetKeyCount()) {
-    VMSDK_LOG(NOTICE, nullptr) << "Iterating over key: " << key_iter_.GetKey();
     key_iter_.NextKey();
     current_idx_ += 1;
     break;
@@ -50,8 +38,7 @@ void PhraseIterator::Next() {
 }
 
 const InternedStringPtr& PhraseIterator::operator*() const {
-  // TODO: Implement
-  // 1. Return the current key at the current position of the Posting Iterator.
+  // Return the current key from the key iterator of the posting object.
   return key_iter_.GetKey();
 }
 

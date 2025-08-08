@@ -62,7 +62,7 @@ class Text : public IndexBase {
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  public:
-  // Abstract for Text. Every text type will have a specific implementation.
+  // Abstract for Text. Every text operation will have a specific implementation.
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
    public:
     bool Done() const override;
@@ -71,9 +71,8 @@ class Text : public IndexBase {
 
    private:
   };
-  // TODO: remove once actual TextPredicate is implemented
-  // struct TextPredicate {};
-  // Common for all Text types.
+
+  // Common EntriesFetcher impl for all Text operations.
   class EntriesFetcher : public EntriesFetcherBase {
    public:
     EntriesFetcher(size_t size,
@@ -99,7 +98,6 @@ class Text : public IndexBase {
   // Calculate size based on the predicate.
   size_t CalculateSize(const query::TextPredicate& predicate) const;
 
-  // This is needed for the FT.SEARCH command's core search fn.
   virtual std::unique_ptr<EntriesFetcher> Search(const query::TextPredicate& predicate,
                                                  bool negate) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;

@@ -30,9 +30,6 @@ A PositionIterator is provided to iterate over the positions of an individual Ke
 
 */
 
-// TODO: Add this once lexer and text are implemented
-// #include "src/indexes/text/lexer.h"
-// #include "src/indexes/text.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -40,7 +37,6 @@ A PositionIterator is provided to iterate over the positions of an individual Ke
 #include <map>
 
 #include "src/utils/string_interning.h"
-#include "src/indexes/index_base.h"
 
 namespace valkey_search::indexes::text {
 

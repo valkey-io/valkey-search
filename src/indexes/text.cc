@@ -17,16 +17,11 @@
 namespace valkey_search::indexes {
 
 Text::Text(const data_model::TextIndex& text_index_proto,
-           std::shared_ptr<text::TextIndex> text_index)
-    : IndexBase(IndexerType::kText), text_index_(text_index) {
-  // TODO: Initialize text_field_number_
-  // Right now the data_model is as follows. Do we need a text field number
-  // here?
-  // data_model::TextIndex {
-  //   bool with_suffix_trie = 1;
-  //   bool no_stem = 2;
-  //   int32 min_stem_size = 3;
-  // }
+           std::shared_ptr<TextIndexSchema> text_index_schema,
+           size_t text_field_number)
+    : IndexBase(IndexerType::kText), 
+      text_index_schema_(text_index_schema),
+      text_field_number_(text_field_number) {   
 }
 
 absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
@@ -34,20 +29,32 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
   // TODO: Replace this tokenizing with the proper lexer functionality when it's
   // implemented
   int prev_pos = 0;
+  uint32_t position = 0;
+  
   for (int i = 0; i <= data.size(); i++) {
     if (i == data.size() || data[i] == ' ') {
       if (i > prev_pos) {
         absl::string_view word = data.substr(prev_pos, i - prev_pos);
-        text_index_->prefix_.Mutate(
+        text_index_schema_->text_index_->prefix_.Mutate(
             word,
             [&](std::optional<std::shared_ptr<text::Postings>> existing)
                 -> std::optional<std::shared_ptr<text::Postings>> {
-              // TODO: Mutate the postings object
-              // Note that we'll have to create a new Postings object if one
-              // doesn't exist and I'm not sure if we should be passing a whole
-              // IndexSchema object to the constructor.
-              throw std::runtime_error("Mutate lambda not implemented");
+              std::shared_ptr<text::Postings> postings;
+              if (existing.has_value()) {
+                postings = existing.value();
+              } else {
+                // Create new Postings object with schema configuration
+                // TODO: Get save_positions from IndexSchema, for now assume true
+                bool save_positions = true;
+                uint8_t num_text_fields = text_index_schema_->num_text_fields_;
+                postings = std::make_shared<text::Postings>(save_positions, num_text_fields);
+              }
+              
+              // Add the key and position to postings using correct API
+              postings->InsertPosting(key, text_field_number_, position);
+              return postings;
             });
+        position++;
       }
       prev_pos = i + 1;
     }

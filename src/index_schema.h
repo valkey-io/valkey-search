@@ -31,6 +31,7 @@
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
+#include "src/indexes/text/text_index.h"
 #include "src/keyspace_event_manager.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
@@ -97,13 +98,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline const std::string &GetName() const { return name_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
 
-  bool GetSavePositions() const { return save_positions_; }
-  size_t GetNumTextFields() const { return num_text_fields_; }
-  // TODO: Change this after query support is added for full text search
-  void SetTextConfiguration(bool save_positions, size_t num_text_fields) {
-    save_positions_ = save_positions;
-    num_text_fields_ = num_text_fields;
-  }
+  std::shared_ptr<indexes::TextIndexSchema> GetTextIndexSchema() const { return text_index_schema_; }
+  void SetTextIndexSchema(std::shared_ptr<indexes::TextIndexSchema> schema) { text_index_schema_ = schema; }
 
   void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type, const char *event,
                               ValkeyModuleString *key) override;
@@ -176,6 +172,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint32_t db_num_{0};
   bool save_positions_{true};
   size_t num_text_fields_{0};
+  std::shared_ptr<indexes::TextIndexSchema> text_index_schema_;
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   InternedStringMap<DocumentMutation> tracked_mutated_records_

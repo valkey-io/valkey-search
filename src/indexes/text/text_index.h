@@ -1,24 +1,30 @@
-/*
- * Copyright (c) 2025, valkey-search contributors
- * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
- *
- */
+#ifndef VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
+#define VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 
-#ifndef VALKEY_SEARCH_INDEXES_TEXT_TEXT_H_
-#define VALKEY_SEARCH_INDEXES_TEXT_TEST_H_
-
-#include <concepts>
 #include <memory>
+#include <optional>
 
-#include "src/index_schema.pb.h"
-#include "src/indexes/text/posting.h"
+#include "absl/strings/string_view.h"
+#include "absl/functional/function_ref.h"
+#include "absl/container/flat_hash_map.h"
 #include "src/indexes/text/radix_tree.h"
-#include "src/utils/string_interning.h"
+#include "src/indexes/text/posting.h"
+#include "src/index_schema.pb.h"
 
-namespace valkey_search::indexes::text {
+namespace valkey_search::indexes {
 
-struct TextIndex {
+using Key = valkey_search::InternedStringPtr;
+using Position = uint32_t;
+
+// Forward declaration from text namespace
+namespace text {
+  struct Postings;
+}
+
+class TextIndex {
+ public:
+  TextIndex() = default;
+  ~TextIndex() = default;
   //
   // The main query data structure maps Words into Postings objects. This
   // is always done with a prefix tree. Optionally, a suffix tree can also be
@@ -30,15 +36,24 @@ struct TextIndex {
   // becomes responsible for cross-tree locking issues. Multiple locking
   // strategies are possible. TBD (a shared-ed word lock table should work well)
   //
-  RadixTree<std::shared_ptr<Postings>, false> prefix_;
-  std::optional<RadixTree<std::shared_ptr<Postings>, true>> suffix_;
+
+  // Prefix tree
+  text::RadixTree<std::shared_ptr<text::Postings>, false> prefix_;
+  
+  // Suffix tree
+  std::optional<text::RadixTree<std::shared_ptr<text::Postings>, true>> suffix_;
 };
 
-struct IndexSchemaText {
+class TextIndexSchema {
+ public:
   //
   // This is the main index of all Text fields in this index schema
   //
-  std::shared_ptr<TextIndex> corpus_;
+  TextIndexSchema() : num_text_fields_(0), text_index_(std::make_shared<TextIndex>()) {}
+  ~TextIndexSchema() = default;
+
+  uint8_t num_text_fields_;
+  std::shared_ptr<indexes::TextIndex> text_index_;
   //
   // To support the Delete record and the post-filtering case, there is a
   // separate table of postings that are indexed by Key.
@@ -49,6 +64,6 @@ struct IndexSchemaText {
   absl::flat_hash_map<Key, TextIndex> by_key_;
 };
 
-}  // namespace valkey_search::indexes::text
+}  // namespace valkey_search::indexes
 
 #endif

@@ -39,7 +39,7 @@ A PositionIterator is provided to iterate over the positions of an individual Ke
 #include <vector>
 #include <map>
 
-#include "src/index_schema.h"
+#include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes::text {
 
@@ -63,7 +63,7 @@ struct Postings {
   // are inserted have an assumed single position of 0.
   // The "num_text_fields" entry identifies how many bits of the field-mask are required
   // and is used to select the representation.
-  explicit Postings(const valkey_search::IndexSchema& index_schema);
+  explicit Postings(bool save_positions, size_t num_text_fields);
   
   // Destructor
   ~Postings();

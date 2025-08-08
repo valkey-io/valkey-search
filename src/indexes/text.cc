@@ -17,14 +17,13 @@
 namespace valkey_search::indexes {
 
 Text::Text(const data_model::TextIndex& text_index_proto,
-           std::shared_ptr<text::TextIndexSchema> text_index_schema,
-           size_t text_field_number)
+           std::shared_ptr<text::TextIndexSchema> text_index_schema)
     : IndexBase(IndexerType::kText), 
-      text_field_number_(text_field_number),
       text_index_schema_(text_index_schema),
+      text_field_number_(text_index_schema->AllocateTextFieldNumber()),
       with_suffix_trie_(text_index_proto.with_suffix_trie()),
       no_stem_(text_index_proto.no_stem()),
-      min_stem_size_(text_index_proto.min_stem_size()) {   
+      min_stem_size_(text_index_proto.min_stem_size()) {
 }
 
 absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,

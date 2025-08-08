@@ -46,9 +46,9 @@ struct TextIndex {
 };
 
 struct TextIndexSchema {
-  TextIndexSchema() : num_text_fields_(1), text_index_(std::make_shared<TextIndex>()) {}
+  TextIndexSchema() : num_text_fields_(0), text_index_(std::make_shared<TextIndex>()) {}
   TextIndexSchema(const data_model::IndexSchema& index_schema_proto) 
-      : num_text_fields_(1), 
+      : num_text_fields_(0), 
         text_index_(std::make_shared<TextIndex>()),
         language_(index_schema_proto.language()),
         punctuation_(index_schema_proto.punctuation()),
@@ -75,6 +75,11 @@ struct TextIndexSchema {
   std::string punctuation_;
   bool with_offsets_ = false;
   std::vector<std::string> stop_words_;
+
+  uint8_t AllocateTextFieldNumber() {
+    return num_text_fields_++;
+  }
+
 };
 
 }  // namespace valkey_search::indexes::text

@@ -74,6 +74,9 @@ class PhraseIterator : public indexes::EntriesFetcherIteratorBase {
 
  private:
   std::vector<WordIterator> words_;
+  std::shared_ptr<Postings> target_posting_;
+  Postings::KeyIterator key_iter_;
+  uint32_t current_word_idx_ = 0;
   size_t slop_;
   bool in_order_;
   const InternedStringSet* untracked_keys_;

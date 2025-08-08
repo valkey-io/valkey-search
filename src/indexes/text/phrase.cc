@@ -1,4 +1,5 @@
 #include "src/indexes/text/phrase.h"
+#include "src/indexes/text/posting.h"
 
 namespace valkey_search::indexes::text {
 
@@ -14,7 +15,7 @@ PhraseIterator::PhraseIterator(const std::vector<WordIterator>& words,
 
 bool PhraseIterator::Done() const {
   // 1. Check if we are at the end of the Posting Interator.
-  return true;
+  return key_iter_.IsValid();
 }
 
 void PhraseIterator::Next() {
@@ -24,12 +25,18 @@ void PhraseIterator::Next() {
   // 3. Store the ref to the Posting Iterator.
   // 4. Move to the next position in the Posting Iterator.
   // NOTE: We should skip the word if the attribute field mask does not match the required fields.
+  target_posting_ = words_[current_word_idx_].GetTarget();
+  key_iter_ = target_posting_->GetKeyIterator();
+  while (key_iter_.IsValid()) {
+    key_iter_.NextKey();
+    break;
+  }
 }
 
 const InternedStringPtr& PhraseIterator::operator*() const {
   // TODO: Implement
   // 1. Return the current key at the current position of the Posting Iterator.
-  return current_key_;
+  return key_iter_.GetKey();
 }
 
 } // namespace valkey_search::indexes::text

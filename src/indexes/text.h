@@ -14,8 +14,11 @@
 #include "src/indexes/text/text_index.h"
 #include "src/query/predicate.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "src/indexes/text/phrase.h"
 
 namespace valkey_search::indexes {
+
+using WordIterator = text::RadixTree<std::shared_ptr<text::Postings>, false>::WordIterator;
 
 class Text : public IndexBase {
  public:
@@ -73,8 +76,11 @@ class Text : public IndexBase {
   class EntriesFetcher : public EntriesFetcherBase {
    public:
     EntriesFetcher(size_t size,
+                const std::shared_ptr<text::TextIndex>& text_index,
                 const InternedStringSet* untracked_keys = nullptr)
-    : size_(size), untracked_keys_(untracked_keys) {}
+        : size_(size),
+          text_index_(text_index),
+          untracked_keys_(untracked_keys) {}
 
     size_t Size() const override;
 
@@ -83,6 +89,7 @@ class Text : public IndexBase {
 
     size_t size_;
     const InternedStringSet* untracked_keys_;
+    std::shared_ptr<text::TextIndex> text_index_;
     query::TextPredicate::Operation operation_;
     absl::string_view data_;
     bool no_field_{false};

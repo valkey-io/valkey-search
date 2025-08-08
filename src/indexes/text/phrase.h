@@ -8,7 +8,17 @@
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
 
+#include <vector>
+#include <cstddef>
+#include "src/indexes/index_base.h"
+#include "src/indexes/text/radix_tree.h"
+#include "src/utils/string_interning.h"
+#include "src/indexes/text/posting.h"
+
+
 namespace valkey_search::indexes::text {
+
+using WordIterator = RadixTree<std::shared_ptr<Postings>, false>::WordIterator;
 
 /*
 
@@ -51,18 +61,23 @@ void process_one_key(KeyIterators[*]) {
   }
 }
 */
-}
-struct PhraseIterator : public indexes::EntriesFetcherIteratorBase {
-  PhraseIterator(std::vector<WordIterator *> words, size_t slop, bool in_order);
+class PhraseIterator : public indexes::EntriesFetcherIteratorBase {
+ public:
+  PhraseIterator(const std::vector<WordIterator>& words,
+                 size_t slop,
+                 bool in_order,
+                 const InternedStringSet* untracked_keys = nullptr);
 
-  virtual bool Done() const override;
-  virtual void Next() = override;
-  // TODO: Should this return a Key or an InternedStringPtr?
-  virtual const Key& operator*() const override;
-  private:
-    std::vector<WordIterator *> words_;
-    size_t slop_{0};
-    bool in_order_{true};
+  bool Done() const override;
+  void Next() override;
+  const InternedStringPtr& operator*() const override;
+
+ private:
+  std::vector<WordIterator> words_;
+  size_t slop_;
+  bool in_order_;
+  const InternedStringSet* untracked_keys_;
+  InternedStringPtr current_key_;
 };
 
 

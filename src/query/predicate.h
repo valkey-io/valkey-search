@@ -19,6 +19,7 @@
 #include "vmsdk/src/type_conversions.h"
 
 namespace valkey_search::indexes {
+class Text;
 class Numeric;
 class Tag;
 }  // namespace valkey_search::indexes
@@ -31,14 +32,17 @@ enum class PredicateType {
   kComposedAnd,
   kComposedOr,
   kNegate,
+  kText,
   kNone
 };
 
+class TextPredicate;
 class TagPredicate;
 class NumericPredicate;
 class Evaluator {
  public:
   virtual ~Evaluator() = default;
+  virtual bool EvaluateText(const TextPredicate& predicate) = 0;
   virtual bool EvaluateTags(const TagPredicate& predicate) = 0;
   virtual bool EvaluateNumeric(const NumericPredicate& predicate) = 0;
 };
@@ -127,6 +131,53 @@ class TagPredicate : public Predicate {
   std::string raw_tag_string_;
   absl::flat_hash_set<std::string> tags_;
 };
+
+class TextPredicate : public Predicate {
+ public:
+  enum class Operation {
+    kExact,      // Exact term / exact phrase match.
+    kPrefix,     // Prefix Wildcard match
+    kSuffix,     // kSuffix Wildcard match
+    kInfix,      // kInfix Wildcard match
+    kFuzzy,      // Fuzzy match
+  };
+
+  TextPredicate(const indexes::Text* index, absl::string_view alias,
+                absl::string_view identifier,
+                absl::string_view raw_text_string,
+                Operation op = Operation::kExact,
+                uint32_t fuzzy_distance = 0);
+
+  bool Evaluate(Evaluator& evaluator) const override;
+  bool Evaluate(absl::string_view raw_text_string) const;
+  const indexes::Text* GetIndex() const { return index_; }
+  absl::string_view GetAlias() const { return alias_; }
+  absl::string_view GetIdentifier() const {
+    return vmsdk::ToStringView(identifier_.get());
+  }
+  vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
+    return vmsdk::RetainUniqueValkeyString(identifier_.get());
+  }
+  const std::string& GetTextString() const { return raw_text_string_; }
+  Operation GetOperation() const { return operation_; }
+  uint32_t GetFuzzyDistance() const { return fuzzy_distance_; }
+
+ private:
+  const indexes::Text* index_;
+  vmsdk::UniqueValkeyString identifier_;
+  std::string alias_; // Attribute alias will be NULL for default text fields.
+  std::string raw_text_string_;
+  Operation operation_;
+  uint32_t fuzzy_distance_;
+
+  // Private evaluation methods
+  bool EvaluateExact(absl::string_view text) const;
+  bool EvaluatePrefix(absl::string_view text) const;
+  bool EvaluateSuffix(absl::string_view text) const;
+  bool EvaluateInfix(absl::string_view text) const;
+  bool EvaluateFuzzy(absl::string_view text) const;
+};
+
 enum class LogicalOperator { kAnd, kOr };
 // Composed Predicate (AND/OR)
 class ComposedPredicate : public Predicate {

@@ -47,6 +47,8 @@ class FilterParser {
   ParseNumericPredicate(const std::string& attribute_alias);
   absl::StatusOr<std::unique_ptr<query::TagPredicate>> ParseTagPredicate(
       const std::string& attribute_alias);
+  absl::StatusOr<std::unique_ptr<query::TextPredicate>> ParseTextPredicate(
+      const std::string& field_name);
   void SkipWhitespace();
 
   char Peek() const { return expression_[pos_]; }

@@ -434,11 +434,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseExpression(
         node_count_++;  // Count the TextPredicate Node
         VMSDK_ASSIGN_OR_RETURN(predicate, ParseTextPredicate(field_name));
       }
-      // else {
-      //   return absl::InvalidArgumentError(
-      //       absl::StrCat("Expected '[', '{', got '",
-      //                    expression_.substr(pos_, 1), "'. Position: ", pos_));
-      // }
       if (prev_predicate) {
         node_count_++;  // Count the ComposedPredicate Node
       }

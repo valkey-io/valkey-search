@@ -83,7 +83,8 @@ class Text : public IndexBase {
 
     size_t Size() const override;
 
-    // Factory method that creates the appropriate iterator
+    // Factory method that creates the appropriate text iterator
+    // based on the text predicate's operation type.
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 
     size_t size_;

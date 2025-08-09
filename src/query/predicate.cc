@@ -64,23 +64,22 @@ bool TextPredicate::EvaluateExact(absl::string_view text) const {
 }
 
 bool TextPredicate::EvaluatePrefix(absl::string_view text) const {
-  // TODO: Implement prefix wildcard match using WordIterator.
-  return absl::StartsWith(text, raw_text_string_);
+  // TODO: Implement prefix matching logic.
+  return false;
 }
 
 bool TextPredicate::EvaluateSuffix(absl::string_view text) const {
-  // TODO: Implement suffix wildcard match using WordIterator.
-  return absl::EndsWith(text, raw_text_string_);
+  // TODO: Implement suffix matching logic.
+  return false;
 }
 
 bool TextPredicate::EvaluateInfix(absl::string_view text) const {
-  // TODO: Implement infix wildcard match using WordIterator.
+  // TODO: Implement infix matching logic.
   return false;
 }
 
 bool TextPredicate::EvaluateFuzzy(absl::string_view text) const {
-  // TODO: Implement Levenshtein distance calculation using the PathIterator.
-  // Return true if distance <= fuzzy_distance_
+  // TODO: Implement fuzzy matching logic.
   return false;
 }
 

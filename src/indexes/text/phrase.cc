@@ -1,5 +1,4 @@
 #include "src/indexes/text/phrase.h"
-#include "src/indexes/text/posting.h"
 
 namespace valkey_search::indexes::text {
 

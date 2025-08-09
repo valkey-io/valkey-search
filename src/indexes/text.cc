@@ -107,6 +107,7 @@ size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
       return target_posting->GetKeyCount();
     }
     default:
+      CHECK(false) << "Unsupported TextPredicate operation: " << static_cast<int>(predicate.GetOperation());
       return 0;
   }
 }

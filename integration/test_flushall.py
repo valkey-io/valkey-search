@@ -5,6 +5,7 @@ from valkeytestframework.conftest import resource_port_tracker
 from indexes import *
 import logging, time
 from typing import Any
+from util import waiters
 
 def num_docs(client: Valkey.client, index: str) -> dict[str, str]:
     res = client.execute_command("FT.INFO", index)
@@ -48,12 +49,10 @@ class TestFlushAllCME(ValkeySearchClusterTestCase):
         hnsw_index.load_data(client, NUM_VECTORS)
 
         clients = [self.client_for_primary(i) for i in range(len(self.servers))]
-        assert NUM_VECTORS == self.sum_docs(hnsw_index.name)
+        # Wait for all the docs to be indexed (up to 3 seconds)
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index.name), NUM_VECTORS, timeout=5)
         for c in clients:
             c.execute_command("flushall sync")
 
-        time.sleep(3)
-
         assert client.execute_command("FT._LIST") == [hnsw_index.name.encode()]
-        assert 0 == self.sum_docs(hnsw_index.name)
-
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index.name), 0, timeout=5)

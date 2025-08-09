@@ -15,14 +15,10 @@ SAN_BUILD="no"
 ARGV=$@
 EXIT_CODE=0
 
-# Constants
-BOLD_PINK='\e[35;1m'
-RESET='\e[0m'
-GREEN='\e[32;1m'
-RED='\e[31;1m'
-BLUE='\e[34;1m'
-
 echo "Root directory: ${ROOT_DIR}"
+
+# Import our functions
+. ${ROOT_DIR}/scripts/common.rc
 
 function print_usage() {
 cat<<EOF
@@ -129,16 +125,6 @@ do
         ;;
     esac
 done
-
-# Capitalize a word. This method is compatible with bash-3 and bash-4
-function capitalize_string() {
-    local string=$1
-    local first_char=${string:0:1}
-    local remainder=${string:1}
-    first_char=$(echo "${first_char}" | tr '[:lower:]' '[:upper:]')
-    remainder=$(echo "${remainder}" | tr '[:upper:]' '[:lower:]')
-    echo ${first_char}${remainder}
-}
 
 function configure() {
     printf "${BOLD_PINK}Running cmake...${RESET}\n"
@@ -249,7 +235,7 @@ function is_configure_required() {
         echo "yes"
         return
     fi
-    local build_file_lastmodified=$(date -r ${ninja_build_file} +%s)
+    local build_file_lastmodified=$(get_file_last_modified ${ninja_build_file})
     local cmake_files=$(find ${ROOT_DIR} -name "CMakeLists.txt" -o -name "*.cmake"| grep -v ".build-release" | grep -v ".build-debug")
     for cmake_file in ${cmake_files}; do
         local cmake_file_modified=$(date -r ${cmake_file} +%s)
@@ -324,22 +310,31 @@ elif [ ! -z "${RUN_TEST}" ]; then
     (${TESTS_DIR}/${RUN_TEST} && print_test_ok) || print_test_error_and_exit
     print_test_summary
 elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
-    cd testing/integration
-    params=""
-    if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
-        params=" --test-errors-stdout"
-    fi
-    if [[ "${BUILD_CONFIG}" == "debug" ]]; then
-        params="${params} --debug"
-    fi
+    pushd testing/integration >/dev/null
+        params=""
+        if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
+            params=" --test-errors-stdout"
+        fi
+        if [[ "${BUILD_CONFIG}" == "debug" ]]; then
+            params="${params} --debug"
+        fi
 
-    if [[ "${SAN_BUILD}" == "address" ]]; then
-        params="${params} --asan"
-    fi
-    if [[ "${SAN_BUILD}" == "thread" ]]; then
-        params="${params} --tsan"
-    fi
-    ./run.sh ${params}
+        if [[ "${SAN_BUILD}" == "address" ]]; then
+            params="${params} --asan"
+        fi
+        if [[ "${SAN_BUILD}" == "thread" ]]; then
+            params="${params} --tsan"
+        fi
+        ./run.sh ${params}
+    popd >/dev/null
+    
+    # Run OSS integration tests
+    pushd integration >/dev/null
+        if [[ "${SAN_BUILD}" == "no" ]]; then
+            # For now, run these this test suite without ASan.
+            ./run.sh
+        fi
+    popd >/dev/null
 fi
 
 END_TIME=`date +%s`

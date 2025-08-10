@@ -108,8 +108,8 @@ static auto writer_threads_count =
 constexpr absl::string_view kUseCoordinator{"use-coordinator"};
 static auto use_coordinator =
     config::BooleanBuilder(kUseCoordinator, false)
-        .WithFlags(VALKEYMODULE_CONFIG_HIDDEN)  // can only be set during
-                                                // start-up
+        .WithFlags(VALKEYMODULE_CONFIG_IMMUTABLE)  // can only be set during
+                                                   // start-up
         .Build();
 
 // Register an enumerator for the log level
@@ -123,6 +123,11 @@ static const std::vector<std::string_view> kLogLevelNames = {
 static const std::vector<int> kLogLevelValues = {
     static_cast<int>(LogLevel::kWarning), static_cast<int>(LogLevel::kNotice),
     static_cast<int>(LogLevel::kVerbose), static_cast<int>(LogLevel::kDebug)};
+
+/// Should this instance skip loading index data from RDB?
+constexpr absl::string_view kReIndexVectorRDBLoad{"skip-rdb-load"};
+static auto rdb_load_skip_index =
+    config::BooleanBuilder(kReIndexVectorRDBLoad, false).Build();
 
 /// Control the modules log level verbosity
 constexpr absl::string_view kLogLevel{"log-level"};
@@ -150,6 +155,10 @@ static auto log_level =
         .WithValidationCallback(ValidateLogLevel)
         .Build();
 
+/// Should timeouts return partial results OR generate a TIMEOUT error?
+constexpr absl::string_view kEnablePartialResults{"enable-partial-results"};
+static config::Boolean enable_partial_results(kEnablePartialResults, true);
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -168,13 +177,26 @@ const vmsdk::config::Boolean& GetUseCoordinator() {
   return dynamic_cast<const vmsdk::config::Boolean&>(*use_coordinator);
 }
 
+const vmsdk::config::Boolean& GetSkipIndexLoad() {
+  return dynamic_cast<const vmsdk::config::Boolean&>(*rdb_load_skip_index);
+}
+
+vmsdk::config::Boolean& GetSkipIndexLoadMutable() {
+  return dynamic_cast<vmsdk::config::Boolean&>(*rdb_load_skip_index);
+}
+
 vmsdk::config::Enum& GetLogLevel() {
   return dynamic_cast<vmsdk::config::Enum&>(*log_level);
 }
 
 absl::Status Reset() {
   VMSDK_RETURN_IF_ERROR(use_coordinator->SetValue(false));
+  VMSDK_RETURN_IF_ERROR(rdb_load_skip_index->SetValue(false));
   return absl::OkStatus();
+}
+
+const vmsdk::config::Boolean& GetEnablePartialResults() {
+  return static_cast<vmsdk::config::Boolean&>(enable_partial_results);
 }
 
 }  // namespace options

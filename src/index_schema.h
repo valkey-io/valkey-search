@@ -72,7 +72,7 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   static absl::StatusOr<std::shared_ptr<IndexSchema>> Create(
       ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto,
-      vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes = false);
+      vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes, bool reload);
   ~IndexSchema() override;
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
       absl::string_view attribute_alias) const;
@@ -155,7 +155,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   IndexSchema(ValkeyModuleCtx *ctx,
               const data_model::IndexSchema &index_schema_proto,
               std::unique_ptr<AttributeDataType> attribute_data_type,
-              vmsdk::ThreadPool *mutations_thread_pool);
+              vmsdk::ThreadPool *mutations_thread_pool, bool reload);
   absl::Status Init(ValkeyModuleCtx *ctx);
 
  private:
@@ -244,6 +244,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};
 
   FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoad);
+  FRIEND_TEST(IndexSchemaRDBTest, ComprehensiveSkipLoadTest);
   FRIEND_TEST(IndexSchemaFriendTest, ConsistencyTest);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributes);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributesSanity);

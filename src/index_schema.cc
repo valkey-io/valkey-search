@@ -43,6 +43,7 @@
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/log.h"
@@ -65,7 +66,8 @@ IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
   ValkeyModule_SelectDb(scan_ctx.get(), db_num);
   db_size = ValkeyModule_DbSize(scan_ctx.get());
   VMSDK_LOG(NOTICE, ctx) << "Starting backfill for index schema in DB "
-                         << db_num << ": " << name;
+                         << db_num << ": " << name << " (size: " << db_size
+                         << ")";
 }
 
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
@@ -144,7 +146,7 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
     ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto,
-    vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes) {
+    vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes, bool reload) {
   std::unique_ptr<AttributeDataType> attribute_data_type;
   switch (index_schema_proto.attribute_data_type()) {
     case data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH:
@@ -162,7 +164,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
 
   auto res = std::shared_ptr<IndexSchema>(
       new IndexSchema(ctx, index_schema_proto, std::move(attribute_data_type),
-                      mutations_thread_pool));
+                      mutations_thread_pool, reload));
   VMSDK_RETURN_IF_ERROR(res->Init(ctx));
   if (!skip_attributes) {
     for (const auto &attribute : index_schema_proto.attributes()) {
@@ -188,7 +190,8 @@ vmsdk::MRMWMutexOptions CreateMrmwMutexOptions() {
 IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
                          const data_model::IndexSchema &index_schema_proto,
                          std::unique_ptr<AttributeDataType> attribute_data_type,
-                         vmsdk::ThreadPool *mutations_thread_pool)
+                         vmsdk::ThreadPool *mutations_thread_pool,
+                         bool reload)
     : detached_ctx_(vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx)),
       keyspace_event_manager_(&KeyspaceEventManager::Instance()),
       attribute_data_type_(std::move(attribute_data_type)),
@@ -199,16 +202,20 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
   ValkeyModule_SelectDb(detached_ctx_.get(), db_num_);
   if (index_schema_proto.subscribed_key_prefixes().empty()) {
     subscribed_key_prefixes_.push_back("");
-    return;
-  }
-  for (const auto &key_prefix : index_schema_proto.subscribed_key_prefixes()) {
-    if (!std::any_of(
-            subscribed_key_prefixes_.begin(), subscribed_key_prefixes_.end(),
-            [&](const std::string &s) { return key_prefix.starts_with(s); })) {
-      subscribed_key_prefixes_.push_back(std::string(key_prefix));
+  } else {
+    for (const auto &key_prefix : index_schema_proto.subscribed_key_prefixes()) {
+      if (!std::any_of(
+              subscribed_key_prefixes_.begin(), subscribed_key_prefixes_.end(),
+              [&](const std::string &s) { return key_prefix.starts_with(s); })) {
+        subscribed_key_prefixes_.push_back(std::string(key_prefix));
+      }
     }
   }
-  stats_.document_cnt = index_schema_proto.stats().documents_count();
+  // The protobuf has volatile fields that get save/restores in the RDB. here we
+  // reconcile the source of the index_schema_proto (reload or not) and restore those fields
+  if (reload) {
+    stats_.document_cnt = index_schema_proto.stats().documents_count();
+  }
 }
 
 absl::Status IndexSchema::Init(ValkeyModuleCtx *ctx) {
@@ -862,16 +869,22 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
     ValkeyModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,
     std::unique_ptr<data_model::IndexSchema> index_schema_proto,
     SupplementalContentIter &&supplemental_iter) {
-  // Attributes will be loaded from supplemental content.
+  // flag to skip loading attributes and indices
+  bool skip_loading_index_data = options::GetSkipIndexLoad().GetValue();
+  // When skipping index data, create attributes immediately (with empty
+  // indexes)
+  bool load_attributes_on_create = skip_loading_index_data;
+  // Attributes will be loaded from supplemental content. if
+  // !load_attributes_on_create
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,
       IndexSchema::Create(ctx, *index_schema_proto, mutations_thread_pool,
-                          /*skip_attributes=*/true));
+                          !load_attributes_on_create, true));
 
   // Supplemental content will include indices and any content for them
   while (supplemental_iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto supplemental_content, supplemental_iter.Next());
-    if (supplemental_content->type() ==
+    if (ABSL_PREDICT_TRUE(!skip_loading_index_data) && supplemental_content->type() ==
         data_model::SupplementalContentType::
             SUPPLEMENTAL_CONTENT_INDEX_CONTENT) {
       auto &attribute =
@@ -881,7 +894,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
                                           supplemental_iter.IterateChunks()));
       VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
           attribute.alias(), attribute.identifier(), index));
-    } else if (supplemental_content->type() ==
+    } else if (ABSL_PREDICT_TRUE(!skip_loading_index_data) && supplemental_content->type() ==
                data_model::SupplementalContentType::
                    SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP) {
       auto &attribute =
@@ -901,9 +914,25 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           ctx, &index_schema->GetAttributeDataType(),
           supplemental_iter.IterateChunks()));
     } else {
-      VMSDK_LOG(NOTICE, ctx) << "Unknown supplemental content type: "
-                             << data_model::SupplementalContentType_Name(
-                                    supplemental_content->type());
+      if (ABSL_PREDICT_FALSE(skip_loading_index_data) && (
+          supplemental_content->type() == data_model::SupplementalContentType::
+              SUPPLEMENTAL_CONTENT_INDEX_CONTENT ||
+          supplemental_content->type() == data_model::SupplementalContentType::
+              SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP)) {
+        VMSDK_LOG(NOTICE, ctx) << "Skipping supplemental content type: "
+                               << data_model::SupplementalContentType_Name(
+                                      supplemental_content->type());
+      } else {
+        VMSDK_LOG(NOTICE, ctx) << "Unknown supplemental content type: "
+                               << data_model::SupplementalContentType_Name(
+                                      supplemental_content->type());
+      }
+      // We need to iterate over the chunks to consume them
+      [[maybe_unused]] auto chunk_it = supplemental_iter.IterateChunks();
+      while (chunk_it.HasNext()) {
+        VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto chunk_result,
+                               chunk_it.Next());
+      }
     }
   }
 

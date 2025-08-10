@@ -29,6 +29,7 @@
 #include "src/metrics.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 
 namespace valkey_search::coordinator {
 
@@ -52,6 +53,17 @@ constexpr absl::string_view kRetryPolicy =
     "    }"
     "}]}";
 // clang-format on
+
+static constexpr absl::string_view kCoordinatorQueryTimeout{"coordinator-query-timeout-secs"};
+static constexpr int kCoordinatorQueryDefaultTimeout{120};
+static constexpr int kCoordinatorQueryMinTimeout{1};
+static constexpr int kCoordinatorQueryMaxTimeout{3600};
+
+static auto query_connection_timeout = vmsdk::config::NumberBuilder(kCoordinatorQueryTimeout,
+  kCoordinatorQueryDefaultTimeout,
+  kCoordinatorQueryMinTimeout,
+  kCoordinatorQueryMaxTimeout
+).Build();
 
 grpc::ChannelArguments& GetChannelArgs() {
   static absl::once_flag once;
@@ -131,8 +143,8 @@ void ClientImpl::SearchIndexPartition(
     std::unique_ptr<vmsdk::StopWatch> latency_sample;
   };
   auto args = std::make_unique<SearchIndexPartitionArgs>();
-  args->context.set_deadline(absl::ToChronoTime(
-      absl::Now() + absl::Milliseconds(request->timeout_ms())));
+  args->context.set_deadline(
+      absl::ToChronoTime(absl::Now() + absl::Seconds(query_connection_timeout->GetValue())));
   args->callback = std::move(done);
   args->request = std::move(request);
   args->latency_sample = SAMPLE_EVERY_N(100);

@@ -24,6 +24,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
+#include "module_config.h"
 #include "src/acl.h"
 #include "src/commands/commands.h"
 #include "src/commands/ft_search_parser.h"
@@ -34,6 +35,7 @@
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
+#include "valkey_search_options.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -167,6 +169,13 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
 // SendReply respects the Limit, see https://valkey.io/commands/ft.search/
 void SendReply(ValkeyModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
                const query::VectorSearchParameters &parameters) {
+
+  if (!options::GetEnablePartialResults().GetValue() &&
+      parameters.cancellation_token->IsCancelled()) {
+    ValkeyModule_ReplyWithError(ctx, "Search operation cancelled due to timeout");
+    ++Metrics::GetStats().query_failed_requests_cnt;
+    return;
+  }
   // Increment success counter.
   ++Metrics::GetStats().query_successful_requests_cnt;
 
@@ -204,8 +213,16 @@ void SendReply(ValkeyModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
 
 namespace async {
 
-int Reply(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
+int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
           [[maybe_unused]] int argc) {
+  auto *res =
+      static_cast<Result *>(ValkeyModule_GetBlockedClientPrivateData(ctx));
+  CHECK(res != nullptr);
+  res->parameters->cancellation_token->Cancel(); // Cancel to tell Free that it's been seen
+  return ValkeyModule_ReplyWithError(ctx, "Request timed out");
+}
+
+int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   auto *res =
       static_cast<Result *>(ValkeyModule_GetBlockedClientPrivateData(ctx));
   CHECK(res != nullptr);
@@ -223,11 +240,6 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
   delete result;
 }
 
-int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
-            [[maybe_unused]] int argc) {
-  return ValkeyModule_ReplyWithSimpleString(ctx, "Request timed out");
-}
-
 }  // namespace async
 
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
@@ -237,7 +249,7 @@ absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     VMSDK_ASSIGN_OR_RETURN(
         auto parameters,
         ParseVectorSearchParameters(ctx, argv + 1, argc - 1, schema_manager));
-
+    parameters->cancellation_token = cancel::Make(parameters->timeout_ms, nullptr);
     static const auto permissions =
         PrefixACLPermissions(kSearchCmdPermissions, kSearchCommand);
     VMSDK_RETURN_IF_ERROR(AclPrefixCheck(

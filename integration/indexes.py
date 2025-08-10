@@ -105,3 +105,7 @@ class Index:
         for (col, f) in enumerate(self.fields):
             d[f.name] = f.make_value(row, col)
         return d
+    
+    def info(self, client:valkey.client) -> dict[str,str]:
+        res = client.execute_command("FT.INFO", self.name)
+        return {res[i]: res[i+1] for i in range(len(res), 2)}

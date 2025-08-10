@@ -90,7 +90,7 @@ static auto reader_threads_count =
             })
         .Build();
 
-/// Register the "--reader-threads" flag. Controls the writer thread pool
+/// Register the "--writer-threads" flag. Controls the writer thread pool
 constexpr absl::string_view kWriterThreadsConfig{"writer-threads"};
 static auto writer_threads_count =
     config::NumberBuilder(kWriterThreadsConfig,  // name
@@ -102,6 +102,20 @@ static auto writer_threads_count =
               UpdateThreadPoolCount(
                   ValkeySearch::Instance().GetWriterThreadPool(), new_value);
             })
+        .Build();
+
+/// Register the "--max-worker-suspension" flag.
+/// Controls the resumption of the worker thread pool:
+///   - If max-worker-suspension > 0, resume the workers either when the
+///     fork is died or after max-worker-suspension secs passed.
+///   - If max-worker-suspension <= 0, resume the workers when the fork
+///     is borned.
+constexpr absl::string_view kMaxWorkerSuspension{"max-worker-suspension"};
+static auto max_worker_suspension =
+    config::NumberBuilder(kMaxWorkerSuspension,  // name
+                          60,                    // default value
+                          0,                     // min value
+                          3600)                  // max value
         .Build();
 
 /// Should this instance use coordinator?
@@ -171,6 +185,10 @@ vmsdk::config::Number& GetReaderThreadCount() {
 
 vmsdk::config::Number& GetWriterThreadCount() {
   return dynamic_cast<vmsdk::config::Number&>(*writer_threads_count);
+}
+
+vmsdk::config::Number& GetMaxWorkerSuspension() {
+      return dynamic_cast<vmsdk::config::Number&>(*max_worker_suspension);
 }
 
 const vmsdk::config::Boolean& GetUseCoordinator() {

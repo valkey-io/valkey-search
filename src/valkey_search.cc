@@ -111,16 +111,19 @@ static vmsdk::info_field::Integer used_memory(
         .Computed(vmsdk::GetUsedMemoryCnt)
         .CrashSafe());
 
- static vmsdk::info_field::Integer reclaimable_memory("memory", "index_reclaimable_memory", 
+static vmsdk::info_field::Integer reclaimable_memory(
+    "memory", "index_reclaimable_memory",
     vmsdk::info_field::IntegerBuilder()
-      .App()
-      .Computed([]() -> uint64_t { return Metrics::GetStats().reclaimable_memory; })
-      .CrashSafe());
-
-static vmsdk::info_field::String background_indexing_status("indexing", "background_indexing_status",
-    vmsdk::info_field::StringBuilder()
         .App()
-        .ComputedCharPtr([]() -> const char * {
+        .Computed([]() -> uint64_t {
+          return Metrics::GetStats().reclaimable_memory;
+        })
+        .CrashSafe());
+
+static vmsdk::info_field::String background_indexing_status(
+    "indexing", "background_indexing_status",
+    vmsdk::info_field::StringBuilder().App().ComputedCharPtr(
+        []() -> const char * {
           return SchemaManager::Instance().IsIndexingInProgress()
                      ? "IN_PROGRESS"
                      : "NO_ACTIVITY";
@@ -210,9 +213,12 @@ static vmsdk::info_field::Integer time_slice_read_periods(
 
 static vmsdk::info_field::Integer time_slice_read_time(
     "time_slice_mutex", "time_slice_read_time",
-    vmsdk::info_field::IntegerBuilder().Dev().Units(vmsdk::info_field::Units::kMicroSeconds).Computed([]() -> long long {
-      return vmsdk::GetGlobalTimeSlicedMRMWStats().read_time_microseconds;
-    }));
+    vmsdk::info_field::IntegerBuilder()
+        .App()
+        .Units(vmsdk::info_field::Units::kMicroSeconds)
+        .Computed([]() -> long long {
+          return vmsdk::GetGlobalTimeSlicedMRMWStats().read_time_microseconds;
+        }));
 
 static vmsdk::info_field::Integer time_slice_write_periods(
     "time_slice_mutex", "time_slice_write_periods",
@@ -222,9 +228,12 @@ static vmsdk::info_field::Integer time_slice_write_periods(
 
 static vmsdk::info_field::Integer time_slice_write_time(
     "time_slice_mutex", "time_slice_write_time",
-    vmsdk::info_field::IntegerBuilder().Dev().Units(vmsdk::info_field::Units::kMicroSeconds).Computed([]() -> long long {
-      return vmsdk::GetGlobalTimeSlicedMRMWStats().write_time_microseconds;
-    }));   
+    vmsdk::info_field::IntegerBuilder()
+        .App()
+        .Units(vmsdk::info_field::Units::kMicroSeconds)
+        .Computed([]() -> long long {
+          return vmsdk::GetGlobalTimeSlicedMRMWStats().write_time_microseconds;
+        }));
 
 static vmsdk::info_field::Integer time_slice_queries(
     "time_slice_mutex", "time_slice_queries",
@@ -1011,9 +1020,9 @@ absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
       ctx, VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS |
                VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD |
                VALKEYMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED);
-  VMSDK_LOG(NOTICE, ctx) << "Json module is "
-                         << (IsJsonModuleLoaded(ctx) ? "" : "not ")
-                         << "loaded!";
+  VMSDK_LOG(NOTICE, ctx) << "Json "
+                         << (IsJsonModuleSupported(ctx) ? "" : "not ")
+                         << "supported!";
   VectorExternalizer::Instance().Init(ctx_);
   ValkeyModule_Assert(vmsdk::info_field::Validate(ctx));
   VMSDK_LOG(DEBUG, ctx) << "Search module completed initialization!";

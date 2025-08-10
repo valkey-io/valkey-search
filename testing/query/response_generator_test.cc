@@ -122,14 +122,15 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
     expected_fetched_identifiers.insert(id);
   }
   for (const auto &neighbor : expected_neighbors) {
-    EXPECT_CALL(data_type,
-                FetchAllRecords(&fake_ctx, parameters.attribute_alias,
-                                absl::string_view(*neighbor.external_id),
-                                expected_fetched_identifiers))
+    EXPECT_CALL(
+        data_type,
+        FetchAllRecords(&fake_ctx, parameters.attribute_alias, testing::_,
+                        absl::string_view(*neighbor.external_id),
+                        expected_fetched_identifiers))
         .WillOnce([&params](
                       ValkeyModuleCtx *ctx,
                       const std::string &query_attribute_alias,
-                      absl::string_view key,
+                      ValkeyModuleKey *open_key, absl::string_view key,
                       const absl::flat_hash_set<absl::string_view> &identifiers)
                       -> absl::StatusOr<RecordsMap> {
           if (params.missing_keys.contains(key)) {
@@ -193,12 +194,12 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
   });
 
   // Mock FetchAllRecords to return different sized content
-  EXPECT_CALL(data_type, FetchAllRecords(&fake_ctx, parameters.attribute_alias,
-                                         absl::string_view("small_content_id"),
-                                         testing::_))
+  EXPECT_CALL(data_type, FetchAllRecords(
+                             &fake_ctx, parameters.attribute_alias, testing::_,
+                             absl::string_view("small_content_id"), testing::_))
       .WillOnce([](ValkeyModuleCtx *ctx,
                    const std::string &query_attribute_alias,
-                   absl::string_view key,
+                   ValkeyModuleKey *open_key, absl::string_view key,
                    const absl::flat_hash_set<absl::string_view> &identifiers)
                     -> absl::StatusOr<RecordsMap> {
         // Return small content (within both size and field limits)
@@ -212,13 +213,13 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
         return small_content;
       });
 
-  EXPECT_CALL(data_type, FetchAllRecords(&fake_ctx, parameters.attribute_alias,
-                                         absl::string_view("large_content_id"),
-                                         testing::_))
+  EXPECT_CALL(data_type, FetchAllRecords(
+                             &fake_ctx, parameters.attribute_alias, testing::_,
+                             absl::string_view("large_content_id"), testing::_))
       .WillOnce([test_size_limit](
                     ValkeyModuleCtx *ctx,
                     const std::string &query_attribute_alias,
-                    absl::string_view key,
+                    ValkeyModuleKey *open_key, absl::string_view key,
                     const absl::flat_hash_set<absl::string_view> &identifiers)
                     -> absl::StatusOr<RecordsMap> {
         // Return large content (exceeds size limit)
@@ -233,11 +234,11 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
       });
 
   EXPECT_CALL(data_type,
-              FetchAllRecords(&fake_ctx, parameters.attribute_alias,
+              FetchAllRecords(&fake_ctx, parameters.attribute_alias, testing::_,
                               absl::string_view("many_fields_id"), testing::_))
       .WillOnce([](ValkeyModuleCtx *ctx,
                    const std::string &query_attribute_alias,
-                   absl::string_view key,
+                   ValkeyModuleKey *open_key, absl::string_view key,
                    const absl::flat_hash_set<absl::string_view> &identifiers)
                     -> absl::StatusOr<RecordsMap> {
         // Return content with many fields (exceeds field count limit)
@@ -271,7 +272,7 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
 
   // Verify that the metric was incremented correctly
   // Should be incremented by 2: once for large content, once for many fields
-  EXPECT_EQ( Metrics::GetStats().query_result_record_dropped_cnt, 2);
+  EXPECT_EQ(Metrics::GetStats().query_result_record_dropped_cnt, 2);
 }
 
 INSTANTIATE_TEST_SUITE_P(

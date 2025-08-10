@@ -58,6 +58,7 @@ class LoadTest : public ValkeySearchTestWithParam<LoadTestCase> {
   void SetUp() override {
     ValkeySearchTestWithParam<LoadTestCase>::SetUp();
     CHECK(options::Reset().ok());
+    vmsdk::SetModuleLoaded("json", true);
   }
 };
 

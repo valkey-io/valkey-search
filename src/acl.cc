@@ -194,9 +194,12 @@ bool IsAllowedCommands(
     } else if (absl::EqualsIgnoreCase(cmd, "-@all") ||
                absl::EqualsIgnoreCase(cmd, "nocommands")) {
       allowed = false;
-    } else if (!acl_cmd.empty() &&
-               module_allowed_cmds.contains(
-                   absl::string_view(acl_cmd.data() + 1, acl_cmd.size() - 1))) {
+    } else if (acl_cmd.size() > 1 &&
+               ((acl_cmd.data()[1] == '@' && module_allowed_cmds.contains(
+                absl::string_view(acl_cmd.data() + 1, acl_cmd.size() - 1))) ||
+               (acl_cmd.data()[1] != '@' && module_allowed_cmds.contains(
+                absl::AsciiStrToUpper(absl::string_view(acl_cmd.data() + 1, acl_cmd.size() - 1))))
+               )) {
       if (cmd.starts_with('+')) {
         allowed = true;
       } else if (cmd.starts_with('-')) {

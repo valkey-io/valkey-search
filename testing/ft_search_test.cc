@@ -450,7 +450,7 @@ class FTSearchTest : public ValkeySearchTestWithParam<
       auto key = std::to_string(i);
       std::string vector = std::string((char *)vectors[i].data(),
                                        vectors[i].size() * sizeof(float));
-      auto interned_key = StringInternStore::Intern(key);
+      auto interned_key = StringInternStore::Intern(key, StringType::KEY);
 
       VMSDK_EXPECT_OK(index.value()->AddRecord(interned_key, vector));
     }
@@ -685,7 +685,7 @@ class FTSearchMaxLimitTest : public ValkeySearchTestWithParam<MaxLimitTestCase> 
       auto key = std::to_string(i);
       std::string vector = std::string((char *)vectors[i].data(),
                                        vectors[i].size() * sizeof(float));
-      auto interned_key = StringInternStore::Intern(key);
+      auto interned_key = StringInternStore::Intern(key, StringType::KEY);
 
       VMSDK_EXPECT_OK(index.value()->AddRecord(interned_key, vector));
     }

@@ -22,6 +22,7 @@
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "src/indexes/global_metrics.h"
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
 #include "src/utils/patricia_tree.h"
@@ -45,9 +46,17 @@ Tag::Tag(const data_model::TagIndex& tag_index_proto)
       case_sensitive_(tag_index_proto.case_sensitive()),
       tree_(case_sensitive_) {}
 
+Tag::~Tag() {
+  // Decrement global record count for all tracked tags
+  absl::MutexLock lock(&index_mutex_);
+  for (const auto& [key, tag_info] : tracked_tags_by_keys_) {
+    GlobalIndexStats::Instance().Decr(MetricType::kTags, tag_info.tags.size());
+  }
+}
+
 absl::StatusOr<bool> Tag::AddRecord(const InternedStringPtr& key,
                                     absl::string_view data) {
-  auto interned_data = StringInternStore::Intern(data);
+  auto interned_data = StringInternStore::Intern(data, StringType::TAG);
   auto parsed_tags = ParseRecordTags(*interned_data, separator_);
   absl::MutexLock lock(&index_mutex_);
   if (parsed_tags.empty()) {
@@ -64,6 +73,7 @@ absl::StatusOr<bool> Tag::AddRecord(const InternedStringPtr& key,
   untracked_keys_.erase(key);
   for (const auto& tag : parsed_tags) {
     tree_.AddKeyValue(tag, key);
+    GlobalIndexStats::Instance().Incr(MetricType::kTags);
   }
   return true;
 }
@@ -109,7 +119,7 @@ absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
 absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
                                        absl::string_view data) {
   // TODO: implement operator [] in patricia_tree.
-  auto interned_data = StringInternStore::Intern(data);
+  auto interned_data = StringInternStore::Intern(data, StringType::TAG);
   auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
   if (new_parsed_tags.empty()) {
     [[maybe_unused]] auto res =
@@ -129,6 +139,7 @@ absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
   for (const auto& tag : new_parsed_tags) {
     if (!tag_info.tags.contains(tag)) {
       tree_.AddKeyValue(tag, key);
+      GlobalIndexStats::Instance().Incr(MetricType::kTags);
     }
   }
 
@@ -136,6 +147,7 @@ absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
   for (const auto& tag : tag_info.tags) {
     if (!new_parsed_tags.contains(tag)) {
       tree_.Remove(tag, key);
+      GlobalIndexStats::Instance().Decr(MetricType::kTags);  
     }
   }
 
@@ -161,6 +173,7 @@ absl::StatusOr<bool> Tag::RemoveRecord(const InternedStringPtr& key,
   auto& tag_info = it->second;
   for (const auto& tag : tag_info.tags) {
     tree_.Remove(tag, key);
+    GlobalIndexStats::Instance().Decr(MetricType::kTags);  
   }
   tracked_tags_by_keys_.erase(it);
   return true;

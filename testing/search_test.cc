@@ -111,7 +111,7 @@ class TestedNumericEntriesFetcher : public indexes::Numeric::EntriesFetcher {
   std::unique_ptr<indexes::EntriesFetcherIteratorBase> Begin() override {
     std::vector<InternedStringPtr> keys;
     for (size_t i = key_range_.first; i <= key_range_.second; ++i) {
-      auto interned_key = StringInternStore::Intern(std::to_string(i));
+      auto interned_key = StringInternStore::Intern(std::to_string(i), StringType::KEY);
       keys.push_back(interned_key);
     }
 
@@ -368,7 +368,7 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
     // Add record to vector index
     std::string vector = std::string((char *)vectors[i].data(),
                                      vectors[i].size() * sizeof(float));
-    auto interned_key = StringInternStore::Intern(key);
+    auto interned_key = StringInternStore::Intern(key, StringType::KEY);
 
     VMSDK_EXPECT_OK(vector_index->AddRecord(interned_key, vector));
 
@@ -708,7 +708,7 @@ struct IndexedContentTestCase {
     std::optional<absl::flat_hash_map<std::string, std::string>>
         attribute_contents;
     indexes::Neighbor ToIndexesNeighbor() const {
-      auto string_interned_external_id = StringInternStore::Intern(external_id);
+      auto string_interned_external_id = StringInternStore::Intern(external_id, StringType::KEY);
       auto result = indexes::Neighbor{string_interned_external_id, distance};
       if (attribute_contents.has_value()) {
         result.attribute_contents = RecordsMap();
@@ -828,7 +828,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
         CHECK(false);
     }
     for (auto &content : index.contents) {
-      auto key = StringInternStore::Intern(content.first);
+      auto key = StringInternStore::Intern(content.first, StringType::KEY);
       auto value = content.second;
       VMSDK_EXPECT_OK(index_base->AddRecord(key, value));
     }

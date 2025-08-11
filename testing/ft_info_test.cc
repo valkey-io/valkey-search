@@ -135,10 +135,11 @@ INSTANTIATE_TEST_SUITE_P(
                         .expect_return_failure = false,
                         .expected_output =
                             "*22\r\n+index_name\r\n+test_name\r\n+index_"
-                            "definition\r\n*6\r\n+key_"
+                            "definition\r\n*8\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
-                            "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
-                            "24\r\n+"
+                            "default_score\r\n$1\r\n1\r\n+indexes_all\r\n+"
+                            "false\r\n+"
+                            "attributes\r\n*1\r\n*24\r\n+"
                             "identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+"
                             "type\r\n+VECTOR\r\n+"
@@ -192,10 +193,11 @@ INSTANTIATE_TEST_SUITE_P(
                         .expect_return_failure = false,
                         .expected_output =
                             "*22\r\n+index_name\r\n+test_name\r\n+index_"
-                            "definition\r\n*6\r\n+key_"
+                            "definition\r\n*8\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
-                            "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
-                            "20\r\n+"
+                            "default_score\r\n$1\r\n1\r\n+indexes_all\r\n+"
+                            "false\r\n+"
+                            "attributes\r\n*1\r\n*20\r\n+"
                             "identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+"
                             "type\r\n+VECTOR\r\n+"
@@ -242,7 +244,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "*22\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
-                            "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
+                            "default_score\r\n$1\r\n1\r\n+indexes_all\r\n+false\r\n+"
+			    "attributes\r\n*1\r\n*"
                             "12\r\n+identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+type\r\n+"
                             "TAG\r\n+SEPARATOR\r\n+@\r\n+CASESENSITIVE\r\n+"
@@ -283,9 +286,10 @@ INSTANTIATE_TEST_SUITE_P(
                         .expect_return_failure = false,
                         .expected_output =
                             "*22\r\n+index_name\r\n+test_name\r\n+index_"
-                            "definition\r\n*6\r\n+key_"
+                            "definition\r\n*8\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
-                            "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
+                            "default_score\r\n$1\r\n1\r\n+indexes_all\r\n+false\r\n+"
+			    "attributes\r\n*1\r\n*"
                             "12\r\n+identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+type\r\n+"
                             "TAG\r\n+SEPARATOR\r\n+@\r\n+CASESENSITIVE\r\n+"
@@ -323,9 +327,11 @@ INSTANTIATE_TEST_SUITE_P(
                         .expect_return_failure = false,
                         .expected_output =
                             "*22\r\n+index_name\r\n+test_name\r\n+index_"
-                            "definition\r\n*6\r\n+key_"
+                            "definition\r\n*8\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
-                            "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
+                            "default_score\r\n$1\r\n1\r\n+indexes_all\r\n+"
+                            "false\r\n+"
+                            "attributes\r\n*1\r\n*"
                             "8\r\n+identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+type\r\n+"
                             "NUMERIC\r\n+size\r\n$1\r\n0\r\n+num_docs\r\n:"

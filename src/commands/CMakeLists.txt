@@ -1,5 +1,6 @@
 set(SRCS_COMMANDS
     ${CMAKE_CURRENT_LIST_DIR}/ft_create.cc
+    ${CMAKE_CURRENT_LIST_DIR}/ft_create_info.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_dropindex.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_debug.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_info.cc ${CMAKE_CURRENT_LIST_DIR}/ft_list.cc

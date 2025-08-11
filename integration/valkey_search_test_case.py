@@ -1,4 +1,5 @@
 import os
+import time
 import pytest
 from valkeytestframework.valkey_test_case import ValkeyTestCase
 from valkey import ResponseError
@@ -25,7 +26,7 @@ class ValkeySearchTestCaseBase(ValkeyTestCase):
         self.server, self.client = self.create_server(
             testdir=self.testdir, server_path=server_path, args=args
         )
-        logging.info("startup args are: %s", args)
+        self.server, self.client = self.start_new_server()
 
     def verify_error_response(self, client, cmd, expected_err_reply):
         try:
@@ -58,6 +59,51 @@ class ValkeySearchTestCaseBase(ValkeyTestCase):
                 key, value = line.split(":", 1)
                 stats_dict[key.strip()] = value.strip()
         return stats_dict
+
+    def start_new_server(self):
+        """Create a new Valkey server instance"""        
+        loadmodule = f"{os.getenv('MODULE_PATH')} --loadmodule {os.getenv('JSON_MODULE_PATH')}"
+        args = {
+            "enable-debug-command": "yes",
+            "loadmodule": loadmodule,
+        }
+        server_path = os.getenv("VALKEY_SERVER_PATH")
+
+        server, client = self.create_server(
+            testdir=self.testdir, server_path=server_path, args=args
+        )
+        logging.info("startup args are: %s", args)
+        return server, client
+            
+    def verify_replicaof_succeeded(self, replica_client):
+        info = replica_client.execute_command("INFO", "replication")
+        role = info.get("role", "")
+        master_link_status = info.get("master_link_status", "")
+        assert role == "slave" and master_link_status == "up"
+
+    def create_new_replica(self):
+        """Create a Valkey server configured as a replica of the primary `self.server`."""
+        replica_server, replica_client = self.start_new_server()
+
+        replica_client.execute_command("REPLICAOF", "127.0.0.1", self.server.port)
+        time.sleep(10)   # allow replication to complete
+        self.verify_replicaof_succeeded(replica_client)
+
+        return replica_server, replica_client
+
+    def cleanup_replica(self, replica_client):
+        """Restore replica server back to standalone mode."""
+        replica_client.execute_command("REPLICAOF", "NO", "ONE")
+        
+        # verify it's back to being standalone
+        info = replica_client.execute_command("INFO", "replication")
+        role = info.get("role", "")
+        assert role == "master", f"Expected role 'master' but got '{role}'"
+
+        info = self.client.execute_command("INFO", "replication")
+        role = info.get("role", "")
+        num_replicas = info.get("connected_slaves", "")
+        assert role == "master" and num_replicas == 0, f"Expected role 'master' with no replicas but got role='{role}', connected replicas={num_replicas}"
 
 
 class ValkeySearchClusterTestCase(ValkeySearchTestCaseBase):
@@ -123,6 +169,73 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseBase):
                     ]
                 )
             )
+    
+    def get_node_id(self, node_idx):
+        client = self.client_for_primary(node_idx)
+        nodes_info = client.execute_command("CLUSTER", "NODES")
+        lines = nodes_info.decode('utf-8').strip().split('\n')
+        for line in lines:
+            parts = line.split()
+            if len(parts) >= 3 and 'myself' in parts[2]:
+                return parts[0]
+        
+        raise AssertionError(f"Could not find node ID for node {node_idx}")
+
+    def setup_replica_from_existing_cluster_servers(self, primary_idx=0, replica_idx=1):
+        """Setup replication using existing cluster servers with CLUSTER REPLICATE."""
+        if replica_idx >= len(self.servers) or primary_idx >= len(self.servers):
+            raise AssertionError(f"Invalid server indices: primary={primary_idx}, replica={replica_idx}")
+        
+        primary_client = self.client_for_primary(primary_idx)
+        replica_client = self.client_for_primary(replica_idx)
+        
+        ranges = self._split_range_pairs(0, 16384, self.CLUSTER_SIZE)
+        replica_start, replica_end = ranges[replica_idx]
+        
+        primary_id = self.get_node_id(primary_idx)
+        
+        # move slots from replica to primary
+        for slot in range(replica_start, replica_end):
+            replica_client.execute_command("CLUSTER", "SETSLOT", slot, "NODE", primary_id)
+        
+        replica_client.execute_command("CLUSTER", "REPLICATE", primary_id)
+        
+        # verify replication succeeded
+        replica_verified = False
+        nodes_info = replica_client.execute_command("CLUSTER", "NODES")
+        lines = nodes_info.decode('utf-8').strip().split('\n')
+        for line in lines:
+            parts = line.split()
+            if len(parts) >= 4 and 'myself' in parts[2]:
+                if parts[3] == primary_id and 'slave' in parts[2]:
+                    replica_verified = True
+                    break
+        
+        if not replica_verified:
+            raise AssertionError(f"Cluster replication setup failed for replica {replica_idx} -> primary {primary_idx}")
+        
+        return primary_client, replica_client
+    
+    def cleanup_replica_cluster(self, replica_idx=1):
+        """Restore replica server back to primary mode and rejoin cluster."""
+        replica_client = self.client_for_primary(replica_idx)
+        replica_client.execute_command("CLUSTER", "RESET", "SOFT")
+        
+        self.cluster_meet(replica_idx, self.CLUSTER_SIZE)
+        
+        # re-assign the original slots
+        ranges = self._split_range_pairs(0, 16384, self.CLUSTER_SIZE)
+        start, end = ranges[replica_idx]
+        self.add_slots(replica_idx, start, end)
+        
+        # verify node is back in the cluster
+        nodes_info = replica_client.execute_command("CLUSTER", "NODES")
+        lines = nodes_info.decode('utf-8').strip().split('\n')
+        for line in lines:
+            parts = line.split()
+            if len(parts) >= 3 and 'myself' in parts[2]:
+                assert 'master' in parts[2], f"Node should be master but shows: {parts[2]}"
+                break
 
     @pytest.fixture(autouse=True)
     def setup_test(self, request):

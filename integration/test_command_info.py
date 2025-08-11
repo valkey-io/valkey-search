@@ -66,8 +66,6 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert ft_create_docs is not None
         assert isinstance(ft_create_docs, dict)
 
-        print(docs)
-        
         # Verify summary
         assert ft_create_docs[b"summary"] == b"Creates an empty search index and initiates the backfill process"
         

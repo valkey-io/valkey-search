@@ -17,4 +17,5 @@
         "--query-driver=**"
     ],
     "clangd.inactiveRegions.useBackgroundHighlight": true,
+    "clangd.enableCodeCompletion": true
 }

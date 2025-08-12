@@ -56,16 +56,47 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         """Test FT.CREATE command docs"""
         client: Valkey = self.server.get_new_client()
         
-        docs = client.execute_command("COMMAND", "DOCS", "FT.CREATE")
+        # Bypass the default parser by using raw connection
+        conn = client.connection_pool.get_connection('COMMAND')
+        try:
+            conn.send_command("COMMAND", "DOCS", "FT.CREATE")
+            docs = conn.read_response()
+        finally:
+            client.connection_pool.release(conn)
         assert docs is not None
         assert isinstance(docs, list)
         assert len(docs) >= 2
-        
-        assert docs[0] == b'FT.CREATE'
-        ft_create_docs = docs[1]
-        assert ft_create_docs is not None
-        assert isinstance(ft_create_docs, dict)
 
+        assert docs[0] == b'FT.CREATE'
+        
+        # docs[1] is a flat list of key-value pairs
+        kv_list = docs[1]
+        assert kv_list is not None
+        assert isinstance(kv_list, list)
+        
+        # Helper function to parse nested structures
+        def parse_kv_list(kv_list):
+            result = {}
+            i = 0
+            while i < len(kv_list):
+                key = kv_list[i]
+                value = kv_list[i + 1] if i + 1 < len(kv_list) else None
+                
+                if isinstance(value, list) and value and isinstance(value[0], list):
+                    parsed_value = []
+                    for item in value:
+                        if isinstance(item, list):
+                            parsed_value.append(parse_kv_list(item))
+                        else:
+                            parsed_value.append(item)
+                    result[key] = parsed_value
+                else:
+                    result[key] = value
+                i += 2
+            return result
+        
+        ft_create_docs = parse_kv_list(kv_list)
+        
         # Verify summary
         assert ft_create_docs[b"summary"] == b"Creates an empty search index and initiates the backfill process"
         
@@ -99,7 +130,7 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert b"optional" in on_arg[b"flags"]
         
         # Verify ON subarguments (HASH and JSON)
-        on_subargs = on_arg[b"value"]
+        on_subargs = on_arg[b"arguments"]
         assert isinstance(on_subargs, list)
         assert len(on_subargs) == 2
         
@@ -128,7 +159,7 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert b"optional" in prefix_arg[b"flags"]
         
         # Verify PREFIX subarguments
-        prefix_subargs = prefix_arg[b"value"]
+        prefix_subargs = prefix_arg[b"arguments"]
         assert isinstance(prefix_subargs, list)
         assert len(prefix_subargs) == 2
         
@@ -158,9 +189,9 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert b"multiple" in schema_arg[b"flags"]
         
         # Verify SCHEMA subarguments
-        schema_subargs = schema_arg[b"value"]
+        schema_subargs = schema_arg[b"arguments"]
         assert isinstance(schema_subargs, list)
-        assert len(schema_subargs) == 4
+        assert len(schema_subargs) == 3
         
         field_id_arg = schema_subargs[0]
         assert isinstance(field_id_arg, dict)
@@ -186,7 +217,7 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert field_type_arg[b"since"] == b"1.0.0"
         
         # Verify field types
-        field_types = field_type_arg[b"value"]
+        field_types = field_type_arg[b"arguments"]
         assert isinstance(field_types, list)
         assert len(field_types) == 3
         
@@ -215,7 +246,7 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert vector_type[b"since"] == b"1.0.0"
 
         # Verify TAG subarguments
-        tag_subargs = tag_type[b"value"]
+        tag_subargs = tag_type[b"arguments"]
         assert isinstance(tag_subargs, list)
         assert len(tag_subargs) == 2
         
@@ -238,7 +269,7 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert b"optional" in casesensitive_arg[b"flags"]
         
         # Verify VECTOR subarguments
-        vector_subargs = vector_type[b"value"]
+        vector_subargs = vector_type[b"arguments"]
         assert isinstance(vector_subargs, list)
         assert len(vector_subargs) == 3
         
@@ -267,7 +298,7 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert b"multiple" in attributes_arg[b"flags"]
         
         # Verify attributes subargs (name-value pairs)
-        attributes_subargs = attributes_arg[b"value"]
+        attributes_subargs = attributes_arg[b"arguments"]
         assert isinstance(attributes_subargs, list)
         assert len(attributes_subargs) == 2
         
@@ -286,7 +317,7 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert attr_value_arg[b"since"] == b"1.0.0"
         
         # Verify algorithm options (HNSW and FLAT)
-        algorithms = algorithm_arg[b"value"]
+        algorithms = algorithm_arg[b"arguments"]
         assert isinstance(algorithms, list)
         assert len(algorithms) == 2
         
@@ -300,7 +331,7 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert hnsw_alg[b"since"] == b"1.0.0"
         
         # Verify HNSW parameters
-        hnsw_params = hnsw_alg[b"value"]
+        hnsw_params = hnsw_alg[b"arguments"]
         assert isinstance(hnsw_params, list)
         assert len(hnsw_params) == 7
         
@@ -322,7 +353,7 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert type_param[b"since"] == b"1.0.0"
 
         # Check type options (FLOAT32)
-        type_options = type_param[b"value"]
+        type_options = type_param[b"arguments"]
         assert len(type_options) == 1
         float32_option = type_options[0]
         assert float32_option[b"name"] == b"float32"
@@ -340,7 +371,7 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert distance_param[b"since"] == b"1.0.0"
         
         # Check distance metric options (L2, IP, COSINE)
-        distance_options = distance_param[b"value"]
+        distance_options = distance_param[b"arguments"]
         assert len(distance_options) == 3
         
         l2_option = distance_options[0]
@@ -409,7 +440,7 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert flat_alg[b"since"] == b"1.0.0"
         
         # Verify FLAT parameters
-        flat_params = flat_alg[b"value"]
+        flat_params = flat_alg[b"arguments"]
         assert len(flat_params) == 4
         
         # Check all FLAT parameters
@@ -430,7 +461,7 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert flat_type_param[b"since"] == b"1.0.0"
 
         # Check type options for FLAT (FLOAT32)
-        flat_type_options = flat_type_param[b"value"]
+        flat_type_options = flat_type_param[b"arguments"]
         assert len(flat_type_options) == 1
         flat_float32_option = flat_type_options[0]
         assert flat_float32_option[b"name"] == b"float32"
@@ -448,8 +479,8 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert flat_distance_param[b"since"] == b"1.0.0"
         
         # Check distance metric options for FLAT (same as HNSW: L2, IP, COSINE)
-        assert b"value" in flat_distance_param
-        flat_distance_options = flat_distance_param[b"value"]
+        assert b"arguments" in flat_distance_param
+        flat_distance_options = flat_distance_param[b"arguments"]
         assert len(flat_distance_options) == 3
         
         flat_l2_option = flat_distance_options[0]

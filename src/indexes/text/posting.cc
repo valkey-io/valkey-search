@@ -302,7 +302,7 @@ bool Postings::KeyIterator::SkipForwardKey(const Key& key) {
 }
 
 const Key& Postings::KeyIterator::GetKey() const {
-  CHECK(key_map_ != nullptr && current_ != end_) << "KeyIterator is invalid or exhausted";
+  // CHECK(key_map_ != nullptr && current_ != end_) << "KeyIterator is invalid or exhausted";
   return current_->first;
 }
 

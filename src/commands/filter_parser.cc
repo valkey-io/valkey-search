@@ -24,6 +24,7 @@
 #include "src/valkey_search_options.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/text.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
@@ -217,6 +218,41 @@ absl::StatusOr<absl::string_view> FilterParser::ParseTagString() {
   return expression_.substr(pos, stop_pos);
 }
 
+absl::StatusOr<std::unique_ptr<query::TextPredicate>> FilterParser::ParseTextPredicate(
+    const std::string& field_name) {
+  auto index = index_schema_.GetIndex(field_name);
+  if (!index.ok() ||
+      index.value()->GetIndexerType() != indexes::IndexerType::kText) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "`", field_name, "` is not indexed as a text field"));
+  }
+  auto identifier = index_schema_.GetIdentifier(field_name).value();
+  filter_identifiers_.insert(identifier);
+  // Currently, we do not support default field text predicates (ie - without a field specified).
+  std::string text_value;
+  bool in_quotes = Match('"');
+  while (!IsEnd()) {
+    char c = Peek();
+    if (in_quotes && c == '"') {
+      pos_++;
+      break;
+    } else if (c == ' ' || c == ')' || c == '|') {
+      break;
+    }
+    text_value.push_back(c);
+    pos_++;
+  }
+  if (in_quotes && text_value.empty()) {
+    return absl::InvalidArgumentError("Empty quoted string");
+  }
+  if (text_value.empty()) {
+    return absl::InvalidArgumentError("Empty text predicate");
+  }
+  auto text_index = dynamic_cast<const indexes::Text*>(index.value().get());
+  // If in quotes, it is an exact match.
+  return std::make_unique<query::TextPredicate>(text_index, field_name, identifier, text_value, query::TextPredicate::Operation::kExact, 0);
+}
+
 absl::StatusOr<absl::flat_hash_set<absl::string_view>> FilterParser::ParseTags(
     absl::string_view tag_string, indexes::Tag* tag_index) const {
   return indexes::Tag::ParseSearchTags(tag_string, tag_index->GetSeparator());
@@ -391,9 +427,8 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseExpression(
         node_count_++;  // Count the TagPredicate Node
         VMSDK_ASSIGN_OR_RETURN(predicate, ParseTagPredicate(field_name));
       } else {
-        return absl::InvalidArgumentError(
-            absl::StrCat("Expected '[', '{', got '",
-                         expression_.substr(pos_, 1), "'. Position: ", pos_));
+        node_count_++;  // Count the TextPredicate Node
+        VMSDK_ASSIGN_OR_RETURN(predicate, ParseTextPredicate(field_name));
       }
       if (prev_predicate) {
         node_count_++;  // Count the ComposedPredicate Node

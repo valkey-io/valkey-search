@@ -26,6 +26,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -163,6 +164,13 @@ size_t EvaluateFilterAsPrimary(
     auto numeric_predicate = dynamic_cast<const NumericPredicate *>(predicate);
     auto fetcher =
         numeric_predicate->GetIndex()->Search(*numeric_predicate, negate);
+    size_t size = fetcher->Size();
+    entries_fetchers.push(std::move(fetcher));
+    return size;
+  }
+  if (predicate->GetType() == PredicateType::kText) {
+    auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
+    auto fetcher = text_predicate->GetIndex()->Search(*text_predicate, negate);
     size_t size = fetcher->Size();
     entries_fetchers.push(std::move(fetcher));
     return size;
@@ -340,7 +348,6 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
         false);
     // Collect matching keys
     std::deque<indexes::Neighbor> neighbors;
-    indexes::InlineVectorEvaluator evaluator;
     while (!entries_fetchers.empty()) {
       auto fetcher = std::move(entries_fetchers.front());
       entries_fetchers.pop();

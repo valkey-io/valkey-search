@@ -22,9 +22,12 @@
 #include "src/index_schema.pb.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
-
+#include "src/indexes/text/phrase.h"
+#include "src/query/predicate.h" 
 
 namespace valkey_search::indexes {
+
+using WordIterator = text::RadixTree<std::shared_ptr<text::Postings>, false>::WordIterator;
 
 class Text : public IndexBase {
  public:
@@ -58,6 +61,7 @@ class Text : public IndexBase {
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  public:
+  // Abstract for Text. Every text operation will have a specific implementation.
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
    public:
     bool Done() const override;
@@ -67,18 +71,34 @@ class Text : public IndexBase {
    private:
   };
 
+  // Common EntriesFetcher impl for all Text operations.
   class EntriesFetcher : public EntriesFetcherBase {
    public:
+    EntriesFetcher(size_t size,
+                const std::shared_ptr<text::TextIndex>& text_index,
+                const InternedStringSet* untracked_keys = nullptr)
+        : size_(size),
+          text_index_(text_index),
+          untracked_keys_(untracked_keys) {}
+
     size_t Size() const override;
+
+    // Factory method that creates the appropriate text iterator
+    // based on the text predicate's operation type.
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;
 
-   private:
+    size_t size_;
+    const InternedStringSet* untracked_keys_;
+    std::shared_ptr<text::TextIndex> text_index_;
+    query::TextPredicate::Operation operation_;
+    absl::string_view data_;
+    bool no_field_{false};
   };
 
-  // TODO: remove once actual TextPredicate is implemented
-  struct TextPredicate {};
+  // Calculate size based on the predicate.
+  size_t CalculateSize(const query::TextPredicate& predicate) const;
 
-  virtual std::unique_ptr<EntriesFetcher> Search(const TextPredicate& predicate,
+  virtual std::unique_ptr<EntriesFetcher> Search(const query::TextPredicate& predicate,
                                                  bool negate) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
@@ -89,7 +109,7 @@ class Text : public IndexBase {
   
   // Reference to the shared text index schema
   std::shared_ptr<text::TextIndexSchema> text_index_schema_;
-  
+  InternedStringSet untracked_keys_;
   // TextIndex proto-derived configuration fields
   bool with_suffix_trie_;
   bool no_stem_;

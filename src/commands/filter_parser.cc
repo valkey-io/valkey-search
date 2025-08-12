@@ -249,10 +249,6 @@ absl::StatusOr<std::unique_ptr<query::TextPredicate>> FilterParser::ParseTextPre
     return absl::InvalidArgumentError("Empty text predicate");
   }
   auto text_index = dynamic_cast<const indexes::Text*>(index.value().get());
-  if (!text_index) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Field '", field_name, "' is not a text field"));
-  }
   // If in quotes, it is an exact match.
   return std::make_unique<query::TextPredicate>(text_index, field_name, identifier, text_value, query::TextPredicate::Operation::kExact, 0);
 }

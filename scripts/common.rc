@@ -41,7 +41,7 @@ _WORKSPACE_HOME=$(findup QUICK_START.md)
 _THIRD_PARTY_COMPONENTS_BUILD_DIR=${_WORKSPACE_HOME}/.build-release
 
 function get_third_party_build_dir() {
-  if [[ "${SAN_BUILD}" == "no" ]]; then
+  if [ -z "${SAN_BUILD}" ] || [[ "${SAN_BUILD}" == "no" ]]; then
     echo ${_THIRD_PARTY_COMPONENTS_BUILD_DIR}
   else
     echo ${_THIRD_PARTY_COMPONENTS_BUILD_DIR}-asan
@@ -170,7 +170,7 @@ function setup_json_module() {
   fi
 
   rm -fr "${VALKEY_JSON_HOME}"
-  LOG_INFO "Cloning valkey-server into ${VALKEY_JSON_HOME}"
+  LOG_INFO "Cloning valkey-json into ${VALKEY_JSON_HOME}"
   git clone https://github.com/valkey-io/valkey-json.git ${VALKEY_JSON_HOME}
 
   pushd ${VALKEY_JSON_HOME} >/dev/null

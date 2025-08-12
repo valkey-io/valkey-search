@@ -1,5 +1,5 @@
 from typing import List
-from integration.indexes import Index, Numeric, Vector
+from indexes import *
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker

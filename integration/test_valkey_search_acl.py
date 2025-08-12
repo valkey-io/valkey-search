@@ -1,4 +1,5 @@
 from typing import List
+from integration.indexes import Index, Numeric, Vector
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
@@ -94,38 +95,16 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
     def test_index_with_several_prefixes_permissions(self):
         client: Valkey = self.server.get_new_client()
         # Create index with two prefixes
-        assert (
-            client.execute_command(
-                "FT.CREATE",
-                INDEX_NAME,
-                "PREFIX",
-                "2",
-                "vec:",
-                "vector:",
-                "SCHEMA",
-                "vector",
-                "VECTOR",
-                "HNSW",
-                "6",
-                "TYPE",
-                "FLOAT32",
-                "DIM",
-                "3",
-                "DISTANCE_METRIC",
-                "COSINE",
-            )
-            == b"OK"
+        hnsw_index: Index = Index(
+            INDEX_NAME,
+            [Vector("vector", 3, type="HNSW", m=2, efc=1), Numeric("n")],
+            prefixes=["vec:", "vector:"],
         )
+        hnsw_index.create(client)
         # Create a user which can access one of the key prefixes
         client.execute_command("ACL SETUSER user1 on >search_pass ~vector:* &* +@all")
-        # Insert vectors with prefix "vec:"
-        for i in range(10):
-            vector_bytes = struct.pack("<3f", *[float(i), float(i + 1), float(i + 2)])
-            client.hset(f"vec:{i}", "vector", vector_bytes)
-        # Insert vectors with prefix "vector:"
-        for i in range(10):
-            vector_bytes = struct.pack("<3f", *[float(i), float(i + 1), float(i + 2)])
-            client.hset(f"vector:{i}", "vector", vector_bytes)
+        # Load data in the index
+        hnsw_index.load_data(client, 100)
         # Switch to that user
         client.execute_command(f"AUTH user1 search_pass")
         assert client.execute_command(f"ACL whoami") == "user1"

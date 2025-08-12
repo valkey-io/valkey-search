@@ -21,7 +21,7 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
                 # Make sure the error is not related to permission issues
                 assert "has no permissions to run" not in str(e)
         except Exception as e:
-            # Any other error is acceptible. This is done to avoid errors
+            # Any other error is acceptable. This is done to avoid errors
             # Of missing index
             assert True
 

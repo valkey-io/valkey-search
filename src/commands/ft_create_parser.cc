@@ -651,7 +651,6 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   }
   
   // Apply global text defaults to the schema
-  index_schema_proto.set_language(schema_text_defaults.language);
   index_schema_proto.set_punctuation(schema_text_defaults.punctuation);
   index_schema_proto.set_with_offsets(schema_text_defaults.with_offsets);
   

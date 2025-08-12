@@ -331,6 +331,7 @@ TEST_P(LoadTest, load) {
 }
 
 TEST_F(ValkeySearchTest, FullSyncFork) {
+  VMSDK_EXPECT_OK(options::GetMaxWorkerSuspension().SetValue(1));
   InitThreadPools(2, 2);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   auto reader_thread_pool = ValkeySearch::Instance().GetReaderThreadPool();

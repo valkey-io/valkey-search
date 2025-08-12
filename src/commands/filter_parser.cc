@@ -224,7 +224,7 @@ absl::StatusOr<std::unique_ptr<query::TextPredicate>> FilterParser::ParseTextPre
   if (!index.ok() ||
       index.value()->GetIndexerType() != indexes::IndexerType::kText) {
     return absl::InvalidArgumentError(absl::StrCat(
-        "`", field_name, "` is not indexed as a numeric field"));
+        "`", field_name, "` is not indexed as a text field"));
   }
   auto identifier = index_schema_.GetIdentifier(field_name).value();
   filter_identifiers_.insert(identifier);

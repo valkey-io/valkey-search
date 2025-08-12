@@ -143,6 +143,17 @@ ValkeyModuleCommandArg ftCreateDistanceMetricOptions[] = {
 // HNSW algorithm subargs
 ValkeyModuleCommandArg ftCreateHnswSubargs[] = {
     {
+        .name = "attribute_count",
+        .type = VALKEYMODULE_ARG_TYPE_INTEGER,
+        .key_spec_index = -1,
+        .token = nullptr,
+        .summary = "Number of attributes following",
+        .since = "1.0.0",
+        .flags = VALKEYMODULE_CMD_ARG_NONE,
+        .deprecated_since = nullptr,
+        .subargs = nullptr,
+    },
+    {
         .name = "dim",
         .type = VALKEYMODULE_ARG_TYPE_INTEGER,
         .key_spec_index = -1,
@@ -158,7 +169,7 @@ ValkeyModuleCommandArg ftCreateHnswSubargs[] = {
         .type = VALKEYMODULE_ARG_TYPE_ONEOF,
         .key_spec_index = -1,
         .token = "TYPE",
-        .summary = "Vector data type (Currently Only for FLOAT32)",
+        .summary = "Vector data type (required)",
         .since = "1.0.0",
         .flags = VALKEYMODULE_CMD_ARG_NONE,
         .deprecated_since = nullptr,
@@ -169,7 +180,7 @@ ValkeyModuleCommandArg ftCreateHnswSubargs[] = {
         .type = VALKEYMODULE_ARG_TYPE_ONEOF,
         .key_spec_index = -1,
         .token = "DISTANCE_METRIC",
-        .summary = "Distance algorithm",
+        .summary = "Distance algorithm (required)",
         .since = "1.0.0",
         .flags = VALKEYMODULE_CMD_ARG_NONE,
         .deprecated_since = nullptr,
@@ -225,6 +236,17 @@ ValkeyModuleCommandArg ftCreateHnswSubargs[] = {
 // FLAT algorithm subargs
 ValkeyModuleCommandArg ftCreateFlatSubargs[] = {
     {
+        .name = "attribute_count",
+        .type = VALKEYMODULE_ARG_TYPE_INTEGER,
+        .key_spec_index = -1,
+        .token = nullptr,
+        .summary = "Number of attributes following",
+        .since = "1.0.0",
+        .flags = VALKEYMODULE_CMD_ARG_NONE,
+        .deprecated_since = nullptr,
+        .subargs = nullptr,
+    },
+    {
         .name = "dim",
         .type = VALKEYMODULE_ARG_TYPE_INTEGER,
         .key_spec_index = -1,
@@ -240,7 +262,7 @@ ValkeyModuleCommandArg ftCreateFlatSubargs[] = {
         .type = VALKEYMODULE_ARG_TYPE_ONEOF,
         .key_spec_index = -1,
         .token = "TYPE",
-        .summary = "Vector data type (FLOAT32)",
+        .summary = "Vector data type (required)",
         .since = "1.0.0",
         .flags = VALKEYMODULE_CMD_ARG_NONE,
         .deprecated_since = nullptr,
@@ -251,7 +273,7 @@ ValkeyModuleCommandArg ftCreateFlatSubargs[] = {
         .type = VALKEYMODULE_ARG_TYPE_ONEOF,
         .key_spec_index = -1,
         .token = "DISTANCE_METRIC",
-        .summary = "Distance algorithm",
+        .summary = "Distance algorithm (required)",
         .since = "1.0.0",
         .flags = VALKEYMODULE_CMD_ARG_NONE,
         .deprecated_since = nullptr,
@@ -298,33 +320,6 @@ ValkeyModuleCommandArg ftCreateVectorAlgorithms[] = {
     {nullptr}  // Sentinel
 };
 
-// Subargs for vector attributes (name-value pairs that can repeat)
-ValkeyModuleCommandArg ftCreateVectorAttributeSubargs[] = {
-    {
-        .name = "attribute_name",
-        .type = VALKEYMODULE_ARG_TYPE_STRING,
-        .key_spec_index = -1,
-        .token = nullptr,
-        .summary = "Attribute name",
-        .since = "1.0.0",
-        .flags = VALKEYMODULE_CMD_ARG_NONE,
-        .deprecated_since = nullptr,
-        .subargs = nullptr,
-    },
-    {
-        .name = "attribute_value", 
-        .type = VALKEYMODULE_ARG_TYPE_STRING,
-        .key_spec_index = -1,
-        .token = nullptr,
-        .summary = "Attribute value",
-        .since = "1.0.0",
-        .flags = VALKEYMODULE_CMD_ARG_NONE,
-        .deprecated_since = nullptr,
-        .subargs = nullptr,
-    },
-    {nullptr}  // Sentinel
-};
-
 ValkeyModuleCommandArg ftCreateVectorSubargs[] = {
     {
         .name = "algorithm",
@@ -336,28 +331,6 @@ ValkeyModuleCommandArg ftCreateVectorSubargs[] = {
         .flags = VALKEYMODULE_CMD_ARG_NONE,
         .deprecated_since = nullptr,
         .subargs = ftCreateVectorAlgorithms,
-    },
-    {
-        .name = "attribute_count",
-        .type = VALKEYMODULE_ARG_TYPE_INTEGER,
-        .key_spec_index = -1,
-        .token = nullptr,
-        .summary = "Number of vector attributes",
-        .since = "1.0.0",
-        .flags = VALKEYMODULE_CMD_ARG_NONE,
-        .deprecated_since = nullptr,
-        .subargs = nullptr,
-    },
-    {
-        .name = "attributes",
-        .type = VALKEYMODULE_ARG_TYPE_BLOCK,
-        .key_spec_index = -1,
-        .token = nullptr,
-        .summary = "Vector attribute name-value pairs",
-        .since = "1.0.0",
-        .flags = VALKEYMODULE_CMD_ARG_MULTIPLE,
-        .deprecated_since = nullptr,
-        .subargs = ftCreateVectorAttributeSubargs,
     },
     {nullptr}  // Sentinel
 };

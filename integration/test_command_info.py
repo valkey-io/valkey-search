@@ -271,7 +271,7 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         # Verify VECTOR subarguments
         vector_subargs = vector_type[b"arguments"]
         assert isinstance(vector_subargs, list)
-        assert len(vector_subargs) == 3
+        assert len(vector_subargs) == 1
         
         algorithm_arg = vector_subargs[0]
         assert isinstance(algorithm_arg, dict)
@@ -279,42 +279,6 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert algorithm_arg[b"type"] == b"oneof"
         assert algorithm_arg[b"summary"] == b"Vector algorithm (HNSW or FLAT)"
         assert algorithm_arg[b"since"] == b"1.0.0"
-        
-        # Verify attribute_count argument
-        attr_count_arg = vector_subargs[1]
-        assert isinstance(attr_count_arg, dict)
-        assert attr_count_arg[b"name"] == b"attribute_count"
-        assert attr_count_arg[b"type"] == b"integer"
-        assert attr_count_arg[b"summary"] == b"Number of vector attributes"
-        assert attr_count_arg[b"since"] == b"1.0.0"
-        
-        # Verify attributes argument
-        attributes_arg = vector_subargs[2]
-        assert isinstance(attributes_arg, dict)
-        assert attributes_arg[b"name"] == b"attributes"
-        assert attributes_arg[b"type"] == b"block"
-        assert attributes_arg[b"summary"] == b"Vector attribute name-value pairs"
-        assert attributes_arg[b"since"] == b"1.0.0"
-        assert b"multiple" in attributes_arg[b"flags"]
-        
-        # Verify attributes subargs (name-value pairs)
-        attributes_subargs = attributes_arg[b"arguments"]
-        assert isinstance(attributes_subargs, list)
-        assert len(attributes_subargs) == 2
-        
-        attr_name_arg = attributes_subargs[0]
-        assert isinstance(attr_name_arg, dict)
-        assert attr_name_arg[b"name"] == b"attribute_name"
-        assert attr_name_arg[b"type"] == b"string"
-        assert attr_name_arg[b"summary"] == b"Attribute name"
-        assert attr_name_arg[b"since"] == b"1.0.0"
-        
-        attr_value_arg = attributes_subargs[1]
-        assert isinstance(attr_value_arg, dict)
-        assert attr_value_arg[b"name"] == b"attribute_value"
-        assert attr_value_arg[b"type"] == b"string"
-        assert attr_value_arg[b"summary"] == b"Attribute value"
-        assert attr_value_arg[b"since"] == b"1.0.0"
         
         # Verify algorithm options (HNSW and FLAT)
         algorithms = algorithm_arg[b"arguments"]
@@ -333,23 +297,30 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         # Verify HNSW parameters
         hnsw_params = hnsw_alg[b"arguments"]
         assert isinstance(hnsw_params, list)
-        assert len(hnsw_params) == 7
+        assert len(hnsw_params) == 8
         
         # Check all HNSW parameters
-        # 1. DIM parameter
-        dim_param = hnsw_params[0]
+        # 1. attribute_count parameter
+        attr_count_param = hnsw_params[0]
+        assert attr_count_param[b"name"] == b"attribute_count"
+        assert attr_count_param[b"type"] == b"integer"
+        assert attr_count_param[b"summary"] == b"Number of attributes following"
+        assert attr_count_param[b"since"] == b"1.0.0"
+        
+        # 2. DIM parameter
+        dim_param = hnsw_params[1]
         assert dim_param[b"name"] == b"dim"
         assert dim_param[b"type"] == b"integer"
         assert dim_param[b"token"] == b"DIM"
         assert dim_param[b"summary"] == b"Vector dimensions (required)"
         assert dim_param[b"since"] == b"1.0.0"
         
-        # 2. TYPE parameter
-        type_param = hnsw_params[1]
+        # 3. TYPE parameter
+        type_param = hnsw_params[2]
         assert type_param[b"name"] == b"type"
         assert type_param[b"type"] == b"oneof"
         assert type_param[b"token"] == b"TYPE"
-        assert type_param[b"summary"] == b"Vector data type (Currently Only for FLOAT32)"
+        assert type_param[b"summary"] == b"Vector data type (required)"
         assert type_param[b"since"] == b"1.0.0"
 
         # Check type options (FLOAT32)
@@ -362,12 +333,12 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert float32_option[b"summary"] == b"32-bit floating point vector"
         assert float32_option[b"since"] == b"1.0.0"
 
-        # 3. DISTANCE_METRIC parameter
-        distance_param = hnsw_params[2]
+        # 4. DISTANCE_METRIC parameter
+        distance_param = hnsw_params[3]
         assert distance_param[b"name"] == b"distance_metric"
         assert distance_param[b"type"] == b"oneof"
         assert distance_param[b"token"] == b"DISTANCE_METRIC"
-        assert distance_param[b"summary"] == b"Distance algorithm"
+        assert distance_param[b"summary"] == b"Distance algorithm (required)"
         assert distance_param[b"since"] == b"1.0.0"
         
         # Check distance metric options (L2, IP, COSINE)
@@ -395,8 +366,8 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert cosine_option[b"summary"] == b"Cosine distance"
         assert cosine_option[b"since"] == b"1.0.0"
         
-        # 4. INITIAL_CAP parameter
-        initial_cap_param = hnsw_params[3]
+        # 5. INITIAL_CAP parameter
+        initial_cap_param = hnsw_params[4]
         assert initial_cap_param[b"name"] == b"initial_cap"
         assert initial_cap_param[b"type"] == b"integer"
         assert initial_cap_param[b"token"] == b"INITIAL_CAP"
@@ -404,8 +375,8 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert initial_cap_param[b"since"] == b"1.0.0"
         assert b"optional" in initial_cap_param[b"flags"]
         
-        # 5. M parameter
-        m_param = hnsw_params[4]
+        # 6. M parameter
+        m_param = hnsw_params[5]
         assert m_param[b"name"] == b"m"
         assert m_param[b"type"] == b"integer"
         assert m_param[b"token"] == b"M"
@@ -413,8 +384,8 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert m_param[b"since"] == b"1.0.0"
         assert b"optional" in m_param[b"flags"]
         
-        # 6. EF_CONSTRUCTION parameter
-        ef_construction_param = hnsw_params[5]
+        # 7. EF_CONSTRUCTION parameter
+        ef_construction_param = hnsw_params[6]
         assert ef_construction_param[b"name"] == b"ef_construction"
         assert ef_construction_param[b"type"] == b"integer"
         assert ef_construction_param[b"token"] == b"EF_CONSTRUCTION"
@@ -422,8 +393,8 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert ef_construction_param[b"since"] == b"1.0.0"
         assert b"optional" in ef_construction_param[b"flags"]
         
-        # 7. EF_RUNTIME parameter
-        ef_runtime_param = hnsw_params[6]
+        # 8. EF_RUNTIME parameter
+        ef_runtime_param = hnsw_params[7]
         assert ef_runtime_param[b"name"] == b"ef_runtime"
         assert ef_runtime_param[b"type"] == b"integer"
         assert ef_runtime_param[b"token"] == b"EF_RUNTIME"
@@ -441,23 +412,30 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         
         # Verify FLAT parameters
         flat_params = flat_alg[b"arguments"]
-        assert len(flat_params) == 4
+        assert len(flat_params) == 5
         
         # Check all FLAT parameters
-        # 1. DIM parameter
-        flat_dim_param = flat_params[0]
+        # 1. attribute_count parameter
+        flat_attr_count_param = flat_params[0]
+        assert flat_attr_count_param[b"name"] == b"attribute_count"
+        assert flat_attr_count_param[b"type"] == b"integer"
+        assert flat_attr_count_param[b"summary"] == b"Number of attributes following"
+        assert flat_attr_count_param[b"since"] == b"1.0.0"
+        
+        # 2. DIM parameter
+        flat_dim_param = flat_params[1]
         assert flat_dim_param[b"name"] == b"dim"
         assert flat_dim_param[b"type"] == b"integer"
         assert flat_dim_param[b"token"] == b"DIM"
         assert flat_dim_param[b"summary"] == b"Vector dimensions (required)"
         assert flat_dim_param[b"since"] == b"1.0.0"
         
-        # 2. TYPE parameter
-        flat_type_param = flat_params[1]
+        # 3. TYPE parameter
+        flat_type_param = flat_params[2]
         assert flat_type_param[b"name"] == b"type"
         assert flat_type_param[b"type"] == b"oneof"
         assert flat_type_param[b"token"] == b"TYPE"
-        assert flat_type_param[b"summary"] == b"Vector data type (FLOAT32)"
+        assert flat_type_param[b"summary"] == b"Vector data type (required)"
         assert flat_type_param[b"since"] == b"1.0.0"
 
         # Check type options for FLAT (FLOAT32)
@@ -470,12 +448,12 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert flat_float32_option[b"summary"] == b"32-bit floating point vector"
         assert flat_float32_option[b"since"] == b"1.0.0"
 
-        # 3. DISTANCE_METRIC parameter
-        flat_distance_param = flat_params[2]
+        # 4. DISTANCE_METRIC parameter
+        flat_distance_param = flat_params[3]
         assert flat_distance_param[b"name"] == b"distance_metric"
         assert flat_distance_param[b"type"] == b"oneof"
         assert flat_distance_param[b"token"] == b"DISTANCE_METRIC"
-        assert flat_distance_param[b"summary"] == b"Distance algorithm"
+        assert flat_distance_param[b"summary"] == b"Distance algorithm (required)"
         assert flat_distance_param[b"since"] == b"1.0.0"
         
         # Check distance metric options for FLAT (same as HNSW: L2, IP, COSINE)
@@ -504,8 +482,8 @@ class TestCommandInfo(ValkeySearchTestCaseBase):
         assert flat_cosine_option[b"summary"] == b"Cosine distance"
         assert flat_cosine_option[b"since"] == b"1.0.0"
         
-        # 4. INITIAL_CAP parameter
-        flat_initial_cap_param = flat_params[3]
+        # 5. INITIAL_CAP parameter
+        flat_initial_cap_param = flat_params[4]
         assert flat_initial_cap_param[b"name"] == b"initial_cap"
         assert flat_initial_cap_param[b"type"] == b"integer"
         assert flat_initial_cap_param[b"token"] == b"INITIAL_CAP"

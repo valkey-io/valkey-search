@@ -124,28 +124,34 @@ fi
 
 RUN_SUCCESS=0
 function run_pytest() {
-  set +e
   zap valkey-server
   LOG_INFO "Running: ${PYTHON_PATH} -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/"
   ${PYTHON_PATH} -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/
   RUN_SUCCESS=$?
-  set -e
 }
 
 function run_with_retries() {
   counter=1
-  while ((counter <= 3)); do
-    LOG_INFO "Running tests. Attempt number: ${counter}"
+  retries=${INTEG_RETRIES}
+  if ((retries == 1)); then
+    # Avoid the clutter and run it once.
     run_pytest
-    if [[ "${RUN_SUCCESS}" == "0" ]]; then
-      LOG_INFO "Success!"
-      return
-    fi
-    ((counter++))
-    LOG_NOTICE "Retrying..."
-  done
-  LOG_ERROR "Retries exhausted"
-  exit 1
+  else
+    while ((counter <= retries)); do
+      LOG_INFO "Running tests. Attempt number: ${counter}"
+      set +e
+      run_pytest
+      set -e
+      if [[ "${RUN_SUCCESS}" == "0" ]]; then
+        LOG_INFO "Success!"
+        return
+      fi
+      ((counter++))
+      LOG_NOTICE "Retrying..."
+    done
+    LOG_ERROR "Retries exhausted"
+    exit 1
+  fi
 }
 
 run_with_retries

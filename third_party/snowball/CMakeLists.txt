@@ -1,5 +1,6 @@
 # Snowball stemming library
 # Build the libstemmer C library
+# Version: v3.0.1
 
 set(SNOWBALL_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 

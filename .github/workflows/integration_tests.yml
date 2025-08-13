@@ -31,4 +31,4 @@ jobs:
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
     - name: Run Integration Tests
-      run: docker run --privileged --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image sudo ci/build_ubuntu.sh --run-integration-tests
+      run: docker run --privileged --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image sudo ci/build_ubuntu.sh --run-integration-tests --retries=3

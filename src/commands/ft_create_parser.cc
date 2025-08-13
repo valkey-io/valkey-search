@@ -253,6 +253,7 @@ absl::Status ParseLanguage(vmsdk::ArgsIterator &itr,
     return absl::InvalidArgumentError(
         NotSupportedParamErrorMsg(kLanguageFieldParam));
   }
+
   index_schema_proto.set_language(language);
   return absl::OkStatus();
 }
@@ -569,6 +570,9 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   const auto max_attributes_value = options::GetMaxAttributes().GetValue();
 
   data_model::IndexSchema index_schema_proto;
+  // Set default language
+  index_schema_proto.set_language(data_model::LANGUAGE_ENGLISH);
+
   vmsdk::ArgsIterator itr{argv, argc};
   VMSDK_RETURN_IF_ERROR(
       vmsdk::ParseParamValue(itr, *index_schema_proto.mutable_name()));
@@ -617,18 +621,17 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     
     // Try SCORE parameter
     VMSDK_RETURN_IF_ERROR(ParseScore(itr, index_schema_proto));
-
-    if (itr.DistanceEnd() < initial_distance) {
-      continue; // Parameter was consumed, continue to next iteration
+    if (itr.DistanceEnd() != initial_distance) {
+      continue;
     }
     
     // Try LANGUAGE parameter
     VMSDK_RETURN_IF_ERROR(ParseLanguage(itr, index_schema_proto));
-
-    if (itr.DistanceEnd() < initial_distance) {
-      schema_text_defaults.language = index_schema_proto.language();
-      continue; // Parameter was consumed, continue to next iteration
+    if (itr.DistanceEnd() != initial_distance) {
+      index_schema_proto.set_language(data_model::LANGUAGE_ENGLISH);
+      continue;
     }
+
     
     // Try unsupported field parameters
     VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kPayloadFieldParam, false, itr));
@@ -649,6 +652,9 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   if (schema_text_defaults.punctuation.empty()) {
     return absl::InvalidArgumentError("PUNCTUATION string cannot be empty");
   }
+
+  // updating the local schema_text_defaults with language for consistency
+  schema_text_defaults.language = index_schema_proto.language();
   
   // Apply global text defaults to the schema
   index_schema_proto.set_punctuation(schema_text_defaults.punctuation);

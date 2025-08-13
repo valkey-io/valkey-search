@@ -43,6 +43,11 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             "search_number_of_attributes",
             "search_number_of_indexes",
             "search_total_indexed_documents",
+            "search_number_of_active_indexes",
+            "search_number_of_active_indexes_running_queries",
+            "search_number_of_active_indexes_indexing",
+            "search_total_active_write_threads",
+            "search_total_indexing_time",
             "search_used_memory_bytes",
             "search_index_reclaimable_memory"
         ]
@@ -79,4 +84,3 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             assert field in info_data
             bytes_value = info_data[field]
             assert isinstance(bytes_value, str) and bytes_value.endswith("iB")
-

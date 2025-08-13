@@ -468,7 +468,9 @@ TEST_F(ValkeySearchTest, Info) {
     "global_ingestion\ningest_field_numeric: 400\ningest_field_tag: 500\ningest_field_vector: 300\n"
     "ingest_hash_blocked: 0\ningest_hash_keys: 100\ningest_json_blocked: 0\ningest_json_keys: 200\n"
     "ingest_last_batch_size: 600\ningest_total_batches: 700\ningest_total_failures: 800\n"
-    "index_stats\nnumber_of_attributes: 1\nnumber_of_indexes: 1\ntotal_indexed_documents: 4\n"
+    "index_stats\nnumber_of_indexes: 1\nnumber_of_attributes: 1\ntotal_indexed_documents: 4\nnumber_of_active_indexes: 1\n"
+    "number_of_active_indexes_running_queries: 0\nnumber_of_active_indexes_indexing: 1\n"
+    "total_active_write_threads: 5\ntotal_indexing_time: 0\n"
     "indexing\nbackground_indexing_status: 'IN_PROGRESS'\n"
     "memory\nused_memory_bytes: 18408\nused_memory_human: '17.98KiB'\n"
 );

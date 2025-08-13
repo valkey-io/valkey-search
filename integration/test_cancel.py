@@ -31,14 +31,6 @@ def search_command(index: str, filter: Union[int, None]) -> list[str]:
     ]
 
 
-def num_docs(client: Valkey.client, index: str) -> dict[str, str]:
-    res = client.execute_command("FT.INFO", index)
-    print("Got info result of ", res)
-    for i in range(len(res)):
-        if res[i] == b'num_docs':
-            print("Found ", res[i+1])
-            return int(res[i+1].decode())
-    assert False
 
 def search(
     client: valkey.client,
@@ -238,8 +230,8 @@ class TestCancelCME(ValkeySearchClusterTestCase):
           timeout=5
         )
     
-    def sum_docs(self, index:str) -> int:
-        return sum([num_docs(self.client_for_primary(i), index) for i in range(len(self.replication_groups))])
+    def sum_docs(self, index: Index) -> int:
+        return sum([index.info(self.client_for_primary(i)).num_docs for i in range(len(self.replication_groups))])
 
     def test_timeoutCME(self):
         self.execute_all(["flushall sync"])
@@ -255,7 +247,7 @@ class TestCancelCME(ValkeySearchClusterTestCase):
         flat_index.create(client)
         hnsw_index.load_data(client, 100)
         # Let the index properly processed
-        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index.name), 100, timeout=3)
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 100, timeout=3)
 
         #
         # Nominal case

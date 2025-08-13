@@ -115,11 +115,10 @@ TEST_P(StringInterningTest, WithAllocator) {
 TEST_F(StringInterningTest, StringInternStoreTracksMemoryInternally) {
   MemoryPool caller_pool{0};
   std::shared_ptr<InternedString> interned_str;
+  auto allocator = std::make_unique<MockAllocator>();
 
   {
     NestedMemoryScope scope{caller_pool};
-    auto allocator = std::make_unique<MockAllocator>();
-
     interned_str = StringInternStore::Intern("test_string", allocator.get());
   }
 

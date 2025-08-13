@@ -40,11 +40,6 @@ class Stemmer {
    */
   absl::StatusOr<std::string> StemWord(const std::string& word) const;
   
-  /**
-   * Run self-test to verify stemmer functionality.
-   */
-  static void RunSelfTest();
-  
  private:
   struct sb_stemmer* stemmer_;
 };

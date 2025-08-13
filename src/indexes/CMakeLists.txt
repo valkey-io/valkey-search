@@ -105,28 +105,6 @@ target_link_libraries(stemmer PUBLIC snowball)
 target_link_libraries(stemmer PUBLIC log)
 target_link_libraries(stemmer PUBLIC status_macros)
 
-# Add stemmer self-test executable
-add_executable(stemmer_test ${SRCS_STEMMER})
-target_compile_definitions(stemmer_test PRIVATE STEMMER_SELF_TEST)
-target_include_directories(stemmer_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(stemmer_test PUBLIC snowball)
-target_link_libraries(stemmer_test PUBLIC log)
-target_link_libraries(stemmer_test PUBLIC status_macros)
-target_link_libraries(stemmer_test PUBLIC utils)
-target_link_libraries(stemmer_test PUBLIC valkey_module)
-if(APPLE)
-  target_link_libraries(stemmer_test PUBLIC absl::core_headers)
-else()
-  target_link_libraries(stemmer_test PUBLIC ${GRPC_LIB})
-  target_link_libraries(stemmer_test PUBLIC absl::status)
-  target_link_libraries(stemmer_test PUBLIC absl::statusor)
-  target_link_libraries(stemmer_test PUBLIC absl::log)
-  target_link_libraries(stemmer_test PUBLIC absl::strings)
-  target_link_libraries(stemmer_test PUBLIC absl::str_format)
-  target_link_libraries(stemmer_test PUBLIC absl::hash)
-  target_link_libraries(stemmer_test PUBLIC absl::flat_hash_set)
-endif()
-
 set(SRCS_TEXT ${CMAKE_CURRENT_LIST_DIR}/text/text_index.h
               ${CMAKE_CURRENT_LIST_DIR}/text.cc
               ${CMAKE_CURRENT_LIST_DIR}/text.h

@@ -350,6 +350,9 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     # Run OSS integration tests
     pushd integration >/dev/null
         if [[ "${SAN_BUILD}" == "no" ]]; then
+            if [[ "${TEST_PATTERN}" == "oss" ]]; then
+                TEST_PATTERN=""
+            fi
             # For now, run these this test suite without ASan.
             export TEST_PATTERN=${TEST_PATTERN}
             export INTEG_RETRIES=${INTEG_RETRIES}

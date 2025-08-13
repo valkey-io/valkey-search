@@ -109,7 +109,7 @@ static auto writer_threads_count =
 ///   - If max-worker-suspension-secs > 0, resume the workers either when the
 ///     fork is died or after max-worker-suspension-secs seconds passed.
 ///   - If max-worker-suspension-secs <= 0, resume the workers when the fork
-///     is borned.
+///     is born.
 constexpr absl::string_view kMaxWorkerSuspensionSecs{"max-worker-suspension-secs"};
 static auto max_worker_suspension_secs =
     config::Number(kMaxWorkerSuspensionSecs,  // name

@@ -902,8 +902,8 @@ void ValkeySearch::OnForkChildCallback(ValkeyModuleCtx *ctx,
       ResumeWriterThreadPool(ctx, /*is_expired=*/false);
     }
   } else {
-    // max-worker-suspension-secs <= 0 - we resume the workers on a 'fork borned' event.
-    // We don't check if it's a 'fork borned' event - in case the config was modified
+    // max-worker-suspension-secs <= 0 - we resume the workers on a 'fork born' event.
+    // We don't check if it's a 'fork born' event - in case the config was modified
     // in the middle of the fork, we want to resume the workers also after 'fork died'
     // event in case it wasn't already.
     ResumeWriterThreadPool(ctx, /*is_expired=*/false);

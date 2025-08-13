@@ -493,7 +493,7 @@ TEST_F(ValkeySearchTest, OnForkChildDiedCallback) {
   EXPECT_EQ(Metrics::GetStats().writer_worker_thread_pool_resumed_cnt, 1);
 }
 
-TEST_F(ValkeySearchTest, OnForkChildBornedCallback) {
+TEST_F(ValkeySearchTest, OnForkChildBornCallback) {
   VMSDK_EXPECT_OK(options::GetMaxWorkerSuspensionSecs().SetValue(0));
   InitThreadPools(std::nullopt, 5);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();

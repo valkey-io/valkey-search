@@ -884,9 +884,9 @@ void ValkeySearch::OnServerCronCallback(ValkeyModuleCtx *ctx,
   // Resume worker thread pool if suspension time exceeds the max allowed
   // duration
   if (writer_thread_pool_suspend_watch_.has_value() &&
-      options::GetMaxWorkerSuspension().GetValue() > 0 &&
+      options::GetMaxWorkerSuspensionSecs().GetValue() > 0 &&
       writer_thread_pool_suspend_watch_.value().Duration() >
-          absl::Seconds(options::GetMaxWorkerSuspension().GetValue())) {
+          absl::Seconds(options::GetMaxWorkerSuspensionSecs().GetValue())) {
     ResumeWriterThreadPool(ctx, /*is_expired=*/true);
   }
 }
@@ -895,14 +895,14 @@ void ValkeySearch::OnForkChildCallback(ValkeyModuleCtx *ctx,
                                        [[maybe_unused]] ValkeyModuleEvent eid,
                                        uint64_t subevent,
                                        [[maybe_unused]] void *data) {
-  // if max-worker-suspension config > 0, we resume the workers either when fork dies
-  // or when time expired (the second condition is checked on cron callback).
-  if (options::GetMaxWorkerSuspension().GetValue() > 0) {
+  // if max-worker-suspension-secs config > 0, we resume the workers either when fork dies
+  // or when time expires (the second condition is checked on cron callback).
+  if (options::GetMaxWorkerSuspensionSecs().GetValue() > 0) {
     if (subevent & VALKEYMODULE_SUBEVENT_FORK_CHILD_DIED) {
       ResumeWriterThreadPool(ctx, /*is_expired=*/false);
     }
   } else {
-    // max-worker-suspension <= 0 - we resume the workers on a 'fork borned' event.
+    // max-worker-suspension-secs <= 0 - we resume the workers on a 'fork borned' event.
     // We don't check if it's a 'fork borned' event - in case the config was modified
     // in the middle of the fork, we want to resume the workers also after 'fork died'
     // event in case it wasn't already.
@@ -999,7 +999,7 @@ void ValkeySearch::ResumeWriterThreadPool(ValkeyModuleCtx *ctx,
       is_expired
           ? absl::StrFormat(
                 "Worker thread pool suspension took more than %lu seconds",
-                options::GetMaxWorkerSuspension().GetValue())
+                options::GetMaxWorkerSuspensionSecs().GetValue())
           : "Fork child died notification received";
   if (is_expired) {
     Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt++;

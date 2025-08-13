@@ -104,19 +104,18 @@ static auto writer_threads_count =
             })
         .Build();
 
-/// Register the "--max-worker-suspension" flag.
+/// Register the "--max-worker-suspension-secs" flag.
 /// Controls the resumption of the worker thread pool:
-///   - If max-worker-suspension > 0, resume the workers either when the
-///     fork is died or after max-worker-suspension secs passed.
-///   - If max-worker-suspension <= 0, resume the workers when the fork
+///   - If max-worker-suspension-secs > 0, resume the workers either when the
+///     fork is died or after max-worker-suspension-secs seconds passed.
+///   - If max-worker-suspension-secs <= 0, resume the workers when the fork
 ///     is borned.
-constexpr absl::string_view kMaxWorkerSuspension{"max-worker-suspension"};
-static auto max_worker_suspension =
-    config::NumberBuilder(kMaxWorkerSuspension,  // name
-                          60,                    // default value
-                          0,                     // min value
-                          3600)                  // max value
-        .Build();
+constexpr absl::string_view kMaxWorkerSuspensionSecs{"max-worker-suspension-secs"};
+static auto max_worker_suspension_secs =
+    config::Number(kMaxWorkerSuspensionSecs,  // name
+                   60,                        // default value
+                   0,                         // min value
+                   3600);                     // max value
 
 /// Should this instance use coordinator?
 constexpr absl::string_view kUseCoordinator{"use-coordinator"};
@@ -187,8 +186,8 @@ vmsdk::config::Number& GetWriterThreadCount() {
   return dynamic_cast<vmsdk::config::Number&>(*writer_threads_count);
 }
 
-vmsdk::config::Number& GetMaxWorkerSuspension() {
-      return dynamic_cast<vmsdk::config::Number&>(*max_worker_suspension);
+vmsdk::config::Number& GetMaxWorkerSuspensionSecs() {
+      return max_worker_suspension_secs;
 }
 
 const vmsdk::config::Boolean& GetUseCoordinator() {

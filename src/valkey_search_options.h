@@ -32,7 +32,7 @@ config::Number& GetWriterThreadCount();
 
 /// Return the max time in seconds that the worker thread pool is
 /// suspended after fork started
-config::Number& GetMaxWorkerSuspension();
+config::Number& GetMaxWorkerSuspensionSecs();
 
 /// Return an immutable reference to the "use-coordinator" flag
 const config::Boolean& GetUseCoordinator();

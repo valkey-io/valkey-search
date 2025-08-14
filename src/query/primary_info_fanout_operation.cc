@@ -44,13 +44,13 @@ void PrimaryInfoFanoutOperation::OnResponse(
   if (!resp.error().empty()) {
     grpc::Status status =
         grpc::Status(grpc::StatusCode::INTERNAL, resp.error());
-    OnError(status, target);
+    OnError(status, resp.error_type(), target);
     return;
   }
   if (!resp.exists()) {
     grpc::Status status =
         grpc::Status(grpc::StatusCode::INTERNAL, "Index does not exists");
-    OnError(status, target);
+    OnError(status, coordinator::FanoutErrorType::INDEX_NAME_ERROR, target);
     return;
   }
   if (!schema_fingerprint_.has_value()) {
@@ -59,7 +59,8 @@ void PrimaryInfoFanoutOperation::OnResponse(
     grpc::Status status =
         grpc::Status(grpc::StatusCode::INTERNAL,
                      "Cluster not in a consistent state, please retry.");
-    OnError(status, target);
+    OnError(status, coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR,
+            target);
     return;
   }
   if (!encoding_version_.has_value()) {
@@ -68,27 +69,21 @@ void PrimaryInfoFanoutOperation::OnResponse(
     grpc::Status status =
         grpc::Status(grpc::StatusCode::INTERNAL,
                      "Cluster not in a consistent state, please retry.");
-    OnError(status, target);
+    OnError(status, coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR,
+            target);
     return;
   }
   if (resp.index_name() != index_name_) {
     grpc::Status status =
         grpc::Status(grpc::StatusCode::INTERNAL,
                      "Cluster not in a consistent state, please retry.");
-    OnError(status, target);
+    OnError(status, coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR, target);
     return;
   }
   exists_ = true;
   num_docs_ += resp.num_docs();
   num_records_ += resp.num_records();
   hash_indexing_failures_ += resp.hash_indexing_failures();
-}
-
-void PrimaryInfoFanoutOperation::OnError(
-    grpc::Status status,
-    [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
-  absl::MutexLock lock(&mutex_);
-  errors_.push_back(status.error_message());
 }
 
 coordinator::InfoIndexPartitionResponse
@@ -103,8 +98,7 @@ PrimaryInfoFanoutOperation::GetLocalResponse(
   if (!index_schema_result.ok()) {
     resp.set_exists(false);
     resp.set_index_name(request.index_name());
-    resp.set_error(std::string("Index not found: ") +
-                   std::string(index_schema_result.status().message()));
+    resp.set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
     return resp;
   }
 
@@ -131,9 +125,7 @@ PrimaryInfoFanoutOperation::GetLocalResponse(
   if (!fingerprint.has_value() || !encoding_version.has_value()) {
     resp.set_exists(false);
     resp.set_index_name(request.index_name());
-    resp.set_error(
-        std::string("Cluster not in a consistent state, please retry.") +
-        std::string(index_schema_result.status().message()));
+    resp.set_error_type(coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR);
     return resp;
   }
   resp.set_exists(true);
@@ -162,17 +154,10 @@ void PrimaryInfoFanoutOperation::InvokeRemoteRpc(
 int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
                                               ValkeyModuleString** argv,
                                               int argc) {
-  if (!errors_.empty()) {
-    std::string all_errors;
-    for (const auto& error : errors_) {
-      if (!all_errors.empty()) {
-        all_errors += "\n";
-      }
-      all_errors += error;
-    }
-    return ValkeyModule_ReplyWithError(ctx, all_errors.c_str());
+  if (!index_name_error_nodes.empty() || !communication_error_nodes.empty() ||
+      !inconsisitent_state_error_nodes.empty()) {
+    return FanoutOperationBase::GenerateErrorReply(ctx);
   }
-
   ValkeyModule_ReplyWithArray(ctx, 10);
   ValkeyModule_ReplyWithSimpleString(ctx, "mode");
   ValkeyModule_ReplyWithSimpleString(ctx, "primary");

@@ -143,6 +143,13 @@ message InfoIndexPartitionRequest {
   uint64 timeout_ms = 2;
 }
 
+enum FanoutErrorType {
+  FANOUT_ERROR_TYPE_UNSPECIFIED = 0;
+  INDEX_NAME_ERROR = 1;
+  INCONSISTENT_STATE_ERROR = 2;
+  COMMUNICATION_ERROR = 3;
+}
+
 message InfoIndexPartitionResponse {
   bool exists = 1;
   string index_name = 2;
@@ -160,5 +167,6 @@ message InfoIndexPartitionResponse {
   string error = 14;
   optional uint64 schema_fingerprint = 15;
   optional uint32 encoding_version = 16;
+  FanoutErrorType error_type = 17;
 }
 

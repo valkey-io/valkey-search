@@ -3,35 +3,42 @@ from valkey_search_test_case import ValkeySearchClusterTestCase
 from valkey.cluster import ValkeyCluster
 from valkey.client import Valkey
 from valkeytestframework.conftest import resource_port_tracker
+from valkeytestframework.util import waiters
+from test_info_primary import _parse_info_kv_list
 
-def _parse_info_kv_list(reply):
-    it = iter(reply)
-    out = {}
-    for k in it:
-        v = next(it, None)
-        out[k.decode() if isinstance(k, bytes) else k] = v
-    return out
+class TestFTInfoCluster(ValkeySearchClusterTestCase):
 
-class TestFTInfoClusterCompleted(ValkeySearchClusterTestCase):
+    def is_indexing_complete(self, node, index_name):
+        try:
+            raw = node.execute_command("FT.INFO", index_name, "CLUSTER")
+            info = _parse_info_kv_list(raw)
+            if not info:
+                return False
+            backfill_in_progress = int(info.get("backfill_in_progress", 1))
+            state = info.get("state", "")
+            return backfill_in_progress == 0 and state == "ready"
+        except:
+            return False
 
     def test_ft_info_cluster_counts(self):
         cluster: ValkeyCluster = self.new_cluster_client()
         node0: Valkey = self.new_client_for_primary(0)
-
-        N = 5
-        for i in range(N):
-            cluster.execute_command("HSET", f"doc:{i}", "price", str(10 + i))
+        index_name = "index1"
 
         assert node0.execute_command(
-            "FT.CREATE", "index1",
+            "FT.CREATE", index_name,
             "ON", "HASH",
             "PREFIX", "1", "doc:",
             "SCHEMA", "price", "NUMERIC"
         ) == b"OK"
 
-        time.sleep(0.2)
+        N = 5
+        for i in range(N):
+            cluster.execute_command("HSET", f"doc:{i}", "price", str(10 + i))
+        
+        waiters.wait_for_equal(lambda: self.is_indexing_complete(node0, index_name), True, timeout=5)
 
-        raw = node0.execute_command("FT.INFO", "index1", "CLUSTER")
+        raw = node0.execute_command("FT.INFO", index_name, "CLUSTER")
         info = _parse_info_kv_list(raw)
 
         assert info is not None
@@ -40,10 +47,10 @@ class TestFTInfoClusterCompleted(ValkeySearchClusterTestCase):
         assert (mode in (b"cluster", "cluster"))
         assert (index_name in (b"index1", "index1"))
 
-        backfill_in_progress = int(info["backfill_in_progress"].decode() if isinstance(info["backfill_in_progress"], bytes) else info["backfill_in_progress"])
-        backfill_complete_percent_max = float(info["backfill_complete_percent_max"].decode() if isinstance(info["backfill_complete_percent_max"], bytes) else info["backfill_complete_percent_max"])
-        backfill_complete_percent_min = float(info["backfill_complete_percent_min"].decode() if isinstance(info["backfill_complete_percent_min"], bytes) else info["backfill_complete_percent_min"])
-        state = info["state"].decode() if isinstance(info["state"], bytes) else info["state"]
+        backfill_in_progress = int(info["backfill_in_progress"])
+        backfill_complete_percent_max = float(info["backfill_complete_percent_max"])
+        backfill_complete_percent_min = float(info["backfill_complete_percent_min"])
+        state = info["state"]
 
         assert backfill_in_progress == 0
         assert backfill_complete_percent_max == 1.000000

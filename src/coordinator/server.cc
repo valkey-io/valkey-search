@@ -32,10 +32,11 @@
 #include "src/index_schema.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
+#include "src/query/fanout_operation_base.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
-#include "valkey_search_options.h"
 #include "src/schema_manager.h"
+#include "valkey_search_options.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -114,7 +115,8 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
   GRPCSuspensionGuard guard(GRPCSuspender::Instance());
   auto latency_sample = SAMPLE_EVERY_N(100);
   grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
-  auto vector_search_parameters = GRPCSearchRequestToParameters(*request, context);
+  auto vector_search_parameters =
+      GRPCSearchRequestToParameters(*request, context);
   if (!vector_search_parameters.ok()) {
     reactor->Finish(ToGrpcStatus(vector_search_parameters.status()));
     RecordSearchMetrics(true, std::move(latency_sample));
@@ -135,7 +137,7 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
         if (parameters->cancellation_token->IsCancelled() &&
             !valkey_search::options::GetEnablePartialResults().GetValue()) {
           reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
-                          "Search operation cancelled due to timeout"});
+                           "Search operation cancelled due to timeout"});
           RecordSearchMetrics(true, std::move(latency_sample));
           return;
         }
@@ -196,7 +198,8 @@ grpc::ServerUnaryReactor* Service::InfoIndexPartition(
       response->set_exists(false);
       response->set_index_name(idx);
       response->set_error(status_or_schema.status().ToString());
-      reactor->Finish(grpc::Status::OK);
+      response->set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
+      reactor->Finish(ToGrpcStatus(status_or_schema.status()));
       return;
     }
     auto schema = std::move(status_or_schema.value());
@@ -279,4 +282,4 @@ std::unique_ptr<Server> ServerImpl::Create(
       new ServerImpl(std::move(coordinator_service), std::move(server), port));
 }
 
-} // namespace valkey_search::coordinator
+}  // namespace valkey_search::coordinator

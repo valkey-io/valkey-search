@@ -35,9 +35,6 @@ class ClusterInfoFanoutOperation : public fanout::FanoutOperationBase<
   void OnResponse(const coordinator::InfoIndexPartitionResponse& resp,
                   [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
 
-  void OnError(grpc::Status status,
-               [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
-
   coordinator::InfoIndexPartitionResponse GetLocalResponse(
       ValkeyModuleCtx* ctx,
       const coordinator::InfoIndexPartitionRequest& request,
@@ -58,7 +55,6 @@ class ClusterInfoFanoutOperation : public fanout::FanoutOperationBase<
   bool exists_;
   std::optional<uint64_t> schema_fingerprint_;
   std::optional<uint32_t> encoding_version_;
-  std::vector<std::string> errors_;
   std::string index_name_;
   std::optional<unsigned> timeout_ms_;
   float backfill_complete_percent_max_;

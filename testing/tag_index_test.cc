@@ -29,10 +29,10 @@ class TagIndexTest : public vmsdk::ValkeyTest {
     data_model::TagIndex tag_index_proto;
     tag_index_proto.set_separator(",");
     tag_index_proto.set_case_sensitive(false);
-    index = std::make_unique<IndexTeser<Tag, data_model::TagIndex>>(
+    index = std::make_unique<IndexTeser<TagField, data_model::TagIndex>>(
         tag_index_proto);
   }
-  std::unique_ptr<IndexTeser<Tag, data_model::TagIndex>> index;
+  std::unique_ptr<IndexTeser<TagField, data_model::TagIndex>> index;
   std::string identifier = "attribute_id";
   std::string alias = "attribute_alias";
 };
@@ -58,7 +58,7 @@ TEST_F(TagIndexTest, AddRecordAndSearchTest) {
 
   std::string raw_tag_string = "tag1";
   auto parsed_tags =
-      indexes::Tag::ParseSearchTags(raw_tag_string, index->GetSeparator())
+      indexes::TagField::ParseSearchTags(raw_tag_string, index->GetSeparator())
           .value();
   query::TagPredicate predicate(index.get(), alias, identifier, raw_tag_string,
                                 parsed_tags);
@@ -74,7 +74,7 @@ TEST_F(TagIndexTest, RemoveRecordAndSearchTest) {
 
   std::string raw_tag_string = "tag1";
   auto parsed_tags =
-      indexes::Tag::ParseSearchTags(raw_tag_string, index->GetSeparator())
+      indexes::TagField::ParseSearchTags(raw_tag_string, index->GetSeparator())
           .value();
   query::TagPredicate predicate(index.get(), alias, identifier, raw_tag_string,
                                 parsed_tags);
@@ -89,7 +89,7 @@ TEST_F(TagIndexTest, ModifyRecordAndSearchTest) {
 
   std::string raw_tag_string = "tag2.1";
   auto parsed_tags =
-      indexes::Tag::ParseSearchTags(raw_tag_string, index->GetSeparator())
+      indexes::TagField::ParseSearchTags(raw_tag_string, index->GetSeparator())
           .value();
   query::TagPredicate predicate(index.get(), alias, identifier, raw_tag_string,
                                 parsed_tags);
@@ -107,7 +107,7 @@ TEST_F(TagIndexTest, ModifyRecordWithEmptyString) {
 
   std::string raw_tag_string = "tag2";
   auto parsed_tags =
-      indexes::Tag::ParseSearchTags(raw_tag_string, index->GetSeparator())
+      indexes::TagField::ParseSearchTags(raw_tag_string, index->GetSeparator())
           .value();
   query::TagPredicate predicate(index.get(), alias, identifier, raw_tag_string,
                                 parsed_tags);
@@ -142,7 +142,7 @@ TEST_F(TagIndexTest, PrefixSearchHappyTest) {
 
   std::string raw_tag_string = "dis*";
   auto parsed_tags =
-      indexes::Tag::ParseSearchTags(raw_tag_string, index->GetSeparator())
+      indexes::TagField::ParseSearchTags(raw_tag_string, index->GetSeparator())
           .value();
   EXPECT_THAT(parsed_tags, testing::UnorderedElementsAre("dis*"));
   auto entries_fetcher =
@@ -162,7 +162,7 @@ TEST_F(TagIndexTest, PrefixSearchCaseInsensitiveTest) {
 
   std::string raw_tag_string = "dIs*";
   auto parsed_tags =
-      indexes::Tag::ParseSearchTags(raw_tag_string, index->GetSeparator())
+      indexes::TagField::ParseSearchTags(raw_tag_string, index->GetSeparator())
           .value();
   EXPECT_THAT(parsed_tags, testing::UnorderedElementsAre("dIs*"));
   auto entries_fetcher =
@@ -174,7 +174,7 @@ TEST_F(TagIndexTest, PrefixSearchCaseInsensitiveTest) {
 }
 
 TEST_F(TagIndexTest, PrefixSearchInvalidTagTest) {
-  auto status = indexes::Tag::ParseSearchTags("dis**", index->GetSeparator());
+  auto status = indexes::TagField::ParseSearchTags("dis**", index->GetSeparator());
   EXPECT_EQ(status.status().code(), absl::StatusCode::kInvalidArgument);
 }
 
@@ -186,7 +186,7 @@ TEST_F(TagIndexTest, PrefixSearchMinLengthNotSatisfiedTest) {
 
   std::string raw_tag_string = "d*";
   auto parsed_tags =
-      indexes::Tag::ParseSearchTags(raw_tag_string, index->GetSeparator())
+      indexes::TagField::ParseSearchTags(raw_tag_string, index->GetSeparator())
           .value();
   EXPECT_TRUE(parsed_tags.empty());
 
@@ -205,7 +205,7 @@ TEST_F(TagIndexTest, PrefixSearchMinLengthSatisfiedTest) {
 
   std::string raw_tag_string = "dis*";
   auto parsed_tags =
-      indexes::Tag::ParseSearchTags(raw_tag_string, index->GetSeparator())
+      indexes::TagField::ParseSearchTags(raw_tag_string, index->GetSeparator())
           .value();
   EXPECT_EQ(parsed_tags.size(), 1);
 
@@ -231,7 +231,7 @@ TEST_F(TagIndexTest, NegativeSearchTest) {
 
   std::string raw_tag_string = "dis*";
   auto parsed_tags =
-      indexes::Tag::ParseSearchTags(raw_tag_string, index->GetSeparator())
+      indexes::TagField::ParseSearchTags(raw_tag_string, index->GetSeparator())
           .value();
   EXPECT_EQ(parsed_tags.size(), 1);
 
@@ -255,7 +255,7 @@ TEST_F(TagIndexTest, DeletedKeysNegativeSearchTest) {
   auto entries_fetcher = index->Search(
       query::TagPredicate(
           index.get(), alias, identifier, raw_tag_string,
-          indexes::Tag::ParseSearchTags(raw_tag_string, index->GetSeparator())
+          indexes::TagField::ParseSearchTags(raw_tag_string, index->GetSeparator())
               .value()),
       true);
   EXPECT_THAT(Fetch(*entries_fetcher),
@@ -267,7 +267,7 @@ TEST_F(TagIndexTest, DeletedKeysNegativeSearchTest) {
   entries_fetcher = index->Search(
       query::TagPredicate(
           index.get(), alias, identifier, raw_tag_string,
-          indexes::Tag::ParseSearchTags(raw_tag_string, index->GetSeparator())
+          indexes::TagField::ParseSearchTags(raw_tag_string, index->GetSeparator())
               .value()),
       true);
   EXPECT_THAT(Fetch(*entries_fetcher), testing::UnorderedElementsAre("doc0"));

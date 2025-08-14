@@ -47,7 +47,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           auto identifier,
           index_schema->GetIdentifier(predicate.tag().attribute_alias()));
       attribute_identifiers.insert(identifier);
-      auto tag_index = dynamic_cast<indexes::Tag*>(index.get());
+      auto tag_index = dynamic_cast<indexes::TagField*>(index.get());
       VMSDK_ASSIGN_OR_RETURN(
           auto parsed_tags,
           tag_index->ParseSearchTags(predicate.tag().raw_tag_string(),
@@ -70,7 +70,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           auto identifier,
           index_schema->GetIdentifier(predicate.numeric().attribute_alias()));
       attribute_identifiers.insert(identifier);
-      auto numeric_index = dynamic_cast<indexes::Numeric*>(index.get());
+      auto numeric_index = dynamic_cast<indexes::NumericField*>(index.get());
       auto numeric_predicate = std::make_unique<query::NumericPredicate>(
           numeric_index, predicate.numeric().attribute_alias(), identifier,
           predicate.numeric().start(), predicate.numeric().is_inclusive_start(),

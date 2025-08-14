@@ -39,14 +39,14 @@ static bool IsValidPrefix(absl::string_view str) {
          str[str.length() - 2] != '*';
 }
 
-Tag::Tag(const data_model::TagIndex& tag_index_proto)
+TagField::TagField(const data_model::TagIndex& tag_index_proto)
     : IndexBase(IndexerType::kTag),
       separator_(tag_index_proto.separator()[0]),
       case_sensitive_(tag_index_proto.case_sensitive()),
       tree_(case_sensitive_) {}
 
-absl::StatusOr<bool> Tag::AddRecord(const InternedStringPtr& key,
-                                    absl::string_view data) {
+absl::StatusOr<bool> TagField::AddRecord(const InternedStringPtr& key,
+                                         absl::string_view data) {
   auto interned_data = StringInternStore::Intern(data);
   auto parsed_tags = ParseRecordTags(*interned_data, separator_);
   absl::MutexLock lock(&index_mutex_);
@@ -68,7 +68,7 @@ absl::StatusOr<bool> Tag::AddRecord(const InternedStringPtr& key,
   return true;
 }
 
-absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
+absl::StatusOr<absl::flat_hash_set<absl::string_view>> TagField::ParseSearchTags(
     absl::string_view data, char separator) {
   absl::flat_hash_set<absl::string_view> parsed_tags;
   std::vector<absl::string_view> parts = absl::StrSplit(data, separator);
@@ -94,7 +94,7 @@ absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
   return parsed_tags;
 }
 
-absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
+absl::flat_hash_set<absl::string_view> TagField::ParseRecordTags(
     absl::string_view data, char separator) {
   absl::flat_hash_set<absl::string_view> parsed_tags;
   for (const auto& part : absl::StrSplit(data, separator)) {
@@ -106,8 +106,8 @@ absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
   return parsed_tags;
 }
 
-absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
-                                       absl::string_view data) {
+absl::StatusOr<bool> TagField::ModifyRecord(const InternedStringPtr& key,
+                                            absl::string_view data) {
   // TODO: implement operator [] in patricia_tree.
   auto interned_data = StringInternStore::Intern(data);
   auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
@@ -144,8 +144,8 @@ absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
   return true;
 }
 
-absl::StatusOr<bool> Tag::RemoveRecord(const InternedStringPtr& key,
-                                       DeletionType deletion_type) {
+absl::StatusOr<bool> TagField::RemoveRecord(const InternedStringPtr& key,
+                                            DeletionType deletion_type) {
   absl::MutexLock lock(&index_mutex_);
   if (deletion_type == DeletionType::kRecord) {
     // If key is DELETED, remove it from untracked_keys_.
@@ -166,7 +166,7 @@ absl::StatusOr<bool> Tag::RemoveRecord(const InternedStringPtr& key,
   return true;
 }
 
-int Tag::RespondWithInfo(ValkeyModuleCtx* ctx) const {
+int TagField::RespondWithInfo(ValkeyModuleCtx* ctx) const {
   auto num_replies = 6;
   ValkeyModule_ReplyWithSimpleString(ctx, "type");
   ValkeyModule_ReplyWithSimpleString(ctx, "TAG");
@@ -184,12 +184,12 @@ int Tag::RespondWithInfo(ValkeyModuleCtx* ctx) const {
   return num_replies;
 }
 
-bool Tag::IsTracked(const InternedStringPtr& key) const {
+bool TagField::IsTracked(const InternedStringPtr& key) const {
   absl::MutexLock lock(&index_mutex_);
   return tracked_tags_by_keys_.contains(key);
 }
 
-std::unique_ptr<data_model::Index> Tag::ToProto() const {
+std::unique_ptr<data_model::Index> TagField::ToProto() const {
   auto index_proto = std::make_unique<data_model::Index>();
   auto tag_index = std::make_unique<data_model::TagIndex>();
   tag_index->set_separator(absl::string_view(&separator_, 1));
@@ -198,7 +198,7 @@ std::unique_ptr<data_model::Index> Tag::ToProto() const {
   return index_proto;
 }
 
-InternedStringPtr Tag::GetRawValue(const InternedStringPtr& key) const {
+InternedStringPtr TagField::GetRawValue(const InternedStringPtr& key) const {
   // Note that the Tag index is not mutated while the time sliced mutex is
   // in a read mode and therefor it is safe to skip lock acquiring.
   if (auto it = tracked_tags_by_keys_.find(key);
@@ -208,7 +208,7 @@ InternedStringPtr Tag::GetRawValue(const InternedStringPtr& key) const {
   return nullptr;
 }
 
-const absl::flat_hash_set<absl::string_view>* Tag::GetValue(
+const absl::flat_hash_set<absl::string_view>* TagField::GetValue(
     const InternedStringPtr& key, bool& case_sensitive) const {
   // Note that the Tag index is not mutated while the time sliced mutex is
   // in a read mode and therefor it is safe to skip lock acquiring.
@@ -220,7 +220,7 @@ const absl::flat_hash_set<absl::string_view>* Tag::GetValue(
   return nullptr;
 }
 
-Tag::EntriesFetcherIterator::EntriesFetcherIterator(
+TagField::EntriesFetcherIterator::EntriesFetcherIterator(
     const PatriciaTreeIndex& tree,
     absl::flat_hash_set<PatriciaNodeIndex*>& entries,
     const InternedStringSet& untracked_keys, bool negate)
@@ -229,7 +229,7 @@ Tag::EntriesFetcherIterator::EntriesFetcherIterator(
       untracked_keys_(untracked_keys),
       negate_(negate) {}
 
-bool Tag::EntriesFetcherIterator::Done() const {
+bool TagField::EntriesFetcherIterator::Done() const {
   if (negate_) {
     return tree_iter_.Done() &&
            (untracked_keys_.empty() ||
@@ -239,7 +239,7 @@ bool Tag::EntriesFetcherIterator::Done() const {
   return entries_.empty() && next_node_ == nullptr;
 }
 
-void Tag::EntriesFetcherIterator::NextNegate() {
+void TagField::EntriesFetcherIterator::NextNegate() {
   if (next_node_) {
     ++next_iter_;
     if (next_iter_ != next_node_->value.value().end()) {
@@ -264,7 +264,7 @@ void Tag::EntriesFetcherIterator::NextNegate() {
   ++untracked_keys_iter_.value();
 }
 
-void Tag::EntriesFetcherIterator::Next() {
+void TagField::EntriesFetcherIterator::Next() {
   if (negate_) {
     NextNegate();
     return;
@@ -287,7 +287,7 @@ void Tag::EntriesFetcherIterator::Next() {
   next_node_ = nullptr;
 }
 
-const InternedStringPtr& Tag::EntriesFetcherIterator::operator*() const {
+const InternedStringPtr& TagField::EntriesFetcherIterator::operator*() const {
   if (negate_ && tree_iter_.Done()) {
     return *untracked_keys_iter_.value();
   }
@@ -295,7 +295,7 @@ const InternedStringPtr& Tag::EntriesFetcherIterator::operator*() const {
 }
 
 // TODO: b/357027854 - Support Suffix/Infix Search
-std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
+std::unique_ptr<TagField::EntriesFetcher> TagField::Search(
     const query::TagPredicate& predicate, bool negate) const {
   absl::flat_hash_set<PatriciaNodeIndex*> entries;
   size_t size = 0;
@@ -329,20 +329,20 @@ std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
                : tracked_tags_by_keys_.size();
     size += untracked_keys_.size();
   }
-  return std::make_unique<Tag::EntriesFetcher>(tree_, entries, size, negate,
-                                               untracked_keys_);
+  return std::make_unique<TagField::EntriesFetcher>(tree_, entries, size, negate,
+                                                    untracked_keys_);
 }
 
-std::unique_ptr<EntriesFetcherIteratorBase> Tag::EntriesFetcher::Begin() {
+std::unique_ptr<EntriesFetcherIteratorBase> TagField::EntriesFetcher::Begin() {
   auto itr = std::make_unique<EntriesFetcherIterator>(tree_, entries_,
                                                       untracked_keys_, negate_);
   itr->Next();
   return itr;
 }
 
-size_t Tag::EntriesFetcher::Size() const { return size_; }
+size_t TagField::EntriesFetcher::Size() const { return size_; }
 
-uint64_t Tag::GetRecordCount() const {
+uint64_t TagField::GetRecordCount() const {
   absl::MutexLock lock(&index_mutex_);
   return tracked_tags_by_keys_.size();
 }

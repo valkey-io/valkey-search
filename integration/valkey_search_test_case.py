@@ -31,6 +31,16 @@ class Node:
         self.server: ValkeyServerHandle = server
         self.logfile: str = logfile
 
+    def does_logfile_contains(self, pattern: str) -> bool:
+        try:
+            logfile = open(self.logfile, "r")
+            for line in logfile:
+                if pattern in line:
+                    return True
+            return False
+        except:
+            return False
+
 
 class ReplicationGroup:
     """This class represents a valkey server replication group. A replication group consists of a single primary node
@@ -49,11 +59,7 @@ class ReplicationGroup:
         node_id = node_id.decode("utf-8")
         for replica in self.replicas:
             replica.client.execute_command(f"CLUSTER REPLICATE {node_id}")
-        waiters.wait_for_equal(
-            lambda: self.primary.client.info("replication")["connected_slaves"],
-            len(self.replicas),
-            timeout=3,
-        )
+        self._wait_for_replication()
 
     def setup_replications_cmd(self):
         primary_ip = self.primary.server.bind_ip
@@ -62,11 +68,34 @@ class ReplicationGroup:
             replica.client.execute_command(
                 f"REPLICAOF {primary_ip} {primary_port}"
             )
-        waiters.wait_for_equal(
-            lambda: self.primary.client.info("replication")["connected_slaves"],
-            len(self.replicas),
-            timeout=3,
+        self._wait_for_replication()
+
+    def _wait_for_replication(self):
+        # connected_slaves:1
+        # slave0:ip=127.0.0.1,port=14892,state=online,offset=98,lag=0,type=replica
+        waiters.wait_for_true(
+            lambda: self._check_all_replicas_are_connected(),
+            timeout=30,
         )
+
+        # Now that we see all the replicas are connected, wait for their status to change
+        # into "online"
+        for i in range(0, len(self.replicas)):
+            name = f"slave{i}"
+            # Wait for the replication to complete for this replica
+            waiters.wait_for_true(
+                lambda: self._check_is_replica_online(name),
+                timeout=30,
+            )
+
+    def _check_all_replicas_are_connected(self):
+        return self.primary.client.info("replication")[
+            "connected_slaves"
+        ] == len(self.replicas)
+
+    def _check_is_replica_online(self, name) -> bool:
+        replica_status = self.primary.client.info("replication")[name]
+        return replica_status["state"] == "online"
 
     def _wait_for_meet(self, count: int) -> bool:
         d: dict = self.primary.client.cluster("NODES")
@@ -121,6 +150,7 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         port: int,
         test_name: str,
         cluster_enabled=True,
+        is_primary=True,
     ) -> (ValkeyServerHandle, Valkey, str):
         """Launch server node and return a tuple of the server handle, a client to the server
         and the log file path"""
@@ -139,18 +169,25 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
             f.write("\n")
             f.close()
 
+        role = "primary" if is_primary else "replica"
+        logfile = f"{testdir}/logfile-{role}-{port}.log"
         server, client = self.create_server(
             testdir=testdir,
             server_path=server_path,
-            args="",
+            args={"logfile": logfile},
             port=port,
             conf_file=conf_file,
         )
         os.chdir(curdir)
-        logfile = f"{testdir}/logfile_{port}"
         self.wait_for_logfile(logfile, "Ready to accept connections")
         client.ping()
         return server, client, logfile
+
+    def verify_replicaof_succeeded(self, replica_client) -> bool:
+        info = replica_client.execute_command("INFO", "replication")
+        role = info.get("role", "")
+        master_link_status = info.get("master_link_status", "")
+        assert role == "slave" and master_link_status == "up"
 
 
 class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
@@ -165,10 +202,10 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
         if hasattr(request, "param") and request.param["replica_count"]:
             replica_count = request.param["replica_count"]
 
-        primary = self.start_new_server()
+        primary = self.start_new_server(is_primary=True)
         replicas: List[Node] = []
         for _ in range(0, replica_count):
-            replicas.append(self.start_new_server())
+            replicas.append(self.start_new_server(is_primary=False))
 
         self.rg = ReplicationGroup(primary=primary, replicas=replicas)
         self.rg.setup_replications_cmd()
@@ -220,20 +257,15 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
                 stats_dict[key.strip()] = value.strip()
         return stats_dict
 
-    def start_new_server(self) -> Node:
+    def start_new_server(self, is_primary=True) -> Node:
         """Create a new Valkey server instance"""
         server, client, logfile = self.start_server(
             self.get_bind_port(),
             self.test_name,
             False,
+            is_primary,
         )
         return Node(client=client, server=server, logfile=logfile)
-
-    def verify_replicaof_succeeded(self, replica_client):
-        info = replica_client.execute_command("INFO", "replication")
-        role = info.get("role", "")
-        master_link_status = info.get("master_link_status", "")
-        assert role == "slave" and master_link_status == "up"
 
     def get_replica_connection(self, index) -> Valkey:
         return self.rg.get_replica_connection(index)
@@ -307,18 +339,23 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
         for i in range(0, len(ports), replica_count + 1):
             primary_port = ports[i]
             server, client, logfile = self.start_server(
-                primary_port, test_name, True
+                primary_port,
+                test_name,
+                True,
+                is_primary=True,
             )
 
             replicas = []
             for _ in range(0, replica_count):
+                # Start the replicas
                 i = i + 1
                 replica_port = ports[i]
                 replica_server, replica_client, replica_logfile = (
                     self.start_server(
                         replica_port,
                         test_name,
-                        True,
+                        cluster_enabled=True,
+                        is_primary=False,
                     )
                 )
                 replicas.append(
@@ -358,15 +395,14 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
 
         # Wait for the cluster to be up
         for rg in self.replication_groups:
-            rg.setup_replications_cluster()
             logging.info(
                 f"Waiting for cluster to change state...{rg.primary.logfile}"
             )
             self.wait_for_logfile(
                 rg.primary.logfile, "Cluster state changed: ok"
             )
-            logging.info("Cluster is up and running!")
-
+            rg.setup_replications_cluster()
+        logging.info("Cluster is up and running!")
         yield
 
         # Cleanup

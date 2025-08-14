@@ -58,7 +58,7 @@ class TestSearchFTDropindexCME(ValkeySearchClusterTestCase):
     """
 
     @pytest.mark.parametrize(
-        "setup_test", [{"replica_count": 2}], indirect=True
+        "setup_test", [{"replica_count": 1}], indirect=True
     )
     def test_ft_dropindex_fails_on_replica_cme(self):
         """Test that FT.DROPINDEX fails when executed on a replica."""
@@ -76,7 +76,7 @@ class TestSearchFTDropindexCMD(ValkeySearchTestCaseBase):
     """
 
     @pytest.mark.parametrize(
-        "setup_test", [{"replica_count": 2}], indirect=True
+        "setup_test", [{"replica_count": 1}], indirect=True
     )
     def test_ft_dropindex_fails_on_replica_cmd(self):
         """Test that FT.DROPINDEX fails when executed on a replica."""

@@ -93,6 +93,7 @@ target_link_libraries(vector_flat PUBLIC log)
 target_link_libraries(vector_flat PUBLIC memory_allocation_overrides)
 target_link_libraries(vector_flat PUBLIC status_macros)
 target_link_libraries(vector_flat PUBLIC valkey_module)
+
 set(SRCS_TEXT ${CMAKE_CURRENT_LIST_DIR}/text/text_index.h
               ${CMAKE_CURRENT_LIST_DIR}/text.cc
               ${CMAKE_CURRENT_LIST_DIR}/text.h

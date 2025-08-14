@@ -144,7 +144,7 @@ message InfoIndexPartitionRequest {
 }
 
 enum FanoutErrorType {
-  FANOUT_ERROR_TYPE_UNSPECIFIED = 0;
+  OK = 0;
   INDEX_NAME_ERROR = 1;
   INCONSISTENT_STATE_ERROR = 2;
   COMMUNICATION_ERROR = 3;

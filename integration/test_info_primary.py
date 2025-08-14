@@ -16,16 +16,13 @@ def _parse_info_kv_list(reply):
 class TestFTInfoPrimary(ValkeySearchClusterTestCase):
 
     def is_indexing_complete(self, node, index_name, N):
-        try:
-            raw = node.execute_command("FT.INFO", index_name, "PRIMARY")
-            info = _parse_info_kv_list(raw)
-            if not info:
-                return False
-            num_docs = int(info.get("num_docs", 0))
-            num_records = int(info.get("num_records", 0))
-            return num_docs >= N and num_records >= N
-        except:
+        raw = node.execute_command("FT.INFO", index_name, "PRIMARY")
+        info = _parse_info_kv_list(raw)
+        if not info:
             return False
+        num_docs = int(info.get("num_docs", 0))
+        num_records = int(info.get("num_records", 0))
+        return num_docs >= N and num_records >= N
 
     def test_ft_info_primary_counts(self):
         cluster: ValkeyCluster = self.new_cluster_client()

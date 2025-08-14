@@ -9,16 +9,13 @@ from test_info_primary import _parse_info_kv_list
 class TestFTInfoCluster(ValkeySearchClusterTestCase):
 
     def is_indexing_complete(self, node, index_name):
-        try:
-            raw = node.execute_command("FT.INFO", index_name, "CLUSTER")
-            info = _parse_info_kv_list(raw)
-            if not info:
-                return False
-            backfill_in_progress = int(info.get("backfill_in_progress", 1))
-            state = info.get("state", "")
-            return backfill_in_progress == 0 and state == "ready"
-        except:
+        raw = node.execute_command("FT.INFO", index_name, "CLUSTER")
+        info = _parse_info_kv_list(raw)
+        if not info:
             return False
+        backfill_in_progress = int(info.get("backfill_in_progress", 1))
+        state = info.get("state", "")
+        return backfill_in_progress == 0 and state == "ready"
 
     def test_ft_info_cluster_counts(self):
         cluster: ValkeyCluster = self.new_cluster_client()

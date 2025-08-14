@@ -155,7 +155,7 @@ int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
                                               ValkeyModuleString** argv,
                                               int argc) {
   if (!index_name_error_nodes.empty() || !communication_error_nodes.empty() ||
-      !inconsisitent_state_error_nodes.empty()) {
+      !inconsistent_state_error_nodes.empty()) {
     return FanoutOperationBase::GenerateErrorReply(ctx);
   }
   ValkeyModule_ReplyWithArray(ctx, 10);

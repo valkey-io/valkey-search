@@ -42,6 +42,13 @@ class FanoutOperationBase {
   }
 
  protected:
+  const std::string INDEX_NAME_ERROR_LOG_PREFIX =
+      "Index name error on node with address ";
+  const std::string INCONSISTENT_STATE_ERROR_LOG_PREFFIX =
+      "Inconsistent state error on node with address ";
+  const std::string COMMUNICATION_ERROR_LOG_PREFIX =
+      "Communication error on node with address ";
+
   static int Reply(ValkeyModuleCtx* ctx, ValkeyModuleString** argv, int argc) {
     auto* op = static_cast<FanoutOperationBase*>(
         ValkeyModule_GetBlockedClientPrivateData(ctx));
@@ -91,7 +98,7 @@ class FanoutOperationBase {
       index_name_error_nodes.push_back(target);
     } else if (error_type ==
                coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR) {
-      inconsisitent_state_error_nodes.push_back(target);
+      inconsistent_state_error_nodes.push_back(target);
     } else {
       communication_error_nodes.push_back(target);
     }
@@ -102,37 +109,40 @@ class FanoutOperationBase {
     std::string error_message;
     // Log index name errors
     if (!index_name_error_nodes.empty()) {
-      error_message += "Index name not found.\n";
+      error_message = "Index name not found.";
       for (const FanoutSearchTarget& target : index_name_error_nodes) {
         if (target.type == FanoutSearchTarget::Type::kLocal) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5) << "Index name error on local node";
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
+              << INDEX_NAME_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
-              << "Index name error on remote node: " << target.address;
+              << INDEX_NAME_ERROR_LOG_PREFIX << target.address;
         }
       }
     }
     // Log communication errors
     if (!communication_error_nodes.empty()) {
-      error_message += "Communication error between nodes found.\n";
+      error_message = "Communication error between nodes found.";
       for (const FanoutSearchTarget& target : communication_error_nodes) {
         if (target.type == FanoutSearchTarget::Type::kLocal) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5) << "Communication error on local node";
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
+              << COMMUNICATION_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
-              << "Communication error on remote node: " << target.address;
+              << COMMUNICATION_ERROR_LOG_PREFIX << target.address;
         }
       }
     }
     // Log inconsistent state errors
-    if (!inconsisitent_state_error_nodes.empty()) {
-      error_message += "Inconsistent index state error found.\n";
-      for (const FanoutSearchTarget& target : inconsisitent_state_error_nodes) {
+    if (!inconsistent_state_error_nodes.empty()) {
+      error_message = "Inconsistent index state error found.";
+      for (const FanoutSearchTarget& target : inconsistent_state_error_nodes) {
         if (target.type == FanoutSearchTarget::Type::kLocal) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5) << "Inconsistent state error on local node";
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
+              << INCONSISTENT_STATE_ERROR_LOG_PREFFIX << "LOCAL NODE";
         } else {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
-              << "Inconsistent state error on remote node: " << target.address;
+              << INCONSISTENT_STATE_ERROR_LOG_PREFFIX << target.address;
         }
       }
     }
@@ -146,17 +156,29 @@ class FanoutOperationBase {
     if (target.type == FanoutSearchTarget::Type::kLocal) {
       vmsdk::RunByMain([this, ctx, target, request]() {
         Response resp = this->GetLocalResponse(ctx, request, target);
-        if (resp.error_type() ==
-            coordinator::FanoutErrorType::INDEX_NAME_ERROR) {
-          this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
-                        coordinator::FanoutErrorType::INDEX_NAME_ERROR, target);
-        } else if (resp.error_type() ==
-                   coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR) {
-          this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
-                        coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR,
-                        target);
-        } else {
-          this->OnResponse(resp, target);
+        switch (resp.error_type()) {
+          // no error, continue to aggregate response
+          case coordinator::FanoutErrorType::OK:
+            this->OnResponse(resp, target);
+            break;
+          case coordinator::FanoutErrorType::INDEX_NAME_ERROR:
+            this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
+                          coordinator::FanoutErrorType::INDEX_NAME_ERROR,
+                          target);
+            break;
+          case coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR:
+            this->OnError(
+                grpc::Status(grpc::StatusCode::INTERNAL, ""),
+                coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR, target);
+            break;
+          case coordinator::FanoutErrorType::COMMUNICATION_ERROR:
+            this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
+                          coordinator::FanoutErrorType::COMMUNICATION_ERROR,
+                          target);
+            break;
+          default:
+            CHECK(false);
+            break;
         }
         this->RpcDone();
       });
@@ -200,7 +222,7 @@ class FanoutOperationBase {
   absl::Mutex mutex_;
   std::unique_ptr<vmsdk::BlockedClient> blocked_client_;
   std::vector<FanoutSearchTarget> index_name_error_nodes;
-  std::vector<FanoutSearchTarget> inconsisitent_state_error_nodes;
+  std::vector<FanoutSearchTarget> inconsistent_state_error_nodes;
   std::vector<FanoutSearchTarget> communication_error_nodes;
 };
 

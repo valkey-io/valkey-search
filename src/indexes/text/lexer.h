@@ -23,7 +23,10 @@ natural character that is part of a word.
 #include <string>
 #include <vector>
 
+#include "absl/status/status.h"
 #include "absl/status/statusor.h"
+
+struct sb_stemmer;
 
 namespace valkey_search::indexes::text {
 
@@ -50,6 +53,9 @@ struct Lexer {
 
   // Instantiate with default Punctuation
   Lexer();
+  
+  // Destructor
+  ~Lexer();
 
   //
   // Process an input string
@@ -57,6 +63,18 @@ struct Lexer {
   // May fail if there are non-UTF-8 characters present.
   //
   absl::StatusOr<LexerOutput> ProcessString(absl::string_view s) const;
+  
+  
+  // Initialize stemmer for a specific language.
+  // @param language Language code (e.g., "english", "french")
+  absl::Status Initialize(const std::string& language);
+  
+  // Stem a word to its root form.
+  // @param word The word to stem (UTF-8 encoded)
+  absl::StatusOr<std::string> StemWord(const std::string& word) const;
+
+ private:
+  struct sb_stemmer* stemmer_;
 };
 
 //
@@ -79,7 +97,7 @@ struct LexerOutput {
  private:
   // Storage for escaped words
   std::vector<std::string> escaped_words_;
-}
+};
 
 }  // namespace valkey_search::indexes::text
 

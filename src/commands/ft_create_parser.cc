@@ -37,13 +37,6 @@
 namespace valkey_search {
 namespace {
 
-// Default stop words set
-const std::vector<std::string> kDefaultStopWords{
-    "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by", "for",
-    "if", "in", "into", "it", "no", "not", "of", "on", "or", "such", "that", "their",
-    "then", "there", "these", "they", "this", "to", "was", "will", "with"
-};
-
 constexpr absl::string_view kInitialCapParam{"INITIAL_CAP"};
 constexpr absl::string_view kBlockSizeParam{"BLOCK_SIZE"};
 constexpr absl::string_view kMParam{"M"};
@@ -621,17 +614,9 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     
     // Try SCORE parameter
     VMSDK_RETURN_IF_ERROR(ParseScore(itr, index_schema_proto));
-    if (itr.DistanceEnd() != initial_distance) {
-      continue;
-    }
     
     // Try LANGUAGE parameter
     VMSDK_RETURN_IF_ERROR(ParseLanguage(itr, index_schema_proto));
-    if (itr.DistanceEnd() != initial_distance) {
-      index_schema_proto.set_language(data_model::LANGUAGE_ENGLISH);
-      continue;
-    }
-
     
     // Try unsupported field parameters
     VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kPayloadFieldParam, false, itr));

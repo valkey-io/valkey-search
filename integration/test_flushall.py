@@ -35,7 +35,7 @@ class TestFlushAllCMD(ValkeySearchTestCaseBase):
 class TestFlushAllCME(ValkeySearchClusterTestCase):
 
     def sum_docs(self, index:str) -> int:
-        return sum([num_docs(self.client_for_primary(i), index) for i in range(len(self.servers))])
+        return sum([num_docs(self.client_for_primary(i), index) for i in range(len(self.replication_groups))])
 
     def test_flushallCME(self):
         """
@@ -48,7 +48,7 @@ class TestFlushAllCME(ValkeySearchClusterTestCase):
         hnsw_index.create(client)
         hnsw_index.load_data(client, NUM_VECTORS)
 
-        clients = [self.client_for_primary(i) for i in range(len(self.servers))]
+        clients = [self.client_for_primary(i) for i in range(len(self.replication_groups))]
         # Wait for all the docs to be indexed (up to 3 seconds)
         waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index.name), NUM_VECTORS, timeout=5)
         for c in clients:

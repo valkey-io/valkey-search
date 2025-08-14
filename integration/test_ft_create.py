@@ -59,7 +59,7 @@ class TestSearchFTCreateCME(ValkeySearchClusterTestCase):
     """
 
     @pytest.mark.parametrize(
-        "setup_test", [{"replica_count": 2}], indirect=True
+        "setup_test", [{"replica_count": 1}], indirect=True
     )
     def test_ft_create_fails_on_replica_cme(self):
         """Test that FT.CREATE fails when executed on a replica."""
@@ -76,7 +76,7 @@ class TestSearchFTCreateCMD(ValkeySearchTestCaseBase):
     """
 
     @pytest.mark.parametrize(
-        "setup_test", [{"replica_count": 2}], indirect=True
+        "setup_test", [{"replica_count": 1}], indirect=True
     )
     def test_ft_create_fails_on_replica_cmd(self):
         """Test that FT.CREATE fails when executed on a replica."""

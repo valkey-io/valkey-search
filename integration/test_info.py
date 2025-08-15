@@ -94,4 +94,9 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
         for field in bytes_fields:
             assert field in info_data
             bytes_value = info_data[field]
+            if isinstance(bytes_value, bytes):
+                bytes_value = bytes_value.decode('utf-8')
+            elif isinstance(bytes_value, int):
+                bytes_value = str(bytes_value)
+            assert isinstance(bytes_value, str)
             assert bytes_value.endswith("iB") or bytes_value.isdigit()

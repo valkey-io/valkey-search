@@ -132,7 +132,7 @@ size_t DisplayAsSIBytes(size_t bytes, char *buffer, size_t buffer_size) {
   } else if (bytes >= Ki) {
     return snprintf(buffer, buffer_size, "%.2fKiB", value / Ki);
   } else {
-    return snprintf(buffer, buffer_size, "%ldiB", bytes);
+    return snprintf(buffer, buffer_size, "%ld", bytes);
   }
 }
 

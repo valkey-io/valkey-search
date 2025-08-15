@@ -5,15 +5,15 @@
  *
  */
 
-#include <pthread.h>
+#include "vmsdk/src/debug.h"
 
 #include <absl/container/flat_hash_map.h>
 #include <absl/synchronization/mutex.h>
-#include "module_config.h"
-#include "vmsdk/src/utils.h"
-#include "vmsdk/src/log.h"
+#include <pthread.h>
 
-#include "vmsdk/src/debug.h"
+#include "module_config.h"
+#include "vmsdk/src/log.h"
+#include "vmsdk/src/utils.h"
 
 namespace vmsdk {
 namespace debug {
@@ -47,46 +47,51 @@ void PausePoint(absl::string_view point, std::source_location location) {
       return;
     }
     it->second.push_back(Waiter{
-      .location_ = location,
-      .threadid_ = pthread_self(),
-      .start_time_ = absl::Now(),
-    }); // Indicate that I'm waiting.
+        .location_ = location,
+        .threadid_ = pthread_self(),
+        .start_time_ = absl::Now(),
+    });  // Indicate that I'm waiting.
   }
-  VMSDK_LOG(WARNING, nullptr) << "Waiting at pause point " << point << " @ " << ToString(location);
+  VMSDK_LOG(WARNING, nullptr)
+      << "Waiting at pause point " << point << " @ " << ToString(location);
   auto message_time = absl::Now() + absl::Seconds(10);
   while (true) {
     absl::SleepFor(absl::Milliseconds(1));
     {
       absl::MutexLock lock(&pause_point_lock);
       if (!pause_point_waiters.contains(point)) {
-        VMSDK_LOG(WARNING, nullptr) << "End of waiting at pause point " << point;
+        VMSDK_LOG(WARNING, nullptr)
+            << "End of waiting at pause point " << point;
         return;
       }
     }
     if (absl::Now() > message_time) {
-      VMSDK_IO_LOG_EVERY_N_SEC(WARNING, nullptr, 10) 
-        << "Waiting > 10 seconds at pause point " << point << " Location:" << ToString(location);
+      VMSDK_IO_LOG_EVERY_N_SEC(WARNING, nullptr, 10)
+          << "Waiting > 10 seconds at pause point " << point
+          << " Location:" << ToString(location);
     }
   }
 }
 
 //
-// This function is used by the control machinery (FT.DEBUG) to enable/disable and test PausePoints.
+// This function is used by the control machinery (FT.DEBUG) to enable/disable
+// and test PausePoints.
 //
 void PausePointControl(absl::string_view point, bool enable) {
-    absl::MutexLock lock(&pause_point_lock);
-    if (enable) {
-      if (!pause_point_waiters.contains(point)) {
-        pause_point_waiters[point];
-      }
-      CHECK(pause_point_waiters.contains(point));
-    } else {
-      pause_point_waiters.erase(point);
+  absl::MutexLock lock(&pause_point_lock);
+  if (enable) {
+    if (!pause_point_waiters.contains(point)) {
+      pause_point_waiters[point];
     }
+    CHECK(pause_point_waiters.contains(point));
+  } else {
+    pause_point_waiters.erase(point);
+  }
 }
 
 //
-// This function is used to determine how many threads are waiting at the PausePoint
+// This function is used to determine how many threads are waiting at the
+// PausePoint
 //
 absl::StatusOr<size_t> PausePointWaiters(absl::string_view point) {
   absl::MutexLock lock(&pause_point_lock);
@@ -94,7 +99,8 @@ absl::StatusOr<size_t> PausePointWaiters(absl::string_view point) {
   if (it == pause_point_waiters.end()) {
     return absl::NotFoundError("Pause Point not found");
   } else {
-    VMSDK_LOG(WARNING, nullptr) << "PAUSEPOINT: " << it->second.size() << " Waiters";
+    VMSDK_LOG(WARNING, nullptr)
+        << "PAUSEPOINT: " << it->second.size() << " Waiters";
     return it->second.size();
   }
 }
@@ -102,7 +108,7 @@ absl::StatusOr<size_t> PausePointWaiters(absl::string_view point) {
 //
 // General display of state
 //
-void PausePointList(ValkeyModuleCtx *ctx) {
+void PausePointList(ValkeyModuleCtx* ctx) {
   absl::MutexLock lock(&pause_point_lock);
   ValkeyModule_ReplyWithArray(ctx, 2 * pause_point_waiters.size());
   for (auto& [pausepoint, waiters] : pause_point_waiters) {
@@ -115,10 +121,11 @@ void PausePointList(ValkeyModuleCtx *ctx) {
       ValkeyModule_ReplyWithSimpleString(ctx, "Threadid");
       ValkeyModule_ReplyWithLongLong(ctx, w.threadid_);
       ValkeyModule_ReplyWithSimpleString(ctx, "WaitSeconds");
-      ValkeyModule_ReplyWithDouble(ctx, absl::ToDoubleSeconds(absl::Now() - w.start_time_));
+      ValkeyModule_ReplyWithDouble(
+          ctx, absl::ToDoubleSeconds(absl::Now() - w.start_time_));
     }
   }
 }
 
-}
-}
+}  // namespace debug
+}  // namespace vmsdk

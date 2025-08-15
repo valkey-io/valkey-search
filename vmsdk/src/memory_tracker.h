@@ -31,78 +31,73 @@
 #define VMSDK_SRC_MEMORY_TRACKER_H_
 
 #include <atomic>
+
 #include "vmsdk/src/utils.h"
 
 class MemoryPool {
-public:
-    explicit MemoryPool(int64_t initial_value = 0) : counter_(initial_value) {}
-    
-    int64_t GetUsage() const {
-        return counter_.load();
-    }
+ public:
+  explicit MemoryPool(int64_t initial_value = 0) : counter_(initial_value) {}
 
-    void Add(int64_t delta) {
-        counter_.fetch_add(delta);
-    }
+  int64_t GetUsage() const { return counter_.load(); }
 
-    void Reset() {
-        counter_.store(0);
-    }
-    
-private:
-    std::atomic<int64_t> counter_;
+  void Add(int64_t delta) { counter_.fetch_add(delta); }
+
+  void Reset() { counter_.store(0); }
+
+ private:
+  std::atomic<int64_t> counter_;
 };
 
 class MemoryScope {
-public:
-    explicit MemoryScope(MemoryPool& pool);
-    virtual ~MemoryScope() = default;
+ public:
+  explicit MemoryScope(MemoryPool& pool);
+  virtual ~MemoryScope() = default;
 
-    VMSDK_NON_COPYABLE_NON_MOVABLE(MemoryScope);
+  VMSDK_NON_COPYABLE_NON_MOVABLE(MemoryScope);
 
-    int64_t GetBaselineMemory() const { return baseline_memory_; }
+  int64_t GetBaselineMemory() const { return baseline_memory_; }
 
-protected:
-    MemoryPool& target_pool_;
-    int64_t baseline_memory_ = 0;
+ protected:
+  MemoryPool& target_pool_;
+  int64_t baseline_memory_ = 0;
 };
 
 /**
  * A memory scope that isolates memory changes within its lifetime.
- * 
+ *
  * When this scope is destroyed, it calculates the net memory change during its
  * lifetime and adds it to the target pool, then resets the global memory delta
  * back to the baseline. This effectively "isolates" the memory tracking within
  * this scope, preventing memory changes from propagating to outer scopes.
- * 
+ *
  * Use this when you want to track memory usage for a specific operation
  * without affecting the memory tracking of surrounding code.
  */
 class IsolatedMemoryScope final : public MemoryScope {
-public:
-    explicit IsolatedMemoryScope(MemoryPool& pool);
-    ~IsolatedMemoryScope() override;
-    
-    VMSDK_NON_COPYABLE_NON_MOVABLE(IsolatedMemoryScope);
+ public:
+  explicit IsolatedMemoryScope(MemoryPool& pool);
+  ~IsolatedMemoryScope() override;
+
+  VMSDK_NON_COPYABLE_NON_MOVABLE(IsolatedMemoryScope);
 };
 
 /**
  * A memory scope that allows memory changes to propagate to outer scopes.
- * 
+ *
  * When this scope is destroyed, it calculates the net memory change during its
  * lifetime and adds it to the target pool, but does NOT reset the global memory
  * delta. This allows memory changes to "nest" and propagate to any outer scopes
  * that might be tracking memory usage.
- * 
+ *
  * Use this when you want to track memory usage for a specific operation while
  * still allowing those changes to be visible to surrounding tracking code.
  */
 class NestedMemoryScope final : public MemoryScope {
-public:
-    explicit NestedMemoryScope(MemoryPool& pool);
-    ~NestedMemoryScope() override;
-    
-    VMSDK_NON_COPYABLE_NON_MOVABLE(NestedMemoryScope);
+ public:
+  explicit NestedMemoryScope(MemoryPool& pool);
+  ~NestedMemoryScope() override;
+
+  VMSDK_NON_COPYABLE_NON_MOVABLE(NestedMemoryScope);
 };
 
-#endif // VMSDK_SRC_MEMORY_TRACKER_H_ 
+#endif  // VMSDK_SRC_MEMORY_TRACKER_H_

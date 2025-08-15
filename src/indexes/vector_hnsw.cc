@@ -212,7 +212,6 @@ int VectorHNSW<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
                        data_model::VectorIndex::AlgorithmCase::kHnswAlgorithm)
           .data());
 
-  
   ValkeyModule_ReplyWithSimpleString(ctx, "data_type");
   if constexpr (std::is_same_v<T, float>) {
     ValkeyModule_ReplyWithSimpleString(
@@ -230,7 +229,7 @@ int VectorHNSW<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
       ctx, LookupKeyByValue(*kDistanceMetricByStr, distance_metric_).data());
   ValkeyModule_ReplyWithSimpleString(ctx, "M");
   absl::ReaderMutexLock lock(&resize_mutex_);
-  
+
   ValkeyModule_ReplyWithLongLong(ctx, GetM());
   ValkeyModule_ReplyWithSimpleString(ctx, "ef_construction");
   ValkeyModule_ReplyWithLongLong(ctx, GetEfConstruction());
@@ -315,19 +314,17 @@ absl::Status VectorHNSW<T>::RemoveRecordImpl(uint64_t internal_id) {
 // Paper over the impedance mismatch between the
 // cancel::Token and hnswlib::BaseCancellationFunctor.
 class CancelCondition : public hnswlib::BaseCancellationFunctor {
-  public:
-  explicit CancelCondition(cancel::Token &token)
-      : token_(token) {}
+ public:
+  explicit CancelCondition(cancel::Token &token) : token_(token) {}
   bool isCancelled() override { return token_->IsCancelled(); }
 
-  private:
+ private:
   cancel::Token &token_;
 };
 
 template <typename T>
 absl::StatusOr<std::deque<Neighbor>> VectorHNSW<T>::Search(
-    absl::string_view query, uint64_t count,
-    cancel::Token& cancellation_token,
+    absl::string_view query, uint64_t count, cancel::Token &cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
     std::optional<size_t> ef_runtime) {
   if (!IsValidSizeVector(query)) {
@@ -336,17 +333,18 @@ absl::StatusOr<std::deque<Neighbor>> VectorHNSW<T>::Search(
         query.size(), ") does not match index's expected size (",
         dimensions_ * GetDataTypeSize(), ")."));
   }
-  auto perform_search =
-      [this, count, &filter, &ef_runtime, &cancellation_token](absl::string_view query)
-          ABSL_NO_THREAD_SAFETY_ANALYSIS
+  auto perform_search = [this, count, &filter, &ef_runtime,
+                         &cancellation_token](absl::string_view query)
+                            ABSL_NO_THREAD_SAFETY_ANALYSIS
       -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
     try {
       CancelCondition cancel_condition(cancellation_token);
       auto res = algo_->searchKnn((T *)query.data(), count, ef_runtime,
-                              filter.get(), &cancel_condition);
+                                  filter.get(), &cancel_condition);
       if (!valkey_search::options::GetEnablePartialResults().GetValue() &&
           cancellation_token->IsCancelled()) {
-        return absl::CancelledError("Search operation cancelled due to timeout");
+        return absl::CancelledError(
+            "Search operation cancelled due to timeout");
       }
       return res;
     } catch (const std::exception &e) {

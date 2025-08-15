@@ -271,7 +271,7 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
 
   // Verify that the metric was incremented correctly
   // Should be incremented by 2: once for large content, once for many fields
-  EXPECT_EQ( Metrics::GetStats().query_result_record_dropped_cnt, 2);
+  EXPECT_EQ(Metrics::GetStats().query_result_record_dropped_cnt, 2);
 }
 
 INSTANTIATE_TEST_SUITE_P(

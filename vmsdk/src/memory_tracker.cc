@@ -28,29 +28,27 @@
  */
 
 #include "memory_tracker.h"
+
 #include "vmsdk/src/memory_allocation.h"
 
 MemoryScope::MemoryScope(MemoryPool& pool)
     : target_pool_(pool), baseline_memory_(vmsdk::GetMemoryDelta()) {}
 
 IsolatedMemoryScope::IsolatedMemoryScope(MemoryPool& pool)
-    : MemoryScope(pool) {
-}
+    : MemoryScope(pool) {}
 
 IsolatedMemoryScope::~IsolatedMemoryScope() {
-    int64_t current_delta = vmsdk::GetMemoryDelta();
-    int64_t net_change = current_delta - baseline_memory_;
-    target_pool_.Add(net_change);
+  int64_t current_delta = vmsdk::GetMemoryDelta();
+  int64_t net_change = current_delta - baseline_memory_;
+  target_pool_.Add(net_change);
 
-    vmsdk::SetMemoryDelta(baseline_memory_);
+  vmsdk::SetMemoryDelta(baseline_memory_);
 }
 
-NestedMemoryScope::NestedMemoryScope(MemoryPool& pool)
-    : MemoryScope(pool) {
-}
+NestedMemoryScope::NestedMemoryScope(MemoryPool& pool) : MemoryScope(pool) {}
 
 NestedMemoryScope::~NestedMemoryScope() {
-    int64_t current_delta = vmsdk::GetMemoryDelta();
-    int64_t net_change = current_delta - baseline_memory_;
-    target_pool_.Add(net_change);
+  int64_t current_delta = vmsdk::GetMemoryDelta();
+  int64_t net_change = current_delta - baseline_memory_;
+  target_pool_.Add(net_change);
 }

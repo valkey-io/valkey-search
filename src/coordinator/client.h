@@ -24,7 +24,7 @@ using GetGlobalMetadataCallback =
     absl::AnyInvocable<void(grpc::Status, GetGlobalMetadataResponse&)>;
 using SearchIndexPartitionCallback =
     absl::AnyInvocable<void(grpc::Status, SearchIndexPartitionResponse&)>;
-using InfoIndexPartitionCallback = 
+using InfoIndexPartitionCallback =
     absl::AnyInvocable<void(grpc::Status, InfoIndexPartitionResponse&)>;
 
 class Client {
@@ -36,8 +36,7 @@ class Client {
       SearchIndexPartitionCallback done) = 0;
   virtual void InfoIndexPartition(
       std::unique_ptr<InfoIndexPartitionRequest> request,
-      InfoIndexPartitionCallback done,
-      int timeout_ms = 5000) = 0;
+      InfoIndexPartitionCallback done, int timeout_ms = 5000) = 0;
 };
 
 class ClientImpl : public Client {
@@ -56,10 +55,9 @@ class ClientImpl : public Client {
   void SearchIndexPartition(
       std::unique_ptr<SearchIndexPartitionRequest> request,
       SearchIndexPartitionCallback done) override;
-  void InfoIndexPartition(
-      std::unique_ptr<InfoIndexPartitionRequest> request,
-      InfoIndexPartitionCallback done,
-      int timeout_ms = 5000) override;
+  void InfoIndexPartition(std::unique_ptr<InfoIndexPartitionRequest> request,
+                          InfoIndexPartitionCallback done,
+                          int timeout_ms = 5000) override;
 
  private:
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;

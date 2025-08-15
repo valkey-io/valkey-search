@@ -17,9 +17,9 @@
 #include "absl/hash/hash.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "gtest/gtest_prod.h"
 #include "src/utils/allocator.h"
 #include "vmsdk/src/memory_tracker.h"
-#include "gtest/gtest_prod.h"
 
 namespace valkey_search {
 

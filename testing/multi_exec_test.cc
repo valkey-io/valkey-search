@@ -176,9 +176,9 @@ TEST_F(MultiExecTest, Basic) {
 
 TEST_F(MultiExecTest, TrackMutationOverride) {
   // Get initial metrics values to compare after operations
-  auto& metrics = Metrics::GetStats();
+  auto &metrics = Metrics::GetStats();
   uint64_t initial_batches = metrics.ingest_total_batches;
-  
+
   VMSDK_EXPECT_OK(mutations_thread_pool->SuspendWorkers());
   EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
       .WillOnce([this](ValkeyModuleEventLoopOneShotFunc func, void *data) {
@@ -242,14 +242,20 @@ TEST_F(MultiExecTest, TrackMutationOverride) {
         std::string(record_value_) + "1", std::string(record_value_) + "4",
         std::string(record_value_) + "3"};
     EXPECT_THAT(expected_keys, testing::UnorderedElementsAreArray(added_keys));
-    
+
     // Check that the batch metrics were updated
     EXPECT_GT(metrics.ingest_total_batches, initial_batches);
     EXPECT_EQ(metrics.ingest_last_batch_size, expected_keys.size());
   }
-  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(vmsdk::BlockedClientCategory::kHash), 0);
-  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(vmsdk::BlockedClientCategory::kJson), 0);
-  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(vmsdk::BlockedClientCategory::kOther), 0);
+  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
+                vmsdk::BlockedClientCategory::kHash),
+            0);
+  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
+                vmsdk::BlockedClientCategory::kJson),
+            0);
+  EXPECT_EQ(vmsdk::BlockedClientTracker::GetInstance().GetClientCount(
+                vmsdk::BlockedClientCategory::kOther),
+            0);
   index_schema = nullptr;
 }
 

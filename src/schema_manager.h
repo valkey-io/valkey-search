@@ -100,6 +100,8 @@ class SchemaManager {
                          std::unique_ptr<data_model::RDBSection> section,
                          SupplementalContentIter &&supplemental_iter);
   absl::Status SaveIndexes(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when);
+  static absl::StatusOr<uint64_t> ComputeFingerprint(
+      const google::protobuf::Any &metadata);
 
  private:
   absl::Status RemoveAll()
@@ -109,8 +111,6 @@ class SchemaManager {
   vmsdk::ThreadPool *mutations_thread_pool_;
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
 
-  static absl::StatusOr<uint64_t> ComputeFingerprint(
-      const google::protobuf::Any &metadata);
   absl::Status OnMetadataCallback(absl::string_view id,
                                   const google::protobuf::Any *metadata)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);

@@ -15,3 +15,4 @@ integration/valkeytestframework
 integration/valkeytestframework*
 dump.rdb
 test-data*
+integration/test-data/

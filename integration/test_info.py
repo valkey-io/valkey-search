@@ -94,4 +94,4 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
         for field in bytes_fields:
             assert field in info_data
             bytes_value = info_data[field]
-            assert isinstance(bytes_value, str)
+            assert bytes_value.endswith("iB") or bytes_value.isdigit()

@@ -43,11 +43,11 @@ class FanoutOperationBase {
 
  protected:
   const std::string INDEX_NAME_ERROR_LOG_PREFIX =
-      "Index name error on node with address ";
-  const std::string INCONSISTENT_STATE_ERROR_LOG_PREFFIX =
-      "Inconsistent state error on node with address ";
+      "FT.INFO FAILURE: Index name error on node with address ";
+  const std::string INCONSISTENT_STATE_ERROR_LOG_PREFIX =
+      "FT.INFO FAILURE: Inconsistent state error on node with address ";
   const std::string COMMUNICATION_ERROR_LOG_PREFIX =
-      "Communication error on node with address ";
+      "FT.INFO FAILURE: Communication error on node with address ";
 
   static int Reply(ValkeyModuleCtx* ctx, ValkeyModuleString** argv, int argc) {
     auto* op = static_cast<FanoutOperationBase*>(
@@ -139,10 +139,10 @@ class FanoutOperationBase {
       for (const FanoutSearchTarget& target : inconsistent_state_error_nodes) {
         if (target.type == FanoutSearchTarget::Type::kLocal) {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
-              << INCONSISTENT_STATE_ERROR_LOG_PREFFIX << "LOCAL NODE";
+              << INCONSISTENT_STATE_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
-              << INCONSISTENT_STATE_ERROR_LOG_PREFFIX << target.address;
+              << INCONSISTENT_STATE_ERROR_LOG_PREFIX << target.address;
         }
       }
     }

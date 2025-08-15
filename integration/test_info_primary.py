@@ -13,6 +13,15 @@ def _parse_info_kv_list(reply):
         out[k.decode() if isinstance(k, bytes) else k] = v.decode() if isinstance(v, bytes) else v
     return out
 
+def verify_error_response(client, cmd, expected_err_reply):
+    try:
+        client.execute_command(cmd)
+        assert False
+    except Exception as e:
+        assert_error_msg = f"Actual error message: '{str(e)}' is different from expected error message '{expected_err_reply}'"
+        assert str(e) == expected_err_reply, assert_error_msg
+        return str(e)
+
 class TestFTInfoPrimary(ValkeySearchClusterTestCase):
 
     def is_indexing_complete(self, node, index_name, N):
@@ -62,7 +71,7 @@ class TestFTInfoPrimary(ValkeySearchClusterTestCase):
     def test_ft_info_non_existing_index(self):
         cluster: ValkeyCluster = self.new_cluster_client()
         node0: Valkey = self.new_client_for_primary(0)
-        self.verify_error_response(
+        verify_error_response(
             node0,
             "FT.INFO index123 PRIMARY",
             "Index with name 'index123' not found",

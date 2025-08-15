@@ -4,7 +4,7 @@ from valkey.cluster import ValkeyCluster
 from valkey.client import Valkey
 from valkeytestframework.conftest import resource_port_tracker
 from valkeytestframework.util import waiters
-from test_info_primary import _parse_info_kv_list
+from test_info_primary import _parse_info_kv_list, verify_error_response
 
 class TestFTInfoCluster(ValkeySearchClusterTestCase):
 
@@ -57,7 +57,7 @@ class TestFTInfoCluster(ValkeySearchClusterTestCase):
     def test_ft_info_non_existing_index(self):
         cluster: ValkeyCluster = self.new_cluster_client()
         node0: Valkey = self.new_client_for_primary(0)
-        self.verify_error_response(
+        verify_error_response(
             node0,
             "FT.INFO index123 CLUSTER",
             "Index with name 'index123' not found",

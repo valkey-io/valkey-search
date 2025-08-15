@@ -84,7 +84,8 @@ class ThreadSafeVector {
   void Clear() { ClearWithCallback(nullptr); }
 
  private:
-  void ForEachInternal(std::function<void(T)> callback) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_) {
+  void ForEachInternal(std::function<void(T)> callback)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_) {
     if (callback != nullptr) {
       for (auto& item : vec_) {
         callback(item);

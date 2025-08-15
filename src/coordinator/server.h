@@ -44,7 +44,7 @@ class Service final : public Coordinator::CallbackService {
       grpc::CallbackServerContext* context,
       const SearchIndexPartitionRequest* request,
       SearchIndexPartitionResponse* response) override;
-  
+
   grpc::ServerUnaryReactor* InfoIndexPartition(
       grpc::CallbackServerContext* context,
       const InfoIndexPartitionRequest* request,

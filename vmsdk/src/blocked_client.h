@@ -33,23 +33,27 @@ struct BlockedClientEntry;
 
 class BlockedClientTracker {
  public:
-  static BlockedClientTracker& GetInstance();
-  
-  size_t GetClientCount(BlockedClientCategory category) const ABSL_LOCKS_EXCLUDED(blocked_clients_mutex);
-  
+  static BlockedClientTracker &GetInstance();
+
+  size_t GetClientCount(BlockedClientCategory category) const
+      ABSL_LOCKS_EXCLUDED(blocked_clients_mutex);
+
   // Access to the map for a specific category
-  absl::flat_hash_map<unsigned long long, BlockedClientEntry>& 
-  operator[](BlockedClientCategory category) ABSL_EXCLUSIVE_LOCKS_REQUIRED(blocked_clients_mutex);
-  
-  const absl::flat_hash_map<unsigned long long, BlockedClientEntry>& 
-  operator[](BlockedClientCategory category) const ABSL_EXCLUSIVE_LOCKS_REQUIRED(blocked_clients_mutex);
-  
+  absl::flat_hash_map<unsigned long long, BlockedClientEntry> &operator[](
+      BlockedClientCategory category)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(blocked_clients_mutex);
+
+  const absl::flat_hash_map<unsigned long long, BlockedClientEntry> &operator[](
+      BlockedClientCategory category) const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(blocked_clients_mutex);
+
  private:
   BlockedClientTracker() = default;
-  
+
   std::array<absl::NoDestructor<
-      absl::flat_hash_map<unsigned long long, BlockedClientEntry>>, 
-      static_cast<size_t>(BlockedClientCategory::kCategoryCount)> tracked_blocked_clients_;
+                 absl::flat_hash_map<unsigned long long, BlockedClientEntry>>,
+             static_cast<size_t>(BlockedClientCategory::kCategoryCount)>
+      tracked_blocked_clients_;
 };
 
 class BlockedClient {
@@ -67,7 +71,8 @@ class BlockedClient {
         tracked_client_id_(std::exchange(other.tracked_client_id_, 0)),
         time_measurement_ongoing_(
             std::exchange(other.time_measurement_ongoing_, false)),
-            category_(std::exchange(other.category_, BlockedClientCategory::kOther)) {}
+        category_(
+            std::exchange(other.category_, BlockedClientCategory::kOther)) {}
 
   BlockedClient &operator=(BlockedClient &&other) noexcept;
 

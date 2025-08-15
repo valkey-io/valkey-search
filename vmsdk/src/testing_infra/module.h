@@ -479,8 +479,7 @@ class InfoCapture {
       info_ << str << ": '" << field << "'" << std::endl;
     }
   }
-  void InfoAddFieldDouble(const char *str, double field,
-                            int in_dict_field) {
+  void InfoAddFieldDouble(const char *str, double field, int in_dict_field) {
     if (in_dict_field) {
       info_ << str << "=" << field << ",";
     } else {
@@ -974,8 +973,7 @@ inline int TestValkeyModule_InfoAddFieldCString(ValkeyModuleInfoCtx *ctx,
 }
 
 inline int TestValkeyModule_InfoAddFieldDouble(ValkeyModuleInfoCtx *ctx,
-                                          const char *str,
-                                          double field) {
+                                               const char *str, double field) {
   if (ctx) {
     ctx->info_capture.InfoAddFieldDouble(str, field, ctx->in_dict_field);
   }
@@ -1496,8 +1494,7 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_ModuleTypeGetType = &TestValkeyModule_ModuleTypeGetType;
   ValkeyModule_GetDetachedThreadSafeContext =
       &TestValkeyModule_GetDetachedThreadSafeContext;
-  ValkeyModule_GetThreadSafeContext =
-      &TestValkeyModule_GetThreadSafeContext;
+  ValkeyModule_GetThreadSafeContext = &TestValkeyModule_GetThreadSafeContext;
   ValkeyModule_FreeThreadSafeContext = &TestValkeyModule_FreeThreadSafeContext;
   ValkeyModule_SelectDb = &TestValkeyModule_SelectDb;
   ValkeyModule_GetSelectedDb = &TestValkeyModule_GetSelectedDb;
@@ -1617,7 +1614,7 @@ inline void TestValkeyModule_Init() {
   ON_CALL(*kMockValkeyModule, Milliseconds()).WillByDefault([]() -> long long {
     static long long fake_time = 0;
     return ++fake_time;
-   });
+  });
   static absl::once_flag flag;
   absl::call_once(flag, []() { vmsdk::TrackCurrentAsMainThread(); });
   CHECK(vmsdk::InitLogging(nullptr, "debug").ok());

@@ -200,12 +200,12 @@ class TestCancelCME(ValkeySearchClusterTestCase):
     def execute_all(self, command: Union[str, list[str]]) -> list[Any]:
         return [
             self.client_for_primary(i).execute_command(*command)
-            for i in range(len(self.servers))
+            for i in range(len(self.replication_groups))
         ]
 
     def config_set(self, config: str, value: str):
         assert self.execute_all(["config set", config, value]) == [True] * len(
-            self.servers
+            self.replication_groups
         )
 
     def check_info(self, name: str, value: Union[str, int]):
@@ -239,7 +239,7 @@ class TestCancelCME(ValkeySearchClusterTestCase):
         )
     
     def sum_docs(self, index:str) -> int:
-        return sum([num_docs(self.client_for_primary(i), index) for i in range(len(self.servers))])
+        return sum([num_docs(self.client_for_primary(i), index) for i in range(len(self.replication_groups))])
 
     def test_timeoutCME(self):
         self.execute_all(["flushall sync"])

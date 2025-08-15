@@ -752,7 +752,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "num_docs");
   ValkeyModule_ReplyWithCString(ctx,
                                 std::to_string(stats_.document_cnt).c_str());
-  // hard-code num_terms to 0 as it's related to fulltext indexes:
+  // TODO: CHANGE hard-code num_terms to 0 as it's related to fulltext indexes:
   ValkeyModule_ReplyWithSimpleString(ctx, "num_terms");
   ValkeyModule_ReplyWithCString(ctx, "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "num_records");

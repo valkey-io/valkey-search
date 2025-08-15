@@ -14,6 +14,7 @@ INTEGRATION_TEST="no"
 SAN_BUILD="no"
 ARGV=$@
 EXIT_CODE=0
+INTEG_RETRIES=1
 
 echo "Root directory: ${ROOT_DIR}"
 
@@ -24,19 +25,20 @@ function print_usage() {
 cat<<EOF
 Usage: build.sh [options...]
 
-    --help | -h               Print this help message and exit.
-    --configure               Run cmake stage (aka configure stage).
-    --verbose | -v            Run verbose build.
-    --debug                   Build for debug version.
-    --clean                   Clean the current build configuration (debug or release).
-    --run-tests               Run all tests. Optionally, pass a test name to run: "--run-tests=<test-name>".
-    --no-build                By default, build.sh always triggers a build. This option disables this behavior.
-    --test-errors-stdout      When a test fails, dump the captured tests output to stdout.
-    --run-integration-tests   Run integration tests.
-    --use-system-modules      Use system's installed gRPC, Protobuf & Abseil dependencies.
-    --asan                    Build with address sanitizer enabled.
-    --tsan                    Build with thread sanitizer enabled.
-
+    --help | -h                       Print this help message and exit.
+    --configure                       Run cmake stage (aka configure stage).
+    --verbose | -v                    Run verbose build.
+    --debug                           Build for debug version.
+    --clean                           Clean the current build configuration (debug or release).
+    --run-tests                       Run all tests. Optionally, pass a test name to run: "--run-tests=<test-name>".
+    --no-build                        By default, build.sh always triggers a build. This option disables this behavior.
+    --test-errors-stdout              When a test fails, dump the captured tests output to stdout.
+    --run-integration-tests[=pattern] Run integration tests.
+    --use-system-modules              Use system's installed gRPC, Protobuf & Abseil dependencies.
+    --asan                            Build with address sanitizer enabled.
+    --tsan                            Build with thread sanitizer enabled.
+    --retries=N                       Attempt to run integration tests N times. Default is 1.
+    
 Example usage:
 
     # Build the release configuration, run cmake if needed
@@ -86,7 +88,17 @@ do
     --run-integration-tests)
         INTEGRATION_TEST="yes"
         shift || true
-        echo "Running integration tests"
+        echo "Running integration tests (all)"
+        ;;
+    --run-integration-tests=*)
+        INTEGRATION_TEST="yes"
+        TEST_PATTERN=${1#*=}
+        shift || true
+        echo "Running integration tests with pattern=${TEST_PATTERN}"
+        ;;
+    --retries=*)
+        INTEG_RETRIES=${1#*=}
+        shift || true
         ;;
     --test-errors-stdout)
         DUMP_TEST_ERRORS_STDOUT="yes"
@@ -310,28 +322,40 @@ elif [ ! -z "${RUN_TEST}" ]; then
     (${TESTS_DIR}/${RUN_TEST} && print_test_ok) || print_test_error_and_exit
     print_test_summary
 elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
-    pushd testing/integration >/dev/null
-        params=""
-        if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
-            params=" --test-errors-stdout"
-        fi
-        if [[ "${BUILD_CONFIG}" == "debug" ]]; then
-            params="${params} --debug"
-        fi
+    if [ ! -z "${TEST_PATTERN}" ]; then
+        echo ""
+        LOG_WARNING " ** TEST_PATTERN is found, skipping Abseil based integration tests **"
+        echo ""
+    else
+        # Abseil based tests do not support filtering tests based on "-k" flag
+        # so when the TEST_PATTERN env variable is found, skip Abseil based tests
+        pushd testing/integration >/dev/null
+            params=""
+            if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
+                params=" --test-errors-stdout"
+            fi
+            if [[ "${BUILD_CONFIG}" == "debug" ]]; then
+                params="${params} --debug"
+            fi
 
-        if [[ "${SAN_BUILD}" == "address" ]]; then
-            params="${params} --asan"
-        fi
-        if [[ "${SAN_BUILD}" == "thread" ]]; then
-            params="${params} --tsan"
-        fi
-        ./run.sh ${params}
-    popd >/dev/null
-    
+            if [[ "${SAN_BUILD}" == "address" ]]; then
+                params="${params} --asan"
+            fi
+            if [[ "${SAN_BUILD}" == "thread" ]]; then
+                params="${params} --tsan"
+            fi
+            ./run.sh ${params}
+        popd >/dev/null
+    fi
     # Run OSS integration tests
     pushd integration >/dev/null
         if [[ "${SAN_BUILD}" == "no" ]]; then
+            if [[ "${TEST_PATTERN}" == "oss" ]]; then
+                TEST_PATTERN=""
+            fi
             # For now, run these this test suite without ASan.
+            export TEST_PATTERN=${TEST_PATTERN}
+            export INTEG_RETRIES=${INTEG_RETRIES}
             ./run.sh
         fi
     popd >/dev/null

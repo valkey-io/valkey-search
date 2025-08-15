@@ -243,6 +243,8 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 
 }  // namespace async
 
+vmsdk::config::Boolean ForceReplicasOnly("test-force-replicas-only", false);
+
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc) {
   auto status = [&]() -> absl::Status {
@@ -281,7 +283,10 @@ absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 
     if (ValkeySearch::Instance().UsingCoordinator() &&
         ValkeySearch::Instance().IsCluster() && !parameters->local_only) {
-      auto search_targets = query::fanout::GetSearchTargetsForFanout(ctx);
+      auto mode = /* !vmsdk::IsReadOnly(ctx) ? query::fanout::kPrimaries ? */
+          ForceReplicasOnly.GetValue() ? query::fanout::FanoutTargetMode::kReplicasOnly 
+              : query::fanout::FanoutTargetMode::kRandom;
+      auto search_targets = query::fanout::GetSearchTargetsForFanout(ctx, mode);
       return query::fanout::PerformSearchFanoutAsync(
           ctx, search_targets,
           ValkeySearch::Instance().GetCoordinatorClientPool(),

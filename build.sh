@@ -14,6 +14,7 @@ INTEGRATION_TEST="no"
 SAN_BUILD="no"
 ARGV=$@
 EXIT_CODE=0
+INTEG_RETRIES=1
 
 echo "Root directory: ${ROOT_DIR}"
 
@@ -36,7 +37,8 @@ Usage: build.sh [options...]
     --use-system-modules              Use system's installed gRPC, Protobuf & Abseil dependencies.
     --asan                            Build with address sanitizer enabled.
     --tsan                            Build with thread sanitizer enabled.
-
+    --retries=N                       Attempt to run integration tests N times. Default is 1.
+    
 Example usage:
 
     # Build the release configuration, run cmake if needed
@@ -93,6 +95,10 @@ do
         TEST_PATTERN=${1#*=}
         shift || true
         echo "Running integration tests with pattern=${TEST_PATTERN}"
+        ;;
+    --retries=*)
+        INTEG_RETRIES=${1#*=}
+        shift || true
         ;;
     --test-errors-stdout)
         DUMP_TEST_ERRORS_STDOUT="yes"
@@ -344,8 +350,12 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     # Run OSS integration tests
     pushd integration >/dev/null
         if [[ "${SAN_BUILD}" == "no" ]]; then
+            if [[ "${TEST_PATTERN}" == "oss" ]]; then
+                TEST_PATTERN=""
+            fi
             # For now, run these this test suite without ASan.
             export TEST_PATTERN=${TEST_PATTERN}
+            export INTEG_RETRIES=${INTEG_RETRIES}
             ./run.sh
         fi
     popd >/dev/null

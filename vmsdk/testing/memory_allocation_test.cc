@@ -167,7 +167,7 @@ TEST_F(MemoryAllocationTest, SwitchToValkeyCalloc) {
   EXPECT_CALL(*kMockSystemAlloc, _calloc(size, sizeof(int))).Times(0);
   EXPECT_CALL(*kMockValkeyModule, Calloc(size, sizeof(int)))
       .WillOnce(testing::Return(test_ptr));
-  EXPECT_CALL(*kMockValkeyModule, MallocSize(test_ptr))
+  EXPECT_CALL(*kMockValkeyModule, MallocUsableSize(test_ptr))
       .Times(2)
       .WillRepeatedly(testing::Return(size * sizeof(int)));
 

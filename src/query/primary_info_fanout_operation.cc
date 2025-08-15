@@ -77,7 +77,8 @@ void PrimaryInfoFanoutOperation::OnResponse(
     grpc::Status status =
         grpc::Status(grpc::StatusCode::INTERNAL,
                      "Cluster not in a consistent state, please retry.");
-    OnError(status, coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR, target);
+    OnError(status, coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR,
+            target);
     return;
   }
   exists_ = true;

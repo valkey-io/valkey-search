@@ -40,7 +40,7 @@ INSTANTIATE_TEST_SUITE_P(
     ThreadPoolTests, ThreadPoolTest,
     testing::ValuesIn<ThreadPool::Priority>({ThreadPool::Priority::kHigh,
                                              ThreadPool::Priority::kLow}),
-    [](const testing::TestParamInfo<ThreadPool::Priority> &info) {
+    [](const testing::TestParamInfo<ThreadPool::Priority>& info) {
       return info.param == ThreadPool::Priority::kHigh ? "task_priority_high"
                                                        : "task_priority_low";
     });
@@ -258,12 +258,15 @@ TEST_F(ThreadPoolTest, priority) {
           thread_pool.Schedule([&mutex] { absl::MutexLock lock(&mutex); },
                                ThreadPool::Priority::kHigh));
     }
-//// The logic below fails, because it assumes that the scheduling of tasks and their execution is the same. Which it is
-//// not. It's possible for a low priority task to be started while a high priority task is still running. This isn't
-//// true. As the high prio threads decrement the blocking counter and terminate, it's possible for a low priority
-//// thread to get started (since there's an idle thread in the pool) and then to beat the remaining high priority
-//// threads to win access to the mutex. In other words, the mutex access doesn't honor the thread priorities and that
-//// causes this test to fail intermittently.
+    //// The logic below fails, because it assumes that the scheduling of tasks
+    /// and their execution is the same. Which it is / not. It's possible for a
+    /// low priority task to be started while a high priority task is still
+    /// running. This isn't / true. As the high prio threads decrement the
+    /// blocking counter and terminate, it's possible for a low priority /
+    /// thread to get started (since there's an idle thread in the pool) and
+    /// then to beat the remaining high priority / threads to win access to the
+    /// mutex. In other words, the mutex access doesn't honor the thread
+    /// priorities and that / causes this test to fail intermittently.
     for (size_t i = 0; i < tasks; ++i) {
       EXPECT_TRUE(thread_pool.Schedule(
           [&pending_run_low_priority, &pending_run_high_priority,
@@ -329,16 +332,18 @@ std::shared_ptr<absl::BlockingCounter> ScheduleTasks(
       std::make_shared<absl::BlockingCounter>(kThreadCount);
 
   for (size_t i = 0; i < kThreadCount; i++) {
-    EXPECT_TRUE(thread_pool.Schedule([&atomic_flag, modulo, blocking_counter]() {
-    uint64_t counter = 0;
-    while (!atomic_flag) {
-      counter++;
-      if (counter % modulo == 0) {
-        absl::SleepFor(absl::Microseconds(1));
-      }
-    }
-    blocking_counter->DecrementCount();
-  }, vmsdk::ThreadPool::Priority::kHigh));
+    EXPECT_TRUE(thread_pool.Schedule(
+        [&atomic_flag, modulo, blocking_counter]() {
+          uint64_t counter = 0;
+          while (!atomic_flag) {
+            counter++;
+            if (counter % modulo == 0) {
+              absl::SleepFor(absl::Microseconds(1));
+            }
+          }
+          blocking_counter->DecrementCount();
+        },
+        vmsdk::ThreadPool::Priority::kHigh));
   }
   return blocking_counter;
 }
@@ -358,7 +363,8 @@ TEST_F(ThreadPoolTest, TestCPUUsage) {
   EXPECT_LT(thread_pool.GetAvgCPUPercentage().value(), 1.0);
 
   atomic_flag.store(false);
-  // Increasing modulo means we will be sleeping less in the task, so CPU expected to rise
+  // Increasing modulo means we will be sleeping less in the task, so CPU
+  // expected to rise
   modulo = 1000;
   blocking_counter = ScheduleTasks(thread_pool, atomic_flag, modulo);
   absl::SleepFor(absl::Milliseconds(100));

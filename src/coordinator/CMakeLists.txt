@@ -83,7 +83,9 @@ target_link_libraries(metadata_manager PUBLIC valkey_module)
 target_link_libraries(metadata_manager PUBLIC highwayhash)
 
 set(SRCS_SEARCH_CONVERTER ${CMAKE_CURRENT_LIST_DIR}/search_converter.cc
-                          ${CMAKE_CURRENT_LIST_DIR}/search_converter.h)
+                          ${CMAKE_CURRENT_LIST_DIR}/search_converter.h
+                          ${CMAKE_CURRENT_LIST_DIR}/info_converter.cc
+                          ${CMAKE_CURRENT_LIST_DIR}/info_converter.h)
 
 valkey_search_add_static_library(search_converter "${SRCS_SEARCH_CONVERTER}")
 target_include_directories(search_converter PUBLIC ${CMAKE_CURRENT_LIST_DIR})

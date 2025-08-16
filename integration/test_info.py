@@ -34,6 +34,7 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             "search_hnsw_search_exceptions_count",
             "search_hnsw_create_exceptions_count",
             "search_string_interning_store_size",
+            "search_string_interning_memory_bytes",
             "search_vector_externing_entry_count",
             "search_vector_externing_hash_extern_errors",
             "search_vector_externing_generated_value_cnt",
@@ -52,7 +53,8 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
         ]
 
         bytes_fields = [
-            "search_used_memory_human"
+            "search_used_memory_human",
+            "search_string_interning_memory_human"
         ]
         
         double_fields = [

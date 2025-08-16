@@ -4,22 +4,24 @@
 /*
 
 For each entry in the inverted term index, there is an instance of
-this structure which is used to contain the key/field/position information for each
-word. It is expected that there will be a very large number of these objects
-most of which will have only a small number of key/field/position entries. However,
-there will be a small number of instances where the number of key/field/position
-entries is quite large. Thus it's likely that the fully optimized version of
-this object will have two or more encodings for its contents. This optimization
-is hidden from external view. 
+this structure which is used to contain the key/field/position information for
+each word. It is expected that there will be a very large number of these
+objects most of which will have only a small number of key/field/position
+entries. However, there will be a small number of instances where the number of
+key/field/position entries is quite large. Thus it's likely that the fully
+optimized version of this object will have two or more encodings for its
+contents. This optimization is hidden from external view.
 
 This object is NOT multi-thread safe, it's expected that the caller performs
 locking for mutation operations.
 
-Conceptually, this object holds an ordered list of Keys and for each Key there is
-an ordered list of Positions. Each position is tagged with a bitmask of fields.
+Conceptually, this object holds an ordered list of Keys and for each Key there
+is an ordered list of Positions. Each position is tagged with a bitmask of
+fields.
 
 A KeyIterator is provided to iterate over the keys within this object.
-A PositionIterator is provided to iterate over the positions of an individual Key.
+A PositionIterator is provided to iterate over the positions of an individual
+Key.
 
 */
 
@@ -29,7 +31,7 @@ A PositionIterator is provided to iterate over the positions of an individual Ke
 namespace valkey_search::text {
 
 //
-// this is the logical view of a posting. 
+// this is the logical view of a posting.
 //
 struct Posting {
   const Key& GetKey() const;
@@ -42,8 +44,8 @@ struct Postings {
   struct PositionIterator;
   // Construct a posting. If save_positions is off, then any keys that
   // are inserted have an assumed single position of 0.
-  // The "num_text_fields" entry identifies how many bits of the field-mask are required
-  // and is used to select the representation.
+  // The "num_text_fields" entry identifies how many bits of the field-mask are
+  // required and is used to select the representation.
   Postings(bool save_positions, size_t num_text_fields);
 
   // Are there any postings in this object?
@@ -62,9 +64,9 @@ struct Postings {
   size_t GetPostingCount() const;
 
   // Defrag this contents of this object. Returns the updated "this" pointer.
-  Postings *Defrag();
+  Postings* Defrag();
 
-  // Get a Key iterator. 
+  // Get a Key iterator.
   KeyIterator GetKeyIterator() const;
 
   // The Key Iterator
@@ -101,7 +103,6 @@ struct Postings {
     // Get Current Position
     const Position& GetPosition() const;
   };
-
 };
 
 }  // namespace valkey_search::text

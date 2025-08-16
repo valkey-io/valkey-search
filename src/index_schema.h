@@ -89,7 +89,8 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   static absl::StatusOr<std::shared_ptr<IndexSchema>> Create(
       ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto,
-      vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes, bool reload);
+      vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes,
+      bool reload);
   ~IndexSchema() override;
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
       absl::string_view attribute_alias) const;

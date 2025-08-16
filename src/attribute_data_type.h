@@ -99,7 +99,8 @@ class JsonAttributeDataType : public AttributeDataType {
       ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key, absl::string_view key,
       absl::string_view identifier) const override;
   inline int GetValkeyEventTypes() const override {
-    return VALKEYMODULE_NOTIFY_MODULE | AttributeDataType::GetValkeyEventTypes();
+    return VALKEYMODULE_NOTIFY_MODULE |
+           AttributeDataType::GetValkeyEventTypes();
   }
   inline data_model::AttributeDataType ToProto() const override {
     return data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;

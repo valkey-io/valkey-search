@@ -9,8 +9,9 @@
 #define VALKEYSEARCH_SRC_UTILS_CANCEL_H_
 
 #include <memory>
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
+
 #include "grpcpp/server_context.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 namespace cancel {
@@ -34,13 +35,12 @@ struct Base {
 using Token = std::shared_ptr<Base>;
 
 //
-// Make a Cancellation Token based on a timeout and optionally a rGPC server context
+// Make a Cancellation Token based on a timeout and optionally a rGPC server
+// context
 //
 Token Make(long long timeout_ms, grpc::CallbackServerContext *context);
 
-} // namespace cancel
-} // namespace valkey_search
-
-
+}  // namespace cancel
+}  // namespace valkey_search
 
 #endif

@@ -18,12 +18,16 @@ static vmsdk::config::Number PollFrequency(
     "timeout-poll-frequency", 100, 1, std::numeric_limits<long long>::max());
 static vmsdk::config::Boolean TestForceTimeout("test-force-timeout", false);
 
+static vmsdk::config::Boolean TestForcePausePoint("test-force-pause", false);
+
 static vmsdk::info_field::Integer Timeouts(
     "timeouts", "cancel-timeouts", vmsdk::info_field::IntegerBuilder().Dev());
 static vmsdk::info_field::Integer gRPCCancels(
     "timeouts", "cancel-grpc", vmsdk::info_field::IntegerBuilder().Dev());
 static vmsdk::info_field::Integer ForceCancels(
     "timeouts", "cancel-forced", vmsdk::info_field::IntegerBuilder().Dev());
+static vmsdk::info_field::Integer PausedCancels(
+    "timeouts", "cancel-paused", vmsdk::info_field::IntegerBuilder().Dev());
 
 //
 // A Concrete implementation of Token that can be used to cancel
@@ -54,6 +58,18 @@ struct TokenImpl : public Base {
           is_cancelled_ = true;  // Operation should be cancelled
           ForceCancels.Increment(1);
           VMSDK_LOG(WARNING, nullptr) << "CANCEL: Timeout forced";
+        } else if (TestForcePausePoint.GetValue()) {
+          PausedCancels.Increment(1);
+          VMSDK_LOG(WARNING, nullptr) << "CANCEL: Paused";
+          absl::Time pause_start = absl::Now();
+          while (TestForcePausePoint.GetValue()) {
+            VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1) 
+              << "CANCEL: Paused for " 
+              << absl::ToInt64Seconds(absl::Now() - pause_start) 
+              << " Seconds.";
+            absl::SleepFor(absl::Milliseconds(30));
+          }
+          VMSDK_LOG(WARNING, nullptr) << "CANCEL: Unpaused";
         }
       }
     }

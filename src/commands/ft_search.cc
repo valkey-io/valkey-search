@@ -215,11 +215,7 @@ namespace async {
 
 int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
           [[maybe_unused]] int argc) {
-  auto *res =
-      static_cast<Result *>(ValkeyModule_GetBlockedClientPrivateData(ctx));
-  CHECK(res != nullptr);
-  res->parameters->cancellation_token->Cancel(); // Cancel to tell Free that it's been seen
-  return ValkeyModule_ReplyWithError(ctx, "Request timed out");
+  return ValkeyModule_ReplyWithError(ctx, "Search operation cancelled due to timeout");
 }
 
 int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {

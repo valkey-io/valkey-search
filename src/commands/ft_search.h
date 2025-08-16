@@ -12,7 +12,6 @@
 #include <memory>
 
 #include "absl/status/statusor.h"
-#include "src/index_schema.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/search.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -25,6 +24,7 @@ void SendReply(ValkeyModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
 namespace async {
 
 struct Result {
+  cancel::Token cancellation_token;
   absl::StatusOr<std::deque<indexes::Neighbor>> neighbors;
   std::unique_ptr<query::VectorSearchParameters> parameters;
 };

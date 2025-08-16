@@ -30,8 +30,8 @@
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
-#include "src/indexes/vector_base.h"
 #include "src/indexes/text/text_index.h"
+#include "src/indexes/vector_base.h"
 #include "src/keyspace_event_manager.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
@@ -98,13 +98,13 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline const std::string &GetName() const { return name_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
 
-  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const { return text_index_schema_; }
-  void CreateTextIndexSchema(const data_model::IndexSchema* index_schema_proto = nullptr) { 
-    if (index_schema_proto) {
-      text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(*index_schema_proto); 
-    } else {
-      text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(); 
-    }
+  void CreateTextIndexSchema(
+      const data_model::IndexSchema &index_schema_proto) {
+    text_index_schema_ =
+        std::make_shared<indexes::text::TextIndexSchema>(index_schema_proto);
+  }
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+    return text_index_schema_;
   }
 
   void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type, const char *event,

@@ -212,6 +212,17 @@ data_model::NumericIndex CreateNumericIndexProto();
 data_model::TagIndex CreateTagIndexProto(const std::string& separator = ",",
                                          bool case_sensitive = false);
 
+data_model::TextIndex CreateTextIndexProto(bool with_suffix_trie, bool no_stem,
+                                           uint32_t min_stem_size);
+
+// std::shared_ptr<indexes::text::TextIndexSchema> CreateTextIndexSchema();
+
+data_model::IndexSchema CreateIndexSchemaProtoWithTextFields(
+    data_model::Language language,
+    const std::string& punctuation,
+    bool with_offsets,
+    const std::vector<std::string>& stop_words);
+
 class MockIndexSchema : public IndexSchema {
  public:
   static absl::StatusOr<std::shared_ptr<MockIndexSchema>> Create(

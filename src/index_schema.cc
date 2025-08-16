@@ -6,7 +6,6 @@
  */
 
 #include "src/index_schema.h"
-#include "src/indexes/text/text_index.h"
 
 #include <algorithm>
 #include <atomic>
@@ -38,6 +37,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -74,6 +74,7 @@ IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
 
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     ValkeyModuleCtx *ctx, IndexSchema *index_schema,
+    const data_model::IndexSchema &index_schema_proto,
     const data_model::Attribute &attribute,
     std::optional<SupplementalContentChunkIter> iter) {
   const auto &index = attribute.index();
@@ -85,13 +86,12 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
       return std::make_shared<indexes::Numeric>(index.numeric_index());
     }
     case data_model::Index::IndexTypeCase::kTextIndex: {
-      // Create or reuse shared TextIndexSchema
+      // Create the TextIndexSchema if this is the first Text index we're seeing
       if (!index_schema->GetTextIndexSchema()) {
-        // TODO : get the index_schema_proto the right way here to pass schema level properties
-        index_schema->CreateTextIndexSchema();
+        index_schema->CreateTextIndexSchema(index_schema_proto);
       }
-      return std::make_shared<indexes::Text>(index.text_index(),
-                                             index_schema->GetTextIndexSchema());
+      return std::make_shared<indexes::Text>(
+          index.text_index(), index_schema->GetTextIndexSchema());
     }
     case data_model::Index::IndexTypeCase::kVectorIndex: {
       switch (index.vector_index().algorithm_case()) {
@@ -179,9 +179,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
   VMSDK_RETURN_IF_ERROR(res->Init(ctx));
   if (!skip_attributes) {
     for (const auto &attribute : index_schema_proto.attributes()) {
-      VMSDK_ASSIGN_OR_RETURN(
-          std::shared_ptr<indexes::IndexBase> index,
-          IndexFactory(ctx, res.get(), attribute, std::nullopt));
+      VMSDK_ASSIGN_OR_RETURN(std::shared_ptr<indexes::IndexBase> index,
+                             IndexFactory(ctx, res.get(), index_schema_proto,
+                                          attribute, std::nullopt));
       VMSDK_RETURN_IF_ERROR(
           res->AddIndex(attribute.alias(), attribute.identifier(), index));
     }
@@ -802,6 +802,15 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
       google::protobuf::RepeatedPtrFieldBackInserter(
           index_schema_proto->mutable_attributes()),
       [](const auto &attribute) { return *attribute.second.ToProto(); });
+  // Text-specific properties
+  if (text_index_schema_) {
+    index_schema_proto->set_language(text_index_schema_->language_);
+    index_schema_proto->set_punctuation(text_index_schema_->punctuation_);
+    index_schema_proto->set_with_offsets(text_index_schema_->with_offsets_);
+    index_schema_proto->mutable_stop_words()->Add(
+        text_index_schema_->stop_words_.begin(),
+        text_index_schema_->stop_words_.end());
+  }
   return index_schema_proto;
 }
 
@@ -899,9 +908,10 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
                 SUPPLEMENTAL_CONTENT_INDEX_CONTENT) {
       auto &attribute =
           supplemental_content->index_content_header().attribute();
-      VMSDK_ASSIGN_OR_RETURN(std::shared_ptr<indexes::IndexBase> index,
-                             IndexFactory(ctx, index_schema.get(), attribute,
-                                          supplemental_iter.IterateChunks()));
+      VMSDK_ASSIGN_OR_RETURN(
+          std::shared_ptr<indexes::IndexBase> index,
+          IndexFactory(ctx, index_schema.get(), *index_schema_proto, attribute,
+                       supplemental_iter.IterateChunks()));
       VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
           attribute.alias(), attribute.identifier(), index));
     } else if (ABSL_PREDICT_TRUE(!skip_loading_index_data) &&

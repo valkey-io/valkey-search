@@ -37,7 +37,7 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
     if (i == data.size() || data[i] == ' ') {
       if (i > prev_pos) {
         absl::string_view word = data.substr(prev_pos, i - prev_pos);
-        text_index_schema_->text_index_->prefix_.Mutate(
+        text_index_schema_->text_index_.prefix_.Mutate(
             word,
             [&](std::optional<std::shared_ptr<text::Postings>> existing)
                 -> std::optional<std::shared_ptr<text::Postings>> {
@@ -75,24 +75,26 @@ absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr& key,
 }
 
 int Text::RespondWithInfo(ValkeyModuleCtx* ctx) const {
-  throw std::runtime_error("Text::RespondWithInfo not implemented");
+  // TODO: provide Text attribute info for FT.INFO
+  return 0;
 }
 
 bool Text::IsTracked(const InternedStringPtr& key) const {
+  // TODO
   return false;
 }
 
 uint64_t Text::GetRecordCount() const {
-  throw std::runtime_error("Text::GetRecordCount not implemented");
+  // TODO: keep track of number of keys indexed for this attribute
+  return 0;
 }
 
 std::unique_ptr<data_model::Index> Text::ToProto() const {
   auto index_proto = std::make_unique<data_model::Index>();
-  auto text_index = std::make_unique<data_model::TextIndex>();
+  auto* text_index = index_proto->mutable_text_index();
   text_index->set_with_suffix_trie(with_suffix_trie_);
   text_index->set_no_stem(no_stem_);
   text_index->set_min_stem_size(min_stem_size_);
-  index_proto->set_allocated_text_index(text_index.release());
   return index_proto;
 }
 

@@ -82,12 +82,12 @@ set(INDEXES_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/vector_test.cc
 )
 
-add_executable(indexes_test ${INDEXES_TEST_SOURCES})
-target_include_directories(indexes_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(indexes_test PRIVATE testing_common_base)
-target_link_libraries(indexes_test PRIVATE text)
-target_link_libraries(indexes_test PRIVATE hnswlib_vmsdk)
-finalize_test_flags(indexes_test)
+add_executable(abc_indexes_test ${INDEXES_TEST_SOURCES})
+target_include_directories(abc_indexes_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(abc_indexes_test PRIVATE testing_common_base)
+target_link_libraries(abc_indexes_test PRIVATE text)
+target_link_libraries(abc_indexes_test PRIVATE hnswlib_vmsdk)
+finalize_test_flags(abc_indexes_test)
 
 # 3. Core Test Suite - consolidates core functionality tests
 set(CORE_TEST_SOURCES

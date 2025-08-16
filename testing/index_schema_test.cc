@@ -33,6 +33,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
 #include "src/keyspace_event_manager.h"
@@ -1161,6 +1162,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
   // Construct and save index schema
   {
+    // TODO: create a proto with some non-default text schema-level properties
     auto index_schema = MockIndexSchema::Create(
                             &fake_ctx_, index_schema_name_str, key_prefixes,
                             std::make_unique<HashAttributeDataType>(), nullptr)
@@ -1199,6 +1201,25 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
     VMSDK_EXPECT_OK(index_schema->AddIndex("flat_attribute", "flat_identifier",
                                            flat_index));
 
+    // Add numeric index
+    auto numeric_index = std::make_shared<indexes::Numeric>(
+        CreateNumericIndexProto());
+    VMSDK_EXPECT_OK(index_schema->AddIndex("numeric_attribute", "numeric_identifier", numeric_index));
+
+    // Add tag index
+    auto tag_index = std::make_shared<indexes::Tag>(
+        CreateTagIndexProto(",", false));
+    VMSDK_EXPECT_OK(index_schema->AddIndex("tag_attribute", "tag_identifier", tag_index));
+    
+    // Add text index
+    index_schema->CreateTextIndexSchema(CreateIndexSchemaProtoWithTextFields(
+        data_model::Language_INT_MAX_SENTINEL_DO_NOT_USE_,
+        ".",
+        false,
+        {"stop"}));
+    auto text_index = std::make_shared<indexes::Text>(CreateTextIndexProto(true, true, 6), index_schema->GetTextIndexSchema());
+    VMSDK_EXPECT_OK(index_schema->AddIndex("text_attribute", "text_identifier", text_index));
+
     VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream));
   }
 
@@ -1223,6 +1244,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
               testing::UnorderedElementsAre("prefix1", "prefix2"));
   EXPECT_TRUE(dynamic_cast<const HashAttributeDataType *>(
       &index_schema->GetAttributeDataType()));
+
   VMSDK_EXPECT_OK(index_schema->GetIndex("hnsw_attribute"));
   auto hnsw_index = dynamic_cast<indexes::VectorHNSW<float> *>(
       index_schema->GetIndex("hnsw_attribute").value().get());
@@ -1244,6 +1266,32 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
                   flat_index->GetSpace()) != nullptr);
   EXPECT_EQ(flat_index->GetCapacity(), initial_cap);
   EXPECT_EQ(flat_index->GetBlockSize(), block_size);
+
+  VMSDK_EXPECT_OK(index_schema->GetIndex("numeric_attribute"));
+  auto num_index = dynamic_cast<indexes::Numeric *>(
+      index_schema->GetIndex("numeric_attribute").value().get());
+  EXPECT_TRUE(num_index != nullptr);
+
+  VMSDK_EXPECT_OK(index_schema->GetIndex("tag_attribute"));
+  auto tag_index = dynamic_cast<indexes::Tag *>(
+      index_schema->GetIndex("tag_attribute").value().get());
+  EXPECT_TRUE(tag_index != nullptr);
+  EXPECT_EQ(tag_index->GetSeparator(), ',');
+  EXPECT_EQ(tag_index->IsCaseSensitive(), false);
+
+  VMSDK_EXPECT_OK(index_schema->GetIndex("text_attribute"));
+  auto text_index = dynamic_cast<indexes::Text *>(
+      index_schema->GetIndex("text_attribute").value().get());
+  EXPECT_TRUE(text_index != nullptr);
+  EXPECT_EQ(text_index->GetWithSuffixTrie(), true);
+  EXPECT_EQ(text_index->GetNoStem(), true);
+  EXPECT_EQ(text_index->GetMinStemSize(), 6);
+
+  auto text_index_schema = index_schema->GetTextIndexSchema();
+  EXPECT_EQ(text_index_schema->language_,  data_model::Language_INT_MAX_SENTINEL_DO_NOT_USE_);
+  EXPECT_EQ(text_index_schema->punctuation_,  ".");
+  EXPECT_EQ(text_index_schema->with_offsets_,  false);
+  EXPECT_THAT(text_index_schema->stop_words_, testing::Contains("stop"));
 
   EXPECT_TRUE(index_schema->IsBackfillInProgress());
   EXPECT_EQ(index_schema->GetStats().document_cnt, 10);
@@ -1742,11 +1790,11 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     LOG(INFO) << "✓ Skip load verified - index empty, backfill ready";
   }
 
-  // STEP 3: Drop the index (implicitly done when schema goes out of scope)
+  // STEP 3: Drop the schema (implicitly done when schema goes out of scope)
   LOG(INFO) << "STEP 3: Index dropped (implicit)";
 
-  // STEP 4: Create vector index + numeric field + tag field + add 1000 vectors + save to RDB  
-  LOG(INFO) << "STEP 4: Creating mixed index with vector + numeric + tag fields";
+  // STEP 4: Create vector index + numeric index + tag index + text index + add 1000 vectors + save to RDB  
+  LOG(INFO) << "STEP 4: Creating mixed schema with vector + numeric + tag + text indexes";
   FakeSafeRDB rdb_stream_step4;
   
   {
@@ -1772,16 +1820,23 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     auto tag_index = std::make_shared<indexes::Tag>(
         CreateTagIndexProto(",", false));
     VMSDK_EXPECT_OK(index_schema->AddIndex("category", "cat_id", tag_index));
+    
+    // Add text index
+    auto text_index_schema = std::make_shared<indexes::text::TextIndexSchema>();
+    auto text_index = std::make_shared<indexes::Text>(CreateTextIndexProto(true, false, 6), text_index_schema);
+    VMSDK_EXPECT_OK(index_schema->AddIndex("description", "desc_id", text_index));
 
     // Add test data for all indexes
     auto vectors = DeterministicallyGenerateVectors(num_vectors, dimensions, 1.0);
     auto vec_itr = index_schema->attributes_.find("embedding");
     auto num_itr = index_schema->attributes_.find("price");
     auto tag_itr = index_schema->attributes_.find("category");
+    auto text_itr = index_schema->attributes_.find("description");
     
     EXPECT_FALSE(vec_itr == index_schema->attributes_.end());
     EXPECT_FALSE(num_itr == index_schema->attributes_.end());
     EXPECT_FALSE(tag_itr == index_schema->attributes_.end());
+    EXPECT_FALSE(text_itr == index_schema->attributes_.end());
     
     for (size_t i = 0; i < vectors.size(); ++i) {
       auto interned_key = StringInternStore::Intern("item:" + std::to_string(i));
@@ -1805,6 +1860,13 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
       vmsdk::UniqueValkeyString tag_data = vmsdk::MakeUniqueValkeyString(category);
       index_schema->ProcessAttributeMutation(&fake_ctx_, tag_itr->second,
                                              interned_key, std::move(tag_data),
+                                             indexes::DeletionType::kNone);
+
+      // Add text data (description)
+      std::string description = "description" + std::to_string(i);
+      vmsdk::UniqueValkeyString text_data = vmsdk::MakeUniqueValkeyString(description);
+      index_schema->ProcessAttributeMutation(&fake_ctx_, text_itr->second,
+                                             interned_key, std::move(text_data),
                                              indexes::DeletionType::kNone);
     }
 
@@ -1843,10 +1905,12 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     auto vec_index = mixed_schema->GetIndex("embedding");
     auto num_index = mixed_schema->GetIndex("price");
     auto tag_index = mixed_schema->GetIndex("category");
+    auto text_index = mixed_schema->GetIndex("description");
     
     VMSDK_EXPECT_OK_STATUSOR(vec_index);
     VMSDK_EXPECT_OK_STATUSOR(num_index);
     VMSDK_EXPECT_OK_STATUSOR(tag_index);
+    VMSDK_EXPECT_OK_STATUSOR(text_index);
     
     EXPECT_EQ(vec_index.value()->GetRecordCount(), num_vectors);
     LOG(INFO) << "✓ Mixed index normal load verified";
@@ -1910,10 +1974,12 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     auto vec_index = mixed_skip_schema->GetIndex("embedding");
     auto num_index = mixed_skip_schema->GetIndex("price");
     auto tag_index = mixed_skip_schema->GetIndex("category");
+    auto text_index = mixed_skip_schema->GetIndex("description");
     
     VMSDK_EXPECT_OK_STATUSOR(vec_index);
     VMSDK_EXPECT_OK_STATUSOR(num_index);
     VMSDK_EXPECT_OK_STATUSOR(tag_index);
+    VMSDK_EXPECT_OK_STATUSOR(text_index);
     
     EXPECT_EQ(vec_index.value()->GetRecordCount(), 0);
     EXPECT_TRUE(mixed_skip_schema->IsBackfillInProgress());

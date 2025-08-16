@@ -266,6 +266,7 @@ cleanup() {
 
 # Ensure cleanup runs on exit
 trap cleanup EXIT
+export CMAKE_POLICY_VERSION_MINIMUM=3.5
 
 BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
 if [[ "${SAN_BUILD}" != "no" ]]; then

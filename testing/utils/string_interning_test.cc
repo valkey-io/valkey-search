@@ -12,15 +12,56 @@
 #include <string>
 
 #include "gtest/gtest.h"
+#include "gmock/gmock.h"
+#include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/memory_tracker.h"
 #include "src/utils/allocator.h"
 #include "src/utils/intrusive_ref_count.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/testing_infra/module.h"
+#include "vmsdk/src/memory_allocation_overrides.h"
 
 namespace valkey_search {
 
 using testing::TestParamInfo;
 
 namespace {
+
+class MockAllocator : public Allocator {
+ public:
+  explicit MockAllocator() : chunk_(this, 1024) {}
+
+  ~MockAllocator() override = default;
+
+  char* Allocate(size_t size) override {
+    // simulate the memory allocation in the current tracking scope
+    vmsdk::ReportAllocMemorySize(size);
+    
+    if (!chunk_.free_list.empty()) {
+      auto ptr = chunk_.free_list.top();
+      chunk_.free_list.pop();
+      allocated_size_ = size;
+      return ptr;
+    }
+    return nullptr;  // Out of memory
+  }
+
+  size_t ChunkSize() const override {
+    return 1024;
+  }
+  
+protected:
+  void Free(AllocatorChunk* chunk, char* ptr) override {
+    // Report memory deallocation to balance the allocation
+    vmsdk::ReportFreeMemorySize(allocated_size_);
+    
+    chunk->free_list.push(ptr);
+  }
+
+ private:
+  AllocatorChunk chunk_;
+  size_t allocated_size_ = 0;
+};
 
 class StringInterningTest : public vmsdk::ValkeyTestWithParam<bool> {};
 
@@ -71,12 +112,27 @@ TEST_P(StringInterningTest, WithAllocator) {
   }
 }
 
+TEST_F(StringInterningTest, StringInternStoreTracksMemoryInternally) {
+  MemoryPool caller_pool{0};
+  std::shared_ptr<InternedString> interned_str;
+  auto allocator = std::make_unique<MockAllocator>();
+
+  {
+    NestedMemoryScope scope{caller_pool};
+    interned_str = StringInternStore::Intern("test_string", allocator.get());
+  }
+
+  EXPECT_EQ(caller_pool.GetUsage(), 0);
+  EXPECT_EQ(StringInternStore::GetMemoryUsage(), 12);
+
+  interned_str.reset();
+}
+
 INSTANTIATE_TEST_SUITE_P(StringInterningTests, StringInterningTest,
                          ::testing::Values(true, false),
                          [](const TestParamInfo<bool> &info) {
                            return std::to_string(info.param);
                          });
-
 }  // namespace
 
 }  // namespace valkey_search

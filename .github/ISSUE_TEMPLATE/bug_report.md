@@ -2,7 +2,7 @@
 name: Bug report
 about: Report a problem with an existing or in-development feature.
 title: "[BUG]"
-labels: bug
+labels: bug, enhancement
 assignees: ''
 
 ---

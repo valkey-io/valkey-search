@@ -66,7 +66,7 @@ absl::StatusOr<double> ThreadPool::GetAvgCPUPercentage() {
   std::vector<double> cpu_results;
   absl::Status err = absl::OkStatus();
   threads_.ForEach([&cpu_results, &err, this](auto thread) {
-    if(!err.ok()) {
+    if (!err.ok()) {
       return;
     }
     auto status = thread->thread_monitor_->GetThreadCPUPercentage();
@@ -77,7 +77,8 @@ absl::StatusOr<double> ThreadPool::GetAvgCPUPercentage() {
     cpu_results.push_back(status.value());
   });
   VMSDK_RETURN_IF_ERROR(err);
-  double sum_all_cpus = std::accumulate(cpu_results.begin(), cpu_results.end(), 0.0);
+  double sum_all_cpus =
+      std::accumulate(cpu_results.begin(), cpu_results.end(), 0.0);
   if (cpu_results.empty()) {
     return sum_all_cpus;
   }

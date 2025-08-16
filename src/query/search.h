@@ -80,11 +80,10 @@ struct VectorSearchParameters {
       assert(params.empty());
     }
   } parse_vars;
-  bool IsNonVectorQuery() const {
-    return attribute_alias.empty();
-  }
-  VectorSearchParameters(uint64_t timeout, grpc::CallbackServerContext *context)
-      : timeout_ms(timeout), cancellation_token(cancel::Make(timeout, context)) {}
+  bool IsNonVectorQuery() const { return attribute_alias.empty(); }
+  VectorSearchParameters(uint64_t timeout, grpc::CallbackServerContext* context)
+      : timeout_ms(timeout),
+        cancellation_token(cancel::Make(timeout, context)) {}
 };
 
 // Callback to be called when the search is done.

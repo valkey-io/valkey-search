@@ -17,10 +17,10 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/index_schema.h"
+#include "src/query/fanout_template.h"
 #include "src/query/search.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
-#include "src/query/fanout_template.h"
 
 namespace valkey_search::query::fanout {
 

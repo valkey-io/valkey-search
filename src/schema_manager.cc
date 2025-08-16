@@ -195,7 +195,8 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
 
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,
-      IndexSchema::Create(ctx, index_schema_proto, mutations_thread_pool_, false, false));
+      IndexSchema::Create(ctx, index_schema_proto, mutations_thread_pool_,
+                          false, false));
 
   db_to_index_schemas_[db_num][name] = std::move(index_schema);
 
@@ -668,7 +669,8 @@ void SchemaManager::OnServerCronCallback(ValkeyModuleCtx *ctx,
                                          [[maybe_unused]] ValkeyModuleEvent eid,
                                          [[maybe_unused]] uint64_t subevent,
                                          [[maybe_unused]] void *data) {
-  SchemaManager::Instance().PerformBackfill(ctx, options::GetBackfillBatchSize().GetValue());
+  SchemaManager::Instance().PerformBackfill(
+      ctx, options::GetBackfillBatchSize().GetValue());
 }
 
 static vmsdk::info_field::Integer number_of_indexes(

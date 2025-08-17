@@ -31,17 +31,21 @@ InternedString::InternedString(char* data, size_t length)
     : data_(data), length_(length), is_shared_(true), is_data_owner_(false) {}
 
 InternedString::~InternedString() {
-  // NOTE: isolate memory tracking for deallocation.
-  IsolatedMemoryScope scope {StringInternStore::memory_pool_};
+  auto deallocate = [this]() {
+    if (is_data_owner_) {
+      delete[] data_;
+    } else {
+      Allocator::Free(data_);
+    }
+  };
 
   if (is_shared_) {
+    // NOTE: isolate memory tracking for deallocation only for interned strings.
+    IsolatedMemoryScope scope {StringInternStore::memory_pool_};
     StringInternStore::Instance().Release(this);
-  }
-  
-  if (is_data_owner_) {
-    delete[] data_;
+    deallocate();
   } else {
-    Allocator::Free(data_);
+    deallocate();
   }
 }
 

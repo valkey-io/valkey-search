@@ -126,6 +126,20 @@ TEST_F(StringInterningTest, StringInternStoreTracksMemoryInternally) {
   EXPECT_EQ(StringInternStore::GetMemoryUsage(), 12);
 
   interned_str.reset();
+
+  EXPECT_EQ(StringInternStore::GetMemoryUsage(), 0);
+}
+
+TEST_F(StringInterningTest, NonInternedStringDoesNotAffectStoreMemory) {
+  int64_t initial_memory = StringInternStore::GetMemoryUsage();
+  
+  auto non_interned = std::make_shared<InternedString>("non_interned_string");
+  
+  EXPECT_EQ(StringInternStore::GetMemoryUsage(), initial_memory);
+  
+  non_interned.reset();
+  
+  EXPECT_EQ(StringInternStore::GetMemoryUsage(), initial_memory);
 }
 
 INSTANTIATE_TEST_SUITE_P(StringInterningTests, StringInterningTest,

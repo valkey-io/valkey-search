@@ -33,7 +33,7 @@ InternedString::InternedString(char* data, size_t length)
     : data_(data), length_(length), is_shared_(true), is_data_owner_(false) {}
 
 InternedString::~InternedString() {
-  // NOTE: isolate memory tracking for deallocation only for interned strings.
+  // NOTE: isolate memory tracking for deallocation.
   IsolatedMemoryScope scope {StringInternStore::memory_pool_};
 
   if (is_shared_) {

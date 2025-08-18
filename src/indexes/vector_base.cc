@@ -40,6 +40,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text.h"
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
@@ -100,7 +101,9 @@ bool InlineVectorEvaluator::EvaluateNumeric(
 }
 
 bool InlineVectorEvaluator::EvaluateText(const query::TextPredicate &predicate) {
-  // TODO
+  // CHECK(key_);
+  // auto text = predicate.GetIndex()->GetRawValue(*key_);
+  // return predicate.Evaluate(text);
   return true;
 }
 

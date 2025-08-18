@@ -97,19 +97,21 @@ std::unique_ptr<data_model::Index> Text::ToProto() const {
 }
 
 size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
-  switch (predicate.GetOperation()) {
-    case query::TextPredicate::Operation::kExact: {
-      // TODO: Handle phrase matching.
-      auto word = predicate.GetTextString();
-      if (word.empty()) return 0;
-      auto iter = text_index_schema_->text_index_->prefix_.GetWordIterator(word);
-      auto target_posting = iter.GetTarget();
-      return target_posting->GetKeyCount();
-    }
-    default:
-      CHECK(false) << "Unsupported TextPredicate operation: " << static_cast<int>(predicate.GetOperation());
-      return 0;
-  }
+  // switch (predicate.GetOperation()) {
+  //   case query::TextPredicate::Operation::kExact: {
+  //     // TODO: Handle phrase matching.
+  //     auto word = predicate.GetTextString();
+  //     if (word.empty()) return 0;
+  //     auto iter = text_index_schema_->text_index_->prefix_.GetWordIterator(word);
+  //     auto target_posting = iter.GetTarget();
+  //     return target_posting->GetKeyCount();
+  //   }
+  //   default:
+  //     CHECK(false) << "Unsupported TextPredicate operation: " << static_cast<int>(predicate.GetOperation());
+  //     return 0;
+  // }
+  return 0;
+  // switch ()
 }
 
 std::unique_ptr<Text::EntriesFetcher> Text::Search(
@@ -119,9 +121,10 @@ std::unique_ptr<Text::EntriesFetcher> Text::Search(
     CalculateSize(predicate),
     text_index_schema_->text_index_,
     negate ? &untracked_keys_ : nullptr);
-  fetcher->operation_ = predicate.GetOperation();
+  // fetcher->operation_ = predicate.GetOperation();
+  fetcher->predicate_ = &predicate;
   // Currently, we support a single word (exact term) match.
-  fetcher->data_ = predicate.GetTextString();
+  // fetcher->data_ = predicate.GetTextString();
   return fetcher;
 }
 
@@ -129,20 +132,20 @@ std::unique_ptr<Text::EntriesFetcher> Text::Search(
 size_t Text::EntriesFetcher::Size() const { return size_; }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
-  switch (operation_) {
-    case query::TextPredicate::Operation::kExact: {
-      auto iter = text_index_->prefix_.GetWordIterator(data_);
-      std::vector<WordIterator> iterVec = {iter};
-      bool slop = 0;
-      bool in_order = true;
-      auto itr = std::make_unique<text::PhraseIterator>(iterVec, slop, in_order, untracked_keys_);
-      itr->Next();
-      return itr;
-    }
-    default:
-      CHECK(false) << "Unsupported TextPredicate operation: " << static_cast<int>(operation_);
-      return nullptr;
-  }
+  // switch (operation_) {
+  //   case query::TextPredicate::Operation::kExact: {
+  //     auto iter = text_index_->prefix_.GetWordIterator(data_);
+  //     std::vector<WordIterator> iterVec = {iter};
+  //     bool slop = 0;
+  //     bool in_order = true;
+  //     auto itr = std::make_unique<text::PhraseIterator>(iterVec, slop, in_order, untracked_keys_);
+  //     itr->Next();
+  //     return itr;
+  //   }
+  //   default:
+  //     CHECK(false) << "Unsupported TextPredicate operation: " << static_cast<int>(operation_);
+  //     return nullptr;
+  // }
   return nullptr;
 }
 

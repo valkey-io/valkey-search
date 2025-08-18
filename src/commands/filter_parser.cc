@@ -250,7 +250,10 @@ absl::StatusOr<std::unique_ptr<query::TextPredicate>> FilterParser::ParseTextPre
   }
   auto text_index = dynamic_cast<const indexes::Text*>(index.value().get());
   // If in quotes, it is an exact match.
-  return std::make_unique<query::TextPredicate>(text_index, field_name, identifier, text_value, query::TextPredicate::Operation::kExact, 0);
+  // return std::make_unique<query::TextPredicate>(text_index, field_name, identifier, text_value, query::TextPredicate::Operation::kExact, 0);
+  return std::make_unique<query::TermPredicate>(
+      text_index, identifier,
+      field_name, text_value);
 }
 
 absl::StatusOr<absl::flat_hash_set<absl::string_view>> FilterParser::ParseTags(

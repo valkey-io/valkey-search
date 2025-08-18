@@ -26,6 +26,8 @@ def search_command(index: str, filter: Union[int, None]) -> list[str]:
         "2",
         "BLOB",
         float_to_bytes([10.0, 10.0, 10.0]),
+        "TIMEOUT",
+        "10"
     ]
 
 
@@ -43,6 +45,7 @@ def search(
     index: str,
     timeout: bool,
     filter: Union[int, None] = None,
+    
 ) -> list[tuple[str, float]]:
     print("Search command: ", search_command(index, filter))
     if not timeout:
@@ -168,6 +171,28 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
             client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 2
         )
         assert hnsw_result != nominal_hnsw_result
+
+        #
+        # Now force the race the other way, i.e., force a timeout via Valkey
+        #
+        assert (
+            client.execute_command("CONFIG SET search.test-force-timeout no")
+            == b"OK"
+        )
+        assert (
+            client.execute_command("CONFIG SET search.test-force-pause yes")
+            == b"OK"
+        )
+        hnsw_result = search(client, "hnsw", True, 2)
+        assert (
+            client.info("SEARCH")["search_cancel-paused"] > 0
+        )
+        assert (
+            client.execute_command("CONFIG SET search.test-force-pause yes")
+            == b"OK"
+        )
+
+
 
 
 class TestCancelCME(ValkeySearchClusterTestCase):

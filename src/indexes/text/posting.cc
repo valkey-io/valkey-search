@@ -291,6 +291,26 @@ void Postings::KeyIterator::NextKey() {
   }
 }
 
+bool Postings::KeyIterator::ContainsField(size_t field_index) const {
+  CHECK(key_map_ != nullptr && current_ != end_) << "KeyIterator is invalid or exhausted";
+
+  // Check all positions for this key to see if field_index is set
+  for (const auto& [position, field_mask] : current_->second) {
+    // Safety check: Ensure field_mask is not null
+    if (field_mask == nullptr) {
+      CHECK(false) << "field_mask is null";
+      return false;
+    }
+
+    // Use HasField method to check if field is set
+    if (field_mask->HasField(field_index)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 bool Postings::KeyIterator::SkipForwardKey(const Key& key) {
   CHECK(key_map_ != nullptr) << "KeyIterator is invalid";
   
@@ -302,7 +322,7 @@ bool Postings::KeyIterator::SkipForwardKey(const Key& key) {
 }
 
 const Key& Postings::KeyIterator::GetKey() const {
-  // CHECK(key_map_ != nullptr && current_ != end_) << "KeyIterator is invalid or exhausted";
+  CHECK(key_map_ != nullptr && current_ != end_) << "KeyIterator is invalid or exhausted";
   return current_->first;
 }
 

@@ -73,7 +73,7 @@ struct TextIndexSchema {
   // IndexSchema proto-derived configuration fields
   data_model::Language language_ = data_model::LANGUAGE_UNSPECIFIED;
   std::string punctuation_;
-  bool with_offsets_ = false;
+  bool with_offsets_ = true;
   std::vector<std::string> stop_words_;
 
   uint8_t AllocateTextFieldNumber() {

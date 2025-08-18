@@ -5,16 +5,18 @@ namespace valkey_search::indexes::text {
 PhraseIterator::PhraseIterator(const std::vector<WordIterator>& words,
                               size_t slop,
                               bool in_order,
-                              const InternedStringSet* untracked_keys)
+                              const InternedStringSet* untracked_keys,
+                              std::optional<size_t> text_field_number)
     : words_(words),
       slop_(slop),
       in_order_(in_order),
       untracked_keys_(untracked_keys),
-      current_idx_(0) {
+      text_field_number_(text_field_number) {
 }
 
 bool PhraseIterator::Done() const {
-  return current_idx_ >= target_posting_->GetKeyCount();
+  // Check if key iterator is valid
+  return !key_iter_.IsValid();
 }
 
 void PhraseIterator::Next() {
@@ -23,17 +25,23 @@ void PhraseIterator::Next() {
     target_posting_ = words_[0].GetTarget();
     key_iter_ = target_posting_->GetKeyIterator();
     begin_ = false;  // Set to false after the first call to Next.
+    
+    // Check first key for field requirement
+    if (text_field_number_.has_value() && !Done() && 
+        !key_iter_.ContainsField(text_field_number_.value())) {
+      Next();
+    }
     return;
   }
-  // On subsequent calls, we advance the key iterator.
-  // Note: In the current implementation, we support an exact term match.
-  // There is also no consideration into the attribute (field) to see that it matches
-  // the query used. Currently, all matches are returned.
-  while (current_idx_ < target_posting_->GetKeyCount()) {
+  
+  // Advance until we find a valid key or reach the end
+  do {
     key_iter_.NextKey();
-    current_idx_ += 1;
-    break;
-  }
+    if (Done()) {
+      break;
+    }
+  } while (text_field_number_.has_value() && 
+           !key_iter_.ContainsField(text_field_number_.value()));
 }
 
 const InternedStringPtr& PhraseIterator::operator*() const {

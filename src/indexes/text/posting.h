@@ -106,6 +106,9 @@ struct Postings {
     // Get Current key
     const Key& GetKey() const;
 
+    // Check if word is present in the field specified for current key
+    bool ContainsField(size_t field_index) const;
+
     // Get Position Iterator
     PositionIterator GetPositionIterator() const;
 

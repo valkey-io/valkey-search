@@ -423,6 +423,88 @@ static vmsdk::info_field::Integer query_prefiltering_requests_cnt(
       return Metrics::GetStats().query_prefiltering_requests_cnt;
     }));
 
+static vmsdk::info_field::Integer search_total_queries_processed(
+    "query", "total_queries_processed",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      auto total_queries = Metrics::GetStats().query_successful_requests_cnt + 
+                            Metrics::GetStats().query_failed_requests_cnt;
+      return total_queries;
+    }));
+
+static vmsdk::info_field::Integer search_total_query_commands(
+    "query", "total_query_commands",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      auto total_commands = Metrics::GetStats().query_successful_requests_cnt + 
+                             Metrics::GetStats().query_failed_requests_cnt +
+                             Metrics::GetStats().query_hybrid_requests_cnt;
+      return total_commands;
+    }));
+
+static vmsdk::info_field::Integer search_total_query_execution_time_ms(
+    "query", "total_query_execution_time_ms",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual total query execution time in milliseconds
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer search_total_active_queries(
+    "query", "total_active_queries",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual total active queries count
+      return 0;
+    }));
+
+// Error and warning metrics
+static vmsdk::info_field::Integer errors_indexing_failures(
+    "warnings_and_errors", "errors_indexing_failures",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual metrics
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer errors_for_index_with_max_failures(
+    "warnings_and_errors", "errors_for_index_with_max_failures",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual values
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer OOM_indexing_failures_indexes_count(
+    "warnings_and_errors", "OOM_indexing_failures_indexes_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual values
+      return 0;
+    }));
+
+// Dialect statistics metrics
+static vmsdk::info_field::Integer dialect_1(
+    "dialect_statistics", "dialect_1",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual values
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer dialect_2(
+    "dialect_statistics", "dialect_2",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual values
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer dialect_3(
+    "dialect_statistics", "dialect_3",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual values
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer dialect_4(
+    "dialect_statistics", "dialect_4",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual values
+      return 0;
+    }));
+
 static vmsdk::info_field::Integer hnsw_add_exceptions_count(
     "hnswlib", "hnsw_add_exceptions_count",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {

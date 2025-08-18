@@ -457,6 +457,7 @@ TEST_F(ValkeySearchTest, Info) {
     "worker_pool_suspend_cnt: 13\nwriter_resumed_cnt: 14\nreader_resumed_cnt: 15\nwriter_suspension_expired_cnt: 16\n"
     "rdb\nrdb_load_success_cnt: 17\nrdb_load_failure_cnt: 18\nrdb_save_success_cnt: 19\nrdb_save_failure_cnt: 20\n"
     "query\nsuccessful_requests_count: 2\nfailure_requests_count: 1\nhybrid_requests_count: 1\ninline_filtering_requests_count: 2\n"
+    "total_queries_processed: 3\ntotal_query_commands: 4\ntotal_query_execution_time_ms: 0\ntotal_active_queries: 0\n"
     "hnswlib\nhnsw_add_exceptions_count: 3\nhnsw_remove_exceptions_count: 4\nhnsw_modify_exceptions_count: 5\n"
     "hnsw_search_exceptions_count: 6\nhnsw_create_exceptions_count: 7\n"
     "latency\nhnsw_vector_index_search_latency_usec: 'p50=100139.007,p99=200278.015,p99.9=200278.015'\n"
@@ -481,6 +482,8 @@ TEST_F(ValkeySearchTest, Info) {
     "largest_memory_index: 0\nlargest_memory_index_human: 0\nused_memory_vector_index: 0\ncursors\nglobal_idle_user: 0\n"
     "global_idle_internal: 0\nglobal_total_user: 0\nglobal_total_internal: 0\ngarbage_collector\ngc_bytes_collected: 0\n"
     "gc_total_cycles: 0\ngc_total_ms_run: 0\ngc_total_docs_not_collected: 0\ngc_marked_deleted_vectors: 0\n"
+    "warnings_and_errors\nerrors_indexing_failures: 0\nerrors_for_index_with_max_failures: 0\nOOM_indexing_failures_indexes_count: 0\n"
+    "dialect_statistics\ndialect_1: 0\ndialect_2: 0\ndialect_3: 0\ndialect_4: 0\n"
 );
 #endif
   StringInternStore::SetMemoryUsage(0); // reset memory pool

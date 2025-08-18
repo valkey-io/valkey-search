@@ -130,13 +130,32 @@ void* PerformAndTrackAlignedAlloc(size_t align, size_t size,
   }
   return ptr;
 }
+
+namespace test_utils {
+
+thread_local size_t (*test_malloc_size_fn)(void*) = nullptr;
+
+void SetTestSystemMallocSizeFunction(size_t (*fn)(void*)) {
+  test_malloc_size_fn = fn;
+}
+
+void ClearTestSystemMallocSizeFunction() {
+  test_malloc_size_fn = nullptr;
+}
+
+}  // namespace test_utils
 }  // namespace vmsdk
 
 extern "C" {
-// Our allocator doesn't support tracking system memory size, so we just
-// return 0.
+// Basically our allocator doesn't support tracking system memory size, so we just
+// return 0. But if test_malloc_size_fn is set, tracking system memory size is possible.
 // NOLINTNEXTLINE
-__attribute__((weak)) size_t empty_usable_size(void* ptr) noexcept { return 0; }
+__attribute__((weak)) size_t usable_size(void* ptr) noexcept {
+  if (vmsdk::test_utils::test_malloc_size_fn) {
+    return vmsdk::test_utils::test_malloc_size_fn(ptr);
+  }
+  return 0;
+}
 
 // For Valkey allocation - we need to ensure alignment by taking advantage of
 // jemalloc alignment properties, as there is no aligned malloc module
@@ -152,7 +171,7 @@ size_t AlignSize(size_t size, int alignment = 16) {
 void* __wrap_malloc(size_t size) noexcept {
   if (!vmsdk::IsUsingValkeyAlloc()) {
     auto ptr =
-        vmsdk::PerformAndTrackMalloc(size, __real_malloc, empty_usable_size);
+        vmsdk::PerformAndTrackMalloc(size, __real_malloc, usable_size);
     vmsdk::SystemAllocTracker::GetInstance().TrackPointer(ptr);
     return ptr;
   }
@@ -172,7 +191,7 @@ void __wrap_free(void* ptr) noexcept {
   // another DSO which doesn't have our wrapped symbols (namely libc.so). For
   // this reason, we bypass the tracking during the bootstrap phase.
   if (was_tracked || !vmsdk::IsUsingValkeyAlloc()) {
-    vmsdk::PerformAndTrackFree(ptr, __real_free, empty_usable_size);
+    vmsdk::PerformAndTrackFree(ptr, __real_free, usable_size);
   } else {
     vmsdk::PerformAndTrackFree(ptr, ValkeyModule_Free,
                                ValkeyModule_MallocUsableSize);
@@ -182,7 +201,7 @@ void __wrap_free(void* ptr) noexcept {
 void* __wrap_calloc(size_t __nmemb, size_t size) noexcept {
   if (!vmsdk::IsUsingValkeyAlloc()) {
     auto ptr = vmsdk::PerformAndTrackCalloc(__nmemb, size, __real_calloc,
-                                            empty_usable_size);
+                                            usable_size);
     vmsdk::SystemAllocTracker::GetInstance().TrackPointer(ptr);
     return ptr;
   }
@@ -203,7 +222,7 @@ void* __wrap_realloc(void* ptr, size_t size) noexcept {
                                          ValkeyModule_MallocUsableSize);
   } else {
     auto new_ptr = vmsdk::PerformAndTrackRealloc(ptr, size, __real_realloc,
-                                                 empty_usable_size);
+                                                 usable_size);
     vmsdk::SystemAllocTracker::GetInstance().TrackPointer(new_ptr);
     return new_ptr;
   }
@@ -212,7 +231,7 @@ void* __wrap_realloc(void* ptr, size_t size) noexcept {
 void* __wrap_aligned_alloc(size_t __alignment, size_t __size) noexcept {
   if (!vmsdk::IsUsingValkeyAlloc()) {
     auto ptr = vmsdk::PerformAndTrackAlignedAlloc(
-        __alignment, __size, __real_aligned_alloc, empty_usable_size);
+        __alignment, __size, __real_aligned_alloc, usable_size);
     vmsdk::SystemAllocTracker::GetInstance().TrackPointer(ptr);
     return ptr;
   }
@@ -224,7 +243,7 @@ void* __wrap_aligned_alloc(size_t __alignment, size_t __size) noexcept {
 
 int __wrap_malloc_usable_size(void* ptr) noexcept {
   if (vmsdk::SystemAllocTracker::GetInstance().IsTracked(ptr)) {
-    return empty_usable_size(ptr);
+    return usable_size(ptr);
   }
   return ValkeyModule_MallocUsableSize(ptr);
 }

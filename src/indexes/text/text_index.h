@@ -42,10 +42,10 @@ struct TextIndex {
 };
 
 struct TextIndexSchema {
-  TextIndexSchema() = default;
+  TextIndexSchema() : text_index_(std::make_shared<TextIndex>()) {}
   TextIndexSchema(const data_model::IndexSchema &index_schema_proto) 
       : num_text_fields_(0), 
-        text_index_(),
+        text_index_(std::make_shared<TextIndex>()),
         language_(index_schema_proto.language()),
         punctuation_(index_schema_proto.punctuation()),
         with_offsets_(index_schema_proto.with_offsets()),
@@ -56,7 +56,7 @@ struct TextIndexSchema {
   //
   // This is the main index of all Text fields in this index schema
   //
-  TextIndex text_index_;
+  std::shared_ptr<TextIndex> text_index_;
   //
   // To support the Delete record and the post-filtering case, there is a
   // separate table of postings that are indexed by Key.
@@ -75,8 +75,6 @@ struct TextIndexSchema {
   uint8_t AllocateTextFieldNumber() {
     return num_text_fields_++;
   }
-
-  // TODO: Add ToProto() function here?
 };
 
 }  // namespace valkey_search::indexes::text

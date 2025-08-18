@@ -37,7 +37,7 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
     if (i == data.size() || data[i] == ' ') {
       if (i > prev_pos) {
         absl::string_view word = data.substr(prev_pos, i - prev_pos);
-        text_index_schema_->text_index_.prefix_.Mutate(
+        text_index_schema_->text_index_->prefix_.Mutate(
             word,
             [&](std::optional<std::shared_ptr<text::Postings>> existing)
                 -> std::optional<std::shared_ptr<text::Postings>> {

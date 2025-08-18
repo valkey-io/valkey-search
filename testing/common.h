@@ -215,9 +215,7 @@ data_model::TagIndex CreateTagIndexProto(const std::string& separator = ",",
 data_model::TextIndex CreateTextIndexProto(bool with_suffix_trie, bool no_stem,
                                            uint32_t min_stem_size);
 
-// std::shared_ptr<indexes::text::TextIndexSchema> CreateTextIndexSchema();
-
-data_model::IndexSchema CreateIndexSchemaProtoWithTextFields(
+data_model::IndexSchema CreateIndexSchemaProtoWithTextProperties(
     data_model::Language language,
     const std::string& punctuation,
     bool with_offsets,

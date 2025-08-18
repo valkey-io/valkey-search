@@ -162,7 +162,7 @@ data_model::TextIndex CreateTextIndexProto(bool with_suffix_trie, bool no_stem,
   return text_index_proto;
 }
 
-data_model::IndexSchema CreateIndexSchemaProtoWithTextFields(
+data_model::IndexSchema CreateIndexSchemaProtoWithTextProperties(
     data_model::Language language,
     const std::string& punctuation,
     bool with_offsets,

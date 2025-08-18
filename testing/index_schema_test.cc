@@ -1162,7 +1162,6 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
   // Construct and save index schema
   {
-    // TODO: create a proto with some non-default text schema-level properties
     auto index_schema = MockIndexSchema::Create(
                             &fake_ctx_, index_schema_name_str, key_prefixes,
                             std::make_unique<HashAttributeDataType>(), nullptr)
@@ -1212,7 +1211,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
     VMSDK_EXPECT_OK(index_schema->AddIndex("tag_attribute", "tag_identifier", tag_index));
     
     // Add text index
-    index_schema->CreateTextIndexSchema(CreateIndexSchemaProtoWithTextFields(
+    index_schema->CreateTextIndexSchema(CreateIndexSchemaProtoWithTextProperties(
         data_model::Language_INT_MAX_SENTINEL_DO_NOT_USE_,
         ".",
         false,

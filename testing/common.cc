@@ -163,15 +163,13 @@ data_model::TextIndex CreateTextIndexProto(bool with_suffix_trie, bool no_stem,
 }
 
 data_model::IndexSchema CreateIndexSchemaProtoWithTextProperties(
-    data_model::Language language,
-    const std::string& punctuation,
-    bool with_offsets,
-    const std::vector<std::string>& stop_words) {
+    data_model::Language language, const std::string &punctuation,
+    bool with_offsets, const std::vector<std::string> &stop_words) {
   data_model::IndexSchema index_schema_proto;
   index_schema_proto.set_language(language);
   index_schema_proto.set_punctuation(punctuation);
   index_schema_proto.set_with_offsets(with_offsets);
-  for (const auto& word : stop_words) {
+  for (const auto &word : stop_words) {
     index_schema_proto.add_stop_words(word);
   }
   return index_schema_proto;

@@ -18,13 +18,12 @@ namespace valkey_search::indexes {
 
 Text::Text(const data_model::TextIndex& text_index_proto,
            std::shared_ptr<text::TextIndexSchema> text_index_schema)
-    : IndexBase(IndexerType::kText), 
+    : IndexBase(IndexerType::kText),
       text_index_schema_(text_index_schema),
       text_field_number_(text_index_schema->AllocateTextFieldNumber()),
       with_suffix_trie_(text_index_proto.with_suffix_trie()),
       no_stem_(text_index_proto.no_stem()),
-      min_stem_size_(text_index_proto.min_stem_size()) {
-}
+      min_stem_size_(text_index_proto.min_stem_size()) {}
 
 absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
                                      absl::string_view data) {
@@ -32,7 +31,7 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
   // implemented
   int prev_pos = 0;
   uint32_t position = 0;
-  
+
   for (int i = 0; i <= data.size(); i++) {
     if (i == data.size() || data[i] == ' ') {
       if (i > prev_pos) {
@@ -46,12 +45,14 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
                 postings = existing.value();
               } else {
                 // Create new Postings object with schema configuration
-                // TODO: Get save_positions from IndexSchema, for now assume true
+                // TODO: Get save_positions from IndexSchema, for now assume
+                // true
                 bool save_positions = true;
                 uint8_t num_text_fields = text_index_schema_->num_text_fields_;
-                postings = std::make_shared<text::Postings>(save_positions, num_text_fields);
+                postings = std::make_shared<text::Postings>(save_positions,
+                                                            num_text_fields);
               }
-              
+
               // Add the key and position to postings
               postings->InsertPosting(key, text_field_number_, position);
               return postings;
@@ -104,29 +105,28 @@ size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
       // TODO: Handle phrase matching.
       auto word = predicate.GetTextString();
       if (word.empty()) return 0;
-      auto iter = text_index_schema_->text_index_->prefix_.GetWordIterator(word);
+      auto iter =
+          text_index_schema_->text_index_->prefix_.GetWordIterator(word);
       auto target_posting = iter.GetTarget();
       return target_posting->GetKeyCount();
     }
     default:
-      CHECK(false) << "Unsupported TextPredicate operation: " << static_cast<int>(predicate.GetOperation());
+      CHECK(false) << "Unsupported TextPredicate operation: "
+                   << static_cast<int>(predicate.GetOperation());
       return 0;
   }
 }
 
 std::unique_ptr<Text::EntriesFetcher> Text::Search(
-    const query::TextPredicate& predicate,
-    bool negate) const {
+    const query::TextPredicate& predicate, bool negate) const {
   auto fetcher = std::make_unique<EntriesFetcher>(
-    CalculateSize(predicate),
-    text_index_schema_->text_index_,
-    negate ? &untracked_keys_ : nullptr);
+      CalculateSize(predicate), text_index_schema_->text_index_,
+      negate ? &untracked_keys_ : nullptr);
   fetcher->operation_ = predicate.GetOperation();
   // Currently, we support a single word (exact term) match.
   fetcher->data_ = predicate.GetTextString();
   return fetcher;
 }
-
 
 size_t Text::EntriesFetcher::Size() const { return size_; }
 
@@ -137,12 +137,14 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
       std::vector<WordIterator> iterVec = {iter};
       bool slop = 0;
       bool in_order = true;
-      auto itr = std::make_unique<text::PhraseIterator>(iterVec, slop, in_order, untracked_keys_);
+      auto itr = std::make_unique<text::PhraseIterator>(iterVec, slop, in_order,
+                                                        untracked_keys_);
       itr->Next();
       return itr;
     }
     default:
-      CHECK(false) << "Unsupported TextPredicate operation: " << static_cast<int>(operation_);
+      CHECK(false) << "Unsupported TextPredicate operation: "
+                   << static_cast<int>(operation_);
       return nullptr;
   }
   return nullptr;

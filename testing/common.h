@@ -216,10 +216,8 @@ data_model::TextIndex CreateTextIndexProto(bool with_suffix_trie, bool no_stem,
                                            uint32_t min_stem_size);
 
 data_model::IndexSchema CreateIndexSchemaProtoWithTextProperties(
-    data_model::Language language,
-    const std::string& punctuation,
-    bool with_offsets,
-    const std::vector<std::string>& stop_words);
+    data_model::Language language, const std::string& punctuation,
+    bool with_offsets, const std::vector<std::string>& stop_words);
 
 class MockIndexSchema : public IndexSchema {
  public:

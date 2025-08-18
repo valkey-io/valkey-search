@@ -34,6 +34,8 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             "search_hnsw_search_exceptions_count",
             "search_hnsw_create_exceptions_count",
             "search_string_interning_store_size",
+            "search_string_interning_memory_bytes",
+            "search_string_interning_memory_human", # less than 1KiB
             "search_vector_externing_entry_count",
             "search_vector_externing_hash_extern_errors",
             "search_vector_externing_generated_value_cnt",
@@ -43,6 +45,11 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             "search_number_of_attributes",
             "search_number_of_indexes",
             "search_total_indexed_documents",
+            "search_number_of_active_indexes",
+            "search_number_of_active_indexes_running_queries",
+            "search_number_of_active_indexes_indexing",
+            "search_total_active_write_threads",
+            "search_total_indexing_time",
             "search_used_memory_bytes",
             "search_index_reclaimable_memory",
             "search_used_memory_indexes",
@@ -100,3 +107,4 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
                 bytes_value = str(bytes_value)
             assert isinstance(bytes_value, str)
             assert bytes_value.endswith("iB") or bytes_value.isdigit()
+

@@ -17,7 +17,7 @@ most of which will have only a small number of key/field/position entries. Howev
 there will be a small number of instances where the number of key/field/position
 entries is quite large. Thus it's likely that the fully optimized version of
 this object will have two or more encodings for its contents. This optimization
-is hidden from external view.
+is hidden from external view. 
 
 This object is NOT multi-thread safe, it's expected that the caller performs
 locking for mutation operations.

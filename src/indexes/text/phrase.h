@@ -10,7 +10,6 @@
 
 #include <vector>
 #include <cstddef>
-#include <optional>
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/radix_tree.h"
 #include "src/utils/string_interning.h"
@@ -68,7 +67,7 @@ class PhraseIterator : public indexes::EntriesFetcherIteratorBase {
                  size_t slop,
                  bool in_order,
                  const InternedStringSet* untracked_keys = nullptr,
-                 std::optional<size_t> text_field_number = std::nullopt);
+                 std::unique_ptr<FieldMask> field_mask = nullptr);
 
   bool Done() const override;
   void Next() override;
@@ -83,7 +82,7 @@ class PhraseIterator : public indexes::EntriesFetcherIteratorBase {
   bool in_order_;
   const InternedStringSet* untracked_keys_;
   InternedStringPtr current_key_;
-  std::optional<size_t> text_field_number_;
+  std::unique_ptr<FieldMask> field_mask_;
 };
 
 

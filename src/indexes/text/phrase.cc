@@ -6,12 +6,12 @@ PhraseIterator::PhraseIterator(const std::vector<WordIterator>& words,
                               size_t slop,
                               bool in_order,
                               const InternedStringSet* untracked_keys,
-                              std::optional<size_t> text_field_number)
+                              std::unique_ptr<FieldMask> field_mask)
     : words_(words),
       slop_(slop),
       in_order_(in_order),
       untracked_keys_(untracked_keys),
-      text_field_number_(text_field_number) {
+      field_mask_(std::move(field_mask)) {
 }
 
 bool PhraseIterator::Done() const {
@@ -27,8 +27,8 @@ void PhraseIterator::Next() {
     begin_ = false;  // Set to false after the first call to Next.
     
     // Check first key for field requirement
-    if (text_field_number_.has_value() && !Done() && 
-        !key_iter_.ContainsField(text_field_number_.value())) {
+    if (field_mask_ != nullptr && !Done() && 
+        !key_iter_.ContainsFields(*field_mask_)) {
       Next();
     }
     return;
@@ -40,8 +40,8 @@ void PhraseIterator::Next() {
     if (Done()) {
       break;
     }
-  } while (text_field_number_.has_value() && 
-           !key_iter_.ContainsField(text_field_number_.value()));
+  } while (field_mask_ != nullptr && 
+           !key_iter_.ContainsFields(*field_mask_));
 }
 
 const InternedStringPtr& PhraseIterator::operator*() const {

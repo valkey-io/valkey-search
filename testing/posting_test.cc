@@ -337,4 +337,30 @@ TEST_F(PostingTest, EmptyPostingIterators) {
   EXPECT_FALSE(pos_iter.IsValid());
 }
 
+TEST_F(PostingTest, ContainsFieldsCheck) {
+  // Create a fresh posting to ensure no interference from other tests
+  Postings fresh_postings(true, 5);
+  
+  // Test basic field containment functionality 
+  fresh_postings.InsertPosting(InternKey("doc1"), 0, 10);
+  
+  auto field_mask = FieldMask::Create(5);
+  field_mask->SetField(0);
+  
+  auto key_iter = fresh_postings.GetKeyIterator();
+  
+  // Should have exactly one key
+  EXPECT_EQ(fresh_postings.GetKeyCount(), 1);
+  
+  // Iterator should be valid and contain the field we inserted
+  EXPECT_TRUE(key_iter.IsValid());
+  EXPECT_EQ(key_iter.GetKey()->Str(), "doc1");
+  EXPECT_TRUE(key_iter.ContainsFields(*field_mask));
+  
+  // Test that it doesn't contain fields that weren't set
+  auto field_mask_2 = FieldMask::Create(5);
+  field_mask_2->SetField(1);
+  EXPECT_FALSE(key_iter.ContainsFields(*field_mask_2));
+}
+
 }  // namespace valkey_search::indexes::text

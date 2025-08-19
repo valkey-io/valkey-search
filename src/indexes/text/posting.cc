@@ -19,20 +19,6 @@
 namespace valkey_search::indexes::text {
 
 // Internal FieldMask classes - not part of external interface
-// Field mask interface optimized for different field counts
-class FieldMask {
-public:
-  static std::unique_ptr<FieldMask> Create(size_t num_fields);
-  virtual ~FieldMask() = default;
-  virtual void SetField(size_t field_index) = 0;
-  virtual void ClearField(size_t field_index) = 0;
-  virtual bool HasField(size_t field_index) const = 0;
-  virtual void SetAllFields() = 0;
-  virtual void ClearAllFields() = 0;
-  virtual size_t CountSetFields() const = 0;
-  virtual uint64_t AsUint64() const = 0;
-  virtual size_t MaxFields() const = 0;
-};
 
 // Template implementation for field mask with optimized storage
 template<typename MaskType, size_t MAX_FIELDS>
@@ -42,11 +28,12 @@ public:
   void SetField(size_t field_index) override;
   void ClearField(size_t field_index) override;
   bool HasField(size_t field_index) const override;
+  bool HasFields(const FieldMask& field_mask) const override;
   void SetAllFields() override;
   void ClearAllFields() override;
   size_t CountSetFields() const override;
   uint64_t AsUint64() const override;
-  size_t MaxFields() const override { return MAX_FIELDS; }
+  size_t MaxFields() const override { return num_fields_; }
 private:
   MaskType mask_;
   size_t num_fields_;
@@ -119,6 +106,19 @@ bool FieldMaskImpl<MaskType, MAX_FIELDS>::HasField(size_t field_index) const {
     return true;  // Single field case: presence of object implies field is set
   } else {
     return (mask_ & (MaskType(1) << field_index)) != 0;
+  }
+}
+
+// Check if this mask contains all fields specified in the input field_mask
+template<typename MaskType, size_t MAX_FIELDS>
+bool FieldMaskImpl<MaskType, MAX_FIELDS>::HasFields(const FieldMask& field_mask) const {
+  if constexpr (std::is_same_v<MaskType, EmptyFieldMask>) {
+    // Single field case: check if field 0 is requested in the input mask
+    return field_mask.HasField(0);
+  } else {
+    // Check if this mask contains ALL fields specified in the input mask
+    uint64_t other_mask = field_mask.AsUint64();
+    return (mask_ & other_mask) == other_mask;
   }
 }
 
@@ -291,19 +291,19 @@ void Postings::KeyIterator::NextKey() {
   }
 }
 
-bool Postings::KeyIterator::ContainsField(size_t field_index) const {
+bool Postings::KeyIterator::ContainsFields(const FieldMask& field_mask) const {
   CHECK(key_map_ != nullptr && current_ != end_) << "KeyIterator is invalid or exhausted";
 
-  // Check all positions for this key to see if field_index is set
-  for (const auto& [position, field_mask] : current_->second) {
+  // Check all positions for this key to see if any of the requested fields are set
+  for (const auto& [position, position_field_mask] : current_->second) {
     // Safety check: Ensure field_mask is not null
-    if (field_mask == nullptr) {
-      CHECK(false) << "field_mask is null";
+    if (position_field_mask == nullptr) {
+      CHECK(false) << "position_field_mask is null";
       return false;
     }
 
-    // Use HasField method to check if field is set
-    if (field_mask->HasField(field_index)) {
+    // Use HasFields method to check if any of the requested fields are set
+    if (position_field_mask->HasFields(field_mask)) {
       return true;
     }
   }

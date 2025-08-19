@@ -115,11 +115,16 @@ size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
 std::unique_ptr<Text::EntriesFetcher> Text::Search(
     const query::TextPredicate& predicate,
     bool negate) const {
+  // TODO : Create FieldMask with multiple bits set when multiple fields queried in Text Predicate
+  // Create FieldMask with the specific text field bit set
+  auto field_mask = text::FieldMask::Create(text_index_schema_->num_text_fields_);
+  field_mask->SetField(text_field_number_);
+  
   auto fetcher = std::make_unique<EntriesFetcher>(
     CalculateSize(predicate),
     text_index_schema_->text_index_,
     negate ? &untracked_keys_ : nullptr,
-    text_field_number_);
+    std::move(field_mask));
   fetcher->operation_ = predicate.GetOperation();
   // Currently, we support a single word (exact term) match.
   fetcher->data_ = predicate.GetTextString();
@@ -136,7 +141,7 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
       std::vector<WordIterator> iterVec = {iter};
       bool slop = 0;
       bool in_order = true;
-      auto itr = std::make_unique<text::PhraseIterator>(iterVec, slop, in_order, untracked_keys_, text_field_number_);
+      auto itr = std::make_unique<text::PhraseIterator>(iterVec, slop, in_order, untracked_keys_, std::move(field_mask_));
       itr->Next();
       return itr;
     }

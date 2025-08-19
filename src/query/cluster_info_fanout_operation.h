@@ -37,8 +37,7 @@ class ClusterInfoFanoutOperation : public fanout::FanoutOperationBase<
                   [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
 
   coordinator::InfoIndexPartitionResponse GetLocalResponse(
-      ValkeyModuleCtx* ctx,
-      const coordinator::InfoIndexPartitionRequest& request,
+      int db_id, const coordinator::InfoIndexPartitionRequest& request,
       [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
 
   void InvokeRemoteRpc(
@@ -53,6 +52,8 @@ class ClusterInfoFanoutOperation : public fanout::FanoutOperationBase<
                     int argc) override;
 
   void ResetForRetry() override;
+
+  bool ShouldRetry() override;
 
  private:
   bool exists_;

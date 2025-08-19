@@ -91,10 +91,10 @@ void PrimaryInfoFanoutOperation::OnResponse(
 
 coordinator::InfoIndexPartitionResponse
 PrimaryInfoFanoutOperation::GetLocalResponse(
-    ValkeyModuleCtx* ctx, const coordinator::InfoIndexPartitionRequest& request,
+    int db_id, const coordinator::InfoIndexPartitionRequest& request,
     [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
-  auto index_schema_result = SchemaManager::Instance().GetIndexSchema(
-      ValkeyModule_GetSelectedDb(ctx), request.index_name());
+  auto index_schema_result =
+      SchemaManager::Instance().GetIndexSchema(db_id, request.index_name());
 
   coordinator::InfoIndexPartitionResponse resp;
 
@@ -184,6 +184,10 @@ void PrimaryInfoFanoutOperation::ResetForRetry() {
   num_docs_ = 0;
   num_records_ = 0;
   hash_indexing_failures_ = 0;
+}
+
+bool PrimaryInfoFanoutOperation::ShouldRetry() {
+  return true;
 }
 
 }  // namespace valkey_search::query::primary_info_fanout

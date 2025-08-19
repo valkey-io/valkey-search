@@ -15,7 +15,10 @@ import string
 import logging
 import shutil
 
-CLUSTER_LOGS_DIR = "/tmp/valkey-test-framework-files"
+LOGS_DIR = "/tmp/valkey-test-framework-files"
+
+if "LOGS_DIR" in os.environ:
+    LOGS_DIR = os.environ["LOGS_DIR"]
 
 
 class Node:
@@ -155,7 +158,7 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         """Launch server node and return a tuple of the server handle, a client to the server
         and the log file path"""
         server_path = os.getenv("VALKEY_SERVER_PATH")
-        testdir = f"{CLUSTER_LOGS_DIR}/{test_name}"
+        testdir = f"{LOGS_DIR}/{test_name}"
 
         os.makedirs(testdir, exist_ok=True)
         curdir = os.getcwd()
@@ -331,7 +334,7 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
                 ports.append(self.get_bind_port())
 
         test_name = self.normalize_dir_name(request.node.name)
-        testdir_base = f"{CLUSTER_LOGS_DIR}/{test_name}"
+        testdir_base = f"{LOGS_DIR}/{test_name}"
 
         if os.path.exists(testdir_base):
             shutil.rmtree(testdir_base)

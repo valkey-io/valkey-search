@@ -6,6 +6,28 @@ RED='\e[31;1m'
 BLUE='\e[34;1m'
 YELLOW='\e[33;1m'
 
+function LOG_INFO() {
+  printf "${GREEN}$1${RESET}\n"
+}
+
+function LOG_ERROR() {
+  printf "${RED}$1${RESET}\n"
+}
+
+function LOG_NOTICE() {
+  printf "${BOLD_PINK}$1${RESET}\n"
+}
+
+function LOG_WARNING() {
+  printf "${YELLOW}$1${RESET}\n"
+}
+
+function print_environment_var() {
+  local varname=$1
+  local value=$2
+  printf "${BLUE}${varname}${RESET} => ${GREEN}${value}${RESET}\n"
+}
+
 if [[ "$(uname -s)" == "Darwin" ]]; then
   export MODULE_EXT="dylib"
 else
@@ -38,7 +60,24 @@ function findup() {
 # Determine pip command
 PYTHON_PATH="${PYTHON_PATH:=}"
 _WORKSPACE_HOME=$(findup QUICK_START.md)
+export MODULE_ROOT=${_WORKSPACE_HOME}
 _THIRD_PARTY_COMPONENTS_BUILD_DIR=${_WORKSPACE_HOME}/.build-release
+
+if [[ "${SAN_BUILD}" != "no" ]]; then
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    # detect_leaks is not support on macOS
+    export ASAN_OPTIONS="detect_odr_violation=0:halt_on_error=1"
+  else
+    export ASAN_OPTIONS="detect_odr_violation=0:detect_leaks=1:halt_on_error=1"
+  fi
+  if [[ "${SAN_BUILD}" == "address" ]]; then
+    export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/asan.supp"
+  else
+    export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/tsan.supp"
+  fi
+  print_environment_var "LSAN_OPTIONS" "${LSAN_OPTIONS}"
+  print_environment_var "ASAN_OPTIONS" "${ASAN_OPTIONS}"
+fi
 
 function get_third_party_build_dir() {
   if [ -z "${SAN_BUILD}" ] || [[ "${SAN_BUILD}" == "no" ]]; then
@@ -58,20 +97,17 @@ function capitalize_string() {
   echo ${first_char}${remainder}
 }
 
-function LOG_INFO() {
-  printf "${GREEN}$1${RESET}\n"
-}
-
-function LOG_ERROR() {
-  printf "${RED}$1${RESET}\n"
-}
-
-function LOG_NOTICE() {
-  printf "${BOLD_PINK}$1${RESET}\n"
-}
-
-function LOG_WARNING() {
-  printf "${YELLOW}$1${RESET}\n"
+function pip_check_if_module_installed() {
+  local module_name=$1
+  set +e
+  ${PIP_PATH} show ${module_name} >/dev/null 2>&1
+  RESULT=$?
+  set -e
+  if [ ${RESULT} -eq 0 ]; then
+    echo "yes"
+  else
+    echo "no"
+  fi
 }
 
 function install_test_framework() {
@@ -88,15 +124,22 @@ function install_test_framework() {
     rm -fr ${test_framework_path}
     LOG_INFO "Cloning valkey-test-framework into ${test_framework_path}"
     git clone "${test_framework_url}" ${test_framework_path}
-    pushd ${test_framework_path} >/dev/null
+  fi
+
+  pushd ${test_framework_path} >/dev/null
+  valkey_module_installed=$(pip_check_if_module_installed valkey)
+  if [[ "${valkey_module_installed}" == "no" ]]; then
+    LOG_INFO "Installing dependencies"
     local requirements_txt=${test_framework_path}/requirements.txt
     if [ -f ${requirements_txt} ]; then
       LOG_INFO "Installing requirements file"
       ${PIP_PATH} install -r ${requirements_txt}
       ${PIP_PATH} install --upgrade pytest
+    else
+      LOG_ERROR "Missing ${requirements_txt} file. Broken installation?"
     fi
-    popd >/dev/null
   fi
+  popd >/dev/null
 
   # Remove valkey-test-framework tests
   rm -fr ${_WORKSPACE_HOME}/integration/valkeytestframework.git/tests
@@ -181,12 +224,6 @@ function setup_json_module() {
 
   export VALKEY_JSON_PATH=${json_module_path}
   LOG_INFO "VALKEY_JSON_PATH => ${VALKEY_JSON_PATH}"
-}
-
-function print_environment_var() {
-  local varname=$1
-  local value=$2
-  printf "${GRAY}${varname}${RESET} => ${GREEN}${value}${RESET}\n"
 }
 
 # Loop over Valkey log files and search for sanitization errors

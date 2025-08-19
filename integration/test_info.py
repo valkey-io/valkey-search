@@ -37,7 +37,7 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             "search_total_queries_processed",
             "search_total_query_commands",
             "search_total_query_execution_time_ms",
-            "search_total_active_queries"
+            "search_total_active_queries",
             "search_hnsw_add_exceptions_count",
             "search_hnsw_remove_exceptions_count",
             "search_hnsw_modify_exceptions_count",

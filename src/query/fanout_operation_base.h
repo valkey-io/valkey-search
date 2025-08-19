@@ -33,7 +33,8 @@ constexpr unsigned kNoValkeyTimeout = 86400000;
 template <typename Request, typename Response, FanoutTargetMode kTargetMode>
 class FanoutOperationBase {
  public:
-  explicit FanoutOperationBase() = default;
+  explicit FanoutOperationBase(bool retry_enabled = false)
+      : retry_enabled_(retry_enabled) {};
 
   virtual ~FanoutOperationBase() = default;
 
@@ -267,6 +268,24 @@ class FanoutOperationBase {
       }
     }
   }
+
+  unsigned GetCurrentTimeoutMs() const {
+    using namespace std::chrono;
+    auto elapsed_ms =
+        duration_cast<milliseconds>(steady_clock::now() - start_tp_).count();
+    if (elapsed_ms >= GetTimeoutMs()) {
+      return 0;
+    }
+    return static_cast<unsigned>(GetTimeoutMs() - elapsed_ms);
+  }
+
+  bool ShouldRetry() { return true; }
+
+  virtual void ResetForRetry() {
+    index_name_error_nodes.clear();
+    inconsistent_state_error_nodes.clear();
+    communication_error_nodes.clear();
+  };
 
   virtual void OnCompletion() {
     CHECK(blocked_client_);

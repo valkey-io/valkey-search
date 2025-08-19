@@ -123,6 +123,11 @@ struct RadixTree {
   // Create a Path iterator at a specific starting prefix
   PathIterator GetPathIterator(absl::string_view prefix) const;
 
+  // Debug function to print tree structure
+  void DebugPrintTree(const std::string& label = "") const;
+
+ private:
+
  private:
   /*
    * This is the first iteration of a RadixTree. It will be optimized in the
@@ -182,6 +187,33 @@ struct RadixTree {
   };
 
   Node root_;
+
+  // Debug helper function
+  void DebugPrintNode(const Node* node, const std::string& path, int depth) const {
+    std::string indent(depth * 2, ' ');
+    std::cout << indent << "Node[" << path << "]";
+    
+    if (node->target.has_value()) {
+      std::cout << " TARGET";
+    }
+    
+    std::visit(
+        overloaded{
+            [&](const std::monostate&) {
+              std::cout << " LEAF" << std::endl;
+            },
+            [&](const std::map<Byte, std::unique_ptr<Node>>& children) {
+              std::cout << " BRANCH(" << children.size() << ")" << std::endl;
+              for (const auto& [byte, child] : children) {
+                DebugPrintNode(child.get(), path + char(byte), depth + 1);
+              }
+            },
+            [&](const std::pair<BytePath, std::unique_ptr<Node>>& child) {
+              std::cout << " COMPRESSED[" << child.first << "]" << std::endl;
+              DebugPrintNode(child.second.get(), path + child.first, depth + 1);
+            }},
+        node->children);
+  }
 
  public:
   //
@@ -478,8 +510,6 @@ void RadixTree<Target, reverse>::Mutate(
                         parent->children);
                 parent_child.first += child.first;
                 parent_child.second = std::move(child.second);
-              } else {
-                // TODO: Handle case where parent has branching children
               }
             },
         },
@@ -680,6 +710,13 @@ const Target& RadixTree<Target, reverse>::PathIterator::GetTarget() const {
 template <typename Target, bool reverse>
 void RadixTree<Target, reverse>::PathIterator::Defrag() {
   throw std::logic_error("TODO");
+}
+
+template <typename Target, bool reverse>
+void RadixTree<Target, reverse>::DebugPrintTree(const std::string& label) const {
+  std::cout << "\n=== Tree Structure" << (label.empty() ? "" : (" - " + label)) << " ===" << std::endl;
+  DebugPrintNode(&root_, "", 0);
+  std::cout << "=== End Structure ===\n" << std::endl;
 }
 
 }  // namespace valkey_search::indexes::text

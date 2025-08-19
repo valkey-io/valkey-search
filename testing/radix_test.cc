@@ -152,10 +152,13 @@ TEST_F(RadixTreeTest, DeleteStructuralCases) {
   prefix_tree_->Mutate("cat", [](auto) { return TestTarget(1); });
   prefix_tree_->Mutate("car", [](auto) { return TestTarget(2); });
   prefix_tree_->Mutate("can", [](auto) { return TestTarget(3); });
+  prefix_tree_->DebugPrintTree("Initial: cat, car, can");
   
   prefix_tree_->Mutate("car", [](auto) -> std::optional<TestTarget> {
     return std::nullopt;
   });
+  
+  prefix_tree_->DebugPrintTree("After deleting 'car'");
   
   // Verify remaining structure
   auto iter = prefix_tree_->GetWordIterator("ca");
@@ -170,9 +173,11 @@ TEST_F(RadixTreeTest, DeleteStructuralCases) {
   // Case 2: Delete from compressed node
   prefix_tree_->Mutate("testing", [](auto) { return TestTarget(4); });
   prefix_tree_->Mutate("test", [](auto) { return TestTarget(5); });
+  prefix_tree_->DebugPrintTree("After adding testing/test");
   prefix_tree_->Mutate("test", [](auto) -> std::optional<TestTarget> {
     return std::nullopt;
   });
+  prefix_tree_->DebugPrintTree("After deleting 'test'");
   
   // Verify compressed node structure remains correct
   auto test_iter = prefix_tree_->GetWordIterator("test");

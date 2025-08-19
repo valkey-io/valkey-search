@@ -25,7 +25,8 @@ class ClusterInfoFanoutOperation : public fanout::FanoutOperationBase<
                                        coordinator::InfoIndexPartitionResponse,
                                        fanout::FanoutTargetMode::kAll> {
  public:
-  ClusterInfoFanoutOperation(std::string index_name, unsigned timeout_ms);
+  ClusterInfoFanoutOperation(std::string index_name, unsigned timeout_ms,
+                             bool retry_enabled);
 
   unsigned GetTimeoutMs() const override;
 
@@ -50,6 +51,8 @@ class ClusterInfoFanoutOperation : public fanout::FanoutOperationBase<
 
   int GenerateReply(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,
                     int argc) override;
+
+  void ResetForRetry() override;
 
  private:
   bool exists_;

@@ -64,6 +64,11 @@ absl::Status RegisterCommands(ValkeyModuleCtx *ctx,
           absl::StrCat("Failed to set ACL categories `", permissions,
                        "` for the command: ", command.cmd_name.data()));
     }
+    if (command.command_info) {
+      command_info::Set(ctx, cmd, command.cmd_name, *command.command_info);
+    } else {
+      VMSDK_LOG(WARNING, ctx) << "Missing command info for " << command.cmd_name;
+    }
   }
   return absl::OkStatus();
 }

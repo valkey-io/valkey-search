@@ -96,6 +96,21 @@ void AddLatencyStat(ValkeyModuleInfoCtx *ctx, absl::string_view stat_name,
  that's done this section will be empty and it can be removed.
  */
 
+// Version section fields
+static vmsdk::info_field::String version(
+    "version", "version",
+    vmsdk::info_field::StringBuilder().App().ComputedCharPtr(
+        []() -> const char * {
+          return "255.255.255";
+        }));
+
+static vmsdk::info_field::String redis_version(
+    "version", "redis_version",
+    vmsdk::info_field::StringBuilder().App().ComputedCharPtr(
+        []() -> const char * {
+          return "255.255.255";
+        }));
+
 static vmsdk::info_field::Integer human_used_memory(
     "memory", "used_memory_human",
     vmsdk::info_field::IntegerBuilder()
@@ -753,6 +768,123 @@ static vmsdk::info_field::String flat_vector_index_search_latency_usec(
           return Metrics::GetStats()
               .flat_vector_index_search_latency.HasSamples();
         }));
+
+// Configuration metrics
+static vmsdk::info_field::String extension_load(
+    "runtime_configurations", "extension_load",
+    vmsdk::info_field::StringBuilder().App().ComputedCharPtr(
+        []() -> const char * {
+          // Need to implement actual value retrieval
+          return " ";
+        }));
+
+static vmsdk::info_field::String friso_ini(
+    "runtime_configurations", "friso_ini",
+    vmsdk::info_field::StringBuilder().App().ComputedCharPtr(
+        []() -> const char * {
+          // Need to implement actual value retrieval
+          return " ";
+        }));
+
+static vmsdk::info_field::String enableGC(
+    "runtime_configurations", "enableGC",
+    vmsdk::info_field::StringBuilder().App().ComputedCharPtr(
+        []() -> const char * {
+          // Need to implement actual value retrieval
+          return "OFF";
+        }));
+
+static vmsdk::info_field::Integer minimal_term_prefix(
+    "runtime_configurations", "minimal_term_prefix",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // Need to implement actual value retrieval
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer minimal_stem_length(
+    "runtime_configurations", "minimal_stem_length",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // Need to implement actual value retrieval
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer maximal_prefix_expansions(
+    "runtime_configurations", "maximal_prefix_expansions",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // Need to implement actual value retrieval
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer query_timeout_ms(
+    "runtime_configurations", "query_timeout_ms",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // Need to implement actual value retrieval
+      return 0;
+    }));
+
+static vmsdk::info_field::String timeout_policy(
+    "runtime_configurations", "timeout_policy",
+    vmsdk::info_field::StringBuilder().App().ComputedCharPtr(
+        []() -> const char * {
+          // Need to implement actual value retrieval
+          return " ";
+        }));
+
+static vmsdk::info_field::Integer cursor_read_size(
+    "runtime_configurations", "cursor_read_size",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // Need to implement actual value retrieval
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer cursor_max_idle_time(
+    "runtime_configurations", "cursor_max_idle_time",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // Need to implement actual value retrieval
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer max_doc_table_size(
+    "runtime_configurations", "max_doc_table_size",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // Need to implement actual value retrieval
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer max_search_results(
+    "runtime_configurations", "max_search_results",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // Need to implement actual value retrieval
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer max_aggregate_results(
+    "runtime_configurations", "max_aggregate_results",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // Need to implement actual value retrieval
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer gc_scan_size(
+    "runtime_configurations", "gc_scan_size",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // Need to implement actual value retrieval
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer min_phonetic_term_length(
+    "runtime_configurations", "min_phonetic_term_length",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // Need to implement actual value retrieval
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer bm25std_tanh_factor(
+    "runtime_configurations", "bm25std_tanh_factor",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // Need to implement actual value retrieval
+      return 0;
+    }));
 
 #ifdef DEBUG_INFO
 // Helper function to create subscription info fields with maximum deduplication

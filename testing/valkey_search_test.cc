@@ -476,6 +476,11 @@ TEST_F(ValkeySearchTest, Info) {
     "total_active_write_threads: 5\ntotal_indexing_time: 0\n"
     "indexing\nbackground_indexing_status: 'IN_PROGRESS'\n"
     "memory\nused_memory_bytes: 18408\nused_memory_human: '17.98KiB'\n"
+    "runtime_configurations\nbm25std_tanh_factor: 0\ncursor_max_idle_time: 0\ncursor_read_size: 0\nenableGC: OFF\n"
+    "extension_load: \nfriso_ini: \ngc_scan_size: 0\nmax_aggregate_results: 0\nmax_doc_table_size: 0\n"
+    "max_search_results: 0\nmaximal_prefix_expansions: 0\nmin_phonetic_term_length: 0\nminimal_stem_length: 0\n"
+    "minimal_term_prefix: 0\nquery_timeout_ms: 0\ntimeout_policy: \n"
+    "version\nversion: 255.255.255\nredis_version: 255.255.255\n"
 );
 #endif
   StringInternStore::SetMemoryUsage(0); // reset memory pool

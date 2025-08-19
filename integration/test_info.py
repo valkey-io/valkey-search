@@ -52,10 +52,28 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             "search_total_indexing_time",
             "search_used_memory_bytes",
             "search_index_reclaimable_memory"
+            "search_minimal_term_prefix",
+            "search_minimal_stem_length",
+            "search_maximal_prefix_expansions",
+            "search_query_timeout_ms",
+            "search_cursor_read_size",
+            "search_cursor_max_idle_time",
+            "search_max_doc_table_size",
+            "search_max_search_results",
+            "search_max_aggregate_results",
+            "search_gc_scan_size",
+            "search_min_phonetic_term_length",
+            "search_bm25std_tanh_factor"
         ]
 
         string_fields = [
             "search_background_indexing_status"
+            "search_extension_load",
+            "search_friso_ini",
+            "search_enableGC",
+            "search_timeout_policy",
+            "search_version",
+            "search_redis_version"
         ]
 
         bytes_fields = [

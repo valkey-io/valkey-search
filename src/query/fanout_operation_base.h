@@ -35,6 +35,8 @@ class FanoutOperationBase {
         ctx, &Reply, &Timeout, &Free, GetTimeoutMs());
     blocked_client_->MeasureTimeStart();
     start_tp_ = std::chrono::steady_clock::now();
+    db_id_ = ValkeyModule_GetSelectedDb(ctx);
+    round_count = 0;
     StartFanoutRound(ctx);
   }
 
@@ -69,6 +71,7 @@ class FanoutOperationBase {
     {
       absl::MutexLock lock(&mutex_);
       outstanding_ = targets.size();
+      ++round_count;
     }
     unsigned timeout_ms = GetTimeoutMs();
     for (const auto& target : targets) {
@@ -81,84 +84,6 @@ class FanoutOperationBase {
     return query::fanout::FanoutTemplate::GetTargets(ctx, kTargetMode);
   }
 
-  virtual Response GetLocalResponse(
-      ValkeyModuleCtx* ctx, const Request&,
-      [[maybe_unused]] const FanoutSearchTarget&) = 0;
-
-  virtual void InvokeRemoteRpc(coordinator::Client*, const Request&,
-                               std::function<void(grpc::Status, Response&)>,
-                               unsigned timeout_ms) = 0;
-
-  virtual unsigned GetTimeoutMs() const = 0;
-
-  virtual Request GenerateRequest([[maybe_unused]] const FanoutSearchTarget&,
-                                  unsigned timeout_ms) = 0;
-
-  virtual void OnResponse(const Response&,
-                          [[maybe_unused]] const FanoutSearchTarget&) = 0;
-
-  virtual int GenerateReply(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,
-                            int argc) = 0;
-
-  virtual void OnError(grpc::Status status,
-                       coordinator::FanoutErrorType error_type,
-                       const FanoutSearchTarget& target) {
-    absl::MutexLock lock(&mutex_);
-    if (error_type == coordinator::FanoutErrorType::INDEX_NAME_ERROR) {
-      index_name_error_nodes.push_back(target);
-    } else if (error_type ==
-               coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR) {
-      inconsistent_state_error_nodes.push_back(target);
-    } else {
-      communication_error_nodes.push_back(target);
-    }
-  }
-
-  virtual int GenerateErrorReply(ValkeyModuleCtx* ctx) {
-    absl::MutexLock lock(&mutex_);
-    std::string error_message;
-    // Log index name errors
-    if (!index_name_error_nodes.empty()) {
-      error_message = "Index name not found.";
-      for (const FanoutSearchTarget& target : index_name_error_nodes) {
-        if (target.type == FanoutSearchTarget::Type::kLocal) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
-              << INDEX_NAME_ERROR_LOG_PREFIX << "LOCAL NODE";
-        } else {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
-              << INDEX_NAME_ERROR_LOG_PREFIX << target.address;
-        }
-      }
-    }
-    // Log communication errors
-    if (!communication_error_nodes.empty()) {
-      error_message = "Communication error between nodes found.";
-      for (const FanoutSearchTarget& target : communication_error_nodes) {
-        if (target.type == FanoutSearchTarget::Type::kLocal) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
-              << COMMUNICATION_ERROR_LOG_PREFIX << "LOCAL NODE";
-        } else {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
-              << COMMUNICATION_ERROR_LOG_PREFIX << target.address;
-        }
-      }
-    }
-    // Log inconsistent state errors
-    if (!inconsistent_state_error_nodes.empty()) {
-      error_message = "Inconsistent index state error found.";
-      for (const FanoutSearchTarget& target : inconsistent_state_error_nodes) {
-        if (target.type == FanoutSearchTarget::Type::kLocal) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
-              << INCONSISTENT_STATE_ERROR_LOG_PREFIX << "LOCAL NODE";
-        } else {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
-              << INCONSISTENT_STATE_ERROR_LOG_PREFIX << target.address;
-        }
-      }
-    }
-    return ValkeyModule_ReplyWithError(ctx, error_message.c_str());
-  }
-
   void IssueRpc(ValkeyModuleCtx* ctx, const FanoutSearchTarget& target,
                 const Request& request, unsigned timeout_ms) {
     coordinator::ClientPool* client_pool_ =
@@ -166,7 +91,7 @@ class FanoutOperationBase {
 
     if (target.type == FanoutSearchTarget::Type::kLocal) {
       vmsdk::RunByMain([this, ctx, target, request]() {
-        Response resp = this->GetLocalResponse(ctx, request, target);
+        Response resp = this->GetLocalResponse(db_id_, request, target);
         switch (resp.error_type()) {
           // no error, continue to aggregate response
           case coordinator::FanoutErrorType::OK:
@@ -216,22 +141,90 @@ class FanoutOperationBase {
     }
   }
 
-  void RpcDone(ValkeyModuleCtx* ctx) {
-    bool done = false;
-    {
-      absl::MutexLock lock(&mutex_);
-      if (--outstanding_ == 0) {
-        done = true;
+  virtual Response GetLocalResponse(
+      int db_id, const Request&,
+      [[maybe_unused]] const FanoutSearchTarget&) = 0;
+
+  virtual void InvokeRemoteRpc(coordinator::Client*, const Request&,
+                               std::function<void(grpc::Status, Response&)>,
+                               unsigned timeout_ms) = 0;
+
+  virtual unsigned GetTimeoutMs() const = 0;
+
+  virtual Request GenerateRequest([[maybe_unused]] const FanoutSearchTarget&,
+                                  unsigned timeout_ms) = 0;
+
+  virtual void OnResponse(const Response&,
+                          [[maybe_unused]] const FanoutSearchTarget&) = 0;
+
+  virtual void OnError(grpc::Status status,
+                       coordinator::FanoutErrorType error_type,
+                       const FanoutSearchTarget& target) {
+    absl::MutexLock lock(&mutex_);
+    if (error_type == coordinator::FanoutErrorType::INDEX_NAME_ERROR) {
+      index_name_error_nodes.push_back(target);
+    } else if (error_type ==
+               coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR) {
+      inconsistent_state_error_nodes.push_back(target);
+    } else {
+      communication_error_nodes.push_back(target);
+    }
+  }
+
+  virtual bool ShouldRetry() = 0;
+
+  virtual void ResetForRetry() {
+    index_name_error_nodes.clear();
+    inconsistent_state_error_nodes.clear();
+    communication_error_nodes.clear();
+  };
+
+  virtual int GenerateReply(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,
+                            int argc) = 0;
+
+  virtual int GenerateErrorReply(ValkeyModuleCtx* ctx) {
+    absl::MutexLock lock(&mutex_);
+    std::string error_message;
+    // Log index name errors
+    if (!index_name_error_nodes.empty()) {
+      error_message = "Index name not found.";
+      for (const FanoutSearchTarget& target : index_name_error_nodes) {
+        if (target.type == FanoutSearchTarget::Type::kLocal) {
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
+              << INDEX_NAME_ERROR_LOG_PREFIX << "LOCAL NODE";
+        } else {
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
+              << INDEX_NAME_ERROR_LOG_PREFIX << target.address;
+        }
       }
     }
-    if (done) {
-      if (retry_enabled_ && (GetCurrentTimeoutMs() > 100) && ShouldRetry()) {
-        ResetForRetry();
-        StartFanoutRound(ctx);
-      } else {
-        OnCompletion();
+    // Log communication errors
+    if (!communication_error_nodes.empty()) {
+      error_message = "Communication error between nodes found.";
+      for (const FanoutSearchTarget& target : communication_error_nodes) {
+        if (target.type == FanoutSearchTarget::Type::kLocal) {
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
+              << COMMUNICATION_ERROR_LOG_PREFIX << "LOCAL NODE";
+        } else {
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
+              << COMMUNICATION_ERROR_LOG_PREFIX << target.address;
+        }
       }
     }
+    // Log inconsistent state errors
+    if (!inconsistent_state_error_nodes.empty()) {
+      error_message = "Inconsistent index state error found.";
+      for (const FanoutSearchTarget& target : inconsistent_state_error_nodes) {
+        if (target.type == FanoutSearchTarget::Type::kLocal) {
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
+              << INCONSISTENT_STATE_ERROR_LOG_PREFIX << "LOCAL NODE";
+        } else {
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
+              << INCONSISTENT_STATE_ERROR_LOG_PREFIX << target.address;
+        }
+      }
+    }
+    return ValkeyModule_ReplyWithError(ctx, error_message.c_str());
   }
 
   unsigned GetCurrentTimeoutMs() const {
@@ -244,13 +237,27 @@ class FanoutOperationBase {
     return static_cast<unsigned>(GetTimeoutMs() - elapsed_ms);
   }
 
-  bool ShouldRetry() { return true; }
-
-  virtual void ResetForRetry() {
-    index_name_error_nodes.clear();
-    inconsistent_state_error_nodes.clear();
-    communication_error_nodes.clear();
-  };
+  void RpcDone(ValkeyModuleCtx* ctx) {
+    bool done = false;
+    {
+      absl::MutexLock lock(&mutex_);
+      if (--outstanding_ == 0) {
+        done = true;
+      }
+    }
+    if (done) {
+      if (retry_enabled_ && (GetCurrentTimeoutMs() > 0) && ShouldRetry()) {
+        VMSDK_LOG(NOTICE, nullptr)
+            << "Retry started for round: " << round_count;
+        VMSDK_LOG(NOTICE, nullptr)
+            << "Remaining time: " << GetCurrentTimeoutMs();
+        ResetForRetry();
+        StartFanoutRound(ctx);
+      } else {
+        OnCompletion();
+      }
+    }
+  }
 
   virtual void OnCompletion() {
     CHECK(blocked_client_);
@@ -266,6 +273,8 @@ class FanoutOperationBase {
   std::vector<FanoutSearchTarget> communication_error_nodes;
   bool retry_enabled_;
   std::chrono::steady_clock::time_point start_tp_;
+  int db_id_;
+  unsigned round_count;
 };
 
 }  // namespace valkey_search::query::fanout

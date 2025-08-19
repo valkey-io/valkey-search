@@ -40,6 +40,13 @@ class FilterParser {
   size_t node_count_{0};
   absl::flat_hash_set<std::string> filter_identifiers_;
 
+  absl::StatusOr<std::string> ResolveTextFieldOrDefault(const std::optional<std::string>& maybe_field);
+  absl::StatusOr<std::unique_ptr<query::TextPredicate>>
+  BuildSingleTextPredicate(const std::string& field_name, absl::string_view raw_token);
+  absl::StatusOr<std::vector<std::unique_ptr<query::TextPredicate>>>
+  ParseOneTextAtomIntoTerms(const std::string& field_for_default);
+  absl::StatusOr<std::unique_ptr<query::Predicate>>
+  ParseTextGroup(const std::string& initial_field);
   absl::StatusOr<bool> IsMatchAllExpression();
   absl::StatusOr<std::unique_ptr<query::Predicate>> ParseExpression(
       uint32_t level);

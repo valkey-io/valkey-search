@@ -256,58 +256,38 @@ class ProximityPredicate : public TextPredicate {
   bool Evaluate(Evaluator& evaluator) const override;
   // The composed predicate does not have this method below:
   // bool Evaluate(const std::string_view& text) const override;
+  bool Evaluate(const std::string_view& text) const override {
+    // Implement proximity evaluation logic or return false (index usually handles this)
+    return false;
+  }
+  const indexes::Text* GetIndex() const override {
+    return terms_.empty() ? nullptr : terms_[0]->GetIndex();
+  }
+
+  absl::string_view GetAlias() const override {
+    return terms_.empty() ? "" : terms_[0]->GetAlias();
+  }
+
+  absl::string_view GetIdentifier() const override {
+    return terms_.empty() ? "" : terms_[0]->GetIdentifier();
+  }
+
+  vmsdk::UniqueValkeyString GetRetainedIdentifier() const override {
+    return terms_.empty() ? vmsdk::UniqueValkeyString() : terms_[0]->GetRetainedIdentifier();
+  }
+
+  absl::string_view GetTextString() const override {
+    return terms_.empty() ? "" : terms_[0]->GetTextString();
+  }
+
+  const std::vector<std::unique_ptr<TextPredicate>>& GetTerms() const { return terms_; }
+
 
  private:
   std::vector<std::unique_ptr<TextPredicate>> terms_;
   bool inorder_;
   uint32_t slop_;
 };
-
-// class TextPredicate : public Predicate {
-//  public:
-//   enum class Operation {
-//     kExact,      // Exact term / exact phrase match.
-//     kPrefix,     // Prefix Wildcard match
-//     kSuffix,     // kSuffix Wildcard match
-//     kInfix,      // kInfix Wildcard match
-//     kFuzzy,      // Fuzzy match
-//   };
-
-//   TextPredicate(const indexes::Text* index, absl::string_view alias,
-//                 absl::string_view identifier,
-//                 absl::string_view raw_text_string,
-//                 Operation op = Operation::kExact,
-//                 uint32_t fuzzy_distance = 0);
-
-//   bool Evaluate(Evaluator& evaluator) const override;
-//   bool Evaluate(absl::string_view raw_text_string) const;
-//   const indexes::Text* GetIndex() const { return index_; }
-//   absl::string_view GetAlias() const { return alias_; }
-//   absl::string_view GetIdentifier() const {
-//     return vmsdk::ToStringView(identifier_.get());
-//   }
-//   vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
-//     return vmsdk::RetainUniqueValkeyString(identifier_.get());
-//   }
-//   const std::string& GetTextString() const { return raw_text_string_; }
-//   Operation GetOperation() const { return operation_; }
-//   uint32_t GetFuzzyDistance() const { return fuzzy_distance_; }
-
-//  private:
-//   const indexes::Text* index_;
-//   vmsdk::UniqueValkeyString identifier_;
-//   std::string alias_; // Attribute alias will be NULL for default text fields.
-//   std::string raw_text_string_;
-//   Operation operation_;
-//   uint32_t fuzzy_distance_;
-
-//   // Private evaluation methods
-//   bool EvaluateExact(absl::string_view text) const;
-//   bool EvaluatePrefix(absl::string_view text) const;
-//   bool EvaluateSuffix(absl::string_view text) const;
-//   bool EvaluateInfix(absl::string_view text) const;
-//   bool EvaluateFuzzy(absl::string_view text) const;
-// };
 
 enum class LogicalOperator { kAnd, kOr };
 // Composed Predicate (AND/OR)

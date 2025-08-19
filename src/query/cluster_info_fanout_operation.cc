@@ -17,7 +17,8 @@ ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(std::string index_name,
                                                        bool retry_enabled)
     : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
                                   coordinator::InfoIndexPartitionResponse,
-                                  fanout::FanoutTargetMode::kAll>(retry_enabled),
+                                  fanout::FanoutTargetMode::kAll>(
+          retry_enabled),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
       exists_(false),
@@ -105,10 +106,10 @@ void ClusterInfoFanoutOperation::OnResponse(
 
 coordinator::InfoIndexPartitionResponse
 ClusterInfoFanoutOperation::GetLocalResponse(
-    ValkeyModuleCtx* ctx, const coordinator::InfoIndexPartitionRequest& request,
+    int db_id, const coordinator::InfoIndexPartitionRequest& request,
     [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
-  auto index_schema_result = SchemaManager::Instance().GetIndexSchema(
-      ValkeyModule_GetSelectedDb(ctx), request.index_name());
+  auto index_schema_result =
+      SchemaManager::Instance().GetIndexSchema(db_id, request.index_name());
 
   coordinator::InfoIndexPartitionResponse resp;
 
@@ -201,6 +202,10 @@ void ClusterInfoFanoutOperation::ResetForRetry() {
   backfill_complete_percent_max_ = 0.0f;
   backfill_complete_percent_min_ = 0.0f;
   backfill_in_progress_ = false;
+}
+
+bool ClusterInfoFanoutOperation::ShouldRetry() {
+  return false;
 }
 
 }  // namespace valkey_search::query::cluster_info_fanout

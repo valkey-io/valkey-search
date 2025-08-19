@@ -145,12 +145,15 @@ void PrintPredicate(const query::Predicate* pred, int depth = 0, bool last = tru
                 for (size_t i = 0; i < terms.size(); ++i)
                     PrintPredicate(terms[i].get(), depth + 1, i == terms.size() - 1);
             } else if (auto term = dynamic_cast<const query::TermPredicate*>(pred)) {
-                VMSDK_LOG(WARNING, nullptr) << prefix << "TERM(" << term->GetTextString() << ")\n";
+                VMSDK_LOG(WARNING, nullptr) << prefix << "TERM(" << term->GetTextString() << ")_"
+                                            << term->GetIdentifier() << "\n";
             } else if (auto pre = dynamic_cast<const query::PrefixPredicate*>(pred)) {
-                VMSDK_LOG(WARNING, nullptr) << prefix << "PREFIX(" << pre->GetTextString() << ")\n";
+                VMSDK_LOG(WARNING, nullptr) << prefix << "PREFIX(" << pre->GetTextString() << ")_"
+                                            << pre->GetIdentifier() << "\n";
             } else if (auto fuzzy = dynamic_cast<const query::FuzzyPredicate*>(pred)) {
                 VMSDK_LOG(WARNING, nullptr) << prefix << "FUZZY(" << fuzzy->GetTextString()
-                                            << ", distance=" << fuzzy->GetDistance() << ")\n";
+                                            << ", distance=" << fuzzy->GetDistance() << ")_"
+                                            << fuzzy->GetIdentifier() << "\n";
             } else {
                 VMSDK_LOG(WARNING, nullptr) << prefix << "UNKNOWN TEXT\n";
             }
@@ -163,13 +166,14 @@ void PrintPredicate(const query::Predicate* pred, int depth = 0, bool last = tru
                                         << "NUMERIC(" << np->GetStart()
                                         << (np->IsStartInclusive() ? "≤" : "<")
                                         << " .. " << np->GetEnd()
-                                        << (np->IsEndInclusive() ? "≤" : "<") << ")\n";
+                                        << (np->IsEndInclusive() ? "≤" : "<") << ")_" << np->GetIdentifier() << "\n";
             break;
         }
 
         case query::PredicateType::kTag: {
             const auto* tp = dynamic_cast<const query::TagPredicate*>(pred);
-            VMSDK_LOG(WARNING, nullptr) << prefix << "TAG(" << tp->GetTagString() << ")\n";
+            VMSDK_LOG(WARNING, nullptr) << prefix << "TAG(" << tp->GetTagString() << ")_"
+                                        << tp->GetIdentifier() << "\n";
             break;
         }
 
@@ -463,21 +467,15 @@ std::unique_ptr<query::Predicate> WrapPredicate(
 // classify wildcard kind
 enum class WildcardKind { kNone, kPrefix, kSuffix, kInfix };
 
-// // quick trim helpers
-// inline absl::string_view TrimWS(absl::string_view s) {
-//   while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
-//   while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back())))  s.remove_suffix(1);
-//   return s;
-// }
-
 // detect wildcard kind based on '*'
+// I reviewed this fn. Looks good to me.
 WildcardKind DetectWildcard(absl::string_view tok) {
   const bool starts = !tok.empty() && tok.front() == '*';
   const bool ends   = !tok.empty() && tok.back()  == '*';
   if (!starts && !ends) return WildcardKind::kNone;
   if (starts && ends)   return WildcardKind::kInfix;
   if (starts)           return WildcardKind::kSuffix; // "*x"
-  return WildcardKind::kPrefix;                        // "x*"
+  return WildcardKind::kPrefix;                       // "x*"
 }
 
 // strip one leading and/or trailing '*' for prefix/suffix/infix
@@ -489,6 +487,7 @@ absl::string_view StripWildcardMarkers(absl::string_view tok) {
 
 // Fuzzy: allow 1..3 '%' on both sides: %x%, %%x%%, %%%x%%%
 // TODO: Handle errors. Also detect escaped '%' in the future.
+// I reviewed this fn. Looks good to me aside from the TODO comment.
 inline size_t GetFuzzyDistance(absl::string_view tok) {
   if (tok.size() < 3) return 0;
   auto count_leading = [](absl::string_view s) {
@@ -514,20 +513,6 @@ absl::string_view StripFuzzyMarkers(absl::string_view tok, size_t& distance) {
   tok.remove_prefix(i);
   tok.remove_suffix(j);
   return tok;
-}
-
-// Reads one raw token (unquoted) stopping on space, ')', '|', '{', '[', or start of '@field'
-std::string ReadRawToken(absl::string_view expr, size_t& pos) {
-  std::string out;
-  while (pos < expr.size()) {
-    char c = expr[pos];
-    if (std::isspace(static_cast<unsigned char>(c)) || c == ')' || c == '|' || c == '{' || c == '[') break;
-    // stop before a new field annotation "@foo:"
-    if (c == '@') break;
-    out.push_back(c);
-    ++pos;
-  }
-  return out;
 }
 
 absl::StatusOr<std::string> FilterParser::ResolveTextFieldOrDefault(const std::optional<std::string>& maybe_field) {
@@ -596,51 +581,54 @@ FilterParser::BuildSingleTextPredicate(const std::string& field_name, absl::stri
   return std::make_unique<query::TermPredicate>(text_index, identifier, field_name, std::string(token));
 }
 
+// I reviewed this fn. Looks good to me.
 absl::StatusOr<std::vector<std::unique_ptr<query::TextPredicate>>>
 FilterParser::ParseOneTextAtomIntoTerms(const std::string& field_for_default) {
   std::vector<std::unique_ptr<query::TextPredicate>> terms;
-
   SkipWhitespace();
 
-  // Quoted phrase → split into tokens and create Term/Wildcard/Fuzzy per token
+  auto push_token = [&](std::string& tok) -> absl::Status {
+    if (tok.empty()) return absl::OkStatus();
+    VMSDK_ASSIGN_OR_RETURN(auto t, BuildSingleTextPredicate(field_for_default, tok));
+    terms.push_back(std::move(t));
+    tok.clear();
+    return absl::OkStatus();
+  };
+
   if (Match('"')) {
     std::string curr;
     while (!IsEnd()) {
       char c = Peek();
       if (c == '"') { ++pos_; break; }
-      if (std::isspace(static_cast<unsigned char>(c))) {
-        if (!curr.empty()) {
-          VMSDK_ASSIGN_OR_RETURN(auto t, BuildSingleTextPredicate(field_for_default, curr));
-          terms.push_back(std::move(t));
-          curr.clear();
-        }
-        ++pos_;
-        continue;
+      if (std::isspace(static_cast<unsigned char>(c))) { 
+        VMSDK_RETURN_IF_ERROR(push_token(curr)); 
+        ++pos_; 
+      } else { 
+        curr.push_back(c); 
+        ++pos_; 
       }
-      curr.push_back(c);
-      ++pos_;
     }
-    if (!curr.empty()) {
-      VMSDK_ASSIGN_OR_RETURN(auto t, BuildSingleTextPredicate(field_for_default, curr));
-      terms.push_back(std::move(t));
-    }
-    if (terms.empty()) {
-      return absl::InvalidArgumentError("Empty quoted string");
-    }
-    // Exact phrase is realized later by proximity
-    return terms;
+    VMSDK_RETURN_IF_ERROR(push_token(curr));
+    if (terms.empty()) return absl::InvalidArgumentError("Empty quoted string");
+    return terms; // exact phrase realized later by proximity (slop=0, inorder=true)
   }
 
-  // Unquoted single token
-  std::string tok = ReadRawToken(expression_, pos_);
-  if (tok.empty()) {
-    return absl::InvalidArgumentError("Empty text token");
+  // Reads one raw token (unquoted) stopping on space, ')', '|', '{', '[', or start of '@field'
+  std::string tok;
+  while (pos_ < expression_.size()) {
+      char c = expression_[pos_];
+      if (std::isspace(static_cast<unsigned char>(c)) || c == ')' || c == '|' ||
+          c == '{' || c == '[' || c == '@') break;
+      tok.push_back(c);
+      ++pos_;
   }
+  if (tok.empty()) return absl::InvalidArgumentError("Empty text token");
   VMSDK_ASSIGN_OR_RETURN(auto t, BuildSingleTextPredicate(field_for_default, tok));
   terms.push_back(std::move(t));
   return terms;
 }
 
+// I did NOT review / test this function fully. Need to compare with previous implementation.
 absl::StatusOr<std::unique_ptr<query::Predicate>>
 FilterParser::ParseTextGroup(const std::string& initial_field) {
     std::vector<std::unique_ptr<query::TextPredicate>> all_terms;
@@ -648,16 +636,14 @@ FilterParser::ParseTextGroup(const std::string& initial_field) {
     std::string current_field = initial_field;
 
     // Require at least one text atom
-    {
-        if (!IsEnd() && Peek() == '@') {
-            VMSDK_ASSIGN_OR_RETURN(auto f, ParseFieldName());
-            current_field = f;
-        }
-
-        VMSDK_ASSIGN_OR_RETURN(auto resolved, ResolveTextFieldOrDefault(current_field));
-        VMSDK_ASSIGN_OR_RETURN(auto first_terms, ParseOneTextAtomIntoTerms(resolved));
-        for (auto& t : first_terms) all_terms.push_back(std::move(t));
+    if (!IsEnd() && Peek() == '@') {
+        VMSDK_ASSIGN_OR_RETURN(auto f, ParseFieldName());
+        current_field = f;
     }
+
+    VMSDK_ASSIGN_OR_RETURN(auto resolved, ResolveTextFieldOrDefault(current_field));
+    VMSDK_ASSIGN_OR_RETURN(auto first_terms, ParseOneTextAtomIntoTerms(resolved));
+    for (auto& t : first_terms) all_terms.push_back(std::move(t));
 
     while (!IsEnd()) {
         SkipWhitespace();
@@ -668,35 +654,33 @@ FilterParser::ParseTextGroup(const std::string& initial_field) {
         // Stop text group if next is OR, parentheses
         if (c == '|' || c == ')' || c == '(') break;
 
-        // Stop/consume if next is @field:[...] or @field:{...}
+        // Field override or numeric/tag
         if (c == '@') {
-            size_t saved_pos = pos_;
             VMSDK_ASSIGN_OR_RETURN(auto f, ParseFieldName());
+            current_field = f;
             SkipWhitespace();
             if (!IsEnd()) {
                 char next = Peek();
                 if (next == '[') {
                     ++pos_; // consume '[' for numeric
-                    VMSDK_ASSIGN_OR_RETURN(auto numeric, ParseNumericPredicate(f));
+                    VMSDK_ASSIGN_OR_RETURN(auto numeric, ParseNumericPredicate(current_field));
                     extra_terms.push_back(std::move(numeric));
-                    continue;  // keep parsing text group after numeric
+                    continue;
                 } else if (next == '{') {
                     ++pos_; // consume '{' for tag
-                    VMSDK_ASSIGN_OR_RETURN(auto tag, ParseTagPredicate(f));
+                    VMSDK_ASSIGN_OR_RETURN(auto tag, ParseTagPredicate(current_field));
                     extra_terms.push_back(std::move(tag));
                     continue;
                 }
             }
-            // Otherwise, text field override
-            current_field = f;
         }
 
-        VMSDK_ASSIGN_OR_RETURN(auto resolved, ResolveTextFieldOrDefault(current_field));
+        VMSDK_ASSIGN_OR_RETURN(resolved, ResolveTextFieldOrDefault(current_field));
         VMSDK_ASSIGN_OR_RETURN(auto terms, ParseOneTextAtomIntoTerms(resolved));
         for (auto& t : terms) all_terms.push_back(std::move(t));
     }
 
-    // Build result:
+    // Build main predicate from text terms
     std::unique_ptr<query::Predicate> prox;
     if (all_terms.size() == 1) {
         prox = std::move(all_terms[0]);
@@ -705,15 +689,89 @@ FilterParser::ParseTextGroup(const std::string& initial_field) {
             std::move(all_terms), /*slop=*/0, /*inorder=*/true);
     }
 
-    // Optionally, append numeric/tag predicates (or drop them for now)
+    // Append numeric/tag predicates
     for (auto &extra : extra_terms) {
         bool neg = false;
-        prox = WrapPredicate(std::move(prox), std::move(extra),
-                             /*negate=*/neg, query::LogicalOperator::kAnd);
+        prox = WrapPredicate(std::move(prox), std::move(extra), neg, query::LogicalOperator::kAnd);
     }
 
     return prox;
 }
+
+
+// absl::StatusOr<std::unique_ptr<query::Predicate>>
+// FilterParser::ParseTextGroup(const std::string& initial_field) {
+//     std::vector<std::unique_ptr<query::TextPredicate>> all_terms;
+//     std::vector<std::unique_ptr<query::Predicate>> extra_terms;  // numeric/tag for later
+//     std::string current_field = initial_field;
+
+//     // Require at least one text atom
+//     {
+//         if (!IsEnd() && Peek() == '@') {
+//             VMSDK_ASSIGN_OR_RETURN(auto f, ParseFieldName());
+//             current_field = f;
+//         }
+
+//         VMSDK_ASSIGN_OR_RETURN(auto resolved, ResolveTextFieldOrDefault(current_field));
+//         VMSDK_ASSIGN_OR_RETURN(auto first_terms, ParseOneTextAtomIntoTerms(resolved));
+//         for (auto& t : first_terms) all_terms.push_back(std::move(t));
+//     }
+
+//     while (!IsEnd()) {
+//         SkipWhitespace();
+//         if (IsEnd()) break;
+
+//         char c = Peek();
+
+//         // Stop text group if next is OR, parentheses
+//         if (c == '|' || c == ')' || c == '(') break;
+
+//         // Stop/consume if next is @field:[...] or @field:{...}
+//         if (c == '@') {
+//             size_t saved_pos = pos_;
+//             VMSDK_ASSIGN_OR_RETURN(auto f, ParseFieldName());
+//             SkipWhitespace();
+//             if (!IsEnd()) {
+//                 char next = Peek();
+//                 if (next == '[') {
+//                     ++pos_; // consume '[' for numeric
+//                     VMSDK_ASSIGN_OR_RETURN(auto numeric, ParseNumericPredicate(f));
+//                     extra_terms.push_back(std::move(numeric));
+//                     continue;  // keep parsing text group after numeric
+//                 } else if (next == '{') {
+//                     ++pos_; // consume '{' for tag
+//                     VMSDK_ASSIGN_OR_RETURN(auto tag, ParseTagPredicate(f));
+//                     extra_terms.push_back(std::move(tag));
+//                     continue;
+//                 }
+//             }
+//             // Otherwise, text field override
+//             current_field = f;
+//         }
+
+//         VMSDK_ASSIGN_OR_RETURN(auto resolved, ResolveTextFieldOrDefault(current_field));
+//         VMSDK_ASSIGN_OR_RETURN(auto terms, ParseOneTextAtomIntoTerms(resolved));
+//         for (auto& t : terms) all_terms.push_back(std::move(t));
+//     }
+
+//     // Build result:
+//     std::unique_ptr<query::Predicate> prox;
+//     if (all_terms.size() == 1) {
+//         prox = std::move(all_terms[0]);
+//     } else if (!all_terms.empty()) {
+//         prox = std::make_unique<query::ProximityPredicate>(
+//             std::move(all_terms), /*slop=*/0, /*inorder=*/true);
+//     }
+
+//     // Optionally, append numeric/tag predicates (or drop them for now)
+//     for (auto &extra : extra_terms) {
+//         bool neg = false;
+//         prox = WrapPredicate(std::move(prox), std::move(extra),
+//                              /*negate=*/neg, query::LogicalOperator::kAnd);
+//     }
+
+//     return prox;
+// }
 
 absl::StatusOr<std::unique_ptr<query::Predicate>>
 FilterParser::ParseExpression(uint32_t level) {
@@ -776,6 +834,7 @@ FilterParser::ParseExpression(uint32_t level) {
             }
             // Tag predicate
             else if (!IsEnd() && Peek() == '{') {
+                ++pos_; // consume '{'
                 ++node_count_;
                 if (!field_for_node.has_value()) {
                     return absl::InvalidArgumentError("Tag predicate must have explicit field");

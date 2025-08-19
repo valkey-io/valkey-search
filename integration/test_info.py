@@ -57,7 +57,7 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             "search_total_active_write_threads",
             "search_total_indexing_time",
             "search_used_memory_bytes",
-            "search_index_reclaimable_memory"
+            "search_index_reclaimable_memory",
             "search_minimal_term_prefix",
             "search_minimal_stem_length",
             "search_maximal_prefix_expansions",

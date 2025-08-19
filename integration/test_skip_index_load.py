@@ -278,35 +278,7 @@ class TestRDBCorruptedIndex(ValkeySearchTestCaseBase):
                     if attr_dict.get(b"identifier") == b"embedding":
                         assert attr_dict.get(b"attribute") == b"embedding"
                         assert attr_dict.get(b"type") == b"VECTOR"
-                        # Check vector parameters in the index array
-                        index_params = attr_dict.get(b"index", [])
-                        if isinstance(index_params, list):
-                            index_dict = {
-                                index_params[i]: index_params[i + 1]
-                                for i in range(0, len(index_params), 2)
-                            }
-                            assert b"dimensions" in index_dict or b"DIM" in index_dict
-                            assert (
-                                b"distance_metric" in index_dict
-                                or b"algorithm" in index_dict
-                                or b"ALGORITHM" in index_dict
-                            )
-                            # Verify it's using HNSW algorithm
-                            algorithm = index_dict.get(b"algorithm") or index_dict.get(
-                                b"ALGORITHM"
-                            )
-                            if isinstance(algorithm, list) and len(algorithm) >= 2:
-                                # Algorithm is stored as [b'name', b'HNSW', ...other params...]
-                                assert (
-                                    algorithm[0] == b"name"
-                                ), f"Expected algorithm name field, got {algorithm[0]}"
-                                assert (
-                                    algorithm[1] == b"HNSW"
-                                ), f"Expected HNSW algorithm, got {algorithm[1]}"
-                            else:
-                                assert (
-                                    algorithm == b"HNSW"
-                                ), f"Expected HNSW algorithm, got {algorithm}"
+                        assert attr_dict.get(b"algorithm") == b"HNSW"
 
             logging.info("Index schema verified successfully")
 

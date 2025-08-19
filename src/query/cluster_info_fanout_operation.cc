@@ -167,4 +167,8 @@ bool ClusterInfoFanoutOperation::ShouldRetry() {
          !communication_error_nodes.empty();
 }
 
+bool ClusterInfoFanoutOperation::ShouldRetry() {
+  return false;
+}
+
 }  // namespace valkey_search::query::cluster_info_fanout

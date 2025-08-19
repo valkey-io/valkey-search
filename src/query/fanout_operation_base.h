@@ -267,6 +267,20 @@ class FanoutOperationBase {
         OnCompletion();
       }
     }
+    // Log inconsistent state errors
+    if (!inconsistent_state_error_nodes.empty()) {
+      error_message = "Inconsistent index state error found.";
+      for (const FanoutSearchTarget& target : inconsistent_state_error_nodes) {
+        if (target.type == FanoutSearchTarget::Type::kLocal) {
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
+              << INCONSISTENT_STATE_ERROR_LOG_PREFIX << "LOCAL NODE";
+        } else {
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
+              << INCONSISTENT_STATE_ERROR_LOG_PREFIX << target.address;
+        }
+      }
+    }
+    return ValkeyModule_ReplyWithError(ctx, error_message.c_str());
   }
 
   unsigned GetCurrentTimeoutMs() const {
@@ -279,13 +293,27 @@ class FanoutOperationBase {
     return static_cast<unsigned>(GetTimeoutMs() - elapsed_ms);
   }
 
-  bool ShouldRetry() { return true; }
-
-  virtual void ResetForRetry() {
-    index_name_error_nodes.clear();
-    inconsistent_state_error_nodes.clear();
-    communication_error_nodes.clear();
-  };
+  void RpcDone(ValkeyModuleCtx* ctx) {
+    bool done = false;
+    {
+      absl::MutexLock lock(&mutex_);
+      if (--outstanding_ == 0) {
+        done = true;
+      }
+    }
+    if (done) {
+      if (retry_enabled_ && (GetCurrentTimeoutMs() > 0) && ShouldRetry()) {
+        VMSDK_LOG(NOTICE, nullptr)
+            << "Retry started for round: " << round_count;
+        VMSDK_LOG(NOTICE, nullptr)
+            << "Remaining time: " << GetCurrentTimeoutMs();
+        ResetForRetry();
+        StartFanoutRound(ctx);
+      } else {
+        OnCompletion();
+      }
+    }
+  }
 
   virtual void OnCompletion() {
     CHECK(blocked_client_);

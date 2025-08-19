@@ -73,7 +73,7 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
         ]
 
         string_fields = [
-            "search_background_indexing_status"
+            "search_background_indexing_status",
             "search_extension_load",
             "search_friso_ini",
             "search_enableGC",

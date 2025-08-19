@@ -278,7 +278,16 @@ class TestRDBCorruptedIndex(ValkeySearchTestCaseBase):
                     if attr_dict.get(b"identifier") == b"embedding":
                         assert attr_dict.get(b"attribute") == b"embedding"
                         assert attr_dict.get(b"type") == b"VECTOR"
+                        assert (
+                            b"distance_metric" in attr_dict
+                            or b"algorithm" in attr_dict
+                            or b"ALGORITHM" in attr_dict
+                        )
                         assert attr_dict.get(b"algorithm") == b"HNSW"
+                        assert b"ef_construction" in attr_dict
+                        assert b"ef_runtime" in attr_dict
+                        assert b"capacity" in attr_dict
+                        assert b"dim" in attr_dict
 
             logging.info("Index schema verified successfully")
 

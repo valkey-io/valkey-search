@@ -13,10 +13,12 @@
 namespace valkey_search::query::primary_info_fanout {
 
 PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(std::string index_name,
-                                                       unsigned timeout_ms)
+                                                       unsigned timeout_ms,
+                                                       bool retry_enabled)
     : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
                                   coordinator::InfoIndexPartitionResponse,
-                                  fanout::FanoutTargetMode::kPrimary>(),
+                                  fanout::FanoutTargetMode::kPrimary>(
+          retry_enabled),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
       exists_(false),
@@ -25,7 +27,7 @@ PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(std::string index_name,
       hash_indexing_failures_(0) {}
 
 unsigned PrimaryInfoFanoutOperation::GetTimeoutMs() const {
-  return timeout_ms_.value_or(5000);
+  return timeout_ms_.value_or(1000);
 }
 
 coordinator::InfoIndexPartitionRequest
@@ -172,6 +174,16 @@ int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
   ValkeyModule_ReplyWithCString(
       ctx, std::to_string(hash_indexing_failures_).c_str());
   return VALKEYMODULE_OK;
+}
+
+void PrimaryInfoFanoutOperation::ResetForRetry() {
+  FanoutOperationBase::ResetForRetry();
+  exists_ = false;
+  schema_fingerprint_.reset();
+  version_.reset();
+  num_docs_ = 0;
+  num_records_ = 0;
+  hash_indexing_failures_ = 0;
 }
 
 }  // namespace valkey_search::query::primary_info_fanout

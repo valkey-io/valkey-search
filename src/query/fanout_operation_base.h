@@ -9,6 +9,8 @@
 
 #include <grpcpp/grpcpp.h>
 
+#include <chrono>
+
 #include "absl/synchronization/mutex.h"
 #include "grpcpp/support/status.h"
 #include "src/coordinator/client_pool.h"
@@ -23,7 +25,8 @@ namespace valkey_search::query::fanout {
 template <typename Request, typename Response, FanoutTargetMode kTargetMode>
 class FanoutOperationBase {
  public:
-  explicit FanoutOperationBase() = default;
+  explicit FanoutOperationBase(bool retry_enabled = false)
+      : retry_enabled_(retry_enabled) {};
 
   virtual ~FanoutOperationBase() = default;
 
@@ -31,14 +34,8 @@ class FanoutOperationBase {
     blocked_client_ = std::make_unique<vmsdk::BlockedClient>(
         ctx, &Reply, &Timeout, &Free, GetTimeoutMs());
     blocked_client_->MeasureTimeStart();
-
-    auto targets = GetTargets(ctx);
-    outstanding_ = targets.size();
-    unsigned timeout_ms = GetTimeoutMs();
-    for (const auto& target : targets) {
-      auto req = GenerateRequest(target, timeout_ms);
-      IssueRpc(ctx, target, req, timeout_ms);
-    }
+    start_tp_ = std::chrono::steady_clock::now();
+    StartFanoutRound(ctx);
   }
 
  protected:
@@ -65,6 +62,19 @@ class FanoutOperationBase {
 
   static void Free(ValkeyModuleCtx* ctx, void* privdata) {
     delete static_cast<FanoutOperationBase*>(privdata);
+  }
+
+  void StartFanoutRound(ValkeyModuleCtx* ctx) {
+    auto targets = GetTargets(ctx);
+    {
+      absl::MutexLock lock(&mutex_);
+      outstanding_ = targets.size();
+    }
+    unsigned timeout_ms = GetTimeoutMs();
+    for (const auto& target : targets) {
+      auto req = GenerateRequest(target, timeout_ms);
+      IssueRpc(ctx, target, req, timeout_ms);
+    }
   }
 
   std::vector<FanoutSearchTarget> GetTargets(ValkeyModuleCtx* ctx) const {
@@ -153,6 +163,7 @@ class FanoutOperationBase {
                 const Request& request, unsigned timeout_ms) {
     coordinator::ClientPool* client_pool_ =
         ValkeySearch::Instance().GetCoordinatorClientPool();
+
     if (target.type == FanoutSearchTarget::Type::kLocal) {
       vmsdk::RunByMain([this, ctx, target, request]() {
         Response resp = this->GetLocalResponse(ctx, request, target);
@@ -180,7 +191,7 @@ class FanoutOperationBase {
             CHECK(false);
             break;
         }
-        this->RpcDone();
+        this->RpcDone(ctx);
       });
     } else {
       auto client = client_pool_->GetClient(target.address);
@@ -188,29 +199,58 @@ class FanoutOperationBase {
         this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
                       coordinator::FanoutErrorType::COMMUNICATION_ERROR,
                       target);
-        this->RpcDone();
+        this->RpcDone(ctx);
         return;
       }
       this->InvokeRemoteRpc(
           client.get(), request,
-          [this, target](grpc::Status status, Response& resp) {
+          [this, ctx, target](grpc::Status status, Response& resp) {
             if (status.ok()) {
               this->OnResponse(resp, target);
             } else {
               this->OnError(status, resp.error_type(), target);
             }
-            this->RpcDone();
+            this->RpcDone(ctx);
           },
           timeout_ms);
     }
   }
 
-  void RpcDone() {
-    absl::MutexLock lock(&mutex_);
-    if (--outstanding_ == 0) {
-      OnCompletion();
+  void RpcDone(ValkeyModuleCtx* ctx) {
+    bool done = false;
+    {
+      absl::MutexLock lock(&mutex_);
+      if (--outstanding_ == 0) {
+        done = true;
+      }
+    }
+    if (done) {
+      if (retry_enabled_ && (GetCurrentTimeoutMs() > 100) && ShouldRetry()) {
+        ResetForRetry();
+        StartFanoutRound(ctx);
+      } else {
+        OnCompletion();
+      }
     }
   }
+
+  unsigned GetCurrentTimeoutMs() const {
+    using namespace std::chrono;
+    auto elapsed_ms =
+        duration_cast<milliseconds>(steady_clock::now() - start_tp_).count();
+    if (elapsed_ms >= GetTimeoutMs()) {
+      return 0;
+    }
+    return static_cast<unsigned>(GetTimeoutMs() - elapsed_ms);
+  }
+
+  bool ShouldRetry() { return true; }
+
+  virtual void ResetForRetry() {
+    index_name_error_nodes.clear();
+    inconsistent_state_error_nodes.clear();
+    communication_error_nodes.clear();
+  };
 
   virtual void OnCompletion() {
     CHECK(blocked_client_);
@@ -224,6 +264,8 @@ class FanoutOperationBase {
   std::vector<FanoutSearchTarget> index_name_error_nodes;
   std::vector<FanoutSearchTarget> inconsistent_state_error_nodes;
   std::vector<FanoutSearchTarget> communication_error_nodes;
+  bool retry_enabled_;
+  std::chrono::steady_clock::time_point start_tp_;
 };
 
 }  // namespace valkey_search::query::fanout

@@ -25,7 +25,8 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
                                        coordinator::InfoIndexPartitionResponse,
                                        fanout::FanoutTargetMode::kPrimary> {
  public:
-  PrimaryInfoFanoutOperation(std::string index_name, unsigned timeout_ms);
+  PrimaryInfoFanoutOperation(std::string index_name, unsigned timeout_ms,
+                             bool retry_enabled);
 
   unsigned GetTimeoutMs() const override;
 
@@ -50,6 +51,8 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
 
   int GenerateReply(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,
                     int argc) override;
+
+  void ResetForRetry() override;
 
  private:
   bool exists_;

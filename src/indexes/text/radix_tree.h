@@ -267,6 +267,7 @@ void RadixTree<Target, reverse>::Mutate(
   CHECK(!word.empty()) << "Can't mutate the target at an empty word";
   Node* n = &root_;
   absl::string_view remaining = word;
+  std::deque<Node*> node_path{n};
   while (!remaining.empty()) {
     Node* next;
     std::visit(
@@ -339,7 +340,10 @@ void RadixTree<Target, reverse>::Mutate(
               }
             }},
         n->children);
-    n = next;
+    if (next != n) {
+      n = next;
+      node_path.push_back(n);
+    }
   }
 
   std::optional<Target> new_target = mutate(n->target);
@@ -347,8 +351,139 @@ void RadixTree<Target, reverse>::Mutate(
   if (new_target) {
     n->target = new_target;
   } else {
-    // TODO: delete word from the tree
-    assert(false);
+    // Delete the word from the tree
+    n->target = std::nullopt;
+    node_path.pop_back();
+
+    // Reconstruct the tree
+    std::visit(
+        overloaded{
+            [&](const std::monostate&) {
+              // We're at a leaf node and need to trim a branch from the tree
+              absl::string_view remaining = word;
+              bool done = false;
+              while (!node_path.empty() && !done) {
+                // Start at the target node's parent
+                Node* n = node_path.back();
+                node_path.pop_back();
+                std::visit(
+                    overloaded{
+                        [&](const std::monostate&) {
+                          CHECK(false) << "We don't expect to hit a leaf while "
+                                          "traversing up the tree";
+                        },
+                        [&](std::map<Byte, std::unique_ptr<Node>>& children) {
+                          children.erase(remaining.back());
+                          if (children.size() > 1) {
+                            // Keep the branching node as is
+                          } else if (children.size() == 1) {
+                            // Transform into compressed node if there is now
+                            // only one child
+                            n->children =
+                                std::pair{BytePath{children.begin()->first},
+                                          std::move(children.begin()->second)};
+                            // We don't necessarily need to keep it as a
+                            // distinct node if it doesn't have a target
+                            if (n->target == std::nullopt) {
+                              Node* parent_node = !node_path.empty()
+                                                      ? node_path.back()
+                                                      : nullptr;
+                              Node* child_node = std::get<std::pair<
+                                  BytePath, std::unique_ptr<Node>>>(n->children)
+                                                     .second.get();
+
+                              bool parent_compressed =
+                                  parent_node &&
+                                  std::holds_alternative<std::pair<
+                                      BytePath, std::unique_ptr<Node>>>(
+                                      parent_node->children);
+                              bool child_compressed = std::holds_alternative<
+                                  std::pair<BytePath, std::unique_ptr<Node>>>(
+                                  child_node->children);
+
+                              if (parent_compressed && child_compressed) {
+                                auto& parent_node_child = std::get<
+                                    std::pair<BytePath, std::unique_ptr<Node>>>(
+                                    parent_node->children);
+                                auto& node_child = std::get<
+                                    std::pair<BytePath, std::unique_ptr<Node>>>(
+                                    n->children);
+                                auto& child_node_child = std::get<
+                                    std::pair<BytePath, std::unique_ptr<Node>>>(
+                                    child_node->children);
+
+                                parent_node_child.first +=
+                                    node_child.first + child_node_child.first;
+                                parent_node_child.second =
+                                    std::move(child_node_child.second);
+                              } else if (parent_compressed) {
+                                auto& parent_node_child = std::get<
+                                    std::pair<BytePath, std::unique_ptr<Node>>>(
+                                    parent_node->children);
+                                auto& node_child = std::get<
+                                    std::pair<BytePath, std::unique_ptr<Node>>>(
+                                    n->children);
+
+                                parent_node_child.first += node_child.first;
+                                parent_node_child.second =
+                                    std::move(node_child.second);
+                              } else if (child_compressed) {
+                                auto& node_child = std::get<
+                                    std::pair<BytePath, std::unique_ptr<Node>>>(
+                                    n->children);
+                                auto& child_node_child = std::get<
+                                    std::pair<BytePath, std::unique_ptr<Node>>>(
+                                    child_node->children);
+
+                                node_child.first += child_node_child.first;
+                                node_child.second =
+                                    std::move(child_node_child.second);
+                              }
+                            }
+                          } else {
+                            CHECK(false)
+                                << "We shouldn't have a branching node with "
+                                   "zero children";
+                          }
+                          done = true;
+                        },
+                        [&](const std::pair<BytePath, std::unique_ptr<Node>>&
+                                child) {
+                          if (n->target != std::nullopt) {
+                            // This node can be turned into a leaf
+                            n->children = std::monostate{};
+                            done = true;
+                          } else {
+                            // We can trim the tree branch higher up
+                            remaining.remove_suffix(child.first.length());
+                          }
+                        },
+                    },
+                    n->children);
+              }
+            },
+            [&](const std::map<Byte, std::unique_ptr<Node>>& children) {
+              // The target node is a branching node. Nothing more to do.
+            },
+            [&](std::pair<BytePath, std::unique_ptr<Node>>& child) {
+              // The target node is a compressed node. If its parent is a
+              // compressed node, we can modify the parent to have an edge
+              // directly to target node's child.
+              const auto& parent = node_path.back();
+              if (std::holds_alternative<
+                      std::pair<BytePath, std::unique_ptr<Node>>>(
+                      parent->children)) {
+                auto& parent_child =
+                    std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
+                        parent->children);
+                parent_child.first += child.first;
+                parent_child.second = std::move(child.second);
+              } else {
+                // TODO: Handle case where parent has branching children
+              }
+            },
+        },
+        n->children);
   }
 }
 

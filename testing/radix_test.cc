@@ -125,19 +125,108 @@ TEST_F(RadixTreeTest, EdgeCases) {
   }
 }
 
-TEST_F(RadixTreeTest, DISABLED_UnimplementedFeatures) {
-  // TODO: Enable when deletion is implemented
-  prefix_tree_->Mutate("test", [](auto) { return TestTarget(1); });
-  EXPECT_DEATH(
-      prefix_tree_->Mutate("test",
-                           [](auto existing) -> std::optional<TestTarget> {
-                             return std::nullopt;  // Delete - not implemented
-                           }),
-      ".*");
+TEST_F(RadixTreeTest, DeleteBasicCases) {
+  // Case 1: Delete leaf node
+  prefix_tree_->Mutate("hello", [](auto) { return TestTarget(1); });
+  prefix_tree_->Mutate("hello", [](auto) -> std::optional<TestTarget> {
+    return std::nullopt;
+  });
+  prefix_tree_->Mutate("hello", [](auto existing) {
+    EXPECT_FALSE(existing.has_value());
+    return existing;
+  });
+
+  // Case 2: Delete non-existent node
+  prefix_tree_->Mutate("world", [](auto existing) -> std::optional<TestTarget> {
+    EXPECT_FALSE(existing.has_value());
+    return std::nullopt;
+  });
 
   // TODO: Enable when assertion handling is clarified
   EXPECT_DEATH(prefix_tree_->Mutate("", [](auto) { return TestTarget(1); }),
                ".*");
+}
+
+TEST_F(RadixTreeTest, DeleteStructuralCases) {
+  // Case 1: Delete from branch node
+  prefix_tree_->Mutate("cat", [](auto) { return TestTarget(1); });
+  prefix_tree_->Mutate("car", [](auto) { return TestTarget(2); });
+  prefix_tree_->Mutate("can", [](auto) { return TestTarget(3); });
+  
+  prefix_tree_->Mutate("car", [](auto) -> std::optional<TestTarget> {
+    return std::nullopt;
+  });
+  
+  // Verify remaining structure
+  auto iter = prefix_tree_->GetWordIterator("ca");
+  std::vector<std::pair<std::string, int>> actual;
+  while (!iter.Done()) {
+    actual.emplace_back(std::string(iter.GetWord()), iter.GetTarget().value);
+    iter.Next();
+  }
+  std::vector<std::pair<std::string, int>> expected = {{"can", 3}, {"cat", 1}};
+  EXPECT_EQ(actual, expected);
+
+  // Case 2: Delete from compressed node
+  prefix_tree_->Mutate("testing", [](auto) { return TestTarget(4); });
+  prefix_tree_->Mutate("test", [](auto) { return TestTarget(5); });
+  prefix_tree_->Mutate("test", [](auto) -> std::optional<TestTarget> {
+    return std::nullopt;
+  });
+  
+  // Verify compressed node structure remains correct
+  auto test_iter = prefix_tree_->GetWordIterator("test");
+  EXPECT_FALSE(test_iter.Done());
+  EXPECT_EQ(test_iter.GetWord(), "testing");
+  EXPECT_EQ(test_iter.GetTarget().value, 4);
+}
+
+TEST_F(RadixTreeTest, DeleteCausingMerge) {
+  prefix_tree_->Mutate("app", [](auto) { return TestTarget(1); });
+  prefix_tree_->Mutate("application", [](auto) { return TestTarget(2); });
+  
+  prefix_tree_->Mutate("app", [](auto) -> std::optional<TestTarget> {
+    return std::nullopt;
+  });
+  
+  prefix_tree_->Mutate("application", [](auto existing) {
+    EXPECT_TRUE(existing.has_value());
+    EXPECT_EQ(existing->value, 2);
+    return existing;
+  });
+}
+
+TEST_F(RadixTreeTest, DeleteComplexScenarios) {
+  // Build a more complex tree structure
+  std::vector<std::pair<std::string, int>> initial = {
+    {"a", 1}, {"ab", 2}, {"abc", 3}, 
+    {"abcd", 4}, {"abce", 5}
+  };
+  
+  for (const auto& [word, value] : initial) {
+    prefix_tree_->Mutate(word, [value](auto) { return TestTarget(value); });
+  }
+
+  // Delete nodes in specific order to test various restructuring scenarios
+  std::vector<std::string> delete_order = {"abc", "a", "abce"};
+  for (const auto& word : delete_order) {
+    prefix_tree_->Mutate(word, [](auto) -> std::optional<TestTarget> {
+      return std::nullopt;
+    });
+  }
+
+  // Verify final structure
+  auto iter = prefix_tree_->GetWordIterator("");
+  std::vector<std::pair<std::string, int>> expected = {
+    {"ab", 2}, {"abcd", 4}
+  };
+  
+  std::vector<std::pair<std::string, int>> actual;
+  while (!iter.Done()) {
+    actual.emplace_back(std::string(iter.GetWord()), iter.GetTarget().value);
+    iter.Next();
+  }
+  EXPECT_EQ(actual, expected);
 }
 
 // Test complex scenarios: overlapping prefixes and special strings
@@ -187,8 +276,6 @@ TEST_F(RadixTreeTest, WordIteratorBasic) {
 
   std::vector<std::pair<std::string, int>> actual;
   while (!iter.Done()) {
-    std::cout << iter.GetWord() << std::endl;
-    std::cout << iter.GetTarget().value << std::endl;
     actual.emplace_back(std::string(iter.GetWord()), iter.GetTarget().value);
     iter.Next();
   }

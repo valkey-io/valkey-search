@@ -187,7 +187,7 @@ void PrimaryInfoFanoutOperation::ResetForRetry() {
 }
 
 bool PrimaryInfoFanoutOperation::ShouldRetry() {
-  return true;
+  return !inconsistent_state_error_nodes.empty();
 }
 
 }  // namespace valkey_search::query::primary_info_fanout

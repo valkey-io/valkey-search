@@ -47,6 +47,10 @@
 namespace vmsdk {
 namespace module {
 
+constexpr absl::string_view kWriteFlag{"write"};
+constexpr absl::string_view kReadOnlyFlag{"readonly"};
+constexpr absl::string_view kFastFlag{"fast"};
+constexpr absl::string_view kAdminFlag{"admin"};
 constexpr absl::string_view kDenyOOMFlag{"deny-oom"};
 
 struct CommandOptions {

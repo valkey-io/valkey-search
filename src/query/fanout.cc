@@ -34,6 +34,7 @@
 #include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/search.h"
+#include "src/query/fanout_template.h"
 #include "src/utils/string_interning.h"
 #include "valkey_search_options.h"
 #include "vmsdk/src/log.h"
@@ -63,6 +64,7 @@ struct SearchPartitionResultsTracker {
   int outstanding_requests ABSL_GUARDED_BY(mutex);
   query::SearchResponseCallback callback;
   std::unique_ptr<VectorSearchParameters> parameters ABSL_GUARDED_BY(mutex);
+  std::atomic_bool reached_oom{false};
 
   SearchPartitionResultsTracker(
       int outstanding_requests, int k, query::SearchResponseCallback callback,
@@ -72,21 +74,25 @@ struct SearchPartitionResultsTracker {
         parameters(std::move(parameters)) {}
 
   void HandleResponse(coordinator::SearchIndexPartitionResponse &response,
-                      const std::string &address,
-                      const grpc::Status &status) {
-
+                      const std::string &address, const grpc::Status &status) {
     if (!status.ok()) {
-      if (!options::GetEnablePartialResults().GetValue()) {
+      bool should_cancel = status.error_code() == grpc::RESOURCE_EXHAUSTED ||
+                           !options::GetEnablePartialResults().GetValue();
+      if (status.error_code() == grpc::RESOURCE_EXHAUSTED) {
+        reached_oom.store(true);
+      }
+      if (should_cancel) {
         parameters->cancellation_token->Cancel();
       }
-      if (status.error_code() != grpc::StatusCode::DEADLINE_EXCEEDED) {
+      if (status.error_code() != grpc::DEADLINE_EXCEEDED &&
+          status.error_code() != grpc::RESOURCE_EXHAUSTED) {
         VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-            << "Error during handling of FT.SEARCH on node " << address
-            << ": " << status.error_message();
+            << "Error during handling of FT.SEARCH on node " << address << ": "
+            << status.error_message();
       }
       return;
     }
-                       
+
     absl::MutexLock lock(&mutex);
     while (response.neighbors_size() > 0) {
       auto neighbor_entry = std::unique_ptr<coordinator::NeighborEntry>(
@@ -120,8 +126,8 @@ struct SearchPartitionResultsTracker {
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex) {
     // For non-vector queries, we can add the result directly.
     if (parameters->attribute_alias.empty()) {
-        results.emplace(std::move(neighbor));
-        return;
+      results.emplace(std::move(neighbor));
+      return;
     }
     if (results.size() < parameters->k) {
       results.emplace(std::move(neighbor));
@@ -135,10 +141,14 @@ struct SearchPartitionResultsTracker {
     absl::MutexLock lock(&mutex);
     absl::StatusOr<std::deque<indexes::Neighbor>> result =
         std::deque<indexes::Neighbor>();
-    while (!results.empty()) {
-      result->push_back(
-          std::move(const_cast<indexes::Neighbor &>(results.top())));
-      results.pop();
+    if (reached_oom) {
+      result = absl::ResourceExhaustedError(kOOMMsg);
+    } else {
+      while (!results.empty()) {
+        result->push_back(
+            std::move(const_cast<indexes::Neighbor &>(results.top())));
+        results.pop();
+      }
     }
     callback(result, std::move(parameters));
   }
@@ -223,6 +233,9 @@ absl::Status PerformSearchFanoutAsync(
           if (neighbors.ok()) {
             tracker->AddResults(*neighbors);
           } else {
+            if (absl::IsResourceExhausted(neighbors.status())) {
+              tracker->reached_oom.store(true);
+            }
             VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
                 << "Error during local handling of FT.SEARCH: "
                 << neighbors.status().message();
@@ -235,53 +248,10 @@ absl::Status PerformSearchFanoutAsync(
 }
 
 // TODO See if caching this improves performance.
-std::vector<FanoutSearchTarget> GetSearchTargetsForFanout(
+std::vector<fanout::FanoutSearchTarget> GetSearchTargetsForFanout(
     ValkeyModuleCtx *ctx) {
-  size_t num_nodes;
-  auto nodes = vmsdk::MakeUniqueValkeyClusterNodesList(ctx, &num_nodes);
-  absl::flat_hash_map<std::string, std::vector<FanoutSearchTarget>>
-      shard_id_to_target;
-  std::vector<FanoutSearchTarget> selected_targets;
-  for (size_t i = 0; i < num_nodes; ++i) {
-    std::string node_id(nodes.get()[i], VALKEYMODULE_NODE_ID_LEN);
-    char ip[INET6_ADDRSTRLEN] = "";
-    char master_id[VALKEYMODULE_NODE_ID_LEN] = "";
-    int port;
-    int flags;
-    if (ValkeyModule_GetClusterNodeInfo(ctx, node_id.c_str(), ip, master_id,
-                                        &port, &flags) != VALKEYMODULE_OK) {
-      VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
-          << "Failed to get node info for node " << node_id
-          << ", skipping node...";
-      continue;
-    }
-    // Master ID is not null terminated.
-    auto master_id_str = std::string(master_id, VALKEYMODULE_NODE_ID_LEN);
-    if (flags & VALKEYMODULE_NODE_PFAIL || flags & VALKEYMODULE_NODE_FAIL) {
-      VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
-          << "Node " << node_id << " (" << ip
-          << ") is failing, skipping for FT.SEARCH...";
-      continue;
-    }
-    if (flags & VALKEYMODULE_NODE_MASTER) {
-      master_id_str = node_id;
-    }
-    if (flags & VALKEYMODULE_NODE_MYSELF) {
-      shard_id_to_target[master_id_str].push_back(
-          FanoutSearchTarget{.type = FanoutSearchTarget::Type::kLocal});
-    } else {
-      shard_id_to_target[master_id_str].push_back(FanoutSearchTarget{
-          .type = FanoutSearchTarget::Type::kRemote,
-          .address =
-              absl::StrCat(ip, ":", coordinator::GetCoordinatorPort(port))});
-    }
-  }
-  absl::BitGen gen;
-  for (const auto &[shard_id, targets] : shard_id_to_target) {
-    size_t index = absl::Uniform(gen, 0u, targets.size());
-    selected_targets.push_back(targets.at(index));
-  }
-  return selected_targets;
+  return fanout::FanoutTemplate::GetTargets(ctx, fanout::FanoutTargetMode::kRandom);
 }
+
 
 }  // namespace valkey_search::query::fanout

@@ -148,6 +148,8 @@ class MockValkeyModule {
   MOCK_METHOD(ValkeyModuleType *, ModuleTypeGetType, (ValkeyModuleKey * key));
   MOCK_METHOD(ValkeyModuleCtx *, GetDetachedThreadSafeContext,
               (ValkeyModuleCtx * ctx));
+  MOCK_METHOD(ValkeyModuleCtx *, GetThreadSafeContext,
+              (ValkeyModuleBlockedClient * bc));
   MOCK_METHOD(void, FreeThreadSafeContext, (ValkeyModuleCtx * ctx));
   MOCK_METHOD(int, SelectDb, (ValkeyModuleCtx * ctx, int newid));
   MOCK_METHOD(int, GetSelectedDb, (ValkeyModuleCtx * ctx));
@@ -910,6 +912,11 @@ inline ValkeyModuleCtx *TestValkeyModule_GetDetachedThreadSafeContext(
   return kMockValkeyModule->GetDetachedThreadSafeContext(ctx);
 }
 
+inline ValkeyModuleCtx *TestValkeyModule_GetThreadSafeContext(
+    ValkeyModuleBlockedClient *bc) {
+  return kMockValkeyModule->GetThreadSafeContext(bc);
+}
+
 inline void TestValkeyModule_FreeThreadSafeContext(ValkeyModuleCtx *ctx) {
   return kMockValkeyModule->FreeThreadSafeContext(ctx);
 }
@@ -1489,6 +1496,8 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_ModuleTypeGetType = &TestValkeyModule_ModuleTypeGetType;
   ValkeyModule_GetDetachedThreadSafeContext =
       &TestValkeyModule_GetDetachedThreadSafeContext;
+  ValkeyModule_GetThreadSafeContext =
+      &TestValkeyModule_GetThreadSafeContext;
   ValkeyModule_FreeThreadSafeContext = &TestValkeyModule_FreeThreadSafeContext;
   ValkeyModule_SelectDb = &TestValkeyModule_SelectDb;
   ValkeyModule_GetSelectedDb = &TestValkeyModule_GetSelectedDb;

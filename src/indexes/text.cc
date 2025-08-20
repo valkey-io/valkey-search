@@ -127,7 +127,7 @@ std::unique_ptr<Text::EntriesFetcher> Text::Search(
     CalculateSize(predicate),
     text_index_schema_->text_index_,
     negate ? &untracked_keys_ : nullptr,
-    std::move(field_mask));
+    field_mask->AsUint64());
   fetcher->operation_ = predicate.GetOperation();
   // Currently, we support a single word (exact term) match.
   fetcher->data_ = predicate.GetTextString();
@@ -144,7 +144,7 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
       std::vector<WordIterator> iterVec = {iter};
       bool slop = 0;
       bool in_order = true;
-      auto itr = std::make_unique<text::PhraseIterator>(iterVec, slop, in_order, std::move(field_mask_), untracked_keys_);
+      auto itr = std::make_unique<text::PhraseIterator>(iterVec, slop, in_order, field_mask_, untracked_keys_);
       itr->Next();
       return itr;
     }

@@ -355,12 +355,12 @@ TEST_F(PostingTest, ContainsFieldsCheck) {
   // Iterator should be valid and contain the field we inserted
   EXPECT_TRUE(key_iter.IsValid());
   EXPECT_EQ(key_iter.GetKey()->Str(), "doc1");
-  EXPECT_TRUE(key_iter.ContainsFields(*field_mask));
+  EXPECT_TRUE(key_iter.ContainsFields(field_mask->AsUint64()));
   
   // Test that it doesn't contain fields that weren't set
   auto field_mask_2 = FieldMask::Create(5);
   field_mask_2->SetField(1);
-  EXPECT_FALSE(key_iter.ContainsFields(*field_mask_2));
+  EXPECT_FALSE(key_iter.ContainsFields(field_mask_2->AsUint64()));
 }
 
 }  // namespace valkey_search::indexes::text

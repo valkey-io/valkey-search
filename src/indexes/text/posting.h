@@ -51,7 +51,6 @@ public:
   virtual void SetField(size_t field_index) = 0;
   virtual void ClearField(size_t field_index) = 0;
   virtual bool HasField(size_t field_index) const = 0;
-  virtual bool HasFields(const FieldMask& field_mask) const = 0;
   virtual void SetAllFields() = 0;
   virtual void ClearAllFields() = 0;
   virtual size_t CountSetFields() const = 0;
@@ -123,7 +122,7 @@ struct Postings {
     const Key& GetKey() const;
 
     // Check if word is present in any of the fields specified by field_mask for current key
-    bool ContainsFields(const FieldMask& field_mask) const;
+    bool ContainsFields(uint64_t field_mask) const;
 
     // Get Position Iterator
     PositionIterator GetPositionIterator() const;

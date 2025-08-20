@@ -5,13 +5,13 @@ namespace valkey_search::indexes::text {
 PhraseIterator::PhraseIterator(const std::vector<WordIterator>& words,
                               size_t slop,
                               bool in_order,
-                              std::unique_ptr<FieldMask> field_mask,
+                              uint64_t field_mask,
                               const InternedStringSet* untracked_keys)
     : words_(words),
       slop_(slop),
       in_order_(in_order),
       untracked_keys_(untracked_keys),
-      field_mask_(std::move(field_mask)) {
+      field_mask_(field_mask) {
 }
 
 bool PhraseIterator::Done() const {
@@ -27,7 +27,7 @@ void PhraseIterator::Next() {
     begin_ = false;  // Set to false after the first call to Next.
     
     // Check first key for field requirement
-    if (!Done() && !key_iter_.ContainsFields(*field_mask_)) {
+    if (!Done() && !key_iter_.ContainsFields(field_mask_)) {
       Next();
     }
     return;
@@ -39,7 +39,7 @@ void PhraseIterator::Next() {
     if (Done()) {
       break;
     }
-  } while (!key_iter_.ContainsFields(*field_mask_));
+  } while (!key_iter_.ContainsFields(field_mask_));
 }
 
 const InternedStringPtr& PhraseIterator::operator*() const {

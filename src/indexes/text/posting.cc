@@ -28,7 +28,6 @@ public:
   void SetField(size_t field_index) override;
   void ClearField(size_t field_index) override;
   bool HasField(size_t field_index) const override;
-  bool HasFields(const FieldMask& field_mask) const override;
   void SetAllFields() override;
   void ClearAllFields() override;
   size_t CountSetFields() const override;
@@ -109,18 +108,6 @@ bool FieldMaskImpl<MaskType, MAX_FIELDS>::HasField(size_t field_index) const {
   }
 }
 
-// Check if this mask contains all fields specified in the input field_mask
-template<typename MaskType, size_t MAX_FIELDS>
-bool FieldMaskImpl<MaskType, MAX_FIELDS>::HasFields(const FieldMask& field_mask) const {
-  if constexpr (std::is_same_v<MaskType, EmptyFieldMask>) {
-    // Single field case: check if field 0 is requested in the input mask
-    return field_mask.HasField(0);
-  } else {
-    // Check if this mask contains ALL fields specified in the input mask
-    uint64_t other_mask = field_mask.AsUint64();
-    return (mask_ & other_mask) == other_mask;
-  }
-}
 
 // Set all field bits to true
 template<typename MaskType, size_t MAX_FIELDS>
@@ -291,7 +278,7 @@ void Postings::KeyIterator::NextKey() {
   }
 }
 
-bool Postings::KeyIterator::ContainsFields(const FieldMask& field_mask) const {
+bool Postings::KeyIterator::ContainsFields(uint64_t field_mask) const {
   CHECK(key_map_ != nullptr && current_ != end_) << "KeyIterator is invalid or exhausted";
 
   // Check all positions for this key to see if any of the requested fields are set
@@ -302,8 +289,9 @@ bool Postings::KeyIterator::ContainsFields(const FieldMask& field_mask) const {
       return false;
     }
 
-    // Use HasFields method to check if any of the requested fields are set
-    if (position_field_mask->HasFields(field_mask)) {
+    // Convert position field mask to uint64_t and compare
+    uint64_t position_mask = position_field_mask->AsUint64();
+    if ((position_mask & field_mask) == field_mask) {
       return true;
     }
   }

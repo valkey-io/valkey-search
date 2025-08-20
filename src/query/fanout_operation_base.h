@@ -270,7 +270,6 @@ class FanoutOperationBase {
   bool retry_enabled_;
   std::chrono::steady_clock::time_point start_tp_;
   int db_id_;
-  unsigned round_count;
 };
 
 }  // namespace valkey_search::query::fanout

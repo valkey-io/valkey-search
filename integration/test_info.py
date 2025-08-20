@@ -4,10 +4,16 @@ from valkey import ResponseError
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
+import pytest
+import os
 
 
 class TestVSSBasic(ValkeySearchTestCaseBase):
 
+    @pytest.mark.skipif(
+        os.environ.get("SAN_BUILD", "no") != "no",
+        reason="Test skipped in ASAN test"
+    )
     def test_info_fields_present(self):
         client: Valkey = self.server.get_new_client()
         # Validate that the info fields are present.

@@ -247,10 +247,6 @@ class FanoutOperationBase {
     }
     if (done) {
       if (retry_enabled_ && (GetCurrentTimeoutMs() > 0) && ShouldRetry()) {
-        VMSDK_LOG(NOTICE, nullptr)
-            << "Retry started for round: " << round_count;
-        VMSDK_LOG(NOTICE, nullptr)
-            << "Remaining time: " << GetCurrentTimeoutMs();
         ResetForRetry();
         StartFanoutRound(ctx);
       } else {

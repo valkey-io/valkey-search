@@ -108,7 +108,6 @@ bool FieldMaskImpl<MaskType, MAX_FIELDS>::HasField(size_t field_index) const {
   }
 }
 
-
 // Set all field bits to true
 template<typename MaskType, size_t MAX_FIELDS>
 void FieldMaskImpl<MaskType, MAX_FIELDS>::SetAllFields() {
@@ -291,7 +290,7 @@ bool Postings::KeyIterator::ContainsFields(uint64_t field_mask) const {
 
     // Convert position field mask to uint64_t and compare
     uint64_t position_mask = position_field_mask->AsUint64();
-    if ((position_mask & field_mask) == field_mask) {
+    if ((position_mask & field_mask) != 0) {
       return true;
     }
   }

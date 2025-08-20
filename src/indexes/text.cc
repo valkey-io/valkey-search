@@ -66,12 +66,51 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
 
 absl::StatusOr<bool> Text::RemoveRecord(const InternedStringPtr& key,
                                         DeletionType deletion_type) {
-  throw std::runtime_error("Text::RemoveRecord not implemented");
+  
+  // TODO: Key Tracking
+  
+  if (deletion_type == DeletionType::kRecord){
+    // Collect all words to check (to avoid modifying while iterating)
+    std::vector<std::string> words_to_check;
+    auto iter = text_index_schema_->text_index_->prefix_.GetWordIterator("");
+    while (!iter.Done()) {
+      words_to_check.emplace_back(iter.GetWord());
+      iter.Next();
+    }
+    
+    // For each word, check if it contains the key and remove it
+    for (const auto& word : words_to_check) {
+      text_index_schema_->text_index_->prefix_.Mutate(
+          word,
+          [&](std::optional<std::shared_ptr<text::Postings>> existing)
+              -> std::optional<std::shared_ptr<text::Postings>> {
+            if (existing.has_value()) {
+              auto postings = existing.value();
+              postings->RemoveKey(key);
+              
+              // If postings is empty after removing the key, delete the entry
+              if (postings->IsEmpty()) {
+                return std::nullopt;
+              }
+              return postings;
+            }
+            return existing;
+          });
+    }
+  }
+  
+  return true;
 }
 
 absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr& key,
                                         absl::string_view data) {
-  throw std::runtime_error("Text::ModifyRecord not implemented");
+  // An update is a delete followed by an add
+  auto remove_result = RemoveRecord(key);
+  if (!remove_result.ok()) {
+    return remove_result.status();
+  }
+  
+  return AddRecord(key, data);
 }
 
 int Text::RespondWithInfo(ValkeyModuleCtx* ctx) const {

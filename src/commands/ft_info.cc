@@ -28,7 +28,7 @@ namespace valkey_search {
 constexpr absl::string_view kFTInfoTimeoutMsConfig{"ft-info-timeout-ms"};
 constexpr uint32_t kDefaultFTInfoTimeoutMs{1000};
 constexpr uint32_t kMinimumFTInfoTimeoutMs{100};
-constexpr uint32_t kMaximumFTInfoTimeoutMs{300000};  // 5 minutes max
+constexpr uint32_t kMaximumFTInfoTimeoutMs{10000};  // 10s max
 
 namespace options {
 
@@ -118,7 +118,7 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     op->StartOperation(ctx);
   } else if (is_cluster) {
     auto op = new query::cluster_info_fanout::ClusterInfoFanoutOperation(
-        std::string(index_schema_name), timeout_ms, false);
+        std::string(index_schema_name), timeout_ms, true);
     op->StartOperation(ctx);
   } else {
     VMSDK_LOG(DEBUG, ctx) << "==========Using Local Scope==========";

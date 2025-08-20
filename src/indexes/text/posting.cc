@@ -288,7 +288,7 @@ bool Postings::KeyIterator::ContainsFields(uint64_t field_mask) const {
       return false;
     }
 
-    // Convert position field mask to uint64_t and compare
+    // Convert position field mask to uint64_t and compare if any of the fields from field_mask are present in position_field_mask
     uint64_t position_mask = position_field_mask->AsUint64();
     if ((position_mask & field_mask) != 0) {
       return true;

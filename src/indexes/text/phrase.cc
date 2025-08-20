@@ -5,7 +5,7 @@ namespace valkey_search::indexes::text {
 PhraseIterator::PhraseIterator(const std::vector<WordIterator>& words,
                               size_t slop,
                               bool in_order,
-                              uint64_t field_mask,
+                              FieldMaskPredicate field_mask,
                               const InternedStringSet* untracked_keys)
     : words_(words),
       slop_(slop),

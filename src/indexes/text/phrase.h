@@ -18,6 +18,7 @@
 
 namespace valkey_search::indexes::text {
 
+using FieldMaskPredicate = uint64_t;
 using WordIterator = RadixTree<std::shared_ptr<Postings>, false>::WordIterator;
 
 /*
@@ -66,7 +67,7 @@ class PhraseIterator : public indexes::EntriesFetcherIteratorBase {
   PhraseIterator(const std::vector<WordIterator>& words,
                  size_t slop,
                  bool in_order,
-                 uint64_t field_mask,
+                 FieldMaskPredicate field_mask,
                  const InternedStringSet* untracked_keys = nullptr);
 
   bool Done() const override;
@@ -82,7 +83,7 @@ class PhraseIterator : public indexes::EntriesFetcherIteratorBase {
   bool in_order_;
   const InternedStringSet* untracked_keys_;
   InternedStringPtr current_key_;
-  uint64_t field_mask_;
+  FieldMaskPredicate field_mask_;
 };
 
 

@@ -115,19 +115,12 @@ size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
 std::unique_ptr<Text::EntriesFetcher> Text::Search(
     const query::TextPredicate& predicate,
     bool negate) const {
-  // Create FieldMask with default all fields set,
-  auto field_mask = text::FieldMask::Create(text_index_schema_->num_text_fields_);
-  field_mask->SetAllFields();  // Initialize with default case all fields set (0xffffffffffff)
-
-  // TODO : Modify this to handle fields based on input query passed down from the text predicate. when no field specified default field mask used
-  field_mask->ClearAllFields(); // Clear all fields to 0
-  field_mask->SetField(text_field_number_); // Set only the specific text field
-  
   auto fetcher = std::make_unique<EntriesFetcher>(
     CalculateSize(predicate),
     text_index_schema_->text_index_,
-    negate ? &untracked_keys_ : nullptr,
-    field_mask->AsUint64());
+    negate ? &untracked_keys_ : nullptr);
+  // TODO : We only support single field queries for now. Change below when we support multiple and all fields.
+  fetcher->field_mask_ = 1ULL << text_field_number_;
   fetcher->operation_ = predicate.GetOperation();
   // Currently, we support a single word (exact term) match.
   fetcher->data_ = predicate.GetTextString();

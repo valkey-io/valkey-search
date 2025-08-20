@@ -36,7 +36,6 @@ class FanoutOperationBase {
     blocked_client_->MeasureTimeStart();
     start_tp_ = std::chrono::steady_clock::now();
     db_id_ = ValkeyModule_GetSelectedDb(ctx);
-    round_count = 0;
     StartFanoutRound(ctx);
   }
 
@@ -71,7 +70,6 @@ class FanoutOperationBase {
     {
       absl::MutexLock lock(&mutex_);
       outstanding_ = targets.size();
-      ++round_count;
     }
     unsigned timeout_ms = GetTimeoutMs();
     for (const auto& target : targets) {

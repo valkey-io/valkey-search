@@ -116,9 +116,13 @@ std::unique_ptr<Text::EntriesFetcher> Text::Search(
     const query::TextPredicate& predicate,
     bool negate) const {
   // TODO : Create FieldMask with multiple bits set when multiple fields queried in Text Predicate
-  // Create FieldMask with the specific text field bit set
+  // Create FieldMask with default all fields set, then clear and set specific field
   auto field_mask = text::FieldMask::Create(text_index_schema_->num_text_fields_);
-  field_mask->SetField(text_field_number_);
+  field_mask->SetAllFields();  // Initialize with default case all fields set (0xffffffffffff)
+
+  // TODO : Modify this to handle fields based on input query passed down from the text predicate. when no field specified default field mask used
+  field_mask->ClearAllFields(); // Clear all fields to 0
+  field_mask->SetField(text_field_number_); // Set only the specific text field
   
   auto fetcher = std::make_unique<EntriesFetcher>(
     CalculateSize(predicate),
@@ -141,7 +145,7 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
       std::vector<WordIterator> iterVec = {iter};
       bool slop = 0;
       bool in_order = true;
-      auto itr = std::make_unique<text::PhraseIterator>(iterVec, slop, in_order, untracked_keys_, std::move(field_mask_));
+      auto itr = std::make_unique<text::PhraseIterator>(iterVec, slop, in_order, std::move(field_mask_), untracked_keys_);
       itr->Next();
       return itr;
     }

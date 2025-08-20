@@ -66,8 +66,8 @@ class PhraseIterator : public indexes::EntriesFetcherIteratorBase {
   PhraseIterator(const std::vector<WordIterator>& words,
                  size_t slop,
                  bool in_order,
-                 const InternedStringSet* untracked_keys = nullptr,
-                 std::unique_ptr<FieldMask> field_mask = nullptr);
+                 std::unique_ptr<FieldMask> field_mask,
+                 const InternedStringSet* untracked_keys = nullptr);
 
   bool Done() const override;
   void Next() override;

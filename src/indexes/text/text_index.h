@@ -11,12 +11,12 @@
 #include <memory>
 #include <optional>
 
-#include "absl/strings/string_view.h"
-#include "absl/functional/function_ref.h"
 #include "absl/container/flat_hash_map.h"
-#include "src/indexes/text/radix_tree.h"
-#include "src/indexes/text/posting.h"
+#include "absl/functional/function_ref.h"
+#include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/text/posting.h"
+#include "src/indexes/text/radix_tree.h"
 
 namespace valkey_search::indexes::text {
 
@@ -37,23 +37,20 @@ struct TextIndex {
   // becomes responsible for cross-tree locking issues. Multiple locking
   // strategies are possible. TBD (a shared-ed word lock table should work well)
   //
-
-  // Prefix tree
   RadixTree<std::shared_ptr<Postings>, false> prefix_;
-  
-  // Suffix tree
   std::optional<RadixTree<std::shared_ptr<Postings>, true>> suffix_;
 };
 
 struct TextIndexSchema {
-  TextIndexSchema() : num_text_fields_(0), text_index_(std::make_shared<TextIndex>()) {}
-  TextIndexSchema(const data_model::IndexSchema& index_schema_proto) 
-      : num_text_fields_(0), 
+  TextIndexSchema() : text_index_(std::make_shared<TextIndex>()) {}
+  TextIndexSchema(const data_model::IndexSchema &index_schema_proto)
+      : num_text_fields_(0),
         text_index_(std::make_shared<TextIndex>()),
         language_(index_schema_proto.language()),
         punctuation_(index_schema_proto.punctuation()),
         with_offsets_(index_schema_proto.with_offsets()),
-        stop_words_(index_schema_proto.stop_words().begin(), index_schema_proto.stop_words().end()) {}
+        stop_words_(index_schema_proto.stop_words().begin(),
+                    index_schema_proto.stop_words().end()) {}
   ~TextIndexSchema() = default;
 
   uint8_t num_text_fields_;
@@ -71,15 +68,12 @@ struct TextIndexSchema {
   absl::flat_hash_map<Key, TextIndex> by_key_;
 
   // IndexSchema proto-derived configuration fields
-  data_model::Language language_ = data_model::LANGUAGE_UNSPECIFIED;
+  data_model::Language language_;
   std::string punctuation_;
-  bool with_offsets_ = false;
+  bool with_offsets_;
   std::vector<std::string> stop_words_;
 
-  uint8_t AllocateTextFieldNumber() {
-    return num_text_fields_++;
-  }
-
+  uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }
 };
 
 }  // namespace valkey_search::indexes::text

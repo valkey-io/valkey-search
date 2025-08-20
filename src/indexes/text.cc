@@ -115,8 +115,7 @@ size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
 std::unique_ptr<Text::EntriesFetcher> Text::Search(
     const query::TextPredicate& predicate,
     bool negate) const {
-  // TODO : Create FieldMask with multiple bits set when multiple fields queried in Text Predicate
-  // Create FieldMask with default all fields set, then clear and set specific field
+  // Create FieldMask with default all fields set,
   auto field_mask = text::FieldMask::Create(text_index_schema_->num_text_fields_);
   field_mask->SetAllFields();  // Initialize with default case all fields set (0xffffffffffff)
 

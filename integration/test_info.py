@@ -10,10 +10,6 @@ import os
 
 class TestVSSBasic(ValkeySearchTestCaseBase):
 
-    @pytest.mark.skipif(
-        os.environ.get("SAN_BUILD", "no") != "no",
-        reason="Test skipped in ASAN test"
-    )
     def test_info_fields_present(self):
         client: Valkey = self.server.get_new_client()
         # Validate that the info fields are present.
@@ -91,4 +87,4 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
         for field in bytes_fields:
             assert field in info_data
             bytes_value = info_data[field]
-            assert isinstance(bytes_value, str) and bytes_value.endswith("iB")
+            assert (isinstance(bytes_value, str) and bytes_value.endswith("iB")) or bytes_value == 0

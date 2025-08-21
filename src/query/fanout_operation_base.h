@@ -66,10 +66,7 @@ class FanoutOperationBase {
 
   void StartFanoutRound(ValkeyModuleCtx* ctx) {
     auto targets = GetTargets(ctx);
-    {
-      absl::MutexLock lock(&mutex_);
-      outstanding_ = targets.size();
-    }
+    outstanding_ = targets.size();
     unsigned timeout_ms = GetTimeoutMs();
     for (const auto& target : targets) {
       auto req = GenerateRequest(target, timeout_ms);
@@ -88,7 +85,7 @@ class FanoutOperationBase {
 
     if (target.type == FanoutSearchTarget::Type::kLocal) {
       vmsdk::RunByMain([this, ctx, target, request]() {
-        Response resp = this->GetLocalResponse(db_id_, request, target);
+        Response resp = this->GetLocalResponse(request, target);
         switch (resp.error_type()) {
           // no error, continue to aggregate response
           case coordinator::FanoutErrorType::OK:
@@ -134,8 +131,7 @@ class FanoutOperationBase {
   }
 
   virtual Response GetLocalResponse(
-      int db_id, const Request&,
-      [[maybe_unused]] const FanoutSearchTarget&) = 0;
+      const Request&, [[maybe_unused]] const FanoutSearchTarget&) = 0;
 
   virtual void InvokeRemoteRpc(coordinator::Client*, const Request&,
                                std::function<void(grpc::Status, Response&)>,

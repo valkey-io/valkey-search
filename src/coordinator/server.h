@@ -35,6 +35,9 @@ class Service final : public Coordinator::CallbackService {
 
   ~Service() override = default;
 
+  static coordinator::InfoIndexPartitionResponse GenerateInfoResponse(
+      const std::string& index_name);
+
   grpc::ServerUnaryReactor* GetGlobalMetadata(
       grpc::CallbackServerContext* context,
       const GetGlobalMetadataRequest* request,

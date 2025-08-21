@@ -26,6 +26,7 @@
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search::indexes {
 namespace {
@@ -38,13 +39,18 @@ std::optional<double> ParseNumber(absl::string_view data) {
 }
 }  // namespace
 
-Numeric::Numeric(const data_model::NumericIndex& numeric_index_proto)
-    : IndexBase(IndexerType::kNumeric) {
+Numeric::Numeric(const data_model::NumericIndex& numeric_index_proto, MemoryPool& memory_pool)
+    : IndexBase(IndexerType::kNumeric, memory_pool) {
+  NestedMemoryScope scope{memory_pool};
+
   index_ = std::make_unique<BTreeNumericIndex>();
 }
 
+// NOTE: key should be stored interned string.
 absl::StatusOr<bool> Numeric::AddRecord(const InternedStringPtr& key,
                                         absl::string_view data) {
+  NestedMemoryScope scope{memory_pool_};
+                                          
   auto value = ParseNumber(data);
   absl::MutexLock lock(&index_mutex_);
   if (!value.has_value()) {
@@ -61,6 +67,7 @@ absl::StatusOr<bool> Numeric::AddRecord(const InternedStringPtr& key,
   return true;
 }
 
+// NOTE: key should be stored interned string.
 absl::StatusOr<bool> Numeric::ModifyRecord(const InternedStringPtr& key,
                                            absl::string_view data) {
   auto value = ParseNumber(data);
@@ -69,6 +76,9 @@ absl::StatusOr<bool> Numeric::ModifyRecord(const InternedStringPtr& key,
         RemoveRecord(key, indexes::DeletionType::kIdentifier);
     return false;
   }
+
+  NestedMemoryScope scope{memory_pool_};
+
   absl::MutexLock lock(&index_mutex_);
   auto it = tracked_keys_.find(key);
   if (it == tracked_keys_.end()) {
@@ -81,8 +91,11 @@ absl::StatusOr<bool> Numeric::ModifyRecord(const InternedStringPtr& key,
   return true;
 }
 
+// NOTE: key should be stored interned string.
 absl::StatusOr<bool> Numeric::RemoveRecord(const InternedStringPtr& key,
                                            DeletionType deletion_type) {
+  NestedMemoryScope scope{memory_pool_};
+
   absl::MutexLock lock(&index_mutex_);
   if (deletion_type == DeletionType::kRecord) {
     // If key is DELETED, remove it from untracked_keys_.

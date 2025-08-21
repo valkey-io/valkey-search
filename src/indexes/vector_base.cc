@@ -52,6 +52,7 @@
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search {
 constexpr float kDefaultMagnitude = -1.0f;
@@ -131,6 +132,8 @@ template <typename T>
 void VectorBase::Init(int dimensions,
                       valkey_search::data_model::DistanceMetric distance_metric,
                       std::unique_ptr<hnswlib::SpaceInterface<T>> &space) {
+  NestedMemoryScope scope{memory_pool_};
+
   space = CreateSpace<T>(dimensions, distance_metric);
   distance_metric_ = distance_metric;
   if (distance_metric ==

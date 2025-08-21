@@ -27,6 +27,7 @@
 #include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search::indexes {
 
@@ -39,8 +40,8 @@ static bool IsValidPrefix(absl::string_view str) {
          str[str.length() - 2] != '*';
 }
 
-Tag::Tag(const data_model::TagIndex& tag_index_proto)
-    : IndexBase(IndexerType::kTag),
+Tag::Tag(const data_model::TagIndex& tag_index_proto, MemoryPool& memory_pool)
+    : IndexBase(IndexerType::kTag, memory_pool),
       separator_(tag_index_proto.separator()[0]),
       case_sensitive_(tag_index_proto.case_sensitive()),
       tree_(case_sensitive_) {}

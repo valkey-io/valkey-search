@@ -28,6 +28,7 @@
 #include "third_party/hnswlib/bruteforce.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search::indexes {
 
@@ -37,13 +38,15 @@ class VectorFlat : public VectorBase {
   static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> Create(
       const data_model::VectorIndex& vector_index_proto,
       absl::string_view attribute_identifier,
-      data_model::AttributeDataType attribute_data_type)
+      data_model::AttributeDataType attribute_data_type,
+      MemoryPool& memory_pool)
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> LoadFromRDB(
       ValkeyModuleCtx* ctx, const AttributeDataType* attribute_data_type,
       const data_model::VectorIndex& vector_index_proto,
       absl::string_view attribute_identifier,
-      SupplementalContentChunkIter&& iter) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      SupplementalContentChunkIter&& iter,
+      MemoryPool& memory_pool) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorFlat() override = default;
   size_t GetDataTypeSize() const override { return sizeof(T); }
 
@@ -95,7 +98,8 @@ class VectorFlat : public VectorBase {
  private:
   VectorFlat(int dimensions, data_model::DistanceMetric distance_metric,
              uint32_t block_size, absl::string_view attribute_identifier,
-             data_model::AttributeDataType attribute_data_type);
+             data_model::AttributeDataType attribute_data_type,
+             MemoryPool& memory_pool);
   std::unique_ptr<hnswlib::BruteforceSearch<T>> algo_
       ABSL_GUARDED_BY(resize_mutex_);
   std::unique_ptr<hnswlib::SpaceInterface<T>> space_;

@@ -30,6 +30,7 @@
 #include "src/utils/segment_tree.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search::indexes {
 
@@ -81,7 +82,7 @@ class BTreeNumeric {
 
 class Numeric : public IndexBase {
  public:
-  explicit Numeric(const data_model::NumericIndex& numeric_index_proto);
+  explicit Numeric(const data_model::NumericIndex& numeric_index_proto, MemoryPool& memory_pool);
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);

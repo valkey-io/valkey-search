@@ -81,7 +81,8 @@ absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateVectorHNSWSchema(
       CreateHNSWVectorIndexProto(dimensions, data_model::DISTANCE_METRIC_COSINE,
                                  1000, 10, 300, 30),
       "vector_identifier",
-      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+      test_index_schema->GetMemoryPool());
   VMSDK_EXPECT_OK(index);
   VMSDK_EXPECT_OK(test_index_schema->AddIndex("vector", "vector", *index));
   return test_index_schema;

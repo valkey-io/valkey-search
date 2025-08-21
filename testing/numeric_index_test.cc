@@ -18,6 +18,9 @@
 #include "src/query/predicate.h"
 #include "testing/common.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/memory_tracker.h"
+#include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
 
@@ -26,7 +29,8 @@ namespace {
 class NumericIndexTest : public vmsdk::ValkeyTest {
  protected:
   data_model::NumericIndex numeric_index_proto;
-  IndexTeser<Numeric, data_model::NumericIndex> index{numeric_index_proto};
+  MemoryPool memory_pool;
+  IndexTeser<Numeric, data_model::NumericIndex> index{numeric_index_proto, memory_pool};
 };
 
 std::vector<std::string> Fetch(
@@ -310,6 +314,37 @@ TEST_F(NumericIndexTest, DeletedKeysNegativeSearchTest) {
                                            true, 3.0, true),
                    true);
   EXPECT_THAT(Fetch(*entries_fetcher), testing::UnorderedElementsAre("doc0"));
+}
+
+TEST_F(NumericIndexTest, MemoryTrackingAddRecord) {
+  memory_pool.Reset();
+  int64_t initial_memory = memory_pool.GetUsage();
+  
+  EXPECT_TRUE(index.AddRecord("key", "1.5").value());
+  int64_t after_first_add = memory_pool.GetUsage();
+  EXPECT_GT(after_first_add, initial_memory);
+}
+
+TEST_F(NumericIndexTest, MemoryTrackingAddDuplicatedRecord) {
+  memory_pool.Reset();
+  int64_t initial_memory = memory_pool.GetUsage();
+  
+  EXPECT_TRUE(index.AddRecord("key", "1.5").value());
+  int64_t after_first_add = memory_pool.GetUsage();
+  EXPECT_GT(after_first_add, initial_memory);
+  
+  auto status = index.AddRecord("key", "3.5");
+  EXPECT_EQ(status.status().code(), absl::StatusCode::kAlreadyExists);
+  EXPECT_EQ(memory_pool.GetUsage(), after_first_add);
+}
+
+TEST_F(NumericIndexTest, MemoryTrackingAddRecordUntrackedKey) {
+  memory_pool.Reset();
+  int64_t initial_memory = memory_pool.GetUsage();
+  
+  EXPECT_FALSE(index.AddRecord("key", "not_a_number").value());
+  int64_t after_non_numeric = memory_pool.GetUsage();
+  EXPECT_GT(after_non_numeric, initial_memory);
 }
 
 }  // namespace

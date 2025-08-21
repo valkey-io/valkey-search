@@ -17,6 +17,7 @@
 #include "src/query/predicate.h"
 #include "testing/common.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search::indexes {
 
@@ -29,8 +30,9 @@ class TagIndexTest : public vmsdk::ValkeyTest {
     data_model::TagIndex tag_index_proto;
     tag_index_proto.set_separator(",");
     tag_index_proto.set_case_sensitive(false);
+    MemoryPool memory_pool{};
     index = std::make_unique<IndexTeser<Tag, data_model::TagIndex>>(
-        tag_index_proto);
+        tag_index_proto, memory_pool);
   }
   std::unique_ptr<IndexTeser<Tag, data_model::TagIndex>> index;
   std::string identifier = "attribute_id";

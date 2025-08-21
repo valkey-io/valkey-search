@@ -43,6 +43,7 @@
 #include "testing/common.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search {
 
@@ -68,8 +69,8 @@ auto VectorToStr = [](const std::vector<float> &v) {
 
 class MockNumeric : public indexes::Numeric {
  public:
-  MockNumeric(const data_model::NumericIndex &numeric_index_proto)
-      : indexes::Numeric(numeric_index_proto) {}
+  MockNumeric(const data_model::NumericIndex &numeric_index_proto, MemoryPool& memory_pool)
+      : indexes::Numeric(numeric_index_proto, memory_pool) {}
   MOCK_METHOD(std::unique_ptr<indexes::Numeric::EntriesFetcher>, Search,
               (const query::NumericPredicate &predicate, bool negate),
               (const, override));
@@ -124,8 +125,8 @@ class TestedNumericEntriesFetcher : public indexes::Numeric::EntriesFetcher {
 
 class MockTag : public indexes::Tag {
  public:
-  MockTag(const data_model::TagIndex &tag_index_proto)
-      : indexes::Tag(tag_index_proto) {}
+  MockTag(const data_model::TagIndex &tag_index_proto, MemoryPool& memory_pool)
+      : indexes::Tag(tag_index_proto, memory_pool) {}
   MOCK_METHOD(std::unique_ptr<indexes::Tag::EntriesFetcher>, Search,
               (const query::TagPredicate &predicate, bool negate),
               (const, override));
@@ -167,9 +168,9 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
   EXPECT_CALL(*index_schema, GetIdentifier(::testing::_)).Times(::testing::AnyNumber());
 
   auto numeric_index_100_10 =
-      std::make_shared<MockNumeric>(numeric_index_proto);
+      std::make_shared<MockNumeric>(numeric_index_proto, index_schema->GetMemoryPool());
   auto numeric_index_100_30 =
-      std::make_shared<MockNumeric>(numeric_index_proto);
+      std::make_shared<MockNumeric>(numeric_index_proto, index_schema->GetMemoryPool());
   VMSDK_EXPECT_OK(index_schema->AddIndex(
       "numeric_index_100_10", "numeric_index_100_10", numeric_index_100_10));
   VMSDK_EXPECT_OK(index_schema->AddIndex(
@@ -192,7 +193,8 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
   data_model::TagIndex tag_index_proto;
   tag_index_proto.set_separator(",");
   tag_index_proto.set_case_sensitive(false);
-  auto tag_index_100_15 = std::make_shared<MockTag>(tag_index_proto);
+  auto tag_index_100_15 = std::make_shared<MockTag>(
+    tag_index_proto, index_schema->GetMemoryPool());
 
   VMSDK_EXPECT_OK(index_schema->AddIndex("tag_index_100_15", "tag_index_100_15",
                                          tag_index_100_15));
@@ -329,7 +331,8 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
                            kVectorDimensions, data_model::DISTANCE_METRIC_L2,
                            1000, 10, 300, 30),
                        "vector_attribute_identifier",
-                       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+                       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+                        index_schema->GetMemoryPool())
                        .value();
   } else {
     vector_index =
@@ -337,7 +340,8 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
             CreateFlatVectorIndexProto(
                 kVectorDimensions, data_model::DISTANCE_METRIC_L2, 1000, 250),
             "vector_attribute_identifier",
-            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+            index_schema->GetMemoryPool())
             .value();
   }
   VMSDK_EXPECT_OK(index_schema->AddIndex(kVectorAttributeAlias,
@@ -345,14 +349,16 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
 
   // Add numeric index
   data_model::NumericIndex numeric_index_proto;
-  auto numeric_index = std::make_shared<indexes::Numeric>(numeric_index_proto);
+  auto numeric_index = std::make_shared<indexes::Numeric>(
+    numeric_index_proto, index_schema->GetMemoryPool());
   VMSDK_EXPECT_OK(index_schema->AddIndex("numeric", "numeric", numeric_index));
 
   // Add tag index
   data_model::TagIndex tag_index_proto;
   tag_index_proto.set_separator(",");
   tag_index_proto.set_case_sensitive(false);
-  auto tag_index = std::make_shared<indexes::Tag>(tag_index_proto);
+  auto tag_index = std::make_shared<indexes::Tag>(
+    tag_index_proto, index_schema->GetMemoryPool());
   VMSDK_EXPECT_OK(index_schema->AddIndex("tag", "tag", tag_index));
 
   // Add records
@@ -785,7 +791,8 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
         auto vector_index =
             indexes::VectorHNSW<float>::Create(
                 vector_index_proto, "attribute_identifier_1",
-                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+                index_schema->GetMemoryPool())
                 .value();
         VMSDK_EXPECT_OK(index_schema->AddIndex(
             index.attribute_alias, index.attribute_identifier, vector_index));
@@ -798,7 +805,8 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
         auto flat_index =
             indexes::VectorFlat<float>::Create(
                 vector_index_proto, "attribute_identifier_1",
-                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+                index_schema->GetMemoryPool())
                 .value();
         VMSDK_EXPECT_OK(index_schema->AddIndex(
             index.attribute_alias, index.attribute_identifier, flat_index));
@@ -809,7 +817,8 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
         data_model::TagIndex tag_index_proto;
         tag_index_proto.set_separator(",");
         tag_index_proto.set_case_sensitive(false);
-        auto tag_index = std::make_shared<indexes::Tag>(tag_index_proto);
+        auto tag_index = std::make_shared<indexes::Tag>(
+            tag_index_proto, index_schema->GetMemoryPool());
         VMSDK_EXPECT_OK(index_schema->AddIndex(
             index.attribute_alias, index.attribute_identifier, tag_index));
         index_base = tag_index;
@@ -818,7 +827,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
       case IndexerType::kNumeric: {
         data_model::NumericIndex numeric_index_proto;
         auto numeric_index =
-            std::make_shared<indexes::Numeric>(numeric_index_proto);
+            std::make_shared<indexes::Numeric>(numeric_index_proto, index_schema->GetMemoryPool());
         VMSDK_EXPECT_OK(index_schema->AddIndex(
             index.attribute_alias, index.attribute_identifier, numeric_index));
         index_base = numeric_index;

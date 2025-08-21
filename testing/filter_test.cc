@@ -17,6 +17,8 @@
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
+#include "vmsdk/src/memory_tracker.h"
+
 namespace valkey_search {
 
 namespace {
@@ -40,14 +42,15 @@ class FilterTest : public ValkeySearchTestWithParam<FilterTestCase> {
 
 void InitIndexSchema(MockIndexSchema *index_schema) {
   data_model::NumericIndex numeric_index_proto;
+  MemoryPool memory_pool{};
 
   auto numeric_index_1_5 =
       std::make_shared<IndexTeser<indexes::Numeric, data_model::NumericIndex>>(
-          numeric_index_proto);
+          numeric_index_proto, memory_pool);
 
   auto numeric_index_2_0 =
       std::make_shared<IndexTeser<indexes::Numeric, data_model::NumericIndex>>(
-          numeric_index_proto);
+          numeric_index_proto, memory_pool);
   VMSDK_EXPECT_OK(numeric_index_1_5->AddRecord("key1", "1.5"));
   VMSDK_EXPECT_OK(numeric_index_2_0->AddRecord("key1", "2.0"));
   VMSDK_EXPECT_OK(index_schema->AddIndex("num_field_1.5", "num_field_1.5",
@@ -60,19 +63,19 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
   tag_index_proto.set_case_sensitive(true);
   auto tag_index_1 =
       std::make_shared<IndexTeser<indexes::Tag, data_model::TagIndex>>(
-          tag_index_proto);
+          tag_index_proto, memory_pool);
   VMSDK_EXPECT_OK(tag_index_1->AddRecord("key1", "tag1"));
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("tag_field_1", "tag_field_1", tag_index_1));
   auto tag_index_1_2 =
       std::make_shared<IndexTeser<indexes::Tag, data_model::TagIndex>>(
-          tag_index_proto);
+          tag_index_proto, memory_pool);
   VMSDK_EXPECT_OK(tag_index_1_2->AddRecord("key1", "tag2,tag1"));
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("tag_field_1_2", "tag_field_1_2", tag_index_1_2));
   auto tag_index_with_space =
       std::make_shared<IndexTeser<indexes::Tag, data_model::TagIndex>>(
-          tag_index_proto);
+          tag_index_proto, memory_pool);
   VMSDK_EXPECT_OK(tag_index_with_space->AddRecord("key1", "tag 1 ,tag 2"));
   VMSDK_EXPECT_OK(index_schema->AddIndex(
       "tag_field_with_space", "tag_field_with_space", tag_index_with_space));
@@ -82,7 +85,7 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
   tag_case_insensitive_proto.set_case_sensitive(false);
   auto tag_field_case_insensitive =
       std::make_shared<IndexTeser<indexes::Tag, data_model::TagIndex>>(
-          tag_case_insensitive_proto);
+          tag_case_insensitive_proto, memory_pool);
   VMSDK_EXPECT_OK(tag_field_case_insensitive->AddRecord("key1", "tag1"));
   VMSDK_EXPECT_OK(index_schema->AddIndex("tag_field_case_insensitive",
                                          "tag_field_case_insensitive",

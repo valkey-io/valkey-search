@@ -385,12 +385,13 @@ TEST_P(FanoutTest, TestFanout) {
   tag_index.set_separator(",");
   tag_index.set_case_sensitive(false);
   VMSDK_EXPECT_OK(schema.value()->AddIndex(
-      "tag_alias", "tag_id", std::make_shared<indexes::Tag>(tag_index)));
+      "tag_alias", "tag_id", std::make_shared<indexes::Tag>(
+        tag_index, schema.value()->GetMemoryPool())));
 
   data_model::NumericIndex numeric_index;
   VMSDK_EXPECT_OK(schema.value()->AddIndex(
       "numeric_alias", "numeric_id",
-      std::make_shared<indexes::Numeric>(numeric_index)));
+      std::make_shared<indexes::Numeric>(numeric_index, schema.value()->GetMemoryPool())));
 
   InitThreadPools(5, 0);
   auto mock_coordinator_client_pool =

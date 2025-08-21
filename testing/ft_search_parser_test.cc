@@ -125,18 +125,21 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
         flat_algorithm_proto.release());
     auto index = indexes::VectorFlat<float>::Create(
                     vector_index_proto, "attribute_identifier_1",
-                    data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+                    data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+                    index_schema->GetMemoryPool())
                     .value();
     VMSDK_EXPECT_OK(
         index_schema->AddIndex(test_case.attribute_alias, "id1", index));
   } else {
     // Non Vector index setup
     data_model::NumericIndex numeric_index_proto;
-    auto numeric_index = std::make_shared<indexes::Numeric>(numeric_index_proto);
+    auto numeric_index = std::make_shared<indexes::Numeric>(
+        numeric_index_proto, index_schema->GetMemoryPool());
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("attribute_identifier_1", "id1", numeric_index));
     data_model::TagIndex tag_index_proto;
-    auto tag_index = std::make_shared<indexes::Tag>(tag_index_proto);
+    auto tag_index = std::make_shared<indexes::Tag>(
+        tag_index_proto, index_schema->GetMemoryPool());
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("attribute_identifier_2", "id2", tag_index));
   }

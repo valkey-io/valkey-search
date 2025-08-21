@@ -36,7 +36,7 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
                   [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
 
   coordinator::InfoIndexPartitionResponse GetLocalResponse(
-      int db_id, const coordinator::InfoIndexPartitionRequest& request,
+      const coordinator::InfoIndexPartitionRequest& request,
       [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
 
   void InvokeRemoteRpc(

@@ -25,8 +25,7 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
                                        coordinator::InfoIndexPartitionResponse,
                                        fanout::FanoutTargetMode::kPrimary> {
  public:
-  PrimaryInfoFanoutOperation(std::string index_name, unsigned timeout_ms,
-                             bool retry_enabled);
+  PrimaryInfoFanoutOperation(std::string index_name, unsigned timeout_ms);
 
   unsigned GetTimeoutMs() const override;
 
@@ -60,7 +59,7 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
   std::optional<uint64_t> schema_fingerprint_;
   std::optional<uint32_t> version_;
   std::string index_name_;
-  std::optional<unsigned> timeout_ms_;
+  unsigned timeout_ms_;
   uint64_t num_docs_;
   uint64_t num_records_;
   uint64_t hash_indexing_failures_;

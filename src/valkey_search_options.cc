@@ -110,7 +110,8 @@ static auto writer_threads_count =
 ///     fork is died or after max-worker-suspension-secs seconds passed.
 ///   - If max-worker-suspension-secs <= 0, resume the workers when the fork
 ///     is born.
-constexpr absl::string_view kMaxWorkerSuspensionSecs{"max-worker-suspension-secs"};
+constexpr absl::string_view kMaxWorkerSuspensionSecs{
+    "max-worker-suspension-secs"};
 static auto max_worker_suspension_secs =
     config::Number(kMaxWorkerSuspensionSecs,  // name
                    60,                        // default value
@@ -119,11 +120,9 @@ static auto max_worker_suspension_secs =
 
 /// Should this instance use coordinator?
 constexpr absl::string_view kUseCoordinator{"use-coordinator"};
-static auto use_coordinator =
-    config::BooleanBuilder(kUseCoordinator, false)
-        .WithFlags(VALKEYMODULE_CONFIG_IMMUTABLE)  // can only be set during
-                                                   // start-up
-        .Build();
+static auto use_coordinator = config::BooleanBuilder(kUseCoordinator, false)
+                                  .Hidden()  // can only be set during start-up
+                                  .Build();
 
 // Register an enumerator for the log level
 static const std::vector<std::string_view> kLogLevelNames = {
@@ -187,7 +186,7 @@ vmsdk::config::Number& GetWriterThreadCount() {
 }
 
 vmsdk::config::Number& GetMaxWorkerSuspensionSecs() {
-      return max_worker_suspension_secs;
+  return max_worker_suspension_secs;
 }
 
 const vmsdk::config::Boolean& GetUseCoordinator() {

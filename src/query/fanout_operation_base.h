@@ -34,7 +34,6 @@ class FanoutOperationBase {
         ctx, &Reply, &Timeout, &Free, GetTimeoutMs());
     blocked_client_->MeasureTimeStart();
     start_tp_ = std::chrono::steady_clock::now();
-    db_id_ = ValkeyModule_GetSelectedDb(ctx);
     StartFanoutRound(ctx);
   }
 
@@ -259,7 +258,6 @@ class FanoutOperationBase {
   std::vector<FanoutSearchTarget> inconsistent_state_error_nodes;
   std::vector<FanoutSearchTarget> communication_error_nodes;
   std::chrono::steady_clock::time_point start_tp_;
-  int db_id_;
 };
 
 }  // namespace valkey_search::query::fanout

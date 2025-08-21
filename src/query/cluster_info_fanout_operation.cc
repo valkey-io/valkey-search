@@ -104,55 +104,9 @@ void ClusterInfoFanoutOperation::OnResponse(
 
 coordinator::InfoIndexPartitionResponse
 ClusterInfoFanoutOperation::GetLocalResponse(
-    int db_id, const coordinator::InfoIndexPartitionRequest& request,
+    const coordinator::InfoIndexPartitionRequest& request,
     [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
-  auto index_schema_result =
-      SchemaManager::Instance().GetIndexSchema(db_id, request.index_name());
-
-  coordinator::InfoIndexPartitionResponse resp;
-
-  if (!index_schema_result.ok()) {
-    resp.set_exists(false);
-    resp.set_index_name(request.index_name());
-    resp.set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
-    return resp;
-  }
-
-  auto index_schema = index_schema_result.value();
-  IndexSchema::InfoIndexPartitionData data =
-      index_schema->GetInfoIndexPartitionData();
-
-  std::optional<uint64_t> fingerprint;
-  std::optional<uint32_t> version;
-
-  auto global_metadata =
-      coordinator::MetadataManager::Instance().GetGlobalMetadata();
-  if (global_metadata->type_namespace_map().contains(
-          kSchemaManagerMetadataTypeName)) {
-    const auto& entry_map = global_metadata->type_namespace_map().at(
-        kSchemaManagerMetadataTypeName);
-    if (entry_map.entries().contains(request.index_name())) {
-      const auto& entry = entry_map.entries().at(request.index_name());
-      fingerprint = entry.fingerprint();
-      version = entry.version();
-    }
-  }
-
-  if (!fingerprint.has_value() || !version.has_value()) {
-    resp.set_exists(false);
-    resp.set_index_name(request.index_name());
-    resp.set_error_type(coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR);
-    return resp;
-  }
-  resp.set_exists(true);
-  resp.set_index_name(request.index_name());
-  resp.set_backfill_complete_percent(data.backfill_complete_percent);
-  resp.set_backfill_in_progress(data.backfill_in_progress);
-  resp.set_state(data.state);
-  resp.set_schema_fingerprint(fingerprint.value());
-  resp.set_version(version.value());
-  resp.set_error("");
-  return resp;
+  return coordinator::Service::GenerateInfoResponse(request.index_name());
 }
 
 void ClusterInfoFanoutOperation::InvokeRemoteRpc(

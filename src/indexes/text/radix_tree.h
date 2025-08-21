@@ -123,6 +123,11 @@ struct RadixTree {
   // Create a Path iterator at a specific starting prefix
   PathIterator GetPathIterator(absl::string_view prefix) const;
 
+  // Debug function to print tree structure
+  void DebugPrintTree(const std::string& label = "") const;
+
+ private:
+
  private:
   /*
    * This is the first iteration of a RadixTree. It will be optimized in the
@@ -182,6 +187,33 @@ struct RadixTree {
   };
 
   Node root_;
+
+  // Debug helper function
+  void DebugPrintNode(const Node* node, const std::string& path, int depth) const {
+    std::string indent(depth * 2, ' ');
+    std::cout << indent << "Node[" << path << "]";
+    
+    if (node->target.has_value()) {
+      std::cout << " TARGET";
+    }
+    
+    std::visit(
+        overloaded{
+            [&](const std::monostate&) {
+              std::cout << " LEAF" << std::endl;
+            },
+            [&](const std::map<Byte, std::unique_ptr<Node>>& children) {
+              std::cout << " BRANCH(" << children.size() << ")" << std::endl;
+              for (const auto& [byte, child] : children) {
+                DebugPrintNode(child.get(), path + char(byte), depth + 1);
+              }
+            },
+            [&](const std::pair<BytePath, std::unique_ptr<Node>>& child) {
+              std::cout << " COMPRESSED[" << child.first << "]" << std::endl;
+              DebugPrintNode(child.second.get(), path + child.first, depth + 1);
+            }},
+        node->children);
+  }
 
  public:
   //
@@ -267,6 +299,7 @@ void RadixTree<Target, reverse>::Mutate(
   CHECK(!word.empty()) << "Can't mutate the target at an empty word";
   Node* n = &root_;
   absl::string_view remaining = word;
+  std::deque<Node*> node_path{n};
   while (!remaining.empty()) {
     Node* next;
     std::visit(
@@ -339,7 +372,10 @@ void RadixTree<Target, reverse>::Mutate(
               }
             }},
         n->children);
-    n = next;
+    if (next != n) {
+      n = next;
+      node_path.push_back(n);
+    }
   }
 
   std::optional<Target> new_target = mutate(n->target);
@@ -347,8 +383,137 @@ void RadixTree<Target, reverse>::Mutate(
   if (new_target) {
     n->target = new_target;
   } else {
-    // TODO: delete word from the tree
-    assert(false);
+    // Delete the word from the tree
+    n->target = std::nullopt;
+    node_path.pop_back();
+
+    // Reconstruct the tree
+    std::visit(
+        overloaded{
+            [&](const std::monostate&) {
+              // We're at a leaf node and need to trim a branch from the tree
+              absl::string_view remaining = word;
+              bool done = false;
+              while (!node_path.empty() && !done) {
+                // Start at the target node's parent
+                Node* n = node_path.back();
+                node_path.pop_back();
+                std::visit(
+                    overloaded{
+                        [&](const std::monostate&) {
+                          CHECK(false) << "We don't expect to hit a leaf while "
+                                          "traversing up the tree";
+                        },
+                        [&](std::map<Byte, std::unique_ptr<Node>>& children) {
+                          children.erase(remaining.back());
+                          if (children.size() > 1) {
+                            // Keep the branching node as is
+                          } else if (children.size() == 1) {
+                            // Transform into compressed node if there is now
+                            // only one child
+                            n->children =
+                                std::pair{BytePath{children.begin()->first},
+                                          std::move(children.begin()->second)};
+                            // We don't necessarily need to keep it as a
+                            // distinct node if it doesn't have a target
+                            if (n->target == std::nullopt) {
+                              Node* parent_node = !node_path.empty()
+                                                      ? node_path.back()
+                                                      : nullptr;
+                              Node* child_node = std::get<std::pair<
+                                  BytePath, std::unique_ptr<Node>>>(n->children)
+                                                     .second.get();
+
+                              bool parent_compressed =
+                                  parent_node &&
+                                  std::holds_alternative<std::pair<
+                                      BytePath, std::unique_ptr<Node>>>(
+                                      parent_node->children);
+                              bool child_compressed = std::holds_alternative<
+                                  std::pair<BytePath, std::unique_ptr<Node>>>(
+                                  child_node->children);
+
+                              if (parent_compressed && child_compressed) {
+                                auto& parent_node_child = std::get<
+                                    std::pair<BytePath, std::unique_ptr<Node>>>(
+                                    parent_node->children);
+                                auto& node_child = std::get<
+                                    std::pair<BytePath, std::unique_ptr<Node>>>(
+                                    n->children);
+                                auto& child_node_child = std::get<
+                                    std::pair<BytePath, std::unique_ptr<Node>>>(
+                                    child_node->children);
+
+                                parent_node_child.first +=
+                                    node_child.first + child_node_child.first;
+                                parent_node_child.second =
+                                    std::move(child_node_child.second);
+                              } else if (parent_compressed) {
+                                auto& parent_node_child = std::get<
+                                    std::pair<BytePath, std::unique_ptr<Node>>>(
+                                    parent_node->children);
+                                auto& node_child = std::get<
+                                    std::pair<BytePath, std::unique_ptr<Node>>>(
+                                    n->children);
+
+                                parent_node_child.first += node_child.first;
+                                parent_node_child.second =
+                                    std::move(node_child.second);
+                              } else if (child_compressed) {
+                                auto& node_child = std::get<
+                                    std::pair<BytePath, std::unique_ptr<Node>>>(
+                                    n->children);
+                                auto& child_node_child = std::get<
+                                    std::pair<BytePath, std::unique_ptr<Node>>>(
+                                    child_node->children);
+
+                                node_child.first += child_node_child.first;
+                                node_child.second =
+                                    std::move(child_node_child.second);
+                              }
+                            }
+                          } else {
+                            CHECK(false)
+                                << "We shouldn't have a branching node with "
+                                   "zero children";
+                          }
+                          done = true;
+                        },
+                        [&](const std::pair<BytePath, std::unique_ptr<Node>>&
+                                child) {
+                          if (n->target != std::nullopt) {
+                            // This node can be turned into a leaf
+                            n->children = std::monostate{};
+                            done = true;
+                          } else {
+                            // We can trim the tree branch higher up
+                            remaining.remove_suffix(child.first.length());
+                          }
+                        },
+                    },
+                    n->children);
+              }
+            },
+            [&](const std::map<Byte, std::unique_ptr<Node>>& children) {
+              // The target node is a branching node. Nothing more to do.
+            },
+            [&](std::pair<BytePath, std::unique_ptr<Node>>& child) {
+              // The target node is a compressed node. If its parent is a
+              // compressed node, we can modify the parent to have an edge
+              // directly to target node's child.
+              const auto& parent = node_path.back();
+              if (std::holds_alternative<
+                      std::pair<BytePath, std::unique_ptr<Node>>>(
+                      parent->children)) {
+                auto& parent_child =
+                    std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
+                        parent->children);
+                parent_child.first += child.first;
+                parent_child.second = std::move(child.second);
+              }
+            },
+        },
+        n->children);
   }
 }
 
@@ -421,7 +586,8 @@ RadixTree<Target, reverse>::GetPathIterator(absl::string_view prefix) const {
 /*** WordIterator ***/
 
 template <typename Target, bool reverse>
-RadixTree<Target, reverse>::WordIterator::WordIterator(const Node* node, absl::string_view prefix)
+RadixTree<Target, reverse>::WordIterator::WordIterator(const Node* node,
+                                                       absl::string_view prefix)
     : curr_(node), word_(prefix) {
   if (curr_ && !curr_->target.has_value()) {
     Next();
@@ -541,7 +707,13 @@ void RadixTree<Target, reverse>::PathIterator::Defrag() {
   throw std::logic_error("TODO");
 }
 
+template <typename Target, bool reverse>
+void RadixTree<Target, reverse>::DebugPrintTree(const std::string& label) const {
+  std::cout << "\n=== Tree Structure" << (label.empty() ? "" : (" - " + label)) << " ===" << std::endl;
+  DebugPrintNode(&root_, "", 0);
+  std::cout << "=== End Structure ===\n" << std::endl;
+}
+
 }  // namespace valkey_search::indexes::text
 
 #endif
-

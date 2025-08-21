@@ -25,8 +25,7 @@ namespace valkey_search::query::fanout {
 template <typename Request, typename Response, FanoutTargetMode kTargetMode>
 class FanoutOperationBase {
  public:
-  explicit FanoutOperationBase(bool retry_enabled = false)
-      : retry_enabled_(retry_enabled) {};
+  explicit FanoutOperationBase() = default;
 
   virtual ~FanoutOperationBase() = default;
 
@@ -105,11 +104,6 @@ class FanoutOperationBase {
                 grpc::Status(grpc::StatusCode::INTERNAL, ""),
                 coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR, target);
             break;
-          case coordinator::FanoutErrorType::COMMUNICATION_ERROR:
-            this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
-                          coordinator::FanoutErrorType::COMMUNICATION_ERROR,
-                          target);
-            break;
           default:
             CHECK(false);
             break;
@@ -171,11 +165,13 @@ class FanoutOperationBase {
 
   virtual bool ShouldRetry() = 0;
 
-  virtual void ResetForRetry() {
+  void ResetBaseForRetry() {
     index_name_error_nodes.clear();
     inconsistent_state_error_nodes.clear();
     communication_error_nodes.clear();
   };
+
+  virtual void ResetForRetry() = 0;
 
   virtual int GenerateReply(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,
                             int argc) = 0;
@@ -225,14 +221,14 @@ class FanoutOperationBase {
     return ValkeyModule_ReplyWithError(ctx, error_message.c_str());
   }
 
-  unsigned GetCurrentTimeoutMs() const {
+  unsigned IsOperationTimedOut() const {
     using namespace std::chrono;
     auto elapsed_ms =
         duration_cast<milliseconds>(steady_clock::now() - start_tp_).count();
     if (elapsed_ms >= GetTimeoutMs()) {
       return 0;
     }
-    return static_cast<unsigned>(GetTimeoutMs() - elapsed_ms);
+    return static_cast<unsigned>(GetTimeoutMs() - elapsed_ms) > 0;
   }
 
   void RpcDone(ValkeyModuleCtx* ctx) {
@@ -244,7 +240,8 @@ class FanoutOperationBase {
       }
     }
     if (done) {
-      if (retry_enabled_ && (GetCurrentTimeoutMs() > 0) && ShouldRetry()) {
+      if (IsOperationTimedOut() && ShouldRetry()) {
+        ResetBaseForRetry();
         ResetForRetry();
         StartFanoutRound(ctx);
       } else {
@@ -265,7 +262,6 @@ class FanoutOperationBase {
   std::vector<FanoutSearchTarget> index_name_error_nodes;
   std::vector<FanoutSearchTarget> inconsistent_state_error_nodes;
   std::vector<FanoutSearchTarget> communication_error_nodes;
-  bool retry_enabled_;
   std::chrono::steady_clock::time_point start_tp_;
   int db_id_;
 };

@@ -25,8 +25,7 @@ class ClusterInfoFanoutOperation : public fanout::FanoutOperationBase<
                                        coordinator::InfoIndexPartitionResponse,
                                        fanout::FanoutTargetMode::kAll> {
  public:
-  ClusterInfoFanoutOperation(std::string index_name, unsigned timeout_ms,
-                             bool retry_enabled);
+  ClusterInfoFanoutOperation(std::string index_name, unsigned timeout_ms);
 
   unsigned GetTimeoutMs() const override;
 
@@ -60,7 +59,7 @@ class ClusterInfoFanoutOperation : public fanout::FanoutOperationBase<
   std::optional<uint64_t> schema_fingerprint_;
   std::optional<uint32_t> version_;
   std::string index_name_;
-  std::optional<unsigned> timeout_ms_;
+  unsigned timeout_ms_;
   float backfill_complete_percent_max_;
   float backfill_complete_percent_min_;
   bool backfill_in_progress_;

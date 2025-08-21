@@ -18,11 +18,8 @@ INTEG_RETRIES=1
 
 echo "Root directory: ${ROOT_DIR}"
 
-# Import our functions
-. ${ROOT_DIR}/scripts/common.rc
-
 function print_usage() {
-cat<<EOF
+    cat <<EOF
 Usage: build.sh [options...]
 
     --help | -h                       Print this help message and exit.
@@ -51,8 +48,7 @@ EOF
 }
 
 ## Parse command line arguments
-while [ $# -gt 0 ]
-do
+while [ $# -gt 0 ]; do
     arg=$1
     case $arg in
     --clean)
@@ -116,18 +112,18 @@ do
         shift || true
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
-     --tsan)
+    --tsan)
         CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DSAN_BUILD=thread"
         SAN_BUILD="thread"
         shift || true
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
-    --verbose|-v)
+    --verbose | -v)
         shift || true
         VERBOSE_ARGS="-v"
         echo "Verbose build: true"
         ;;
-    --help|-h)
+    --help | -h)
         print_usage
         exit 0
         ;;
@@ -137,6 +133,10 @@ do
         ;;
     esac
 done
+
+# Import our functions, needs to be done after parsing the command line arguments
+export SAN_BUILD
+. ${ROOT_DIR}/scripts/common.rc
 
 function configure() {
     printf "${BOLD_PINK}Running cmake...${RESET}\n"
@@ -205,7 +205,7 @@ function check_tool() {
     local tool_name=$1
     local message=$2
     printf "Checking for ${tool_name}..."
-    command -v ${tool_name} > /dev/null || \
+    command -v ${tool_name} >/dev/null ||
         (printf "${RED}failed${RESET}.\n${RED}ERROR${RESET} - could not locate tool '${tool_name}'. ${message}\n" && exit 1)
     printf "${GREEN}ok${RESET}\n"
 }
@@ -223,7 +223,7 @@ function check_tools() {
     else
         # Check for ninja. On RedHat based Linux, it is called ninja-build, while on Debian based Linux, it is simply ninja
         # Ubuntu / Mint et al will report "ID_LIKE=debian"
-        local debian_output=$(cat /etc/*-release|grep -i debian|wc -l)
+        local debian_output=$(cat /etc/*-release | grep -i debian | wc -l)
         if [ ${debian_output} -gt 0 ]; then
             NINJA_TOOL="ninja"
         else
@@ -248,7 +248,7 @@ function is_configure_required() {
         return
     fi
     local build_file_lastmodified=$(get_file_last_modified ${ninja_build_file})
-    local cmake_files=$(find ${ROOT_DIR} -name "CMakeLists.txt" -o -name "*.cmake"| grep -v ".build-release" | grep -v ".build-debug")
+    local cmake_files=$(find ${ROOT_DIR} -name "CMakeLists.txt" -o -name "*.cmake" | grep -v ".build-release" | grep -v ".build-debug")
     for cmake_file in ${cmake_files}; do
         local cmake_file_modified=$(date -r ${cmake_file} +%s)
         if [ ${cmake_file_modified} -gt ${build_file_lastmodified} ]; then
@@ -259,13 +259,13 @@ function is_configure_required() {
     echo "no"
 }
 
-
 cleanup() {
-  cd ${ROOT_DIR}
+    cd ${ROOT_DIR}
 }
 
 # Ensure cleanup runs on exit
 trap cleanup EXIT
+export CMAKE_POLICY_VERSION_MINIMUM=3.5
 
 BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
 if [[ "${SAN_BUILD}" != "no" ]]; then
@@ -286,7 +286,7 @@ FORCE_CMAKE=$(is_configure_required)
 printf "${GREEN}${FORCE_CMAKE}${RESET}\n"
 check_tools
 
-START_TIME=`date +%s`
+START_TIME=$(date +%s)
 if [[ "${RUN_CMAKE}" == "yes" ]] || [[ "${FORCE_CMAKE}" == "yes" ]]; then
     configure
 fi
@@ -295,10 +295,10 @@ if [[ "${RUN_BUILD}" == "yes" ]]; then
     build
 fi
 
-END_TIME=`date +%s`
+END_TIME=$(date +%s)
 BUILD_RUNTIME=$((END_TIME - START_TIME))
 
-START_TIME=`date +%s`
+START_TIME=$(date +%s)
 
 if [[ "${SAN_BUILD}" != "no" ]]; then
     export ASAN_OPTIONS="detect_odr_violation=0"
@@ -308,16 +308,16 @@ if [[ "${RUN_TEST}" == "all" ]]; then
     rm -f ${TEST_OUTPUT_FILE}
     TESTS=$(ls ${TESTS_DIR}/*_test)
     for test in $TESTS; do
-        echo "==> Running executable: ${test}" >> ${TEST_OUTPUT_FILE}
-        echo "" >> ${TEST_OUTPUT_FILE}
+        echo "==> Running executable: ${test}" >>${TEST_OUTPUT_FILE}
+        echo "" >>${TEST_OUTPUT_FILE}
         print_test_prefix "${test}"
-        (${test} >> ${TEST_OUTPUT_FILE} 2>&1 && print_test_ok) || print_test_error_and_exit
+        (${test} >>${TEST_OUTPUT_FILE} 2>&1 && print_test_ok) || print_test_error_and_exit
     done
     print_test_summary
 elif [ ! -z "${RUN_TEST}" ]; then
     rm -f ${TEST_OUTPUT_FILE}
-    echo "==> Running executable: ${TESTS_DIR}/${RUN_TEST}" >> ${TEST_OUTPUT_FILE}
-    echo "" >> ${TEST_OUTPUT_FILE}
+    echo "==> Running executable: ${TESTS_DIR}/${RUN_TEST}" >>${TEST_OUTPUT_FILE}
+    echo "" >>${TEST_OUTPUT_FILE}
     print_test_prefix "${TESTS_DIR}/${RUN_TEST}"
     (${TESTS_DIR}/${RUN_TEST} && print_test_ok) || print_test_error_and_exit
     print_test_summary
@@ -330,37 +330,36 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
         # Abseil based tests do not support filtering tests based on "-k" flag
         # so when the TEST_PATTERN env variable is found, skip Abseil based tests
         pushd testing/integration >/dev/null
-            params=""
-            if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
-                params=" --test-errors-stdout"
-            fi
-            if [[ "${BUILD_CONFIG}" == "debug" ]]; then
-                params="${params} --debug"
-            fi
+        params=""
+        if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
+            params=" --test-errors-stdout"
+        fi
+        if [[ "${BUILD_CONFIG}" == "debug" ]]; then
+            params="${params} --debug"
+        fi
 
-            if [[ "${SAN_BUILD}" == "address" ]]; then
-                params="${params} --asan"
-            fi
-            if [[ "${SAN_BUILD}" == "thread" ]]; then
-                params="${params} --tsan"
-            fi
-            ./run.sh ${params}
+        if [[ "${SAN_BUILD}" == "address" ]]; then
+            params="${params} --asan"
+        fi
+        if [[ "${SAN_BUILD}" == "thread" ]]; then
+            params="${params} --tsan"
+        fi
+        ./run.sh ${params}
         popd >/dev/null
     fi
+
     # Run OSS integration tests
     pushd integration >/dev/null
-        if [[ "${SAN_BUILD}" == "no" ]]; then
-            if [[ "${TEST_PATTERN}" == "oss" ]]; then
-                TEST_PATTERN=""
-            fi
-            # For now, run these this test suite without ASan.
-            export TEST_PATTERN=${TEST_PATTERN}
-            export INTEG_RETRIES=${INTEG_RETRIES}
-            ./run.sh
-        fi
+    if [[ "${TEST_PATTERN}" == "oss" ]]; then
+        TEST_PATTERN=""
+    fi
+    export TEST_PATTERN=${TEST_PATTERN}
+    export INTEG_RETRIES=${INTEG_RETRIES}
+    # Run will run ASan or normal tests based on the environment variable SAN_BUILD
+    ./run.sh
     popd >/dev/null
 fi
 
-END_TIME=`date +%s`
+END_TIME=$(date +%s)
 TEST_RUNTIME=$((END_TIME - START_TIME))
 exit ${EXIT_CODE}

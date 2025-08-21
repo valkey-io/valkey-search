@@ -13,12 +13,10 @@
 namespace valkey_search::query::cluster_info_fanout {
 
 ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(std::string index_name,
-                                                       unsigned timeout_ms,
-                                                       bool retry_enabled)
+                                                       unsigned timeout_ms)
     : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
                                   coordinator::InfoIndexPartitionResponse,
-                                  fanout::FanoutTargetMode::kAll>(
-          retry_enabled),
+                                  fanout::FanoutTargetMode::kAll>(),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
       exists_(false),
@@ -27,7 +25,7 @@ ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(std::string index_name,
       backfill_in_progress_(false) {}
 
 unsigned ClusterInfoFanoutOperation::GetTimeoutMs() const {
-  return timeout_ms_.value_or(1000);
+  return timeout_ms_;
 }
 
 coordinator::InfoIndexPartitionRequest
@@ -195,7 +193,6 @@ int ClusterInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
 }
 
 void ClusterInfoFanoutOperation::ResetForRetry() {
-  FanoutOperationBase::ResetForRetry();
   exists_ = false;
   schema_fingerprint_.reset();
   version_.reset();

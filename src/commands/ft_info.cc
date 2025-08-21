@@ -114,11 +114,11 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 
   if (is_primary) {
     auto op = new query::primary_info_fanout::PrimaryInfoFanoutOperation(
-        std::string(index_schema_name), timeout_ms, true);
+        std::string(index_schema_name), timeout_ms);
     op->StartOperation(ctx);
   } else if (is_cluster) {
     auto op = new query::cluster_info_fanout::ClusterInfoFanoutOperation(
-        std::string(index_schema_name), timeout_ms, true);
+        std::string(index_schema_name), timeout_ms);
     op->StartOperation(ctx);
   } else {
     VMSDK_LOG(DEBUG, ctx) << "==========Using Local Scope==========";

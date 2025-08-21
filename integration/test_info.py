@@ -88,4 +88,4 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             assert field in info_data
             bytes_value = info_data[field]
             assert (isinstance(bytes_value, str) and bytes_value.endswith("iB")) or 
-                   ((os.environ.get('SAN_BUILD'), 'no') != 'no') and bytes_value == 0)
+                   (((os.environ.get('SAN_BUILD'), 'no') != 'no') and bytes_value == 0)

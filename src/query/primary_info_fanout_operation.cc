@@ -12,15 +12,14 @@
 
 namespace valkey_search::query::primary_info_fanout {
 
-PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(std::string index_name,
-                                                       unsigned timeout_ms,
-                                                       uint32_t db_num)
+PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
+    uint32_t db_num, const std::string& index_name, unsigned timeout_ms)
     : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
                                   coordinator::InfoIndexPartitionResponse,
                                   fanout::FanoutTargetMode::kPrimary>(),
+      db_num_(db_num),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
-      db_num_(db_num),
       exists_(false),
       num_docs_(0),
       num_records_(0),

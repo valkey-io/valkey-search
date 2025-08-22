@@ -25,7 +25,8 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
                                        coordinator::InfoIndexPartitionResponse,
                                        fanout::FanoutTargetMode::kPrimary> {
  public:
-  PrimaryInfoFanoutOperation(std::string index_name, unsigned timeout_ms);
+  PrimaryInfoFanoutOperation(std::string index_name, unsigned timeout_ms,
+                             uint32_t db_num = 0);
 
   unsigned GetTimeoutMs() const override;
 
@@ -35,9 +36,9 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
   void OnResponse(const coordinator::InfoIndexPartitionResponse& resp,
                   [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
 
-  coordinator::InfoIndexPartitionResponse GetLocalResponse(
-      const coordinator::InfoIndexPartitionRequest& request,
-      [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
+  std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
+  GetLocalResponse(const coordinator::InfoIndexPartitionRequest& request,
+                   [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
 
   void InvokeRemoteRpc(
       coordinator::Client* client,
@@ -58,6 +59,7 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
   bool exists_;
   std::optional<uint64_t> schema_fingerprint_;
   std::optional<uint32_t> version_;
+  uint32_t db_num_;
   std::string index_name_;
   unsigned timeout_ms_;
   uint64_t num_docs_;

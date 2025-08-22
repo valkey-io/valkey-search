@@ -96,6 +96,8 @@ std::unique_ptr<data_model::Index> Text::ToProto() const {
   return index_proto;
 }
 
+// Size is needed for Inline queries (for approximation of qualified entries) and for multi sub query operations
+// (with AND/OR). This should be implemented as part of either Inline support OR multi sub query search.
 size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
   // switch (predicate.GetOperation()) {
   //   case query::TextPredicate::Operation::kExact: {
@@ -111,7 +113,6 @@ size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
   //     return 0;
   // }
   return 0;
-  // switch ()
 }
 
 std::unique_ptr<Text::EntriesFetcher> Text::Search(
@@ -128,24 +129,35 @@ std::unique_ptr<Text::EntriesFetcher> Text::Search(
   return fetcher;
 }
 
+// Option 1: In Text::Search(), use a Metadata struct to store the predicate operation and other details.
+// Begin -> General class (impl EntriesFetcherIteratorBase)
+// Text::Search() -> Create a Metadata struct. Store the Metadata. Return the EntriesFetcher.
+// EntriesFetcher::Begin() -> Create a Text::EntriesFetcherIterator which can be one of many types based on the metadata's specified operation.
+// EntriesFetcher::Size() -> Return the size of the entries based on the metadata OR cache the size during the Search() call.
+
+// Option 2: In Text::Search(), store the predicate operation directly in the EntriesFetcher.
+// Begin -> General class (impl EntriesFetcherIteratorBase)
+// Text::Search() -> Create an EntriesFetcher and store the predicate operation directly in it.
+// EntriesFetcher::Begin() -> Create a Text::EntriesFetcherIterator which can be one of many types based on the predicate_ operation.
+// EntriesFetcher::Size() -> Return the size of the entries based on the predicate operation stored in the EntriesFetcher.
+
 
 size_t Text::EntriesFetcher::Size() const { return size_; }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
-  // switch (operation_) {
-  //   case query::TextPredicate::Operation::kExact: {
-  //     auto iter = text_index_->prefix_.GetWordIterator(data_);
-  //     std::vector<WordIterator> iterVec = {iter};
-  //     bool slop = 0;
-  //     bool in_order = true;
-  //     auto itr = std::make_unique<text::PhraseIterator>(iterVec, slop, in_order, untracked_keys_);
-  //     itr->Next();
-  //     return itr;
-  //   }
-  //   default:
-  //     CHECK(false) << "Unsupported TextPredicate operation: " << static_cast<int>(operation_);
-  //     return nullptr;
-  // }
+  if (auto term = dynamic_cast<const query::TermPredicate*>(predicate_)) {
+    auto iter = text_index_->prefix_.GetWordIterator(term->GetTextString());
+    auto itr = std::make_unique<text::TermIterator>(iter, untracked_keys_);
+    itr->Next();
+    return itr;
+  } else if (auto prefix = dynamic_cast<const query::PrefixPredicate*>(predicate_)) {
+    auto iter = text_index_->prefix_.GetWordIterator(prefix->GetTextString());
+    auto itr = std::make_unique<text::WildCardIterator>(iter, text::WildCardOperation::kPrefix, untracked_keys_);
+    itr->Next();
+    return itr;
+  }
+  // TODO: Return error in the query path earlier on.
+  CHECK(false) << "Unsupported TextPredicate operation";
   return nullptr;
 }
 

@@ -684,7 +684,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseExpression(
         VMSDK_ASSIGN_OR_RETURN(predicate, ParseTagPredicate(field_name));
       }
       else {
-        ++node_count_;
+        node_count_++;
         VMSDK_ASSIGN_OR_RETURN(predicate, ParseTextGroup(field_name));
       }
       if (prev_predicate) {

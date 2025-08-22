@@ -29,7 +29,7 @@ TermPredicate::TermPredicate(const indexes::Text* index,
                              absl::string_view identifier,
                              absl::string_view alias,
                              std::string term)
-    : TextPredicate(),  // base class has no enum type in Option 1
+    : TextPredicate(),
       index_(index),
       identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
       alias_(alias),
@@ -48,7 +48,7 @@ bool TermPredicate::Evaluate(const std::string_view& text) const {
 PrefixPredicate::PrefixPredicate(
     const indexes::Text* index, absl::string_view identifier,
     absl::string_view alias, std::string term)
-    : TextPredicate(),  // base class has no enum type in Option 1
+    : TextPredicate(),
       index_(index),
       identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
       alias_(alias),
@@ -67,7 +67,7 @@ FuzzyPredicate::FuzzyPredicate(const indexes::Text* index,
                                absl::string_view identifier,
                                absl::string_view alias, std::string term,
                                uint32_t distance)
-    : TextPredicate(),  // base class has no enum type in Option 1
+    : TextPredicate(),
       index_(index),
       identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
       alias_(alias),
@@ -90,7 +90,7 @@ bool FuzzyPredicate::Evaluate(const std::string_view& text) const {
 ProximityPredicate::ProximityPredicate(
     std::vector<std::unique_ptr<TextPredicate>> terms, uint32_t slop,
     bool inorder)
-    : TextPredicate(),  // base class has no enum type in Option 1
+    : TextPredicate(),
       terms_(std::move(terms)),
       inorder_(inorder),
       slop_(slop) {}
@@ -98,47 +98,6 @@ ProximityPredicate::ProximityPredicate(
 bool ProximityPredicate::Evaluate(Evaluator& evaluator) const {
   return evaluator.EvaluateText(*this);
 }
-
-// bool TextPredicate::Evaluate(absl::string_view text) const {
-  // switch (operation_) {
-  //   case Operation::kExact:
-  //     return EvaluateExact(text);
-  //   case Operation::kPrefix:
-  //     return EvaluatePrefix(text);
-  //   case Operation::kSuffix:
-  //     return EvaluateSuffix(text);
-  //   case Operation::kInfix:
-  //     return EvaluateInfix(text);
-  //   case Operation::kFuzzy:
-  //     return EvaluateFuzzy(text);
-  //   default:
-  //     return false;
-  // }
-// }
-
-// bool TextPredicate::EvaluateExact(absl::string_view text) const {
-//   return text == raw_text_string_;
-// }
-
-// bool TextPredicate::EvaluatePrefix(absl::string_view text) const {
-//   // TODO: Implement prefix matching logic.
-//   return false;
-// }
-
-// bool TextPredicate::EvaluateSuffix(absl::string_view text) const {
-//   // TODO: Implement suffix matching logic.
-//   return false;
-// }
-
-// bool TextPredicate::EvaluateInfix(absl::string_view text) const {
-//   // TODO: Implement infix matching logic.
-//   return false;
-// }
-
-// bool TextPredicate::EvaluateFuzzy(absl::string_view text) const {
-//   // TODO: Implement fuzzy matching logic.
-//   return false;
-// }
 
 NumericPredicate::NumericPredicate(const indexes::Numeric* index,
                                    absl::string_view alias,

@@ -145,32 +145,6 @@ class TextPredicate : public Predicate {
   virtual absl::string_view GetTextString() const = 0;
 };
 
-// This was the alternative. But I am not using it because a ProximityPredicate should not
-// construct a TextPredicate containing alias, identifier, raw_string, etc. but it will contain one
-// or more text predicates indirectly.
-// class TextPredicate : public Predicate {
-//  public:
-//   TextPredicate(const indexes::Text* index,
-//                 absl::string_view alias,
-//                 absl::string_view identifier,
-//                 absl::string_view raw_text_string);
-//   virtual ~TextPredicate() = default;
-//   // Base fields access
-//   const indexes::Text* GetIndex() const { return index_; }
-//   absl::string_view GetAlias() const { return alias_; }
-//   absl::string_view GetIdentifier() const { return vmsdk::ToStringView(identifier_.get()); }
-//   vmsdk::UniqueValkeyString GetRetainedIdentifier() const { return vmsdk::RetainUniqueValkeyString(identifier_.get()); }
-//   absl::string_view GetRawText() const { return raw_text_string_; }
-
-//   virtual bool Evaluate(Evaluator& evaluator) const = 0;
-  
-//  private:
-//   const indexes::Text* index_;
-//   std::string alias_;
-//   vmsdk::UniqueValkeyString identifier_;
-//   std::string raw_text_string_;
-// };
-
 class TermPredicate : public TextPredicate {
  public:
   TermPredicate(const indexes::Text* index,

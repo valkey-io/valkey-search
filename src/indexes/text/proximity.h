@@ -25,7 +25,7 @@ using WordIterator = RadixTree<std::shared_ptr<Postings>, false>::WordIterator;
 
 Top level iterator for a phrase.
 
-A Phrase is defined as a sequence of words that can be separated by up to 'slop'
+Proximity is defined as a sequence of words that can be separated by up to 'slop'
 words. Optionally, the order of the words can be required or not.
 
 This is implemented as a merge operation on the various Word Iterators passed in.
@@ -61,7 +61,7 @@ void process_one_key(KeyIterators[*]) {
   }
 }
 */
-class PhraseIterator : public indexes::EntriesFetcherIteratorBase {
+class ProximityIterator : public indexes::EntriesFetcherIteratorBase {
  public:
   PhraseIterator(const std::vector<WordIterator>& words,
                  size_t slop,

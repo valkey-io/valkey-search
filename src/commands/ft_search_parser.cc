@@ -394,10 +394,8 @@ absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
       parameters.score_as =
           vmsdk::MakeUniqueValkeyString(parameters.parse_vars.score_as_string);
     }
-  } else {
-    // TODO: Return temp error:
-    return absl::InvalidArgumentError("Temp Error");
   }
+  // TODO: Return Temp Error for unsupported predicates.
   return absl::OkStatus();
 }
 }  // namespace

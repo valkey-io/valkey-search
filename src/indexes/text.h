@@ -22,7 +22,8 @@
 #include "src/index_schema.pb.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
-#include "src/indexes/text/phrase.h"
+#include "src/indexes/text/term.h"
+#include "src/indexes/text/wildcard.h"
 #include "src/query/predicate.h" 
 
 namespace valkey_search::indexes {

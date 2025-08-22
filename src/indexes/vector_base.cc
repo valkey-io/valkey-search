@@ -103,7 +103,7 @@ bool InlineVectorEvaluator::EvaluateNumeric(
 bool InlineVectorEvaluator::EvaluateText(const query::TextPredicate &predicate) {
   // CHECK(key_);
   // auto text = predicate.GetIndex()->GetRawValue(*key_);
-  // return predicate.Evaluate(text);
+  // return predicate.Evaluate(*text);
   return true;
 }
 

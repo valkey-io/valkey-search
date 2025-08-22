@@ -54,7 +54,7 @@ def fetch_random_wikipedia_page_text():
     """
     url = "https://en.wikipedia.org/wiki/Special:Random"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        "User-Agent": "valkey-search/0.1"
     }
     try:
         response = requests.get(url, headers=headers, timeout=10)

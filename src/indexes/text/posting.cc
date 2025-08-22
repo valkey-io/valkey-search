@@ -19,20 +19,6 @@
 namespace valkey_search::indexes::text {
 
 // Internal FieldMask classes - not part of external interface
-// Field mask interface optimized for different field counts
-class FieldMask {
-public:
-  static std::unique_ptr<FieldMask> Create(size_t num_fields);
-  virtual ~FieldMask() = default;
-  virtual void SetField(size_t field_index) = 0;
-  virtual void ClearField(size_t field_index) = 0;
-  virtual bool HasField(size_t field_index) const = 0;
-  virtual void SetAllFields() = 0;
-  virtual void ClearAllFields() = 0;
-  virtual size_t CountSetFields() const = 0;
-  virtual uint64_t AsUint64() const = 0;
-  virtual size_t MaxFields() const = 0;
-};
 
 // Template implementation for field mask with optimized storage
 template<typename MaskType, size_t MAX_FIELDS>
@@ -46,7 +32,7 @@ public:
   void ClearAllFields() override;
   size_t CountSetFields() const override;
   uint64_t AsUint64() const override;
-  size_t MaxFields() const override { return MAX_FIELDS; }
+  size_t MaxFields() const override { return num_fields_; }
 private:
   MaskType mask_;
   size_t num_fields_;
@@ -291,6 +277,27 @@ void Postings::KeyIterator::NextKey() {
   }
 }
 
+bool Postings::KeyIterator::ContainsFields(uint64_t field_mask) const {
+  CHECK(key_map_ != nullptr && current_ != end_) << "KeyIterator is invalid or exhausted";
+
+  // Check all positions for this key to see if any of the requested fields are set
+  for (const auto& [position, position_field_mask] : current_->second) {
+    // Safety check: Ensure field_mask is not null
+    if (position_field_mask == nullptr) {
+      CHECK(false) << "position_field_mask is null";
+      return false;
+    }
+
+    // Convert position field mask to uint64_t and compare if any of the fields from field_mask are present in position_field_mask
+    uint64_t position_mask = position_field_mask->AsUint64();
+    if ((position_mask & field_mask) != 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 bool Postings::KeyIterator::SkipForwardKey(const Key& key) {
   CHECK(key_map_ != nullptr) << "KeyIterator is invalid";
   
@@ -302,7 +309,7 @@ bool Postings::KeyIterator::SkipForwardKey(const Key& key) {
 }
 
 const Key& Postings::KeyIterator::GetKey() const {
-  // CHECK(key_map_ != nullptr && current_ != end_) << "KeyIterator is invalid or exhausted";
+  CHECK(key_map_ != nullptr && current_ != end_) << "KeyIterator is invalid or exhausted";
   return current_->first;
 }
 

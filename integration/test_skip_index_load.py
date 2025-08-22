@@ -56,7 +56,7 @@ class TestRDBCorruptedIndex(ValkeySearchTestCaseBase):
 
     def _start_server(self, port, test_name, rdbfile="dump.rdb", search_module_args=""):
         server_path = os.getenv("VALKEY_SERVER_PATH")
-        testdir = f"/tmp/valkey-search-clusters/{test_name}"
+        testdir = f"/tmp/valkey-test-framework-files/{test_name}"
 
         os.makedirs(testdir, exist_ok=True)
         curdir = os.getcwd()
@@ -173,7 +173,7 @@ class TestRDBCorruptedIndex(ValkeySearchTestCaseBase):
             logging.info(f"Server failed to start as expected: {e}")
 
             # Now check the logs to verify it was actually the RDB corruption that caused the failure
-            test_dirs = [f"/tmp/valkey-search-clusters/corrupted_rdb_test_fail"]
+            test_dirs = [f"/tmp/valkey-test-framework-files/corrupted_rdb_test_fail"]
             log_found = False
 
             for test_dir in test_dirs:

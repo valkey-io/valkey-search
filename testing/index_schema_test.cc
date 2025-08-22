@@ -49,6 +49,9 @@
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "vmsdk/src/memory_tracker.h"
+#include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/memory_allocation_overrides.h"
 
 namespace valkey_search {
 

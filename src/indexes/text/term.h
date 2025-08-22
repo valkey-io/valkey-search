@@ -18,6 +18,7 @@
 
 namespace valkey_search::indexes::text {
 
+using FieldMaskPredicate = uint64_t;
 using WordIterator = RadixTree<std::shared_ptr<Postings>, false>::WordIterator;
 
 /*
@@ -29,6 +30,7 @@ Top level iterator for a Term
 class TermIterator : public indexes::EntriesFetcherIteratorBase {
  public:
   TermIterator(const WordIterator& word,
+                 FieldMaskPredicate field_mask,
                  const InternedStringSet* untracked_keys = nullptr);
 
   bool Done() const override;
@@ -43,6 +45,7 @@ class TermIterator : public indexes::EntriesFetcherIteratorBase {
   bool begin_ = true;  // Used to track if we are at the beginning of the iterator.
   const InternedStringSet* untracked_keys_;
   InternedStringPtr current_key_;
+  FieldMaskPredicate field_mask_;
 };
 
 

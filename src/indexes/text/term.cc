@@ -5,12 +5,14 @@ namespace valkey_search::indexes::text {
 TermIterator::TermIterator(const WordIterator& word,
                               const InternedStringSet* untracked_keys)
     : word_(word),
+      FieldMaskPredicate field_mask,
       untracked_keys_(untracked_keys),
-      current_idx_(0) {
+      field_mask_(field_mask) {
 }
 
 bool TermIterator::Done() const {
-  return current_idx_ >= target_posting_->GetKeyCount();
+  // Check if key iterator is valid
+  return !key_iter_.IsValid();
 }
 
 void TermIterator::Next() {
@@ -19,17 +21,21 @@ void TermIterator::Next() {
     target_posting_ = word_.GetTarget();
     key_iter_ = target_posting_->GetKeyIterator();
     begin_ = false;  // Set to false after the first call to Next.
+    
+    // Check first key for field requirement
+    if (!Done() && !key_iter_.ContainsFields(field_mask_)) {
+      Next();
+    }
     return;
   }
-  // On subsequent calls, we advance the key iterator.
-  // Note: In the current implementation, we support an exact term match.
-  // There is also no consideration into the attribute (field) to see that it matches
-  // the query used. Currently, all matches are returned.
-  while (current_idx_ < target_posting_->GetKeyCount()) {
+  
+  // Advance until we find a valid key or reach the end
+  do {
     key_iter_.NextKey();
-    current_idx_ += 1;
-    break;
-  }
+    if (Done()) {
+      break;
+    }
+  } while (!key_iter_.ContainsFields(field_mask_));
 }
 
 const InternedStringPtr& TermIterator::operator*() const {

@@ -25,7 +25,8 @@ class ClusterInfoFanoutOperation : public fanout::FanoutOperationBase<
                                        coordinator::InfoIndexPartitionResponse,
                                        fanout::FanoutTargetMode::kAll> {
  public:
-  ClusterInfoFanoutOperation(std::string index_name, unsigned timeout_ms);
+  ClusterInfoFanoutOperation(std::string index_name, unsigned timeout_ms,
+                             uint32_t db_num = 0);
 
   unsigned GetTimeoutMs() const override;
 
@@ -35,9 +36,9 @@ class ClusterInfoFanoutOperation : public fanout::FanoutOperationBase<
   void OnResponse(const coordinator::InfoIndexPartitionResponse& resp,
                   [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
 
-  coordinator::InfoIndexPartitionResponse GetLocalResponse(
-      const coordinator::InfoIndexPartitionRequest& request,
-      [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
+  std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
+  GetLocalResponse(const coordinator::InfoIndexPartitionRequest& request,
+                   [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
 
   void InvokeRemoteRpc(
       coordinator::Client* client,
@@ -58,6 +59,7 @@ class ClusterInfoFanoutOperation : public fanout::FanoutOperationBase<
   bool exists_;
   std::optional<uint64_t> schema_fingerprint_;
   std::optional<uint32_t> version_;
+  uint32_t db_num_;
   std::string index_name_;
   unsigned timeout_ms_;
   float backfill_complete_percent_max_;

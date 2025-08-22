@@ -111,15 +111,17 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
       PrefixACLPermissions(kInfoCmdPermissions, kInfoCommand);
   VMSDK_RETURN_IF_ERROR(
       AclPrefixCheck(ctx, permissions, index_schema->GetKeyPrefixes()));
-  
+
   // operation(db_num, index_name, timeout)
   if (is_primary) {
     auto op = new query::primary_info_fanout::PrimaryInfoFanoutOperation(
-        0, std::string(index_schema_name), timeout_ms);
+        ValkeyModule_GetSelectedDb(ctx), std::string(index_schema_name),
+        timeout_ms);
     op->StartOperation(ctx);
   } else if (is_cluster) {
     auto op = new query::cluster_info_fanout::ClusterInfoFanoutOperation(
-        0, std::string(index_schema_name), timeout_ms);
+        ValkeyModule_GetSelectedDb(ctx), std::string(index_schema_name),
+        timeout_ms);
     op->StartOperation(ctx);
   } else {
     VMSDK_LOG(DEBUG, ctx) << "==========Using Local Scope==========";

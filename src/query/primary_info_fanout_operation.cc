@@ -13,12 +13,14 @@
 namespace valkey_search::query::primary_info_fanout {
 
 PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(std::string index_name,
-                                                       unsigned timeout_ms)
+                                                       unsigned timeout_ms,
+                                                       uint32_t db_num)
     : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
                                   coordinator::InfoIndexPartitionResponse,
                                   fanout::FanoutTargetMode::kPrimary>(),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
+      db_num_(db_num),
       exists_(false),
       num_docs_(0),
       num_records_(0),
@@ -32,6 +34,7 @@ coordinator::InfoIndexPartitionRequest
 PrimaryInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&,
                                             unsigned timeout_ms) {
   coordinator::InfoIndexPartitionRequest req;
+  req.set_db_num(db_num_);
   req.set_index_name(index_name_);
   req.set_timeout_ms(timeout_ms);
   return req;
@@ -87,11 +90,11 @@ void PrimaryInfoFanoutOperation::OnResponse(
   hash_indexing_failures_ += resp.hash_indexing_failures();
 }
 
-coordinator::InfoIndexPartitionResponse
+std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
 PrimaryInfoFanoutOperation::GetLocalResponse(
     const coordinator::InfoIndexPartitionRequest& request,
     [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
-  return coordinator::Service::GenerateInfoResponse(request.index_name());
+  return coordinator::Service::GenerateInfoResponse(request);
 }
 
 void PrimaryInfoFanoutOperation::InvokeRemoteRpc(

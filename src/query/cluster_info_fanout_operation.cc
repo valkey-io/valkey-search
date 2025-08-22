@@ -13,12 +13,14 @@
 namespace valkey_search::query::cluster_info_fanout {
 
 ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(std::string index_name,
-                                                       unsigned timeout_ms)
+                                                       unsigned timeout_ms,
+                                                       uint32_t db_num)
     : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
                                   coordinator::InfoIndexPartitionResponse,
                                   fanout::FanoutTargetMode::kAll>(),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
+      db_num_(db_num),
       exists_(false),
       backfill_complete_percent_max_(0.0f),
       backfill_complete_percent_min_(0.0f),
@@ -32,6 +34,7 @@ coordinator::InfoIndexPartitionRequest
 ClusterInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&,
                                             unsigned timeout_ms) {
   coordinator::InfoIndexPartitionRequest req;
+  req.set_db_num(db_num_);
   req.set_index_name(index_name_);
   req.set_timeout_ms(timeout_ms);
   return req;
@@ -102,11 +105,11 @@ void ClusterInfoFanoutOperation::OnResponse(
   }
 }
 
-coordinator::InfoIndexPartitionResponse
+std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
 ClusterInfoFanoutOperation::GetLocalResponse(
     const coordinator::InfoIndexPartitionRequest& request,
     [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
-  return coordinator::Service::GenerateInfoResponse(request.index_name());
+  return coordinator::Service::GenerateInfoResponse(request);
 }
 
 void ClusterInfoFanoutOperation::InvokeRemoteRpc(

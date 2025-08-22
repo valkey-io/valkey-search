@@ -84,25 +84,11 @@ class FanoutOperationBase {
 
     if (target.type == FanoutSearchTarget::Type::kLocal) {
       vmsdk::RunByMain([this, ctx, target, request]() {
-        Response resp = this->GetLocalResponse(request, target);
-        switch (resp.error_type()) {
-          // no error, continue to aggregate response
-          case coordinator::FanoutErrorType::OK:
-            this->OnResponse(resp, target);
-            break;
-          case coordinator::FanoutErrorType::INDEX_NAME_ERROR:
-            this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
-                          coordinator::FanoutErrorType::INDEX_NAME_ERROR,
-                          target);
-            break;
-          case coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR:
-            this->OnError(
-                grpc::Status(grpc::StatusCode::INTERNAL, ""),
-                coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR, target);
-            break;
-          default:
-            CHECK(false);
-            break;
+        auto [status, resp] = this->GetLocalResponse(request, target);
+        if (status.ok()) {
+          this->OnResponse(resp, target);
+        } else {
+          this->OnError(status, resp.error_type(), target);
         }
         this->RpcDone(ctx);
       });
@@ -129,7 +115,7 @@ class FanoutOperationBase {
     }
   }
 
-  virtual Response GetLocalResponse(
+  virtual std::pair<grpc::Status, Response> GetLocalResponse(
       const Request&, [[maybe_unused]] const FanoutSearchTarget&) = 0;
 
   virtual void InvokeRemoteRpc(coordinator::Client*, const Request&,

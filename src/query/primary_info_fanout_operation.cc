@@ -20,6 +20,7 @@ PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
       db_num_(db_num),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
+      db_num_(db_num),
       exists_(false),
       num_docs_(0),
       num_records_(0),

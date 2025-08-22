@@ -54,7 +54,7 @@ class ClusterInfoFanoutOperation : public fanout::FanoutOperationBase<
  private:
   bool exists_;
   std::optional<uint64_t> schema_fingerprint_;
-  std::optional<uint32_t> encoding_version_;
+  std::optional<uint32_t> version_;
   std::string index_name_;
   std::optional<unsigned> timeout_ms_;
   float backfill_complete_percent_max_;

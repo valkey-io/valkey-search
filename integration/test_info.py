@@ -4,6 +4,8 @@ from valkey import ResponseError
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
+import pytest
+import os
 
 
 class TestVSSBasic(ValkeySearchTestCaseBase):
@@ -101,10 +103,5 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
         for field in bytes_fields:
             assert field in info_data
             bytes_value = info_data[field]
-            if isinstance(bytes_value, bytes):
-                bytes_value = bytes_value.decode('utf-8')
-            elif isinstance(bytes_value, int):
-                bytes_value = str(bytes_value)
-            assert isinstance(bytes_value, str)
-            assert bytes_value.endswith("iB") or bytes_value.isdigit()
-
+            assert (isinstance(bytes_value, str) and bytes_value.endswith("iB")) or  \
+                   (((os.environ.get('SAN_BUILD'), 'no') != 'no') and bytes_value == 0)

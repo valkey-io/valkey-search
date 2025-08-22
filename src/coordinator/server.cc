@@ -182,17 +182,22 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
   return reactor;
 }
 
-coordinator::InfoIndexPartitionResponse Service::GenerateInfoResponse(
-    const std::string& index_name) {
+std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
+Service::GenerateInfoResponse(
+    const coordinator::InfoIndexPartitionRequest& request) {
+  uint32_t db_num = request.db_num();
+  std::string index_name = request.index_name();
   coordinator::InfoIndexPartitionResponse response;
   auto status_or_schema =
-      SchemaManager::Instance().GetIndexSchema(/*db=*/0, index_name);
+      SchemaManager::Instance().GetIndexSchema(db_num, index_name);
   if (!status_or_schema.ok()) {
     response.set_exists(false);
     response.set_index_name(index_name);
     response.set_error(status_or_schema.status().ToString());
     response.set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
-    return response;
+    grpc::Status error_status(grpc::StatusCode::NOT_FOUND,
+                              status_or_schema.status().ToString());
+    return std::make_pair(error_status, response);
   }
   auto schema = std::move(status_or_schema.value());
   IndexSchema::InfoIndexPartitionData data =
@@ -203,16 +208,15 @@ coordinator::InfoIndexPartitionResponse Service::GenerateInfoResponse(
 
   auto global_metadata =
       coordinator::MetadataManager::Instance().GetGlobalMetadata();
-  if (global_metadata->type_namespace_map().contains(
-          kSchemaManagerMetadataTypeName)) {
-    const auto& entry_map = global_metadata->type_namespace_map().at(
-        kSchemaManagerMetadataTypeName);
-    if (entry_map.entries().contains(index_name)) {
-      const auto& entry = entry_map.entries().at(index_name);
-      fingerprint = entry.fingerprint();
-      version = entry.version();
-    }
-  }
+  CHECK(global_metadata->type_namespace_map().contains(
+      kSchemaManagerMetadataTypeName));
+  const auto& entry_map =
+      global_metadata->type_namespace_map().at(kSchemaManagerMetadataTypeName);
+  CHECK(entry_map.entries().contains(index_name));
+  const auto& entry = entry_map.entries().at(index_name);
+  fingerprint = entry.fingerprint();
+  version = entry.version();
+
   response.set_exists(true);
   response.set_index_name(index_name);
   response.set_num_docs(data.num_docs);
@@ -232,7 +236,7 @@ coordinator::InfoIndexPartitionResponse Service::GenerateInfoResponse(
   if (version.has_value()) {
     response.set_version(version.value());
   }
-  return response;
+  return std::make_pair(grpc::Status::OK, response);
 }
 
 grpc::ServerUnaryReactor* Service::InfoIndexPartition(
@@ -243,14 +247,11 @@ grpc::ServerUnaryReactor* Service::InfoIndexPartition(
   auto latency_sample = SAMPLE_EVERY_N(100);
   grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
 
-  vmsdk::RunByMain([reactor, response, index_name = request->index_name(),
+  vmsdk::RunByMain([reactor, response, request,
                     latency_sample = std::move(latency_sample)]() mutable {
-    *response = Service::GenerateInfoResponse(index_name);
-    if (!response->exists()) {
-      reactor->Finish(grpc::Status(grpc::StatusCode::NOT_FOUND, response->error()));
-    } else {
-      reactor->Finish(grpc::Status::OK);
-    }
+    auto [status, info_response] = Service::GenerateInfoResponse(*request);
+    *response = std::move(info_response);
+    reactor->Finish(status);
   });
   return reactor;
 }

@@ -399,8 +399,8 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   }
   results.root_predicate = std::move(predicate);
   results.filter_identifiers.swap(filter_identifiers_);
-  // print the accumulated AND chain by calling the PrintPredicate function
-  VMSDK_LOG(WARNING, nullptr) << "Parsed Result";
+  // Log the built query syntax tree.
+  VMSDK_LOG(WARNING, nullptr) << "Parsed QuerySyntaxTree:";
   PrintPredicate(results.root_predicate.get());
   return results;
 }
@@ -447,7 +447,6 @@ absl::string_view StripWildcardMarkers(absl::string_view tok) {
 }
 
 // Fuzzy: allow 1..3 '%' on both sides: %x%, %%x%%, %%%x%%%
-// TODO: Handle errors. Also detect escaped '%' in the future.
 inline size_t GetFuzzyDistance(absl::string_view tok) {
   if (tok.size() < 3) return 0;
   auto count_leading = [](absl::string_view s) {
@@ -477,7 +476,8 @@ absl::string_view StripFuzzyMarkers(absl::string_view tok, size_t& distance) {
 
 absl::StatusOr<std::string> FilterParser::ResolveTextFieldOrDefault(const std::optional<std::string>& maybe_field) {
   if (maybe_field.has_value()) return *maybe_field;
-  return std::string("__default__"); // Placeholder for default text field
+  // Placeholder for default text field
+  return std::string("__default__");
 }
 
 absl::StatusOr<std::unique_ptr<query::TextPredicate>>
@@ -571,7 +571,7 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::string& field_for_default) {
 // TODO:
 // - Handle negation
 // - Handle parentheses by treating them as composed AND and simply moving forward
-// - Handle default text field
+// - Handle parsing and set up of default text field predicates
 // - Try to move out nested standard operations (negate/numeric/tag) back to the caller site and reduce responsibilities
 // of the text parser
 // - Handle escaped characters in text tokens
@@ -634,7 +634,24 @@ FilterParser::ParseTextGroup(const std::string& initial_field) {
     return prox;
 }
 
-// Original implementation of ParseExpression.
+// Parsing rules:
+// 1. Predicate evaluation is done with left-associative grouping while the OR
+// operator has higher precedence than the AND operator. precedence. For
+// example: a & b | c & d is evaluated as (a & b) | (c & d).
+// 2. Field name is always preceded by '@' and followed by ':'.
+// 3. A numeric field has the following pattern: @field_name:[Start,End]. Both
+// space and comma are valid separators between Start and End.
+// 4. A tag field has the following pattern: @field_name:{tag1|tag2|tag3}.
+// 5. The tag separator character is configurable with a default value of '|'.
+// 6. A field name can be wrapped with `()` to group multiple predicates.
+// 7. Space between predicates is considered as AND while '|' is considered as
+// OR.
+// 8. A predicate can be negated by preceding it with '-'. For example:
+// -@field_name:10 => NOT(@field_name:10), -(a | b) => NOT(a | b).
+// 9. -inf, inf and +inf are acceptable numbers in a range. Therefore, greater
+// than 100 is expressed as [(100 inf].
+// 10. Numeric filters are inclusive. Exclusive min or max are expressed with (
+// prepended to the number, for example, [(100 (200].
 absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseExpression(
     uint32_t level) {
   if (level++ >= options::GetQueryStringDepth().GetValue()) {
@@ -684,7 +701,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseExpression(
         VMSDK_ASSIGN_OR_RETURN(predicate, ParseTagPredicate(field_name));
       }
       else {
-        node_count_++;
+        node_count_++;  // Count the TextPredicate Node
         VMSDK_ASSIGN_OR_RETURN(predicate, ParseTextGroup(field_name));
       }
       if (prev_predicate) {

@@ -99,19 +99,6 @@ std::unique_ptr<data_model::Index> Text::ToProto() const {
 // Size is needed for Inline queries (for approximation of qualified entries) and for multi sub query operations
 // (with AND/OR). This should be implemented as part of either Inline support OR multi sub query search.
 size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
-  // switch (predicate.GetOperation()) {
-  //   case query::TextPredicate::Operation::kExact: {
-  //     // TODO: Handle phrase matching.
-  //     auto word = predicate.GetTextString();
-  //     if (word.empty()) return 0;
-  //     auto iter = text_index_schema_->text_index_->prefix_.GetWordIterator(word);
-  //     auto target_posting = iter.GetTarget();
-  //     return target_posting->GetKeyCount();
-  //   }
-  //   default:
-  //     CHECK(false) << "Unsupported TextPredicate operation: " << static_cast<int>(predicate.GetOperation());
-  //     return 0;
-  // }
   return 0;
 }
 
@@ -125,8 +112,6 @@ std::unique_ptr<Text::EntriesFetcher> Text::Search(
   fetcher->predicate_ = &predicate;
   // TODO : We only support single field queries for now. Change below when we support multiple and all fields.
   fetcher->field_mask_ = 1ULL << text_field_number_;
-  // Currently, we support a single word (exact term) match.
-  // fetcher->data_ = predicate.GetTextString();
   return fetcher;
 }
 
@@ -148,12 +133,12 @@ size_t Text::EntriesFetcher::Size() const { return size_; }
 std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
   if (auto term = dynamic_cast<const query::TermPredicate*>(predicate_)) {
     auto iter = text_index_->prefix_.GetWordIterator(term->GetTextString());
-    auto itr = std::make_unique<text::TermIterator>(iter, field_mask_, untracked_keys_);
+    auto itr = std::make_unique<text::TermIterator>(iter, term->GetTextString(), field_mask_, untracked_keys_);
     itr->Next();
     return itr;
   } else if (auto prefix = dynamic_cast<const query::PrefixPredicate*>(predicate_)) {
     auto iter = text_index_->prefix_.GetWordIterator(prefix->GetTextString());
-    auto itr = std::make_unique<text::WildCardIterator>(iter, text::WildCardOperation::kPrefix, untracked_keys_);
+    auto itr = std::make_unique<text::WildCardIterator>(iter, text::WildCardOperation::kPrefix, field_mask_, untracked_keys_);
     itr->Next();
     return itr;
   }

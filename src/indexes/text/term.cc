@@ -3,14 +3,19 @@
 namespace valkey_search::indexes::text {
 
 TermIterator::TermIterator(const WordIterator& word,
+                              const absl::string_view data,
                               const FieldMaskPredicate field_mask,
                               const InternedStringSet* untracked_keys)
-    : word_(word),
+    : word_(word),  
+      data_(data),
       field_mask_(field_mask),
       untracked_keys_(untracked_keys) {
 }
 
 bool TermIterator::Done() const {
+  if (word_.GetWord() != data_) {
+    return true;
+  }
   // Check if key iterator is valid
   return !key_iter_.IsValid();
 }
@@ -20,22 +25,14 @@ void TermIterator::Next() {
   if (begin_) {
     target_posting_ = word_.GetTarget();
     key_iter_ = target_posting_->GetKeyIterator();
-    begin_ = false;  // Set to false after the first call to Next.
-    
-    // Check first key for field requirement
-    if (!Done() && !key_iter_.ContainsFields(field_mask_)) {
-      Next();
-    }
-    return;
-  }
-  
-  // Advance until we find a valid key or reach the end
-  do {
+    begin_ = false;  // Set to false after the first call to Next.    
+  } else {
     key_iter_.NextKey();
-    if (Done()) {
-      break;
-    }
-  } while (!key_iter_.ContainsFields(field_mask_));
+  }
+  // Advance until we find a valid key or reach the end
+  while (!Done() && !key_iter_.ContainsFields(field_mask_)) {
+    key_iter_.NextKey();
+  }
 }
 
 const InternedStringPtr& TermIterator::operator*() const {

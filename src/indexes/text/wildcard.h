@@ -50,11 +50,9 @@ This algorithm operates in time O(#SuffixMatches)
 #include "src/utils/string_interning.h"
 #include "src/indexes/text/posting.h"
 
-// #include "absl/string/string_view.h"
-// #include "src/text/text.h"
-
 namespace valkey_search::indexes::text {
 
+using FieldMaskPredicate = uint64_t;
 using WordIterator = RadixTree<std::shared_ptr<Postings>, false>::WordIterator;
 
 enum WildCardOperation {
@@ -64,16 +62,7 @@ enum WildCardOperation {
 };
 
 struct WildCardIterator : public indexes::EntriesFetcherIteratorBase {
-  // using Posting = typename Postings::Posting;
-  // // Use this form when there's no suffix tree available.
-  // WildCardIterator(absl::string_view prefix, absl::string_view suffix,
-  //                  const RadixTree<Postings>& prefix_tree);
-
-  // // Use this form when a suffix tree IS available.
-  // WildCardIterator(absl::string_view prefix, absl::string_view suffix,
-  //                  const RadixTree<Postings>& prefix_tree,
-  //                  const RadixTree<Postings>& suffix_tree);
-  WildCardIterator(const WordIterator& word, const WildCardOperation operation,
+  WildCardIterator(const WordIterator& word, const WildCardOperation operation, const FieldMaskPredicate field_mask,
                 const InternedStringSet* untracked_keys = nullptr);
 
   // Points to valid Word?
@@ -84,23 +73,7 @@ struct WildCardIterator : public indexes::EntriesFetcherIteratorBase {
 
   const InternedStringPtr& operator*() const override;
 
-  // Seek forward to word that's equal or greater
-  // returns true => found equal word, false => didn't find equal word
-  // bool SeekForward(absl::string_view word);
-
-  // Access the iterator, will assert if !IsValid()
-  // absl::string_view GetWord() const override;
-  // Posting& GetPosting() const;
-
-  // absl::string_view GetPrefix() const { return prefix_; }
-  // absl::string_view GetSuffix() const { return suffix_; }
-
  private:
-  // absl::string_view prefix_;
-  // absl::string_view suffix_;
-  // the one to iterator over, could be temporary or not....
-  // std::shared_ptr<RadixTree<Postings *>> radix_tree_;
-
   WordIterator word_;
   std::shared_ptr<Postings> target_posting_;
   Postings::KeyIterator key_iter_;
@@ -108,6 +81,7 @@ struct WildCardIterator : public indexes::EntriesFetcherIteratorBase {
   const InternedStringSet* untracked_keys_;
   InternedStringPtr current_key_;
   WildCardOperation operation_;
+  FieldMaskPredicate field_mask_;
 };
 
 

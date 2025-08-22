@@ -30,6 +30,7 @@ Top level iterator for a Term
 class TermIterator : public indexes::EntriesFetcherIteratorBase {
  public:
   TermIterator(const WordIterator& word,
+                 const absl::string_view data,
                  const FieldMaskPredicate field_mask,
                  const InternedStringSet* untracked_keys = nullptr);
 
@@ -41,6 +42,7 @@ class TermIterator : public indexes::EntriesFetcherIteratorBase {
   WordIterator word_;
   std::shared_ptr<Postings> target_posting_;
   Postings::KeyIterator key_iter_;
+  const absl::string_view data_;
   uint32_t current_idx_ = 0;
   bool begin_ = true;  // Used to track if we are at the beginning of the iterator.
   const InternedStringSet* untracked_keys_;

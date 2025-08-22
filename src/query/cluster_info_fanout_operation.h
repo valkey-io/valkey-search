@@ -25,8 +25,8 @@ class ClusterInfoFanoutOperation : public fanout::FanoutOperationBase<
                                        coordinator::InfoIndexPartitionResponse,
                                        fanout::FanoutTargetMode::kAll> {
  public:
-  ClusterInfoFanoutOperation(std::string index_name, unsigned timeout_ms,
-                             uint32_t db_num = 0);
+  ClusterInfoFanoutOperation(uint32_t db_num, const std::string& index_name,
+                             unsigned timeout_ms);
 
   unsigned GetTimeoutMs() const override;
 

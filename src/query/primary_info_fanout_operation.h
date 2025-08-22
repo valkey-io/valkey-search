@@ -25,8 +25,8 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
                                        coordinator::InfoIndexPartitionResponse,
                                        fanout::FanoutTargetMode::kPrimary> {
  public:
-  PrimaryInfoFanoutOperation(std::string index_name, unsigned timeout_ms,
-                             uint32_t db_num = 0);
+  PrimaryInfoFanoutOperation(uint32_t db_num, const std::string& index_name,
+                             unsigned timeout_ms);
 
   unsigned GetTimeoutMs() const override;
 

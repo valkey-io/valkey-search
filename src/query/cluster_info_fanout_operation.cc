@@ -12,15 +12,14 @@
 
 namespace valkey_search::query::cluster_info_fanout {
 
-ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(std::string index_name,
-                                                       unsigned timeout_ms,
-                                                       uint32_t db_num)
+ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(
+    uint32_t db_num, const std::string& index_name, unsigned timeout_ms)
     : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
                                   coordinator::InfoIndexPartitionResponse,
                                   fanout::FanoutTargetMode::kAll>(),
+      db_num_(db_num),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
-      db_num_(db_num),
       exists_(false),
       backfill_complete_percent_max_(0.0f),
       backfill_complete_percent_min_(0.0f),

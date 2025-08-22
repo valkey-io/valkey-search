@@ -20,6 +20,7 @@ ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(
       db_num_(db_num),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
+      db_num_(db_num),
       exists_(false),
       backfill_complete_percent_max_(0.0f),
       backfill_complete_percent_min_(0.0f),

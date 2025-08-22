@@ -3,11 +3,11 @@
 namespace valkey_search::indexes::text {
 
 TermIterator::TermIterator(const WordIterator& word,
+                              const FieldMaskPredicate field_mask,
                               const InternedStringSet* untracked_keys)
     : word_(word),
-      FieldMaskPredicate field_mask,
-      untracked_keys_(untracked_keys),
-      field_mask_(field_mask) {
+      field_mask_(field_mask),
+      untracked_keys_(untracked_keys) {
 }
 
 bool TermIterator::Done() const {

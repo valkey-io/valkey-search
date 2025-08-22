@@ -30,7 +30,7 @@ Top level iterator for a Term
 class TermIterator : public indexes::EntriesFetcherIteratorBase {
  public:
   TermIterator(const WordIterator& word,
-                 FieldMaskPredicate field_mask,
+                 const FieldMaskPredicate field_mask,
                  const InternedStringSet* untracked_keys = nullptr);
 
   bool Done() const override;

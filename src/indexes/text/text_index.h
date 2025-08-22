@@ -8,20 +8,31 @@
 #ifndef VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 #define VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 
+#include <bitset>
 #include <memory>
 #include <optional>
+#include <cctype>
 
-#include "absl/strings/string_view.h"
-#include "absl/functional/function_ref.h"
 #include "absl/container/flat_hash_map.h"
 #include "src/indexes/text/radix_tree.h"
 #include "src/indexes/text/posting.h"
 #include "src/index_schema.pb.h"
 
+struct sb_stemmer;
+
 namespace valkey_search::indexes::text {
+
+namespace {
+
+bool IsWhitespace(char c) {
+  return std::isspace(static_cast<unsigned char>(c)) || std::iscntrl(static_cast<unsigned char>(c));
+}
+
+}  // namespace
 
 using Key = valkey_search::InternedStringPtr;
 using Position = uint32_t;
+using PunctuationBitmap = std::bitset<256>;
 
 struct TextIndex {
   TextIndex() = default;
@@ -46,15 +57,21 @@ struct TextIndex {
 };
 
 struct TextIndexSchema {
-  TextIndexSchema() : num_text_fields_(0), text_index_(std::make_shared<TextIndex>()) {}
-  TextIndexSchema(const data_model::IndexSchema& index_schema_proto) 
+  TextIndexSchema(data_model::Language language,
+                  const std::string& punctuation,
+                  bool with_offsets,
+                  const std::vector<std::string>& stop_words)
       : num_text_fields_(0), 
         text_index_(std::make_shared<TextIndex>()),
-        language_(index_schema_proto.language()),
-        punctuation_(index_schema_proto.punctuation()),
-        with_offsets_(index_schema_proto.with_offsets()),
-        stop_words_(index_schema_proto.stop_words().begin(), index_schema_proto.stop_words().end()) {}
-  ~TextIndexSchema() = default;
+        stemmer_(nullptr),
+        language_(language),
+        punctuation_(punctuation),
+        with_offsets_(with_offsets),
+        stop_words_(stop_words) {
+    BuildOptimizedStructures();
+  }
+
+  ~TextIndexSchema();
 
   uint8_t num_text_fields_;
   //
@@ -70,16 +87,69 @@ struct TextIndexSchema {
   //
   absl::flat_hash_map<Key, TextIndex> by_key_;
 
-  // IndexSchema proto-derived configuration fields
+  // Raw configuration (for RDB persistence)
   data_model::Language language_ = data_model::LANGUAGE_UNSPECIFIED;
   std::string punctuation_;
   bool with_offsets_ = true;
   std::vector<std::string> stop_words_;
 
+  // Optimized structures (shared across all text fields)
+  PunctuationBitmap punct_bitmap_;
+
+  // Stemmer reused across all operations for this index
+  mutable sb_stemmer* stemmer_;
+
   uint8_t AllocateTextFieldNumber() {
     return num_text_fields_++;
   }
 
+  sb_stemmer* GetStemmer() const;
+
+  std::string GetPunctuation() const {
+    return punctuation_;
+  }
+
+  data_model::Language GetLanguage() const {
+    return language_;
+  }
+
+  bool GetWithOffsets() const {
+    return with_offsets_;
+  }
+
+  const PunctuationBitmap& GetPunctuationBitmap() const {
+    return punct_bitmap_;
+  }
+
+  std::string GetLanguageString() const {
+    switch (language_) {
+      case data_model::LANGUAGE_ENGLISH:
+        return "english";
+      default:
+        return "english";
+    }
+  }
+
+ private:
+  void BuildOptimizedStructures() {
+    punct_bitmap_.reset();
+
+    // Add all whitespace characters as word separators (RFC requirement)
+    for (int i = 0; i < 256; ++i) {
+      if (IsWhitespace(static_cast<char>(i))) {
+        punct_bitmap_.set(i);
+      }
+    }
+
+    // Add user-specified punctuation characters
+    for (char c : punctuation_) {
+      if (static_cast<unsigned char>(c) < 256) {  // Only ASCII for now
+        punct_bitmap_.set(static_cast<unsigned char>(c));
+      }
+    }
+
+    // TODO: Build hash set for stop words
+  }
 };
 
 }  // namespace valkey_search::indexes::text

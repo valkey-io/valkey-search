@@ -9,13 +9,18 @@ from test_info_primary import _parse_info_kv_list, verify_error_response
 class TestFTInfoCluster(ValkeySearchClusterTestCase):
 
     def is_indexing_complete(self, node, index_name):
-        raw = node.execute_command("FT.INFO", index_name, "CLUSTER")
-        info = _parse_info_kv_list(raw)
-        if not info:
-            return False
-        backfill_in_progress = int(info.get("backfill_in_progress", 1))
-        state = info.get("state", "")
-        return backfill_in_progress == 0 and state == "ready"
+        try:
+            raw = node.execute_command("FT.INFO", index_name, "CLUSTER")
+            info = _parse_info_kv_list(raw)
+            if not info:
+                return False
+            backfill_in_progress = int(info.get("backfill_in_progress", 1))
+            state = info.get("state", "")
+            return backfill_in_progress == 0 and state == "ready"
+        except Exception as e:
+            if "Communication error between nodes found" in str(e):
+                return False
+            raise
 
     def test_ft_info_cluster_counts(self):
         cluster: ValkeyCluster = self.new_cluster_client()

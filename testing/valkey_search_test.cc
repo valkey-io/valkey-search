@@ -331,6 +331,7 @@ TEST_P(LoadTest, load) {
 }
 
 TEST_F(ValkeySearchTest, FullSyncFork) {
+  VMSDK_EXPECT_OK(options::GetMaxWorkerSuspensionSecs().SetValue(1));
   InitThreadPools(2, 2);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   auto reader_thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
@@ -481,7 +482,7 @@ TEST_F(ValkeySearchTest, Info) {
   StringInternStore::SetMemoryUsage(0); // reset memory pool
 }
 
-TEST_F(ValkeySearchTest, OnForkChildCallback) {
+TEST_F(ValkeySearchTest, OnForkChildDiedCallback) {
   InitThreadPools(std::nullopt, 5);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
@@ -492,6 +493,21 @@ TEST_F(ValkeySearchTest, OnForkChildCallback) {
   EXPECT_TRUE(writer_thread_pool->IsSuspended());
   ValkeySearch::Instance().OnForkChildCallback(
       &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_FORK_CHILD_DIED, nullptr);
+  EXPECT_FALSE(writer_thread_pool->IsSuspended());
+  EXPECT_EQ(
+      Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt, 0);
+  EXPECT_EQ(Metrics::GetStats().writer_worker_thread_pool_resumed_cnt, 1);
+}
+
+TEST_F(ValkeySearchTest, OnForkChildBornCallback) {
+  VMSDK_EXPECT_OK(options::GetMaxWorkerSuspensionSecs().SetValue(0));
+  InitThreadPools(std::nullopt, 5);
+  auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
+  VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
+  ValkeyModuleEvent eid;
+  Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt = 0;
+  Metrics::GetStats().writer_worker_thread_pool_resumed_cnt = 0;
+  ValkeySearch::Instance().OnForkChildCallback(&fake_ctx_, eid, 0, nullptr);
   EXPECT_FALSE(writer_thread_pool->IsSuspended());
   EXPECT_EQ(
       Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt, 0);

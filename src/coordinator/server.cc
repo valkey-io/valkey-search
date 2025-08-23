@@ -207,9 +207,9 @@ grpc::ServerUnaryReactor* Service::InfoIndexPartition(
         schema->GetInfoIndexPartitionData();
 
     std::optional<uint64_t> fingerprint;
-    std::optional<uint32_t> encoding_version;
+    std::optional<uint32_t> version;
 
-    // Get the full metadata to access both fingerprint and encoding_version
+    // Get the full metadata to access both fingerprint and version
     auto global_metadata =
         coordinator::MetadataManager::Instance().GetGlobalMetadata();
     if (global_metadata->type_namespace_map().contains(
@@ -219,7 +219,7 @@ grpc::ServerUnaryReactor* Service::InfoIndexPartition(
       if (entry_map.entries().contains(idx)) {
         const auto& entry = entry_map.entries().at(idx);
         fingerprint = entry.fingerprint();
-        encoding_version = entry.encoding_version();
+        version = entry.version();
       }
     }
 
@@ -240,8 +240,8 @@ grpc::ServerUnaryReactor* Service::InfoIndexPartition(
     if (fingerprint.has_value()) {
       response->set_schema_fingerprint(fingerprint.value());
     }
-    if (encoding_version.has_value()) {
-      response->set_encoding_version(encoding_version.value());
+    if (version.has_value()) {
+      response->set_version(version.value());
     }
     reactor->Finish(grpc::Status::OK);
   });

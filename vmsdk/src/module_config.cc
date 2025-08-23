@@ -18,6 +18,14 @@
 namespace vmsdk {
 namespace config {
 
+/// Controls the modules debug mode flag. We set it here to "true" to allow
+/// Valkey to load the configurations first time when the module loaded. Once
+/// this is done, we set it back to false. If the user passes "--debug-mode yes"
+/// we will change it back to "true".
+static auto debug_mode = BooleanBuilder(kDebugMode, true).Hidden().Build();
+
+bool IsDebugModeEnabled() { return debug_mode->GetValue(); }
+
 namespace {
 
 constexpr absl::string_view kUseCoordinator = "--use-coordinator";
@@ -111,6 +119,8 @@ absl::Status ModuleConfigManager::Init(ValkeyModuleCtx *ctx) {
 absl::Status ModuleConfigManager::ParseAndLoadArgv(ValkeyModuleCtx *ctx,
                                                    ValkeyModuleString **argv,
                                                    int argc) {
+  // reset the debug mode to "false".
+  debug_mode->SetValueOrLog(false, LogLevel::kWarning);
   vmsdk::ArgsIterator iter{argv, argc};
   while (iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto key, iter.Get());

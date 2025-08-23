@@ -26,23 +26,18 @@ def search_command(index: str, filter: Union[int, None]) -> list[str]:
         "2",
         "BLOB",
         float_to_bytes([10.0, 10.0, 10.0]),
+        "TIMEOUT",
+        "10"
     ]
 
 
-def num_docs(client: Valkey.client, index: str) -> dict[str, str]:
-    res = client.execute_command("FT.INFO", index)
-    print("Got info result of ", res)
-    for i in range(len(res)):
-        if res[i] == b'num_docs':
-            print("Found ", res[i+1])
-            return int(res[i+1].decode())
-    assert False
 
 def search(
     client: valkey.client,
     index: str,
     timeout: bool,
     filter: Union[int, None] = None,
+    
 ) -> list[tuple[str, float]]:
     print("Search command: ", search_command(index, filter))
     if not timeout:
@@ -169,6 +164,28 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
         )
         assert hnsw_result != nominal_hnsw_result
 
+        #
+        # Now force the race the other way, i.e., force a timeout via Valkey
+        #
+        assert (
+            client.execute_command("CONFIG SET search.test-force-timeout no")
+            == b"OK"
+        )
+        assert (
+            client.execute_command("CONFIG SET search.test-force-pause yes")
+            == b"OK"
+        )
+        hnsw_result = search(client, "hnsw", True, 2)
+        assert (
+            client.info("SEARCH")["search_cancel-paused"] > 0
+        )
+        assert (
+            client.execute_command("CONFIG SET search.test-force-pause yes")
+            == b"OK"
+        )
+
+
+
 
 class TestCancelCME(ValkeySearchClusterTestCase):
 
@@ -213,8 +230,8 @@ class TestCancelCME(ValkeySearchClusterTestCase):
           timeout=5
         )
     
-    def sum_docs(self, index:str) -> int:
-        return sum([num_docs(self.client_for_primary(i), index) for i in range(len(self.replication_groups))])
+    def sum_docs(self, index: Index) -> int:
+        return sum([index.info(self.client_for_primary(i)).num_docs for i in range(len(self.replication_groups))])
 
     def test_timeoutCME(self):
         self.execute_all(["flushall sync"])
@@ -230,7 +247,7 @@ class TestCancelCME(ValkeySearchClusterTestCase):
         flat_index.create(client)
         hnsw_index.load_data(client, 100)
         # Let the index properly processed
-        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index.name), 100, timeout=3)
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 100, timeout=3)
 
         #
         # Nominal case

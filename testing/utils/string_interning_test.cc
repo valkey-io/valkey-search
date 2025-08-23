@@ -130,16 +130,27 @@ TEST_F(StringInterningTest, StringInternStoreTracksMemoryInternally) {
   EXPECT_EQ(StringInternStore::GetMemoryUsage(), 0);
 }
 
-TEST_F(StringInterningTest, NonInternedStringDoesNotAffectStoreMemory) {
+TEST_F(StringInterningTest, NonInternedStringDoesAffectStoreMemory) {
+  static auto track_malloc_size = [](void* ptr) -> size_t {
+    return 21;
+  };
+  
+  vmsdk::test_utils::SetTestSystemMallocSizeFunction(track_malloc_size);
+  
+  const char* test_str = "non_interned_string";
+  size_t expected_size = strlen(test_str) + 1;
+
   int64_t initial_memory = StringInternStore::GetMemoryUsage();
   
-  auto non_interned = std::make_shared<InternedString>("non_interned_string");
+  auto non_interned = std::make_shared<InternedString>(test_str);
   
-  EXPECT_EQ(StringInternStore::GetMemoryUsage(), initial_memory);
+  EXPECT_EQ(StringInternStore::GetMemoryUsage(), initial_memory+21);
   
   non_interned.reset();
   
   EXPECT_EQ(StringInternStore::GetMemoryUsage(), initial_memory);
+  
+  vmsdk::test_utils::ClearTestSystemMallocSizeFunction();
 }
 
 INSTANTIATE_TEST_SUITE_P(StringInterningTests, StringInterningTest,

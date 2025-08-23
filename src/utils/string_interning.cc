@@ -22,6 +22,8 @@ MemoryPool StringInternStore::memory_pool_{0};
 
 InternedString::InternedString(absl::string_view str, bool shared)
     : length_(str.length()), is_shared_(shared), is_data_owner_(true) {
+  IsolatedMemoryScope scope { StringInternStore::memory_pool_ };
+
   data_ = new char[length_ + 1];
   memcpy(data_, str.data(), length_);
   data_[length_] = '\0';
@@ -31,21 +33,17 @@ InternedString::InternedString(char* data, size_t length)
     : data_(data), length_(length), is_shared_(true), is_data_owner_(false) {}
 
 InternedString::~InternedString() {
-  auto deallocate = [this]() {
-    if (is_data_owner_) {
-      delete[] data_;
-    } else {
-      Allocator::Free(data_);
-    }
-  };
+  // NOTE: isolate memory tracking for deallocation.
+  IsolatedMemoryScope scope {StringInternStore::memory_pool_};
 
   if (is_shared_) {
-    // NOTE: isolate memory tracking for deallocation only for interned strings.
-    IsolatedMemoryScope scope {StringInternStore::memory_pool_};
     StringInternStore::Instance().Release(this);
-    deallocate();
+  }
+
+  if (is_data_owner_) {
+    delete[] data_;
   } else {
-    deallocate();
+    Allocator::Free(data_);
   }
 }
 

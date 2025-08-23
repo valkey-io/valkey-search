@@ -94,93 +94,96 @@ inline std::string indent_prefix(int depth, bool last) {
     return s;
 }
 
-void PrintPredicate(const query::Predicate* pred, int depth = 0, bool last = true) {
-    if (!pred) {
-        VMSDK_LOG(WARNING, nullptr) << indent_prefix(depth, last) << "NULL\n";
-        return;
+void PrintPredicate(const query::Predicate* pred, int depth, bool last, bool& valid) {
+  if (!pred) {
+    VMSDK_LOG(WARNING, nullptr) << indent_prefix(depth, last) << "NULL\n";
+    return;
+  }
+  std::string prefix = indent_prefix(depth, last);
+  switch (pred->GetType()) {
+    case query::PredicateType::kComposedAnd:
+    case query::PredicateType::kComposedOr: {
+      const auto* comp = dynamic_cast<const query::ComposedPredicate*>(pred);
+      VMSDK_LOG(WARNING, nullptr) << prefix
+                                  << (pred->GetType() == query::PredicateType::kComposedAnd ? "AND" : "OR") << "\n";
+      // Flatten same-type children for better readability
+      std::vector<const query::Predicate*> children;
+      std::function<void(const query::Predicate*)> collect = [&](const query::Predicate* node){
+        if (!node) return;
+        if (node->GetType() == pred->GetType()) {
+            auto c = dynamic_cast<const query::ComposedPredicate*>(node);
+            collect(c->GetLhsPredicate());
+            collect(c->GetRhsPredicate());
+        } else {
+            children.push_back(node);
+        }
+      };
+      collect(comp);
+      for (size_t i = 0; i < children.size(); ++i) {
+        PrintPredicate(children[i], depth + 1, i == children.size() - 1, valid);
+      }
+      break;
     }
-
-    std::string prefix = indent_prefix(depth, last);
-
-    switch (pred->GetType()) {
-        case query::PredicateType::kComposedAnd:
-        case query::PredicateType::kComposedOr: {
-            const auto* comp = dynamic_cast<const query::ComposedPredicate*>(pred);
-            VMSDK_LOG(WARNING, nullptr) << prefix
-                                        << (pred->GetType() == query::PredicateType::kComposedAnd ? "AND" : "OR") << "\n";
-
-            // Flatten same-type children for better readability
-            std::vector<const query::Predicate*> children;
-            std::function<void(const query::Predicate*)> collect = [&](const query::Predicate* node){
-                if (!node) return;
-                if (node->GetType() == pred->GetType()) {
-                    auto c = dynamic_cast<const query::ComposedPredicate*>(node);
-                    collect(c->GetLhsPredicate());
-                    collect(c->GetRhsPredicate());
-                } else {
-                    children.push_back(node);
-                }
-            };
-            collect(comp);
-
-            for (size_t i = 0; i < children.size(); ++i) {
-                PrintPredicate(children[i], depth + 1, i == children.size() - 1);
-            }
-            break;
-        }
-
-        case query::PredicateType::kNegate: {
-            const auto* neg = dynamic_cast<const query::NegatePredicate*>(pred);
-            VMSDK_LOG(WARNING, nullptr) << prefix << "NOT\n";
-            PrintPredicate(neg->GetPredicate(), depth + 1, true);
-            break;
-        }
-
-        case query::PredicateType::kText: {
-            if (auto prox = dynamic_cast<const query::ProximityPredicate*>(pred)) {
-                VMSDK_LOG(WARNING, nullptr) << prefix
-                                            << "PROXIMITY(slop=" << prox->GetSlop()
-                                            << ", inorder=" << prox->IsInOrder() << ")\n";
-                const auto& terms = prox->GetTerms();
-                for (size_t i = 0; i < terms.size(); ++i)
-                    PrintPredicate(terms[i].get(), depth + 1, i == terms.size() - 1);
-            } else if (auto term = dynamic_cast<const query::TermPredicate*>(pred)) {
-                VMSDK_LOG(WARNING, nullptr) << prefix << "TERM(" << term->GetTextString() << ")_"
-                                            << term->GetIdentifier() << "\n";
-            } else if (auto pre = dynamic_cast<const query::PrefixPredicate*>(pred)) {
-                VMSDK_LOG(WARNING, nullptr) << prefix << "PREFIX(" << pre->GetTextString() << ")_"
-                                            << pre->GetIdentifier() << "\n";
-            } else if (auto fuzzy = dynamic_cast<const query::FuzzyPredicate*>(pred)) {
-                VMSDK_LOG(WARNING, nullptr) << prefix << "FUZZY(" << fuzzy->GetTextString()
-                                            << ", distance=" << fuzzy->GetDistance() << ")_"
-                                            << fuzzy->GetIdentifier() << "\n";
-            } else {
-                VMSDK_LOG(WARNING, nullptr) << prefix << "UNKNOWN TEXT\n";
-            }
-            break;
-        }
-
-        case query::PredicateType::kNumeric: {
-            const auto* np = dynamic_cast<const query::NumericPredicate*>(pred);
-            VMSDK_LOG(WARNING, nullptr) << prefix
-                                        << "NUMERIC(" << np->GetStart()
-                                        << (np->IsStartInclusive() ? "≤" : "<")
-                                        << " .. " << np->GetEnd()
-                                        << (np->IsEndInclusive() ? "≤" : "<") << ")_" << np->GetIdentifier() << "\n";
-            break;
-        }
-
-        case query::PredicateType::kTag: {
-            const auto* tp = dynamic_cast<const query::TagPredicate*>(pred);
-            VMSDK_LOG(WARNING, nullptr) << prefix << "TAG(" << tp->GetTagString() << ")_"
-                                        << tp->GetIdentifier() << "\n";
-            break;
-        }
-
-        default:
-            VMSDK_LOG(WARNING, nullptr) << prefix << "UNKNOWN\n";
-            break;
+    case query::PredicateType::kNegate: {
+      const auto* neg = dynamic_cast<const query::NegatePredicate*>(pred);
+      VMSDK_LOG(WARNING, nullptr) << prefix << "NOT\n";
+      PrintPredicate(neg->GetPredicate(), depth + 1, true, valid);
+      break;
     }
+    case query::PredicateType::kText: {
+      if (auto prox = dynamic_cast<const query::ProximityPredicate*>(pred)) {
+        valid = false;
+        VMSDK_LOG(WARNING, nullptr) << prefix
+                                    << "PROXIMITY(slop=" << prox->GetSlop()
+                                    << ", inorder=" << prox->IsInOrder() << ")\n";
+        const auto& terms = prox->GetTerms();
+        for (size_t i = 0; i < terms.size(); ++i)
+          PrintPredicate(terms[i].get(), depth + 1, i == terms.size() - 1, valid);
+      } else if (auto term = dynamic_cast<const query::TermPredicate*>(pred)) {
+        VMSDK_LOG(WARNING, nullptr) << prefix << "TERM(" << term->GetTextString() << ")_"
+                                    << term->GetIdentifier() << "\n";
+      } else if (auto pre = dynamic_cast<const query::PrefixPredicate*>(pred)) {
+        VMSDK_LOG(WARNING, nullptr) << prefix << "PREFIX(" << pre->GetTextString() << ")_"
+                                    << pre->GetIdentifier() << "\n";
+      } else if (auto pre = dynamic_cast<const query::SuffixPredicate*>(pred)) {
+        valid = false;
+        VMSDK_LOG(WARNING, nullptr) << prefix << "Suffix(" << pre->GetTextString() << ")_"
+                                    << pre->GetIdentifier() << "\n";
+      } else if (auto pre = dynamic_cast<const query::InfixPredicate*>(pred)) {
+        valid = false;
+        VMSDK_LOG(WARNING, nullptr) << prefix << "Infix(" << pre->GetTextString() << ")_"
+                                    << pre->GetIdentifier() << "\n";
+      } else if (auto fuzzy = dynamic_cast<const query::FuzzyPredicate*>(pred)) {
+        valid = false;
+        VMSDK_LOG(WARNING, nullptr) << prefix << "FUZZY(" << fuzzy->GetTextString()
+                                    << ", distance=" << fuzzy->GetDistance() << ")_"
+                                    << fuzzy->GetIdentifier() << "\n";
+      } else {
+        valid = false;
+        VMSDK_LOG(WARNING, nullptr) << prefix << "UNKNOWN TEXT\n";
+      }
+      break;
+    }
+    case query::PredicateType::kNumeric: {
+      const auto* np = dynamic_cast<const query::NumericPredicate*>(pred);
+      VMSDK_LOG(WARNING, nullptr) << prefix
+                                  << "NUMERIC(" << np->GetStart()
+                                  << (np->IsStartInclusive() ? "≤" : "<")
+                                  << " .. " << np->GetEnd()
+                                  << (np->IsEndInclusive() ? "≤" : "<") << ")_" << np->GetIdentifier() << "\n";
+      break;
+    }
+    case query::PredicateType::kTag: {
+      const auto* tp = dynamic_cast<const query::TagPredicate*>(pred);
+      VMSDK_LOG(WARNING, nullptr) << prefix << "TAG(" << tp->GetTagString() << ")_"
+                                  << tp->GetIdentifier() << "\n";
+      break;
+    }
+    default:
+      valid |= false;
+      VMSDK_LOG(WARNING, nullptr) << prefix << "UNKNOWN\n";
+      break;
+  }
 }
 
 FilterParser::FilterParser(const IndexSchema& index_schema,
@@ -401,7 +404,12 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   results.filter_identifiers.swap(filter_identifiers_);
   // Log the built query syntax tree.
   VMSDK_LOG(WARNING, nullptr) << "Parsed QuerySyntaxTree:";
-  PrintPredicate(results.root_predicate.get());
+  bool valid = true;
+  PrintPredicate(results.root_predicate.get(), 0, true, valid);
+  // Temporary validation until we support all the new predicates
+  if (!valid) {
+    return absl::InvalidArgumentError("Unsupported query operation");
+  }
   return results;
 }
 
@@ -500,11 +508,10 @@ FilterParser::BuildSingleTextPredicate(const std::string& field_name, absl::stri
     switch (kind) {
       case WildcardType::kPrefix:
         return std::make_unique<query::PrefixPredicate>(text_index, identifier, field_name, std::string(stem));
-      // TODO: Implement Suffix and Infix predicates
-      // case WildcardType::kSuffix:
-      //   return std::make_unique<query::SuffixPredicate>(text_index, identifier, field_name, std::string(stem));
-      // case WildcardType::kInfix:
-      //   return std::make_unique<query::InfixPredicate>(text_index, identifier, field_name, std::string(stem));
+      case WildcardType::kSuffix:
+        return std::make_unique<query::SuffixPredicate>(text_index, identifier, field_name, std::string(stem));
+      case WildcardType::kInfix:
+        return std::make_unique<query::InfixPredicate>(text_index, identifier, field_name, std::string(stem));
       default: break;
     }
   }

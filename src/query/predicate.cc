@@ -63,6 +63,42 @@ bool PrefixPredicate::Evaluate(const std::string_view& text) const {
   return absl::StartsWith(text, term_);
 }
 
+SuffixPredicate::SuffixPredicate(
+    const indexes::Text* index, absl::string_view identifier,
+    absl::string_view alias, std::string term)
+    : TextPredicate(),
+      index_(index),
+      identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
+      alias_(alias),
+      term_(term) {}
+
+bool SuffixPredicate::Evaluate(Evaluator& evaluator) const {
+  return evaluator.EvaluateText(*this);
+}
+
+bool SuffixPredicate::Evaluate(const std::string_view& text) const {
+  if (text.empty()) return false;
+  return absl::EndsWith(text, term_);
+}
+
+InfixPredicate::InfixPredicate(
+    const indexes::Text* index, absl::string_view identifier,
+    absl::string_view alias, std::string term)
+    : TextPredicate(),
+      index_(index),
+      identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
+      alias_(alias),
+      term_(term) {}
+
+bool InfixPredicate::Evaluate(Evaluator& evaluator) const {
+  return evaluator.EvaluateText(*this);
+}
+
+bool InfixPredicate::Evaluate(const std::string_view& text) const {
+  if (text.empty()) return false;
+  return absl::StrContains(text, term_);
+}
+
 FuzzyPredicate::FuzzyPredicate(const indexes::Text* index,
                                absl::string_view identifier,
                                absl::string_view alias, std::string term,

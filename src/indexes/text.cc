@@ -115,19 +115,6 @@ std::unique_ptr<Text::EntriesFetcher> Text::Search(
   return fetcher;
 }
 
-// Option 1: In Text::Search(), use a Metadata struct to store the predicate operation and other details.
-// Begin -> General class (impl EntriesFetcherIteratorBase)
-// Text::Search() -> Create a Metadata struct. Store the Metadata. Return the EntriesFetcher.
-// EntriesFetcher::Begin() -> Create a Text::EntriesFetcherIterator which can be one of many types based on the metadata's specified operation.
-// EntriesFetcher::Size() -> Return the size of the entries based on the metadata OR cache the size during the Search() call.
-
-// Option 2: In Text::Search(), store the predicate operation directly in the EntriesFetcher.
-// Begin -> General class (impl EntriesFetcherIteratorBase)
-// Text::Search() -> Create an EntriesFetcher and store the predicate operation directly in it.
-// EntriesFetcher::Begin() -> Create a Text::EntriesFetcherIterator which can be one of many types based on the predicate_ operation.
-// EntriesFetcher::Size() -> Return the size of the entries based on the predicate operation stored in the EntriesFetcher.
-
-
 size_t Text::EntriesFetcher::Size() const { return size_; }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
@@ -142,7 +129,6 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
     itr->Next();
     return itr;
   }
-  // TODO: Return error in the query path earlier on.
   CHECK(false) << "Unsupported TextPredicate operation";
   return nullptr;
 }

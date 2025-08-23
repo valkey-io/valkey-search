@@ -194,6 +194,56 @@ class PrefixPredicate : public TextPredicate {
   std::string term_;
 };
 
+class SuffixPredicate : public TextPredicate {
+ public:
+  SuffixPredicate(const indexes::Text* index,
+                  absl::string_view identifier,
+                  absl::string_view alias,
+                  std::string term);
+  const indexes::Text* GetIndex() const { return index_; }
+  absl::string_view GetAlias() const { return alias_; }
+  absl::string_view GetIdentifier() const {
+    return vmsdk::ToStringView(identifier_.get());
+  }
+  vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
+    return vmsdk::RetainUniqueValkeyString(identifier_.get());
+  }
+  absl::string_view GetTextString() const override { return term_; }
+  bool Evaluate(Evaluator& evaluator) const override;
+  bool Evaluate(const std::string_view& text) const override;
+
+ private:
+  const indexes::Text* index_;
+  vmsdk::UniqueValkeyString identifier_;
+  absl::string_view alias_;
+  std::string term_;
+};
+
+class InfixPredicate : public TextPredicate {
+ public:
+  InfixPredicate(const indexes::Text* index,
+                  absl::string_view identifier,
+                  absl::string_view alias,
+                  std::string term);
+  const indexes::Text* GetIndex() const { return index_; }
+  absl::string_view GetAlias() const { return alias_; }
+  absl::string_view GetIdentifier() const {
+    return vmsdk::ToStringView(identifier_.get());
+  }
+  vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
+    return vmsdk::RetainUniqueValkeyString(identifier_.get());
+  }
+  absl::string_view GetTextString() const override { return term_; }
+  bool Evaluate(Evaluator& evaluator) const override;
+  bool Evaluate(const std::string_view& text) const override;
+
+ private:
+  const indexes::Text* index_;
+  vmsdk::UniqueValkeyString identifier_;
+  absl::string_view alias_;
+  std::string term_;
+};
+
 class FuzzyPredicate : public TextPredicate {
  public:
   FuzzyPredicate(const indexes::Text* index,

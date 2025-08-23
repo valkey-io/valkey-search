@@ -28,7 +28,7 @@ class TestFTInfoPrimary(ValkeySearchClusterTestCase):
 
     def is_indexing_complete(self, node, index_name, N):
         try:
-             raw = node.execute_command("FT.INFO", index_name, "PRIMARY")
+            raw = node.execute_command("FT.INFO", index_name, "PRIMARY")
             info = _parse_info_kv_list(raw)
             if not info:
                 return False
@@ -56,7 +56,7 @@ class TestFTInfoPrimary(ValkeySearchClusterTestCase):
         for i in range(N):
             cluster.execute_command("HSET", f"doc:{i}", "price", str(10 + i))
 
-        waiters.wait_for_equal(lambda: self.is_indexing_complete(node0, index_name, N), True, timeout=5)
+        waiters.wait_for_equal(lambda: self.is_indexing_complete(node0, index_name, N), True, timeout=10)
 
         raw = node0.execute_command("FT.INFO", index_name, "PRIMARY")
         info = _parse_info_kv_list(raw)

@@ -13,6 +13,8 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <sstream>
+#include <map>
 
 #include "absl/synchronization/mutex.h"
 #include "absl/time/clock.h"
@@ -475,8 +477,11 @@ TEST_F(ValkeySearchTest, Info) {
     "index_stats\nnumber_of_indexes: 1\nnumber_of_attributes: 1\ntotal_indexed_documents: 4\nnumber_of_active_indexes: 1\n"
     "number_of_active_indexes_running_queries: 0\nnumber_of_active_indexes_indexing: 1\n"
     "total_active_write_threads: 5\ntotal_indexing_time: 0\n"
-    "indexing\nbackground_indexing_status: 'IN_PROGRESS'\n"
-    "memory\nused_memory_bytes: 18408\nused_memory_human: '17.98KiB'\n"
+    "indexing\nbackground_indexing_status: 'IN_PROGRESS'\nmemory\nused_memory_bytes: 18408\nused_memory_human: '17.98KiB'\n"
+    "used_memory_indexes: 0\nused_memory_indexes_human: 0\nsmallest_memory_index: 0\nsmallest_memory_index_human: 0\n"
+    "largest_memory_index: 0\nlargest_memory_index_human: 0\nused_memory_vector_index: 0\ncursors\nglobal_idle_user: 0\n"
+    "global_idle_internal: 0\nglobal_total_user: 0\nglobal_total_internal: 0\ngarbage_collector\ngc_bytes_collected: 0\n"
+    "gc_total_cycles: 0\ngc_total_ms_run: 0\ngc_total_docs_not_collected: 0\ngc_marked_deleted_vectors: 0\n"
 );
 #endif
   StringInternStore::SetMemoryUsage(0); // reset memory pool

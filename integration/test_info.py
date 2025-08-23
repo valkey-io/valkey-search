@@ -53,7 +53,20 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             "search_total_active_write_threads",
             "search_total_indexing_time",
             "search_used_memory_bytes",
-            "search_index_reclaimable_memory"
+            "search_index_reclaimable_memory",
+            "search_used_memory_indexes",
+            "search_smallest_memory_index",
+            "search_largest_memory_index",
+            "search_used_memory_vector_index",
+            "search_global_idle_user",
+            "search_global_idle_internal",
+            "search_global_total_user",
+            "search_global_total_internal",
+            "search_gc_bytes_collected",
+            "search_gc_total_cycles",
+            "search_gc_total_ms_run",
+            "search_gc_total_docs_not_collected",
+            "search_gc_marked_deleted_vectors"
         ]
 
         string_fields = [
@@ -61,7 +74,10 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
         ]
 
         bytes_fields = [
-            "search_used_memory_human"
+            "search_used_memory_human",
+            "search_used_memory_indexes_human",
+            "search_smallest_memory_index_human",
+            "search_largest_memory_index_human"
         ]
         
         double_fields = [

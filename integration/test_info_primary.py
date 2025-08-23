@@ -25,13 +25,18 @@ def verify_error_response(client, cmd, expected_err_reply):
 class TestFTInfoPrimary(ValkeySearchClusterTestCase):
 
     def is_indexing_complete(self, node, index_name, N):
-        raw = node.execute_command("FT.INFO", index_name, "PRIMARY")
-        info = _parse_info_kv_list(raw)
-        if not info:
-            return False
-        num_docs = int(info.get("num_docs", 0))
-        num_records = int(info.get("num_records", 0))
-        return num_docs >= N and num_records >= N
+        try:
+            raw = node.execute_command("FT.INFO", index_name, "PRIMARY")
+            info = _parse_info_kv_list(raw)
+            if not info:
+                return False
+            num_docs = int(info.get("num_docs", 0))
+            num_records = int(info.get("num_records", 0))
+            return num_docs >= N and num_records >= N
+        except Exception as e:
+            if "Communication error between nodes found" in str(e):
+                return False
+            raise
 
     def test_ft_info_primary_counts(self):
         cluster: ValkeyCluster = self.new_cluster_client()
@@ -49,7 +54,7 @@ class TestFTInfoPrimary(ValkeySearchClusterTestCase):
         for i in range(N):
             cluster.execute_command("HSET", f"doc:{i}", "price", str(10 + i))
 
-        waiters.wait_for_equal(lambda: self.is_indexing_complete(node0, index_name, N), True, timeout=5)
+        waiters.wait_for_equal(lambda: self.is_indexing_complete(node0, index_name, N), True, timeout=10)
 
         raw = node0.execute_command("FT.INFO", index_name, "PRIMARY")
         info = _parse_info_kv_list(raw)

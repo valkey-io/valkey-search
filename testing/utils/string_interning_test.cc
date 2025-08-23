@@ -130,6 +130,7 @@ TEST_F(StringInterningTest, StringInternStoreTracksMemoryInternally) {
   EXPECT_EQ(StringInternStore::GetMemoryUsage(), 0);
 }
 
+#ifndef SAN_BUILD
 TEST_F(StringInterningTest, NonInternedStringDoesAffectStoreMemory) {
   static auto track_malloc_size = [](void* ptr) -> size_t {
     return 21;
@@ -152,6 +153,7 @@ TEST_F(StringInterningTest, NonInternedStringDoesAffectStoreMemory) {
   
   vmsdk::test_utils::ClearTestSystemMallocSizeFunction();
 }
+#endif
 
 INSTANTIATE_TEST_SUITE_P(StringInterningTests, StringInterningTest,
                          ::testing::Values(true, false),

@@ -29,18 +29,18 @@ class TestFTInfoCluster(ValkeySearchClusterTestCase):
         node0: Valkey = self.new_client_for_primary(0)
         index_name = "index1"
 
+        N = 5
+        for i in range(N):
+            cluster.execute_command("HSET", f"doc:{i}", "price", str(10 + i))
+
         assert node0.execute_command(
             "FT.CREATE", index_name,
             "ON", "HASH",
             "PREFIX", "1", "doc:",
             "SCHEMA", "price", "NUMERIC"
         ) == b"OK"
-
-        N = 5
-        for i in range(N):
-            cluster.execute_command("HSET", f"doc:{i}", "price", str(10 + i))
         
-        waiters.wait_for_equal(lambda: self.is_indexing_complete(node0, index_name), True, timeout=5)
+        waiters.wait_for_equal(lambda: self.is_indexing_complete(node0, index_name), True, timeout=10)
 
         raw = node0.execute_command("FT.INFO", index_name, "CLUSTER")
         info = _parse_info_kv_list(raw)

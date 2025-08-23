@@ -45,6 +45,7 @@ class TermIterator : public indexes::EntriesFetcherIteratorBase {
   const absl::string_view data_;
   uint32_t current_idx_ = 0;
   bool begin_ = true;  // Used to track if we are at the beginning of the iterator.
+  bool nomatch_ = false;
   const InternedStringSet* untracked_keys_;
   InternedStringPtr current_key_;
   FieldMaskPredicate field_mask_;

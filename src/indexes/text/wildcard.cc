@@ -13,35 +13,39 @@ WildCardIterator::WildCardIterator(const WordIterator& word,
 }
 
 bool WildCardIterator::Done() const {
+  if (nomatch_) {
+    return true;
+  }
   return word_.Done() && !key_iter_.IsValid();
 }
 
 void WildCardIterator::Next() {
-  auto advance_to_valid_key = [&]() {
+  // Note: Currently only supports Prefix search.
+  if (begin_) {
+    if (word_.Done()) {
+      nomatch_ = true;
+      return;
+    }
+    target_posting_ = word_.GetTarget();
+    key_iter_ = target_posting_->GetKeyIterator();
+    begin_ = false;
+  } else if (key_iter_.IsValid()) {
+    key_iter_.NextKey();
+  }
+  while (!word_.Done()) {
     while (key_iter_.IsValid() && !key_iter_.ContainsFields(field_mask_)) {
       key_iter_.NextKey();
     }
-  };
-  // On a Begin() call, we initialize the target_posting_ and key_iter_.
-  if (begin_) {
-    target_posting_ = word_.GetTarget();
-    key_iter_ = target_posting_->GetKeyIterator();
-    begin_ = false;  // Set to false after the first call to Next.
-    advance_to_valid_key();
-    return;
-  }
-  if (key_iter_.IsValid()) {
-    key_iter_.NextKey();
-    advance_to_valid_key();
-    if (key_iter_.IsValid()) return;
-  }
-  while (!word_.Done()) {
+    // If we found a valid key, stop
+    if (key_iter_.IsValid()) {
+      return;
+    }
+    // Current posting exhausted. Move to next word
     word_.Next();
-    if (word_.Done()) return;
-    target_posting_ = word_.GetTarget();
-    key_iter_ = target_posting_->GetKeyIterator();
-    advance_to_valid_key();
-    if (key_iter_.IsValid()) return;
+    if (!word_.Done()) {
+      target_posting_ = word_.GetTarget();
+      key_iter_ = target_posting_->GetKeyIterator();
+    }
   }
 }
 

@@ -571,7 +571,7 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::string& field_for_default) {
 // TODO:
 // - Handle negation
 // - Handle parentheses by treating them as composed AND and simply moving forward
-// - Handle parsing and set up of default text field predicates
+// - Handle parsing and setup of default text field predicates
 // - Try to move out nested standard operations (negate/numeric/tag) back to the caller site and reduce responsibilities
 // of the text parser
 // - Handle escaped characters in text tokens

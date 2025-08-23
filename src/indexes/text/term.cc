@@ -13,7 +13,7 @@ TermIterator::TermIterator(const WordIterator& word,
 }
 
 bool TermIterator::Done() const {
-  if (word_.GetWord() != data_) {
+  if (nomatch_ || word_.GetWord() != data_) {
     return true;
   }
   // Check if key iterator is valid
@@ -23,6 +23,10 @@ bool TermIterator::Done() const {
 void TermIterator::Next() {
   // On a Begin() call, we initialize the target_posting_ and key_iter_.
   if (begin_) {
+    if (word_.Done()) {
+      nomatch_ = true;
+      return;
+    }
     target_posting_ = word_.GetTarget();
     key_iter_ = target_posting_->GetKeyIterator();
     begin_ = false;  // Set to false after the first call to Next.    

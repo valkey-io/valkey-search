@@ -82,6 +82,7 @@ struct WildCardIterator : public indexes::EntriesFetcherIteratorBase {
   InternedStringPtr current_key_;
   WildCardOperation operation_;
   FieldMaskPredicate field_mask_;
+  bool nomatch_ = false;
 };
 
 

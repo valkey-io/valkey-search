@@ -134,22 +134,19 @@ class TagPredicate : public Predicate {
 
 class TextPredicate : public Predicate {
  public:
-  enum class Operation {
-    kExact,      // Exact term / exact phrase match.
-    kPrefix,     // Prefix Wildcard match
-    kSuffix,     // kSuffix Wildcard match
-    kInfix,      // kInfix Wildcard match
-    kFuzzy,      // Fuzzy match
-  };
+  TextPredicate() : Predicate(PredicateType::kText) {}
+  virtual ~TextPredicate() = default;
+  virtual bool Evaluate(Evaluator& evaluator) const = 0;
+  virtual bool Evaluate(const std::string_view& text) const = 0;
+  virtual const indexes::Text* GetIndex() const = 0;
+};
 
-  TextPredicate(const indexes::Text* index, absl::string_view alias,
+class TermPredicate : public TextPredicate {
+ public:
+  TermPredicate(const indexes::Text* index,
                 absl::string_view identifier,
-                absl::string_view raw_text_string,
-                Operation op = Operation::kExact,
-                uint32_t fuzzy_distance = 0);
-
-  bool Evaluate(Evaluator& evaluator) const override;
-  bool Evaluate(absl::string_view raw_text_string) const;
+                absl::string_view alias,
+                std::string term);
   const indexes::Text* GetIndex() const { return index_; }
   absl::string_view GetAlias() const { return alias_; }
   absl::string_view GetIdentifier() const {
@@ -158,24 +155,137 @@ class TextPredicate : public Predicate {
   vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
     return vmsdk::RetainUniqueValkeyString(identifier_.get());
   }
-  const std::string& GetTextString() const { return raw_text_string_; }
-  Operation GetOperation() const { return operation_; }
-  uint32_t GetFuzzyDistance() const { return fuzzy_distance_; }
+  absl::string_view GetTextString() const { return term_; }
+  bool Evaluate(Evaluator& evaluator) const override;
+  bool Evaluate(const std::string_view& text) const override;
+ private:
+  const indexes::Text* index_;
+  vmsdk::UniqueValkeyString identifier_;
+  absl::string_view alias_;
+  std::string term_;
+};
+
+class PrefixPredicate : public TextPredicate {
+ public:
+  PrefixPredicate(const indexes::Text* index,
+                  absl::string_view identifier,
+                  absl::string_view alias,
+                  std::string term);
+  const indexes::Text* GetIndex() const { return index_; }
+  absl::string_view GetAlias() const { return alias_; }
+  absl::string_view GetIdentifier() const {
+    return vmsdk::ToStringView(identifier_.get());
+  }
+  vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
+    return vmsdk::RetainUniqueValkeyString(identifier_.get());
+  }
+  absl::string_view GetTextString() const { return term_; }
+  bool Evaluate(Evaluator& evaluator) const override;
+  bool Evaluate(const std::string_view& text) const override;
 
  private:
   const indexes::Text* index_;
   vmsdk::UniqueValkeyString identifier_;
-  std::string alias_; // Attribute alias will be NULL for default text fields.
-  std::string raw_text_string_;
-  Operation operation_;
-  uint32_t fuzzy_distance_;
+  absl::string_view alias_;
+  std::string term_;
+};
 
-  // Private evaluation methods
-  bool EvaluateExact(absl::string_view text) const;
-  bool EvaluatePrefix(absl::string_view text) const;
-  bool EvaluateSuffix(absl::string_view text) const;
-  bool EvaluateInfix(absl::string_view text) const;
-  bool EvaluateFuzzy(absl::string_view text) const;
+class SuffixPredicate : public TextPredicate {
+ public:
+  SuffixPredicate(const indexes::Text* index,
+                  absl::string_view identifier,
+                  absl::string_view alias,
+                  std::string term);
+  const indexes::Text* GetIndex() const { return index_; }
+  absl::string_view GetAlias() const { return alias_; }
+  absl::string_view GetIdentifier() const {
+    return vmsdk::ToStringView(identifier_.get());
+  }
+  vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
+    return vmsdk::RetainUniqueValkeyString(identifier_.get());
+  }
+  absl::string_view GetTextString() const { return term_; }
+  bool Evaluate(Evaluator& evaluator) const override;
+  bool Evaluate(const std::string_view& text) const override;
+
+ private:
+  const indexes::Text* index_;
+  vmsdk::UniqueValkeyString identifier_;
+  absl::string_view alias_;
+  std::string term_;
+};
+
+class InfixPredicate : public TextPredicate {
+ public:
+  InfixPredicate(const indexes::Text* index,
+                  absl::string_view identifier,
+                  absl::string_view alias,
+                  std::string term);
+  const indexes::Text* GetIndex() const { return index_; }
+  absl::string_view GetAlias() const { return alias_; }
+  absl::string_view GetIdentifier() const {
+    return vmsdk::ToStringView(identifier_.get());
+  }
+  vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
+    return vmsdk::RetainUniqueValkeyString(identifier_.get());
+  }
+  absl::string_view GetTextString() const { return term_; }
+  bool Evaluate(Evaluator& evaluator) const override;
+  bool Evaluate(const std::string_view& text) const override;
+
+ private:
+  const indexes::Text* index_;
+  vmsdk::UniqueValkeyString identifier_;
+  absl::string_view alias_;
+  std::string term_;
+};
+
+class FuzzyPredicate : public TextPredicate {
+ public:
+  FuzzyPredicate(const indexes::Text* index,
+                 absl::string_view identifier,
+                 absl::string_view alias,
+                 std::string term, uint32_t distance);
+  const indexes::Text* GetIndex() const { return index_; }
+  absl::string_view GetAlias() const { return alias_; }
+  absl::string_view GetIdentifier() const {
+    return vmsdk::ToStringView(identifier_.get());
+  }
+  vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
+    return vmsdk::RetainUniqueValkeyString(identifier_.get());
+  }
+  absl::string_view GetTextString() const { return term_; }
+  uint32_t GetDistance() const { return distance_; }
+  bool Evaluate(Evaluator& evaluator) const override;
+  bool Evaluate(const std::string_view& text) const override;
+
+ private:
+  const indexes::Text* index_;
+  vmsdk::UniqueValkeyString identifier_;
+  absl::string_view alias_;
+  std::string term_;
+  uint32_t distance_;
+};
+
+class ProximityPredicate : public TextPredicate {
+ public:
+  ProximityPredicate(std::vector<std::unique_ptr<TextPredicate>> terms,
+                     uint32_t slop = 0, bool inorder = true);
+  uint32_t GetSlop() const { return slop_; }
+  bool IsInOrder() const { return inorder_; }
+  bool Evaluate(Evaluator& evaluator) const override;
+  bool Evaluate(const std::string_view& text) const override {
+    return false;
+  }
+  const indexes::Text* GetIndex() const override {
+    return terms_[0]->GetIndex();
+  }
+  const std::vector<std::unique_ptr<TextPredicate>>& GetTerms() const { return terms_; }
+
+ private:
+  std::vector<std::unique_ptr<TextPredicate>> terms_;
+  bool inorder_;
+  uint32_t slop_;
 };
 
 enum class LogicalOperator { kAnd, kOr };

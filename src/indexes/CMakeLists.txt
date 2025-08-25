@@ -99,8 +99,10 @@ set(SRCS_TEXT ${CMAKE_CURRENT_LIST_DIR}/text/text_index.h
               ${CMAKE_CURRENT_LIST_DIR}/text.h
               ${CMAKE_CURRENT_LIST_DIR}/text/posting.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/posting.h
-              ${CMAKE_CURRENT_LIST_DIR}/text/phrase.cc
-              ${CMAKE_CURRENT_LIST_DIR}/text/phrase.h)
+              ${CMAKE_CURRENT_LIST_DIR}/text/term.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/term.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/wildcard.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/wildcard.h)
 
 valkey_search_add_static_library(text "${SRCS_TEXT}")
 target_include_directories(text PUBLIC ${CMAKE_CURRENT_LIST_DIR})

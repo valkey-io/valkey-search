@@ -22,7 +22,8 @@
 #include "src/index_schema.pb.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
-#include "src/indexes/text/phrase.h"
+#include "src/indexes/text/term.h"
+#include "src/indexes/text/wildcard.h"
 #include "src/query/predicate.h" 
 
 namespace valkey_search::indexes {
@@ -92,7 +93,7 @@ class Text : public IndexBase {
     size_t size_;
     const InternedStringSet* untracked_keys_;
     std::shared_ptr<text::TextIndex> text_index_;
-    query::TextPredicate::Operation operation_;
+    const query::TextPredicate* predicate_;
     absl::string_view data_;
     bool no_field_{false};
     text::FieldMaskPredicate field_mask_;

@@ -13,12 +13,15 @@ hash_docs = [
     ["HSET", "product:1", "category", "electronics", "name", "Laptop", "price", "999.99", "rating", "4.5", "desc", "Great"],
     ["HSET", "product:2", "category", "electronics", "name", "Tablet", "price", "499.00", "rating", "4.0", "desc", "Good"],
     ["HSET", "product:3", "category", "electronics", "name", "Phone", "price", "299.00", "rating", "3.8", "desc", "Ok"],
-    ["HSET", "product:4", "category", "books", "name", "Book", "price", "19.99", "rating", "4.8", "desc", "Wonderful"]
+    ["HSET", "product:4", "category", "books", "name", "Book", "price", "19.99", "rating", "4.8", "desc", "Wonderful"],
+    ["HSET", "product:5", "category", "books", "name", "Book2", "price", "19.99", "rating", "1.0", "desc", "Greased"]
 ]
 text_query_term = ["FT.SEARCH", "products", '@desc:"Wonderful"']
 text_query_term_nomatch = ["FT.SEARCH", "products", '@desc:"nomatch"']
 text_query_prefix = ["FT.SEARCH", "products", '@desc:"Wond*"']
 text_query_prefix_nomatch = ["FT.SEARCH", "products", '@desc:"nomatch*"']
+text_query_prefix_multimatch = ["FT.SEARCH", "products", '@desc:"Grea*"']
+
 expected_hash_key = b'product:4'
 expected_hash_value = {
     b'name': b"Book",
@@ -39,7 +42,9 @@ hash_docs_with_desc2 = [
 
 # Search queries for specific fields
 text_query_desc_field = ["FT.SEARCH", "products2", '@desc:"Wonderful"']
+text_query_desc_prefix = ["FT.SEARCH", "products2", '@desc:"Wonder*"']
 text_query_desc2_field = ["FT.SEARCH", "products2", '@desc2:"Wonderful"']
+text_query_desc2_prefix = ["FT.SEARCH", "products2", '@desc2:"Wonder*"']
 
 # Expected results for desc field search
 expected_desc_hash_key = b'product:4'
@@ -91,6 +96,11 @@ class TestFullText(ValkeySearchTestCaseBase):
             result = client.execute_command(*query)
             assert len(result) == 1
             assert result[0] == 0  # Number of documents found
+        # Perform a wild card prefix operation with multiple matches
+        result = client.execute_command(*text_query_prefix_multimatch)
+        assert len(result) == 5
+        assert result[0] == 2  # Number of documents found. Both docs below start with Grea* => Great and Greased
+        assert result[1] == b"product:1" and result[3] == b"product:5" or result[1] == b"product:5" and result[3] == b"product:1"
 
     def test_ft_create(self):
         """
@@ -162,20 +172,26 @@ class TestFullText(ValkeySearchTestCaseBase):
         for doc in hash_docs_with_desc2:
             assert client.execute_command(*doc) == 6
         
-        # Perform search on desc field for "Wonderful"
-        result_desc = client.execute_command(*text_query_desc_field)
-        assert len(result_desc) == 3
-        assert result_desc[0] == 1  # Number of documents found
-        assert result_desc[1] == expected_desc_hash_key
-        document_desc = result_desc[2]
-        doc_fields_desc = dict(zip(document_desc[::2], document_desc[1::2]))
-        assert doc_fields_desc == expected_desc_hash_value
+        # 1) Perform a term search on desc field for "Wonderful"
+        # 2) Perform a prefix search on desc field for "Wonder*"
+        desc_queries = [text_query_desc_field, text_query_desc_prefix]
+        for query in desc_queries:
+            result_desc = client.execute_command(*query)
+            assert len(result_desc) == 3
+            assert result_desc[0] == 1  # Number of documents found
+            assert result_desc[1] == expected_desc_hash_key
+            document_desc = result_desc[2]
+            doc_fields_desc = dict(zip(document_desc[::2], document_desc[1::2]))
+            assert doc_fields_desc == expected_desc_hash_value
         
-        # Perform search on desc2 field for "Wonderful"
-        result_desc2 = client.execute_command(*text_query_desc2_field)
-        assert len(result_desc2) == 3
-        assert result_desc2[0] == 1  # Number of documents found
-        assert result_desc2[1] == expected_desc2_hash_key
-        document_desc2 = result_desc2[2]
-        doc_fields_desc2 = dict(zip(document_desc2[::2], document_desc2[1::2]))
-        assert doc_fields_desc2 == expected_desc2_hash_value
+        # 1) Perform a term search on desc2 field for "Wonderful"
+        # 2) Perform a prefix search on desc2 field for "Wonder*"
+        desc2_queries = [text_query_desc2_field, text_query_desc2_prefix]
+        for query in desc2_queries:
+            result_desc2 = client.execute_command(*query)
+            assert len(result_desc2) == 3
+            assert result_desc2[0] == 1  # Number of documents found
+            assert result_desc2[1] == expected_desc2_hash_key
+            document_desc2 = result_desc2[2]
+            doc_fields_desc2 = dict(zip(document_desc2[::2], document_desc2[1::2]))
+            assert doc_fields_desc2 == expected_desc2_hash_value

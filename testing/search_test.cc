@@ -164,7 +164,8 @@ class EvaluateFilterAsPrimaryTest
 void InitIndexSchema(MockIndexSchema *index_schema) {
   data_model::NumericIndex numeric_index_proto;
 
-  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_)).Times(::testing::AnyNumber());
+  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
 
   auto numeric_index_100_10 =
       std::make_shared<MockNumeric>(numeric_index_proto);
@@ -319,7 +320,8 @@ struct PerformVectorSearchTestCase {
 std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
     const IndexerType vector_indexer_type = indexes::IndexerType::kHNSW) {
   auto index_schema = CreateIndexSchema(kIndexSchemaName).value();
-  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_)).Times(::testing::AnyNumber());
+  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
 
   // Add vector index
   std::shared_ptr<indexes::IndexBase> vector_index;
@@ -357,9 +359,9 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
 
   // Add records
   size_t num_records = 10000;
-  #ifdef SAN_BUILD
+#ifdef SAN_BUILD
   num_records = 100;
-  #endif
+#endif
   auto vectors =
       DeterministicallyGenerateVectors(num_records, kVectorDimensions, 10.0);
   for (size_t i = 0; i < num_records; ++i) {
@@ -571,7 +573,7 @@ TEST_P(SearchTest, ParseParams) {
     FilterParser parser(*params.index_schema, test_case.filter);
     params.filter_parse_results = std::move(parser.Parse().value());
   }
-  auto neighbors = Search(params, true);
+  auto neighbors = Search(params, query::SearchMode::kLocal);
   VMSDK_EXPECT_OK(neighbors);
 #ifndef SAN_BUILD
   EXPECT_EQ(neighbors->size(), test_case.expected_keys.size());

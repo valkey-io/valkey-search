@@ -93,7 +93,6 @@ class Text : public IndexBase {
     size_t size_;
     const InternedStringSet* untracked_keys_;
     std::shared_ptr<text::TextIndex> text_index_;
-    // query::TextPredicate::Operation operation_;
     const query::TextPredicate* predicate_;
     absl::string_view data_;
     bool no_field_{false};

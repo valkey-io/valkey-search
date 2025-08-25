@@ -477,7 +477,7 @@ inline size_t GetFuzzyDistance(absl::string_view tok) {
 }
 
 absl::string_view StripFuzzyMarkers(absl::string_view tok, size_t& distance) {
-  // remove up to distance (max 3 for now) leading/trailing '%'
+  // remove up to the `distance` leading/trailing '%'
   size_t i = 0; while (i < tok.size() && tok[i] == '%' && i < distance) ++i;
   size_t j = 0; while (j < tok.size() && tok[tok.size()-1-j] == '%' && j < distance) ++j;
   tok.remove_prefix(i);

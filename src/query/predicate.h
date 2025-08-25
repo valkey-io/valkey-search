@@ -139,10 +139,6 @@ class TextPredicate : public Predicate {
   virtual bool Evaluate(Evaluator& evaluator) const = 0;
   virtual bool Evaluate(const std::string_view& text) const = 0;
   virtual const indexes::Text* GetIndex() const = 0;
-  virtual absl::string_view GetAlias() const = 0;
-  virtual absl::string_view GetIdentifier() const = 0;
-  virtual vmsdk::UniqueValkeyString GetRetainedIdentifier() const = 0;
-  virtual absl::string_view GetTextString() const = 0;
 };
 
 class TermPredicate : public TextPredicate {
@@ -159,7 +155,7 @@ class TermPredicate : public TextPredicate {
   vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
     return vmsdk::RetainUniqueValkeyString(identifier_.get());
   }
-  absl::string_view GetTextString() const override { return term_; }
+  absl::string_view GetTextString() const { return term_; }
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const std::string_view& text) const override;
  private:
@@ -183,7 +179,7 @@ class PrefixPredicate : public TextPredicate {
   vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
     return vmsdk::RetainUniqueValkeyString(identifier_.get());
   }
-  absl::string_view GetTextString() const override { return term_; }
+  absl::string_view GetTextString() const { return term_; }
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const std::string_view& text) const override;
 
@@ -208,7 +204,7 @@ class SuffixPredicate : public TextPredicate {
   vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
     return vmsdk::RetainUniqueValkeyString(identifier_.get());
   }
-  absl::string_view GetTextString() const override { return term_; }
+  absl::string_view GetTextString() const { return term_; }
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const std::string_view& text) const override;
 
@@ -233,7 +229,7 @@ class InfixPredicate : public TextPredicate {
   vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
     return vmsdk::RetainUniqueValkeyString(identifier_.get());
   }
-  absl::string_view GetTextString() const override { return term_; }
+  absl::string_view GetTextString() const { return term_; }
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const std::string_view& text) const override;
 
@@ -258,7 +254,7 @@ class FuzzyPredicate : public TextPredicate {
   vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
     return vmsdk::RetainUniqueValkeyString(identifier_.get());
   }
-  absl::string_view GetTextString() const override { return term_; }
+  absl::string_view GetTextString() const { return term_; }
   uint32_t GetDistance() const { return distance_; }
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const std::string_view& text) const override;
@@ -278,34 +274,13 @@ class ProximityPredicate : public TextPredicate {
   uint32_t GetSlop() const { return slop_; }
   bool IsInOrder() const { return inorder_; }
   bool Evaluate(Evaluator& evaluator) const override;
-  // The composed predicate does not have this method below:
-  // bool Evaluate(const std::string_view& text) const override;
   bool Evaluate(const std::string_view& text) const override {
-    // Implement proximity evaluation logic or return false (index usually handles this)
     return false;
   }
   const indexes::Text* GetIndex() const override {
-    return terms_.empty() ? nullptr : terms_[0]->GetIndex();
+    return terms_[0]->GetIndex();
   }
-
-  absl::string_view GetAlias() const override {
-    return terms_.empty() ? "" : terms_[0]->GetAlias();
-  }
-
-  absl::string_view GetIdentifier() const override {
-    return terms_.empty() ? "" : terms_[0]->GetIdentifier();
-  }
-
-  vmsdk::UniqueValkeyString GetRetainedIdentifier() const override {
-    return terms_.empty() ? vmsdk::UniqueValkeyString() : terms_[0]->GetRetainedIdentifier();
-  }
-
-  absl::string_view GetTextString() const override {
-    return terms_.empty() ? "" : terms_[0]->GetTextString();
-  }
-
   const std::vector<std::unique_ptr<TextPredicate>>& GetTerms() const { return terms_; }
-
 
  private:
   std::vector<std::unique_ptr<TextPredicate>> terms_;

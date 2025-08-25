@@ -597,7 +597,7 @@ FilterParser::ParseTextGroup(const std::string& initial_field) {
     char c = Peek();
     // Stop text group if next is OR
     if (c == '|') break;
-    // Currently, parenthesis is not included in Proximity predicate. This needs to be adressed.
+    // Currently, parenthesis is not included in Proximity predicate. This needs to be addressed.
     if (c == '(' || c == ')') break;
     std::optional<std::string> field_for_atom;
     if (!current_field.empty()) {

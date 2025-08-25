@@ -94,6 +94,8 @@ inline std::string indent_prefix(int depth, bool last) {
     return s;
 }
 
+// Note: This function is temporary until we support all the new text predicates and until we support the FT.EXPLAINCLI
+// command to return the parsed query syntax tree from the query string provided.
 void PrintPredicate(const query::Predicate* pred, int depth, bool last, bool& valid) {
   if (!pred) {
     VMSDK_LOG(WARNING, nullptr) << indent_prefix(depth, last) << "NULL\n";
@@ -180,7 +182,7 @@ void PrintPredicate(const query::Predicate* pred, int depth, bool last, bool& va
       break;
     }
     default:
-      valid |= false;
+      valid = false;
       VMSDK_LOG(WARNING, nullptr) << prefix << "UNKNOWN\n";
       break;
   }
@@ -454,9 +456,11 @@ absl::string_view StripWildcardMarkers(absl::string_view tok) {
   return tok;
 }
 
-// Fuzzy: allow 1..3 '%' on both sides: %x%, %%x%%, %%%x%%%
+static const uint32_t FUZZY_MAX_DISTANCE = 3;
+
+// Fuzzy: allow 1..3 '%' (modifiable) on both sides: %x%, %%x%%, %%%x%%%
 inline size_t GetFuzzyDistance(absl::string_view tok) {
-  if (tok.size() < 3) return 0;
+  if (tok.size() < FUZZY_MAX_DISTANCE) return 0;
   auto count_leading = [](absl::string_view s) {
     size_t n = 0; while (n < s.size() && s[n] == '%') ++n; return n;
   };
@@ -465,8 +469,7 @@ inline size_t GetFuzzyDistance(absl::string_view tok) {
   };
   size_t lead = count_leading(tok);
   size_t tail = count_trailing(tok);
-  if (lead == 0 || tail == 0 || lead != tail) return 0;
-  if (lead > 3 || tail > 3) return 0;
+  if (lead != tail || lead == 0  || lead > FUZZY_MAX_DISTANCE) return 0;
   if ((lead + tail) < tok.size()) {
     return lead;
   }
@@ -706,8 +709,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseExpression(
       } else if (Match('{')) {
         node_count_++;  // Count the TagPredicate Node
         VMSDK_ASSIGN_OR_RETURN(predicate, ParseTagPredicate(field_name));
-      }
-      else {
+      } else {
         node_count_++;  // Count the TextPredicate Node
         VMSDK_ASSIGN_OR_RETURN(predicate, ParseTextGroup(field_name));
       }

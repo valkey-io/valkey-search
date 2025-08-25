@@ -5,8 +5,8 @@
  *
  */
 
-#ifndef _VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
-#define _VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
+#ifndef _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
+#define _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 
 #include <vector>
 #include <cstddef>

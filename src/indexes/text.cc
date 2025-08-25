@@ -73,7 +73,7 @@ absl::StatusOr<bool> Text::RemoveRecord(const InternedStringPtr& key,
     auto iter = text_index_schema_->text_index_->prefix_.GetWordIterator("");
     while (!iter.Done()) {
       // For each word, check if it contains the key and remove it
-      std::string word = iter.GetWord();
+      std::string word{iter.GetWord()};
       iter.Next();
       
       text_index_schema_->text_index_->prefix_.Mutate(

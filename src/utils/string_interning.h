@@ -75,7 +75,7 @@ class InternedString {
   // It is intended for cases where an API requires a `StringIntern` object
   // but interning is unnecessary or inefficient. For example, this applies
   // when fetching data from remote nodes.
-  InternedString(absl::string_view str) : InternedString(str, false) {};
+  InternedString(absl::string_view str) : InternedString(str, false){};
 
   ~InternedString();
 

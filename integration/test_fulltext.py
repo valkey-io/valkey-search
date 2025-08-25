@@ -15,7 +15,10 @@ hash_docs = [
     ["HSET", "product:3", "category", "electronics", "name", "Phone", "price", "299.00", "rating", "3.8", "desc", "Ok"],
     ["HSET", "product:4", "category", "books", "name", "Book", "price", "19.99", "rating", "4.8", "desc", "Wonderful"]
 ]
-text_query = ["FT.SEARCH", "products", '@desc:"Wonderful"']
+text_query_term = ["FT.SEARCH", "products", '@desc:"Wonderful"']
+text_query_term_nomatch = ["FT.SEARCH", "products", '@desc:"nomatch"']
+text_query_prefix = ["FT.SEARCH", "products", '@desc:"Wond*"']
+text_query_prefix_nomatch = ["FT.SEARCH", "products", '@desc:"nomatch*"']
 expected_hash_key = b'product:4'
 expected_hash_value = {
     b'name': b"Book",
@@ -72,14 +75,22 @@ class TestFullText(ValkeySearchTestCaseBase):
         # Insert documents into the index
         for doc in hash_docs:
             assert client.execute_command(*doc) == 5
-        # Perform the text search query
-        result = client.execute_command(*text_query)
-        assert len(result) == 3
-        assert result[0] == 1  # Number of documents found
-        assert result[1] == expected_hash_key
-        document = result[2]
-        doc_fields = dict(zip(document[::2], document[1::2]))
-        assert doc_fields == expected_hash_value
+        # Perform the text search query with term and prefix operations that return a match.
+        match = [text_query_term, text_query_prefix]
+        for query in match:
+            result = client.execute_command(*query)
+            assert len(result) == 3
+            assert result[0] == 1  # Number of documents found
+            assert result[1] == expected_hash_key
+            document = result[2]
+            doc_fields = dict(zip(document[::2], document[1::2]))
+            assert doc_fields == expected_hash_value
+        # Perform the text search query with term and prefix operations that return no match.
+        nomatch = [text_query_term_nomatch, text_query_prefix_nomatch]
+        for query in nomatch:
+            result = client.execute_command(*query)
+            assert len(result) == 1
+            assert result[0] == 0  # Number of documents found
 
     def test_ft_create(self):
         """

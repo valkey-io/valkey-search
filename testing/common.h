@@ -240,9 +240,9 @@ class MockIndexSchema : public IndexSchema {
   MockIndexSchema(ValkeyModuleCtx* ctx,
                   const data_model::IndexSchema& index_schema_proto,
                   std::unique_ptr<AttributeDataType> attribute_data_type,
-                  vmsdk::ThreadPool* mutations_thread_pool)
+                  vmsdk::ThreadPool* mutations_thread_pool, bool reload = false)
       : IndexSchema(ctx, index_schema_proto, std::move(attribute_data_type),
-                    mutations_thread_pool) {
+                    mutations_thread_pool, reload) {
     ON_CALL(*this, OnLoadingEnded(testing::_))
         .WillByDefault(testing::Invoke([this](ValkeyModuleCtx* ctx) {
           return IndexSchema::OnLoadingEnded(ctx);

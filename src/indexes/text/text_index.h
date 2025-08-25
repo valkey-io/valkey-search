@@ -42,22 +42,20 @@ struct TextIndex {
 };
 
 struct TextIndexSchema {
-  TextIndexSchema() : text_index_(std::make_shared<TextIndex>()) {}
+  TextIndexSchema() = default;
   TextIndexSchema(const data_model::IndexSchema &index_schema_proto)
-      : num_text_fields_(0),
-        text_index_(std::make_shared<TextIndex>()),
-        language_(index_schema_proto.language()),
+      : language_(index_schema_proto.language()),
         punctuation_(index_schema_proto.punctuation()),
         with_offsets_(index_schema_proto.with_offsets()),
         stop_words_(index_schema_proto.stop_words().begin(),
                     index_schema_proto.stop_words().end()) {}
   ~TextIndexSchema() = default;
 
-  uint8_t num_text_fields_;
+  uint8_t num_text_fields_ = 0;
   //
   // This is the main index of all Text fields in this index schema
   //
-  std::shared_ptr<TextIndex> text_index_;
+  std::shared_ptr<TextIndex> text_index_ = std::make_shared<TextIndex>();
   //
   // To support the Delete record and the post-filtering case, there is a
   // separate table of postings that are indexed by Key.
@@ -68,9 +66,9 @@ struct TextIndexSchema {
   absl::flat_hash_map<Key, TextIndex> by_key_;
 
   // IndexSchema proto-derived configuration fields
-  data_model::Language language_;
+  data_model::Language language_ = data_model::LANGUAGE_UNSPECIFIED;
   std::string punctuation_;
-  bool with_offsets_;
+  bool with_offsets_ = true;
   std::vector<std::string> stop_words_;
 
   uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }

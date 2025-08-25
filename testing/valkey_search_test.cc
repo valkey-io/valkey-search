@@ -443,6 +443,9 @@ TEST_F(ValkeySearchTest, Info) {
   stats.coordinator_bytes_in = 2000;
   auto interned_key_1 = StringInternStore::Intern("key1");
   EXPECT_EQ(std::string(*interned_key_1), "key1");
+  
+  StringInternStore::SetMemoryUsage(2097152);  // 2MB in bytes
+  
   ValkeyModuleInfoCtx fake_info_ctx;
   ValkeySearch::Instance().Info(&fake_info_ctx, false);
 #ifndef TESTING_TMP_DISABLED
@@ -461,18 +464,21 @@ TEST_F(ValkeySearchTest, Info) {
     "coordinator_client_get_global_metadata_success_count: 22\ncoordinator_client_get_global_metadata_failure_count: 21\n"
     "coordinator_client_search_index_partition_success_count: 24\ncoordinator_client_search_index_partition_failure_count: 23\n"
     "coordinator_bytes_out: 1000\ncoordinator_bytes_in: 2000\n"
-    "string_interning\nstring_interning_store_size: 1\n"
+    "string_interning\nstring_interning_store_size: 1\nstring_interning_memory_bytes: 2097152\nstring_interning_memory_human: '2.00MiB'\n"
     "vector_externing\nvector_externing_entry_count: 0\nvector_externing_hash_extern_errors: 0\n"
     "vector_externing_generated_value_cnt: 0\nvector_externing_num_lru_entries: 0\n"
     "vector_externing_lru_promote_cnt: 0\nvector_externing_deferred_entry_cnt: 0\n"
     "global_ingestion\ningest_field_numeric: 400\ningest_field_tag: 500\ningest_field_vector: 300\n"
     "ingest_hash_blocked: 0\ningest_hash_keys: 100\ningest_json_blocked: 0\ningest_json_keys: 200\n"
     "ingest_last_batch_size: 600\ningest_total_batches: 700\ningest_total_failures: 800\n"
-    "index_stats\nnumber_of_attributes: 1\nnumber_of_indexes: 1\ntotal_indexed_documents: 4\n"
+    "index_stats\nnumber_of_indexes: 1\nnumber_of_attributes: 1\ntotal_indexed_documents: 4\nnumber_of_active_indexes: 1\n"
+    "number_of_active_indexes_running_queries: 0\nnumber_of_active_indexes_indexing: 1\n"
+    "total_active_write_threads: 5\ntotal_indexing_time: 0\n"
     "indexing\nbackground_indexing_status: 'IN_PROGRESS'\n"
     "memory\nused_memory_bytes: 18408\nused_memory_human: '17.98KiB'\n"
 );
 #endif
+  StringInternStore::SetMemoryUsage(0); // reset memory pool
 }
 
 TEST_F(ValkeySearchTest, OnForkChildCallback) {

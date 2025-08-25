@@ -157,7 +157,7 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
     ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto,
-    vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes) {
+    vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes, bool reload) {
   std::unique_ptr<AttributeDataType> attribute_data_type;
   switch (index_schema_proto.attribute_data_type()) {
     case data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH:
@@ -175,7 +175,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
 
   auto res = std::shared_ptr<IndexSchema>(
       new IndexSchema(ctx, index_schema_proto, std::move(attribute_data_type),
-                      mutations_thread_pool));
+                      mutations_thread_pool, reload));
   VMSDK_RETURN_IF_ERROR(res->Init(ctx));
   if (!skip_attributes) {
     for (const auto &attribute : index_schema_proto.attributes()) {
@@ -201,7 +201,8 @@ vmsdk::MRMWMutexOptions CreateMrmwMutexOptions() {
 IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
                          const data_model::IndexSchema &index_schema_proto,
                          std::unique_ptr<AttributeDataType> attribute_data_type,
-                         vmsdk::ThreadPool *mutations_thread_pool)
+                         vmsdk::ThreadPool *mutations_thread_pool,
+                         bool reload)
     : detached_ctx_(vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx)),
       keyspace_event_manager_(&KeyspaceEventManager::Instance()),
       attribute_data_type_(std::move(attribute_data_type)),
@@ -212,16 +213,20 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
   ValkeyModule_SelectDb(detached_ctx_.get(), db_num_);
   if (index_schema_proto.subscribed_key_prefixes().empty()) {
     subscribed_key_prefixes_.push_back("");
-    return;
-  }
-  for (const auto &key_prefix : index_schema_proto.subscribed_key_prefixes()) {
-    if (!std::any_of(
-            subscribed_key_prefixes_.begin(), subscribed_key_prefixes_.end(),
-            [&](const std::string &s) { return key_prefix.starts_with(s); })) {
-      subscribed_key_prefixes_.push_back(std::string(key_prefix));
+  } else {
+    for (const auto &key_prefix : index_schema_proto.subscribed_key_prefixes()) {
+      if (!std::any_of(
+              subscribed_key_prefixes_.begin(), subscribed_key_prefixes_.end(),
+              [&](const std::string &s) { return key_prefix.starts_with(s); })) {
+        subscribed_key_prefixes_.push_back(std::string(key_prefix));
+      }
     }
   }
-  stats_.document_cnt = index_schema_proto.stats().documents_count();
+  // The protobuf has volatile fields that get save/restores in the RDB. here we
+  // reconcile the source of the index_schema_proto (reload or not) and restore those fields
+  if (reload) {
+    stats_.document_cnt = index_schema_proto.stats().documents_count();
+  }
 }
 
 absl::Status IndexSchema::Init(ValkeyModuleCtx *ctx) {
@@ -379,7 +384,6 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     }
   }
   if (added) {
-    // Track key modifications by data type
     switch (attribute_data_type_->ToProto()) {
       case data_model::ATTRIBUTE_DATA_TYPE_HASH:
         Metrics::GetStats().ingest_hash_keys++;
@@ -720,7 +724,7 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithArray(ctx, 26);
+  ValkeyModule_ReplyWithArray(ctx, 34);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
   ValkeyModule_ReplyWithSimpleString(ctx, "index_options");
@@ -750,16 +754,68 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplySetArrayLength(ctx, attribute_array_len);
 
   ValkeyModule_ReplyWithSimpleString(ctx, "num_docs");
-  ValkeyModule_ReplyWithCString(ctx,
-                                std::to_string(stats_.document_cnt).c_str());
+  ValkeyModule_ReplyWithLongLong(ctx, stats_.document_cnt);
   // hard-code num_terms to 0 as it's related to fulltext indexes:
   ValkeyModule_ReplyWithSimpleString(ctx, "num_terms");
-  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
   ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
-  ValkeyModule_ReplyWithCString(ctx, std::to_string(CountRecords()).c_str());
+  ValkeyModule_ReplyWithLongLong(ctx, CountRecords());
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%lu", stats_.subscription_add.skipped_cnt).c_str());
+
+
+  ValkeyModule_ReplyWithSimpleString(ctx, "gc_stats");
+  ValkeyModule_ReplyWithArray(ctx, 14);
+  ValkeyModule_ReplyWithSimpleString(ctx, "bytes_collected");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "total_ms_run");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "total_cycles");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "average_cycle_time_ms");
+  ValkeyModule_ReplyWithCString(ctx, "nan");
+  ValkeyModule_ReplyWithSimpleString(ctx, "last_run_time_ms");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "gc_numeric_trees_missed");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "gc_blocks_denied");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+
+
+  ValkeyModule_ReplyWithSimpleString(ctx, "cursor_stats");
+  ValkeyModule_ReplyWithArray(ctx, 8);
+  ValkeyModule_ReplyWithSimpleString(ctx, "global_idle");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "global_total");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "index_capacity");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "index_total");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
+
+  ValkeyModule_ReplyWithSimpleString(ctx, "dialect_stats");
+  ValkeyModule_ReplyWithArray(ctx, 8);
+  ValkeyModule_ReplyWithSimpleString(ctx, "dialect_1");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "dialect_2");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "dialect_3");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "dialect_4");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
+
+  ValkeyModule_ReplyWithSimpleString(ctx, "Index Errors");
+  ValkeyModule_ReplyWithArray(ctx, 8);
+  ValkeyModule_ReplyWithSimpleString(ctx, "indexing failures");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "last indexing error");
+  ValkeyModule_ReplyWithSimpleString(ctx, "N/A");
+  ValkeyModule_ReplyWithSimpleString(ctx, "last indexing error key");
+  ValkeyModule_ReplyWithCString(ctx, "N/A");
+  ValkeyModule_ReplyWithSimpleString(ctx, "background indexing status");
+  ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_in_progress");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%d", IsBackfillInProgress() ? 1 : 0).c_str());
@@ -897,7 +953,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,
       IndexSchema::Create(ctx, *index_schema_proto, mutations_thread_pool,
-                          !load_attributes_on_create));
+                          !load_attributes_on_create, true));
 
   // Supplemental content will include indices and any content for them
   while (supplemental_iter.HasNext()) {
@@ -1140,6 +1196,43 @@ void IndexSchema::VectorExternalizer(const InternedStringPtr &key,
   }
   VectorExternalizer::Instance().Remove(key, attribute_identifier,
                                         attribute_data_type_->ToProto());
+}
+
+IndexSchema::InfoIndexPartitionData IndexSchema::Stats::GetStats() const {
+  absl::MutexLock lock(&mutex_);
+  return InfoIndexPartitionData{
+      .num_docs = document_cnt,
+      .hash_indexing_failures = subscription_add.skipped_cnt,
+      .backfill_inqueue_tasks = backfill_inqueue_tasks,
+      .mutation_queue_size = mutation_queue_size_,
+      .recent_mutations_queue_delay =
+          mutation_queue_size_ > 0
+              ? static_cast<uint64_t>(mutations_queue_delay_ / absl::Seconds(1))
+              : 0};
+}
+
+// backfill scanned key count
+uint64_t IndexSchema::GetBackfillScannedKeyCount() const {
+  const auto &backfill_job = backfill_job_.Get();
+  return backfill_job.has_value() ? backfill_job->scanned_key_count : 0;
+}
+
+// backfill database size
+uint64_t IndexSchema::GetBackfillDbSize() const {
+  const auto &backfill_job = backfill_job_.Get();
+  return backfill_job.has_value() ? backfill_job->db_size : 0;
+}
+
+IndexSchema::InfoIndexPartitionData IndexSchema::GetInfoIndexPartitionData()
+    const {
+  InfoIndexPartitionData data = stats_.GetStats();
+  data.num_records = CountRecords();
+  data.backfill_scanned_count = GetBackfillScannedKeyCount();
+  data.backfill_db_size = GetBackfillDbSize();
+  data.backfill_complete_percent = GetBackfillPercent();
+  data.backfill_in_progress = IsBackfillInProgress();
+  data.state = std::string(GetStateForInfo());
+  return data;
 }
 
 }  // namespace valkey_search

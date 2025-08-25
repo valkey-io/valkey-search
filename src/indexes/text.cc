@@ -45,9 +45,7 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
                 postings = existing.value();
               } else {
                 // Create new Postings object with schema configuration
-                // TODO: Get save_positions from IndexSchema, for now assume
-                // true
-                bool save_positions = true;
+                bool save_positions = text_index_schema_->with_offsets_;
                 uint8_t num_text_fields = text_index_schema_->num_text_fields_;
                 postings = std::make_shared<text::Postings>(save_positions,
                                                             num_text_fields);
@@ -120,8 +118,11 @@ size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
 std::unique_ptr<Text::EntriesFetcher> Text::Search(
     const query::TextPredicate& predicate, bool negate) const {
   auto fetcher = std::make_unique<EntriesFetcher>(
-      CalculateSize(predicate), text_index_schema_->text_index_,
-      negate ? &untracked_keys_ : nullptr);
+    CalculateSize(predicate),
+    text_index_schema_->text_index_,
+    negate ? &untracked_keys_ : nullptr);
+  // TODO : We only support single field queries for now. Change below when we support multiple and all fields.
+  fetcher->field_mask_ = 1ULL << text_field_number_;
   fetcher->operation_ = predicate.GetOperation();
   // Currently, we support a single word (exact term) match.
   fetcher->data_ = predicate.GetTextString();
@@ -137,8 +138,7 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
       std::vector<WordIterator> iterVec = {iter};
       bool slop = 0;
       bool in_order = true;
-      auto itr = std::make_unique<text::PhraseIterator>(iterVec, slop, in_order,
-                                                        untracked_keys_);
+      auto itr = std::make_unique<text::PhraseIterator>(iterVec, slop, in_order, field_mask_, untracked_keys_);
       itr->Next();
       return itr;
     }

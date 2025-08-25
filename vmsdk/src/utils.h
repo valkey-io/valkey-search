@@ -1,4 +1,3 @@
-
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
@@ -103,5 +102,18 @@ size_t DisplayAsSIBytes(size_t value, char *buffer, size_t buffer_size);
 // skipped.
 absl::Status VerifyRange(long long num_value, std::optional<long long> min,
                          std::optional<long long> max);
+
+#define VMSDK_NON_COPYABLE(ClassName)              \
+  ClassName(const ClassName&) = delete;            \
+  ClassName& operator=(const ClassName&) = delete
+
+#define VMSDK_NON_MOVABLE(ClassName)               \
+  ClassName(ClassName&&) = delete;                 \
+  ClassName& operator=(ClassName&&) = delete
+
+#define VMSDK_NON_COPYABLE_NON_MOVABLE(ClassName)  \
+  VMSDK_NON_COPYABLE(ClassName);                   \
+  VMSDK_NON_MOVABLE(ClassName)
+
 }  // namespace vmsdk
 #endif  // VMSDK_SRC_UTILS_H_

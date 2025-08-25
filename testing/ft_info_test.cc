@@ -105,7 +105,7 @@ INSTANTIATE_TEST_SUITE_P(
         {
             .test_name = "happy_path_hnsw",
             .test_cases =
-                {
+	          {
                     {
                         .argv = {"FT.Info", "test_name"},
                         .index_schema_pbtxt = R"(
@@ -138,14 +138,20 @@ INSTANTIATE_TEST_SUITE_P(
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
-                            "8\r\n+identifier\r\n+test_identifier_1\r\n+"
-                            "attribute\r\n+test_attribute_1\r\n+type\r\n+"
-                            "VECTOR\r\n+index\r\n*12\r\n+capacity\r\n:100\r\n+"
-                            "dimensions\r\n:10\r\n+distance_metric\r\n+"
-                            "COSINE\r\n+size\r\n$1\r\n0\r\n+data_type\r\n+"
-                            "FLOAT32\r\n+algorithm\r\n*8\r\n+name\r\n+HNSW\r\n+"
-                            "m\r\n:240\r\n+ef_construction\r\n:400\r\n+ef_"
-                            "runtime\r\n:30\r\n+num_docs\r\n:0\r\n+num_"
+                            "24\r\n+"
+			    "identifier\r\n+test_identifier_1\r\n+"
+                            "attribute\r\n+test_attribute_1\r\n+"
+			    "type\r\n+VECTOR\r\n+"
+			    "algorithm\r\n+HNSW\r\n+"
+			    "data_type\r\n+FLOAT32\r\n+"
+			    "dim\r\n:10\r\n+"
+			    "distance_metric\r\n+COSINE\r\n+"
+			    "M\r\n:240\r\n+"
+			    "ef_construction\r\n:400\r\n+"
+			    "ef_runtime\r\n:30\r\n+"
+			    "capacity\r\n:100\r\n+"
+			    "size\r\n$1\r\n0\r\n+"
+			    "num_docs\r\n:0\r\n+num_"
                             "terms\r\n:0\r\n+num_records\r\n:0\r\n+"
                             "hash_indexing_failures\r\n$1\r\n0\r\n+gc_stats\r\n*14\r\n+"
 			    "bytes_collected\r\n$1\r\n0\r\n+total_ms_run\r\n$1\r\n0\r\n+"
@@ -171,7 +177,7 @@ INSTANTIATE_TEST_SUITE_P(
         {
             .test_name = "happy_path_flat",
             .test_cases =
-                {
+	         {
                     {
                         .argv = {"FT.Info", "test_name"},
                         .index_schema_pbtxt = R"(
@@ -202,13 +208,18 @@ INSTANTIATE_TEST_SUITE_P(
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
-                            "8\r\n+identifier\r\n+test_identifier_1\r\n+"
-                            "attribute\r\n+test_attribute_1\r\n+type\r\n+"
-                            "VECTOR\r\n+index\r\n*12\r\n+capacity\r\n:100\r\n+"
-                            "dimensions\r\n:10\r\n+distance_metric\r\n+"
-                            "COSINE\r\n+size\r\n$1\r\n0\r\n+data_type\r\n+"
-                            "FLOAT32\r\n+algorithm\r\n*4\r\n+name\r\n+FLAT\r\n+"
-                            "block_size\r\n:1024\r\n+num_docs\r\n:0\r\n+"
+                            "20\r\n+"
+			    "identifier\r\n+test_identifier_1\r\n+"
+                            "attribute\r\n+test_attribute_1\r\n+"
+			    "type\r\n+VECTOR\r\n+"
+			    "algorithm\r\n+FLAT\r\n+"
+			    "data_type\r\n+FLOAT32\r\n+"
+			    "dim\r\n:10\r\n+"
+			    "distance_metric\r\n+COSINE\r\n+"
+			    "block_size\r\n:1024\r\n+"
+                            "capacity\r\n:100\r\n+"
+			    "size\r\n$1\r\n0\r\n+"
+			    "num_docs\r\n:0\r\n+"
                             "num_terms\r\n:0\r\n+num_records\r\n:0\r\n+hash_indexing_failures\r\n$1\r\n0\r\n+"
                             "gc_stats\r\n*14\r\n+"
                             "bytes_collected\r\n$1\r\n0\r\n+total_ms_run\r\n$1\r\n0\r\n+"
@@ -233,7 +244,7 @@ INSTANTIATE_TEST_SUITE_P(
         {
             .test_name = "happy_path_tag_no_flags",
             .test_cases =
-                {
+		 {
                     {
                         .argv = {"FT.Info", "test_name"},
                         .index_schema_pbtxt = R"(
@@ -285,7 +296,7 @@ INSTANTIATE_TEST_SUITE_P(
         {
             .test_name = "happy_path_tag_case_sensitive_true",
             .test_cases =
-                {
+		 {
                     {
                         .argv = {"FT.Info", "test_name"},
                         .index_schema_pbtxt = R"(
@@ -339,7 +350,7 @@ INSTANTIATE_TEST_SUITE_P(
         {
             .test_name = "happy_path_numeric",
             .test_cases =
-                {
+		{
                     {
                         .argv = {"FT.Info", "test_name"},
                         .index_schema_pbtxt = R"(

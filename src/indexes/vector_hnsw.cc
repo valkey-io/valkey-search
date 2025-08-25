@@ -205,6 +205,14 @@ absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
 
 template <typename T>
 int VectorHNSW<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
+  ValkeyModule_ReplyWithSimpleString(ctx, "algorithm");
+  ValkeyModule_ReplyWithSimpleString(
+      ctx,
+      LookupKeyByValue(*kVectorAlgoByStr,
+                       data_model::VectorIndex::AlgorithmCase::kHnswAlgorithm)
+          .data());
+
+  
   ValkeyModule_ReplyWithSimpleString(ctx, "data_type");
   if constexpr (std::is_same_v<T, float>) {
     ValkeyModule_ReplyWithSimpleString(
@@ -215,22 +223,20 @@ int VectorHNSW<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
   } else {
     ValkeyModule_ReplyWithSimpleString(ctx, "UNKNOWN");
   }
-  ValkeyModule_ReplyWithSimpleString(ctx, "algorithm");
-  ValkeyModule_ReplyWithArray(ctx, 8);
-  ValkeyModule_ReplyWithSimpleString(ctx, "name");
+  ValkeyModule_ReplyWithSimpleString(ctx, "dim");
+  ValkeyModule_ReplyWithLongLong(ctx, dimensions_);
+  ValkeyModule_ReplyWithSimpleString(ctx, "distance_metric");
   ValkeyModule_ReplyWithSimpleString(
-      ctx,
-      LookupKeyByValue(*kVectorAlgoByStr,
-                       data_model::VectorIndex::AlgorithmCase::kHnswAlgorithm)
-          .data());
-  ValkeyModule_ReplyWithSimpleString(ctx, "m");
+      ctx, LookupKeyByValue(*kDistanceMetricByStr, distance_metric_).data());
+  ValkeyModule_ReplyWithSimpleString(ctx, "M");
   absl::ReaderMutexLock lock(&resize_mutex_);
+  
   ValkeyModule_ReplyWithLongLong(ctx, GetM());
   ValkeyModule_ReplyWithSimpleString(ctx, "ef_construction");
   ValkeyModule_ReplyWithLongLong(ctx, GetEfConstruction());
   ValkeyModule_ReplyWithSimpleString(ctx, "ef_runtime");
   ValkeyModule_ReplyWithLongLong(ctx, GetEfRuntime());
-  return 4;
+  return 14;
 }
 
 template <typename T>

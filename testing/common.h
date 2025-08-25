@@ -274,7 +274,6 @@ class TestableValkeySearch : public ValkeySearch {
   vmsdk::ThreadPool* GetReaderThreadPool() const {
     return reader_thread_pool_.get();
   }
-  size_t GetMaxWorkerThreadPoolSuspensionSec() const override { return 1; }
 };
 
 class TestableSchemaManager : public SchemaManager {

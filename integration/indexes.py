@@ -112,11 +112,10 @@ class Tag(Field):
         self.separator = separator
 
     def create(self):
-        return (
-            super().create() + ["SEPARATOR", self.separator]
-            if self.separator
-            else []
-        )
+        result = super().create() + ["TAG"]
+        if self.separator:
+            result += ["SEPARATOR", self.separator]
+        return result
 
     def make_value(self, row: int, column: int, type: str) -> Union[str, bytes, float, list[float]]:
         return f"Tag:{row}:{column}"
@@ -163,10 +162,15 @@ class Index:
                 #print("Loading ", self.keyname(i), json.dumps(data))
                 client.execute_command("JSON.SET", self.keyname(i), "$", json.dumps(data))
 
+    def load_data_with_ttl(self, client: valkey.client, rows: int, ttl_ms: int):
+        for i in range(0, rows):
+            data = self.make_data(i)
+            key = self.keyname(i)
+            client.hset(key, mapping=data)
+            client.pexpire(key, ttl_ms)
+
     def keyname(self, row: int) -> str:
-        prefix = (
-            self.prefixes[row % len(self.prefixes)] if self.prefixes else ""
-        )
+        prefix = self.prefixes[row % len(self.prefixes)] if self.prefixes else ""
         return f"{prefix}:{row:08d}"
 
     def make_data(self, row: int) -> dict[str, Union[str, bytes]]:

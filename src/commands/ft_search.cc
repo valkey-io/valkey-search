@@ -264,7 +264,9 @@ absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);
     if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
                            inside_multi_exec)) {
-      VMSDK_ASSIGN_OR_RETURN(auto neighbors, query::Search(*parameters, true));
+      VMSDK_ASSIGN_OR_RETURN(
+          auto neighbors,
+          query::Search(*parameters, query::SearchMode::kLocal));
       SendReply(ctx, neighbors, *parameters);
       return absl::OkStatus();
     }
@@ -294,9 +296,9 @@ absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
           std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),
           std::move(on_done_callback));
     }
-    return query::SearchAsync(std::move(parameters),
-                              ValkeySearch::Instance().GetReaderThreadPool(),
-                              std::move(on_done_callback), true);
+    return query::SearchAsync(
+        std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),
+        std::move(on_done_callback), query::SearchMode::kLocal);
   }();
   if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;

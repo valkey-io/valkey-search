@@ -241,7 +241,7 @@ absl::Status PerformSearchFanoutAsync(
                 << neighbors.status().message();
           }
         },
-        true))
+        SearchMode::kLocal))
         << "Failed to handle FT.SEARCH locally during fan-out";
   }
   return absl::OkStatus();

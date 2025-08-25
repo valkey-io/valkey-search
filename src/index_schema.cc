@@ -766,8 +766,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithCString(ctx, "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "tag_overhead_sz_mb");
   ValkeyModule_ReplyWithCString(ctx, "0");
-
-  
   ValkeyModule_ReplyWithSimpleString(ctx, "text_overhead_sz_mb");
   ValkeyModule_ReplyWithCString(ctx, "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "total_index_memory_sz_mb");
@@ -780,14 +778,10 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithCString(ctx, "nan");
   ValkeyModule_ReplyWithSimpleString(ctx, "offsets_per_term_avg");
   ValkeyModule_ReplyWithCString(ctx, "nan");
-  
   ValkeyModule_ReplyWithSimpleString(ctx, "offset_bits_per_record_avg");
   ValkeyModule_ReplyWithCString(ctx, "nan");
-
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithLongLong(ctx, stats_.subscription_add.skipped_cnt);
-
- 
   ValkeyModule_ReplyWithSimpleString(ctx, "total_indexing_time");
   ValkeyModule_ReplyWithCString(ctx, "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "indexing");
@@ -816,7 +810,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "gc_blocks_denied");
   ValkeyModule_ReplyWithCString(ctx, "0");
 
-
   ValkeyModule_ReplyWithSimpleString(ctx, "cursor_stats");
   ValkeyModule_ReplyWithArray(ctx, 8);
   ValkeyModule_ReplyWithSimpleString(ctx, "global_idle");
@@ -827,7 +820,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithLongLong(ctx, 0);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_total");
   ValkeyModule_ReplyWithLongLong(ctx, 0);
-
   ValkeyModule_ReplyWithSimpleString(ctx, "dialect_stats");
   ValkeyModule_ReplyWithArray(ctx, 8);
   ValkeyModule_ReplyWithSimpleString(ctx, "dialect_1");

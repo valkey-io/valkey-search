@@ -114,6 +114,79 @@ static vmsdk::info_field::Integer reclaimable_memory(
         })
         .CrashSafe());
 
+static vmsdk::info_field::Integer used_memory_indexes(
+    "memory", "used_memory_indexes",
+    vmsdk::info_field::IntegerBuilder()
+        .App()
+        .Computed([]() -> uint64_t {
+          // TODO: need to implement actual memory calculation for indexes
+          return 0;
+        })
+        .CrashSafe());
+
+static vmsdk::info_field::Integer used_memory_indexes_human(
+    "memory", "used_memory_indexes_human",
+    vmsdk::info_field::IntegerBuilder()
+        .SIBytes()
+        .App()
+        .Computed([]() -> uint64_t {
+          // TODO: need to implement actual memory calculation for indexes
+          return 0;
+        })
+        .CrashSafe());
+
+static vmsdk::info_field::Integer smallest_memory_index(
+    "memory", "smallest_memory_index",
+    vmsdk::info_field::IntegerBuilder()
+        .App()
+        .Computed([]() -> uint64_t {
+          // TODO: need to implement actual memory calculation for smallest index
+          return 0;
+        })
+        .CrashSafe());
+
+static vmsdk::info_field::Integer smallest_memory_index_human(
+    "memory", "smallest_memory_index_human",
+    vmsdk::info_field::IntegerBuilder()
+        .SIBytes()
+        .App()
+        .Computed([]() -> uint64_t {
+          // TODO: need to implement actual memory calculation for smallest index
+          return 0;
+        })
+        .CrashSafe());
+
+static vmsdk::info_field::Integer largest_memory_index(
+    "memory", "largest_memory_index",
+    vmsdk::info_field::IntegerBuilder()
+        .App()
+        .Computed([]() -> uint64_t {
+          // TODO: need to implement actual memory calculation for largest index
+          return 0;
+        })
+        .CrashSafe());
+
+static vmsdk::info_field::Integer largest_memory_index_human(
+    "memory", "largest_memory_index_human",
+    vmsdk::info_field::IntegerBuilder()
+        .SIBytes()
+        .App()
+        .Computed([]() -> uint64_t {
+          // TODO: need to implement actual memory calculation for largest index
+          return 0;
+        })
+        .CrashSafe());
+
+static vmsdk::info_field::Integer used_memory_vector_index(
+    "memory", "used_memory_vector_index",
+    vmsdk::info_field::IntegerBuilder()
+        .App()
+        .Computed([]() -> uint64_t {
+          // TODO: need to implement actual memory calculation for vector index
+          return 0;
+        })
+        .CrashSafe());
+
 static vmsdk::info_field::String background_indexing_status(
     "indexing", "background_indexing_status",
     vmsdk::info_field::StringBuilder().App().ComputedCharPtr(
@@ -342,6 +415,88 @@ static vmsdk::info_field::Integer query_prefiltering_requests_cnt(
     "query", "query_prefiltering_requests_cnt",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
       return Metrics::GetStats().query_prefiltering_requests_cnt;
+    }));
+
+static vmsdk::info_field::Integer search_total_queries_processed(
+    "query", "total_queries_processed",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      auto total_queries = Metrics::GetStats().query_successful_requests_cnt + 
+                            Metrics::GetStats().query_failed_requests_cnt;
+      return total_queries;
+    }));
+
+static vmsdk::info_field::Integer search_total_query_commands(
+    "query", "total_query_commands",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      auto total_commands = Metrics::GetStats().query_successful_requests_cnt + 
+                             Metrics::GetStats().query_failed_requests_cnt +
+                             Metrics::GetStats().query_hybrid_requests_cnt;
+      return total_commands;
+    }));
+
+static vmsdk::info_field::Integer search_total_query_execution_time_ms(
+    "query", "total_query_execution_time_ms",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual total query execution time in milliseconds
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer search_total_active_queries(
+    "query", "total_active_queries",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual total active queries count
+      return 0;
+    }));
+
+// Error and warning metrics
+static vmsdk::info_field::Integer errors_indexing_failures(
+    "warnings_and_errors", "errors_indexing_failures",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual metrics
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer errors_for_index_with_max_failures(
+    "warnings_and_errors", "errors_for_index_with_max_failures",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual values
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer OOM_indexing_failures_indexes_count(
+    "warnings_and_errors", "OOM_indexing_failures_indexes_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual values
+      return 0;
+    }));
+
+// Dialect statistics metrics
+static vmsdk::info_field::Integer dialect_1(
+    "dialect_statistics", "dialect_1",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual values
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer dialect_2(
+    "dialect_statistics", "dialect_2",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual values
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer dialect_3(
+    "dialect_statistics", "dialect_3",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual values
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer dialect_4(
+    "dialect_statistics", "dialect_4",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual values
+      return 0;
     }));
 
 static vmsdk::info_field::Integer hnsw_add_exceptions_count(
@@ -815,8 +970,72 @@ static vmsdk::info_field::Integer &remove_subscription_failure_count =
     remove_subscription_fields[1];
 static vmsdk::info_field::Integer &remove_subscription_skipped_count =
     remove_subscription_fields[2];
-
 #endif
+
+// Search cursors info fields
+static vmsdk::info_field::Integer global_idle_user(
+    "cursors", "global_idle_user",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual cursor idle user count
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer global_idle_internal(
+    "cursors", "global_idle_internal",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual cursor idle internal count
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer global_total_user(
+    "cursors", "global_total_user",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual cursor total user count
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer global_total_internal(
+    "cursors", "global_total_internal",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual cursor total internal count
+      return 0;
+    }));
+
+// Search garbage collector info fields
+static vmsdk::info_field::Integer gc_bytes_collected(
+    "garbage_collector", "gc_bytes_collected",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual GC bytes collected
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer gc_total_cycles(
+    "garbage_collector", "gc_total_cycles",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual GC total cycles
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer gc_total_ms_run(
+    "garbage_collector", "gc_total_ms_run",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual GC total milliseconds run
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer gc_total_docs_not_collected(
+    "garbage_collector", "gc_total_docs_not_collected",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual GC total docs not collected
+      return 0;
+    }));
+
+static vmsdk::info_field::Integer gc_marked_deleted_vectors(
+    "garbage_collector", "gc_marked_deleted_vectors",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      // TODO: need to implement actual GC marked deleted vectors
+      return 0;
+    }));
 
 static vmsdk::info_field::Integer string_interning_memory_bytes("string_interning", "string_interning_memory_bytes",
   vmsdk::info_field::IntegerBuilder()

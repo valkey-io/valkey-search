@@ -1,7 +1,7 @@
 from valkey import ResponseError
 from valkey.client import Valkey
 from valkey_search_test_case import (
-    ValkeySearchTestCaseBase,
+    ValkeySearchTestCaseDebugMode,
     ValkeySearchClusterTestCase,
 )
 from valkeytestframework.conftest import resource_port_tracker
@@ -51,7 +51,7 @@ def search(
         return []
 
 
-class TestCancelCMD(ValkeySearchTestCaseBase):
+class TestCancelCMD(ValkeySearchTestCaseDebugMode):
 
     def test_timeoutCMD(self):
         """

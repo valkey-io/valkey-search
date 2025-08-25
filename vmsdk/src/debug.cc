@@ -18,7 +18,16 @@
 namespace vmsdk {
 namespace debug {
 
-std::string ToString(const std::source_location& location) {
+absl::Mutex pause_point_lock;
+struct Waiter {
+  std::source_location location_;
+  pthread_t threadid_;
+  absl::Time start_time_;
+};
+
+absl::flat_hash_map<std::string, std::vector<Waiter>> pause_point_waiters;
+
+static std::string ToString(const std::source_location& location) {
   std::string os;
   os = "Function: ";
   os += location.function_name();
@@ -29,22 +38,8 @@ std::string ToString(const std::source_location& location) {
   return os;
 }
 
-absl::Mutex pause_point_lock;
-struct Waiter {
-  std::source_location location_;
-  pthread_t threadid_;
-  absl::Time start_time_;
-};
-
-auto PausePointsEnabled = vmsdk::config::BooleanBuilder("debug-pause-points-enabled", true).Dev().Build();
-
-absl::flat_hash_map<std::string, std::vector<Waiter>> pause_point_waiters;
-
 void PausePoint(absl::string_view point, std::source_location location) {
   CHECK(!IsMainThread()) << "Pause point not allowed on main thread.";
-  if (!PausePointsEnabled->GetValue()) {
-    return;
-  }
   {
     absl::MutexLock lock(&pause_point_lock);
     auto it = pause_point_waiters.find(point);

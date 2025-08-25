@@ -70,7 +70,7 @@ absl::Status PausePointControlCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator& itr
 
 absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                         int argc) {
-  if (false /* !vmsdk::config::IsDebugModeEnabled() */) {
+  if (!vmsdk::config::IsDebugModeEnabled()) {
     // Pretend like we don't exist
     std::ostringstream msg;
     msg << "ERR unknown command '" << vmsdk::ToStringView(argv[0]) << "', with args beginning with:";

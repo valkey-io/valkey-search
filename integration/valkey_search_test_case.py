@@ -276,6 +276,17 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
     def get_primary_connection(self) -> Valkey:
         return self.rg.get_primary_connection()
 
+def EnableDebugMode(config: List[str]):
+    # turn "loadmodule xx.so" into "loadmodule xx.so --debug-mode yes"
+    load_module = f"loadmodule {os.getenv('MODULE_PATH')}"
+    return [x.replace(load_module, load_module + " --debug-mode yes") for x in config]
+
+class ValkeySearchTestCaseDebugMode(ValkeySearchTestCaseBase):
+    '''
+    Same as ValkeySearchTestCaseBase, except that "debug-mode" is enabled.
+    '''
+    def get_config_file_lines(self, testdir, port) -> List[str]:
+        return EnableDebugMode(super(ValkeySearchTestCaseDebugMode, self).get_config_file_lines(testdir, port))
 
 class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
     # Default cluster size
@@ -464,3 +475,12 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
         )
         valkey_conn.ping()
         return valkey_conn
+    
+
+class ValkeySearchClusterTestCaseDebugMode(ValkeySearchClusterTestCase):
+    '''
+    Same as ValkeySearchClusterTestCase, except that "debug-mode" is enabled.
+    '''
+    def get_config_file_lines(self, testdir, port) -> List[str]:
+        return EnableDebugMode(super(ValkeySearchClusterTestCaseDebugMode, self).get_config_file_lines(testdir, port))
+

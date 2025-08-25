@@ -580,68 +580,71 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::string& field_for_default) {
 
 // TODO:
 // - Handle negation
-// - Handle parentheses by treating them as composed AND and simply moving forward
+// - Handle parenthesis by including terms in the proximity predicate. This requires folding this fn in the caller site.
 // - Handle parsing and setup of default text field predicates
-// - Try to move out nested standard operations (negate/numeric/tag) back to the caller site and reduce responsibilities
+// - Try to move out nested standard operations (negate/numeric/tag/parenthesis) back to the caller site and reduce responsibilities
 // of the text parser
 // - Handle escaped characters in text tokens
 absl::StatusOr<std::unique_ptr<query::Predicate>>
 FilterParser::ParseTextGroup(const std::string& initial_field) {
-    std::vector<std::unique_ptr<query::TextPredicate>> all_terms;
-    std::vector<std::unique_ptr<query::Predicate>> extra_terms;
-    std::string current_field = initial_field;
-    while (!IsEnd()) {
-        SkipWhitespace();
-        if (IsEnd()) break;
-        bool negate = Match('-');
-        char c = Peek();
-        // Stop text group if next is OR or parentheses
-        if (c == '|' || c == ')' || c == '(') break;
-        std::optional<std::string> field_for_atom;
-        if (!current_field.empty()) {
-          field_for_atom = current_field;
+  std::vector<std::unique_ptr<query::TextPredicate>> all_terms;
+  std::vector<std::unique_ptr<query::Predicate>> extra_terms;
+  std::string current_field = initial_field;
+  while (!IsEnd()) {
+    SkipWhitespace();
+    if (IsEnd()) break;
+    bool negate = Match('-');
+    char c = Peek();
+    // Stop text group if next is OR
+    if (c == '|') break;
+    // Currently, parenthesis is not included in Proximity predicate. This needs to be adressed.
+    if (c == '(' || c == ')') break;
+    std::optional<std::string> field_for_atom;
+    if (!current_field.empty()) {
+      field_for_atom = current_field;
+    }
+    // Field override or numeric/tag
+    if (c == '@') {
+      VMSDK_ASSIGN_OR_RETURN(current_field, ParseFieldName());
+      field_for_atom = current_field;
+      SkipWhitespace();
+      if (!IsEnd()) {
+        if (Match('[')) {
+          VMSDK_ASSIGN_OR_RETURN(auto numeric, ParseNumericPredicate(current_field));
+          extra_terms.push_back(std::move(numeric));
+          continue;
+        } else if (Match('{')) {
+          VMSDK_ASSIGN_OR_RETURN(auto tag, ParseTagPredicate(current_field));
+          extra_terms.push_back(std::move(tag));
+          continue;
         }
-        // Field override or numeric/tag
-        if (c == '@') {
-            VMSDK_ASSIGN_OR_RETURN(current_field, ParseFieldName());
-            field_for_atom = current_field;
-            SkipWhitespace();
-            if (!IsEnd()) {
-                char next = Peek();
-                if (next == '[') {
-                    ++pos_; // consume '[' for numeric
-                    VMSDK_ASSIGN_OR_RETURN(auto numeric, ParseNumericPredicate(current_field));
-                    extra_terms.push_back(std::move(numeric));
-                    continue;
-                } else if (next == '{') {
-                    ++pos_; // consume '{' for tag
-                    VMSDK_ASSIGN_OR_RETURN(auto tag, ParseTagPredicate(current_field));
-                    extra_terms.push_back(std::move(tag));
-                    continue;
-                }
-            }
-        }
-        // Parse next text atom (first or subsequent)
-        VMSDK_ASSIGN_OR_RETURN(auto resolved, ResolveTextFieldOrDefault(field_for_atom));
-        VMSDK_ASSIGN_OR_RETURN(auto terms, ParseOneTextAtomIntoTerms(resolved));
-        for (auto& t : terms) all_terms.push_back(std::move(t));
-        // Only use initial_field for first atom
-        current_field.clear();
+      } else {
+        return absl::InvalidArgumentError("Invalid query string");
+      }
     }
-    // Build main predicate from text terms
-    std::unique_ptr<query::Predicate> prox;
-    if (all_terms.size() == 1) {
-        prox = std::move(all_terms[0]);
-    } else if (!all_terms.empty()) {
-        prox = std::make_unique<query::ProximityPredicate>(
-            std::move(all_terms), /*slop=*/0, /*inorder=*/true);
-    }
-    // Append numeric/tag predicates
-    for (auto &extra : extra_terms) {
-        bool neg = false;
-        prox = WrapPredicate(std::move(prox), std::move(extra), neg, query::LogicalOperator::kAnd);
-    }
-    return prox;
+    // Parse next text atom (first or subsequent)
+    VMSDK_ASSIGN_OR_RETURN(auto resolved, ResolveTextFieldOrDefault(field_for_atom));
+    VMSDK_ASSIGN_OR_RETURN(auto terms, ParseOneTextAtomIntoTerms(resolved));
+    for (auto& t : terms) all_terms.push_back(std::move(t));
+    // Only use initial_field for first atom
+    current_field.clear();
+  }
+  // Build main predicate from text terms
+  std::unique_ptr<query::Predicate> prox;
+  if (all_terms.size() == 1) {
+    prox = std::move(all_terms[0]);
+  } else if (!all_terms.empty()) {
+    prox = std::make_unique<query::ProximityPredicate>(
+        std::move(all_terms), /*slop=*/0, /*inorder=*/true);
+  } else {
+    return absl::InvalidArgumentError("Invalid query string");
+  }
+  // Append numeric/tag predicates
+  for (auto &extra : extra_terms) {
+    bool neg = false;
+    prox = WrapPredicate(std::move(prox), std::move(extra), neg, query::LogicalOperator::kAnd);
+  }
+  return prox;
 }
 
 // Parsing rules:

@@ -17,6 +17,7 @@
 #include "absl/types/variant.h"
 #include "src/index_schema.pb.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
@@ -38,12 +39,24 @@ class RecordsMapValue {
     }
     return absl::get<ValkeyModuleString *>(identifier_);
   }
+  friend std::ostream &operator<<(std::ostream &os,
+                                  const RecordsMapValue &value) {
+    return os << vmsdk::ToStringView(value.GetIdentifier()) << ":'"
+              << vmsdk::ToStringView(value.value.get()) << "'";
+  }
 
  private:
   absl::variant<ValkeyModuleString *, vmsdk::UniqueValkeyString> identifier_;
 };
 
 using RecordsMap = absl::flat_hash_map<absl::string_view, RecordsMapValue>;
+
+std::ostream &operator<<(std::ostream &os, const RecordsMap &map) {
+  for (const auto &[name, value] : map) {
+    os << name << "=>" << value << ",";
+  }
+  return os;
+}
 
 class AttributeDataType {
  public:

@@ -106,7 +106,18 @@ vmsdk::module::Options options = {
                 },
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTDebugCmd>,
             },
-        }  // namespace
+            {
+                .cmd_name = valkey_search::kAggregateCommand,
+                .permissions =
+                    ACLPermissionFormatter(valkey_search::kSearchCmdPermissions),
+                .flags = {
+                    vmsdk::module::kReadOnlyFlag,
+                    vmsdk::module::kDenyOOMFlag
+                },
+                .cmd_func =
+                    &vmsdk::CreateCommand<valkey_search::FTAggregateCmd>,
+            },
+        }
     ,
     .on_load =
         [](ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,

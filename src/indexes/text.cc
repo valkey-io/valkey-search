@@ -18,13 +18,12 @@ namespace valkey_search::indexes {
 
 Text::Text(const data_model::TextIndex& text_index_proto,
            std::shared_ptr<text::TextIndexSchema> text_index_schema)
-    : IndexBase(IndexerType::kText), 
+    : IndexBase(IndexerType::kText),
       text_index_schema_(text_index_schema),
       text_field_number_(text_index_schema->AllocateTextFieldNumber()),
       with_suffix_trie_(text_index_proto.with_suffix_trie()),
       no_stem_(text_index_proto.no_stem()),
-      min_stem_size_(text_index_proto.min_stem_size()) {
-}
+      min_stem_size_(text_index_proto.min_stem_size()) {}
 
 absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
                                      absl::string_view data) {
@@ -32,7 +31,7 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
   // implemented
   int prev_pos = 0;
   uint32_t position = 0;
-  
+
   for (int i = 0; i <= data.size(); i++) {
     if (i == data.size() || data[i] == ' ') {
       if (i > prev_pos) {
@@ -46,12 +45,12 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
                 postings = existing.value();
               } else {
                 // Create new Postings object with schema configuration
-                // TODO: Get save_positions from IndexSchema, for now assume true
                 bool save_positions = text_index_schema_->with_offsets_;
                 uint8_t num_text_fields = text_index_schema_->num_text_fields_;
-                postings = std::make_shared<text::Postings>(save_positions, num_text_fields);
+                postings = std::make_shared<text::Postings>(save_positions,
+                                                            num_text_fields);
               }
-              
+
               // Add the key and position to postings
               postings->InsertPosting(key, text_field_number_, position);
               return postings;
@@ -75,24 +74,26 @@ absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr& key,
 }
 
 int Text::RespondWithInfo(ValkeyModuleCtx* ctx) const {
-  throw std::runtime_error("Text::RespondWithInfo not implemented");
+  // TODO: provide Text attribute info for FT.INFO
+  return 0;
 }
 
 bool Text::IsTracked(const InternedStringPtr& key) const {
+  // TODO
   return false;
 }
 
 uint64_t Text::GetRecordCount() const {
-  throw std::runtime_error("Text::GetRecordCount not implemented");
+  // TODO: keep track of number of keys indexed for this attribute
+  return 0;
 }
 
 std::unique_ptr<data_model::Index> Text::ToProto() const {
   auto index_proto = std::make_unique<data_model::Index>();
-  auto text_index = std::make_unique<data_model::TextIndex>();
+  auto* text_index = index_proto->mutable_text_index();
   text_index->set_with_suffix_trie(with_suffix_trie_);
   text_index->set_no_stem(no_stem_);
   text_index->set_min_stem_size(min_stem_size_);
-  index_proto->set_allocated_text_index(text_index.release());
   return index_proto;
 }
 
@@ -102,19 +103,20 @@ size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
       // TODO: Handle phrase matching.
       auto word = predicate.GetTextString();
       if (word.empty()) return 0;
-      auto iter = text_index_schema_->text_index_->prefix_.GetWordIterator(word);
+      auto iter =
+          text_index_schema_->text_index_->prefix_.GetWordIterator(word);
       auto target_posting = iter.GetTarget();
       return target_posting->GetKeyCount();
     }
     default:
-      CHECK(false) << "Unsupported TextPredicate operation: " << static_cast<int>(predicate.GetOperation());
+      CHECK(false) << "Unsupported TextPredicate operation: "
+                   << static_cast<int>(predicate.GetOperation());
       return 0;
   }
 }
 
 std::unique_ptr<Text::EntriesFetcher> Text::Search(
-    const query::TextPredicate& predicate,
-    bool negate) const {
+    const query::TextPredicate& predicate, bool negate) const {
   auto fetcher = std::make_unique<EntriesFetcher>(
     CalculateSize(predicate),
     text_index_schema_->text_index_,
@@ -126,7 +128,6 @@ std::unique_ptr<Text::EntriesFetcher> Text::Search(
   fetcher->data_ = predicate.GetTextString();
   return fetcher;
 }
-
 
 size_t Text::EntriesFetcher::Size() const { return size_; }
 
@@ -142,7 +143,8 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
       return itr;
     }
     default:
-      CHECK(false) << "Unsupported TextPredicate operation: " << static_cast<int>(operation_);
+      CHECK(false) << "Unsupported TextPredicate operation: "
+                   << static_cast<int>(operation_);
       return nullptr;
   }
   return nullptr;

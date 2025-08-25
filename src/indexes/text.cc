@@ -70,16 +70,12 @@ absl::StatusOr<bool> Text::RemoveRecord(const InternedStringPtr& key,
   // TODO: Key Tracking
   
   if (deletion_type == DeletionType::kRecord){
-    // Collect all words to check (to avoid modifying while iterating)
-    std::vector<std::string> words_to_check;
     auto iter = text_index_schema_->text_index_->prefix_.GetWordIterator("");
     while (!iter.Done()) {
-      words_to_check.emplace_back(iter.GetWord());
+      // For each word, check if it contains the key and remove it
+      std::string word = iter.GetWord();
       iter.Next();
-    }
-    
-    // For each word, check if it contains the key and remove it
-    for (const auto& word : words_to_check) {
+      
       text_index_schema_->text_index_->prefix_.Mutate(
           word,
           [&](std::optional<std::shared_ptr<text::Postings>> existing)

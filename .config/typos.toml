@@ -10,4 +10,5 @@ extend-exclude = [
 extend-ignore-re = [
     "baNAna",
     "eXIst",
+    "Grea*"
 ]

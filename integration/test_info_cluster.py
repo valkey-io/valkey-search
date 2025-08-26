@@ -4,25 +4,20 @@ from valkey.cluster import ValkeyCluster
 from valkey.client import Valkey
 from valkeytestframework.conftest import resource_port_tracker
 from valkeytestframework.util import waiters
-from test_info_primary import _parse_info_kv_list, verify_error_response
 import pytest
+from test_info_primary import _parse_info_kv_list, verify_error_response, is_index_on_all_nodes
 
 @pytest.mark.skip("temporary")
 class TestFTInfoCluster(ValkeySearchClusterTestCase):
 
-    def is_indexing_complete(self, node, index_name):
-        try:
-            raw = node.execute_command("FT.INFO", index_name, "CLUSTER")
-            info = _parse_info_kv_list(raw)
-            if not info:
-                return False
-            backfill_in_progress = int(info.get("backfill_in_progress", 1))
-            state = info.get("state", "")
-            return backfill_in_progress == 0 and state == "ready"
-        except Exception as e:
-            if "Communication error between nodes found" in str(e):
-                return False
-            raise
+    def is_backfill_complete(self, node, index_name):
+        raw = node.execute_command("FT.INFO", index_name, "CLUSTER")
+        info = _parse_info_kv_list(raw)
+        if not info:
+            return False
+        backfill_in_progress = int(info["backfill_in_progress"])
+        state = info["state"]
+        return backfill_in_progress == 0 and state == "ready"
 
     def test_ft_info_cluster_counts(self):
         cluster: ValkeyCluster = self.new_cluster_client()
@@ -40,7 +35,8 @@ class TestFTInfoCluster(ValkeySearchClusterTestCase):
             "SCHEMA", "price", "NUMERIC"
         ) == b"OK"
         
-        waiters.wait_for_equal(lambda: self.is_indexing_complete(node0, index_name), True, timeout=10)
+        waiters.wait_for_true(lambda: is_index_on_all_nodes(self, index_name))
+        waiters.wait_for_true(lambda: self.is_backfill_complete(node0, index_name))
 
         raw = node0.execute_command("FT.INFO", index_name, "CLUSTER")
         info = _parse_info_kv_list(raw)

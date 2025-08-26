@@ -158,7 +158,7 @@ void ClusterInfoFanoutOperation::ResetForRetry() {
 }
 
 bool ClusterInfoFanoutOperation::ShouldRetry() {
-  return !inconsistent_state_error_nodes.empty();
+  return !inconsistent_state_error_nodes.empty() || !communication_error_nodes.empty();
 }
 
 }  // namespace valkey_search::query::cluster_info_fanout

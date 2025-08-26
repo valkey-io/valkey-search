@@ -34,7 +34,8 @@ class FanoutOperationBase {
         ctx, &Reply, &Timeout, &Free, GetTimeoutMs());
     blocked_client_->MeasureTimeStart();
     start_tp_ = std::chrono::steady_clock::now();
-    StartFanoutRound(ctx);
+    targets_ = GetTargets(ctx);
+    StartFanoutRound();
   }
 
  protected:
@@ -63,13 +64,12 @@ class FanoutOperationBase {
     delete static_cast<FanoutOperationBase*>(privdata);
   }
 
-  void StartFanoutRound(ValkeyModuleCtx* ctx) {
-    auto targets = GetTargets(ctx);
-    outstanding_ = targets.size();
+  void StartFanoutRound() {
+    outstanding_ = targets_.size();
     unsigned timeout_ms = GetTimeoutMs();
-    for (const auto& target : targets) {
+    for (const auto& target : targets_) {
       auto req = GenerateRequest(target, timeout_ms);
-      IssueRpc(ctx, target, req, timeout_ms);
+      IssueRpc(target, req, timeout_ms);
     }
   }
 
@@ -77,20 +77,20 @@ class FanoutOperationBase {
     return query::fanout::FanoutTemplate::GetTargets(ctx, kTargetMode);
   }
 
-  void IssueRpc(ValkeyModuleCtx* ctx, const FanoutSearchTarget& target,
-                const Request& request, unsigned timeout_ms) {
+  void IssueRpc(const FanoutSearchTarget& target, const Request& request,
+                unsigned timeout_ms) {
     coordinator::ClientPool* client_pool_ =
         ValkeySearch::Instance().GetCoordinatorClientPool();
 
     if (target.type == FanoutSearchTarget::Type::kLocal) {
-      vmsdk::RunByMain([this, ctx, target, request]() {
+      vmsdk::RunByMain([this, target, request]() {
         auto [status, resp] = this->GetLocalResponse(request, target);
         if (status.ok()) {
           this->OnResponse(resp, target);
         } else {
           this->OnError(status, resp.error_type(), target);
         }
-        this->RpcDone(ctx);
+        this->RpcDone();
       });
     } else {
       auto client = client_pool_->GetClient(target.address);
@@ -98,18 +98,22 @@ class FanoutOperationBase {
         this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
                       coordinator::FanoutErrorType::COMMUNICATION_ERROR,
                       target);
-        this->RpcDone(ctx);
+        this->RpcDone();
         return;
       }
       this->InvokeRemoteRpc(
           client.get(), request,
-          [this, ctx, target](grpc::Status status, Response& resp) {
+          [this, target](grpc::Status status, Response& resp) {
             if (status.ok()) {
               this->OnResponse(resp, target);
             } else {
+              VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1)
+                  << "FANOUT_DEBUG: InvokeRemoteRpc error on target "
+                  << target.address << ", status code: " << status.error_code()
+                  << ", error message: " << status.error_message();
               this->OnError(status, resp.error_type(), target);
             }
-            this->RpcDone(ctx);
+            this->RpcDone();
           },
           timeout_ms);
     }
@@ -165,10 +169,10 @@ class FanoutOperationBase {
       error_message = "Index name not found.";
       for (const FanoutSearchTarget& target : index_name_error_nodes) {
         if (target.type == FanoutSearchTarget::Type::kLocal) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << INDEX_NAME_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << INDEX_NAME_ERROR_LOG_PREFIX << target.address;
         }
       }
@@ -178,10 +182,10 @@ class FanoutOperationBase {
       error_message = "Communication error between nodes found.";
       for (const FanoutSearchTarget& target : communication_error_nodes) {
         if (target.type == FanoutSearchTarget::Type::kLocal) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << COMMUNICATION_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << COMMUNICATION_ERROR_LOG_PREFIX << target.address;
         }
       }
@@ -191,10 +195,10 @@ class FanoutOperationBase {
       error_message = "Inconsistent index state error found.";
       for (const FanoutSearchTarget& target : inconsistent_state_error_nodes) {
         if (target.type == FanoutSearchTarget::Type::kLocal) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << INCONSISTENT_STATE_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << INCONSISTENT_STATE_ERROR_LOG_PREFIX << target.address;
         }
       }
@@ -212,7 +216,7 @@ class FanoutOperationBase {
     return static_cast<unsigned>(GetTimeoutMs() - elapsed_ms) > 0;
   }
 
-  void RpcDone(ValkeyModuleCtx* ctx) {
+  void RpcDone() {
     bool done = false;
     {
       absl::MutexLock lock(&mutex_);
@@ -224,7 +228,7 @@ class FanoutOperationBase {
       if (IsOperationTimedOut() && ShouldRetry()) {
         ResetBaseForRetry();
         ResetForRetry();
-        StartFanoutRound(ctx);
+        StartFanoutRound();
       } else {
         OnCompletion();
       }
@@ -244,6 +248,7 @@ class FanoutOperationBase {
   std::vector<FanoutSearchTarget> inconsistent_state_error_nodes;
   std::vector<FanoutSearchTarget> communication_error_nodes;
   std::chrono::steady_clock::time_point start_tp_;
+  std::vector<FanoutSearchTarget> targets_;
 };
 
 }  // namespace valkey_search::query::fanout

@@ -274,7 +274,7 @@ class FanoutOperationBase {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
               << INCONSISTENT_STATE_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
+          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << INCONSISTENT_STATE_ERROR_LOG_PREFIX << target.address;
         }
       }
@@ -292,7 +292,7 @@ class FanoutOperationBase {
     return static_cast<unsigned>(GetTimeoutMs() - elapsed_ms) > 0;
   }
 
-  void RpcDone(ValkeyModuleCtx* ctx) {
+  void RpcDone() {
     bool done = false;
     {
       absl::MutexLock lock(&mutex_);
@@ -304,7 +304,7 @@ class FanoutOperationBase {
       if (IsOperationTimedOut() && ShouldRetry()) {
         ResetBaseForRetry();
         ResetForRetry();
-        StartFanoutRound(ctx);
+        StartFanoutRound();
       } else {
         OnCompletion();
       }

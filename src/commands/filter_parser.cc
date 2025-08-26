@@ -734,5 +734,4 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseExpression(
   }
   return prev_predicate;
 }
-// namespace valkey_search
-}
+}  // namespace valkey_search

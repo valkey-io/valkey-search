@@ -140,7 +140,8 @@ void PrimaryInfoFanoutOperation::ResetForRetry() {
 }
 
 bool PrimaryInfoFanoutOperation::ShouldRetry() {
-  return !inconsistent_state_error_nodes.empty() || !communication_error_nodes.empty();
+  return !inconsistent_state_error_nodes.empty() ||
+         !communication_error_nodes.empty();
 }
 
 }  // namespace valkey_search::query::primary_info_fanout

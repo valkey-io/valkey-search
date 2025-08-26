@@ -714,7 +714,7 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithArray(ctx, 34);
+  ValkeyModule_ReplyWithArray(ctx, 76);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
   ValkeyModule_ReplyWithSimpleString(ctx, "index_options");
@@ -745,14 +745,57 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
 
   ValkeyModule_ReplyWithSimpleString(ctx, "num_docs");
   ValkeyModule_ReplyWithLongLong(ctx, stats_.document_cnt);
+  ValkeyModule_ReplyWithSimpleString(ctx, "max_doc_id");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
   // hard-code num_terms to 0 as it's related to fulltext indexes:
   ValkeyModule_ReplyWithSimpleString(ctx, "num_terms");
   ValkeyModule_ReplyWithLongLong(ctx, 0);
   ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
   ValkeyModule_ReplyWithLongLong(ctx, CountRecords());
+
+  ValkeyModule_ReplyWithSimpleString(ctx, "inverted_sz_mb");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "vector_index_sz_mb");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "total_inverted_index_blocks");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "offset_vectors_sz_mb");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "doc_table_size_mb");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "sortable_values_size_mb");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "key_table_size_mb");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "tag_overhead_sz_mb");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "text_overhead_sz_mb");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "total_index_memory_sz_mb");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "geoshapes_sz_mb");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "records_per_doc_avg");
+  ValkeyModule_ReplyWithCString(ctx, "nan");
+  ValkeyModule_ReplyWithSimpleString(ctx, "bytes_per_record_avg");
+  ValkeyModule_ReplyWithCString(ctx, "nan");
+  ValkeyModule_ReplyWithSimpleString(ctx, "offsets_per_term_avg");
+  ValkeyModule_ReplyWithCString(ctx, "nan");
+  ValkeyModule_ReplyWithSimpleString(ctx, "offset_bits_per_record_avg");
+  ValkeyModule_ReplyWithCString(ctx, "nan");
+
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
-  ValkeyModule_ReplyWithCString(
-      ctx, absl::StrFormat("%lu", stats_.subscription_add.skipped_cnt).c_str());
+  ValkeyModule_ReplyWithLongLong(ctx, stats_.subscription_add.skipped_cnt);
+  ValkeyModule_ReplyWithSimpleString(ctx, "total_indexing_time");
+  ValkeyModule_ReplyWithCString(ctx, "0");
+  ValkeyModule_ReplyWithSimpleString(ctx, "indexing");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "percent_indexed");
+  ValkeyModule_ReplyWithCString(ctx, "1");
+  ValkeyModule_ReplyWithSimpleString(ctx, "number_of_uses");
+  ValkeyModule_ReplyWithLongLong(ctx, 1);
+  ValkeyModule_ReplyWithSimpleString(ctx, "cleaning");
+  ValkeyModule_ReplyWithLongLong(ctx, 0);
 
   ValkeyModule_ReplyWithSimpleString(ctx, "gc_stats");
   ValkeyModule_ReplyWithArray(ctx, 14);

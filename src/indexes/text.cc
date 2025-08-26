@@ -46,8 +46,8 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
     return tokens.status();
   }
 
-  uint32_t position = 0;
-  for (const auto& token : *tokens) {
+  for (uint32_t position = 0; position < tokens->size(); ++position) {
+    const auto& token = (*tokens)[position];
     text_index_schema_->text_index_->prefix_.Mutate(
         token,
         [&](std::optional<std::shared_ptr<text::Postings>> existing)
@@ -65,7 +65,6 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
           postings->InsertPosting(key, text_field_number_, position);
           return postings;
         });
-    position++;
   }
 
   return true;
@@ -90,7 +89,8 @@ bool Text::IsTracked(const InternedStringPtr& key) const {
 }
 
 uint64_t Text::GetRecordCount() const {
-  throw std::runtime_error("Text::GetRecordCount not implemented");
+  // TODO: Implement proper record count tracking when key management is added
+  return 0;
 }
 
 std::unique_ptr<data_model::Index> Text::ToProto() const {

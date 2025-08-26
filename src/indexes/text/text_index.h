@@ -24,8 +24,8 @@ namespace valkey_search::indexes::text {
 
 namespace {
 
-bool IsWhitespace(char c) {
-  return std::isspace(static_cast<unsigned char>(c)) || std::iscntrl(static_cast<unsigned char>(c));
+bool IsWhitespace(unsigned char c) {
+  return std::isspace(c) || std::iscntrl(c);
 }
 
 }  // namespace
@@ -63,12 +63,10 @@ struct TextIndexSchema {
                   const std::vector<std::string>& stop_words)
       : num_text_fields_(0), 
         text_index_(std::make_shared<TextIndex>()),
-        stemmer_(nullptr),
         language_(language),
-        punctuation_(punctuation),
-        with_offsets_(with_offsets),
-        stop_words_(stop_words) {
-    BuildOptimizedStructures();
+        with_offsets_(with_offsets) {
+    BuildPunctuationBitmap(punctuation);
+    // TODO: Implement stop words filtering logic
   }
 
   ~TextIndexSchema();
@@ -87,17 +85,17 @@ struct TextIndexSchema {
   //
   absl::flat_hash_map<Key, TextIndex> by_key_;
 
-  // Raw configuration (for RDB persistence)
-  data_model::Language language_ = data_model::LANGUAGE_UNSPECIFIED;
-  std::string punctuation_;
-  bool with_offsets_ = true;
-  std::vector<std::string> stop_words_;
-
   // Optimized structures (shared across all text fields)
   PunctuationBitmap punct_bitmap_;
 
+  // Language needed for stemmer creation
+  data_model::Language language_ = data_model::LANGUAGE_UNSPECIFIED;
+  
   // Stemmer reused across all operations for this index
-  mutable sb_stemmer* stemmer_;
+  mutable sb_stemmer* stemmer_ = nullptr;
+
+  // Whether to store position offsets for phrase queries
+  bool with_offsets_ = false;
 
   uint8_t AllocateTextFieldNumber() {
     return num_text_fields_++;
@@ -105,20 +103,12 @@ struct TextIndexSchema {
 
   sb_stemmer* GetStemmer() const;
 
-  std::string GetPunctuation() const {
-    return punctuation_;
-  }
-
-  data_model::Language GetLanguage() const {
-    return language_;
+  const PunctuationBitmap& GetPunctuationBitmap() const {
+    return punct_bitmap_;
   }
 
   bool GetWithOffsets() const {
     return with_offsets_;
-  }
-
-  const PunctuationBitmap& GetPunctuationBitmap() const {
-    return punct_bitmap_;
   }
 
   std::string GetLanguageString() const {
@@ -131,25 +121,23 @@ struct TextIndexSchema {
   }
 
  private:
-  void BuildOptimizedStructures() {
+  void BuildPunctuationBitmap(const std::string& punctuation) {
     punct_bitmap_.reset();
 
     // Add all whitespace characters as word separators (RFC requirement)
     for (int i = 0; i < 256; ++i) {
-      if (IsWhitespace(static_cast<char>(i))) {
+      if (IsWhitespace(static_cast<unsigned char>(i))) {
         punct_bitmap_.set(i);
       }
     }
 
     // Add user-specified punctuation characters
-    for (char c : punctuation_) {
-      if (static_cast<unsigned char>(c) < 256) {  // Only ASCII for now
-        punct_bitmap_.set(static_cast<unsigned char>(c));
-      }
+    for (char c : punctuation) {
+      punct_bitmap_.set(static_cast<unsigned char>(c));
     }
-
-    // TODO: Build hash set for stop words
   }
+
+  // TODO: void BuildStopWordsSet(const std::vector<std::string>& stop_words); // Next PR
 };
 
 }  // namespace valkey_search::indexes::text

@@ -168,9 +168,9 @@ class Scanner {
     if (ec == std::errc::invalid_argument) {
       return std::nullopt;
     }
-    RedisModule_Assert(ec == std::errc());
+    ValkeyModule_Assert(ec == std::errc());
     pos_ = ptr - sv_.data();
-    RedisModule_Assert(pos_ <= sv_.size());
+    ValkeyModule_Assert(pos_ <= sv_.size());
 #else
     absl::string_view s(sv_);
     s.remove_prefix(pos_);

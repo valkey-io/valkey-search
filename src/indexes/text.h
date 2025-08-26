@@ -8,10 +8,8 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_TEXT_H_
 #define VALKEYSEARCH_SRC_INDEXES_TEXT_H_
 
-// C++ standard library headers
 #include <memory>
 
-// Third-party library headers
 #include "absl/base/thread_annotations.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
@@ -19,7 +17,6 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 
-// Project headers
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/text_index.h"
 #include "src/utils/string_interning.h"

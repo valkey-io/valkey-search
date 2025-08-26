@@ -21,6 +21,16 @@ namespace valkey_search::indexes::text {
 
 using Lexer = valkey_search::indexes::text::Lexer;
 
+// Test case structure for parameterized tests
+struct LexerTestCase {
+  std::string input;
+  std::vector<std::string> expected;
+  bool stemming_enabled = true;
+  uint32_t min_stem_size = 3;
+  std::string custom_punctuation = "";  // empty = use default punctuation
+  std::string description;
+};
+
 class LexerTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -59,66 +69,50 @@ class LexerTest : public ::testing::Test {
   uint32_t min_stem_size_;
 };
 
-TEST_F(LexerTest, EmptyStringReturnsNoWords) {
-  auto result = lexer_->Tokenize("", text_schema_->GetPunctuationBitmap(), text_schema_->GetStemmer(), stemming_enabled_, min_stem_size_);
-  ASSERT_TRUE(result.ok());
-  const auto& words = *result;
-  EXPECT_TRUE(words.empty());
-}
+// Parameterized test for comprehensive tokenization testing
+class LexerParameterizedTest : public LexerTest,
+                               public ::testing::WithParamInterface<LexerTestCase> {};
 
-TEST_F(LexerTest, OnlyPunctuationReturnsNoWords) {
-  auto result = lexer_->Tokenize("   \t\n!@#$%^&*()   ", text_schema_->GetPunctuationBitmap(), text_schema_->GetStemmer(), stemming_enabled_, min_stem_size_);
-  ASSERT_TRUE(result.ok());
-  const auto& words = *result;
-  EXPECT_TRUE(words.empty());
-}
-
-TEST_F(LexerTest, DefaultPunctuationHandling) {
-  auto result = lexer_->Tokenize("hello,world!this-is_a.test", text_schema_->GetPunctuationBitmap(), text_schema_->GetStemmer(), stemming_enabled_, min_stem_size_);
-  ASSERT_TRUE(result.ok());
-  const auto& words = *result;
-  EXPECT_EQ(words.size(), 6);
-  EXPECT_EQ(words[0], "hello");
-  EXPECT_EQ(words[1], "world");
-  EXPECT_EQ(words[2], "this");
-  EXPECT_EQ(words[3], "is");
-  EXPECT_EQ(words[4], "a");
-  EXPECT_EQ(words[5], "test");
-}
-
-TEST_F(LexerTest, CustomPunctuationHandling) {
-  auto custom_schema = CreateCustomTextSchema(" ,");
-
-  auto result = lexer_->Tokenize("hello,world!this-is_a.test", custom_schema->GetPunctuationBitmap(), custom_schema->GetStemmer(), stemming_enabled_, min_stem_size_);
-  ASSERT_TRUE(result.ok());
+TEST_P(LexerParameterizedTest, TokenizeTest) {
+  const auto& test_case = GetParam();
   
-  const auto& words = *result;
-  EXPECT_EQ(words.size(), 2);
-  EXPECT_EQ(words[0], "hello");
-  EXPECT_EQ(words[1], "world!this-is_a.test");
+  std::shared_ptr<TextIndexSchema> schema = text_schema_;
+  if (!test_case.custom_punctuation.empty()) {
+    schema = CreateCustomTextSchema(test_case.custom_punctuation);
+  }
+
+  auto result = lexer_->Tokenize(
+      test_case.input,
+      schema->GetPunctuationBitmap(),
+      schema->GetStemmer(),
+      test_case.stemming_enabled,
+      test_case.min_stem_size
+  );
+  
+  ASSERT_TRUE(result.ok()) << "Test case: " << test_case.description;
+  EXPECT_EQ(*result, test_case.expected) << "Test case: " << test_case.description;
 }
 
-TEST_F(LexerTest, CaseConversion) {
-  auto result = lexer_->Tokenize("HELLO World miXeD", text_schema_->GetPunctuationBitmap(), text_schema_->GetStemmer(), false, min_stem_size_);
-  ASSERT_TRUE(result.ok());
-  const auto& words = *result;
-  ASSERT_EQ(words.size(), 3);
-  EXPECT_EQ(words[0], "hello");
-  EXPECT_EQ(words[1], "world");
-  EXPECT_EQ(words[2], "mixed");
-}
+INSTANTIATE_TEST_SUITE_P(
+    AllTokenizationTests,
+    LexerParameterizedTest,
+    ::testing::Values(
+        LexerTestCase{"", {}, true, 3, "", "Empty string returns no words"},
+        LexerTestCase{"   \t\n!@#$%^&*()   ", {}, true, 3, "", "Only punctuation returns no words"},
+        LexerTestCase{"hello,world!this-is_a.test", {"hello", "world", "this", "is", "a", "test"}, true, 3, "", "Default punctuation handling"},
+        LexerTestCase{"hello,world!this-is_a.test", {"hello", "world!this-is_a.test"}, true, 3, " ,", "Custom punctuation handling"},
+        LexerTestCase{"HELLO World miXeD", {"hello", "world", "mixed"}, false, 3, "", "Case conversion"},
+        LexerTestCase{"hello 世界 test café", {"hello", "世界", "test", "café"}, true, 3, "", "UTF-8 support"},
+        LexerTestCase{"a b c", {"a", "b", "c"}, true, 3, "", "Single character words"},
+        LexerTestCase{"hello\tworld\ntest", {"hello", "world", "test"}, true, 3, "", "Tabs and newlines"},
+        LexerTestCase{"running jumping", {"run", "jump"}, true, 3, "", "Stemming enabled"},
+        LexerTestCase{"running jumping", {"running", "jumping"}, false, 3, "", "Stemming disabled"},
+        LexerTestCase{"run running", {"run", "running"}, true, 10, "", "Min stem size prevents stemming"},
+        LexerTestCase{"hello🙂world", {"hello🙂world"}, true, 3, "", "Non-ASCII punctuation handling"}
+    )
+);
 
-TEST_F(LexerTest, UTF8Support) {
-  auto result = lexer_->Tokenize("hello 世界 test café", text_schema_->GetPunctuationBitmap(), text_schema_->GetStemmer(), stemming_enabled_, min_stem_size_);
-  ASSERT_TRUE(result.ok());
-  const auto& words = *result;
-  ASSERT_EQ(words.size(), 4);
-  EXPECT_EQ(words[0], "hello");
-  EXPECT_EQ(words[1], "世界");
-  EXPECT_EQ(words[2], "test");
-  EXPECT_EQ(words[3], "café");
-}
-
+// Separate tests for error cases and special scenarios
 TEST_F(LexerTest, InvalidUTF8) {
   std::string invalid_utf8 = "hello \xFF\xFE world";
   auto result = lexer_->Tokenize(invalid_utf8, text_schema_->GetPunctuationBitmap(), text_schema_->GetStemmer(), stemming_enabled_, min_stem_size_);
@@ -127,68 +121,11 @@ TEST_F(LexerTest, InvalidUTF8) {
   EXPECT_EQ(result.status().message(), "Invalid UTF-8");
 }
 
-TEST_F(LexerTest, SingleCharacterWords) {
-  auto result = lexer_->Tokenize("a b c", text_schema_->GetPunctuationBitmap(), text_schema_->GetStemmer(), stemming_enabled_, min_stem_size_);
-  ASSERT_TRUE(result.ok());
-  const auto& words = *result;
-  ASSERT_EQ(words.size(), 3);
-  EXPECT_EQ(words[0], "a");
-  EXPECT_EQ(words[1], "b");
-  EXPECT_EQ(words[2], "c");
-}
-
 TEST_F(LexerTest, LongWord) {
   std::string long_word(1000, 'a');
   auto result = lexer_->Tokenize(long_word, text_schema_->GetPunctuationBitmap(), text_schema_->GetStemmer(), stemming_enabled_, min_stem_size_);
   ASSERT_TRUE(result.ok());
-  const auto& words = *result;
-  ASSERT_EQ(words.size(), 1);
-  EXPECT_EQ(words[0], long_word);
-}
-
-TEST_F(LexerTest, TabsAndNewlines) {
-  auto result = lexer_->Tokenize("hello\tworld\ntest", text_schema_->GetPunctuationBitmap(), text_schema_->GetStemmer(), stemming_enabled_, min_stem_size_);
-  ASSERT_TRUE(result.ok());
-  const auto& words = *result;
-  ASSERT_EQ(words.size(), 3);
-  EXPECT_EQ(words[0], "hello");
-  EXPECT_EQ(words[1], "world");
-  EXPECT_EQ(words[2], "test");
-}
-
-TEST_F(LexerTest, StemmingEnabled) {
-  auto result = lexer_->Tokenize("running jumping", text_schema_->GetPunctuationBitmap(), text_schema_->GetStemmer(), true, 3);
-  ASSERT_TRUE(result.ok());
-  const auto& words = *result;
-  ASSERT_EQ(words.size(), 2);
-  EXPECT_EQ(words[0], "run");
-  EXPECT_EQ(words[1], "jump");
-}
-
-TEST_F(LexerTest, StemmingDisabled) {
-  auto result = lexer_->Tokenize("running jumping", text_schema_->GetPunctuationBitmap(), text_schema_->GetStemmer(), false, 3);
-  ASSERT_TRUE(result.ok());
-  const auto& words = *result;
-  ASSERT_EQ(words.size(), 2);
-  EXPECT_EQ(words[0], "running");
-  EXPECT_EQ(words[1], "jumping");
-}
-
-TEST_F(LexerTest, MinStemSize) {
-  auto result = lexer_->Tokenize("run running", text_schema_->GetPunctuationBitmap(), text_schema_->GetStemmer(), true, 10);
-  ASSERT_TRUE(result.ok());
-  const auto& words = *result;
-  ASSERT_EQ(words.size(), 2);
-  EXPECT_EQ(words[0], "run");
-  EXPECT_EQ(words[1], "running");
-}
-
-TEST_F(LexerTest, NonASCIIPunctuationHandling) {
-  auto result = lexer_->Tokenize("hello🙂world", text_schema_->GetPunctuationBitmap(), text_schema_->GetStemmer(), stemming_enabled_, min_stem_size_);
-  ASSERT_TRUE(result.ok());
-  const auto& words = *result;
-  EXPECT_EQ(words.size(), 1);
-  EXPECT_EQ(words[0], "hello🙂world");
+  EXPECT_EQ(*result, std::vector<std::string>({long_word}));
 }
 
 }  // namespace valkey_search::indexes::text

@@ -87,16 +87,7 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     }
     case data_model::Index::IndexTypeCase::kTextIndex: {
       if (!index_schema->GetTextIndexSchema()) {
-        std::vector<std::string> stop_words(
-            index_schema_proto->stop_words().begin(),
-            index_schema_proto->stop_words().end()
-        );
-        index_schema->CreateTextIndexSchema(
-            index_schema_proto->language(),
-            index_schema_proto->punctuation(),
-            index_schema_proto->with_offsets(),
-            stop_words
-        );
+        index_schema->CreateTextIndexSchema();
       }
       return std::make_shared<indexes::Text>(index.text_index(),
                                              index_schema->GetTextIndexSchema());
@@ -216,6 +207,11 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       attribute_data_type_(std::move(attribute_data_type)),
       name_(std::string(index_schema_proto.name())),
       db_num_(index_schema_proto.db_num()),
+      language_(index_schema_proto.language()),
+      punctuation_(index_schema_proto.punctuation()),
+      with_offsets_(index_schema_proto.with_offsets()),
+      stop_words_(index_schema_proto.stop_words().begin(),
+                  index_schema_proto.stop_words().end()),
       mutations_thread_pool_(mutations_thread_pool),
       time_sliced_mutex_(CreateMrmwMutexOptions()) {
   ValkeyModule_SelectDb(detached_ctx_.get(), db_num_);
@@ -861,12 +857,11 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
       subscribed_key_prefixes_.begin(), subscribed_key_prefixes_.end());
   index_schema_proto->set_attribute_data_type(attribute_data_type_->ToProto());
 
-  // Get text configurations from TextIndexSchema for RDB serialization
-  if (this->text_index_schema_) {
-    index_schema_proto->set_language(this->text_index_schema_->GetLanguage());
-    index_schema_proto->set_punctuation(this->text_index_schema_->GetPunctuation());
-    index_schema_proto->set_with_offsets(this->text_index_schema_->GetWithOffsets());
-  }
+  // Always serialize text configurations from stored members
+  index_schema_proto->set_language(language_);
+  index_schema_proto->set_punctuation(punctuation_);
+  index_schema_proto->set_with_offsets(with_offsets_);
+  index_schema_proto->mutable_stop_words()->Assign(stop_words_.begin(), stop_words_.end());
 
   auto stats = index_schema_proto->mutable_stats();
   stats->set_documents_count(stats_.document_cnt);

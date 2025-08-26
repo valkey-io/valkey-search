@@ -29,27 +29,23 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
 
   size_t pos = 0;
   while (pos < text.size()) {
-    while (pos < text.size() &&
-           punct_bitmap[static_cast<unsigned char>(text[pos])]) {
+    while (pos < text.size() && Lexer::IsPunctuation(text[pos], punct_bitmap)) {
       pos++;
     }
 
     size_t word_start = pos;
-    while (pos < text.size() &&
-           !punct_bitmap[static_cast<unsigned char>(text[pos])]) {
+    while (pos < text.size() && !Lexer::IsPunctuation(text[pos], punct_bitmap)) {
       pos++;
     }
 
     if (pos > word_start) {
-      std::string word(text.data() + word_start, pos - word_start);
+      absl::string_view word_view(text.data() + word_start, pos - word_start);
 
-      word = absl::AsciiStrToLower(word);
+      std::string word = absl::AsciiStrToLower(word_view);
 
       // TODO: Stop word removal
 
-      if (stemming_enabled && word.length() >= min_stem_size) {
-        word = StemWord(word, stemmer);
-      }
+      word = StemWord(word, stemmer, stemming_enabled, min_stem_size);
 
       tokens.push_back(std::move(word));
     }
@@ -60,9 +56,11 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
 
 std::string Lexer::StemWord(
     const std::string& word,
-    sb_stemmer* stemmer) const {
+    sb_stemmer* stemmer,
+    bool stemming_enabled,
+    uint32_t min_stem_size) const {
   
-  if (word.empty()) {
+  if (word.empty() || !stemming_enabled || word.length() < min_stem_size) {
     return word;
   }
   
@@ -93,6 +91,6 @@ bool Lexer::IsValidUtf8(absl::string_view text) const {
   }
 
   // If any invalid UTF-8 sequences were encountered, text is invalid
-  return scanner.GetInvalidUtf8Count() == 0;
+  return scanner.GetInvalidUtf8Count() == 0 && scanner.GetPosition() == text.size();
 }
 }  // namespace valkey_search::indexes::text

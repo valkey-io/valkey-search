@@ -44,10 +44,17 @@ struct Lexer {
       uint32_t min_stem_size
   ) const;
 
+  // Punctuation checking API
+  static bool IsPunctuation(char c, const std::bitset<256>& punct_bitmap) {
+    return punct_bitmap[static_cast<unsigned char>(c)];
+  }
+
  private:
   std::string StemWord(
       const std::string& word,
-      sb_stemmer* stemmer) const;
+      sb_stemmer* stemmer,
+      bool stemming_enabled,
+      uint32_t min_stem_size) const;
 
   // UTF-8 processing helpers
   bool IsValidUtf8(absl::string_view text) const;

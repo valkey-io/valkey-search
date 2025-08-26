@@ -752,7 +752,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithLongLong(ctx, 0);
   ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
   ValkeyModule_ReplyWithLongLong(ctx, CountRecords());
-
   ValkeyModule_ReplyWithSimpleString(ctx, "inverted_sz_mb");
   ValkeyModule_ReplyWithCString(ctx, "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "vector_index_sz_mb");
@@ -783,7 +782,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithCString(ctx, "nan");
   ValkeyModule_ReplyWithSimpleString(ctx, "offset_bits_per_record_avg");
   ValkeyModule_ReplyWithCString(ctx, "nan");
-
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithLongLong(ctx, stats_.subscription_add.skipped_cnt);
   ValkeyModule_ReplyWithSimpleString(ctx, "total_indexing_time");

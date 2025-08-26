@@ -487,13 +487,6 @@ FilterParser::BuildSingleTextPredicate(const std::string& field_name,
   bool starts_star = !token.empty() && token.front() == '*';
   bool ends_star   = !token.empty() && token.back() == '*';
   if (starts_star || ends_star) {
-    // reject if there are multiple '*' on either end
-    if (starts_star && token.size() > 1 && token[1] == '*') {
-      return absl::InvalidArgumentError("Too many leading '*' markers");
-    }
-    if (ends_star && token.size() > 1 && token[token.size() - 2] == '*') {
-      return absl::InvalidArgumentError("Too many trailing '*' markers");
-    }
     absl::string_view core = token;
     if (starts_star) core.remove_prefix(1);
     if (ends_star)   core.remove_suffix(1);
@@ -517,6 +510,7 @@ FilterParser::BuildSingleTextPredicate(const std::string& field_name,
       text_index, identifier, field_name, std::string(token));
 }
 
+// TODO: Needs punctuation handing
 absl::StatusOr<std::vector<std::unique_ptr<query::TextPredicate>>>
 FilterParser::ParseOneTextAtomIntoTerms(const std::string& field_for_default) {
   std::vector<std::unique_ptr<query::TextPredicate>> terms;
@@ -553,6 +547,7 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::string& field_for_default) {
   // Reads one raw token (unquoted) stopping on space, ')', '|', '{', '[', or
   // start of '@field'
   std::string tok;
+  bool seen_nonwildcard = false;
   while (pos_ < expression_.size()) {
     char c = expression_[pos_];
     if (std::isspace(static_cast<unsigned char>(c)) || c == ')' || c == '|' ||
@@ -560,6 +555,13 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::string& field_for_default) {
       break;
     tok.push_back(c);
     ++pos_;
+    // If we encounter a tailing * (wildcard) after content, break to split into a new predicate.
+    if (c == '*' && seen_nonwildcard) {
+      break;
+    }
+    if (c != '*') {
+      seen_nonwildcard = true;
+    }
   }
   if (tok.empty()) return absl::InvalidArgumentError("Empty text token");
   VMSDK_ASSIGN_OR_RETURN(auto t,

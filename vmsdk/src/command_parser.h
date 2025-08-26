@@ -33,7 +33,7 @@ class ArgsIterator {
  public:
   ArgsIterator(ValkeyModuleString **argv, int argc)
       : argv_(argv), argc_(argc) {}
-  absl::StatusOr<ArgsIterator> SubIterator(int distance) {
+  absl::StatusOr<ArgsIterator> SubIterator(int distance) const {
     if (distance <= 0) {
       return absl::InvalidArgumentError("distance must be positive");
     }
@@ -42,11 +42,15 @@ class ArgsIterator {
     }
     return ArgsIterator(argv_ + itr_, distance);
   }
-  absl::StatusOr<ValkeyModuleString *> Get() {
+  absl::StatusOr<ValkeyModuleString *> Get() const {
     if (itr_ >= argc_) {
       return absl::OutOfRangeError("Missing argument");
     }
     return argv_[itr_];
+  }
+  absl::StatusOr<absl::string_view> GetStringView() const {
+    VMSDK_ASSIGN_OR_RETURN(auto r, Get());
+    return vmsdk::ToStringView(r);
   }
 
   ArgsIterator &Next(int steps = 1) {
@@ -106,6 +110,12 @@ inline absl::StatusOr<bool> IsParamKeyMatch(absl::string_view key,
   }
   itr.Next();
   return true;
+}
+
+inline bool IsParamNext(absl::string_view key, ArgsIterator &itr) {
+  auto r = IsParamKeyMatch(key, false, itr);
+  CHECK(r.ok());
+  return *r;
 }
 
 template <typename T>

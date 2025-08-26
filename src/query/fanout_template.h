@@ -11,8 +11,8 @@
 #include "absl/random/random.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
-#include "src/coordinator/util.h"
 #include "src/coordinator/client_pool.h"
+#include "src/coordinator/util.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -220,7 +220,8 @@ class FanoutTemplate {
 
     grpc_invoker(
         client, std::move(request),
-        [tracker, address, callback_logic](grpc::Status status, ResponseT& response) mutable {
+        [tracker, address, callback_logic](grpc::Status status,
+                                           ResponseT& response) mutable {
           callback_logic(status, response, tracker, address);
         },
         timeout_ms);

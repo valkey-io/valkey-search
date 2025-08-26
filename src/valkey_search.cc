@@ -818,18 +818,20 @@ static vmsdk::info_field::Integer &remove_subscription_skipped_count =
 
 #endif
 
-static vmsdk::info_field::Integer string_interning_memory_bytes("string_interning", "string_interning_memory_bytes",
-  vmsdk::info_field::IntegerBuilder()
-      .App()
-      .Computed(StringInternStore::GetMemoryUsage)
-      .CrashSafe());
+static vmsdk::info_field::Integer string_interning_memory_bytes(
+    "string_interning", "string_interning_memory_bytes",
+    vmsdk::info_field::IntegerBuilder()
+        .App()
+        .Computed(StringInternStore::GetMemoryUsage)
+        .CrashSafe());
 
-static vmsdk::info_field::Integer string_interning_memory_human("string_interning", "string_interning_memory_human",
-  vmsdk::info_field::IntegerBuilder()
-      .SIBytes()
-      .App()
-      .Computed(StringInternStore::GetMemoryUsage)
-      .CrashSafe());
+static vmsdk::info_field::Integer string_interning_memory_human(
+    "string_interning", "string_interning_memory_human",
+    vmsdk::info_field::IntegerBuilder()
+        .SIBytes()
+        .App()
+        .Computed(StringInternStore::GetMemoryUsage)
+        .CrashSafe());
 
 void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
   vmsdk::info_field::DoSections(ctx, for_crash_report);
@@ -909,17 +911,18 @@ void ValkeySearch::OnForkChildCallback(ValkeyModuleCtx *ctx,
                                        [[maybe_unused]] ValkeyModuleEvent eid,
                                        uint64_t subevent,
                                        [[maybe_unused]] void *data) {
-  // if max-worker-suspension-secs config > 0, we resume the workers either when fork dies
-  // or when time expires (the second condition is checked on cron callback).
+  // if max-worker-suspension-secs config > 0, we resume the workers either when
+  // fork dies or when time expires (the second condition is checked on cron
+  // callback).
   if (options::GetMaxWorkerSuspensionSecs().GetValue() > 0) {
     if (subevent & VALKEYMODULE_SUBEVENT_FORK_CHILD_DIED) {
       ResumeWriterThreadPool(ctx, /*is_expired=*/false);
     }
   } else {
-    // max-worker-suspension-secs <= 0 - we resume the workers on a 'fork born' event.
-    // We don't check if it's a 'fork born' event - in case the config was modified
-    // in the middle of the fork, we want to resume the workers also after 'fork died'
-    // event in case it wasn't already.
+    // max-worker-suspension-secs <= 0 - we resume the workers on a 'fork born'
+    // event. We don't check if it's a 'fork born' event - in case the config
+    // was modified in the middle of the fork, we want to resume the workers
+    // also after 'fork died' event in case it wasn't already.
     ResumeWriterThreadPool(ctx, /*is_expired=*/false);
   }
 }

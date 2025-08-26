@@ -17,26 +17,26 @@ namespace vmsdk {
 absl::Mutex blocked_clients_mutex;
 
 // Implementation for BlockedClientTracker
-BlockedClientTracker& BlockedClientTracker::GetInstance() {
+BlockedClientTracker &BlockedClientTracker::GetInstance() {
   static BlockedClientTracker instance;
   return instance;
 }
 
-size_t BlockedClientTracker::GetClientCount(BlockedClientCategory category) const 
-  ABSL_LOCKS_EXCLUDED(blocked_clients_mutex) {
+size_t BlockedClientTracker::GetClientCount(BlockedClientCategory category)
+    const ABSL_LOCKS_EXCLUDED(blocked_clients_mutex) {
   absl::MutexLock lock(&blocked_clients_mutex);
   return tracked_blocked_clients_[static_cast<size_t>(category)]->size();
 }
 
-absl::flat_hash_map<unsigned long long, BlockedClientEntry>& 
-BlockedClientTracker::operator[](BlockedClientCategory category) 
-  ABSL_EXCLUSIVE_LOCKS_REQUIRED(blocked_clients_mutex) {
+absl::flat_hash_map<unsigned long long, BlockedClientEntry> &
+BlockedClientTracker::operator[](BlockedClientCategory category)
+    ABSL_EXCLUSIVE_LOCKS_REQUIRED(blocked_clients_mutex) {
   return *tracked_blocked_clients_[static_cast<size_t>(category)];
 }
 
-const absl::flat_hash_map<unsigned long long, BlockedClientEntry>& 
-BlockedClientTracker::operator[](BlockedClientCategory category) const 
-  ABSL_EXCLUSIVE_LOCKS_REQUIRED(blocked_clients_mutex) {
+const absl::flat_hash_map<unsigned long long, BlockedClientEntry> &
+BlockedClientTracker::operator[](BlockedClientCategory category) const
+    ABSL_EXCLUSIVE_LOCKS_REQUIRED(blocked_clients_mutex) {
   return *tracked_blocked_clients_[static_cast<size_t>(category)];
 }
 
@@ -49,14 +49,14 @@ BlockedClientTracker::operator[](BlockedClientCategory category) const
 // VM_BlockClient, while subsequent calls simply increment an internal reference
 // count. VM_UnblockClient is only called once the reference count returns to
 // zero.
-BlockedClient::BlockedClient(ValkeyModuleCtx *ctx, bool handle_duplication, 
-                            BlockedClientCategory category)
+BlockedClient::BlockedClient(ValkeyModuleCtx *ctx, bool handle_duplication,
+                             BlockedClientCategory category)
     : category_(category) {
   if (handle_duplication) {
     unsigned long long tracked_client_id = ValkeyModule_GetClientId(ctx);
     if (tracked_client_id != 0) {
       absl::MutexLock lock(&blocked_clients_mutex);
-      auto& category_map = BlockedClientTracker::GetInstance()[category_];
+      auto &category_map = BlockedClientTracker::GetInstance()[category_];
       auto it = category_map.find(tracked_client_id);
       if (it == category_map.end()) {
         blocked_client_ =
@@ -111,11 +111,11 @@ void BlockedClient::UnblockClient() {
   auto blocked_client = std::exchange(blocked_client_, nullptr);
   auto private_data = std::exchange(private_data_, nullptr);
   auto tracked_client_id = std::exchange(tracked_client_id_, 0);
-  auto category = category_; // Save category before potential move
-  
+  auto category = category_;  // Save category before potential move
+
   if (tracked_client_id) {
     absl::MutexLock lock(&blocked_clients_mutex);
-    auto& category_map = BlockedClientTracker::GetInstance()[category];
+    auto &category_map = BlockedClientTracker::GetInstance()[category];
     auto itr = category_map.find(tracked_client_id);
     CHECK(itr != category_map.end());
     auto &cnt = itr->second.cnt;

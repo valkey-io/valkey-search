@@ -176,9 +176,9 @@ static auto max_ef_runtime =
 /// in milliseconds for FT.SEARCH.
 static auto default_timeout_ms =
     vmsdk::config::NumberBuilder(kDefaultTimeoutMs,  // name
-                                 kTimeoutMs,            // default timeout
-                                 kMinTimeoutMs,         // min timeout
-                                 kMaxTimeoutMs)         // max timeout
+                                 kTimeoutMs,         // default timeout
+                                 kMinTimeoutMs,      // min timeout
+                                 kMaxTimeoutMs)      // max timeout
         .Build();
 
 const absl::NoDestructor<

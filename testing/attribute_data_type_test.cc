@@ -296,7 +296,7 @@ class JsonAttributeDataTypeTest
     key_obj.reset();
     ValkeySearchTestWithParam::TearDown();
   }
-  
+
   ValkeyModuleCtx fake_ctx;
   JsonAttributeDataType json_attribute_data_type;
   vmsdk::UniqueValkeyString key_str;
@@ -370,7 +370,7 @@ absl::string_view NormalizeValue(absl::string_view record) {
     absl::ConsumeSuffix(&record, "]");
   }
   if (absl::ConsumePrefix(&record, "\"")) {
-      absl::ConsumeSuffix(&record, "\"");
+    absl::ConsumeSuffix(&record, "\"");
   }
   return record;
 }
@@ -502,7 +502,8 @@ TEST_P(JsonAttributeDataTypeTest, JsonFetchAllRecords) {
         vmsdk::ToStringView(key_str.get()).data(), identifiers);
     if (records.ok()) {
       EXPECT_EQ(module_reply_type, VALKEYMODULE_REPLY_STRING);
-      EXPECT_EQ(ToStringMap(records.value()), NormalizeExpected(test_case.expected_records_map));
+      EXPECT_EQ(ToStringMap(records.value()),
+                NormalizeExpected(test_case.expected_records_map));
       return;
     }
     EXPECT_FALSE(expect_exists_key &&

@@ -182,4 +182,4 @@ class Index:
     
     def backfill_complete(self, client: valkey.client) -> bool:
         res = self.info(client)
-        return res.backfill_in_progress == b"0"
+        return res.backfill_in_progress == 0

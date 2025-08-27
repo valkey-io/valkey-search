@@ -284,12 +284,7 @@ class FanoutOperationBase {
 
   unsigned IsOperationTimedOut() const {
     using namespace std::chrono;
-    auto elapsed_ms =
-        duration_cast<milliseconds>(steady_clock::now() - start_tp_).count();
-    if (elapsed_ms >= GetTimeoutMs()) {
-      return 0;
-    }
-    return static_cast<unsigned>(GetTimeoutMs() - elapsed_ms) > 0;
+    return steady_clock::now() >= deadline_tp_;
   }
 
   void RpcDone() {
@@ -301,7 +296,7 @@ class FanoutOperationBase {
       }
     }
     if (done) {
-      if (IsOperationTimedOut() && ShouldRetry()) {
+      if (!IsOperationTimedOut() && ShouldRetry()) {
         ResetBaseForRetry();
         ResetForRetry();
         StartFanoutRound();

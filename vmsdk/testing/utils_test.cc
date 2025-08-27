@@ -126,14 +126,13 @@ TEST_F(UtilsTest, IsRealUserClient) {
 
 TEST_F(UtilsTest, DisplayAsSIBytes) {
   std::vector<std::pair<size_t, std::string>> testcases{
-    {0.0, "0"},
-    {1023, "1023"},
-    {1ull << 10, "1.00KiB"},
-    {1ull << 20, "1.00MiB"},
-    {1ull << 30, "1.00GiB"},
-    {1ull << 40, "1.00TiB"},
-    {1ull << 50, "1.00PiB"}
-  };
+      {0.0, "0"},
+      {1023, "1023"},
+      {1ull << 10, "1.00KiB"},
+      {1ull << 20, "1.00MiB"},
+      {1ull << 30, "1.00GiB"},
+      {1ull << 40, "1.00TiB"},
+      {1ull << 50, "1.00PiB"}};
   for (auto& [value, expected] : testcases) {
     char buffer[100];
     size_t bytes = DisplayAsSIBytes(value, buffer, sizeof(buffer));
@@ -141,31 +140,30 @@ TEST_F(UtilsTest, DisplayAsSIBytes) {
     std::memset(buffer, -1, sizeof(buffer));
     bytes = DisplayAsSIBytes(value, buffer, 1);
     EXPECT_EQ(buffer[0], 0);
-    EXPECT_EQ(buffer[1], '\xFF'); // untouched.
+    EXPECT_EQ(buffer[1], '\xFF');  // untouched.
   }
 }
 
 TEST_F(UtilsTest, WrongArity) {
   // Test standard FT commands
-  EXPECT_EQ(WrongArity("FT.INFO"), 
+  EXPECT_EQ(WrongArity("FT.INFO"),
             "ERR wrong number of arguments for 'FT.INFO' command");
-  EXPECT_EQ(WrongArity("FT.SEARCH"), 
+  EXPECT_EQ(WrongArity("FT.SEARCH"),
             "ERR wrong number of arguments for 'FT.SEARCH' command");
-  EXPECT_EQ(WrongArity("FT.DROPINDEX"), 
+  EXPECT_EQ(WrongArity("FT.DROPINDEX"),
             "ERR wrong number of arguments for 'FT.DROPINDEX' command");
-  EXPECT_EQ(WrongArity("FT._LIST"), 
+  EXPECT_EQ(WrongArity("FT._LIST"),
             "ERR wrong number of arguments for 'FT._LIST' command");
-  
+
   // Test edge cases
-  EXPECT_EQ(WrongArity(""), 
-            "ERR wrong number of arguments for '' command");
-  EXPECT_EQ(WrongArity("SINGLE"), 
+  EXPECT_EQ(WrongArity(""), "ERR wrong number of arguments for '' command");
+  EXPECT_EQ(WrongArity("SINGLE"),
             "ERR wrong number of arguments for 'SINGLE' command");
-  
+
   // Test with special characters
-  EXPECT_EQ(WrongArity("CMD.WITH-DASH"), 
+  EXPECT_EQ(WrongArity("CMD.WITH-DASH"),
             "ERR wrong number of arguments for 'CMD.WITH-DASH' command");
-  EXPECT_EQ(WrongArity("CMD_WITH_UNDERSCORE"), 
+  EXPECT_EQ(WrongArity("CMD_WITH_UNDERSCORE"),
             "ERR wrong number of arguments for 'CMD_WITH_UNDERSCORE' command");
 }
 

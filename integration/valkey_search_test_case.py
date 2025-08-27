@@ -15,7 +15,10 @@ import string
 import logging
 import shutil
 
-CLUSTER_LOGS_DIR = "/tmp/valkey-test-framework-files"
+LOGS_DIR = "/tmp/valkey-test-framework-files"
+
+if "LOGS_DIR" in os.environ:
+    LOGS_DIR = os.environ["LOGS_DIR"]
 
 
 class Node:
@@ -155,7 +158,7 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         """Launch server node and return a tuple of the server handle, a client to the server
         and the log file path"""
         server_path = os.getenv("VALKEY_SERVER_PATH")
-        testdir = f"{CLUSTER_LOGS_DIR}/{test_name}"
+        testdir = f"{LOGS_DIR}/{test_name}"
 
         os.makedirs(testdir, exist_ok=True)
         curdir = os.getcwd()
@@ -273,6 +276,17 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
     def get_primary_connection(self) -> Valkey:
         return self.rg.get_primary_connection()
 
+def EnableDebugMode(config: List[str]):
+    # turn "loadmodule xx.so" into "loadmodule xx.so --debug-mode yes"
+    load_module = f"loadmodule {os.getenv('MODULE_PATH')}"
+    return [x.replace(load_module, load_module + " --debug-mode yes") for x in config]
+
+class ValkeySearchTestCaseDebugMode(ValkeySearchTestCaseBase):
+    '''
+    Same as ValkeySearchTestCaseBase, except that "debug-mode" is enabled.
+    '''
+    def get_config_file_lines(self, testdir, port) -> List[str]:
+        return EnableDebugMode(super(ValkeySearchTestCaseDebugMode, self).get_config_file_lines(testdir, port))
 
 class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
     # Default cluster size
@@ -331,7 +345,7 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
                 ports.append(self.get_bind_port())
 
         test_name = self.normalize_dir_name(request.node.name)
-        testdir_base = f"{CLUSTER_LOGS_DIR}/{test_name}"
+        testdir_base = f"{LOGS_DIR}/{test_name}"
 
         if os.path.exists(testdir_base):
             shutil.rmtree(testdir_base)
@@ -461,3 +475,12 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
         )
         valkey_conn.ping()
         return valkey_conn
+    
+
+class ValkeySearchClusterTestCaseDebugMode(ValkeySearchClusterTestCase):
+    '''
+    Same as ValkeySearchClusterTestCase, except that "debug-mode" is enabled.
+    '''
+    def get_config_file_lines(self, testdir, port) -> List[str]:
+        return EnableDebugMode(super(ValkeySearchClusterTestCaseDebugMode, self).get_config_file_lines(testdir, port))
+

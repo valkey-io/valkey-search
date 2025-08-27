@@ -11,15 +11,15 @@
 #include <memory>
 #include <string>
 
-#include "gtest/gtest.h"
 #include "gmock/gmock.h"
-#include "vmsdk/src/memory_allocation.h"
-#include "vmsdk/src/memory_tracker.h"
+#include "gtest/gtest.h"
 #include "src/utils/allocator.h"
 #include "src/utils/intrusive_ref_count.h"
-#include "vmsdk/src/testing_infra/utils.h"
-#include "vmsdk/src/testing_infra/module.h"
+#include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/memory_allocation_overrides.h"
+#include "vmsdk/src/memory_tracker.h"
+#include "vmsdk/src/testing_infra/module.h"
+#include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search {
 
@@ -36,7 +36,7 @@ class MockAllocator : public Allocator {
   char* Allocate(size_t size) override {
     // simulate the memory allocation in the current tracking scope
     vmsdk::ReportAllocMemorySize(size);
-    
+
     if (!chunk_.free_list.empty()) {
       auto ptr = chunk_.free_list.top();
       chunk_.free_list.pop();
@@ -46,15 +46,13 @@ class MockAllocator : public Allocator {
     return nullptr;  // Out of memory
   }
 
-  size_t ChunkSize() const override {
-    return 1024;
-  }
-  
-protected:
+  size_t ChunkSize() const override { return 1024; }
+
+ protected:
   void Free(AllocatorChunk* chunk, char* ptr) override {
     // Report memory deallocation to balance the allocation
     vmsdk::ReportFreeMemorySize(allocated_size_);
-    
+
     chunk->free_list.push(ptr);
   }
 
@@ -130,7 +128,7 @@ TEST_F(StringInterningTest, StringInternStoreTracksMemoryInternally) {
 
 INSTANTIATE_TEST_SUITE_P(StringInterningTests, StringInterningTest,
                          ::testing::Values(true, false),
-                         [](const TestParamInfo<bool> &info) {
+                         [](const TestParamInfo<bool>& info) {
                            return std::to_string(info.param);
                          });
 }  // namespace

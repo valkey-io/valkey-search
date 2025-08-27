@@ -346,7 +346,7 @@ absl::Status AclPrefixCheck(
   // to access ALL keys.
   if (module_prefixes.empty() && !IsPrefixAllowed("", acl_keys)) {
     return absl::PermissionDeniedError(
-          "The user doesn't have a permission to execute a command");
+        "The user doesn't have a permission to execute a command");
   }
 
   // We allow the user to execute command only if the user has permissions for

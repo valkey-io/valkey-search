@@ -6,7 +6,7 @@ from typing import Tuple, Union
 
 # from pyparsing import abstractmethod
 import valkey
-import logging
+from ft_info_parser import FTInfoParser
 import struct
 
 
@@ -165,6 +165,6 @@ class Index:
             d[f.name] = f.make_value(row, col)
         return d
 
-    def info(self, client: valkey.client) -> dict[str, str]:
+    def info(self, client: valkey.client) -> FTInfoParser:
         res = client.execute_command("FT.INFO", self.name)
-        return {res[i]: res[i + 1] for i in range(len(res), 2)}
+        return FTInfoParser(res)

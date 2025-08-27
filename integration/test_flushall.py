@@ -7,15 +7,6 @@ import logging, time
 from typing import Any
 from util import waiters
 
-def num_docs(client: Valkey.client, index: str) -> dict[str, str]:
-    res = client.execute_command("FT.INFO", index)
-    print("Got info result of ", res)
-    for i in range(len(res)):
-        if res[i] == b'num_docs':
-            print("Found ", res[i+1])
-            return int(res[i+1].decode())
-    assert False
-
 class TestFlushAllCMD(ValkeySearchTestCaseBase):
     def test_flushallCMD(self):
         """
@@ -26,7 +17,7 @@ class TestFlushAllCMD(ValkeySearchTestCaseBase):
        
         hnsw_index.create(client)
         hnsw_index.load_data(client, 1000)
-        assert 1000 == num_docs(client, hnsw_index.name)
+        assert 1000 == hnsw_index.info(client).num_docs
 
         client.execute_command("FLUSHALL SYNC")
 
@@ -34,8 +25,8 @@ class TestFlushAllCMD(ValkeySearchTestCaseBase):
 
 class TestFlushAllCME(ValkeySearchClusterTestCase):
 
-    def sum_docs(self, index:str) -> int:
-        return sum([num_docs(self.client_for_primary(i), index) for i in range(len(self.replication_groups))])
+    def sum_docs(self, index: Index) -> int:
+        return sum([index.info(self.client_for_primary(i)).num_docs for i in range(len(self.replication_groups))])
 
     def test_flushallCME(self):
         """
@@ -50,9 +41,9 @@ class TestFlushAllCME(ValkeySearchClusterTestCase):
 
         clients = [self.client_for_primary(i) for i in range(len(self.replication_groups))]
         # Wait for all the docs to be indexed (up to 3 seconds)
-        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index.name), NUM_VECTORS, timeout=5)
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), NUM_VECTORS, timeout=5)
         for c in clients:
             c.execute_command("flushall sync")
 
         assert client.execute_command("FT._LIST") == [hnsw_index.name.encode()]
-        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index.name), 0, timeout=5)
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 0, timeout=5)

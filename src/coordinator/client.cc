@@ -192,7 +192,6 @@ void ClientImpl::InfoIndexPartition(
   auto args = std::make_unique<InfoIndexPartitionArgs>();
   args->context.set_deadline(
       absl::ToChronoTime(absl::Now() + absl::Milliseconds(timeout_ms)));
-  args->context.set_wait_for_ready(true);
   args->callback = std::move(done);
   args->request = std::move(request);
   args->latency_sample = SAMPLE_EVERY_N(100);

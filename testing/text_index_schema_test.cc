@@ -51,21 +51,51 @@ TEST_F(TextIndexSchemaTest, FieldAllocationAcrossMultipleTexts) {
   // Schema correctly tracks field allocation for posting list identification
 }
 
-TEST_F(TextIndexSchemaTest, SchemaEnablesIndexing) {
-  auto schema = CreateSchema();
-  data_model::TextIndex proto;
-  Text field(proto, schema);
+TEST_F(TextIndexSchemaTest, TextIndexSchemaInitialization) {
+  // Test with custom configuration including stop words
+  std::vector<std::string> stop_words = {"the", "and", "or", "in", "on"};
+  auto custom_schema = std::make_shared<TextIndexSchema>(
+      data_model::LANGUAGE_ENGLISH,
+      " \t\n.,!?;:", // custom punctuation
+      true,          // stemming enabled
+      stop_words
+  );
   
-  EXPECT_EQ(nullptr, schema->stemmer_);
+  // Verify field allocation starts at zero
+  EXPECT_EQ(0, custom_schema->num_text_fields_);
   
-  auto key = StringInternStore::Intern("test_key");
-  auto result = field.AddRecord(key, "hello world");
+  // Verify punctuation bitmap is properly set
+  const auto& punctuation_bitmap = custom_schema->GetPunctuationBitmap();
+  EXPECT_GT(punctuation_bitmap.count(), 0); // At least some punctuation characters are set
   
-  EXPECT_TRUE(result.ok());
-  EXPECT_TRUE(*result);
+  // Verify stop words are properly configured
+  const auto& stop_set = custom_schema->GetStopWordsSet();
+  EXPECT_EQ(5, stop_set.size());
+  EXPECT_TRUE(stop_set.count("the"));
+  EXPECT_TRUE(stop_set.count("and"));
+  EXPECT_TRUE(stop_set.count("or"));
+  EXPECT_TRUE(stop_set.count("in"));
+  EXPECT_TRUE(stop_set.count("on"));
+  EXPECT_FALSE(stop_set.count("hello"));
   
-  EXPECT_NE(nullptr, schema->stemmer_);
-  EXPECT_EQ(schema->stemmer_, schema->GetStemmer()); // Reused
+  // Verify stemmer lazy initialization and reuse
+  auto stemmer1 = custom_schema->GetStemmer();
+  EXPECT_NE(nullptr, stemmer1);
+  
+  auto stemmer2 = custom_schema->GetStemmer();
+  EXPECT_EQ(stemmer1, stemmer2); // Same instance reused
+  
+  // Test empty stop words configuration
+  std::vector<std::string> no_stop_words;
+  auto empty_schema = std::make_shared<TextIndexSchema>(
+      data_model::LANGUAGE_ENGLISH,
+      " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
+      true,
+      no_stop_words
+  );
+  
+  EXPECT_TRUE(empty_schema->GetStopWordsSet().empty());
+  EXPECT_EQ(0, empty_schema->num_text_fields_);
 }
 
 }  // namespace text

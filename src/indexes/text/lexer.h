@@ -19,13 +19,14 @@ and Text classes, then passed to lexer methods as parameters.
 Tokenization Pipeline:
 1. Split text on punctuation characters (configurable)
 2. Convert to lowercase 
-3. TODO: stop word removal (not implemented in this phase)
+3. Stop word removal (filter out common words)
 4. Apply stemming based on language and field settings
 
 */
 
 #include <bitset>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "absl/status/statusor.h"
@@ -41,12 +42,19 @@ struct Lexer {
       const std::bitset<256>& punct_bitmap,
       sb_stemmer* stemmer,
       bool stemming_enabled,
-      uint32_t min_stem_size
+      uint32_t min_stem_size,
+      const std::unordered_set<std::string>& stop_words_set
   ) const;
 
   // Punctuation checking API
   static bool IsPunctuation(char c, const std::bitset<256>& punct_bitmap) {
     return punct_bitmap[static_cast<unsigned char>(c)];
+  }
+
+  // Stop word checking API (expects lowercase input)
+  static bool IsStopWord(const std::string& lowercase_word, 
+                         const std::unordered_set<std::string>& stop_words_set) {
+    return stop_words_set.find(lowercase_word) != stop_words_set.end();
   }
 
  private:

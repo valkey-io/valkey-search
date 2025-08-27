@@ -36,7 +36,8 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
       text_index_schema_->GetPunctuationBitmap(),
       text_index_schema_->GetStemmer(),
       !no_stem_,
-      min_stem_size_
+      min_stem_size_,
+      text_index_schema_->GetStopWordsSet()
   );
 
   if (!tokens.ok()) {

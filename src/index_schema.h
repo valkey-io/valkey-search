@@ -30,8 +30,8 @@
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
-#include "src/indexes/vector_base.h"
 #include "src/indexes/text/text_index.h"
+#include "src/indexes/vector_base.h"
 #include "src/keyspace_event_manager.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
@@ -90,7 +90,8 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   static absl::StatusOr<std::shared_ptr<IndexSchema>> Create(
       ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto,
-      vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes, bool reload);
+      vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes,
+      bool reload);
   ~IndexSchema() override;
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
       absl::string_view attribute_alias) const;
@@ -115,14 +116,12 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline const std::string &GetName() const { return name_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
 
-  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const { return text_index_schema_; }
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+    return text_index_schema_;
+  }
   void CreateTextIndexSchema() {
     text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
-        language_,
-        punctuation_,
-        with_offsets_,
-        stop_words_
-    );
+        language_, punctuation_, with_offsets_, stop_words_);
   }
 
   void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type, const char *event,

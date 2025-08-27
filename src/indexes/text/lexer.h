@@ -18,7 +18,7 @@ and Text classes, then passed to lexer methods as parameters.
 
 Tokenization Pipeline:
 1. Split text on punctuation characters (configurable)
-2. Convert to lowercase 
+2. Convert to lowercase
 3. TODO: stop word removal (not implemented in this phase)
 4. Apply stemming based on language and field settings
 
@@ -37,12 +37,8 @@ namespace valkey_search::indexes::text {
 
 struct Lexer {
   absl::StatusOr<std::vector<std::string>> Tokenize(
-      absl::string_view text,
-      const std::bitset<256>& punct_bitmap,
-      sb_stemmer* stemmer,
-      bool stemming_enabled,
-      uint32_t min_stem_size
-  ) const;
+      absl::string_view text, const std::bitset<256>& punct_bitmap,
+      sb_stemmer* stemmer, bool stemming_enabled, uint32_t min_stem_size) const;
 
   // Punctuation checking API
   static bool IsPunctuation(char c, const std::bitset<256>& punct_bitmap) {
@@ -50,11 +46,8 @@ struct Lexer {
   }
 
  private:
-  std::string StemWord(
-      const std::string& word,
-      sb_stemmer* stemmer,
-      bool stemming_enabled,
-      uint32_t min_stem_size) const;
+  std::string StemWord(const std::string& word, sb_stemmer* stemmer,
+                       bool stemming_enabled, uint32_t min_stem_size) const;
 
   // UTF-8 processing helpers
   bool IsValidUtf8(absl::string_view text) const;

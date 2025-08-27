@@ -24,19 +24,20 @@ std::vector<ValkeyModuleString*> ToValkeyStringVector(
     if (exclude == params[i]) {
       continue;
     }
-    
+
     // Handle quote stripping (mimics CLI behavior)
     absl::string_view param = params[i];
     std::string processed_param;
-    
-    if (param.length() >= 2 && 
+
+    if (param.length() >= 2 &&
         ((param.front() == '"' && param.back() == '"') ||
          (param.front() == '\'' && param.back() == '\''))) {
-          
       processed_param = std::string(param.substr(1, param.length() - 2));
-      ret.push_back(ValkeyModule_CreateString(nullptr, processed_param.data(), processed_param.size()));
+      ret.push_back(ValkeyModule_CreateString(nullptr, processed_param.data(),
+                                              processed_param.size()));
     } else {
-      ret.push_back(ValkeyModule_CreateString(nullptr, param.data(), param.size()));
+      ret.push_back(
+          ValkeyModule_CreateString(nullptr, param.data(), param.size()));
     }
   }
   return ret;

@@ -15,12 +15,8 @@
 namespace valkey_search::indexes::text {
 
 absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
-    absl::string_view text,
-    const std::bitset<256>& punct_bitmap,
-    sb_stemmer* stemmer,
-    bool stemming_enabled,
-    uint32_t min_stem_size) const {
-
+    absl::string_view text, const std::bitset<256>& punct_bitmap,
+    sb_stemmer* stemmer, bool stemming_enabled, uint32_t min_stem_size) const {
   if (!IsValidUtf8(text)) {
     return absl::InvalidArgumentError("Invalid UTF-8");
   }
@@ -34,7 +30,8 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
     }
 
     size_t word_start = pos;
-    while (pos < text.size() && !Lexer::IsPunctuation(text[pos], punct_bitmap)) {
+    while (pos < text.size() &&
+           !Lexer::IsPunctuation(text[pos], punct_bitmap)) {
       pos++;
     }
 
@@ -50,30 +47,24 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
       tokens.push_back(std::move(word));
     }
   }
-  
+
   return tokens;
 }
 
-std::string Lexer::StemWord(
-    const std::string& word,
-    sb_stemmer* stemmer,
-    bool stemming_enabled,
-    uint32_t min_stem_size) const {
-  
+std::string Lexer::StemWord(const std::string& word, sb_stemmer* stemmer,
+                            bool stemming_enabled,
+                            uint32_t min_stem_size) const {
   if (word.empty() || !stemming_enabled || word.length() < min_stem_size) {
     return word;
   }
-  
+
   CHECK(stemmer) << "Stemmer not initialized";
 
   const sb_symbol* stemmed = sb_stemmer_stem(
-    stemmer,
-    reinterpret_cast<const sb_symbol*>(word.c_str()),
-    word.length()
-  );
-  
+      stemmer, reinterpret_cast<const sb_symbol*>(word.c_str()), word.length());
+
   DCHECK(stemmed) << "Stemming failed for word: " + word;
-  
+
   int stemmed_length = sb_stemmer_length(stemmer);
   return std::string(reinterpret_cast<const char*>(stemmed), stemmed_length);
 }
@@ -91,6 +82,7 @@ bool Lexer::IsValidUtf8(absl::string_view text) const {
   }
 
   // If any invalid UTF-8 sequences were encountered, text is invalid
-  return scanner.GetInvalidUtf8Count() == 0 && scanner.GetPosition() == text.size();
+  return scanner.GetInvalidUtf8Count() == 0 &&
+         scanner.GetPosition() == text.size();
 }
 }  // namespace valkey_search::indexes::text

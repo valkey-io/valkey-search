@@ -15,6 +15,7 @@ SAN_BUILD="no"
 ARGV=$@
 EXIT_CODE=0
 INTEG_RETRIES=1
+JOBS=""
 
 echo "Root directory: ${ROOT_DIR}"
 
@@ -35,7 +36,8 @@ Usage: build.sh [options...]
     --asan                            Build with address sanitizer enabled.
     --tsan                            Build with thread sanitizer enabled.
     --retries=N                       Attempt to run integration tests N times. Default is 1.
-    
+    --jobs=N                          Limit the build workers to N. Default: use all available cores.
+
 Example usage:
 
     # Build the release configuration, run cmake if needed
@@ -118,6 +120,10 @@ while [ $# -gt 0 ]; do
         shift || true
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
+    --jobs=*)
+        JOBS=${1#*=}
+        shift || true
+        ;;
     --verbose | -v)
         shift || true
         VERBOSE_ARGS="-v"
@@ -153,11 +159,15 @@ function build() {
     printf "${BOLD_PINK}Building${RESET}\n"
     if [ -d ${BUILD_DIR} ]; then
         cd ${BUILD_DIR}
-        ${NINJA_TOOL} ${VERBOSE_ARGS} ${CMAKE_TARGET}
+        if [ -z "${JOBS}" ]; then
+            ${NINJA_TOOL} ${VERBOSE_ARGS} ${CMAKE_TARGET}
+        else
+            ${NINJA_TOOL} -j ${JOBS} ${VERBOSE_ARGS} ${CMAKE_TARGET}
+        fi
         cd ${ROOT_DIR}
 
         printf "\n${GREEN}Build Successful!${RESET}\n\n"
-        printf "${BOLD_PINK}Module path:${RESET} ${BUILD_DIR}/libsearch.so\n\n"
+        printf "${BOLD_PINK}Module path:${RESET} ${BUILD_DIR}/libsearch.${MODULE_EXT}\n\n"
 
         if [ -z "${RUN_TEST}" ]; then
             printf "You may want to run the unit tests by executing:\n"
@@ -165,7 +175,7 @@ function build() {
         fi
 
         printf "To load the module, execute the following command:\n"
-        printf "    valkey-server --loadmodule ${BUILD_DIR}/libsearch.so\n\n"
+        printf "    valkey-server --loadmodule ${BUILD_DIR}/libsearch.${MODULE_EXT}\n\n"
     fi
 }
 

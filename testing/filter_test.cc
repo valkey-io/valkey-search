@@ -11,11 +11,11 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/commands/filter_parser.h"
+#include "src/commands/ft_create_parser.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/text_index.h"
-#include "src/commands/ft_create_parser.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
@@ -92,25 +92,26 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
                                          tag_field_case_insensitive));
 
   data_model::TextIndex text_index_proto;
-  auto text_index_schema = std::make_shared<valkey_search::indexes::text::TextIndexSchema>(
-                            data_model::LANGUAGE_ENGLISH, 
-                            std::string(kDefaultPunctuation), 
-                            true, 
-                            kDefaultStopWords
-                        );
-  auto text_index_1 = std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
-  auto text_index_2 = std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
-  VMSDK_EXPECT_OK(index_schema->AddIndex("text_field1", "text_field1",
-                                         text_index_1));
-  VMSDK_EXPECT_OK(index_schema->AddIndex("text_field2", "text_field2",
-                                         text_index_2));
+  auto text_index_schema =
+      std::make_shared<valkey_search::indexes::text::TextIndexSchema>(
+          data_model::LANGUAGE_ENGLISH, std::string(kDefaultPunctuation), true,
+          kDefaultStopWords);
+  auto text_index_1 =
+      std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
+  auto text_index_2 =
+      std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("text_field1", "text_field1", text_index_1));
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("text_field2", "text_field2", text_index_2));
 }
 
 TEST_P(FilterTest, ParseParams) {
   const FilterTestCase &test_case = GetParam();
   auto index_schema = CreateIndexSchema("index_schema_name").value();
   InitIndexSchema(index_schema.get());
-  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_)).Times(::testing::AnyNumber());
+  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
   FilterParser parser(*index_schema, test_case.filter);
   auto parse_results = parser.Parse();
   EXPECT_EQ(test_case.create_success, parse_results.ok());
@@ -495,58 +496,55 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "exact_suffix",
             .filter = "@text_field1:*word",
             .create_success = false,
-            .create_expected_error_message =
-                "Unsupported query operation",
+            .create_expected_error_message = "Unsupported query operation",
         },
         {
             .test_name = "exact_inffix",
             .filter = "@text_field1:*word*",
             .create_success = false,
-            .create_expected_error_message =
-                "Unsupported query operation",
+            .create_expected_error_message = "Unsupported query operation",
         },
         {
             .test_name = "exact_fuzzy1",
             .filter = "@text_field1:%word%",
             .create_success = false,
-            .create_expected_error_message =
-                "Unsupported query operation",
+            .create_expected_error_message = "Unsupported query operation",
         },
         {
             .test_name = "exact_fuzzy2",
             .filter = "@text_field1:%%word%%",
             .create_success = false,
-            .create_expected_error_message =
-                "Unsupported query operation",
+            .create_expected_error_message = "Unsupported query operation",
         },
         {
             .test_name = "exact_fuzzy3",
             .filter = "@text_field1:%%%word%%%",
             .create_success = false,
-            .create_expected_error_message =
-                "Unsupported query operation",
+            .create_expected_error_message = "Unsupported query operation",
         },
         {
             .test_name = "proximity1",
             .filter = "@text_field1:\"hello my name is\"",
             .create_success = false,
-            .create_expected_error_message =
-                "Unsupported query operation",
+            .create_expected_error_message = "Unsupported query operation",
         },
         {
             .test_name = "proximity2",
-            .filter = "@text_field1:hello @text_field2:my @text_field1:name @text_field2:is",
+            .filter = "@text_field1:hello @text_field2:my @text_field1:name "
+                      "@text_field2:is",
             .create_success = false,
-            .create_expected_error_message =
-                "Unsupported query operation",
+            .create_expected_error_message = "Unsupported query operation",
         },
         {
             .test_name = "proximity3",
-            .filter = "@text_field1:\"Advanced Neural Networking in plants\" | @text_field1:Advanced @text_field2:neu* @text_field1:network"
-                      "@num_field_2.0:[10 100] @text_field1:hello | @tag_field_1:{books} @text_field2:Neural | @text_field1:%%%word%%% @text_field2:network",
+            .filter =
+                "@text_field1:\"Advanced Neural Networking in plants\" | "
+                "@text_field1:Advanced @text_field2:neu* @text_field1:network"
+                "@num_field_2.0:[10 100] @text_field1:hello | "
+                "@tag_field_1:{books} @text_field2:Neural | "
+                "@text_field1:%%%word%%% @text_field2:network",
             .create_success = false,
-            .create_expected_error_message =
-                "Unsupported query operation",
+            .create_expected_error_message = "Unsupported query operation",
         },
         {
             .test_name = "bad_filter_1",

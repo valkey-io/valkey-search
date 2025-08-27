@@ -17,9 +17,9 @@
 #include "absl/hash/hash.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "gtest/gtest_prod.h"
 #include "src/utils/allocator.h"
 #include "vmsdk/src/memory_tracker.h"
-#include "gtest/gtest_prod.h"
 
 namespace valkey_search {
 
@@ -75,7 +75,7 @@ class InternedString {
   // It is intended for cases where an API requires a `StringIntern` object
   // but interning is unnecessary or inefficient. For example, this applies
   // when fetching data from remote nodes.
-  InternedString(absl::string_view str) : InternedString(str, false) {};
+  InternedString(absl::string_view str) : InternedString(str, false){};
 
   ~InternedString();
 

@@ -11,30 +11,32 @@
 /*
 
 For each entry in the inverted term index, there is an instance of
-this structure which is used to contain the key/field/position information for each
-word. It is expected that there will be a very large number of these objects
-most of which will have only a small number of key/field/position entries. However,
-there will be a small number of instances where the number of key/field/position
-entries is quite large. Thus it's likely that the fully optimized version of
-this object will have two or more encodings for its contents. This optimization
-is hidden from external view. 
+this structure which is used to contain the key/field/position information for
+each word. It is expected that there will be a very large number of these
+objects most of which will have only a small number of key/field/position
+entries. However, there will be a small number of instances where the number of
+key/field/position entries is quite large. Thus it's likely that the fully
+optimized version of this object will have two or more encodings for its
+contents. This optimization is hidden from external view.
 
 This object is NOT multi-thread safe, it's expected that the caller performs
 locking for mutation operations.
 
-Conceptually, this object holds an ordered list of Keys and for each Key there is
-an ordered list of Positions. Each position is tagged with a bitmask of fields.
+Conceptually, this object holds an ordered list of Keys and for each Key there
+is an ordered list of Positions. Each position is tagged with a bitmask of
+fields.
 
 A KeyIterator is provided to iterate over the keys within this object.
-A PositionIterator is provided to iterate over the positions of an individual Key. 
+A PositionIterator is provided to iterate over the positions of an individual
+Key.
 
 */
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
-#include <map>
 
 #include "src/utils/string_interning.h"
 
@@ -45,7 +47,7 @@ using Position = uint32_t;
 
 // Field mask interface optimized for different field counts
 class FieldMask {
-public:
+ public:
   static std::unique_ptr<FieldMask> Create(size_t num_fields);
   virtual ~FieldMask() = default;
   virtual void SetField(size_t field_index) = 0;
@@ -58,9 +60,8 @@ public:
   virtual size_t MaxFields() const = 0;
 };
 
-
 //
-// this is the logical view of a posting. 
+// this is the logical view of a posting.
 //
 struct Posting {
   const Key& GetKey() const;
@@ -73,10 +74,10 @@ struct Postings {
   struct PositionIterator;
   // Construct a posting. If save_positions is off, then any keys that
   // are inserted have an assumed single position of 0.
-  // The "num_text_fields" entry identifies how many bits of the field-mask are required
-  // and is used to select the representation.
+  // The "num_text_fields" entry identifies how many bits of the field-mask are
+  // required and is used to select the representation.
   explicit Postings(bool save_positions, size_t num_text_fields);
-  
+
   // Destructor
   ~Postings();
 
@@ -84,9 +85,11 @@ struct Postings {
   bool IsEmpty() const;
 
   // Insert a posting entry for a key and field
-  // If save_positions=false: Only key and field are stored (position ignored if provided)
-  // If save_positions=true: Key, position, and field are stored (position must be provided)
-  void InsertPosting(const Key& key, size_t field_index, Position position = UINT32_MAX);
+  // If save_positions=false: Only key and field are stored (position ignored if
+  // provided) If save_positions=true: Key, position, and field are stored
+  // (position must be provided)
+  void InsertPosting(const Key& key, size_t field_index,
+                     Position position = UINT32_MAX);
 
   // Remove a key and all positions for it
   void RemoveKey(const Key& key);
@@ -96,14 +99,14 @@ struct Postings {
 
   // Total number of postings for all keys
   size_t GetPostingCount() const;
-  
+
   // Total frequency of the term across all keys and positions
   size_t GetTotalTermFrequency() const;
 
   // Defrag this contents of this object. Returns the updated "this" pointer.
-  Postings *Defrag();
+  Postings* Defrag();
 
-  // Get a Key iterator. 
+  // Get a Key iterator.
   KeyIterator GetKeyIterator() const;
 
   // The Key Iterator
@@ -121,15 +124,16 @@ struct Postings {
     // Get Current key
     const Key& GetKey() const;
 
-    // Check if word is present in any of the fields specified by field_mask for current key
+    // Check if word is present in any of the fields specified by field_mask for
+    // current key
     bool ContainsFields(uint64_t field_mask) const;
 
     // Get Position Iterator
     PositionIterator GetPositionIterator() const;
 
-  private:
+   private:
     friend struct Postings;
-    
+
     // Iterator state - pointer to key_to_positions map
     using PositionMap = std::map<Position, std::unique_ptr<class FieldMask>>;
     const std::map<Key, PositionMap>* key_map_;
@@ -151,13 +155,13 @@ struct Postings {
 
     // Get Current Position
     const Position& GetPosition() const;
-    
+
     // Get field mask for current position
     uint64_t GetFieldMask() const;
 
-  private:
+   private:
     friend struct KeyIterator;
-    
+
     // Iterator state - pointer to positions map
     using PositionMap = std::map<Position, std::unique_ptr<class FieldMask>>;
     const PositionMap* position_map_;
@@ -165,7 +169,7 @@ struct Postings {
     PositionMap::const_iterator end_;
   };
 
-private:
+ private:
   class Impl;
   std::unique_ptr<Impl> impl_;
 };

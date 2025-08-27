@@ -16,18 +16,18 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
-
 #include "src/indexes/index_base.h"
+#include "src/indexes/text/term.h"
 #include "src/indexes/text/text_index.h"
+#include "src/indexes/text/wildcard.h"
+#include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
-#include "src/indexes/text/term.h"
-#include "src/indexes/text/wildcard.h"
-#include "src/query/predicate.h" 
 
 namespace valkey_search::indexes {
 
-using WordIterator = text::RadixTree<std::shared_ptr<text::Postings>, false>::WordIterator;
+using WordIterator =
+    text::RadixTree<std::shared_ptr<text::Postings>, false>::WordIterator;
 
 /**
  * Text per-field index implementation for full-text search functionality.
@@ -65,7 +65,8 @@ class Text : public IndexBase {
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  public:
-  // Abstract for Text. Every text operation will have a specific implementation.
+  // Abstract for Text. Every text operation will have a specific
+  // implementation.
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
    public:
     bool Done() const override;
@@ -79,9 +80,9 @@ class Text : public IndexBase {
   class EntriesFetcher : public EntriesFetcherBase {
    public:
     EntriesFetcher(size_t size,
-                const std::shared_ptr<text::TextIndex>& text_index,
-                const InternedStringSet* untracked_keys = nullptr,
-                text::FieldMaskPredicate field_mask = ~0ULL)
+                   const std::shared_ptr<text::TextIndex>& text_index,
+                   const InternedStringSet* untracked_keys = nullptr,
+                   text::FieldMaskPredicate field_mask = ~0ULL)
         : size_(size),
           text_index_(text_index),
           untracked_keys_(untracked_keys),
@@ -105,15 +106,15 @@ class Text : public IndexBase {
   // Calculate size based on the predicate.
   size_t CalculateSize(const query::TextPredicate& predicate) const;
 
-  virtual std::unique_ptr<EntriesFetcher> Search(const query::TextPredicate& predicate,
-                                                 bool negate) const
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  virtual std::unique_ptr<EntriesFetcher> Search(
+      const query::TextPredicate& predicate,
+      bool negate) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  private:
-  // Each text field index within the schema is assigned a unique number, this is used
-  // by the Postings object to identify fields.
+  // Each text field index within the schema is assigned a unique number, this
+  // is used by the Postings object to identify fields.
   size_t text_field_number_;
-  
+
   // Reference to the shared text index schema
   std::shared_ptr<text::TextIndexSchema> text_index_schema_;
 

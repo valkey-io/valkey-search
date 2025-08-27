@@ -409,35 +409,36 @@ TEST_F(RadixTreeTest, WordIteratorPrefixPartialMatch) {
   prefix_tree_->Mutate("can", [](auto) { return TestTarget(2); });
   prefix_tree_->Mutate("testing", [](auto) { return TestTarget(4); });
   prefix_tree_->Mutate("test", [](auto) { return TestTarget(5); });
-  
+
   auto test_iter = prefix_tree_->GetWordIterator("te");
-  
+
   std::vector<std::string> words;
-  
+
   while (!test_iter.Done()) {
     std::string current_word = std::string(test_iter.GetWord());
     words.push_back(current_word);
     test_iter.Next();
   }
-  
+
   // Expected: only "test" and "testing" should match prefix "te"
   std::vector<std::string> expected = {"test", "testing"};
-  EXPECT_EQ(words, expected) << "WordIterator should only return words that start with 'te'";
-  
+  EXPECT_EQ(words, expected)
+      << "WordIterator should only return words that start with 'te'";
+
   test_iter = prefix_tree_->GetWordIterator("ca");
-  
+
   words.clear();
   while (!test_iter.Done()) {
     std::string current_word = std::string(test_iter.GetWord());
     words.push_back(current_word);
     test_iter.Next();
   }
-  
+
   // Expected: "can" and "cat" should match prefix "ca"
   expected = {"can", "cat"};
-  EXPECT_EQ(words, expected) << "WordIterator should return words that start with 'ca'";
+  EXPECT_EQ(words, expected)
+      << "WordIterator should return words that start with 'ca'";
 }
-
 
 }  // namespace
 }  // namespace valkey_search::indexes::text

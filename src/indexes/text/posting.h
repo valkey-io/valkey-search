@@ -37,6 +37,7 @@ A PositionIterator is provided to iterate over the positions of an individual Ke
 #include <map>
 
 #include "src/utils/string_interning.h"
+#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search::indexes::text {
 
@@ -106,6 +107,9 @@ struct Postings {
   // Get a Key iterator. 
   KeyIterator GetKeyIterator() const;
 
+  // Memory tracking
+  static int64_t GetMemoryUsage();
+
   // The Key Iterator
   struct KeyIterator {
     // Is valid?
@@ -166,6 +170,14 @@ struct Postings {
   };
 
 private:
+  static MemoryPool memory_pool_;
+  
+  // Used for testing.
+  static void SetMemoryUsage(int64_t value) {
+    memory_pool_.Reset();
+    memory_pool_.Add(value);
+  }
+
   class Impl;
   std::unique_ptr<Impl> impl_;
 };

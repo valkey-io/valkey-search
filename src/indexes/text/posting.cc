@@ -15,6 +15,8 @@
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
+#include "vmsdk/src/memory_allocation_overrides.h"
+#include "vmsdk/src/memory_allocation.h"
 
 namespace valkey_search::indexes::text {
 
@@ -159,6 +161,9 @@ template class FieldMaskImpl<uint64_t, 64>;
 
 // Basic Postings Object Implementation
 
+// Static memory pool for tracking posting memory usage
+MemoryPool Postings::memory_pool_{0};
+
 // Position map type alias - maps position to optimized FieldMask objects
 using PositionMap = std::map<Position, std::unique_ptr<FieldMask>>;
 
@@ -174,11 +179,36 @@ public:
 
 Postings::Postings(bool save_positions, size_t num_text_fields) 
     : impl_(std::make_unique<Impl>(save_positions, num_text_fields)) {
+  IsolatedMemoryScope scope{memory_pool_};
   CHECK(impl_ != nullptr) << "Failed to create Postings implementation";
+  
+  // Report base object memory usage
+  vmsdk::ReportAllocMemorySize(sizeof(Postings) + sizeof(Impl));
 }
 
 // Automatic cleanup via unique_ptr
-Postings::~Postings() = default;
+Postings::~Postings() {
+  IsolatedMemoryScope scope{memory_pool_};
+  
+  // Report deallocation for all remaining data
+  for (const auto& [key, positions] : impl_->key_to_positions_) {
+    // Report deallocation for each position entry
+    for (const auto& [position, field_mask] : positions) {
+      size_t field_mask_size = impl_->num_text_fields_ == 1 ? sizeof(SingleFieldMask) :
+                              impl_->num_text_fields_ <= 8 ? sizeof(ByteFieldMask) : 
+                              sizeof(Uint64FieldMask);
+      size_t entry_size = sizeof(Position) + field_mask_size + 24; // approx map node overhead
+      vmsdk::ReportFreeMemorySize(entry_size);
+    }
+    
+    // Report deallocation for key overhead
+    size_t key_overhead = 48; // approximate map node overhead for key
+    vmsdk::ReportFreeMemorySize(key_overhead);
+  }
+  
+  // Report deallocation of base object
+  vmsdk::ReportFreeMemorySize(sizeof(Postings) + sizeof(Impl));
+}
 
 // Check if posting list contains any documents
 bool Postings::IsEmpty() const {
@@ -187,6 +217,8 @@ bool Postings::IsEmpty() const {
 
 // Insert a posting entry for a key and field
 void Postings::InsertPosting(const Key& key, size_t field_index, Position position) {
+  IsolatedMemoryScope scope{memory_pool_};
+  
   CHECK(field_index < impl_->num_text_fields_) << "Field index out of range";
   
   Position effective_position;
@@ -200,6 +232,7 @@ void Postings::InsertPosting(const Key& key, size_t field_index, Position positi
     effective_position = 0;
   }
   
+  bool is_new_key = impl_->key_to_positions_.find(key) == impl_->key_to_positions_.end();
   auto& pos_map = impl_->key_to_positions_[key];
   
   // Check if position already exists
@@ -213,13 +246,46 @@ void Postings::InsertPosting(const Key& key, size_t field_index, Position positi
     auto field_mask = FieldMask::Create(impl_->num_text_fields_);
     field_mask->SetField(field_index);
     pos_map[effective_position] = std::move(field_mask);
+    
+    // Report memory allocation for new position entry
+    size_t field_mask_size = impl_->num_text_fields_ == 1 ? sizeof(SingleFieldMask) :
+                            impl_->num_text_fields_ <= 8 ? sizeof(ByteFieldMask) : 
+                            sizeof(Uint64FieldMask);
+    size_t entry_size = sizeof(Position) + field_mask_size + 24; // approx map node overhead
+    vmsdk::ReportAllocMemorySize(entry_size);
+  }
+  
+  // Report additional memory for new key
+  if (is_new_key) {
+    size_t key_overhead = 48; // approximate map node overhead for key
+    vmsdk::ReportAllocMemorySize(key_overhead);
   }
 }
 
-
 // Remove a document key and all its positions
 void Postings::RemoveKey(const Key& key) {
-  impl_->key_to_positions_.erase(key);
+  IsolatedMemoryScope scope{memory_pool_};
+  
+  auto it = impl_->key_to_positions_.find(key);
+  if (it != impl_->key_to_positions_.end()) {
+    // Calculate memory being freed
+    size_t positions_count = it->second.size();
+    
+    // Report deallocation for each position entry
+    for (const auto& [position, field_mask] : it->second) {
+      size_t field_mask_size = impl_->num_text_fields_ == 1 ? sizeof(SingleFieldMask) :
+                              impl_->num_text_fields_ <= 8 ? sizeof(ByteFieldMask) : 
+                              sizeof(Uint64FieldMask);
+      size_t entry_size = sizeof(Position) + field_mask_size + 24; // approx map node overhead
+      vmsdk::ReportFreeMemorySize(entry_size);
+    }
+    
+    // Report deallocation for key overhead
+    size_t key_overhead = 48; // approximate map node overhead for key
+    vmsdk::ReportFreeMemorySize(key_overhead);
+    
+    impl_->key_to_positions_.erase(it);
+  }
 }
 
 // Get total number of document keys
@@ -354,6 +420,11 @@ const Position& Postings::PositionIterator::GetPosition() const {
 uint64_t Postings::PositionIterator::GetFieldMask() const {
   CHECK(position_map_ != nullptr && current_ != end_) << "PositionIterator is invalid or exhausted";
   return current_->second->AsUint64();
+}
+
+// Memory tracking implementation
+int64_t Postings::GetMemoryUsage() {
+  return memory_pool_.GetUsage();
 }
 
 }  // namespace valkey_search::indexes::text

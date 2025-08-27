@@ -36,7 +36,7 @@ WEAK_SYMBOL int (*__real_posix_memalign)(void**, size_t,
 // NOLINTNEXTLINE
 WEAK_SYMBOL void* (*__real_valloc)(size_t) = valloc;
 // NOLINTNEXTLINE
-__attribute__((weak)) size_t empty_usable_size(void* ptr) noexcept;
+__attribute__((weak)) size_t usable_size(void* ptr) noexcept;
 }  // extern "C"
 
 // Different exception specifier between CLANG & GCC
@@ -108,4 +108,23 @@ void operator delete[](void* p, std::align_val_t alignment,
 void operator delete[](void* p, size_t size,
                        std::align_val_t alignment) noexcept;
 #endif  // !SAN_BUILD
+
+namespace vmsdk {
+namespace test_utils {
+
+// Set a custom malloc size function for testing purposes.
+// This allows tests to provide their own implementation of malloc_usable_size
+// for system allocations, enabling accurate memory tracking in tests.
+// The function pointer is thread-local, so it only affects the calling thread.
+// 
+// @param fn Function pointer that takes a void* and returns the allocated size.
+//           Pass nullptr to clear the test function.
+void SetTestSystemMallocSizeFunction(size_t (*fn)(void*));
+
+// Clear the test malloc size function, reverting to default behavior.
+void ClearTestSystemMallocSizeFunction();
+
+}  // namespace test_utils
+}  // namespace vmsdk
+
 #endif  // VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_

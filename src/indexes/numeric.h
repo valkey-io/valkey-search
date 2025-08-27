@@ -83,6 +83,7 @@ class BTreeNumeric {
 class Numeric : public IndexBase {
  public:
   explicit Numeric(const data_model::NumericIndex& numeric_index_proto, MemoryPool& memory_pool);
+  ~Numeric() override;
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);

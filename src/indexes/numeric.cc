@@ -46,6 +46,10 @@ Numeric::Numeric(const data_model::NumericIndex& numeric_index_proto, MemoryPool
   index_ = std::make_unique<BTreeNumericIndex>();
 }
 
+Numeric::~Numeric() {
+  NestedMemoryScope scope{memory_pool_};
+}
+
 // NOTE: key should be stored interned string.
 absl::StatusOr<bool> Numeric::AddRecord(const InternedStringPtr& key,
                                         absl::string_view data) {
@@ -59,6 +63,8 @@ absl::StatusOr<bool> Numeric::AddRecord(const InternedStringPtr& key,
   }
   auto [_, succ] = tracked_keys_.insert({key, *value});
   if (!succ) {
+    // NOTE: don't track allocation error.
+    DisableMemoryTracking disable_tracking;
     return absl::AlreadyExistsError(
         absl::StrCat("Key `", key->Str(), "` already exists"));
   }
@@ -77,14 +83,14 @@ absl::StatusOr<bool> Numeric::ModifyRecord(const InternedStringPtr& key,
     return false;
   }
 
-  NestedMemoryScope scope{memory_pool_};
-
   absl::MutexLock lock(&index_mutex_);
   auto it = tracked_keys_.find(key);
   if (it == tracked_keys_.end()) {
     return absl::NotFoundError(
         absl::StrCat("Key `", key->Str(), "` not found"));
   }
+
+  NestedMemoryScope scope{memory_pool_};
 
   index_->Modify(it->first, it->second, *value);
   it->second = *value;

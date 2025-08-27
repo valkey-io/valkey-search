@@ -54,3 +54,11 @@ NestedMemoryScope::~NestedMemoryScope() {
     int64_t net_change = current_delta - baseline_memory_;
     target_pool_.Add(net_change);
 }
+
+DisableMemoryTracking::DisableMemoryTracking() 
+    : saved_delta_(vmsdk::GetMemoryDelta()) {
+}
+
+DisableMemoryTracking::~DisableMemoryTracking() {
+    vmsdk::SetMemoryDelta(saved_delta_);
+}

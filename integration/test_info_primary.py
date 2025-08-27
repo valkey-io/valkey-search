@@ -23,7 +23,6 @@ def verify_error_response(client, cmd, expected_err_reply):
         assert str(e) == expected_err_reply, assert_error_msg
         return str(e)
 
-@pytest.mark.skip("temporary")
 def is_index_on_all_nodes(cur, index_name):
     """
     Returns True if index exists on all nodes, False otherwise
@@ -41,6 +40,7 @@ def is_index_on_all_nodes(cur, index_name):
                 return False
     return True
 
+@pytest.mark.skip("temporary")
 class TestFTInfoPrimary(ValkeySearchClusterTestCase):
 
     def is_indexing_complete(self, node, index_name, N):

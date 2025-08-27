@@ -76,7 +76,7 @@ class FanoutTemplate {
     auto nodes = vmsdk::MakeUniqueValkeyClusterNodesList(ctx, &num_nodes);
 
     std::vector<TargetType> selected_targets;
-    
+
     if (target_mode == FanoutTargetMode::kPrimary) {
       // Select all primary (master) nodes directly
       for (size_t i = 0; i < num_nodes; ++i) {
@@ -142,7 +142,8 @@ class FanoutTemplate {
         }
       }
     } else {
-      CHECK(target_mode == FanoutTargetMode::kRandom || target_mode == FanoutTargetMode::kReplicasOnly);
+      CHECK(target_mode == FanoutTargetMode::kRandom ||
+            target_mode == FanoutTargetMode::kReplicasOnly);
       // Original logic: group master and replica into shards and randomly
       // select one, unless confined to replicas only
       absl::flat_hash_map<std::string, std::vector<size_t>>

@@ -878,7 +878,8 @@ TEST_P(GetTargetsTest, TestGetTargets) {
   for (const auto &possible_target_list : params.possible_expected_targets) {
     target_matchers.push_back(testing::AnyOfArray(possible_target_list));
   }
-  EXPECT_THAT(fanout::GetSearchTargetsForFanout(&fake_ctx_, fanout::FanoutTargetMode::kRandom),
+  EXPECT_THAT(fanout::GetSearchTargetsForFanout(
+                  &fake_ctx_, fanout::FanoutTargetMode::kRandom),
               UnorderedElementsAreArray(target_matchers));
 }
 }  // namespace query

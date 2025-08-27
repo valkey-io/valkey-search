@@ -284,7 +284,8 @@ absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     if (ValkeySearch::Instance().UsingCoordinator() &&
         ValkeySearch::Instance().IsCluster() && !parameters->local_only) {
       auto mode = /* !vmsdk::IsReadOnly(ctx) ? query::fanout::kPrimaries ? */
-          ForceReplicasOnly.GetValue() ? query::fanout::FanoutTargetMode::kReplicasOnly 
+          ForceReplicasOnly.GetValue()
+              ? query::fanout::FanoutTargetMode::kReplicasOnly
               : query::fanout::FanoutTargetMode::kRandom;
       auto search_targets = query::fanout::GetSearchTargetsForFanout(ctx, mode);
       return query::fanout::PerformSearchFanoutAsync(

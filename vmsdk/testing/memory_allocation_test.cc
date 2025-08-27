@@ -7,16 +7,16 @@
 
 #include "vmsdk/src/memory_allocation.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdlib>
-#include <atomic>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "vmsdk/src/memory_allocation_overrides.h"
+#include "vmsdk/src/memory_tracker.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
-#include "vmsdk/src/memory_tracker.h"
 
 class MockSystemAlloc {
  public:
@@ -439,7 +439,7 @@ TEST_F(MemoryAllocationTest, IsolatedMemoryScopeAllocationIsolation) {
       EXPECT_CALL(*kMockValkeyModule, MallocUsableSize(reinterpret_cast<void*>(0x2000)))
           .WillRepeatedly(testing::Return(96));
       inner_ptr = __wrap_malloc(75);
-      
+
       EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 224);
       EXPECT_EQ(vmsdk::GetMemoryDelta(), 224);
       EXPECT_EQ(outer_pool.GetUsage(), 0);
@@ -451,7 +451,7 @@ TEST_F(MemoryAllocationTest, IsolatedMemoryScopeAllocationIsolation) {
     EXPECT_EQ(outer_pool.GetUsage(), 0);
     EXPECT_EQ(inner_pool.GetUsage(), 96);
   }
-  
+
   EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 224);
   EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
   EXPECT_EQ(outer_pool.GetUsage(), 128);
@@ -466,12 +466,12 @@ TEST_F(MemoryAllocationTest, IsolatedMemoryScopeFreeIsolation) {
 
   EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
   EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
-  
+
   MemoryPool outer_pool{0};
   MemoryPool inner_pool{0};
   void* outer_ptr = nullptr;
   void* inner_ptr = nullptr;
-  
+
   // Allocate outer pool.
   {
     IsolatedMemoryScope scope{outer_pool};
@@ -607,7 +607,7 @@ TEST_F(MemoryAllocationTest, NestedMemoryScopeAllocation) {
 TEST_F(MemoryAllocationTest, NestedMemoryScopeFree) {
   EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
   EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
-  
+
   MemoryPool outer_pool{0};
   MemoryPool inner_pool{0};
   void* outer_ptr = nullptr;

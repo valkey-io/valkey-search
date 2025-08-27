@@ -58,6 +58,16 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# If user did not pass --asan | --tsan, honor the environment variable
+# SAN_BUILD.
+if [ -z "${SAN_SUFFIX}" ] && [ ! -z "${SAN_BUILD}" ]; then
+  if [[ "${SAN_BUILD}" == "address" ]]; then
+    SAN_SUFFIX="-asan"
+  elif [[ "${SAN_BUILD}" == "thread" ]]; then
+    SAN_SUFFIX="-tsan"
+  fi
+fi
+
 BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}${SAN_SUFFIX}
 WD=${BUILD_DIR}/integration
 
@@ -71,9 +81,11 @@ check_existence "MODULE_PATH" "${MODULE_PATH}"
 setup_valkey_server
 check_existence "VALKEY_SERVER_PATH" "${VALKEY_SERVER_PATH}"
 
-LOG_INFO "VALKEY_SERVER_PATH => ${VALKEY_SERVER_PATH}"
+export VALKEY_SERVER_PATH
+export MODULE_PATH
+print_environment_var "VALKEY_SERVER_PATH" "${VALKEY_SERVER_PATH}"
+print_environment_var "MODULE_PATH" "${MODULE_PATH}"
 
-LOG_INFO "MODULE_PATH => ${MODULE_PATH}"
 mkdir -p ${WD}
 LOG_INFO "Working directory is set to: ${WD}"
 
@@ -84,8 +96,8 @@ function setup_python() {
       python3 -m venv ${WD}/env
     fi
     source ${WD}/env/bin/activate
-    PYTHON_PATH=${WD}/env/bin/python3
-    PIP_PATH=${WD}/env/bin/pip3
+    export PYTHON_PATH=${WD}/env/bin/python3
+    export PIP_PATH=${WD}/env/bin/pip3
   fi
 }
 
@@ -123,6 +135,12 @@ else
 fi
 
 RUN_SUCCESS=0
+export LOGS_DIR=${WD}/.valkey-test-framework
+print_environment_var "LOGS_DIR" "${LOGS_DIR}"
+
+rm -fr ${LOGS_DIR}
+mkdir -p ${LOGS_DIR}
+
 function run_pytest() {
   zap valkey-server
   LOG_INFO "Running: ${PYTHON_PATH} -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/"
@@ -155,3 +173,14 @@ function run_with_retries() {
 }
 
 run_with_retries
+
+if [[ "${SAN_BUILD}" != "no" ]]; then
+  printf "Checking for errors...\n"
+  # Terminate valkey-server so the logs will be flushed
+  pkill valkey-server || true
+  # Wait for 3 seconds making sure the processes terminated
+  sleep 3
+  # And now we can check the logs
+  logfiles=$(find ${LOGS_DIR} -name "*.log")
+  check_for_san_errors "${logfiles}"
+fi

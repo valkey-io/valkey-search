@@ -63,9 +63,9 @@ void ClusterInfoFanoutOperation::OnResponse(
             target);
     return;
   }
-  if (!encoding_version_.has_value()) {
-    encoding_version_ = resp.encoding_version();
-  } else if (encoding_version_.value() != resp.encoding_version()) {
+  if (!version_.has_value()) {
+    version_ = resp.version();
+  } else if (version_.value() != resp.version()) {
     grpc::Status status =
         grpc::Status(grpc::StatusCode::INTERNAL,
                      "Cluster not in a consistent state, please retry.");
@@ -123,7 +123,7 @@ ClusterInfoFanoutOperation::GetLocalResponse(
       index_schema->GetInfoIndexPartitionData();
 
   std::optional<uint64_t> fingerprint;
-  std::optional<uint32_t> encoding_version;
+  std::optional<uint32_t> version;
 
   auto global_metadata =
       coordinator::MetadataManager::Instance().GetGlobalMetadata();
@@ -134,11 +134,11 @@ ClusterInfoFanoutOperation::GetLocalResponse(
     if (entry_map.entries().contains(request.index_name())) {
       const auto& entry = entry_map.entries().at(request.index_name());
       fingerprint = entry.fingerprint();
-      encoding_version = entry.encoding_version();
+      version = entry.version();
     }
   }
 
-  if (!fingerprint.has_value() || !encoding_version.has_value()) {
+  if (!fingerprint.has_value() || !version.has_value()) {
     resp.set_exists(false);
     resp.set_index_name(request.index_name());
     resp.set_error_type(coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR);
@@ -150,7 +150,7 @@ ClusterInfoFanoutOperation::GetLocalResponse(
   resp.set_backfill_in_progress(data.backfill_in_progress);
   resp.set_state(data.state);
   resp.set_schema_fingerprint(fingerprint.value());
-  resp.set_encoding_version(encoding_version.value());
+  resp.set_version(version.value());
   resp.set_error("");
   return resp;
 }

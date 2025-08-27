@@ -62,8 +62,7 @@ class VectorFlat : public VectorBase {
   absl::StatusOr<std::deque<Neighbor>> Search(
       absl::string_view query, uint64_t count,
       cancel::Token& cancellation_token,
-      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr
-    )
+      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr)
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
 
  protected:

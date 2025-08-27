@@ -376,27 +376,17 @@ absl::StatusOr<bool> VectorBase::UpdateMetadata(
 int VectorBase::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "type");
   ValkeyModule_ReplyWithSimpleString(ctx, "VECTOR");
-  ValkeyModule_ReplyWithSimpleString(ctx, "index");
-
-  ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+  int array_len = 2;
+  array_len += RespondWithInfoImpl(ctx);
   ValkeyModule_ReplyWithSimpleString(ctx, "capacity");
   ValkeyModule_ReplyWithLongLong(ctx, GetCapacity());
-  ValkeyModule_ReplyWithSimpleString(ctx, "dimensions");
-  ValkeyModule_ReplyWithLongLong(ctx, dimensions_);
-  ValkeyModule_ReplyWithSimpleString(ctx, "distance_metric");
-  ValkeyModule_ReplyWithSimpleString(
-      ctx, LookupKeyByValue(*kDistanceMetricByStr, distance_metric_).data());
   ValkeyModule_ReplyWithSimpleString(ctx, "size");
   {
     absl::MutexLock lock(&key_to_metadata_mutex_);
     ValkeyModule_ReplyWithCString(
         ctx, std::to_string(key_by_internal_id_.size()).c_str());
   }
-  int array_len = 8;
-  array_len += RespondWithInfoImpl(ctx);
-  ValkeyModule_ReplySetArrayLength(ctx, array_len);
-
-  return 4;
+  return array_len + 4;
 }
 
 absl::Status VectorBase::SaveIndex(RDBChunkOutputStream chunked_out) const {

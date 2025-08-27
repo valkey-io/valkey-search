@@ -7,6 +7,7 @@
 
 #include "src/utils/cancel.h"
 
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -54,6 +55,8 @@ struct TokenImpl : public Base {
           is_cancelled_ = true;  // Operation should be cancelled
           ForceCancels.Increment(1);
           VMSDK_LOG(WARNING, nullptr) << "CANCEL: Timeout forced";
+        } else if (!vmsdk::IsMainThread()) {
+          PAUSEPOINT("Cancel");
         }
       }
     }

@@ -30,12 +30,10 @@ unsigned PrimaryInfoFanoutOperation::GetTimeoutMs() const {
 }
 
 coordinator::InfoIndexPartitionRequest
-PrimaryInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&,
-                                            unsigned timeout_ms) {
+PrimaryInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&) {
   coordinator::InfoIndexPartitionRequest req;
   req.set_db_num(db_num_);
   req.set_index_name(index_name_);
-  req.set_timeout_ms(timeout_ms);
   return req;
 }
 

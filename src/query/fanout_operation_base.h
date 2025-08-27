@@ -33,7 +33,8 @@ class FanoutOperationBase {
     blocked_client_ = std::make_unique<vmsdk::BlockedClient>(
         ctx, &Reply, &Timeout, &Free, GetTimeoutMs());
     blocked_client_->MeasureTimeStart();
-    start_tp_ = std::chrono::steady_clock::now();
+    deadline_tp_ = std::chrono::steady_clock::now() +
+                   std::chrono::milliseconds(GetTimeoutMs());
     targets_ = GetTargets(ctx);
     StartFanoutRound();
   }
@@ -68,7 +69,7 @@ class FanoutOperationBase {
     outstanding_ = targets_.size();
     unsigned timeout_ms = GetTimeoutMs();
     for (const auto& target : targets_) {
-      auto req = GenerateRequest(target, timeout_ms);
+      auto req = GenerateRequest(target);
       IssueRpc(target, req, timeout_ms);
     }
   }
@@ -128,8 +129,8 @@ class FanoutOperationBase {
 
   virtual unsigned GetTimeoutMs() const = 0;
 
-  virtual Request GenerateRequest([[maybe_unused]] const FanoutSearchTarget&,
-                                  unsigned timeout_ms) = 0;
+  virtual Request GenerateRequest(
+      [[maybe_unused]] const FanoutSearchTarget&) = 0;
 
   virtual void OnResponse(const Response&,
                           [[maybe_unused]] const FanoutSearchTarget&) = 0;
@@ -206,14 +207,9 @@ class FanoutOperationBase {
     return ValkeyModule_ReplyWithError(ctx, error_message.c_str());
   }
 
-  unsigned IsOperationTimedOut() const {
+  bool IsOperationTimedOut() const {
     using namespace std::chrono;
-    auto elapsed_ms =
-        duration_cast<milliseconds>(steady_clock::now() - start_tp_).count();
-    if (elapsed_ms >= GetTimeoutMs()) {
-      return 0;
-    }
-    return static_cast<unsigned>(GetTimeoutMs() - elapsed_ms) > 0;
+    return steady_clock::now() >= deadline_tp_;
   }
 
   void RpcDone() {
@@ -225,7 +221,7 @@ class FanoutOperationBase {
       }
     }
     if (done) {
-      if (IsOperationTimedOut() && ShouldRetry()) {
+      if (!IsOperationTimedOut() && ShouldRetry()) {
         ResetBaseForRetry();
         ResetForRetry();
         StartFanoutRound();
@@ -247,7 +243,7 @@ class FanoutOperationBase {
   std::vector<FanoutSearchTarget> index_name_error_nodes;
   std::vector<FanoutSearchTarget> inconsistent_state_error_nodes;
   std::vector<FanoutSearchTarget> communication_error_nodes;
-  std::chrono::steady_clock::time_point start_tp_;
+  std::chrono::steady_clock::time_point deadline_tp_;
   std::vector<FanoutSearchTarget> targets_;
 };
 

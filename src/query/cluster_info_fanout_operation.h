@@ -31,7 +31,7 @@ class ClusterInfoFanoutOperation : public fanout::FanoutOperationBase<
   unsigned GetTimeoutMs() const override;
 
   coordinator::InfoIndexPartitionRequest GenerateRequest(
-      const fanout::FanoutSearchTarget&, unsigned timeout_ms) override;
+      const fanout::FanoutSearchTarget&) override;
 
   void OnResponse(const coordinator::InfoIndexPartitionResponse& resp,
                   [[maybe_unused]] const fanout::FanoutSearchTarget&) override;

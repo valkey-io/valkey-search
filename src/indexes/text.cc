@@ -13,6 +13,7 @@
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/posting.h"
+#include "src/indexes/text/lexer.h"
 
 namespace valkey_search::indexes {
 
@@ -28,39 +29,44 @@ Text::Text(const data_model::TextIndex& text_index_proto,
 
 absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
                                      absl::string_view data) {
-  // TODO: Replace this tokenizing with the proper lexer functionality when it's
-  // implemented
-  int prev_pos = 0;
-  uint32_t position = 0;
-  
-  for (int i = 0; i <= data.size(); i++) {
-    if (i == data.size() || data[i] == ' ') {
-      if (i > prev_pos) {
-        absl::string_view word = data.substr(prev_pos, i - prev_pos);
-        text_index_schema_->text_index_->prefix_.Mutate(
-            word,
-            [&](std::optional<std::shared_ptr<text::Postings>> existing)
-                -> std::optional<std::shared_ptr<text::Postings>> {
-              std::shared_ptr<text::Postings> postings;
-              if (existing.has_value()) {
-                postings = existing.value();
-              } else {
-                // Create new Postings object with schema configuration
-                // TODO: Get save_positions from IndexSchema, for now assume true
-                bool save_positions = text_index_schema_->with_offsets_;
-                uint8_t num_text_fields = text_index_schema_->num_text_fields_;
-                postings = std::make_shared<text::Postings>(save_positions, num_text_fields);
-              }
-              
-              // Add the key and position to postings
-              postings->InsertPosting(key, text_field_number_, position);
-              return postings;
-            });
-        position++;
-      }
-      prev_pos = i + 1;
+  valkey_search::indexes::text::Lexer lexer;
+
+  auto tokens = lexer.Tokenize(
+      data,
+      text_index_schema_->GetPunctuationBitmap(),
+      text_index_schema_->GetStemmer(),
+      !no_stem_,
+      min_stem_size_
+  );
+
+  if (!tokens.ok()) {
+    if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {
+      return false;  // UTF-8 errors → hash_indexing_failures
     }
+    return tokens.status();
   }
+
+  for (uint32_t position = 0; position < tokens->size(); ++position) {
+    const auto& token = (*tokens)[position];
+    text_index_schema_->text_index_->prefix_.Mutate(
+        token,
+        [&](std::optional<std::shared_ptr<text::Postings>> existing)
+            -> std::optional<std::shared_ptr<text::Postings>> {
+          std::shared_ptr<text::Postings> postings;
+          if (existing.has_value()) {
+            postings = existing.value();
+          } else {
+            // Create new Postings object with schema configuration
+            bool save_positions = text_index_schema_->GetWithOffsets();
+            uint8_t num_text_fields = text_index_schema_->num_text_fields_;
+            postings = std::make_shared<text::Postings>(save_positions, num_text_fields);
+          }
+
+          postings->InsertPosting(key, text_field_number_, position);
+          return postings;
+        });
+  }
+
   return true;
 }
 
@@ -83,7 +89,8 @@ bool Text::IsTracked(const InternedStringPtr& key) const {
 }
 
 uint64_t Text::GetRecordCount() const {
-  throw std::runtime_error("Text::GetRecordCount not implemented");
+  // TODO: Implement proper record count tracking when key management is added
+  return 0;
 }
 
 std::unique_ptr<data_model::Index> Text::ToProto() const {

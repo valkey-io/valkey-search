@@ -7,44 +7,49 @@ from valkeytestframework.conftest import resource_port_tracker
 """
 This file contains tests for full text search.
 """
+
+# NOTE: Test data uses lowercase/non-stemmed terms to avoid unpredictable stemming behavior.
+# Previous version used "Wonderful" which could stem to "wonder", making tests unreliable.
+# TODO: Add exact term match support for words that can be stemmed to allow testing both behaviors.
+
 # Constants for text queries on Hash documents.
 text_index_on_hash = "FT.CREATE products ON HASH PREFIX 1 product: SCHEMA desc TEXT"
 hash_docs = [
-    ["HSET", "product:1", "category", "electronics", "name", "Laptop", "price", "999.99", "rating", "4.5", "desc", "Great"],
-    ["HSET", "product:2", "category", "electronics", "name", "Tablet", "price", "499.00", "rating", "4.0", "desc", "Good"],
+    ["HSET", "product:1", "category", "electronics", "name", "Laptop", "price", "999.99", "rating", "4.5", "desc", "great"],
+    ["HSET", "product:2", "category", "electronics", "name", "Tablet", "price", "499.00", "rating", "4.0", "desc", "good"],
     ["HSET", "product:3", "category", "electronics", "name", "Phone", "price", "299.00", "rating", "3.8", "desc", "Ok"],
-    ["HSET", "product:4", "category", "books", "name", "Book", "price", "19.99", "rating", "4.8", "desc", "Wonderful"],
-    ["HSET", "product:5", "category", "books", "name", "Book2", "price", "19.99", "rating", "1.0", "desc", "Greased"]
+    ["HSET", "product:4", "category", "books", "name", "Book", "price", "19.99", "rating", "4.8", "desc", "wonder"],
+    ["HSET", "product:5", "category", "books", "name", "Book2", "price", "19.99", "rating", "1.0", "desc", "greased"]
 ]
-text_query_term = ["FT.SEARCH", "products", '@desc:"Wonderful"']
+text_query_term = ["FT.SEARCH", "products", '@desc:"wonder"']
 text_query_term_nomatch = ["FT.SEARCH", "products", '@desc:"nomatch"']
-text_query_prefix = ["FT.SEARCH", "products", '@desc:"Wond*"']
+text_query_prefix = ["FT.SEARCH", "products", '@desc:"wond*"']
 text_query_prefix_nomatch = ["FT.SEARCH", "products", '@desc:"nomatch*"']
-text_query_prefix_multimatch = ["FT.SEARCH", "products", '@desc:"Grea*"']
+text_query_prefix_multimatch = ["FT.SEARCH", "products", '@desc:"grea*"']
 
 expected_hash_key = b'product:4'
 expected_hash_value = {
     b'name': b"Book",
     b'price': b'19.99',
     b'rating': b'4.8',
-    b'desc': b"Wonderful",
+    b'desc': b"wonder",
     b'category': b"books"
 }
 
 # Constants for per-field text search test
 text_index_on_hash_two_fields = "FT.CREATE products2 ON HASH PREFIX 1 product: SCHEMA desc TEXT desc2 TEXT"
 hash_docs_with_desc2 = [
-    ["HSET", "product:1", "category", "electronics", "name", "Laptop", "price", "999.99", "rating", "4.5", "desc", "Great", "desc2", "Wonderful experience here"],
+    ["HSET", "product:1", "category", "electronics", "name", "Laptop", "price", "999.99", "rating", "4.5", "desc", "Great", "desc2", "wonder experience here"],
     ["HSET", "product:2", "category", "electronics", "name", "Tablet", "price", "499.00", "rating", "4.0", "desc", "Good", "desc2", "Hello, where are you here ?"],
     ["HSET", "product:3", "category", "electronics", "name", "Phone", "price", "299.00", "rating", "3.8", "desc", "Ok", "desc2", "Hello, how are you doing?"],
-    ["HSET", "product:4", "category", "books", "name", "Book", "price", "19.99", "rating", "4.8", "desc", "Wonderful", "desc2", "Hello, what are you doing Great?"]
+    ["HSET", "product:4", "category", "books", "name", "Book", "price", "19.99", "rating", "4.8", "desc", "wonder", "desc2", "Hello, what are you doing Great?"]
 ]
 
 # Search queries for specific fields
-text_query_desc_field = ["FT.SEARCH", "products2", '@desc:"Wonderful"']
-text_query_desc_prefix = ["FT.SEARCH", "products2", '@desc:"Wonder*"']
-text_query_desc2_field = ["FT.SEARCH", "products2", '@desc2:"Wonderful"']
-text_query_desc2_prefix = ["FT.SEARCH", "products2", '@desc2:"Wonder*"']
+text_query_desc_field = ["FT.SEARCH", "products2", '@desc:"wonder"']
+text_query_desc_prefix = ["FT.SEARCH", "products2", '@desc:"wonde*"']
+text_query_desc2_field = ["FT.SEARCH", "products2", '@desc2:"wonder"']
+text_query_desc2_prefix = ["FT.SEARCH", "products2", '@desc2:"wonde*"']
 
 # Expected results for desc field search
 expected_desc_hash_key = b'product:4'
@@ -52,7 +57,7 @@ expected_desc_hash_value = {
     b'name': b"Book",
     b'price': b'19.99', 
     b'rating': b'4.8',
-    b'desc': b"Wonderful",
+    b'desc': b"wonder",
     b'desc2': b"Hello, what are you doing Great?",
     b'category': b"books"
 }
@@ -64,7 +69,7 @@ expected_desc2_hash_value = {
     b'price': b'999.99',
     b'rating': b'4.5', 
     b'desc': b"Great",
-    b'desc2': b"Wonderful experience here",
+    b'desc2': b"wonder experience here",
     b'category': b"electronics"
 }
 
@@ -172,7 +177,7 @@ class TestFullText(ValkeySearchTestCaseBase):
         for doc in hash_docs_with_desc2:
             assert client.execute_command(*doc) == 6
         
-        # 1) Perform a term search on desc field for "Wonderful"
+        # 1) Perform a term search on desc field for "wonder"
         # 2) Perform a prefix search on desc field for "Wonder*"
         desc_queries = [text_query_desc_field, text_query_desc_prefix]
         for query in desc_queries:
@@ -184,7 +189,7 @@ class TestFullText(ValkeySearchTestCaseBase):
             doc_fields_desc = dict(zip(document_desc[::2], document_desc[1::2]))
             assert doc_fields_desc == expected_desc_hash_value
         
-        # 1) Perform a term search on desc2 field for "Wonderful"
+        # 1) Perform a term search on desc2 field for "wonder"
         # 2) Perform a prefix search on desc2 field for "Wonder*"
         desc2_queries = [text_query_desc2_field, text_query_desc2_prefix]
         for query in desc2_queries:

@@ -14,6 +14,8 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/text_index.h"
+#include "src/commands/ft_create_parser.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
@@ -90,7 +92,12 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
                                          tag_field_case_insensitive));
 
   data_model::TextIndex text_index_proto;
-  auto text_index_schema = std::make_shared<valkey_search::indexes::text::TextIndexSchema>();
+  auto text_index_schema = std::make_shared<valkey_search::indexes::text::TextIndexSchema>(
+                            data_model::LANGUAGE_ENGLISH, 
+                            std::string(kDefaultPunctuation), 
+                            true, 
+                            kDefaultStopWords
+                        );
   auto text_index_1 = std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
   auto text_index_2 = std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
   VMSDK_EXPECT_OK(index_schema->AddIndex("text_field1", "text_field1",

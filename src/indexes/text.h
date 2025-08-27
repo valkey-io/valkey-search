@@ -9,17 +9,16 @@
 #define VALKEYSEARCH_SRC_INDEXES_TEXT_H_
 
 #include <memory>
-#include <optional>
+
 #include "absl/base/thread_annotations.h"
-#include "absl/container/flat_hash_map.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/text_index.h"
-#include "src/index_schema.pb.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "src/indexes/text/term.h"
@@ -30,10 +29,14 @@ namespace valkey_search::indexes {
 
 using WordIterator = text::RadixTree<std::shared_ptr<text::Postings>, false>::WordIterator;
 
+/**
+ * Text per-field index implementation for full-text search functionality.
+ */
 class Text : public IndexBase {
  public:
   explicit Text(const data_model::TextIndex& text_index_proto,
-                std::shared_ptr<valkey_search::indexes::text::TextIndexSchema> text_index_schema);
+                std::shared_ptr<text::TextIndexSchema> text_index_schema);
+
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
@@ -113,12 +116,13 @@ class Text : public IndexBase {
   
   // Reference to the shared text index schema
   std::shared_ptr<text::TextIndexSchema> text_index_schema_;
+
   InternedStringSet untracked_keys_;
-  // TextIndex proto-derived configuration fields
+
   bool with_suffix_trie_;
   bool no_stem_;
   int32_t min_stem_size_;
-  
+
   // TODO: Map to track which keys are indexed and their raw data
 
   mutable absl::Mutex index_mutex_;

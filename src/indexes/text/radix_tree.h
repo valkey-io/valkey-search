@@ -371,6 +371,7 @@ RadixTree<Target, reverse>::GetWordIterator(absl::string_view prefix) const {
   const Node* n = &root_;
   absl::string_view remaining = prefix;
   bool no_match = false;
+  std::string actual_prefix = std::string(prefix);
 
   // Find the highest node in the sub-branch that matches the prefix
   while (!remaining.empty()) {
@@ -392,6 +393,8 @@ RadixTree<Target, reverse>::GetWordIterator(absl::string_view prefix) const {
               if (remaining.starts_with(path)) {
                 remaining.remove_prefix(path.length());
               } else if (path.starts_with(remaining)) {
+                // The prefix is a sub-path of the current path, we need to reconstruct prefix to be passed to the iterator and return word found so far
+                actual_prefix = actual_prefix.substr(0, actual_prefix.length() - remaining.length()) + path;
                 remaining.remove_prefix(remaining.length());
               } else {
                 no_match = true;
@@ -405,7 +408,7 @@ RadixTree<Target, reverse>::GetWordIterator(absl::string_view prefix) const {
       break;
     }
   }
-  return WordIterator(n, prefix);
+  return WordIterator(n, actual_prefix);
 }
 
 template <typename Target, bool reverse>

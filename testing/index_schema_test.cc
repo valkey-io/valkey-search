@@ -33,6 +33,8 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text.h"
+#include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
 #include "src/keyspace_event_manager.h"
@@ -49,6 +51,9 @@
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "vmsdk/src/memory_tracker.h"
+#include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/memory_allocation_overrides.h"
 
 namespace valkey_search {
 
@@ -1248,6 +1253,107 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   EXPECT_TRUE(index_schema->IsBackfillInProgress());
   EXPECT_EQ(index_schema->GetStats().document_cnt, 10);
   EXPECT_EQ(index_schema->CountRecords(), 10);
+}
+
+TEST_F(IndexSchemaRDBTest, SaveAndLoadTextIndex) ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  std::vector<absl::string_view> key_prefixes = {"doc:"};
+  std::string index_schema_name_str("text_index_schema");
+  bool with_suffix_trie = false;
+  bool no_stem = false;
+  uint32_t min_stem_size = 3;
+
+  FakeSafeRDB rdb_stream;
+
+  // Construct and save index schema with text index
+  {
+    auto index_schema = MockIndexSchema::Create(
+                            &fake_ctx_, index_schema_name_str, key_prefixes,
+                            std::make_unique<HashAttributeDataType>(), nullptr)
+                            .value();
+
+    // Create TextIndexSchema like in text_test.cc
+    std::vector<std::string> empty_stop_words;
+    auto text_index_schema = std::make_shared<indexes::text::TextIndexSchema>(
+        data_model::LANGUAGE_ENGLISH,
+        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",  // Default punctuation
+        false,  // with_offsets
+        empty_stop_words
+    );
+
+    // Create text index with both proto and schema
+    auto text_index = std::make_shared<indexes::Text>(
+        CreateTextIndexProto(with_suffix_trie, no_stem, min_stem_size),
+        text_index_schema);
+    VMSDK_EXPECT_OK(index_schema->AddIndex("description", "desc_id", text_index));
+
+    // Add various text documents to exercise text index functionality
+    std::vector<std::string> texts = {
+        "hello world search engine",
+        "running runs runner stemming test", 
+        "Hello World Test Case with punctuation!",
+        "document with multiple words and symbols@#$"
+    };
+    
+    for (size_t i = 0; i < texts.size(); ++i) {
+      auto interned_key = StringInternStore::Intern("doc:" + std::to_string(i));
+      vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(texts[i]);
+      
+      // Add record and handle return value properly
+      auto result = text_index->AddRecord(interned_key, vmsdk::ToStringView(data.get()));
+      VMSDK_EXPECT_OK(result);
+      EXPECT_TRUE(result.value());
+    }
+
+    VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream));
+  }
+
+  // Load the saved index schema and validate text index restoration
+  {
+    ValkeyModuleCtx parent_ctx;
+    ValkeyModuleCtx scan_ctx;
+    EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&parent_ctx))
+        .WillRepeatedly(Return(&scan_ctx));
+    
+    RDBSectionIter iter(&rdb_stream, 1);
+    auto section = iter.Next();
+    VMSDK_EXPECT_OK_STATUSOR(section);
+    
+    auto index_schema_or = IndexSchema::LoadFromRDB(
+        &parent_ctx, nullptr,
+        std::make_unique<data_model::IndexSchema>((*section)->index_schema_contents()),
+        iter.IterateSupplementalContent());
+    
+    VMSDK_EXPECT_OK_STATUSOR(index_schema_or);
+    auto index_schema = std::move(index_schema_or.value());
+
+    // Validate basic schema properties
+    EXPECT_THAT(index_schema->GetKeyPrefixes(), testing::UnorderedElementsAre("doc:"));
+    EXPECT_TRUE(dynamic_cast<const HashAttributeDataType*>(&index_schema->GetAttributeDataType()));
+    
+    // Validate text index was restored correctly
+    VMSDK_EXPECT_OK(index_schema->GetIndex("description"));
+    auto text_index = dynamic_cast<indexes::Text*>(
+        index_schema->GetIndex("description").value().get());
+    EXPECT_TRUE(text_index != nullptr);
+    
+    // Validate text index configuration was preserved
+    auto text_proto = text_index->ToProto();
+    EXPECT_TRUE(text_proto->has_text_index());
+    EXPECT_EQ(text_proto->text_index().with_suffix_trie(), with_suffix_trie);
+    EXPECT_EQ(text_proto->text_index().no_stem(), no_stem);
+    EXPECT_EQ(text_proto->text_index().min_stem_size(), min_stem_size);
+    
+    // TODO: Text index key tracking is not yet implemented
+    // Validate that GetRecordCount returns 0 (expected for unimplemented key tracking)
+    EXPECT_EQ(text_index->GetRecordCount(), 0);
+    
+    // TODO: Document count will be 0 until proper key tracking is implemented
+    // This test verifies RDB save/load works without crashing, not document counting
+    EXPECT_EQ(index_schema->GetStats().document_cnt, 0);
+    
+    // Validate backfill is properly set up for restored schema
+    EXPECT_TRUE(index_schema->IsBackfillInProgress());
+  }
 }
 
 TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {

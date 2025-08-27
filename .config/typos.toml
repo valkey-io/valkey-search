@@ -5,9 +5,14 @@ extend-exclude = [
     "third_party/snowball/**"
 ]
 
+[default]
+extend-ignore-re = [
+    "grea.*",
+    "Grea.*",
+]
 
 [type.cpp]
 extend-ignore-re = [
     "baNAna",
-    "eXIst",
+    "eXIst"
 ]

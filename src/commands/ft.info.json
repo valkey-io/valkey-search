@@ -10,9 +10,26 @@
         "key_spec_index": 0,
         "name": "key",
         "type": "key"
+      },
+      {
+        "name": "scope",
+        "type": "oneof",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "LOCAL",
+            "type": "pure-token",
+            "token": "LOCAL"
+          },
+          {
+            "name": "GLOBAL",
+            "type": "pure-token",
+            "token": "GLOBAL"
+          }
+        ]
       }
     ],
-    "arity": 2,
+    "arity": -2,
     "complexity": "O(1)",
     "group": "search",
     "module_since": "1.0.0",

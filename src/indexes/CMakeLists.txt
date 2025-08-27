@@ -95,12 +95,17 @@ target_link_libraries(vector_flat PUBLIC status_macros)
 target_link_libraries(vector_flat PUBLIC valkey_module)
 
 set(SRCS_TEXT ${CMAKE_CURRENT_LIST_DIR}/text/text_index.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/text_index.cc
               ${CMAKE_CURRENT_LIST_DIR}/text.cc
               ${CMAKE_CURRENT_LIST_DIR}/text.h
               ${CMAKE_CURRENT_LIST_DIR}/text/posting.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/posting.h
-              ${CMAKE_CURRENT_LIST_DIR}/text/phrase.cc
-              ${CMAKE_CURRENT_LIST_DIR}/text/phrase.h)
+              ${CMAKE_CURRENT_LIST_DIR}/text/term.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/term.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/wildcard.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/wildcard.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/lexer.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/lexer.h)
 
 valkey_search_add_static_library(text "${SRCS_TEXT}")
 target_include_directories(text PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -110,3 +115,4 @@ target_link_libraries(text PUBLIC rdb_serialization)
 target_link_libraries(text PUBLIC string_interning)
 target_link_libraries(text PUBLIC valkey_module)
 target_link_libraries(text PUBLIC snowball)
+target_link_libraries(text PUBLIC scanner)

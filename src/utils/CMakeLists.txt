@@ -14,6 +14,9 @@ set(SRCS_STRING_INTERNING ${CMAKE_CURRENT_LIST_DIR}/string_interning.cc
 valkey_search_add_static_library(string_interning "${SRCS_STRING_INTERNING}")
 target_include_directories(string_interning PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(string_interning PUBLIC allocator)
+target_link_libraries(string_interning PUBLIC memory_tracker)
+target_link_libraries(string_interning PUBLIC memory_allocation)
+target_link_libraries(string_interning PUBLIC memory_allocation_overrides)
 
 set(SRCS_ALLOCATOR ${CMAKE_CURRENT_LIST_DIR}/allocator.cc
                    ${CMAKE_CURRENT_LIST_DIR}/allocator.h
@@ -47,3 +50,10 @@ set(SRCS_INTRUSIVE_REF_COUNT ${CMAKE_CURRENT_LIST_DIR}/intrusive_ref_count.h)
 add_library(intrusive_ref_count INTERFACE ${SRCS_INTRUSIVE_REF_COUNT})
 target_include_directories(intrusive_ref_count
                            INTERFACE ${CMAKE_CURRENT_LIST_DIR})
+
+set(SRCS_SCANNER ${CMAKE_CURRENT_LIST_DIR}/scanner.h)
+
+add_library(scanner INTERFACE ${SRCS_SCANNER})
+target_include_directories(scanner INTERFACE ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(scanner INTERFACE absl::strings)
+target_link_libraries(scanner INTERFACE valkey_module)

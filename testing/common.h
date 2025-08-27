@@ -212,6 +212,10 @@ data_model::NumericIndex CreateNumericIndexProto();
 data_model::TagIndex CreateTagIndexProto(const std::string& separator = ",",
                                          bool case_sensitive = false);
 
+data_model::TextIndex CreateTextIndexProto(bool with_suffix_trie = false,
+                                           bool no_stem = false,
+                                           uint32_t min_stem_size = 3);
+
 class MockIndexSchema : public IndexSchema {
  public:
   static absl::StatusOr<std::shared_ptr<MockIndexSchema>> Create(
@@ -233,9 +237,9 @@ class MockIndexSchema : public IndexSchema {
   MockIndexSchema(ValkeyModuleCtx* ctx,
                   const data_model::IndexSchema& index_schema_proto,
                   std::unique_ptr<AttributeDataType> attribute_data_type,
-                  vmsdk::ThreadPool* mutations_thread_pool)
+                  vmsdk::ThreadPool* mutations_thread_pool, bool reload = false)
       : IndexSchema(ctx, index_schema_proto, std::move(attribute_data_type),
-                    mutations_thread_pool) {
+                    mutations_thread_pool, reload) {
     ON_CALL(*this, OnLoadingEnded(testing::_))
         .WillByDefault(testing::Invoke([this](ValkeyModuleCtx* ctx) {
           return IndexSchema::OnLoadingEnded(ctx);

@@ -369,11 +369,15 @@ absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
       parameters.filter_parse_results,
       ParsePreFilter(*parameters.index_schema, pre_filter),
       _.SetPrepend() << "Invalid filter expression: `" << pre_filter << "`. ");
-  if (parameters.filter_parse_results.root_predicate) {
-    ++Metrics::GetStats().query_hybrid_requests_cnt;
+  if (!parameters.filter_parse_results.root_predicate && vector_filter.empty()) {
+    // Return an error if no valid pre-filter and no vector filter is provided.
+    return absl::InvalidArgumentError("Vector query clause is missing");
   }
   // Optionally parse the vector filter if it exists.
   if (!vector_filter.empty()) {
+    if (parameters.filter_parse_results.root_predicate) {
+      ++Metrics::GetStats().query_hybrid_requests_cnt;
+    }
     VMSDK_RETURN_IF_ERROR(ParseKNN(parameters, vector_filter)).SetPrepend()
         << "Error parsing vector similarity parameters: `" << vector_filter
         << "`. ";
@@ -395,6 +399,7 @@ absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
           vmsdk::MakeUniqueValkeyString(parameters.parse_vars.score_as_string);
     }
   }
+  // TODO: Return Temp Error for unsupported predicates.
   return absl::OkStatus();
 }
 }  // namespace

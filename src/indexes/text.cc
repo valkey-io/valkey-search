@@ -13,6 +13,7 @@
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/posting.h"
+#include "src/indexes/text/lexer.h"
 
 namespace valkey_search::indexes {
 
@@ -28,39 +29,44 @@ Text::Text(const data_model::TextIndex& text_index_proto,
 
 absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
                                      absl::string_view data) {
-  // TODO: Replace this tokenizing with the proper lexer functionality when it's
-  // implemented
-  int prev_pos = 0;
-  uint32_t position = 0;
-  
-  for (int i = 0; i <= data.size(); i++) {
-    if (i == data.size() || data[i] == ' ') {
-      if (i > prev_pos) {
-        absl::string_view word = data.substr(prev_pos, i - prev_pos);
-        text_index_schema_->text_index_->prefix_.Mutate(
-            word,
-            [&](std::optional<std::shared_ptr<text::Postings>> existing)
-                -> std::optional<std::shared_ptr<text::Postings>> {
-              std::shared_ptr<text::Postings> postings;
-              if (existing.has_value()) {
-                postings = existing.value();
-              } else {
-                // Create new Postings object with schema configuration
-                // TODO: Get save_positions from IndexSchema, for now assume true
-                bool save_positions = true;
-                uint8_t num_text_fields = text_index_schema_->num_text_fields_;
-                postings = std::make_shared<text::Postings>(save_positions, num_text_fields);
-              }
-              
-              // Add the key and position to postings
-              postings->InsertPosting(key, text_field_number_, position);
-              return postings;
-            });
-        position++;
-      }
-      prev_pos = i + 1;
+  valkey_search::indexes::text::Lexer lexer;
+
+  auto tokens = lexer.Tokenize(
+      data,
+      text_index_schema_->GetPunctuationBitmap(),
+      text_index_schema_->GetStemmer(),
+      !no_stem_,
+      min_stem_size_
+  );
+
+  if (!tokens.ok()) {
+    if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {
+      return false;  // UTF-8 errors → hash_indexing_failures
     }
+    return tokens.status();
   }
+
+  for (uint32_t position = 0; position < tokens->size(); ++position) {
+    const auto& token = (*tokens)[position];
+    text_index_schema_->text_index_->prefix_.Mutate(
+        token,
+        [&](std::optional<std::shared_ptr<text::Postings>> existing)
+            -> std::optional<std::shared_ptr<text::Postings>> {
+          std::shared_ptr<text::Postings> postings;
+          if (existing.has_value()) {
+            postings = existing.value();
+          } else {
+            // Create new Postings object with schema configuration
+            bool save_positions = text_index_schema_->GetWithOffsets();
+            uint8_t num_text_fields = text_index_schema_->num_text_fields_;
+            postings = std::make_shared<text::Postings>(save_positions, num_text_fields);
+          }
+
+          postings->InsertPosting(key, text_field_number_, position);
+          return postings;
+        });
+  }
+
   return true;
 }
 
@@ -94,7 +100,7 @@ bool Text::IsTracked(const InternedStringPtr& key) const {
 }
 
 uint64_t Text::GetRecordCount() const {
-  // TODO by someone implementing this method
+  // TODO: Implement proper record count tracking when key management is added
   return 0;
 }
 
@@ -108,20 +114,10 @@ std::unique_ptr<data_model::Index> Text::ToProto() const {
   return index_proto;
 }
 
+// Size is needed for Inline queries (for approximation of qualified entries) and for multi sub query operations
+// (with AND/OR). This should be implemented as part of either Inline support OR multi sub query search.
 size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
-  switch (predicate.GetOperation()) {
-    case query::TextPredicate::Operation::kExact: {
-      // TODO: Handle phrase matching.
-      auto word = predicate.GetTextString();
-      if (word.empty()) return 0;
-      auto iter = text_index_schema_->text_index_->prefix_.GetWordIterator(word);
-      auto target_posting = iter.GetTarget();
-      return target_posting->GetKeyCount();
-    }
-    default:
-      CHECK(false) << "Unsupported TextPredicate operation: " << static_cast<int>(predicate.GetOperation());
-      return 0;
-  }
+  return 0;
 }
 
 std::unique_ptr<Text::EntriesFetcher> Text::Search(
@@ -131,30 +127,27 @@ std::unique_ptr<Text::EntriesFetcher> Text::Search(
     CalculateSize(predicate),
     text_index_schema_->text_index_,
     negate ? &untracked_keys_ : nullptr);
-  fetcher->operation_ = predicate.GetOperation();
-  // Currently, we support a single word (exact term) match.
-  fetcher->data_ = predicate.GetTextString();
+  fetcher->predicate_ = &predicate;
+  // TODO : We only support single field queries for now. Change below when we support multiple and all fields.
+  fetcher->field_mask_ = 1ULL << text_field_number_;
   return fetcher;
 }
-
 
 size_t Text::EntriesFetcher::Size() const { return size_; }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
-  switch (operation_) {
-    case query::TextPredicate::Operation::kExact: {
-      auto iter = text_index_->prefix_.GetWordIterator(data_);
-      std::vector<WordIterator> iterVec = {iter};
-      bool slop = 0;
-      bool in_order = true;
-      auto itr = std::make_unique<text::PhraseIterator>(iterVec, slop, in_order, untracked_keys_);
-      itr->Next();
-      return itr;
-    }
-    default:
-      CHECK(false) << "Unsupported TextPredicate operation: " << static_cast<int>(operation_);
-      return nullptr;
+  if (auto term = dynamic_cast<const query::TermPredicate*>(predicate_)) {
+    auto iter = text_index_->prefix_.GetWordIterator(term->GetTextString());
+    auto itr = std::make_unique<text::TermIterator>(iter, term->GetTextString(), field_mask_, untracked_keys_);
+    itr->Next();
+    return itr;
+  } else if (auto prefix = dynamic_cast<const query::PrefixPredicate*>(predicate_)) {
+    auto iter = text_index_->prefix_.GetWordIterator(prefix->GetTextString());
+    auto itr = std::make_unique<text::WildCardIterator>(iter, text::WildCardOperation::kPrefix, field_mask_, untracked_keys_);
+    itr->Next();
+    return itr;
   }
+  CHECK(false) << "Unsupported TextPredicate operation";
   return nullptr;
 }
 

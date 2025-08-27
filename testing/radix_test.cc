@@ -403,5 +403,41 @@ TEST_F(RadixTreeTest, WordIteratorLargeScale) {
   EXPECT_GT(word_counts.size(), 100);  // Should have many unique words
 }
 
+TEST_F(RadixTreeTest, WordIteratorPrefixPartialMatch) {
+  // Reproduce the specific issue with WordIterator prefix matching
+  prefix_tree_->Mutate("cat", [](auto) { return TestTarget(1); });
+  prefix_tree_->Mutate("can", [](auto) { return TestTarget(2); });
+  prefix_tree_->Mutate("testing", [](auto) { return TestTarget(4); });
+  prefix_tree_->Mutate("test", [](auto) { return TestTarget(5); });
+  
+  auto test_iter = prefix_tree_->GetWordIterator("te");
+  
+  std::vector<std::string> words;
+  
+  while (!test_iter.Done()) {
+    std::string current_word = std::string(test_iter.GetWord());
+    words.push_back(current_word);
+    test_iter.Next();
+  }
+  
+  // Expected: only "test" and "testing" should match prefix "te"
+  std::vector<std::string> expected = {"test", "testing"};
+  EXPECT_EQ(words, expected) << "WordIterator should only return words that start with 'te'";
+  
+  test_iter = prefix_tree_->GetWordIterator("ca");
+  
+  words.clear();
+  while (!test_iter.Done()) {
+    std::string current_word = std::string(test_iter.GetWord());
+    words.push_back(current_word);
+    test_iter.Next();
+  }
+  
+  // Expected: "can" and "cat" should match prefix "ca"
+  expected = {"can", "cat"};
+  EXPECT_EQ(words, expected) << "WordIterator should return words that start with 'ca'";
+}
+
+
 }  // namespace
 }  // namespace valkey_search::indexes::text

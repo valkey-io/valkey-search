@@ -98,7 +98,7 @@ ValkeyModuleCommandArg ftCreateVectorTypeOptions[] = {
         .flags = VALKEYMODULE_CMD_ARG_NONE,
         .deprecated_since = nullptr,
         .subargs = nullptr,
-        },
+    },
     {nullptr}  // Sentinel
 };
 
@@ -213,7 +213,7 @@ ValkeyModuleCommandArg ftCreateHnswSubargs[] = {
         .type = VALKEYMODULE_ARG_TYPE_INTEGER,
         .key_spec_index = -1,
         .token = "EF_CONSTRUCTION",
-        .summary = 
+        .summary =
             "Vectors examined during index creation (default 200, max 4096)",
         .since = "1.0.0",
         .flags = VALKEYMODULE_CMD_ARG_OPTIONAL,
@@ -460,7 +460,7 @@ ValkeyModuleCommandArg ftCreateArgs[] = {
 
 const ValkeyModuleCommandInfo ftCreateInfo = {
     .version = VALKEYMODULE_COMMAND_INFO_VERSION,
-    .summary = 
+    .summary =
         "Creates an empty search index and initiates the backfill process",
     .complexity = "O(N log N), where N is the number of indexed items",
     .since = "1.0.0",

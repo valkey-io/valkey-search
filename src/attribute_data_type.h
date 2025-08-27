@@ -57,7 +57,7 @@ class AttributeDataType {
   };
   virtual absl::StatusOr<RecordsMap> FetchAllRecords(
       ValkeyModuleCtx *ctx, const std::string &vector_identifier,
-      absl::string_view key,
+      ValkeyModuleKey *open_key, absl::string_view key,
       const absl::flat_hash_set<absl::string_view> &identifiers) const = 0;
   virtual data_model::AttributeDataType ToProto() const = 0;
   virtual std::string ToString() const = 0;
@@ -82,7 +82,7 @@ class HashAttributeDataType : public AttributeDataType {
   inline std::string ToString() const override { return "HASH"; }
   absl::StatusOr<RecordsMap> FetchAllRecords(
       ValkeyModuleCtx *ctx, const std::string &vector_identifier,
-      absl::string_view key,
+      ValkeyModuleKey *open_key, absl::string_view key,
       const absl::flat_hash_set<absl::string_view> &identifiers) const override;
   bool IsProperType(ValkeyModuleKey *key) const override {
     return ValkeyModule_KeyType(key) == VALKEYMODULE_KEYTYPE_HASH;
@@ -108,7 +108,7 @@ class JsonAttributeDataType : public AttributeDataType {
   inline std::string ToString() const override { return "JSON"; }
   absl::StatusOr<RecordsMap> FetchAllRecords(
       ValkeyModuleCtx *ctx, const std::string &vector_identifier,
-      absl::string_view key,
+      ValkeyModuleKey *open_key, absl::string_view key,
       const absl::flat_hash_set<absl::string_view> &identifiers) const override;
   bool IsProperType(ValkeyModuleKey *key) const override {
     return ValkeyModule_KeyType(key) == VALKEYMODULE_KEYTYPE_MODULE;
@@ -116,7 +116,10 @@ class JsonAttributeDataType : public AttributeDataType {
   bool RecordsProvidedAsString() const override { return true; }
 };
 
-bool IsJsonModuleLoaded(ValkeyModuleCtx *ctx);
-absl::string_view TrimBrackets(absl::string_view record);
+bool IsJsonModuleSupported(ValkeyModuleCtx *ctx);
+using JsonSharedAPIGetValueFn = int (*)(ValkeyModuleKey *key, const char *path,
+                                        ValkeyModuleString **result);
+// Used just for testing
+void ResetJsonLoadedCache();
 }  // namespace valkey_search
 #endif  // VALKEYSEARCH_SRC_ATTRIBUTE_DATA_TYPE_H_

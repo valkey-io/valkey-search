@@ -1055,9 +1055,9 @@ absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
       ctx, VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS |
                VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD |
                VALKEYMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED);
-  VMSDK_LOG(NOTICE, ctx) << "Json module is "
-                         << (IsJsonModuleLoaded(ctx) ? "" : "not ")
-                         << "loaded!";
+  VMSDK_LOG(NOTICE, ctx) << "Json "
+                         << (IsJsonModuleSupported(ctx) ? "" : "not ")
+                         << "supported!";
   VectorExternalizer::Instance().Init(ctx_);
   ValkeyModule_Assert(vmsdk::info_field::Validate(ctx));
   VMSDK_LOG(DEBUG, ctx) << "Search module completed initialization!";

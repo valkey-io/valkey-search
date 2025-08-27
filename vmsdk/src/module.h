@@ -98,6 +98,8 @@ int CreateCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   return VALKEYMODULE_OK;
 }
 bool IsModuleLoaded(ValkeyModuleCtx *ctx, const std::string &name);
+// Used only for testing
+void SetModuleLoaded(const std::string &name, bool remove = false);
 }  // namespace vmsdk
 
 #endif  // VMSDK_SRC_MODULE_H_

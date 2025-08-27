@@ -164,7 +164,8 @@ class EvaluateFilterAsPrimaryTest
 void InitIndexSchema(MockIndexSchema *index_schema) {
   data_model::NumericIndex numeric_index_proto;
 
-  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_)).Times(::testing::AnyNumber());
+  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
 
   auto numeric_index_100_10 =
       std::make_shared<MockNumeric>(numeric_index_proto);
@@ -319,7 +320,8 @@ struct PerformVectorSearchTestCase {
 std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
     const IndexerType vector_indexer_type = indexes::IndexerType::kHNSW) {
   auto index_schema = CreateIndexSchema(kIndexSchemaName).value();
-  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_)).Times(::testing::AnyNumber());
+  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
 
   // Add vector index
   std::shared_ptr<indexes::IndexBase> vector_index;
@@ -357,9 +359,9 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
 
   // Add records
   size_t num_records = 10000;
-  #ifdef SAN_BUILD
+#ifdef SAN_BUILD
   num_records = 100;
-  #endif
+#endif
   auto vectors =
       DeterministicallyGenerateVectors(num_records, kVectorDimensions, 10.0);
   for (size_t i = 0; i < num_records; ++i) {
@@ -396,7 +398,7 @@ class PerformVectorSearchTest
 TEST_P(PerformVectorSearchTest, PerformVectorSearchTest) {
   auto index_schema = CreateIndexSchemaWithMultipleAttributes();
   const PerformVectorSearchTestCase &test_case = GetParam();
-  query::VectorSearchParameters params;
+  query::VectorSearchParameters params(100000, nullptr);
   params.index_schema_name = kIndexSchemaName;
   params.attribute_alias = kVectorAttributeAlias;
   params.score_as = vmsdk::MakeUniqueValkeyString(kScoreAs);
@@ -479,7 +481,7 @@ TEST_P(FetchFilteredKeysTest, ParseParams) {
   auto vector_index = dynamic_cast<indexes::VectorBase *>(
       index_schema->GetIndex(kVectorAttributeAlias)->get());
   const FetchFilteredKeysTestCase &test_case = GetParam();
-  query::VectorSearchParameters params;
+  query::VectorSearchParameters params(100000, nullptr);
   FilterParser parser(*index_schema, test_case.filter);
   params.filter_parse_results = std::move(parser.Parse().value());
   params.k = 100;
@@ -557,7 +559,7 @@ TEST_P(SearchTest, ParseParams) {
   const auto &param = GetParam();
   IndexerType indexer_type = std::get<0>(param);
   SearchTestCase test_case = std::get<1>(param);
-  query::VectorSearchParameters params;
+  query::VectorSearchParameters params(100000, nullptr);
   params.index_schema = CreateIndexSchemaWithMultipleAttributes(indexer_type);
   params.index_schema_name = kIndexSchemaName;
   params.attribute_alias = kVectorAttributeAlias;
@@ -834,7 +836,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
     }
   }
 
-  auto parameters = query::VectorSearchParameters();
+  auto parameters = query::VectorSearchParameters(100000, nullptr);
   parameters.index_schema = index_schema;
   for (auto &attribute : test_case.return_attributes) {
     auto identifier = vmsdk::MakeUniqueValkeyString(attribute.identifier);

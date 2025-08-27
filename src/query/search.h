@@ -27,6 +27,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
+#include "src/utils/cancel.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/thread_pool.h"
@@ -35,6 +36,8 @@ namespace valkey_search::query {
 
 constexpr int64_t kTimeoutMS{50000};
 const size_t kMaxTimeoutMs{60000};
+constexpr absl::string_view kOOMMsg{
+    "OOM command not allowed when used memory > 'maxmemory'"};
 
 struct LimitParameter {
   uint64_t first_index{0};
@@ -48,6 +51,7 @@ struct ReturnAttribute {
 };
 
 struct VectorSearchParameters {
+  mutable cancel::Token cancellation_token;
   std::shared_ptr<IndexSchema> index_schema;
   std::string index_schema_name;
   std::string attribute_alias;
@@ -55,10 +59,10 @@ struct VectorSearchParameters {
   std::string query;
   uint32_t dialect{2};
   bool local_only{false};
-  int k;
+  int k{0};
   std::optional<unsigned> ef;
   LimitParameter limit;
-  uint64_t timeout_ms{kTimeoutMS};
+  uint64_t timeout_ms;
   bool no_content{false};
   FilterParseResults filter_parse_results;
   std::vector<ReturnAttribute> return_attributes;
@@ -76,9 +80,10 @@ struct VectorSearchParameters {
       assert(params.empty());
     }
   } parse_vars;
-  bool IsNonVectorQuery() const {
-    return attribute_alias.empty();
-  }
+  bool IsNonVectorQuery() const { return attribute_alias.empty(); }
+  VectorSearchParameters(uint64_t timeout, grpc::CallbackServerContext* context)
+      : timeout_ms(timeout),
+        cancellation_token(cancel::Make(timeout, context)) {}
 };
 
 // Callback to be called when the search is done.

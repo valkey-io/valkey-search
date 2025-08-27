@@ -5,38 +5,263 @@ GREEN='\e[32;1m'
 RED='\e[31;1m'
 BLUE='\e[34;1m'
 YELLOW='\e[33;1m'
-
-if [[ "$(uname -s)" == "Darwin" ]]; then
-    MODULE_EXT="dylib"
-else
-    MODULE_EXT="so"
-fi
-
-# Determine pip command
-PYTHON_PATH="${PYTHON_PATH:=}"
-
-# Capitalize a word. This method is compatible with bash-3 and bash-4
-function capitalize_string() {
-    local string=$1
-    local first_char=${string:0:1}
-    local remainder=${string:1}
-    first_char=$(echo "${first_char}" | tr '[:lower:]' '[:upper:]')
-    remainder=$(echo "${remainder}" | tr '[:upper:]' '[:lower:]')
-    echo ${first_char}${remainder}
-}
+UNAME_S=$(uname -s)
 
 function LOG_INFO() {
-    printf "${GREEN}INFO  ${RESET}: $1\n"
+  printf "${GREEN}$1${RESET}\n"
 }
 
 function LOG_ERROR() {
-    printf "${RED}ERROR ${RESET}: $1\n"
+  printf "${RED}$1${RESET}\n"
 }
 
 function LOG_NOTICE() {
-    printf "${BOLD_PINK}NOTICE${RESET}: $1\n"
+  printf "${BOLD_PINK}$1${RESET}\n"
 }
 
 function LOG_WARNING() {
-    printf "${YELLOW}WARN  ${RESET}: $1\n"
+  printf "${YELLOW}$1${RESET}\n"
+}
+
+function print_environment_var() {
+  local varname=$1
+  local value=$2
+  printf "${BLUE}${varname}${RESET} => ${GREEN}${value}${RESET}\n"
+}
+
+if [[ "${UNAME_S}" == "Darwin" ]]; then
+  export MODULE_EXT="dylib"
+else
+  export MODULE_EXT="so"
+fi
+
+function num_proc() {
+  if [[ "${UNAME_S}" == "Darwin" ]]; then
+    echo $(sysctl -n hw.ncpu)
+  else
+    echo $(nproc)
+  fi
+}
+
+function findup() {
+  # Check if a filename was provided
+  if [ -z "$1" ]; then
+    echo "Usage: findup filename"
+    exit 1
+  fi
+
+  # Start from current directory
+  local path="$(pwd)"
+
+  # Continue until we reach root directory
+  while [[ "$path" != "/" ]]; do
+    # Check if file exists in current path
+    if [ -f "$path/$1" ]; then
+      echo "$path"
+      return
+    fi
+    # Move up to parent directory
+    path="$(dirname "$path")"
+  done
+  exit 1
+}
+
+# Determine pip command
+PYTHON_PATH="${PYTHON_PATH:=}"
+_WORKSPACE_HOME=$(findup QUICK_START.md)
+export MODULE_ROOT=${_WORKSPACE_HOME}
+_THIRD_PARTY_COMPONENTS_BUILD_DIR=${_WORKSPACE_HOME}/.build-release
+
+if [[ "${SAN_BUILD}" != "no" ]]; then
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    # detect_leaks is not support on macOS
+    export ASAN_OPTIONS="detect_odr_violation=0:halt_on_error=1"
+  else
+    export ASAN_OPTIONS="detect_odr_violation=0:detect_leaks=1:halt_on_error=1"
+  fi
+  if [[ "${SAN_BUILD}" == "address" ]]; then
+    export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/asan.supp"
+  else
+    export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/tsan.supp"
+  fi
+  print_environment_var "LSAN_OPTIONS" "${LSAN_OPTIONS}"
+  print_environment_var "ASAN_OPTIONS" "${ASAN_OPTIONS}"
+fi
+
+function get_third_party_build_dir() {
+  if [ -z "${SAN_BUILD}" ] || [[ "${SAN_BUILD}" == "no" ]]; then
+    echo ${_THIRD_PARTY_COMPONENTS_BUILD_DIR}
+  else
+    echo ${_THIRD_PARTY_COMPONENTS_BUILD_DIR}-asan
+  fi
+}
+
+# Capitalize a word. This method is compatible with bash-3 and bash-4
+function capitalize_string() {
+  local string=$1
+  local first_char=${string:0:1}
+  local remainder=${string:1}
+  first_char=$(echo "${first_char}" | tr '[:lower:]' '[:upper:]')
+  remainder=$(echo "${remainder}" | tr '[:upper:]' '[:lower:]')
+  echo ${first_char}${remainder}
+}
+
+function pip_check_if_module_installed() {
+  local module_name=$1
+  set +e
+  ${PIP_PATH} show ${module_name} >/dev/null 2>&1
+  RESULT=$?
+  set -e
+  if [ ${RESULT} -eq 0 ]; then
+    echo "yes"
+  else
+    echo "no"
+  fi
+}
+
+function install_test_framework() {
+  if [ ! -z "${VALKEY_TEST_FRAMEWORK}" ] &&
+    [ -f "${VALKEY_TEST_FRAMEWORK}/LICENSE" ]; then
+    LOG_INFO "Using valkey-test-framework => ${VALKEY_TEST_FRAMEWORK}"
+    return
+  fi
+
+  local test_framework_url="https://github.com/valkey-io/valkey-test-framework"
+  local test_framework_path="${_WORKSPACE_HOME}/integration/valkeytestframework.git"
+
+  if [ ! -f ${test_framework_path}/LICENSE ]; then
+    rm -fr ${test_framework_path}
+    LOG_INFO "Cloning valkey-test-framework into ${test_framework_path}"
+    git clone "${test_framework_url}" ${test_framework_path}
+  fi
+
+  pushd ${test_framework_path} >/dev/null
+  valkey_module_installed=$(pip_check_if_module_installed valkey)
+  if [[ "${valkey_module_installed}" == "no" ]]; then
+    LOG_INFO "Installing dependencies"
+    local requirements_txt=${test_framework_path}/requirements.txt
+    if [ -f ${requirements_txt} ]; then
+      LOG_INFO "Installing requirements file"
+      ${PIP_PATH} install -r ${requirements_txt}
+      ${PIP_PATH} install --upgrade pytest
+    else
+      LOG_ERROR "Missing ${requirements_txt} file. Broken installation?"
+    fi
+  fi
+  popd >/dev/null
+
+  # Remove valkey-test-framework tests
+  rm -fr ${_WORKSPACE_HOME}/integration/valkeytestframework.git/tests
+  ln -sf ${_WORKSPACE_HOME}/integration/valkeytestframework.git/src ${_WORKSPACE_HOME}/integration/valkeytestframework
+  LOG_INFO "Using valkeytestframework => ${_WORKSPACE_HOME}/integration/valkeytestframework"
+  print_environment_var "PYTHONPATH" "${PYTHONPATH}"
+  export PYTHONPATH=${_WORKSPACE_HOME}/integration/valkeytestframework
+}
+
+function setup_valkey_server() {
+  LOG_INFO "Building valkey-server...(SAN_BUILD=${SAN_BUILD})"
+  if [ ! -z "${VALKEY_SERVER_PATH}" ] && [ -f "${VALKEY_SERVER_PATH}" ]; then
+    LOG_INFO "Using valkey-server => ${VALKEY_SERVER_PATH}"
+    return
+  fi
+
+  # Clone and build it
+  VALKEY_VERSION="8.1.1"
+  export VALKEY_SERVER_HOME_DIR=$(get_third_party_build_dir)/valkey-server
+  export VALKEY_SERVER_BUILD_DIR=${VALKEY_SERVER_HOME_DIR}/.build-release
+  if [ ! -d ${VALKEY_SERVER_HOME_DIR} ]; then
+    LOG_INFO "Cloning valkey-server into ${VALKEY_SERVER_HOME_DIR}"
+    git clone --branch ${VALKEY_VERSION} --single-branch https://github.com/valkey-io/valkey.git ${VALKEY_SERVER_HOME_DIR}
+  fi
+
+  mkdir -p ${VALKEY_SERVER_BUILD_DIR}
+  pushd ${VALKEY_SERVER_BUILD_DIR} >/dev/null
+
+  if [ -f "${VALKEY_SERVER_BUILD_DIR}/bin/valkey-server" ]; then
+    export VALKEY_SERVER_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-server
+    export VALKEY_CLI_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-cli
+    LOG_INFO "Found valkey-server: ${VALKEY_SERVER_PATH}"
+    LOG_INFO "Found valkey-cli: ${VALKEY_CLI_PATH}"
+    return
+  fi
+
+  if [ ! -z "${SAN_BUILD}" ] && [[ "${SAN_BUILD}" != "no" ]]; then
+    VALKEY_CMAKE_EXTRA_ARGS="-DBUILD_SANITIZER=${SAN_BUILD}"
+    LOG_INFO "Building Valkey with Sanitizer options: -DBUILD_SANITIZER=${SAN_BUILD}"
+  fi
+
+  LOG_INFO "Working directory: ${VALKEY_SERVER_BUILD_DIR}"
+  LOG_INFO "Building valkey-server: cmake -DCMAKE_BUILD_TYPE=Release .. ${VALKEY_CMAKE_EXTRA_ARGS}"
+  cmake -DCMAKE_BUILD_TYPE=Release .. ${VALKEY_CMAKE_EXTRA_ARGS}
+  make -j$(num_proc)
+  popd >/dev/null
+  export VALKEY_SERVER_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-server
+  export VALKEY_CLI_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-cli
+  LOG_INFO "VALKEY_SERVER_PATH => ${VALKEY_SERVER_PATH}"
+  LOG_INFO "Found valkey-cli: ${VALKEY_CLI_PATH}"
+}
+
+function setup_json_module() {
+  LOG_INFO "Building valkey-json..."
+  if [ ! -z "${VALKEY_JSON_PATH}" ] && [ -f "${VALKEY_JSON_PATH}" ]; then
+    LOG_INFO "Using valkey-json => ${VALKEY_JSON_PATH}"
+    return
+  fi
+
+  # Clone and build it
+  export VALKEY_JSON_COMMIT_HASH="5b2f3db24c0135a8d8b8e5cf434c7a3d42bd91f0"
+  export VALKEY_JSON_VERSION="unstable"
+  export VALKEY_JSON_HOME=$(get_third_party_build_dir)/valkey-json
+  export VALKEY_JSON_BUILD_DIR=${VALKEY_JSON_HOME}/.build-release
+
+  local json_module_path=${VALKEY_JSON_HOME}/build/src/libjson.${MODULE_EXT}
+  if [ -f "${json_module_path}" ]; then
+    export VALKEY_JSON_PATH="${json_module_path}"
+    LOG_INFO "Found valkey-json: ${VALKEY_JSON_PATH}"
+    return
+  fi
+
+  rm -fr "${VALKEY_JSON_HOME}"
+  LOG_INFO "Cloning valkey-json into ${VALKEY_JSON_HOME}"
+  git clone https://github.com/valkey-io/valkey-json.git ${VALKEY_JSON_HOME}
+
+  pushd ${VALKEY_JSON_HOME} >/dev/null
+  LOG_INFO "Working directory: ${VALKEY_JSON_HOME}"
+  LOG_INFO "Building valkey-json: ./build.sh --release"
+  ./build.sh --release
+  popd >/dev/null
+
+  export VALKEY_JSON_PATH=${json_module_path}
+  LOG_INFO "VALKEY_JSON_PATH => ${VALKEY_JSON_PATH}"
+}
+
+# Loop over Valkey log files and search for sanitization errors
+function check_for_san_errors() {
+  local valkey_logs="$1"
+  local exit_with_error=0
+  local files_to_dump=""
+  for logfile in ${valkey_logs}; do
+    printf "Checking log file ${logfile} for ASan/TSan errors"
+    local errors_count=$(cat ${logfile} | grep -wE 'AddressSanitizer|ThreadSanitizer|LeakSanitizer' | wc -l)
+    if [[ ${errors_count} -eq 0 ]]; then
+      printf "... ${GREEN}ok${RESET}\n"
+    else
+      printf "... ${RED}found errors!${RESET}\n"
+      exit_with_error=1
+      files_to_dump="${files_to_dump} ${logfile}"
+    fi
+  done
+
+  if [[ ${exit_with_error} -ne 0 ]]; then
+    printf "\n\nDumping log files with errors\n\n"
+    for file in ${files_to_dump}; do
+      cat $file
+      printf "\n\n -------------------------------- \n\n"
+    done
+    exit 1
+  fi
+}
+
+function get_file_last_modified() {
+  echo $(date -r ${1} +%s)
 }

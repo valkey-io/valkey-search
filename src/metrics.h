@@ -32,7 +32,8 @@ class Metrics {
     uint64_t query_failed_requests_cnt{0};
     uint64_t query_result_record_dropped_cnt{0};
     uint64_t query_hybrid_requests_cnt{0};
-    uint64_t query_inline_filtering_requests_cnt{0};
+    std::atomic<uint64_t> query_inline_filtering_requests_cnt{0};
+    std::atomic<uint64_t> query_prefiltering_requests_cnt{0};
     std::atomic<uint64_t> hnsw_add_exceptions_cnt{0};
     std::atomic<uint64_t> hnsw_remove_exceptions_cnt{0};
     std::atomic<uint64_t> hnsw_modify_exceptions_cnt{0};
@@ -71,7 +72,7 @@ class Metrics {
         0};
     std::atomic<uint64_t> coordinator_bytes_out{0};
     std::atomic<uint64_t> coordinator_bytes_in{0};
-    
+
     // Global ingestion stats (counts across all indexes)
     std::atomic<uint64_t> ingest_hash_keys{0};
     std::atomic<uint64_t> ingest_hash_blocked{0};
@@ -117,10 +118,10 @@ class Metrics {
             absl::ToInt64Nanoseconds(absl::Seconds(1)), LATENCY_PRECISION};
     // Time Slice Mutex metrics
     std::atomic<uint64_t> time_slice_read_periods{0};
-    std::atomic<uint64_t> time_slice_read_time{0};      // microseconds, cumulative
+    std::atomic<uint64_t> time_slice_read_time{0};  // microseconds, cumulative
     std::atomic<uint64_t> time_slice_queries{0};
     std::atomic<uint64_t> time_slice_write_periods{0};
-    std::atomic<uint64_t> time_slice_write_time{0};     // microseconds, cumulative
+    std::atomic<uint64_t> time_slice_write_time{0};  // microseconds, cumulative
     std::atomic<uint64_t> time_slice_upserts{0};
     std::atomic<uint64_t> time_slice_deletes{0};
   };

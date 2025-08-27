@@ -16,6 +16,9 @@ namespace config = vmsdk::config;
 /// Return the value of the Query String Bytes configuration
 uint32_t GetQueryStringBytes();
 
+/// Return the value of the Query String Bytes configuration
+uint32_t GetQueryStringBytes();
+
 /// Return a mutable reference to the HNSW resize configuration parameter
 config::Number& GetHNSWBlockSize();
 
@@ -27,13 +30,27 @@ config::Number& GetReaderThreadCount();
 /// number of writer threads
 config::Number& GetWriterThreadCount();
 
+/// Return the max time in seconds that the worker thread pool is
+/// suspended after fork started
+config::Number& GetMaxWorkerSuspensionSecs();
+
 /// Return an immutable reference to the "use-coordinator" flag
 const config::Boolean& GetUseCoordinator();
+
+/// Return the configuration entry for skipping vector index RDB loading
+const config::Boolean& GetSkipIndexLoad();
+
+/// Return a mutable reference for testing
+config::Boolean& GetSkipIndexLoadMutable();
 
 /// Return the log level
 config::Enum& GetLogLevel();
 
 /// Reset the state of the options (mainly needed for testing)
 absl::Status Reset();
+
+/// Allow delivery of partial results when timeout occurs
+const config::Boolean& GetEnablePartialResults();
+
 }  // namespace options
 }  // namespace valkey_search

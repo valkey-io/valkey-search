@@ -14,9 +14,15 @@ set(SRCS_STRING_INTERNING ${CMAKE_CURRENT_LIST_DIR}/string_interning.cc
 valkey_search_add_static_library(string_interning "${SRCS_STRING_INTERNING}")
 target_include_directories(string_interning PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(string_interning PUBLIC allocator)
+target_link_libraries(string_interning PUBLIC memory_tracker)
+target_link_libraries(string_interning PUBLIC memory_allocation)
+target_link_libraries(string_interning PUBLIC memory_allocation_overrides)
 
 set(SRCS_ALLOCATOR ${CMAKE_CURRENT_LIST_DIR}/allocator.cc
-                   ${CMAKE_CURRENT_LIST_DIR}/allocator.h)
+                   ${CMAKE_CURRENT_LIST_DIR}/allocator.h
+                   ${CMAKE_CURRENT_LIST_DIR}/cancel.h
+                   ${CMAKE_CURRENT_LIST_DIR}/cancel.cc
+                   )
 
 valkey_search_add_static_library(allocator "${SRCS_ALLOCATOR}")
 target_include_directories(allocator PUBLIC ${CMAKE_CURRENT_LIST_DIR})

@@ -69,6 +69,9 @@ constexpr int kMaxEfRuntime{4096};
 constexpr int kMaxPrefixesCount{16};
 constexpr int kMaxTagFieldLen{10000};
 constexpr int kMaxNumericFieldLen{256};
+constexpr int kTimeoutMs{50000};
+constexpr int kMinTimeoutMs{1};
+constexpr int kMaxTimeoutMs{60000};
 
 constexpr absl::string_view kMaxPrefixesConfig{"max-prefixes"};
 constexpr absl::string_view kMaxTagFieldLenConfig{"max-tag-field-length"};
@@ -80,6 +83,7 @@ constexpr absl::string_view kMaxMConfig{"max-vector-m"};
 constexpr absl::string_view kMaxEfConstructionConfig{
     "max-vector-ef-construction"};
 constexpr absl::string_view kMaxEfRuntimeConfig{"max-vector-ef-runtime"};
+constexpr absl::string_view kDefaultTimeoutMs{"default-timeout-ms"};
 
 /// Register the "--max-prefixes" flag. Controls the max number of prefixes per
 /// index.
@@ -166,6 +170,15 @@ static auto max_ef_runtime =
                                  kMaxEfRuntime)        // max size
         .WithValidationCallback(
             CHECK_RANGE(1, kMaxEfRuntime, kMaxEfRuntimeConfig))
+        .Build();
+
+/// Register the "--default-timeout-ms" flag. Controls the default timeout
+/// in milliseconds for FT.SEARCH.
+static auto default_timeout_ms =
+    vmsdk::config::NumberBuilder(kDefaultTimeoutMs,  // name
+                                 kTimeoutMs,         // default timeout
+                                 kMinTimeoutMs,      // min timeout
+                                 kMaxTimeoutMs)      // max timeout
         .Build();
 
 const absl::NoDestructor<
@@ -424,7 +437,7 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   VMSDK_ASSIGN_OR_RETURN(auto res, ParseParam(kOnParam, false, itr,
                                               on_data_type, *kOnDataTypeByStr));
   if (on_data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON &&
-      !IsJsonModuleLoaded(ctx)) {
+      !IsJsonModuleSupported(ctx)) {
     return absl::InvalidArgumentError("JSON module is not loaded.");
   }
   index_schema_proto.set_attribute_data_type(on_data_type);
@@ -580,6 +593,10 @@ vmsdk::config::Number &GetMaxEfConstruction() {
 
 vmsdk::config::Number &GetMaxEfRuntime() {
   return dynamic_cast<vmsdk::config::Number &>(*max_ef_runtime);
+}
+
+vmsdk::config::Number &GetDefaultTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number &>(*default_timeout_ms);
 }
 }  // namespace options
 }  // namespace valkey_search

@@ -23,15 +23,20 @@
 #include "grpcpp/server_context.h"
 #include "grpcpp/support/server_callback.h"
 #include "grpcpp/support/status.h"
+#include "module_config.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/grpc_suspender.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
+#include "src/index_schema.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
+#include "src/query/fanout_operation_base.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
+#include "src/schema_manager.h"
+#include "valkey_search_options.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -110,7 +115,8 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
   GRPCSuspensionGuard guard(GRPCSuspender::Instance());
   auto latency_sample = SAMPLE_EVERY_N(100);
   grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
-  auto vector_search_parameters = GRPCSearchRequestToParameters(*request);
+  auto vector_search_parameters =
+      GRPCSearchRequestToParameters(*request, context);
   if (!vector_search_parameters.ok()) {
     reactor->Finish(ToGrpcStatus(vector_search_parameters.status()));
     RecordSearchMetrics(true, std::move(latency_sample));
@@ -128,34 +134,41 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
           RecordSearchMetrics(true, std::move(latency_sample));
           return;
         }
+        if (parameters->cancellation_token->IsCancelled() &&
+            !valkey_search::options::GetEnablePartialResults().GetValue()) {
+          reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
+                           "Search operation cancelled due to timeout"});
+          RecordSearchMetrics(true, std::move(latency_sample));
+          return;
+        }
         if (parameters->no_content) {
           SerializeNeighbors(response, neighbors.value());
           reactor->Finish(grpc::Status::OK);
           RecordSearchMetrics(false, std::move(latency_sample));
         } else {
-          vmsdk::RunByMain(
-              [parameters = std::move(parameters), response, reactor,
-               latency_sample = std::move(latency_sample),
-               neighbors = std::move(neighbors.value())]() mutable {
-                const auto& attribute_data_type =
-                    parameters->index_schema->GetAttributeDataType();
-                auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-                if (parameters->attribute_alias.empty()) {
-                    query::ProcessNonVectorNeighborsForReply(ctx.get(), attribute_data_type,
-                                            neighbors, *parameters);
-                } else {
-                  auto vector_identifier =
-                      parameters->index_schema
-                          ->GetIdentifier(parameters->attribute_alias)
-                          .value();
-                    query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
-                                                    neighbors, *parameters,
-                                                    vector_identifier);
-                }
-                SerializeNeighbors(response, neighbors);
-                reactor->Finish(grpc::Status::OK);
-                RecordSearchMetrics(false, std::move(latency_sample));
-              });
+          vmsdk::RunByMain([parameters = std::move(parameters), response,
+                            reactor, latency_sample = std::move(latency_sample),
+                            neighbors =
+                                std::move(neighbors.value())]() mutable {
+            const auto& attribute_data_type =
+                parameters->index_schema->GetAttributeDataType();
+            auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
+            if (parameters->attribute_alias.empty()) {
+              query::ProcessNonVectorNeighborsForReply(
+                  ctx.get(), attribute_data_type, neighbors, *parameters);
+            } else {
+              auto vector_identifier =
+                  parameters->index_schema
+                      ->GetIdentifier(parameters->attribute_alias)
+                      .value();
+              query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
+                                              neighbors, *parameters,
+                                              vector_identifier);
+            }
+            SerializeNeighbors(response, neighbors);
+            reactor->Finish(grpc::Status::OK);
+            RecordSearchMetrics(false, std::move(latency_sample));
+          });
         }
       },
       false);
@@ -166,6 +179,72 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
     RecordSearchMetrics(true, nullptr);
     reactor->Finish(ToGrpcStatus(status));
   }
+  return reactor;
+}
+
+grpc::ServerUnaryReactor* Service::InfoIndexPartition(
+    grpc::CallbackServerContext* context,
+    const InfoIndexPartitionRequest* request,
+    InfoIndexPartitionResponse* response) {
+  GRPCSuspensionGuard guard(GRPCSuspender::Instance());
+  auto latency_sample = SAMPLE_EVERY_N(100);
+  grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
+
+  vmsdk::RunByMain([reactor, response, idx = request->index_name(),
+                    latency_sample = std::move(latency_sample)]() mutable {
+    auto status_or_schema =
+        SchemaManager::Instance().GetIndexSchema(/*db=*/0, idx);
+    if (!status_or_schema.ok()) {
+      response->set_exists(false);
+      response->set_index_name(idx);
+      response->set_error(status_or_schema.status().ToString());
+      response->set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
+      reactor->Finish(ToGrpcStatus(status_or_schema.status()));
+      return;
+    }
+    auto schema = std::move(status_or_schema.value());
+    IndexSchema::InfoIndexPartitionData data =
+        schema->GetInfoIndexPartitionData();
+
+    std::optional<uint64_t> fingerprint;
+    std::optional<uint32_t> version;
+
+    // Get the full metadata to access both fingerprint and version
+    auto global_metadata =
+        coordinator::MetadataManager::Instance().GetGlobalMetadata();
+    if (global_metadata->type_namespace_map().contains(
+            kSchemaManagerMetadataTypeName)) {
+      const auto& entry_map = global_metadata->type_namespace_map().at(
+          kSchemaManagerMetadataTypeName);
+      if (entry_map.entries().contains(idx)) {
+        const auto& entry = entry_map.entries().at(idx);
+        fingerprint = entry.fingerprint();
+        version = entry.version();
+      }
+    }
+
+    response->set_exists(true);
+    response->set_index_name(idx);
+    response->set_num_docs(data.num_docs);
+    response->set_num_records(data.num_records);
+    response->set_hash_indexing_failures(data.hash_indexing_failures);
+    response->set_backfill_scanned_count(data.backfill_scanned_count);
+    response->set_backfill_db_size(data.backfill_db_size);
+    response->set_backfill_inqueue_tasks(data.backfill_inqueue_tasks);
+    response->set_backfill_complete_percent(data.backfill_complete_percent);
+    response->set_backfill_in_progress(data.backfill_in_progress);
+    response->set_mutation_queue_size(data.mutation_queue_size);
+    response->set_recent_mutations_queue_delay(
+        data.recent_mutations_queue_delay);
+    response->set_state(data.state);
+    if (fingerprint.has_value()) {
+      response->set_schema_fingerprint(fingerprint.value());
+    }
+    if (version.has_value()) {
+      response->set_version(version.value());
+    }
+    reactor->Finish(grpc::Status::OK);
+  });
   return reactor;
 }
 
@@ -183,7 +262,8 @@ std::unique_ptr<Server> ServerImpl::Create(
   std::shared_ptr<grpc::ServerCredentials> creds =
       grpc::InsecureServerCredentials();
   auto coordinator_service = std::make_unique<Service>(
-      vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx), reader_thread_pool);
+      vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx),
+      reader_thread_pool);
   grpc::ServerBuilder builder;
   builder.AddListeningPort(server_address, creds);
   builder.RegisterService(coordinator_service.get());

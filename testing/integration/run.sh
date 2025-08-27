@@ -1,14 +1,13 @@
 #!/bin/bash -e
 
 ROOT_DIR=$(readlink -f $(dirname $0))
+WORKSPACE_HOME=$(readlink -f ${ROOT_DIR}/../..)
+
 BUILD_CONFIG=release
 TEST=all
 CLEAN="no"
 VALKEY_VERSION="8.1.1"
-# Use this commit: https://github.com/valkey-io/valkey-json/commit/5b2f3db24c0135a8d8b8e5cf434c7a3d42bd91f0
-VALKEY_JSON_COMMIT_HASH="5b2f3db24c0135a8d8b8e5cf434c7a3d42bd91f0"
 VALKEY_JSON_VERSION="unstable"
-MODULE_ROOT=$(readlink -f ${ROOT_DIR}/../..)
 DUMP_TEST_ERRORS_STDOUT="no"
 
 # Constants
@@ -20,6 +19,7 @@ BLUE='\e[34;1m'
 GRAY='\e[90;1m'
 
 echo "Root directory: ${ROOT_DIR}"
+echo "WORKSPACE_HOME directory: ${WORKSPACE_HOME}"
 
 function print_usage() {
 cat<<EOF
@@ -79,6 +79,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+export SAN_BUILD
+
+# Source the common.rc after we setup our environment variables
+. ${WORKSPACE_HOME}/scripts/common.rc
+
 if [[ ! "${TEST}" == "stability" ]] && [[ ! "${TEST}" == "vector_search_integration" ]] && [[ ! "${TEST}" == "all" ]]; then
     printf "\n${RED}Invalid test value: ${TEST}${RESET}\n\n" >&2
     print_usage
@@ -96,8 +101,8 @@ function is_cmake_required() {
         echo "yes"
         return
     fi
-    local build_file_lastmodified=$(stat --printf "%Y" ${ROOT_DIR}/CMakeLists.txt)
-    local cmake_cache_modified=$(stat --printf "%Y" ${BUILD_DIR}/CTestTestfile.cmake)
+    local build_file_lastmodified=$(get_file_last_modified ${ROOT_DIR}/CMakeLists.txt)
+    local cmake_cache_modified=$(get_file_last_modified ${BUILD_DIR}/CTestTestfile.cmake)
     if [ ${build_file_lastmodified} -gt ${cmake_cache_modified} ]; then
         echo "yes"
         return
@@ -105,23 +110,12 @@ function is_cmake_required() {
     echo "no"
 }
 
-
-function is_build_required() {
-    if [ ! -f ${1} ]; then
-        echo "yes"
-        return
-    fi
-    echo "no"
-}
-
-
 function configure() {
-
     printf "Checking if cmake configure is required..."
     RUN_CMAKE=$(is_cmake_required)
     printf "${GREEN}${RUN_CMAKE}${RESET}\n"
 
-    local BUILD_TYPE=$(echo ${BUILD_CONFIG^})
+    local BUILD_TYPE=$(capitalize_string ${BUILD_CONFIG})
 
     if [[ "${RUN_CMAKE}" == "yes" ]]; then
         printf "${BOLD_PINK}Running cmake...${RESET}\n"
@@ -130,42 +124,9 @@ function configure() {
         cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE}
         cd ${ROOT_DIR}
     fi
-
-    printf "Checking if valkey-server build is required..."
-    BUILD_SERVER=$(is_build_required ${VALKEY_SERVER_PATH})
-    printf "${GREEN}${BUILD_SERVER}${RESET}\n"
-    if [[ "${BUILD_SERVER}" == "yes" ]]; then
-        printf "${BOLD_PINK}Building valkey-server...${RESET}\n"
-        if [ ! -d ${VALKEY_SERVER_DIR} ]; then
-            git clone --branch ${VALKEY_VERSION} --single-branch https://github.com/valkey-io/valkey.git ${VALKEY_SERVER_DIR}
-        fi
-        mkdir -p ${VALKEY_SERVER_BUILD_DIR}
-        cd ${VALKEY_SERVER_BUILD_DIR}
-
-        VALKEY_CMAKE_EXTRA_ARGS=""
-        if [[ "${SAN_BUILD}" != "no" ]]; then
-            VALKEY_CMAKE_EXTRA_ARGS="-DBUILD_SANITIZER=${SAN_BUILD}"
-        fi
-
-        printf "${BOLD_PINK}Running valkey-server cmake:${RESET}cmake -DCMAKE_BUILD_TYPE=Release .. -GNinja ${VALKEY_CMAKE_EXTRA_ARGS}\n"
-        cmake -DCMAKE_BUILD_TYPE=Release .. -GNinja ${VALKEY_CMAKE_EXTRA_ARGS}
-        ninja
-        cd ${ROOT_DIR}
-    fi
-
-    printf "Checking if valkey-json build is required..."
-    BUILD_JSON=$(is_build_required ${VALKEY_JSON_PATH})
-    printf "${GREEN}${BUILD_JSON}${RESET}\n"
-    if [[ "${BUILD_JSON}" == "yes" ]]; then
-        printf "${BOLD_PINK}Building valkey-json...${RESET}\n"
-
-        rm -rf ${VALKEY_JSON_DIR}
-        git clone https://github.com/valkey-io/valkey-json.git ${VALKEY_JSON_DIR}
-        cd ${VALKEY_JSON_DIR}
-        git checkout ${VALKEY_JSON_COMMIT_HASH}
-        SERVER_VERSION=$VALKEY_VERSION ./build.sh --release
-        cd ${ROOT_DIR}
-    fi
+  
+    setup_valkey_server
+    setup_json_module
 
     # If the binary is already there, do not rebuild it
     printf "Checking for ${VALKEY_SEARCH_PATH}"
@@ -186,14 +147,7 @@ function build() {
 
 BUILD_DIR_BASENAME=.build-${BUILD_CONFIG}${san_suffix}
 BUILD_DIR=${ROOT_DIR}/${BUILD_DIR_BASENAME}
-VALKEY_SERVER_DIR=${BUILD_DIR}/valkey-${VALKEY_VERSION}
-VALKEY_SERVER_BUILD_DIR=${VALKEY_SERVER_DIR}/.build-release
-VALKEY_SERVER_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-server
-VALKEY_JSON_DIR=${BUILD_DIR}/valkey-json-${VALKEY_JSON_VERSION}
-VALKEY_JSON_PATH=${VALKEY_JSON_DIR}/build/src/libjson.so
-VALKEY_SEARCH_PATH=${MODULE_ROOT}/${BUILD_DIR_BASENAME}/libsearch.so
-
-echo " VALKEY_SERVER_DIR is set to ${VALKEY_SERVER_DIR}"
+VALKEY_SEARCH_PATH=${MODULE_ROOT}/${BUILD_DIR_BASENAME}/libsearch.${MODULE_EXT}
 
 if [[ "${CLEAN}" == "yes" ]]; then
     rm -rf ${BUILD_DIR}
@@ -225,53 +179,10 @@ if ! command -v memtier_benchmark &> /dev/null; then
     exit 1
 fi
 
-function print_environment_var() {
-    local varname=$1
-    local value=$2
-    printf "${GRAY}${varname}${RESET} => ${GREEN}${value}${RESET}\n"
-}
-
-# Loop over valkey log files and search for "AddressSanitizer" and "ThreadSanitizer" lines
-function check_for_san_errors() {
-    valkey_logs=$(ls ${TEST_UNDECLARED_OUTPUTS_DIR}/*_stdout.txt | grep -v valkey_cli_stdout)
-    local exit_with_error=0
-    local files_to_dump=""
-    for logfile in ${valkey_logs}; do
-        printf "Checking log file ${logfile} for ASan/TSan errors"
-        local errors_count=$(cat ${logfile}| grep -wE 'AddressSanitizer|ThreadSanitizer'|wc -l)
-        if [[ ${errors_count} -eq 0 ]]; then
-            printf "... ${GREEN}ok${RESET}\n"
-        else
-            printf "... ${RED}found errors!${RESET}\n"
-            exit_with_error=1
-            files_to_dump="${files_to_dump} ${logfile}"
-        fi
-    done
-
-    if [[ ${exit_with_error} -ne 0 ]]; then
-        printf "\n\nDumping log files with errors\n\n"
-        for file in ${files_to_dump}; do
-            cat $file
-            printf "\n\n -------------------------------- \n\n"
-        done
-        exit 1
-    fi
-}
-
-export VALKEY_SERVER_PATH="$VALKEY_SERVER_PATH"
-export VALKEY_CLI_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-cli
 export MEMTIER_PATH=memtier_benchmark
 export VALKEY_SEARCH_PATH=${VALKEY_SEARCH_PATH}
-export VALKEY_JSON_PATH="${VALKEY_JSON_PATH}"
 export TEST_UNDECLARED_OUTPUTS_DIR="$BUILD_DIR/output"
-if [[ "${SAN_BUILD}" != "no" ]]; then
-    export ASAN_OPTIONS="detect_odr_violation=0:detect_leaks=1:halt_on_error=1"
-    if [[ "${SAN_BUILD}" == "address" ]]; then
-        export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/asan.supp"
-    else
-        export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/tsan.supp"
-    fi
-fi
+
 
 rm -rf $TEST_UNDECLARED_OUTPUTS_DIR
 mkdir -p $TEST_UNDECLARED_OUTPUTS_DIR
@@ -299,12 +210,12 @@ else
     python3 ${ROOT_DIR}/${TEST}_test.py
 fi
 
-printf "Checking for errors...\n"
 if [[ "${SAN_BUILD}" != "no" ]]; then
+    printf "Checking for errors...\n"
     # Terminate valkey-server so the logs will be flushed
     pkill valkey-server || true
     # Wait for 3 seconds making sure the processes terminated
     sleep 3
     # And now we can check the logs
-    check_for_san_errors
+    check_for_san_errors "$(ls ${TEST_UNDECLARED_OUTPUTS_DIR}/*_stdout.txt | grep -v valkey_cli_stdout)"
 fi

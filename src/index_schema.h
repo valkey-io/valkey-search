@@ -51,6 +51,20 @@ using FreeFunc = void (*)(void *);
 class IndexSchema : public KeyspaceEventSubscription,
                     public std::enable_shared_from_this<IndexSchema> {
  public:
+  struct InfoIndexPartitionData {
+    uint64_t num_docs;
+    uint64_t num_records;
+    uint64_t hash_indexing_failures;
+    uint64_t backfill_scanned_count;
+    uint64_t backfill_db_size;
+    uint64_t backfill_inqueue_tasks;
+    float backfill_complete_percent;
+    bool backfill_in_progress;
+    uint64_t mutation_queue_size;
+    uint64_t recent_mutations_queue_delay;
+    std::string state;
+  };
+
   struct Stats {
     template <typename T>
     struct ResultCnt {
@@ -66,13 +80,17 @@ class IndexSchema : public KeyspaceEventSubscription,
     uint64_t mutation_queue_size_ ABSL_GUARDED_BY(mutex_){0};
     absl::Duration mutations_queue_delay_ ABSL_GUARDED_BY(mutex_);
     mutable absl::Mutex mutex_;
+
+    // Single interface to get all stats data
+    InfoIndexPartitionData GetStats() const;
   };
   std::shared_ptr<IndexSchema> GetSharedPtr() { return shared_from_this(); }
   std::weak_ptr<IndexSchema> GetWeakPtr() { return weak_from_this(); }
 
   static absl::StatusOr<std::shared_ptr<IndexSchema>> Create(
       ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto,
-      vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes = false);
+      vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes,
+      bool reload);
   ~IndexSchema() override;
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
       absl::string_view attribute_alias) const;
@@ -150,12 +168,15 @@ class IndexSchema : public KeyspaceEventSubscription,
   void ProcessMultiQueue();
   void SubscribeToVectorExternalizer(absl::string_view attribute_identifier,
                                      indexes::VectorBase *vector_index);
+  uint64_t GetBackfillScannedKeyCount() const;
+  uint64_t GetBackfillDbSize() const;
+  InfoIndexPartitionData GetInfoIndexPartitionData() const;
 
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,
               const data_model::IndexSchema &index_schema_proto,
               std::unique_ptr<AttributeDataType> attribute_data_type,
-              vmsdk::ThreadPool *mutations_thread_pool);
+              vmsdk::ThreadPool *mutations_thread_pool, bool reload);
   absl::Status Init(ValkeyModuleCtx *ctx);
 
  private:
@@ -244,6 +265,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};
 
   FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoad);
+  FRIEND_TEST(IndexSchemaRDBTest, ComprehensiveSkipLoadTest);
   FRIEND_TEST(IndexSchemaFriendTest, ConsistencyTest);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributes);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributesSanity);

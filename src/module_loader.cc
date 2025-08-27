@@ -33,7 +33,7 @@ inline std::list<absl::string_view> ACLPermissionFormatter(
   }
   return permissions;
 }
-}
+}  // namespace
 
 vmsdk::module::Options options = {
     .name = "search",
@@ -48,13 +48,15 @@ vmsdk::module::Options options = {
                 .cmd_name = valkey_search::kCreateCommand,
                 .permissions = ACLPermissionFormatter(
                     valkey_search::kCreateCmdPermissions),
-                .flags = {vmsdk::module::kDenyOOMFlag},
+                .flags = {vmsdk::module::kWriteFlag, vmsdk::module::kFastFlag,
+                          vmsdk::module::kDenyOOMFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTCreateCmd>,
             },
             {
                 .cmd_name = valkey_search::kDropIndexCommand,
                 .permissions = ACLPermissionFormatter(
                     valkey_search::kDropIndexCmdPermissions),
+                .flags = {vmsdk::module::kWriteFlag, vmsdk::module::kFastFlag},
                 .cmd_func =
                     &vmsdk::CreateCommand<valkey_search::FTDropIndexCmd>,
             },
@@ -62,25 +64,32 @@ vmsdk::module::Options options = {
                 .cmd_name = valkey_search::kInfoCommand,
                 .permissions =
                     ACLPermissionFormatter(valkey_search::kInfoCmdPermissions),
+                .flags = {vmsdk::module::kReadOnlyFlag,
+                          vmsdk::module::kFastFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTInfoCmd>,
             },
             {
                 .cmd_name = valkey_search::kListCommand,
                 .permissions =
                     ACLPermissionFormatter(valkey_search::kListCmdPermissions),
+                .flags = {vmsdk::module::kReadOnlyFlag,
+                          vmsdk::module::kAdminFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTListCmd>,
             },
             {
                 .cmd_name = valkey_search::kSearchCommand,
                 .permissions = ACLPermissionFormatter(
                     valkey_search::kSearchCmdPermissions),
-                .flags = {vmsdk::module::kDenyOOMFlag},
+                .flags = {vmsdk::module::kReadOnlyFlag,
+                          vmsdk::module::kDenyOOMFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTSearchCmd>,
             },
             {
                 .cmd_name = valkey_search::kDebugCommand,
                 .permissions =
                     ACLPermissionFormatter(valkey_search::kDebugCmdPermissions),
+                .flags = {vmsdk::module::kReadOnlyFlag,
+                          vmsdk::module::kAdminFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTDebugCmd>,
             },
         }  // namespace

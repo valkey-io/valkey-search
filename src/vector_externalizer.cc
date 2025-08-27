@@ -151,8 +151,8 @@ void VectorExternalizer::ProcessEngineUpdateQueue() {
       entry.vector = std::move(vector_externalizer_entry.vector);
       if (!key_obj) {
         auto key_str = vmsdk::MakeUniqueValkeyString(key->Str());
-        key_obj = vmsdk::MakeUniqueValkeyOpenKey(ctx_.Get().get(), key_str.get(),
-                                                VALKEYMODULE_WRITE);
+        key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+            ctx_.Get().get(), key_str.get(), VALKEYMODULE_WRITE);
         if (!key_obj) {
           break;
         }

@@ -67,8 +67,8 @@ class KeyspaceEventManager {
   absl::Status StartValkeySubscriptionIfNeeded(ValkeyModuleCtx *ctx, int types);
 
   static inline int OnValkeyKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
-                                                const char *event,
-                                                ValkeyModuleString *key) {
+                                                 const char *event,
+                                                 ValkeyModuleString *key) {
     Instance().NotifySubscribers(ctx, type, event, key);
     return VALKEYMODULE_OK;
   }

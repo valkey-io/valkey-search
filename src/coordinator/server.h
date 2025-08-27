@@ -45,6 +45,11 @@ class Service final : public Coordinator::CallbackService {
       const SearchIndexPartitionRequest* request,
       SearchIndexPartitionResponse* response) override;
 
+  grpc::ServerUnaryReactor* InfoIndexPartition(
+      grpc::CallbackServerContext* context,
+      const InfoIndexPartitionRequest* request,
+      InfoIndexPartitionResponse* response) override;
+
  private:
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
   vmsdk::ThreadPool* reader_thread_pool_;

@@ -456,7 +456,7 @@ TEST_P(FanoutTest, TestFanout) {
     EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
         *grpc_request, search_parameters));
   };
-  auto parameters = GRPCSearchRequestToParameters(search_parameters);
+  auto parameters = GRPCSearchRequestToParameters(search_parameters, nullptr);
   VMSDK_EXPECT_OK(parameters);
   VMSDK_EXPECT_OK(fanout::PerformSearchFanoutAsync(
       &fake_ctx_, targets, mock_coordinator_client_pool.get(),

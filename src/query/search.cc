@@ -78,6 +78,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
 
     auto latency_sample = SAMPLE_EVERY_N(100);
     auto res = vector_hnsw->Search(parameters.query, parameters.k,
+                                   parameters.cancellation_token,
                                    std::move(inline_filter), parameters.ef);
     Metrics::GetStats().hnsw_vector_index_search_latency.SubmitSample(
         std::move(latency_sample));
@@ -87,6 +88,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
     auto vector_flat = dynamic_cast<indexes::VectorFlat<float> *>(vector_index);
     auto latency_sample = SAMPLE_EVERY_N(100);
     auto res = vector_flat->Search(parameters.query, parameters.k,
+                                   parameters.cancellation_token,
                                    std::move(inline_filter));
     Metrics::GetStats().flat_vector_index_search_latency.SubmitSample(
         std::move(latency_sample));
@@ -200,6 +202,9 @@ CalcBestMatchingPrefilteredKeys(
                                         results, top_keys);
       }
       iterator->Next();
+      if (parameters.cancellation_token->IsCancelled()) {
+        return results;
+      }
     }
   }
   return results;
@@ -327,6 +332,13 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
 
 absl::StatusOr<std::deque<indexes::Neighbor>> Search(
     const VectorSearchParameters &parameters, bool is_local_search) {
+  // Handle OOM for search requests, mainly defends against request
+  // coming from the coordinator
+  auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
+  auto ctx_flags = ValkeyModule_GetContextFlags(ctx.get());
+  if (ctx_flags & VALKEYMODULE_CTX_FLAGS_OOM) {
+    return absl::ResourceExhaustedError(kOOMMsg);
+  }
   // Handle non vector queries first where attribute_alias is empty.
   if (parameters.IsNonVectorQuery()) {
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
@@ -341,7 +353,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
       entries_fetchers.pop();
       auto iterator = fetcher->Begin();
       while (!iterator->Done()) {
-        const InternedStringPtr& label = **iterator;
+        const InternedStringPtr &label = **iterator;
         neighbors.push_back(indexes::Neighbor{label, 0.0f});
         iterator->Next();
       }
@@ -359,7 +371,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
   auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
   vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
   ++Metrics::GetStats().time_slice_queries;
-  
+
   if (!parameters.filter_parse_results.root_predicate) {
     return MaybeAddIndexedContent(PerformVectorSearch(vector_index, parameters),
                                   parameters);
@@ -375,14 +387,13 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
         << "Using pre-filter query execution, qualified entries="
         << qualified_entries;
     // Do an exact nearest neighbour search on the reduced search space.
-    auto results = CalcBestMatchingPrefilteredKeys(
-        parameters, entries_fetchers, vector_index);
+    ++Metrics::GetStats().query_prefiltering_requests_cnt;
+    auto results = CalcBestMatchingPrefilteredKeys(parameters, entries_fetchers,
+                                                   vector_index);
 
     return vector_index->CreateReply(results);
   }
-  if (is_local_search) {
-    ++Metrics::GetStats().query_inline_filtering_requests_cnt;
-  }
+  ++Metrics::GetStats().query_inline_filtering_requests_cnt;
   lock.SetMayProlong();
   return MaybeAddIndexedContent(PerformVectorSearch(vector_index, parameters),
                                 parameters);

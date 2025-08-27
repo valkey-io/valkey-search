@@ -9,13 +9,15 @@
 #define VALKEY_SEARCH_INDEXES_TEXT_WORD_ITERATOR_H_
 
 #include <memory>
+
 #include "absl/strings/string_view.h"
 
 namespace valkey_search::indexes::text {
 
 /*
 
-Base Class for all Word Iterators. currently this includes WildCard and Fuzzy, more may come in the future.
+Base Class for all Word Iterators. currently this includes WildCard and Fuzzy,
+more may come in the future.
 
 */
 struct WordIterator {

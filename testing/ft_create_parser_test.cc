@@ -625,17 +625,17 @@ INSTANTIATE_TEST_SUITE_P(
              .success = true,
              .command_str = "idx1 on HASH SCHEMA hash_field1 as "
                             "hash_field11 tag ",
-            .tag_parameters = {{
+             .tag_parameters = {{
                  .separator = ",",
                  .case_sensitive = false,
              }},
              .expected = {.index_schema_name = "idx1",
-                        .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
-                        .attributes = {{
-                            .identifier = "hash_field1",
-                            .attribute_alias = "hash_field11",
-                            .indexer_type = indexes::IndexerType::kTag,
-                        }}},
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field11",
+                              .indexer_type = indexes::IndexerType::kTag,
+                          }}},
          },
          {
              .test_name = "invalid_separator",

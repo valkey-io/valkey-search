@@ -11,14 +11,15 @@
 #include <memory>
 
 #include "absl/status/statusor.h"
+#include "grpcpp/server_context.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/query/search.h"
-#include "grpcpp/server_context.h"
 
 namespace valkey_search::coordinator {
 
 absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
-GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request, grpc::CallbackServerContext *context);
+GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
+                              grpc::CallbackServerContext* context);
 
 std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
     const query::VectorSearchParameters& parameters);

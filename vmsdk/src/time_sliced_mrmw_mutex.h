@@ -22,7 +22,7 @@ struct TimeSlicedMRMWStats {
   std::atomic<uint64_t> read_periods{0};
   std::atomic<uint64_t> read_time_microseconds{0};  // cumulative
   std::atomic<uint64_t> write_periods{0};
-  std::atomic<uint64_t> write_time_microseconds{0}; // cumulative
+  std::atomic<uint64_t> write_time_microseconds{0};  // cumulative
 };
 
 // Forward declaration for global statistics
@@ -149,9 +149,9 @@ class ABSL_SCOPED_LOCKABLE ReaderMutexLock {
   ReaderMutexLock& operator=(const ReaderMutexLock&) = delete;
   ReaderMutexLock& operator=(ReaderMutexLock&&) = delete;
   void SetMayProlong();
-  ~ReaderMutexLock() ABSL_UNLOCK_FUNCTION() { 
+  ~ReaderMutexLock() ABSL_UNLOCK_FUNCTION() {
     mutex_->Unlock(may_prolong_);
-    global_stats.read_time_microseconds += 
+    global_stats.read_time_microseconds +=
         absl::ToInt64Microseconds(timer_.Duration());
   }
 
@@ -176,9 +176,9 @@ class ABSL_SCOPED_LOCKABLE WriterMutexLock {
   WriterMutexLock& operator=(const WriterMutexLock&) = delete;
   WriterMutexLock& operator=(WriterMutexLock&&) = delete;
   void SetMayProlong();
-  ~WriterMutexLock() ABSL_UNLOCK_FUNCTION() { 
+  ~WriterMutexLock() ABSL_UNLOCK_FUNCTION() {
     mutex_->Unlock(may_prolong_);
-    global_stats.write_time_microseconds += 
+    global_stats.write_time_microseconds +=
         absl::ToInt64Microseconds(timer_.Duration());
   }
 

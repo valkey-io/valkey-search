@@ -110,7 +110,8 @@ TEST_P(FilterTest, ParseParams) {
   const FilterTestCase &test_case = GetParam();
   auto index_schema = CreateIndexSchema("index_schema_name").value();
   InitIndexSchema(index_schema.get());
-  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_)).Times(::testing::AnyNumber());
+  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
   FilterParser parser(*index_schema, test_case.filter);
   auto parse_results = parser.Parse();
   EXPECT_EQ(test_case.create_success, parse_results.ok());

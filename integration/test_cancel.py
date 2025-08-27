@@ -1,7 +1,7 @@
 from valkey import ResponseError
 from valkey.client import Valkey
 from valkey_search_test_case import (
-    ValkeySearchTestCaseBase,
+    ValkeySearchTestCaseDebugMode,
     ValkeySearchClusterTestCase,
 )
 from valkeytestframework.conftest import resource_port_tracker
@@ -51,7 +51,7 @@ def search(
         return []
 
 
-class TestCancelCMD(ValkeySearchTestCaseBase):
+class TestCancelCMD(ValkeySearchTestCaseDebugMode):
 
     def test_timeoutCMD(self):
         """
@@ -172,21 +172,21 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
             == b"OK"
         )
         assert (
-            client.execute_command("CONFIG SET search.test-force-pause yes")
+            client.execute_command("FT._DEBUG PAUSEPOINT SET Cancel")
             == b"OK"
         )
+        assert(client.execute_command("FT._DEBUG PAUSEPOINT LIST") == [b"Cancel", []])
+
         hnsw_result = search(client, "hnsw", True, 2)
+        waiters.wait_for_true(lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST Cancel") > 0)
+        w = client.execute_command("FT._DEBUG PAUSEPOINT LIST")
+        assert(w[0] == b'Cancel')
+        assert(len(w[1]) > 0)
         assert (
-            client.info("SEARCH")["search_cancel-paused"] > 0
-        )
-        assert (
-            client.execute_command("CONFIG SET search.test-force-pause yes")
+            client.execute_command("FT._DEBUG PAUSEPOINT RESET Cancel")
             == b"OK"
         )
-
-
-
-
+        assert(client.execute_command("FT._DEBUG PAUSEPOINT LIST") == [])
 class TestCancelCME(ValkeySearchClusterTestCase):
 
     def execute_all(self, command: Union[str, list[str]]) -> list[Any]:

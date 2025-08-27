@@ -11,19 +11,20 @@
 /*
 
 For each entry in the inverted term index, there is an instance of
-this structure which is used to contain the key/field/position information for each
-word. It is expected that there will be a very large number of these objects
-most of which will have only a small number of key/field/position entries. However,
-there will be a small number of instances where the number of key/field/position
-entries is quite large. Thus it's likely that the fully optimized version of
-this object will have two or more encodings for its contents. This optimization
-is hidden from external view. 
+this structure which is used to contain the key/field/position information for
+each word. It is expected that there will be a very large number of these
+objects most of which will have only a small number of key/field/position
+entries. However, there will be a small number of instances where the number of
+key/field/position entries is quite large. Thus it's likely that the fully
+optimized version of this object will have two or more encodings for its
+contents. This optimization is hidden from external view.
 
 This object is NOT multi-thread safe, it's expected that the caller performs
 locking for mutation operations.
 
-Conceptually, this object holds an ordered list of Keys and for each Key there is
-an ordered list of Positions. Each position is tagged with a bitmask of fields.
+Conceptually, this object holds an ordered list of Keys and for each Key there
+is an ordered list of Positions. Each position is tagged with a bitmask of
+fields.
 
 A KeyIterator is provided to iterate over the keys within this object.
 A PositionIterator is provided to iterate over the positions of an individual Key. 
@@ -60,7 +61,7 @@ public:
 
 
 //
-// this is the logical view of a posting. 
+// this is the logical view of a posting.
 //
 struct Posting {
   const Key& GetKey() const;
@@ -101,9 +102,9 @@ struct Postings {
   size_t GetTotalTermFrequency() const;
 
   // Defrag this contents of this object. Returns the updated "this" pointer.
-  Postings *Defrag();
+  Postings* Defrag();
 
-  // Get a Key iterator. 
+  // Get a Key iterator.
   KeyIterator GetKeyIterator() const;
 
   // The Key Iterator

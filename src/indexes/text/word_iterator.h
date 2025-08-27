@@ -26,8 +26,9 @@ struct WordIterator {
   virtual absl::string_view GetWord() const = 0;
   virtual std::unique_ptr<WordIterator> Clone() const = 0;
 
-  absl::string_view operator*() const = { return GetWord(); }
-};
+  absl::string_view operator*() const = {return GetWord();
+}
+};  // namespace valkey_search::indexes::text
 
 }  // namespace valkey_search::indexes::text
 #endif

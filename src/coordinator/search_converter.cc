@@ -112,7 +112,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
     }
     case Predicate::PREDICATE_NOT_SET:
       return absl::InvalidArgumentError("Predicate not set");
-    // TODO: Support CME Fanouts of TextPredicate
+      // TODO: Support CME Fanouts of TextPredicate
   }
   CHECK(false);
 }

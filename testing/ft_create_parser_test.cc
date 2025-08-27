@@ -36,13 +36,14 @@ struct AttributeParameters {
 
 // Default stop words
 const std::vector<std::string> kDefStopWords{
-    "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by", "for",
-    "if", "in", "into", "it", "no", "not", "of", "on", "or", "such", "that", "their",
-    "then", "there", "these", "they", "this", "to", "was", "will", "with"
-};
+    "a",    "is",   "the", "an",   "and",  "are",   "as",   "at",    "be",
+    "but",  "by",   "for", "if",   "in",   "into",  "it",   "no",    "not",
+    "of",   "on",   "or",  "such", "that", "their", "then", "there", "these",
+    "they", "this", "to",  "was",  "will", "with"};
 
 struct ExpectedPerIndexTextParameters {
-  std::string punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|";  // Default punctuation
+  std::string punctuation =
+      ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|";                  // Default punctuation
   std::vector<std::string> stop_words = {kDefStopWords};  // Default stop words
   data_model::Language language = data_model::Language::LANGUAGE_ENGLISH;
   bool with_offsets = true;
@@ -115,35 +116,39 @@ TEST_P(FTCreateParserTest, ParseParams) {
     EXPECT_EQ(prefixes, test_case.expected.prefixes);
     EXPECT_EQ(index_schema_proto->attributes().size(),
               test_case.expected.attributes.size());
-              
+
     // Verify schema-level text parameters if we have text fields
     bool has_text_fields = false;
-    for (const auto& attr : test_case.expected.attributes) {
+    for (const auto &attr : test_case.expected.attributes) {
       if (attr.indexer_type == indexes::IndexerType::kText) {
         has_text_fields = true;
         break;
       }
     }
-    
+
     // Verify global text parameters in IndexSchema proto
     if (has_text_fields && test_case.success) {
       // Verify punctuation
-      EXPECT_EQ(index_schema_proto->punctuation(), test_case.expected.per_index_text_params.punctuation);
-      
+      EXPECT_EQ(index_schema_proto->punctuation(),
+                test_case.expected.per_index_text_params.punctuation);
+
       // Verify language
-      EXPECT_EQ(index_schema_proto->language(), test_case.expected.per_index_text_params.language);
-      
+      EXPECT_EQ(index_schema_proto->language(),
+                test_case.expected.per_index_text_params.language);
+
       // Verify with_offsets
-      EXPECT_EQ(index_schema_proto->with_offsets(), test_case.expected.per_index_text_params.with_offsets);
-      
+      EXPECT_EQ(index_schema_proto->with_offsets(),
+                test_case.expected.per_index_text_params.with_offsets);
+
       // Verify stop words
       std::vector<std::string> actual_stop_words;
-      for (const auto& word : index_schema_proto->stop_words()) {
+      for (const auto &word : index_schema_proto->stop_words()) {
         actual_stop_words.push_back(word);
       }
-      EXPECT_EQ(actual_stop_words, test_case.expected.per_index_text_params.stop_words);
+      EXPECT_EQ(actual_stop_words,
+                test_case.expected.per_index_text_params.stop_words);
     }
-    
+
     auto hnsw_index = 0;
     auto flat_index = 0;
     auto tag_index = 0;
@@ -205,9 +210,11 @@ TEST_P(FTCreateParserTest, ParseParams) {
                  indexes::IndexerType::kText) {
         EXPECT_TRUE(index_schema_proto->attributes(i).index().has_text_index());
         if (text_index < test_case.text_parameters.size()) {
-          auto text_proto = index_schema_proto->attributes(i).index().text_index();
-          const auto& expected_text = test_case.text_parameters[text_index];
-          EXPECT_EQ(text_proto.with_suffix_trie(), expected_text.with_suffix_trie);
+          auto text_proto =
+              index_schema_proto->attributes(i).index().text_index();
+          const auto &expected_text = test_case.text_parameters[text_index];
+          EXPECT_EQ(text_proto.with_suffix_trie(),
+                    expected_text.with_suffix_trie);
           EXPECT_EQ(text_proto.no_stem(), expected_text.no_stem);
           EXPECT_EQ(text_proto.min_stem_size(), expected_text.min_stem_size);
         }

@@ -6,7 +6,6 @@
  */
 
 #include "src/index_schema.h"
-#include "src/indexes/text/text_index.h"
 
 #include <algorithm>
 #include <atomic>
@@ -38,6 +37,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -89,8 +89,8 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
       if (!index_schema->GetTextIndexSchema()) {
         index_schema->CreateTextIndexSchema();
       }
-      return std::make_shared<indexes::Text>(index.text_index(),
-                                             index_schema->GetTextIndexSchema());
+      return std::make_shared<indexes::Text>(
+          index.text_index(), index_schema->GetTextIndexSchema());
     }
     case data_model::Index::IndexTypeCase::kVectorIndex: {
       switch (index.vector_index().algorithm_case()) {
@@ -179,9 +179,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
   VMSDK_RETURN_IF_ERROR(res->Init(ctx));
   if (!skip_attributes) {
     for (const auto &attribute : index_schema_proto.attributes()) {
-      VMSDK_ASSIGN_OR_RETURN(
-          std::shared_ptr<indexes::IndexBase> index,
-          IndexFactory(ctx, res.get(), attribute, &index_schema_proto, std::nullopt));
+      VMSDK_ASSIGN_OR_RETURN(std::shared_ptr<indexes::IndexBase> index,
+                             IndexFactory(ctx, res.get(), attribute,
+                                          &index_schema_proto, std::nullopt));
       VMSDK_RETURN_IF_ERROR(
           res->AddIndex(attribute.alias(), attribute.identifier(), index));
     }
@@ -863,7 +863,8 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   index_schema_proto->set_language(language_);
   index_schema_proto->set_punctuation(punctuation_);
   index_schema_proto->set_with_offsets(with_offsets_);
-  index_schema_proto->mutable_stop_words()->Assign(stop_words_.begin(), stop_words_.end());
+  index_schema_proto->mutable_stop_words()->Assign(stop_words_.begin(),
+                                                   stop_words_.end());
 
   auto stats = index_schema_proto->mutable_stats();
   stats->set_documents_count(stats_.document_cnt);
@@ -971,7 +972,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           supplemental_content->index_content_header().attribute();
       VMSDK_ASSIGN_OR_RETURN(std::shared_ptr<indexes::IndexBase> index,
                              IndexFactory(ctx, index_schema.get(), attribute,
-                                          index_schema_proto.get(), supplemental_iter.IterateChunks()));
+                                          index_schema_proto.get(),
+                                          supplemental_iter.IterateChunks()));
       VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
           attribute.alias(), attribute.identifier(), index));
     } else if (ABSL_PREDICT_TRUE(!skip_loading_index_data) &&

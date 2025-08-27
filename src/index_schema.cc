@@ -221,6 +221,10 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       subscribed_key_prefixes_.push_back(std::string(key_prefix));
     }
   }
+  // Initialize stop_words from proto
+  // for (const auto &stop_word : index_schema_proto.stop_words()) {
+  //   stop_words_.push_back(std::string(stop_word));
+  // }
   stats_.document_cnt = index_schema_proto.stats().documents_count();
 }
 
@@ -720,7 +724,14 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithArray(ctx, 26);
+  int arrSize = 26;
+  if (text_index_schema_ != nullptr) {
+    arrSize += 2;
+    // with_offsets is shown as a flag (field name only), not a key-value pair
+    // so it doesn't increment arrSize
+  }
+
+  ValkeyModule_ReplyWithArray(ctx, arrSize);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
   ValkeyModule_ReplyWithSimpleString(ctx, "index_options");
@@ -780,6 +791,21 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
                .c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "state");
   ValkeyModule_ReplyWithSimpleString(ctx, GetStateForInfo().data());
+  
+  // Add text-related schema fields
+  if (text_index_schema_) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "punctuation");
+    ValkeyModule_ReplyWithSimpleString(ctx, text_index_schema_->punctuation_.c_str());
+    if(text_index_schema_->with_offsets_){
+      ValkeyModule_ReplyWithSimpleString(ctx, "with_offsets");
+    }
+  }
+  
+  // ValkeyModule_ReplyWithSimpleString(ctx, "stop_words");
+  // ValkeyModule_ReplyWithArray(ctx, stop_words_.size());
+  // for (const auto &stop_word : stop_words_) {
+  //   ValkeyModule_ReplyWithSimpleString(ctx, stop_word.c_str());
+  // }
 }
 
 bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {

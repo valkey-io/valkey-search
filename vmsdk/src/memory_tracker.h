@@ -102,23 +102,23 @@ class NestedMemoryScope final : public MemoryScope {
 
 /**
  * A helper class that temporarily disables memory tracking.
- * 
- * When this class is created, it saves the current memory delta. When destroyed,
- * it restores the saved delta, effectively discarding any memory allocations
- * that occurred during its lifetime from being tracked.
- * 
+ *
+ * When this class is created, it saves the current memory delta. When
+ * destroyed, it restores the saved delta, effectively discarding any memory
+ * allocations that occurred during its lifetime from being tracked.
+ *
  * Use this when you need to allocate memory that should not be counted as part
  * of the tracked memory usage (e.g., error status objects).
  */
 class DisableMemoryTracking final {
-public:
-    DisableMemoryTracking();
-    ~DisableMemoryTracking();
-    
-    VMSDK_NON_COPYABLE_NON_MOVABLE(DisableMemoryTracking);
-    
-private:
-    int64_t saved_delta_;
+ public:
+  DisableMemoryTracking();
+  ~DisableMemoryTracking();
+
+  VMSDK_NON_COPYABLE_NON_MOVABLE(DisableMemoryTracking);
+
+ private:
+  int64_t saved_delta_;
 };
 
-#endif // VMSDK_SRC_MEMORY_TRACKER_H_ 
+#endif  // VMSDK_SRC_MEMORY_TRACKER_H_

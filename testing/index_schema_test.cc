@@ -125,7 +125,8 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
                             .value();
     EXPECT_TRUE(
         KeyspaceEventManager::Instance().HasSubscription(index_schema.get()));
-    auto mock_index = std::make_shared<MockIndex>(test_case.index_type, index_schema->GetMemoryPool());
+    auto mock_index = std::make_shared<MockIndex>(
+        test_case.index_type, index_schema->GetMemoryPool());
     VMSDK_EXPECT_OK(index_schema->AddIndex("attribute_name",
                                            test_case.hash_field, mock_index));
 
@@ -606,7 +607,8 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
             .value();
     EXPECT_TRUE(
         KeyspaceEventManager::Instance().HasSubscription(index_schema.get()));
-    auto mock_index = std::make_shared<MockIndex>(index_schema->GetMemoryPool());
+    auto mock_index =
+        std::make_shared<MockIndex>(index_schema->GetMemoryPool());
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("attribute_name", "vector", mock_index));
 
@@ -1645,13 +1647,14 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
                             std::make_unique<HashAttributeDataType>(), nullptr)
                             .value();
 
-    auto hnsw_index = indexes::VectorHNSW<float>::Create(
-        CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
-                                   m, ef_construction, ef_runtime),
-        "embedding",
-        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
-        index_schema->GetMemoryPool())
-        .value();
+    auto hnsw_index =
+        indexes::VectorHNSW<float>::Create(
+            CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
+                                       m, ef_construction, ef_runtime),
+            "embedding",
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+            index_schema->GetMemoryPool())
+            .value();
     VMSDK_EXPECT_OK(index_schema->AddIndex("embedding", "emb_id", hnsw_index));
 
     // Add 1000 vectors
@@ -1791,13 +1794,14 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
                             .value();
 
     // Add vector index
-    auto hnsw_index = indexes::VectorHNSW<float>::Create(
-        CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
-                                   m, ef_construction, ef_runtime),
-        "embedding",
-        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
-        index_schema->GetMemoryPool())
-        .value();
+    auto hnsw_index =
+        indexes::VectorHNSW<float>::Create(
+            CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
+                                       m, ef_construction, ef_runtime),
+            "embedding",
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+            index_schema->GetMemoryPool())
+            .value();
     VMSDK_EXPECT_OK(index_schema->AddIndex("embedding", "emb_id", hnsw_index));
 
     // Add numeric index
@@ -1983,31 +1987,36 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
                             .value();
 
     // Create 3 vector indexes (original + 2 additional)
-    auto hnsw_index1 = indexes::VectorHNSW<float>::Create(
-        CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
-                                   m, ef_construction, ef_runtime),
-        "embedding1",
-        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
-        index_schema->GetMemoryPool())
-        .value();
-    VMSDK_EXPECT_OK(index_schema->AddIndex("embedding1", "emb1_id", hnsw_index1));
+    auto hnsw_index1 =
+        indexes::VectorHNSW<float>::Create(
+            CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
+                                       m, ef_construction, ef_runtime),
+            "embedding1",
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+            index_schema->GetMemoryPool())
+            .value();
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex("embedding1", "emb1_id", hnsw_index1));
 
-    auto hnsw_index2 = indexes::VectorHNSW<float>::Create(
-        CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
-                                   m, ef_construction, ef_runtime),
-        "embedding2",
-        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
-        index_schema->GetMemoryPool())
-        .value();
-    VMSDK_EXPECT_OK(index_schema->AddIndex("embedding2", "emb2_id", hnsw_index2));
+    auto hnsw_index2 =
+        indexes::VectorHNSW<float>::Create(
+            CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
+                                       m, ef_construction, ef_runtime),
+            "embedding2",
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+            index_schema->GetMemoryPool())
+            .value();
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex("embedding2", "emb2_id", hnsw_index2));
 
-    auto flat_index = indexes::VectorFlat<float>::Create(
-        CreateFlatVectorIndexProto(dimensions, distance_metric, initial_cap, block_size),
-        "embedding3",
-        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
-        index_schema->GetMemoryPool())
-        .value();
-    VMSDK_EXPECT_OK(index_schema->AddIndex("embedding3", "emb3_id", flat_index));
+    auto flat_index =
+        indexes::VectorFlat<float>::Create(
+            CreateFlatVectorIndexProto(dimensions, distance_metric, initial_cap,
+                                       block_size),
+            "embedding3",
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+            index_schema->GetMemoryPool())
+            .value();
 
     // Add vectors to each index (100 vectors each, different ranges)
     auto vectors = DeterministicallyGenerateVectors(

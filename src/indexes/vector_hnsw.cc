@@ -38,10 +38,10 @@
 #include "src/valkey_search.h"
 #include "valkey_search_options.h"
 #include "vmsdk/src/log.h"
+#include "vmsdk/src/memory_tracker.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
-#include "vmsdk/src/memory_tracker.h"
 
 // Note that the ordering matters here - we want to minimize the memory
 // overrides to just the hnswlib code.
@@ -85,11 +85,11 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier,
     data_model::AttributeDataType attribute_data_type,
-    MemoryPool& memory_pool) {
+    MemoryPool &memory_pool) {
   try {
-    auto index = std::shared_ptr<VectorHNSW<T>>(
-        new VectorHNSW<T>(vector_index_proto.dimension_count(),
-                          attribute_identifier, attribute_data_type, memory_pool));
+    auto index = std::shared_ptr<VectorHNSW<T>>(new VectorHNSW<T>(
+        vector_index_proto.dimension_count(), attribute_identifier,
+        attribute_data_type, memory_pool));
     index->Init(vector_index_proto.dimension_count(),
                 vector_index_proto.distance_metric(), index->space_);
     const auto &hnsw_proto = vector_index_proto.hnsw_algorithm();
@@ -142,9 +142,8 @@ template <typename T>
 absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     const data_model::VectorIndex &vector_index_proto,
-    absl::string_view attribute_identifier,
-    SupplementalContentChunkIter &&iter,
-    MemoryPool& memory_pool) {
+    absl::string_view attribute_identifier, SupplementalContentChunkIter &&iter,
+    MemoryPool &memory_pool) {
   try {
     auto index = std::shared_ptr<VectorHNSW<T>>(new VectorHNSW<T>(
         vector_index_proto.dimension_count(), attribute_identifier,
@@ -179,7 +178,7 @@ template <typename T>
 VectorHNSW<T>::VectorHNSW(int dimensions,
                           absl::string_view attribute_identifier,
                           data_model::AttributeDataType attribute_data_type,
-                          MemoryPool& memory_pool)
+                          MemoryPool &memory_pool)
     : VectorBase(IndexerType::kHNSW, dimensions, attribute_data_type,
                  attribute_identifier, memory_pool) {}
 

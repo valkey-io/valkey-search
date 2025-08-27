@@ -53,10 +53,9 @@ NestedMemoryScope::~NestedMemoryScope() {
   target_pool_.Add(net_change);
 }
 
-DisableMemoryTracking::DisableMemoryTracking() 
-    : saved_delta_(vmsdk::GetMemoryDelta()) {
-}
+DisableMemoryTracking::DisableMemoryTracking()
+    : saved_delta_(vmsdk::GetMemoryDelta()) {}
 
 DisableMemoryTracking::~DisableMemoryTracking() {
-    vmsdk::SetMemoryDelta(saved_delta_);
+  vmsdk::SetMemoryDelta(saved_delta_);
 }

@@ -125,10 +125,10 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
     vector_index_proto.set_allocated_flat_algorithm(
         flat_algorithm_proto.release());
     auto index = indexes::VectorFlat<float>::Create(
-                    vector_index_proto, "attribute_identifier_1",
-                    data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
-                    index_schema->GetMemoryPool())
-                    .value();
+                     vector_index_proto, "attribute_identifier_1",
+                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+                     index_schema->GetMemoryPool())
+                     .value();
     VMSDK_EXPECT_OK(
         index_schema->AddIndex(test_case.attribute_alias, "id1", index));
   } else {

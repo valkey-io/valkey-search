@@ -48,13 +48,13 @@
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/memory_tracker.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
-#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search {
 
@@ -78,10 +78,12 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
   const auto &index = attribute.index();
   switch (index.index_type_case()) {
     case data_model::Index::IndexTypeCase::kTagIndex: {
-      return std::make_shared<indexes::Tag>(index.tag_index(), index_schema->GetMemoryPool());
+      return std::make_shared<indexes::Tag>(index.tag_index(),
+                                            index_schema->GetMemoryPool());
     }
     case data_model::Index::IndexTypeCase::kNumericIndex: {
-      return std::make_shared<indexes::Numeric>(index.numeric_index(), index_schema->GetMemoryPool());
+      return std::make_shared<indexes::Numeric>(index.numeric_index(),
+                                                index_schema->GetMemoryPool());
     }
     case data_model::Index::IndexTypeCase::kVectorIndex: {
       switch (index.vector_index().algorithm_case()) {
@@ -97,7 +99,7 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
                             std::move(*iter), index_schema->GetMemoryPool())
                       : indexes::VectorHNSW<float>::Create(
                             index.vector_index(), attribute.identifier(),
-                            index_schema->GetAttributeDataType().ToProto(), 
+                            index_schema->GetAttributeDataType().ToProto(),
                             index_schema->GetMemoryPool()));
               index_schema->SubscribeToVectorExternalizer(
                   attribute.identifier(), index.get());

@@ -25,8 +25,8 @@
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/memory_tracker.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
 namespace {
@@ -39,22 +39,21 @@ std::optional<double> ParseNumber(absl::string_view data) {
 }
 }  // namespace
 
-Numeric::Numeric(const data_model::NumericIndex& numeric_index_proto, MemoryPool& memory_pool)
+Numeric::Numeric(const data_model::NumericIndex& numeric_index_proto,
+                 MemoryPool& memory_pool)
     : IndexBase(IndexerType::kNumeric, memory_pool) {
   NestedMemoryScope scope{memory_pool};
 
   index_ = std::make_unique<BTreeNumericIndex>();
 }
 
-Numeric::~Numeric() {
-  NestedMemoryScope scope{memory_pool_};
-}
+Numeric::~Numeric() { NestedMemoryScope scope{memory_pool_}; }
 
 // NOTE: key should be stored interned string.
 absl::StatusOr<bool> Numeric::AddRecord(const InternedStringPtr& key,
                                         absl::string_view data) {
   NestedMemoryScope scope{memory_pool_};
-                                          
+
   auto value = ParseNumber(data);
   absl::MutexLock lock(&index_mutex_);
   if (!value.has_value()) {

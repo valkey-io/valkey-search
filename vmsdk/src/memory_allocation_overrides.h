@@ -116,7 +116,7 @@ namespace test_utils {
 // This allows tests to provide their own implementation of malloc_usable_size
 // for system allocations, enabling accurate memory tracking in tests.
 // The function pointer is thread-local, so it only affects the calling thread.
-// 
+//
 // @param fn Function pointer that takes a void* and returns the allocated size.
 //           Pass nullptr to clear the test function.
 void SetTestSystemMallocSizeFunction(size_t (*fn)(void*));

@@ -26,8 +26,8 @@
 #include "src/utils/string_interning.h"
 #include "third_party/hnswlib/hnswalg.h"
 #include "third_party/hnswlib/hnswlib.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/memory_tracker.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
 
@@ -38,8 +38,7 @@ class VectorHNSW : public VectorBase {
       const data_model::VectorIndex& vector_index_proto,
       absl::string_view attribute_identifier,
       data_model::AttributeDataType attribute_data_type,
-      MemoryPool& memory_pool)
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      MemoryPool& memory_pool) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> LoadFromRDB(
       ValkeyModuleCtx* ctx, const AttributeDataType* attribute_data_type,
       const data_model::VectorIndex& vector_index_proto,
@@ -107,7 +106,7 @@ class VectorHNSW : public VectorBase {
 
  private:
   VectorHNSW(int dimensions, absl::string_view attribute_identifier,
-             data_model::AttributeDataType attribute_data_type, 
+             data_model::AttributeDataType attribute_data_type,
              MemoryPool& memory_pool);
   std::unique_ptr<hnswlib::HierarchicalNSW<T>> algo_
       ABSL_GUARDED_BY(resize_mutex_);

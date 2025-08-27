@@ -38,8 +38,8 @@
 #include "third_party/hnswlib/hnswlib.h"
 #include "third_party/hnswlib/iostream.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/memory_tracker.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
 
@@ -151,8 +151,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,
              data_model::AttributeDataType attribute_data_type,
-             absl::string_view attribute_identifier,
-             MemoryPool& memory_pool)
+             absl::string_view attribute_identifier, MemoryPool& memory_pool)
       : IndexBase(indexer_type, memory_pool),
         dimensions_(dimensions),
         attribute_identifier_(attribute_identifier),

@@ -35,8 +35,8 @@
 #include "third_party/hnswlib/space_ip.h"
 #include "third_party/hnswlib/space_l2.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/memory_tracker.h"
+#include "vmsdk/src/type_conversions.h"
 
 namespace valkey_search::indexes {
 
@@ -66,17 +66,16 @@ class VectorIndexTest : public ValkeySearchTest {
   HashAttributeDataType hash_attribute_data_type_;
 };
 
-void TestInitializationHNSW(int dimensions,
-                            data_model::DistanceMetric distance_metric,
-                            const std::string& distance_metric_name,
-                            int initial_cap, int m, int ef_construction,
-                            size_t ef_runtime, MemoryPool& memory_pool) ABSL_NO_THREAD_SAFETY_ANALYSIS {
+void TestInitializationHNSW(
+    int dimensions, data_model::DistanceMetric distance_metric,
+    const std::string& distance_metric_name, int initial_cap, int m,
+    int ef_construction, size_t ef_runtime,
+    MemoryPool& memory_pool) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   auto index = VectorHNSW<float>::Create(
       CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap, m,
                                  ef_construction, ef_runtime),
       "attribute_identifier_1",
-      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
-      memory_pool);
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, memory_pool);
   auto* space = index.value()->GetSpace();
   EXPECT_EQ(distance_metric_name, typeid(*space).name());
   EXPECT_EQ(index.value()->GetDimensions(), dimensions);
@@ -103,8 +102,7 @@ TEST_F(VectorIndexTest, InitializationFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
         CreateFlatVectorIndexProto(kDimensions, distance_metric.first,
                                    kInitialCap, kBlockSize),
         "attribute_identifier_1",
-        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
-        memory_pool);
+        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, memory_pool);
     auto* space = index.value()->GetSpace();
     EXPECT_EQ(distance_metric.second, typeid(*space).name());
     EXPECT_EQ(index.value()->GetDimensions(), kDimensions);
@@ -239,8 +237,7 @@ TEST_P(NormalizeStringRecordTest, NormalizeStringRecord) {
       CreateHNSWVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
                                  kInitialCap, kM, kEFConstruction, kEFRuntime),
       "attribute_identifier_1",
-      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
-      memory_pool);
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, memory_pool);
   auto record = vmsdk::MakeUniqueValkeyString(params.record);
   auto norm_record = index.value()->NormalizeStringRecord(std::move(record));
   if (!params.success) {
@@ -299,7 +296,7 @@ TEST_F(VectorIndexTest, BasicHNSW) {
 TEST_F(VectorIndexTest, BasicFlat) {
   for (auto& distance_metric :
        {data_model::DISTANCE_METRIC_COSINE, data_model::DISTANCE_METRIC_L2}) {
-    MemoryPool memory_pool{};   
+    MemoryPool memory_pool{};
     auto index = VectorFlat<float>::Create(
         CreateFlatVectorIndexProto(kDimensions, distance_metric, kInitialCap,
                                    kBlockSize),
@@ -473,7 +470,8 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
     {
       auto loaded_index_hnsw = VectorHNSW<float>::LoadFromRDB(
           &fake_ctx_, &hash_attribute_data_type_, hnsw_proto,
-          "attribute_identifier_3", SupplementalContentChunkIter(&rdb), memory_pool);
+          "attribute_identifier_3", SupplementalContentChunkIter(&rdb),
+          memory_pool);
       VMSDK_EXPECT_OK(loaded_index_hnsw);
       VMSDK_EXPECT_OK(
           (*loaded_index_hnsw)
@@ -498,7 +496,8 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
     {
       auto loaded_index_hnsw = VectorHNSW<float>::LoadFromRDB(
           &fake_ctx_, &hash_attribute_data_type_, hnsw_proto,
-          "attribute_identifier_4", SupplementalContentChunkIter(&rdb), memory_pool);
+          "attribute_identifier_4", SupplementalContentChunkIter(&rdb),
+          memory_pool);
       VMSDK_EXPECT_OK(loaded_index_hnsw);
       VMSDK_EXPECT_OK(
           (*loaded_index_hnsw)
@@ -543,7 +542,8 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
     {
       auto index_pr = VectorFlat<float>::LoadFromRDB(
           &fake_ctx_, &hash_attribute_data_type_, flat_proto,
-          "attribute_identifier_2", SupplementalContentChunkIter(&rdb), memory_pool);
+          "attribute_identifier_2", SupplementalContentChunkIter(&rdb),
+          memory_pool);
       VMSDK_EXPECT_OK(index_pr);
       auto index = std::move(index_pr.value());
       VMSDK_EXPECT_OK(
@@ -567,7 +567,8 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
     {
       auto index_pr = VectorFlat<float>::LoadFromRDB(
           &fake_ctx_, &hash_attribute_data_type_, flat_proto,
-          "attribute_identifier_3", SupplementalContentChunkIter(&rdb), memory_pool);
+          "attribute_identifier_3", SupplementalContentChunkIter(&rdb),
+          memory_pool);
       VMSDK_EXPECT_OK(index_pr);
       auto index = std::move(index_pr.value());
       VMSDK_EXPECT_OK(

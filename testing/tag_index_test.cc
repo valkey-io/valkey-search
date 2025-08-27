@@ -16,8 +16,8 @@
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
 #include "testing/common.h"
-#include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/memory_tracker.h"
+#include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search::indexes {
 

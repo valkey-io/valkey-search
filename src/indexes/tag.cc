@@ -26,8 +26,8 @@
 #include "src/query/predicate.h"
 #include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/memory_tracker.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
 

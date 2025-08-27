@@ -420,10 +420,11 @@ TEST_F(MemoryAllocationTest, IsolatedMemoryScopeAllocationIsolation) {
 
   {
     IsolatedMemoryScope outer_scope{outer_pool};
-    
+
     EXPECT_CALL(*kMockValkeyModule, Alloc(112))
         .WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
-    EXPECT_CALL(*kMockValkeyModule, MallocUsableSize(reinterpret_cast<void*>(0x1000)))
+    EXPECT_CALL(*kMockValkeyModule,
+                MallocUsableSize(reinterpret_cast<void*>(0x1000)))
         .WillRepeatedly(testing::Return(128));
     outer_ptr = __wrap_malloc(100);
 
@@ -433,10 +434,11 @@ TEST_F(MemoryAllocationTest, IsolatedMemoryScopeAllocationIsolation) {
 
     {
       IsolatedMemoryScope inner_scope{inner_pool};
-      
+
       EXPECT_CALL(*kMockValkeyModule, Alloc(80))
           .WillOnce(testing::Return(reinterpret_cast<void*>(0x2000)));
-      EXPECT_CALL(*kMockValkeyModule, MallocUsableSize(reinterpret_cast<void*>(0x2000)))
+      EXPECT_CALL(*kMockValkeyModule,
+                  MallocUsableSize(reinterpret_cast<void*>(0x2000)))
           .WillRepeatedly(testing::Return(96));
       inner_ptr = __wrap_malloc(75);
 
@@ -475,10 +477,11 @@ TEST_F(MemoryAllocationTest, IsolatedMemoryScopeFreeIsolation) {
   // Allocate outer pool.
   {
     IsolatedMemoryScope scope{outer_pool};
-    
+
     EXPECT_CALL(*kMockValkeyModule, Alloc(112))
         .WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
-    EXPECT_CALL(*kMockValkeyModule, MallocUsableSize(reinterpret_cast<void*>(0x1000)))
+    EXPECT_CALL(*kMockValkeyModule,
+                MallocUsableSize(reinterpret_cast<void*>(0x1000)))
         .WillRepeatedly(testing::Return(128));
     outer_ptr = __wrap_malloc(100);
 
@@ -499,7 +502,8 @@ TEST_F(MemoryAllocationTest, IsolatedMemoryScopeFreeIsolation) {
 
     EXPECT_CALL(*kMockValkeyModule, Alloc(80))
         .WillOnce(testing::Return(reinterpret_cast<void*>(0x2000)));
-    EXPECT_CALL(*kMockValkeyModule, MallocUsableSize(reinterpret_cast<void*>(0x2000)))
+    EXPECT_CALL(*kMockValkeyModule,
+                MallocUsableSize(reinterpret_cast<void*>(0x2000)))
         .WillRepeatedly(testing::Return(96));
     inner_ptr = __wrap_malloc(75);
 
@@ -520,7 +524,8 @@ TEST_F(MemoryAllocationTest, IsolatedMemoryScopeFreeIsolation) {
     {
       IsolatedMemoryScope inner_scope{inner_pool};
 
-      EXPECT_CALL(*kMockValkeyModule, Free(reinterpret_cast<void*>(0x2000))).Times(1);
+      EXPECT_CALL(*kMockValkeyModule, Free(reinterpret_cast<void*>(0x2000)))
+          .Times(1);
       __wrap_free(inner_ptr);
 
       EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 128);
@@ -534,7 +539,8 @@ TEST_F(MemoryAllocationTest, IsolatedMemoryScopeFreeIsolation) {
     EXPECT_EQ(outer_pool.GetUsage(), 128);
     EXPECT_EQ(inner_pool.GetUsage(), 0);
 
-    EXPECT_CALL(*kMockValkeyModule, Free(reinterpret_cast<void*>(0x1000))).Times(1);
+    EXPECT_CALL(*kMockValkeyModule, Free(reinterpret_cast<void*>(0x1000)))
+        .Times(1);
     __wrap_free(outer_ptr);
 
     EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
@@ -566,7 +572,8 @@ TEST_F(MemoryAllocationTest, NestedMemoryScopeAllocation) {
 
     EXPECT_CALL(*kMockValkeyModule, Alloc(112))
         .WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
-    EXPECT_CALL(*kMockValkeyModule, MallocUsableSize(reinterpret_cast<void*>(0x1000)))
+    EXPECT_CALL(*kMockValkeyModule,
+                MallocUsableSize(reinterpret_cast<void*>(0x1000)))
         .WillRepeatedly(testing::Return(128));
     outer_ptr = __wrap_malloc(100);
 
@@ -579,7 +586,8 @@ TEST_F(MemoryAllocationTest, NestedMemoryScopeAllocation) {
 
       EXPECT_CALL(*kMockValkeyModule, Alloc(80))
           .WillOnce(testing::Return(reinterpret_cast<void*>(0x2000)));
-      EXPECT_CALL(*kMockValkeyModule, MallocUsableSize(reinterpret_cast<void*>(0x2000)))
+      EXPECT_CALL(*kMockValkeyModule,
+                  MallocUsableSize(reinterpret_cast<void*>(0x2000)))
           .WillRepeatedly(testing::Return(96));
       inner_ptr = __wrap_malloc(75);
 
@@ -619,7 +627,8 @@ TEST_F(MemoryAllocationTest, NestedMemoryScopeFree) {
 
     EXPECT_CALL(*kMockValkeyModule, Alloc(112))
         .WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
-    EXPECT_CALL(*kMockValkeyModule, MallocUsableSize(reinterpret_cast<void*>(0x1000)))
+    EXPECT_CALL(*kMockValkeyModule,
+                MallocUsableSize(reinterpret_cast<void*>(0x1000)))
         .WillRepeatedly(testing::Return(128));
     outer_ptr = __wrap_malloc(100);
   }
@@ -635,7 +644,8 @@ TEST_F(MemoryAllocationTest, NestedMemoryScopeFree) {
 
     EXPECT_CALL(*kMockValkeyModule, Alloc(80))
         .WillOnce(testing::Return(reinterpret_cast<void*>(0x2000)));
-    EXPECT_CALL(*kMockValkeyModule, MallocUsableSize(reinterpret_cast<void*>(0x2000)))
+    EXPECT_CALL(*kMockValkeyModule,
+                MallocUsableSize(reinterpret_cast<void*>(0x2000)))
         .WillRepeatedly(testing::Return(96));
     inner_ptr = __wrap_malloc(75);
   }
@@ -651,7 +661,8 @@ TEST_F(MemoryAllocationTest, NestedMemoryScopeFree) {
     {
       NestedMemoryScope inner_scope{inner_pool};
 
-      EXPECT_CALL(*kMockValkeyModule, Free(reinterpret_cast<void*>(0x2000))).Times(1);
+      EXPECT_CALL(*kMockValkeyModule, Free(reinterpret_cast<void*>(0x2000)))
+          .Times(1);
       __wrap_free(inner_ptr);
 
       EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 128);
@@ -665,7 +676,8 @@ TEST_F(MemoryAllocationTest, NestedMemoryScopeFree) {
     EXPECT_EQ(outer_pool.GetUsage(), 128);
     EXPECT_EQ(inner_pool.GetUsage(), 0);
 
-    EXPECT_CALL(*kMockValkeyModule, Free(reinterpret_cast<void*>(0x1000))).Times(1);
+    EXPECT_CALL(*kMockValkeyModule, Free(reinterpret_cast<void*>(0x1000)))
+        .Times(1);
     __wrap_free(outer_ptr);
 
     EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
@@ -696,7 +708,8 @@ TEST_F(MemoryAllocationTest, DisableMemoryTrackingAllocation) {
 
     EXPECT_CALL(*kMockValkeyModule, Alloc(112))
         .WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
-    EXPECT_CALL(*kMockValkeyModule, MallocUsableSize(reinterpret_cast<void*>(0x1000)))
+    EXPECT_CALL(*kMockValkeyModule,
+                MallocUsableSize(reinterpret_cast<void*>(0x1000)))
         .WillRepeatedly(testing::Return(128));
     first_ptr = __wrap_malloc(100);
 
@@ -708,7 +721,8 @@ TEST_F(MemoryAllocationTest, DisableMemoryTrackingAllocation) {
 
     EXPECT_CALL(*kMockValkeyModule, Alloc(80))
         .WillOnce(testing::Return(reinterpret_cast<void*>(0x2000)));
-    EXPECT_CALL(*kMockValkeyModule, MallocUsableSize(reinterpret_cast<void*>(0x2000)))
+    EXPECT_CALL(*kMockValkeyModule,
+                MallocUsableSize(reinterpret_cast<void*>(0x2000)))
         .WillRepeatedly(testing::Return(96));
     second_ptr = __wrap_malloc(75);
 
@@ -732,7 +746,7 @@ TEST_F(MemoryAllocationTest, DisableMemoryTrackingFree) {
 
   EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);
   EXPECT_EQ(vmsdk::GetMemoryDelta(), 0);
-  
+
   MemoryPool pool{0};
   void* ptr = nullptr;
 
@@ -742,7 +756,8 @@ TEST_F(MemoryAllocationTest, DisableMemoryTrackingFree) {
 
     EXPECT_CALL(*kMockValkeyModule, Alloc(112))
         .WillOnce(testing::Return(reinterpret_cast<void*>(0x1000)));
-    EXPECT_CALL(*kMockValkeyModule, MallocUsableSize(reinterpret_cast<void*>(0x1000)))
+    EXPECT_CALL(*kMockValkeyModule,
+                MallocUsableSize(reinterpret_cast<void*>(0x1000)))
         .WillRepeatedly(testing::Return(128));
     ptr = __wrap_malloc(100);
   }
@@ -756,7 +771,8 @@ TEST_F(MemoryAllocationTest, DisableMemoryTrackingFree) {
 
     DisableMemoryTracking disable_scope;
 
-    EXPECT_CALL(*kMockValkeyModule, Free(reinterpret_cast<void*>(0x1000))).Times(1);
+    EXPECT_CALL(*kMockValkeyModule, Free(reinterpret_cast<void*>(0x1000)))
+        .Times(1);
     __wrap_free(ptr);
 
     EXPECT_EQ(vmsdk::GetUsedMemoryCnt(), 0);

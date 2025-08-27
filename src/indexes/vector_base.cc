@@ -49,10 +49,10 @@
 #include "third_party/hnswlib/space_l2.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/memory_tracker.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
-#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search {
 constexpr float kDefaultMagnitude = -1.0f;

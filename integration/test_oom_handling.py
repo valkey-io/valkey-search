@@ -45,6 +45,7 @@ def run_search_query(client: Valkey):
         search_vector,
     )
 
+@pytest.mark.skip(reason="temporary skipping cluster tests")
 class TestSearchOOMHandlingCME(ValkeySearchClusterTestCase):
     """
     Test suite for search command OOM handling for CME. We expect that

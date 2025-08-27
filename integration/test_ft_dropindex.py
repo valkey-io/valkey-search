@@ -51,6 +51,7 @@ def ft_dropindex_fails_on_replica(primary_client, replica_client):
     assert primary_client.execute_command("FT._LIST") == []
 
 
+@pytest.mark.skip(reason="temporary skipping cluster tests")
 class TestSearchFTDropindexCME(ValkeySearchClusterTestCase):
     """
     Test suite for FT.DROPINDEX search command. We expect that

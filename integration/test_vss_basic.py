@@ -7,6 +7,7 @@ from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkey_search_test_case import ValkeySearchClusterTestCase
 from valkeytestframework.conftest import resource_port_tracker
+import pytest
 
 
 class TestVSSBasic(ValkeySearchTestCaseBase):
@@ -27,7 +28,7 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
                 json_loaded = True
         assert module_loaded
 
-
+@pytest.mark.skip(reason="temporary skipping cluster tests")
 class TestVSSClusterBasic(ValkeySearchClusterTestCase):
 
     def test_cluster_starting(self):

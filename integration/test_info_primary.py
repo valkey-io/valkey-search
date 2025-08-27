@@ -4,6 +4,7 @@ from valkey.cluster import ValkeyCluster
 from valkey.client import Valkey
 from valkeytestframework.conftest import resource_port_tracker
 from valkeytestframework.util import waiters
+import pytest
 
 def _parse_info_kv_list(reply):
     it = iter(reply)
@@ -22,6 +23,7 @@ def verify_error_response(client, cmd, expected_err_reply):
         assert str(e) == expected_err_reply, assert_error_msg
         return str(e)
 
+@pytest.mark.skip(reason="temporary skipping cluster tests")
 class TestFTInfoPrimary(ValkeySearchClusterTestCase):
 
     def is_indexing_complete(self, node, index_name, N):

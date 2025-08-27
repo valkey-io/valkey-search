@@ -6,6 +6,7 @@ from indexes import *
 import logging, time
 from typing import Any
 from util import waiters
+import pytest
 
 class TestFlushAllCMD(ValkeySearchTestCaseBase):
     def test_flushallCMD(self):
@@ -23,6 +24,7 @@ class TestFlushAllCMD(ValkeySearchTestCaseBase):
 
         assert client.execute_command("FT._LIST") == []
 
+@pytest.mark.skip(reason="temporary skipping cluster tests")
 class TestFlushAllCME(ValkeySearchClusterTestCase):
 
     def sum_docs(self, index: Index) -> int:

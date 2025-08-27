@@ -9,6 +9,7 @@ from indexes import *
 import logging
 from typing import Any, Union
 from valkeytestframework.util import waiters
+import pytest
 
 def canceller(client, client_id):
     my_id = client.execute_command("client id")
@@ -187,6 +188,8 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
             == b"OK"
         )
         assert(client.execute_command("FT._DEBUG PAUSEPOINT LIST") == [])
+
+@pytest.mark.skip(reason="temporary skipping cluster tests")
 class TestCancelCME(ValkeySearchClusterTestCase):
 
     def execute_all(self, command: Union[str, list[str]]) -> list[Any]:

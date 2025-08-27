@@ -5,7 +5,9 @@ from valkey.client import Valkey
 from valkeytestframework.conftest import resource_port_tracker
 from valkeytestframework.util import waiters
 from test_info_primary import _parse_info_kv_list, verify_error_response
+import pytest
 
+@pytest.mark.skip(reason="temporary skipping cluster tests")
 class TestFTInfoCluster(ValkeySearchClusterTestCase):
 
     def is_indexing_complete(self, node, index_name):

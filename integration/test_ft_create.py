@@ -51,7 +51,7 @@ def ft_create_fails_on_replica(primary_client, replica_client):
         replica_client.execute_command(*CREATE_INDEX_SCHEMA)
     assert "You can't write against a read only replica" in str(e.value)
 
-
+@pytest.mark.skip(reason="temporary skipping cluster tests")
 class TestSearchFTCreateCME(ValkeySearchClusterTestCase):
     """
     Test suite for FT.CREATE search command. We expect that

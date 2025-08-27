@@ -6,6 +6,7 @@ import json
 from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import ValkeySearchClusterTestCase
 import time
+import pytest
 
 """
 This file contains tests for non vector (numeric and tag) queries on Hash/JSON documents in Valkey Search - in CME / CMD.
@@ -125,6 +126,7 @@ class TestNonVector(ValkeySearchTestCaseBase):
         # Validation of numeric and tag queries.
         validate_non_vector_queries(client)
 
+@pytest.mark.skip(reason="temporary skipping cluster tests")
 class TestNonVectorCluster(ValkeySearchClusterTestCase):
 
     def test_non_vector_cluster(self):

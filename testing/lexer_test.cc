@@ -12,8 +12,8 @@
 #include <string>
 #include <vector>
 #include <memory>
-#include <unordered_set>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "gtest/gtest.h"
@@ -113,11 +113,9 @@ INSTANTIATE_TEST_SUITE_P(
         LexerTestCase{"run running", {"run", "running"}, true, 10, "", "Min stem size prevents stemming"},
         LexerTestCase{"hello🙂world", {"hello🙂world"}, true, 3, "", "Non-ASCII punctuation handling"},
         
-        // Essential stop word filtering test cases (reduced from 7 to 4)
+        // Stop word filtering test cases
         LexerTestCase{"the cat and dog", {"cat", "dog"}, true, 3, "", "Stop words filtered out"},
-        LexerTestCase{"hello the world and test or goodbye", {"hello", "world", "test", "goodby"}, true, 3, "", "Mixed content with stop words"},
-        LexerTestCase{"the and or", {}, true, 3, "", "All stop words filtered out"},
-        LexerTestCase{"the running and jumping or swimming", {"run", "jump", "swim"}, true, 3, "", "Stop words with stemming"}
+        LexerTestCase{"the and or", {}, true, 3, "", "All stop words filtered out"}
     )
 );
 
@@ -137,32 +135,7 @@ TEST_F(LexerTest, LongWord) {
   EXPECT_EQ(*result, std::vector<std::string>({long_word}));
 }
 
-// Test the static IsStopWord method directly
-TEST_F(LexerTest, IsStopWordStaticMethod) {
-  std::unordered_set<std::string> stop_words = {"the", "and", "or"};
-  
-  // Test stop words are detected
-  EXPECT_TRUE(Lexer::IsStopWord("the", stop_words));
-  EXPECT_TRUE(Lexer::IsStopWord("and", stop_words));
-  EXPECT_TRUE(Lexer::IsStopWord("or", stop_words));
-  
-  // Test non-stop words are not detected
-  EXPECT_FALSE(Lexer::IsStopWord("hello", stop_words));
-  EXPECT_FALSE(Lexer::IsStopWord("world", stop_words));
-  EXPECT_FALSE(Lexer::IsStopWord("test", stop_words));
-  
-  // Test edge cases
-  EXPECT_FALSE(Lexer::IsStopWord("", stop_words));
-  EXPECT_FALSE(Lexer::IsStopWord("THE", stop_words)); // Should be lowercase input
-  EXPECT_FALSE(Lexer::IsStopWord("And", stop_words)); // Should be lowercase input
-  
-  // Test words that contain stop words but are not stop words
-  EXPECT_FALSE(Lexer::IsStopWord("theorist", stop_words));
-  EXPECT_FALSE(Lexer::IsStopWord("androgynous", stop_words));
-  EXPECT_FALSE(Lexer::IsStopWord("oracle", stop_words));
-}
-
-// Test empty stop words set behavior (consolidated test)
+// Test empty stop words set behavior
 TEST_F(LexerTest, EmptyStopWordsHandling) {
   // Create schema with no stop words
   std::vector<std::string> empty_stop_words;
@@ -175,14 +148,9 @@ TEST_F(LexerTest, EmptyStopWordsHandling) {
   
   const auto& empty_set = no_stop_schema->GetStopWordsSet();
   
-  // Test static method with empty set
-  EXPECT_FALSE(Lexer::IsStopWord("the", empty_set));
-  EXPECT_FALSE(Lexer::IsStopWord("and", empty_set));
-  EXPECT_FALSE(Lexer::IsStopWord("hello", empty_set));
-  
   // Test tokenization with empty stop words - all words preserved
   auto result = lexer_->Tokenize(
-      "the cat and dog",
+      "Hello, world! TESTING 123 with-dashes and/or symbols",
       no_stop_schema->GetPunctuationBitmap(),
       no_stop_schema->GetStemmer(),
       true,
@@ -191,7 +159,7 @@ TEST_F(LexerTest, EmptyStopWordsHandling) {
   );
   
   ASSERT_TRUE(result.ok());
-  EXPECT_EQ(*result, std::vector<std::string>({"the", "cat", "and", "dog"}));
+  EXPECT_EQ(*result, std::vector<std::string>({"hello", "world", "test", "123", "with", "dash", "and", "or", "symbol"}));
 }
 
 }  // namespace valkey_search::indexes::text

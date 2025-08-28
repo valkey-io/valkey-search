@@ -26,9 +26,9 @@ Tokenization Pipeline:
 
 #include <bitset>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 
@@ -43,7 +43,7 @@ struct Lexer {
       sb_stemmer* stemmer,
       bool stemming_enabled,
       uint32_t min_stem_size,
-      const std::unordered_set<std::string>& stop_words_set
+      const absl::flat_hash_set<std::string>& stop_words_set
   ) const;
 
   // Punctuation checking API
@@ -53,8 +53,8 @@ struct Lexer {
 
   // Stop word checking API (expects lowercase input)
   static bool IsStopWord(const std::string& lowercase_word, 
-                         const std::unordered_set<std::string>& stop_words_set) {
-    return stop_words_set.find(lowercase_word) != stop_words_set.end();
+                         const absl::flat_hash_set<std::string>& stop_words_set) {
+    return stop_words_set.contains(lowercase_word);
   }
 
  private:

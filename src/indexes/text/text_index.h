@@ -12,9 +12,9 @@
 #include <memory>
 #include <optional>
 #include <cctype>
-#include <unordered_set>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "src/indexes/text/radix_tree.h"
 #include "src/indexes/text/posting.h"
 #include "src/index_schema.pb.h"
@@ -90,7 +90,7 @@ struct TextIndexSchema {
   PunctuationBitmap punct_bitmap_;
 
   // Stop words set for filtering during tokenization
-  std::unordered_set<std::string> stop_words_set_;
+  absl::flat_hash_set<std::string> stop_words_set_;
 
   // Language needed for stemmer creation
   data_model::Language language_ = data_model::LANGUAGE_UNSPECIFIED;
@@ -124,7 +124,7 @@ struct TextIndexSchema {
     }
   }
 
-  const std::unordered_set<std::string>& GetStopWordsSet() const {
+  const absl::flat_hash_set<std::string>& GetStopWordsSet() const {
     return stop_words_set_;
   }
 

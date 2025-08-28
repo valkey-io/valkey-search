@@ -73,9 +73,15 @@ expected_desc2_hash_value = {
     b'category': b"electronics"
 }
 
-# Constants for default ingestion pipeline test
+# Index and document setup
 ingestion_pipeline_index = "FT.CREATE idx ON HASH SCHEMA content TEXT"
 ingestion_pipeline_doc = ["HSET", "doc:1", "content", "The quick-running searches are finding effective results! But slow searches aren't working..."]
+
+# Common expected results
+ingestion_match_expected = 1
+ingestion_nomatch_expected = 0
+ingestion_expected_key = b'doc:1'
+ingestion_expected_fields = [b'content', b"The quick-running searches are finding effective results! But slow searches aren't working..."]
 
 # Query arrays for ingestion pipeline test
 ingestion_punctuation_queries = [
@@ -113,11 +119,16 @@ ingestion_nomatch_queries = [
 punctuation_test_index = "FT.CREATE idx ON HASH PUNCTUATION . SCHEMA content TEXT"
 punctuation_test_doc = ["HSET", "doc:1", "content", "hello.world"]
 punctuation_test_query = ["FT.SEARCH", "idx", '@content:"world"']
+punctuation_expected_fields = [b'content', b"hello.world"]
 
 # Constants for multi-field test
 multi_field_index = "FT.CREATE idx ON HASH SCHEMA title TEXT content TEXT NOSTEM"
 multi_field_doc = ["HSET", "doc:1", "title", "running fast", "content", "running quickly"]
 multi_field_query = ["FT.SEARCH", "idx", '@content:"running"']
+multi_field_expected_value = {
+    b'title': b'running fast',
+    b'content': b'running quickly'
+}
 
 # Constants for stopwords test
 stopwords_test_index = "FT.CREATE idx ON HASH STOPWORDS 2 the and SCHEMA content TEXT"
@@ -127,6 +138,7 @@ stopwords_test_queries_filtered = [
     ["FT.SEARCH", "idx", '@content:"and"']
 ]
 stopwords_test_query_indexed = ["FT.SEARCH", "idx", '@content:"cat"']
+stopwords_expected_fields = [b'content', b"the cat and dog"]
 
 # Constants for nostem test
 nostem_test_index = "FT.CREATE idx ON HASH NOSTEM SCHEMA content TEXT"
@@ -135,10 +147,7 @@ nostem_test_queries = [
     ["FT.SEARCH", "idx", '@content:"running"'],
     ["FT.SEARCH", "idx", '@content:"quickly"']
 ]
-
-# Expected results
-ingestion_match_expected = 1
-ingestion_nomatch_expected = 0
+nostem_expected_fields = [b'content', b"running quickly"]
 
 class TestFullText(ValkeySearchTestCaseBase):
 
@@ -278,23 +287,34 @@ class TestFullText(ValkeySearchTestCaseBase):
         
         # Punctuation tokenization (using prefix to handle stemming)
         for query in ingestion_punctuation_queries:
-            assert client.execute_command(*query)[0] == ingestion_match_expected
+            result = client.execute_command(*query)
+            assert result[0] == ingestion_match_expected
+            assert result[1] == ingestion_expected_key
+            assert result[2] == ingestion_expected_fields
         
         # Stop word filtering
         for query in ingestion_stopword_queries:
-            assert client.execute_command(*query)[0] == ingestion_nomatch_expected
+            result = client.execute_command(*query)
+            assert result[0] == ingestion_nomatch_expected
         
         # Case insensitivity (using prefix to handle stemming)
         for query in ingestion_case_queries:
-            assert client.execute_command(*query)[0] == ingestion_match_expected
+            result = client.execute_command(*query)
+            assert result[0] == ingestion_match_expected
+            assert result[1] == ingestion_expected_key
+            assert result[2] == ingestion_expected_fields
         
         # Wildcard matching (prefix only, no suffix tree by default)
         for query in ingestion_wildcard_queries:
-            assert client.execute_command(*query)[0] == ingestion_match_expected
+            result = client.execute_command(*query)
+            assert result[0] == ingestion_match_expected
+            assert result[1] == ingestion_expected_key
+            assert result[2] == ingestion_expected_fields
         
         # Non-existent terms
         for query in ingestion_nomatch_queries:
-            assert client.execute_command(*query)[0] == ingestion_nomatch_expected
+            result = client.execute_command(*query)
+            assert result[0] == ingestion_nomatch_expected
 
     def test_punctuation(self):
         """
@@ -305,6 +325,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         client.execute_command(*punctuation_test_doc)
         result = client.execute_command(*punctuation_test_query)
         assert result[0] == ingestion_match_expected  # Dot separator worked
+        assert result[1] == ingestion_expected_key
+        assert result[2] == punctuation_expected_fields
 
     def test_multi_text_field(self):
         """
@@ -315,6 +337,10 @@ class TestFullText(ValkeySearchTestCaseBase):
         client.execute_command(*multi_field_doc)
         result = client.execute_command(*multi_field_query)
         assert result[0] == ingestion_match_expected  # Document found in content field
+        assert result[1] == ingestion_expected_key
+
+        actual_fields = dict(zip(result[2][::2], result[2][1::2]))
+        assert actual_fields == multi_field_expected_value
 
     def test_stopwords(self):
         """
@@ -332,6 +358,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         # Regular words should be findable
         result = client.execute_command(*stopwords_test_query_indexed)
         assert result[0] == ingestion_match_expected  # Regular word indexed
+        assert result[1] == ingestion_expected_key
+        assert result[2] == stopwords_expected_fields
 
     def test_nostem(self):
         """
@@ -345,3 +373,5 @@ class TestFullText(ValkeySearchTestCaseBase):
         for query in nostem_test_queries:
             result = client.execute_command(*query)
             assert result[0] == ingestion_match_expected  # Exact form found
+            assert result[1] == ingestion_expected_key
+            assert result[2] == nostem_expected_fields

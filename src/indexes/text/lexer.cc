@@ -20,7 +20,7 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
     sb_stemmer* stemmer,
     bool stemming_enabled,
     uint32_t min_stem_size,
-    const std::unordered_set<std::string>& stop_words_set) const {
+    const absl::flat_hash_set<std::string>& stop_words_set) const {
 
   if (!IsValidUtf8(text)) {
     return absl::InvalidArgumentError("Invalid UTF-8");

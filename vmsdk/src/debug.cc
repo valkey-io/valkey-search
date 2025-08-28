@@ -119,7 +119,7 @@ void PausePointList(ValkeyModuleCtx* ctx) {
       ValkeyModule_ReplyWithSimpleString(ctx, "Location");
       ValkeyModule_ReplyWithSimpleString(ctx, ToString(w.location_).data());
       ValkeyModule_ReplyWithSimpleString(ctx, "Threadid");
-      ValkeyModule_ReplyWithLongLong(ctx, w.threadid_);
+      ValkeyModule_ReplyWithLongLong(ctx, (long long)(uintptr_t)w.threadid_);
       ValkeyModule_ReplyWithSimpleString(ctx, "WaitSeconds");
       ValkeyModule_ReplyWithDouble(
           ctx, absl::ToDoubleSeconds(absl::Now() - w.start_time_));

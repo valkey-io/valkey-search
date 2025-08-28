@@ -27,8 +27,7 @@ bool NegatePredicate::Evaluate(Evaluator& evaluator) const {
 
 TermPredicate::TermPredicate(const indexes::Text* index,
                              absl::string_view identifier,
-                             absl::string_view alias,
-                             std::string term)
+                             absl::string_view alias, std::string term)
     : TextPredicate(),
       index_(index),
       identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
@@ -36,18 +35,18 @@ TermPredicate::TermPredicate(const indexes::Text* index,
       term_(term) {}
 
 bool TermPredicate::Evaluate(Evaluator& evaluator) const {
-    // call dynamic dispatch on the evaluator
-    return evaluator.EvaluateText(*this);
+  // call dynamic dispatch on the evaluator
+  return evaluator.EvaluateText(*this);
 }
 
 bool TermPredicate::Evaluate(const std::string_view& text) const {
-    if (text.empty()) return false;
-    return text == term_;  // exact match
+  if (text.empty()) return false;
+  return text == term_;  // exact match
 }
 
-PrefixPredicate::PrefixPredicate(
-    const indexes::Text* index, absl::string_view identifier,
-    absl::string_view alias, std::string term)
+PrefixPredicate::PrefixPredicate(const indexes::Text* index,
+                                 absl::string_view identifier,
+                                 absl::string_view alias, std::string term)
     : TextPredicate(),
       index_(index),
       identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
@@ -63,9 +62,9 @@ bool PrefixPredicate::Evaluate(const std::string_view& text) const {
   return absl::StartsWith(text, term_);
 }
 
-SuffixPredicate::SuffixPredicate(
-    const indexes::Text* index, absl::string_view identifier,
-    absl::string_view alias, std::string term)
+SuffixPredicate::SuffixPredicate(const indexes::Text* index,
+                                 absl::string_view identifier,
+                                 absl::string_view alias, std::string term)
     : TextPredicate(),
       index_(index),
       identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
@@ -81,9 +80,9 @@ bool SuffixPredicate::Evaluate(const std::string_view& text) const {
   return absl::EndsWith(text, term_);
 }
 
-InfixPredicate::InfixPredicate(
-    const indexes::Text* index, absl::string_view identifier,
-    absl::string_view alias, std::string term)
+InfixPredicate::InfixPredicate(const indexes::Text* index,
+                               absl::string_view identifier,
+                               absl::string_view alias, std::string term)
     : TextPredicate(),
       index_(index),
       identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
@@ -119,7 +118,8 @@ bool FuzzyPredicate::Evaluate(const std::string_view& text) const {
 
   // Implement fuzzy matching logic here
   // For simplicity, we can use a placeholder implementation
-  // In a real implementation, you would use a library or algorithm for fuzzy matching
+  // In a real implementation, you would use a library or algorithm for fuzzy
+  // matching
   return absl::StrContains(text, term_);  // Placeholder for actual fuzzy logic
 }
 

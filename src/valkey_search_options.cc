@@ -90,7 +90,7 @@ static auto reader_threads_count =
             })
         .Build();
 
-/// Register the "--reader-threads" flag. Controls the writer thread pool
+/// Register the "--writer-threads" flag. Controls the writer thread pool
 constexpr absl::string_view kWriterThreadsConfig{"writer-threads"};
 static auto writer_threads_count =
     config::NumberBuilder(kWriterThreadsConfig,  // name
@@ -104,13 +104,25 @@ static auto writer_threads_count =
             })
         .Build();
 
+/// Register the "--max-worker-suspension-secs" flag.
+/// Controls the resumption of the worker thread pool:
+///   - If max-worker-suspension-secs > 0, resume the workers either when the
+///     fork is died or after max-worker-suspension-secs seconds passed.
+///   - If max-worker-suspension-secs <= 0, resume the workers when the fork
+///     is born.
+constexpr absl::string_view kMaxWorkerSuspensionSecs{
+    "max-worker-suspension-secs"};
+static auto max_worker_suspension_secs =
+    config::Number(kMaxWorkerSuspensionSecs,  // name
+                   60,                        // default value
+                   0,                         // min value
+                   3600);                     // max value
+
 /// Should this instance use coordinator?
 constexpr absl::string_view kUseCoordinator{"use-coordinator"};
-static auto use_coordinator =
-    config::BooleanBuilder(kUseCoordinator, false)
-        .WithFlags(VALKEYMODULE_CONFIG_IMMUTABLE)  // can only be set during
-                                                   // start-up
-        .Build();
+static auto use_coordinator = config::BooleanBuilder(kUseCoordinator, false)
+                                  .Hidden()  // can only be set during start-up
+                                  .Build();
 
 // Register an enumerator for the log level
 static const std::vector<std::string_view> kLogLevelNames = {
@@ -171,6 +183,10 @@ vmsdk::config::Number& GetReaderThreadCount() {
 
 vmsdk::config::Number& GetWriterThreadCount() {
   return dynamic_cast<vmsdk::config::Number&>(*writer_threads_count);
+}
+
+vmsdk::config::Number& GetMaxWorkerSuspensionSecs() {
+  return max_worker_suspension_secs;
 }
 
 const vmsdk::config::Boolean& GetUseCoordinator() {

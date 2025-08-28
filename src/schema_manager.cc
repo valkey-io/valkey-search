@@ -34,8 +34,8 @@
 #include "src/index_schema.pb.h"
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
-#include "src/vector_externalizer.h"
 #include "src/valkey_search.h"
+#include "src/vector_externalizer.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -196,7 +196,8 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
 
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,
-      IndexSchema::Create(ctx, index_schema_proto, mutations_thread_pool_, false, false));
+      IndexSchema::Create(ctx, index_schema_proto, mutations_thread_pool_,
+                          false, false));
 
   db_to_index_schemas_[db_num][name] = std::move(index_schema);
 
@@ -669,7 +670,8 @@ void SchemaManager::OnServerCronCallback(ValkeyModuleCtx *ctx,
                                          [[maybe_unused]] ValkeyModuleEvent eid,
                                          [[maybe_unused]] uint64_t subevent,
                                          [[maybe_unused]] void *data) {
-  SchemaManager::Instance().PerformBackfill(ctx, options::GetBackfillBatchSize().GetValue());
+  SchemaManager::Instance().PerformBackfill(
+      ctx, options::GetBackfillBatchSize().GetValue());
 }
 
 static vmsdk::info_field::Integer number_of_indexes(
@@ -706,10 +708,11 @@ static vmsdk::info_field::Integer active_indexes_indexing(
 static vmsdk::info_field::Integer total_active_write_threads(
     "index_stats", "total_active_write_threads",
     vmsdk::info_field::IntegerBuilder().App().Computed([] {
-      auto& valkey_search = valkey_search::ValkeySearch::Instance();
+      auto &valkey_search = valkey_search::ValkeySearch::Instance();
       auto writer_thread_pool = valkey_search.GetWriterThreadPool();
       if (writer_thread_pool) {
-        return writer_thread_pool->IsSuspended() ? 0 : writer_thread_pool->Size();
+        return writer_thread_pool->IsSuspended() ? 0
+                                                 : writer_thread_pool->Size();
       }
       return (unsigned long)0;
     }));

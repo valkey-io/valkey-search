@@ -23,8 +23,8 @@
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
 #include "gtest/gtest_prod.h"
-#include "vmsdk/src/thread_safe_vector.h"
 #include "vmsdk/src/thread_monitoring.h"
+#include "vmsdk/src/thread_safe_vector.h"
 
 namespace vmsdk {
 // Note google3/thread can't be used as it's not open source

@@ -5,6 +5,7 @@ GREEN='\e[32;1m'
 RED='\e[31;1m'
 BLUE='\e[34;1m'
 YELLOW='\e[33;1m'
+UNAME_S=$(uname -s)
 
 function LOG_INFO() {
   printf "${GREEN}$1${RESET}\n"
@@ -28,11 +29,19 @@ function print_environment_var() {
   printf "${BLUE}${varname}${RESET} => ${GREEN}${value}${RESET}\n"
 }
 
-if [[ "$(uname -s)" == "Darwin" ]]; then
+if [[ "${UNAME_S}" == "Darwin" ]]; then
   export MODULE_EXT="dylib"
 else
   export MODULE_EXT="so"
 fi
+
+function num_proc() {
+  if [[ "${UNAME_S}" == "Darwin" ]]; then
+    echo $(sysctl -n hw.ncpu)
+  else
+    echo $(nproc)
+  fi
+}
 
 function findup() {
   # Check if a filename was provided
@@ -184,7 +193,7 @@ function setup_valkey_server() {
   LOG_INFO "Working directory: ${VALKEY_SERVER_BUILD_DIR}"
   LOG_INFO "Building valkey-server: cmake -DCMAKE_BUILD_TYPE=Release .. ${VALKEY_CMAKE_EXTRA_ARGS}"
   cmake -DCMAKE_BUILD_TYPE=Release .. ${VALKEY_CMAKE_EXTRA_ARGS}
-  make -j$(nproc)
+  make -j$(num_proc)
   popd >/dev/null
   export VALKEY_SERVER_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-server
   export VALKEY_CLI_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-cli

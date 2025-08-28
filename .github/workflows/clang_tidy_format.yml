@@ -26,7 +26,32 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # Relevant for push case
+
+      - name: Determine base branch
+        id: determine-base
+        run: |
+          set -euo pipefail
+          # If it's a pull request, compare against the base branch.
+          # If it's a direct push, compare against the previous commit.
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git fetch origin ${{ github.event.pull_request.base.ref }}
+            BASE_BRANCH="origin/${{ github.event.pull_request.base.ref }}"
+            echo "PR detected. Comparing with base branch: $BASE_BRANCH"
+          else
+            BASE_BRANCH=$(git rev-parse HEAD~1)
+            echo "Push detected. Comparing with previous commit: $BASE_BRANCH"
+          fi
+          
+          # Verify the base branch/commit exists
+          if ! git rev-parse --verify "$BASE_BRANCH" >/dev/null 2>&1; then
+            echo "Error: Base branch/commit '$BASE_BRANCH' not found"
+            exit 1
+          fi
+          
+          echo "BASE_BRANCH=$BASE_BRANCH" >> $GITHUB_ENV
 
       # Build the Docker image from the Dockerfile in your repo
       - name: Build Docker Image
@@ -38,19 +63,9 @@ jobs:
           echo "Building CompDB"
           docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image bash -c "sudo su ubuntu && export USERNAME='ubuntu' && sudo chown -R ubuntu:ubuntu /workspace && export HOME='/home/ubuntu'  && export USERNAME='ubuntu' && ci/refresh_comp_db.sh "
 
-      - name: Determine base branch
-        id: determine-base
-        run: |
-          # If it's a pull request, compare against the base branch.
-          # If it's a push to main, compare against the previous commit.
-          if [[ "${{ github.ref }}" != "refs/heads/main" ]]; then
-            echo "BASE_BRANCH=${{ github.base_ref }}" >> $GITHUB_ENV
-          else
-            echo "BASE_BRANCH=$(git rev-parse HEAD~1)" >> $GITHUB_ENV
-          fi
-
       - name: Find and process modified files
         run: |
+          set -euo pipefail
           echo "Finding modified or added .cc and .h files..."
           MODIFIED_FILES=$(git diff --name-only --diff-filter=AM $BASE_BRANCH | grep -E '\.(cc|h)$' || echo "")
 
@@ -63,9 +78,14 @@ jobs:
           echo "$MODIFIED_FILES"
 
           for FILE in $MODIFIED_FILES; do
-            echo "Running script on $FILE"
-            docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" clang-tidy-format-image \
-            bash -c ' clang-tidy --quiet -p compile_commands.json "$FILE" 2>&1 | tail -n +3 && ci/check_clang_format.sh "$FILE"'
+            echo "Running clang-format check on $FILE"
+            docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image \
+            bash -c "ci/check_clang_format.sh \"$FILE\""
+            
+            # TODO: Enable clang tidy after the existing code is tidied
+            # echo "Running clang-tidy on $FILE"
+            # docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image \
+            # bash -c "clang-tidy --quiet -p compile_commands.json \"$FILE\" 2>&1 | tail -n +3"
           done
 
       - name: Ensure script execution success

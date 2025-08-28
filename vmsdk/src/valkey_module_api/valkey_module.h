@@ -307,8 +307,8 @@ typedef uint64_t ValkeyModuleTimerID;
  */
 #define VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS (1 << 0)
 
-/* When set, Valkey will not call ValkeyModule_SignalModifiedKey(), implicitly in
- * ValkeyModule_CloseKey, and the module needs to do that when manually when
+/* When set, Valkey will not call ValkeyModule_SignalModifiedKey(), implicitly
+ * in ValkeyModule_CloseKey, and the module needs to do that when manually when
  * keys are modified from the user's perspective, to invalidate WATCH. */
 #define VALKEYMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED (1 << 1)
 
@@ -625,7 +625,8 @@ static const ValkeyModuleEvent
 #define VALKEYMODULE_SUBEVENT_LOADING_PROGRESS_AOF 1
 #define _VALKEYMODULE_SUBEVENT_LOADING_PROGRESS_NEXT 2
 
-/* Replication Backup events are deprecated since Valkey 7.0 and are never fired.
+/* Replication Backup events are deprecated since Valkey 7.0 and are never
+ * fired.
  */
 #define VALKEYMODULE_SUBEVENT_REPL_BACKUP_CREATE 0
 #define VALKEYMODULE_SUBEVENT_REPL_BACKUP_RESTORE 1
@@ -688,7 +689,8 @@ typedef struct ValkeyModuleClientInfo {
 
 #define ValkeyModuleClientInfo ValkeyModuleClientInfoV1
 
-#define VALKEYMODULE_CLIENTINFO_INITIALIZER_V1 {.version = 1}
+#define VALKEYMODULE_CLIENTINFO_INITIALIZER_V1 \
+  { .version = 1 }
 
 #define VALKEYMODULE_REPLICATIONINFO_VERSION 1
 typedef struct ValkeyModuleReplicationInfo {
@@ -784,7 +786,8 @@ typedef struct ValkeyModuleClusterInfo {
 
 #define ValkeyModuleClusterInfo ValkeyModuleClusterInfoV1
 
-#define VALKEYMODULE_CLUSTERINFO_INITIALIZER_V1 {.version = 1}
+#define VALKEYMODULE_CLUSTERINFO_INITIALIZER_V1 \
+  { .version = 1 }
 
 /* If PSC connection cannot be extracted from a client,
  * Consider it to be 0. */

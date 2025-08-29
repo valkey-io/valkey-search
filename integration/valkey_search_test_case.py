@@ -108,6 +108,18 @@ class ReplicationGroup:
             if record["connected"] == False:
                 return False
         return True
+    
+    def _replication_lag(self, index) -> int:
+        primary_offset = self.primary.client.info("REPLICATION")['master_repl_offset']
+        replica_offset = self.replicas[index].client.info("REPLICATION")['slave_repl_offset']
+        assert primary_offset >= replica_offset
+        return primary_offset - replica_offset
+    
+    def replication_lag(self) -> int:
+        '''
+        The maximum replication lag
+        '''
+        return max([self._replication_lag(r) for r in range(len(self.replicas))])
 
     def get_replica_connection(self, index) -> Valkey:
         return self.replicas[index].client
@@ -192,7 +204,15 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         master_link_status = info.get("master_link_status", "")
         assert role == "slave" and master_link_status == "up"
 
+    def get_nodes(self) -> List[Node]:
+        return self.nodes
 
+    def get_primaries(self) -> List[Node]:
+        return self.primaries
+    
+    def get_replicas(self) -> List[Node]:
+        return self.replicas
+    
 class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
 
     @pytest.fixture(autouse=True)
@@ -216,6 +236,8 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
         self.client = self.rg.primary.client
 
         self.nodes: List[Node] = [self.rg.primary]
+        self.primaries: List[Node] = [self.rg.primary]
+        self.replicas: List[Node] = self.rg.replicas
         self.nodes += self.rg.replicas
 
         yield
@@ -392,9 +414,13 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
             self.replication_groups.append(rg)
 
         self.nodes: List[Node] = list()
+        self.primaries: List[Node] = list()
+        self.replicas: List[Node] = list()
         for rg in self.replication_groups:
             self.nodes.append(rg.primary)
+            self.primaries.append(rg.primary)
             self.nodes += rg.replicas
+            self.replicas += rg.replicas
 
         # Split the slots
         ranges = self._split_range_pairs(0, 16384, self.CLUSTER_SIZE)
@@ -461,6 +487,12 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
 
     def get_replication_group(self, index) -> ReplicationGroup:
         return self.replication_groups[index]
+    
+    def get_replication_groups(self) -> List[ReplicationGroup]:
+        return self.replication_groups
+    
+    def replication_lag(self) -> int:
+        return max([rg.replication_lag() for rg in self.replication_groups])
 
     def new_cluster_client(self) -> ValkeyCluster:
         """Return a cluster client"""

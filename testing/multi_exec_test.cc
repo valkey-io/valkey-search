@@ -43,7 +43,7 @@ class MultiExecTest : public ValkeySearchTest {
     index_schema = CreateVectorHNSWSchema(index_schema_name_str, &fake_ctx_,
                                           mutations_thread_pool)
                        .value();
-    mock_index = std::make_shared<MockIndex>();
+    mock_index = std::make_shared<MockIndex>(index_schema->GetMemoryPool());
     const char *identifier = "test_identifier";
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("attribute_name", identifier, mock_index));

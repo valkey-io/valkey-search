@@ -167,11 +167,12 @@ function setup_valkey_server() {
 
   # Clone and build it
   VALKEY_VERSION="8.1.1"
+  VALKEY_SERVER_BRANCH="${VALKEY_SERVER_BRANCH:-${VALKEY_VERSION}}"
   export VALKEY_SERVER_HOME_DIR=$(get_third_party_build_dir)/valkey-server
   export VALKEY_SERVER_BUILD_DIR=${VALKEY_SERVER_HOME_DIR}/.build-release
   if [ ! -d ${VALKEY_SERVER_HOME_DIR} ]; then
-    LOG_INFO "Cloning valkey-server into ${VALKEY_SERVER_HOME_DIR}"
-    git clone --branch ${VALKEY_VERSION} --single-branch https://github.com/valkey-io/valkey.git ${VALKEY_SERVER_HOME_DIR}
+    LOG_INFO "Cloning valkey-server into ${VALKEY_SERVER_HOME_DIR} Branch: ${VALKEY_SERVER_BRANCH}"
+    git clone --branch ${VALKEY_SERVER_BRANCH} --single-branch https://github.com/valkey-io/valkey.git ${VALKEY_SERVER_HOME_DIR}
   fi
 
   mkdir -p ${VALKEY_SERVER_BUILD_DIR}

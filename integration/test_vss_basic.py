@@ -18,15 +18,8 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
         module_list_count = len(module_list_data)
         # We expect JSON & Search to be loaded
         assert module_list_count == 2
-        module_loaded = False
-        json_loaded = False
-        for module in module_list_data:
-            if module[b"name"] == b"search":
-                module_loaded = True
-            elif module[b"name"] == b"json":
-                json_loaded = True
-        assert module_loaded
-
+        assert b"search" in module_list_data
+        assert b"json" in module_list_data
 
 class TestVSSClusterBasic(ValkeySearchClusterTestCase):
 
@@ -36,5 +29,7 @@ class TestVSSClusterBasic(ValkeySearchClusterTestCase):
         module_list_count = len(module_list_data)
         # We expect JSON & Search to be loaded
         assert module_list_count == 2
+        assert b"search" in module_list_data
+        assert b"json" in module_list_data
         cluster_client: ValkeyCluster = self.new_cluster_client()
         assert cluster_client.set("hello", "world") == True

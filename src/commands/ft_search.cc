@@ -243,7 +243,26 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 
 }  // namespace async
 
-vmsdk::config::Boolean ForceReplicasOnly("test-force-replicas-only", false);
+vmsdk::config::Boolean ForceReplicasOnly("debug-force-replicas-only", false);
+
+auto ComputeQueryFanoutMode(ValkeyModuleCtx *ctx) {
+  if (ForceReplicasOnly.GetValue()) {
+    // Testing only
+    return query::fanout::FanoutTargetMode::kReplicasOnly;
+  }
+  if (ValkeyModule_GetServerVersion() < 0x90000) {
+    // Valkey 8 doesn't provide a way to determine if a client is READONLY
+    // So we preserve the 1.0 behavior of random distribution
+    return query::fanout::FanoutTargetMode::kRandom;
+  }
+  // Valkey 9 and above supports reading the READONLY Flag from the context
+  // So honor it
+  if (vmsdk::IsClientReadOnly(ctx)) {
+    return query::fanout::FanoutTargetMode::kRandom;
+  } else {
+    return query::fanout::FanoutTargetMode::kPrimary;
+  }
+}
 
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc) {
@@ -283,10 +302,7 @@ absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 
     if (ValkeySearch::Instance().UsingCoordinator() &&
         ValkeySearch::Instance().IsCluster() && !parameters->local_only) {
-      auto mode = /* !vmsdk::IsReadOnly(ctx) ? query::fanout::kPrimaries ? */
-          ForceReplicasOnly.GetValue()
-              ? query::fanout::FanoutTargetMode::kReplicasOnly
-              : query::fanout::FanoutTargetMode::kRandom;
+      auto mode = ComputeQueryFanoutMode(ctx);
       auto search_targets = query::fanout::GetSearchTargetsForFanout(ctx, mode);
       return query::fanout::PerformSearchFanoutAsync(
           ctx, search_targets,

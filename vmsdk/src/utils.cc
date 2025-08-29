@@ -92,6 +92,13 @@ bool MultiOrLua(ValkeyModuleCtx *ctx) {
           (VALKEYMODULE_CTX_FLAGS_MULTI | VALKEYMODULE_CTX_FLAGS_LUA)) != 0;
 }
 
+bool IsClientReadOnly(ValkeyModuleCtx *ctx) {
+  auto client_id = ValkeyModule_GetClientId(ctx);
+  ValkeyModuleClientInfo client_info = VALKEYMODULE_CLIENTINFO_INITIALIZER_V1;
+  ValkeyModule_GetClientInfoById(&client_info, client_id);
+  return client_info.flags & VALKEYMODULE_CLIENTINFO_FLAG_READONLY;
+}
+
 std::optional<absl::string_view> ParseHashTag(absl::string_view s) {
   auto start = s.find('{');
   // Does a left bracket exist and is NOT the last character

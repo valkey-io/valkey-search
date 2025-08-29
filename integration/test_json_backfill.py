@@ -40,7 +40,7 @@ def do_json_backfill_test(test, client, primary, replica):
     waiters.wait_for_true(lambda: index.backfill_complete(replica))
     p_result = primary.execute_command(*search_command(index.name))
     for n in test.nodes:
-        n.client.execute_command("config set search.test-force-replicas-only yes")
+        n.client.execute_command("config set search.debug-force-replicas-only yes")
     r_result = replica.execute_command(*search_command(index.name))
     print("After second Search")
     print("PResult:", p_result)
@@ -52,7 +52,6 @@ class TestJsonBackfill(ValkeySearchClusterTestCase):
     @pytest.mark.parametrize(
         "setup_test", [{"replica_count": 1}], indirect=True
     )
-    # Mark as xfail until JSON fixes are merged.
     def test_json_backfill_CME(self):
         """
         Validate that JSON backfill works correctly on a replica

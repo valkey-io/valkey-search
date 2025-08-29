@@ -7,6 +7,7 @@
 
 #include "src/indexes/text/text_index.h"
 
+#include "absl/strings/ascii.h"
 #include "libstemmer.h"
 
 namespace valkey_search::indexes::text {
@@ -22,6 +23,16 @@ sb_stemmer* TextIndexSchema::GetStemmer() const {
     stemmer_ = sb_stemmer_new(GetLanguageString().c_str(), "UTF_8");
   }
   return stemmer_;
+}
+
+void TextIndexSchema::BuildStopWordsSet(
+    const std::vector<std::string>& stop_words) {
+  stop_words_set_.clear();
+
+  // Convert all stop words to lowercase for case-insensitive matching
+  for (const auto& word : stop_words) {
+    stop_words_set_.insert(absl::AsciiStrToLower(word));
+  }
 }
 
 }  // namespace valkey_search::indexes::text

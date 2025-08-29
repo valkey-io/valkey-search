@@ -30,9 +30,10 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
                                      absl::string_view data) {
   valkey_search::indexes::text::Lexer lexer;
 
-  auto tokens = lexer.Tokenize(data, text_index_schema_->GetPunctuationBitmap(),
-                               text_index_schema_->GetStemmer(), !no_stem_,
-                               min_stem_size_);
+  auto tokens =
+      lexer.Tokenize(data, text_index_schema_->GetPunctuationBitmap(),
+                     text_index_schema_->GetStemmer(), !no_stem_,
+                     min_stem_size_, text_index_schema_->GetStopWordsSet());
 
   if (!tokens.ok()) {
     if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {

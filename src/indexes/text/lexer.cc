@@ -16,7 +16,8 @@ namespace valkey_search::indexes::text {
 
 absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
     absl::string_view text, const std::bitset<256>& punct_bitmap,
-    sb_stemmer* stemmer, bool stemming_enabled, uint32_t min_stem_size) const {
+    sb_stemmer* stemmer, bool stemming_enabled, uint32_t min_stem_size,
+    const absl::flat_hash_set<std::string>& stop_words_set) const {
   if (!IsValidUtf8(text)) {
     return absl::InvalidArgumentError("Invalid UTF-8");
   }
@@ -40,7 +41,9 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
 
       std::string word = absl::AsciiStrToLower(word_view);
 
-      // TODO: Stop word removal
+      if (Lexer::IsStopWord(word, stop_words_set)) {
+        continue;  // Skip stop words
+      }
 
       word = StemWord(word, stemmer, stemming_enabled, min_stem_size);
 

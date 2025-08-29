@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "gtest/gtest.h"
@@ -76,9 +77,10 @@ TEST_P(LexerParameterizedTest, TokenizeTest) {
     schema = CreateCustomTextSchema(test_case.custom_punctuation);
   }
 
-  auto result = lexer_->Tokenize(
-      test_case.input, schema->GetPunctuationBitmap(), schema->GetStemmer(),
-      test_case.stemming_enabled, test_case.min_stem_size);
+  auto result =
+      lexer_->Tokenize(test_case.input, schema->GetPunctuationBitmap(),
+                       schema->GetStemmer(), test_case.stemming_enabled,
+                       test_case.min_stem_size, schema->GetStopWordsSet());
 
   ASSERT_TRUE(result.ok()) << "Test case: " << test_case.description;
   EXPECT_EQ(*result, test_case.expected)
@@ -88,6 +90,7 @@ TEST_P(LexerParameterizedTest, TokenizeTest) {
 INSTANTIATE_TEST_SUITE_P(
     AllTokenizationTests, LexerParameterizedTest,
     ::testing::Values(
+        // Core tokenization functionality
         LexerTestCase{"", {}, true, 3, "", "Empty string returns no words"},
         LexerTestCase{"   \t\n!@#$%^&*()   ",
                       {},
@@ -150,14 +153,25 @@ INSTANTIATE_TEST_SUITE_P(
                       true,
                       3,
                       "",
-                      "Non-ASCII punctuation handling"}));
+                      "Non-ASCII punctuation handling"},
+
+        // Stop word filtering test cases
+        LexerTestCase{"the cat and dog",
+                      {"cat", "dog"},
+                      true,
+                      3,
+                      "",
+                      "Stop words filtered out"},
+        LexerTestCase{
+            "the and or", {}, true, 3, "", "All stop words filtered out"}));
 
 // Separate tests for error cases and special scenarios
 TEST_F(LexerTest, InvalidUTF8) {
   std::string invalid_utf8 = "hello \xFF\xFE world";
-  auto result = lexer_->Tokenize(
-      invalid_utf8, text_schema_->GetPunctuationBitmap(),
-      text_schema_->GetStemmer(), stemming_enabled_, min_stem_size_);
+  auto result =
+      lexer_->Tokenize(invalid_utf8, text_schema_->GetPunctuationBitmap(),
+                       text_schema_->GetStemmer(), stemming_enabled_,
+                       min_stem_size_, text_schema_->GetStopWordsSet());
   EXPECT_FALSE(result.ok());
   EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument);
   EXPECT_EQ(result.status().message(), "Invalid UTF-8");
@@ -165,11 +179,34 @@ TEST_F(LexerTest, InvalidUTF8) {
 
 TEST_F(LexerTest, LongWord) {
   std::string long_word(1000, 'a');
-  auto result = lexer_->Tokenize(
-      long_word, text_schema_->GetPunctuationBitmap(),
-      text_schema_->GetStemmer(), stemming_enabled_, min_stem_size_);
+  auto result =
+      lexer_->Tokenize(long_word, text_schema_->GetPunctuationBitmap(),
+                       text_schema_->GetStemmer(), stemming_enabled_,
+                       min_stem_size_, text_schema_->GetStopWordsSet());
   ASSERT_TRUE(result.ok());
   EXPECT_EQ(*result, std::vector<std::string>({long_word}));
+}
+
+// Test empty stop words set behavior
+TEST_F(LexerTest, EmptyStopWordsHandling) {
+  // Create schema with no stop words
+  std::vector<std::string> empty_stop_words;
+  auto no_stop_schema = std::make_shared<TextIndexSchema>(
+      data_model::LANGUAGE_ENGLISH, " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
+      true, empty_stop_words);
+
+  const auto& empty_set = no_stop_schema->GetStopWordsSet();
+
+  // Test tokenization with empty stop words - all words preserved
+  auto result =
+      lexer_->Tokenize("Hello, world! TESTING 123 with-dashes and/or symbols",
+                       no_stop_schema->GetPunctuationBitmap(),
+                       no_stop_schema->GetStemmer(), true, 3, empty_set);
+
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(*result,
+            std::vector<std::string>({"hello", "world", "test", "123", "with",
+                                      "dash", "and", "or", "symbol"}));
 }
 
 }  // namespace valkey_search::indexes::text

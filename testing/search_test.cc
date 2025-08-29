@@ -580,7 +580,7 @@ TEST_P(SearchTest, ParseParams) {
     FilterParser parser(*params.index_schema, test_case.filter);
     params.filter_parse_results = std::move(parser.Parse().value());
   }
-  auto neighbors = Search(params, true);
+  auto neighbors = Search(params, query::SearchMode::kLocal);
   VMSDK_EXPECT_OK(neighbors);
 #ifndef SAN_BUILD
   EXPECT_EQ(neighbors->size(), test_case.expected_keys.size());

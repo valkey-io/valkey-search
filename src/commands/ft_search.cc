@@ -243,6 +243,8 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 
 }  // namespace async
 
+vmsdk::config::Boolean ForceReplicasOnly("test-force-replicas-only", false);
+
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc) {
   auto status = [&]() -> absl::Status {
@@ -262,7 +264,9 @@ absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);
     if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
                            inside_multi_exec)) {
-      VMSDK_ASSIGN_OR_RETURN(auto neighbors, query::Search(*parameters, true));
+      VMSDK_ASSIGN_OR_RETURN(
+          auto neighbors,
+          query::Search(*parameters, query::SearchMode::kLocal));
       SendReply(ctx, neighbors, *parameters);
       return absl::OkStatus();
     }
@@ -281,16 +285,20 @@ absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 
     if (ValkeySearch::Instance().UsingCoordinator() &&
         ValkeySearch::Instance().IsCluster() && !parameters->local_only) {
-      auto search_targets = query::fanout::GetSearchTargetsForFanout(ctx);
+      auto mode = /* !vmsdk::IsReadOnly(ctx) ? query::fanout::kPrimaries ? */
+          ForceReplicasOnly.GetValue()
+              ? query::fanout::FanoutTargetMode::kReplicasOnly
+              : query::fanout::FanoutTargetMode::kRandom;
+      auto search_targets = query::fanout::GetSearchTargetsForFanout(ctx, mode);
       return query::fanout::PerformSearchFanoutAsync(
           ctx, search_targets,
           ValkeySearch::Instance().GetCoordinatorClientPool(),
           std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),
           std::move(on_done_callback));
     }
-    return query::SearchAsync(std::move(parameters),
-                              ValkeySearch::Instance().GetReaderThreadPool(),
-                              std::move(on_done_callback), true);
+    return query::SearchAsync(
+        std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),
+        std::move(on_done_callback), query::SearchMode::kLocal);
   }();
   if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;

@@ -37,7 +37,7 @@ namespace valkey_search::coordinator {
 constexpr absl::string_view kRetryPolicy =
     "{\"methodConfig\" : [{"
     "   \"name\" : [{\"service\": \"valkey_search.coordinator.Coordinator\"}],"
-    "   \"waitForReady\": false,"
+    "   \"waitForReady\": true,"
     "   \"retryPolicy\": {"
     "     \"maxAttempts\": 5,"
     "     \"initialBackoff\": \"0.100s\","
@@ -48,7 +48,8 @@ constexpr absl::string_view kRetryPolicy =
     "       \"UNKNOWN\","
     "       \"RESOURCE_EXHAUSTED\","
     "       \"INTERNAL\","
-    "       \"DATA_LOSS\""
+    "       \"DATA_LOSS\","
+    "       \"NOT_FOUND\""
     "     ]"
     "    }"
     "}]}";

@@ -73,82 +73,6 @@ expected_desc2_hash_value = {
     b'category': b"electronics"
 }
 
-# Index and document setup
-ingestion_pipeline_index = "FT.CREATE idx ON HASH SCHEMA content TEXT"
-ingestion_pipeline_doc = ["HSET", "doc:1", "content", "The quick-running searches are finding effective results! But slow searches aren't working..."]
-
-# Common expected results
-ingestion_match_expected = 1
-ingestion_nomatch_expected = 0
-ingestion_expected_key = b'doc:1'
-ingestion_expected_fields = [b'content', b"The quick-running searches are finding effective results! But slow searches aren't working..."]
-
-# Query arrays for ingestion pipeline test
-ingestion_punctuation_queries = [
-    ["FT.SEARCH", "idx", '@content:"quick*"'],
-    ["FT.SEARCH", "idx", '@content:"run*"'],
-    ["FT.SEARCH", "idx", '@content:"result*"'],
-    ["FT.SEARCH", "idx", '@content:"work*"']
-]
-
-ingestion_stopword_queries = [
-    ["FT.SEARCH", "idx", '@content:"the"'],
-    ["FT.SEARCH", "idx", '@content:"are"'],
-    ["FT.SEARCH", "idx", '@content:"but"']
-]
-
-ingestion_case_queries = [
-    ["FT.SEARCH", "idx", '@content:"quick*"'],
-    ["FT.SEARCH", "idx", '@content:"effect*"']
-]
-
-ingestion_wildcard_queries = [
-    ["FT.SEARCH", "idx", '@content:"find*"'],
-    ["FT.SEARCH", "idx", '@content:"effect*"'],
-    ["FT.SEARCH", "idx", '@content:"work*"'],
-    ["FT.SEARCH", "idx", '@content:"search*"']
-]
-
-ingestion_nomatch_queries = [
-    ["FT.SEARCH", "idx", '@content:"nonexistent"'],
-    ["FT.SEARCH", "idx", '@content:"missing*"'],
-    ["FT.SEARCH", "idx", '@content:"xyz*"']
-]
-
-# Constants for punctuation test
-punctuation_test_index = "FT.CREATE idx ON HASH PUNCTUATION . SCHEMA content TEXT"
-punctuation_test_doc = ["HSET", "doc:1", "content", "hello.world"]
-punctuation_test_query = ["FT.SEARCH", "idx", '@content:"world"']
-punctuation_expected_fields = [b'content', b"hello.world"]
-
-# Constants for multi-field test
-multi_field_index = "FT.CREATE idx ON HASH SCHEMA title TEXT content TEXT NOSTEM"
-multi_field_doc = ["HSET", "doc:1", "title", "running fast", "content", "running quickly"]
-multi_field_query = ["FT.SEARCH", "idx", '@content:"running"']
-multi_field_expected_value = {
-    b'title': b'running fast',
-    b'content': b'running quickly'
-}
-
-# Constants for stopwords test
-stopwords_test_index = "FT.CREATE idx ON HASH STOPWORDS 2 the and SCHEMA content TEXT"
-stopwords_test_doc = ["HSET", "doc:1", "content", "the cat and dog"]
-stopwords_test_queries_filtered = [
-    ["FT.SEARCH", "idx", '@content:"the"'],
-    ["FT.SEARCH", "idx", '@content:"and"']
-]
-stopwords_test_query_indexed = ["FT.SEARCH", "idx", '@content:"cat"']
-stopwords_expected_fields = [b'content', b"the cat and dog"]
-
-# Constants for nostem test
-nostem_test_index = "FT.CREATE idx ON HASH NOSTEM SCHEMA content TEXT"
-nostem_test_doc = ["HSET", "doc:1", "content", "running quickly"]
-nostem_test_queries = [
-    ["FT.SEARCH", "idx", '@content:"running"'],
-    ["FT.SEARCH", "idx", '@content:"quickly"']
-]
-nostem_expected_fields = [b'content', b"running quickly"]
-
 class TestFullText(ValkeySearchTestCaseBase):
 
     def test_text_search(self):
@@ -282,96 +206,96 @@ class TestFullText(ValkeySearchTestCaseBase):
         Test comprehensive ingestion pipeline: FT.CREATE → HSET → FT.SEARCH with full tokenization
         """
         client: Valkey = self.server.get_new_client()
-        client.execute_command(ingestion_pipeline_index)
-        client.execute_command(*ingestion_pipeline_doc)
+        client.execute_command("FT.CREATE idx ON HASH SCHEMA content TEXT")
+        client.execute_command("HSET", "doc:1", "content", "The quick-running searches are finding EFFECTIVE results!")
+        client.execute_command("HSET", "doc:2", "content", "But slow searches aren't working...")
         
-        # Punctuation tokenization (using prefix to handle stemming)
-        for query in ingestion_punctuation_queries:
-            result = client.execute_command(*query)
-            assert result[0] == ingestion_match_expected
-            assert result[1] == ingestion_expected_key
-            assert result[2] == ingestion_expected_fields
+        # List of queries with pass/fail expectations
+        test_cases = [
+            ("quick*", True, "Punctuation tokenization - hyphen creates word boundaries"),
+            ("effect*", True, "Case insensitivity - lowercase matches uppercase"),
+            ("the", False, "Stop word filtering - common words filtered out"),
+            ("find*", True, "Prefix wildcard - matches 'finding'"),
+            ("nonexistent", False, "Non-existent terms return no results")
+        ]
         
-        # Stop word filtering
-        for query in ingestion_stopword_queries:
-            result = client.execute_command(*query)
-            assert result[0] == ingestion_nomatch_expected
+        expected_key = b'doc:1'
+        expected_fields = [b'content', b"The quick-running searches are finding EFFECTIVE results!"]
         
-        # Case insensitivity (using prefix to handle stemming)
-        for query in ingestion_case_queries:
-            result = client.execute_command(*query)
-            assert result[0] == ingestion_match_expected
-            assert result[1] == ingestion_expected_key
-            assert result[2] == ingestion_expected_fields
-        
-        # Wildcard matching (prefix only, no suffix tree by default)
-        for query in ingestion_wildcard_queries:
-            result = client.execute_command(*query)
-            assert result[0] == ingestion_match_expected
-            assert result[1] == ingestion_expected_key
-            assert result[2] == ingestion_expected_fields
-        
-        # Non-existent terms
-        for query in ingestion_nomatch_queries:
-            result = client.execute_command(*query)
-            assert result[0] == ingestion_nomatch_expected
-
-    def test_punctuation(self):
-        """
-        Test that per-index PUNCTUATION actually affects search results
-        """
-        client: Valkey = self.server.get_new_client()
-        client.execute_command(punctuation_test_index)
-        client.execute_command(*punctuation_test_doc)
-        result = client.execute_command(*punctuation_test_query)
-        assert result[0] == ingestion_match_expected  # Dot separator worked
-        assert result[1] == ingestion_expected_key
-        assert result[2] == punctuation_expected_fields
+        for query_term, should_match, description in test_cases:
+            result = client.execute_command("FT.SEARCH", "idx", f'@content:"{query_term}"')
+            if should_match:
+                assert result[0] == 1 and result[1] == expected_key and result[2] == expected_fields, f"Failed: {description}"
+            else:
+                assert result[0] == 0, f"Failed: {description}"
 
     def test_multi_text_field(self):
         """
         Test different TEXT field configs in same index
         """
         client: Valkey = self.server.get_new_client()
-        client.execute_command(multi_field_index)
-        client.execute_command(*multi_field_doc)
-        result = client.execute_command(*multi_field_query)
-        assert result[0] == ingestion_match_expected  # Document found in content field
-        assert result[1] == ingestion_expected_key
+        client.execute_command("FT.CREATE idx ON HASH SCHEMA title TEXT content TEXT NOSTEM")
+        client.execute_command("HSET", "doc:1", "title", "running fast", "content", "running quickly")
 
+        expected_value = {
+            b'title': b'running fast',
+            b'content': b'running quickly'
+        }
+
+        result = client.execute_command("FT.SEARCH", "idx", '@title:"run"')
         actual_fields = dict(zip(result[2][::2], result[2][1::2]))
-        assert actual_fields == multi_field_expected_value
+        assert actual_fields == expected_value
 
-    def test_stopwords(self):
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"run"')
+        assert result[0] == 0  # Should not find (NOSTEM)
+
+    def test_custom_stopwords(self):
         """
-        End-to-end test: FT.CREATE STOPWORDS config actually filters stop words in search
+        End-to-end test: FT.CREATE STOPWORDS config actually filters custom stop words in search
         """
         client: Valkey = self.server.get_new_client()
-        client.execute_command(stopwords_test_index)
-        client.execute_command(*stopwords_test_doc)
+        client.execute_command("FT.CREATE idx ON HASH STOPWORDS 2 the and SCHEMA content TEXT")
+        client.execute_command("HSET", "doc:1", "content", "the cat and dog are good")
         
         # Stop words should not be findable
-        for query in stopwords_test_queries_filtered:
-            result = client.execute_command(*query)
-            assert result[0] == ingestion_nomatch_expected  # Stop word filtered out
         
-        # Regular words should be findable
-        result = client.execute_command(*stopwords_test_query_indexed)
-        assert result[0] == ingestion_match_expected  # Regular word indexed
-        assert result[1] == ingestion_expected_key
-        assert result[2] == stopwords_expected_fields
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"and"')
+        assert result[0] == 0  # Stop word "and" filtered out
+        
+        # non stop words should be findable
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"are"')
+        assert result[0] == 1  # Regular word indexed
+        assert result[1] == b'doc:1'
+        assert result[2] == [b'content', b"the cat and dog are good"]
 
     def test_nostem(self):
         """
         End-to-end test: FT.CREATE NOSTEM config actually affects stemming in search
         """
         client: Valkey = self.server.get_new_client()
-        client.execute_command(nostem_test_index)
-        client.execute_command(*nostem_test_doc)
+        client.execute_command("FT.CREATE idx ON HASH NOSTEM SCHEMA content TEXT")
+        client.execute_command("HSET", "doc:1", "content", "running quickly")
         
         # With NOSTEM, exact forms should be findable
-        for query in nostem_test_queries:
-            result = client.execute_command(*query)
-            assert result[0] == ingestion_match_expected  # Exact form found
-            assert result[1] == ingestion_expected_key
-            assert result[2] == nostem_expected_fields
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"running"')
+        assert result[0] == 1  # Exact form "running" found
+        assert result[1] == b'doc:1'
+        assert result[2] == [b'content', b"running quickly"]
+
+    def test_custom_punctuation(self):
+        """
+        Test PUNCTUATION directive configures custom tokenization separators
+        """
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE idx ON HASH PUNCTUATION . SCHEMA content TEXT")
+        client.execute_command("HSET", "doc:1", "content", "hello.world test@email")
+        
+        # Dot configured as separator - should find split words
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"hello"')
+        assert result[0] == 1  # Found "hello" as separate token
+        assert result[1] == b'doc:1'
+        assert result[2] == [b'content', b"hello.world test@email"]
+        
+        # @ NOT configured as separator - should not be able with split words
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"test"')
+        assert result[0] == 0

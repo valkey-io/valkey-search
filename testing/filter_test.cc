@@ -38,11 +38,11 @@ struct FilterTestCase {
 class FilterTest : public ValkeySearchTestWithParam<FilterTestCase> {
  public:
   indexes::InlineVectorEvaluator evaluator_;
+  MemoryPool memory_pool_;
 };
 
-void InitIndexSchema(MockIndexSchema *index_schema) {
+void InitIndexSchema(MockIndexSchema *index_schema, MemoryPool& memory_pool) {
   data_model::NumericIndex numeric_index_proto;
-  MemoryPool memory_pool{};
 
   auto numeric_index_1_5 =
       std::make_shared<IndexTeser<indexes::Numeric, data_model::NumericIndex>>(
@@ -95,7 +95,7 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
 TEST_P(FilterTest, ParseParams) {
   const FilterTestCase &test_case = GetParam();
   auto index_schema = CreateIndexSchema("index_schema_name").value();
-  InitIndexSchema(index_schema.get());
+  InitIndexSchema(index_schema.get(), memory_pool_);
   EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
       .Times(::testing::AnyNumber());
   FilterParser parser(*index_schema, test_case.filter);

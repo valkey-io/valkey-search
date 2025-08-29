@@ -41,7 +41,7 @@ class FilterTest : public ValkeySearchTestWithParam<FilterTestCase> {
   MemoryPool memory_pool_;
 };
 
-void InitIndexSchema(MockIndexSchema *index_schema, MemoryPool& memory_pool) {
+void InitIndexSchema(MockIndexSchema *index_schema, MemoryPool &memory_pool) {
   data_model::NumericIndex numeric_index_proto;
 
   auto numeric_index_1_5 =

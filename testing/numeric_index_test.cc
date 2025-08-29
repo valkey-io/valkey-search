@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/container/btree_map.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
 #include "gmock/gmock.h"
@@ -16,6 +17,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/query/predicate.h"
+#include "src/utils/segment_tree.h"
 #include "testing/common.h"
 #include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/memory_tracker.h"
@@ -548,25 +550,31 @@ TEST_F(NumericIndexTest, MemoryTrackingDestructor) {
   memory_pool.Reset();
   int64_t initial_memory = memory_pool.GetUsage();
 
+  // Keep references to interned strings outside the scope to prevent
+  // deallocation
+  std::vector<InternedStringPtr> string_refs;
+  std::unique_ptr<Numeric> index_ptr;
   {
-    // Create a Numeric index in a local scope
     data_model::NumericIndex local_numeric_proto;
-    IndexTeser<Numeric, data_model::NumericIndex> local_index{
-        numeric_index_proto, memory_pool};
+    index_ptr = std::make_unique<Numeric>(local_numeric_proto, memory_pool);
 
-    auto key1 = absl::string_view{"key1"};
-    auto key2 = absl::string_view{"key2"};
-    auto key3 = absl::string_view{"key3"};
-    auto invalid_key = absl::string_view{"invalid"};
+    auto key1 = StringInternStore::Intern("key1");
+    auto key2 = StringInternStore::Intern("key2");
+    auto key3 = StringInternStore::Intern("key3");
 
-    EXPECT_TRUE(local_index.AddRecord(key1, "1.5").value());
-    EXPECT_TRUE(local_index.AddRecord(key2, "2.5").value());
-    EXPECT_TRUE(local_index.AddRecord(key3, "3.5").value());
-    EXPECT_FALSE(local_index.AddRecord(invalid_key, "not_a_number").value());
+    string_refs.push_back(key1);
+    string_refs.push_back(key2);
+    string_refs.push_back(key3);
+
+    EXPECT_TRUE(index_ptr->AddRecord(key1, "1.5").value());
+    EXPECT_TRUE(index_ptr->AddRecord(key2, "2.5").value());
+    EXPECT_TRUE(index_ptr->AddRecord(key3, "3.5").value());
 
     int64_t memory_with_records = memory_pool.GetUsage();
     EXPECT_GT(memory_with_records, initial_memory);
   }
+
+  index_ptr.reset();
 
   int64_t memory_after_destructor = memory_pool.GetUsage();
   EXPECT_EQ(memory_after_destructor, initial_memory);

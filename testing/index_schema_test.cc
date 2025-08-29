@@ -2017,6 +2017,8 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
             data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
             index_schema->GetMemoryPool())
             .value();
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex("embedding3", "emb3_id", flat_index));
 
     // Add vectors to each index (100 vectors each, different ranges)
     auto vectors = DeterministicallyGenerateVectors(

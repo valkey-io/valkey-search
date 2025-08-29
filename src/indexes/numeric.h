@@ -103,7 +103,7 @@ class Numeric : public IndexBase {
   inline void ForEachTrackedKey(
       absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override {
     absl::MutexLock lock(&index_mutex_);
-    for (const auto& [key, _] : tracked_keys_) {
+    for (const auto& [key, _] : *tracked_keys_) {
       fn(key);
     }
   }
@@ -169,9 +169,11 @@ class Numeric : public IndexBase {
 
  private:
   mutable absl::Mutex index_mutex_;
-  InternedStringMap<double> tracked_keys_ ABSL_GUARDED_BY(index_mutex_);
+  std::unique_ptr<InternedStringMap<double>> tracked_keys_
+      ABSL_GUARDED_BY(index_mutex_);
   // untracked keys is needed to support negate filtering
-  InternedStringSet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);
+  std::unique_ptr<InternedStringSet> untracked_keys_
+      ABSL_GUARDED_BY(index_mutex_);
   std::unique_ptr<BTreeNumericIndex> index_ ABSL_GUARDED_BY(index_mutex_);
 };
 }  // namespace valkey_search::indexes

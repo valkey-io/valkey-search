@@ -8,6 +8,7 @@ target_link_libraries(index_base INTERFACE rdb_serialization)
 target_link_libraries(index_base INTERFACE string_interning)
 target_link_libraries(index_base INTERFACE managed_pointers)
 target_link_libraries(index_base INTERFACE valkey_module)
+target_link_libraries(index_base INTERFACE memory_tracker)
 
 set(SRCS_VECTOR_BASE ${CMAKE_CURRENT_LIST_DIR}/vector_base.cc
                      ${CMAKE_CURRENT_LIST_DIR}/vector_base.h)
@@ -32,6 +33,7 @@ target_link_libraries(vector_base PUBLIC managed_pointers)
 target_link_libraries(vector_base PUBLIC type_conversions)
 target_link_libraries(vector_base PUBLIC status_macros)
 target_link_libraries(vector_base PUBLIC valkey_module)
+target_link_libraries(vector_base PUBLIC memory_tracker)
 
 set(SRCS_VECTOR_HNSW ${CMAKE_CURRENT_LIST_DIR}/vector_hnsw.cc
                      ${CMAKE_CURRENT_LIST_DIR}/vector_hnsw.h)
@@ -50,6 +52,7 @@ target_link_libraries(vector_hnsw PUBLIC memory_allocation_overrides)
 target_link_libraries(vector_hnsw PUBLIC utils)
 target_link_libraries(vector_hnsw PUBLIC status_macros)
 target_link_libraries(vector_hnsw PUBLIC valkey_module)
+target_link_libraries(vector_hnsw PUBLIC memory_tracker)
 
 set(SRCS_NUMERIC ${CMAKE_CURRENT_LIST_DIR}/numeric.cc
                  ${CMAKE_CURRENT_LIST_DIR}/numeric.h)
@@ -62,6 +65,7 @@ target_link_libraries(numeric PUBLIC predicate_header)
 target_link_libraries(numeric PUBLIC segment_tree)
 target_link_libraries(numeric PUBLIC string_interning)
 target_link_libraries(numeric PUBLIC valkey_module)
+target_link_libraries(numeric PUBLIC memory_tracker)
 
 set(SRCS_TAG ${CMAKE_CURRENT_LIST_DIR}/tag.cc ${CMAKE_CURRENT_LIST_DIR}/tag.h)
 
@@ -76,6 +80,7 @@ target_link_libraries(tag PUBLIC managed_pointers)
 target_link_libraries(tag PUBLIC type_conversions)
 target_link_libraries(tag PUBLIC valkey_module)
 target_link_libraries(tag PUBLIC ${INDEX_SCHEMA_PROTO_LIB})
+target_link_libraries(tag PUBLIC memory_tracker)
 
 set(SRCS_VECTOR_FLAT ${CMAKE_CURRENT_LIST_DIR}/vector_flat.cc
                      ${CMAKE_CURRENT_LIST_DIR}/vector_flat.h)
@@ -93,3 +98,4 @@ target_link_libraries(vector_flat PUBLIC log)
 target_link_libraries(vector_flat PUBLIC memory_allocation_overrides)
 target_link_libraries(vector_flat PUBLIC status_macros)
 target_link_libraries(vector_flat PUBLIC valkey_module)
+target_link_libraries(vector_flat PUBLIC memory_tracker)

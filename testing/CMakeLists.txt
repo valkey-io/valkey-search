@@ -42,6 +42,7 @@ target_link_libraries(testing_common_base PUBLIC module)
 target_link_libraries(testing_common_base PUBLIC utils)
 target_link_libraries(testing_common_base PUBLIC valkey_module)
 target_link_libraries(testing_common_base PUBLIC vmsdk_testing_infra)
+target_link_libraries(testing_common_base PUBLIC memory_tracker)
 
 # Coordinator common library - used by tests that need coordinator functionality
 add_library(testing_common_coordinator INTERFACE)

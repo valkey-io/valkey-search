@@ -42,32 +42,40 @@ std::optional<double> ParseNumber(absl::string_view data) {
 Numeric::Numeric(const data_model::NumericIndex& numeric_index_proto,
                  MemoryPool& memory_pool)
     : IndexBase(IndexerType::kNumeric, memory_pool) {
-  NestedMemoryScope scope{memory_pool};
+  IsolatedMemoryScope scope{memory_pool};
 
+  tracked_keys_ = std::make_unique<InternedStringMap<double>>();
+  untracked_keys_ = std::make_unique<InternedStringSet>();
   index_ = std::make_unique<BTreeNumericIndex>();
 }
 
-Numeric::~Numeric() { NestedMemoryScope scope{memory_pool_}; }
+Numeric::~Numeric() {
+  IsolatedMemoryScope scope{memory_pool_};
+
+  tracked_keys_.reset();
+  untracked_keys_.reset();
+  index_.reset();
+}
 
 // NOTE: key should be stored interned string.
 absl::StatusOr<bool> Numeric::AddRecord(const InternedStringPtr& key,
                                         absl::string_view data) {
-  NestedMemoryScope scope{memory_pool_};
+  IsolatedMemoryScope scope{memory_pool_};
 
   auto value = ParseNumber(data);
   absl::MutexLock lock(&index_mutex_);
   if (!value.has_value()) {
-    untracked_keys_.insert(key);
+    untracked_keys_->insert(key);
     return false;
   }
-  auto [_, succ] = tracked_keys_.insert({key, *value});
+  auto [_, succ] = tracked_keys_->insert({key, *value});
   if (!succ) {
     // NOTE: don't track allocation error.
     DisableMemoryTracking disable_tracking;
     return absl::AlreadyExistsError(
         absl::StrCat("Key `", key->Str(), "` already exists"));
   }
-  untracked_keys_.erase(key);
+  untracked_keys_->erase(key);
   index_->Add(key, *value);
   return true;
 }
@@ -83,13 +91,13 @@ absl::StatusOr<bool> Numeric::ModifyRecord(const InternedStringPtr& key,
   }
 
   absl::MutexLock lock(&index_mutex_);
-  auto it = tracked_keys_.find(key);
-  if (it == tracked_keys_.end()) {
+  auto it = tracked_keys_->find(key);
+  if (it == tracked_keys_->end()) {
     return absl::NotFoundError(
         absl::StrCat("Key `", key->Str(), "` not found"));
   }
 
-  NestedMemoryScope scope{memory_pool_};
+  IsolatedMemoryScope scope{memory_pool_};
 
   index_->Modify(it->first, it->second, *value);
   it->second = *value;
@@ -99,23 +107,23 @@ absl::StatusOr<bool> Numeric::ModifyRecord(const InternedStringPtr& key,
 // NOTE: key should be stored interned string.
 absl::StatusOr<bool> Numeric::RemoveRecord(const InternedStringPtr& key,
                                            DeletionType deletion_type) {
-  NestedMemoryScope scope{memory_pool_};
+  IsolatedMemoryScope scope{memory_pool_};
 
   absl::MutexLock lock(&index_mutex_);
   if (deletion_type == DeletionType::kRecord) {
     // If key is DELETED, remove it from untracked_keys_.
-    untracked_keys_.erase(key);
+    untracked_keys_->erase(key);
   } else {
     // If key doesn't have TAG but exists, insert it to untracked_keys_.
-    untracked_keys_.insert(key);
+    untracked_keys_->insert(key);
   }
-  auto it = tracked_keys_.find(key);
-  if (it == tracked_keys_.end()) {
+  auto it = tracked_keys_->find(key);
+  if (it == tracked_keys_->end()) {
     return false;
   }
 
   index_->Remove(it->first, it->second);
-  tracked_keys_.erase(it);
+  tracked_keys_->erase(it);
   return true;
 }
 
@@ -125,13 +133,13 @@ int Numeric::RespondWithInfo(ValkeyModuleCtx* ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "size");
   absl::MutexLock lock(&index_mutex_);
   ValkeyModule_ReplyWithCString(ctx,
-                                std::to_string(tracked_keys_.size()).c_str());
+                                std::to_string(tracked_keys_->size()).c_str());
   return 4;
 }
 
 bool Numeric::IsTracked(const InternedStringPtr& key) const {
   absl::MutexLock lock(&index_mutex_);
-  return tracked_keys_.contains(key);
+  return tracked_keys_->contains(key);
 }
 
 std::unique_ptr<data_model::Index> Numeric::ToProto() const {
@@ -144,7 +152,7 @@ std::unique_ptr<data_model::Index> Numeric::ToProto() const {
 const double* Numeric::GetValue(const InternedStringPtr& key) const {
   // Note that the Numeric index is not mutated while the time sliced mutex is
   // in a read mode and therefor it is safe to skip lock acquiring.
-  if (auto it = tracked_keys_.find(key); it != tracked_keys_.end()) {
+  if (auto it = tracked_keys_->find(key); it != tracked_keys_->end()) {
     return &it->second;
   }
   return nullptr;
@@ -172,8 +180,8 @@ std::unique_ptr<Numeric::EntriesFetcher> Numeric::Search(
     ;
     additional_entries_range.second = btree.end();
     return std::make_unique<Numeric::EntriesFetcher>(
-        entries_range, size + untracked_keys_.size(), additional_entries_range,
-        &untracked_keys_);
+        entries_range, size + untracked_keys_->size(), additional_entries_range,
+        untracked_keys_.get());
   }
 
   entries_range.first = predicate.IsStartInclusive()
@@ -274,7 +282,7 @@ std::unique_ptr<EntriesFetcherIteratorBase> Numeric::EntriesFetcher::Begin() {
 
 uint64_t Numeric::GetRecordCount() const {
   absl::MutexLock lock(&index_mutex_);
-  return tracked_keys_.size();
+  return tracked_keys_->size();
 }
 
 }  // namespace valkey_search::indexes

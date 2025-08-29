@@ -55,13 +55,16 @@ namespace config = vmsdk::config;
 /// Register the "--query-string-bytes" flag. Controls the length of the query
 /// string of the FT.SEARCH cmd.
 constexpr absl::string_view kQueryStringBytesConfig{"query-string-bytes"};
-constexpr uint32_t kDefaultQueryStringBytes{10240};
+constexpr uint32_t kMaxQueryStringBytes{10240};
 constexpr uint32_t kMinimumQueryStringBytes{1};
 static auto query_string_bytes =
     config::NumberBuilder(kQueryStringBytesConfig,   // name
-                          kDefaultQueryStringBytes,  // default size
+                          kMaxQueryStringBytes,      // default size
                           kMinimumQueryStringBytes,  // min size
-                          UINT_MAX)                  // max size
+                          kMaxQueryStringBytes)      // max size
+        .WithValidationCallback(CHECK_RANGE(kMinimumQueryStringBytes,
+                                            kMaxQueryStringBytes,
+                                            kQueryStringBytesConfig))
         .Build();
 
 constexpr absl::string_view kHNSWBlockSizeConfig{"hnsw-block-size"};

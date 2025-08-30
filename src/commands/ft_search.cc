@@ -24,7 +24,6 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
-#include "module_config.h"
 #include "src/acl.h"
 #include "src/commands/commands.h"
 #include "src/commands/ft_search_parser.h"
@@ -35,9 +34,11 @@
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
-#include "valkey_search_options.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/blocked_client.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -243,7 +244,7 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 
 }  // namespace async
 
-vmsdk::config::Boolean ForceReplicasOnly("test-force-replicas-only", false);
+CONTROLLED_BOOLEAN(ForceReplicasOnly, false);
 
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc) {

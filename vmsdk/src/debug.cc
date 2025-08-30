@@ -7,7 +7,10 @@
 
 #include "vmsdk/src/debug.h"
 
+#include <absl/base/no_destructor.h>
+#include <absl/container/btree_map.h>
 #include <absl/container/flat_hash_map.h>
+#include <absl/strings/ascii.h>
 #include <absl/synchronization/mutex.h>
 #include <pthread.h>
 
@@ -125,6 +128,72 @@ void PausePointList(ValkeyModuleCtx* ctx) {
           ctx, absl::ToDoubleSeconds(absl::Now() - w.start_time_));
     }
   }
+}
+
+//
+// Controlled Variable Machinery
+//
+absl::Mutex ControlledVariableLock;
+
+static absl::btree_map<std::string, ControlledBase*>&
+GetControlledVars() {
+  static absl::NoDestructor<
+      std::unique_ptr<absl::btree_map<std::string, ControlledBase*>>>
+      test_controlled_vars;
+  if (!*test_controlled_vars) {
+    *test_controlled_vars =
+        std::make_unique<absl::btree_map<std::string, ControlledBase*>>();
+  }
+  return **test_controlled_vars;
+}
+
+ControlledBase::ControlledBase(absl::string_view name) : name_(name) {
+  absl::MutexLock lock(&ControlledVariableLock);
+  std::string lc_name = absl::AsciiStrToLower(name);
+  CHECK(!GetControlledVars().contains(lc_name))
+      << "Duplicate declaration of Controlled " << name_;
+  GetControlledVars()[lc_name] = this;
+}
+
+ControlledBase::~ControlledBase() {
+  absl::MutexLock lock(&ControlledVariableLock);
+  std::string lc_name = absl::AsciiStrToLower(name_);
+  CHECK(GetControlledVars()[lc_name] == this)
+      << "Duplicate declaration of Controlled " << name_;
+  GetControlledVars().erase(lc_name);
+}
+
+static absl::StatusOr<ControlledBase*> FindVariable(
+    absl::string_view name) {
+  auto lc_name = absl::AsciiStrToLower(name);
+  if (!GetControlledVars().contains(lc_name)) {
+    return absl::NotFoundError(
+        absl::StrCat("Controlled variable ", name, " not found"));
+  }
+  return GetControlledVars()[lc_name];
+}
+
+absl::Status ControlledSet(absl::string_view name,
+                               absl::string_view value) {
+  absl::MutexLock lock(&ControlledVariableLock);
+  VMSDK_ASSIGN_OR_RETURN(auto var, FindVariable(name));
+  return var->SetValue(value);
+}
+
+absl::StatusOr<std::string> ControlledGet(absl::string_view name) {
+  absl::MutexLock lock(&ControlledVariableLock);
+  VMSDK_ASSIGN_OR_RETURN(auto var, FindVariable(name));
+  return var->DisplayValue();
+}
+
+std::vector<std::pair<std::string, std::string>> ControlledGetValues() {
+  absl::MutexLock lock(&ControlledVariableLock);
+  std::vector<std::pair<std::string, std::string>> result;
+  for (auto& [name, test_control] : GetControlledVars()) {
+    result.push_back(
+        std::make_pair(test_control->GetName(), test_control->DisplayValue()));
+  }
+  return result;
 }
 
 }  // namespace debug

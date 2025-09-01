@@ -66,7 +66,7 @@ void PausePoint(absl::string_view point, std::source_location location) {
       }
     }
     if (absl::Now() > message_time) {
-      VMSDK_IO_LOG_EVERY_N_SEC(WARNING, nullptr, 10)
+      VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 10)
           << "Waiting > 10 seconds at pause point " << point
           << " Location:" << ToString(location);
     }

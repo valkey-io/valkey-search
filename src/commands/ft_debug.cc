@@ -132,17 +132,21 @@ absl::Status ControlledCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   return absl::OkStatus();
 }
 
-absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator& itr) {
+absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
-  static std::vector<std::pair<std::string, std::string>> help_text {
-    {"FT._DEBUG SHOW_INFO", "Show Info Variable Information"},
-    {"FT._DEBUG CONTROLLED_VARIABLE SET <variable> <value>", "Set a controlled variable"},
-    {"FT._DEBUG CONTROLLED_VARIABLE GET <variable>", "Get a controlled variable"},
-    {"FT._DEBUG CONTROLLED_VARIABLE LIST", "list all controlled variables and their values"},
-    {"FT._DEBUG PAUSEPOINT [ SET | RESET | TEST | LIST] <pausepoint>","control pause points"},
+  static std::vector<std::pair<std::string, std::string>> help_text{
+      {"FT._DEBUG SHOW_INFO", "Show Info Variable Information"},
+      {"FT._DEBUG CONTROLLED_VARIABLE SET <variable> <value>",
+       "Set a controlled variable"},
+      {"FT._DEBUG CONTROLLED_VARIABLE GET <variable>",
+       "Get a controlled variable"},
+      {"FT._DEBUG CONTROLLED_VARIABLE LIST",
+       "list all controlled variables and their values"},
+      {"FT._DEBUG PAUSEPOINT [ SET | RESET | TEST | LIST] <pausepoint>",
+       "control pause points"},
   };
   ValkeyModule_ReplySetArrayLength(ctx, 2 * help_text.size());
-  for (auto& pair : help_text) {
+  for (auto &pair : help_text) {
     ValkeyModule_ReplyWithCString(ctx, pair.first.data());
     ValkeyModule_ReplyWithCString(ctx, pair.second.data());
   }
@@ -182,8 +186,8 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   } else if (keyword == "HELP") {
     return HelpCmd(ctx, itr);
   } else {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Unknown subcommand: ", *itr.GetStringView(), " try HELP subcommand"));
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Unknown subcommand: ", *itr.GetStringView(), " try HELP subcommand"));
   }
 }
 

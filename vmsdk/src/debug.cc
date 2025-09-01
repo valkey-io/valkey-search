@@ -135,8 +135,7 @@ void PausePointList(ValkeyModuleCtx* ctx) {
 //
 absl::Mutex ControlledVariableLock;
 
-static absl::btree_map<std::string, ControlledBase*>&
-GetControlledVars() {
+static absl::btree_map<std::string, ControlledBase*>& GetControlledVars() {
   static absl::NoDestructor<
       std::unique_ptr<absl::btree_map<std::string, ControlledBase*>>>
       test_controlled_vars;
@@ -163,8 +162,7 @@ ControlledBase::~ControlledBase() {
   GetControlledVars().erase(lc_name);
 }
 
-static absl::StatusOr<ControlledBase*> FindVariable(
-    absl::string_view name) {
+static absl::StatusOr<ControlledBase*> FindVariable(absl::string_view name) {
   auto lc_name = absl::AsciiStrToLower(name);
   if (!GetControlledVars().contains(lc_name)) {
     return absl::NotFoundError(
@@ -173,8 +171,7 @@ static absl::StatusOr<ControlledBase*> FindVariable(
   return GetControlledVars()[lc_name];
 }
 
-absl::Status ControlledSet(absl::string_view name,
-                               absl::string_view value) {
+absl::Status ControlledSet(absl::string_view name, absl::string_view value) {
   absl::MutexLock lock(&ControlledVariableLock);
   VMSDK_ASSIGN_OR_RETURN(auto var, FindVariable(name));
   return var->SetValue(value);

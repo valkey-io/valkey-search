@@ -53,9 +53,9 @@ void PausePointList(ValkeyModuleCtx* ctx);
 
 //
 // Controlled variables are similar to Configurables in that they are
-// variables that code can use to control their behavior. Controlled Variables are not
-// part of the stable API as they are specifically targetted at internal test
-// code.
+// variables that code can use to control their behavior. Controlled Variables
+// are not part of the stable API as they are specifically targetted at internal
+// test code.
 //
 // Typical use is to declare a variable locally in a file (usually a .cc) at
 // file scope, and then to use that variable in your code to control something.

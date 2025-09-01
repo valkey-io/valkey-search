@@ -28,7 +28,7 @@ absl::Status CheckEndOfArgs(vmsdk::ArgsIterator &itr) {
 }
 
 //
-// FT.DEBUG PAUSEPOINT [ SET | RESET | TEST | LIST] <pausepoint>
+// FT._DEBUG PAUSEPOINT [ SET | RESET | TEST | LIST] <pausepoint>
 //
 // Connects to the vmsdk::debug mechanism
 // A pausepoint is a mechanism to pause a thread at a specific location for
@@ -86,9 +86,9 @@ absl::Status PausePointControlCmd(ValkeyModuleCtx *ctx,
 }
 
 //
-// FT.DEBUG CONTROLLED_VARIABLE SET <test_control> <value>
-// FT.DEBUG CONTROLLED_VARIABLE GET <test_control>
-// FT.DEBUG CONTROLLED_VARIABLE LIST
+// FT._DEBUG CONTROLLED_VARIABLE SET <test_control> <value>
+// FT._DEBUG CONTROLLED_VARIABLE GET <test_control>
+// FT._DEBUG CONTROLLED_VARIABLE LIST
 //
 // Connects to the vmsdk::debug CONTROLLED_VARIABLE mechanism.
 //

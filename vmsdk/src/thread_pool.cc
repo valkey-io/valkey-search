@@ -54,7 +54,8 @@ namespace vmsdk {
 ThreadPool::ThreadPool(const std::string &name_prefix, size_t num_threads)
     : initial_thread_count_(num_threads),
       priority_tasks_(static_cast<int>(ThreadPool::Priority::kMax) + 1),
-      name_prefix_(name_prefix) {}
+      name_prefix_(name_prefix),
+      random_generator_(std::random_device{}()) {}
 
 void ThreadPool::StartWorkers() {
   CHECK(!started_);
@@ -226,13 +227,12 @@ void ThreadPool::WorkerThread(std::shared_ptr<Thread> thread) {
         continue;
       }
 
-      for (auto &tasks : priority_tasks_ | std::views::reverse) {
-        if (!tasks.empty()) {
-          task = std::move(tasks.front());
-          tasks.pop();
-          break;
-        }
+      // Use the new fairness-aware task selection
+      auto optional_task = TryGetNextTask();
+      if (!optional_task.has_value()) {
+        continue;  // No tasks available, go back to waiting
       }
+      task = std::move(*optional_task);
     }
     task();
   }
@@ -289,4 +289,53 @@ void ThreadPool::Resize(size_t count, bool wait_for_resize) {
     DecrThreadCountBy(current_size - count, wait_for_resize);
   }
 }
+
+void ThreadPool::SetHighPriorityWeight(int weight) {
+  // Clamp weight to valid range [0, 100]
+  weight = std::max(0, std::min(100, weight));
+  high_priority_weight_.store(weight);
+}
+
+int ThreadPool::GetHighPriorityWeight() const {
+  return high_priority_weight_.load();
+}
+
+std::optional<absl::AnyInvocable<void()>> ThreadPool::TryGetNextTask() {
+  // Check for kMax priority first - always takes precedence
+  if (!GetPriorityTasksQueue(Priority::kMax).empty()) {
+    auto &max_queue = GetPriorityTasksQueue(Priority::kMax);
+    auto task = std::move(max_queue.front());
+    max_queue.pop();
+    return task;
+  }
+
+  // No kMax tasks - apply fairness between kHigh and kLow
+  bool high_has_tasks = !GetPriorityTasksQueue(Priority::kHigh).empty();
+  bool low_has_tasks = !GetPriorityTasksQueue(Priority::kLow).empty();
+
+  if (!high_has_tasks && !low_has_tasks) {
+    return std::nullopt;  // No tasks available
+  }
+
+  Priority selected_priority;
+  if (!high_has_tasks) {
+    selected_priority = Priority::kLow;
+  } else if (!low_has_tasks) {
+    selected_priority = Priority::kHigh;
+  } else {
+    // Both have tasks - use weighted random selection
+    int high_weight = high_priority_weight_.load();
+    std::uniform_int_distribution<int> dist(0, 99);
+    int random_val = dist(random_generator_);
+
+    selected_priority =
+        (random_val < high_weight) ? Priority::kHigh : Priority::kLow;
+  }
+
+  auto &selected_queue = GetPriorityTasksQueue(selected_priority);
+  auto task = std::move(selected_queue.front());
+  selected_queue.pop();
+  return task;
+}
+
 }  // namespace vmsdk

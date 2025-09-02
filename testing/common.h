@@ -44,6 +44,7 @@
 #include "src/vector_externalizer.h"
 #include "third_party/hnswlib/iostream.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/memory_tracker.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -55,7 +56,8 @@ namespace valkey_search {
 template <typename T, typename K>
 class IndexTeser : public T {
  public:
-  explicit IndexTeser(K proto) : T(K(proto)) {}
+  explicit IndexTeser(K proto, MemoryPool& memory_pool)
+      : T(K(proto), memory_pool) {}
   absl::StatusOr<bool> AddRecord(absl::string_view key,
                                  absl::string_view data) {
     auto interned_key = StringInternStore::Intern(key);
@@ -80,8 +82,10 @@ class IndexTeser : public T {
 
 class MockIndex : public indexes::IndexBase {
  public:
-  MockIndex() : indexes::IndexBase(indexes::IndexerType::kNone) {}
-  MockIndex(indexes::IndexerType type) : indexes::IndexBase(type) {}
+  MockIndex(MemoryPool& memory_pool)
+      : indexes::IndexBase(indexes::IndexerType::kNone, memory_pool) {}
+  MockIndex(indexes::IndexerType type, MemoryPool& memory_pool)
+      : indexes::IndexBase(type, memory_pool) {}
   MOCK_METHOD(absl::StatusOr<bool>, AddRecord,
               (const InternedStringPtr& key, absl::string_view data),
               (override));

@@ -17,38 +17,7 @@ def search_command(index: str) -> list[str]:
         float_to_bytes([10.0, 10.0, 10.0]),
     ]
 
-def index_on_node(client, name:str) -> bool:
-    indexes = client.execute_command("FT._LIST")
-    return name.encode() in indexes
-
-def sum_of_remote_searches(nodes: list[Node]) -> int:
-    return sum([n.client.info("search")["search_coordinator_server_search_index_partition_success_count"] for n in nodes])
-
-def do_json_backfill_test(test, client, primary, replica):
-    assert(primary.info("replication")["role"] == "master")
-    assert(replica.info("replication")["role"] == "slave")
-    index = Index("test", [Vector("v", 3, type="FLAT")], type="HASH")
-    index.load_data(client, 100)
-    replica.readonly()
-    assert(primary.execute_command("DBSIZE") > 0)
-    assert(replica.execute_command("DBSIZE") > 0)
-
-    index.create(primary)
-    waiters.wait_for_true(lambda: index_on_node(primary, index.name))
-    waiters.wait_for_true(lambda: index_on_node(replica, index.name))
-    waiters.wait_for_true(lambda: index.backfill_complete(primary))
-    waiters.wait_for_true(lambda: index.backfill_complete(replica))
-    p_result = primary.execute_command(*search_command(index.name))
-    for n in test.nodes:
-        n.client.execute_command("config set search.test-force-replicas-only yes")
-    r_result = replica.execute_command(*search_command(index.name))
-    print("After second Search")
-    print("PResult:", p_result)
-    print("RResult:", r_result)
-    assert len(p_result) == 21
-    assert len(r_result) == 21
-
-class TestJsonBackfill(ValkeySearchClusterTestCaseDebugMode):
+class TestShardDown(ValkeySearchClusterTestCaseDebugMode):
     @pytest.mark.parametrize(
         "setup_test", [{"replica_count": 1}], indirect=True
     )
@@ -60,16 +29,19 @@ class TestJsonBackfill(ValkeySearchClusterTestCaseDebugMode):
         index = Index("test", [Vector("v", 3, type="FLAT")], type="HASH")
         index.create(client)
         index.load_data(self, 100)
-        #
-        # Mark one shard down.
-        #
         for n in self.nodes:
             n.client.execute_command("config set search.enable-partial-results no")
 
+        #
+        # Mark one shard down.
+        #
         rg = self.get_replication_group(2)
         shard_nodes = [rg.primary] + rg.replicas
         for n in shard_nodes:
             n.client.execute_command("FT._DEBUG PAUSEPOINT SET Search.gRPC")
+        #
+        # Execute command
+        #
         with pytest.raises(ResponseError):
             r_result = self.get_replication_group(0).get_primary_connection().execute_command(*search_command(index.name))
             print("Result: ", r_result)                
@@ -78,8 +50,27 @@ class TestJsonBackfill(ValkeySearchClusterTestCaseDebugMode):
         for n in shard_nodes:
             t = n.client.execute_command("FT._DEBUG PAUSEPOINT TEST Search.gRPC")
             n.client.execute_command("FT._DEBUG PAUSEPOINT RESET Search.gRPC")
-            n.client.execute_command("FT._DEBUG PAUSEPOINT SET Search.gRPC")
-            print("Test Pausepoint: ", t)
             sum += t
         assert sum > 0
 
+        #
+        # Flip partial results
+        #
+        for n in self.nodes:
+            n.client.execute_command("config set search.enable-partial-results yes")
+
+        for n in shard_nodes:
+            n.client.execute_command("FT._DEBUG PAUSEPOINT SET Search.gRPC")
+
+        #
+        # Execute command, no exception
+        #
+        r_result = self.get_replication_group(0).get_primary_connection().execute_command(*search_command(index.name))
+        print("Result: ", r_result)                
+
+        sum = 0
+        for n in shard_nodes:
+            t = n.client.execute_command("FT._DEBUG PAUSEPOINT TEST Search.gRPC")
+            n.client.execute_command("FT._DEBUG PAUSEPOINT RESET Search.gRPC")
+            sum += t
+        assert sum > 0

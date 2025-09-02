@@ -40,7 +40,7 @@ def do_json_backfill_test(test, client, primary, replica):
     waiters.wait_for_true(lambda: index.backfill_complete(replica))
     p_result = primary.execute_command(*search_command(index.name))
     for n in test.nodes:
-        n.client.execute_command("config set search.test-force-replicas-only yes")
+        n.client.execute_command("ft._debug CONTROLLED_VARIABLE set ForceReplicasOnly yes")
     r_result = replica.execute_command(*search_command(index.name))
     print("After second Search")
     print("PResult:", p_result)
@@ -48,7 +48,7 @@ def do_json_backfill_test(test, client, primary, replica):
     assert len(p_result) == 21
     assert len(r_result) == 21
 
-class TestJsonBackfill(ValkeySearchClusterTestCase):
+class TestJsonBackfill(ValkeySearchClusterTestCaseDebugMode):
     @pytest.mark.parametrize(
         "setup_test", [{"replica_count": 1}], indirect=True
     )
@@ -62,7 +62,7 @@ class TestJsonBackfill(ValkeySearchClusterTestCase):
         replica = rg.get_replica_connection(0)
         do_json_backfill_test(self, self.new_cluster_client(), primary, replica)
 
-class TestSearchFTDropindexCMD(ValkeySearchTestCaseBase):
+class TestSearchFTDropindexCMD(ValkeySearchTestCaseDebugMode):
     """
     Test suite for FT.DROPINDEX search command. We expect that
     clients will not be able to drop index on the replica.

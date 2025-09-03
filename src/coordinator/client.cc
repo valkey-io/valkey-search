@@ -27,6 +27,7 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/grpc_suspender.h"
 #include "src/metrics.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
@@ -202,6 +203,9 @@ void ClientImpl::InfoIndexPartition(
       &args_raw->context, args_raw->request.get(), &args_raw->response,
       // std::function is not move-only
       [args_raw](grpc::Status s) mutable {
+        if (!vmsdk::IsMainThread()) {
+          PAUSEPOINT("fanout_remote_pausepoint");
+        }
         GRPCSuspensionGuard guard(GRPCSuspender::Instance());
         auto args = std::unique_ptr<InfoIndexPartitionArgs>(args_raw);
         args->callback(s, args->response);

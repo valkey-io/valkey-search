@@ -10,17 +10,33 @@
 #include <grpcpp/grpcpp.h>
 
 #include <chrono>
+#include <source_location>
 
 #include "absl/synchronization/mutex.h"
 #include "grpcpp/support/status.h"
 #include "src/coordinator/client_pool.h"
+#include "src/metrics.h"
 #include "src/query/fanout_template.h"
 #include "src/valkey_search.h"
 #include "vmsdk/src/blocked_client.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::query::fanout {
+
+constexpr absl::string_view kFanoutForceRemoteFailConfig{
+    "fanout-force-remote-fail"};
+
+namespace options {
+static auto fanout_force_remote_fail =
+    vmsdk::config::BooleanBuilder(kFanoutForceRemoteFailConfig, false).Build();
+
+vmsdk::config::Boolean& GetFanoutForceRemoteFail() {
+  return dynamic_cast<vmsdk::config::Boolean&>(*fanout_force_remote_fail);
+}
+}  // namespace options
 
 template <typename Request, typename Response, FanoutTargetMode kTargetMode>
 class FanoutOperationBase {
@@ -36,6 +52,7 @@ class FanoutOperationBase {
     deadline_tp_ = std::chrono::steady_clock::now() +
                    std::chrono::milliseconds(GetTimeoutMs());
     targets_ = GetTargets(ctx);
+    Metrics::GetStats().fanout_retry_cnt.store(0);
     StartFanoutRound();
   }
 
@@ -94,6 +111,16 @@ class FanoutOperationBase {
         this->RpcDone();
       });
     } else {
+      // force the remote to fail 10 times for testing only
+      if (options::GetFanoutForceRemoteFail().GetValue() &&
+          Metrics::GetStats().fanout_retry_cnt < 10) {
+        this->OnError(grpc::Status(grpc::StatusCode::INTERNAL,
+                                   "Forced remote failure for testing"),
+                      coordinator::FanoutErrorType::COMMUNICATION_ERROR,
+                      target);
+        this->RpcDone();
+        return;
+      }
       auto client = client_pool_->GetClient(target.address);
       if (!client) {
         this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
@@ -222,6 +249,7 @@ class FanoutOperationBase {
     }
     if (done) {
       if (!IsOperationTimedOut() && ShouldRetry()) {
+        ++Metrics::GetStats().fanout_retry_cnt;
         ResetBaseForRetry();
         ResetForRetry();
         StartFanoutRound();

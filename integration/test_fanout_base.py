@@ -41,7 +41,7 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
 
         assert node0.execute_command("CONFIG SET search.fanout-force-remote-fail no") == b"OK"
 
-    # force timout by pausing remote calls
+    # force timeout by pausing remote calls
     def test_fanout_base_timeout(self):
         cluster: ValkeyCluster = self.new_cluster_client()
         node0: Valkey = self.new_client_for_primary(0)

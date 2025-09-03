@@ -208,22 +208,19 @@ absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
 // Paper over the impedance mismatch between the
 // cancel::Token and hnswlib::BaseCancellationFunctor.
 class CancelCondition : public hnswlib::BaseCancellationFunctor {
-  public:
-  explicit CancelCondition(cancel::Token &token)
-      : token_(token) { CHECK(&token); }
-  bool isCancelled() override { 
-    return token_->IsCancelled();
+ public:
+  explicit CancelCondition(cancel::Token &token) : token_(token) {
+    CHECK(&token);
   }
+  bool isCancelled() override { return token_->IsCancelled(); }
 
-  private:
+ private:
   cancel::Token &token_;
 };
 
-
 template <typename T>
 absl::StatusOr<std::deque<Neighbor>> VectorFlat<T>::Search(
-    absl::string_view query, uint64_t count,
-    cancel::Token &cancellation_token,
+    absl::string_view query, uint64_t count, cancel::Token &cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
   if (!IsValidSizeVector(query)) {
     return absl::InvalidArgumentError(absl::StrCat(
@@ -231,7 +228,8 @@ absl::StatusOr<std::deque<Neighbor>> VectorFlat<T>::Search(
         query.size(), ") does not match index's expected size (",
         dimensions_ * GetDataTypeSize(), ")."));
   }
-  auto perform_search = [this, count, &filter, &cancellation_token](absl::string_view query)
+  auto perform_search = [this, count, &filter,
+                         &cancellation_token](absl::string_view query)
       -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
     absl::ReaderMutexLock lock(&resize_mutex_);
     try {
@@ -239,8 +237,7 @@ absl::StatusOr<std::deque<Neighbor>> VectorFlat<T>::Search(
       return algo_->searchKnn(
           (T *)query.data(),
           std::min(count, static_cast<uint64_t>(algo_->cur_element_count_)),
-          filter.get(),
-          &canceler);
+          filter.get(), &canceler);
     } catch (const std::exception &e) {
       Metrics::GetStats().flat_search_exceptions_cnt.fetch_add(
           1, std::memory_order_relaxed);
@@ -296,6 +293,12 @@ void VectorFlat<T>::ToProtoImpl(
 
 template <typename T>
 int VectorFlat<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
+  ValkeyModule_ReplyWithSimpleString(ctx, "algorithm");
+  ValkeyModule_ReplyWithSimpleString(
+      ctx,
+      LookupKeyByValue(*kVectorAlgoByStr,
+                       data_model::VectorIndex::AlgorithmCase::kFlatAlgorithm)
+          .data());
   ValkeyModule_ReplyWithSimpleString(ctx, "data_type");
   if constexpr (std::is_same_v<T, float>) {
     ValkeyModule_ReplyWithSimpleString(
@@ -306,18 +309,16 @@ int VectorFlat<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
   } else {
     ValkeyModule_ReplyWithSimpleString(ctx, "UNKNOWN");
   }
-  ValkeyModule_ReplyWithSimpleString(ctx, "algorithm");
-  ValkeyModule_ReplyWithArray(ctx, 4);
-  ValkeyModule_ReplyWithSimpleString(ctx, "name");
+  ValkeyModule_ReplyWithSimpleString(ctx, "dim");
+  ValkeyModule_ReplyWithLongLong(ctx, dimensions_);
+  ValkeyModule_ReplyWithSimpleString(ctx, "distance_metric");
   ValkeyModule_ReplyWithSimpleString(
-      ctx,
-      LookupKeyByValue(*kVectorAlgoByStr,
-                       data_model::VectorIndex::AlgorithmCase::kFlatAlgorithm)
-          .data());
+      ctx, LookupKeyByValue(*kDistanceMetricByStr, distance_metric_).data());
+
   ValkeyModule_ReplyWithSimpleString(ctx, "block_size");
   ValkeyModule_ReplyWithLongLong(ctx, block_size_);
 
-  return 4;
+  return 10;
 }
 
 template <typename T>

@@ -34,6 +34,10 @@ enum Flags {
   kBitFlags = VALKEYMODULE_CONFIG_BITFLAGS,
 };
 
+/// Return true if debug mode is enabled. "search.debug-mode == yes"
+constexpr absl::string_view kDebugMode{"debug-mode"};
+bool IsDebugModeEnabled();
+
 /// Support Valkey configuration entries in a one-liner.
 ///
 /// Example usage:
@@ -71,7 +75,6 @@ enum Flags {
 /// CONFIG SET search.config-name <value>
 /// CONFIG GET search.config-name
 /// ```
-
 class Registerable;
 class ModuleConfigManager {
  public:
@@ -120,10 +123,15 @@ class Registerable {
   // bitwise OR'ed flags of `Flags`
   inline void SetFlags(size_t flags) { flags_ = flags; }
   inline bool IsHidden() const { return flags_ & VALKEYMODULE_CONFIG_HIDDEN; }
+  inline void EnableFlag(size_t flag) { flags_ |= flag; }
+
+  inline void SetDeveloperConfig(bool b) { this->developer_config_ = b; }
+  inline bool IsDeveloperConfig() const { return developer_config_; }
 
  protected:
   std::string name_;
   size_t flags_{kDefault};
+  bool developer_config_{false};
 };
 
 template <typename T>
@@ -178,6 +186,11 @@ class ConfigBase : public Registerable {
   }
 
   absl::Status Validate(T val) const {
+    if (IsDeveloperConfig() && !IsDebugModeEnabled()) {
+      return absl::PermissionDeniedError(
+          absl::StrFormat("Modification of '%s' requires '%s' to be enabled.",
+                          GetName(), kDebugMode));
+    }
     if (validate_callback_) {
       return validate_callback_(val);
     }
@@ -324,6 +337,36 @@ class ConfigBuilder {
 
   auto &WithFlags(size_t flags) {
     config_->SetFlags(flags);
+    return *this;
+  }
+
+  auto &Immutable() {
+    config_->EnableFlag(VALKEYMODULE_CONFIG_IMMUTABLE);
+    return *this;
+  }
+
+  auto &Hidden() {
+    config_->EnableFlag(VALKEYMODULE_CONFIG_HIDDEN);
+    return *this;
+  }
+
+  auto &Sensitive() {
+    config_->EnableFlag(VALKEYMODULE_CONFIG_SENSITIVE);
+    return *this;
+  }
+
+  auto &Protected() {
+    config_->EnableFlag(VALKEYMODULE_CONFIG_PROTECTED);
+    return *this;
+  }
+
+  /// This configuration setting is restricted to developer use only. It can be
+  /// modified exclusively when `search.debug-mode` is set to `yes` (the default
+  /// setting is `no`). When a configuration entry is marked as `Dev()`, it
+  /// becomes both `Hidden` and `Immutable` if `search.debug-mode` is set to
+  /// `no`, preventing any runtime modifications.
+  auto &Dev() {
+    config_->SetDeveloperConfig(true);
     return *this;
   }
 

@@ -18,8 +18,8 @@ and Text classes, then passed to lexer methods as parameters.
 
 Tokenization Pipeline:
 1. Split text on punctuation characters (configurable)
-2. Convert to lowercase 
-3. TODO: stop word removal (not implemented in this phase)
+2. Convert to lowercase
+3. Stop word removal (filter out common words)
 4. Apply stemming based on language and field settings
 
 */
@@ -28,6 +28,7 @@ Tokenization Pipeline:
 #include <string>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 
@@ -37,24 +38,25 @@ namespace valkey_search::indexes::text {
 
 struct Lexer {
   absl::StatusOr<std::vector<std::string>> Tokenize(
-      absl::string_view text,
-      const std::bitset<256>& punct_bitmap,
-      sb_stemmer* stemmer,
-      bool stemming_enabled,
-      uint32_t min_stem_size
-  ) const;
+      absl::string_view text, const std::bitset<256>& punct_bitmap,
+      sb_stemmer* stemmer, bool stemming_enabled, uint32_t min_stem_size,
+      const absl::flat_hash_set<std::string>& stop_words_set) const;
 
   // Punctuation checking API
   static bool IsPunctuation(char c, const std::bitset<256>& punct_bitmap) {
     return punct_bitmap[static_cast<unsigned char>(c)];
   }
 
+  // Stop word checking API (expects lowercase input)
+  static bool IsStopWord(
+      const std::string& lowercase_word,
+      const absl::flat_hash_set<std::string>& stop_words_set) {
+    return stop_words_set.contains(lowercase_word);
+  }
+
  private:
-  std::string StemWord(
-      const std::string& word,
-      sb_stemmer* stemmer,
-      bool stemming_enabled,
-      uint32_t min_stem_size) const;
+  std::string StemWord(const std::string& word, sb_stemmer* stemmer,
+                       bool stemming_enabled, uint32_t min_stem_size) const;
 
   // UTF-8 processing helpers
   bool IsValidUtf8(absl::string_view text) const;

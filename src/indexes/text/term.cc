@@ -10,14 +10,13 @@
 namespace valkey_search::indexes::text {
 
 TermIterator::TermIterator(const WordIterator& word,
-                              const absl::string_view data,
-                              const FieldMaskPredicate field_mask,
-                              const InternedStringSet* untracked_keys)
-    : word_(word),  
+                           const absl::string_view data,
+                           const FieldMaskPredicate field_mask,
+                           const InternedStringSet* untracked_keys)
+    : word_(word),
       data_(data),
       field_mask_(field_mask),
-      untracked_keys_(untracked_keys) {
-}
+      untracked_keys_(untracked_keys) {}
 
 bool TermIterator::Done() const {
   if (nomatch_ || word_.GetWord() != data_) {
@@ -36,7 +35,7 @@ void TermIterator::Next() {
     }
     target_posting_ = word_.GetTarget();
     key_iter_ = target_posting_->GetKeyIterator();
-    begin_ = false;  // Set to false after the first call to Next.    
+    begin_ = false;  // Set to false after the first call to Next.
   } else {
     key_iter_.NextKey();
   }
@@ -51,4 +50,4 @@ const InternedStringPtr& TermIterator::operator*() const {
   return key_iter_.GetKey();
 }
 
-} // namespace valkey_search::indexes::text
+}  // namespace valkey_search::indexes::text

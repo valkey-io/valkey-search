@@ -58,6 +58,7 @@ class LoadTest : public ValkeySearchTestWithParam<LoadTestCase> {
   void SetUp() override {
     ValkeySearchTestWithParam<LoadTestCase>::SetUp();
     CHECK(options::Reset().ok());
+    vmsdk::SetModuleLoaded("json", true);
   }
 };
 
@@ -331,6 +332,7 @@ TEST_P(LoadTest, load) {
 }
 
 TEST_F(ValkeySearchTest, FullSyncFork) {
+  VMSDK_EXPECT_OK(options::GetMaxWorkerSuspensionSecs().SetValue(1));
   InitThreadPools(2, 2);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   auto reader_thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
@@ -401,7 +403,7 @@ TEST_F(ValkeySearchTest, Info) {
   stats.hnsw_modify_exceptions_cnt = 5;
   stats.hnsw_search_exceptions_cnt = 6;
   stats.hnsw_create_exceptions_cnt = 7;
-  
+
   // Set global ingestion stats
   stats.ingest_hash_keys = 100;
   // Let's set the blocked clients values in the test
@@ -443,45 +445,64 @@ TEST_F(ValkeySearchTest, Info) {
   stats.coordinator_bytes_in = 2000;
   auto interned_key_1 = StringInternStore::Intern("key1");
   EXPECT_EQ(std::string(*interned_key_1), "key1");
-  
+
   StringInternStore::SetMemoryUsage(2097152);  // 2MB in bytes
-  
+
   ValkeyModuleInfoCtx fake_info_ctx;
   ValkeySearch::Instance().Info(&fake_info_ctx, false);
 #ifndef TESTING_TMP_DISABLED
   EXPECT_EQ(
       fake_info_ctx.info_capture.GetInfo(),
-    "thread-pool\nused_read_cpu: 0\nused_write_cpu: 0\nquery_queue_size: 10\nwriter_queue_size: 5\n"
-    "worker_pool_suspend_cnt: 13\nwriter_resumed_cnt: 14\nreader_resumed_cnt: 15\nwriter_suspension_expired_cnt: 16\n"
-    "rdb\nrdb_load_success_cnt: 17\nrdb_load_failure_cnt: 18\nrdb_save_success_cnt: 19\nrdb_save_failure_cnt: 20\n"
-    "query\nsuccessful_requests_count: 2\nfailure_requests_count: 1\nhybrid_requests_count: 1\ninline_filtering_requests_count: 2\n"
-    "hnswlib\nhnsw_add_exceptions_count: 3\nhnsw_remove_exceptions_count: 4\nhnsw_modify_exceptions_count: 5\n"
-    "hnsw_search_exceptions_count: 6\nhnsw_create_exceptions_count: 7\n"
-    "latency\nhnsw_vector_index_search_latency_usec: 'p50=100139.007,p99=200278.015,p99.9=200278.015'\n"
-    "coordinator\ncoordinator_server_listening_port: 0\n"
-    "coordinator_server_get_global_metadata_success_count: 26\ncoordinator_server_get_global_metadata_failure_count: 25\n"
-    "coordinator_server_search_index_partition_success_count: 28\ncoordinator_server_search_index_partition_failure_count: 27\n"
-    "coordinator_client_get_global_metadata_success_count: 22\ncoordinator_client_get_global_metadata_failure_count: 21\n"
-    "coordinator_client_search_index_partition_success_count: 24\ncoordinator_client_search_index_partition_failure_count: 23\n"
-    "coordinator_bytes_out: 1000\ncoordinator_bytes_in: 2000\n"
-    "string_interning\nstring_interning_store_size: 1\nstring_interning_memory_bytes: 2097152\nstring_interning_memory_human: '2.00MiB'\n"
-    "vector_externing\nvector_externing_entry_count: 0\nvector_externing_hash_extern_errors: 0\n"
-    "vector_externing_generated_value_cnt: 0\nvector_externing_num_lru_entries: 0\n"
-    "vector_externing_lru_promote_cnt: 0\nvector_externing_deferred_entry_cnt: 0\n"
-    "global_ingestion\ningest_field_numeric: 400\ningest_field_tag: 500\ningest_field_vector: 300\n"
-    "ingest_hash_blocked: 0\ningest_hash_keys: 100\ningest_json_blocked: 0\ningest_json_keys: 200\n"
-    "ingest_last_batch_size: 600\ningest_total_batches: 700\ningest_total_failures: 800\n"
-    "index_stats\nnumber_of_indexes: 1\nnumber_of_attributes: 1\ntotal_indexed_documents: 4\nnumber_of_active_indexes: 1\n"
-    "number_of_active_indexes_running_queries: 0\nnumber_of_active_indexes_indexing: 1\n"
-    "total_active_write_threads: 5\ntotal_indexing_time: 0\n"
-    "indexing\nbackground_indexing_status: 'IN_PROGRESS'\n"
-    "memory\nused_memory_bytes: 18408\nused_memory_human: '17.98KiB'\n"
-);
+      "thread-pool\nused_read_cpu: 0\nused_write_cpu: 0\nquery_queue_size: "
+      "10\nwriter_queue_size: 5\n"
+      "worker_pool_suspend_cnt: 13\nwriter_resumed_cnt: "
+      "14\nreader_resumed_cnt: 15\nwriter_suspension_expired_cnt: 16\n"
+      "rdb\nrdb_load_success_cnt: 17\nrdb_load_failure_cnt: "
+      "18\nrdb_save_success_cnt: 19\nrdb_save_failure_cnt: 20\n"
+      "query\nsuccessful_requests_count: 2\nfailure_requests_count: "
+      "1\nhybrid_requests_count: 1\ninline_filtering_requests_count: 2\n"
+      "hnswlib\nhnsw_add_exceptions_count: 3\nhnsw_remove_exceptions_count: "
+      "4\nhnsw_modify_exceptions_count: 5\n"
+      "hnsw_search_exceptions_count: 6\nhnsw_create_exceptions_count: 7\n"
+      "latency\nhnsw_vector_index_search_latency_usec: "
+      "'p50=100139.007,p99=200278.015,p99.9=200278.015'\n"
+      "coordinator\ncoordinator_server_listening_port: 0\n"
+      "coordinator_server_get_global_metadata_success_count: "
+      "26\ncoordinator_server_get_global_metadata_failure_count: 25\n"
+      "coordinator_server_search_index_partition_success_count: "
+      "28\ncoordinator_server_search_index_partition_failure_count: 27\n"
+      "coordinator_client_get_global_metadata_success_count: "
+      "22\ncoordinator_client_get_global_metadata_failure_count: 21\n"
+      "coordinator_client_search_index_partition_success_count: "
+      "24\ncoordinator_client_search_index_partition_failure_count: 23\n"
+      "coordinator_bytes_out: 1000\ncoordinator_bytes_in: 2000\n"
+      "string_interning\nstring_interning_store_size: "
+      "1\nstring_interning_memory_bytes: "
+      "2097152\nstring_interning_memory_human: '2.00MiB'\n"
+      "vector_externing\nvector_externing_entry_count: "
+      "0\nvector_externing_hash_extern_errors: 0\n"
+      "vector_externing_generated_value_cnt: "
+      "0\nvector_externing_num_lru_entries: 0\n"
+      "vector_externing_lru_promote_cnt: "
+      "0\nvector_externing_deferred_entry_cnt: 0\n"
+      "global_ingestion\ningest_field_numeric: 400\ningest_field_tag: "
+      "500\ningest_field_vector: 300\n"
+      "ingest_hash_blocked: 0\ningest_hash_keys: 100\ningest_json_blocked: "
+      "0\ningest_json_keys: 200\n"
+      "ingest_last_batch_size: 600\ningest_total_batches: "
+      "700\ningest_total_failures: 800\n"
+      "index_stats\nnumber_of_indexes: 1\nnumber_of_attributes: "
+      "1\ntotal_indexed_documents: 4\nnumber_of_active_indexes: 1\n"
+      "number_of_active_indexes_running_queries: "
+      "0\nnumber_of_active_indexes_indexing: 1\n"
+      "total_active_write_threads: 5\ntotal_indexing_time: 0\n"
+      "indexing\nbackground_indexing_status: 'IN_PROGRESS'\n"
+      "memory\nused_memory_bytes: 18408\nused_memory_human: '17.98KiB'\n");
 #endif
-  StringInternStore::SetMemoryUsage(0); // reset memory pool
+  StringInternStore::SetMemoryUsage(0);  // reset memory pool
 }
 
-TEST_F(ValkeySearchTest, OnForkChildCallback) {
+TEST_F(ValkeySearchTest, OnForkChildDiedCallback) {
   InitThreadPools(std::nullopt, 5);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
@@ -492,6 +513,21 @@ TEST_F(ValkeySearchTest, OnForkChildCallback) {
   EXPECT_TRUE(writer_thread_pool->IsSuspended());
   ValkeySearch::Instance().OnForkChildCallback(
       &fake_ctx_, eid, VALKEYMODULE_SUBEVENT_FORK_CHILD_DIED, nullptr);
+  EXPECT_FALSE(writer_thread_pool->IsSuspended());
+  EXPECT_EQ(
+      Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt, 0);
+  EXPECT_EQ(Metrics::GetStats().writer_worker_thread_pool_resumed_cnt, 1);
+}
+
+TEST_F(ValkeySearchTest, OnForkChildBornCallback) {
+  VMSDK_EXPECT_OK(options::GetMaxWorkerSuspensionSecs().SetValue(0));
+  InitThreadPools(std::nullopt, 5);
+  auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
+  VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
+  ValkeyModuleEvent eid;
+  Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt = 0;
+  Metrics::GetStats().writer_worker_thread_pool_resumed_cnt = 0;
+  ValkeySearch::Instance().OnForkChildCallback(&fake_ctx_, eid, 0, nullptr);
   EXPECT_FALSE(writer_thread_pool->IsSuspended());
   EXPECT_EQ(
       Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt, 0);

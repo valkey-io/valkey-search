@@ -69,12 +69,8 @@ void ReportFreeMemorySize(uint64_t size) {
   memory_delta -= static_cast<int64_t>(size);
 }
 
-int64_t GetMemoryDelta() {
-  return memory_delta;
-}
+int64_t GetMemoryDelta() { return memory_delta; }
 
-void SetMemoryDelta(int64_t delta) {
-  memory_delta = delta;
-}
+void SetMemoryDelta(int64_t delta) { memory_delta = delta; }
 
 }  // namespace vmsdk

@@ -4,20 +4,19 @@
  * SPDX-License-Identifier: BSD 3-Clause
  *
  */
- 
+
 #include "src/indexes/text/wildcard.h"
 
 namespace valkey_search::indexes::text {
 
 WildCardIterator::WildCardIterator(const WordIterator& word,
-                              const text::WildCardOperation op,
-                              const FieldMaskPredicate field_mask,
-                              const InternedStringSet* untracked_keys)
+                                   const text::WildCardOperation op,
+                                   const FieldMaskPredicate field_mask,
+                                   const InternedStringSet* untracked_keys)
     : word_(word),
       operation_(op),
       field_mask_(field_mask),
-      untracked_keys_(untracked_keys) {
-}
+      untracked_keys_(untracked_keys) {}
 
 bool WildCardIterator::Done() const {
   if (nomatch_) {
@@ -61,4 +60,4 @@ const InternedStringPtr& WildCardIterator::operator*() const {
   return key_iter_.GetKey();
 }
 
-} // namespace valkey_search::indexes::text
+}  // namespace valkey_search::indexes::text

@@ -143,10 +143,8 @@ class TextPredicate : public Predicate {
 
 class TermPredicate : public TextPredicate {
  public:
-  TermPredicate(const indexes::Text* index,
-                absl::string_view identifier,
-                absl::string_view alias,
-                std::string term);
+  TermPredicate(const indexes::Text* index, absl::string_view identifier,
+                absl::string_view alias, std::string term);
   const indexes::Text* GetIndex() const { return index_; }
   absl::string_view GetAlias() const { return alias_; }
   absl::string_view GetIdentifier() const {
@@ -158,6 +156,7 @@ class TermPredicate : public TextPredicate {
   absl::string_view GetTextString() const { return term_; }
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const std::string_view& text) const override;
+
  private:
   const indexes::Text* index_;
   vmsdk::UniqueValkeyString identifier_;
@@ -167,10 +166,8 @@ class TermPredicate : public TextPredicate {
 
 class PrefixPredicate : public TextPredicate {
  public:
-  PrefixPredicate(const indexes::Text* index,
-                  absl::string_view identifier,
-                  absl::string_view alias,
-                  std::string term);
+  PrefixPredicate(const indexes::Text* index, absl::string_view identifier,
+                  absl::string_view alias, std::string term);
   const indexes::Text* GetIndex() const { return index_; }
   absl::string_view GetAlias() const { return alias_; }
   absl::string_view GetIdentifier() const {
@@ -192,10 +189,8 @@ class PrefixPredicate : public TextPredicate {
 
 class SuffixPredicate : public TextPredicate {
  public:
-  SuffixPredicate(const indexes::Text* index,
-                  absl::string_view identifier,
-                  absl::string_view alias,
-                  std::string term);
+  SuffixPredicate(const indexes::Text* index, absl::string_view identifier,
+                  absl::string_view alias, std::string term);
   const indexes::Text* GetIndex() const { return index_; }
   absl::string_view GetAlias() const { return alias_; }
   absl::string_view GetIdentifier() const {
@@ -217,10 +212,8 @@ class SuffixPredicate : public TextPredicate {
 
 class InfixPredicate : public TextPredicate {
  public:
-  InfixPredicate(const indexes::Text* index,
-                  absl::string_view identifier,
-                  absl::string_view alias,
-                  std::string term);
+  InfixPredicate(const indexes::Text* index, absl::string_view identifier,
+                 absl::string_view alias, std::string term);
   const indexes::Text* GetIndex() const { return index_; }
   absl::string_view GetAlias() const { return alias_; }
   absl::string_view GetIdentifier() const {
@@ -242,10 +235,8 @@ class InfixPredicate : public TextPredicate {
 
 class FuzzyPredicate : public TextPredicate {
  public:
-  FuzzyPredicate(const indexes::Text* index,
-                 absl::string_view identifier,
-                 absl::string_view alias,
-                 std::string term, uint32_t distance);
+  FuzzyPredicate(const indexes::Text* index, absl::string_view identifier,
+                 absl::string_view alias, std::string term, uint32_t distance);
   const indexes::Text* GetIndex() const { return index_; }
   absl::string_view GetAlias() const { return alias_; }
   absl::string_view GetIdentifier() const {
@@ -274,13 +265,13 @@ class ProximityPredicate : public TextPredicate {
   uint32_t GetSlop() const { return slop_; }
   bool IsInOrder() const { return inorder_; }
   bool Evaluate(Evaluator& evaluator) const override;
-  bool Evaluate(const std::string_view& text) const override {
-    return false;
-  }
+  bool Evaluate(const std::string_view& text) const override { return false; }
   const indexes::Text* GetIndex() const override {
     return terms_[0]->GetIndex();
   }
-  const std::vector<std::unique_ptr<TextPredicate>>& GetTerms() const { return terms_; }
+  const std::vector<std::unique_ptr<TextPredicate>>& GetTerms() const {
+    return terms_;
+  }
 
  private:
   std::vector<std::unique_ptr<TextPredicate>> terms_;

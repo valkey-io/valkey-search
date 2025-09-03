@@ -114,9 +114,16 @@ int OnLoadDone(absl::Status status, ValkeyModuleCtx *ctx,
   return VALKEYMODULE_ERR;
 }
 }  // namespace module
+static absl::flat_hash_set<std::string> loaded_modules;
+void SetModuleLoaded(const std::string &name, bool remove) {
+  if (remove) {
+    loaded_modules.erase(name);
+    return;
+  }
+  loaded_modules.insert(name);
+}
 
 bool IsModuleLoaded(ValkeyModuleCtx *ctx, const std::string &name) {
-  static absl::flat_hash_set<std::string> loaded_modules;
   if (loaded_modules.contains(name)) {
     return true;
   }
@@ -138,7 +145,6 @@ bool IsModuleLoaded(ValkeyModuleCtx *ctx, const std::string &name) {
     }
 
     size_t len = ValkeyModule_CallReplyLength(mod_info);
-
     for (size_t j = 0; j + 1 < len; j += 2) {
       ValkeyModuleCallReply *key =
           ValkeyModule_CallReplyArrayElement(mod_info, j);

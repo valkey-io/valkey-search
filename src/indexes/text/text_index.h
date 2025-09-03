@@ -9,14 +9,15 @@
 #define VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 
 #include <bitset>
+#include <cctype>
 #include <memory>
 #include <optional>
-#include <cctype>
 
 #include "absl/container/flat_hash_map.h"
-#include "src/indexes/text/radix_tree.h"
-#include "src/indexes/text/posting.h"
+#include "absl/container/flat_hash_set.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/text/posting.h"
+#include "src/indexes/text/radix_tree.h"
 
 struct sb_stemmer;
 
@@ -51,22 +52,20 @@ struct TextIndex {
 
   // Prefix tree
   RadixTree<std::shared_ptr<Postings>, false> prefix_;
-  
+
   // Suffix tree
   std::optional<RadixTree<std::shared_ptr<Postings>, true>> suffix_;
 };
 
 struct TextIndexSchema {
-  TextIndexSchema(data_model::Language language,
-                  const std::string& punctuation,
-                  bool with_offsets,
-                  const std::vector<std::string>& stop_words)
-      : num_text_fields_(0), 
+  TextIndexSchema(data_model::Language language, const std::string& punctuation,
+                  bool with_offsets, const std::vector<std::string>& stop_words)
+      : num_text_fields_(0),
         text_index_(std::make_shared<TextIndex>()),
         language_(language),
         with_offsets_(with_offsets) {
     BuildPunctuationBitmap(punctuation);
-    // TODO: Implement stop words filtering logic
+    BuildStopWordsSet(stop_words);
   }
 
   ~TextIndexSchema();
@@ -88,18 +87,19 @@ struct TextIndexSchema {
   // Optimized structures (shared across all text fields)
   PunctuationBitmap punct_bitmap_;
 
+  // Stop words set for filtering during tokenization
+  absl::flat_hash_set<std::string> stop_words_set_;
+
   // Language needed for stemmer creation
   data_model::Language language_ = data_model::LANGUAGE_UNSPECIFIED;
-  
+
   // Stemmer reused across all operations for this index
   mutable sb_stemmer* stemmer_ = nullptr;
 
   // Whether to store position offsets for phrase queries
   bool with_offsets_ = false;
 
-  uint8_t AllocateTextFieldNumber() {
-    return num_text_fields_++;
-  }
+  uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }
 
   sb_stemmer* GetStemmer() const;
 
@@ -107,9 +107,7 @@ struct TextIndexSchema {
     return punct_bitmap_;
   }
 
-  bool GetWithOffsets() const {
-    return with_offsets_;
-  }
+  bool GetWithOffsets() const { return with_offsets_; }
 
   std::string GetLanguageString() const {
     switch (language_) {
@@ -118,6 +116,10 @@ struct TextIndexSchema {
       default:
         return "english";
     }
+  }
+
+  const absl::flat_hash_set<std::string>& GetStopWordsSet() const {
+    return stop_words_set_;
   }
 
  private:
@@ -137,7 +139,7 @@ struct TextIndexSchema {
     }
   }
 
-  // TODO: void BuildStopWordsSet(const std::vector<std::string>& stop_words); // Next PR
+  void BuildStopWordsSet(const std::vector<std::string>& stop_words);
 };
 
 }  // namespace valkey_search::indexes::text

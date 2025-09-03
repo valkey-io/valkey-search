@@ -12,32 +12,28 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
-#include "src/indexes/text/posting.h"
 #include "src/indexes/text/lexer.h"
+#include "src/indexes/text/posting.h"
 
 namespace valkey_search::indexes {
 
 Text::Text(const data_model::TextIndex& text_index_proto,
            std::shared_ptr<text::TextIndexSchema> text_index_schema)
-    : IndexBase(IndexerType::kText), 
+    : IndexBase(IndexerType::kText),
       text_index_schema_(text_index_schema),
       text_field_number_(text_index_schema->AllocateTextFieldNumber()),
       with_suffix_trie_(text_index_proto.with_suffix_trie()),
       no_stem_(text_index_proto.no_stem()),
-      min_stem_size_(text_index_proto.min_stem_size()) {
-}
+      min_stem_size_(text_index_proto.min_stem_size()) {}
 
 absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
                                      absl::string_view data) {
   valkey_search::indexes::text::Lexer lexer;
 
-  auto tokens = lexer.Tokenize(
-      data,
-      text_index_schema_->GetPunctuationBitmap(),
-      text_index_schema_->GetStemmer(),
-      !no_stem_,
-      min_stem_size_
-  );
+  auto tokens =
+      lexer.Tokenize(data, text_index_schema_->GetPunctuationBitmap(),
+                     text_index_schema_->GetStemmer(), !no_stem_,
+                     min_stem_size_, text_index_schema_->GetStopWordsSet());
 
   if (!tokens.ok()) {
     if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {
@@ -59,7 +55,8 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
             // Create new Postings object with schema configuration
             bool save_positions = text_index_schema_->GetWithOffsets();
             uint8_t num_text_fields = text_index_schema_->num_text_fields_;
-            postings = std::make_shared<text::Postings>(save_positions, num_text_fields);
+            postings = std::make_shared<text::Postings>(save_positions,
+                                                        num_text_fields);
           }
 
           postings->InsertPosting(key, text_field_number_, position);
@@ -95,9 +92,7 @@ int Text::RespondWithInfo(ValkeyModuleCtx* ctx) const {
   return 10;
 }
 
-bool Text::IsTracked(const InternedStringPtr& key) const {
-  return false;
-}
+bool Text::IsTracked(const InternedStringPtr& key) const { return false; }
 
 uint64_t Text::GetRecordCount() const {
   // TODO: Implement proper record count tracking when key management is added
@@ -114,21 +109,21 @@ std::unique_ptr<data_model::Index> Text::ToProto() const {
   return index_proto;
 }
 
-// Size is needed for Inline queries (for approximation of qualified entries) and for multi sub query operations
-// (with AND/OR). This should be implemented as part of either Inline support OR multi sub query search.
+// Size is needed for Inline queries (for approximation of qualified entries)
+// and for multi sub query operations (with AND/OR). This should be implemented
+// as part of either Inline support OR multi sub query search.
 size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
   return 0;
 }
 
 std::unique_ptr<Text::EntriesFetcher> Text::Search(
-    const query::TextPredicate& predicate,
-    bool negate) const {
+    const query::TextPredicate& predicate, bool negate) const {
   auto fetcher = std::make_unique<EntriesFetcher>(
-    CalculateSize(predicate),
-    text_index_schema_->text_index_,
-    negate ? &untracked_keys_ : nullptr);
+      CalculateSize(predicate), text_index_schema_->text_index_,
+      negate ? &untracked_keys_ : nullptr);
   fetcher->predicate_ = &predicate;
-  // TODO : We only support single field queries for now. Change below when we support multiple and all fields.
+  // TODO : We only support single field queries for now. Change below when we
+  // support multiple and all fields.
   fetcher->field_mask_ = 1ULL << text_field_number_;
   return fetcher;
 }
@@ -138,12 +133,15 @@ size_t Text::EntriesFetcher::Size() const { return size_; }
 std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
   if (auto term = dynamic_cast<const query::TermPredicate*>(predicate_)) {
     auto iter = text_index_->prefix_.GetWordIterator(term->GetTextString());
-    auto itr = std::make_unique<text::TermIterator>(iter, term->GetTextString(), field_mask_, untracked_keys_);
+    auto itr = std::make_unique<text::TermIterator>(
+        iter, term->GetTextString(), field_mask_, untracked_keys_);
     itr->Next();
     return itr;
-  } else if (auto prefix = dynamic_cast<const query::PrefixPredicate*>(predicate_)) {
+  } else if (auto prefix =
+                 dynamic_cast<const query::PrefixPredicate*>(predicate_)) {
     auto iter = text_index_->prefix_.GetWordIterator(prefix->GetTextString());
-    auto itr = std::make_unique<text::WildCardIterator>(iter, text::WildCardOperation::kPrefix, field_mask_, untracked_keys_);
+    auto itr = std::make_unique<text::WildCardIterator>(
+        iter, text::WildCardOperation::kPrefix, field_mask_, untracked_keys_);
     itr->Next();
     return itr;
   }

@@ -112,14 +112,16 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
     }
     case Predicate::PREDICATE_NOT_SET:
       return absl::InvalidArgumentError("Predicate not set");
-    // TODO: Support CME Fanouts of TextPredicate
+      // TODO: Support CME Fanouts of TextPredicate
   }
   CHECK(false);
 }
 
 absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
-GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request, grpc::CallbackServerContext *context) {
-  auto parameters = std::make_unique<query::VectorSearchParameters>(request.timeout_ms(), context);
+GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
+                              grpc::CallbackServerContext* context) {
+  auto parameters = std::make_unique<query::VectorSearchParameters>(
+      request.timeout_ms(), context);
   parameters->index_schema_name = request.index_schema_name();
   parameters->attribute_alias = request.attribute_alias();
   VMSDK_ASSIGN_OR_RETURN(

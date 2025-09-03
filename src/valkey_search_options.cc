@@ -6,6 +6,8 @@
  */
 #include "valkey_search_options.h"
 
+#include "src/index_schema.h"
+#include "src/schema_manager.h"
 #include "valkey_search.h"
 #include "vmsdk/src/concurrency.h"
 #include "vmsdk/src/module_config.h"
@@ -22,6 +24,25 @@ constexpr uint32_t kMaximumFTInfoTimeoutMs{300000};
 constexpr uint32_t kDefaultFTInfoRpcTimeoutMs{2500};
 constexpr uint32_t kMinimumFTInfoRpcTimeoutMs{100};
 constexpr uint32_t kMaximumFTInfoRpcTimeoutMs{300000};
+
+// Async client throttling configuration
+constexpr absl::string_view kAsyncClientClientThrottlingEnabled{
+    "async-client-throttling-enabled"};
+constexpr absl::string_view kAsyncClientsBlockThreshold{
+    "async-clients-block-threshold"};
+constexpr absl::string_view kAsyncClientRatioSyncWeight{
+    "async-client-ratio-sync-weight"};
+constexpr absl::string_view kAsyncClientRatioAsyncWeight{
+    "async-client-ratio-async-weight"};
+constexpr absl::string_view kAsyncClientThrottlingHysteresisPercentage{
+    "async-client-throttling-hysteresis-percentage"};
+constexpr absl::string_view kAsyncClientClientPriority{"async-client-priority"};
+constexpr uint32_t kMinPercentageValue{1};
+constexpr uint32_t kMaxPercentageValue{100};
+constexpr uint32_t kDefaultAsyncClientsBlockThreshold{UINT32_MAX};
+constexpr uint32_t kDefaultAsyncClientRatioSyncWeight{1};
+constexpr uint32_t kDefaultAsyncClientRatioAsyncWeight{1};
+constexpr uint32_t kDefaultAsyncClientThrottlingHysteresisPercentage{80};
 
 namespace {
 
@@ -44,6 +65,22 @@ void UpdateThreadPoolCount(vmsdk::ThreadPool* pool, long long new_value) {
   pool->Resize(new_value);
 }
 
+/// Unblock async client clients when throttling is disabled
+void UnblockAsyncClientsDisabled(long long new_value) {
+  if (!SchemaManager::IsInitialized()) {
+    return;  // Safe exit during initialization
+  }
+  SchemaManager::Instance().UnblockAllAsyncClientsForDisable();
+}
+
+/// Unblock async client clients when throttling configuration changes
+void UnblockAsyncClients(long long new_value) {
+  if (!SchemaManager::IsInitialized()) {
+    return;  // Safe exit during initialization
+  }
+  SchemaManager::Instance().UnblockAllAsyncClients();
+}
+
 absl::Status ValidateLogLevel(const int value) {
   if (value >= static_cast<int>(LogLevel::kWarning) &&
       value <= static_cast<int>(LogLevel::kDebug)) {
@@ -57,6 +94,74 @@ absl::Status ValidateLogLevel(const int value) {
 
 // Configuration entries
 namespace config = vmsdk::config;
+
+// Async client throttling configuration variables
+/// Config for enabling/disabling async client client throttling
+static auto async_client_throttling_enabled =
+    config::BooleanBuilder(kAsyncClientClientThrottlingEnabled, false)
+        .WithModifyCallback([](bool new_value) {
+          if (!new_value) {
+            UnblockAsyncClientsDisabled(new_value);
+          }
+        })
+        .Build();
+
+static auto async_clients_block_threshold =
+    config::NumberBuilder(kAsyncClientsBlockThreshold,         // name
+                          kDefaultAsyncClientsBlockThreshold,  // default size
+                          0,                                   // min size
+                          UINT_MAX)                            // max size
+        .WithModifyCallback(UnblockAsyncClients)
+        .Build();
+
+// Two-integer weight configuration for sync vs async client ratios
+static auto async_client_ratio_sync_weight =
+    config::NumberBuilder(kAsyncClientRatioSyncWeight,         // name
+                          kDefaultAsyncClientRatioSyncWeight,  // default size
+                          1,         // min size (must be > 0)
+                          UINT_MAX)  // max size
+        .WithModifyCallback(UnblockAsyncClients)
+        .Build();
+
+static auto async_client_ratio_async_weight =
+    config::NumberBuilder(kAsyncClientRatioAsyncWeight,         // name
+                          kDefaultAsyncClientRatioAsyncWeight,  // default size
+                          1,         // min size (must be > 0)
+                          UINT_MAX)  // max size
+        .WithModifyCallback(UnblockAsyncClients)
+        .Build();
+
+static auto async_client_throttling_hysteresis_percentage =
+    config::NumberBuilder(
+        kAsyncClientThrottlingHysteresisPercentage,         // name
+        kDefaultAsyncClientThrottlingHysteresisPercentage,  // default size
+        kMinPercentageValue,                                // min size
+        kMaxPercentageValue)                                // max size
+        .WithValidationCallback(
+            CHECK_RANGE(kMinPercentageValue, kMaxPercentageValue,
+                        kAsyncClientThrottlingHysteresisPercentage))
+        .WithModifyCallback(UnblockAsyncClients)
+        .Build();
+
+// Async client priority configuration
+static const std::vector<std::string_view> kAsyncClientClientPriorityNames{
+    "low", "high", "max"};
+static const std::vector<int> kAsyncClientClientPriorityValues{
+    0, 1, 2};  // kLow, kHigh, kMax
+
+static auto async_client_priority =
+    config::EnumBuilder(kAsyncClientClientPriority, 0,  // default to "low"
+                        kAsyncClientClientPriorityNames,
+                        kAsyncClientClientPriorityValues)
+        .WithValidationCallback([](int value) -> absl::Status {
+          if (value < 0 || value > 2) {
+            return absl::InvalidArgumentError(
+                "Invalid async client client priority value");
+          }
+          return absl::OkStatus();
+        })
+        .WithModifyCallback(UnblockAsyncClients)
+        .Build();
 
 /// Register the "--query-string-bytes" flag. Controls the length of the query
 /// string of the FT.SEARCH cmd.
@@ -301,6 +406,37 @@ absl::Status Reset() {
   VMSDK_RETURN_IF_ERROR(use_coordinator->SetValue(false));
   VMSDK_RETURN_IF_ERROR(rdb_load_skip_index->SetValue(false));
   return absl::OkStatus();
+}
+
+vmsdk::config::Number& GetAsyncClientBlockThreshold() {
+  return dynamic_cast<vmsdk::config::Number&>(*async_clients_block_threshold);
+}
+
+vmsdk::config::Number& GetAsyncClientRatioSyncWeight() {
+  return dynamic_cast<vmsdk::config::Number&>(*async_client_ratio_sync_weight);
+}
+
+vmsdk::config::Number& GetAsyncClientRatioAsyncWeight() {
+  return dynamic_cast<vmsdk::config::Number&>(*async_client_ratio_async_weight);
+}
+
+vmsdk::config::Boolean& IsAsyncClientThrottlingEnabled() {
+  return dynamic_cast<vmsdk::config::Boolean&>(
+      *async_client_throttling_enabled);
+}
+
+vmsdk::config::Number& GetAsyncClientThrottlingHysteresisPercentage() {
+  return dynamic_cast<vmsdk::config::Number&>(
+      *async_client_throttling_hysteresis_percentage);
+}
+
+vmsdk::config::Enum& GetAsyncClientPriority() {
+  return dynamic_cast<vmsdk::config::Enum&>(*async_client_priority);
+}
+
+vmsdk::ThreadPool::Priority GetAsyncClientPriorityValue() {
+  return static_cast<vmsdk::ThreadPool::Priority>(
+      GetAsyncClientPriority().GetValue());
 }
 
 const vmsdk::config::Boolean& GetEnablePartialResults() {

@@ -44,6 +44,7 @@ class FanoutOperationBase {
     deadline_tp_ = std::chrono::steady_clock::now() +
                    std::chrono::milliseconds(GetTimeoutMs());
     targets_ = GetTargets(ctx);
+    Metrics::GetStats().fanout_retry_cnt.store(0);
     StartFanoutRound();
   }
 
@@ -110,6 +111,16 @@ class FanoutOperationBase {
         this->RpcDone();
       });
     } else {
+      // force the remote to fail 10 times for testing only
+      if (options::GetFanoutForceRemoteFail().GetValue() &&
+          Metrics::GetStats().fanout_retry_cnt < 10) {
+        this->OnError(grpc::Status(grpc::StatusCode::INTERNAL,
+                                   "Forced remote failure for testing"),
+                      coordinator::FanoutErrorType::COMMUNICATION_ERROR,
+                      target);
+        this->RpcDone();
+        return;
+      }
       auto client = client_pool_->GetClient(target.address);
       if (!client) {
         ++Metrics::GetStats().info_fanout_fail_cnt;
@@ -297,6 +308,7 @@ class FanoutOperationBase {
     }
     if (done) {
       if (!IsOperationTimedOut() && ShouldRetry()) {
+        ++Metrics::GetStats().fanout_retry_cnt;
         ResetBaseForRetry();
         ResetForRetry();
         StartFanoutRound();

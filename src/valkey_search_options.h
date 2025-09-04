@@ -52,5 +52,8 @@ absl::Status Reset();
 /// Allow delivery of partial results when timeout occurs
 const config::Boolean& GetEnablePartialResults();
 
+/// Return the configuration entry for high priority weight in thread pools
+config::Number& GetHighPriorityWeight();
+
 }  // namespace options
 }  // namespace valkey_search

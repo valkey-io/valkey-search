@@ -732,12 +732,30 @@ uint64_t IndexSchema::CountRecords() const {
   return record_cnt;
 }
 
+bool IndexSchema::HasTextFields() const {
+  for (const auto &attribute : attributes_) {
+    if (attribute.second.GetIndex()->GetIndexerType() == indexes::IndexerType::kText) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  int arrSize = 26;
-  if (text_index_schema_ != nullptr) {
-    arrSize += 2;
-    // with_offsets is shown as a flag (field name only), not a key-value pair
-    // so it doesn't increment arrSize
+  int arrSize = 28;
+  
+  // Calculate additional array size for text-related fields only if text fields exist
+  if (HasTextFields()) {
+    if (!punctuation_.empty()) {
+      arrSize += 2; // punctuation key-value pair
+    }
+    if (!stop_words_.empty()) {
+      arrSize += 2; // stop_words key-value pair
+    }
+    arrSize += 2; // language key-value pair (always shown for text fields)
+    if (with_offsets_) {
+      arrSize += 2; // with_offsets flag (field name only)
+    }
   }
 
   ValkeyModule_ReplyWithArray(ctx, arrSize);
@@ -852,19 +870,37 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, GetStateForInfo().data());
   
   // Add text-related schema fields
-  if (text_index_schema_) {
+  if (!punctuation_.empty()) {
     ValkeyModule_ReplyWithSimpleString(ctx, "punctuation");
-    ValkeyModule_ReplyWithSimpleString(ctx, text_index_schema_->punctuation_.c_str());
-    if(text_index_schema_->with_offsets_){
-      ValkeyModule_ReplyWithSimpleString(ctx, "with_offsets");
+    ValkeyModule_ReplyWithSimpleString(ctx, punctuation_.c_str());
+  }
+  
+  if (!stop_words_.empty()) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "stop_words");
+    ValkeyModule_ReplyWithArray(ctx, stop_words_.size());
+    for (const auto &stop_word : stop_words_) {
+      ValkeyModule_ReplyWithSimpleString(ctx, stop_word.c_str());
     }
   }
   
-  // ValkeyModule_ReplyWithSimpleString(ctx, "stop_words");
-  // ValkeyModule_ReplyWithArray(ctx, stop_words_.size());
-  // for (const auto &stop_word : stop_words_) {
-  //   ValkeyModule_ReplyWithSimpleString(ctx, stop_word.c_str());
-  // }
+  if (language_ != data_model::LANGUAGE_UNSPECIFIED) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "language");
+    switch (language_) {
+      case data_model::LANGUAGE_ENGLISH:
+        ValkeyModule_ReplyWithSimpleString(ctx, "english");
+        break;
+      default:
+        ValkeyModule_ReplyWithSimpleString(ctx, "english");
+        break;
+    }
+  } else {
+    ValkeyModule_ReplyWithSimpleString(ctx, "language");
+    ValkeyModule_ReplyWithSimpleString(ctx, "english");
+  }
+  
+  if (with_offsets_) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "with_offsets");
+  }
 }
 
 bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {

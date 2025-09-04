@@ -82,14 +82,17 @@ int Text::RespondWithInfo(ValkeyModuleCtx* ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "TEXT");
   ValkeyModule_ReplyWithSimpleString(ctx, "WITH_SUFFIX_TRIE");
   ValkeyModule_ReplyWithBool(ctx, with_suffix_trie_);
-  ValkeyModule_ReplyWithSimpleString(ctx, "NO_STEM");
-  ValkeyModule_ReplyWithBool(ctx, no_stem_);
-  ValkeyModule_ReplyWithSimpleString(ctx, "MIN_STEM_SIZE");
-  ValkeyModule_ReplyWithLongLong(ctx, min_stem_size_);
-  ValkeyModule_ReplyWithSimpleString(ctx, "size");
-  absl::MutexLock lock(&index_mutex_);
-  ValkeyModule_ReplyWithLongLong(ctx, GetRecordCount());
-  return 10;
+  
+  // Show only one: if no_stem is specified, show no_stem, otherwise show min_stem_size
+  if (no_stem_) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "NO_STEM");
+    ValkeyModule_ReplyWithBool(ctx, no_stem_);
+    return 8;
+  } else {
+    ValkeyModule_ReplyWithSimpleString(ctx, "MIN_STEM_SIZE");
+    ValkeyModule_ReplyWithLongLong(ctx, min_stem_size_);
+    return 8;
+  }
 }
 
 bool Text::IsTracked(const InternedStringPtr& key) const { return false; }

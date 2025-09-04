@@ -54,8 +54,7 @@ namespace vmsdk {
 ThreadPool::ThreadPool(const std::string &name_prefix, size_t num_threads)
     : initial_thread_count_(num_threads),
       priority_tasks_(static_cast<int>(ThreadPool::Priority::kMax) + 1),
-      name_prefix_(name_prefix),
-      random_generator_(std::random_device{}()) {}
+      name_prefix_(name_prefix) {}
 
 void ThreadPool::StartWorkers() {
   CHECK(!started_);
@@ -293,11 +292,11 @@ void ThreadPool::Resize(size_t count, bool wait_for_resize) {
 void ThreadPool::SetHighPriorityWeight(int weight) {
   // Clamp weight to valid range [0, 100]
   weight = std::max(0, std::min(100, weight));
-  high_priority_weight_.store(weight);
+  high_priority_weight_.store(weight, std::memory_order_relaxed);
 }
 
 int ThreadPool::GetHighPriorityWeight() const {
-  return high_priority_weight_.load();
+  return high_priority_weight_.load(std::memory_order_relaxed);
 }
 
 std::optional<absl::AnyInvocable<void()>> ThreadPool::TryGetNextTask() {
@@ -323,13 +322,12 @@ std::optional<absl::AnyInvocable<void()>> ThreadPool::TryGetNextTask() {
   } else if (!low_has_tasks) {
     selected_priority = Priority::kHigh;
   } else {
-    // Both have tasks - use weighted random selection
-    int high_weight = high_priority_weight_.load();
-    std::uniform_int_distribution<int> dist(0, 99);
-    int random_val = dist(random_generator_);
-
-    selected_priority =
-        (random_val < high_weight) ? Priority::kHigh : Priority::kLow;
+    // Both have tasks - use counter-based fairness
+    int high_weight = high_priority_weight_.load(std::memory_order_relaxed);
+    uint32_t counter_val = fairness_counter_.fetch_add(1, std::memory_order_relaxed);
+    
+    selected_priority = ((counter_val % 100) < static_cast<uint32_t>(high_weight)) 
+                       ? Priority::kHigh : Priority::kLow;
   }
 
   auto &selected_queue = GetPriorityTasksQueue(selected_priority);

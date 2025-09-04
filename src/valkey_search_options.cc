@@ -179,8 +179,8 @@ static auto high_priority_weight =
                           100)  // Default 100%, range 0-100
         .WithModifyCallback([](auto new_value) {
           // Update both reader and writer thread pools
-          auto* reader_pool = ValkeySearch::Instance().GetReaderThreadPool();
-          auto* writer_pool = ValkeySearch::Instance().GetWriterThreadPool();
+          auto reader_pool = ValkeySearch::Instance().GetReaderThreadPool();
+          auto writer_pool = ValkeySearch::Instance().GetWriterThreadPool();
           if (reader_pool) {
             reader_pool->SetHighPriorityWeight(new_value);
           }

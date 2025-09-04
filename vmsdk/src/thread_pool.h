@@ -15,7 +15,6 @@
 #include <memory>
 #include <optional>
 #include <queue>
-#include <random>
 #include <string>
 #include <vector>
 
@@ -102,7 +101,7 @@ class ThreadPool {
   void WorkerThread(std::shared_ptr<Thread> thread)
       ABSL_LOCKS_EXCLUDED(queue_mutex_);
 
-  /// Set the weight for high priority tasks (0-100)
+  /// Set the weight for high priority tasks [0, 100]
   /// Low priority weight = 100 - high_priority_weight
   void SetHighPriorityWeight(int weight);
 
@@ -149,7 +148,7 @@ class ThreadPool {
 
   // Fairness mechanism for kHigh vs kLow priority tasks
   std::atomic<int> high_priority_weight_{100};
-  mutable std::mt19937 random_generator_;
+  std::atomic<uint32_t> fairness_counter_{0};
 
   FRIEND_TEST(ThreadPoolTest, DynamicSizing);
 };

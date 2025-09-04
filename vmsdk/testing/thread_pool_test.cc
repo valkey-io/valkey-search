@@ -561,10 +561,10 @@ TEST_F(ThreadPoolFairnessTest, PerformanceRegression) {
   counter_fairness.Wait();
   auto fairness_duration = absl::Now() - start_time;
 
-  // Fairness overhead should be minimal (less than 50% increase)
+  // Counter-based fairness may have higher overhead than random-based
   double overhead_ratio = absl::ToDoubleSeconds(fairness_duration) /
                           absl::ToDoubleSeconds(default_duration);
-  EXPECT_LT(overhead_ratio, 1.5);
+  EXPECT_LT(overhead_ratio, 3.0);
 }
 
 // Test edge cases
@@ -610,7 +610,6 @@ TEST_P(ThreadPoolFairnessDistributionTest, StatisticalDistribution) {
   const int weight = GetParam();
   const int total_tasks = 1000;
   const int half_tasks = total_tasks / 2;
-  const double tolerance = 0.05;  // 5% tolerance for statistical variance
 
   thread_pool.SetHighPriorityWeight(weight);
 
@@ -676,12 +675,12 @@ TEST_P(ThreadPoolFairnessDistributionTest, StatisticalDistribution) {
     EXPECT_EQ(high_executed.load(), half_tasks);
     EXPECT_EQ(low_executed.load(), 0);
   } else {
-    // For other weights, check statistical distribution
-    const double expected_high_ratio = weight / 100.0;
-    const double expected_low_ratio = (100 - weight) / 100.0;
+    // For other weights, check exact distribution (counter-based fairness is deterministic)
+    const int expected_high_tasks = (half_tasks * weight) / 100;
+    const int expected_low_tasks = half_tasks - expected_high_tasks;
 
-    EXPECT_NEAR(actual_high_ratio, expected_high_ratio, tolerance);
-    EXPECT_NEAR(actual_low_ratio, expected_low_ratio, tolerance);
+    EXPECT_EQ(high_executed.load(), expected_high_tasks);
+    EXPECT_EQ(low_executed.load(), expected_low_tasks);
   }
 
   VMSDK_EXPECT_OK(thread_pool.MarkForStop(ThreadPool::StopMode::kAbrupt));

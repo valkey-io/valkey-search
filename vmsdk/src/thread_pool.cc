@@ -324,10 +324,13 @@ std::optional<absl::AnyInvocable<void()>> ThreadPool::TryGetNextTask() {
   } else {
     // Both have tasks - use counter-based fairness
     int high_weight = high_priority_weight_.load(std::memory_order_relaxed);
-    uint32_t counter_val = fairness_counter_.fetch_add(1, std::memory_order_relaxed);
-    
-    selected_priority = ((counter_val % 100) < static_cast<uint32_t>(high_weight)) 
-                       ? Priority::kHigh : Priority::kLow;
+    uint32_t counter_val =
+        fairness_counter_.fetch_add(1, std::memory_order_relaxed);
+
+    selected_priority =
+        ((counter_val % 100) < static_cast<uint32_t>(high_weight))
+            ? Priority::kHigh
+            : Priority::kLow;
   }
 
   auto &selected_queue = GetPriorityTasksQueue(selected_priority);

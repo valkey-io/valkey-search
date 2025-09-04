@@ -675,7 +675,8 @@ TEST_P(ThreadPoolFairnessDistributionTest, StatisticalDistribution) {
     EXPECT_EQ(high_executed.load(), half_tasks);
     EXPECT_EQ(low_executed.load(), 0);
   } else {
-    // For other weights, check exact distribution (counter-based fairness is deterministic)
+    // For other weights, check exact distribution (counter-based fairness is
+    // deterministic)
     const int expected_high_tasks = (half_tasks * weight) / 100;
     const int expected_low_tasks = half_tasks - expected_high_tasks;
 

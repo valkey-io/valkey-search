@@ -339,13 +339,15 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
 }
 
 absl::StatusOr<std::deque<indexes::Neighbor>> Search(
-    const VectorSearchParameters &parameters, bool is_local_search) {
-  // Handle OOM for search requests, mainly defends against request
+    const VectorSearchParameters &parameters, SearchMode search_mode) {
+  // Handle OOM for search requests, defends against request
   // coming from the coordinator
-  auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-  auto ctx_flags = ValkeyModule_GetContextFlags(ctx.get());
-  if (ctx_flags & VALKEYMODULE_CTX_FLAGS_OOM) {
-    return absl::ResourceExhaustedError(kOOMMsg);
+  if (search_mode == SearchMode::kRemote) {
+    auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
+    auto ctx_flags = ValkeyModule_GetContextFlags(ctx.get());
+    if (ctx_flags & VALKEYMODULE_CTX_FLAGS_OOM) {
+      return absl::ResourceExhaustedError(kOOMMsg);
+    }
   }
   // Handle non vector queries first where attribute_alias is empty.
   if (parameters.IsNonVectorQuery()) {
@@ -409,11 +411,11 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
 absl::Status SearchAsync(std::unique_ptr<VectorSearchParameters> parameters,
                          vmsdk::ThreadPool *thread_pool,
                          SearchResponseCallback callback,
-                         bool is_local_search) {
+                         SearchMode search_mode) {
   thread_pool->Schedule(
       [parameters = std::move(parameters), callback = std::move(callback),
-       is_local_search]() mutable {
-        auto res = Search(*parameters, is_local_search);
+       search_mode]() mutable {
+        auto res = Search(*parameters, search_mode);
         callback(res, std::move(parameters));
       },
       vmsdk::ThreadPool::Priority::kHigh);

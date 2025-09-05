@@ -56,7 +56,7 @@ const absl::flat_hash_map<data_model::DistanceMetric, std::string>
 };
 
 static cancel::Token& CancelNever() {
-  static cancel::Token cancel_never = cancel::Make(100000, nullptr);
+  static cancel::Token cancel_never = cancel::Make(1000000, nullptr);
   return cancel_never;
 }
 

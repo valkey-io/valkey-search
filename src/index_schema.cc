@@ -740,7 +740,7 @@ bool IndexSchema::HasTextFields() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  int arrSize = 78;
+  int arrSize = 36;
   
   // Calculate additional array size for text-related fields only if text fields exist
   if (HasTextFields()) {

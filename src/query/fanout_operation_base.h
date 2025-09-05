@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <source_location>
+#include <thread>
 
 #include "absl/synchronization/mutex.h"
 #include "grpcpp/support/status.h"
@@ -121,29 +122,36 @@ class FanoutOperationBase {
         this->RpcDone();
         return;
       }
-      auto client = client_pool_->GetClient(target.address);
-      if (!client) {
-        this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
-                      coordinator::FanoutErrorType::COMMUNICATION_ERROR,
-                      target);
-        this->RpcDone();
-        return;
-      }
-      this->InvokeRemoteRpc(
-          client.get(), request,
-          [this, target](grpc::Status status, Response& resp) {
-            if (status.ok()) {
-              this->OnResponse(resp, target);
-            } else {
-              VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1)
-                  << "FANOUT_DEBUG: InvokeRemoteRpc error on target "
-                  << target.address << ", status code: " << status.error_code()
-                  << ", error message: " << status.error_message();
-              this->OnError(status, resp.error_type(), target);
-            }
-            this->RpcDone();
-          },
-          timeout_ms);
+      std::thread([this, target, request, timeout_ms, client_pool_]() {
+        if (!vmsdk::IsMainThread()) {
+          PAUSEPOINT("fanout_before_rpc");
+        }
+        auto client = client_pool_->GetClient(target.address);
+        if (!client) {
+          VMSDK_LOG(WARNING, nullptr) << "Found invalid client!";
+          this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
+                        coordinator::FanoutErrorType::COMMUNICATION_ERROR,
+                        target);
+          this->RpcDone();
+          return;
+        }
+        this->InvokeRemoteRpc(
+            client.get(), request,
+            [this, target](grpc::Status status, Response& resp) {
+              if (status.ok()) {
+                this->OnResponse(resp, target);
+              } else {
+                VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1)
+                    << "FANOUT_DEBUG: InvokeRemoteRpc error on target "
+                    << target.address
+                    << ", status code: " << status.error_code()
+                    << ", error message: " << status.error_message();
+                this->OnError(status, resp.error_type(), target);
+              }
+              this->RpcDone();
+            },
+            timeout_ms);
+      }).detach();
     }
   }
 

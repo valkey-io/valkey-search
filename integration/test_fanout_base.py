@@ -8,6 +8,8 @@ from test_info_primary import is_index_on_all_nodes
 from valkey.exceptions import ResponseError
 import pytest
 import re
+import threading
+import time
 
 class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
 
@@ -56,19 +58,49 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
 
         waiters.wait_for_true(lambda: is_index_on_all_nodes(self, index_name))
 
-        set_pausepoint_res = node0.execute_command("FT._DEBUG PAUSEPOINT SET fanout_remote_pausepoint")
-        assert "OK" in str(set_pausepoint_res)
+        assert node0.execute_command("FT._DEBUG PAUSEPOINT SET fanout_remote_pausepoint") == b"OK"
 
         with pytest.raises(ResponseError) as ei:
             node0.execute_command("FT.INFO", index_name, "PRIMARY")
         assert "Request timed out" in str(ei.value)
 
-        test_pausepoint_res = node0.execute_command("FT._DEBUG PAUSEPOINT TEST fanout_remote_pausepoint")
-        assert int(str(test_pausepoint_res)) > 0
+        assert int(str(node0.execute_command("FT._DEBUG PAUSEPOINT TEST fanout_remote_pausepoint"))) > 0
 
-        reset_pausepoint_res = node0.execute_command("FT._DEBUG PAUSEPOINT RESET fanout_remote_pausepoint")
-        assert "OK" in str(reset_pausepoint_res)
+        assert node0.execute_command("FT._DEBUG PAUSEPOINT RESET fanout_remote_pausepoint") == b"OK"
 
+    # force timeout by shutting down a node
+    def test_fanout_base_shutdown_timeout(self):
+        cluster: ValkeyCluster = self.new_cluster_client()
+        node0: Valkey = self.new_client_for_primary(0)
+        node1: Valkey = self.new_client_for_primary(1)
+        index_name = "index1"
 
+        assert node0.execute_command(
+            "FT.CREATE", index_name,
+            "ON", "HASH",
+            "PREFIX", "1", "doc:",
+            "SCHEMA", "price", "NUMERIC"
+        ) == b"OK"
 
+        waiters.wait_for_true(lambda: is_index_on_all_nodes(self, index_name))
 
+        N = 5
+        for i in range(N):
+            cluster.execute_command("HSET", f"doc:{i}", "price", str(10 + i))
+
+        set_res = node0.execute_command("FT._DEBUG PAUSEPOINT SET fanout_before_rpc")
+        assert b"OK" in set_res
+
+        def shutdown_and_release():
+            waiters.wait_for_true(lambda: int(node0.execute_command("FT._DEBUG PAUSEPOINT TEST fanout_before_rpc")) > 0)
+            try:
+                node1.execute_command("SHUTDOWN")
+            except Exception:
+                pass
+            node0.execute_command("FT._DEBUG PAUSEPOINT RESET fanout_before_rpc")
+
+        threading.Thread(target=shutdown_and_release, daemon=True).start()
+
+        with pytest.raises(ResponseError) as ei:
+            node0.execute_command("FT.INFO", index_name, "CLUSTER")
+        assert "Request timed out" in str(ei.value)

@@ -496,7 +496,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
                             "10\r\n+identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+type\r\n+"
-                            "TEXT\r\n+WITH_SUFFIX_TRIE\r\n+0\r\n+MIN_STEM_SIZE\r\n:0\r\n+"
+                            "TEXT\r\n+WITH_SUFFIX_TRIE\r\n+0\r\n+MIN_STEM_"
+                            "SIZE\r\n:0\r\n+"
                             "num_docs\r\n:0\r\n+num_"
                             "terms\r\n:0\r\n+num_records\r\n:0\r\n+"
                             "hash_indexing_failures\r\n$1\r\n0\r\n+gc_"
@@ -524,7 +525,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
                             "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
                             "mutations_queue_delay\r\n$5\r\n0 sec\r\n+state\r\n"
-                            "+ready\r\n+punctuation\r\n+\r\n+stop_words\r\n*0\r\n+"
+                            "+ready\r\n+punctuation\r\n+\r\n+stop_words\r\n*"
+                            "0\r\n+"
                             "with_offsets\r\n+0\r\n+language\r\n+english\r\n",
                     },
                 },
@@ -566,7 +568,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
                             "10\r\n+identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+type\r\n+"
-                            "TEXT\r\n+WITH_SUFFIX_TRIE\r\n+1\r\n+NO_STEM\r\n+1\r\n+"
+                            "TEXT\r\n+WITH_SUFFIX_TRIE\r\n+1\r\n+NO_STEM\r\n+"
+                            "1\r\n+"
                             "num_docs\r\n:0\r\n+num_"
                             "terms\r\n:0\r\n+num_records\r\n:0\r\n+"
                             "hash_indexing_failures\r\n$1\r\n0\r\n+gc_"
@@ -594,7 +597,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
                             "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
                             "mutations_queue_delay\r\n$5\r\n0 sec\r\n+state\r\n"
-                            "+ready\r\n+punctuation\r\n+.,!?\r\n+stop_words\r\n*3\r\n+"
+                            "+ready\r\n+punctuation\r\n+.,!?\r\n+stop_"
+                            "words\r\n*3\r\n+"
                             "the\r\n+and\r\n+or\r\n+with_offsets\r\n+1\r\n+"
                             "language\r\n+english\r\n",
                     },

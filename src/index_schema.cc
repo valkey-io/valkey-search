@@ -178,8 +178,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
   VMSDK_RETURN_IF_ERROR(res->Init(ctx));
   if (!skip_attributes) {
     for (const auto &attribute : index_schema_proto.attributes()) {
-      VMSDK_ASSIGN_OR_RETURN(std::shared_ptr<indexes::IndexBase> index,
-                             IndexFactory(ctx, res.get(), attribute, std::nullopt));
+      VMSDK_ASSIGN_OR_RETURN(
+          std::shared_ptr<indexes::IndexBase> index,
+          IndexFactory(ctx, res.get(), attribute, std::nullopt));
       VMSDK_RETURN_IF_ERROR(
           res->AddIndex(attribute.alias(), attribute.identifier(), index));
     }
@@ -732,7 +733,8 @@ uint64_t IndexSchema::CountRecords() const {
 
 bool IndexSchema::HasTextFields() const {
   for (const auto &attribute : attributes_) {
-    if (attribute.second.GetIndex()->GetIndexerType() == indexes::IndexerType::kText) {
+    if (attribute.second.GetIndex()->GetIndexerType() ==
+        indexes::IndexerType::kText) {
       return true;
     }
   }
@@ -741,8 +743,9 @@ bool IndexSchema::HasTextFields() const {
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   int arrSize = 36;
-  
-  // Calculate additional array size for text-related fields only if text fields exist
+
+  // Calculate additional array size for text-related fields only if text fields
+  // exist
   if (HasTextFields()) {
     arrSize += 6;
   }
@@ -857,7 +860,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
                .c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "state");
   ValkeyModule_ReplyWithSimpleString(ctx, GetStateForInfo().data());
-  
+
   // Add text-related schema fields
   if (HasTextFields()) {
     ValkeyModule_ReplyWithSimpleString(ctx, "punctuation");
@@ -872,7 +875,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
     ValkeyModule_ReplyWithSimpleString(ctx, "with_offsets");
     ValkeyModule_ReplyWithSimpleString(ctx, with_offsets_ ? "1" : "0");
   }
-  
+
   if (language_ != data_model::LANGUAGE_UNSPECIFIED) {
     ValkeyModule_ReplyWithSimpleString(ctx, "language");
     switch (language_) {
@@ -887,8 +890,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
     ValkeyModule_ReplyWithSimpleString(ctx, "language");
     ValkeyModule_ReplyWithSimpleString(ctx, "english");
   }
-  
-
 }
 
 bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {

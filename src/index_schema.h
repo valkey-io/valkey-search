@@ -104,6 +104,7 @@ class IndexSchema : public KeyspaceEventSubscription,
                         std::shared_ptr<indexes::IndexBase> index);
 
   void RespondWithInfo(ValkeyModuleCtx *ctx) const;
+  bool HasTextFields() const;
 
   inline const AttributeDataType &GetAttributeDataType() const override {
     return *attribute_data_type_;
@@ -201,7 +202,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   bool with_offsets_{true};
   std::vector<std::string> stop_words_;
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
-
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   InternedStringMap<DocumentMutation> tracked_mutated_records_
       ABSL_GUARDED_BY(mutated_records_mutex_);

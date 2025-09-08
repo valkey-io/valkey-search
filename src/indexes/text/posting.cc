@@ -13,11 +13,11 @@
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
-#include "vmsdk/src/memory_allocation_overrides.h"
-#include "vmsdk/src/memory_allocation.h"
 
 #include "absl/log/check.h"
 #include "src/index_schema.h"
+#include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/memory_allocation_overrides.h"
 
 namespace valkey_search::indexes::text {
 

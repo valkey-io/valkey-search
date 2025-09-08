@@ -215,6 +215,9 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
         self.server = self.rg.primary.server
         self.client = self.rg.primary.client
 
+        self.nodes: List[Node] = [self.rg.primary]
+        self.nodes += self.rg.replicas
+
         yield
 
         # Cleanup
@@ -387,6 +390,11 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
             )
             rg = ReplicationGroup(primary=primary_node, replicas=replicas)
             self.replication_groups.append(rg)
+
+        self.nodes: List[Node] = list()
+        for rg in self.replication_groups:
+            self.nodes.append(rg.primary)
+            self.nodes += rg.replicas
 
         # Split the slots
         ranges = self._split_range_pairs(0, 16384, self.CLUSTER_SIZE)

@@ -171,7 +171,7 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
           });
         }
       },
-      false);
+      query::SearchMode::kRemote);
   if (!status.ok()) {
     VMSDK_LOG(WARNING, detached_ctx_.get())
         << "Failed to enqueue search request: " << status.message();

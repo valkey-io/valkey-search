@@ -174,9 +174,9 @@ struct Postings {
     PositionMap::const_iterator end_;
   };
 
-private:
+ private:
   static MemoryPool memory_pool_;
-  
+
   // Used for testing.
   static void SetMemoryUsage(int64_t value) {
     memory_pool_.Reset();

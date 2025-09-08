@@ -241,7 +241,7 @@ absl::Status PerformSearchFanoutAsync(
                 << neighbors.status().message();
           }
         },
-        true))
+        SearchMode::kLocal))
         << "Failed to handle FT.SEARCH locally during fan-out";
   }
   return absl::OkStatus();
@@ -249,9 +249,8 @@ absl::Status PerformSearchFanoutAsync(
 
 // TODO See if caching this improves performance.
 std::vector<fanout::FanoutSearchTarget> GetSearchTargetsForFanout(
-    ValkeyModuleCtx *ctx) {
-  return fanout::FanoutTemplate::GetTargets(ctx,
-                                            fanout::FanoutTargetMode::kRandom);
+    ValkeyModuleCtx *ctx, FanoutTargetMode mode) {
+  return fanout::FanoutTemplate::GetTargets(ctx, mode);
 }
 
 }  // namespace valkey_search::query::fanout

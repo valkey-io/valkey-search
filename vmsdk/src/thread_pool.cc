@@ -333,16 +333,16 @@ std::optional<absl::AnyInvocable<void()>> ThreadPool::TryGetNextTask() {
       // Only increment counter when we need fairness calculation
       uint32_t counter_val =
           fairness_counter_.fetch_add(1, std::memory_order_relaxed);
-      
+
       // Calculate pattern for better latency distribution
       int low_weight = 100 - high_weight;
       int gcd_val = std::gcd(high_weight, low_weight);
       int high_ratio = high_weight / gcd_val;
       int pattern_length = high_ratio + (low_weight / gcd_val);
-      
+
       int position_in_pattern = counter_val % pattern_length;
-      selected_priority = (position_in_pattern < high_ratio) 
-                         ? Priority::kHigh : Priority::kLow;
+      selected_priority =
+          (position_in_pattern < high_ratio) ? Priority::kHigh : Priority::kLow;
     }
   }
 

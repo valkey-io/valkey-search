@@ -76,7 +76,7 @@ class TestFTInfoCluster(ValkeySearchClusterTestCaseDebugMode):
         waiters.wait_for_true(lambda: is_index_on_all_nodes(self, index_name))
         waiters.wait_for_true(lambda: self.is_backfill_complete(node0, index_name))
         
-        assert node0.execute_command("FT._DEBUG FANOUT_FORCE_REMOTE_FAIL yes") == b"OK"
+        assert node0.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceTimeout yes") == b"OK"
 
         raw = node0.execute_command("FT.INFO", index_name, "CLUSTER")
 
@@ -105,4 +105,4 @@ class TestFTInfoCluster(ValkeySearchClusterTestCaseDebugMode):
         assert backfill_complete_percent_min == 1.000000
         assert state == "ready"
 
-        assert node0.execute_command("FT._DEBUG FANOUT_FORCE_REMOTE_FAIL no") == b"OK"
+        assert node0.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceTimeout no") == b"OK"

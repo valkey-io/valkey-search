@@ -28,7 +28,7 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
 
         waiters.wait_for_true(lambda: is_index_on_all_nodes(self, index_name))
 
-        assert node0.execute_command("FT._DEBUG FANOUT_FORCE_REMOTE_FAIL yes") == b"OK"
+        assert node0.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceTimeout yes") == b"OK"
 
         node0.execute_command("FT.INFO", index_name, "PRIMARY")
         info_search_str = str(node0.execute_command("INFO SEARCH"))
@@ -41,7 +41,7 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
 
         assert retry_count > 0, f"Expected retry_count to be greater than 0, got {retry_count}"
 
-        assert node0.execute_command("FT._DEBUG FANOUT_FORCE_REMOTE_FAIL no") == b"OK"
+        assert node0.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceTimeout no") == b"OK"
 
     # force timeout by pausing remote calls
     def test_fanout_base_timeout(self):

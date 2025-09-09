@@ -322,15 +322,28 @@ std::optional<absl::AnyInvocable<void()>> ThreadPool::TryGetNextTask() {
   } else if (!low_has_tasks) {
     selected_priority = Priority::kHigh;
   } else {
-    // Both have tasks - use counter-based fairness
+    // Both have tasks - use pattern-based weighted round robin
     int high_weight = high_priority_weight_.load(std::memory_order_relaxed);
-    uint32_t counter_val =
-        fairness_counter_.fetch_add(1, std::memory_order_relaxed);
 
-    selected_priority =
-        ((counter_val % 100) < static_cast<uint32_t>(high_weight))
-            ? Priority::kHigh
-            : Priority::kLow;
+    if (high_weight == 0) {
+      selected_priority = Priority::kLow;
+    } else if (high_weight == 100) {
+      selected_priority = Priority::kHigh;
+    } else {
+      // Only increment counter when we need fairness calculation
+      uint32_t counter_val =
+          fairness_counter_.fetch_add(1, std::memory_order_relaxed);
+      
+      // Calculate pattern for better latency distribution
+      int low_weight = 100 - high_weight;
+      int gcd_val = std::gcd(high_weight, low_weight);
+      int high_ratio = high_weight / gcd_val;
+      int pattern_length = high_ratio + (low_weight / gcd_val);
+      
+      int position_in_pattern = counter_val % pattern_length;
+      selected_priority = (position_in_pattern < high_ratio) 
+                         ? Priority::kHigh : Priority::kLow;
+    }
   }
 
   auto &selected_queue = GetPriorityTasksQueue(selected_priority);

@@ -15,10 +15,10 @@
 
 #include "absl/synchronization/mutex.h"
 #include "grpcpp/support/status.h"
-#include "src/commands/ft_debug.h"
 #include "src/coordinator/client_pool.h"
 #include "src/metrics.h"
 #include "src/query/fanout_template.h"
+#include "src/utils/cancel.h"
 #include "src/valkey_search.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/debug.h"
@@ -103,8 +103,8 @@ class FanoutOperationBase {
       });
     } else {
       // force the remote to fail 10 times for testing only
-      if (Metrics::GetStats().fanout_retry_cnt < 10 &&
-          valkey_search::GetFanoutForceRemoteFail()) {
+      if (valkey_search::cancel::GetForceTimeoutValue() &&
+          Metrics::GetStats().fanout_retry_cnt < 10) {
         std::thread([this, target]() {
           this->OnError(grpc::Status(grpc::StatusCode::INTERNAL,
                                      "Forced remote failure for testing"),

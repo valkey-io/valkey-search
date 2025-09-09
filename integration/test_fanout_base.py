@@ -17,14 +17,12 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
         node0: Valkey = self.new_client_for_primary(0)
         node1: Valkey = self.new_client_for_primary(1)
         index_name = "index1"
-
         assert node0.execute_command(
             "FT.CREATE", index_name,
             "ON", "HASH",
             "PREFIX", "1", "doc:",
             "SCHEMA", "price", "NUMERIC"
         ) == b"OK"
-
         waiters.wait_for_true(lambda: is_index_on_all_nodes(self, index_name))
         # force remote node to fail once and trigger retry
         assert node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceRemoteFailCount 1") == b"OK"

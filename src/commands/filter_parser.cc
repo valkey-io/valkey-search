@@ -139,7 +139,7 @@ void PrintPredicate(const query::Predicate* pred, int depth, bool last,
     }
     case query::PredicateType::kText: {
       if (auto prox = dynamic_cast<const query::ProximityPredicate*>(pred)) {
-        valid = false;
+        // valid = false;
         VMSDK_LOG(WARNING, nullptr)
             << prefix << "PROXIMITY(slop=" << prox->GetSlop()
             << ", inorder=" << prox->IsInOrder() << ")\n";

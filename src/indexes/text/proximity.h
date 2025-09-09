@@ -15,6 +15,7 @@
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/radix_tree.h"
 #include "src/utils/string_interning.h"
+#include "src/indexes/text/text_iterator.h"
 
 namespace valkey_search::indexes::text {
 
@@ -65,8 +66,10 @@ Iterator.
 */
 class ProximityIterator : public indexes::EntriesFetcherIteratorBase {
  public:
-  PhraseIterator(const std::vector<EntriesFetcherIteratorBase>& iters,
-                 size_t slop, bool in_order, FieldMaskPredicate field_mask,
+  ProximityIterator(std::vector<std::unique_ptr<TextIterator>>&& iters,
+                 size_t slop,
+                 bool in_order, 
+                 FieldMaskPredicate field_mask,
                  const InternedStringSet* untracked_keys = nullptr);
 
   bool Done() const override;
@@ -74,19 +77,32 @@ class ProximityIterator : public indexes::EntriesFetcherIteratorBase {
   const InternedStringPtr& operator*() const override;
 
  private:
-  std::vector<EntriesFetcherIteratorBase> iters_;
-  std::shared_ptr<Postings> target_posting_;
-  Postings::KeyIterator key_iter_;
-  WordIterator word_iter_;
-  bool begin_ =
-      true;  // Used to track if we are at the beginning of the iterator.
+  std::vector<std::unique_ptr<TextIterator>> iters_; // List of all the Text Predicates contained in the Proximity AND.
+  bool done_;  // Used to track if we are at the beginning of the iterator.
   size_t slop_;
   bool in_order_;
   const InternedStringSet* untracked_keys_;
+  
+  absl::string_view current_word_; // Should never be used.
   InternedStringPtr current_key_;
-  FieldMaskPredicate field_mask_;
-};
+  uint64_t current_pos_;  // Should never be used.
+  uint64_t field_mask_; // This is from the query and is used in exact phrase
 
+  // Align all iterators on the same key (lexicographically)
+  bool AlignToSameKey();
+
+  // Check if current positions satisfy proximity
+  bool MatchPositions();
+
+  // Advance position vectors for next match in current key
+  bool AdvanceLowestKey();
+
+  void SyncCurrentKey();
+
+  bool NextKey();
+  bool NextPosition();
+  bool NextWord();
+};
 }  // namespace valkey_search::indexes::text
 
 #endif

@@ -27,12 +27,6 @@ absl::Status CheckEndOfArgs(vmsdk::ArgsIterator &itr) {
   }
 }
 
-namespace {
-static std::atomic<bool> g_fanout_force_remote_fail{false};
-}
-
-bool GetFanoutForceRemoteFail() { return g_fanout_force_remote_fail.load(); }
-
 //
 // FT._DEBUG PAUSEPOINT [ SET | RESET | TEST | LIST] <pausepoint>
 //
@@ -138,27 +132,6 @@ absl::Status ControlledCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   return absl::OkStatus();
 }
 
-absl::Status FanoutForceRemoteFailCmd(ValkeyModuleCtx *ctx,
-                                      vmsdk::ArgsIterator &itr) {
-  std::string keyword;
-  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, keyword));
-  keyword = absl::AsciiStrToUpper(keyword);
-  if (keyword == "GET") {
-    ValkeyModule_ReplyWithSimpleString(
-        ctx, g_fanout_force_remote_fail.load() ? "yes" : "no");
-  } else if (keyword == "YES" || keyword == "TRUE") {
-    g_fanout_force_remote_fail.store(true);
-    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
-  } else if (keyword == "NO" || keyword == "FALSE") {
-    g_fanout_force_remote_fail.store(false);
-    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
-  } else {
-    ValkeyModule_ReplyWithError(
-        ctx, absl::StrCat("Unknown keyword", keyword).data());
-  }
-  return absl::OkStatus();
-}
-
 absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
   static std::vector<std::pair<std::string, std::string>> help_text{
@@ -212,8 +185,6 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return ControlledCmd(ctx, itr);
   } else if (keyword == "HELP") {
     return HelpCmd(ctx, itr);
-  } else if (keyword == "FANOUT_FORCE_REMOTE_FAIL") {
-    return FanoutForceRemoteFailCmd(ctx, itr);
   } else {
     return absl::InvalidArgumentError(absl::StrCat(
         "Unknown subcommand: ", *itr.GetStringView(), " try HELP subcommand"));

@@ -293,6 +293,23 @@ void ThreadPool::SetHighPriorityWeight(int weight) {
   // Clamp weight to valid range [0, 100]
   weight = std::max(0, std::min(100, weight));
   high_priority_weight_.store(weight, std::memory_order_relaxed);
+
+  // Pre-compute pattern for efficiency
+  if (weight == 0) {
+    pattern_length_.store(1, std::memory_order_relaxed);
+    high_ratio_.store(0, std::memory_order_relaxed);
+  } else if (weight == 100) {
+    pattern_length_.store(1, std::memory_order_relaxed);
+    high_ratio_.store(1, std::memory_order_relaxed);
+  } else {
+    int low_weight = 100 - weight;
+    int gcd_val = std::gcd(weight, low_weight);
+    int high_ratio = weight / gcd_val;
+    int pattern_len = high_ratio + (low_weight / gcd_val);
+
+    pattern_length_.store(pattern_len, std::memory_order_relaxed);
+    high_ratio_.store(high_ratio, std::memory_order_relaxed);
+  }
 }
 
 int ThreadPool::GetHighPriorityWeight() const {
@@ -334,11 +351,9 @@ std::optional<absl::AnyInvocable<void()>> ThreadPool::TryGetNextTask() {
       uint32_t counter_val =
           fairness_counter_.fetch_add(1, std::memory_order_relaxed);
 
-      // Calculate pattern for better latency distribution
-      int low_weight = 100 - high_weight;
-      int gcd_val = std::gcd(high_weight, low_weight);
-      int high_ratio = high_weight / gcd_val;
-      int pattern_length = high_ratio + (low_weight / gcd_val);
+      // Use pre-computed pattern values for better performance
+      int high_ratio = high_ratio_.load(std::memory_order_relaxed);
+      int pattern_length = pattern_length_.load(std::memory_order_relaxed);
 
       int position_in_pattern = counter_val % pattern_length;
       selected_priority =

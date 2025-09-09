@@ -150,6 +150,10 @@ class ThreadPool {
   std::atomic<int> high_priority_weight_{100};
   std::atomic<uint32_t> fairness_counter_{0};
 
+  // Pattern-based weighted round robin for better latency distribution
+  std::atomic<int> pattern_length_{1};  // Length of the repeating pattern
+  std::atomic<int> high_ratio_{1};  // Number of high priority tasks in pattern
+
   FRIEND_TEST(ThreadPoolTest, DynamicSizing);
 };
 

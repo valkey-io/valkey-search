@@ -18,6 +18,8 @@ namespace cancel {
 CONTROLLED_SIZE_T(TimeoutPollFrequency, 100);
 CONTROLLED_BOOLEAN(ForceTimeout, false);
 
+bool GetForceTimeoutValue() { return ForceTimeout.GetValue(); }
+
 static vmsdk::info_field::Integer Timeouts(
     "timeouts", "cancel-timeouts", vmsdk::info_field::IntegerBuilder().Dev());
 

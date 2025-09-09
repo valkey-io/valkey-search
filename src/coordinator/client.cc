@@ -62,6 +62,8 @@ static constexpr int kCoordinatorQueryDefaultTimeout{120};
 static constexpr int kCoordinatorQueryMinTimeout{1};
 static constexpr int kCoordinatorQueryMaxTimeout{3600};
 
+static constexpr int kInfoRpcTimeout{2500};
+
 static auto query_connection_timeout =
     vmsdk::config::NumberBuilder(
         kCoordinatorQueryTimeout, kCoordinatorQueryDefaultTimeout,
@@ -192,7 +194,7 @@ void ClientImpl::InfoIndexPartition(
   };
   auto args = std::make_unique<InfoIndexPartitionArgs>();
   args->context.set_deadline(
-      absl::ToChronoTime(absl::Now() + absl::Milliseconds(timeout_ms)));
+      absl::ToChronoTime(absl::Now() + absl::Milliseconds(kInfoRpcTimeout)));
   args->callback = std::move(done);
   args->request = std::move(request);
   args->latency_sample = SAMPLE_EVERY_N(100);

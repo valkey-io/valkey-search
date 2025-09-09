@@ -31,11 +31,23 @@
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+
+// Mock options for testing - provides the missing symbol for tests
+vmsdk::module::Options options = {
+    .name = "search_test",
+    .acl_categories = {},
+    .version = 10000,
+    .info = nullptr,
+    .commands = {},
+    .on_load = nullptr,
+    .on_unload = nullptr,
+};
 
 namespace valkey_search {
 

@@ -1,5 +1,5 @@
 import time
-from valkey_search_test_case import ValkeySearchClusterTestCase
+from valkey_search_test_case import ValkeySearchClusterTestCaseDebugMode
 from valkey.cluster import ValkeyCluster
 from valkey.client import Valkey
 from valkeytestframework.conftest import resource_port_tracker
@@ -41,7 +41,7 @@ def is_index_on_all_nodes(cur, index_name):
                 return False
     return True
 
-class TestFTInfoPrimary(ValkeySearchClusterTestCase):
+class TestFTInfoPrimary(ValkeySearchClusterTestCaseDebugMode):
 
     def is_indexing_complete(self, node, index_name, N):
         raw = node.execute_command("FT.INFO", index_name, "PRIMARY")
@@ -108,7 +108,7 @@ class TestFTInfoPrimary(ValkeySearchClusterTestCase):
 
         waiters.wait_for_true(lambda: self.is_indexing_complete(node0, index_name, N))
 
-        assert node0.execute_command("CONFIG SET search.fanout-force-remote-fail yes") == b"OK"
+        assert node0.execute_command("FT._DEBUG FANOUT_FORCE_REMOTE_FAIL yes") == b"OK"
 
         raw = node0.execute_command("FT.INFO", index_name, "PRIMARY")
 
@@ -135,4 +135,4 @@ class TestFTInfoPrimary(ValkeySearchClusterTestCase):
         assert num_records == N
         assert hash_fail == 0
 
-        assert node0.execute_command("CONFIG SET search.fanout-force-remote-fail no") == b"OK"
+        assert node0.execute_command("FT._DEBUG FANOUT_FORCE_REMOTE_FAIL no") == b"OK"

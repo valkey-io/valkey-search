@@ -1,5 +1,5 @@
 import time
-from valkey_search_test_case import ValkeySearchClusterTestCase
+from valkey_search_test_case import ValkeySearchClusterTestCaseDebugMode
 from valkey.cluster import ValkeyCluster
 from valkey.client import Valkey
 from valkeytestframework.conftest import resource_port_tracker
@@ -8,7 +8,7 @@ import pytest
 from test_info_primary import _parse_info_kv_list, verify_error_response, is_index_on_all_nodes
 import re
 
-class TestFTInfoCluster(ValkeySearchClusterTestCase):
+class TestFTInfoCluster(ValkeySearchClusterTestCaseDebugMode):
 
     def is_backfill_complete(self, node, index_name):
         raw = node.execute_command("FT.INFO", index_name, "CLUSTER")
@@ -76,7 +76,7 @@ class TestFTInfoCluster(ValkeySearchClusterTestCase):
         waiters.wait_for_true(lambda: is_index_on_all_nodes(self, index_name))
         waiters.wait_for_true(lambda: self.is_backfill_complete(node0, index_name))
         
-        assert node0.execute_command("CONFIG SET search.fanout-force-remote-fail yes") == b"OK"
+        assert node0.execute_command("FT._DEBUG FANOUT_FORCE_REMOTE_FAIL yes") == b"OK"
 
         raw = node0.execute_command("FT.INFO", index_name, "CLUSTER")
 
@@ -105,4 +105,4 @@ class TestFTInfoCluster(ValkeySearchClusterTestCase):
         assert backfill_complete_percent_min == 1.000000
         assert state == "ready"
 
-        assert node0.execute_command("CONFIG SET search.fanout-force-remote-fail no") == b"OK"
+        assert node0.execute_command("FT._DEBUG FANOUT_FORCE_REMOTE_FAIL no") == b"OK"

@@ -15,6 +15,7 @@
 
 #include "absl/synchronization/mutex.h"
 #include "grpcpp/support/status.h"
+#include "src/commands/ft_debug.h"
 #include "src/coordinator/client_pool.h"
 #include "src/metrics.h"
 #include "src/query/fanout_template.h"
@@ -27,18 +28,6 @@
 
 namespace valkey_search::query::fanout {
 
-constexpr absl::string_view kFanoutForceRemoteFailConfig{
-    "fanout-force-remote-fail"};
-
-namespace options {
-static auto fanout_force_remote_fail =
-    vmsdk::config::BooleanBuilder(kFanoutForceRemoteFailConfig, false).Build();
-
-vmsdk::config::Boolean& GetFanoutForceRemoteFail() {
-  return dynamic_cast<vmsdk::config::Boolean&>(*fanout_force_remote_fail);
-}
-}  // namespace options
-
 template <typename Request, typename Response, FanoutTargetMode kTargetMode>
 class FanoutOperationBase {
  public:
@@ -49,6 +38,7 @@ class FanoutOperationBase {
   void StartOperation(ValkeyModuleCtx* ctx) {
     blocked_client_ = std::make_unique<vmsdk::BlockedClient>(
         ctx, &Reply, &Timeout, &Free, GetTimeoutMs());
+    blocked_client_->SetReplyPrivateData(this);
     blocked_client_->MeasureTimeStart();
     deadline_tp_ = std::chrono::steady_clock::now() +
                    std::chrono::milliseconds(GetTimeoutMs());
@@ -113,45 +103,41 @@ class FanoutOperationBase {
       });
     } else {
       // force the remote to fail 10 times for testing only
-      if (options::GetFanoutForceRemoteFail().GetValue() &&
-          Metrics::GetStats().fanout_retry_cnt < 10) {
-        this->OnError(grpc::Status(grpc::StatusCode::INTERNAL,
-                                   "Forced remote failure for testing"),
+      if (Metrics::GetStats().fanout_retry_cnt < 10 &&
+          valkey_search::GetFanoutForceRemoteFail()) {
+        std::thread([this, target]() {
+          this->OnError(grpc::Status(grpc::StatusCode::INTERNAL,
+                                     "Forced remote failure for testing"),
+                        coordinator::FanoutErrorType::COMMUNICATION_ERROR,
+                        target);
+          this->RpcDone();
+        }).detach();
+        return;
+      }
+      auto client = client_pool_->GetClient(target.address);
+      if (!client) {
+        VMSDK_LOG(WARNING, nullptr) << "Found invalid client!";
+        this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
                       coordinator::FanoutErrorType::COMMUNICATION_ERROR,
                       target);
         this->RpcDone();
         return;
       }
-      std::thread([this, target, request, timeout_ms, client_pool_]() {
-        if (!vmsdk::IsMainThread()) {
-          PAUSEPOINT("fanout_before_rpc");
-        }
-        auto client = client_pool_->GetClient(target.address);
-        if (!client) {
-          VMSDK_LOG(WARNING, nullptr) << "Found invalid client!";
-          this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
-                        coordinator::FanoutErrorType::COMMUNICATION_ERROR,
-                        target);
-          this->RpcDone();
-          return;
-        }
-        this->InvokeRemoteRpc(
-            client.get(), request,
-            [this, target](grpc::Status status, Response& resp) {
-              if (status.ok()) {
-                this->OnResponse(resp, target);
-              } else {
-                VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1)
-                    << "FANOUT_DEBUG: InvokeRemoteRpc error on target "
-                    << target.address
-                    << ", status code: " << status.error_code()
-                    << ", error message: " << status.error_message();
-                this->OnError(status, resp.error_type(), target);
-              }
-              this->RpcDone();
-            },
-            timeout_ms);
-      }).detach();
+      this->InvokeRemoteRpc(
+          client.get(), request,
+          [this, target](grpc::Status status, Response& resp) {
+            if (status.ok()) {
+              this->OnResponse(resp, target);
+            } else {
+              VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+                  << "FANOUT_DEBUG: InvokeRemoteRpc error on target "
+                  << target.address << ", status code: " << status.error_code()
+                  << ", error message: " << status.error_message();
+              this->OnError(status, resp.error_type(), target);
+            }
+            this->RpcDone();
+          },
+          timeout_ms);
     }
   }
 
@@ -269,7 +255,6 @@ class FanoutOperationBase {
 
   virtual void OnCompletion() {
     CHECK(blocked_client_);
-    blocked_client_->SetReplyPrivateData(this);
     blocked_client_->UnblockClient();
   }
 

@@ -15,6 +15,7 @@
 
 #include "absl/synchronization/mutex.h"
 #include "grpcpp/support/status.h"
+#include "src/commands/ft_debug.h"
 #include "src/coordinator/client_pool.h"
 #include "src/metrics.h"
 #include "src/query/fanout_template.h"
@@ -112,10 +113,21 @@ class FanoutOperationBase {
       });
     } else {
       // force the remote to fail 10 times for testing only
-      if (options::GetFanoutForceRemoteFail().GetValue() &&
-          Metrics::GetStats().fanout_retry_cnt < 10) {
-        this->OnError(grpc::Status(grpc::StatusCode::INTERNAL,
-                                   "Forced remote failure for testing"),
+      if (Metrics::GetStats().fanout_retry_cnt < 10 &&
+          valkey_search::GetFanoutForceRemoteFail()) {
+        std::thread([this, target]() {
+          this->OnError(grpc::Status(grpc::StatusCode::INTERNAL,
+                                     "Forced remote failure for testing"),
+                        coordinator::FanoutErrorType::COMMUNICATION_ERROR,
+                        target);
+          this->RpcDone();
+        }).detach();
+        return;
+      }
+      auto client = client_pool_->GetClient(target.address);
+      if (!client) {
+        VMSDK_LOG(WARNING, nullptr) << "Found invalid client!";
+        this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
                       coordinator::FanoutErrorType::COMMUNICATION_ERROR,
                       target);
         this->RpcDone();
@@ -320,7 +332,6 @@ class FanoutOperationBase {
 
   virtual void OnCompletion() {
     CHECK(blocked_client_);
-    blocked_client_->SetReplyPrivateData(this);
     blocked_client_->UnblockClient();
   }
 

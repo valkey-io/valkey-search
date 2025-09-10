@@ -100,6 +100,8 @@ set(SRCS_TEXT ${CMAKE_CURRENT_LIST_DIR}/text/text_index.h
               ${CMAKE_CURRENT_LIST_DIR}/text.h
               ${CMAKE_CURRENT_LIST_DIR}/text/posting.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/posting.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/text_fetcher.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/text_fetcher.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/text_iterator.h
               ${CMAKE_CURRENT_LIST_DIR}/text/proximity.h
               ${CMAKE_CURRENT_LIST_DIR}/text/proximity.cc

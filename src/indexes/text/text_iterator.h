@@ -19,9 +19,9 @@ class TextIterator {
 public:
     virtual ~TextIterator() = default;
 
-    // Word-level iteration
-    virtual bool NextWord() = 0;
-    virtual absl::string_view CurrentWord() = 0;
+    // // Word-level iteration
+    // virtual bool NextWord() = 0;
+    // virtual absl::string_view CurrentWord() = 0;
 
     // Key-level iteration
     virtual bool NextKey() = 0;

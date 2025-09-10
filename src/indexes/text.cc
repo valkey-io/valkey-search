@@ -123,64 +123,42 @@ size_t Text::EntriesFetcher::Size() const { return size_; }
 // Change to be a recursive function that builds the iterator based on predicate.
 std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
   if (auto term = dynamic_cast<const query::TermPredicate*>(predicate_)) {
-    // auto iter = text_index_->prefix_.GetWordIterator(term->GetTextString());
-    // auto itr = std::make_unique<text::TermIterator>(
-    //     iter, term->GetTextString(), field_mask_, untracked_keys_);
-    // itr->Next();
-    // return itr;
     auto word_iter = text_index_->prefix_.GetWordIterator(term->GetTextString());
+    std::unique_ptr<text::TextIterator> ti = std::make_unique<text::TermIterator>(
+      word_iter,
+      /*exact=*/true,
+      term->GetTextString(),
+      field_mask_,
+      untracked_keys_);
+    auto iter = std::make_unique<text::TextFetcher>(std::move(ti));
+    return iter;
+  }
+  else if (auto proximity =
+                 dynamic_cast<const query::ProximityPredicate*>(predicate_)) {
     std::vector<std::unique_ptr<text::TextIterator>> vec;
-    vec.emplace_back(std::make_unique<text::TermIterator>(
-        word_iter,
-        /*exact=*/true,
-        term->GetTextString(),
-        field_mask_,
-        untracked_keys_));
+    for (const auto& term : proximity->GetTerms()) {
+      if (auto term_pred = dynamic_cast<const query::TermPredicate*>(term.get())) {
+        auto word_iter = text_index_->prefix_.GetWordIterator(term_pred->GetTextString());
+        vec.emplace_back(std::make_unique<text::TermIterator>(
+            word_iter,
+            /*exact=*/true,
+            term_pred->GetTextString(),
+            field_mask_,
+            untracked_keys_));
+      } else {
+        CHECK(false) << "Unsupported TextPredicate operation inside Proximity";
+      }
+    }
     VMSDK_LOG(WARNING, nullptr) << "vec size" << vec.size();
-    auto prox_iter = std::make_unique<text::ProximityIterator>(
+    auto prox =
+    std::make_unique<text::ProximityIterator>(
         std::move(vec),
         /*slop=*/0,
         /*in_order=*/true,
         field_mask_,
         untracked_keys_);
-    // prox_iter->Next();
-    return prox_iter;
+    return std::make_unique<text::TextFetcher>(std::move(prox));
   }
-  else if (auto proximity =
-                 dynamic_cast<const query::ProximityPredicate*>(predicate_)) {
-      std::vector<std::unique_ptr<text::TextIterator>> vec;
-      for (const auto& term : proximity->GetTerms()) {
-        if (auto term_pred = dynamic_cast<const query::TermPredicate*>(term.get())) {
-          auto word_iter = text_index_->prefix_.GetWordIterator(term_pred->GetTextString());
-          vec.emplace_back(std::make_unique<text::TermIterator>(
-              word_iter,
-              /*exact=*/true,
-              term_pred->GetTextString(),
-              field_mask_,
-              untracked_keys_));
-        } else {
-          CHECK(false) << "Unsupported TextPredicate operation inside Proximity";
-        }
-      }
-      VMSDK_LOG(WARNING, nullptr) << "vec size" << vec.size();
-      auto prox_iter = std::make_unique<text::ProximityIterator>(
-          std::move(vec),
-          /*slop=*/0,
-          /*in_order=*/true,
-          field_mask_,
-          untracked_keys_);
-      // prox_iter->Next();
-      return prox_iter;
-  }
-  // else if (auto prefix =
-  //                dynamic_cast<const query::PrefixPredicate*>(predicate_)) {
-  //   auto iter = text_index_->prefix_.GetWordIterator(prefix->GetTextString());
-  //   auto itr = std::make_unique<text::WildCardIterator>(
-  //       iter, text::WildCardOperation::kPrefix, field_mask_, untracked_keys_);
-  //   itr->Next();
-  //   return itr;
-  // }
-  // CHECK(false) << "Unsupported TextPredicate operation";
   return nullptr;
 }
 

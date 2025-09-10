@@ -59,9 +59,9 @@ class TermIterator : public TextIterator {
                const uint32_t field_mask,
                const InternedStringSet* untracked_keys = nullptr);
 
-  // Word-level iteration
-  bool NextWord() override;
-  absl::string_view CurrentWord() override;
+  // // Word-level iteration
+  // bool NextWord() override;
+  // absl::string_view CurrentWord() override;
 
   // Key-level iteration
   bool NextKey() override;
@@ -85,12 +85,9 @@ class TermIterator : public TextIterator {
   Postings::KeyIterator key_iter_;
   Postings::PositionIterator pos_iter_;
 
-  absl::string_view current_word_;
   InternedStringPtr current_key_;
   uint32_t current_pos_;
-
   const InternedStringSet* untracked_keys_;
-
   bool nomatch_;
 };
 

@@ -14,34 +14,31 @@ TermIterator::TermIterator(const WordIterator& word_iter,
                            const absl::string_view data,
                            const uint32_t field_mask,
                            const InternedStringSet* untracked_keys)
-    : word_iter_(word_iter),
-      exact_(exact),
+    : exact_(exact),
       data_(data),
       field_mask_(field_mask),
-      untracked_keys_(untracked_keys)
+      word_iter_(word_iter),
+      target_posting_(nullptr),      // initialize shared_ptr to null
+      key_iter_(),                   // default-initialize iterator
+      pos_iter_(),                   // default-initialize iterator
+      current_key_(nullptr),         // no key yet
+      current_pos_(0),               // start at position 0
+      untracked_keys_(untracked_keys),
+      nomatch_(false)                // start as "not done"
 {
-  VMSDK_LOG(WARNING, nullptr) << "TI::init";
+  VMSDK_LOG(WARNING, nullptr) << "TI::init. nomatch_: " << nomatch_;
   if (word_iter_.Done()) {
-    VMSDK_LOG(WARNING, nullptr) << "TI::nomatch";
+    VMSDK_LOG(WARNING, nullptr) << "TI::nomatch1";
     nomatch_ = true;
     return;
   }
   target_posting_ = word_iter_.GetTarget();
   key_iter_ = target_posting_->GetKeyIterator();
   // TODO: Check if this is a degenerate case of the Done function or if it can be done to be done. 
-  if (!NextKey()) {
+  if (!TermIterator::NextKey()) {
+    VMSDK_LOG(WARNING, nullptr) << "TI::nomatch2";
     nomatch_ = true;
   }
-}
-
-bool TermIterator::NextWord() {
-  VMSDK_LOG(WARNING, nullptr) << "TI::NextWord";
-  return false;
-}
-
-absl::string_view TermIterator::CurrentWord() {
-  VMSDK_LOG(WARNING, nullptr) << "TI::CurrentWord";
-  return current_word_;
 }
 
 bool TermIterator::NextKey() {

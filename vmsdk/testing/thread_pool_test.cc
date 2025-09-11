@@ -660,11 +660,6 @@ TEST_P(ThreadPoolFairnessDistributionTest, StatisticalDistribution) {
   EXPECT_EQ(executed_tasks, half_tasks);
 
   // 6. Check the distribution of executed tasks
-  const double actual_high_ratio =
-      static_cast<double>(high_executed.load()) / half_tasks;
-  const double actual_low_ratio =
-      static_cast<double>(low_executed.load()) / half_tasks;
-
   // Test distribution based on weight
   if (weight == 0) {
     // 0% weight should mean no high priority tasks executed
@@ -694,20 +689,19 @@ TEST_P(ThreadPoolFairnessDistributionTest, MaxPriorityPreservation) {
   ThreadPool thread_pool("fairness-single-worker", 1);
   const int weight = GetParam();
   const int tasks_per_priority = 3;
-  const int total_tasks = 3 * tasks_per_priority;
 
   std::atomic<int> high_executed{0};
   std::atomic<int> low_executed{0};
   std::atomic<int> max_executed{0};
 
-  absl::BlockingCounter counter(3);  // 3 of kMax priority
+  absl::BlockingCounter counter(tasks_per_priority);  // 3 of kMax priority
   absl::BlockingCounter worker_counter(1);
 
   // Set weight to favor low priority (should not affect kMax)
   thread_pool.SetHighPriorityWeight(weight);  // 10% high, 90% low
 
   // Schedule tasks in reverse priority order to test precedence
-  for (int i = 0; i < 3; ++i) {
+  for (int i = 0; i < tasks_per_priority; ++i) {
     EXPECT_TRUE(thread_pool.Schedule([&low_executed]() { low_executed++; },
                                      ThreadPool::Priority::kLow));
 
@@ -730,15 +724,15 @@ TEST_P(ThreadPoolFairnessDistributionTest, MaxPriorityPreservation) {
   // Validate only  kMax tasks should have executed
   EXPECT_EQ(high_executed.load(), 0);
   EXPECT_EQ(low_executed.load(), 0);
-  EXPECT_EQ(max_executed.load(), 3);
+  EXPECT_EQ(max_executed.load(), tasks_per_priority);
 
   worker_counter.DecrementCount();
   // Wait for all tasks to be completed
   thread_pool.JoinWorkers();
   // All tasks should have executed
-  EXPECT_EQ(high_executed.load(), 3);
-  EXPECT_EQ(low_executed.load(), 3);
-  EXPECT_EQ(max_executed.load(), 3);
+  EXPECT_EQ(high_executed.load(), tasks_per_priority);
+  EXPECT_EQ(low_executed.load(), tasks_per_priority);
+  EXPECT_EQ(max_executed.load(), tasks_per_priority);
 }
 
 }  // namespace vmsdk

@@ -28,7 +28,7 @@ namespace valkey_search {
 constexpr absl::string_view kFTInfoTimeoutMsConfig{"ft-info-timeout-ms"};
 constexpr uint32_t kDefaultFTInfoTimeoutMs{5000};
 constexpr uint32_t kMinimumFTInfoTimeoutMs{100};
-constexpr uint32_t kMaximumFTInfoTimeoutMs{10000};  // 10s max
+constexpr uint32_t kMaximumFTInfoTimeoutMs{300000};  // 5 minutes max
 
 namespace options {
 

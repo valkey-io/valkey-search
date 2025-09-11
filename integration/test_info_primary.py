@@ -108,7 +108,7 @@ class TestFTInfoPrimary(ValkeySearchClusterTestCaseDebugMode):
 
         waiters.wait_for_true(lambda: self.is_indexing_complete(node0, index_name, N))
 
-        assert node0.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceTimeout yes") == b"OK"
+        assert node0.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceRetry yes") == b"OK"
 
         raw = node0.execute_command("FT.INFO", index_name, "PRIMARY")
 
@@ -135,4 +135,5 @@ class TestFTInfoPrimary(ValkeySearchClusterTestCaseDebugMode):
         assert num_records == N
         assert hash_fail == 0
 
-        assert node0.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceTimeout no") == b"OK"
+        assert node0.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceRetry no") == b"OK"
+

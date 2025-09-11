@@ -25,7 +25,7 @@ ProximityIterator::ProximityIterator(std::vector<std::unique_ptr<TextIterator>>&
     }
     // initialize iterators to first key/position
     for (auto& iter : iters_) {
-        if (iter->Done()) {
+        if (iter->DoneKeys()) {
             done_ = true;
             VMSDK_LOG(WARNING, nullptr) << "PI::init done 2";
             return;
@@ -50,25 +50,45 @@ void ProximityIterator::Next() {
 }
 
 bool ProximityIterator::NextKey() {
-    VMSDK_LOG(WARNING, nullptr) << "PI::Next1";   
-    if (done_) return false;
-    VMSDK_LOG(WARNING, nullptr) << "PI::Next2";   
-    // We are currently sitting on a valid key. Try to advance past it.
-    for (auto& c : iters_) {
-        if (!c->Done() && c->CurrentKey() == current_key_) {
-            c->NextKey();  // move any child iterators sitting at current_key_
+    VMSDK_LOG(WARNING, nullptr) << "PI::Next1";    
+    for (;;) {
+        if (done_) return false;
+        // 1) Advance any child iterators that are still sitting on the old key.
+        for (auto& c : iters_) {
+            if (!c->DoneKeys() && c->CurrentKey() == current_key_) {
+                c->NextKey();  // move any child iterators sitting at current_key_
+            }
         }
+        // 2) Align all children to the next common key
+        if (!NextKeyMain()) {
+            // NextKeyMain sets done_ on child exhaustion but be safe here too
+            done_ = true;
+            return false;
+        }
+        // For nested proximity, we need to check if the start and end positions match the slop and order.
+        // 3) Try to find the first valid position in this key
+        if (NextPosition()) {
+            // Found a valid match; NextPosition sets current_key_ and current_pos_
+            // If a child had been advanced and exhausted positions but still has
+            // more keys, last_pos_exhausted_idx_ may be set; we'll handle on next call.
+            return true;
+        }
+        // otherwise, loop and try again (defensive).
     }
-    // TODO: Change NextKey with the function that operates on words and uses position context.
-    if (!NextKeyMain()) {
-        done_ = true;
-        return false;
-    }
-    return true;
+    return false;
 }
-
 bool ProximityIterator::Done() const {
     VMSDK_LOG(WARNING, nullptr) << "PI::Done";   
+    return done_;
+}
+
+bool ProximityIterator::DoneKeys() const {
+    VMSDK_LOG(WARNING, nullptr) << "PI::DoneKeys";   
+    return done_;
+}
+
+bool ProximityIterator::DonePositions() const {
+    VMSDK_LOG(WARNING, nullptr) << "PI::DonePositions";   
     return done_;
 }
 
@@ -83,32 +103,6 @@ uint32_t ProximityIterator::CurrentPosition() {
 }
 
 // ---- Internal helpers ----
-
-void ProximityIterator::SyncCurrentKey() {
-  // Since all children are aligned to the same doc key:
-  VMSDK_LOG(WARNING, nullptr) << "PI::SyncCurrentKey";   
-  current_key_ = iters_[0]->CurrentKey();
-}
-
-// Note: Does not yet handle looping over words. Change the top level IF statement to a loop for words
-bool ProximityIterator::MatchPositions() {
-  VMSDK_LOG(WARNING, nullptr) << "PI::MatchPositions";   
-  // Keep looping until we find a valid proximity match OR run out of keys.
-  if (!Done()) {
-    // 1. Align all children to the same key
-    if (NextKey()) {
-        SyncCurrentKey();
-        return true;
-    }
-    
-
-    // 2. Scan positions in this key to see if slop/in-order condition met
-    // if (NextPosition()) return true;
-
-    // 3. If no position match, advance to next key and repeat
-  }
-  return false;
-}
 
 bool ProximityIterator::NextKeyMain() {
     VMSDK_LOG(WARNING, nullptr) << "PI::NextKey";
@@ -125,11 +119,12 @@ bool ProximityIterator::NextKeyMain() {
         InternedStringPtr max_key = nullptr;
 
         for (auto& iter : iters_) {
-            if (iter->Done()) {
-                done_ = true;
-                VMSDK_LOG(WARNING, nullptr) << "PI::NextKey child done -> exhausted";
-                return false;
-            }
+            // I suggest commenting this out
+            // if (iter->DoneKeys()) {
+            //     done_ = true;
+            //     VMSDK_LOG(WARNING, nullptr) << "PI::NextKey child done -> exhausted";
+            //     return false;
+            // }
             auto k = iter->CurrentKey();
             if (!k) {
                 done_ = true;
@@ -150,7 +145,7 @@ bool ProximityIterator::NextKeyMain() {
         // 3) Advance all iterators that are strictly behind the current max_key
         bool advanced_any = false;
         for (auto& iter : iters_) {
-            while (!iter->Done() &&
+            while (!iter->DoneKeys() &&
                    iter->CurrentKey() &&
                    iter->CurrentKey()->Str() < max_key->Str()) {
                 VMSDK_LOG(WARNING, nullptr)
@@ -163,11 +158,12 @@ bool ProximityIterator::NextKeyMain() {
                 }
                 advanced_any = true;
             }
-            if (iter->Done()) {
-                done_ = true;
-                VMSDK_LOG(WARNING, nullptr) << "PI::NextKey child became done after advancing";
-                return false;
-            }
+            // I suggest commenting this out
+            // if (iter->DoneKeys()) {
+            //     done_ = true;
+            //     VMSDK_LOG(WARNING, nullptr) << "PI::NextKey child became done after advancing";
+            //     return false;
+            // }
         }
 
         // 4) Safety: if min != max but nothing advanced, bump the (previous) min forward
@@ -194,64 +190,132 @@ bool ProximityIterator::NextKeyMain() {
 bool ProximityIterator::NextPosition() {
     VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition";
 
-    if (iters_.empty() || done_) {  // <-- Check done upfront
-        done_ = true;
+    if (done_) {  // <-- Check done upfront
         return false;
     }
 
+    const size_t n = iters_.size();
     while (true) {
-        // 1. Stop if any iterator is done
-        for (auto& uptr : iters_) {
-            if (uptr->Done()) { // Done needs to take into account the position iterator in all TextIterators.
-                done_ = true;  // <-- set done when a child iterator exhausted
-                return false;
-            }
-        }
+        VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition loop start";
+        // // 1. Collect current positions
+        // std::vector<uint64_t> positions(n);
+        // for (size_t i = 0; i < n; ++i) {
+        //     // if (iters_[i]->DonePositions()) {
+        //     //     done_ = true;
+        //     //     return false;
+        //     // }
+        //     positions[i] = iters_[i]->CurrentPosition();
+        // }
 
-        // 2. Collect current positions
+        // // 2. Check left-to-right for slop / in-order violations
+        // size_t failure_idx = n; // n means no violation
+        // for (size_t i = 0; i + 1 < n; ++i) {
+        //     uint64_t gap = positions[i + 1] - positions[i] - 1;
+        //     if (gap > slop_ || (in_order_ && positions[i] >= positions[i + 1])) {
+        //         failure_idx = i; // left term is lagging
+        //         break;
+        //     }
+        // }
+
+        // if (failure_idx == n) {
+        //     // ✅ Found a valid combination
+        //     current_pos_ = positions[0];
+        //     current_key_ = iters_[0]->CurrentKey();
+
+        //     // // --- Prepare for next combination ---
+        //     // // Try to advance the **rightmost iterator** that can move.
+        //     // // If none can move, lagging-advance in the next iteration will handle it.
+        //     // for (ssize_t i = n - 1; i >= 0; --i) {
+        //     //     if (iters_[i]->NextPosition()) {
+        //     //         // Successfully advanced; reset all to the right
+        //     //         for (size_t j = i + 1; j < n; ++j) {
+        //     //             iters_[j]->ResetPositions();
+        //     //         }
+        //     //         break;
+        //     //     } else if (i == 0) {
+        //     //         // Leftmost iterator exhausted → no more combinations
+        //     //         return true; // yield last combination now
+        //     //     }
+        //     // }
+
+        //     return true;
+        // }
+
+        // // // 3. Violation occurred → advance the lagging iterator (left of failure)
+        // // size_t advance_idx = failure_idx;
+        // // while (true) {
+        // //     if (!iters_[advance_idx]->NextPosition()) {
+        // //         if (advance_idx == 0) {
+        // //             done_ = true;
+        // //             return false;
+        // //         }
+        // //         --advance_idx;
+        // //     } else {
+        // //         // Successfully advanced lagging iterator
+        // //         break;
+        // //     }
+        // // }
+
+        // // // 4. Reset all iterators to the right of the one we just advanced
+        // // for (size_t i = advance_idx + 1; i < n; ++i) {
+        // //     iters_[i]->ResetPositions();
+        // // }
+
+        // // Loop again to check new combination
+        // // Done 
+        // return false;
+
+        // 1. Collect positions
         std::vector<uint64_t> positions;
         positions.reserve(iters_.size());
-        for (auto& uptr : iters_) {
-            positions.push_back(uptr->CurrentPosition());
+        for (auto& it : iters_) {
+            // if (it->DonePositions()) return false;
+            positions.push_back(it->CurrentPosition());
+            VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition pos: " << it->CurrentPosition();
         }
-
-        // 3. Check span
-        auto minmax = std::minmax_element(positions.begin(), positions.end());
-        uint64_t span = *minmax.second - *minmax.first;
-
-        bool ok = (span <= slop_);
-        if (in_order_) {
-            ok = ok && std::is_sorted(positions.begin(), positions.end());
-        }
-
-        if (ok) {
-            // Found a match
-            current_pos_ = *minmax.first;
-            // current_word_ = iters_[0]->CurrentWord();  // assume all aligned in same key
-            current_key_ = iters_[0]->CurrentKey();
-
-            // Advance all positions for next call, but stop if exhausted
-            bool any_exhausted = false;
-            for (auto& uptr : iters_) {
-                if (!uptr->NextPosition()) {  // <-- use return value to detect exhaustion
-                    any_exhausted = true;
-                }
-            }
-            if (any_exhausted) {  // <-- if any child exhausted, we are done
-                done_ = true;
-            }
+        
+        // 2. Ensure order if required
+        // if (in_order_ && !std::is_sorted(positions.begin(), positions.end())) {
+        //     // Advance smallest iterator and retry
+        //     // TODO: Need to read this.
+        //     size_t min_idx = std::distance(
+        //         positions.begin(),
+        //         std::min_element(positions.begin(), positions.end())
+        //     );
+        //     if (!iters_[min_idx]->NextPosition()) return false;
+        //     continue;
+        // }
+        if (std::is_sorted(positions.begin(), positions.end())) {
+            VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition is sorted";
             return true;
         }
+        return false;
+        // // 3. Compute max gap between adjacent positions
+        // uint64_t max_gap = 0;
+        // for (size_t i = 0; i + 1 < positions.size(); ++i) {
+        //     uint64_t gap = positions[i+1] > positions[i] ? positions[i+1] - positions[i] - 1 : 0;
+        //     if (gap > max_gap) max_gap = gap;
+        // }
 
-        // 4. Advance the iterator with smallest position
-        size_t min_idx = std::distance(
-            positions.begin(),
-            std::min_element(positions.begin(), positions.end())
-        );
-        if (!iters_[min_idx]->NextPosition()) {  // <-- check if child exhausted
-            done_ = true;  // <-- propagate done
-            return false;
-        }
+        // if (max_gap <= slop_) {
+        //     // Found a match
+        //     current_pos_ = positions.front();
+
+        //     // Prepare for next candidate by advancing iterator with smallest position
+        //     size_t min_idx = std::distance(
+        //         positions.begin(),
+        //         std::min_element(positions.begin(), positions.end())
+        //     );
+        //     iters_[min_idx]->NextPosition();
+        //     return true;
+        // }
+
+        // // No match -> advance smallest and retry
+        // size_t min_idx = std::distance(
+        //     positions.begin(),
+        //     std::min_element(positions.begin(), positions.end())
+        // );
+        // if (!iters_[min_idx]->NextPosition()) return false;
     }
 }
 

@@ -64,10 +64,12 @@ class TermIterator : public TextIterator {
   // absl::string_view CurrentWord() override;
 
   // Key-level iteration
+  bool DoneKeys() const override;
   bool NextKey() override;
   const InternedStringPtr& CurrentKey() override;
 
   // Position-level iteration
+  bool DonePositions() const override;
   bool NextPosition() override;
   uint32_t CurrentPosition() override;
 
@@ -86,7 +88,6 @@ class TermIterator : public TextIterator {
   Postings::PositionIterator pos_iter_;
 
   InternedStringPtr current_key_;
-  uint32_t current_pos_;
   const InternedStringSet* untracked_keys_;
   bool nomatch_;
 };

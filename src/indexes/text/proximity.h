@@ -77,10 +77,12 @@ class ProximityIterator : public TextIterator {
   // absl::string_view CurrentWord() override;
 
   // Key-level iteration
+  bool DoneKeys() const override; 
   bool NextKey() override;
   const InternedStringPtr& CurrentKey() override;
 
   // Position-level iteration
+  bool DonePositions() const override;
   bool NextPosition() override;
   uint32_t CurrentPosition() override;
 
@@ -103,13 +105,9 @@ class ProximityIterator : public TextIterator {
   // Align all iterators on the same key (lexicographically)
   bool AlignToSameKey();
 
-  // Check if current positions satisfy proximity
-  bool MatchPositions();
-
   // Advance position vectors for next match in current key
   bool AdvanceLowestKey();
 
-  void SyncCurrentKey();
   bool NextKeyMain();
 
   // bool NextKey();

@@ -22,13 +22,12 @@ TermIterator::TermIterator(const WordIterator& word_iter,
       key_iter_(),                   // default-initialize iterator
       pos_iter_(),                   // default-initialize iterator
       current_key_(nullptr),         // no key yet
-      current_pos_(0),               // start at position 0
       untracked_keys_(untracked_keys),
       nomatch_(false)                // start as "not done"
 {
-  VMSDK_LOG(WARNING, nullptr) << "TI::init. nomatch_: " << nomatch_;
+  VMSDK_LOG(WARNING, nullptr) << "TI::init{" << data_ << "}. nomatch_: " << nomatch_;
   if (word_iter_.Done()) {
-    VMSDK_LOG(WARNING, nullptr) << "TI::nomatch1";
+    VMSDK_LOG(WARNING, nullptr) << "TI::nomatch1{" << data_ << "}";
     nomatch_ = true;
     return;
   }
@@ -36,13 +35,13 @@ TermIterator::TermIterator(const WordIterator& word_iter,
   key_iter_ = target_posting_->GetKeyIterator();
   // TODO: Check if this is a degenerate case of the Done function or if it can be done to be done. 
   if (!TermIterator::NextKey()) {
-    VMSDK_LOG(WARNING, nullptr) << "TI::nomatch2";
+    VMSDK_LOG(WARNING, nullptr) << "TI::nomatch2{" << word_iter_.GetWord() << "}";
     nomatch_ = true;
   }
 }
 
 bool TermIterator::NextKey() {
-  VMSDK_LOG(WARNING, nullptr) << "TI::NextKey";
+  VMSDK_LOG(WARNING, nullptr) << "TI::NextKey{" << word_iter_.GetWord() << "}";
   if (nomatch_) return false;
   if (current_key_) {
       key_iter_.NextKey();
@@ -52,6 +51,7 @@ bool TermIterator::NextKey() {
     if (key_iter_.ContainsFields(field_mask_)) {
         current_key_ = key_iter_.GetKey();
         pos_iter_ = key_iter_.GetPositionIterator();
+        VMSDK_LOG(WARNING, nullptr) << "TI::NextKey{" << word_iter_.GetWord() << "} - Found key. CurrentKey: " << current_key_->Str() << " Position: " << pos_iter_.GetPosition();;
         return true;
     }
     key_iter_.NextKey();
@@ -63,30 +63,39 @@ bool TermIterator::NextKey() {
 }
 
 const InternedStringPtr& TermIterator::CurrentKey() {
-  VMSDK_LOG(WARNING, nullptr) << "TI::CurrentKey";
+  VMSDK_LOG(WARNING, nullptr) << "TI::CurrentKey{" << word_iter_.GetWord() << "}";
   return current_key_;
 }
 
 // Note: Right now, we expect the caller site to move to the next key when the positions are exhausted.
 // Need to think about whether this is the right contract.
 bool TermIterator::NextPosition() {
-  VMSDK_LOG(WARNING, nullptr) << "TI::NextPosition";
+  VMSDK_LOG(WARNING, nullptr) << "TI::NextPosition{" << word_iter_.GetWord() << "}";
   if (nomatch_) return false;
   if (!pos_iter_.IsValid()) {
     return false;
   }
-  current_pos_ = pos_iter_.GetPosition();
   pos_iter_.NextPosition();
   return true;
 }
 
 uint32_t TermIterator::CurrentPosition() {
-  VMSDK_LOG(WARNING, nullptr) << "TI::CurrentPosition";
-  return current_pos_;
+  VMSDK_LOG(WARNING, nullptr) << "TI::CurrentPosition{" << word_iter_.GetWord() << "}";
+  return pos_iter_.GetPosition();
+}
+
+bool TermIterator::DoneKeys() const {
+  VMSDK_LOG(WARNING, nullptr) << "TI::Done{" << word_iter_.GetWord() << "}";
+  return nomatch_ || !key_iter_.IsValid();
+}
+
+bool TermIterator::DonePositions() const {
+  VMSDK_LOG(WARNING, nullptr) << "TI::Done{" << word_iter_.GetWord() << "}";
+  return nomatch_ || !pos_iter_.IsValid();
 }
 
 bool TermIterator::Done() const {
-  VMSDK_LOG(WARNING, nullptr) << "TI::Done";
+  VMSDK_LOG(WARNING, nullptr) << "TI::Done{" << word_iter_.GetWord() << "}";
   return nomatch_ || !key_iter_.IsValid();
 }
 

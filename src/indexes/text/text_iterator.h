@@ -24,10 +24,12 @@ public:
     // virtual absl::string_view CurrentWord() = 0;
 
     // Key-level iteration
+    virtual bool DoneKeys() const = 0;
     virtual bool NextKey() = 0;
     virtual const InternedStringPtr& CurrentKey() = 0;
 
     // Position-level iteration
+    virtual bool DonePositions() const = 0;
     virtual bool NextPosition() = 0;
     virtual uint32_t CurrentPosition() = 0;
 

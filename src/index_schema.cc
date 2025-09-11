@@ -366,6 +366,9 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     vmsdk::UniqueValkeyString record = VectorExternalizer::Instance().GetRecord(
         ctx, attribute_data_type_.get(), key_obj.get(), key_cstr,
         attribute.GetIdentifier(), is_module_owned);
+    if (!record) {
+      return;
+    }
     if (!is_module_owned) {
       // A record which are owned by the module were not modified and are
       // already tracked in the vector registry.

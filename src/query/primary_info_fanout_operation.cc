@@ -137,6 +137,7 @@ void PrimaryInfoFanoutOperation::ResetForRetry() {
   hash_indexing_failures_ = 0;
 }
 
+// retry condition: (1) inconsistent state (2) network error
 bool PrimaryInfoFanoutOperation::ShouldRetry() {
   return !inconsistent_state_error_nodes.empty() ||
          !communication_error_nodes.empty();

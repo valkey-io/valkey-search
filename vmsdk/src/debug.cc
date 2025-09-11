@@ -21,6 +21,7 @@
 namespace vmsdk {
 namespace debug {
 
+// consider changing controlled boolean from static to inline type
 Controlled<bool> ForceRetry("ForceRetry", false);
 
 absl::Mutex pause_point_lock;

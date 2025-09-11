@@ -1093,14 +1093,14 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
     itr->second.attributes.value()[mutated_attribute.first] =
         std::move(mutated_attribute.second);
   }
-  if (ABSL_PREDICT_TRUE(block_client)) {
-    vmsdk::BlockedClient blocked_client(ctx, true,
-                                        GetBlockedCategoryFromProto());
-    blocked_client.MeasureTimeStart();
-    itr->second.blocked_clients.emplace_back(std::move(blocked_client));
-  }
   if (ABSL_PREDICT_FALSE(!from_backfill && itr->second.from_backfill)) {
     itr->second.from_backfill = false;
+    if (ABSL_PREDICT_TRUE(block_client)) {
+      vmsdk::BlockedClient blocked_client(ctx, true,
+                                          GetBlockedCategoryFromProto());
+      blocked_client.MeasureTimeStart();
+      itr->second.blocked_clients.emplace_back(std::move(blocked_client));
+    }
     return true;
   }
   return false;

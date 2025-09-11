@@ -156,6 +156,7 @@ void ClusterInfoFanoutOperation::ResetForRetry() {
   state_ = "";
 }
 
+// retry condition: (1) inconsistent state (2) network error
 bool ClusterInfoFanoutOperation::ShouldRetry() {
   return !inconsistent_state_error_nodes.empty() ||
          !communication_error_nodes.empty();

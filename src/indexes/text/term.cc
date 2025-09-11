@@ -52,6 +52,7 @@ bool TermIterator::NextKey() {
         current_key_ = key_iter_.GetKey();
         pos_iter_ = key_iter_.GetPositionIterator();
         VMSDK_LOG(WARNING, nullptr) << "TI::NextKey{" << word_iter_.GetWord() << "} - Found key. CurrentKey: " << current_key_->Str() << " Position: " << pos_iter_.GetPosition();;
+        // pos_iter_.NextPosition();
         return true;
     }
     key_iter_.NextKey();

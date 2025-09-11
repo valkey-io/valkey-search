@@ -26,6 +26,10 @@
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
+namespace vmsdk::debug {
+extern Controlled<bool> ForceRetry;
+}
+
 namespace valkey_search::query::fanout {
 
 template <typename Request, typename Response, FanoutTargetMode kTargetMode>
@@ -102,8 +106,9 @@ class FanoutOperationBase {
         this->RpcDone();
       });
     } else {
-      // force the remote to fail 10 times for testing only
-      if (valkey_search::cancel::GetForceTimeoutValue() &&
+      // Testing code path. This forces 10 retries for testing only when
+      // ForceRetry is enabled
+      if (vmsdk::debug::ForceRetry.GetValue() &&
           Metrics::GetStats().fanout_retry_cnt < 10) {
         std::thread([this, target]() {
           this->OnError(grpc::Status(grpc::StatusCode::INTERNAL,
@@ -170,6 +175,7 @@ class FanoutOperationBase {
     }
   }
 
+  // decide which condition to run retry
   virtual bool ShouldRetry() = 0;
 
   void ResetBaseForRetry() {
@@ -178,6 +184,7 @@ class FanoutOperationBase {
     communication_error_nodes.clear();
   };
 
+  // reset and clean the fields for new round of retry
   virtual void ResetForRetry() = 0;
 
   virtual int GenerateReply(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,

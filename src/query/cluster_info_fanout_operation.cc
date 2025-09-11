@@ -153,6 +153,7 @@ void ClusterInfoFanoutOperation::ResetForRetry() {
   backfill_complete_percent_max_ = 0.0f;
   backfill_complete_percent_min_ = 0.0f;
   backfill_in_progress_ = false;
+  state_ = "";
 }
 
 bool ClusterInfoFanoutOperation::ShouldRetry() {

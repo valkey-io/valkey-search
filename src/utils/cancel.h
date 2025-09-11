@@ -16,8 +16,6 @@
 namespace valkey_search {
 namespace cancel {
 
-bool GetForceTimeoutValue();
-
 //
 // Long running query operations need to be cancellable.
 // Every query object is given a shared_ptr to a Token object

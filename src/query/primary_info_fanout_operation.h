@@ -51,8 +51,10 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
   int GenerateReply(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,
                     int argc) override;
 
+  // reset and clean the fields for new round of retry
   void ResetForRetry() override;
 
+  // decide which condition to run retry
   bool ShouldRetry() override;
 
  private:

@@ -21,6 +21,8 @@
 namespace vmsdk {
 namespace debug {
 
+Controlled<bool> ForceRetry("ForceRetry", false);
+
 absl::Mutex pause_point_lock;
 struct Waiter {
   std::source_location location_;

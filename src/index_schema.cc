@@ -573,6 +573,7 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
   const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);
   if (ABSL_PREDICT_FALSE(inside_multi_exec)) {
     EnqueueMultiMutation(interned_key);
+    return;
   }
   const bool block_client =
       ShouldBlockClient(ctx, inside_multi_exec, from_backfill);

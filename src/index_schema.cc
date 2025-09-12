@@ -364,10 +364,11 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     }
     bool is_module_owned;
     vmsdk::UniqueValkeyString record = VectorExternalizer::Instance().GetRecord(
-        ctx, attribute_data_type_.get(), key_obj.get(), key_cstr,
-        attribute.GetIdentifier(), is_module_owned);
-    if (!record) {
-      return;
+            ctx, attribute_data_type_.get(), key_obj.get(), key_cstr,
+            attribute.GetIdentifier(), is_module_owned);
+    // Early return on record not found just if the record not tracked. Otherwise, it will be processed as a delete 
+    if (!record && !attribute.IsTracked(interned_key) && !InTrackedMutationRecords(interned_key, attribute.GetIdentifier())) {
+        return;
     }
     if (!is_module_owned) {
       // A record which are owned by the module were not modified and are
@@ -1068,6 +1069,18 @@ vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
     default:
       return vmsdk::BlockedClientCategory::kOther;
   }
+}
+
+bool IndexSchema::InTrackedMutationRecords(const InternedStringPtr &key, const std::string &identifier) const {
+    absl::MutexLock lock(&mutated_records_mutex_);
+    auto itr = tracked_mutated_records_.find(key);
+    if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
+        return false;
+    }
+    if (itr->second.attributes->find(identifier) == itr->second.attributes->end()) {
+        return false;
+    }
+    return true;
 }
 // Returns true if the inserted key not exists otherwise false
 bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,

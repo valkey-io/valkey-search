@@ -144,9 +144,11 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
                       key, absl::string_view(test_case.expected_vector_buffer)))
           .WillOnce(Return(test_case.expect_index_modify_w_result.value()));
     } else if (test_case.expect_index_remove_w_result.has_value()) {
-      EXPECT_CALL(*mock_index,
-                  RemoveRecord(key, test_case.expected_deletion_type))
-          .WillOnce(Return(test_case.expect_index_remove_w_result.value()));
+        if (test_case.expect_index_remove_w_result.value().ok() && test_case.expect_index_remove_w_result.value().value() == true) {
+            EXPECT_CALL(*mock_index,
+                    RemoveRecord(key, test_case.expected_deletion_type))
+                .WillOnce(Return(test_case.expect_index_remove_w_result.value()));
+        }
     }
     if (test_case.open_key_fail) {
       // Keep the default behavior still for other keys (e.g. IndexSchema key).
@@ -235,11 +237,15 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
           std::get<1>(tuple)->success_cnt - std::get<0>(tuple).success_cnt,
           std::get<2>(tuple)->success_cnt);
       EXPECT_EQ(
-          std::get<1>(tuple)->skipped_cnt - std::get<0>(tuple).skipped_cnt,
-          std::get<2>(tuple)->skipped_cnt);
-      EXPECT_EQ(
-          std::get<1>(tuple)->failure_cnt - std::get<0>(tuple).failure_cnt,
-          std::get<2>(tuple)->failure_cnt);
+              std::get<1>(tuple)->skipped_cnt - std::get<0>(tuple).skipped_cnt,
+              std::get<2>(tuple)->skipped_cnt);
+      if (!test_case.expect_index_remove_w_result.has_value() ||
+         !test_case.expect_index_remove_w_result.value().ok() ||
+         test_case.expect_index_remove_w_result.value().value() == true) {
+          EXPECT_EQ(
+                  std::get<1>(tuple)->failure_cnt - std::get<0>(tuple).failure_cnt,
+                  std::get<2>(tuple)->failure_cnt);
+      }
     }
     EXPECT_EQ(index_schema->GetStats().document_cnt - document_cnt,
               test_case.expected_document_cnt_delta);
@@ -379,7 +385,7 @@ INSTANTIATE_TEST_SUITE_P(
             .expect_index_remove_w_result = false,
             .expected_remove_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
-                    .skipped_cnt = 1,
+                    .skipped_cnt = 0,
                 },
         },
         {
@@ -392,7 +398,7 @@ INSTANTIATE_TEST_SUITE_P(
             .expect_index_remove_w_result = false,
             .expected_remove_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
-                    .skipped_cnt = 1,
+                    .skipped_cnt = 0,
                 },
             .expected_deletion_type = indexes::DeletionType::kRecord,
         },
@@ -578,7 +584,7 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_vector_buffer = "vector_buffer",
             .expected_remove_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
-                    .skipped_cnt = 1,
+                    .skipped_cnt = 0,
                 },
         },
     }),

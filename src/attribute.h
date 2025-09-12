@@ -53,6 +53,9 @@ class Attribute {
     }
     return vmsdk::RetainUniqueValkeyString(cached_score_as_.get());
   }
+  bool IsTracked(const InternedStringPtr& key) const {
+    return index_->IsTracked(key);
+  }
 
  private:
   std::string alias_;

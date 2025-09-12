@@ -72,6 +72,7 @@ class TermIterator : public TextIterator {
   bool DonePositions() const override;
   bool NextPosition() override;
   uint32_t CurrentPosition() override;
+  uint64_t GetFieldMask() const override;
 
   // Optional unified iteration contract
   bool Done() const override;

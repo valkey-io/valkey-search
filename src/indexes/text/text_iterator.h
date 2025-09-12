@@ -32,6 +32,7 @@ public:
     virtual bool DonePositions() const = 0;
     virtual bool NextPosition() = 0;
     virtual uint32_t CurrentPosition() = 0;
+    virtual uint64_t GetFieldMask() const = 0;
 
     // Optional unified iteration contract
     virtual bool Done() const = 0;

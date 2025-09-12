@@ -85,6 +85,11 @@ uint32_t TermIterator::CurrentPosition() {
   return pos_iter_.GetPosition();
 }
 
+uint64_t TermIterator::GetFieldMask() const {
+  VMSDK_LOG(WARNING, nullptr) << "TI::GetFieldMask{" << word_iter_.GetWord() << "}";
+  return pos_iter_.GetFieldMask();
+} 
+
 bool TermIterator::DoneKeys() const {
   VMSDK_LOG(WARNING, nullptr) << "TI::Done{" << word_iter_.GetWord() << "}";
   return nomatch_ || !key_iter_.IsValid();

@@ -102,6 +102,20 @@ uint32_t ProximityIterator::CurrentPosition() {
   return current_pos_;
 }
 
+uint64_t ProximityIterator::GetFieldMask() const {
+    // CHECK that all iterators have the same field mask and crash otherwise.
+    uint64_t common_fields = iters_[0]->GetFieldMask();
+    for (size_t i = 1; i < iters_.size(); ++i) {
+        common_fields &= iters_[i]->GetFieldMask();
+        // Using the intersection of field masks, check if any field is common
+        if (common_fields == 0) {
+            // valid = false;
+            CHECK(false) << "ProximityIterator::GetFieldMask - Mismatched field masks in child iterators";
+        }
+    }
+    return common_fields;
+}
+
 // ---- Internal helpers ----
 
 bool ProximityIterator::NextKeyMain() {
@@ -210,32 +224,60 @@ bool ProximityIterator::NextPosition() {
 
         // Check if current combination satisfies constraints
         bool valid = true;
-        for (size_t i = 0; i + 1 < n && valid; ++i) {
-            if (in_order_ && positions[i] >= positions[i + 1]) {
-                valid = false;
-            } else if (positions[i + 1] - positions[i] - 1 > slop_) {
+        // First check all positions are in same field
+        uint64_t common_fields = iters_[0]->GetFieldMask();
+        for (size_t i = 1; i < n && valid; ++i) {
+            common_fields &= iters_[i]->GetFieldMask();
+            // Using the intersection of field masks, check if any field is common
+            if (common_fields == 0) {
                 valid = false;
             }
         }
-
+        if (valid) {
+            // Then check order/slop constraints
+            for (size_t i = 0; i + 1 < n && valid; ++i) {
+                if (in_order_ && positions[i] >= positions[i + 1]) {
+                    valid = false;
+                } else if (positions[i + 1] - positions[i] - 1 > slop_) {
+                    valid = false;
+                }
+            }
+        }
         if (valid) {
             current_pos_ = positions[0];
             current_key_ = iters_[0]->CurrentKey();
             VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition returning as valid";
+            // Advance rightmost iterator for next call
+            if (!iters_[n-1]->NextPosition()) {
+                done_ = true; // No more combinations
+            }
             return true;
         }
 
-        // Find which iterator to advance
-        size_t advance_idx = n - 1; // default to rightmost
-        for (size_t i = 0; i + 1 < n; ++i) {
-            if (in_order_ && positions[i] >= positions[i + 1]) {
-                advance_idx = i + 1; // advance right iterator
-                break;
-            } else if (positions[i + 1] - positions[i] - 1 > slop_) {
-                advance_idx = i; // advance left iterator when it's lagging
-                break;
+        // // Find which iterator to advance
+        // size_t advance_idx = n - 1; // default to rightmost
+        // for (size_t i = 0; i + 1 < n; ++i) {
+        //     if (iters_[i]->GetFieldMask() != iters_[i + 1]->GetFieldMask()) {
+        //         // Advance iterator with smaller field
+        //         advance_idx = (iters_[i]->GetFieldMask() < iters_[i + 1]->GetFieldMask()) ? i : i + 1;
+        //         break;
+        //     }
+        //     else if (in_order_ && positions[i] >= positions[i + 1]) {
+        //         advance_idx = i + 1; // advance right iterator
+        //         break;
+        //     } else if (in_order_ && positions[i + 1] - positions[i] - 1 > slop_) {
+        //         advance_idx = i; // advance left iterator when it's lagging
+        //         break;
+        //     }
+        // }
+        // Always advance iterator with smallest position
+        size_t advance_idx = 0;
+        for (size_t i = 1; i < n; ++i) {
+            if (positions[i] < positions[advance_idx]) {
+                advance_idx = i;
             }
         }
+
 
         // Advance the iterator
         if (!iters_[advance_idx]->NextPosition()) {

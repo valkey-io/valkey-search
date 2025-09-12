@@ -78,7 +78,10 @@ absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr& key,
 }
 
 int Text::RespondWithInfo(ValkeyModuleCtx* ctx) const {
-  throw std::runtime_error("Text::RespondWithInfo not implemented");
+  auto num_replies = 2;
+  ValkeyModule_ReplyWithSimpleString(ctx, "type");
+  ValkeyModule_ReplyWithSimpleString(ctx, "TEXT");
+  return num_replies;
 }
 
 bool Text::IsTracked(const InternedStringPtr& key) const { return false; }
@@ -136,6 +139,66 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
   }
   CHECK(false) << "Unsupported TextPredicate operation";
   return nullptr;
+}
+
+uint64_t Text::GetTotalPositions() const {
+  if (!text_index_schema_ || !text_index_schema_->text_index_) {
+    return 0;
+  }
+  
+  uint64_t total_positions = 0;
+  
+  // Iterate through all terms in the prefix tree
+  auto word_iter = text_index_schema_->text_index_->prefix_.GetWordIterator("");
+  
+  while (!word_iter.Done()) {
+    auto postings = word_iter.GetTarget();
+    if (postings) {
+      total_positions += postings->GetPositionCount();
+    }
+    word_iter.Next();
+  }
+  
+  return total_positions;
+}
+
+uint64_t Text::GetNumTerms() const {
+  if (!text_index_schema_ || !text_index_schema_->text_index_) {
+    return 0;
+  }
+  
+  uint64_t num_terms = 0;
+  
+  // Count all terms in the prefix tree
+  auto word_iter = text_index_schema_->text_index_->prefix_.GetWordIterator("");
+  
+  while (!word_iter.Done()) {
+    num_terms++;
+    word_iter.Next();
+  }
+  
+  return num_terms;
+}
+
+uint64_t Text::GetTotalTermFrequency() const {
+  if (!text_index_schema_ || !text_index_schema_->text_index_) {
+    return 0;
+  }
+  
+  uint64_t total_term_freq = 0;
+  
+  // Sum up term frequencies from all postings
+  auto word_iter = text_index_schema_->text_index_->prefix_.GetWordIterator("");
+  
+  while (!word_iter.Done()) {
+    auto postings = word_iter.GetTarget();
+    if (postings) {
+      total_term_freq += postings->GetTotalTermFrequency();
+    }
+    word_iter.Next();
+  }
+  
+  return total_term_freq;
 }
 
 }  // namespace valkey_search::indexes

@@ -39,6 +39,7 @@ Key.
 #include <vector>
 
 #include "src/utils/string_interning.h"
+#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search::indexes::text {
 
@@ -97,8 +98,8 @@ struct Postings {
   // Total number of keys
   size_t GetKeyCount() const;
 
-  // Total number of postings for all keys
-  size_t GetPostingCount() const;
+  // Total number of positions for all keys
+  size_t GetPositionCount() const;
 
   // Total frequency of the term across all keys and positions
   size_t GetTotalTermFrequency() const;
@@ -108,6 +109,9 @@ struct Postings {
 
   // Get a Key iterator.
   KeyIterator GetKeyIterator() const;
+
+  // Memory tracking
+  static int64_t GetMemoryUsage();
 
   // The Key Iterator
   struct KeyIterator {
@@ -170,6 +174,14 @@ struct Postings {
   };
 
  private:
+  static MemoryPool memory_pool_;
+
+  // Used for testing.
+  static void SetMemoryUsage(int64_t value) {
+    memory_pool_.Reset();
+    memory_pool_.Add(value);
+  }
+
   class Impl;
   std::unique_ptr<Impl> impl_;
 };

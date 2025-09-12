@@ -104,6 +104,11 @@ class Text : public IndexBase {
       const query::TextPredicate& predicate,
       bool negate) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
+  // Statistics methods for FT.INFO
+  uint64_t GetTotalPositions() const;
+  uint64_t GetNumTerms() const;
+  uint64_t GetTotalTermFrequency() const;
+
  private:
   // Each text field index within the schema is assigned a unique number, this
   // is used by the Postings object to identify fields.

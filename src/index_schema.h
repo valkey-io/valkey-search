@@ -183,6 +183,14 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t GetBackfillDbSize() const;
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
 
+  // Text index statistics helper methods
+  uint64_t GetTextIndexMemoryUsage() const;
+  uint64_t GetRadixTreeMemoryUsage() const;
+  uint64_t GetPostingsMemoryUsage() const;
+  uint64_t GetTotalPositions() const;
+  uint64_t GetNumTerms() const;
+  uint64_t GetTotalTermFrequency() const;
+
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,
               const data_model::IndexSchema &index_schema_proto,

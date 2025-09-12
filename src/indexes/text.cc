@@ -122,6 +122,126 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
   return std::make_unique<text::TextFetcher>(std::move(iter));
 }
 
+uint64_t Text::GetTotalPositions() const {
+  if (!text_index_schema_ || !text_index_schema_->text_index_) {
+    return 0;
+  }
+  
+  uint64_t total_positions = 0;
+  
+  // Iterate through all terms in the prefix tree
+  auto word_iter = text_index_schema_->text_index_->prefix_.GetWordIterator("");
+  
+  while (!word_iter.Done()) {
+    auto postings = word_iter.GetTarget();
+    if (postings) {
+      total_positions += postings->GetPositionCount();
+    }
+    word_iter.Next();
+  }
+  
+  return total_positions;
+}
+
+uint64_t Text::GetNumTerms() const {
+  if (!text_index_schema_ || !text_index_schema_->text_index_) {
+    return 0;
+  }
+  
+  uint64_t num_terms = 0;
+  
+  // Count all terms in the prefix tree
+  auto word_iter = text_index_schema_->text_index_->prefix_.GetWordIterator("");
+  
+  while (!word_iter.Done()) {
+    num_terms++;
+    word_iter.Next();
+  }
+  
+  return num_terms;
+}
+
+uint64_t Text::GetTotalTermFrequency() const {
+  if (!text_index_schema_ || !text_index_schema_->text_index_) {
+    return 0;
+  }
+  
+  uint64_t total_term_freq = 0;
+  
+  // Sum up term frequencies from all postings
+  auto word_iter = text_index_schema_->text_index_->prefix_.GetWordIterator("");
+  
+  while (!word_iter.Done()) {
+    auto postings = word_iter.GetTarget();
+    if (postings) {
+      total_term_freq += postings->GetTotalTermFrequency();
+    }
+    word_iter.Next();
+  }
+  
+  return total_term_freq;
+}
+
+uint64_t Text::GetTotalPositions() const {
+  if (!text_index_schema_ || !text_index_schema_->text_index_) {
+    return 0;
+  }
+  
+  uint64_t total_positions = 0;
+  
+  // Iterate through all terms in the prefix tree
+  auto word_iter = text_index_schema_->text_index_->prefix_.GetWordIterator("");
+  
+  while (!word_iter.Done()) {
+    auto postings = word_iter.GetTarget();
+    if (postings) {
+      total_positions += postings->GetPositionCount();
+    }
+    word_iter.Next();
+  }
+  
+  return total_positions;
+}
+
+uint64_t Text::GetNumTerms() const {
+  if (!text_index_schema_ || !text_index_schema_->text_index_) {
+    return 0;
+  }
+  
+  uint64_t num_terms = 0;
+  
+  // Count all terms in the prefix tree
+  auto word_iter = text_index_schema_->text_index_->prefix_.GetWordIterator("");
+  
+  while (!word_iter.Done()) {
+    num_terms++;
+    word_iter.Next();
+  }
+  
+  return num_terms;
+}
+
+uint64_t Text::GetTotalTermFrequency() const {
+  if (!text_index_schema_ || !text_index_schema_->text_index_) {
+    return 0;
+  }
+  
+  uint64_t total_term_freq = 0;
+  
+  // Sum up term frequencies from all postings
+  auto word_iter = text_index_schema_->text_index_->prefix_.GetWordIterator("");
+  
+  while (!word_iter.Done()) {
+    auto postings = word_iter.GetTarget();
+    if (postings) {
+      total_term_freq += postings->GetTotalTermFrequency();
+    }
+    word_iter.Next();
+  }
+  
+  return total_term_freq;
+}
+
 }  // namespace valkey_search::indexes
 
 // Implement the TextPredicate BuildTextIterator virtual method

@@ -186,35 +186,11 @@ Postings::Postings(bool save_positions, size_t num_text_fields)
     : impl_(std::make_unique<Impl>(save_positions, num_text_fields)) {
   IsolatedMemoryScope scope{memory_pool_};
   CHECK(impl_ != nullptr) << "Failed to create Postings implementation";
-
-  // Report base object memory usage
-  vmsdk::ReportAllocMemorySize(sizeof(Postings) + sizeof(Impl));
 }
 
 // Automatic cleanup via unique_ptr
 Postings::~Postings() {
   IsolatedMemoryScope scope{memory_pool_};
-
-  // Report deallocation for all remaining data
-  for (const auto& [key, positions] : impl_->key_to_positions_) {
-    // Report deallocation for each position entry
-    for (const auto& [position, field_mask] : positions) {
-      size_t field_mask_size =
-          impl_->num_text_fields_ == 1   ? sizeof(SingleFieldMask)
-          : impl_->num_text_fields_ <= 8 ? sizeof(ByteFieldMask)
-                                         : sizeof(Uint64FieldMask);
-      size_t entry_size =
-          sizeof(Position) + field_mask_size + 24;  // approx map node overhead
-      vmsdk::ReportFreeMemorySize(entry_size);
-    }
-
-    // Report deallocation for key overhead
-    size_t key_overhead = 48;  // approximate map node overhead for key
-    vmsdk::ReportFreeMemorySize(key_overhead);
-  }
-
-  // Report deallocation of base object
-  vmsdk::ReportFreeMemorySize(sizeof(Postings) + sizeof(Impl));
 }
 
 // Check if posting list contains any documents
@@ -254,21 +230,6 @@ void Postings::InsertPosting(const Key& key, size_t field_index,
     auto field_mask = FieldMask::Create(impl_->num_text_fields_);
     field_mask->SetField(field_index);
     pos_map[effective_position] = std::move(field_mask);
-
-    // Report memory allocation for new position entry
-    size_t field_mask_size =
-        impl_->num_text_fields_ == 1   ? sizeof(SingleFieldMask)
-        : impl_->num_text_fields_ <= 8 ? sizeof(ByteFieldMask)
-                                       : sizeof(Uint64FieldMask);
-    size_t entry_size =
-        sizeof(Position) + field_mask_size + 24;  // approx map node overhead
-    vmsdk::ReportAllocMemorySize(entry_size);
-  }
-
-  // Report additional memory for new key
-  if (is_new_key) {
-    size_t key_overhead = 48;  // approximate map node overhead for key
-    vmsdk::ReportAllocMemorySize(key_overhead);
   }
 }
 
@@ -278,24 +239,6 @@ void Postings::RemoveKey(const Key& key) {
 
   auto it = impl_->key_to_positions_.find(key);
   if (it != impl_->key_to_positions_.end()) {
-    // Calculate memory being freed
-    size_t positions_count = it->second.size();
-
-    // Report deallocation for each position entry
-    for (const auto& [position, field_mask] : it->second) {
-      size_t field_mask_size =
-          impl_->num_text_fields_ == 1   ? sizeof(SingleFieldMask)
-          : impl_->num_text_fields_ <= 8 ? sizeof(ByteFieldMask)
-                                         : sizeof(Uint64FieldMask);
-      size_t entry_size =
-          sizeof(Position) + field_mask_size + 24;  // approx map node overhead
-      vmsdk::ReportFreeMemorySize(entry_size);
-    }
-
-    // Report deallocation for key overhead
-    size_t key_overhead = 48;  // approximate map node overhead for key
-    vmsdk::ReportFreeMemorySize(key_overhead);
-
     impl_->key_to_positions_.erase(it);
   }
 }
@@ -304,7 +247,7 @@ void Postings::RemoveKey(const Key& key) {
 size_t Postings::GetKeyCount() const { return impl_->key_to_positions_.size(); }
 
 // Get total number of position entries across all keys
-size_t Postings::GetPostingCount() const {
+size_t Postings::GetPositionCount() const {
   size_t total = 0;
   for (const auto& [key, positions] : impl_->key_to_positions_) {
     total += positions.size();

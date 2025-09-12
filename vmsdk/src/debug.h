@@ -106,12 +106,12 @@ struct Controlled : private ControlledBase {
 // Override default template for boolean
 //
 template <>
-inline std::string Controlled<bool>::DisplayValue() const {
+std::string Controlled<bool>::DisplayValue() const {
   return value_ ? "on" : "off";
-}
+};
 
 template <>
-inline absl::Status Controlled<bool>::SetValue(absl::string_view value) {
+absl::Status Controlled<bool>::SetValue(absl::string_view value) {
   std::string lc_value = absl::AsciiStrToLower(value);
   if (lc_value == "on" || lc_value == "yes" || value == "1") {
     value_ = true;

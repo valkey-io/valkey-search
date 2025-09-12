@@ -238,14 +238,14 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
           std::get<1>(tuple)->success_cnt - std::get<0>(tuple).success_cnt,
           std::get<2>(tuple)->success_cnt);
       EXPECT_EQ(
-              std::get<1>(tuple)->skipped_cnt - std::get<0>(tuple).skipped_cnt,
-              std::get<2>(tuple)->skipped_cnt);
+          std::get<1>(tuple)->skipped_cnt - std::get<0>(tuple).skipped_cnt,
+          std::get<2>(tuple)->skipped_cnt);
       if (!test_case.expect_index_remove_w_result.has_value() ||
-         !test_case.expect_index_remove_w_result.value().ok() ||
-         test_case.expect_index_remove_w_result.value().value() == true) {
-          EXPECT_EQ(
-                  std::get<1>(tuple)->failure_cnt - std::get<0>(tuple).failure_cnt,
-                  std::get<2>(tuple)->failure_cnt);
+          !test_case.expect_index_remove_w_result.value().ok() ||
+          test_case.expect_index_remove_w_result.value().value() == true) {
+        EXPECT_EQ(
+            std::get<1>(tuple)->failure_cnt - std::get<0>(tuple).failure_cnt,
+            std::get<2>(tuple)->failure_cnt);
       }
     }
     EXPECT_EQ(index_schema->GetStats().document_cnt - document_cnt,

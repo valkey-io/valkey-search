@@ -8,7 +8,9 @@ from typing import Tuple, Union
 import valkey
 from ft_info_parser import FTInfoParser
 import logging, json
-import struct
+import struct, threading
+from typing import Union
+from valkey_search_test_case import ValkeySearchClusterTestCase
 
 
 def float_to_bytes(flt: list[float]) -> bytes:
@@ -151,9 +153,21 @@ class Index:
         print(f"Creating Index: {cmd}")
         client.execute_command(*cmd)
 
-    def load_data(self, client: valkey.client, rows: int):
-        print("Loading data to ", client)
-        for i in range(0, rows):
+    def load_data(self, client: Union[valkey.client, ValkeySearchClusterTestCase], rows: int):
+        print("Loading data to ", client, " rows:", rows)
+        if not isinstance(client, ValkeySearchClusterTestCase):
+            self.load_data_inner(client, 0, rows, 1)
+        else:
+            NUM_CONNECTIONS = 20
+            threads = []
+            for i in range(NUM_CONNECTIONS):
+                threads.append(threading.Thread(target=self.load_data_inner, args=(client.new_cluster_client(), i, rows, NUM_CONNECTIONS)))
+                threads[-1].start()
+            for i in range(NUM_CONNECTIONS):
+                threads[i].join()
+
+    def load_data_inner(self, client: valkey.client, start: int, end: int , incr: int):
+        for i in range(start, end, incr):
             data = self.make_data(i)
             if self.type == "HASH":
                 #print("Loading ", self.keyname(i), data)

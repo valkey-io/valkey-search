@@ -246,7 +246,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   bool DeleteIfNotInValkeyDict(ValkeyModuleCtx *ctx, ValkeyModuleString *key,
                                const Attribute &attribute);
   vmsdk::BlockedClientCategory GetBlockedCategoryFromProto() const;
-  bool InTrackedMutationRecords(const InternedStringPtr &key, const std::string &identifier) const;
+  bool InTrackedMutationRecords(const InternedStringPtr &key,
+                                const std::string &identifier) const;
   bool TrackMutatedRecord(ValkeyModuleCtx *ctx, const InternedStringPtr &key,
                           MutatedAttributes &&mutated_attributes,
                           bool from_backfill, bool block_client)

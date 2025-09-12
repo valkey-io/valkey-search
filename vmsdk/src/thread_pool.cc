@@ -226,13 +226,12 @@ void ThreadPool::WorkerThread(std::shared_ptr<Thread> thread) {
         continue;
       }
 
-      for (auto &tasks : priority_tasks_ | std::views::reverse) {
-        if (!tasks.empty()) {
-          task = std::move(tasks.front());
-          tasks.pop();
-          break;
-        }
+      // Use the new fairness-aware task selection
+      auto optional_task = TryGetNextTask();
+      if (!optional_task.has_value()) {
+        continue;  // No tasks available, go back to waiting
       }
+      task = std::move(*optional_task);
     }
     task();
   }
@@ -289,4 +288,83 @@ void ThreadPool::Resize(size_t count, bool wait_for_resize) {
     DecrThreadCountBy(current_size - count, wait_for_resize);
   }
 }
+
+void ThreadPool::SetHighPriorityWeight(int weight) {
+  // Clamp weight to valid range [0, 100]
+  weight = std::max(0, std::min(100, weight));
+  high_priority_weight_.store(weight, std::memory_order_relaxed);
+
+  // Pre-compute pattern for efficiency
+  if (weight == 0) {
+    pattern_length_.store(1, std::memory_order_relaxed);
+    high_ratio_.store(0, std::memory_order_relaxed);
+  } else if (weight == 100) {
+    pattern_length_.store(1, std::memory_order_relaxed);
+    high_ratio_.store(1, std::memory_order_relaxed);
+  } else {
+    int low_weight = 100 - weight;
+    int gcd_val = std::gcd(weight, low_weight);
+    int high_ratio = weight / gcd_val;
+    int pattern_len = high_ratio + (low_weight / gcd_val);
+
+    pattern_length_.store(pattern_len, std::memory_order_relaxed);
+    high_ratio_.store(high_ratio, std::memory_order_relaxed);
+  }
+}
+
+int ThreadPool::GetHighPriorityWeight() const {
+  return high_priority_weight_.load(std::memory_order_relaxed);
+}
+
+std::optional<absl::AnyInvocable<void()>> ThreadPool::TryGetNextTask() {
+  // Check for kMax priority first - always takes precedence
+  if (!GetPriorityTasksQueue(Priority::kMax).empty()) {
+    auto &max_queue = GetPriorityTasksQueue(Priority::kMax);
+    auto task = std::move(max_queue.front());
+    max_queue.pop();
+    return task;
+  }
+
+  // No kMax tasks - apply fairness between kHigh and kLow
+  bool high_has_tasks = !GetPriorityTasksQueue(Priority::kHigh).empty();
+  bool low_has_tasks = !GetPriorityTasksQueue(Priority::kLow).empty();
+
+  if (!high_has_tasks && !low_has_tasks) {
+    return std::nullopt;  // No tasks available
+  }
+
+  Priority selected_priority;
+  if (!high_has_tasks) {
+    selected_priority = Priority::kLow;
+  } else if (!low_has_tasks) {
+    selected_priority = Priority::kHigh;
+  } else {
+    // Both have tasks - use pattern-based weighted round robin
+    int high_weight = high_priority_weight_.load(std::memory_order_relaxed);
+
+    if (high_weight == 0) {
+      selected_priority = Priority::kLow;
+    } else if (high_weight == 100) {
+      selected_priority = Priority::kHigh;
+    } else {
+      // Only increment counter when we need fairness calculation
+      uint32_t counter_val =
+          fairness_counter_.fetch_add(1, std::memory_order_relaxed);
+
+      // Use pre-computed pattern values for better performance
+      int high_ratio = high_ratio_.load(std::memory_order_relaxed);
+      int pattern_length = pattern_length_.load(std::memory_order_relaxed);
+
+      int position_in_pattern = counter_val % pattern_length;
+      selected_priority =
+          (position_in_pattern < high_ratio) ? Priority::kHigh : Priority::kLow;
+    }
+  }
+
+  auto &selected_queue = GetPriorityTasksQueue(selected_priority);
+  auto task = std::move(selected_queue.front());
+  selected_queue.pop();
+  return task;
+}
+
 }  // namespace vmsdk

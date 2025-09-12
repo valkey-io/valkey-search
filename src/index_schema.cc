@@ -371,9 +371,6 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     if (!record && !attribute.IsTracked(interned_key) &&
         !InTrackedMutationRecords(interned_key, attribute.GetIdentifier())) {
       return;
-    // Early return on record not found just if the record not tracked. Otherwise, it will be processed as a delete 
-    if (!record && !attribute.IsTracked(interned_key) && !InTrackedMutationRecords(interned_key, attribute.GetIdentifier())) {
-        return;
     }
     if (!is_module_owned) {
       // A record which are owned by the module were not modified and are

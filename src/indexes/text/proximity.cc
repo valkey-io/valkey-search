@@ -189,203 +189,60 @@ bool ProximityIterator::NextKeyMain() {
 
 bool ProximityIterator::NextPosition() {
     VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition";
-
-    if (done_) {  // <-- Check done upfront
-        return false;
-    }
+    if (done_) return false;
 
     const size_t n = iters_.size();
+    
     while (true) {
-        VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition loop start";
-        // // 1. Collect current positions
-        // std::vector<uint64_t> positions(n);
-        // for (size_t i = 0; i < n; ++i) {
-        //     // if (iters_[i]->DonePositions()) {
-        //     //     done_ = true;
-        //     //     return false;
-        //     // }
-        //     positions[i] = iters_[i]->CurrentPosition();
-        // }
-
-        // // 2. Check left-to-right for slop / in-order violations
-        // size_t failure_idx = n; // n means no violation
-        // for (size_t i = 0; i + 1 < n; ++i) {
-        //     uint64_t gap = positions[i + 1] - positions[i] - 1;
-        //     if (gap > slop_ || (in_order_ && positions[i] >= positions[i + 1])) {
-        //         failure_idx = i; // left term is lagging
-        //         break;
-        //     }
-        // }
-
-        // if (failure_idx == n) {
-        //     // ✅ Found a valid combination
-        //     current_pos_ = positions[0];
-        //     current_key_ = iters_[0]->CurrentKey();
-
-        //     // // --- Prepare for next combination ---
-        //     // // Try to advance the **rightmost iterator** that can move.
-        //     // // If none can move, lagging-advance in the next iteration will handle it.
-        //     // for (ssize_t i = n - 1; i >= 0; --i) {
-        //     //     if (iters_[i]->NextPosition()) {
-        //     //         // Successfully advanced; reset all to the right
-        //     //         for (size_t j = i + 1; j < n; ++j) {
-        //     //             iters_[j]->ResetPositions();
-        //     //         }
-        //     //         break;
-        //     //     } else if (i == 0) {
-        //     //         // Leftmost iterator exhausted → no more combinations
-        //     //         return true; // yield last combination now
-        //     //     }
-        //     // }
-
-        //     return true;
-        // }
-
-        // // // 3. Violation occurred → advance the lagging iterator (left of failure)
-        // // size_t advance_idx = failure_idx;
-        // // while (true) {
-        // //     if (!iters_[advance_idx]->NextPosition()) {
-        // //         if (advance_idx == 0) {
-        // //             done_ = true;
-        // //             return false;
-        // //         }
-        // //         --advance_idx;
-        // //     } else {
-        // //         // Successfully advanced lagging iterator
-        // //         break;
-        // //     }
-        // // }
-
-        // // // 4. Reset all iterators to the right of the one we just advanced
-        // // for (size_t i = advance_idx + 1; i < n; ++i) {
-        // //     iters_[i]->ResetPositions();
-        // // }
-
-        // // Loop again to check new combination
-        // // Done 
-        // return false;
-
-        // 1. Collect positions
-        std::vector<uint64_t> positions;
-        positions.reserve(iters_.size());
-        for (auto& it : iters_) {
-            // if (it->DonePositions()) return false;
-            positions.push_back(it->CurrentPosition());
-            VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition pos: " << it->CurrentPosition();
+        VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition in loop";
+        // Check if any iterator is done with positions
+        for (size_t i = 0; i < n; ++i) {
+            if (iters_[i]->DonePositions()) {
+                return false;
+            }
         }
-        
-        // 2. Ensure order if required
-        // if (in_order_ && !std::is_sorted(positions.begin(), positions.end())) {
-        //     // Advance smallest iterator and retry
-        //     // TODO: Need to read this.
-        //     size_t min_idx = std::distance(
-        //         positions.begin(),
-        //         std::min_element(positions.begin(), positions.end())
-        //     );
-        //     if (!iters_[min_idx]->NextPosition()) return false;
-        //     continue;
-        // }
-        if (std::is_sorted(positions.begin(), positions.end())) {
-            VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition is sorted";
+
+        // Collect current positions
+        std::vector<uint32_t> positions(n);
+        for (size_t i = 0; i < n; ++i) {
+            positions[i] = iters_[i]->CurrentPosition();
+        }
+
+        // Check if current combination satisfies constraints
+        bool valid = true;
+        for (size_t i = 0; i + 1 < n && valid; ++i) {
+            if (in_order_ && positions[i] >= positions[i + 1]) {
+                valid = false;
+            } else if (positions[i + 1] - positions[i] - 1 > slop_) {
+                valid = false;
+            }
+        }
+
+        if (valid) {
+            current_pos_ = positions[0];
+            current_key_ = iters_[0]->CurrentKey();
+            VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition returning as valid";
             return true;
         }
-        return false;
-        // // 3. Compute max gap between adjacent positions
-        // uint64_t max_gap = 0;
-        // for (size_t i = 0; i + 1 < positions.size(); ++i) {
-        //     uint64_t gap = positions[i+1] > positions[i] ? positions[i+1] - positions[i] - 1 : 0;
-        //     if (gap > max_gap) max_gap = gap;
-        // }
 
-        // if (max_gap <= slop_) {
-        //     // Found a match
-        //     current_pos_ = positions.front();
+        // Find which iterator to advance
+        size_t advance_idx = n - 1; // default to rightmost
+        for (size_t i = 0; i + 1 < n; ++i) {
+            if (in_order_ && positions[i] >= positions[i + 1]) {
+                advance_idx = i + 1; // advance right iterator
+                break;
+            } else if (positions[i + 1] - positions[i] - 1 > slop_) {
+                advance_idx = i; // advance left iterator when it's lagging
+                break;
+            }
+        }
 
-        //     // Prepare for next candidate by advancing iterator with smallest position
-        //     size_t min_idx = std::distance(
-        //         positions.begin(),
-        //         std::min_element(positions.begin(), positions.end())
-        //     );
-        //     iters_[min_idx]->NextPosition();
-        //     return true;
-        // }
-
-        // // No match -> advance smallest and retry
-        // size_t min_idx = std::distance(
-        //     positions.begin(),
-        //     std::min_element(positions.begin(), positions.end())
-        // );
-        // if (!iters_[min_idx]->NextPosition()) return false;
+        // Advance the iterator
+        if (!iters_[advance_idx]->NextPosition()) {
+            VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition returning false";
+            return false;
+        }
     }
 }
-
-// bool ProximityIterator::NextKey() {
-//     VMSDK_LOG(WARNING, nullptr) << "PI::NextKey";
-
-//     if (iters_.empty()) {
-//         VMSDK_LOG(WARNING, nullptr) << "PI::NextKey Done 1";
-//         done_ = true;  // <-- Set done flag here
-//         return false;
-//     }
-
-//     while (!Done()) {
-//         // 1. Find the minimum current key among all iterators
-//         VMSDK_LOG(WARNING, nullptr) << "PI::NextKey in loop1. Starting 1";
-//         InternedStringPtr min_key = nullptr;
-//         for (auto& iter : iters_) {
-//             VMSDK_LOG(WARNING, nullptr) << "PI::NextKey in loop11";
-//             if (iter->Done()) {
-//                 done_ = true;
-//                 VMSDK_LOG(WARNING, nullptr) << "PI::NextKey Done 2";
-//                 return false;
-//             }
-//             auto key = iter->CurrentKey();
-//             if (!key) {
-//                 done_ = true;
-//                 VMSDK_LOG(WARNING, nullptr) << "PI::NextKey Done 3";
-//                 return false;
-//             }
-//             if (!min_key || key->Str() < min_key->Str()) {
-//                 min_key = key;
-//             }
-//         }
-//         // 2. Advance iterators that are behind min_key
-//         VMSDK_LOG(WARNING, nullptr) << "PI::NextKey check Starting 2";
-//         bool all_equal = true;
-//         for (auto& iter : iters_) {
-//             VMSDK_LOG(WARNING, nullptr) << "PI::NextKey in loop12";
-//             while (!iter->Done() && iter->CurrentKey()->Str() < min_key->Str()) {
-//                 VMSDK_LOG(WARNING, nullptr) << "PI::NextKey in loop121";
-//                 if (!iter->NextKey()) {
-//                     done_ = true;
-//                     VMSDK_LOG(WARNING, nullptr) << "PI::NextKey Done 4";
-//                     return false;
-//                 }
-//             }
-//             if (iter->Done()) {
-//                 done_ = true;
-//                 VMSDK_LOG(WARNING, nullptr) << "PI::NextKey Done 5";
-//                 return false;
-//             }
-//             if (iter->CurrentKey()->Str() != min_key->Str()) {
-//                 // This is an issue.
-//                 // if (iter->CurrentKey()->Str() > min_key->Str()) {
-//                 // }
-//                 VMSDK_LOG(WARNING, nullptr) << "PI::NextKey Keys dont match" << "Key1: " << iter->CurrentKey()->Str() << " Key2: " << min_key->Str();
-//                 all_equal = false;
-//             }
-//         }
-//         // 3. If all iterators are at the same key, we found a common key
-//         VMSDK_LOG(WARNING, nullptr) << "PI::NextKey Starting 3";
-//         if (all_equal) {
-//             current_key_ = min_key;
-//             VMSDK_LOG(WARNING, nullptr) << "PI::NextKey Done with key " << current_key_->Str();
-//             VMSDK_LOG(WARNING, nullptr) << "PI::NextKey Done 6";
-//             return true;
-//         }
-//         // Otherwise, repeat loop to find next common key
-//     }
-//     return false;
-// }
 
 }  // namespace valkey_search::indexes::text

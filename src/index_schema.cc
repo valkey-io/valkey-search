@@ -714,7 +714,7 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithArray(ctx, 34);
+  ValkeyModule_ReplyWithArray(ctx, 24);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
 
@@ -751,18 +751,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%lu", stats_.subscription_add.skipped_cnt).c_str());
-
-  // Stats that we are going to display
-  ValkeyModule_ReplyWithSimpleString(ctx, "inverted_index_memory");
-  ValkeyModule_ReplyWithLongLong(ctx, 0);
-  ValkeyModule_ReplyWithSimpleString(ctx, "index_memory");
-  ValkeyModule_ReplyWithLongLong(ctx, 0);
-  ValkeyModule_ReplyWithSimpleString(ctx, "total_inverted_index_blocks");
-  ValkeyModule_ReplyWithLongLong(ctx, 0);
-  ValkeyModule_ReplyWithSimpleString(ctx, "total_terms");
-  ValkeyModule_ReplyWithLongLong(ctx, 0);
-  ValkeyModule_ReplyWithSimpleString(ctx, "memory_per_document");
-  ValkeyModule_ReplyWithLongLong(ctx, 0);
 
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_in_progress");
   ValkeyModule_ReplyWithCString(

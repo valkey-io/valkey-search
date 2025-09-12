@@ -11,7 +11,8 @@
 #include <condition_variable>  // NOLINT(build/c++11)
 #include <cstddef>
 #include <memory>
-#include <mutex>  // NOLINT(build/c++11)
+#include <mutex>   // NOLINT(build/c++11)
+#include <thread>  // NOLINT(build/c++11)
 #include <vector>
 
 #include "absl/synchronization/blocking_counter.h"
@@ -387,6 +388,351 @@ TEST_F(ThreadPoolTest, TestCPUUsage) {
   atomic_flag.store(true);
   blocking_counter->Wait();
   thread_pool.JoinWorkers();
+}
+
+// ============================================================================
+// THREAD POOL FAIRNESS TESTS
+// ============================================================================
+
+class ThreadPoolFairnessTest : public ::testing::Test {
+ protected:
+  ThreadPoolFairnessTest() : thread_pool_("fairness-test-pool", 4) {}
+
+  void SetUp() override { thread_pool_.StartWorkers(); }
+
+  void TearDown() override { thread_pool_.JoinWorkers(); }
+
+  ThreadPool thread_pool_;
+};
+
+// Test weight setter and getter functionality
+TEST_F(ThreadPoolFairnessTest, WeightSetterGetter) {
+  // Test default weight
+  EXPECT_EQ(thread_pool_.GetHighPriorityWeight(), 100);
+
+  // Test setting valid weights
+  thread_pool_.SetHighPriorityWeight(0);
+  EXPECT_EQ(thread_pool_.GetHighPriorityWeight(), 0);
+
+  thread_pool_.SetHighPriorityWeight(50);
+  EXPECT_EQ(thread_pool_.GetHighPriorityWeight(), 50);
+
+  thread_pool_.SetHighPriorityWeight(100);
+  EXPECT_EQ(thread_pool_.GetHighPriorityWeight(), 100);
+}
+
+// Test weight clamping for invalid values
+TEST_F(ThreadPoolFairnessTest, WeightClamping) {
+  // Test negative values get clamped to 0
+  thread_pool_.SetHighPriorityWeight(-1);
+  EXPECT_EQ(thread_pool_.GetHighPriorityWeight(), 0);
+
+  thread_pool_.SetHighPriorityWeight(-100);
+  EXPECT_EQ(thread_pool_.GetHighPriorityWeight(), 0);
+
+  // Test values > 100 get clamped to 100
+  thread_pool_.SetHighPriorityWeight(101);
+  EXPECT_EQ(thread_pool_.GetHighPriorityWeight(), 100);
+
+  thread_pool_.SetHighPriorityWeight(999);
+  EXPECT_EQ(thread_pool_.GetHighPriorityWeight(), 100);
+}
+
+// Test fairness under concurrent weight changes
+TEST_F(ThreadPoolFairnessTest, ConcurrentWeightChanges) {
+  const int total_tasks = 500;
+  std::atomic<bool> stop_weight_changes{false};
+  std::atomic<int> tasks_executed{0};
+
+  // Thread that continuously changes weights
+  std::thread weight_changer([this, &stop_weight_changes]() {
+    const std::vector<int> weights = {0, 25, 50, 75, 100};
+    size_t weight_index = 0;
+
+    while (!stop_weight_changes) {
+      thread_pool_.SetHighPriorityWeight(weights[weight_index]);
+      weight_index = (weight_index + 1) % weights.size();
+      absl::SleepFor(absl::Microseconds(100));
+    }
+  });
+
+  absl::BlockingCounter counter(total_tasks);
+
+  // Schedule tasks while weights are changing
+  for (int i = 0; i < total_tasks; ++i) {
+    ThreadPool::Priority priority =
+        (i % 2 == 0) ? ThreadPool::Priority::kHigh : ThreadPool::Priority::kLow;
+
+    EXPECT_TRUE(thread_pool_.Schedule(
+        [&tasks_executed, &counter]() {
+          tasks_executed++;
+          counter.DecrementCount();
+        },
+        priority));
+  }
+
+  counter.Wait();
+  stop_weight_changes = true;
+  weight_changer.join();
+
+  // All tasks should have executed despite weight changes
+  EXPECT_EQ(tasks_executed.load(), total_tasks);
+}
+
+// Test starvation prevention
+TEST_F(ThreadPoolFairnessTest, StarvationPrevention) {
+  // Set weight to heavily favor high priority but allow some low priority
+  thread_pool_.SetHighPriorityWeight(90);  // 90% high, 10% low
+
+  std::atomic<int> low_executed{0};
+  std::atomic<bool> continue_scheduling{true};
+
+  // Continuously schedule high priority tasks
+  std::thread high_priority_scheduler([this, &continue_scheduling]() {
+    while (continue_scheduling) {
+      thread_pool_.Schedule([]() { absl::SleepFor(absl::Microseconds(100)); },
+                            ThreadPool::Priority::kHigh);
+      absl::SleepFor(absl::Microseconds(10));
+    }
+  });
+
+  // Schedule low priority tasks and wait for some to execute
+  const int low_tasks = 10;
+  absl::BlockingCounter low_counter(low_tasks);
+
+  for (int i = 0; i < low_tasks; ++i) {
+    EXPECT_TRUE(thread_pool_.Schedule(
+        [&low_executed, &low_counter]() {
+          low_executed++;
+          low_counter.DecrementCount();
+        },
+        ThreadPool::Priority::kLow));
+  }
+
+  // Wait for low priority tasks to complete (with timeout)
+  auto start_time = absl::Now();
+  low_counter.Wait();
+  auto duration = absl::Now() - start_time;
+
+  continue_scheduling = false;
+  high_priority_scheduler.join();
+
+  // Verify low priority tasks eventually executed
+  EXPECT_EQ(low_executed.load(), low_tasks);
+  // Verify it didn't take too long (starvation would cause timeout)
+  EXPECT_LT(duration, absl::Seconds(5));
+}
+
+// Test performance regression - fairness shouldn't significantly impact
+// performance
+TEST_F(ThreadPoolFairnessTest, PerformanceRegression) {
+  const int total_tasks = 10000;
+
+  // Test with default weight (100% high priority - should be fast)
+  thread_pool_.SetHighPriorityWeight(100);
+
+  auto start_time = absl::Now();
+  absl::BlockingCounter counter_default(total_tasks);
+
+  for (int i = 0; i < total_tasks; ++i) {
+    EXPECT_TRUE(thread_pool_.Schedule(
+        [&counter_default]() { counter_default.DecrementCount(); },
+        ThreadPool::Priority::kHigh));
+  }
+
+  counter_default.Wait();
+  auto default_duration = absl::Now() - start_time;
+
+  // Test with fairness weight (50/50 distribution)
+  thread_pool_.SetHighPriorityWeight(50);
+
+  start_time = absl::Now();
+  absl::BlockingCounter counter_fairness(total_tasks);
+
+  for (int i = 0; i < total_tasks; ++i) {
+    ThreadPool::Priority priority =
+        (i % 2 == 0) ? ThreadPool::Priority::kHigh : ThreadPool::Priority::kLow;
+
+    EXPECT_TRUE(thread_pool_.Schedule(
+        [&counter_fairness]() { counter_fairness.DecrementCount(); },
+        priority));
+  }
+
+  counter_fairness.Wait();
+  auto fairness_duration = absl::Now() - start_time;
+
+  // Counter-based fairness may have higher overhead than random-based
+  double overhead_ratio = absl::ToDoubleSeconds(fairness_duration) /
+                          absl::ToDoubleSeconds(default_duration);
+  EXPECT_LT(overhead_ratio, 3.0);
+}
+
+// Test edge cases
+TEST_F(ThreadPoolFairnessTest, EdgeCases) {
+  // Test with empty queues
+  thread_pool_.SetHighPriorityWeight(50);
+
+  // No tasks scheduled, should handle gracefully
+  absl::SleepFor(absl::Milliseconds(100));
+
+  // Test rapid weight changes with few tasks
+  std::atomic<int> executed{0};
+  absl::BlockingCounter counter(5);
+
+  for (int i = 0; i < 5; ++i) {
+    thread_pool_.SetHighPriorityWeight(i * 25);
+
+    EXPECT_TRUE(thread_pool_.Schedule(
+        [&executed, &counter]() {
+          executed++;
+          counter.DecrementCount();
+        },
+        ThreadPool::Priority::kHigh));
+  }
+
+  counter.Wait();
+  EXPECT_EQ(executed.load(), 5);
+}
+
+// Test fairness distribution with different weights
+class ThreadPoolFairnessDistributionTest
+    : public ::testing::TestWithParam<int> {};
+
+INSTANTIATE_TEST_SUITE_P(WeightTests, ThreadPoolFairnessDistributionTest,
+                         testing::Values(0, 25, 50, 75, 100),
+                         [](const testing::TestParamInfo<int>& info) {
+                           return "HighPriority" + std::to_string(info.param) +
+                                  "Percent";
+                         });
+
+TEST_P(ThreadPoolFairnessDistributionTest, StatisticalDistribution) {
+  ThreadPool thread_pool("fairness-single-worker", 1);
+  const int weight = GetParam();
+  const int total_tasks = 1000;
+  const int half_tasks = total_tasks / 2;
+
+  thread_pool.SetHighPriorityWeight(weight);
+
+  std::atomic<int> high_executed{0};
+  std::atomic<int> low_executed{0};
+
+  // Counter for exactly half the tasks
+  absl::BlockingCounter counter(half_tasks);
+  absl::BlockingCounter worker_counter(1);
+
+  // 1. Schedule all tasks (they will be queued but not executed)
+  // Tasks will suspend the pool themselves when counter reaches zero
+  for (int i = 0; i < total_tasks / 2; ++i) {
+    EXPECT_TRUE(thread_pool.Schedule(
+        [&high_executed, &counter, &worker_counter]() {
+          high_executed++;
+          if (counter.DecrementCount()) {
+            // This was the final task - suspend the thread immediately
+            worker_counter.Wait();
+          }
+        },
+        ThreadPool::Priority::kHigh));
+
+    EXPECT_TRUE(thread_pool.Schedule(
+        [&low_executed, &counter, &worker_counter]() {
+          low_executed++;
+          if (counter.DecrementCount()) {
+            // This was the final task - suspend the thread immediately
+            worker_counter.Wait();
+          }
+        },
+        ThreadPool::Priority::kLow));
+  }
+
+  // 2. Verify tasks are queued but not executed yet
+  EXPECT_EQ(high_executed.load(), 0);
+  EXPECT_EQ(low_executed.load(), 0);
+  EXPECT_EQ(thread_pool.QueueSize(), total_tasks);
+
+  // 3. Start the worker and let it execute exactly half the tasks
+  thread_pool.StartWorkers();
+
+  // 4. Wait for exactly half the tasks to complete (pool will auto-suspend)
+  counter.Wait();
+
+  // 5. Verify exactly half the tasks were executed
+  const int executed_tasks = high_executed.load() + low_executed.load();
+  EXPECT_EQ(executed_tasks, half_tasks);
+
+  // 6. Check the distribution of executed tasks
+  // Test distribution based on weight
+  if (weight == 0) {
+    // 0% weight should mean no high priority tasks executed
+    EXPECT_EQ(high_executed.load(), 0);
+    EXPECT_EQ(low_executed.load(), half_tasks);
+  } else if (weight == 100) {
+    // 100% weight should mean no low priority tasks executed
+    EXPECT_EQ(high_executed.load(), half_tasks);
+    EXPECT_EQ(low_executed.load(), 0);
+  } else {
+    // For other weights, check exact distribution (counter-based fairness is
+    // deterministic)
+    const int expected_high_tasks = (half_tasks * weight) / 100;
+    const int expected_low_tasks = half_tasks - expected_high_tasks;
+
+    EXPECT_EQ(high_executed.load(), expected_high_tasks);
+    EXPECT_EQ(low_executed.load(), expected_low_tasks);
+  }
+
+  VMSDK_EXPECT_OK(thread_pool.MarkForStop(ThreadPool::StopMode::kAbrupt));
+  worker_counter.DecrementCount();
+  thread_pool.JoinWorkers();
+}
+
+// Test kMax priority always takes precedence
+TEST_P(ThreadPoolFairnessDistributionTest, MaxPriorityPreservation) {
+  ThreadPool thread_pool("fairness-single-worker", 1);
+  const int weight = GetParam();
+  const int tasks_per_priority = 3;
+
+  std::atomic<int> high_executed{0};
+  std::atomic<int> low_executed{0};
+  std::atomic<int> max_executed{0};
+
+  absl::BlockingCounter counter(tasks_per_priority);  // 3 of kMax priority
+  absl::BlockingCounter worker_counter(1);
+
+  // Set weight to favor low priority (should not affect kMax)
+  thread_pool.SetHighPriorityWeight(weight);  // 10% high, 90% low
+
+  // Schedule tasks in reverse priority order to test precedence
+  for (int i = 0; i < tasks_per_priority; ++i) {
+    EXPECT_TRUE(thread_pool.Schedule([&low_executed]() { low_executed++; },
+                                     ThreadPool::Priority::kLow));
+
+    EXPECT_TRUE(thread_pool.Schedule([&high_executed]() { high_executed++; },
+                                     ThreadPool::Priority::kHigh));
+
+    EXPECT_TRUE(thread_pool.Schedule(
+        [&max_executed, &counter, &worker_counter]() {
+          max_executed++;
+          if (counter.DecrementCount()) {
+            worker_counter.Wait();
+          }
+        },
+        ThreadPool::Priority::kMax));
+  }
+
+  thread_pool.StartWorkers();
+  counter.Wait();
+
+  // Validate only  kMax tasks should have executed
+  EXPECT_EQ(high_executed.load(), 0);
+  EXPECT_EQ(low_executed.load(), 0);
+  EXPECT_EQ(max_executed.load(), tasks_per_priority);
+
+  worker_counter.DecrementCount();
+  // Wait for all tasks to be completed
+  thread_pool.JoinWorkers();
+  // All tasks should have executed
+  EXPECT_EQ(high_executed.load(), tasks_per_priority);
+  EXPECT_EQ(low_executed.load(), tasks_per_priority);
+  EXPECT_EQ(max_executed.load(), tasks_per_priority);
 }
 
 }  // namespace vmsdk

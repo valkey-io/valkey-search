@@ -134,6 +134,17 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
     auto iter = std::make_unique<text::TextFetcher>(std::move(ti));
     return iter;
   }
+  else if (auto prefix = dynamic_cast<const query::PrefixPredicate*>(predicate_)) {
+    auto word_iter = text_index_->prefix_.GetWordIterator(prefix->GetTextString());
+    std::unique_ptr<text::TextIterator> wi = std::make_unique<text::WildCardIterator>(
+      word_iter,
+      text::WildCardOperation::kPrefix,
+      prefix->GetTextString(),
+      field_mask_,
+      untracked_keys_);
+    auto iter = std::make_unique<text::TextFetcher>(std::move(wi));
+    return iter;
+  }
   else if (auto proximity =
                  dynamic_cast<const query::ProximityPredicate*>(predicate_)) {
     std::vector<std::unique_ptr<text::TextIterator>> vec;
@@ -146,7 +157,15 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
             term_pred->GetTextString(),
             field_mask_,
             untracked_keys_));
-      } else {
+      } else if( auto prefix_pred = dynamic_cast<const query::PrefixPredicate*>(term.get())) {
+        auto word_iter = text_index_->prefix_.GetWordIterator(prefix_pred->GetTextString());
+        vec.emplace_back(std::make_unique<text::WildCardIterator>(
+            word_iter,
+            text::WildCardOperation::kPrefix,
+            prefix_pred->GetTextString(),
+            field_mask_,
+            untracked_keys_));
+      }else {
         CHECK(false) << "Unsupported TextPredicate operation inside Proximity";
       }
     }

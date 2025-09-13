@@ -34,7 +34,7 @@ public:
     virtual uint32_t CurrentPosition() = 0;
     virtual uint64_t GetFieldMask() const = 0;
 
-    // Optional unified iteration contract
+  // Optional unified iteration contract - These should be deleted
     virtual bool Done() const = 0;
     virtual void Next() = 0;
 };

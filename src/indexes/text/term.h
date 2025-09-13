@@ -59,10 +59,6 @@ class TermIterator : public TextIterator {
                const uint32_t field_mask,
                const InternedStringSet* untracked_keys = nullptr);
 
-  // // Word-level iteration
-  // bool NextWord() override;
-  // absl::string_view CurrentWord() override;
-
   // Key-level iteration
   bool DoneKeys() const override;
   bool NextKey() override;
@@ -74,7 +70,7 @@ class TermIterator : public TextIterator {
   uint32_t CurrentPosition() override;
   uint64_t GetFieldMask() const override;
 
-  // Optional unified iteration contract
+  // Optional unified iteration contract - These should be deleted
   bool Done() const override;
   void Next() override;
 

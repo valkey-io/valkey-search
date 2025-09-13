@@ -49,10 +49,10 @@ This algorithm operates in time O(#SuffixMatches)
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/radix_tree.h"
 #include "src/utils/string_interning.h"
+#include "src/indexes/text/text_iterator.h"
 
 namespace valkey_search::indexes::text {
 
-using FieldMaskPredicate = uint64_t;
 using WordIterator = RadixTree<std::shared_ptr<Postings>, false>::WordIterator;
 
 enum WildCardOperation {
@@ -61,31 +61,69 @@ enum WildCardOperation {
   kInfix,
 };
 
-struct WildCardIterator : public indexes::EntriesFetcherIteratorBase {
-  WildCardIterator(const WordIterator& word, const WildCardOperation operation,
-                   const FieldMaskPredicate field_mask,
-                   const InternedStringSet* untracked_keys = nullptr);
+class WildCardIterator : public TextIterator {
+ public:
+  WildCardIterator(const WordIterator& word_iter,
+               const WildCardOperation operation,
+               const absl::string_view data,
+               const uint32_t field_mask,
+               const InternedStringSet* untracked_keys = nullptr);
 
-  // Points to valid Word?
+  // Key-level iteration
+  bool DoneKeys() const override;
+  bool NextKey() override;
+  const InternedStringPtr& CurrentKey() override;
+
+  // Position-level iteration
+  bool DonePositions() const override;
+  bool NextPosition() override;
+  uint32_t CurrentPosition() override;
+  uint64_t GetFieldMask() const override;
+
+  // Optional unified iteration contract - These should be deleted
   bool Done() const override;
-
-  // Go to next word
   void Next() override;
 
-  const InternedStringPtr& operator*() const override;
-
  private:
-  WordIterator word_;
+  const absl::string_view data_;
+  const uint32_t field_mask_;
+
+  WordIterator word_iter_;
   std::shared_ptr<Postings> target_posting_;
   Postings::KeyIterator key_iter_;
-  bool begin_ =
-      true;  // Used to track if we are at the beginning of the iterator.
-  const InternedStringSet* untracked_keys_;
-  InternedStringPtr current_key_;
+  Postings::PositionIterator pos_iter_;
   WildCardOperation operation_;
-  FieldMaskPredicate field_mask_;
-  bool nomatch_ = false;
+
+  InternedStringPtr current_key_;
+  const InternedStringSet* untracked_keys_;
+  bool nomatch_;
 };
+
+// struct WildCardIterator : public indexes::EntriesFetcherIteratorBase {
+//   WildCardIterator(const WordIterator& word, const WildCardOperation operation,
+//                    const FieldMaskPredicate field_mask,
+//                    const InternedStringSet* untracked_keys = nullptr);
+
+//   // Points to valid Word?
+//   bool Done() const override;
+
+//   // Go to next word
+//   void Next() override;
+
+//   const InternedStringPtr& operator*() const override;
+
+//  private:
+//   WordIterator word_;
+//   std::shared_ptr<Postings> target_posting_;
+//   Postings::KeyIterator key_iter_;
+//   bool begin_ =
+//       true;  // Used to track if we are at the beginning of the iterator.
+//   const InternedStringSet* untracked_keys_;
+//   InternedStringPtr current_key_;
+//   WildCardOperation operation_;
+//   FieldMaskPredicate field_mask_;
+//   bool nomatch_ = false;
+// };
 
 // struct WildCardIterator : public WordIterator {
 //   using Posting = typename Postings::Posting;

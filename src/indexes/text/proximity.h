@@ -8,13 +8,13 @@
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
 
-#include <vector>
 #include <cstddef>
+#include <vector>
+
 #include "src/indexes/index_base.h"
+#include "src/indexes/text/posting.h"
 #include "src/indexes/text/radix_tree.h"
 #include "src/utils/string_interning.h"
-#include "src/indexes/text/posting.h"
-
 
 namespace valkey_search::indexes::text {
 
@@ -26,11 +26,11 @@ using WordIterator = RadixTree<std::shared_ptr<Postings>, false>::WordIterator;
 
 Top level iterator for a phrase.
 
-A Phrase is defined as a sequence of words that can be separated by up to 'slop'
-words. Optionally, the order of the words can be required or not.
+Proximity is defined as a sequence of words that can be separated by up to
+'slop' words. Optionally, the order of the words can be required or not.
 
-This is implemented as a merge operation on the various Word Iterators passed in.
-The code below is conceptual and is written like a Python generator
+This is implemented as a merge operation on the various Word Iterators passed
+in. The code below is conceptual and is written like a Python generator
 
 for (word0 : all words in word[0]) {
   for (word1 : all words in word[1]) {
@@ -57,17 +57,16 @@ void process_one_key(KeyIterators[*]) {
     if (PositionIterators[*] satisfy the Slop and In-order requirements) {
       Yield word;
     }
-    Find smallest PositionIterator and advance it to the next Smallest Position Iterator.
+    Find smallest PositionIterator and advance it to the next Smallest Position
+Iterator.
 
   }
 }
 */
-class PhraseIterator : public indexes::EntriesFetcherIteratorBase {
+class ProximityIterator : public indexes::EntriesFetcherIteratorBase {
  public:
-  PhraseIterator(const std::vector<WordIterator>& words,
-                 size_t slop,
-                 bool in_order,
-                 FieldMaskPredicate field_mask,
+  PhraseIterator(const std::vector<EntriesFetcherIteratorBase>& iters,
+                 size_t slop, bool in_order, FieldMaskPredicate field_mask,
                  const InternedStringSet* untracked_keys = nullptr);
 
   bool Done() const override;
@@ -75,17 +74,18 @@ class PhraseIterator : public indexes::EntriesFetcherIteratorBase {
   const InternedStringPtr& operator*() const override;
 
  private:
-  std::vector<WordIterator> words_;
+  std::vector<EntriesFetcherIteratorBase> iters_;
   std::shared_ptr<Postings> target_posting_;
   Postings::KeyIterator key_iter_;
-  bool begin_ = true;  // Used to track if we are at the beginning of the iterator.
+  WordIterator word_iter_;
+  bool begin_ =
+      true;  // Used to track if we are at the beginning of the iterator.
   size_t slop_;
   bool in_order_;
   const InternedStringSet* untracked_keys_;
   InternedStringPtr current_key_;
   FieldMaskPredicate field_mask_;
 };
-
 
 }  // namespace valkey_search::indexes::text
 

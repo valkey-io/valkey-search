@@ -137,9 +137,12 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
        parameters.filter_parse_results.filter_identifiers) {
     identifiers.insert(filter_identifier);
   }
-  VMSDK_ASSIGN_OR_RETURN(
-      auto content, attribute_data_type.FetchAllRecords(ctx, vector_identifier,
-                                                        key, identifiers));
+  auto key_str = vmsdk::MakeUniqueValkeyString(key);
+  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+  VMSDK_ASSIGN_OR_RETURN(auto content, attribute_data_type.FetchAllRecords(
+                                           ctx, vector_identifier,
+                                           key_obj.get(), key, identifiers));
   if (parameters.filter_parse_results.filter_identifiers.empty()) {
     return content;
   }
@@ -178,9 +181,12 @@ absl::StatusOr<RecordsMap> GetContent(
       identifiers.insert(filter_identifier);
     }
   }
-  VMSDK_ASSIGN_OR_RETURN(
-      auto content, attribute_data_type.FetchAllRecords(ctx, vector_identifier,
-                                                        key, identifiers));
+  auto key_str = vmsdk::MakeUniqueValkeyString(key);
+  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+  VMSDK_ASSIGN_OR_RETURN(auto content, attribute_data_type.FetchAllRecords(
+                                           ctx, vector_identifier,
+                                           key_obj.get(), key, identifiers));
   if (parameters.filter_parse_results.filter_identifiers.empty()) {
     return content;
   }
@@ -209,11 +215,11 @@ absl::StatusOr<RecordsMap> GetContent(
 
 // Adds all local content for neighbors to the list of neighbors.
 // This function is meant to be used for non-vector queries.
-void ProcessNonVectorNeighborsForReply(ValkeyModuleCtx *ctx,
-                                      const AttributeDataType &attribute_data_type,
-                                      std::deque<indexes::Neighbor> &neighbors,
-                                      const query::VectorSearchParameters &parameters) {
-    ProcessNeighborsForReply(ctx, attribute_data_type, neighbors, parameters, "");
+void ProcessNonVectorNeighborsForReply(
+    ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
+    std::deque<indexes::Neighbor> &neighbors,
+    const query::VectorSearchParameters &parameters) {
+  ProcessNeighborsForReply(ctx, attribute_data_type, neighbors, parameters, "");
 }
 
 // Adds all local content for neighbors to the list of neighbors.

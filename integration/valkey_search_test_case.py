@@ -215,6 +215,9 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
         self.server = self.rg.primary.server
         self.client = self.rg.primary.client
 
+        self.nodes: List[Node] = [self.rg.primary]
+        self.nodes += self.rg.replicas
+
         yield
 
         # Cleanup
@@ -276,6 +279,17 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
     def get_primary_connection(self) -> Valkey:
         return self.rg.get_primary_connection()
 
+def EnableDebugMode(config: List[str]):
+    # turn "loadmodule xx.so" into "loadmodule xx.so --debug-mode yes"
+    load_module = f"loadmodule {os.getenv('MODULE_PATH')}"
+    return [x.replace(load_module, load_module + " --debug-mode yes") for x in config]
+
+class ValkeySearchTestCaseDebugMode(ValkeySearchTestCaseBase):
+    '''
+    Same as ValkeySearchTestCaseBase, except that "debug-mode" is enabled.
+    '''
+    def get_config_file_lines(self, testdir, port) -> List[str]:
+        return EnableDebugMode(super(ValkeySearchTestCaseDebugMode, self).get_config_file_lines(testdir, port))
 
 class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
     # Default cluster size
@@ -377,6 +391,11 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
             rg = ReplicationGroup(primary=primary_node, replicas=replicas)
             self.replication_groups.append(rg)
 
+        self.nodes: List[Node] = list()
+        for rg in self.replication_groups:
+            self.nodes.append(rg.primary)
+            self.nodes += rg.replicas
+
         # Split the slots
         ranges = self._split_range_pairs(0, 16384, self.CLUSTER_SIZE)
         node_idx = 0
@@ -464,3 +483,12 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
         )
         valkey_conn.ping()
         return valkey_conn
+    
+
+class ValkeySearchClusterTestCaseDebugMode(ValkeySearchClusterTestCase):
+    '''
+    Same as ValkeySearchClusterTestCase, except that "debug-mode" is enabled.
+    '''
+    def get_config_file_lines(self, testdir, port) -> List[str]:
+        return EnableDebugMode(super(ValkeySearchClusterTestCaseDebugMode, self).get_config_file_lines(testdir, port))
+

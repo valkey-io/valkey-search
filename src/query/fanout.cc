@@ -33,8 +33,8 @@
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
-#include "src/query/search.h"
 #include "src/query/fanout_template.h"
+#include "src/query/search.h"
 #include "src/utils/string_interning.h"
 #include "valkey_search_options.h"
 #include "vmsdk/src/log.h"
@@ -241,7 +241,7 @@ absl::Status PerformSearchFanoutAsync(
                 << neighbors.status().message();
           }
         },
-        true))
+        SearchMode::kLocal))
         << "Failed to handle FT.SEARCH locally during fan-out";
   }
   return absl::OkStatus();
@@ -249,9 +249,8 @@ absl::Status PerformSearchFanoutAsync(
 
 // TODO See if caching this improves performance.
 std::vector<fanout::FanoutSearchTarget> GetSearchTargetsForFanout(
-    ValkeyModuleCtx *ctx) {
-  return fanout::FanoutTemplate::GetTargets(ctx, fanout::FanoutTargetMode::kRandom);
+    ValkeyModuleCtx *ctx, FanoutTargetMode mode) {
+  return fanout::FanoutTemplate::GetTargets(ctx, mode);
 }
-
 
 }  // namespace valkey_search::query::fanout

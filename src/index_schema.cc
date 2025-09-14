@@ -157,14 +157,15 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
     ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto,
-    vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes, bool reload) {
+    vmsdk::ThreadPool *mutations_thread_pool, bool skip_attributes,
+    bool reload) {
   std::unique_ptr<AttributeDataType> attribute_data_type;
   switch (index_schema_proto.attribute_data_type()) {
     case data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH:
       attribute_data_type = std::make_unique<HashAttributeDataType>();
       break;
     case data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON:
-      if (!IsJsonModuleLoaded(ctx)) {
+      if (!IsJsonModuleSupported(ctx)) {
         return absl::InvalidArgumentError("JSON module is not loaded");
       }
       attribute_data_type = std::make_unique<JsonAttributeDataType>();
@@ -201,8 +202,7 @@ vmsdk::MRMWMutexOptions CreateMrmwMutexOptions() {
 IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
                          const data_model::IndexSchema &index_schema_proto,
                          std::unique_ptr<AttributeDataType> attribute_data_type,
-                         vmsdk::ThreadPool *mutations_thread_pool,
-                         bool reload)
+                         vmsdk::ThreadPool *mutations_thread_pool, bool reload)
     : detached_ctx_(vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx)),
       keyspace_event_manager_(&KeyspaceEventManager::Instance()),
       attribute_data_type_(std::move(attribute_data_type)),
@@ -214,16 +214,21 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
   if (index_schema_proto.subscribed_key_prefixes().empty()) {
     subscribed_key_prefixes_.push_back("");
   } else {
-    for (const auto &key_prefix : index_schema_proto.subscribed_key_prefixes()) {
-      if (!std::any_of(
-              subscribed_key_prefixes_.begin(), subscribed_key_prefixes_.end(),
-              [&](const std::string &s) { return key_prefix.starts_with(s); })) {
+    for (const auto &key_prefix :
+         index_schema_proto.subscribed_key_prefixes()) {
+      if (!std::any_of(subscribed_key_prefixes_.begin(),
+                       subscribed_key_prefixes_.end(),
+                       [&](const std::string &s) {
+                         return key_prefix.starts_with(s);
+                       })) {
         subscribed_key_prefixes_.push_back(std::string(key_prefix));
       }
     }
   }
+
   // The protobuf has volatile fields that get save/restores in the RDB. here we
-  // reconcile the source of the index_schema_proto (reload or not) and restore those fields
+  // reconcile the source of the index_schema_proto (reload or not) and restore
+  // those fields
   if (reload) {
     stats_.document_cnt = index_schema_proto.stats().documents_count();
   }
@@ -764,7 +769,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%lu", stats_.subscription_add.skipped_cnt).c_str());
 
-
   ValkeyModule_ReplyWithSimpleString(ctx, "gc_stats");
   ValkeyModule_ReplyWithArray(ctx, 14);
   ValkeyModule_ReplyWithSimpleString(ctx, "bytes_collected");
@@ -781,7 +785,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithCString(ctx, "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "gc_blocks_denied");
   ValkeyModule_ReplyWithCString(ctx, "0");
-
 
   ValkeyModule_ReplyWithSimpleString(ctx, "cursor_stats");
   ValkeyModule_ReplyWithArray(ctx, 8);
@@ -851,6 +854,7 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   index_schema_proto->mutable_subscribed_key_prefixes()->Add(
       subscribed_key_prefixes_.begin(), subscribed_key_prefixes_.end());
   index_schema_proto->set_attribute_data_type(attribute_data_type_->ToProto());
+
   auto stats = index_schema_proto->mutable_stats();
   stats->set_documents_count(stats_.document_cnt);
   std::transform(
@@ -858,15 +862,18 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
       google::protobuf::RepeatedPtrFieldBackInserter(
           index_schema_proto->mutable_attributes()),
       [](const auto &attribute) { return *attribute.second.ToProto(); });
+  
   // Text-specific properties
   if (text_index_schema_) {
-    index_schema_proto->set_language(text_index_schema_->language_);
-    index_schema_proto->set_punctuation(text_index_schema_->punctuation_);
-    index_schema_proto->set_with_offsets(text_index_schema_->with_offsets_);
+    index_schema_proto->set_language(text_index_schema_->GetLanguage());
+    index_schema_proto->set_punctuation(text_index_schema_->GetPunctuationString());
+    index_schema_proto->set_with_offsets(text_index_schema_->GetWithOffsets());
+    auto stop_words = text_index_schema_->GetStopWordsSet();
     index_schema_proto->mutable_stop_words()->Add(
-        text_index_schema_->stop_words_.begin(),
-        text_index_schema_->stop_words_.end());
+        stop_words.begin(),
+        stop_words.end());
   }
+
   return index_schema_proto;
 }
 

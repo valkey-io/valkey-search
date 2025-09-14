@@ -7,6 +7,7 @@ from typing import Tuple, Union
 # from pyparsing import abstractmethod
 import valkey
 from ft_info_parser import FTInfoParser
+import logging, json
 import struct
 
 
@@ -26,7 +27,7 @@ class Field:
             return [self.name]
 
     # @abstractmethod
-    def make_value(self, row: int, column: int) -> Union[str, bytes]:
+    def make_value(self, row: int, column: int, type:str) -> Union[str, bytes, float, list[float]]:
         pass
 
 
@@ -79,10 +80,12 @@ class Vector(Field):
             + extra
         )
 
-    def make_value(self, row: int, column: int) -> Union[str, bytes]:
+    def make_value(self, row: int, column: int, type: str) -> Union[str, bytes, float, list[float]]:
         data = [float(i + row + column) for i in range(self.dim)]
-        return float_to_bytes(data)
-
+        if type == "HASH":
+            return float_to_bytes(data)
+        else:
+            return data
 
 class Numeric(Field):
     def __init__(self, name: str, alias: Union[str, None] = None):
@@ -91,8 +94,11 @@ class Numeric(Field):
     def create(self):
         return super().create() + ["NUMERIC"]
 
-    def make_value(self, row: int, column: int) -> Union[str, bytes]:
-        return str(row + column)
+    def make_value(self, row: int, column: int, type: str) -> Union[str, bytes, float, list[float]]:
+        if type == "HASH":
+            return str(row + column)
+        else:
+            return row + column
 
 
 class Tag(Field):
@@ -106,15 +112,13 @@ class Tag(Field):
         self.separator = separator
 
     def create(self):
-        return (
-            super().create() + ["SEPARATOR", self.separator]
-            if self.separator
-            else []
-        )
+        result = super().create() + ["TAG"]
+        if self.separator:
+            result += ["SEPARATOR", self.separator]
+        return result
 
-    def make_value(self, row: int, column: int) -> Union[str, bytes]:
+    def make_value(self, row: int, column: int, type: str) -> Union[str, bytes, float, list[float]]:
         return f"Tag:{row}:{column}"
-
 
 class Index:
     def __init__(
@@ -148,23 +152,38 @@ class Index:
         client.execute_command(*cmd)
 
     def load_data(self, client: valkey.client, rows: int):
+        print("Loading data to ", client)
         for i in range(0, rows):
             data = self.make_data(i)
-            client.hset(self.keyname(i), mapping=data)
+            if self.type == "HASH":
+                #print("Loading ", self.keyname(i), data)
+                client.hset(self.keyname(i), mapping=data)
+            else:
+                #print("Loading ", self.keyname(i), json.dumps(data))
+                client.execute_command("JSON.SET", self.keyname(i), "$", json.dumps(data))
+
+    def load_data_with_ttl(self, client: valkey.client, rows: int, ttl_ms: int):
+        for i in range(0, rows):
+            data = self.make_data(i)
+            key = self.keyname(i)
+            client.hset(key, mapping=data)
+            client.pexpire(key, ttl_ms)
 
     def keyname(self, row: int) -> str:
-        prefix = (
-            self.prefixes[row % len(self.prefixes)] if self.prefixes else ""
-        )
+        prefix = self.prefixes[row % len(self.prefixes)] if self.prefixes else ""
         return f"{prefix}:{row:08d}"
 
     def make_data(self, row: int) -> dict[str, Union[str, bytes]]:
         """Make data for a particular row"""
-        d: dict[str, Union[str, bytes]] = {}
+        d: dict[str, Union[str, bytes, list[float]]] = {}
         for col, f in enumerate(self.fields):
-            d[f.name] = f.make_value(row, col)
+            d[f.name] = f.make_value(row, col, self.type)
         return d
 
     def info(self, client: valkey.client) -> FTInfoParser:
         res = client.execute_command("FT.INFO", self.name)
         return FTInfoParser(res)
+    
+    def backfill_complete(self, client: valkey.client) -> bool:
+        res = self.info(client)
+        return res.backfill_in_progress == 0

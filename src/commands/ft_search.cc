@@ -24,7 +24,6 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
-#include "module_config.h"
 #include "src/acl.h"
 #include "src/commands/commands.h"
 #include "src/commands/ft_search_parser.h"
@@ -35,9 +34,11 @@
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
-#include "valkey_search_options.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/blocked_client.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -87,8 +88,8 @@ void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
                 const indexes::Neighbor &neighbor) {
   ValkeyModule_ReplyWithString(ctx, &score_as);
   auto score_value = absl::StrFormat("%.12g", neighbor.distance);
-  ValkeyModule_ReplyWithString(ctx,
-                               vmsdk::MakeUniqueValkeyString(score_value).get());
+  ValkeyModule_ReplyWithString(
+      ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
 }
 
 void SerializeNeighbors(ValkeyModuleCtx *ctx,
@@ -135,25 +136,28 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
   }
 }
 
-// Handle non-vector queries by processing the neighbors and replying with the attribute contents.
-void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
-                                const std::deque<indexes::Neighbor> &neighbors,
-                                const query::VectorSearchParameters &parameters) {
-    const size_t available_results = neighbors.size();
-    ValkeyModule_ReplyWithArray(ctx, 2 * available_results + 1);
-    // First element is the count of available results.
-    ValkeyModule_ReplyWithLongLong(ctx, available_results);
-    for (const auto& neighbor : neighbors) {
-        // Document ID
-        ValkeyModule_ReplyWithString(ctx, vmsdk::MakeUniqueValkeyString(*neighbor.external_id).get());
-        const auto& contents = neighbor.attribute_contents.value();
-        // Fields and values as a flat array
-        ValkeyModule_ReplyWithArray(ctx, 2 * contents.size());
-        for (const auto &attribute_content : contents) {
-            ValkeyModule_ReplyWithString(ctx, attribute_content.second.GetIdentifier());
-            ValkeyModule_ReplyWithString(ctx, attribute_content.second.value.get());
-        }
+// Handle non-vector queries by processing the neighbors and replying with the
+// attribute contents.
+void SerializeNonVectorNeighbors(
+    ValkeyModuleCtx *ctx, const std::deque<indexes::Neighbor> &neighbors,
+    const query::VectorSearchParameters &parameters) {
+  const size_t available_results = neighbors.size();
+  ValkeyModule_ReplyWithArray(ctx, 2 * available_results + 1);
+  // First element is the count of available results.
+  ValkeyModule_ReplyWithLongLong(ctx, available_results);
+  for (const auto &neighbor : neighbors) {
+    // Document ID
+    ValkeyModule_ReplyWithString(
+        ctx, vmsdk::MakeUniqueValkeyString(*neighbor.external_id).get());
+    const auto &contents = neighbor.attribute_contents.value();
+    // Fields and values as a flat array
+    ValkeyModule_ReplyWithArray(ctx, 2 * contents.size());
+    for (const auto &attribute_content : contents) {
+      ValkeyModule_ReplyWithString(ctx,
+                                   attribute_content.second.GetIdentifier());
+      ValkeyModule_ReplyWithString(ctx, attribute_content.second.value.get());
     }
+  }
 }
 
 }  // namespace
@@ -169,10 +173,10 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
 // SendReply respects the Limit, see https://valkey.io/commands/ft.search/
 void SendReply(ValkeyModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
                const query::VectorSearchParameters &parameters) {
-
   if (!options::GetEnablePartialResults().GetValue() &&
       parameters.cancellation_token->IsCancelled()) {
-    ValkeyModule_ReplyWithError(ctx, "Search operation cancelled due to timeout");
+    ValkeyModule_ReplyWithError(ctx,
+                                "Search operation cancelled due to timeout");
     ++Metrics::GetStats().query_failed_requests_cnt;
     return;
   }
@@ -181,8 +185,9 @@ void SendReply(ValkeyModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
 
   // Support non-vector queries: no attribute_alias and k == 0
   if (parameters.IsNonVectorQuery()) {
-    query::ProcessNonVectorNeighborsForReply(ctx, parameters.index_schema->GetAttributeDataType(),
-                                  neighbors, parameters);
+    query::ProcessNonVectorNeighborsForReply(
+        ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
+        parameters);
     SerializeNonVectorNeighbors(ctx, neighbors, parameters);
     return;
   }
@@ -214,8 +219,9 @@ void SendReply(ValkeyModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
 namespace async {
 
 int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
-          [[maybe_unused]] int argc) {
-  return ValkeyModule_ReplyWithError(ctx, "Search operation cancelled due to timeout");
+            [[maybe_unused]] int argc) {
+  return ValkeyModule_ReplyWithError(
+      ctx, "Search operation cancelled due to timeout");
 }
 
 int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -238,6 +244,8 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 
 }  // namespace async
 
+CONTROLLED_BOOLEAN(ForceReplicasOnly, false);
+
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc) {
   auto status = [&]() -> absl::Status {
@@ -245,7 +253,8 @@ absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     VMSDK_ASSIGN_OR_RETURN(
         auto parameters,
         ParseVectorSearchParameters(ctx, argv + 1, argc - 1, schema_manager));
-    parameters->cancellation_token = cancel::Make(parameters->timeout_ms, nullptr);
+    parameters->cancellation_token =
+        cancel::Make(parameters->timeout_ms, nullptr);
     static const auto permissions =
         PrefixACLPermissions(kSearchCmdPermissions, kSearchCommand);
     VMSDK_RETURN_IF_ERROR(AclPrefixCheck(
@@ -256,7 +265,9 @@ absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);
     if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
                            inside_multi_exec)) {
-      VMSDK_ASSIGN_OR_RETURN(auto neighbors, query::Search(*parameters, true));
+      VMSDK_ASSIGN_OR_RETURN(
+          auto neighbors,
+          query::Search(*parameters, query::SearchMode::kLocal));
       SendReply(ctx, neighbors, *parameters);
       return absl::OkStatus();
     }
@@ -275,16 +286,20 @@ absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 
     if (ValkeySearch::Instance().UsingCoordinator() &&
         ValkeySearch::Instance().IsCluster() && !parameters->local_only) {
-      auto search_targets = query::fanout::GetSearchTargetsForFanout(ctx);
+      auto mode = /* !vmsdk::IsReadOnly(ctx) ? query::fanout::kPrimaries ? */
+          ForceReplicasOnly.GetValue()
+              ? query::fanout::FanoutTargetMode::kReplicasOnly
+              : query::fanout::FanoutTargetMode::kRandom;
+      auto search_targets = query::fanout::GetSearchTargetsForFanout(ctx, mode);
       return query::fanout::PerformSearchFanoutAsync(
           ctx, search_targets,
           ValkeySearch::Instance().GetCoordinatorClientPool(),
           std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),
           std::move(on_done_callback));
     }
-    return query::SearchAsync(std::move(parameters),
-                              ValkeySearch::Instance().GetReaderThreadPool(),
-                              std::move(on_done_callback), true);
+    return query::SearchAsync(
+        std::move(parameters), ValkeySearch::Instance().GetReaderThreadPool(),
+        std::move(on_done_callback), query::SearchMode::kLocal);
   }();
   if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;

@@ -8,20 +8,26 @@
 #ifndef VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 #define VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 
+#include <bitset>
+#include <cctype>
 #include <memory>
 #include <optional>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/radix_tree.h"
 
+struct sb_stemmer;
+
 namespace valkey_search::indexes::text {
 
 using Key = valkey_search::InternedStringPtr;
 using Position = uint32_t;
+using PunctuationBitmap = std::bitset<256>;
 
 struct TextIndex {
   TextIndex() = default;
@@ -41,21 +47,34 @@ struct TextIndex {
   std::optional<RadixTree<std::shared_ptr<Postings>, true>> suffix_;
 };
 
-struct TextIndexSchema {
-  TextIndexSchema() = default;
-  TextIndexSchema(const data_model::IndexSchema &index_schema_proto)
-      : language_(index_schema_proto.language()),
-        punctuation_(index_schema_proto.punctuation()),
-        with_offsets_(index_schema_proto.with_offsets()),
-        stop_words_(index_schema_proto.stop_words().begin(),
-                    index_schema_proto.stop_words().end()) {}
-  ~TextIndexSchema() = default;
+class TextIndexSchema {
+ public:
+  TextIndexSchema(const data_model::IndexSchema& index_schema_proto);
+  ~TextIndexSchema();
 
+  uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }
+  
+  uint8_t GetNumTextFields() const { return num_text_fields_; }
+  std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
+  const std::string GetPunctuationString() const { return punct_str_; }
+  const PunctuationBitmap& GetPunctuationBitmap() const {
+    return punct_bitmap_;
+  }
+  const absl::flat_hash_set<std::string>& GetStopWordsSet() const {
+    return stop_words_set_;
+  }
+  data_model::Language GetLanguage() const { return language_; }
+  sb_stemmer* GetStemmer() const { return stemmer_; };
+  bool GetWithOffsets() const { return with_offsets_; }
+
+ private:
   uint8_t num_text_fields_ = 0;
+
   //
   // This is the main index of all Text fields in this index schema
   //
   std::shared_ptr<TextIndex> text_index_ = std::make_shared<TextIndex>();
+
   //
   // To support the Delete record and the post-filtering case, there is a
   // separate table of postings that are indexed by Key.
@@ -65,13 +84,25 @@ struct TextIndexSchema {
   //
   absl::flat_hash_map<Key, TextIndex> by_key_;
 
-  // IndexSchema proto-derived configuration fields
-  data_model::Language language_ = data_model::LANGUAGE_UNSPECIFIED;
-  std::string punctuation_;
-  bool with_offsets_ = true;
-  std::vector<std::string> stop_words_;
+  // Punctuation string
+  std::string punct_str_;
 
-  uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }
+  // Punctiation bitmap
+  PunctuationBitmap punct_bitmap_;
+
+  // Stop words set for filtering during tokenization
+  absl::flat_hash_set<std::string> stop_words_set_;
+
+  // Language needed for stemmer creation
+  data_model::Language language_ = data_model::LANGUAGE_UNSPECIFIED;
+
+  // Stemmer reused across all operations for this index
+  mutable sb_stemmer* stemmer_ = nullptr;
+
+  // Whether to store position offsets for phrase queries
+  bool with_offsets_ = false;
+
+  const char* GetLanguageString() const;
 };
 
 }  // namespace valkey_search::indexes::text

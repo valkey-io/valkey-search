@@ -7,27 +7,22 @@
 
 #include "src/utils/cancel.h"
 
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
-#include "vmsdk/src/module_config.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 namespace cancel {
 
-static vmsdk::config::Number PollFrequency(
-    "timeout-poll-frequency", 100, 1, std::numeric_limits<long long>::max());
-static vmsdk::config::Boolean TestForceTimeout("test-force-timeout", false);
-
-static vmsdk::config::Boolean TestForcePausePoint("test-force-pause", false);
+CONTROLLED_SIZE_T(TimeoutPollFrequency, 100);
+CONTROLLED_BOOLEAN(ForceTimeout, false);
 
 static vmsdk::info_field::Integer Timeouts(
     "timeouts", "cancel-timeouts", vmsdk::info_field::IntegerBuilder().Dev());
-static vmsdk::info_field::Integer gRPCCancels(
-    "timeouts", "cancel-grpc", vmsdk::info_field::IntegerBuilder().Dev());
-static vmsdk::info_field::Integer ForceCancels(
-    "timeouts", "cancel-forced", vmsdk::info_field::IntegerBuilder().Dev());
-static vmsdk::info_field::Integer PausedCancels(
-    "timeouts", "cancel-paused", vmsdk::info_field::IntegerBuilder().Dev());
+
+TEST_COUNTER(gRPCCancels);
+TEST_COUNTER(ForceCancels);
 
 //
 // A Concrete implementation of Token that can be used to cancel
@@ -42,7 +37,7 @@ struct TokenImpl : public Base {
   }
 
   bool IsCancelled() override {
-    if (++count_ > PollFrequency.GetValue()) {
+    if (++count_ > TimeoutPollFrequency.GetValue()) {
       count_ = 0;
       if (!is_cancelled_) {
         if (ValkeyModule_Milliseconds() >= deadline_ms_) {
@@ -54,22 +49,12 @@ struct TokenImpl : public Base {
           is_cancelled_ = true;  // Operation should be cancelled
           gRPCCancels.Increment(1);
           VMSDK_LOG(DEBUG, nullptr) << "CANCEL: gRPC context cancelled";
-        } else if (TestForceTimeout.GetValue()) {
+        } else if (ForceTimeout.GetValue()) {
           is_cancelled_ = true;  // Operation should be cancelled
           ForceCancels.Increment(1);
           VMSDK_LOG(WARNING, nullptr) << "CANCEL: Timeout forced";
-        } else if (TestForcePausePoint.GetValue()) {
-          PausedCancels.Increment(1);
-          VMSDK_LOG(WARNING, nullptr) << "CANCEL: Paused";
-          absl::Time pause_start = absl::Now();
-          while (TestForcePausePoint.GetValue()) {
-            VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1) 
-              << "CANCEL: Paused for " 
-              << absl::ToInt64Seconds(absl::Now() - pause_start) 
-              << " Seconds.";
-            absl::SleepFor(absl::Milliseconds(30));
-          }
-          VMSDK_LOG(WARNING, nullptr) << "CANCEL: Unpaused";
+        } else if (!vmsdk::IsMainThread()) {
+          PAUSEPOINT("Cancel");
         }
       }
     }

@@ -393,8 +393,13 @@ RadixTree<Target, reverse>::GetWordIterator(absl::string_view prefix) const {
               if (remaining.starts_with(path)) {
                 remaining.remove_prefix(path.length());
               } else if (path.starts_with(remaining)) {
-                // The prefix is a sub-path of the current path, we need to reconstruct prefix to be passed to the iterator and return word found so far
-                actual_prefix = actual_prefix.substr(0, actual_prefix.length() - remaining.length()) + path;
+                // The prefix is a sub-path of the current path, we need to
+                // reconstruct prefix to be passed to the iterator and return
+                // word found so far
+                actual_prefix =
+                    actual_prefix.substr(
+                        0, actual_prefix.length() - remaining.length()) +
+                    path;
                 remaining.remove_prefix(remaining.length());
               } else {
                 no_match = true;
@@ -421,7 +426,8 @@ RadixTree<Target, reverse>::GetPathIterator(absl::string_view prefix) const {
 /*** WordIterator ***/
 
 template <typename Target, bool reverse>
-RadixTree<Target, reverse>::WordIterator::WordIterator(const Node* node, absl::string_view prefix)
+RadixTree<Target, reverse>::WordIterator::WordIterator(const Node* node,
+                                                       absl::string_view prefix)
     : curr_(node), word_(prefix) {
   if (curr_ && !curr_->target.has_value()) {
     Next();
@@ -544,4 +550,3 @@ void RadixTree<Target, reverse>::PathIterator::Defrag() {
 }  // namespace valkey_search::indexes::text
 
 #endif
-

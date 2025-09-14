@@ -12,7 +12,6 @@
 #include <optional>
 
 #include "absl/base/thread_annotations.h"
-#include "absl/container/flat_hash_map.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -20,8 +19,9 @@
 #include "absl/synchronization/mutex.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
-#include "src/indexes/text/phrase.h"
+#include "src/indexes/text/term.h"
 #include "src/indexes/text/text_index.h"
+#include "src/indexes/text/wildcard.h"
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -31,11 +31,14 @@ namespace valkey_search::indexes {
 using WordIterator =
     text::RadixTree<std::shared_ptr<text::Postings>, false>::WordIterator;
 
+/**
+ * Text per-field index implementation for full-text search functionality.
+ */
 class Text : public IndexBase {
  public:
   explicit Text(const data_model::TextIndex& text_index_proto,
-                std::shared_ptr<valkey_search::indexes::text::TextIndexSchema>
-                    text_index_schema);
+                std::shared_ptr<text::TextIndexSchema> text_index_schema);
+
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
@@ -83,9 +86,9 @@ class Text : public IndexBase {
   class EntriesFetcher : public EntriesFetcherBase {
    public:
     EntriesFetcher(size_t size,
-                const std::shared_ptr<text::TextIndex>& text_index,
-                const InternedStringSet* untracked_keys = nullptr,
-                text::FieldMaskPredicate field_mask = ~0ULL)
+                   const std::shared_ptr<text::TextIndex>& text_index,
+                   const InternedStringSet* untracked_keys = nullptr,
+                   text::FieldMaskPredicate field_mask = ~0ULL)
         : size_(size),
           text_index_(text_index),
           untracked_keys_(untracked_keys),
@@ -100,7 +103,7 @@ class Text : public IndexBase {
     size_t size_;
     const InternedStringSet* untracked_keys_;
     std::shared_ptr<text::TextIndex> text_index_;
-    query::TextPredicate::Operation operation_;
+    const query::TextPredicate* predicate_;
     absl::string_view data_;
     bool no_field_{false};
     text::FieldMaskPredicate field_mask_;
@@ -120,8 +123,9 @@ class Text : public IndexBase {
 
   // Reference to the shared text index schema
   std::shared_ptr<text::TextIndexSchema> text_index_schema_;
+
   InternedStringSet untracked_keys_;
-  // TextIndex proto-derived configuration fields
+
   bool with_suffix_trie_;
   bool no_stem_;
   int32_t min_stem_size_;

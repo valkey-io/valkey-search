@@ -1,8 +1,8 @@
 from valkey import ResponseError
 from valkey.client import Valkey
 from valkey_search_test_case import (
-    ValkeySearchTestCaseBase,
-    ValkeySearchClusterTestCase,
+    ValkeySearchTestCaseDebugMode,
+    ValkeySearchClusterTestCaseDebugMode,
 )
 from valkeytestframework.conftest import resource_port_tracker
 from indexes import *
@@ -51,7 +51,7 @@ def search(
         return []
 
 
-class TestCancelCMD(ValkeySearchTestCaseBase):
+class TestCancelCMD(ValkeySearchTestCaseDebugMode):
 
     def test_timeoutCMD(self):
         """
@@ -90,11 +90,11 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
         # Now, force timeouts quickly
         #
         assert (
-            client.execute_command("CONFIG SET search.test-force-timeout yes")
+            client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceTimeout yes")
             == b"OK"
         )
         assert (
-            client.execute_command("CONFIG SET search.timeout-poll-frequency 1")
+            client.execute_command("ft._debug CONTROLLED_VARIABLE SET timeoutpollfrequency 1")
             == b"OK"
         )
 
@@ -109,10 +109,10 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
         )
 
         hnsw_result = search(client, "hnsw", True)
-        assert client.info("SEARCH")["search_cancel-forced"] == 1
+        assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 1
 
         flat_result = search(client, "flat", True)
-        assert client.info("SEARCH")["search_cancel-forced"] == 2
+        assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 2
 
         #
         # Enable partial results
@@ -125,11 +125,11 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
         )
 
         hnsw_result = search(client, "hnsw", False)
-        assert client.info("SEARCH")["search_cancel-forced"] == 3
+        assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 3
         assert hnsw_result != nominal_hnsw_result
 
         flat_result = search(client, "flat", False)
-        assert client.info("SEARCH")["search_cancel-forced"] == 4
+        assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 4
         assert flat_result != nominal_flat_result
 
         #
@@ -140,7 +140,7 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
         )
         hnsw_result = search(client, "hnsw", False, 2)
         assert hnsw_result[0] == 2
-        assert client.info("SEARCH")["search_cancel-forced"] == 5
+        assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 5
         assert (
             client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 1
         )
@@ -158,7 +158,7 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
             client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 1
         )
         hnsw_result = search(client, "hnsw", True, 2)
-        assert client.info("SEARCH")["search_cancel-forced"] == 6
+        assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 6
         assert (
             client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 2
         )
@@ -168,40 +168,45 @@ class TestCancelCMD(ValkeySearchTestCaseBase):
         # Now force the race the other way, i.e., force a timeout via Valkey
         #
         assert (
-            client.execute_command("CONFIG SET search.test-force-timeout no")
+            client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceTimeout no")
             == b"OK"
         )
         assert (
-            client.execute_command("CONFIG SET search.test-force-pause yes")
+            client.execute_command("FT._DEBUG PAUSEPOINT SET Cancel")
             == b"OK"
         )
+        assert(client.execute_command("FT._DEBUG PAUSEPOINT LIST") == [b"Cancel", []])
+
         hnsw_result = search(client, "hnsw", True, 2)
+        waiters.wait_for_true(lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST Cancel") > 0)
+        w = client.execute_command("FT._DEBUG PAUSEPOINT LIST")
+        assert(w[0] == b'Cancel')
+        assert(len(w[1]) > 0)
         assert (
-            client.info("SEARCH")["search_cancel-paused"] > 0
-        )
-        assert (
-            client.execute_command("CONFIG SET search.test-force-pause yes")
+            client.execute_command("FT._DEBUG PAUSEPOINT RESET Cancel")
             == b"OK"
         )
+        assert(client.execute_command("FT._DEBUG PAUSEPOINT LIST") == [])
+class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
 
-
-
-
-class TestCancelCME(ValkeySearchClusterTestCase):
-
-    def execute_all(self, command: Union[str, list[str]]) -> list[Any]:
+    def execute_primaries(self, command: Union[str, list[str]]) -> list[Any]:
         return [
             self.client_for_primary(i).execute_command(*command)
             for i in range(len(self.replication_groups))
         ]
 
     def config_set(self, config: str, value: str):
-        assert self.execute_all(["config set", config, value]) == [True] * len(
+        assert self.execute_primaries(["config set", config, value]) == [True] * len(
             self.replication_groups
         )
 
+    def control_set(self, key:str, value:str):
+        assert all(
+            [node.client.execute_command(*["ft._debug", "CONTROLLED_VARIABLE", "set", key, value]) == b"OK" for node in self.nodes]
+        )
+
     def check_info(self, name: str, value: Union[str, int]):
-        results = self.execute_all(["INFO", "SEARCH"])
+        results = self.execute_primaries(["INFO", "SEARCH"])
         failed = False
         for ix, r in enumerate(results):
             if r[name] != value:
@@ -219,7 +224,7 @@ class TestCancelCME(ValkeySearchClusterTestCase):
     
     def _check_info_sum(self, name: str) -> int:
         """Sum the values of a given info field across all servers"""
-        results = self.execute_all(["INFO", "SEARCH"])
+        results = self.execute_primaries(["INFO", "SEARCH"])
         return sum([int(r[name]) for r in results if name in r])
 
     def check_info_sum(self, name: str, sum_value: int):
@@ -234,7 +239,7 @@ class TestCancelCME(ValkeySearchClusterTestCase):
         return sum([index.info(self.client_for_primary(i)).num_docs for i in range(len(self.replication_groups))])
 
     def test_timeoutCME(self):
-        self.execute_all(["flushall sync"])
+        self.execute_primaries(["flushall sync"])
 
         self.config_set("search.info-developer-visible", "yes")
         client: Valkey = self.new_cluster_client()
@@ -256,15 +261,15 @@ class TestCancelCME(ValkeySearchClusterTestCase):
         # hnsw_result = search(cluster, "hnsw", False)
         # flat_result = search(cluster, "flat", False)
 
-        self.check_info_sum("search_cancel-forced", 0)
+        self.check_info_sum("search_test-counter-ForceCancels", 0)
 
         # assert hnsw_result[0] == 10
         # assert flat_result[0] == 10
         #
         # Now, force timeouts quickly
         #
-        self.config_set("search.test-force-timeout", "yes")
-        self.config_set("search.timeout-poll-frequency", "1")
+        self.control_set("ForceTimeout", "yes")
+        self.control_set("TimeoutPollFrequency", "1")
 
         #
         # Enable timeout path, no error but message result
@@ -276,7 +281,7 @@ class TestCancelCME(ValkeySearchClusterTestCase):
         #
         hnsw_result = search(client, "hnsw", True)
 
-        self.check_info_sum("search_cancel-forced", 3)
+        self.check_info_sum("search_test-counter-ForceCancels", 3)
 
         #
         # Pre-filtering HNSW path
@@ -284,11 +289,11 @@ class TestCancelCME(ValkeySearchClusterTestCase):
         self.check_info("search_query_prefiltering_requests_cnt", 0)
         hnsw_result = search(client, "hnsw", True, 10)
         self.check_info("search_query_prefiltering_requests_cnt", 1)
-        self.check_info_sum("search_cancel-forced", 6)
+        self.check_info_sum("search_test-counter-ForceCancels", 6)
 
         #
         # Flat path
         #
         flat_result = search(client, "flat", True)
-        self.check_info_sum("search_cancel-forced", 9)
+        self.check_info_sum("search_test-counter-ForceCancels", 9)
         self.check_info("search_query_prefiltering_requests_cnt", 1)

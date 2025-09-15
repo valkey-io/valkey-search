@@ -34,6 +34,12 @@
 
 namespace valkey_search::query {
 
+enum class SearchMode {
+  kLocal,  // Search executed on local node/instance
+  kRemote  // Search executed as part of distributed operation (from
+           // coordinator)
+};
+
 constexpr int64_t kTimeoutMS{50000};
 const size_t kMaxTimeoutMs{60000};
 constexpr absl::string_view kOOMMsg{
@@ -92,11 +98,12 @@ using SearchResponseCallback =
                             std::unique_ptr<VectorSearchParameters>)>;
 
 absl::StatusOr<std::deque<indexes::Neighbor>> Search(
-    const VectorSearchParameters& parameters, bool is_local_search);
+    const VectorSearchParameters& parameters, SearchMode search_mode);
 
 absl::Status SearchAsync(std::unique_ptr<VectorSearchParameters> parameters,
                          vmsdk::ThreadPool* thread_pool,
-                         SearchResponseCallback callback, bool is_local_search);
+                         SearchResponseCallback callback,
+                         SearchMode search_mode);
 
 absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
     absl::StatusOr<std::deque<indexes::Neighbor>> results,

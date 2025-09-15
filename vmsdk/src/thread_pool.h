@@ -10,6 +10,7 @@
 
 #include <pthread.h>  // NOLINT(build/c++11)
 
+#include <atomic>
 #include <cstddef>
 #include <memory>
 #include <optional>
@@ -100,7 +101,18 @@ class ThreadPool {
   void WorkerThread(std::shared_ptr<Thread> thread)
       ABSL_LOCKS_EXCLUDED(queue_mutex_);
 
+  /// Set the weight for high priority tasks [0, 100]
+  /// Low priority weight = 100 - high_priority_weight
+  void SetHighPriorityWeight(int weight);
+
+  /// Get the current high priority weight
+  int GetHighPriorityWeight() const;
+
  private:
+  /// Try to get the next task using fairness algorithm
+  /// Returns nullopt if no tasks available
+  std::optional<absl::AnyInvocable<void()>> TryGetNextTask()
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_);
   void IncrThreadCountBy(size_t count);
   void DecrThreadCountBy(size_t count, bool sync);
 
@@ -133,6 +145,15 @@ class ThreadPool {
 
   // Suspend and resume are mutually exclusive.
   mutable absl::Mutex suspend_resume_mutex_;
+
+  // Fairness mechanism for kHigh vs kLow priority tasks
+  std::atomic<int> high_priority_weight_{100};
+  std::atomic<uint32_t> fairness_counter_{0};
+
+  // Pattern-based weighted round robin for better latency distribution
+  std::atomic<int> pattern_length_{1};  // Length of the repeating pattern
+  std::atomic<int> high_ratio_{1};  // Number of high priority tasks in pattern
+
   FRIEND_TEST(ThreadPoolTest, DynamicSizing);
 };
 

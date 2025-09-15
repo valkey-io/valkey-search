@@ -87,7 +87,7 @@ class TextIndexSchema {
   // Punctuation string
   std::string punct_str_;
 
-  // Punctiation bitmap
+  // Punctuation bitmap
   PunctuationBitmap punct_bitmap_;
 
   // Stop words set for filtering during tokenization

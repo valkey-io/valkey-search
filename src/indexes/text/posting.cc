@@ -54,6 +54,8 @@ using Uint64FieldMask = FieldMaskImpl<uint64_t, 64>;
 
 // Factory method to create optimal field mask based on field count
 std::unique_ptr<FieldMask> FieldMask::Create(size_t num_fields) {
+  IsolatedMemoryScope scope{Postings::memory_pool_};
+  
   CHECK(num_fields > 0) << "num_fields must be greater than 0";
   CHECK(num_fields <= 64) << "Too many text fields (max 64 supported)";
 

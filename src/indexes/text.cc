@@ -242,6 +242,59 @@ uint64_t Text::GetTotalTermFrequency() const {
   return total_term_freq;
 }
 
+uint64_t Text::GetPostingsMemoryUsage() const {
+  if (!text_index_schema_ || !text_index_schema_->text_index_) {
+    return 0;
+  }
+  return text::Postings::GetMemoryUsage();
+}
+
+uint64_t Text::GetRadixTreeMemoryUsage() const {
+  if (!text_index_schema_ || !text_index_schema_->text_index_) {
+    return 0;
+  }
+  return text::RadixTree<std::shared_ptr<text::Postings>, false>::GetMemoryUsage();
+}
+
+uint64_t Text::GetPositionMemoryUsage() const {
+  uint64_t total_positions = GetTotalPositions();
+  return total_positions * sizeof(uint32_t);
+}
+
+uint64_t Text::GetTotalTextIndexMemoryUsage() const {
+  return GetPostingsMemoryUsage() + GetRadixTreeMemoryUsage();
+}
+
+double Text::GetTotalTermsPerDocAvg(uint64_t num_docs) const {
+  if (num_docs == 0) {
+    return 0.0;
+  }
+  return static_cast<double>(GetTotalTermFrequency()) / num_docs;
+}
+
+double Text::GetTotalTextIndexSizePerDocAvg(uint64_t num_docs) const {
+  if (num_docs == 0) {
+    return 0.0;
+  }
+  return static_cast<double>(GetTotalTextIndexMemoryUsage()) / num_docs;
+}
+
+double Text::GetPositionSizePerTermAvg() const {
+  uint64_t num_terms = GetNumTerms();
+  if (num_terms == 0) {
+    return 0.0;
+  }
+  return static_cast<double>(GetPositionMemoryUsage()) / num_terms;
+}
+
+double Text::GetTotalTextIndexSizePerTermAvg() const {
+  uint64_t num_terms = GetNumTerms();
+  if (num_terms == 0) {
+    return 0.0;
+  }
+  return static_cast<double>(GetTotalTextIndexMemoryUsage()) / num_terms;
+}
+
 }  // namespace valkey_search::indexes
 
 // Implement the TextPredicate BuildTextIterator virtual method

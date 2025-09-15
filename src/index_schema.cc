@@ -595,9 +595,10 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
   }
   const bool block_client =
       ShouldBlockClient(ctx, inside_multi_exec, from_backfill);
-  if (ABSL_PREDICT_FALSE(!TrackMutatedRecord(ctx, interned_key,
-                                             std::move(mutated_attributes),
-                                             from_backfill, block_client)) ||
+
+  if (ABSL_PREDICT_FALSE(!TrackMutatedRecord(
+          ctx, interned_key, std::move(mutated_attributes), from_backfill,
+          block_client, inside_multi_exec)) ||
       inside_multi_exec) {
     // Skip scheduling if the mutation key has already been tracked or is part
     // of a multi exec command.
@@ -1098,7 +1099,8 @@ vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
 bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
                                      const InternedStringPtr &key,
                                      MutatedAttributes &&mutated_attributes,
-                                     bool from_backfill, bool block_client) {
+                                     bool from_backfill, bool block_client,
+                                     bool from_multi) {
   absl::MutexLock lock(&mutated_records_mutex_);
   auto [itr, inserted] =
       tracked_mutated_records_.insert({key, DocumentMutation{}});
@@ -1106,6 +1108,7 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
     itr->second.attributes = MutatedAttributes();
     itr->second.attributes.value() = std::move(mutated_attributes);
     itr->second.from_backfill = from_backfill;
+    itr->second.from_multi = from_multi;
     if (ABSL_PREDICT_TRUE(block_client)) {
       vmsdk::BlockedClient blocked_client(ctx, true,
                                           GetBlockedCategoryFromProto());
@@ -1114,6 +1117,11 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
     }
     return true;
   }
+
+  if (!itr->second.from_multi && from_multi) {
+    itr->second.from_multi = from_multi;
+  }
+
   if (!itr->second.attributes.has_value()) {
     itr->second.attributes = MutatedAttributes();
   }
@@ -1121,12 +1129,15 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
     itr->second.attributes.value()[mutated_attribute.first] =
         std::move(mutated_attribute.second);
   }
-  if (ABSL_PREDICT_TRUE(block_client)) {
+
+  if (ABSL_PREDICT_TRUE(block_client) &&
+      ABSL_PREDICT_TRUE(!itr->second.from_multi)) {
     vmsdk::BlockedClient blocked_client(ctx, true,
                                         GetBlockedCategoryFromProto());
     blocked_client.MeasureTimeStart();
     itr->second.blocked_clients.emplace_back(std::move(blocked_client));
   }
+
   if (ABSL_PREDICT_FALSE(!from_backfill && itr->second.from_backfill)) {
     itr->second.from_backfill = false;
     return true;

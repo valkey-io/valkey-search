@@ -171,6 +171,25 @@ static auto log_level =
 constexpr absl::string_view kEnablePartialResults{"enable-partial-results"};
 static config::Boolean enable_partial_results(kEnablePartialResults, true);
 
+/// Configure the weight for high priority tasks in thread pools (0-100)
+/// Low priority weight = 100 - high_priority_weight
+constexpr absl::string_view kHighPriorityWeight{"high-priority-weight"};
+static auto high_priority_weight =
+    config::NumberBuilder(kHighPriorityWeight, 100, 0,
+                          100)  // Default 100%, range 0-100
+        .WithModifyCallback([](auto new_value) {
+          // Update both reader and writer thread pools
+          auto reader_pool = ValkeySearch::Instance().GetReaderThreadPool();
+          auto writer_pool = ValkeySearch::Instance().GetWriterThreadPool();
+          if (reader_pool) {
+            reader_pool->SetHighPriorityWeight(new_value);
+          }
+          if (writer_pool) {
+            writer_pool->SetHighPriorityWeight(new_value);
+          }
+        })
+        .Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -213,6 +232,10 @@ absl::Status Reset() {
 
 const vmsdk::config::Boolean& GetEnablePartialResults() {
   return static_cast<vmsdk::config::Boolean&>(enable_partial_results);
+}
+
+vmsdk::config::Number& GetHighPriorityWeight() {
+  return dynamic_cast<vmsdk::config::Number&>(*high_priority_weight);
 }
 
 }  // namespace options

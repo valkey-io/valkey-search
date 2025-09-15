@@ -147,7 +147,7 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
       content->set_value(operation.content);
       EXPECT_EQ(test_metadata_manager_
                     ->CreateEntry(operation.type_name, operation.id,
-                                  std::move(content))
+                                  std::move(content), nullptr)
                     .code(),
                 test_case.expected_status_code);
     } else if (operation.operation_type ==

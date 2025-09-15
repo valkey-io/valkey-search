@@ -232,7 +232,7 @@ absl::Status SchemaManager::CreateIndexSchema(
     any_proto->PackFrom(index_schema_proto);
     return coordinator::MetadataManager::Instance().CreateEntry(
         kSchemaManagerMetadataTypeName, index_schema_proto.name(),
-        std::move(any_proto));
+        std::move(any_proto), ctx);
   }
 
   // In non-coordinated mode, apply the update inline.

@@ -81,6 +81,7 @@ target_link_libraries(metadata_manager PUBLIC utils)
 target_link_libraries(metadata_manager PUBLIC status_macros)
 target_link_libraries(metadata_manager PUBLIC valkey_module)
 target_link_libraries(metadata_manager PUBLIC highwayhash)
+target_link_libraries(metadata_manager PUBLIC fanout)
 
 set(SRCS_SEARCH_CONVERTER ${CMAKE_CURRENT_LIST_DIR}/search_converter.cc
                           ${CMAKE_CURRENT_LIST_DIR}/search_converter.h

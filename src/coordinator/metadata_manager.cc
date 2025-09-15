@@ -30,7 +30,9 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/util.h"
+#include "src/query/create_consistency_check_fanout_operation.h"
 #include "src/rdb_serialization.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -147,7 +149,7 @@ absl::StatusOr<google::protobuf::Any> MetadataManager::GetEntry(
 
 absl::Status MetadataManager::CreateEntry(
     absl::string_view type_name, absl::string_view id,
-    std::unique_ptr<google::protobuf::Any> contents) {
+    std::unique_ptr<google::protobuf::Any> contents, ValkeyModuleCtx *ctx) {
   auto &registered_types = registered_types_.Get();
   auto rt_it = registered_types.find(type_name);
   if (rt_it == registered_types.end()) {
@@ -187,6 +189,19 @@ absl::Status MetadataManager::CreateEntry(
   metadata.mutable_version_header()->set_top_level_fingerprint(
       ComputeTopLevelFingerprint(metadata.type_namespace_map()));
   BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
+  
+  // check for valid ctx to prevent test fail due to fake_ctx
+  if (ctx && ValkeySearch::Instance().IsCluster() &&
+      ValkeySearch::Instance().UsingCoordinator()) {
+    VMSDK_LOG(NOTICE, nullptr) << "Entering fanout operation part";
+    // ft.create consistency check
+    unsigned timeout_ms = options::GetFTInfoTimeoutMs().GetValue();
+    auto op = new query::create_consistency_check_fanout_operation::
+        CreateConsistencyCheckFanoutOperation(ValkeyModule_GetSelectedDb(ctx),
+                                              std::string(id), timeout_ms);
+    op->StartOperation(ctx);
+  }
+
   return absl::OkStatus();
 }
 
@@ -225,6 +240,7 @@ absl::Status MetadataManager::DeleteEntry(absl::string_view type_name,
   metadata.mutable_version_header()->set_top_level_fingerprint(
       ComputeTopLevelFingerprint(metadata.type_namespace_map()));
   BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
+  // TODO: ft.dropindex consistency check
   return absl::OkStatus();
 }
 

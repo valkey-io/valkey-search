@@ -122,34 +122,4 @@ bool CreateConsistencyCheckFanoutOperation::ShouldRetry() {
          !communication_error_nodes.empty();
 }
 
-void CreateConsistencyCheckFanoutOperation::SetCompletionCallback(
-    std::function<void(bool, std::string)> callback) {
-  completion_callback_ = std::move(callback);
-}
-
-void CreateConsistencyCheckFanoutOperation::OnCompletion() {
-  bool success = index_name_error_nodes.empty() &&
-                 communication_error_nodes.empty() &&
-                 inconsistent_state_error_nodes.empty();
-
-  std::string error_msg;
-  if (!success) {
-    if (!index_name_error_nodes.empty()) {
-      error_msg = "Index name not found";
-    } else if (!inconsistent_state_error_nodes.empty()) {
-      error_msg = "Cluster not in a consistent state";
-    } else {
-      error_msg = "Communication error between nodes";
-    }
-  }
-
-  // Trigger callback before calling base class
-  if (completion_callback_) {
-    completion_callback_(success, error_msg);
-  }
-
-  // Call base class to complete the operation and delete the object
-  FanoutOperationBase::OnCompletion();
-}
-
 }  // namespace valkey_search::query::create_consistency_check_fanout_operation

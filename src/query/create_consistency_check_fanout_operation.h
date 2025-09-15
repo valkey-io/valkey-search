@@ -59,10 +59,6 @@ class CreateConsistencyCheckFanoutOperation
   // decide which condition to run retry
   bool ShouldRetry() override;
 
-  void SetCompletionCallback(std::function<void(bool, std::string)> callback);
-
-  void OnCompletion() override;
-
  private:
   bool exists_;
   std::optional<uint64_t> schema_fingerprint_;
@@ -70,7 +66,6 @@ class CreateConsistencyCheckFanoutOperation
   uint32_t db_num_;
   std::string index_name_;
   unsigned timeout_ms_;
-  std::function<void(bool success, std::string error_msg)> completion_callback_;
 };
 
 }  // namespace valkey_search::query::create_consistency_check_fanout_operation

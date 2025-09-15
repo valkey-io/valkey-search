@@ -26,7 +26,7 @@ absl::Status FTCreateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, permissions, index_schema_proto));
   VMSDK_RETURN_IF_ERROR(
       SchemaManager::Instance().CreateIndexSchema(ctx, index_schema_proto));
-  
+
   // directly handle reply in standalone mode
   // let fanout operation handle reply in cluster mode
   if (!ValkeySearch::Instance().IsCluster() ||

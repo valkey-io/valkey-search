@@ -1343,7 +1343,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
         " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",  // Default punctuation
         false,                                        // with_offsets
         empty_stop_words);
-    auto text_index_schema = std::make_shared<indexes::text::TextIndexSchema>(proto);
+    auto text_index_schema =
+        std::make_shared<indexes::text::TextIndexSchema>(proto);
 
     // Create text index with both proto and schema
     auto text_index = std::make_shared<indexes::Text>(
@@ -1970,9 +1971,9 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     std::vector<std::string> empty_stop_words;
     auto text_proto = CreateIndexSchemaProtoWithTextProperties(
         data_model::LANGUAGE_ENGLISH,
-        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
-        true, empty_stop_words);
-    auto text_index_schema = std::make_shared<indexes::text::TextIndexSchema>(text_proto);
+        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", true, empty_stop_words);
+    auto text_index_schema =
+        std::make_shared<indexes::text::TextIndexSchema>(text_proto);
     auto text_index = std::make_shared<indexes::Text>(
         CreateTextIndexProto(true, false, 6), text_index_schema);
     VMSDK_EXPECT_OK(

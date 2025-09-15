@@ -862,16 +862,16 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
       google::protobuf::RepeatedPtrFieldBackInserter(
           index_schema_proto->mutable_attributes()),
       [](const auto &attribute) { return *attribute.second.ToProto(); });
-  
+
   // Text-specific properties
   if (text_index_schema_) {
     index_schema_proto->set_language(text_index_schema_->GetLanguage());
-    index_schema_proto->set_punctuation(text_index_schema_->GetPunctuationString());
+    index_schema_proto->set_punctuation(
+        text_index_schema_->GetPunctuationString());
     index_schema_proto->set_with_offsets(text_index_schema_->GetWithOffsets());
     auto stop_words = text_index_schema_->GetStopWordsSet();
-    index_schema_proto->mutable_stop_words()->Add(
-        stop_words.begin(),
-        stop_words.end());
+    index_schema_proto->mutable_stop_words()->Add(stop_words.begin(),
+                                                  stop_words.end());
   }
 
   return index_schema_proto;

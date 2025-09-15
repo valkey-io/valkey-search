@@ -53,7 +53,7 @@ class TextIndexSchema {
   ~TextIndexSchema();
 
   uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }
-  
+
   uint8_t GetNumTextFields() const { return num_text_fields_; }
   std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
   const std::string GetPunctuationString() const { return punct_str_; }

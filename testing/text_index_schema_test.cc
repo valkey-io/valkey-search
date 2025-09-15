@@ -11,20 +11,21 @@
 #include "src/indexes/text/text_index.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
+#include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search {
 namespace indexes {
 namespace text {
 
-class TextIndexSchemaTest : public ::testing::Test {
+class TextIndexSchemaTest : public vmsdk::ValkeyTest {
  protected:
+  void SetUp() override { vmsdk::ValkeyTest::SetUp(); }
+
   std::shared_ptr<TextIndexSchema> CreateSchema() {
     std::vector<std::string> empty_stop_words;
     auto proto = CreateIndexSchemaProtoWithTextProperties(
         data_model::LANGUAGE_ENGLISH,
-        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
-        false,
-        empty_stop_words);
+        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", false, empty_stop_words);
     return std::make_shared<TextIndexSchema>(proto);
   }
 };

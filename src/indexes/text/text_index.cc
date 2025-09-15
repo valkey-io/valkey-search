@@ -48,7 +48,7 @@ absl::flat_hash_set<std::string> BuildStopWordsSet(
 
 TextIndexSchema::TextIndexSchema(
     const data_model::IndexSchema& index_schema_proto)
-    : punct_str_(index_schema_proto.punctuation()), 
+    : punct_str_(index_schema_proto.punctuation()),
       punct_bitmap_(BuildPunctuationBitmap(index_schema_proto.punctuation())),
       stop_words_set_(
           BuildStopWordsSet({index_schema_proto.stop_words().begin(),

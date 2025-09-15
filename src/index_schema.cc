@@ -366,6 +366,12 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     vmsdk::UniqueValkeyString record = VectorExternalizer::Instance().GetRecord(
         ctx, attribute_data_type_.get(), key_obj.get(), key_cstr,
         attribute.GetIdentifier(), is_module_owned);
+    // Early return on record not found just if the record not tracked.
+    // Otherwise, it will be processed as a delete
+    if (!record && !attribute.GetIndex()->IsTracked(interned_key) &&
+        !InTrackedMutationRecords(interned_key, attribute.GetIdentifier())) {
+      return;
+    }
     if (!is_module_owned) {
       // A record which are owned by the module were not modified and are
       // already tracked in the vector registry.
@@ -576,9 +582,10 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
   }
   const bool block_client =
       ShouldBlockClient(ctx, inside_multi_exec, from_backfill);
-  if (ABSL_PREDICT_FALSE(!TrackMutatedRecord(ctx, interned_key,
-                                             std::move(mutated_attributes),
-                                             from_backfill, block_client)) ||
+
+  if (ABSL_PREDICT_FALSE(!TrackMutatedRecord(
+          ctx, interned_key, std::move(mutated_attributes), from_backfill,
+          block_client, inside_multi_exec)) ||
       inside_multi_exec) {
     // Skip scheduling if the mutation key has already been tracked or is part
     // of a multi exec command.
@@ -1014,11 +1021,26 @@ vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
       return vmsdk::BlockedClientCategory::kOther;
   }
 }
+
+bool IndexSchema::InTrackedMutationRecords(
+    const InternedStringPtr &key, const std::string &identifier) const {
+  absl::MutexLock lock(&mutated_records_mutex_);
+  auto itr = tracked_mutated_records_.find(key);
+  if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
+    return false;
+  }
+  if (itr->second.attributes->find(identifier) ==
+      itr->second.attributes->end()) {
+    return false;
+  }
+  return true;
+}
 // Returns true if the inserted key not exists otherwise false
 bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
                                      const InternedStringPtr &key,
                                      MutatedAttributes &&mutated_attributes,
-                                     bool from_backfill, bool block_client) {
+                                     bool from_backfill, bool block_client,
+                                     bool from_multi) {
   absl::MutexLock lock(&mutated_records_mutex_);
   auto [itr, inserted] =
       tracked_mutated_records_.insert({key, DocumentMutation{}});
@@ -1026,6 +1048,7 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
     itr->second.attributes = MutatedAttributes();
     itr->second.attributes.value() = std::move(mutated_attributes);
     itr->second.from_backfill = from_backfill;
+    itr->second.from_multi = from_multi;
     if (ABSL_PREDICT_TRUE(block_client)) {
       vmsdk::BlockedClient blocked_client(ctx, true,
                                           GetBlockedCategoryFromProto());
@@ -1034,6 +1057,11 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
     }
     return true;
   }
+
+  if (!itr->second.from_multi && from_multi) {
+    itr->second.from_multi = from_multi;
+  }
+
   if (!itr->second.attributes.has_value()) {
     itr->second.attributes = MutatedAttributes();
   }
@@ -1041,12 +1069,15 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
     itr->second.attributes.value()[mutated_attribute.first] =
         std::move(mutated_attribute.second);
   }
-  if (ABSL_PREDICT_TRUE(block_client)) {
+
+  if (ABSL_PREDICT_TRUE(block_client) &&
+      ABSL_PREDICT_TRUE(!itr->second.from_multi)) {
     vmsdk::BlockedClient blocked_client(ctx, true,
                                         GetBlockedCategoryFromProto());
     blocked_client.MeasureTimeStart();
     itr->second.blocked_clients.emplace_back(std::move(blocked_client));
   }
+
   if (ABSL_PREDICT_FALSE(!from_backfill && itr->second.from_backfill)) {
     itr->second.from_backfill = false;
     return true;

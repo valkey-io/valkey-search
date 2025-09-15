@@ -144,9 +144,12 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
                       key, absl::string_view(test_case.expected_vector_buffer)))
           .WillOnce(Return(test_case.expect_index_modify_w_result.value()));
     } else if (test_case.expect_index_remove_w_result.has_value()) {
-      EXPECT_CALL(*mock_index,
-                  RemoveRecord(key, test_case.expected_deletion_type))
-          .WillOnce(Return(test_case.expect_index_remove_w_result.value()));
+      if (test_case.expect_index_remove_w_result.value().ok() &&
+          test_case.expect_index_remove_w_result.value().value() == true) {
+        EXPECT_CALL(*mock_index,
+                    RemoveRecord(key, test_case.expected_deletion_type))
+            .WillOnce(Return(test_case.expect_index_remove_w_result.value()));
+      }
     }
     if (test_case.open_key_fail) {
       // Keep the default behavior still for other keys (e.g. IndexSchema key).
@@ -237,9 +240,13 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
       EXPECT_EQ(
           std::get<1>(tuple)->skipped_cnt - std::get<0>(tuple).skipped_cnt,
           std::get<2>(tuple)->skipped_cnt);
-      EXPECT_EQ(
-          std::get<1>(tuple)->failure_cnt - std::get<0>(tuple).failure_cnt,
-          std::get<2>(tuple)->failure_cnt);
+      if (!test_case.expect_index_remove_w_result.has_value() ||
+          !test_case.expect_index_remove_w_result.value().ok() ||
+          test_case.expect_index_remove_w_result.value().value() == true) {
+        EXPECT_EQ(
+            std::get<1>(tuple)->failure_cnt - std::get<0>(tuple).failure_cnt,
+            std::get<2>(tuple)->failure_cnt);
+      }
     }
     EXPECT_EQ(index_schema->GetStats().document_cnt - document_cnt,
               test_case.expected_document_cnt_delta);
@@ -379,7 +386,7 @@ INSTANTIATE_TEST_SUITE_P(
             .expect_index_remove_w_result = false,
             .expected_remove_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
-                    .skipped_cnt = 1,
+                    .skipped_cnt = 0,
                 },
         },
         {
@@ -392,7 +399,7 @@ INSTANTIATE_TEST_SUITE_P(
             .expect_index_remove_w_result = false,
             .expected_remove_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
-                    .skipped_cnt = 1,
+                    .skipped_cnt = 0,
                 },
             .expected_deletion_type = indexes::DeletionType::kRecord,
         },
@@ -578,7 +585,7 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_vector_buffer = "vector_buffer",
             .expected_remove_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
-                    .skipped_cnt = 1,
+                    .skipped_cnt = 0,
                 },
         },
     }),
@@ -1383,23 +1390,23 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributesSanity) {
   auto mutated_attributes_1 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_TRUE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_1), true, false));
+      nullptr, key, std::move(mutated_attributes_1), true, false, false));
   // Verify that adding a track attribute with backfill off after on return true
   auto mutated_attributes_2 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_TRUE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_2), false, false));
+      nullptr, key, std::move(mutated_attributes_2), false, false, false));
   auto mutated_attributes_3 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_FALSE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_3), false, false));
+      nullptr, key, std::move(mutated_attributes_3), false, false, false));
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1);
   auto consumed_data = index_schema->ConsumeTrackedMutatedAttribute(key, true);
   EXPECT_TRUE(consumed_data.has_value());
   auto mutated_attributes_4 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_FALSE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_4), false, false));
+      nullptr, key, std::move(mutated_attributes_4), false, false, false));
   consumed_data = index_schema->ConsumeTrackedMutatedAttribute(key, true);
   EXPECT_FALSE(consumed_data.has_value());
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1);
@@ -1421,7 +1428,7 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
           CreateMutatedAttributes(attribute_identifier, data_ptr);
       EXPECT_EQ(index_schema->attributes_.size(), 1);
       EXPECT_TRUE(index_schema->TrackMutatedRecord(
-          nullptr, key, std::move(mutated_attributes), false, false));
+          nullptr, key, std::move(mutated_attributes), false, false, false));
     }
     if (!track_before_consumption_data_ptr.empty()) {
       VLOG(1) << "track_before_consumption_data_ptr is not empty";
@@ -1429,7 +1436,7 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
       auto mutated_attributes = CreateMutatedAttributes(
           attribute_identifier, track_before_consumption_data_ptr);
       EXPECT_FALSE(index_schema->TrackMutatedRecord(
-          nullptr, key, std::move(mutated_attributes), false, false));
+          nullptr, key, std::move(mutated_attributes), false, false, false));
       data_ptr = track_before_consumption_data_ptr;
     }
     EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1);
@@ -1458,10 +1465,10 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
         EXPECT_EQ(index_schema->attributes_.size(), 1);
         auto mutated_attributes = CreateMutatedAttributes(
             attribute_identifier, track_after_consumption_data_ptr);
-        EXPECT_EQ(
-            index_schema->TrackMutatedRecord(
-                nullptr, key, std::move(mutated_attributes), false, false),
-            !track_before_consumption_data_ptr.empty());
+        EXPECT_EQ(index_schema->TrackMutatedRecord(
+                      nullptr, key, std::move(mutated_attributes), false, false,
+                      false),
+                  !track_before_consumption_data_ptr.empty());
       }
       auto consumed_data =
           index_schema->ConsumeTrackedMutatedAttribute(key, false);

@@ -76,7 +76,8 @@ TEST_P(AclPrefixCheckTest, AclPrefixCheckTests) {
   pass.emplace_back(CreateValkeyModuleCallReply("pass"));
   AddElementToCallReplyMap(reply_map, "passwords", std::move(pass));
 
-  AddElementToCallReplyMap(reply_map, "commands", test_case.acls[0].cmds);
+  // `ACL GETUSER`'s response is in lowercase
+  AddElementToCallReplyMap(reply_map, "commands", absl::AsciiStrToLower(test_case.acls[0].cmds));
   AddElementToCallReplyMap(reply_map, "keys", test_case.acls[0].keys);
 
   AddElementToCallReplyMap(reply_map, "channels", "&");
@@ -85,7 +86,7 @@ TEST_P(AclPrefixCheckTest, AclPrefixCheckTests) {
     CallReplyArray selectors;
     for (int i = 1; i < test_case.acls.size(); i++) {
       CallReplyMap selector;
-      AddElementToCallReplyMap(selector, "commands", test_case.acls[i].cmds);
+      AddElementToCallReplyMap(selector, "commands", absl::AsciiStrToLower(test_case.acls[i].cmds));
       AddElementToCallReplyMap(selector, "keys", test_case.acls[i].keys);
       AddElementToCallReplyMap(selector, "channels", "&");
       selectors.emplace_back(CreateValkeyModuleCallReply(std::move(selector)));

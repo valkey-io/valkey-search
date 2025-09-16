@@ -22,6 +22,8 @@ TermIterator::TermIterator(const WordIterator& word_iter,
       key_iter_(),                   // default-initialize iterator
       pos_iter_(),                   // default-initialize iterator
       current_key_(nullptr),         // no key yet
+      current_position_(std::nullopt),
+      current_field_mask_(std::nullopt),
       untracked_keys_(untracked_keys),
       nomatch_(false)                // start as "not done"
 {
@@ -33,9 +35,14 @@ TermIterator::TermIterator(const WordIterator& word_iter,
   }
   target_posting_ = word_iter_.GetTarget();
   key_iter_ = target_posting_->GetKeyIterator();
-  // TODO: Check if this is a degenerate case of the Done function or if it can be done to be done. 
+  // Prime the first key and position if they exist.
   if (!TermIterator::NextKey()) {
     VMSDK_LOG(WARNING, nullptr) << "TI::nomatch2{" << word_iter_.GetWord() << "}";
+    nomatch_ = true;
+    return;
+  }
+  if (!TermIterator::NextPosition()) {
+    VMSDK_LOG(WARNING, nullptr) << "TI::nomatch3{" << word_iter_.GetWord() << "}";
     nomatch_ = true;
   }
 }
@@ -52,7 +59,6 @@ bool TermIterator::NextKey() {
         current_key_ = key_iter_.GetKey();
         pos_iter_ = key_iter_.GetPositionIterator();
         VMSDK_LOG(WARNING, nullptr) << "TI::NextKey{" << word_iter_.GetWord() << "} - Found key. CurrentKey: " << current_key_->Str() << " Position: " << pos_iter_.GetPosition();;
-        // pos_iter_.NextPosition();
         return true;
     }
     key_iter_.NextKey();
@@ -65,6 +71,7 @@ bool TermIterator::NextKey() {
 
 const InternedStringPtr& TermIterator::CurrentKey() {
   VMSDK_LOG(WARNING, nullptr) << "TI::CurrentKey{" << word_iter_.GetWord() << "}";
+  // CHECK(current_key_ != nullptr); // TODO: Add back when the rest of code follows the contract of not calling this when null.
   return current_key_;
 }
 
@@ -73,75 +80,50 @@ const InternedStringPtr& TermIterator::CurrentKey() {
 bool TermIterator::NextPosition() {
   VMSDK_LOG(WARNING, nullptr) << "TI::NextPosition{" << word_iter_.GetWord() << "}";
   if (nomatch_) return false;
-  if (!pos_iter_.IsValid()) {
-    return false;
+  if (current_position_.has_value()) {
+      pos_iter_.NextPosition();
   }
-  pos_iter_.NextPosition();
-  return true;
+  // Loop until we find a position that satisfies the field mask
+  while (pos_iter_.IsValid()) {
+    if (pos_iter_.GetFieldMask() & field_mask_) {
+      current_position_ = pos_iter_.GetPosition();
+      current_field_mask_ = pos_iter_.GetFieldMask();
+      return true;
+    }
+    pos_iter_.NextPosition();
+  }
+  // No more valid positions
+  current_position_ = std::nullopt;
+  nomatch_ = true;
+  return false;
 }
 
 uint32_t TermIterator::CurrentPosition() {
   VMSDK_LOG(WARNING, nullptr) << "TI::CurrentPosition{" << word_iter_.GetWord() << "}";
-  return pos_iter_.GetPosition();
+  CHECK(current_position_.has_value());
+  return current_position_.value();
 }
 
 uint64_t TermIterator::GetFieldMask() const {
   VMSDK_LOG(WARNING, nullptr) << "TI::GetFieldMask{" << word_iter_.GetWord() << "}";
-  return pos_iter_.GetFieldMask();
+  CHECK(current_field_mask_.has_value());
+  return current_field_mask_.value();
 } 
 
 bool TermIterator::DoneKeys() const {
-  VMSDK_LOG(WARNING, nullptr) << "TI::Done{" << word_iter_.GetWord() << "}";
-  return nomatch_ || !key_iter_.IsValid();
+  VMSDK_LOG(WARNING, nullptr) << "TI::DoneKeys{" << word_iter_.GetWord() << "}";
+  if (nomatch_) {
+    return true;
+  }
+  return !key_iter_.IsValid();
 }
 
 bool TermIterator::DonePositions() const {
-  VMSDK_LOG(WARNING, nullptr) << "TI::Done{" << word_iter_.GetWord() << "}";
-  return nomatch_ || !pos_iter_.IsValid();
+  VMSDK_LOG(WARNING, nullptr) << "TI::DonePositions{" << word_iter_.GetWord() << "}";
+  if (nomatch_) {
+    return true;
+  }
+  return !pos_iter_.IsValid();
 }
-
-bool TermIterator::Done() const {
-  VMSDK_LOG(WARNING, nullptr) << "TI::Done{" << word_iter_.GetWord() << "}";
-  return nomatch_ || !key_iter_.IsValid();
-}
-
-void TermIterator::Next() {
-  // Unified iteration: advance by position first
-  // if (nomatch_) return;
-  // NextPosition();
-  // If no positions left at all, nomatch_ would be set by NextKey/NextWord path
-}
-
-// bool TermIterator::Done() const {
-//   if (nomatch_ || word_.GetWord() != data_) {
-//     return true;
-//   }
-//   // Check if key iterator is valid
-//   return !key_iter_.IsValid();
-// }
-
-// void TermIterator::Next() {
-  // // On a Begin() call, we initialize the target_posting_ and key_iter_.
-  // if (begin_) {
-  //   if (word_.Done()) {
-  //     nomatch_ = true;
-  //     return;
-  //   }
-  //   target_posting_ = word_.GetTarget();
-  //   key_iter_ = target_posting_->GetKeyIterator();
-  //   begin_ = false;  // Set to false after the first call to Next.
-  // } else {
-  //   key_iter_.NextKey();
-  // }
-  // // Advance until we find a valid key or reach the end
-  // while (!Done() && !key_iter_.ContainsFields(field_mask_)) {
-  //   key_iter_.NextKey();
-  // }
-// }
-
-// const InternedStringPtr& TermIterator::operator*() const {
-//   // Return the current key from the key iterator of the posting object.
-//   return key_iter_.GetKey();
-// }
 
 }  // namespace valkey_search::indexes::text

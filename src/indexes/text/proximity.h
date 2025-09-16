@@ -87,10 +87,6 @@ class ProximityIterator : public TextIterator {
   uint32_t CurrentPosition() override;
   uint64_t GetFieldMask() const override;
 
-  // Optional unified iteration contract
-  bool Done() const override;
-  void Next() override;
-
  private:
   std::vector<std::unique_ptr<TextIterator>> iters_; // List of all the Text Predicates contained in the Proximity AND.
   bool done_;  // Used to track if we are at the beginning of the iterator.

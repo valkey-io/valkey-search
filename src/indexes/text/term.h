@@ -28,29 +28,6 @@ using WordIterator = RadixTree<std::shared_ptr<Postings>, false>::WordIterator;
 Top level iterator for a Term
 
 */
-// class TermIterator : public indexes::EntriesFetcherIteratorBase {
-//  public:
-//   TermIterator(const WordIterator& word, const absl::string_view data,
-//                const FieldMaskPredicate field_mask,
-//                const InternedStringSet* untracked_keys = nullptr);
-
-//   bool Done() const override;
-//   void Next() override;
-//   const InternedStringPtr& operator*() const override;
-
-//  private:
-//   WordIterator word_;
-//   std::shared_ptr<Postings> target_posting_;
-//   Postings::KeyIterator key_iter_;
-//   const absl::string_view data_;
-//   uint32_t current_idx_ = 0;
-//   bool begin_ =
-//       true;  // Used to track if we are at the beginning of the iterator.
-//   bool nomatch_ = false;
-//   const InternedStringSet* untracked_keys_;
-//   InternedStringPtr current_key_;
-//   FieldMaskPredicate field_mask_;
-// };
 class TermIterator : public TextIterator {
  public:
   TermIterator(const WordIterator& word_iter, 
@@ -70,10 +47,6 @@ class TermIterator : public TextIterator {
   uint32_t CurrentPosition() override;
   uint64_t GetFieldMask() const override;
 
-  // Optional unified iteration contract - These should be deleted
-  bool Done() const override;
-  void Next() override;
-
  private:
   const bool exact_;
   const absl::string_view data_;
@@ -85,6 +58,8 @@ class TermIterator : public TextIterator {
   Postings::PositionIterator pos_iter_;
 
   InternedStringPtr current_key_;
+  std::optional<std::uint32_t> current_position_;
+  std::optional<std::uint32_t> current_field_mask_;
   const InternedStringSet* untracked_keys_;
   bool nomatch_;
 };

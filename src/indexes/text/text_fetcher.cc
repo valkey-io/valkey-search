@@ -17,7 +17,7 @@ void TextFetcher::Next() {
 
 bool TextFetcher::Done() const {
     VMSDK_LOG(WARNING, nullptr) << "TF::Done";   
-    return iter_->Done();
+    return iter_->DoneKeys();
 }
 
 const InternedStringPtr& TextFetcher::operator*() const {

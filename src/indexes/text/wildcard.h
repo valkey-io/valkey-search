@@ -80,10 +80,6 @@ class WildCardIterator : public TextIterator {
   uint32_t CurrentPosition() override;
   uint64_t GetFieldMask() const override;
 
-  // Optional unified iteration contract - These should be deleted
-  bool Done() const override;
-  void Next() override;
-
  private:
   const absl::string_view data_;
   const uint32_t field_mask_;
@@ -95,6 +91,8 @@ class WildCardIterator : public TextIterator {
   WildCardOperation operation_;
 
   InternedStringPtr current_key_;
+  std::optional<uint32_t> current_position_;
+  std::optional<uint64_t> current_field_mask_;
   const InternedStringSet* untracked_keys_;
   bool nomatch_;
 };

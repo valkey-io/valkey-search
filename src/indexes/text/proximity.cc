@@ -46,11 +46,8 @@ ProximityIterator::ProximityIterator(std::vector<std::unique_ptr<TextIterator>>&
     }
 }
 
-void ProximityIterator::Next() {
-}
-
 bool ProximityIterator::NextKey() {
-    VMSDK_LOG(WARNING, nullptr) << "PI::Next1";    
+    VMSDK_LOG(WARNING, nullptr) << "PI::NextKey1";
     for (;;) {
         if (done_) return false;
         // 1) Advance any child iterators that are still sitting on the old key.
@@ -76,10 +73,6 @@ bool ProximityIterator::NextKey() {
         // otherwise, loop and try again (defensive).
     }
     return false;
-}
-bool ProximityIterator::Done() const {
-    VMSDK_LOG(WARNING, nullptr) << "PI::Done";   
-    return done_;
 }
 
 bool ProximityIterator::DoneKeys() const {
@@ -119,10 +112,10 @@ uint64_t ProximityIterator::GetFieldMask() const {
 // ---- Internal helpers ----
 
 bool ProximityIterator::NextKeyMain() {
-    VMSDK_LOG(WARNING, nullptr) << "PI::NextKey";
+    VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain";
 
     if (iters_.empty()) {
-        VMSDK_LOG(WARNING, nullptr) << "PI::NextKey Done 1";
+        VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain Done 1";
         done_ = true;
         return false;
     }
@@ -142,7 +135,7 @@ bool ProximityIterator::NextKeyMain() {
             auto k = iter->CurrentKey();
             if (!k) {
                 done_ = true;
-                VMSDK_LOG(WARNING, nullptr) << "PI::NextKey child CurrentKey() null -> exhausted";
+                VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain child CurrentKey() null -> exhausted";
                 return false;
             }
             if (!min_key || k->Str() < min_key->Str()) min_key = k;
@@ -152,7 +145,7 @@ bool ProximityIterator::NextKeyMain() {
         // 2) If everyone is already equal -> we found a common key
         if (min_key->Str() == max_key->Str()) {
             current_key_ = max_key;
-            VMSDK_LOG(WARNING, nullptr) << "PI::NextKey found common key " << current_key_->Str();
+            VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain found common key " << current_key_->Str();
             return true;
         }
 
@@ -163,11 +156,11 @@ bool ProximityIterator::NextKeyMain() {
                    iter->CurrentKey() &&
                    iter->CurrentKey()->Str() < max_key->Str()) {
                 VMSDK_LOG(WARNING, nullptr)
-                    << "PI::NextKey advancing child from " << iter->CurrentKey()->Str()
+                    << "PI::NextKeyMain advancing child from " << iter->CurrentKey()->Str()
                     << " toward " << max_key->Str();
                 if (!iter->NextKey()) {
                     done_ = true;
-                    VMSDK_LOG(WARNING, nullptr) << "PI::NextKey child exhausted while advancing";
+                    VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain child exhausted while advancing";
                     return false;
                 }
                 advanced_any = true;
@@ -186,10 +179,10 @@ bool ProximityIterator::NextKeyMain() {
             for (auto& iter : iters_) {
                 if (iter->CurrentKey() && iter->CurrentKey()->Str() == min_key->Str()) {
                     VMSDK_LOG(WARNING, nullptr)
-                        << "PI::NextKey safety advance from stuck min " << min_key->Str();
+                        << "PI::NextKeyMain safety advance from stuck min " << min_key->Str();
                     if (!iter->NextKey()) {
                         done_ = true;
-                        VMSDK_LOG(WARNING, nullptr) << "PI::NextKey child exhausted in safety advance";
+                        VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain child exhausted in safety advance";
                         return false;
                     }
                     break;

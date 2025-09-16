@@ -721,7 +721,7 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithArray(ctx, 24);
+  ValkeyModule_ReplyWithArray(ctx, 22);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
 
@@ -750,9 +750,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
 
   ValkeyModule_ReplyWithSimpleString(ctx, "num_docs");
   ValkeyModule_ReplyWithLongLong(ctx, stats_.document_cnt);
-  // hard-code num_terms to 0 as it's related to fulltext indexes:
-  ValkeyModule_ReplyWithSimpleString(ctx, "num_terms");
-  ValkeyModule_ReplyWithLongLong(ctx, 0);
   ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
   ValkeyModule_ReplyWithLongLong(ctx, CountRecords());
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");

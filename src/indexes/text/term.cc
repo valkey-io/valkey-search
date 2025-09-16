@@ -71,7 +71,7 @@ bool TermIterator::NextKey() {
 
 const InternedStringPtr& TermIterator::CurrentKey() {
   VMSDK_LOG(WARNING, nullptr) << "TI::CurrentKey{" << word_iter_.GetWord() << "}";
-  // CHECK(current_key_ != nullptr); // TODO: Add back when the rest of code follows the contract of not calling this when null.
+  CHECK(current_key_ != nullptr);
   return current_key_;
 }
 

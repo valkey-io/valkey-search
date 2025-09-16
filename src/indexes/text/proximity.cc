@@ -102,7 +102,6 @@ uint64_t ProximityIterator::GetFieldMask() const {
         common_fields &= iters_[i]->GetFieldMask();
         // Using the intersection of field masks, check if any field is common
         if (common_fields == 0) {
-            // valid = false;
             CHECK(false) << "ProximityIterator::GetFieldMask - Mismatched field masks in child iterators";
         }
     }
@@ -113,48 +112,36 @@ uint64_t ProximityIterator::GetFieldMask() const {
 
 bool ProximityIterator::NextKeyMain() {
     VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain";
-
     if (iters_.empty()) {
         VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain Done 1";
         done_ = true;
         return false;
     }
-
     for (;;) {
         // 1) Validate children and compute min/max among current keys
         InternedStringPtr min_key = nullptr;
         InternedStringPtr max_key = nullptr;
-
         for (auto& iter : iters_) {
             // I suggest commenting this out
-            // if (iter->DoneKeys()) {
-            //     done_ = true;
-            //     VMSDK_LOG(WARNING, nullptr) << "PI::NextKey child done -> exhausted";
-            //     return false;
-            // }
-            auto k = iter->CurrentKey();
-            if (!k) {
+            if (iter->DoneKeys()) {
                 done_ = true;
-                VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain child CurrentKey() null -> exhausted";
+                VMSDK_LOG(WARNING, nullptr) << "PI::NextKey child done -> exhausted";
                 return false;
             }
+            auto k = iter->CurrentKey();
             if (!min_key || k->Str() < min_key->Str()) min_key = k;
             if (!max_key || k->Str() > max_key->Str()) max_key = k;
         }
-
         // 2) If everyone is already equal -> we found a common key
         if (min_key->Str() == max_key->Str()) {
             current_key_ = max_key;
             VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain found common key " << current_key_->Str();
             return true;
         }
-
         // 3) Advance all iterators that are strictly behind the current max_key
         bool advanced_any = false;
         for (auto& iter : iters_) {
-            while (!iter->DoneKeys() &&
-                   iter->CurrentKey() &&
-                   iter->CurrentKey()->Str() < max_key->Str()) {
+            while (!iter->DoneKeys() && iter->CurrentKey()->Str() < max_key->Str()) {
                 VMSDK_LOG(WARNING, nullptr)
                     << "PI::NextKeyMain advancing child from " << iter->CurrentKey()->Str()
                     << " toward " << max_key->Str();
@@ -172,7 +159,6 @@ bool ProximityIterator::NextKeyMain() {
             //     return false;
             // }
         }
-
         // 4) Safety: if min != max but nothing advanced, bump the (previous) min forward
         //    to guarantee progress (should be rare; mostly defensive against buggy children).
         if (!advanced_any) {
@@ -189,7 +175,6 @@ bool ProximityIterator::NextKeyMain() {
                 }
             }
         }
-
         // Loop continues: max_key may increase, or everyone may now meet at a common key.
     }
 }
@@ -197,9 +182,7 @@ bool ProximityIterator::NextKeyMain() {
 bool ProximityIterator::NextPosition() {
     VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition";
     if (done_) return false;
-
     const size_t n = iters_.size();
-    
     while (true) {
         VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition in loop";
         // Check if any iterator is done with positions
@@ -208,13 +191,11 @@ bool ProximityIterator::NextPosition() {
                 return false;
             }
         }
-
         // Collect current positions
         std::vector<uint32_t> positions(n);
         for (size_t i = 0; i < n; ++i) {
             positions[i] = iters_[i]->CurrentPosition();
         }
-
         // Check if current combination satisfies constraints
         bool valid = true;
         // First check all positions are in same field
@@ -238,7 +219,7 @@ bool ProximityIterator::NextPosition() {
         }
         if (valid) {
             current_pos_ = positions[0];
-            current_key_ = iters_[0]->CurrentKey();
+            current_key_ = iters_[0]->CurrentKey(); // Technically, we should not have moved since the previous NextMain fn.
             VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition returning as valid";
             // Advance rightmost iterator for next call
             if (!iters_[n-1]->NextPosition()) {
@@ -246,7 +227,6 @@ bool ProximityIterator::NextPosition() {
             }
             return true;
         }
-
         // // Find which iterator to advance
         // size_t advance_idx = n - 1; // default to rightmost
         // for (size_t i = 0; i + 1 < n; ++i) {
@@ -270,8 +250,6 @@ bool ProximityIterator::NextPosition() {
                 advance_idx = i;
             }
         }
-
-
         // Advance the iterator
         if (!iters_[advance_idx]->NextPosition()) {
             VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition returning false";

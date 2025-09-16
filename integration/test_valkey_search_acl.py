@@ -88,10 +88,10 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
         client.execute_command(user)
         user_name = user.split(" ")[2]
         client.execute_command(f"AUTH {user_name} search_pass")
-        # For each command assert if user should or should'nt access
+        # For each command assert if user should or shouldn't access
         for cmd, should_access in valkey_search_commands:
             self._verify_user_permissions(client, cmd, should_access)
-    # typos:ignore-start
+
     @pytest.mark.parametrize(
         "user,allowed_command",
         [
@@ -147,14 +147,13 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
         client.execute_command(user)
         user_name = user.split(" ")[2]
         client.execute_command(f"AUTH {user_name} search_pass")
-        # For each command assert if user should or should'nt access
+        # For each command assert if user should or shouldn't access
         for cmd in valkey_search_commands:
             should_access = allowed_command.lower() == cmd[0].lower()
             self._verify_user_permissions(client, cmd, should_access)
 
         info_client: Valkey = self.server.get_new_client()
         assert info_client.info("STATS")["acl_access_denied_cmd"] == 5
-    # typos:ignore-end
 
     def test_index_with_several_prefixes_permissions(self):
         client: Valkey = self.server.get_new_client()

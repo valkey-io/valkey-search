@@ -99,4 +99,4 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
         with pytest.raises(ResponseError) as excinfo:
             node0.execute_command("FT.INFO", index_name, "CLUSTER")
         
-        assert "Communication error between nodes found" or "Request timed out" in str(excinfo.value)
+        assert "Request timed out" in str(excinfo.value)

@@ -42,10 +42,7 @@ class FanoutOperationBase {
   void StartOperation(ValkeyModuleCtx* ctx) {
     blocked_client_ = std::make_unique<vmsdk::BlockedClient>(
         ctx, &Reply, &Timeout, &Free, GetTimeoutMs());
-    blocked_client_->SetReplyPrivateData(this);
     blocked_client_->MeasureTimeStart();
-    deadline_tp_ = std::chrono::steady_clock::now() +
-                   std::chrono::milliseconds(GetTimeoutMs());
     targets_ = GetTargets(ctx);
     Metrics::GetStats().fanout_retry_cnt.store(0);
     StartFanoutRound();
@@ -235,11 +232,6 @@ class FanoutOperationBase {
     return ValkeyModule_ReplyWithError(ctx, error_message.c_str());
   }
 
-  bool IsOperationTimedOut() const {
-    using namespace std::chrono;
-    return steady_clock::now() >= deadline_tp_;
-  }
-
   void RpcDone() {
     bool done = false;
     {
@@ -249,7 +241,7 @@ class FanoutOperationBase {
       }
     }
     if (done) {
-      if (!IsOperationTimedOut() && ShouldRetry()) {
+      if (ShouldRetry()) {
         ++Metrics::GetStats().fanout_retry_cnt;
         ResetBaseForRetry();
         ResetForRetry();
@@ -262,6 +254,7 @@ class FanoutOperationBase {
 
   virtual void OnCompletion() {
     CHECK(blocked_client_);
+    blocked_client_->SetReplyPrivateData(this);
     blocked_client_->UnblockClient();
   }
 
@@ -271,7 +264,6 @@ class FanoutOperationBase {
   std::vector<FanoutSearchTarget> index_name_error_nodes;
   std::vector<FanoutSearchTarget> inconsistent_state_error_nodes;
   std::vector<FanoutSearchTarget> communication_error_nodes;
-  std::chrono::steady_clock::time_point deadline_tp_;
   std::vector<FanoutSearchTarget> targets_;
 };
 

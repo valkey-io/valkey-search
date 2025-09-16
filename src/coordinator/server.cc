@@ -32,11 +32,11 @@
 #include "src/index_schema.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
-#include "src/query/fanout_operation_base.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
-#include "valkey_search_options.h"
+#include "src/valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -112,6 +112,7 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
     grpc::CallbackServerContext* context,
     const SearchIndexPartitionRequest* request,
     SearchIndexPartitionResponse* response) {
+  PAUSEPOINT("Search.gRPC");
   GRPCSuspensionGuard guard(GRPCSuspender::Instance());
   auto latency_sample = SAMPLE_EVERY_N(100);
   grpc::ServerUnaryReactor* reactor = context->DefaultReactor();

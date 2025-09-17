@@ -9,45 +9,122 @@
 
 namespace valkey_search::indexes::text {
 
-TermIterator::TermIterator(const WordIterator& word,
+TermIterator::TermIterator(const WordIterator& word_iter,
+                           bool exact,
                            const absl::string_view data,
-                           const FieldMaskPredicate field_mask,
+                           const uint32_t field_mask,
                            const InternedStringSet* untracked_keys)
-    : word_(word),
+    : exact_(exact),
       data_(data),
       field_mask_(field_mask),
-      untracked_keys_(untracked_keys) {}
+      word_iter_(word_iter),
+      target_posting_(nullptr),      // initialize shared_ptr to null
+      key_iter_(),                   // default-initialize iterator
+      pos_iter_(),                   // default-initialize iterator
+      current_key_(nullptr),         // no key yet
+      current_position_(std::nullopt),
+      current_field_mask_(std::nullopt),
+      untracked_keys_(untracked_keys),
+      nomatch_(false)                // start as "not done"
+{
+  VMSDK_LOG(WARNING, nullptr) << "TI::init{" << data_ << "}. nomatch_: " << nomatch_;
+  if (word_iter_.Done()) {
+    VMSDK_LOG(WARNING, nullptr) << "TI::nomatch1{" << data_ << "}";
+    nomatch_ = true;
+    return;
+  }
+  target_posting_ = word_iter_.GetTarget();
+  key_iter_ = target_posting_->GetKeyIterator();
+  // Prime the first key and position if they exist.
+  if (!TermIterator::NextKey()) {
+    VMSDK_LOG(WARNING, nullptr) << "TI::nomatch2{" << word_iter_.GetWord() << "}";
+    nomatch_ = true;
+    return;
+  }
+  if (!TermIterator::NextPosition()) {
+    VMSDK_LOG(WARNING, nullptr) << "TI::nomatch3{" << word_iter_.GetWord() << "}";
+    nomatch_ = true;
+  }
+}
 
-bool TermIterator::Done() const {
-  if (nomatch_ || word_.GetWord() != data_) {
+bool TermIterator::NextKey() {
+  VMSDK_LOG(WARNING, nullptr) << "TI::NextKey{" << word_iter_.GetWord() << "}";
+  if (nomatch_) return false;
+  if (current_key_) {
+      key_iter_.NextKey();
+  }
+  // Loop until we find a key that satisfies the field mask
+  while (key_iter_.IsValid()) {
+    if (key_iter_.ContainsFields(field_mask_)) {
+        current_key_ = key_iter_.GetKey();
+        pos_iter_ = key_iter_.GetPositionIterator();
+        VMSDK_LOG(WARNING, nullptr) << "TI::NextKey{" << word_iter_.GetWord() << "} - Found key. CurrentKey: " << current_key_->Str() << " Position: " << pos_iter_.GetPosition();;
+        return true;
+    }
+    key_iter_.NextKey();
+  }
+  // No more valid keys
+  current_key_ = nullptr;
+  nomatch_ = true;
+  return false;
+}
+
+const InternedStringPtr& TermIterator::CurrentKey() {
+  VMSDK_LOG(WARNING, nullptr) << "TI::CurrentKey{" << word_iter_.GetWord() << "}";
+  CHECK(current_key_ != nullptr);
+  return current_key_;
+}
+
+// Note: Right now, we expect the caller site to move to the next key when the positions are exhausted.
+// Need to think about whether this is the right contract.
+bool TermIterator::NextPosition() {
+  VMSDK_LOG(WARNING, nullptr) << "TI::NextPosition{" << word_iter_.GetWord() << "}";
+  if (nomatch_) return false;
+  if (current_position_.has_value()) {
+      pos_iter_.NextPosition();
+  }
+  // Loop until we find a position that satisfies the field mask
+  while (pos_iter_.IsValid()) {
+    if (pos_iter_.GetFieldMask() & field_mask_) {
+      current_position_ = pos_iter_.GetPosition();
+      current_field_mask_ = pos_iter_.GetFieldMask();
+      return true;
+    }
+    pos_iter_.NextPosition();
+  }
+  // No more valid positions
+  current_position_ = std::nullopt;
+  nomatch_ = true;
+  return false;
+}
+
+std::pair<uint32_t, uint32_t> TermIterator::CurrentPosition() {
+  VMSDK_LOG(WARNING, nullptr) << "TI::CurrentPosition{" << word_iter_.GetWord() << "}";
+  CHECK(current_position_.has_value());
+  // return current_position_.value();
+  return std::make_pair(current_position_.value(), current_position_.value());
+}
+
+uint64_t TermIterator::CurrentFieldMask() const {
+  VMSDK_LOG(WARNING, nullptr) << "TI::CurrentFieldMask{" << word_iter_.GetWord() << "}";
+  CHECK(current_field_mask_.has_value());
+  return current_field_mask_.value();
+} 
+
+bool TermIterator::DoneKeys() const {
+  VMSDK_LOG(WARNING, nullptr) << "TI::DoneKeys{" << word_iter_.GetWord() << "}";
+  if (nomatch_) {
     return true;
   }
-  // Check if key iterator is valid
   return !key_iter_.IsValid();
 }
 
-void TermIterator::Next() {
-  // On a Begin() call, we initialize the target_posting_ and key_iter_.
-  if (begin_) {
-    if (word_.Done()) {
-      nomatch_ = true;
-      return;
-    }
-    target_posting_ = word_.GetTarget();
-    key_iter_ = target_posting_->GetKeyIterator();
-    begin_ = false;  // Set to false after the first call to Next.
-  } else {
-    key_iter_.NextKey();
+bool TermIterator::DonePositions() const {
+  VMSDK_LOG(WARNING, nullptr) << "TI::DonePositions{" << word_iter_.GetWord() << "}";
+  if (nomatch_) {
+    return true;
   }
-  // Advance until we find a valid key or reach the end
-  while (!Done() && !key_iter_.ContainsFields(field_mask_)) {
-    key_iter_.NextKey();
-  }
-}
-
-const InternedStringPtr& TermIterator::operator*() const {
-  // Return the current key from the key iterator of the posting object.
-  return key_iter_.GetKey();
+  return !pos_iter_.IsValid();
 }
 
 }  // namespace valkey_search::indexes::text

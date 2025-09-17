@@ -49,10 +49,10 @@ This algorithm operates in time O(#SuffixMatches)
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/radix_tree.h"
 #include "src/utils/string_interning.h"
+#include "src/indexes/text/text_iterator.h"
 
 namespace valkey_search::indexes::text {
 
-using FieldMaskPredicate = uint64_t;
 using WordIterator = RadixTree<std::shared_ptr<Postings>, false>::WordIterator;
 
 enum WildCardOperation {
@@ -61,66 +61,41 @@ enum WildCardOperation {
   kInfix,
 };
 
-struct WildCardIterator : public indexes::EntriesFetcherIteratorBase {
-  WildCardIterator(const WordIterator& word, const WildCardOperation operation,
-                   const FieldMaskPredicate field_mask,
-                   const InternedStringSet* untracked_keys = nullptr);
+class WildCardIterator : public TextIterator {
+ public:
+  WildCardIterator(const WordIterator& word_iter,
+               const WildCardOperation operation,
+               const absl::string_view data,
+               const uint32_t field_mask,
+               const InternedStringSet* untracked_keys = nullptr);
 
-  // Points to valid Word?
-  bool Done() const override;
+  // Key-level iteration
+  bool DoneKeys() const override;
+  bool NextKey() override;
+  const InternedStringPtr& CurrentKey() override;
 
-  // Go to next word
-  void Next() override;
-
-  const InternedStringPtr& operator*() const override;
+  // Position-level iteration
+  bool DonePositions() const override;
+  bool NextPosition() override;
+  std::pair<uint32_t, uint32_t> CurrentPosition() override;
+  uint64_t CurrentFieldMask() const override;
 
  private:
-  WordIterator word_;
+  const absl::string_view data_;
+  const uint32_t field_mask_;
+
+  WordIterator word_iter_;
   std::shared_ptr<Postings> target_posting_;
   Postings::KeyIterator key_iter_;
-  bool begin_ =
-      true;  // Used to track if we are at the beginning of the iterator.
-  const InternedStringSet* untracked_keys_;
-  InternedStringPtr current_key_;
+  Postings::PositionIterator pos_iter_;
   WildCardOperation operation_;
-  FieldMaskPredicate field_mask_;
-  bool nomatch_ = false;
+
+  InternedStringPtr current_key_;
+  std::optional<uint32_t> current_position_;
+  std::optional<uint64_t> current_field_mask_;
+  const InternedStringSet* untracked_keys_;
+  bool nomatch_;
 };
-
-// struct WildCardIterator : public WordIterator {
-//   using Posting = typename Postings::Posting;
-//   // Use this form when there's no suffix tree available.
-//   WildCardIterator(absl::string_view prefix, absl::string_view suffix,
-//                    const RadixTree<Postings>& prefix_tree);
-
-//   // Use this form when a suffix tree IS available.
-//   WildCardIterator(absl::string_view prefix, absl::string_view suffix,
-//                    const RadixTree<Postings>& prefix_tree,
-//                    const RadixTree<Postings>& suffix_tree);
-
-//   // Points to valid Word?
-//   bool Done() const override;
-
-//   // Go to next word
-//   void Next() override;
-
-//   // Seek forward to word that's equal or greater
-//   // returns true => found equal word, false => didn't find equal word
-//   bool SeekForward(absl::string_view word);
-
-//   // Access the iterator, will assert if !IsValid()
-//   absl::string_view GetWord() const override;
-//   Posting& GetPosting() const;
-
-//   absl::string_view GetPrefix() const { return prefix_; }
-//   absl::string_view GetSuffix() const { return suffix_; }
-
-//  private:
-//   absl::string_view prefix_;
-//   absl::string_view suffix_;
-//   // the one to iterator over, could be temporary or not....
-//   std::shared_ptr<RadixTree<Postings *>> radix_tree_;
-// };
 
 }  // namespace valkey_search::indexes::text
 

@@ -23,6 +23,8 @@
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "src/indexes/text/text_fetcher.h"
+#include "src/indexes/text/proximity.h"
 
 namespace valkey_search::indexes {
 
@@ -89,6 +91,8 @@ class Text : public IndexBase {
           field_mask_(field_mask) {}
 
     size_t Size() const override;
+
+    std::unique_ptr<text::TextIterator> BuildTextIterator(const query::TextPredicate* predicate);
 
     // Factory method that creates the appropriate text iterator
     // based on the text predicate's operation type.

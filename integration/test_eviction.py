@@ -118,9 +118,7 @@ class TestEviction(ValkeySearchTestCaseBase):
                 except OutOfMemoryError:
                     oom_retries += 1
                     if oom_retries >= max_oom_retries:
-                        # If we've hit max retries, reduce batch size and continue
-                        batch_size = max(10, batch_size // 2)
-                        break
+                        raise Exception(f"Failed to load data after {max_oom_retries} OOM retries")
                     # Wait for eviction and retry
                     time.sleep(0.1)
             
@@ -153,7 +151,7 @@ class TestEviction(ValkeySearchTestCaseBase):
                 break
             except OutOfMemoryError:
                 if attempt == max_retries - 1:
-                    raise
+                    raise Exception(f"Search operations failed after {max_retries} OOM retries")
                 time.sleep(0.1)
 
     def _verify_search_operations(

@@ -2,6 +2,9 @@
 
 namespace valkey_search::indexes::text {
 
+// TODO: Each loop needs to be smart and safe and always have a logicl exit path.
+// For "recursive like" loops, we need a limit on max iterations.
+
 ProximityIterator::ProximityIterator(std::vector<std::unique_ptr<TextIterator>>&& iters,
                                      size_t slop,
                                      bool in_order,
@@ -50,8 +53,7 @@ ProximityIterator::ProximityIterator(std::vector<std::unique_ptr<TextIterator>>&
 
 bool ProximityIterator::NextKey() {
     VMSDK_LOG(WARNING, nullptr) << "PI::NextKey1";
-    for (;;) {
-        if (done_) return false;
+    while (!done_) {
         // 1) Advance any child iterators that are still sitting on the old key.
         for (auto& c : iters_) {
             if (!c->DoneKeys() && c->CurrentKey() == current_key_) {
@@ -60,8 +62,8 @@ bool ProximityIterator::NextKey() {
         }
         // 2) Align all children to the next common key
         if (!NextKeyMain()) {
-            // NextKeyMain sets done_ on child exhaustion but be safe here too
-            done_ = true;
+            // // NextKeyMain sets done_ on child exhaustion but be safe here too
+            // done_ = true;
             return false;
         }
         // For nested proximity, we need to check if the start and end positions match the slop and order.
@@ -77,11 +79,15 @@ bool ProximityIterator::NextKey() {
     return false;
 }
 
+// TODO: Implement the correct behavior that also works on Nested cases.
+// This should tell us when there are no more keys
 bool ProximityIterator::DoneKeys() const {
     VMSDK_LOG(WARNING, nullptr) << "PI::DoneKeys";   
     return done_;
 }
 
+// TODO: Implement the correct behavior that also works on Nested cases.
+// This should tell us when there are no more position combinations on the current key.
 bool ProximityIterator::DonePositions() const {
     VMSDK_LOG(WARNING, nullptr) << "PI::DonePositions";   
     return done_;
@@ -112,8 +118,6 @@ uint64_t ProximityIterator::CurrentFieldMask() const {
     return common_fields;
 }
 
-// ---- Internal helpers ----
-
 bool ProximityIterator::NextKeyMain() {
     VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain";
     if (iters_.empty()) {
@@ -121,7 +125,7 @@ bool ProximityIterator::NextKeyMain() {
         done_ = true;
         return false;
     }
-    for (;;) {
+    while (!done_) {
         // 1) Validate children and compute min/max among current keys
         InternedStringPtr min_key = nullptr;
         InternedStringPtr max_key = nullptr;
@@ -144,6 +148,7 @@ bool ProximityIterator::NextKeyMain() {
         // 3) Advance all iterators that are strictly behind the current max_key
         bool advanced_any = false;
         for (auto& iter : iters_) {
+            // TODO: Replace this block with SeekForward on the Key.
             while (!iter->DoneKeys() && iter->CurrentKey()->Str() < max_key->Str()) {
                 VMSDK_LOG(WARNING, nullptr)
                     << "PI::NextKeyMain advancing child from " << iter->CurrentKey()->Str()
@@ -155,38 +160,35 @@ bool ProximityIterator::NextKeyMain() {
                 }
                 advanced_any = true;
             }
-            // I suggest commenting this out
-            // if (iter->DoneKeys()) {
-            //     done_ = true;
-            //     VMSDK_LOG(WARNING, nullptr) << "PI::NextKey child became done after advancing";
-            //     return false;
-            // }
         }
-        // 4) Safety: if min != max but nothing advanced, bump the (previous) min forward
-        //    to guarantee progress (should be rare; mostly defensive against buggy children).
-        if (!advanced_any) {
-            for (auto& iter : iters_) {
-                if (iter->CurrentKey() && iter->CurrentKey()->Str() == min_key->Str()) {
-                    VMSDK_LOG(WARNING, nullptr)
-                        << "PI::NextKeyMain safety advance from stuck min " << min_key->Str();
-                    if (!iter->NextKey()) {
-                        done_ = true;
-                        VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain child exhausted in safety advance";
-                        return false;
-                    }
-                    break;
-                }
-            }
-        }
+        // TODO: Think about whether this is really possible.
+        // IMO, we should crash if min != max but !advanced_any.
+        // // 4) Safety: if min != max but nothing advanced, bump the (previous) min forward
+        // //    to guarantee progress (should be rare; mostly defensive against buggy children).
+        // if (!advanced_any) {
+        //     for (auto& iter : iters_) {
+        //         if (iter->CurrentKey() && iter->CurrentKey()->Str() == min_key->Str()) {
+        //             VMSDK_LOG(WARNING, nullptr)
+        //                 << "PI::NextKeyMain safety advance from stuck min " << min_key->Str();
+        //             if (!iter->NextKey()) {
+        //                 done_ = true;
+        //                 VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain child exhausted in safety advance";
+        //                 return false;
+        //             }
+        //             break;
+        //         }
+        //     }
+        // }
         // Loop continues: max_key may increase, or everyone may now meet at a common key.
     }
+    return false;
 }
 
 bool ProximityIterator::NextPosition() {
     VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition";
     if (done_) return false;
     const size_t n = iters_.size();
-    while (true) {
+    while (!done_) {
         VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition in loop";
         // Check if any iterator is done with positions
         for (size_t i = 0; i < n; ++i) {
@@ -230,22 +232,6 @@ bool ProximityIterator::NextPosition() {
             }
             return true;
         }
-        // // Find which iterator to advance
-        // size_t advance_idx = n - 1; // default to rightmost
-        // for (size_t i = 0; i + 1 < n; ++i) {
-        //     if (iters_[i]->GetFieldMask() != iters_[i + 1]->GetFieldMask()) {
-        //         // Advance iterator with smaller field
-        //         advance_idx = (iters_[i]->GetFieldMask() < iters_[i + 1]->GetFieldMask()) ? i : i + 1;
-        //         break;
-        //     }
-        //     else if (in_order_ && positions[i] >= positions[i + 1]) {
-        //         advance_idx = i + 1; // advance right iterator
-        //         break;
-        //     } else if (in_order_ && positions[i + 1] - positions[i] - 1 > slop_) {
-        //         advance_idx = i; // advance left iterator when it's lagging
-        //         break;
-        //     }
-        // }
         // Always advance iterator with smallest position
         size_t advance_idx = 0;
         for (size_t i = 1; i < n; ++i) {
@@ -254,11 +240,13 @@ bool ProximityIterator::NextPosition() {
             }
         }
         // Advance the iterator
+        // TODO: Use the seek forward capability to seek to the required position
         if (!iters_[advance_idx]->NextPosition()) {
             VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition returning false";
             return false;
         }
     }
+    return false;
 }
 
 }  // namespace valkey_search::indexes::text

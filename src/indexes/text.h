@@ -92,6 +92,8 @@ class Text : public IndexBase {
 
     size_t Size() const override;
 
+    std::unique_ptr<text::TextIterator> BuildTextIterator(const query::TextPredicate* predicate);
+
     // Factory method that creates the appropriate text iterator
     // based on the text predicate's operation type.
     std::unique_ptr<EntriesFetcherIteratorBase> Begin() override;

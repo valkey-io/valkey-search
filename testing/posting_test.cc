@@ -64,7 +64,7 @@ class PostingTest : public ValkeySearchTest {
 TEST_F(PostingTest, PostingEmptyOperations) {
   EXPECT_TRUE(boolean_postings_->IsEmpty());
   EXPECT_EQ(boolean_postings_->GetKeyCount(), 0);
-  EXPECT_EQ(boolean_postings_->GetPostingCount(), 0);
+  EXPECT_EQ(boolean_postings_->GetPositionCount(), 0);
   EXPECT_EQ(boolean_postings_->GetTotalTermFrequency(), 0);
 }
 
@@ -79,7 +79,7 @@ TEST_F(PostingTest, BooleanSearchInsertPosting) {
 
   EXPECT_FALSE(boolean_postings_->IsEmpty());
   EXPECT_EQ(boolean_postings_->GetKeyCount(), 2);
-  EXPECT_EQ(boolean_postings_->GetPostingCount(),
+  EXPECT_EQ(boolean_postings_->GetPositionCount(),
             2);  // One position per key (always position 0)
   EXPECT_EQ(boolean_postings_->GetTotalTermFrequency(),
             3);  // Three field occurrences total
@@ -96,7 +96,7 @@ TEST_F(PostingTest, PositionalSearchInsertPosting) {
       10);  // field 2, position 10 (same position, different field)
 
   EXPECT_EQ(positional_postings_->GetKeyCount(), 1);
-  EXPECT_EQ(positional_postings_->GetPostingCount(),
+  EXPECT_EQ(positional_postings_->GetPositionCount(),
             2);  // Two unique positions (10, 20)
   EXPECT_EQ(positional_postings_->GetTotalTermFrequency(),
             3);  // Three field occurrences total
@@ -106,7 +106,7 @@ TEST_F(PostingTest, PositionalSearchInsertPosting) {
   positional_postings_->InsertPosting(InternKey("doc2"), 0, 15);
 
   EXPECT_EQ(positional_postings_->GetKeyCount(), 2);
-  EXPECT_EQ(positional_postings_->GetPostingCount(),
+  EXPECT_EQ(positional_postings_->GetPositionCount(),
             4);  // Two positions per document
   EXPECT_EQ(positional_postings_->GetTotalTermFrequency(),
             5);  // Five field occurrences total
@@ -120,7 +120,7 @@ TEST_F(PostingTest, InsertPostingDefaultPosition) {
       InternKey("doc1"), 1);  // Default position ignored in boolean mode
 
   EXPECT_EQ(boolean_postings_->GetKeyCount(), 1);
-  EXPECT_EQ(boolean_postings_->GetPostingCount(), 1);  // Only one position (0)
+  EXPECT_EQ(boolean_postings_->GetPositionCount(), 1);  // Only one position (0)
   EXPECT_EQ(boolean_postings_->GetTotalTermFrequency(),
             2);  // Two field occurrences at position 0
 }
@@ -135,7 +135,7 @@ TEST_F(PostingTest, RemoveKey) {
   // Remove one key
   positional_postings_->RemoveKey(InternKey("doc1"));
   EXPECT_EQ(positional_postings_->GetKeyCount(), 1);
-  EXPECT_EQ(positional_postings_->GetPostingCount(), 1);
+  EXPECT_EQ(positional_postings_->GetPositionCount(), 1);
 
   // Remove non-existent key (should be no-op)
   positional_postings_->RemoveKey(InternKey("nonexistent"));
@@ -156,7 +156,7 @@ TEST_F(PostingTest, LargeScaleOperations) {
   }
 
   EXPECT_EQ(positional_postings_->GetKeyCount(), 100);
-  EXPECT_EQ(positional_postings_->GetPostingCount(),
+  EXPECT_EQ(positional_postings_->GetPositionCount(),
             1000);  // 100 docs * 10 positions each
   EXPECT_EQ(positional_postings_->GetTotalTermFrequency(),
             1000);  // One field per position
@@ -180,7 +180,7 @@ TEST_F(PostingTest, SingleFieldOptimization) {
 
   // Verify posting works correctly with single field optimization
   EXPECT_EQ(single_field_posting.GetKeyCount(), 2);
-  EXPECT_EQ(single_field_posting.GetPostingCount(), 3);
+  EXPECT_EQ(single_field_posting.GetPositionCount(), 3);
   EXPECT_EQ(single_field_posting.GetTotalTermFrequency(), 3);
 }
 
@@ -195,7 +195,7 @@ TEST_F(PostingTest, BooleanVsPositionalBehavior) {
   boolean_postings_->InsertPosting(InternKey("doc1"), 2,
                                    300);  // position 300 ignored
 
-  EXPECT_EQ(boolean_postings_->GetPostingCount(), 1);  // All at position 0
+  EXPECT_EQ(boolean_postings_->GetPositionCount(), 1);  // All at position 0
   EXPECT_EQ(boolean_postings_->GetTotalTermFrequency(), 3);  // Three fields
 
   // Positional mode: positions respected
@@ -203,7 +203,7 @@ TEST_F(PostingTest, BooleanVsPositionalBehavior) {
   positional_postings_->InsertPosting(InternKey("doc1"), 1, 200);
   positional_postings_->InsertPosting(InternKey("doc1"), 2, 300);
 
-  EXPECT_EQ(positional_postings_->GetPostingCount(),
+  EXPECT_EQ(positional_postings_->GetPositionCount(),
             3);  // Three different positions
   EXPECT_EQ(positional_postings_->GetTotalTermFrequency(), 3);  // Three fields
 }
@@ -216,7 +216,7 @@ TEST_F(PostingTest, MultipleInsertPostingCalls) {
   positional_postings_->InsertPosting(InternKey("doc1"), 1,
                                       10);  // Add field 1 to position 10
 
-  EXPECT_EQ(positional_postings_->GetPostingCount(),
+  EXPECT_EQ(positional_postings_->GetPositionCount(),
             3);  // Three unique positions (10, 20, 30)
   EXPECT_EQ(positional_postings_->GetTotalTermFrequency(),
             4);  // Four field occurrences

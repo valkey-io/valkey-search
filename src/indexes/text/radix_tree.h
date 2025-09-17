@@ -66,6 +66,8 @@ into the codebase efficiently enough to be deployed in production code.
 #include "absl/functional/function_ref.h"
 #include "absl/log/check.h"
 #include "absl/strings/string_view.h"
+#include "vmsdk/src/memory_tracker.h"
+#include "vmsdk/src/memory_allocation_overrides.h"
 
 namespace valkey_search::indexes::text {
 
@@ -85,6 +87,7 @@ struct RadixTree {
   struct WordIterator;
   struct PathIterator;
   RadixTree() = default;
+  ~RadixTree() = default;
 
   //
   // This function is the only way to mutate the RadixTree, all other functions
@@ -122,6 +125,10 @@ struct RadixTree {
 
   // Create a Path iterator at a specific starting prefix
   PathIterator GetPathIterator(absl::string_view prefix) const;
+
+  // Memory tracking
+  static MemoryPool memory_pool_;
+  static int64_t GetMemoryUsage();
 
  private:
   /*
@@ -260,10 +267,20 @@ struct RadixTree {
   };
 };
 
+// Static memory pool for RadixTree instances
+template <typename Target, bool reverse>
+MemoryPool RadixTree<Target, reverse>::memory_pool_{0};
+
+template <typename Target, bool reverse>
+int64_t RadixTree<Target, reverse>::GetMemoryUsage() {
+  return memory_pool_.GetUsage();
+}
+
 template <typename Target, bool reverse>
 void RadixTree<Target, reverse>::Mutate(
     absl::string_view word,
     absl::FunctionRef<std::optional<Target>(std::optional<Target>)> mutate) {
+  IsolatedMemoryScope scope{memory_pool_};
   CHECK(!word.empty()) << "Can't mutate the target at an empty word";
   Node* n = &root_;
   absl::string_view remaining = word;

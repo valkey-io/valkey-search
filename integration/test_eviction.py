@@ -21,7 +21,6 @@ class TestEviction(ValkeySearchTestCaseBase):
         "volatile-random",
         "volatile-ttl",
     ]
-
     @pytest.mark.parametrize("eviction_policy", EVICTION_POLICIES)
     def test_eviction_with_search_index(self, eviction_policy):
         """
@@ -70,17 +69,9 @@ class TestEviction(ValkeySearchTestCaseBase):
         # This should be enough for initial data but will trigger eviction when we add more
         current_used_memory = client.info("memory")["used_memory"]
         
-        # For noeviction, set tight limit; for others, allow some buffer
-        if policy == "noeviction":
-            client.config_set("maxmemory", current_used_memory)
-        else:
-            # Set limit slightly above current usage to allow for eviction overhead
-            client.config_set("maxmemory", int(current_used_memory * 1.05))
-        
+
+        client.config_set("maxmemory", current_used_memory)
         client.config_set("maxmemory-policy", policy)
-        
-        # Wait for configuration to take effect
-        time.sleep(0.1)
 
     def _test_noeviction_behavior(
         self, client: Valkey, index: Index, initial_docs: int

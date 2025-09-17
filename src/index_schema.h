@@ -104,7 +104,6 @@ class IndexSchema : public KeyspaceEventSubscription,
                         std::shared_ptr<indexes::IndexBase> index);
 
   void RespondWithInfo(ValkeyModuleCtx *ctx) const;
-  bool HasTextFields() const;
 
   inline const AttributeDataType &GetAttributeDataType() const override {
     return *attribute_data_type_;

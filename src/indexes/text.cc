@@ -92,7 +92,8 @@ int Text::RespondWithInfo(ValkeyModuleCtx* ctx) const {
     ValkeyModule_ReplyWithSimpleString(ctx, "MIN_STEM_SIZE");
     ValkeyModule_ReplyWithLongLong(ctx, min_stem_size_);
   }
-  // Text fields do not include a size field (unlike numeric/tag/vector fields)
+  // Text fields do not include a size field right now (unlike
+  // numeric/tag/vector fields)
   return 6;
 }
 

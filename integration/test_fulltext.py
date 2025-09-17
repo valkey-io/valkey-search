@@ -4,6 +4,7 @@ from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
 from ft_info_parser import FTInfoParser
+from valkeytestframework.util import waiters
 
 """
 This file contains tests for full text search.
@@ -204,19 +205,25 @@ class TestFullText(ValkeySearchTestCaseBase):
         tag_attr = parser.get_attribute_by_name("category")
         assert tag_attr["type"] == "TAG"
         assert tag_attr.get("SEPARATOR") == "|"
-        
-        # Add validation checks for specific fields
-        assert parser.num_docs >= 0, f"num_docs should be non-negative, got: {parser.num_docs}"
-        assert parser.num_records >= 0, f"num_records should be non-negative, got: {parser.num_records}"
-        assert parser.hash_indexing_failures >= 0, f"hash_indexing_failures should be non-negative, got: {parser.hash_indexing_failures}"
+
+        def check_is_backfill_complete(idxname):
+            """
+            Helper function to check if backfill is complete.
+            """
+            info = client.execute_command("FT.INFO", idxname)
+            parser = FTInfoParser(info)
+            return parser.is_backfill_complete()
         
         # Validate backfill fields
-        assert isinstance(parser.backfill_in_progress, bool), f"backfill_in_progress should be boolean, got: {type(parser.backfill_in_progress)}"
-        assert isinstance(parser.backfill_complete_percent, (int, float)), f"backfill_complete_percent should be numeric, got: {type(parser.backfill_complete_percent)}"
-        assert 0.0 <= parser.backfill_complete_percent <= 1.0, f"backfill_complete_percent should be between 0.0 and 1.0, got: {parser.backfill_complete_percent}"
+        waiters.wait_for_equal(lambda: check_is_backfill_complete("idx4"), True, timeout=5)
+        
+        # Add validation checks for specific fields
+        assert parser.num_docs == 0, f"num_docs should be zero"
+        assert parser.num_records == 0, f"num_records should be zero"
+        assert parser.hash_indexing_failures == 0, f"hash_indexing_failures should be zero"
         
         # Validate queue and delay fields
-        assert parser.mutation_queue_size >= 0, f"mutation_queue_size should be non-negative, got: {parser.mutation_queue_size}"
+        assert parser.mutation_queue_size == 0, f"mutation_queue_size should be non-negative, got: {parser.mutation_queue_size}"
         assert isinstance(parser.recent_mutations_queue_delay, str), f"recent_mutations_queue_delay should be string, got: {type(parser.recent_mutations_queue_delay)}"
         
         # Validate state field
@@ -234,7 +241,7 @@ class TestFullText(ValkeySearchTestCaseBase):
         
         # Validate with_offsets setting
         with_offsets = parser.parsed_data.get("with_offsets")
-        assert with_offsets in [0, 1, "0", "1", True, False], f"with_offsets should be boolean-like, got: {with_offsets}"
+        assert with_offsets == 1, f"with_offsets is set to true any other value is wrong"
         
         # Validate language setting
         language = parser.parsed_data.get("language", "")

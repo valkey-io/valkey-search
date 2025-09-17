@@ -182,8 +182,15 @@ class FTInfoParser:
             The attribute dictionary if found, None otherwise
         """
         for attr in self.attributes:
-            if attr.get("identifier") == name:
-                return attr
+            # Handle case where attr might be a list instead of dict
+            if isinstance(attr, dict):
+                if attr.get("identifier") == name:
+                    return attr
+            elif isinstance(attr, list):
+                # Try to parse the list as key-value pairs
+                parsed_attr = self._parse_key_value_list(attr)
+                if isinstance(parsed_attr, dict) and parsed_attr.get("identifier") == name:
+                    return parsed_attr
         return None
 
     def get_attributes_by_type(self, field_type: str) -> List[Dict[str, Any]]:

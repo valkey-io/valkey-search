@@ -72,10 +72,6 @@ class ProximityIterator : public TextIterator {
                  FieldMaskPredicate field_mask,
                  const InternedStringSet* untracked_keys = nullptr);
 
-  // // Word-level iteration
-  // bool NextWord() override;
-  // absl::string_view CurrentWord() override;
-
   // Key-level iteration
   bool DoneKeys() const override; 
   bool NextKey() override;
@@ -84,20 +80,21 @@ class ProximityIterator : public TextIterator {
   // Position-level iteration
   bool DonePositions() const override;
   bool NextPosition() override;
-  uint32_t CurrentPosition() override;
-  uint64_t GetFieldMask() const override;
+  std::pair<uint32_t, uint32_t> CurrentPosition() override;
+  uint64_t CurrentFieldMask() const override;
 
  private:
   std::vector<std::unique_ptr<TextIterator>> iters_; // List of all the Text Predicates contained in the Proximity AND.
   bool done_;  // Used to track if we are at the beginning of the iterator.
   size_t slop_;
   bool in_order_;
+  uint64_t field_mask_; // This is from the query and is used in exact phrase
   const InternedStringSet* untracked_keys_;
   
-  // absl::string_view current_word_; // Should never be used.
   InternedStringPtr current_key_;
-  uint64_t current_pos_;  // Should never be used.
-  uint64_t field_mask_; // This is from the query and is used in exact phrase
+  std::optional<uint32_t> current_start_pos_;
+  std::optional<uint32_t> current_end_pos_;
+  std::optional<uint64_t> current_field_mask_;
 
   // Align all iterators on the same key (lexicographically)
   bool AlignToSameKey();

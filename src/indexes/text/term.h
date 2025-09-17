@@ -44,8 +44,8 @@ class TermIterator : public TextIterator {
   // Position-level iteration
   bool DonePositions() const override;
   bool NextPosition() override;
-  uint32_t CurrentPosition() override;
-  uint64_t GetFieldMask() const override;
+  std::pair<uint32_t, uint32_t> CurrentPosition() override;
+  uint64_t CurrentFieldMask() const override;
 
  private:
   const bool exact_;
@@ -58,8 +58,8 @@ class TermIterator : public TextIterator {
   Postings::PositionIterator pos_iter_;
 
   InternedStringPtr current_key_;
-  std::optional<std::uint32_t> current_position_;
-  std::optional<std::uint32_t> current_field_mask_;
+  std::optional<uint32_t> current_position_;
+  std::optional<uint64_t> current_field_mask_;
   const InternedStringSet* untracked_keys_;
   bool nomatch_;
 };

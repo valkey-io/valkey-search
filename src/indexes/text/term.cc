@@ -98,14 +98,15 @@ bool TermIterator::NextPosition() {
   return false;
 }
 
-uint32_t TermIterator::CurrentPosition() {
+std::pair<uint32_t, uint32_t> TermIterator::CurrentPosition() {
   VMSDK_LOG(WARNING, nullptr) << "TI::CurrentPosition{" << word_iter_.GetWord() << "}";
   CHECK(current_position_.has_value());
-  return current_position_.value();
+  // return current_position_.value();
+  return std::make_pair(current_position_.value(), current_position_.value());
 }
 
-uint64_t TermIterator::GetFieldMask() const {
-  VMSDK_LOG(WARNING, nullptr) << "TI::GetFieldMask{" << word_iter_.GetWord() << "}";
+uint64_t TermIterator::CurrentFieldMask() const {
+  VMSDK_LOG(WARNING, nullptr) << "TI::CurrentFieldMask{" << word_iter_.GetWord() << "}";
   CHECK(current_field_mask_.has_value());
   return current_field_mask_.value();
 } 

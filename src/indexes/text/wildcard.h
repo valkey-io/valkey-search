@@ -77,8 +77,8 @@ class WildCardIterator : public TextIterator {
   // Position-level iteration
   bool DonePositions() const override;
   bool NextPosition() override;
-  uint32_t CurrentPosition() override;
-  uint64_t GetFieldMask() const override;
+  std::pair<uint32_t, uint32_t> CurrentPosition() override;
+  uint64_t CurrentFieldMask() const override;
 
  private:
   const absl::string_view data_;

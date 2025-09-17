@@ -13,7 +13,9 @@ ProximityIterator::ProximityIterator(std::vector<std::unique_ptr<TextIterator>>&
       in_order_(in_order),
       untracked_keys_(untracked_keys),
       current_key_(nullptr),        // no key yet
-      current_pos_(0),              // start at 0
+      current_start_pos_(std::nullopt),
+      current_end_pos_(std::nullopt),
+      current_field_mask_(std::nullopt),
       field_mask_(field_mask)
 {
     VMSDK_LOG(WARNING, nullptr) << "PI::init";
@@ -87,23 +89,25 @@ bool ProximityIterator::DonePositions() const {
 
 const InternedStringPtr& ProximityIterator::CurrentKey() {
   VMSDK_LOG(WARNING, nullptr) << "PI::CurrentKey";
+  CHECK(current_key_ != nullptr);
   return current_key_;
 }
 
-uint32_t ProximityIterator::CurrentPosition() {
+std::pair<uint32_t, uint32_t> ProximityIterator::CurrentPosition() {
   VMSDK_LOG(WARNING, nullptr) << "PI::CurrentPosition";
-  return current_pos_;
+  CHECK(current_start_pos_.has_value() && current_end_pos_.has_value());
+  return std::make_pair(current_start_pos_.value(), current_end_pos_.value());
 }
 
-uint64_t ProximityIterator::GetFieldMask() const {
+uint64_t ProximityIterator::CurrentFieldMask() const {
     // CHECK that all iterators have the same field mask and crash otherwise.
-    uint64_t common_fields = iters_[0]->GetFieldMask();
+    uint64_t common_fields = iters_[0]->CurrentFieldMask();
     for (size_t i = 1; i < iters_.size(); ++i) {
-        common_fields &= iters_[i]->GetFieldMask();
+        common_fields &= iters_[i]->CurrentFieldMask();
         // Using the intersection of field masks, check if any field is common
-        if (common_fields == 0) {
-            CHECK(false) << "ProximityIterator::GetFieldMask - Mismatched field masks in child iterators";
-        }
+        // The nested proximity iterator's NextPosition should ensure that we are on a valid
+        // combination of positions.
+        CHECK(common_fields != 0) << "ProximityIterator::CurrentFieldMask - No common fields in child iterators";
     }
     return common_fields;
 }
@@ -122,7 +126,6 @@ bool ProximityIterator::NextKeyMain() {
         InternedStringPtr min_key = nullptr;
         InternedStringPtr max_key = nullptr;
         for (auto& iter : iters_) {
-            // I suggest commenting this out
             if (iter->DoneKeys()) {
                 done_ = true;
                 VMSDK_LOG(WARNING, nullptr) << "PI::NextKey child done -> exhausted";
@@ -191,39 +194,39 @@ bool ProximityIterator::NextPosition() {
                 return false;
             }
         }
-        // Collect current positions
-        std::vector<uint32_t> positions(n);
+        // Collect current positions (start, end)
+        std::vector<std::pair<uint32_t, uint32_t>> positions(n);
         for (size_t i = 0; i < n; ++i) {
             positions[i] = iters_[i]->CurrentPosition();
         }
         // Check if current combination satisfies constraints
         bool valid = true;
         // First check all positions are in same field
-        uint64_t common_fields = iters_[0]->GetFieldMask();
+        uint64_t common_fields = iters_[0]->CurrentFieldMask();
         for (size_t i = 1; i < n && valid; ++i) {
-            common_fields &= iters_[i]->GetFieldMask();
+            common_fields &= iters_[i]->CurrentFieldMask();
             // Using the intersection of field masks, check if any field is common
             if (common_fields == 0) {
                 valid = false;
             }
         }
         if (valid) {
-            // Then check order/slop constraints
+            // Then check order/slop constraints using start and end positions
             for (size_t i = 0; i + 1 < n && valid; ++i) {
-                if (in_order_ && positions[i] >= positions[i + 1]) {
+                if (in_order_ && positions[i].first >= positions[i + 1].first) {
                     valid = false;
-                } else if (positions[i + 1] - positions[i] - 1 > slop_) {
+                } else if (positions[i + 1].first - positions[i].second - 1 > slop_) {
                     valid = false;
                 }
             }
         }
         if (valid) {
-            current_pos_ = positions[0];
+            current_start_pos_ = positions[0].first;
+            current_end_pos_ = positions[n-1].second;
             current_key_ = iters_[0]->CurrentKey(); // Technically, we should not have moved since the previous NextMain fn.
             VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition returning as valid";
-            // Advance rightmost iterator for next call
             if (!iters_[n-1]->NextPosition()) {
-                done_ = true; // No more combinations
+                done_ = true;
             }
             return true;
         }
@@ -246,7 +249,7 @@ bool ProximityIterator::NextPosition() {
         // Always advance iterator with smallest position
         size_t advance_idx = 0;
         for (size_t i = 1; i < n; ++i) {
-            if (positions[i] < positions[advance_idx]) {
+            if (positions[i].first < positions[advance_idx].first) {
                 advance_idx = i;
             }
         }

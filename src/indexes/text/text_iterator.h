@@ -13,15 +13,10 @@
 
 namespace valkey_search::indexes::text {
 
-/* Base Class for all Word Iterators. currently this includes WildCard and Fuzzy, more may come in the future.
-*/
+/* Base Class for all Text Search Iterators. */
 class TextIterator {
 public:
     virtual ~TextIterator() = default;
-
-    // // Word-level iteration
-    // virtual bool NextWord() = 0;
-    // virtual absl::string_view CurrentWord() = 0;
 
     // Key-level iteration
     virtual bool DoneKeys() const = 0;
@@ -31,9 +26,10 @@ public:
     // Position-level iteration
     virtual bool DonePositions() const = 0;
     virtual bool NextPosition() = 0;
-    // TODO: This needs to be updated to return a start and end. std::pair<uint32_t, uint32_t>
-    virtual uint32_t CurrentPosition() = 0;
-    virtual uint64_t GetFieldMask() const = 0;
+    // Represents start and end. start == end in all TextIterators except for the OR Proximity
+    // since it can contain a nested proximity block.
+    virtual std::pair<uint32_t, uint32_t> CurrentPosition() = 0;
+    virtual uint64_t CurrentFieldMask() const = 0;
 };
 
 }  // namespace valkey_search::indexes::text

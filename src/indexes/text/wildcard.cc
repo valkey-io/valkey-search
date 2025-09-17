@@ -102,14 +102,15 @@ bool WildCardIterator::NextPosition() {
   return false;
 }
 
-uint32_t WildCardIterator::CurrentPosition() {
+std::pair<uint32_t, uint32_t> WildCardIterator::CurrentPosition() {
   VMSDK_LOG(WARNING, nullptr) << "WI::CurrentPosition{" << word_iter_.GetWord() << "}";
   CHECK(current_position_.has_value());
-  return current_position_.value();
+  // return current_position_.value();
+  return std::make_pair(current_position_.value(), current_position_.value());
 }
 
-uint64_t WildCardIterator::GetFieldMask() const {
-  VMSDK_LOG(WARNING, nullptr) << "WI::GetFieldMask{" << word_iter_.GetWord() << "}";
+uint64_t WildCardIterator::CurrentFieldMask() const {
+  VMSDK_LOG(WARNING, nullptr) << "WI::CurrentFieldMask{" << word_iter_.GetWord() << "}";
   CHECK(current_field_mask_.has_value());
   return current_field_mask_.value();
 } 

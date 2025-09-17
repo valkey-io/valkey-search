@@ -348,7 +348,7 @@ INSTANTIATE_TEST_SUITE_P(
                         .argv = {"FT.Info"},
                         .expect_return_failure = true,
                         .expected_output =
-                            "$51\r\nERR wrong number of "
+                            "-ERR wrong number of "
                             "arguments for 'FT.INFO' command\r\n",
                     },
                 },
@@ -362,7 +362,7 @@ INSTANTIATE_TEST_SUITE_P(
                         .index_schema_pbtxt = std::nullopt,
                         .expect_return_failure = true,
                         .expected_output =
-                            "$47\r\nIndex with name 'non_exist_test_name' not "
+                            "-Index with name 'non_exist_test_name' not "
                             "found\r\n",
                     },
                 },
@@ -397,7 +397,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = true,
                         .expected_output =
-                            "$47\r\nIndex with name 'non_exist_test_name' not "
+                            "-Index with name 'non_exist_test_name' not "
                             "found\r\n",
                     },
                 },

@@ -100,25 +100,32 @@ class TestEviction(ValkeySearchTestCaseBase):
         # Load data gradually to allow eviction to keep up
         batch_size = 100
         current_docs = initial_docs
+        max_oom_retries = 5
         
         while current_docs < total_docs:
             next_batch_end = min(current_docs + batch_size, total_docs)
+            oom_retries = 0
             
-            try:
-                if policy.startswith("volatile"):
-                    index.load_data_with_ttl(client, next_batch_end, self.HOUR_IN_MS, start_index=current_docs)
-                else:
-                    index.load_data(client, next_batch_end, start_index=current_docs)
-                current_docs = next_batch_end
-                
-                # Small delay to allow eviction to process
-                time.sleep(0.01)
-                
-            except OutOfMemoryError:
-                # If we hit OOM, wait a bit for eviction and retry with smaller batch
-                time.sleep(0.1)
-                batch_size = max(10, batch_size // 2)
-                continue
+            while oom_retries < max_oom_retries:
+                try:
+                    if policy.startswith("volatile"):
+                        index.load_data_with_ttl(client, next_batch_end, self.HOUR_IN_MS, start_index=current_docs)
+                    else:
+                        index.load_data(client, next_batch_end, start_index=current_docs)
+                    current_docs = next_batch_end
+                    break
+                    
+                except OutOfMemoryError:
+                    oom_retries += 1
+                    if oom_retries >= max_oom_retries:
+                        # If we've hit max retries, reduce batch size and continue
+                        batch_size = max(10, batch_size // 2)
+                        break
+                    # Wait for eviction and retry
+                    time.sleep(0.1)
+            
+            # Small delay between batches
+            time.sleep(0.01)
 
         # Verify that some eviction occurred
         final_info = index.info(client)

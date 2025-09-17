@@ -28,7 +28,7 @@ fields.
 
 A KeyIterator is provided to iterate over the keys within this object.
 A PositionIterator is provided to iterate over the positions of an individual
-Key.
+Key. 
 
 */
 

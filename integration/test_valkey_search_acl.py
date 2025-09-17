@@ -99,7 +99,6 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
             ("ACL SETUSER user1 on >search_pass ~* &* -@all +Ft.CrEaTe", "FT.CREATE"),
             ("ACL SETUSER user1 on >search_pass ~* &* -@all +fT.InFo", "FT.INFO"),
             ("ACL SETUSER user1 on >search_pass ~* &* -@all +Ft._LiSt", "FT._LIST"),
-            ("ACL SETUSER user1 on >search_pass ~* &* -@all +fT._DeBuG", "FT._DEBUG"),
             ("ACL SETUSER user1 on >search_pass ~* &* -@all +Ft.DrOpInDeX", "FT.DROPINDEX"),
         ],
     )

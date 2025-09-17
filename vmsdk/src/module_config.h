@@ -15,6 +15,7 @@
 #include "absl/status/status.h"
 #include "absl/synchronization/mutex.h"
 #include "gtest/gtest_prod.h"
+#include "managed_pointers.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -294,6 +295,12 @@ class String : public ConfigBase<std::string> {
   ~String() override = default;
   absl::Status FromString(std::string_view value) override;
   const std::string &GetString() const { return value_; }
+  ValkeyModuleString *GetCachedValkeyString() const {
+    if (!cached_string_) {
+      cached_string_ = vmsdk::MakeUniqueValkeyString(value_);
+    }
+    return cached_string_.get();
+  }
 
  protected:
   // Implementation specific
@@ -307,10 +314,12 @@ class String : public ConfigBase<std::string> {
   void SetValueImpl(std::string val) override ABSL_LOCKS_EXCLUDED(mutex_) {
     absl::MutexLock lock{&mutex_};
     value_ = val;
+    cached_string_.reset();
   }
 
   mutable absl::Mutex mutex_;
   std::string value_;
+  mutable UniqueValkeyString cached_string_;
   FRIEND_TEST(Builder, ConfigBuilder);
 };
 

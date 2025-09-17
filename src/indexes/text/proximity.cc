@@ -28,21 +28,7 @@ ProximityIterator::ProximityIterator(std::vector<std::unique_ptr<TextIterator>>&
         done_ = true;
         return;
     }
-    // initialize iterators to first key/position
-    for (auto& iter : iters_) {
-        if (iter->DoneKeys()) {
-            done_ = true;
-            VMSDK_LOG(WARNING, nullptr) << "PI::init done 2";
-            return;
-        }
-        // Safety check on init.
-        if (!iter->CurrentKey()) {  // no keys in this iterator
-            done_ = true;
-            VMSDK_LOG(WARNING, nullptr) << "PI::init done 3";
-            return;
-        }
-    }
-    // Prime first common key
+    // Prime iterators to the first common key and valid position combo
     if (NextKey()) {
         done_ = false;
     } else {
@@ -60,18 +46,14 @@ bool ProximityIterator::NextKey() {
                 c->NextKey();  // move any child iterators sitting at current_key_
             }
         }
-        // 2) Align all children to the next common key
+        // 2) Find the next common key amongst all text iterators
+        // This does not shift to the next common key on success. It is handled in (1).
         if (!NextKeyMain()) {
-            // // NextKeyMain sets done_ on child exhaustion but be safe here too
-            // done_ = true;
             return false;
         }
-        // For nested proximity, we need to check if the start and end positions match the slop and order.
-        // 3) Try to find the first valid position in this key
+        // 3) Find the next common position combination across all text iterators.
+        //  This shifts to the next valid position combo on success.
         if (NextPosition()) {
-            // Found a valid match; NextPosition sets current_key_ and current_pos_
-            // If a child had been advanced and exhausted positions but still has
-            // more keys, last_pos_exhausted_idx_ may be set; we'll handle on next call.
             return true;
         }
         // otherwise, loop and try again (defensive).
@@ -79,15 +61,17 @@ bool ProximityIterator::NextKey() {
     return false;
 }
 
-// TODO: Implement the correct behavior that also works on Nested cases.
-// This should tell us when there are no more keys
+// TODO: This API works fine currently when there are no nested proximity iterators.
+// When there are nested operations, we need the NextKeyMain to accurately be able to know
+// when no more common keys exist across iterators. 
 bool ProximityIterator::DoneKeys() const {
     VMSDK_LOG(WARNING, nullptr) << "PI::DoneKeys";   
     return done_;
 }
 
-// TODO: Implement the correct behavior that also works on Nested cases.
-// This should tell us when there are no more position combinations on the current key.
+// TODO: This API works fine currently when there are no nested proximity iterators.
+// When there are nested operations, we need the NextPosition to accurately be able to know
+// when no more valid position combinations across iterators. 
 bool ProximityIterator::DonePositions() const {
     VMSDK_LOG(WARNING, nullptr) << "PI::DonePositions";   
     return done_;
@@ -120,11 +104,6 @@ uint64_t ProximityIterator::CurrentFieldMask() const {
 
 bool ProximityIterator::NextKeyMain() {
     VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain";
-    if (iters_.empty()) {
-        VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain Done 1";
-        done_ = true;
-        return false;
-    }
     while (!done_) {
         // 1) Validate children and compute min/max among current keys
         InternedStringPtr min_key = nullptr;

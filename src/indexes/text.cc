@@ -28,7 +28,6 @@ Text::Text(const data_model::TextIndex& text_index_proto,
 
 absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
                                      absl::string_view data) {
-  VMSDK_LOG(WARNING, nullptr) << "Ingestion: key: " << key->Str() <<  " data: " << data;
   valkey_search::indexes::text::Lexer lexer;
 
   auto tokens =
@@ -59,7 +58,6 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
             postings = std::make_shared<text::Postings>(save_positions,
                                                         num_text_fields);
           }
-          VMSDK_LOG(WARNING, nullptr) << "Ingestion: Key{}" << key->Str() << " text_field_number_: " << text_field_number_ << " position: " << position; 
           postings->InsertPosting(key, text_field_number_, position);
           return postings;
         });

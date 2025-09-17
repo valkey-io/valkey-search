@@ -97,67 +97,6 @@ class WildCardIterator : public TextIterator {
   bool nomatch_;
 };
 
-// struct WildCardIterator : public indexes::EntriesFetcherIteratorBase {
-//   WildCardIterator(const WordIterator& word, const WildCardOperation operation,
-//                    const FieldMaskPredicate field_mask,
-//                    const InternedStringSet* untracked_keys = nullptr);
-
-//   // Points to valid Word?
-//   bool Done() const override;
-
-//   // Go to next word
-//   void Next() override;
-
-//   const InternedStringPtr& operator*() const override;
-
-//  private:
-//   WordIterator word_;
-//   std::shared_ptr<Postings> target_posting_;
-//   Postings::KeyIterator key_iter_;
-//   bool begin_ =
-//       true;  // Used to track if we are at the beginning of the iterator.
-//   const InternedStringSet* untracked_keys_;
-//   InternedStringPtr current_key_;
-//   WildCardOperation operation_;
-//   FieldMaskPredicate field_mask_;
-//   bool nomatch_ = false;
-// };
-
-// struct WildCardIterator : public WordIterator {
-//   using Posting = typename Postings::Posting;
-//   // Use this form when there's no suffix tree available.
-//   WildCardIterator(absl::string_view prefix, absl::string_view suffix,
-//                    const RadixTree<Postings>& prefix_tree);
-
-//   // Use this form when a suffix tree IS available.
-//   WildCardIterator(absl::string_view prefix, absl::string_view suffix,
-//                    const RadixTree<Postings>& prefix_tree,
-//                    const RadixTree<Postings>& suffix_tree);
-
-//   // Points to valid Word?
-//   bool Done() const override;
-
-//   // Go to next word
-//   void Next() override;
-
-//   // Seek forward to word that's equal or greater
-//   // returns true => found equal word, false => didn't find equal word
-//   bool SeekForward(absl::string_view word);
-
-//   // Access the iterator, will assert if !IsValid()
-//   absl::string_view GetWord() const override;
-//   Posting& GetPosting() const;
-
-//   absl::string_view GetPrefix() const { return prefix_; }
-//   absl::string_view GetSuffix() const { return suffix_; }
-
-//  private:
-//   absl::string_view prefix_;
-//   absl::string_view suffix_;
-//   // the one to iterator over, could be temporary or not....
-//   std::shared_ptr<RadixTree<Postings *>> radix_tree_;
-// };
-
 }  // namespace valkey_search::indexes::text
 
 #endif

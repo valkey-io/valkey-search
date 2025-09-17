@@ -40,10 +40,6 @@ Key.
 
 #include "src/utils/string_interning.h"
 
-#include "src/indexes/index_base.h"
-#include "src/indexes/text/radix_tree.h"
-
-
 namespace valkey_search::indexes::text {
 
 using Key = InternedStringPtr;

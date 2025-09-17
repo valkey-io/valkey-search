@@ -161,24 +161,6 @@ bool ProximityIterator::NextKeyMain() {
                 advanced_any = true;
             }
         }
-        // TODO: Think about whether this is really possible.
-        // IMO, we should crash if min != max but !advanced_any.
-        // // 4) Safety: if min != max but nothing advanced, bump the (previous) min forward
-        // //    to guarantee progress (should be rare; mostly defensive against buggy children).
-        // if (!advanced_any) {
-        //     for (auto& iter : iters_) {
-        //         if (iter->CurrentKey() && iter->CurrentKey()->Str() == min_key->Str()) {
-        //             VMSDK_LOG(WARNING, nullptr)
-        //                 << "PI::NextKeyMain safety advance from stuck min " << min_key->Str();
-        //             if (!iter->NextKey()) {
-        //                 done_ = true;
-        //                 VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain child exhausted in safety advance";
-        //                 return false;
-        //             }
-        //             break;
-        //         }
-        //     }
-        // }
         // Loop continues: max_key may increase, or everyone may now meet at a common key.
     }
     return false;
@@ -225,7 +207,6 @@ bool ProximityIterator::NextPosition() {
         if (valid) {
             current_start_pos_ = positions[0].first;
             current_end_pos_ = positions[n-1].second;
-            current_key_ = iters_[0]->CurrentKey(); // Technically, we should not have moved since the previous NextMain fn.
             VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition returning as valid";
             if (!iters_[n-1]->NextPosition()) {
                 done_ = true;

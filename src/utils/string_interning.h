@@ -109,6 +109,13 @@ struct InternedStringPtrEqual {
   }
 };
 
+struct InternedStringPtrLess {
+  template <typename T, typename U>
+  bool operator()(const T &lhs, const U &rhs) const {
+    return lhs->Str() < rhs->Str();
+  }
+};
+
 template <typename T>
 using InternedStringMap =
     absl::flat_hash_map<InternedStringPtr, T, InternedStringPtrHash,

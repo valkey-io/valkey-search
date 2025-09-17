@@ -733,8 +733,26 @@ uint64_t IndexSchema::CountRecords() const {
   return record_cnt;
 }
 
+bool IndexSchema::HasTextFields() const {
+  for (const auto &attribute : attributes_) {
+    if (attribute.second.GetIndex()->GetIndexerType() ==
+        indexes::IndexerType::kText) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithArray(ctx, 34);
+  int arrSize = 36;
+
+  // Calculate additional array size for text-related fields only if text fields
+  // exist
+  if (HasTextFields()) {
+    arrSize += 6;
+  }
+
+  ValkeyModule_ReplyWithArray(ctx, arrSize);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
   ValkeyModule_ReplyWithSimpleString(ctx, "index_options");
@@ -844,6 +862,36 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
                .c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "state");
   ValkeyModule_ReplyWithSimpleString(ctx, GetStateForInfo().data());
+
+  // Add text-related schema fields
+  if (HasTextFields()) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "punctuation");
+    ValkeyModule_ReplyWithSimpleString(ctx, punctuation_.c_str());
+
+    ValkeyModule_ReplyWithSimpleString(ctx, "stop_words");
+    ValkeyModule_ReplyWithArray(ctx, stop_words_.size());
+    for (const auto &stop_word : stop_words_) {
+      ValkeyModule_ReplyWithSimpleString(ctx, stop_word.c_str());
+    }
+
+    ValkeyModule_ReplyWithSimpleString(ctx, "with_offsets");
+    ValkeyModule_ReplyWithSimpleString(ctx, with_offsets_ ? "1" : "0");
+  }
+
+  if (language_ != data_model::LANGUAGE_UNSPECIFIED) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "language");
+    switch (language_) {
+      case data_model::LANGUAGE_ENGLISH:
+        ValkeyModule_ReplyWithSimpleString(ctx, "english");
+        break;
+      default:
+        ValkeyModule_ReplyWithSimpleString(ctx, "english");
+        break;
+    }
+  } else {
+    ValkeyModule_ReplyWithSimpleString(ctx, "language");
+    ValkeyModule_ReplyWithSimpleString(ctx, "english");
+  }
 }
 
 bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {

@@ -131,6 +131,15 @@ class FanoutOperationBase {
             if (status.ok()) {
               this->OnResponse(resp, target);
             } else {
+              // if grpc returns error, response is not populated, need to
+              // manually set error type
+              if (status.error_code() == grpc::StatusCode::NOT_FOUND) {
+                resp.set_error_type(
+                    coordinator::FanoutErrorType::INDEX_NAME_ERROR);
+              } else {
+                resp.set_error_type(
+                    coordinator::FanoutErrorType::COMMUNICATION_ERROR);
+              }
               VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
                   << "FANOUT_DEBUG: InvokeRemoteRpc error on target "
                   << target.address << ", status code: " << status.error_code()

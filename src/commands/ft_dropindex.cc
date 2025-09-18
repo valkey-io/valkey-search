@@ -10,6 +10,7 @@
 #include "src/acl.h"
 #include "src/commands/commands.h"
 #include "src/schema_manager.h"
+#include "src/valkey_search.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
@@ -34,8 +35,14 @@ absl::Status FTDropIndexCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
       AclPrefixCheck(ctx, permissions, index_schema->GetKeyPrefixes()));
 
   VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().RemoveIndexSchema(
-      ValkeyModule_GetSelectedDb(ctx), index_schema_name));
-  ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+      ctx, ValkeyModule_GetSelectedDb(ctx), index_schema_name));
+
+  // directly handle reply in standalone mode
+  // let fanout operation handle reply in cluster mode
+  if (!ValkeySearch::Instance().IsCluster() ||
+      !ValkeySearch::Instance().UsingCoordinator()) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+  }
   ValkeyModule_ReplicateVerbatim(ctx);
   return absl::OkStatus();
 }

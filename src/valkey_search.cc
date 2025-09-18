@@ -748,6 +748,12 @@ static vmsdk::info_field::String flat_vector_index_search_latency_usec(
               .flat_vector_index_search_latency.HasSamples();
         }));
 
+static vmsdk::info_field::Integer fanout_retry_count(
+    "fanout", "fanout_retry_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().fanout_retry_cnt;
+    }));
+
 #ifdef DEBUG_INFO
 // Helper function to create subscription info fields with maximum deduplication
 template <typename StatsSelector>

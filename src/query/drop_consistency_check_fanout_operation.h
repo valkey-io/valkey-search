@@ -18,15 +18,17 @@
 #include "src/query/fanout_operation_base.h"
 #include "src/query/fanout_template.h"
 
-namespace valkey_search::query::primary_info_fanout {
+namespace valkey_search::query::drop_consistency_check_fanout {
 
-class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
-                                       coordinator::InfoIndexPartitionRequest,
-                                       coordinator::InfoIndexPartitionResponse,
-                                       fanout::FanoutTargetMode::kPrimary> {
+class DropConsistencyCheckFanoutOperation
+    : public fanout::FanoutOperationBase<
+          coordinator::InfoIndexPartitionRequest,
+          coordinator::InfoIndexPartitionResponse,
+          fanout::FanoutTargetMode::kAll> {
  public:
-  PrimaryInfoFanoutOperation(uint32_t db_num, const std::string& index_name,
-                             unsigned timeout_ms);
+  DropConsistencyCheckFanoutOperation(uint32_t db_num,
+                                      const std::string& index_name,
+                                      unsigned timeout_ms);
 
   unsigned GetTimeoutMs() const override;
 
@@ -58,15 +60,9 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
   bool ShouldRetry() override;
 
  private:
-  bool exists_;
-  std::optional<uint64_t> schema_fingerprint_;
-  std::optional<uint32_t> version_;
   uint32_t db_num_;
   std::string index_name_;
   unsigned timeout_ms_;
-  uint64_t num_docs_;
-  uint64_t num_records_;
-  uint64_t hash_indexing_failures_;
 };
 
-}  // namespace valkey_search::query::primary_info_fanout
+}  // namespace valkey_search::query::drop_consistency_check_fanout

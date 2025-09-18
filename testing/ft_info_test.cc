@@ -87,7 +87,8 @@ TEST_P(FTInfoTest, FTInfoTests) {
 
       if (test_case.index_schema_pbtxt.has_value()) {
         VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(
-            index_schema_proto.db_num(), index_schema_proto.name()));
+            &fake_ctx_, index_schema_proto.db_num(),
+            index_schema_proto.name()));
         EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 0);
       }
 

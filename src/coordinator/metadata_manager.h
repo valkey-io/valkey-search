@@ -85,7 +85,8 @@ class MetadataManager {
       absl::string_view type_name, absl::string_view id,
       std::unique_ptr<google::protobuf::Any> contents);
 
-  absl::Status DeleteEntry(absl::string_view type_name, absl::string_view id);
+  absl::Status DeleteEntry(ValkeyModuleCtx *ctx, absl::string_view type_name,
+                           absl::string_view id);
 
   std::unique_ptr<GlobalMetadata> GetGlobalMetadata();
 

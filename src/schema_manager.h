@@ -58,7 +58,8 @@ class SchemaManager {
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   absl::Status ImportIndexSchema(std::shared_ptr<IndexSchema> index_schema)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
-  absl::Status RemoveIndexSchema(uint32_t db_num, absl::string_view name)
+  absl::Status RemoveIndexSchema(ValkeyModuleCtx *ctx, uint32_t db_num,
+                                 absl::string_view name)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   absl::StatusOr<std::shared_ptr<IndexSchema>> GetIndexSchema(
       uint32_t db_num, absl::string_view name) const

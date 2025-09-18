@@ -191,7 +191,7 @@ TEST_F(SchemaManagerTest, TestRemoveIndexSchemaNotFound) {
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() {}, nullptr, coordinator_enabled));
     EXPECT_EQ(SchemaManager::Instance()
-                  .RemoveIndexSchema(db_num_, index_name_)
+                  .RemoveIndexSchema(&fake_ctx_, db_num_, index_name_)
                   .code(),
               absl::StatusCode::kNotFound);
   }

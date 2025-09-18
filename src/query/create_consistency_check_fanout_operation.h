@@ -18,15 +18,17 @@
 #include "src/query/fanout_operation_base.h"
 #include "src/query/fanout_template.h"
 
-namespace valkey_search::query::primary_info_fanout {
+namespace valkey_search::query::create_consistency_check_fanout_operation {
 
-class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
-                                       coordinator::InfoIndexPartitionRequest,
-                                       coordinator::InfoIndexPartitionResponse,
-                                       fanout::FanoutTargetMode::kPrimary> {
+class CreateConsistencyCheckFanoutOperation
+    : public fanout::FanoutOperationBase<
+          coordinator::InfoIndexPartitionRequest,
+          coordinator::InfoIndexPartitionResponse,
+          fanout::FanoutTargetMode::kAll> {
  public:
-  PrimaryInfoFanoutOperation(uint32_t db_num, const std::string& index_name,
-                             unsigned timeout_ms);
+  CreateConsistencyCheckFanoutOperation(uint32_t db_num,
+                                        const std::string& index_name,
+                                        unsigned timeout_ms);
 
   unsigned GetTimeoutMs() const override;
 
@@ -64,9 +66,6 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
   uint32_t db_num_;
   std::string index_name_;
   unsigned timeout_ms_;
-  uint64_t num_docs_;
-  uint64_t num_records_;
-  uint64_t hash_indexing_failures_;
 };
 
-}  // namespace valkey_search::query::primary_info_fanout
+}  // namespace valkey_search::query::create_consistency_check_fanout_operation

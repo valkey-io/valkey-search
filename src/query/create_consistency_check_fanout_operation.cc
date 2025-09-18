@@ -5,14 +5,14 @@
  *
  */
 
-#include "src/query/cluster_info_fanout_operation.h"
+#include "src/query/create_consistency_check_fanout_operation.h"
 
 #include "src/coordinator/metadata_manager.h"
 #include "src/schema_manager.h"
 
-namespace valkey_search::query::cluster_info_fanout {
+namespace valkey_search::query::create_consistency_check_fanout_operation {
 
-ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(
+CreateConsistencyCheckFanoutOperation::CreateConsistencyCheckFanoutOperation(
     uint32_t db_num, const std::string& index_name, unsigned timeout_ms)
     : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
                                   coordinator::InfoIndexPartitionResponse,
@@ -20,24 +20,22 @@ ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(
       db_num_(db_num),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
-      exists_(false),
-      backfill_complete_percent_max_(0.0f),
-      backfill_complete_percent_min_(0.0f),
-      backfill_in_progress_(false) {}
+      exists_(false) {}
 
-unsigned ClusterInfoFanoutOperation::GetTimeoutMs() const {
+unsigned CreateConsistencyCheckFanoutOperation::GetTimeoutMs() const {
   return timeout_ms_;
 }
 
 coordinator::InfoIndexPartitionRequest
-ClusterInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&) {
+CreateConsistencyCheckFanoutOperation::GenerateRequest(
+    const fanout::FanoutSearchTarget&) {
   coordinator::InfoIndexPartitionRequest req;
   req.set_db_num(db_num_);
   req.set_index_name(index_name_);
   return req;
 }
 
-void ClusterInfoFanoutOperation::OnResponse(
+void CreateConsistencyCheckFanoutOperation::OnResponse(
     const coordinator::InfoIndexPartitionResponse& resp,
     [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
   absl::MutexLock lock(&mutex_);
@@ -82,34 +80,16 @@ void ClusterInfoFanoutOperation::OnResponse(
     return;
   }
   exists_ = true;
-  float node_percent = resp.backfill_complete_percent();
-  if (backfill_complete_percent_max_ < node_percent) {
-    backfill_complete_percent_max_ = node_percent;
-  }
-  if (backfill_complete_percent_min_ == 0.0f ||
-      backfill_complete_percent_min_ > node_percent) {
-    backfill_complete_percent_min_ = node_percent;
-  }
-  backfill_in_progress_ = backfill_in_progress_ || resp.backfill_in_progress();
-  std::string current_state = resp.state();
-  if (current_state == "backfill_paused_by_oom") {
-    state_ = current_state;
-  } else if (current_state == "backfill_in_progress" &&
-             state_ != "backfill_paused_by_oom") {
-    state_ = current_state;
-  } else if (current_state == "ready" && state_.empty()) {
-    state_ = current_state;
-  }
 }
 
 std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
-ClusterInfoFanoutOperation::GetLocalResponse(
+CreateConsistencyCheckFanoutOperation::GetLocalResponse(
     const coordinator::InfoIndexPartitionRequest& request,
     [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
   return coordinator::Service::GenerateInfoResponse(request);
 }
 
-void ClusterInfoFanoutOperation::InvokeRemoteRpc(
+void CreateConsistencyCheckFanoutOperation::InvokeRemoteRpc(
     coordinator::Client* client,
     const coordinator::InfoIndexPartitionRequest& request,
     std::function<void(grpc::Status, coordinator::InfoIndexPartitionResponse&)>
@@ -121,45 +101,25 @@ void ClusterInfoFanoutOperation::InvokeRemoteRpc(
                              timeout_ms);
 }
 
-int ClusterInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
-                                              ValkeyModuleString** argv,
-                                              int argc) {
+int CreateConsistencyCheckFanoutOperation::GenerateReply(
+    ValkeyModuleCtx* ctx, ValkeyModuleString** argv, int argc) {
   if (!index_name_error_nodes.empty() || !communication_error_nodes.empty() ||
       !inconsistent_state_error_nodes.empty()) {
     return FanoutOperationBase::GenerateErrorReply(ctx);
   }
-  ValkeyModule_ReplyWithArray(ctx, 12);
-  ValkeyModule_ReplyWithSimpleString(ctx, "mode");
-  ValkeyModule_ReplyWithSimpleString(ctx, "cluster");
-  ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
-  ValkeyModule_ReplyWithSimpleString(ctx, index_name_.c_str());
-  ValkeyModule_ReplyWithSimpleString(ctx, "backfill_in_progress");
-  ValkeyModule_ReplyWithCString(ctx, backfill_in_progress_ ? "1" : "0");
-  ValkeyModule_ReplyWithSimpleString(ctx, "backfill_complete_percent_max");
-  ValkeyModule_ReplyWithCString(
-      ctx, std::to_string(backfill_complete_percent_max_).c_str());
-  ValkeyModule_ReplyWithSimpleString(ctx, "backfill_complete_percent_min");
-  ValkeyModule_ReplyWithCString(
-      ctx, std::to_string(backfill_complete_percent_min_).c_str());
-  ValkeyModule_ReplyWithSimpleString(ctx, "state");
-  ValkeyModule_ReplyWithSimpleString(ctx, state_.c_str());
-  return VALKEYMODULE_OK;
+  return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 }
 
-void ClusterInfoFanoutOperation::ResetForRetry() {
+void CreateConsistencyCheckFanoutOperation::ResetForRetry() {
   exists_ = false;
   schema_fingerprint_.reset();
   version_.reset();
-  backfill_complete_percent_max_ = 0.0f;
-  backfill_complete_percent_min_ = 0.0f;
-  backfill_in_progress_ = false;
-  state_ = "";
 }
 
 // retry condition: (1) inconsistent state (2) network error
-bool ClusterInfoFanoutOperation::ShouldRetry() {
+bool CreateConsistencyCheckFanoutOperation::ShouldRetry() {
   return !inconsistent_state_error_nodes.empty() ||
          !communication_error_nodes.empty();
 }
 
-}  // namespace valkey_search::query::cluster_info_fanout
+}  // namespace valkey_search::query::create_consistency_check_fanout_operation

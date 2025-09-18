@@ -231,7 +231,7 @@ absl::Status SchemaManager::CreateIndexSchema(
     auto any_proto = std::make_unique<google::protobuf::Any>();
     any_proto->PackFrom(index_schema_proto);
     return coordinator::MetadataManager::Instance().CreateEntry(
-        kSchemaManagerMetadataTypeName, index_schema_proto.name(),
+        ctx, kSchemaManagerMetadataTypeName, index_schema_proto.name(),
         std::move(any_proto));
   }
 

@@ -146,8 +146,8 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
       content->set_type_url("type.googleapis.com/FakeType");
       content->set_value(operation.content);
       EXPECT_EQ(test_metadata_manager_
-                    ->CreateEntry(operation.type_name, operation.id,
-                                  std::move(content), nullptr)
+                    ->CreateEntry(fake_ctx, operation.type_name, operation.id,
+                                  std::move(content))
                     .code(),
                 test_case.expected_status_code);
     } else if (operation.operation_type ==

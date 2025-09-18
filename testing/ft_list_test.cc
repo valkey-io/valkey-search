@@ -89,11 +89,11 @@ TEST_F(FTListTest, basic) {
                     "*2\r\n+index_schema_name_1\r\n+index_schema_name_2\r\n",
                     "*2\r\n+index_schema_name_2\r\n+index_schema_name_1\r\n"));
     VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(
-        0, index_schema_name_1_str));
+        &fake_ctx, 0, index_schema_name_1_str));
     VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(
-        0, index_schema_name_2_str));
+        &fake_ctx, 0, index_schema_name_2_str));
     VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(
-        1, different_db_index_schema_name_str));
+        &fake_ctx, 1, different_db_index_schema_name_str));
   }
 }
 TEST_F(FTListTest, no_indexes) {

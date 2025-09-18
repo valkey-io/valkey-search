@@ -275,14 +275,15 @@ SchemaManager::RemoveIndexSchemaInternal(uint32_t db_num,
   return result;
 }
 
-absl::Status SchemaManager::RemoveIndexSchema(uint32_t db_num,
+absl::Status SchemaManager::RemoveIndexSchema(ValkeyModuleCtx *ctx,
+                                              uint32_t db_num,
                                               absl::string_view name) {
   if (coordinator_enabled_) {
     CHECK(db_num == 0) << "In cluster mode, we only support DB 0";
     // In coordinated mode, use the metadata_manager as the source of truth.
     // It will callback into us with the update.
     auto status = coordinator::MetadataManager::Instance().DeleteEntry(
-        kSchemaManagerMetadataTypeName, name);
+        ctx, kSchemaManagerMetadataTypeName, name);
     if (status.ok()) {
       return status;
     } else if (absl::IsNotFound(status)) {

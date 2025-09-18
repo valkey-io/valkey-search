@@ -81,8 +81,9 @@ class MetadataManager {
   absl::StatusOr<google::protobuf::Any> GetEntry(absl::string_view type_name,
                                                  absl::string_view id);
 
-  absl::Status CreateEntry(absl::string_view type_name, absl::string_view id,
-                           std::unique_ptr<google::protobuf::Any> contents, ValkeyModuleCtx *ctx);
+  absl::Status CreateEntry(ValkeyModuleCtx *ctx, absl::string_view type_name,
+                           absl::string_view id,
+                           std::unique_ptr<google::protobuf::Any> contents);
 
   absl::Status DeleteEntry(absl::string_view type_name, absl::string_view id);
 

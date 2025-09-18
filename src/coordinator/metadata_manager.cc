@@ -148,8 +148,8 @@ absl::StatusOr<google::protobuf::Any> MetadataManager::GetEntry(
 }
 
 absl::Status MetadataManager::CreateEntry(
-    absl::string_view type_name, absl::string_view id,
-    std::unique_ptr<google::protobuf::Any> contents, ValkeyModuleCtx *ctx) {
+    ValkeyModuleCtx *ctx, absl::string_view type_name, absl::string_view id,
+    std::unique_ptr<google::protobuf::Any> contents) {
   auto &registered_types = registered_types_.Get();
   auto rt_it = registered_types.find(type_name);
   if (rt_it == registered_types.end()) {
@@ -189,7 +189,7 @@ absl::Status MetadataManager::CreateEntry(
   metadata.mutable_version_header()->set_top_level_fingerprint(
       ComputeTopLevelFingerprint(metadata.type_namespace_map()));
   BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
-  
+
   // check for valid ctx to prevent test fail due to fake_ctx
   if (ctx && ValkeySearch::Instance().IsCluster() &&
       ValkeySearch::Instance().UsingCoordinator()) {

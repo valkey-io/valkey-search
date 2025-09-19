@@ -46,16 +46,15 @@ absl::flat_hash_set<std::string> BuildStopWordsSet(
 
 }  // namespace
 
-TextIndexSchema::TextIndexSchema(
-    const data_model::IndexSchema& index_schema_proto)
-    : punct_str_(index_schema_proto.punctuation()),
-      punct_bitmap_(BuildPunctuationBitmap(index_schema_proto.punctuation())),
-      stop_words_set_(
-          BuildStopWordsSet({index_schema_proto.stop_words().begin(),
-                             index_schema_proto.stop_words().end()})),
-      language_(index_schema_proto.language()),
-      stemmer_(sb_stemmer_new(GetLanguageString(), "UTF_8")),
-      with_offsets_(index_schema_proto.with_offsets()) {}
+TextIndexSchema::TextIndexSchema(data_model::Language language,
+                                 const std::string& punctuation,
+                                 bool with_offsets,
+                                 const std::vector<std::string>& stop_words)
+    : language_(language),
+      punct_bitmap_(BuildPunctuationBitmap(punctuation)),
+      stop_words_set_(BuildStopWordsSet(stop_words)),
+      with_offsets_(with_offsets),
+      stemmer_(sb_stemmer_new(GetLanguageString(), "UTF_8")) {}
 
 TextIndexSchema::~TextIndexSchema() {
   if (stemmer_) {

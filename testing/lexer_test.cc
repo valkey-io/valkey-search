@@ -40,10 +40,9 @@ class LexerTest : public ::testing::Test {
 
     // Create TextIndexSchema to get real bitmap (tests real integration)
     std::vector<std::string> stop_words = {"the", "and", "or"};
-    auto index_schema_proto = CreateIndexSchemaProtoWithTextProperties(
+    text_schema_ = std::make_shared<TextIndexSchema>(
         data_model::LANGUAGE_ENGLISH,
         " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", true, stop_words);
-    text_schema_ = std::make_shared<TextIndexSchema>(index_schema_proto);
 
     language_ = "english";
     stemming_enabled_ = true;
@@ -56,9 +55,8 @@ class LexerTest : public ::testing::Test {
   std::shared_ptr<TextIndexSchema> CreateCustomTextSchema(
       const std::string& punctuation) {
     std::vector<std::string> stop_words = {"the", "and", "or"};
-    auto index_schema_proto = CreateIndexSchemaProtoWithTextProperties(
-        data_model::LANGUAGE_ENGLISH, punctuation, true, stop_words);
-    return std::make_shared<TextIndexSchema>(index_schema_proto);
+    return std::make_shared<TextIndexSchema>(data_model::LANGUAGE_ENGLISH,
+                                             punctuation, true, stop_words);
   }
 
   std::unique_ptr<Lexer> lexer_;
@@ -194,10 +192,9 @@ TEST_F(LexerTest, LongWord) {
 TEST_F(LexerTest, EmptyStopWordsHandling) {
   // Create schema with no stop words
   std::vector<std::string> empty_stop_words;
-  auto index_schema_proto = CreateIndexSchemaProtoWithTextProperties(
+  auto no_stop_schema = std::make_shared<TextIndexSchema>(
       data_model::LANGUAGE_ENGLISH, " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
       true, empty_stop_words);
-  auto no_stop_schema = std::make_shared<TextIndexSchema>(index_schema_proto);
 
   const auto& empty_set = no_stop_schema->GetStopWordsSet();
 

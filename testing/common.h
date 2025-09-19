@@ -225,11 +225,19 @@ class MockIndexSchema : public IndexSchema {
       ValkeyModuleCtx* ctx, absl::string_view key,
       const std::vector<absl::string_view>& subscribed_key_prefixes,
       std::unique_ptr<AttributeDataType> attribute_data_type,
-      vmsdk::ThreadPool* mutations_thread_pool) {
+      vmsdk::ThreadPool* mutations_thread_pool,
+      data_model::Language language = data_model::Language::LANGUAGE_ENGLISH,
+      std::string punctuation = ".", bool with_offsets = true,
+      const std::vector<std::string>& stop_words = {}) {
     data_model::IndexSchema index_schema_proto;
     index_schema_proto.set_name(std::string(key));
     index_schema_proto.mutable_subscribed_key_prefixes()->Add(
         subscribed_key_prefixes.begin(), subscribed_key_prefixes.end());
+    index_schema_proto.set_language(language);
+    index_schema_proto.set_punctuation(punctuation);
+    index_schema_proto.set_with_offsets(with_offsets);
+    index_schema_proto.mutable_stop_words()->Add(stop_words.begin(),
+                                                 stop_words.end());
     // NOLINTNEXTLINE
     auto res = std::shared_ptr<MockIndexSchema>(new MockIndexSchema(
         ctx, index_schema_proto, std::move(attribute_data_type),

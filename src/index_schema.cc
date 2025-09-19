@@ -74,7 +74,6 @@ IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
 
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     ValkeyModuleCtx *ctx, IndexSchema *index_schema,
-    const data_model::IndexSchema &index_schema_proto,
     const data_model::Attribute &attribute,
     std::optional<SupplementalContentChunkIter> iter) {
   const auto &index = attribute.index();
@@ -88,7 +87,7 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     case data_model::Index::IndexTypeCase::kTextIndex: {
       // Create the TextIndexSchema if this is the first Text index we're seeing
       if (!index_schema->GetTextIndexSchema()) {
-        index_schema->CreateTextIndexSchema(index_schema_proto);
+        index_schema->CreateTextIndexSchema();
       }
       return std::make_shared<indexes::Text>(
           index.text_index(), index_schema->GetTextIndexSchema());
@@ -180,9 +179,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
   VMSDK_RETURN_IF_ERROR(res->Init(ctx));
   if (!skip_attributes) {
     for (const auto &attribute : index_schema_proto.attributes()) {
-      VMSDK_ASSIGN_OR_RETURN(std::shared_ptr<indexes::IndexBase> index,
-                             IndexFactory(ctx, res.get(), index_schema_proto,
-                                          attribute, std::nullopt));
+      VMSDK_ASSIGN_OR_RETURN(
+          std::shared_ptr<indexes::IndexBase> index,
+          IndexFactory(ctx, res.get(), attribute, std::nullopt));
       VMSDK_RETURN_IF_ERROR(
           res->AddIndex(attribute.alias(), attribute.identifier(), index));
     }
@@ -208,6 +207,11 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       attribute_data_type_(std::move(attribute_data_type)),
       name_(std::string(index_schema_proto.name())),
       db_num_(index_schema_proto.db_num()),
+      language_(index_schema_proto.language()),
+      punctuation_(index_schema_proto.punctuation()),
+      with_offsets_(index_schema_proto.with_offsets()),
+      stop_words_(index_schema_proto.stop_words().begin(),
+                  index_schema_proto.stop_words().end()),
       mutations_thread_pool_(mutations_thread_pool),
       time_sliced_mutex_(CreateMrmwMutexOptions()) {
   ValkeyModule_SelectDb(detached_ctx_.get(), db_num_);
@@ -855,6 +859,13 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
       subscribed_key_prefixes_.begin(), subscribed_key_prefixes_.end());
   index_schema_proto->set_attribute_data_type(attribute_data_type_->ToProto());
 
+  // Always serialize text configurations from stored members
+  index_schema_proto->set_language(language_);
+  index_schema_proto->set_punctuation(punctuation_);
+  index_schema_proto->set_with_offsets(with_offsets_);
+  index_schema_proto->mutable_stop_words()->Assign(stop_words_.begin(),
+                                                   stop_words_.end());
+
   auto stats = index_schema_proto->mutable_stats();
   stats->set_documents_count(stats_.document_cnt);
   std::transform(
@@ -862,17 +873,6 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
       google::protobuf::RepeatedPtrFieldBackInserter(
           index_schema_proto->mutable_attributes()),
       [](const auto &attribute) { return *attribute.second.ToProto(); });
-
-  // Text-specific properties
-  if (text_index_schema_) {
-    index_schema_proto->set_language(text_index_schema_->GetLanguage());
-    index_schema_proto->set_punctuation(
-        text_index_schema_->GetPunctuationString());
-    index_schema_proto->set_with_offsets(text_index_schema_->GetWithOffsets());
-    auto stop_words = text_index_schema_->GetStopWordsSet();
-    index_schema_proto->mutable_stop_words()->Add(stop_words.begin(),
-                                                  stop_words.end());
-  }
 
   return index_schema_proto;
 }
@@ -971,10 +971,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
                 SUPPLEMENTAL_CONTENT_INDEX_CONTENT) {
       auto &attribute =
           supplemental_content->index_content_header().attribute();
-      VMSDK_ASSIGN_OR_RETURN(
-          std::shared_ptr<indexes::IndexBase> index,
-          IndexFactory(ctx, index_schema.get(), *index_schema_proto, attribute,
-                       supplemental_iter.IterateChunks()));
+      VMSDK_ASSIGN_OR_RETURN(std::shared_ptr<indexes::IndexBase> index,
+                             IndexFactory(ctx, index_schema.get(), attribute,
+                                          supplemental_iter.IterateChunks()));
       VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
           attribute.alias(), attribute.identifier(), index));
     } else if (ABSL_PREDICT_TRUE(!skip_loading_index_data) &&

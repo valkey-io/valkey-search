@@ -1229,17 +1229,6 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("tag_attribute", "tag_identifier", tag_index));
 
-    // Add text index
-    index_schema->CreateTextIndexSchema(
-        CreateIndexSchemaProtoWithTextProperties(
-            data_model::Language_INT_MAX_SENTINEL_DO_NOT_USE_, ".", false,
-            {"stop"}));
-    auto text_index =
-        std::make_shared<indexes::Text>(CreateTextIndexProto(true, true, 6),
-                                        index_schema->GetTextIndexSchema());
-    VMSDK_EXPECT_OK(index_schema->AddIndex("text_attribute", "text_identifier",
-                                           text_index));
-
     VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream));
   }
 
@@ -1299,21 +1288,6 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   EXPECT_EQ(tag_index->GetSeparator(), ',');
   EXPECT_EQ(tag_index->IsCaseSensitive(), false);
 
-  VMSDK_EXPECT_OK(index_schema->GetIndex("text_attribute"));
-  auto text_index = dynamic_cast<indexes::Text *>(
-      index_schema->GetIndex("text_attribute").value().get());
-  EXPECT_TRUE(text_index != nullptr);
-  EXPECT_EQ(text_index->GetWithSuffixTrie(), true);
-  EXPECT_EQ(text_index->GetNoStem(), true);
-  EXPECT_EQ(text_index->GetMinStemSize(), 6);
-
-  auto text_index_schema = index_schema->GetTextIndexSchema();
-  EXPECT_EQ(text_index_schema->GetLanguage(),
-            data_model::Language_INT_MAX_SENTINEL_DO_NOT_USE_);
-  EXPECT_EQ(text_index_schema->GetPunctuationString(), ".");
-  EXPECT_EQ(text_index_schema->GetWithOffsets(), false);
-  EXPECT_THAT(text_index_schema->GetStopWordsSet(), testing::Contains("stop"));
-
   EXPECT_TRUE(index_schema->IsBackfillInProgress());
   EXPECT_EQ(index_schema->GetStats().document_cnt, 10);
   EXPECT_EQ(index_schema->CountRecords(), 10);
@@ -1331,22 +1305,22 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
   // Construct and save index schema with text index
   {
+    // Set index schema text properties to values different than the IndexSchema
+    // defaults
+    data_model::Language language = data_model::LANGUAGE_UNSPECIFIED;
+    std::string punctuation = ".";
+    bool with_offsets = false;
+    std::vector<std::string> stop_words = {"stop"};
+
     auto index_schema = MockIndexSchema::Create(
                             &fake_ctx_, index_schema_name_str, key_prefixes,
-                            std::make_unique<HashAttributeDataType>(), nullptr)
+                            std::make_unique<HashAttributeDataType>(), nullptr,
+                            language, punctuation, with_offsets, stop_words)
                             .value();
 
-    // Create TextIndexSchema like in text_test.cc
-    std::vector<std::string> empty_stop_words;
-    auto proto = CreateIndexSchemaProtoWithTextProperties(
-        data_model::LANGUAGE_ENGLISH,
-        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",  // Default punctuation
-        false,                                        // with_offsets
-        empty_stop_words);
-    auto text_index_schema =
-        std::make_shared<indexes::text::TextIndexSchema>(proto);
-
     // Create text index with both proto and schema
+    auto text_index_schema = std::make_shared<indexes::text::TextIndexSchema>(
+        language, punctuation, with_offsets, stop_words);
     auto text_index = std::make_shared<indexes::Text>(
         CreateTextIndexProto(with_suffix_trie, no_stem, min_stem_size),
         text_index_schema);
@@ -1398,6 +1372,21 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
                 testing::UnorderedElementsAre("doc:"));
     EXPECT_TRUE(dynamic_cast<const HashAttributeDataType *>(
         &index_schema->GetAttributeDataType()));
+
+    // Validate text schema properties
+    auto text_index_schema = index_schema->GetTextIndexSchema();
+    EXPECT_EQ(text_index_schema->GetLanguage(),
+              data_model::LANGUAGE_UNSPECIFIED);
+    EXPECT_EQ(
+        text_index_schema->GetPunctuationBitmap(),
+        std::bitset<256>(
+            "000000000000000000000000000000000000000000000000000000000000000000"
+            "000000000000000000000000000000000000000000000000000000000000001000"
+            "000000000000000000000000000000000000000000000000000000000000000000"
+            "0000000000010000000000000111111111111111111111111111111111"));
+    EXPECT_EQ(text_index_schema->GetWithOffsets(), false);
+    EXPECT_THAT(text_index_schema->GetStopWordsSet(),
+                testing::Contains("stop"));
 
     // Validate text index was restored correctly
     VMSDK_EXPECT_OK(index_schema->GetIndex("description"));
@@ -1968,14 +1957,12 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     VMSDK_EXPECT_OK(index_schema->AddIndex("category", "cat_id", tag_index));
 
     // Add text index
-    std::vector<std::string> empty_stop_words;
-    auto text_proto = CreateIndexSchemaProtoWithTextProperties(
-        data_model::LANGUAGE_ENGLISH,
-        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", true, empty_stop_words);
-    auto text_index_schema =
-        std::make_shared<indexes::text::TextIndexSchema>(text_proto);
     auto text_index = std::make_shared<indexes::Text>(
-        CreateTextIndexProto(true, false, 6), text_index_schema);
+        CreateTextIndexProto(true, false, 6),
+        std::make_shared<indexes::text::TextIndexSchema>(
+            data_model::LANGUAGE_ENGLISH,
+            " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", true,
+            std::vector<std::string>{}));
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("description", "desc_id", text_index));
 

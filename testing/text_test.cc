@@ -43,13 +43,11 @@ class TextTest : public ::testing::Test {
   void SetUp() override {
     // Create default text index schema for testing
     std::vector<std::string> empty_stop_words;
-    auto index_schema_proto = CreateIndexSchemaProtoWithTextProperties(
+    text_index_schema_ = std::make_shared<text::TextIndexSchema>(
         data_model::LANGUAGE_ENGLISH,
         " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",  // Default punctuation
         false,                                        // with_offsets
         empty_stop_words);
-    text_index_schema_ =
-        std::make_shared<text::TextIndexSchema>(index_schema_proto);
 
     // Create default TextIndex prototype
     text_index_proto_ = std::make_unique<data_model::TextIndex>();
@@ -71,9 +69,8 @@ class TextTest : public ::testing::Test {
     std::string punct = punctuation.empty()
                             ? " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
                             : punctuation;
-    auto index_schema_proto = CreateIndexSchemaProtoWithTextProperties(
+    return std::make_shared<text::TextIndexSchema>(
         data_model::LANGUAGE_ENGLISH, punct, with_offsets, stop_words);
-    return std::make_shared<text::TextIndexSchema>(index_schema_proto);
   }
 
   // Helper to check if a token exists in the prefix tree
@@ -352,12 +349,10 @@ TEST_F(TextTest, MultipleDocumentsShareTokens) {
 TEST_F(TextTest, StemmingBehavior) {
   // Create schema with stemming enabled
   std::vector<std::string> empty_stop_words;
-  auto index_schema_proto = CreateIndexSchemaProtoWithTextProperties(
+  auto stemming_schema = std::make_shared<text::TextIndexSchema>(
       data_model::LANGUAGE_ENGLISH, " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
       false,  // with_offsets
       empty_stop_words);
-  auto stemming_schema =
-      std::make_shared<text::TextIndexSchema>(index_schema_proto);
 
   data_model::TextIndex stem_proto;
   stem_proto.set_no_stem(false);  // Enable stemming

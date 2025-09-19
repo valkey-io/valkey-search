@@ -92,12 +92,10 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
                                          tag_field_case_insensitive));
 
   data_model::TextIndex text_index_proto;
-  auto index_schema_proto = CreateIndexSchemaProtoWithTextProperties(
-      data_model::LANGUAGE_ENGLISH, std::string(kDefaultPunctuation), true,
-      kDefaultStopWords);
   auto text_index_schema =
       std::make_shared<valkey_search::indexes::text::TextIndexSchema>(
-          index_schema_proto);
+          data_model::LANGUAGE_ENGLISH, std::string(kDefaultPunctuation), true,
+          kDefaultStopWords);
   auto text_index_1 =
       std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
   auto text_index_2 =

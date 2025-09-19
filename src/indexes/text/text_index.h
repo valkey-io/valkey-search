@@ -49,14 +49,15 @@ struct TextIndex {
 
 class TextIndexSchema {
  public:
-  TextIndexSchema(const data_model::IndexSchema& index_schema_proto);
+  TextIndexSchema(data_model::Language language, const std::string& punctuation,
+                  bool with_offsets,
+                  const std::vector<std::string>& stop_words);
   ~TextIndexSchema();
 
   uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }
 
   uint8_t GetNumTextFields() const { return num_text_fields_; }
   std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
-  const std::string GetPunctuationString() const { return punct_str_; }
   const PunctuationBitmap& GetPunctuationBitmap() const {
     return punct_bitmap_;
   }
@@ -83,9 +84,6 @@ class TextIndexSchema {
   // safe.
   //
   absl::flat_hash_map<Key, TextIndex> by_key_;
-
-  // Punctuation string
-  std::string punct_str_;
 
   // Punctuation bitmap
   PunctuationBitmap punct_bitmap_;

@@ -75,7 +75,6 @@ IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     ValkeyModuleCtx *ctx, IndexSchema *index_schema,
     const data_model::Attribute &attribute,
-    const data_model::IndexSchema *index_schema_proto,
     std::optional<SupplementalContentChunkIter> iter) {
   const auto &index = attribute.index();
   switch (index.index_type_case()) {
@@ -86,6 +85,7 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
       return std::make_shared<indexes::Numeric>(index.numeric_index());
     }
     case data_model::Index::IndexTypeCase::kTextIndex: {
+      // Create the TextIndexSchema if this is the first Text index we're seeing
       if (!index_schema->GetTextIndexSchema()) {
         index_schema->CreateTextIndexSchema();
       }
@@ -179,9 +179,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
   VMSDK_RETURN_IF_ERROR(res->Init(ctx));
   if (!skip_attributes) {
     for (const auto &attribute : index_schema_proto.attributes()) {
-      VMSDK_ASSIGN_OR_RETURN(std::shared_ptr<indexes::IndexBase> index,
-                             IndexFactory(ctx, res.get(), attribute,
-                                          &index_schema_proto, std::nullopt));
+      VMSDK_ASSIGN_OR_RETURN(
+          std::shared_ptr<indexes::IndexBase> index,
+          IndexFactory(ctx, res.get(), attribute, std::nullopt));
       VMSDK_RETURN_IF_ERROR(
           res->AddIndex(attribute.alias(), attribute.identifier(), index));
     }
@@ -907,6 +907,7 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
       google::protobuf::RepeatedPtrFieldBackInserter(
           index_schema_proto->mutable_attributes()),
       [](const auto &attribute) { return *attribute.second.ToProto(); });
+
   return index_schema_proto;
 }
 
@@ -1006,7 +1007,6 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           supplemental_content->index_content_header().attribute();
       VMSDK_ASSIGN_OR_RETURN(std::shared_ptr<indexes::IndexBase> index,
                              IndexFactory(ctx, index_schema.get(), attribute,
-                                          index_schema_proto.get(),
                                           supplemental_iter.IterateChunks()));
       VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
           attribute.alias(), attribute.identifier(), index));

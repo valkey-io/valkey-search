@@ -17,6 +17,7 @@
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/text_index.h"
+#include "testing/common.h"
 
 namespace valkey_search::indexes::text {
 

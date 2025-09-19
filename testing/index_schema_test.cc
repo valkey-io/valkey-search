@@ -1217,6 +1217,18 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
     VMSDK_EXPECT_OK(index_schema->AddIndex("flat_attribute", "flat_identifier",
                                            flat_index));
 
+    // Add numeric index
+    auto numeric_index =
+        std::make_shared<indexes::Numeric>(CreateNumericIndexProto());
+    VMSDK_EXPECT_OK(index_schema->AddIndex(
+        "numeric_attribute", "numeric_identifier", numeric_index));
+
+    // Add tag index
+    auto tag_index =
+        std::make_shared<indexes::Tag>(CreateTagIndexProto(",", false));
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex("tag_attribute", "tag_identifier", tag_index));
+
     VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream));
   }
 
@@ -1241,6 +1253,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
               testing::UnorderedElementsAre("prefix1", "prefix2"));
   EXPECT_TRUE(dynamic_cast<const HashAttributeDataType *>(
       &index_schema->GetAttributeDataType()));
+
   VMSDK_EXPECT_OK(index_schema->GetIndex("hnsw_attribute"));
   auto hnsw_index = dynamic_cast<indexes::VectorHNSW<float> *>(
       index_schema->GetIndex("hnsw_attribute").value().get());
@@ -1263,6 +1276,18 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   EXPECT_EQ(flat_index->GetCapacity(), initial_cap);
   EXPECT_EQ(flat_index->GetBlockSize(), block_size);
 
+  VMSDK_EXPECT_OK(index_schema->GetIndex("numeric_attribute"));
+  auto num_index = dynamic_cast<indexes::Numeric *>(
+      index_schema->GetIndex("numeric_attribute").value().get());
+  EXPECT_TRUE(num_index != nullptr);
+
+  VMSDK_EXPECT_OK(index_schema->GetIndex("tag_attribute"));
+  auto tag_index = dynamic_cast<indexes::Tag *>(
+      index_schema->GetIndex("tag_attribute").value().get());
+  EXPECT_TRUE(tag_index != nullptr);
+  EXPECT_EQ(tag_index->GetSeparator(), ',');
+  EXPECT_EQ(tag_index->IsCaseSensitive(), false);
+
   EXPECT_TRUE(index_schema->IsBackfillInProgress());
   EXPECT_EQ(index_schema->GetStats().document_cnt, 10);
   EXPECT_EQ(index_schema->CountRecords(), 10);
@@ -1280,20 +1305,22 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
   // Construct and save index schema with text index
   {
+    // Set index schema text properties to values different than the IndexSchema
+    // defaults
+    data_model::Language language = data_model::LANGUAGE_UNSPECIFIED;
+    std::string punctuation = ".";
+    bool with_offsets = false;
+    std::vector<std::string> stop_words = {"stop"};
+
     auto index_schema = MockIndexSchema::Create(
                             &fake_ctx_, index_schema_name_str, key_prefixes,
-                            std::make_unique<HashAttributeDataType>(), nullptr)
+                            std::make_unique<HashAttributeDataType>(), nullptr,
+                            language, punctuation, with_offsets, stop_words)
                             .value();
 
-    // Create TextIndexSchema like in text_test.cc
-    std::vector<std::string> empty_stop_words;
-    auto text_index_schema = std::make_shared<indexes::text::TextIndexSchema>(
-        data_model::LANGUAGE_ENGLISH,
-        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",  // Default punctuation
-        false,                                        // with_offsets
-        empty_stop_words);
-
     // Create text index with both proto and schema
+    auto text_index_schema = std::make_shared<indexes::text::TextIndexSchema>(
+        language, punctuation, with_offsets, stop_words);
     auto text_index = std::make_shared<indexes::Text>(
         CreateTextIndexProto(with_suffix_trie, no_stem, min_stem_size),
         text_index_schema);
@@ -1345,6 +1372,21 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
                 testing::UnorderedElementsAre("doc:"));
     EXPECT_TRUE(dynamic_cast<const HashAttributeDataType *>(
         &index_schema->GetAttributeDataType()));
+
+    // Validate text schema properties
+    auto text_index_schema = index_schema->GetTextIndexSchema();
+    EXPECT_EQ(text_index_schema->GetLanguage(),
+              data_model::LANGUAGE_UNSPECIFIED);
+    EXPECT_EQ(
+        text_index_schema->GetPunctuationBitmap(),
+        std::bitset<256>(
+            "000000000000000000000000000000000000000000000000000000000000000000"
+            "000000000000000000000000000000000000000000000000000000000000001000"
+            "000000000000000000000000000000000000000000000000000000000000000000"
+            "0000000000010000000000000111111111111111111111111111111111"));
+    EXPECT_EQ(text_index_schema->GetWithOffsets(), false);
+    EXPECT_THAT(text_index_schema->GetStopWordsSet(),
+                testing::Contains("stop"));
 
     // Validate text index was restored correctly
     VMSDK_EXPECT_OK(index_schema->GetIndex("description"));
@@ -1879,13 +1921,13 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     LOG(INFO) << "✓ Skip load verified - index empty, backfill ready";
   }
 
-  // STEP 3: Drop the index (implicitly done when schema goes out of scope)
+  // STEP 3: Drop the schema (implicitly done when schema goes out of scope)
   LOG(INFO) << "STEP 3: Index dropped (implicit)";
 
-  // STEP 4: Create vector index + numeric field + tag field + add 1000 vectors
-  // + save to RDB
-  LOG(INFO)
-      << "STEP 4: Creating mixed index with vector + numeric + tag fields";
+  // STEP 4: Create vector index + numeric index + tag index + text index + add
+  // 1000 vectors + save to RDB
+  LOG(INFO) << "STEP 4: Creating mixed schema with vector + numeric + tag + "
+               "text indexes";
   FakeSafeRDB rdb_stream_step4;
 
   {
@@ -1914,16 +1956,28 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
         std::make_shared<indexes::Tag>(CreateTagIndexProto(",", false));
     VMSDK_EXPECT_OK(index_schema->AddIndex("category", "cat_id", tag_index));
 
+    // Add text index
+    auto text_index = std::make_shared<indexes::Text>(
+        CreateTextIndexProto(true, false, 6),
+        std::make_shared<indexes::text::TextIndexSchema>(
+            data_model::LANGUAGE_ENGLISH,
+            " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", true,
+            std::vector<std::string>{}));
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex("description", "desc_id", text_index));
+
     // Add test data for all indexes
     auto vectors =
         DeterministicallyGenerateVectors(num_vectors, dimensions, 1.0);
     auto vec_itr = index_schema->attributes_.find("embedding");
     auto num_itr = index_schema->attributes_.find("price");
     auto tag_itr = index_schema->attributes_.find("category");
+    auto text_itr = index_schema->attributes_.find("description");
 
     EXPECT_FALSE(vec_itr == index_schema->attributes_.end());
     EXPECT_FALSE(num_itr == index_schema->attributes_.end());
     EXPECT_FALSE(tag_itr == index_schema->attributes_.end());
+    EXPECT_FALSE(text_itr == index_schema->attributes_.end());
 
     for (size_t i = 0; i < vectors.size(); ++i) {
       auto interned_key =
@@ -1954,6 +2008,14 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
           vmsdk::MakeUniqueValkeyString(category);
       index_schema->ProcessAttributeMutation(&fake_ctx_, tag_itr->second,
                                              interned_key, std::move(tag_data),
+                                             indexes::DeletionType::kNone);
+
+      // Add text data (description)
+      std::string description = "description" + std::to_string(i);
+      vmsdk::UniqueValkeyString text_data =
+          vmsdk::MakeUniqueValkeyString(description);
+      index_schema->ProcessAttributeMutation(&fake_ctx_, text_itr->second,
+                                             interned_key, std::move(text_data),
                                              indexes::DeletionType::kNone);
     }
 
@@ -1994,10 +2056,12 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     auto vec_index = mixed_schema->GetIndex("embedding");
     auto num_index = mixed_schema->GetIndex("price");
     auto tag_index = mixed_schema->GetIndex("category");
+    auto text_index = mixed_schema->GetIndex("description");
 
     VMSDK_EXPECT_OK_STATUSOR(vec_index);
     VMSDK_EXPECT_OK_STATUSOR(num_index);
     VMSDK_EXPECT_OK_STATUSOR(tag_index);
+    VMSDK_EXPECT_OK_STATUSOR(text_index);
 
     EXPECT_EQ(vec_index.value()->GetRecordCount(), num_vectors);
     LOG(INFO) << "✓ Mixed index normal load verified";
@@ -2065,10 +2129,12 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     auto vec_index = mixed_skip_schema->GetIndex("embedding");
     auto num_index = mixed_skip_schema->GetIndex("price");
     auto tag_index = mixed_skip_schema->GetIndex("category");
+    auto text_index = mixed_skip_schema->GetIndex("description");
 
     VMSDK_EXPECT_OK_STATUSOR(vec_index);
     VMSDK_EXPECT_OK_STATUSOR(num_index);
     VMSDK_EXPECT_OK_STATUSOR(tag_index);
+    VMSDK_EXPECT_OK_STATUSOR(text_index);
 
     EXPECT_EQ(vec_index.value()->GetRecordCount(), 0);
     EXPECT_TRUE(mixed_skip_schema->IsBackfillInProgress());

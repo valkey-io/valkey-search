@@ -9,7 +9,6 @@
 #define VALKEYSEARCH_SRC_INDEXES_TEXT_H_
 
 #include <memory>
-#include <optional>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/functional/any_invocable.h"
@@ -17,7 +16,6 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
-#include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/term.h"
 #include "src/indexes/text/text_index.h"
@@ -65,10 +63,6 @@ class Text : public IndexBase {
 
   InternedStringPtr GetRawValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
-
-  bool GetWithSuffixTrie() const { return with_suffix_trie_; }
-  bool GetNoStem() const { return no_stem_; }
-  int32_t GetMinStemSize() const { return min_stem_size_; }
 
  public:
   // Abstract for Text. Every text operation will have a specific

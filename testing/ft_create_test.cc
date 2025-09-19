@@ -390,7 +390,7 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_error_message =
                 "$140\r\nInvalid field type for field `vector`: Invalid range: "
                 "Value above maximum; M must be a positive integer greater "
-                "than 0 and cannot exceed 50.\r\n",
+                "than 2 and cannot exceed 50.\r\n",
         },
         {
             .test_name = "MaxEfConstructionLimit",

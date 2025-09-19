@@ -167,6 +167,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     std::vector<vmsdk::BlockedClient> blocked_clients;
     bool consume_in_progress{false};
     bool from_backfill{false};
+    bool from_multi{false};
   };
   using MutatedAttributes =
       absl::flat_hash_map<std::string, DocumentMutation::AttributeData>;
@@ -262,7 +263,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   vmsdk::BlockedClientCategory GetBlockedCategoryFromProto() const;
   bool TrackMutatedRecord(ValkeyModuleCtx *ctx, const InternedStringPtr &key,
                           MutatedAttributes &&mutated_attributes,
-                          bool from_backfill, bool block_client)
+                          bool from_backfill, bool block_client,
+                          bool from_multi)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(
       const InternedStringPtr &key, bool first_time)

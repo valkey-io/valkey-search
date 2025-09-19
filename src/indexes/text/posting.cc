@@ -176,8 +176,8 @@ class Postings::Impl {
  public:
   bool save_positions_;
   size_t num_text_fields_;
-  std::map<Key, PositionMap> key_to_positions_;
-
+  // std::map<Key, PositionMap> key_to_positions_;
+  std::map<Key, PositionMap, InternedStringPtrLess> key_to_positions_;
   Impl(bool save_positions, size_t num_text_fields)
       : save_positions_(save_positions), num_text_fields_(num_text_fields) {}
 };
@@ -266,6 +266,9 @@ Postings::KeyIterator Postings::GetKeyIterator() const {
   iterator.key_map_ = &impl_->key_to_positions_;
   iterator.current_ = iterator.key_map_->begin();
   iterator.end_ = iterator.key_map_->end();
+  for (auto it = iterator.key_map_->begin(); it != iterator.key_map_->end(); ++it) {
+    VMSDK_LOG(WARNING, nullptr) << "Key Map " << it->first->Str();
+  }
   return iterator;
 }
 

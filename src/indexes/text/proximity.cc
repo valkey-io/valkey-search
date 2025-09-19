@@ -105,6 +105,7 @@ uint64_t ProximityIterator::CurrentFieldMask() const {
 bool ProximityIterator::NextKeyMain() {
     VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain";
     while (!done_) {
+        VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain - in loop";
         // 1) Validate children and compute min/max among current keys
         InternedStringPtr min_key = nullptr;
         InternedStringPtr max_key = nullptr;
@@ -188,7 +189,8 @@ bool ProximityIterator::NextPosition() {
             current_end_pos_ = positions[n-1].second;
             VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition returning as valid";
             if (!iters_[n-1]->NextPosition()) {
-                done_ = true;
+                // done_ = true;
+                // Think of what to do here.
             }
             return true;
         }

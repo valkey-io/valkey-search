@@ -41,12 +41,9 @@ TermIterator::TermIterator(const WordIterator& word_iter,
     nomatch_ = true;
     return;
   }
-  if (!TermIterator::NextPosition()) {
-    VMSDK_LOG(WARNING, nullptr) << "TI::nomatch3{" << word_iter_.GetWord() << "}";
-    nomatch_ = true;
-  }
 }
 
+// Usage: Need to check if not DoneKeys, and only then call NextKey
 bool TermIterator::NextKey() {
   VMSDK_LOG(WARNING, nullptr) << "TI::NextKey{" << word_iter_.GetWord() << "}";
   if (nomatch_) return false;
@@ -58,20 +55,24 @@ bool TermIterator::NextKey() {
     if (key_iter_.ContainsFields(field_mask_)) {
         current_key_ = key_iter_.GetKey();
         pos_iter_ = key_iter_.GetPositionIterator();
-        VMSDK_LOG(WARNING, nullptr) << "TI::NextKey{" << word_iter_.GetWord() << "} - Found key. CurrentKey: " << current_key_->Str() << " Position: " << pos_iter_.GetPosition();;
-        return true;
+        current_position_ = std::nullopt;
+        current_field_mask_ = std::nullopt;
+        // We need to call NextPosition here if we dont want garbage values.
+        VMSDK_LOG(WARNING, nullptr) << "TI::NextKey{" << word_iter_.GetWord() << "} - Found key. CurrentKey: " << current_key_->Str() << " Position: " << pos_iter_.GetPosition();
+        if (TermIterator::NextPosition()) {
+          return true;  // We have a key and a position
+        }
     }
     key_iter_.NextKey();
   }
   // No more valid keys
   current_key_ = nullptr;
-  nomatch_ = true;
   return false;
 }
 
 const InternedStringPtr& TermIterator::CurrentKey() {
-  VMSDK_LOG(WARNING, nullptr) << "TI::CurrentKey{" << word_iter_.GetWord() << "}";
   CHECK(current_key_ != nullptr);
+  VMSDK_LOG(WARNING, nullptr) << "TI::CurrentKey{" << word_iter_.GetWord() << "}. Key: " <<  current_key_->Str();
   return current_key_;
 }
 
@@ -94,7 +95,6 @@ bool TermIterator::NextPosition() {
   }
   // No more valid positions
   current_position_ = std::nullopt;
-  nomatch_ = true;
   return false;
 }
 
@@ -109,11 +109,12 @@ uint64_t TermIterator::CurrentFieldMask() const {
   VMSDK_LOG(WARNING, nullptr) << "TI::CurrentFieldMask{" << word_iter_.GetWord() << "}";
   CHECK(current_field_mask_.has_value());
   return current_field_mask_.value();
-} 
+}
 
 bool TermIterator::DoneKeys() const {
   VMSDK_LOG(WARNING, nullptr) << "TI::DoneKeys{" << word_iter_.GetWord() << "}";
   if (nomatch_) {
+      VMSDK_LOG(WARNING, nullptr) << "TI::DoneKeys{" << word_iter_.GetWord() << "} Done due to nomatch_";
     return true;
   }
   return !key_iter_.IsValid();

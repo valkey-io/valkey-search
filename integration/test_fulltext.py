@@ -15,11 +15,11 @@ This file contains tests for full text search.
 # Constants for text queries on Hash documents.
 text_index_on_hash = "FT.CREATE products ON HASH PREFIX 1 product: SCHEMA desc TEXT"
 hash_docs = [
-    ["HSET", "product:1", "category", "electronics", "name", "Laptop", "price", "999.99", "rating", "4.5", "desc", "great"],
-    ["HSET", "product:2", "category", "electronics", "name", "Tablet", "price", "499.00", "rating", "4.0", "desc", "good"],
-    ["HSET", "product:3", "category", "electronics", "name", "Phone", "price", "299.00", "rating", "3.8", "desc", "Ok"],
-    ["HSET", "product:4", "category", "books", "name", "Book", "price", "19.99", "rating", "4.8", "desc", "wonder"],
-    ["HSET", "product:5", "category", "books", "name", "Book2", "price", "19.99", "rating", "1.0", "desc", "greased"]
+    ["HSET", "product:1", "category", "electronics", "name", "Laptop", "price", "999.99", "rating", "4.5", "desc", "Random Words. Random Words. Great oaks from little acorns grow"],
+    ["HSET", "product:2", "category", "electronics", "name", "Tablet", "price", "499.00", "rating", "4.0", "desc", "Random Words. Random Words. Good beginning makes a good ending. Good desc"],
+    ["HSET", "product:3", "category", "electronics", "name", "Phone", "price", "299.00", "rating", "3.8", "desc", "Random Words. Random Words. Ok, this document uses some more common words from other docs. Good desc, great tablet. Random Words."],
+    ["HSET", "product:4", "category", "books", "name", "Book", "price", "19.99", "rating", "4.8", "desc", "Random Words. Random Words. wonder of wonders. Random words these are not. Random Words."],
+    ["HSET", "product:5", "category", "books", "name", "Book2", "price", "19.99", "rating", "1.0", "desc", "Random Words. Random Words. greased the inspector's palm"]
 ]
 text_query_term = ["FT.SEARCH", "products", '@desc:"wonder"']
 text_query_term_nomatch = ["FT.SEARCH", "products", '@desc:"nomatch"']
@@ -105,7 +105,29 @@ class TestFullText(ValkeySearchTestCaseBase):
         result = client.execute_command(*text_query_prefix_multimatch)
         assert len(result) == 5
         assert result[0] == 2  # Number of documents found. Both docs below start with Grea* => Great and Greased
-        assert result[1] == b"product:1" and result[3] == b"product:5" or result[1] == b"product:5" and result[3] == b"product:1"
+        assert result[1] == b"product:1" and result[3] == b"product:5"
+        # TODO: Update these queries to non stemmed versions after queries are stemmed.
+        # Perform an exact phrase search operation on a unique phrase (exists in one doc).
+        result = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl"')
+        result = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl acorn grow"')
+        result = client.execute_command("FT.SEARCH", "products", '@desc:"good begin"')
+        # Perform an exact phrase search operation on a phrase existing in 2 documents.
+        result = client.execute_command("FT.SEARCH", "products", '@desc:"good desc"')
+        # Perform an exact phrase search operation on a phrase existing in 5 documents.
+        result = client.execute_command("FT.SEARCH", "products", '@desc:"random word"')
+
+        # TODO: Test for searches on tokens on a specific field when the same tokens exist in other text fields.
+        # TODO: Test for searches on tokens that have common keys, but in-order does not match.
+        # TODO: Test for searches on tokens that have common keys, but slop does not match.
+        # TODO: Test for searches on tokens that have common keys and inorder matches but slop does not match.
+        # TODO: Test for searches on tokens that have common keys and slop matches but inorder does not match.
+        # TODO: Test for searches on tokens that common keys and initial positions do not have inorder matches or slop matches.
+        #       Later positions do have inorder matches, but no slop matches. Finally, it has both inorder and slop matches.
+
+        # TODO: We can test this once the queries are tokenized with punctuation applied.
+        # result = client.execute_command("FT.SEARCH", "products", '@desc:"inspector\'s palm"')
+        # TODO: We can test this once the queries are tokenized with puncutation and stopword removal applied.
+        # result = client.execute_command("FT.SEARCH", "products", '@desc:"random words, these are not"')
 
     def test_ft_create(self):
         """

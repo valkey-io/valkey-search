@@ -41,10 +41,6 @@ WildCardIterator::WildCardIterator(const WordIterator& word_iter,
     nomatch_ = true;
     return;
   }
-  if (!WildCardIterator::NextPosition()) {
-    VMSDK_LOG(WARNING, nullptr) << "WI::nomatch3{" << word_iter_.GetWord() << "}";
-    nomatch_ = true;
-  }
 }
 
 bool WildCardIterator::NextKey() {
@@ -59,8 +55,12 @@ bool WildCardIterator::NextKey() {
       if (key_iter_.ContainsFields(field_mask_)) {
           current_key_ = key_iter_.GetKey();
           pos_iter_ = key_iter_.GetPositionIterator();
+          current_position_ = std::nullopt;
+          current_field_mask_ = std::nullopt;
           VMSDK_LOG(WARNING, nullptr) << "WI::NextKey{" << word_iter_.GetWord() << "} - Found key. CurrentKey: " << current_key_->Str() << " Position: " << pos_iter_.GetPosition();;
-          return true;
+          if (WildCardIterator::NextPosition()) {
+            return true;
+          }
       }
       key_iter_.NextKey();
     }
@@ -69,13 +69,12 @@ bool WildCardIterator::NextKey() {
   }
   // No more valid keys
   current_key_ = nullptr;
-  nomatch_ = true;
   return false;
 }
 
 const InternedStringPtr& WildCardIterator::CurrentKey() {
-  VMSDK_LOG(WARNING, nullptr) << "WI::CurrentKey{" << word_iter_.GetWord() << "}";
   CHECK(current_key_ != nullptr);
+  VMSDK_LOG(WARNING, nullptr) << "WI::CurrentKey{" << word_iter_.GetWord() << "}. Key: " <<  current_key_->Str();
   return current_key_;
 }
 
@@ -98,7 +97,6 @@ bool WildCardIterator::NextPosition() {
   }
   // No more valid positions
   current_position_ = std::nullopt;
-  nomatch_ = true;
   return false;
 }
 
@@ -113,11 +111,12 @@ uint64_t WildCardIterator::CurrentFieldMask() const {
   VMSDK_LOG(WARNING, nullptr) << "WI::CurrentFieldMask{" << word_iter_.GetWord() << "}";
   CHECK(current_field_mask_.has_value());
   return current_field_mask_.value();
-} 
+}
 
 bool WildCardIterator::DoneKeys() const {
   VMSDK_LOG(WARNING, nullptr) << "WI::DoneKeys{" << word_iter_.GetWord() << "}";
   if (nomatch_) {
+    VMSDK_LOG(WARNING, nullptr) << "WI::DoneKeys{" << word_iter_.GetWord() << "} Done due to nomatch_";
     return true;
   }
   return word_iter_.Done() && !key_iter_.IsValid();

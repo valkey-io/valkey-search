@@ -78,7 +78,23 @@ absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr& key,
 }
 
 int Text::RespondWithInfo(ValkeyModuleCtx* ctx) const {
-  throw std::runtime_error("Text::RespondWithInfo not implemented");
+  ValkeyModule_ReplyWithSimpleString(ctx, "type");
+  ValkeyModule_ReplyWithSimpleString(ctx, "TEXT");
+  ValkeyModule_ReplyWithSimpleString(ctx, "WITH_SUFFIX_TRIE");
+  ValkeyModule_ReplyWithSimpleString(ctx, with_suffix_trie_ ? "1" : "0");
+
+  // Show only one: if no_stem is specified, show no_stem, otherwise show
+  // min_stem_size
+  if (no_stem_) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "NO_STEM");
+    ValkeyModule_ReplyWithSimpleString(ctx, "1");
+  } else {
+    ValkeyModule_ReplyWithSimpleString(ctx, "MIN_STEM_SIZE");
+    ValkeyModule_ReplyWithLongLong(ctx, min_stem_size_);
+  }
+  // Text fields do not include a size field right now (unlike
+  // numeric/tag/vector fields)
+  return 6;
 }
 
 bool Text::IsTracked(const InternedStringPtr& key) const { return false; }

@@ -121,11 +121,6 @@ class FTInfoParser:
         return self.parsed_data.get("index_name", "")
 
     @property
-    def index_options(self) -> List[Any]:
-        """Get the index options."""
-        return self.parsed_data.get("index_options", [])
-
-    @property
     def index_definition(self) -> Dict[str, Any]:
         """Get the index definition."""
         return self.parsed_data.get("index_definition", {})
@@ -139,11 +134,6 @@ class FTInfoParser:
     def num_docs(self) -> int:
         """Get the number of documents in the index."""
         return self.parsed_data.get("num_docs", 0)
-
-    @property
-    def num_terms(self) -> int:
-        """Get the number of terms in the index."""
-        return self.parsed_data.get("num_terms", 0)
 
     @property
     def num_records(self) -> int:
@@ -192,8 +182,15 @@ class FTInfoParser:
             The attribute dictionary if found, None otherwise
         """
         for attr in self.attributes:
-            if attr.get("identifier") == name:
-                return attr
+            # Handle case where attr might be a list instead of dict
+            if isinstance(attr, dict):
+                if attr.get("identifier") == name:
+                    return attr
+            elif isinstance(attr, list):
+                # Try to parse the list as key-value pairs
+                parsed_attr = self._parse_key_value_list(attr)
+                if isinstance(parsed_attr, dict) and parsed_attr.get("identifier") == name:
+                    return parsed_attr
         return None
 
     def get_attributes_by_type(self, field_type: str) -> List[Dict[str, Any]]:
@@ -234,6 +231,72 @@ class FTInfoParser:
     def is_backfill_complete(self) -> bool:
         """Check if backfill is complete."""
         return not self.backfill_in_progress and self.backfill_complete_percent >= 1.0
+
+    def get_text_min_stem_size(self, field_name: str) -> Optional[int]:
+        """
+        Get the min_stem_size of a text field.
+
+        Args:
+            field_name: The name of the text field
+
+        Returns:
+            The min_stem_size if found, None otherwise
+        """
+        attr = self.get_attribute_by_name(field_name)
+        if attr and attr.get("type") == "TEXT":
+            return attr.get("MIN_STEM_SIZE")
+        return None
+
+    def get_text_no_stem(self, field_name: str) -> Optional[bool]:
+        """
+        Get the no_stem setting of a text field.
+
+        Args:
+            field_name: The name of the text field
+
+        Returns:
+            True if no_stem is enabled, False if not, None if field not found
+        """
+        attr = self.get_attribute_by_name(field_name)
+        if attr and attr.get("type") == "TEXT":
+            return bool(attr.get("NO_STEM", 0))
+        return None
+
+    def get_text_with_suffix_trie(self, field_name: str) -> Optional[bool]:
+        """
+        Get the with_suffix_trie setting of a text field.
+
+        Args:
+            field_name: The name of the text field
+
+        Returns:
+            True if suffix trie is enabled, False if not, None if field not found
+        """
+        attr = self.get_attribute_by_name(field_name)
+        if attr and attr.get("type") == "TEXT":
+            return bool(attr.get("WITH_SUFFIX_TRIE", 0))
+        return None
+
+    @property
+    def language(self) -> Optional[str]:
+        """Get the language setting for text indexes."""
+        return self.parsed_data.get("language")
+
+    @property
+    def punctuation(self) -> Optional[str]:
+        """Get the punctuation characters for text indexes."""
+        return self.parsed_data.get("punctuation")
+
+    @property
+    def stop_words(self) -> Optional[List[str]]:
+        """Get the stop words list for text indexes."""
+        return self.parsed_data.get("stop_words")
+
+    @property
+    def with_offsets(self) -> Optional[bool]:
+        """Get the with_offsets setting for text indexes."""
+        offsets = self.parsed_data.get("with_offsets")
+        return bool(offsets) if offsets is not None else None
 
     def get_vector_dimensions(self, field_name: str) -> Optional[int]:
         """

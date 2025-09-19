@@ -3,6 +3,8 @@ from valkey import ResponseError
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
+from ft_info_parser import FTInfoParser
+from valkeytestframework.util import waiters
 
 """
 This file contains tests for full text search.
@@ -107,7 +109,7 @@ class TestFullText(ValkeySearchTestCaseBase):
         assert result[0] == 2  # Number of documents found. Both docs below start with Grea* => Great and Greased
         assert result[1] == b"product:1" and result[3] == b"product:5" or result[1] == b"product:5" and result[3] == b"product:1"
 
-    def test_ft_create(self):
+    def test_ft_create_and_info(self):
         """
         Test basic text search for FT.CREATE with multiple cases.
         Validates that the command parsing works correctly even though TEXT indexing is not yet implemented.
@@ -154,15 +156,96 @@ class TestFullText(ValkeySearchTestCaseBase):
         with pytest.raises(ResponseError):
             client.execute_command(*command_args)
 
-        # Test multiple text fields
         command_args = [
-            "FT.CREATE", "idx4",
-            "ON", "HASH",
-            "SCHEMA", "desc", "TEXT", "desc2", "TEXT"
+            "FT.CREATE", "idx4", "ON", "HASH",
+            "PREFIX", "2", "product:", "item:",
+            "STOPWORDS", "2", "the", "and",
+            "PUNCTUATION", ".,!",
+            "WITHOFFSETS",
+            "SCHEMA",
+            "title", "TEXT", "NOSTEM",
+            "description", "TEXT",
+            "price", "NUMERIC",
+            "category", "TAG", "SEPARATOR", "|",
+            "subcategory", "TAG", "CASESENSITIVE"
         ]
         
         assert client.execute_command(*command_args) == b"OK"
         assert b"idx4" in client.execute_command("FT._LIST")
+        
+        info_response = client.execute_command("FT.INFO", "idx4")
+        parser = FTInfoParser(info_response)
+        
+        # Validate top-level structure
+        required_top_level_fields = [
+            "index_name", "index_options", "index_definition", "attributes",
+            "num_docs", "num_terms", "num_records", "hash_indexing_failures",
+            "gc_stats", "cursor_stats", "dialect_stats", "Index Errors",
+            "backfill_in_progress", "backfill_complete_percent", 
+            "mutation_queue_size", "recent_mutations_queue_delay",
+            "state", "punctuation", "stop_words", "with_offsets", "language"
+        ]
+        
+        for field in required_top_level_fields:
+            assert field in parser.parsed_data, f"Missing required field: {field}"
+        
+        # Validate index definition structure
+        index_def = parser.index_definition
+        assert "key_type" in index_def
+        assert "prefixes" in index_def
+        assert "default_score" in index_def
+
+        text_attr = parser.get_attribute_by_name("title")
+        assert text_attr["type"] == "TEXT"
+        assert text_attr.get("NO_STEM") == 1
+        
+        numeric_attr = parser.get_attribute_by_name("price")
+        assert numeric_attr["type"] == "NUMERIC"
+        
+        tag_attr = parser.get_attribute_by_name("category")
+        assert tag_attr["type"] == "TAG"
+        assert tag_attr.get("SEPARATOR") == "|"
+
+        def check_is_backfill_complete(idxname):
+            """
+            Helper function to check if backfill is complete.
+            """
+            info = client.execute_command("FT.INFO", idxname)
+            parser = FTInfoParser(info)
+            return parser.is_backfill_complete()
+        
+        # Validate backfill fields
+        waiters.wait_for_equal(lambda: check_is_backfill_complete("idx4"), True, timeout=5)
+        
+        # Add validation checks for specific fields
+        assert parser.num_docs == 0, f"num_docs should be zero"
+        assert parser.num_records == 0, f"num_records should be zero"
+        assert parser.hash_indexing_failures == 0, f"hash_indexing_failures should be zero"
+        
+        # Validate queue and delay fields
+        assert parser.mutation_queue_size == 0, f"mutation_queue_size should be non-negative, got: {parser.mutation_queue_size}"
+        assert isinstance(parser.recent_mutations_queue_delay, str), f"recent_mutations_queue_delay should be string, got: {type(parser.recent_mutations_queue_delay)}"
+        
+        # Validate state field
+        assert isinstance(parser.state, str), f"state should be string, got: {type(parser.state)}"
+        assert parser.state in ["ready", "backfill_in_progress"], f"state should be 'ready' or 'backfill_in_progress', got: {parser.state}"
+        
+        # Validate punctuation setting
+        punctuation = parser.parsed_data.get("punctuation", "")
+        assert punctuation == ".,!", f"Expected punctuation '.,!', got: '{punctuation}'"
+        
+        # Validate stop_words setting
+        stop_words = parser.parsed_data.get("stop_words", [])
+        assert isinstance(stop_words, list), f"stop_words should be list, got: {type(stop_words)}"
+        assert set(stop_words) == {"the", "and"}, f"Expected stop_words ['the', 'and'], got: {stop_words}"
+        
+        # Validate with_offsets setting
+        with_offsets = parser.parsed_data.get("with_offsets")
+        assert with_offsets == 1, f"with_offsets is set to true any other value is wrong"
+        
+        # Validate language setting
+        language = parser.parsed_data.get("language", "")
+        assert language == "english", f"Expected language 'english', got: '{language}'"
 
     def test_text_search_per_field(self):
         """

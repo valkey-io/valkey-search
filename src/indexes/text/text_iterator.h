@@ -13,15 +13,35 @@
 
 namespace valkey_search::indexes::text {
 
-/* Base Class for all Text Search Iterators. */
+/* Base Class for all Text Search Iterators. 
+ * If (!DoneKeys) {
+ *   auto key = CurrentKey();
+ *   NextKey();
+ * }
+ */
 class TextIterator {
 public:
     virtual ~TextIterator() = default;
 
     // Key-level iteration
+    // Returns true if there are more keys left to search.
+    // It does not guarantee whether there will be a match wrt constraints
+    // (e.g. field, position, inorder, slop, etc). This is just an indication that it is
+    // safe to call `NextKey()`.
+    // Returns false if we have exhausted all keys, and there are no more search. In this case
+    // no more calls should be made to `NextKey()`.
+
+    // Returns true if there is a match. Use `CurrentKey()` to access the matching document.
+    // Returns false otherwise. When false is returned, `CurrentKey()` should no longer be accessed.
     virtual bool DoneKeys() const = 0;
-    virtual bool NextKey() = 0;
+    // Returns the current key.
+    // PRECONDITION: !DoneKeys
     virtual const InternedStringPtr& CurrentKey() = 0;
+    // Advances the key iteration until there is a match OR until we have exhausted all keys.
+    // Returns true when there is a match wrt constraints (e.g. field, position, inorder, slop, etc).
+    // Returns false otherwise. When false is returned, `CurrentKey()` should no longer be accessed.
+    virtual bool NextKey() = 0;
+
 
     // Position-level iteration
     virtual bool DonePositions() const = 0;

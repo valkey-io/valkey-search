@@ -101,7 +101,7 @@ class ProximityIterator : public TextIterator {
   // Used for Negate
   const InternedStringSet* untracked_keys_;
 
-  bool NextKeyMain();
+  bool FindCommonKey();
 };
 }  // namespace valkey_search::indexes::text
 

@@ -2,9 +2,6 @@
 
 namespace valkey_search::indexes::text {
 
-// TODO: Each loop needs to be smart and safe and always have a logicl exit path.
-// For "recursive like" loops, we need a limit on max iterations.
-
 ProximityIterator::ProximityIterator(std::vector<std::unique_ptr<TextIterator>>&& iters,
                                      size_t slop,
                                      bool in_order,
@@ -29,52 +26,33 @@ ProximityIterator::ProximityIterator(std::vector<std::unique_ptr<TextIterator>>&
         return;
     }
     // Prime iterators to the first common key and valid position combo
-    if (NextKey()) {
-        done_ = false;
-    } else {
-        done_ = true;
-        current_key_ = nullptr;
-    }
+    NextKey();
 }
 
-bool ProximityIterator::NextKey() {
-    VMSDK_LOG(WARNING, nullptr) << "PI::NextKey1";
-    while (!done_) {
-        // 1) Advance any child iterators that are still sitting on the old key.
-        for (auto& c : iters_) {
-            if (!c->DoneKeys() && c->CurrentKey() == current_key_) {
-                c->NextKey();  // move any child iterators sitting at current_key_
-            }
-        }
-        // 2) Find the next common key amongst all text iterators
-        // This does not shift to the next common key on success. It is handled in (1).
-        if (!NextKeyMain()) {
-            return false;
-        }
-        // 3) Find the next common position combination across all text iterators.
-        //  This shifts to the next valid position combo on success.
-        if (NextPosition()) {
+bool ProximityIterator::DoneKeys() const {
+    VMSDK_LOG(WARNING, nullptr) << "PI::DoneKeys";   
+    if (done_) {
+        return true;
+    }
+    for (auto& c : iters_) {
+        if (c->DoneKeys()) {
             return true;
         }
-        // otherwise, loop and try again (defensive).
     }
     return false;
 }
 
-// TODO: This API works fine currently when there are no nested proximity iterators.
-// When there are nested operations, we need the NextKeyMain to accurately be able to know
-// when no more common keys exist across iterators. 
-bool ProximityIterator::DoneKeys() const {
-    VMSDK_LOG(WARNING, nullptr) << "PI::DoneKeys";   
-    return done_;
-}
-
-// TODO: This API works fine currently when there are no nested proximity iterators.
-// When there are nested operations, we need the NextPosition to accurately be able to know
-// when no more valid position combinations across iterators. 
 bool ProximityIterator::DonePositions() const {
-    VMSDK_LOG(WARNING, nullptr) << "PI::DonePositions";   
-    return done_;
+    VMSDK_LOG(WARNING, nullptr) << "PI::DonePositions";
+    if (done_) {
+        return true;
+    }
+    for (auto& c : iters_) {
+        if (c->DonePositions()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 const InternedStringPtr& ProximityIterator::CurrentKey() {
@@ -94,88 +72,113 @@ uint64_t ProximityIterator::CurrentFieldMask() const {
     uint64_t common_fields = iters_[0]->CurrentFieldMask();
     for (size_t i = 1; i < iters_.size(); ++i) {
         common_fields &= iters_[i]->CurrentFieldMask();
-        // Using the intersection of field masks, check if any field is common
-        // The nested proximity iterator's NextPosition should ensure that we are on a valid
+        // Using the intersection of field masks, check if any field is common.
+        // The nested proximity iterator's NextPosition ensures that we are on a valid
         // combination of positions.
-        CHECK(common_fields != 0) << "ProximityIterator::CurrentFieldMask - No common fields in child iterators";
+        CHECK(common_fields != 0) << "ProximityIterator::CurrentFieldMask - positions are not on the common fields in child iterators";
     }
     return common_fields;
 }
 
-bool ProximityIterator::NextKeyMain() {
-    VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain";
-    while (!done_) {
-        VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain - in loop";
-        // 1) Validate children and compute min/max among current keys
-        InternedStringPtr min_key = nullptr;
-        InternedStringPtr max_key = nullptr;
-        for (auto& iter : iters_) {
-            if (iter->DoneKeys()) {
-                done_ = true;
-                VMSDK_LOG(WARNING, nullptr) << "PI::NextKey child done -> exhausted";
-                return false;
-            }
-            auto k = iter->CurrentKey();
-            if (!min_key || k->Str() < min_key->Str()) min_key = k;
-            if (!max_key || k->Str() > max_key->Str()) max_key = k;
-        }
-        // 2) If everyone is already equal -> we found a common key
-        if (min_key->Str() == max_key->Str()) {
-            current_key_ = max_key;
-            VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain found common key " << current_key_->Str();
-            return true;
-        }
-        // 3) Advance all iterators that are strictly behind the current max_key
-        bool advanced_any = false;
-        for (auto& iter : iters_) {
-            // TODO: Replace this block with SeekForward on the Key.
-            while (!iter->DoneKeys() && iter->CurrentKey()->Str() < max_key->Str()) {
-                VMSDK_LOG(WARNING, nullptr)
-                    << "PI::NextKeyMain advancing child from " << iter->CurrentKey()->Str()
-                    << " toward " << max_key->Str();
-                if (!iter->NextKey()) {
-                    done_ = true;
-                    VMSDK_LOG(WARNING, nullptr) << "PI::NextKeyMain child exhausted while advancing";
-                    return false;
-                }
-                advanced_any = true;
+bool ProximityIterator::NextKey() {
+    VMSDK_LOG(WARNING, nullptr) << "PI::NextKey1";
+    // On the second call onwards, advance any text iterators that are still sitting on the old key.
+    if (current_key_) {
+        for (auto& c : iters_) {
+            if (!c->DoneKeys() && c->CurrentKey() == current_key_) {
+                c->NextKey();
             }
         }
-        // Loop continues: max_key may increase, or everyone may now meet at a common key.
+    }
+    while (!DoneKeys()) {
+        VMSDK_LOG(WARNING, nullptr) << "PI::NextKey - in loop";
+        // 1) Move to the next common key amongst all text iterators.
+        if (FindCommonKey()) {
+            current_start_pos_ = std::nullopt;
+            current_end_pos_ = std::nullopt;
+            current_field_mask_ = std::nullopt;
+            // 2) Move to the next valid position combination across all text iterators.
+            //    Exit, if no valid position combination key is found.
+            if (NextPosition()) {
+                return true;
+            }
+        }
+        // Otherwise, loop and try again.
+    }
+    VMSDK_LOG(WARNING, nullptr) << "PI::NextKey keys exhausted";
+    current_key_ = nullptr;
+    return false;
+}
+
+bool ProximityIterator::FindCommonKey() {
+    VMSDK_LOG(WARNING, nullptr) << "PI::FindCommonKey";
+    // 1) Validate children and compute min/max among current keys
+    InternedStringPtr min_key = nullptr;
+    InternedStringPtr max_key = nullptr;
+    for (auto& iter : iters_) {
+        auto k = iter->CurrentKey();
+        if (!min_key || k->Str() < min_key->Str()) min_key = k;
+        if (!max_key || k->Str() > max_key->Str()) max_key = k;
+    }
+    // 2) If everyone is already equal -> we found a common key
+    if (min_key->Str() == max_key->Str()) {
+        current_key_ = max_key;
+        VMSDK_LOG(WARNING, nullptr) << "PI::FindCommonKey found common key " << current_key_->Str();
+        return true;
+    }
+    // 3) Advance all iterators that are strictly behind the current max_key
+    for (auto& iter : iters_) {
+        // TODO: Replace this block with SeekForward on the Key.
+        while (!iter->DoneKeys() && iter->CurrentKey()->Str() < max_key->Str()) {
+            VMSDK_LOG(WARNING, nullptr)
+                << "PI::FindCommonKey advancing child from " << iter->CurrentKey()->Str()
+                << " toward " << max_key->Str();
+            iter->NextKey();
+        }
     }
     return false;
 }
 
 bool ProximityIterator::NextPosition() {
     VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition";
-    if (done_) return false;
     const size_t n = iters_.size();
-    while (!done_) {
-        VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition in loop";
-        // Check if any iterator is done with positions
-        for (size_t i = 0; i < n; ++i) {
-            if (iters_[i]->DonePositions()) {
-                return false;
+    std::vector<std::pair<uint32_t, uint32_t>> positions(n);
+    auto advance_smallest = [&]() -> void {
+        size_t advance_idx = 0;
+        for (size_t i = 1; i < n; ++i) {
+            if (positions[i].first < positions[advance_idx].first) {
+                advance_idx = i;
             }
         }
-        // Collect current positions (start, end)
-        std::vector<std::pair<uint32_t, uint32_t>> positions(n);
+        iters_[advance_idx]->NextPosition();
+    };
+    bool should_advance = false;
+    // On a second call, we advance.
+    if (current_start_pos_.has_value() && current_end_pos_.has_value()) {
+        should_advance = true;
+    }
+    while (!DonePositions()) {
+        VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition in loop";
+        // Collect current positions (start, end) of the text iterators.
         for (size_t i = 0; i < n; ++i) {
             positions[i] = iters_[i]->CurrentPosition();
         }
-        // Check if current combination satisfies constraints
+        if (should_advance) {
+            should_advance = false;
+            advance_smallest();
+        }
+        // Check if current combination of positions satisfies the proximity constraints
         bool valid = true;
-        // First check all positions are in same field
+        // First, using the intersection of field masks, check if all terms are in the same field.
         uint64_t common_fields = iters_[0]->CurrentFieldMask();
         for (size_t i = 1; i < n && valid; ++i) {
             common_fields &= iters_[i]->CurrentFieldMask();
-            // Using the intersection of field masks, check if any field is common
             if (common_fields == 0) {
                 valid = false;
             }
         }
+        // Second, check order/slop constraints using start and end positions.
         if (valid) {
-            // Then check order/slop constraints using start and end positions
             for (size_t i = 0; i + 1 < n && valid; ++i) {
                 if (in_order_ && positions[i].first >= positions[i + 1].first) {
                     valid = false;
@@ -187,27 +190,16 @@ bool ProximityIterator::NextPosition() {
         if (valid) {
             current_start_pos_ = positions[0].first;
             current_end_pos_ = positions[n-1].second;
+            current_field_mask_ = common_fields;
             VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition returning as valid";
-            if (!iters_[n-1]->NextPosition()) {
-                // done_ = true;
-                // Think of what to do here.
-            }
             return true;
         }
-        // Always advance iterator with smallest position
-        size_t advance_idx = 0;
-        for (size_t i = 1; i < n; ++i) {
-            if (positions[i].first < positions[advance_idx].first) {
-                advance_idx = i;
-            }
-        }
-        // Advance the iterator
-        // TODO: Use the seek forward capability to seek to the required position
-        if (!iters_[advance_idx]->NextPosition()) {
-            VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition returning false";
-            return false;
-        }
+        advance_smallest();
     }
+    VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition positions exhausted";
+    current_start_pos_ = std::nullopt;
+    current_end_pos_ = std::nullopt;
+    current_field_mask_ = std::nullopt;
     return false;
 }
 

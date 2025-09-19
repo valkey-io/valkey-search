@@ -24,30 +24,23 @@ WildCardIterator::WildCardIterator(const WordIterator& word_iter,
       current_key_(nullptr),         // no key yet
       current_position_(std::nullopt),
       current_field_mask_(std::nullopt),
-      untracked_keys_(untracked_keys),
-      nomatch_(false)                // start as "not done"
+      untracked_keys_(untracked_keys)
 {
-  VMSDK_LOG(WARNING, nullptr) << "WI::init{" << data_ << "}. nomatch_: " << nomatch_;
+  VMSDK_LOG(WARNING, nullptr) << "WI::init{" << data_ << "}";
   if (word_iter_.Done()) {
-    VMSDK_LOG(WARNING, nullptr) << "WI::nomatch1{" << data_ << "}";
-    nomatch_ = true;
     return;
   }
   target_posting_ = word_iter_.GetTarget();
   key_iter_ = target_posting_->GetKeyIterator();
   // Prime the first key and position if they exist.
-  if (!WildCardIterator::NextKey()) {
-    VMSDK_LOG(WARNING, nullptr) << "WI::nomatch2{" << word_iter_.GetWord() << "}";
-    nomatch_ = true;
-    return;
-  }
+  WildCardIterator::NextKey();
 }
 
 bool WildCardIterator::NextKey() {
   VMSDK_LOG(WARNING, nullptr) << "WI::NextKey{" << word_iter_.GetWord() << "}";
-  if (nomatch_) return false;
   if (current_key_) {
       key_iter_.NextKey();
+      VMSDK_LOG(WARNING, nullptr) << "WI::NextKey{" << data_ << "}. Move to next key. Early Key";
   }
   // Loop until we find a key that satisfies the field mask
   while (!word_iter_.Done()) {
@@ -63,9 +56,16 @@ bool WildCardIterator::NextKey() {
           }
       }
       key_iter_.NextKey();
+      VMSDK_LOG(WARNING, nullptr) << "WI::NextKey{" << data_ << "}. Move to next key";
     }
     // Current posting exhausted. Move to next word
     word_iter_.Next();
+    if (word_iter_.Done()) {
+      return false;
+    }
+    target_posting_ = word_iter_.GetTarget();
+    key_iter_ = target_posting_->GetKeyIterator();
+    VMSDK_LOG(WARNING, nullptr) << "WI::NextKey{" << data_ << "}. Move to next word";
   }
   // No more valid keys
   current_key_ = nullptr;
@@ -78,11 +78,8 @@ const InternedStringPtr& WildCardIterator::CurrentKey() {
   return current_key_;
 }
 
-// Note: Right now, we expect the caller site to move to the next key when the positions are exhausted.
-// Need to think about whether this is the right contract.
 bool WildCardIterator::NextPosition() {
   VMSDK_LOG(WARNING, nullptr) << "WI::NextPosition{" << word_iter_.GetWord() << "}";
-  if (nomatch_) return false;
   if (current_position_.has_value()) {
       pos_iter_.NextPosition();
   }
@@ -97,13 +94,13 @@ bool WildCardIterator::NextPosition() {
   }
   // No more valid positions
   current_position_ = std::nullopt;
+  current_field_mask_ = std::nullopt;
   return false;
 }
 
 std::pair<uint32_t, uint32_t> WildCardIterator::CurrentPosition() {
   VMSDK_LOG(WARNING, nullptr) << "WI::CurrentPosition{" << word_iter_.GetWord() << "}";
   CHECK(current_position_.has_value());
-  // return current_position_.value();
   return std::make_pair(current_position_.value(), current_position_.value());
 }
 
@@ -114,19 +111,15 @@ uint64_t WildCardIterator::CurrentFieldMask() const {
 }
 
 bool WildCardIterator::DoneKeys() const {
-  VMSDK_LOG(WARNING, nullptr) << "WI::DoneKeys{" << word_iter_.GetWord() << "}";
-  if (nomatch_) {
-    VMSDK_LOG(WARNING, nullptr) << "WI::DoneKeys{" << word_iter_.GetWord() << "} Done due to nomatch_";
+  VMSDK_LOG(WARNING, nullptr) << "WI::DoneKeys{" << data_ << "}";
+  if (word_iter_.Done()) {
     return true;
   }
-  return word_iter_.Done() && !key_iter_.IsValid();
+  return !key_iter_.IsValid();
 }
 
 bool WildCardIterator::DonePositions() const {
-  VMSDK_LOG(WARNING, nullptr) << "WI::Done{" << word_iter_.GetWord() << "}";
-  if (nomatch_) {
-    return true;
-  }
+  VMSDK_LOG(WARNING, nullptr) << "WI::Done{" << data_ << "}";
   return !pos_iter_.IsValid();
 }
 

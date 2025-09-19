@@ -94,7 +94,6 @@ class WildCardIterator : public TextIterator {
   std::optional<uint32_t> current_position_;
   std::optional<uint64_t> current_field_mask_;
   const InternedStringSet* untracked_keys_;
-  bool nomatch_;
 };
 
 }  // namespace valkey_search::indexes::text

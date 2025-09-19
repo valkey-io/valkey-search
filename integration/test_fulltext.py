@@ -15,24 +15,27 @@ This file contains tests for full text search.
 # Constants for text queries on Hash documents.
 text_index_on_hash = "FT.CREATE products ON HASH PREFIX 1 product: SCHEMA desc TEXT"
 hash_docs = [
-    ["HSET", "product:1", "category", "electronics", "name", "Laptop", "price", "999.99", "rating", "4.5", "desc", "Random Words. Random Words. Great oaks from little acorns grow"],
-    ["HSET", "product:2", "category", "electronics", "name", "Tablet", "price", "499.00", "rating", "4.0", "desc", "Random Words. Random Words. Good beginning makes a good ending. Good desc"],
-    ["HSET", "product:3", "category", "electronics", "name", "Phone", "price", "299.00", "rating", "3.8", "desc", "Random Words. Random Words. Ok, this document uses some more common words from other docs. Good desc, great tablet. Random Words."],
-    ["HSET", "product:4", "category", "books", "name", "Book", "price", "19.99", "rating", "4.8", "desc", "Random Words. Random Words. wonder of wonders. Random words these are not. Random Words."],
+    ["HSET", "product:1", "category", "electronics", "name", "Laptop", "price", "999.99", "rating", "4.5", "desc", "Random Words. Random Words. Great oaks from little acorns grow. Impressive oak."],
+    ["HSET", "product:2", "category", "electronics", "name", "Tablet", "price", "499.00", "rating", "4.0", "desc", "Random Words. Random Words. Interesting. Good beginning makes a good ending. Interesting desc"],
+    ["HSET", "product:3", "category", "electronics", "name", "Phone", "price", "299.00", "rating", "3.8", "desc", "Random Words. Random Words. Ok, this document uses some more common words from other docs. Interesting desc, impressive tablet. Random Words."],
+    ["HSET", "product:4", "category", "books", "name", "Book", "price", "19.99", "rating", "4.8", "desc", "Random Words. Random Words. wonder of wonders. Uncommon random words. Random Words."],
     ["HSET", "product:5", "category", "books", "name", "Book2", "price", "19.99", "rating", "1.0", "desc", "Random Words. Random Words. greased the inspector's palm"]
 ]
 text_query_term = ["FT.SEARCH", "products", '@desc:"wonder"']
 text_query_term_nomatch = ["FT.SEARCH", "products", '@desc:"nomatch"']
 text_query_prefix = ["FT.SEARCH", "products", '@desc:"wond*"']
+text_query_prefix2 = ["FT.SEARCH", "products", '@desc:"wond*"']
 text_query_prefix_nomatch = ["FT.SEARCH", "products", '@desc:"nomatch*"']
 text_query_prefix_multimatch = ["FT.SEARCH", "products", '@desc:"grea*"']
+text_query_exact_phrase1 = ["FT.SEARCH", "products", '@desc:"word wonder"']
+text_query_exact_phrase2 = ["FT.SEARCH", "products", '@desc:"random word wonder"']
 
 expected_hash_key = b'product:4'
 expected_hash_value = {
     b'name': b"Book",
     b'price': b'19.99',
     b'rating': b'4.8',
-    b'desc': b"wonder",
+    b'desc': b"Random Words. Random Words. wonder of wonders. Uncommon random words. Random Words.",
     b'category': b"books"
 }
 
@@ -86,7 +89,7 @@ class TestFullText(ValkeySearchTestCaseBase):
         for doc in hash_docs:
             assert client.execute_command(*doc) == 5
         # Perform the text search query with term and prefix operations that return a match.
-        match = [text_query_term, text_query_prefix]
+        match = [text_query_term, text_query_prefix, text_query_prefix2, text_query_exact_phrase1, text_query_exact_phrase2]
         for query in match:
             result = client.execute_command(*query)
             assert len(result) == 3
@@ -105,17 +108,29 @@ class TestFullText(ValkeySearchTestCaseBase):
         result = client.execute_command(*text_query_prefix_multimatch)
         assert len(result) == 5
         assert result[0] == 2  # Number of documents found. Both docs below start with Grea* => Great and Greased
-        assert result[1] == b"product:1" and result[3] == b"product:5"
+        assert (result[1] == b"product:1" and result[3] == b"product:5") or (
+            result[1] == b"product:5" and result[3] == b"product:1"
+        )
         # TODO: Update these queries to non stemmed versions after queries are stemmed.
         # Perform an exact phrase search operation on a unique phrase (exists in one doc).
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl"')
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl acorn grow"')
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"good begin"')
+        result1 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl"')
+        result2 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl acorn grow"')
+        assert result1 == result2
+        assert result1[0] == 1
+        assert result1[1] == b"product:1"
         # Perform an exact phrase search operation on a phrase existing in 2 documents.
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"good desc"')
+        result = client.execute_command("FT.SEARCH", "products", '@desc:"interest desc"')
+        assert result[0] == 2
+        assert result[1] == b"product:2"
+        assert result[3] == b"product:3"
         # Perform an exact phrase search operation on a phrase existing in 5 documents.
         result = client.execute_command("FT.SEARCH", "products", '@desc:"random word"')
-
+        assert result[0] == 5
+        assert set(result[1::2]) == {b"product:1", b"product:2", b"product:3", b"product:4", b"product:5"}
+        # Perform an exact phrase search operation on a phrase existing in 1 document.
+        result = client.execute_command("FT.SEARCH", "products", '@desc:"uncommon random word"')
+        assert result[0] == 1
+        assert result[1] == b"product:4"
         # TODO: Test for searches on tokens on a specific field when the same tokens exist in other text fields.
         # TODO: Test for searches on tokens that have common keys, but in-order does not match.
         # TODO: Test for searches on tokens that have common keys, but slop does not match.

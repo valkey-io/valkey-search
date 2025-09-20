@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/container/btree_map.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
 #include "gmock/gmock.h"
@@ -16,8 +17,12 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/query/predicate.h"
+#include "src/utils/segment_tree.h"
 #include "testing/common.h"
+#include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/memory_tracker.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
 
@@ -26,7 +31,9 @@ namespace {
 class NumericIndexTest : public vmsdk::ValkeyTest {
  protected:
   data_model::NumericIndex numeric_index_proto;
-  IndexTeser<Numeric, data_model::NumericIndex> index{numeric_index_proto};
+  MemoryPool memory_pool;
+  IndexTeser<Numeric, data_model::NumericIndex> index{numeric_index_proto,
+                                                      memory_pool};
 };
 
 std::vector<std::string> Fetch(
@@ -311,6 +318,271 @@ TEST_F(NumericIndexTest, DeletedKeysNegativeSearchTest) {
                    true);
   EXPECT_THAT(Fetch(*entries_fetcher), testing::UnorderedElementsAre("doc0"));
 }
+
+#ifndef SAN_BUILD
+TEST_F(NumericIndexTest, MemoryTrackingAddRecord) {
+  auto key = absl::string_view{"key"};
+  auto record = absl::string_view{"1.5"};
+
+  static auto track_malloc_size = [](void* ptr) -> size_t { return 16; };
+
+  vmsdk::test_utils::SetTestSystemMallocSizeFunction(track_malloc_size);
+
+  memory_pool.Reset();
+  int64_t initial_memory = memory_pool.GetUsage();
+
+  EXPECT_TRUE(index.AddRecord(key, record).value());
+  int64_t after_first_add = memory_pool.GetUsage();
+  EXPECT_GT(after_first_add, initial_memory);
+
+  vmsdk::test_utils::ClearTestSystemMallocSizeFunction();
+
+  EXPECT_TRUE(index.RemoveRecord(key).ok());
+}
+
+TEST_F(NumericIndexTest, MemoryTrackingAddDuplicatedRecord) {
+  auto key = absl::string_view{"key"};
+  auto record1 = absl::string_view{"1.5"};
+  auto record2 = absl::string_view{"2.5"};
+
+  static auto track_malloc_size = [](void* ptr) -> size_t { return 16; };
+
+  vmsdk::test_utils::SetTestSystemMallocSizeFunction(track_malloc_size);
+
+  memory_pool.Reset();
+  int64_t initial_memory = memory_pool.GetUsage();
+
+  EXPECT_TRUE(index.AddRecord(key, record1).value());
+  int64_t after_first_add = memory_pool.GetUsage();
+
+  auto status = index.AddRecord(key, record2);
+  EXPECT_EQ(status.status().code(), absl::StatusCode::kAlreadyExists);
+  int64_t after_duplicate_add = memory_pool.GetUsage();
+  EXPECT_EQ(after_duplicate_add, after_first_add);
+
+  vmsdk::test_utils::ClearTestSystemMallocSizeFunction();
+
+  EXPECT_TRUE(index.RemoveRecord(key).ok());
+}
+
+TEST_F(NumericIndexTest, MemoryTrackingAddInvalidRecord) {
+  auto key = absl::string_view{"key"};
+  auto invalid_record = absl::string_view{"not_a_number"};
+
+  static auto track_malloc_size = [](void* ptr) -> size_t { return 16; };
+
+  vmsdk::test_utils::SetTestSystemMallocSizeFunction(track_malloc_size);
+
+  memory_pool.Reset();
+  int64_t initial_memory = memory_pool.GetUsage();
+
+  EXPECT_FALSE(index.AddRecord(key, invalid_record).value());
+  int64_t after_non_numeric = memory_pool.GetUsage();
+  // Memory might increase due to untracked_keys_ expansion
+  EXPECT_GE(after_non_numeric, initial_memory);
+
+  vmsdk::test_utils::ClearTestSystemMallocSizeFunction();
+
+  EXPECT_TRUE(index.RemoveRecord(key, DeletionType::kRecord).ok());
+}
+
+TEST_F(NumericIndexTest, MemoryTrackingAddReplaceInvalidRecord) {
+  auto key = absl::string_view{"key"};
+  auto invalid_record = absl::string_view{"not_a_number"};
+  auto valid_record = absl::string_view{"1.5"};
+
+  static auto track_malloc_size = [](void* ptr) -> size_t { return 16; };
+
+  vmsdk::test_utils::SetTestSystemMallocSizeFunction(track_malloc_size);
+
+  memory_pool.Reset();
+  int64_t initial_memory = memory_pool.GetUsage();
+
+  EXPECT_FALSE(index.AddRecord(key, invalid_record).value());
+  int64_t after_non_numeric = memory_pool.GetUsage();
+
+  EXPECT_TRUE(index.AddRecord(key, valid_record).value());
+  int64_t after_valid_add = memory_pool.GetUsage();
+  EXPECT_GT(after_valid_add, after_non_numeric);
+
+  vmsdk::test_utils::ClearTestSystemMallocSizeFunction();
+
+  EXPECT_TRUE(index.RemoveRecord(key).ok());
+}
+
+TEST_F(NumericIndexTest, MemoryTrackingModifyRecord) {
+  auto key = absl::string_view{"key"};
+  auto record1 = absl::string_view{"1.5"};
+  auto record2 = absl::string_view{"2.5"};
+
+  static auto track_malloc_size = [](void* ptr) -> size_t { return 16; };
+
+  vmsdk::test_utils::SetTestSystemMallocSizeFunction(track_malloc_size);
+
+  memory_pool.Reset();
+  int64_t initial_memory = memory_pool.GetUsage();
+
+  EXPECT_TRUE(index.AddRecord(key, record1).value());
+  int64_t after_add = memory_pool.GetUsage();
+  EXPECT_GT(after_add, initial_memory);
+
+  EXPECT_TRUE(index.ModifyRecord(key, record2).value());
+  int64_t after_modify = memory_pool.GetUsage();
+  EXPECT_EQ(after_modify, after_add);
+
+  vmsdk::test_utils::ClearTestSystemMallocSizeFunction();
+
+  EXPECT_TRUE(index.RemoveRecord(key).ok());
+}
+
+TEST_F(NumericIndexTest, MemoryTrackingModifyRecordNotFound) {
+  auto key = absl::string_view{"key"};
+  auto record = absl::string_view{"1.5"};
+
+  static auto track_malloc_size = [](void* ptr) -> size_t { return 16; };
+
+  vmsdk::test_utils::SetTestSystemMallocSizeFunction(track_malloc_size);
+
+  memory_pool.Reset();
+  int64_t initial_memory = memory_pool.GetUsage();
+
+  auto status = index.ModifyRecord(key, record);
+  EXPECT_EQ(status.status().code(), absl::StatusCode::kNotFound);
+  int64_t after_modify = memory_pool.GetUsage();
+  EXPECT_EQ(after_modify, initial_memory);
+
+  vmsdk::test_utils::ClearTestSystemMallocSizeFunction();
+}
+
+TEST_F(NumericIndexTest, MemoryTrackingModifyRecordInvalid) {
+  auto key = absl::string_view{"key"};
+  auto invalid_record = absl::string_view{"not_a_number"};
+
+  static auto track_malloc_size = [](void* ptr) -> size_t { return 16; };
+
+  vmsdk::test_utils::SetTestSystemMallocSizeFunction(track_malloc_size);
+
+  memory_pool.Reset();
+  int64_t initial_memory = memory_pool.GetUsage();
+
+  EXPECT_FALSE(index.ModifyRecord(key, invalid_record).value());
+  int64_t after_invalid_modify = memory_pool.GetUsage();
+  // Memory might increase due to untracked_keys_ expansion
+  EXPECT_GE(after_invalid_modify, initial_memory);
+
+  vmsdk::test_utils::ClearTestSystemMallocSizeFunction();
+
+  EXPECT_TRUE(index.RemoveRecord(key, DeletionType::kRecord).ok());
+}
+
+TEST_F(NumericIndexTest, MemoryTrackingRemoveRecord) {
+  auto key = absl::string_view{"key"};
+  auto record = absl::string_view{"1.5"};
+
+  static auto track_malloc_size = [](void* ptr) -> size_t { return 16; };
+
+  vmsdk::test_utils::SetTestSystemMallocSizeFunction(track_malloc_size);
+
+  memory_pool.Reset();
+  int64_t initial_memory = memory_pool.GetUsage();
+
+  EXPECT_TRUE(index.AddRecord(key, record).value());
+  int64_t after_add = memory_pool.GetUsage();
+  EXPECT_GT(after_add, initial_memory);
+
+  EXPECT_TRUE(index.RemoveRecord(key).value());
+  int64_t after_remove = memory_pool.GetUsage();
+  EXPECT_LT(after_remove, after_add);
+
+  vmsdk::test_utils::ClearTestSystemMallocSizeFunction();
+}
+
+TEST_F(NumericIndexTest, MemoryTrackingRemoveUntracked) {
+  auto key = absl::string_view{"key"};
+  auto invalid_record = absl::string_view{"not_a_number"};
+
+  static auto track_malloc_size = [](void* ptr) -> size_t { return 16; };
+
+  vmsdk::test_utils::SetTestSystemMallocSizeFunction(track_malloc_size);
+
+  memory_pool.Reset();
+  int64_t initial_memory = memory_pool.GetUsage();
+
+  EXPECT_FALSE(index.AddRecord(key, invalid_record).value());
+  int64_t after_add_invalid = memory_pool.GetUsage();
+
+  EXPECT_FALSE(index.RemoveRecord(key).value());
+  int64_t after_remove_untracked = memory_pool.GetUsage();
+  EXPECT_LE(after_remove_untracked, after_add_invalid);
+
+  vmsdk::test_utils::ClearTestSystemMallocSizeFunction();
+}
+
+TEST_F(NumericIndexTest, MemoryTrackingRemoveWithDeletionTypes) {
+  auto key1 = absl::string_view{"key1"};
+  auto key2 = absl::string_view{"key2"};
+  auto record = absl::string_view{"1.5"};
+
+  static auto track_malloc_size = [](void* ptr) -> size_t { return 16; };
+
+  vmsdk::test_utils::SetTestSystemMallocSizeFunction(track_malloc_size);
+
+  memory_pool.Reset();
+
+  EXPECT_TRUE(index.AddRecord(key1, record).value());
+  EXPECT_TRUE(index.AddRecord(key2, record).value());
+  int64_t after_add = memory_pool.GetUsage();
+
+  EXPECT_TRUE(index.RemoveRecord(key1, DeletionType::kIdentifier).value());
+  int64_t after_soft_delete = memory_pool.GetUsage();
+  // Memory might stay similar or increase slightly due to untracked_keys_
+  // insertion
+  EXPECT_LE(after_soft_delete, after_add);
+
+  vmsdk::test_utils::ClearTestSystemMallocSizeFunction();
+}
+
+TEST_F(NumericIndexTest, MemoryTrackingDestructor) {
+  static auto track_malloc_size = [](void* ptr) -> size_t { return 16; };
+
+  vmsdk::test_utils::SetTestSystemMallocSizeFunction(track_malloc_size);
+
+  memory_pool.Reset();
+  int64_t initial_memory = memory_pool.GetUsage();
+
+  // Keep references to interned strings outside the scope to prevent
+  // deallocation
+  std::vector<InternedStringPtr> string_refs;
+  std::unique_ptr<Numeric> index_ptr;
+  {
+    data_model::NumericIndex local_numeric_proto;
+    index_ptr = std::make_unique<Numeric>(local_numeric_proto, memory_pool);
+
+    auto key1 = StringInternStore::Intern("key1");
+    auto key2 = StringInternStore::Intern("key2");
+    auto key3 = StringInternStore::Intern("key3");
+
+    string_refs.push_back(key1);
+    string_refs.push_back(key2);
+    string_refs.push_back(key3);
+
+    EXPECT_TRUE(index_ptr->AddRecord(key1, "1.5").value());
+    EXPECT_TRUE(index_ptr->AddRecord(key2, "2.5").value());
+    EXPECT_TRUE(index_ptr->AddRecord(key3, "3.5").value());
+
+    int64_t memory_with_records = memory_pool.GetUsage();
+    EXPECT_GT(memory_with_records, initial_memory);
+  }
+
+  index_ptr.reset();
+
+  int64_t memory_after_destructor = memory_pool.GetUsage();
+  EXPECT_EQ(memory_after_destructor, initial_memory);
+
+  vmsdk::test_utils::ClearTestSystemMallocSizeFunction();
+}
+
+#endif
 
 }  // namespace
 

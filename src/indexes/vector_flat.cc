@@ -36,6 +36,7 @@
 #include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/log.h"
+#include "vmsdk/src/memory_tracker.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -53,13 +54,14 @@ template <typename T>
 absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier,
-    data_model::AttributeDataType attribute_data_type) {
+    data_model::AttributeDataType attribute_data_type,
+    MemoryPool &memory_pool) {
   try {
-    auto index = std::shared_ptr<VectorFlat<T>>(
-        new VectorFlat<T>(vector_index_proto.dimension_count(),
-                          vector_index_proto.distance_metric(),
-                          vector_index_proto.flat_algorithm().block_size(),
-                          attribute_identifier, attribute_data_type));
+    auto index = std::shared_ptr<VectorFlat<T>>(new VectorFlat<T>(
+        vector_index_proto.dimension_count(),
+        vector_index_proto.distance_metric(),
+        vector_index_proto.flat_algorithm().block_size(), attribute_identifier,
+        attribute_data_type, memory_pool));
     index->Init(vector_index_proto.dimension_count(),
                 vector_index_proto.distance_metric(), index->space_);
     index->algo_ = std::make_unique<hnswlib::BruteforceSearch<T>>(
@@ -100,14 +102,14 @@ template <typename T>
 absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     const data_model::VectorIndex &vector_index_proto,
-    absl::string_view attribute_identifier,
-    SupplementalContentChunkIter &&iter) {
+    absl::string_view attribute_identifier, SupplementalContentChunkIter &&iter,
+    MemoryPool &memory_pool) {
   try {
     auto index = std::shared_ptr<VectorFlat<T>>(new VectorFlat<T>(
         vector_index_proto.dimension_count(),
         vector_index_proto.distance_metric(),
         vector_index_proto.flat_algorithm().block_size(), attribute_identifier,
-        attribute_data_type->ToProto()));
+        attribute_data_type->ToProto(), memory_pool));
     index->Init(vector_index_proto.dimension_count(),
                 vector_index_proto.distance_metric(), index->space_);
     index->algo_ =
@@ -127,9 +129,9 @@ template <typename T>
 VectorFlat<T>::VectorFlat(
     int dimensions, valkey_search::data_model::DistanceMetric distance_metric,
     uint32_t block_size, absl::string_view attribute_identifier,
-    data_model::AttributeDataType attribute_data_type)
+    data_model::AttributeDataType attribute_data_type, MemoryPool &memory_pool)
     : VectorBase(IndexerType::kFlat, dimensions, attribute_data_type,
-                 attribute_identifier),
+                 attribute_identifier, memory_pool),
       block_size_(block_size) {}
 
 template <typename T>

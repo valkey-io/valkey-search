@@ -29,6 +29,7 @@
 #include "src/rdb_serialization.h"
 #include "src/utils/segment_tree.h"
 #include "src/utils/string_interning.h"
+#include "vmsdk/src/memory_tracker.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
@@ -81,7 +82,9 @@ class BTreeNumeric {
 
 class Numeric : public IndexBase {
  public:
-  explicit Numeric(const data_model::NumericIndex& numeric_index_proto);
+  explicit Numeric(const data_model::NumericIndex& numeric_index_proto,
+                   MemoryPool& memory_pool);
+  ~Numeric() override;
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
@@ -100,7 +103,7 @@ class Numeric : public IndexBase {
   inline void ForEachTrackedKey(
       absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override {
     absl::MutexLock lock(&index_mutex_);
-    for (const auto& [key, _] : tracked_keys_) {
+    for (const auto& [key, _] : *tracked_keys_) {
       fn(key);
     }
   }
@@ -166,9 +169,11 @@ class Numeric : public IndexBase {
 
  private:
   mutable absl::Mutex index_mutex_;
-  InternedStringMap<double> tracked_keys_ ABSL_GUARDED_BY(index_mutex_);
+  std::unique_ptr<InternedStringMap<double>> tracked_keys_
+      ABSL_GUARDED_BY(index_mutex_);
   // untracked keys is needed to support negate filtering
-  InternedStringSet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);
+  std::unique_ptr<InternedStringSet> untracked_keys_
+      ABSL_GUARDED_BY(index_mutex_);
   std::unique_ptr<BTreeNumericIndex> index_ ABSL_GUARDED_BY(index_mutex_);
 };
 }  // namespace valkey_search::indexes

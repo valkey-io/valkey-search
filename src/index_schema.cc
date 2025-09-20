@@ -48,6 +48,7 @@
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/memory_tracker.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
@@ -77,10 +78,12 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
   const auto &index = attribute.index();
   switch (index.index_type_case()) {
     case data_model::Index::IndexTypeCase::kTagIndex: {
-      return std::make_shared<indexes::Tag>(index.tag_index());
+      return std::make_shared<indexes::Tag>(index.tag_index(),
+                                            index_schema->GetMemoryPool());
     }
     case data_model::Index::IndexTypeCase::kNumericIndex: {
-      return std::make_shared<indexes::Numeric>(index.numeric_index());
+      return std::make_shared<indexes::Numeric>(index.numeric_index(),
+                                                index_schema->GetMemoryPool());
     }
     case data_model::Index::IndexTypeCase::kVectorIndex: {
       switch (index.vector_index().algorithm_case()) {
@@ -93,10 +96,11 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
                       ? indexes::VectorHNSW<float>::LoadFromRDB(
                             ctx, &index_schema->GetAttributeDataType(),
                             index.vector_index(), attribute.identifier(),
-                            std::move(*iter))
+                            std::move(*iter), index_schema->GetMemoryPool())
                       : indexes::VectorHNSW<float>::Create(
                             index.vector_index(), attribute.identifier(),
-                            index_schema->GetAttributeDataType().ToProto()));
+                            index_schema->GetAttributeDataType().ToProto(),
+                            index_schema->GetMemoryPool()));
               index_schema->SubscribeToVectorExternalizer(
                   attribute.identifier(), index.get());
               return index;
@@ -118,10 +122,11 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
                       ? indexes::VectorFlat<float>::LoadFromRDB(
                             ctx, &index_schema->GetAttributeDataType(),
                             index.vector_index(), attribute.identifier(),
-                            std::move(*iter))
+                            std::move(*iter), index_schema->GetMemoryPool())
                       : indexes::VectorFlat<float>::Create(
                             index.vector_index(), attribute.identifier(),
-                            index_schema->GetAttributeDataType().ToProto()));
+                            index_schema->GetAttributeDataType().ToProto(),
+                            index_schema->GetMemoryPool()));
               index_schema->SubscribeToVectorExternalizer(
                   attribute.identifier(), index.get());
               return index;
@@ -999,7 +1004,7 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
                          << " stale entries for {Index: " << name_ << "}";
 
   for (auto &[key, attributes] : deletion_attributes) {
-    auto interned_key = std::make_shared<InternedString>(key);
+    auto interned_key = StringInternStore::Intern(key);
     ProcessMutation(ctx, attributes, interned_key, true);
   }
   VMSDK_LOG(NOTICE, ctx) << "Scanned index schema " << name_

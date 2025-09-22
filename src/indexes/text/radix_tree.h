@@ -186,28 +186,35 @@ struct RadixTree {
 
   Node root_;
 
-  void DebugPrintNode(const Node* node, const std::string& path, int depth) const {
-    std::string indent(depth * 2, ' ');
-    std::cout << indent << "Node[" << path << "]";
-    
-    if (node->target.has_value()) {
-      std::cout << " TARGET";
-    }
-    
+  void DebugPrintNode(const Node* node, const std::string& path, int depth,
+                      bool is_last = true,
+                      const std::string& prefix = "") const {
+    // Build tree connector: └── for last child, ├── for others
+    std::string connector =
+        depth == 0 ? "" : prefix + (is_last ? "└── " : "├── ");
+    std::cout << connector << "\"" << path << "\"";
+    if (node->target.has_value()) std::cout << " TARGET";
+
     std::visit(
         overloaded{
-            [&](const std::monostate&) {
-              std::cout << " LEAF" << std::endl;
-            },
+            [&](const std::monostate&) { std::cout << " LEAF" << std::endl; },
             [&](const std::map<Byte, std::unique_ptr<Node>>& children) {
               std::cout << " BRANCH(" << children.size() << ")" << std::endl;
-              for (const auto& [byte, child] : children) {
-                DebugPrintNode(child.get(), path + char(byte), depth + 1);
+              // Prepare prefix for children: spaces for last, │ for continuing
+              std::string child_prefix = prefix + (is_last ? "    " : "│   ");
+              auto it = children.begin();
+              for (size_t i = 0; i < children.size(); ++i, ++it) {
+                DebugPrintNode(it->second.get(), path + char(it->first),
+                               depth + 1, i == children.size() - 1,
+                               child_prefix);
               }
             },
             [&](const std::pair<BytePath, std::unique_ptr<Node>>& child) {
-              std::cout << " COMPRESSED[" << child.first << "]" << std::endl;
-              DebugPrintNode(child.second.get(), path + child.first, depth + 1);
+              std::cout << " COMPRESSED" << std::endl;
+              std::string child_prefix = prefix + (is_last ? "    " : "│   ");
+              // Compressed nodes have only one child, so it's always last
+              DebugPrintNode(child.second.get(), path + child.first, depth + 1,
+                             true, child_prefix);
             }},
         node->children);
   }
@@ -710,8 +717,10 @@ void RadixTree<Target, reverse>::PathIterator::Defrag() {
 }
 
 template <typename Target, bool reverse>
-void RadixTree<Target, reverse>::DebugPrintTree(const std::string& label) const {
-  std::cout << "\n=== Tree Structure" << (label.empty() ? "" : (" - " + label)) << " ===" << std::endl;
+void RadixTree<Target, reverse>::DebugPrintTree(
+    const std::string& label) const {
+  std::cout << "\n=== Tree Structure" << (label.empty() ? "" : (" - " + label))
+            << " ===" << std::endl;
   DebugPrintNode(&root_, "", 0);
   std::cout << "=== End Structure ===\n" << std::endl;
 }

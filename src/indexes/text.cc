@@ -44,7 +44,7 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
 
   for (uint32_t position = 0; position < tokens->size(); ++position) {
     const auto& token = (*tokens)[position];
-    text_index_schema_->text_index_->prefix_.Mutate(
+    text_index_schema_->GetTextIndex()->prefix_.Mutate(
         token,
         [&](std::optional<std::shared_ptr<text::Postings>> existing)
             -> std::optional<std::shared_ptr<text::Postings>> {
@@ -54,7 +54,7 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
           } else {
             // Create new Postings object with schema configuration
             bool save_positions = text_index_schema_->GetWithOffsets();
-            uint8_t num_text_fields = text_index_schema_->num_text_fields_;
+            uint8_t num_text_fields = text_index_schema_->GetNumTextFields();
             postings = std::make_shared<text::Postings>(save_positions,
                                                         num_text_fields);
           }
@@ -97,20 +97,22 @@ int Text::RespondWithInfo(ValkeyModuleCtx* ctx) const {
   return 6;
 }
 
-bool Text::IsTracked(const InternedStringPtr& key) const { return false; }
+bool Text::IsTracked(const InternedStringPtr& key) const {
+  // TODO
+  return false;
+}
 
 uint64_t Text::GetRecordCount() const {
-  // TODO: Implement proper record count tracking when key management is added
+  // TODO: keep track of number of keys indexed for this attribute
   return 0;
 }
 
 std::unique_ptr<data_model::Index> Text::ToProto() const {
   auto index_proto = std::make_unique<data_model::Index>();
-  auto text_index = std::make_unique<data_model::TextIndex>();
+  auto* text_index = index_proto->mutable_text_index();
   text_index->set_with_suffix_trie(with_suffix_trie_);
   text_index->set_no_stem(no_stem_);
   text_index->set_min_stem_size(min_stem_size_);
-  index_proto->set_allocated_text_index(text_index.release());
   return index_proto;
 }
 
@@ -124,7 +126,7 @@ size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
 std::unique_ptr<Text::EntriesFetcher> Text::Search(
     const query::TextPredicate& predicate, bool negate) const {
   auto fetcher = std::make_unique<EntriesFetcher>(
-      CalculateSize(predicate), text_index_schema_->text_index_,
+      CalculateSize(predicate), text_index_schema_->GetTextIndex(),
       negate ? &untracked_keys_ : nullptr);
   fetcher->predicate_ = &predicate;
   // TODO : We only support single field queries for now. Change below when we

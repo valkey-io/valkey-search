@@ -18,6 +18,7 @@
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/text_index.h"
 #include "src/utils/string_interning.h"
+#include "testing/common.h"
 
 namespace valkey_search::indexes {
 
@@ -76,7 +77,7 @@ class TextTest : public ::testing::Test {
   bool TokenExists(const std::string& token,
                    std::shared_ptr<text::TextIndexSchema> schema = nullptr) {
     auto active_schema = schema ? schema : text_index_schema_;
-    auto iter = active_schema->text_index_->prefix_.GetWordIterator(token);
+    auto iter = active_schema->GetTextIndex()->prefix_.GetWordIterator(token);
     return !iter.Done();
   }
 
@@ -85,7 +86,7 @@ class TextTest : public ::testing::Test {
       const std::string& token,
       std::shared_ptr<text::TextIndexSchema> schema = nullptr) {
     auto active_schema = schema ? schema : text_index_schema_;
-    auto iter = active_schema->text_index_->prefix_.GetWordIterator(token);
+    auto iter = active_schema->GetTextIndex()->prefix_.GetWordIterator(token);
     if (iter.Done()) {
       return nullptr;
     }
@@ -366,7 +367,7 @@ TEST_F(TextTest, StemmingBehavior) {
 
   // Stemming behavior depends on the stemmer implementation
   // This test ensures stemming doesn't break the indexing pipeline
-  auto& prefix_tree = stemming_schema->text_index_->prefix_;
+  auto& prefix_tree = stemming_schema->GetTextIndex()->prefix_;
 
   // Should create some tokens (exact form depends on stemmer)
   bool has_tokens = false;

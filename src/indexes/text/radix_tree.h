@@ -123,10 +123,8 @@ struct RadixTree {
   // Create a Path iterator at a specific starting prefix
   PathIterator GetPathIterator(absl::string_view prefix) const;
 
-  // Debug function to print tree structure
+  // Prints tree structure
   void DebugPrintTree(const std::string& label = "") const;
-
- private:
 
  private:
   /*
@@ -188,7 +186,6 @@ struct RadixTree {
 
   Node root_;
 
-  // Debug helper function
   void DebugPrintNode(const Node* node, const std::string& path, int depth) const {
     std::string indent(depth * 2, ' ');
     std::cout << indent << "Node[" << path << "]";
@@ -500,7 +497,7 @@ void RadixTree<Target, reverse>::Mutate(
             [&](std::pair<BytePath, std::unique_ptr<Node>>& child) {
               // The target node is a compressed node. If its parent is a
               // compressed node, we can modify the parent to have an edge
-              // directly to target node's child.
+              // directly to its child and remove the target node.
               const auto& parent = node_path.back();
               if (std::holds_alternative<
                       std::pair<BytePath, std::unique_ptr<Node>>>(

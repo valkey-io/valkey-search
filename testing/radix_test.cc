@@ -534,5 +534,23 @@ TEST_F(RadixTreeTest, WordIteratorPrefixPartialMatch) {
       << "WordIterator should return words that start with 'ca'";
 }
 
+TEST_F(RadixTreeTest, TemporaryDebugTest) {
+  // Simple test to see DebugPrintNode output
+  prefix_tree_->Mutate("testing", [](auto) { return TestTarget(1); });
+  prefix_tree_->Mutate("test", [](auto) { return TestTarget(2); });
+  prefix_tree_->DebugPrintTree("Before deletion");
+  
+  prefix_tree_->Mutate("test", [](auto) -> std::optional<TestTarget> {
+    return std::nullopt;
+  });
+  prefix_tree_->DebugPrintTree("After deleting test");
+  
+  auto iter = prefix_tree_->GetWordIterator("test");
+  std::cout << "Iterator Done: " << iter.Done() << std::endl;
+  if (!iter.Done()) {
+    std::cout << "Iterator Word: '" << iter.GetWord() << "'" << std::endl;
+  }
+}
+
 }  // namespace
 }  // namespace valkey_search::indexes::text

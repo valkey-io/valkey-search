@@ -135,6 +135,15 @@ std::unique_ptr<text::TextIterator> Text::EntriesFetcher::BuildTextIterator(cons
     for (const auto& term : proximity->GetTerms()) {
       vec.emplace_back(BuildTextIterator(term.get()));
     }
+    // CHECK that all iterators have the same field mask and crash otherwise.
+    // This is a safety check since we should handle this in the query level.
+    uint64_t common_fields = vec[0]->FieldMask();
+    for (size_t i = 1; i < vec.size(); ++i) {
+        common_fields &= vec[i]->FieldMask();
+        // The nested proximity iterator's NextPosition fn calls ensure that we are on a valid
+        // combination of positions.
+        CHECK(common_fields != 0) << "ProximityIterator - positions are not on the matching fields in child iterators";
+    }
     return std::make_unique<text::ProximityIterator>(
         std::move(vec), /*slop=*/0, /*in_order=*/true, field_mask_, untracked_keys_);
   }

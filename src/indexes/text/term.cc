@@ -23,7 +23,6 @@ TermIterator::TermIterator(const WordIterator& word_iter,
       pos_iter_(),                   // default-initialize iterator
       current_key_(nullptr),         // no key yet
       current_position_(std::nullopt),
-      current_field_mask_(std::nullopt),
       untracked_keys_(untracked_keys),
       nomatch_(false)                // start as "not done"
 {
@@ -56,7 +55,6 @@ bool TermIterator::NextKey() {
         current_key_ = key_iter_.GetKey();
         pos_iter_ = key_iter_.GetPositionIterator();
         current_position_ = std::nullopt;
-        current_field_mask_ = std::nullopt;
         // We need to call NextPosition here if we dont want garbage values.
         VMSDK_LOG(WARNING, nullptr) << "TI::NextKey{" << word_iter_.GetWord() << "} - Found key. CurrentKey: " << current_key_->Str() << " Position: " << pos_iter_.GetPosition();
         if (TermIterator::NextPosition()) {
@@ -70,7 +68,7 @@ bool TermIterator::NextKey() {
   return false;
 }
 
-const InternedStringPtr& TermIterator::CurrentKey() {
+const InternedStringPtr& TermIterator::CurrentKey() const {
   CHECK(current_key_ != nullptr);
   VMSDK_LOG(WARNING, nullptr) << "TI::CurrentKey{" << word_iter_.GetWord() << "}. Key: " <<  current_key_->Str();
   return current_key_;
@@ -85,27 +83,19 @@ bool TermIterator::NextPosition() {
   while (pos_iter_.IsValid()) {
     if (pos_iter_.GetFieldMask() & field_mask_) {
       current_position_ = pos_iter_.GetPosition();
-      current_field_mask_ = pos_iter_.GetFieldMask();
       return true;
     }
     pos_iter_.NextPosition();
   }
   // No more valid positions
   current_position_ = std::nullopt;
-  current_field_mask_ = std::nullopt;
   return false;
 }
 
-std::pair<uint32_t, uint32_t> TermIterator::CurrentPosition() {
+std::pair<uint32_t, uint32_t> TermIterator::CurrentPosition() const {
   VMSDK_LOG(WARNING, nullptr) << "TI::CurrentPosition{" << word_iter_.GetWord() << "}";
   CHECK(current_position_.has_value());
   return std::make_pair(current_position_.value(), current_position_.value());
-}
-
-uint64_t TermIterator::CurrentFieldMask() const {
-  VMSDK_LOG(WARNING, nullptr) << "TI::CurrentFieldMask{" << word_iter_.GetWord() << "}";
-  CHECK(current_field_mask_.has_value());
-  return current_field_mask_.value();
 }
 
 bool TermIterator::DoneKeys() const {
@@ -123,6 +113,11 @@ bool TermIterator::DonePositions() const {
     return true;
   }
   return !pos_iter_.IsValid();
+}
+
+uint64_t TermIterator::FieldMask() const {
+  VMSDK_LOG(WARNING, nullptr) << "TI::FieldMask{" << word_iter_.GetWord() << "}";
+  return field_mask_;
 }
 
 }  // namespace valkey_search::indexes::text

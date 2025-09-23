@@ -31,6 +31,9 @@ class TextIterator {
 public:
     virtual ~TextIterator() = default;
 
+    // The field which the iterator was initialized to search for.
+    virtual uint64_t FieldMask() const = 0;
+
     // Key-level iteration
     // Returns true if there is a match (i.e. `CurrentKey()` is valid) provided the TextIterator is
     // used as described above. Use `CurrentKey()` to access the matching document.
@@ -39,7 +42,7 @@ public:
     virtual bool DoneKeys() const = 0;
     // Returns the current key.
     // PRECONDITION: !DoneKeys()
-    virtual const InternedStringPtr& CurrentKey() = 0;
+    virtual const InternedStringPtr& CurrentKey() const = 0;
     // Advances the key iteration until there is a match OR until we have exhausted all keys.
     // Returns true when there is a match wrt constraints (e.g. field, position, inorder, slop, etc).
     // Returns false otherwise. When false is returned, `CurrentKey()` should no longer be accessed.
@@ -57,10 +60,7 @@ public:
     // Represents start and end. start == end in all TextIterators except for the OR Proximity
     // since it can contain a nested proximity block.
     // PRECONDITION: !DonePositions()
-    virtual std::pair<uint32_t, uint32_t> CurrentPosition() = 0;
-    // Returns the current field we are searching through.
-    // TODO: Is this needed?
-    virtual uint64_t CurrentFieldMask() const = 0;
+    virtual std::pair<uint32_t, uint32_t> CurrentPosition() const = 0;
     // Moves to the next position match. Returns true if there is one.
     // Otherwise, returns false if we have exhausted all positions.
     // PRECONDITION: !DonePositions()

@@ -68,17 +68,16 @@ class WildCardIterator : public TextIterator {
                const absl::string_view data,
                const uint32_t field_mask,
                const InternedStringSet* untracked_keys = nullptr);
-
+  uint64_t FieldMask() const override;
   // Key-level iteration
   bool DoneKeys() const override;
   bool NextKey() override;
-  const InternedStringPtr& CurrentKey() override;
+  const InternedStringPtr& CurrentKey() const override;
 
   // Position-level iteration
   bool DonePositions() const override;
   bool NextPosition() override;
-  std::pair<uint32_t, uint32_t> CurrentPosition() override;
-  uint64_t CurrentFieldMask() const override;
+  std::pair<uint32_t, uint32_t> CurrentPosition() const override;
 
  private:
   const absl::string_view data_;
@@ -92,7 +91,6 @@ class WildCardIterator : public TextIterator {
 
   InternedStringPtr current_key_;
   std::optional<uint32_t> current_position_;
-  std::optional<uint64_t> current_field_mask_;
   const InternedStringSet* untracked_keys_;
 };
 

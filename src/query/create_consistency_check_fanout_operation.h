@@ -28,7 +28,8 @@ class CreateConsistencyCheckFanoutOperation
  public:
   CreateConsistencyCheckFanoutOperation(uint32_t db_num,
                                         const std::string& index_name,
-                                        unsigned timeout_ms);
+                                        unsigned timeout_ms,
+                                        uint64_t new_entry_fingerprint);
 
   unsigned GetTimeoutMs() const override;
 
@@ -62,6 +63,7 @@ class CreateConsistencyCheckFanoutOperation
  private:
   bool exists_;
   std::optional<uint64_t> schema_fingerprint_;
+  uint64_t new_entry_fingerprint_;
   std::optional<uint32_t> version_;
   uint32_t db_num_;
   std::string index_name_;

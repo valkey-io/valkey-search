@@ -198,7 +198,8 @@ absl::Status MetadataManager::CreateEntry(
     unsigned timeout_ms = options::GetFTInfoTimeoutMs().GetValue();
     auto op = new query::create_consistency_check_fanout_operation::
         CreateConsistencyCheckFanoutOperation(ValkeyModule_GetSelectedDb(ctx),
-                                              std::string(id), timeout_ms);
+                                              std::string(id), timeout_ms,
+                                              fingerprint);
     op->StartOperation(ctx);
   }
 

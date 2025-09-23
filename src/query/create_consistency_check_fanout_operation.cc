@@ -13,14 +13,16 @@
 namespace valkey_search::query::create_consistency_check_fanout_operation {
 
 CreateConsistencyCheckFanoutOperation::CreateConsistencyCheckFanoutOperation(
-    uint32_t db_num, const std::string& index_name, unsigned timeout_ms)
+    uint32_t db_num, const std::string& index_name, unsigned timeout_ms,
+    uint64_t new_entry_fingerprint)
     : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
                                   coordinator::InfoIndexPartitionResponse,
                                   fanout::FanoutTargetMode::kAll>(),
       db_num_(db_num),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
-      exists_(false) {}
+      exists_(false),
+      new_entry_fingerprint_(new_entry_fingerprint) {}
 
 unsigned CreateConsistencyCheckFanoutOperation::GetTimeoutMs() const {
   return timeout_ms_;
@@ -38,7 +40,6 @@ CreateConsistencyCheckFanoutOperation::GenerateRequest(
 void CreateConsistencyCheckFanoutOperation::OnResponse(
     const coordinator::InfoIndexPartitionResponse& resp,
     [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
-  absl::MutexLock lock(&mutex_);
   if (!resp.error().empty()) {
     grpc::Status status =
         grpc::Status(grpc::StatusCode::INTERNAL, resp.error());
@@ -51,9 +52,12 @@ void CreateConsistencyCheckFanoutOperation::OnResponse(
     OnError(status, coordinator::FanoutErrorType::INDEX_NAME_ERROR, target);
     return;
   }
+  // if the received fingerprint is not equal to the exact fingerprint
+  // created in the ft.create command, report an error
   if (!schema_fingerprint_.has_value()) {
     schema_fingerprint_ = resp.schema_fingerprint();
-  } else if (schema_fingerprint_.value() != resp.schema_fingerprint()) {
+  } else if (schema_fingerprint_.value() != resp.schema_fingerprint() ||
+             resp.schema_fingerprint() != new_entry_fingerprint_) {
     grpc::Status status =
         grpc::Status(grpc::StatusCode::INTERNAL,
                      "Cluster not in a consistent state, please retry.");

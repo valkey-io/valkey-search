@@ -75,7 +75,6 @@ IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     ValkeyModuleCtx *ctx, IndexSchema *index_schema,
     const data_model::Attribute &attribute,
-    const data_model::IndexSchema *index_schema_proto,
     std::optional<SupplementalContentChunkIter> iter) {
   const auto &index = attribute.index();
   switch (index.index_type_case()) {
@@ -86,6 +85,7 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
       return std::make_shared<indexes::Numeric>(index.numeric_index());
     }
     case data_model::Index::IndexTypeCase::kTextIndex: {
+      // Create the TextIndexSchema if this is the first Text index we're seeing
       if (!index_schema->GetTextIndexSchema()) {
         index_schema->CreateTextIndexSchema();
       }
@@ -179,9 +179,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
   VMSDK_RETURN_IF_ERROR(res->Init(ctx));
   if (!skip_attributes) {
     for (const auto &attribute : index_schema_proto.attributes()) {
-      VMSDK_ASSIGN_OR_RETURN(std::shared_ptr<indexes::IndexBase> index,
-                             IndexFactory(ctx, res.get(), attribute,
-                                          &index_schema_proto, std::nullopt));
+      VMSDK_ASSIGN_OR_RETURN(
+          std::shared_ptr<indexes::IndexBase> index,
+          IndexFactory(ctx, res.get(), attribute, std::nullopt));
       VMSDK_RETURN_IF_ERROR(
           res->AddIndex(attribute.alias(), attribute.identifier(), index));
     }
@@ -595,9 +595,10 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
   }
   const bool block_client =
       ShouldBlockClient(ctx, inside_multi_exec, from_backfill);
-  if (ABSL_PREDICT_FALSE(!TrackMutatedRecord(ctx, interned_key,
-                                             std::move(mutated_attributes),
-                                             from_backfill, block_client)) ||
+
+  if (ABSL_PREDICT_FALSE(!TrackMutatedRecord(
+          ctx, interned_key, std::move(mutated_attributes), from_backfill,
+          block_client, inside_multi_exec)) ||
       inside_multi_exec) {
     // Skip scheduling if the mutation key has already been tracked or is part
     // of a multi exec command.
@@ -733,7 +734,15 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithArray(ctx, 34);
+  int arrSize = 36;
+
+  // Calculate additional array size for text-related fields only if text fields
+  // exist
+  if (text_index_schema_) {
+    arrSize += 6;
+  }
+
+  ValkeyModule_ReplyWithArray(ctx, arrSize);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
   ValkeyModule_ReplyWithSimpleString(ctx, "index_options");
@@ -843,6 +852,31 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
                .c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "state");
   ValkeyModule_ReplyWithSimpleString(ctx, GetStateForInfo().data());
+
+  // Add text-related schema fields
+  if (text_index_schema_) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "punctuation");
+    ValkeyModule_ReplyWithSimpleString(ctx, punctuation_.c_str());
+
+    ValkeyModule_ReplyWithSimpleString(ctx, "stop_words");
+    ValkeyModule_ReplyWithArray(ctx, stop_words_.size());
+    for (const auto &stop_word : stop_words_) {
+      ValkeyModule_ReplyWithSimpleString(ctx, stop_word.c_str());
+    }
+
+    ValkeyModule_ReplyWithSimpleString(ctx, "with_offsets");
+    ValkeyModule_ReplyWithSimpleString(ctx, with_offsets_ ? "1" : "0");
+  }
+
+  ValkeyModule_ReplyWithSimpleString(ctx, "language");
+  switch (language_) {
+    case data_model::LANGUAGE_ENGLISH:
+      ValkeyModule_ReplyWithSimpleString(ctx, "english");
+      break;
+    default:
+      ValkeyModule_ReplyWithSimpleString(ctx, "english");
+      break;
+  }
 }
 
 bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {
@@ -873,6 +907,7 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
       google::protobuf::RepeatedPtrFieldBackInserter(
           index_schema_proto->mutable_attributes()),
       [](const auto &attribute) { return *attribute.second.ToProto(); });
+
   return index_schema_proto;
 }
 
@@ -972,7 +1007,6 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           supplemental_content->index_content_header().attribute();
       VMSDK_ASSIGN_OR_RETURN(std::shared_ptr<indexes::IndexBase> index,
                              IndexFactory(ctx, index_schema.get(), attribute,
-                                          index_schema_proto.get(),
                                           supplemental_iter.IterateChunks()));
       VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
           attribute.alias(), attribute.identifier(), index));
@@ -1098,7 +1132,8 @@ vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
 bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
                                      const InternedStringPtr &key,
                                      MutatedAttributes &&mutated_attributes,
-                                     bool from_backfill, bool block_client) {
+                                     bool from_backfill, bool block_client,
+                                     bool from_multi) {
   absl::MutexLock lock(&mutated_records_mutex_);
   auto [itr, inserted] =
       tracked_mutated_records_.insert({key, DocumentMutation{}});
@@ -1106,6 +1141,7 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
     itr->second.attributes = MutatedAttributes();
     itr->second.attributes.value() = std::move(mutated_attributes);
     itr->second.from_backfill = from_backfill;
+    itr->second.from_multi = from_multi;
     if (ABSL_PREDICT_TRUE(block_client)) {
       vmsdk::BlockedClient blocked_client(ctx, true,
                                           GetBlockedCategoryFromProto());
@@ -1114,6 +1150,11 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
     }
     return true;
   }
+
+  if (!itr->second.from_multi && from_multi) {
+    itr->second.from_multi = from_multi;
+  }
+
   if (!itr->second.attributes.has_value()) {
     itr->second.attributes = MutatedAttributes();
   }
@@ -1121,12 +1162,15 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
     itr->second.attributes.value()[mutated_attribute.first] =
         std::move(mutated_attribute.second);
   }
-  if (ABSL_PREDICT_TRUE(block_client)) {
+
+  if (ABSL_PREDICT_TRUE(block_client) &&
+      ABSL_PREDICT_TRUE(!itr->second.from_multi)) {
     vmsdk::BlockedClient blocked_client(ctx, true,
                                         GetBlockedCategoryFromProto());
     blocked_client.MeasureTimeStart();
     itr->second.blocked_clients.emplace_back(std::move(blocked_client));
   }
+
   if (ABSL_PREDICT_FALSE(!from_backfill && itr->second.from_backfill)) {
     itr->second.from_backfill = false;
     return true;

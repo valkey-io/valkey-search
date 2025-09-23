@@ -21,9 +21,10 @@ namespace valkey_search::query::fanout {
 
 // Enumeration for fanout target modes
 enum class FanoutTargetMode {
-  kRandom,   // Default: randomly select one node per shard
-  kPrimary,  // Select all primary (master) nodes
-  kAll       // Select all nodes (both primary and replica)
+  kRandom,        // Default: randomly select one node per shard
+  kReplicasOnly,  // Select only replicas, one per shard
+  kPrimary,       // Select all primary (master) nodes
+  kAll            // Select all nodes (both primary and replica)
 };
 
 struct FanoutSearchTarget {
@@ -141,8 +142,10 @@ class FanoutTemplate {
         }
       }
     } else {
+      CHECK(target_mode == FanoutTargetMode::kRandom ||
+            target_mode == FanoutTargetMode::kReplicasOnly);
       // Original logic: group master and replica into shards and randomly
-      // select one
+      // select one, unless confined to replicas only
       absl::flat_hash_map<std::string, std::vector<size_t>>
           shard_id_to_node_indices;
 
@@ -168,6 +171,9 @@ class FanoutTemplate {
         }
         if (flags & VALKEYMODULE_NODE_MASTER) {
           master_id_str = node_id;
+          if (target_mode == FanoutTargetMode::kReplicasOnly) {
+            continue;
+          }
         }
 
         // Store only the node index

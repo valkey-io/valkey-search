@@ -116,12 +116,12 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline const std::string &GetName() const { return name_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
 
-  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
-    return text_index_schema_;
-  }
   void CreateTextIndexSchema() {
     text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
         language_, punctuation_, with_offsets_, stop_words_);
+  }
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+    return text_index_schema_;
   }
 
   void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type, const char *event,
@@ -167,6 +167,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     std::vector<vmsdk::BlockedClient> blocked_clients;
     bool consume_in_progress{false};
     bool from_backfill{false};
+    bool from_multi{false};
   };
   using MutatedAttributes =
       absl::flat_hash_map<std::string, DocumentMutation::AttributeData>;
@@ -262,7 +263,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   vmsdk::BlockedClientCategory GetBlockedCategoryFromProto() const;
   bool TrackMutatedRecord(ValkeyModuleCtx *ctx, const InternedStringPtr &key,
                           MutatedAttributes &&mutated_attributes,
-                          bool from_backfill, bool block_client)
+                          bool from_backfill, bool block_client,
+                          bool from_multi)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(
       const InternedStringPtr &key, bool first_time)

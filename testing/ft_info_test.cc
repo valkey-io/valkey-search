@@ -134,7 +134,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*34\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*36\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -178,7 +178,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "progress\r\n$1\r\n0\r\n+backfill_complete_"
                             "percent\r\n$8\r\n1.000000\r\n+mutation_queue_"
                             "size\r\n$1\r\n0\r\n+recent_mutations_queue_"
-                            "delay\r\n$5\r\n0 sec\r\n+state\r\n+ready\r\n",
+                            "delay\r\n$5\r\n0 sec\r\n+state\r\n+ready\r\n+"
+                            "language\r\n+english\r\n",
                     },
                 },
         },
@@ -212,7 +213,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*34\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*36\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -253,7 +254,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "backfill_in_progress\r\n$1\r\n0\r\n+backfill_"
                             "complete_percent\r\n$8\r\n1.000000\r\n+mutation_"
                             "queue_size\r\n$1\r\n0\r\n+recent_mutations_queue_"
-                            "delay\r\n$5\r\n0 sec\r\n+state\r\n+ready\r\n",
+                            "delay\r\n$5\r\n0 sec\r\n+state\r\n+ready\r\n+"
+                            "language\r\n+english\r\n",
                     },
                 },
         },
@@ -280,7 +282,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*34\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*36\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -313,7 +315,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "1\r\n0\r\n+backfill_complete_percent\r\n$8\r\n1."
                             "000000\r\n+mutation_queue_size\r\n$1\r\n0\r\n+"
                             "recent_mutations_queue_delay\r\n$5\r\n0 sec\r\n"
-                            "+state\r\n+ready\r\n",
+                            "+state\r\n+ready\r\n"
+                            "+language\r\n+english\r\n",
                     },
                 },
         },
@@ -341,7 +344,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*34\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*36\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -375,7 +378,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "progress\r\n$1\r\n0\r\n+backfill_complete_"
                             "percent\r\n$8\r\n1.000000\r\n+mutation_queue_"
                             "size\r\n$1\r\n0\r\n+recent_mutations_queue_"
-                            "delay\r\n$5\r\n0 sec\r\n+state\r\n+ready\r\n",
+                            "delay\r\n$5\r\n0 sec\r\n+state\r\n+ready\r\n+"
+                            "language\r\n+english\r\n",
                     },
                 },
         },
@@ -400,7 +404,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*34\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*36\r\n+index_name\r\n+test_name\r\n+index_"
                             "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -433,7 +437,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
                             "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
                             "mutations_queue_delay\r\n$5\r\n0 sec\r\n+state\r\n"
-                            "+ready\r\n",
+                            "+ready\r\n"
+                            "+language\r\n+english\r\n",
                     },
                 },
         },
@@ -461,6 +466,141 @@ INSTANTIATE_TEST_SUITE_P(
                         .expected_output =
                             "$47\r\nIndex with name 'non_exist_test_name' not "
                             "found\r\n",
+                    },
+                },
+        },
+        {
+            .test_name = "happy_path_text_defaults",
+            .test_cases =
+                {
+                    {
+                        .argv = {"FT.Info", "test_name"},
+                        .index_schema_pbtxt = R"(
+                          name: "test_name"
+                          db_num: 0
+                          subscribed_key_prefixes: "prefix_1"
+                          attribute_data_type: ATTRIBUTE_DATA_TYPE_HASH
+                          attributes: {
+                            alias: "test_attribute_1"
+                            identifier: "test_identifier_1"
+                            index: {
+                              text_index: {}
+                            }
+                          }
+                        )",
+                        .expect_return_failure = false,
+                        .expected_output =
+                            "*42\r\n+index_name\r\n+test_name\r\n+index_"
+                            "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
+                            "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
+                            "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
+                            "10\r\n+identifier\r\n+test_identifier_1\r\n+"
+                            "attribute\r\n+test_attribute_1\r\n+type\r\n+"
+                            "TEXT\r\n+WITH_SUFFIX_TRIE\r\n+0\r\n+MIN_STEM_"
+                            "SIZE\r\n:0\r\n+"
+                            "num_docs\r\n:0\r\n+num_"
+                            "terms\r\n:0\r\n+num_records\r\n:0\r\n+"
+                            "hash_indexing_failures\r\n$1\r\n0\r\n+gc_"
+                            "stats\r\n*14\r\n+"
+                            "bytes_collected\r\n$1\r\n0\r\n+total_ms_run\r\n$"
+                            "1\r\n0\r\n+"
+                            "total_cycles\r\n$1\r\n0\r\n+average_cycle_time_"
+                            "ms\r\n$3\r\nnan\r\n+"
+                            "last_run_time_ms\r\n$1\r\n0\r\n+gc_numeric_trees_"
+                            "missed\r\n$1\r\n0\r\n+"
+                            "gc_blocks_denied\r\n$1\r\n0\r\n+cursor_stats\r\n*"
+                            "8\r\n+"
+                            "global_idle\r\n:0\r\n+global_total\r\n:0\r\n+"
+                            "index_capacity\r\n:0\r\n+index_total\r\n:0\r\n+"
+                            "dialect_stats\r\n*8\r\n+"
+                            "dialect_1\r\n:0\r\n+dialect_2\r\n:0\r\n+"
+                            "dialect_3\r\n:0\r\n+dialect_4\r\n:0\r\n+"
+                            "Index Errors\r\n*8\r\n+"
+                            "indexing failures\r\n:0\r\n+last indexing "
+                            "error\r\n+N/A\r\n+"
+                            "last indexing error "
+                            "key\r\n$3\r\nN/A\r\n+background indexing "
+                            "status\r\n+OK\r\n+"
+                            "backfill_in_progress\r\n$1\r\n0\r\n+"
+                            "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
+                            "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
+                            "mutations_queue_delay\r\n$5\r\n0 sec\r\n+state\r\n"
+                            "+ready\r\n+punctuation\r\n+\r\n+stop_words\r\n*"
+                            "0\r\n+"
+                            "with_offsets\r\n+0\r\n+language\r\n+english\r\n",
+                    },
+                },
+        },
+        {
+            .test_name = "happy_path_text_all_options",
+            .test_cases =
+                {
+                    {
+                        .argv = {"FT.Info", "test_name"},
+                        .index_schema_pbtxt = R"(
+                          name: "test_name"
+                          db_num: 0
+                          subscribed_key_prefixes: "prefix_1"
+                          attribute_data_type: ATTRIBUTE_DATA_TYPE_HASH
+                          language: LANGUAGE_ENGLISH
+                          punctuation: ".,!?"
+                          with_offsets: true
+                          stop_words: "the"
+                          stop_words: "and"
+                          stop_words: "or"
+                          attributes: {
+                            alias: "test_attribute_1"
+                            identifier: "test_identifier_1"
+                            index: {
+                              text_index: {
+                                with_suffix_trie: true
+                                no_stem: true
+                                min_stem_size: 3
+                              }
+                            }
+                          }
+                        )",
+                        .expect_return_failure = false,
+                        .expected_output =
+                            "*42\r\n+index_name\r\n+test_name\r\n+index_"
+                            "options\r\n*0\r\n+index_definition\r\n*6\r\n+key_"
+                            "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
+                            "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
+                            "10\r\n+identifier\r\n+test_identifier_1\r\n+"
+                            "attribute\r\n+test_attribute_1\r\n+type\r\n+"
+                            "TEXT\r\n+WITH_SUFFIX_TRIE\r\n+1\r\n+NO_STEM\r\n+"
+                            "1\r\n+"
+                            "num_docs\r\n:0\r\n+num_"
+                            "terms\r\n:0\r\n+num_records\r\n:0\r\n+"
+                            "hash_indexing_failures\r\n$1\r\n0\r\n+gc_"
+                            "stats\r\n*14\r\n+"
+                            "bytes_collected\r\n$1\r\n0\r\n+total_ms_run\r\n$"
+                            "1\r\n0\r\n+"
+                            "total_cycles\r\n$1\r\n0\r\n+average_cycle_time_"
+                            "ms\r\n$3\r\nnan\r\n+"
+                            "last_run_time_ms\r\n$1\r\n0\r\n+gc_numeric_trees_"
+                            "missed\r\n$1\r\n0\r\n+"
+                            "gc_blocks_denied\r\n$1\r\n0\r\n+cursor_stats\r\n*"
+                            "8\r\n+"
+                            "global_idle\r\n:0\r\n+global_total\r\n:0\r\n+"
+                            "index_capacity\r\n:0\r\n+index_total\r\n:0\r\n+"
+                            "dialect_stats\r\n*8\r\n+"
+                            "dialect_1\r\n:0\r\n+dialect_2\r\n:0\r\n+"
+                            "dialect_3\r\n:0\r\n+dialect_4\r\n:0\r\n+"
+                            "Index Errors\r\n*8\r\n+"
+                            "indexing failures\r\n:0\r\n+last indexing "
+                            "error\r\n+N/A\r\n+"
+                            "last indexing error "
+                            "key\r\n$3\r\nN/A\r\n+background indexing "
+                            "status\r\n+OK\r\n+"
+                            "backfill_in_progress\r\n$1\r\n0\r\n+"
+                            "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
+                            "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
+                            "mutations_queue_delay\r\n$5\r\n0 sec\r\n+state\r\n"
+                            "+ready\r\n+punctuation\r\n+.,!?\r\n+stop_"
+                            "words\r\n*3\r\n+"
+                            "the\r\n+and\r\n+or\r\n+with_offsets\r\n+1\r\n+"
+                            "language\r\n+english\r\n",
                     },
                 },
         },

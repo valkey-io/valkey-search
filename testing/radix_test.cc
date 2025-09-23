@@ -9,6 +9,7 @@
 
 #include "gtest/gtest.h"
 #include "src/indexes/text/radix_tree.h"
+#include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search::indexes::text {
 namespace {
@@ -22,9 +23,10 @@ struct TestTarget {
   }
 };
 
-class RadixTreeTest : public testing::Test {
+class RadixTreeTest : public vmsdk::ValkeyTest {
  protected:
   void SetUp() override {
+    vmsdk::ValkeyTest::SetUp();
     prefix_tree_ = std::make_unique<RadixTree<TestTarget, false>>();
   }
 

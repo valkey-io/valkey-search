@@ -60,12 +60,11 @@ bool WildCardIterator::NextKey() {
     }
     // Current posting exhausted. Move to next word
     word_iter_.Next();
-    if (word_iter_.Done()) {
-      return false;
+    if (!word_iter_.Done()) {
+      target_posting_ = word_iter_.GetTarget();
+      key_iter_ = target_posting_->GetKeyIterator();
+      VMSDK_LOG(WARNING, nullptr) << "WI::NextKey{" << data_ << "}. Move to next word";
     }
-    target_posting_ = word_iter_.GetTarget();
-    key_iter_ = target_posting_->GetKeyIterator();
-    VMSDK_LOG(WARNING, nullptr) << "WI::NextKey{" << data_ << "}. Move to next word";
   }
   // No more valid keys
   current_key_ = nullptr;

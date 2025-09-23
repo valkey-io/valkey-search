@@ -99,7 +99,6 @@ bool TermIterator::NextPosition() {
 std::pair<uint32_t, uint32_t> TermIterator::CurrentPosition() {
   VMSDK_LOG(WARNING, nullptr) << "TI::CurrentPosition{" << word_iter_.GetWord() << "}";
   CHECK(current_position_.has_value());
-  // return current_position_.value();
   return std::make_pair(current_position_.value(), current_position_.value());
 }
 

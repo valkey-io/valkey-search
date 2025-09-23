@@ -83,13 +83,16 @@ uint64_t ProximityIterator::CurrentFieldMask() const {
 bool ProximityIterator::NextKey() {
     VMSDK_LOG(WARNING, nullptr) << "PI::NextKey1";
     // On the second call onwards, advance any text iterators that are still sitting on the old key.
-    if (current_key_) {
-        for (auto& c : iters_) {
-            if (!c->DoneKeys() && c->CurrentKey() == current_key_) {
-                c->NextKey();
-            }
-        }
-    }
+	auto advance = [&]() -> void {
+		for (auto& c : iters_) {
+			if (!c->DoneKeys() && c->CurrentKey() == current_key_) {
+				c->NextKey();
+			}
+		}
+    };
+	if (current_key_) {
+		advance();
+	}
     while (!DoneKeys()) {
         VMSDK_LOG(WARNING, nullptr) << "PI::NextKey - in loop";
         // 1) Move to the next common key amongst all text iterators.
@@ -103,6 +106,7 @@ bool ProximityIterator::NextKey() {
                 return true;
             }
         }
+		advance();
         // Otherwise, loop and try again.
     }
     VMSDK_LOG(WARNING, nullptr) << "PI::NextKey keys exhausted";

@@ -159,7 +159,7 @@ class TestFullText(ValkeySearchTestCaseBase):
 
         # TODO: We can test this once the queries are tokenized with punctuation applied.
         # result = client.execute_command("FT.SEARCH", "products", '@desc:"inspector\'s palm"')
-        # TODO: We can test this once the queries are tokenized with puncutation and stopword removal applied.
+        # TODO: We can test this once the queries are tokenized with punctuation and stopword removal applied.
         # result = client.execute_command("FT.SEARCH", "products", '@desc:"random words, these are not"')
 
     def test_ft_create(self):

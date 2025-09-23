@@ -14,8 +14,8 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/radix_tree.h"
-#include "src/utils/string_interning.h"
 #include "src/indexes/text/text_iterator.h"
+#include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes::text {
 
@@ -67,13 +67,11 @@ Iterator.
 class ProximityIterator : public TextIterator {
  public:
   ProximityIterator(std::vector<std::unique_ptr<TextIterator>>&& iters,
-                 size_t slop,
-                 bool in_order, 
-                 FieldMaskPredicate field_mask,
-                 const InternedStringSet* untracked_keys = nullptr);
+                    size_t slop, bool in_order, FieldMaskPredicate field_mask,
+                    const InternedStringSet* untracked_keys = nullptr);
   uint64_t FieldMask() const override;
   // Key-level iteration
-  bool DoneKeys() const override; 
+  bool DoneKeys() const override;
   bool NextKey() override;
   const InternedStringPtr& CurrentKey() const override;
 
@@ -86,12 +84,12 @@ class ProximityIterator : public TextIterator {
   // List of all the Text Predicates contained in the Proximity AND.
   std::vector<std::unique_ptr<TextIterator>> iters_;
   // Used to track if we are at the beginning of the iterator.
-  bool done_; 
+  bool done_;
   size_t slop_;
   bool in_order_;
   // This is from the query and is used in exact phrase
   uint64_t field_mask_;
-  
+
   InternedStringPtr current_key_;
   std::optional<uint32_t> current_start_pos_;
   std::optional<uint32_t> current_end_pos_;

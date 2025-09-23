@@ -9,8 +9,7 @@
 
 namespace valkey_search::indexes::text {
 
-TermIterator::TermIterator(const WordIterator& word_iter,
-                           bool exact,
+TermIterator::TermIterator(const WordIterator& word_iter, bool exact,
                            const absl::string_view data,
                            const uint32_t field_mask,
                            const InternedStringSet* untracked_keys)
@@ -18,13 +17,13 @@ TermIterator::TermIterator(const WordIterator& word_iter,
       data_(data),
       field_mask_(field_mask),
       word_iter_(word_iter),
-      target_posting_(nullptr),      // initialize shared_ptr to null
-      key_iter_(),                   // default-initialize iterator
-      pos_iter_(),                   // default-initialize iterator
-      current_key_(nullptr),         // no key yet
+      target_posting_(nullptr),  // initialize shared_ptr to null
+      key_iter_(),               // default-initialize iterator
+      pos_iter_(),               // default-initialize iterator
+      current_key_(nullptr),     // no key yet
       current_position_(std::nullopt),
       untracked_keys_(untracked_keys),
-      nomatch_(false)                // start as "not done"
+      nomatch_(false)  // start as "not done"
 {
   if (word_iter_.Done()) {
     nomatch_ = true;
@@ -43,18 +42,18 @@ TermIterator::TermIterator(const WordIterator& word_iter,
 // Usage: Need to check if not DoneKeys, and only then call NextKey
 bool TermIterator::NextKey() {
   if (current_key_) {
-      key_iter_.NextKey();
+    key_iter_.NextKey();
   }
   // Loop until we find a key that satisfies the field mask
   while (key_iter_.IsValid()) {
     if (key_iter_.ContainsFields(field_mask_)) {
-        current_key_ = key_iter_.GetKey();
-        pos_iter_ = key_iter_.GetPositionIterator();
-        current_position_ = std::nullopt;
-        // We need to call NextPosition here if we dont want garbage values.
-        if (TermIterator::NextPosition()) {
-          return true;  // We have a key and a position
-        }
+      current_key_ = key_iter_.GetKey();
+      pos_iter_ = key_iter_.GetPositionIterator();
+      current_position_ = std::nullopt;
+      // We need to call NextPosition here if we dont want garbage values.
+      if (TermIterator::NextPosition()) {
+        return true;  // We have a key and a position
+      }
     }
     key_iter_.NextKey();
   }
@@ -70,7 +69,7 @@ const InternedStringPtr& TermIterator::CurrentKey() const {
 
 bool TermIterator::NextPosition() {
   if (current_position_.has_value()) {
-      pos_iter_.NextPosition();
+    pos_iter_.NextPosition();
   }
   // Loop until we find a position that satisfies the field mask
   while (pos_iter_.IsValid()) {
@@ -104,8 +103,6 @@ bool TermIterator::DonePositions() const {
   return !pos_iter_.IsValid();
 }
 
-uint64_t TermIterator::FieldMask() const {
-  return field_mask_;
-}
+uint64_t TermIterator::FieldMask() const { return field_mask_; }
 
 }  // namespace valkey_search::indexes::text

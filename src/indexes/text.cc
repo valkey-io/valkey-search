@@ -136,19 +136,26 @@ std::unique_ptr<Text::EntriesFetcher> Text::Search(
 
 size_t Text::EntriesFetcher::Size() const { return size_; }
 
-// Recursive function to return the appropriate text iterator based on the predicate.
-std::unique_ptr<text::TextIterator> Text::EntriesFetcher::BuildTextIterator(const query::TextPredicate* predicate) {
+// Recursive function to return the appropriate text iterator based on the
+// predicate.
+std::unique_ptr<text::TextIterator> Text::EntriesFetcher::BuildTextIterator(
+    const query::TextPredicate* predicate) {
   if (auto term = dynamic_cast<const query::TermPredicate*>(predicate)) {
-    auto word_iter = text_index_->prefix_.GetWordIterator(term->GetTextString());
-    return std::make_unique<text::TermIterator>(
-        word_iter, /*exact=*/true, term->GetTextString(), field_mask_, untracked_keys_);
+    auto word_iter =
+        text_index_->prefix_.GetWordIterator(term->GetTextString());
+    return std::make_unique<text::TermIterator>(word_iter, /*exact=*/true,
+                                                term->GetTextString(),
+                                                field_mask_, untracked_keys_);
   }
   if (auto prefix = dynamic_cast<const query::PrefixPredicate*>(predicate)) {
-    auto word_iter = text_index_->prefix_.GetWordIterator(prefix->GetTextString());
+    auto word_iter =
+        text_index_->prefix_.GetWordIterator(prefix->GetTextString());
     return std::make_unique<text::WildCardIterator>(
-        word_iter, text::WildCardOperation::kPrefix, prefix->GetTextString(), field_mask_, untracked_keys_);
+        word_iter, text::WildCardOperation::kPrefix, prefix->GetTextString(),
+        field_mask_, untracked_keys_);
   }
-  if (auto proximity = dynamic_cast<const query::ProximityPredicate*>(predicate)) {
+  if (auto proximity =
+          dynamic_cast<const query::ProximityPredicate*>(predicate)) {
     std::vector<std::unique_ptr<text::TextIterator>> vec;
     for (const auto& term : proximity->GetTerms()) {
       vec.emplace_back(BuildTextIterator(term.get()));
@@ -157,13 +164,15 @@ std::unique_ptr<text::TextIterator> Text::EntriesFetcher::BuildTextIterator(cons
     // This is a safety check since we should handle this in the query level.
     uint64_t common_fields = vec[0]->FieldMask();
     for (size_t i = 1; i < vec.size(); ++i) {
-        common_fields &= vec[i]->FieldMask();
-        // The nested proximity iterator's NextPosition fn calls ensure that we are on a valid
-        // combination of positions.
-        CHECK(common_fields != 0) << "ProximityIterator - positions are not on the matching fields in child iterators";
+      common_fields &= vec[i]->FieldMask();
+      // The nested proximity iterator's NextPosition fn calls ensure that we
+      // are on a valid combination of positions.
+      CHECK(common_fields != 0) << "ProximityIterator - positions are not on "
+                                   "the matching fields in child iterators";
     }
     return std::make_unique<text::ProximityIterator>(
-        std::move(vec), /*slop=*/0, /*in_order=*/true, field_mask_, untracked_keys_);
+        std::move(vec), /*slop=*/0, /*in_order=*/true, field_mask_,
+        untracked_keys_);
   }
   CHECK(false) << "Unsupported TextPredicate type";
 }

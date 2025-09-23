@@ -17,14 +17,14 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/text/proximity.h"
 #include "src/indexes/text/term.h"
+#include "src/indexes/text/text_fetcher.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/text/wildcard.h"
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
-#include "src/indexes/text/text_fetcher.h"
-#include "src/indexes/text/proximity.h"
 
 namespace valkey_search::indexes {
 
@@ -92,7 +92,8 @@ class Text : public IndexBase {
 
     size_t Size() const override;
 
-    std::unique_ptr<text::TextIterator> BuildTextIterator(const query::TextPredicate* predicate);
+    std::unique_ptr<text::TextIterator> BuildTextIterator(
+        const query::TextPredicate* predicate);
 
     // Factory method that creates the appropriate text iterator
     // based on the text predicate's operation type.

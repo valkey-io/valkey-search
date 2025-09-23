@@ -2,56 +2,52 @@
 
 namespace valkey_search::indexes::text {
 
-ProximityIterator::ProximityIterator(std::vector<std::unique_ptr<TextIterator>>&& iters,
-                                     size_t slop,
-                                     bool in_order,
-                                     FieldMaskPredicate field_mask,
-                                     const InternedStringSet* untracked_keys)
-    : iters_(std::move(iters)),     // move the iterators in
-      done_(false),                 // initially not done
+ProximityIterator::ProximityIterator(
+    std::vector<std::unique_ptr<TextIterator>>&& iters, size_t slop,
+    bool in_order, FieldMaskPredicate field_mask,
+    const InternedStringSet* untracked_keys)
+    : iters_(std::move(iters)),  // move the iterators in
+      done_(false),              // initially not done
       slop_(slop),
       in_order_(in_order),
       untracked_keys_(untracked_keys),
-      current_key_(nullptr),        // no key yet
+      current_key_(nullptr),  // no key yet
       current_start_pos_(std::nullopt),
       current_end_pos_(std::nullopt),
-      field_mask_(field_mask)
-{
-    if (iters_.empty()) {
-        done_ = true;
-        return;
-    }
-    // Prime iterators to the first common key and valid position combo
-    NextKey();
+      field_mask_(field_mask) {
+  if (iters_.empty()) {
+    done_ = true;
+    return;
+  }
+  // Prime iterators to the first common key and valid position combo
+  NextKey();
 }
 
 bool ProximityIterator::DoneKeys() const {
-    if (done_) {
-        return true;
+  if (done_) {
+    return true;
+  }
+  for (auto& c : iters_) {
+    if (c->DoneKeys()) {
+      return true;
     }
-    for (auto& c : iters_) {
-        if (c->DoneKeys()) {
-            return true;
-        }
-    }
-    return false;
+  }
+  return false;
 }
 
 bool ProximityIterator::DonePositions() const {
-    if (done_) {
-        return true;
+  if (done_) {
+    return true;
+  }
+  for (auto& c : iters_) {
+    if (c->DonePositions()) {
+      return true;
     }
-    for (auto& c : iters_) {
-        if (c->DonePositions()) {
-            return true;
-        }
-    }
-    return false;
+  }
+  return false;
 }
 
-uint64_t ProximityIterator::FieldMask() const {
-  return field_mask_;
-}
+uint64_t ProximityIterator::FieldMask() const { return field_mask_; }
 
 const InternedStringPtr& ProximityIterator::CurrentKey() const {
   CHECK(current_key_ != nullptr);
@@ -64,107 +60,109 @@ std::pair<uint32_t, uint32_t> ProximityIterator::CurrentPosition() const {
 }
 
 bool ProximityIterator::NextKey() {
-    // On the second call onwards, advance any text iterators that are still sitting on the old key.
-	auto advance = [&]() -> void {
-		for (auto& c : iters_) {
-			if (!c->DoneKeys() && c->CurrentKey() == current_key_) {
-				c->NextKey();
-			}
-		}
-    };
-	if (current_key_) {
-		advance();
-	}
-    while (!DoneKeys()) {
-        // 1) Move to the next common key amongst all text iterators.
-        if (FindCommonKey()) {
-            current_start_pos_ = std::nullopt;
-            current_end_pos_ = std::nullopt;
-            // 2) Move to the next valid position combination across all text iterators.
-            //    Exit, if no valid position combination key is found.
-            if (NextPosition()) {
-                return true;
-            }
-        }
-		advance();
-        // Otherwise, loop and try again.
+  // On the second call onwards, advance any text iterators that are still
+  // sitting on the old key.
+  auto advance = [&]() -> void {
+    for (auto& c : iters_) {
+      if (!c->DoneKeys() && c->CurrentKey() == current_key_) {
+        c->NextKey();
+      }
     }
-    current_key_ = nullptr;
-    return false;
+  };
+  if (current_key_) {
+    advance();
+  }
+  while (!DoneKeys()) {
+    // 1) Move to the next common key amongst all text iterators.
+    if (FindCommonKey()) {
+      current_start_pos_ = std::nullopt;
+      current_end_pos_ = std::nullopt;
+      // 2) Move to the next valid position combination across all text
+      // iterators.
+      //    Exit, if no valid position combination key is found.
+      if (NextPosition()) {
+        return true;
+      }
+    }
+    advance();
+    // Otherwise, loop and try again.
+  }
+  current_key_ = nullptr;
+  return false;
 }
 
 bool ProximityIterator::FindCommonKey() {
-    // 1) Validate children and compute min/max among current keys
-    InternedStringPtr min_key = nullptr;
-    InternedStringPtr max_key = nullptr;
-    for (auto& iter : iters_) {
-        auto k = iter->CurrentKey();
-        if (!min_key || k->Str() < min_key->Str()) min_key = k;
-        if (!max_key || k->Str() > max_key->Str()) max_key = k;
+  // 1) Validate children and compute min/max among current keys
+  InternedStringPtr min_key = nullptr;
+  InternedStringPtr max_key = nullptr;
+  for (auto& iter : iters_) {
+    auto k = iter->CurrentKey();
+    if (!min_key || k->Str() < min_key->Str()) min_key = k;
+    if (!max_key || k->Str() > max_key->Str()) max_key = k;
+  }
+  // 2) If everyone is already equal -> we found a common key
+  if (min_key->Str() == max_key->Str()) {
+    current_key_ = max_key;
+    return true;
+  }
+  // 3) Advance all iterators that are strictly behind the current max_key
+  for (auto& iter : iters_) {
+    // TODO: Replace this block with SeekForward on the Key.
+    while (!iter->DoneKeys() && iter->CurrentKey()->Str() < max_key->Str()) {
+      iter->NextKey();
     }
-    // 2) If everyone is already equal -> we found a common key
-    if (min_key->Str() == max_key->Str()) {
-        current_key_ = max_key;
-        return true;
-    }
-    // 3) Advance all iterators that are strictly behind the current max_key
-    for (auto& iter : iters_) {
-        // TODO: Replace this block with SeekForward on the Key.
-        while (!iter->DoneKeys() && iter->CurrentKey()->Str() < max_key->Str()) {
-            iter->NextKey();
-        }
-    }
-    return false;
+  }
+  return false;
 }
 
 bool ProximityIterator::NextPosition() {
-    const size_t n = iters_.size();
-    std::vector<std::pair<uint32_t, uint32_t>> positions(n);
-    auto advance_smallest = [&]() -> void {
-        size_t advance_idx = 0;
-        for (size_t i = 1; i < n; ++i) {
-            if (positions[i].first < positions[advance_idx].first) {
-                advance_idx = i;
-            }
-        }
-        iters_[advance_idx]->NextPosition();
-    };
-    bool should_advance = false;
-    // On a second call, we advance.
-    if (current_start_pos_.has_value() && current_end_pos_.has_value()) {
-        should_advance = true;
+  const size_t n = iters_.size();
+  std::vector<std::pair<uint32_t, uint32_t>> positions(n);
+  auto advance_smallest = [&]() -> void {
+    size_t advance_idx = 0;
+    for (size_t i = 1; i < n; ++i) {
+      if (positions[i].first < positions[advance_idx].first) {
+        advance_idx = i;
+      }
     }
-    while (!DonePositions()) {
-        // Collect current positions (start, end) of the text iterators.
-        for (size_t i = 0; i < n; ++i) {
-            positions[i] = iters_[i]->CurrentPosition();
-        }
-        if (should_advance) {
-            should_advance = false;
-            advance_smallest();
-        }
-        bool valid = true;
-        // Check if the current combination of positions satisfies the proximity constraints
-		// (order/slop) using start and end positions.
-        if (valid) {
-            for (size_t i = 0; i + 1 < n && valid; ++i) {
-                if (in_order_ && positions[i].first >= positions[i + 1].first) {
-                    valid = false;
-                } else if (positions[i + 1].first - positions[i].second - 1 > slop_) {
-                    valid = false;
-                }
-            }
-        }
-        if (valid) {
-            current_start_pos_ = positions[0].first;
-            current_end_pos_ = positions[n-1].second;
-            return true;
-        }
-        advance_smallest();
+    iters_[advance_idx]->NextPosition();
+  };
+  bool should_advance = false;
+  // On a second call, we advance.
+  if (current_start_pos_.has_value() && current_end_pos_.has_value()) {
+    should_advance = true;
+  }
+  while (!DonePositions()) {
+    // Collect current positions (start, end) of the text iterators.
+    for (size_t i = 0; i < n; ++i) {
+      positions[i] = iters_[i]->CurrentPosition();
     }
-    current_start_pos_ = std::nullopt;
-    current_end_pos_ = std::nullopt;
-    return false;
+    if (should_advance) {
+      should_advance = false;
+      advance_smallest();
+    }
+    bool valid = true;
+    // Check if the current combination of positions satisfies the proximity
+    // constraints (order/slop) using start and end positions.
+    if (valid) {
+      for (size_t i = 0; i + 1 < n && valid; ++i) {
+        if (in_order_ && positions[i].first >= positions[i + 1].first) {
+          valid = false;
+        } else if (positions[i + 1].first - positions[i].second - 1 > slop_) {
+          valid = false;
+        }
+      }
+    }
+    if (valid) {
+      current_start_pos_ = positions[0].first;
+      current_end_pos_ = positions[n - 1].second;
+      return true;
+    }
+    advance_smallest();
+  }
+  current_start_pos_ = std::nullopt;
+  current_end_pos_ = std::nullopt;
+  return false;
 }
 
 }  // namespace valkey_search::indexes::text

@@ -14,8 +14,8 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/radix_tree.h"
-#include "src/utils/string_interning.h"
 #include "src/indexes/text/text_iterator.h"
+#include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes::text {
 
@@ -30,10 +30,8 @@ Top level iterator for a Term
 */
 class TermIterator : public TextIterator {
  public:
-  TermIterator(const WordIterator& word_iter, 
-               bool exact, 
-               const absl::string_view data,
-               const uint32_t field_mask,
+  TermIterator(const WordIterator& word_iter, bool exact,
+               const absl::string_view data, const uint32_t field_mask,
                const InternedStringSet* untracked_keys = nullptr);
   uint64_t FieldMask() const override;
   // Key-level iteration

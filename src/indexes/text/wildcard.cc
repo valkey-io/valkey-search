@@ -18,13 +18,12 @@ WildCardIterator::WildCardIterator(const WordIterator& word_iter,
       data_(data),
       field_mask_(field_mask),
       word_iter_(word_iter),
-      target_posting_(nullptr),      // initialize shared_ptr to null
-      key_iter_(),                   // default-initialize iterator
-      pos_iter_(),                   // default-initialize iterator
-      current_key_(nullptr),         // no key yet
+      target_posting_(nullptr),  // initialize shared_ptr to null
+      key_iter_(),               // default-initialize iterator
+      pos_iter_(),               // default-initialize iterator
+      current_key_(nullptr),     // no key yet
       current_position_(std::nullopt),
-      untracked_keys_(untracked_keys)
-{
+      untracked_keys_(untracked_keys) {
   if (word_iter_.Done()) {
     return;
   }
@@ -36,18 +35,18 @@ WildCardIterator::WildCardIterator(const WordIterator& word_iter,
 
 bool WildCardIterator::NextKey() {
   if (current_key_) {
-      key_iter_.NextKey();
+    key_iter_.NextKey();
   }
   // Loop until we find a key that satisfies the field mask
   while (!word_iter_.Done()) {
     while (key_iter_.IsValid()) {
       if (key_iter_.ContainsFields(field_mask_)) {
-          current_key_ = key_iter_.GetKey();
-          pos_iter_ = key_iter_.GetPositionIterator();
-          current_position_ = std::nullopt;
-          if (WildCardIterator::NextPosition()) {
-            return true;
-          }
+        current_key_ = key_iter_.GetKey();
+        pos_iter_ = key_iter_.GetPositionIterator();
+        current_position_ = std::nullopt;
+        if (WildCardIterator::NextPosition()) {
+          return true;
+        }
       }
       key_iter_.NextKey();
     }
@@ -70,7 +69,7 @@ const InternedStringPtr& WildCardIterator::CurrentKey() const {
 
 bool WildCardIterator::NextPosition() {
   if (current_position_.has_value()) {
-      pos_iter_.NextPosition();
+    pos_iter_.NextPosition();
   }
   // Loop until we find a position that satisfies the field mask
   while (pos_iter_.IsValid()) {
@@ -97,12 +96,8 @@ bool WildCardIterator::DoneKeys() const {
   return !key_iter_.IsValid();
 }
 
-bool WildCardIterator::DonePositions() const {
-  return !pos_iter_.IsValid();
-}
+bool WildCardIterator::DonePositions() const { return !pos_iter_.IsValid(); }
 
-uint64_t WildCardIterator::FieldMask() const {
-  return field_mask_;
-}
+uint64_t WildCardIterator::FieldMask() const { return field_mask_; }
 
 }  // namespace valkey_search::indexes::text

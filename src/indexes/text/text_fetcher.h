@@ -14,8 +14,8 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/radix_tree.h"
-#include "src/utils/string_interning.h"
 #include "src/indexes/text/text_iterator.h"
+#include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes::text {
 
@@ -31,7 +31,8 @@ class TextFetcher : public indexes::EntriesFetcherIteratorBase {
   const InternedStringPtr& operator*() const override;
 
  private:
-  std::unique_ptr<TextIterator> iter_; // List of all the Text Predicates contained in the Proximity AND.
+  std::unique_ptr<TextIterator>
+      iter_;  // List of all the Text Predicates contained in the Proximity AND.
 };
 }  // namespace valkey_search::indexes::text
 

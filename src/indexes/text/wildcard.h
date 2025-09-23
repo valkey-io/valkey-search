@@ -48,8 +48,8 @@ This algorithm operates in time O(#SuffixMatches)
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/radix_tree.h"
-#include "src/utils/string_interning.h"
 #include "src/indexes/text/text_iterator.h"
+#include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes::text {
 
@@ -64,10 +64,9 @@ enum WildCardOperation {
 class WildCardIterator : public TextIterator {
  public:
   WildCardIterator(const WordIterator& word_iter,
-               const WildCardOperation operation,
-               const absl::string_view data,
-               const uint32_t field_mask,
-               const InternedStringSet* untracked_keys = nullptr);
+                   const WildCardOperation operation,
+                   const absl::string_view data, const uint32_t field_mask,
+                   const InternedStringSet* untracked_keys = nullptr);
   uint64_t FieldMask() const override;
   // Key-level iteration
   bool DoneKeys() const override;

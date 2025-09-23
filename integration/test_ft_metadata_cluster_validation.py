@@ -439,3 +439,4 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
             node = self.new_client_for_primary(i)
             with pytest.raises(ResponseError):
                 node.execute_command("FT.INFO", index_name)
+

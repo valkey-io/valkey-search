@@ -71,8 +71,6 @@ void DropConsistencyCheckFanoutOperation::ResetForRetry() {}
 // retry condition: (1) inconsistent state (2) network error (3) index still
 // exists on some nodes
 bool DropConsistencyCheckFanoutOperation::ShouldRetry() {
-  VMSDK_LOG(NOTICE, nullptr)
-      << "index name node error number is " << index_name_error_nodes.size();
   return !inconsistent_state_error_nodes.empty() ||
          !communication_error_nodes.empty() ||
          index_name_error_nodes.size() != targets_.size();

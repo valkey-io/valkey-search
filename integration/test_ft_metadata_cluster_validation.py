@@ -103,8 +103,6 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
             assert parser.index_definition == first_parser.index_definition, f"Index definition mismatch on node {i}"
             
             # Validate attributes consistency - compare by identifier rather than position
-            # since attribute order might differ between nodes
-            # Use the parser's get_attribute_by_name method to handle both dict and list cases
             first_attr_names = set()
             for attr in first_parser.attributes:
                 if isinstance(attr, dict):
@@ -132,11 +130,8 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
                 assert first_attr is not None and node_attr is not None, f"Attribute '{attr_name}' parsing failed"
                 assert node_attr.get('type') == first_attr.get('type'), f"Attribute '{attr_name}' type mismatch on node {i}"
         
-        # Validate specific expected attributes (only those that can be properly parsed)
-        # Skip subcategory for now due to parsing issues with list format
-        testable_attributes = {k: v for k, v in expected_attributes.items() if k != "subcategory"}
-        
-        for attr_name, expected_config in testable_attributes.items():
+        # Validate specific expected attributes
+        for attr_name, expected_config in expected_attributes.items():
             attr = first_parser.get_attribute_by_name(attr_name)
             assert attr is not None, f"Expected attribute '{attr_name}' not found"
             
@@ -144,20 +139,6 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
                 actual_value = attr.get(key)
                 assert actual_value == expected_value, f"Attribute '{attr_name}' {key} mismatch: expected {expected_value}, got {actual_value}"
         
-        # Special validation for subcategory attribute (handle list format manually)
-        # Only validate if subcategory is expected
-        if "subcategory" in expected_attributes:
-            subcategory_found = False
-            for attr in first_parser.attributes:
-                if isinstance(attr, list) and len(attr) >= 2 and attr[0] == 'identifier' and attr[1] == 'subcategory':
-                    subcategory_found = True
-                    # Validate it's a TAG type with CASESENSITIVE
-                    assert 'TAG' in attr, f"subcategory should be TAG type, got: {attr}"
-                    assert 'CASESENSITIVE' in attr, f"subcategory should have CASESENSITIVE, got: {attr}"
-                    break
-            
-            assert subcategory_found, f"subcategory attribute not found in any format"
-
     def test_basic_text_index_metadata_validation(self):
         """Test basic text index with simple configuration."""
         cluster: ValkeyCluster = self.new_cluster_client()
@@ -242,7 +223,7 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
             "subcategory": {
                 "type": "TAG",
                 "identifier": "subcategory",
-                "SEPARATOR": ",",  # Default separator when CASESENSITIVE is used
+                "SEPARATOR": ",",
                 "CASESENSITIVE": 1
             }
         }
@@ -378,10 +359,7 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
         # All nodes should report the same total number of documents
         total_docs = len(test_docs)
         for i, parser in enumerate(ft_info_results):
-            # Note: In a cluster, individual nodes may have different doc counts
-            # but the sum across all nodes should equal total_docs
-            # For this test, we'll validate that each node has some documents
-            # and that all nodes are in ready state
+            # the sum across all nodes should equal total_docs
             assert parser.is_ready(), f"Node {i} is not in ready state"
             assert parser.is_backfill_complete(), f"Node {i} backfill not complete"
 

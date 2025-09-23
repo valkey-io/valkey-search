@@ -25,7 +25,6 @@ WildCardIterator::WildCardIterator(const WordIterator& word_iter,
       current_position_(std::nullopt),
       untracked_keys_(untracked_keys)
 {
-  VMSDK_LOG(WARNING, nullptr) << "WI::init{" << data_ << "}";
   if (word_iter_.Done()) {
     return;
   }
@@ -36,10 +35,8 @@ WildCardIterator::WildCardIterator(const WordIterator& word_iter,
 }
 
 bool WildCardIterator::NextKey() {
-  VMSDK_LOG(WARNING, nullptr) << "WI::NextKey{" << word_iter_.GetWord() << "}";
   if (current_key_) {
       key_iter_.NextKey();
-      VMSDK_LOG(WARNING, nullptr) << "WI::NextKey{" << data_ << "}. Move to next key. Early Key";
   }
   // Loop until we find a key that satisfies the field mask
   while (!word_iter_.Done()) {
@@ -48,20 +45,17 @@ bool WildCardIterator::NextKey() {
           current_key_ = key_iter_.GetKey();
           pos_iter_ = key_iter_.GetPositionIterator();
           current_position_ = std::nullopt;
-          VMSDK_LOG(WARNING, nullptr) << "WI::NextKey{" << word_iter_.GetWord() << "} - Found key. CurrentKey: " << current_key_->Str() << " Position: " << pos_iter_.GetPosition();;
           if (WildCardIterator::NextPosition()) {
             return true;
           }
       }
       key_iter_.NextKey();
-      VMSDK_LOG(WARNING, nullptr) << "WI::NextKey{" << data_ << "}. Move to next key";
     }
     // Current posting exhausted. Move to next word
     word_iter_.Next();
     if (!word_iter_.Done()) {
       target_posting_ = word_iter_.GetTarget();
       key_iter_ = target_posting_->GetKeyIterator();
-      VMSDK_LOG(WARNING, nullptr) << "WI::NextKey{" << data_ << "}. Move to next word";
     }
   }
   // No more valid keys
@@ -71,12 +65,10 @@ bool WildCardIterator::NextKey() {
 
 const InternedStringPtr& WildCardIterator::CurrentKey() const {
   CHECK(current_key_ != nullptr);
-  VMSDK_LOG(WARNING, nullptr) << "WI::CurrentKey{" << word_iter_.GetWord() << "}. Key: " <<  current_key_->Str();
   return current_key_;
 }
 
 bool WildCardIterator::NextPosition() {
-  VMSDK_LOG(WARNING, nullptr) << "WI::NextPosition{" << word_iter_.GetWord() << "}";
   if (current_position_.has_value()) {
       pos_iter_.NextPosition();
   }
@@ -94,13 +86,11 @@ bool WildCardIterator::NextPosition() {
 }
 
 std::pair<uint32_t, uint32_t> WildCardIterator::CurrentPosition() const {
-  VMSDK_LOG(WARNING, nullptr) << "WI::CurrentPosition{" << word_iter_.GetWord() << "}";
   CHECK(current_position_.has_value());
   return std::make_pair(current_position_.value(), current_position_.value());
 }
 
 bool WildCardIterator::DoneKeys() const {
-  VMSDK_LOG(WARNING, nullptr) << "WI::DoneKeys{" << data_ << "}";
   if (word_iter_.Done()) {
     return true;
   }
@@ -108,12 +98,10 @@ bool WildCardIterator::DoneKeys() const {
 }
 
 bool WildCardIterator::DonePositions() const {
-  VMSDK_LOG(WARNING, nullptr) << "WI::Done{" << data_ << "}";
   return !pos_iter_.IsValid();
 }
 
 uint64_t WildCardIterator::FieldMask() const {
-  VMSDK_LOG(WARNING, nullptr) << "WI::FieldMask{" << word_iter_.GetWord() << "}";
   return field_mask_;
 }
 

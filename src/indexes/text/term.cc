@@ -26,14 +26,11 @@ TermIterator::TermIterator(const WordIterator& word_iter,
       untracked_keys_(untracked_keys),
       nomatch_(false)                // start as "not done"
 {
-  VMSDK_LOG(WARNING, nullptr) << "TI::init{" << data_ << "}. nomatch_: " << nomatch_;
   if (word_iter_.Done()) {
-    VMSDK_LOG(WARNING, nullptr) << "TI::nomatch1{" << data_ << "}";
     nomatch_ = true;
     return;
   }
   if (data_ != word_iter_.GetWord()) {
-    VMSDK_LOG(WARNING, nullptr) << "TI::nomatch2{" << data_ << "}";
     nomatch_ = true;
     return;
   }
@@ -45,7 +42,6 @@ TermIterator::TermIterator(const WordIterator& word_iter,
 
 // Usage: Need to check if not DoneKeys, and only then call NextKey
 bool TermIterator::NextKey() {
-  VMSDK_LOG(WARNING, nullptr) << "TI::NextKey{" << word_iter_.GetWord() << "}";
   if (current_key_) {
       key_iter_.NextKey();
   }
@@ -56,7 +52,6 @@ bool TermIterator::NextKey() {
         pos_iter_ = key_iter_.GetPositionIterator();
         current_position_ = std::nullopt;
         // We need to call NextPosition here if we dont want garbage values.
-        VMSDK_LOG(WARNING, nullptr) << "TI::NextKey{" << word_iter_.GetWord() << "} - Found key. CurrentKey: " << current_key_->Str() << " Position: " << pos_iter_.GetPosition();
         if (TermIterator::NextPosition()) {
           return true;  // We have a key and a position
         }
@@ -70,12 +65,10 @@ bool TermIterator::NextKey() {
 
 const InternedStringPtr& TermIterator::CurrentKey() const {
   CHECK(current_key_ != nullptr);
-  VMSDK_LOG(WARNING, nullptr) << "TI::CurrentKey{" << word_iter_.GetWord() << "}. Key: " <<  current_key_->Str();
   return current_key_;
 }
 
 bool TermIterator::NextPosition() {
-  VMSDK_LOG(WARNING, nullptr) << "TI::NextPosition{" << word_iter_.GetWord() << "}";
   if (current_position_.has_value()) {
       pos_iter_.NextPosition();
   }
@@ -93,22 +86,18 @@ bool TermIterator::NextPosition() {
 }
 
 std::pair<uint32_t, uint32_t> TermIterator::CurrentPosition() const {
-  VMSDK_LOG(WARNING, nullptr) << "TI::CurrentPosition{" << word_iter_.GetWord() << "}";
   CHECK(current_position_.has_value());
   return std::make_pair(current_position_.value(), current_position_.value());
 }
 
 bool TermIterator::DoneKeys() const {
-  VMSDK_LOG(WARNING, nullptr) << "TI::DoneKeys{" << data_ << "}";
   if (nomatch_) {
-      VMSDK_LOG(WARNING, nullptr) << "TI::DoneKeys{" << data_ << "} Done due to nomatch_";
     return true;
   }
   return !key_iter_.IsValid();
 }
 
 bool TermIterator::DonePositions() const {
-  VMSDK_LOG(WARNING, nullptr) << "TI::DonePositions{" << data_ << "}";
   if (nomatch_) {
     return true;
   }
@@ -116,7 +105,6 @@ bool TermIterator::DonePositions() const {
 }
 
 uint64_t TermIterator::FieldMask() const {
-  VMSDK_LOG(WARNING, nullptr) << "TI::FieldMask{" << word_iter_.GetWord() << "}";
   return field_mask_;
 }
 

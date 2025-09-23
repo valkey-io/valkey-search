@@ -17,10 +17,7 @@ ProximityIterator::ProximityIterator(std::vector<std::unique_ptr<TextIterator>>&
       current_end_pos_(std::nullopt),
       field_mask_(field_mask)
 {
-    VMSDK_LOG(WARNING, nullptr) << "PI::init";
-    VMSDK_LOG(WARNING, nullptr) << "iters_ size" << iters_.size();
     if (iters_.empty()) {
-        VMSDK_LOG(WARNING, nullptr) << "PI::init done 1";
         done_ = true;
         return;
     }
@@ -29,7 +26,6 @@ ProximityIterator::ProximityIterator(std::vector<std::unique_ptr<TextIterator>>&
 }
 
 bool ProximityIterator::DoneKeys() const {
-    VMSDK_LOG(WARNING, nullptr) << "PI::DoneKeys";   
     if (done_) {
         return true;
     }
@@ -42,7 +38,6 @@ bool ProximityIterator::DoneKeys() const {
 }
 
 bool ProximityIterator::DonePositions() const {
-    VMSDK_LOG(WARNING, nullptr) << "PI::DonePositions";
     if (done_) {
         return true;
     }
@@ -55,24 +50,20 @@ bool ProximityIterator::DonePositions() const {
 }
 
 uint64_t ProximityIterator::FieldMask() const {
-  VMSDK_LOG(WARNING, nullptr) << "PI::FieldMask";
   return field_mask_;
 }
 
 const InternedStringPtr& ProximityIterator::CurrentKey() const {
-  VMSDK_LOG(WARNING, nullptr) << "PI::CurrentKey";
   CHECK(current_key_ != nullptr);
   return current_key_;
 }
 
 std::pair<uint32_t, uint32_t> ProximityIterator::CurrentPosition() const {
-  VMSDK_LOG(WARNING, nullptr) << "PI::CurrentPosition";
   CHECK(current_start_pos_.has_value() && current_end_pos_.has_value());
   return std::make_pair(current_start_pos_.value(), current_end_pos_.value());
 }
 
 bool ProximityIterator::NextKey() {
-    VMSDK_LOG(WARNING, nullptr) << "PI::NextKey1";
     // On the second call onwards, advance any text iterators that are still sitting on the old key.
 	auto advance = [&]() -> void {
 		for (auto& c : iters_) {
@@ -85,7 +76,6 @@ bool ProximityIterator::NextKey() {
 		advance();
 	}
     while (!DoneKeys()) {
-        VMSDK_LOG(WARNING, nullptr) << "PI::NextKey - in loop";
         // 1) Move to the next common key amongst all text iterators.
         if (FindCommonKey()) {
             current_start_pos_ = std::nullopt;
@@ -99,13 +89,11 @@ bool ProximityIterator::NextKey() {
 		advance();
         // Otherwise, loop and try again.
     }
-    VMSDK_LOG(WARNING, nullptr) << "PI::NextKey keys exhausted";
     current_key_ = nullptr;
     return false;
 }
 
 bool ProximityIterator::FindCommonKey() {
-    VMSDK_LOG(WARNING, nullptr) << "PI::FindCommonKey";
     // 1) Validate children and compute min/max among current keys
     InternedStringPtr min_key = nullptr;
     InternedStringPtr max_key = nullptr;
@@ -117,16 +105,12 @@ bool ProximityIterator::FindCommonKey() {
     // 2) If everyone is already equal -> we found a common key
     if (min_key->Str() == max_key->Str()) {
         current_key_ = max_key;
-        VMSDK_LOG(WARNING, nullptr) << "PI::FindCommonKey found common key " << current_key_->Str();
         return true;
     }
     // 3) Advance all iterators that are strictly behind the current max_key
     for (auto& iter : iters_) {
         // TODO: Replace this block with SeekForward on the Key.
         while (!iter->DoneKeys() && iter->CurrentKey()->Str() < max_key->Str()) {
-            VMSDK_LOG(WARNING, nullptr)
-                << "PI::FindCommonKey advancing child from " << iter->CurrentKey()->Str()
-                << " toward " << max_key->Str();
             iter->NextKey();
         }
     }
@@ -134,7 +118,6 @@ bool ProximityIterator::FindCommonKey() {
 }
 
 bool ProximityIterator::NextPosition() {
-    VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition";
     const size_t n = iters_.size();
     std::vector<std::pair<uint32_t, uint32_t>> positions(n);
     auto advance_smallest = [&]() -> void {
@@ -152,7 +135,6 @@ bool ProximityIterator::NextPosition() {
         should_advance = true;
     }
     while (!DonePositions()) {
-        VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition in loop";
         // Collect current positions (start, end) of the text iterators.
         for (size_t i = 0; i < n; ++i) {
             positions[i] = iters_[i]->CurrentPosition();
@@ -176,12 +158,10 @@ bool ProximityIterator::NextPosition() {
         if (valid) {
             current_start_pos_ = positions[0].first;
             current_end_pos_ = positions[n-1].second;
-            VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition returning as valid";
             return true;
         }
         advance_smallest();
     }
-    VMSDK_LOG(WARNING, nullptr) << "PI::NextPosition positions exhausted";
     current_start_pos_ = std::nullopt;
     current_end_pos_ = std::nullopt;
     return false;

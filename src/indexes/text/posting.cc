@@ -17,11 +17,6 @@
 #include "absl/log/check.h"
 #include "src/index_schema.h"
 
-#include <cstddef>
-#include "src/indexes/index_base.h"
-#include "src/indexes/text/radix_tree.h"
-#include "src/utils/string_interning.h"
-
 namespace valkey_search::indexes::text {
 
 // Internal FieldMask classes - not part of external interface
@@ -266,9 +261,6 @@ Postings::KeyIterator Postings::GetKeyIterator() const {
   iterator.key_map_ = &impl_->key_to_positions_;
   iterator.current_ = iterator.key_map_->begin();
   iterator.end_ = iterator.key_map_->end();
-  for (auto it = iterator.key_map_->begin(); it != iterator.key_map_->end(); ++it) {
-    VMSDK_LOG(WARNING, nullptr) << "Key Map " << it->first->Str();
-  }
   return iterator;
 }
 
@@ -333,9 +325,6 @@ Postings::PositionIterator Postings::KeyIterator::GetPositionIterator() const {
   pos_iterator.position_map_ = &current_->second;
   pos_iterator.current_ = pos_iterator.position_map_->begin();
   pos_iterator.end_ = pos_iterator.position_map_->end();
-  for (auto it = pos_iterator.position_map_->begin(); it != pos_iterator.position_map_->end(); ++it) {
-      VMSDK_LOG(WARNING, nullptr) << "Map Position " << it->first;
-  }
   return pos_iterator;
 }
 

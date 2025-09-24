@@ -21,6 +21,12 @@ DropConsistencyCheckFanoutOperation::DropConsistencyCheckFanoutOperation(
       index_name_(index_name),
       timeout_ms_(timeout_ms) {}
 
+DropConsistencyCheckFanoutOperation::~DropConsistencyCheckFanoutOperation() {
+  inconsistent_state_error_nodes.clear();
+  communication_error_nodes.clear();
+  index_name_error_nodes.clear();
+}
+
 unsigned DropConsistencyCheckFanoutOperation::GetTimeoutMs() const {
   return timeout_ms_;
 }

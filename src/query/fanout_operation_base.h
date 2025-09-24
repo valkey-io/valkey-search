@@ -195,7 +195,7 @@ class FanoutOperationBase {
                             int argc) = 0;
 
   virtual int GenerateTimeoutReply(ValkeyModuleCtx* ctx) {
-    return ValkeyModule_ReplyWithError(ctx, "Request timed out custom");
+    return ValkeyModule_ReplyWithError(ctx, "Request timed out");
   }
 
   virtual int GenerateErrorReply(ValkeyModuleCtx* ctx) {

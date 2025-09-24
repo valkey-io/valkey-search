@@ -32,6 +32,8 @@ extern Controlled<bool> ForceRetry;
 
 namespace valkey_search::query::fanout {
 
+constexpr unsigned kNoValkeyTimeout = 86400000;
+
 template <typename Request, typename Response, FanoutTargetMode kTargetMode>
 class FanoutOperationBase {
  public:
@@ -41,8 +43,10 @@ class FanoutOperationBase {
 
   void StartOperation(ValkeyModuleCtx* ctx) {
     blocked_client_ = std::make_unique<vmsdk::BlockedClient>(
-        ctx, &Reply, &Timeout, &Free, GetTimeoutMs());
+        ctx, &Reply, &Timeout, &Free, kNoValkeyTimeout);
     blocked_client_->MeasureTimeStart();
+    deadline_tp_ = std::chrono::steady_clock::now() +
+                   std::chrono::milliseconds(GetTimeoutMs());
     targets_ = GetTargets(ctx);
     Metrics::GetStats().fanout_retry_cnt.store(0);
     StartFanoutRound();
@@ -61,6 +65,9 @@ class FanoutOperationBase {
         ValkeyModule_GetBlockedClientPrivateData(ctx));
     if (!op) {
       return ValkeyModule_ReplyWithError(ctx, "No reply data");
+    }
+    if (op->timeout_occurred_) {
+      return op->GenerateTimeoutReply(ctx);
     }
     return op->GenerateReply(ctx, argv, argc);
   }
@@ -187,6 +194,10 @@ class FanoutOperationBase {
   virtual int GenerateReply(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,
                             int argc) = 0;
 
+  virtual int GenerateTimeoutReply(ValkeyModuleCtx* ctx) {
+    return ValkeyModule_ReplyWithError(ctx, "Request timed out custom");
+  }
+
   virtual int GenerateErrorReply(ValkeyModuleCtx* ctx) {
     absl::MutexLock lock(&mutex_);
     std::string error_message;
@@ -232,6 +243,15 @@ class FanoutOperationBase {
     return ValkeyModule_ReplyWithError(ctx, error_message.c_str());
   }
 
+  bool IsOperationTimedOut() const {
+    return std::chrono::steady_clock::now() >= deadline_tp_;
+  }
+
+  virtual void OnTimeout() {
+    timeout_occurred_ = true;
+    OnCompletion();
+  }
+
   void RpcDone() {
     bool done = false;
     {
@@ -241,6 +261,10 @@ class FanoutOperationBase {
       }
     }
     if (done) {
+      if (IsOperationTimedOut()) {
+        OnTimeout();
+        return;
+      }
       if (ShouldRetry()) {
         ++Metrics::GetStats().fanout_retry_cnt;
         ResetBaseForRetry();
@@ -265,6 +289,8 @@ class FanoutOperationBase {
   std::vector<FanoutSearchTarget> inconsistent_state_error_nodes;
   std::vector<FanoutSearchTarget> communication_error_nodes;
   std::vector<FanoutSearchTarget> targets_;
+  std::chrono::steady_clock::time_point deadline_tp_;
+  bool timeout_occurred_ = false;
 };
 
 }  // namespace valkey_search::query::fanout

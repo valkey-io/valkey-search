@@ -43,6 +43,8 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
 
         assert node0.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceRetry no") == b"OK"
 
+    # this test would not be meanful if not using valkey engine timeout
+    @pytest.mark.skip()
     # force timeout by pausing remote calls
     def test_fanout_base_timeout(self):
         cluster: ValkeyCluster = self.new_cluster_client()

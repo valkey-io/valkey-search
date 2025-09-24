@@ -60,6 +60,8 @@ class CreateConsistencyCheckFanoutOperation
   // decide which condition to run retry
   bool ShouldRetry() override;
 
+  int GenerateTimeoutReply(ValkeyModuleCtx* ctx) override;
+
  private:
   bool exists_;
   std::optional<uint64_t> schema_fingerprint_;

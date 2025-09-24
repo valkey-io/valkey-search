@@ -126,4 +126,15 @@ bool CreateConsistencyCheckFanoutOperation::ShouldRetry() {
          !communication_error_nodes.empty();
 }
 
+int CreateConsistencyCheckFanoutOperation::GenerateTimeoutReply(
+    ValkeyModuleCtx* ctx) {
+  if (schema_fingerprint_.has_value() &&
+      schema_fingerprint_.value() != new_entry_fingerprint_) {
+    return ValkeyModule_ReplyWithError(
+        ctx, absl::StrFormat("Index %s already exists.", index_name_).c_str());
+  }
+  return ValkeyModule_ReplyWithError(ctx,
+                                     "Unable to contact all cluster members");
+}
+
 }  // namespace valkey_search::query::create_consistency_check_fanout_operation

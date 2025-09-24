@@ -2,10 +2,11 @@ from valkey_search_test_case import ValkeySearchClusterTestCaseDebugMode
 from valkey.cluster import ValkeyCluster
 from valkey.client import Valkey
 from valkeytestframework.conftest import resource_port_tracker
+from valkeytestframework.util import waiters
+from valkey.exceptions import ResponseError, ConnectionError
 import threading
 import time
 import pytest
-import re
 
 def create_index_on_node(node, node_id, index_name, results, exceptions, barrier):
     try:
@@ -92,4 +93,34 @@ class TestFTCreateConsistency(ValkeySearchClusterTestCaseDebugMode):
         res = next(iter(results.values()))
         err = next(iter(exceptions.values()))
         assert "OK" in str(res)
-        assert "Request timed out" in str(err)
+        assert "Index index1 already exists" in str(err)
+    
+    def test_create_shutdown(self):
+        cluster = self.new_cluster_client()
+        node0 = self.new_client_for_primary(0)
+        node1 = self.new_client_for_primary(1)
+        index_name = "index1"
+
+        try:
+            node1.execute_command("SHUTDOWN", "NOSAVE")
+        except:
+            pass
+        
+        def is_node_down(node):
+            try:
+                node.ping()
+                return False
+            except ConnectionError:
+                return True
+    
+        waiters.wait_for_true(lambda: is_node_down(node1), timeout=5)
+        
+        with pytest.raises(ResponseError) as excinfo:
+            node0.execute_command(
+            "FT.CREATE", index_name,
+            "ON", "HASH",
+            "PREFIX", "1", "doc:",
+            "SCHEMA", "price", "NUMERIC"
+            )
+
+        assert "Unable to contact all cluster members" in str(excinfo.value)

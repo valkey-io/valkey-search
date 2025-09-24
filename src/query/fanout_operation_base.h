@@ -45,6 +45,8 @@ class FanoutOperationBase {
     blocked_client_ = std::make_unique<vmsdk::BlockedClient>(
         ctx, &Reply, &Timeout, &Free, kNoValkeyTimeout);
     blocked_client_->MeasureTimeStart();
+    deadline_tp_ = std::chrono::steady_clock::now() +
+                   std::chrono::milliseconds(GetTimeoutMs());
     targets_ = GetTargets(ctx);
     Metrics::GetStats().fanout_retry_cnt.store(0);
     StartFanoutRound();
@@ -321,6 +323,10 @@ class FanoutOperationBase {
       }
     }
     if (done) {
+      if (IsOperationTimedOut()) {
+        OnTimeout();
+        return;
+      }
       if (ShouldRetry()) {
         ++Metrics::GetStats().fanout_retry_cnt;
         ResetBaseForRetry();

@@ -117,7 +117,6 @@ class TestFullText(ValkeySearchTestCaseBase):
         # Perform an exact phrase search operation on a unique phrase (exists in one doc).
         result1 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl"')
         result2 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl acorn grow"')
-        result3 = client.execute_command("FT.SEARCH", "products", '@desc:great @desc:oa* @desc:from @desc:lit* @desc:acorn @desc:gr*')
         assert result1 == result2
         assert result1[0] == 1
         assert result1[1] == b"product:1"

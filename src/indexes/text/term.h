@@ -14,6 +14,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/radix_tree.h"
+#include "src/indexes/text/text_iterator.h"
 #include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes::text {
@@ -27,28 +28,36 @@ using WordIterator = RadixTree<std::shared_ptr<Postings>, false>::WordIterator;
 Top level iterator for a Term
 
 */
-class TermIterator : public indexes::EntriesFetcherIteratorBase {
+class TermIterator : public TextIterator {
  public:
-  TermIterator(const WordIterator& word, const absl::string_view data,
-               const FieldMaskPredicate field_mask,
+  TermIterator(const WordIterator& word_iter, bool exact,
+               const absl::string_view data, const uint32_t field_mask,
                const InternedStringSet* untracked_keys = nullptr);
-
-  bool Done() const override;
-  void Next() override;
-  const InternedStringPtr& operator*() const override;
+  uint64_t FieldMask() const override;
+  // Key-level iteration
+  bool DoneKeys() const override;
+  const InternedStringPtr& CurrentKey() const override;
+  bool NextKey() override;
+  bool SeekForwardKey(const InternedStringPtr& target_key) override;
+  // Position-level iteration
+  bool DonePositions() const override;
+  std::pair<uint32_t, uint32_t> CurrentPosition() const override;
+  bool NextPosition() override;
 
  private:
-  WordIterator word_;
+  const bool exact_;
+  const absl::string_view data_;
+  const uint32_t field_mask_;
+
+  WordIterator word_iter_;
   std::shared_ptr<Postings> target_posting_;
   Postings::KeyIterator key_iter_;
-  const absl::string_view data_;
-  uint32_t current_idx_ = 0;
-  bool begin_ =
-      true;  // Used to track if we are at the beginning of the iterator.
-  bool nomatch_ = false;
-  const InternedStringSet* untracked_keys_;
+  Postings::PositionIterator pos_iter_;
+
   InternedStringPtr current_key_;
-  FieldMaskPredicate field_mask_;
+  std::optional<uint32_t> current_position_;
+  const InternedStringSet* untracked_keys_;
+  bool nomatch_;
 };
 
 }  // namespace valkey_search::indexes::text

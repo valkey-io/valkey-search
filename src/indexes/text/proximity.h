@@ -14,6 +14,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/radix_tree.h"
+#include "src/indexes/text/text_iterator.h"
 #include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes::text {
@@ -63,30 +64,41 @@ Iterator.
   }
 }
 */
-class ProximityIterator : public indexes::EntriesFetcherIteratorBase {
+class ProximityIterator : public TextIterator {
  public:
-  PhraseIterator(const std::vector<EntriesFetcherIteratorBase>& iters,
-                 size_t slop, bool in_order, FieldMaskPredicate field_mask,
-                 const InternedStringSet* untracked_keys = nullptr);
-
-  bool Done() const override;
-  void Next() override;
-  const InternedStringPtr& operator*() const override;
+  ProximityIterator(std::vector<std::unique_ptr<TextIterator>>&& iters,
+                    size_t slop, bool in_order, FieldMaskPredicate field_mask,
+                    const InternedStringSet* untracked_keys = nullptr);
+  uint64_t FieldMask() const override;
+  // Key-level iteration
+  bool DoneKeys() const override;
+  const InternedStringPtr& CurrentKey() const override;
+  bool NextKey() override;
+  bool SeekForwardKey(const InternedStringPtr& target_key) override;
+  // Position-level iteration
+  bool DonePositions() const override;
+  std::pair<uint32_t, uint32_t> CurrentPosition() const override;
+  bool NextPosition() override;
 
  private:
-  std::vector<EntriesFetcherIteratorBase> iters_;
-  std::shared_ptr<Postings> target_posting_;
-  Postings::KeyIterator key_iter_;
-  WordIterator word_iter_;
-  bool begin_ =
-      true;  // Used to track if we are at the beginning of the iterator.
+  // List of all the Text Predicates contained in the Proximity AND.
+  std::vector<std::unique_ptr<TextIterator>> iters_;
+  // Used to track if we are at the beginning of the iterator.
+  bool done_;
   size_t slop_;
   bool in_order_;
-  const InternedStringSet* untracked_keys_;
-  InternedStringPtr current_key_;
-  FieldMaskPredicate field_mask_;
-};
+  // This is from the query and is used in exact phrase
+  uint64_t field_mask_;
 
+  InternedStringPtr current_key_;
+  std::optional<uint32_t> current_start_pos_;
+  std::optional<uint32_t> current_end_pos_;
+
+  // Used for Negate
+  const InternedStringSet* untracked_keys_;
+
+  bool FindCommonKey();
+};
 }  // namespace valkey_search::indexes::text
 
 #endif

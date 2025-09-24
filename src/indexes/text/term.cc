@@ -9,45 +9,125 @@
 
 namespace valkey_search::indexes::text {
 
-TermIterator::TermIterator(const WordIterator& word,
+TermIterator::TermIterator(const WordIterator& word_iter, bool exact,
                            const absl::string_view data,
-                           const FieldMaskPredicate field_mask,
+                           const uint32_t field_mask,
                            const InternedStringSet* untracked_keys)
-    : word_(word),
+    : exact_(exact),
       data_(data),
       field_mask_(field_mask),
-      untracked_keys_(untracked_keys) {}
+      word_iter_(word_iter),
+      target_posting_(nullptr),
+      key_iter_(),
+      pos_iter_(),
+      current_key_(nullptr),
+      current_position_(std::nullopt),
+      untracked_keys_(untracked_keys),
+      nomatch_(false) {
+  if (word_iter_.Done()) {
+    nomatch_ = true;
+    return;
+  }
+  if (data_ != word_iter_.GetWord()) {
+    nomatch_ = true;
+    return;
+  }
+  target_posting_ = word_iter_.GetTarget();
+  key_iter_ = target_posting_->GetKeyIterator();
+  // Prime the first key and position if they exist.
+  TermIterator::NextKey();
+}
 
-bool TermIterator::Done() const {
-  if (nomatch_ || word_.GetWord() != data_) {
+uint64_t TermIterator::FieldMask() const { return field_mask_; }
+
+bool TermIterator::DoneKeys() const {
+  if (nomatch_) {
     return true;
   }
-  // Check if key iterator is valid
   return !key_iter_.IsValid();
 }
 
-void TermIterator::Next() {
-  // On a Begin() call, we initialize the target_posting_ and key_iter_.
-  if (begin_) {
-    if (word_.Done()) {
-      nomatch_ = true;
-      return;
-    }
-    target_posting_ = word_.GetTarget();
-    key_iter_ = target_posting_->GetKeyIterator();
-    begin_ = false;  // Set to false after the first call to Next.
-  } else {
-    key_iter_.NextKey();
-  }
-  // Advance until we find a valid key or reach the end
-  while (!Done() && !key_iter_.ContainsFields(field_mask_)) {
-    key_iter_.NextKey();
-  }
+const InternedStringPtr& TermIterator::CurrentKey() const {
+  CHECK(current_key_ != nullptr);
+  return current_key_;
 }
 
-const InternedStringPtr& TermIterator::operator*() const {
-  // Return the current key from the key iterator of the posting object.
-  return key_iter_.GetKey();
+bool TermIterator::NextKey() {
+  if (current_key_) {
+    key_iter_.NextKey();
+  }
+  // Loop until we find a key that satisfies the field mask
+  while (key_iter_.IsValid()) {
+    if (key_iter_.ContainsFields(field_mask_)) {
+      current_key_ = key_iter_.GetKey();
+      pos_iter_ = key_iter_.GetPositionIterator();
+      current_position_ = std::nullopt;
+      // We need to call NextPosition here if we dont want garbage values.
+      if (TermIterator::NextPosition()) {
+        return true;  // We have a key and a position
+      }
+    }
+    key_iter_.NextKey();
+  }
+  // No more valid keys
+  current_key_ = nullptr;
+  return false;
+}
+
+bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
+  // If current key is already >= target_key, no need to seek
+  if (current_key_ && current_key_->Str() >= target_key->Str()) {
+    return true;
+  }
+  // Seek key iterator to target_key or beyond.
+  // We optimize by not checking position / field constraints
+  // until we find the right key.
+  while (key_iter_.IsValid() && key_iter_.GetKey()->Str() < target_key->Str()) {
+    key_iter_.NextKey();
+  }
+  // Find next valid key/position combination using existing logic
+  while (key_iter_.IsValid()) {
+    if (key_iter_.ContainsFields(field_mask_)) {
+      current_key_ = key_iter_.GetKey();
+      pos_iter_ = key_iter_.GetPositionIterator();
+      current_position_ = std::nullopt;
+      if (NextPosition()) {
+        return true;
+      }
+    }
+    key_iter_.NextKey();
+  }
+  current_key_ = nullptr;
+  return false;
+}
+
+bool TermIterator::DonePositions() const {
+  if (nomatch_) {
+    return true;
+  }
+  return !pos_iter_.IsValid();
+}
+
+std::pair<uint32_t, uint32_t> TermIterator::CurrentPosition() const {
+  CHECK(current_position_.has_value());
+  return std::make_pair(current_position_.value(), current_position_.value());
+}
+
+bool TermIterator::NextPosition() {
+  if (current_position_.has_value()) {
+    pos_iter_.NextPosition();
+  }
+  // Loop until we find a position that satisfies the field mask
+  while (pos_iter_.IsValid()) {
+    if (pos_iter_.GetFieldMask() & field_mask_) {
+      current_position_ = pos_iter_.GetPosition();
+      return true;
+    }
+    pos_iter_.NextPosition();
+  }
+  // No more valid positions
+  current_position_ = std::nullopt;
+  return false;
 }
 
 }  // namespace valkey_search::indexes::text

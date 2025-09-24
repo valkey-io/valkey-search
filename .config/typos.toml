@@ -9,6 +9,8 @@ extend-exclude = [
 extend-ignore-re = [
     "grea.*",
     "Grea.*",
+    "opposit",
+    "uniqu",
 ]
 
 [type.cpp]

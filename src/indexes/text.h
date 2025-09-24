@@ -17,7 +17,9 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/text/proximity.h"
 #include "src/indexes/text/term.h"
+#include "src/indexes/text/text_fetcher.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/text/wildcard.h"
 #include "src/query/predicate.h"
@@ -89,6 +91,9 @@ class Text : public IndexBase {
           field_mask_(field_mask) {}
 
     size_t Size() const override;
+
+    std::unique_ptr<text::TextIterator> BuildTextIterator(
+        const query::TextPredicate* predicate);
 
     // Factory method that creates the appropriate text iterator
     // based on the text predicate's operation type.

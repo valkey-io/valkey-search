@@ -18,10 +18,10 @@ WildCardIterator::WildCardIterator(const WordIterator& word_iter,
       data_(data),
       field_mask_(field_mask),
       word_iter_(word_iter),
-      target_posting_(nullptr),  // initialize shared_ptr to null
-      key_iter_(),               // default-initialize iterator
-      pos_iter_(),               // default-initialize iterator
-      current_key_(nullptr),     // no key yet
+      target_posting_(nullptr),
+      key_iter_(),
+      pos_iter_(),
+      current_key_(nullptr),
       current_position_(std::nullopt),
       untracked_keys_(untracked_keys) {
   if (word_iter_.Done()) {

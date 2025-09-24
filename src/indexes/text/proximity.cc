@@ -6,12 +6,12 @@ ProximityIterator::ProximityIterator(
     std::vector<std::unique_ptr<TextIterator>>&& iters, size_t slop,
     bool in_order, FieldMaskPredicate field_mask,
     const InternedStringSet* untracked_keys)
-    : iters_(std::move(iters)),  // move the iterators in
-      done_(false),              // initially not done
+    : iters_(std::move(iters)),
+      done_(false),
       slop_(slop),
       in_order_(in_order),
       untracked_keys_(untracked_keys),
-      current_key_(nullptr),  // no key yet
+      current_key_(nullptr),
       current_start_pos_(std::nullopt),
       current_end_pos_(std::nullopt),
       field_mask_(field_mask) {
@@ -84,8 +84,8 @@ bool ProximityIterator::NextKey() {
         return true;
       }
     }
-    advance();
     // Otherwise, loop and try again.
+    advance();
   }
   current_key_ = nullptr;
   return false;
@@ -100,7 +100,7 @@ bool ProximityIterator::FindCommonKey() {
     if (!min_key || k->Str() < min_key->Str()) min_key = k;
     if (!max_key || k->Str() > max_key->Str()) max_key = k;
   }
-  // 2) If everyone is already equal -> we found a common key
+  // 2) If min == max, we found a common key
   if (min_key->Str() == max_key->Str()) {
     current_key_ = max_key;
     return true;

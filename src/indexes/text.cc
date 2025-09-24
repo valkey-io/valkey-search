@@ -161,7 +161,7 @@ std::unique_ptr<text::TextIterator> Text::EntriesFetcher::BuildTextIterator(
       vec.emplace_back(BuildTextIterator(term.get()));
     }
     // CHECK that all iterators have the same field mask and crash otherwise.
-    // This is a safety check since we should handle this in the query level.
+    // This is a safety check since we already handle this in the query level (TODO).
     uint64_t common_fields = vec[0]->FieldMask();
     for (size_t i = 1; i < vec.size(); ++i) {
       common_fields &= vec[i]->FieldMask();

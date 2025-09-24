@@ -33,6 +33,20 @@ WildCardIterator::WildCardIterator(const WordIterator& word_iter,
   WildCardIterator::NextKey();
 }
 
+uint64_t WildCardIterator::FieldMask() const { return field_mask_; }
+
+bool WildCardIterator::DoneKeys() const {
+  if (word_iter_.Done()) {
+    return true;
+  }
+  return !key_iter_.IsValid();
+}
+
+const InternedStringPtr& WildCardIterator::CurrentKey() const {
+  CHECK(current_key_ != nullptr);
+  return current_key_;
+}
+
 bool WildCardIterator::NextKey() {
   if (current_key_) {
     key_iter_.NextKey();
@@ -62,9 +76,48 @@ bool WildCardIterator::NextKey() {
   return false;
 }
 
-const InternedStringPtr& WildCardIterator::CurrentKey() const {
-  CHECK(current_key_ != nullptr);
-  return current_key_;
+bool WildCardIterator::SeekForwardKey(const InternedStringPtr& target_key) {
+  // If current key is already >= target_key, no need to seek
+  if (current_key_ && current_key_->Str() >= target_key->Str()) {
+    return true;
+  }
+  // Seek through words and keys to find target_key or beyond
+  // We optimize by not checking position / field constraints
+  // until we find the right key.
+  while (!word_iter_.Done()) {
+    // Seek key iterator to target_key or beyond
+    while (key_iter_.IsValid() &&
+           key_iter_.GetKey()->Str() < target_key->Str()) {
+      key_iter_.NextKey();
+    }
+    // Find next valid key/position combination using existing logic
+    while (key_iter_.IsValid()) {
+      if (key_iter_.ContainsFields(field_mask_)) {
+        current_key_ = key_iter_.GetKey();
+        pos_iter_ = key_iter_.GetPositionIterator();
+        current_position_ = std::nullopt;
+        if (NextPosition()) {
+          return true;
+        }
+      }
+      key_iter_.NextKey();
+    }
+    // Current posting exhausted. Move to next word
+    word_iter_.Next();
+    if (!word_iter_.Done()) {
+      target_posting_ = word_iter_.GetTarget();
+      key_iter_ = target_posting_->GetKeyIterator();
+    }
+  }
+  current_key_ = nullptr;
+  return false;
+}
+
+bool WildCardIterator::DonePositions() const { return !pos_iter_.IsValid(); }
+
+std::pair<uint32_t, uint32_t> WildCardIterator::CurrentPosition() const {
+  CHECK(current_position_.has_value());
+  return std::make_pair(current_position_.value(), current_position_.value());
 }
 
 bool WildCardIterator::NextPosition() {
@@ -83,21 +136,5 @@ bool WildCardIterator::NextPosition() {
   current_position_ = std::nullopt;
   return false;
 }
-
-std::pair<uint32_t, uint32_t> WildCardIterator::CurrentPosition() const {
-  CHECK(current_position_.has_value());
-  return std::make_pair(current_position_.value(), current_position_.value());
-}
-
-bool WildCardIterator::DoneKeys() const {
-  if (word_iter_.Done()) {
-    return true;
-  }
-  return !key_iter_.IsValid();
-}
-
-bool WildCardIterator::DonePositions() const { return !pos_iter_.IsValid(); }
-
-uint64_t WildCardIterator::FieldMask() const { return field_mask_; }
 
 }  // namespace valkey_search::indexes::text

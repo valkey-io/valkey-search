@@ -72,13 +72,13 @@ class ProximityIterator : public TextIterator {
   uint64_t FieldMask() const override;
   // Key-level iteration
   bool DoneKeys() const override;
-  bool NextKey() override;
   const InternedStringPtr& CurrentKey() const override;
-
+  bool NextKey() override;
+  bool SeekForwardKey(const InternedStringPtr& target_key) override;
   // Position-level iteration
   bool DonePositions() const override;
-  bool NextPosition() override;
   std::pair<uint32_t, uint32_t> CurrentPosition() const override;
+  bool NextPosition() override;
 
  private:
   // List of all the Text Predicates contained in the Proximity AND.

@@ -23,6 +23,8 @@ ProximityIterator::ProximityIterator(
   NextKey();
 }
 
+uint64_t ProximityIterator::FieldMask() const { return field_mask_; }
+
 bool ProximityIterator::DoneKeys() const {
   if (done_) {
     return true;
@@ -35,28 +37,9 @@ bool ProximityIterator::DoneKeys() const {
   return false;
 }
 
-bool ProximityIterator::DonePositions() const {
-  if (done_) {
-    return true;
-  }
-  for (auto& c : iters_) {
-    if (c->DonePositions()) {
-      return true;
-    }
-  }
-  return false;
-}
-
-uint64_t ProximityIterator::FieldMask() const { return field_mask_; }
-
 const InternedStringPtr& ProximityIterator::CurrentKey() const {
   CHECK(current_key_ != nullptr);
   return current_key_;
-}
-
-std::pair<uint32_t, uint32_t> ProximityIterator::CurrentPosition() const {
-  CHECK(current_start_pos_.has_value() && current_end_pos_.has_value());
-  return std::make_pair(current_start_pos_.value(), current_end_pos_.value());
 }
 
 bool ProximityIterator::NextKey() {
@@ -107,12 +90,57 @@ bool ProximityIterator::FindCommonKey() {
   }
   // 3) Advance all iterators that are strictly behind the current max_key
   for (auto& iter : iters_) {
-    // TODO: Replace this block with SeekForward on the Key.
-    while (!iter->DoneKeys() && iter->CurrentKey()->Str() < max_key->Str()) {
+    iter->SeekForwardKey(max_key);
+  }
+  return false;
+}
+
+bool ProximityIterator::SeekForwardKey(const InternedStringPtr& target_key) {
+  // If current key is already >= target_key, no need to seek
+  if (current_key_ && current_key_->Str() >= target_key->Str()) {
+    return true;
+  }
+  // Skip all keys less than target_key for all iterators
+  for (auto& iter : iters_) {
+    while (!iter->DoneKeys() && iter->CurrentKey()->Str() < target_key->Str()) {
       iter->NextKey();
     }
   }
+  // Find next valid key/position combination
+  while (!DoneKeys()) {
+    if (FindCommonKey()) {
+      current_start_pos_ = std::nullopt;
+      current_end_pos_ = std::nullopt;
+      if (NextPosition()) {
+        return true;
+      }
+    }
+    // Advance past current key and try again
+    for (auto& c : iters_) {
+      if (!c->DoneKeys() && c->CurrentKey() == current_key_) {
+        c->NextKey();
+      }
+    }
+  }
+  current_key_ = nullptr;
   return false;
+}
+
+bool ProximityIterator::DonePositions() const {
+  if (done_) {
+    return true;
+  }
+  for (auto& c : iters_) {
+    if (c->DonePositions()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::pair<uint32_t, uint32_t> ProximityIterator::CurrentPosition() const {
+  CHECK(current_start_pos_.has_value() && current_end_pos_.has_value());
+  return std::make_pair(current_start_pos_.value(), current_end_pos_.value());
 }
 
 bool ProximityIterator::NextPosition() {

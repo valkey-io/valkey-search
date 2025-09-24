@@ -52,6 +52,12 @@ class TextIterator {
   // false is returned, `CurrentKey()` should no longer be accessed.
   // PRECONDITION: !DoneKeys()
   virtual bool NextKey() = 0;
+  // Seeks forward to the first key >= target_key that matches all constraints.
+  // Returns true if such a key is found, false if no more matching keys exist.
+  // If current key is already >= target_key, returns true without changing
+  // state. PRECONDITION: !DoneKeys(). This is intended to be used after a
+  // previous call to NextKey().
+  virtual bool SeekForwardKey(const InternedStringPtr& target_key) = 0;
 
   // Position-level iteration
   // Returns true if there is a match (i.e. `CurrentPosition()` is valid)

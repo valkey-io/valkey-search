@@ -117,9 +117,14 @@ class TestFullText(ValkeySearchTestCaseBase):
         # Perform an exact phrase search operation on a unique phrase (exists in one doc).
         result1 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl"')
         result2 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl acorn grow"')
+        result3 = client.execute_command("FT.SEARCH", "products", '@desc:great @desc:oa* @desc:from @desc:lit* @desc:acorn @desc:gr*')
         assert result1 == result2
         assert result1[0] == 1
         assert result1[1] == b"product:1"
+        # TODO: Uncomment once we support the ability to iterate through words via proximity (and hence reset keys)
+        # OR support the keys search accross all words within the NextKey APIs in TextIterators
+        # result3 = client.execute_command("FT.SEARCH", "products", '@desc:great @desc:oa* @desc:from @desc:lit* @desc:acorn @desc:gr*')
+        # assert result3 == result 1
         # Perform an exact phrase search operation on a phrase existing in 2 documents.
         result = client.execute_command("FT.SEARCH", "products", '@desc:"interest desc"')
         assert result[0] == 2

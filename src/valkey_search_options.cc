@@ -213,7 +213,7 @@ constexpr absl::string_view kFTInfoRpcTimeoutMsConfig{"ft-info-rpc-timeout-ms"};
 static auto ft_info_rpc_timeout_ms =
     vmsdk::config::NumberBuilder(
         kFTInfoRpcTimeoutMsConfig,   // name
-        kDefaultFTInfoRpcTimeoutMs,   // default timeout (2.5 seconds)
+        kDefaultFTInfoRpcTimeoutMs,  // default timeout (2.5 seconds)
         kMinimumFTInfoRpcTimeoutMs,  // min timeout (100ms)
         kMaximumFTInfoRpcTimeoutMs)  // max timeout (5 minutes)
         .Build();

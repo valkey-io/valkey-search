@@ -4,7 +4,11 @@
  * SPDX-License-Identifier: ************
  */
 
+#include <algorithm>
+#include <ctime>
 #include <map>
+#include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -78,7 +82,41 @@ class RadixTreeTest : public vmsdk::ValkeyTest {
         << "Iterator results don't match for prefix '" << prefix << "'";
   }
 
+  void VerifyTreeStructure(const std::vector<std::string>& expected_structure) {
+    auto actual_structure = prefix_tree_->DebugGetTreeStrings();
+
+    if (actual_structure.size() != expected_structure.size()) {
+      FAIL() << "Tree structure size mismatch.\n"
+             << "Expected " << expected_structure.size() << " lines, got "
+             << actual_structure.size() << " lines.\n"
+             << "Expected structure:\n"
+             << JoinLines(expected_structure) << "\n"
+             << "Actual structure:\n"
+             << JoinLines(actual_structure);
+      return;
+    }
+
+    for (size_t i = 0; i < expected_structure.size(); ++i) {
+      EXPECT_EQ(actual_structure[i], expected_structure[i])
+          << "Tree structure mismatch at line " << i << ".\n"
+          << "Expected structure:\n"
+          << JoinLines(expected_structure) << "\n"
+          << "Actual structure:\n"
+          << JoinLines(actual_structure);
+    }
+  }
+
+ protected:
   std::unique_ptr<RadixTree<TestTarget, false>> prefix_tree_;
+
+ private:
+  std::string JoinLines(const std::vector<std::string>& lines) {
+    std::string result;
+    for (size_t i = 0; i < lines.size(); ++i) {
+      result += std::to_string(i) + ": " + lines[i] + "\n";
+    }
+    return result;
+  }
 };
 
 TEST_F(RadixTreeTest, TreeConstruction) {
@@ -118,11 +156,30 @@ TEST_F(RadixTreeTest, TreeConstruction) {
 
 TEST_F(RadixTreeTest, DeleteBranchNodeWord) {
   AddWords({{"cat", 1}, {"car", 2}, {"can", 3}, {"ca", 4}});
+  // clang-format off
+  VerifyTreeStructure({
+      "\"\" COMPRESSED",
+      "└── \"ca\" BRANCH(3) [T]",
+      "    ├── \"can\" LEAF [T]",
+      "    ├── \"car\" LEAF [T]",
+      "    └── \"cat\" LEAF [T]"
+  });
+  // clang-format on
 
-  // Delete word at branching node. Nothing structurally changes.
+  // Delete word at branching node. Nothing structurally changes but target is
+  // removed.
   DeleteWords({"ca"});
   VerifyWords({{"cat", 1}, {"car", 2}, {"can", 3}});
   VerifyWordsDeleted({"ca"});
+  // clang-format off
+  VerifyTreeStructure({
+      "\"\" COMPRESSED",
+      "└── \"ca\" BRANCH(3)",
+      "    ├── \"can\" LEAF [T]",
+      "    ├── \"car\" LEAF [T]",
+      "    └── \"cat\" LEAF [T]"
+  });
+  // clang-format on
 }
 
 TEST_F(RadixTreeTest, DeleteCompressedNodeWord) {
@@ -132,6 +189,12 @@ TEST_F(RadixTreeTest, DeleteCompressedNodeWord) {
   DeleteWords({"app"});
   VerifyWords({{"application", 2}});
   VerifyWordsDeleted({"app"});
+  // clang-format off
+  VerifyTreeStructure({
+      "\"\" COMPRESSED",
+      "└── \"application\" LEAF [T]"
+  });
+  // clang-format on
 
   // Case 2: Branching parent - Tree structure doesn't change
   prefix_tree_ = std::make_unique<RadixTree<TestTarget, false>>();
@@ -139,6 +202,15 @@ TEST_F(RadixTreeTest, DeleteCompressedNodeWord) {
   DeleteWords({"car"});
   VerifyWords({{"cat", 1}, {"cards", 3}});
   VerifyWordsDeleted({"car"});
+  // clang-format off
+  VerifyTreeStructure({
+      "\"\" COMPRESSED",
+      "└── \"ca\" BRANCH(2)",
+      "    ├── \"car\" COMPRESSED",
+      "    │   └── \"cards\" LEAF [T]",
+      "    └── \"cat\" LEAF [T]"
+  });
+  // clang-format on
 }
 
 TEST_F(RadixTreeTest, DeleteLeafNodeWordSimpleScenarios) {
@@ -146,6 +218,7 @@ TEST_F(RadixTreeTest, DeleteLeafNodeWordSimpleScenarios) {
   AddWords({{"hello", 1}});
   DeleteWords({"hello"});
   VerifyWordsDeleted({"hello"});
+  VerifyTreeStructure({"\"\" LEAF"});
 
   // Case 2: Parent node with target gets turned into a leaf
   prefix_tree_ = std::make_unique<RadixTree<TestTarget, false>>();
@@ -153,6 +226,12 @@ TEST_F(RadixTreeTest, DeleteLeafNodeWordSimpleScenarios) {
   DeleteWords({"testing"});
   VerifyWords({{"test", 1}});
   VerifyWordsDeleted({"testing"});
+  // clang-format off
+  VerifyTreeStructure({
+      "\"\" COMPRESSED",
+      "└── \"test\" LEAF [T]"
+  });
+  // clang-format on
 
   // Case 3: Leaf deletion where parent is branching with children.size() > 1
   prefix_tree_ = std::make_unique<RadixTree<TestTarget, false>>();
@@ -160,6 +239,14 @@ TEST_F(RadixTreeTest, DeleteLeafNodeWordSimpleScenarios) {
   DeleteWords({"car"});
   VerifyWords({{"cat", 1}, {"can", 3}});
   VerifyWordsDeleted({"car"});
+  // clang-format off
+  VerifyTreeStructure({
+      "\"\" COMPRESSED",
+      "└── \"ca\" BRANCH(2)",
+      "    ├── \"can\" LEAF [T]",
+      "    └── \"cat\" LEAF [T]"
+  });
+  // clang-format on
 }
 
 TEST_F(RadixTreeTest, DeleteLeafNodeWordComplexScenarios) {
@@ -182,18 +269,30 @@ TEST_F(RadixTreeTest, DeleteLeafNodeWordComplexScenarios) {
   //
   // Words: "xabc", "xtest"
   AddWords({{"xabc", 1}, {"xtest", 2}});
-  prefix_tree_->DebugPrintTree(
-      "Scenario 1 - Initial: both parent and child compressed");
+  // clang-format off
+  VerifyTreeStructure({
+      "\"\" COMPRESSED",
+      "└── \"x\" BRANCH(2)",
+      "    ├── \"xa\" COMPRESSED",
+      "    │   └── \"xabc\" LEAF [T]",
+      "    └── \"xt\" COMPRESSED",
+      "        └── \"xtest\" LEAF [T]"
+  });
+  // clang-format on
 
   // Tree structure after deleting "xabc":
   //                  [compressed]
   //              "xtest" |
   //                   [leaf] -> Target
   DeleteWords({"xabc"});
-  prefix_tree_->DebugPrintTree(
-      "Scenario 1 - After deletion: parent connected to great-grandchild");
   VerifyWords({{"xtest", 2}});
   VerifyWordsDeleted({"xabc"});
+  // clang-format off
+  VerifyTreeStructure({
+      "\"\" COMPRESSED",
+      "└── \"xtest\" LEAF [T]"
+  });
+  // clang-format on
 
   // Reset tree
   prefix_tree_ = std::make_unique<RadixTree<TestTarget, false>>();
@@ -212,18 +311,29 @@ TEST_F(RadixTreeTest, DeleteLeafNodeWordComplexScenarios) {
   //
   // Words: "cats", "catcher"
   AddWords({{"cats", 3}, {"catcher", 4}});
-  prefix_tree_->DebugPrintTree(
-      "Scenario 2 - Initial: parent compressed, child branching");
+  // clang-format off
+  VerifyTreeStructure({
+      "\"\" COMPRESSED",
+      "└── \"cat\" BRANCH(2)",
+      "    ├── \"catc\" COMPRESSED",
+      "    │   └── \"catcher\" LEAF [T]",
+      "    └── \"cats\" LEAF [T]"
+  });
+  // clang-format on
 
   // The tree structure after deleting "catcher":
   //                  [compressed]
   //              "cats" |
   //                   [leaf] -> Target
   DeleteWords({"catcher"});
-  prefix_tree_->DebugPrintTree(
-      "Scenario 2 - After deletion: parent connected to grandchild");
   VerifyWords({{"cats", 3}});
   VerifyWordsDeleted({"catcher"});
+  // clang-format off
+  VerifyTreeStructure({
+      "\"\" COMPRESSED",
+      "└── \"cats\" LEAF [T]"
+  });
+  // clang-format on
 
   // Reset tree
   prefix_tree_ = std::make_unique<RadixTree<TestTarget, false>>();
@@ -240,18 +350,71 @@ TEST_F(RadixTreeTest, DeleteLeafNodeWordComplexScenarios) {
   //
   // Words: "dog", "runner"
   AddWords({{"dog", 5}, {"runner", 6}});
-  prefix_tree_->DebugPrintTree(
-      "Scenario 3 - Initial: parent branching, child compressed");
+  // clang-format off
+  VerifyTreeStructure({
+      "\"\" BRANCH(2)",
+      "├── \"d\" COMPRESSED",
+      "│   └── \"dog\" LEAF [T]",
+      "└── \"r\" COMPRESSED",
+      "    └── \"runner\" LEAF [T]"
+  });
+  // clang-format on
 
   // The tree structure after deleting "dog":
   //                  [compressed]
   //              "runner" |
   //                   [leaf] -> Target
   DeleteWords({"dog"});
-  prefix_tree_->DebugPrintTree(
-      "Scenario 3 - After deletion: node connected to grandchild");
   VerifyWords({{"runner", 6}});
   VerifyWordsDeleted({"dog"});
+  // clang-format off
+  VerifyTreeStructure({
+      "\"\" COMPRESSED",
+      "└── \"runner\" LEAF [T]"
+  });
+  // clang-format on
+
+  // Reset tree
+  prefix_tree_ = std::make_unique<RadixTree<TestTarget, false>>();
+
+  // Initial tree structure:
+  //                  [compressed]
+  //                   "x" |
+  //                   [branching] -> Target
+  //                "a" /     \ "t"
+  //          [compressed]   [compressed]
+  //          "bc" /           \ "est"
+  //   Target <- [leaf]           [leaf] -> Target
+  //
+  // Words: "xabc", "xtest"
+  AddWords({{"xabc", 1}, {"xtest", 2}, {"x", 3}});
+  // clang-format off
+  VerifyTreeStructure({
+      "\"\" COMPRESSED",
+      "└── \"x\" BRANCH(2) [T]",
+      "    ├── \"xa\" COMPRESSED",
+      "    │   └── \"xabc\" LEAF [T]",
+      "    └── \"xt\" COMPRESSED",
+      "        └── \"xtest\" LEAF [T]"
+  });
+  // clang-format on
+
+  // Tree structure after deleting "xabc":
+  //                  [compressed]
+  //                   "x" |
+  //                  [compressed] -> Target
+  //                 test" |
+  //                     [leaf] -> Target
+  DeleteWords({"xabc"});
+  VerifyWords({{"xtest", 2}, {"x", 3}});
+  VerifyWordsDeleted({"xabc"});
+  // clang-format off
+  VerifyTreeStructure({
+      "\"\" COMPRESSED",
+      "└── \"x\" COMPRESSED [T]",
+      "    └── \"xtest\" LEAF [T]"
+  });
+  // clang-format on
 }
 
 // Test WordIterator functionality
@@ -410,6 +573,29 @@ TEST_F(RadixTreeTest, WordIteratorLargeScale) {
 
   // Use VerifyIterator helper to verify all words and counts match
   VerifyIterator("", word_pairs);
+
+  // Randomly delete 100 words
+  std::shuffle(
+      words.begin(), words.end(),
+      std::default_random_engine{static_cast<unsigned>(std::time(nullptr))});
+  std::set<std::string> words_to_delete(words.begin(), words.begin() + 100);
+  for (const auto& w : words_to_delete) {
+    prefix_tree_->Mutate(w, [](auto) { return std::nullopt; });
+    word_counts.erase(w);
+  }
+  word_pairs = std::vector<std::pair<std::string, int>>(word_counts.begin(),
+                                                        word_counts.end());
+  VerifyIterator("", word_pairs);
+
+  // Delete all words
+  for (const auto& w : words) {
+    prefix_tree_->Mutate(w, [](auto) { return std::nullopt; });
+  }
+  // clang-format off
+  VerifyTreeStructure({
+      "\"\" LEAF"
+  });
+  // clang-format on
 }
 
 TEST_F(RadixTreeTest, WordIteratorPrefixPartialMatch) {

@@ -60,6 +60,7 @@ into the codebase efficiently enough to be deployed in production code.
 #include <memory>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <tuple>
 #include <variant>
 
@@ -122,6 +123,9 @@ struct RadixTree {
 
   // Create a Path iterator at a specific starting prefix
   PathIterator GetPathIterator(absl::string_view prefix) const;
+
+  // Returns tree structure as vector of strings
+  std::vector<std::string> DebugGetTreeStrings() const;
 
   // Prints tree structure
   void DebugPrintTree(const std::string& label = "") const;
@@ -208,9 +212,11 @@ struct RadixTree {
    */
   void TrimBranchFromTree(absl::string_view word, std::deque<Node*>& node_path);
 
-  void DebugPrintNode(const Node* node, const std::string& path, int depth,
-                      bool is_last = true,
-                      const std::string& prefix = "") const;
+  // Recursive helper for DebugGetTreeStrings
+  std::vector<std::string> DebugGetTreeString(const Node* node,
+                                              const std::string& path,
+                                              int depth, bool is_last,
+                                              const std::string& prefix) const;
 
  public:
   //
@@ -438,65 +444,136 @@ void RadixTree<Target, reverse>::TrimBranchFromTree(
                 n->children = std::pair{
                     BytePath{static_cast<char>(children.begin()->first)},
                     std::move(children.begin()->second)};
-                // We don't necessarily need to keep it as a distinct node if it
-                // doesn't have a target
-                if (n->target == std::nullopt) {
-                  Node* parent_node =
-                      !node_path.empty() ? node_path.back() : nullptr;
-                  Node* child_node =
-                      std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
-                          n->children)
-                          .second.get();
 
-                  bool parent_compressed =
-                      parent_node &&
-                      std::holds_alternative<
-                          std::pair<BytePath, std::unique_ptr<Node>>>(
-                          parent_node->children);
-                  bool child_compressed = std::holds_alternative<
-                      std::pair<BytePath, std::unique_ptr<Node>>>(
-                      child_node->children);
+                // TODO: iterate down to first node that has a target or isn't
+                // compressed then connect this new compressed node to it if it
+                // has a target or its parent isn't a compressed node. Otherwise
+                // connect the parent to it.
 
-                  if (parent_compressed && child_compressed) {
-                    // Connect the parent to its great grandchild
-                    auto& parent_node_child =
-                        std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
-                            parent_node->children);
-                    auto& node_child =
-                        std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
-                            n->children);
-                    auto& child_node_child =
-                        std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
-                            child_node->children);
+                // Now let's see if we have a new change of compressed nodes we can merge
+                // Node* new_parent;
+                // Node* new_child;
 
-                    parent_node_child.first +=
-                        node_child.first + child_node_child.first;
-                    parent_node_child.second =
-                        std::move(child_node_child.second);
-                  } else if (parent_compressed) {
-                    // Connect the parent to its grandchild
-                    auto& parent_node_child =
-                        std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
-                            parent_node->children);
-                    auto& node_child =
-                        std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
-                            n->children);
+                BytePath new_edge;
 
-                    parent_node_child.first += node_child.first;
-                    parent_node_child.second = std::move(node_child.second);
-                  } else if (child_compressed) {
-                    // Connect the node to its grandchild
-                    auto& node_child =
-                        std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
-                            n->children);
-                    auto& child_node_child =
-                        std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
-                            child_node->children);
+                // Find the new parent
+                // Node* parent = n;
+                // Node* next_parent;
+                // do {
+                //   new_edge += std::get<std::pair<BytePath, std::unique_ptr<Node>>>(parent->children).first;
+                //   next_parent = node_path.back();
+                //   node_path.pop_back();
+                //   // Move to the next parent if the current parent doesn't have
+                //   // a target and the next parent is a compressed node
+                //   // (In reality we should only go up at most one level)
+                // } while (parent->target == std::nullopt &&
+                //          std::holds_alternative<
+                //              std::pair<BytePath, std::unique_ptr<Node>>>(
+                //              next_parent->children));
 
-                    node_child.first += child_node_child.first;
-                    node_child.second = std::move(child_node_child.second);
+                // Find the new parent
+                // Move to the next parent if the current parent doesn't have
+                // a target and the next parent is a compressed node
+                // (In reality we should only go up at most one level)
+                Node* parent = n;
+                if (!node_path.empty()) {
+                  Node* next_parent = node_path.back();
+                  node_path.pop_back();
+                  while (parent->target == std::nullopt &&
+                          std::holds_alternative<
+                              std::pair<BytePath, std::unique_ptr<Node>>>(
+                              next_parent->children))
+                  {
+                    new_edge.insert(0, std::get<std::pair<BytePath, std::unique_ptr<Node>>>(next_parent->children).first);
+                    parent = next_parent;
+                    if (node_path.empty()) {break;}
+                    next_parent = node_path.back();
+                    node_path.pop_back();
                   }
+              }
+
+                // Find the new child
+                // Move to the next child if the current child doesn't have
+                // a target and is a compressed node
+                // (In reality we should only go down at most one level)
+                Node* child_parent = n;
+                auto& children = std::get<std::pair<BytePath, std::unique_ptr<Node>>>(n->children);
+                new_edge += children.first;
+                Node* child = children.second.get();
+                while (child->target == std::nullopt &&
+                       std::holds_alternative<
+                           std::pair<BytePath, std::unique_ptr<Node>>>(
+                           child->children)) {
+                  auto& children = std::get<std::pair<BytePath, std::unique_ptr<Node>>>(child->children);
+                  new_edge += children.first;
+                  child_parent = child;
+                  child = children.second.get();
                 }
+
+                // Connect the parent to the child
+                // We need to move the unique_ptr from its current location
+                parent->children = std::pair{new_edge, std::move(std::get<std::pair<BytePath, std::unique_ptr<Node>>>(child_parent->children).second)};
+
+                // // We don't necessarily need to keep it as a distinct node if
+                // it
+                // // doesn't have a target
+                // if (n->target == std::nullopt) {
+                //   Node* parent_node =
+                //       !node_path.empty() ? node_path.back() : nullptr;
+                //   Node* child_node =
+                //       std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
+                //           n->children)
+                //           .second.get();
+
+                //   bool parent_compressed =
+                //       parent_node &&
+                //       std::holds_alternative<
+                //           std::pair<BytePath, std::unique_ptr<Node>>>(
+                //           parent_node->children);
+                //   bool child_compressed = std::holds_alternative<
+                //       std::pair<BytePath, std::unique_ptr<Node>>>(
+                //       child_node->children);
+
+                //   if (parent_compressed && child_compressed) {
+                //     // Connect the parent to its great grandchild
+                //     auto& parent_node_child =
+                //         std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
+                //             parent_node->children);
+                //     auto& node_child =
+                //         std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
+                //             n->children);
+                //     auto& child_node_child =
+                //         std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
+                //             child_node->children);
+
+                //     parent_node_child.first +=
+                //         node_child.first + child_node_child.first;
+                //     parent_node_child.second =
+                //         std::move(child_node_child.second);
+                //   } else if (parent_compressed) {
+                //     // Connect the parent to its grandchild
+                //     auto& parent_node_child =
+                //         std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
+                //             parent_node->children);
+                //     auto& node_child =
+                //         std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
+                //             n->children);
+
+                //     parent_node_child.first += node_child.first;
+                //     parent_node_child.second = std::move(node_child.second);
+                //   } else if (child_compressed) {
+                //     // Connect the node to its grandchild
+                //     auto& node_child =
+                //         std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
+                //             n->children);
+                //     auto& child_node_child =
+                //         std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
+                //             child_node->children);
+
+                //     node_child.first += child_node_child.first;
+                //     node_child.second = std::move(child_node_child.second);
+                // }
+                // }
               } else {
                 CHECK(false) << "We shouldn't have a branching node with "
                                 "zero children";
@@ -504,8 +581,8 @@ void RadixTree<Target, reverse>::TrimBranchFromTree(
               done = true;
             },
             [&](const std::pair<BytePath, std::unique_ptr<Node>>& child) {
-              if (n->target != std::nullopt) {
-                // This node can be turned into a leaf
+              if (n->target != std::nullopt || n == &root_) {
+                // A compressed node with a target or the root becomes a leaf
                 n->children = std::monostate{};
                 done = true;
               } else {
@@ -705,36 +782,61 @@ void RadixTree<Target, reverse>::PathIterator::Defrag() {
 }
 
 template <typename Target, bool reverse>
-void RadixTree<Target, reverse>::DebugPrintNode(
+std::vector<std::string> RadixTree<Target, reverse>::DebugGetTreeString(
     const Node* node, const std::string& path, int depth, bool is_last,
     const std::string& prefix) const {
+  std::vector<std::string> result;
+
   // Build tree connector: └── for last child, ├── for others
   std::string connector =
       depth == 0 ? "" : prefix + (is_last ? "└── " : "├── ");
-  std::cout << connector << "\"" << path << "\"";
-  if (node->target.has_value()) std::cout << " TARGET";
+  std::string line = connector + "\"" + path + "\"";
 
   std::visit(
-      overloaded{
-          [&](const std::monostate&) { std::cout << " LEAF" << std::endl; },
-          [&](const std::map<Byte, std::unique_ptr<Node>>& children) {
-            std::cout << " BRANCH(" << children.size() << ")" << std::endl;
-            // Prepare prefix for children: spaces for last, │ for continuing
-            std::string child_prefix = prefix + (is_last ? "    " : "│   ");
-            auto it = children.begin();
-            for (size_t i = 0; i < children.size(); ++i, ++it) {
-              DebugPrintNode(it->second.get(), path + char(it->first),
-                             depth + 1, i == children.size() - 1, child_prefix);
-            }
-          },
-          [&](const std::pair<BytePath, std::unique_ptr<Node>>& child) {
-            std::cout << " COMPRESSED" << std::endl;
-            std::string child_prefix = prefix + (is_last ? "    " : "│   ");
-            // Compressed nodes have only one child, so it's always last
-            DebugPrintNode(child.second.get(), path + child.first, depth + 1,
-                           true, child_prefix);
-          }},
+      overloaded{[&](const std::monostate&) {
+                   line += " LEAF";
+                   if (node->target.has_value()) line += " [T]";
+                   result.push_back(line);
+                 },
+                 [&](const std::map<Byte, std::unique_ptr<Node>>& children) {
+                   line += " BRANCH(" + std::to_string(children.size()) + ")";
+                   if (node->target.has_value()) line += " [T]";
+                   result.push_back(line);
+                   // Prepare prefix for children: spaces for last, │ for
+                   // continuing
+                   std::string child_prefix =
+                       depth == 0 ? "" : prefix + (is_last ? "    " : "│   ");
+                   auto it = children.begin();
+                   for (size_t i = 0; i < children.size(); ++i, ++it) {
+                     auto child_result = DebugGetTreeString(
+                         it->second.get(), path + char(it->first), depth + 1,
+                         i == children.size() - 1, child_prefix);
+                     result.insert(result.end(), child_result.begin(),
+                                   child_result.end());
+                   }
+                 },
+                 [&](const std::pair<BytePath, std::unique_ptr<Node>>& child) {
+                   line += " COMPRESSED";
+                   if (node->target.has_value()) line += " [T]";
+                   result.push_back(line);
+                   std::string child_prefix =
+                       depth == 0 ? "" : prefix + (is_last ? "    " : "│   ");
+                   // Compressed nodes have only one child, so it's always last
+                   auto child_result = DebugGetTreeString(
+                       child.second.get(), path + child.first, depth + 1, true,
+                       child_prefix);
+                   result.insert(result.end(), child_result.begin(),
+                                 child_result.end());
+                 }},
       node->children);
+
+  return result;
+}
+
+template <typename Target, bool reverse>
+std::vector<std::string> RadixTree<Target, reverse>::DebugGetTreeStrings()
+    const {
+  return DebugGetTreeString(&root_, "", 0, true, "");
 }
 
 template <typename Target, bool reverse>
@@ -742,7 +844,12 @@ void RadixTree<Target, reverse>::DebugPrintTree(
     const std::string& label) const {
   std::cout << "\n=== Tree Structure" << (label.empty() ? "" : (" - " + label))
             << " ===" << std::endl;
-  DebugPrintNode(&root_, "", 0);
+
+  auto structure_lines = DebugGetTreeStrings();
+  for (const auto& line : structure_lines) {
+    std::cout << line << std::endl;
+  }
+
   std::cout << "=== End Structure ===\n" << std::endl;
 }
 

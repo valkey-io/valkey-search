@@ -438,13 +438,15 @@ ConfigBuilder<std::string> StringBuilder(Args &&...args) {
   return Builder<std::string>(std::forward<Args>(args)...);
 }
 
-#define CHECK_RANGE(MIN, MAX, CONFIG_NAME)                         \
-  [](const int value) {                                            \
-    if (value < MIN || value > MAX) {                              \
-      return absl::OutOfRangeError(absl::StrFormat(                \
-          "%s must be between %u and %u", CONFIG_NAME, MIN, MAX)); \
-    }                                                              \
-    return absl::OkStatus();                                       \
+#define CHECK_RANGE(MIN, MAX, CONFIG_NAME)                           \
+  [](const auto& value) {                                            \
+    using T = std::decay_t<decltype(value)>;                         \
+    if (value < static_cast<T>(MIN) || value > static_cast<T>(MAX)) {\
+      return absl::OutOfRangeError(absl::StrFormat(                  \
+          "%s must be between %v and %v", CONFIG_NAME,               \
+          static_cast<T>(MIN), static_cast<T>(MAX)));                \
+    }                                                                \
+    return absl::OkStatus();                                         \
   }
 
 }  // namespace config

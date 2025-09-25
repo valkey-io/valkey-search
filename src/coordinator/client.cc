@@ -27,6 +27,7 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/grpc_suspender.h"
 #include "src/metrics.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -61,9 +62,6 @@ static constexpr absl::string_view kCoordinatorQueryTimeout{
 static constexpr int kCoordinatorQueryDefaultTimeout{120};
 static constexpr int kCoordinatorQueryMinTimeout{1};
 static constexpr int kCoordinatorQueryMaxTimeout{3600};
-
-// consider adding a config for per rpc timeout later
-static constexpr int kInfoRpcTimeout{2500};
 
 static auto query_connection_timeout =
     vmsdk::config::NumberBuilder(
@@ -194,8 +192,9 @@ void ClientImpl::InfoIndexPartition(
     std::unique_ptr<vmsdk::StopWatch> latency_sample;
   };
   auto args = std::make_unique<InfoIndexPartitionArgs>();
-  args->context.set_deadline(
-      absl::ToChronoTime(absl::Now() + absl::Milliseconds(kInfoRpcTimeout)));
+  args->context.set_deadline(absl::ToChronoTime(
+      absl::Now() +
+      absl::Milliseconds(options::GetFTInfoRpcTimeoutMs().GetValue())));
   args->callback = std::move(done);
   args->request = std::move(request);
   args->latency_sample = SAMPLE_EVERY_N(100);

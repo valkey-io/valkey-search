@@ -15,6 +15,7 @@
 #include "src/query/primary_info_fanout_operation.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/module_config.h"
@@ -24,29 +25,6 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
-
-constexpr absl::string_view kFTInfoTimeoutMsConfig{"ft-info-timeout-ms"};
-constexpr uint32_t kDefaultFTInfoTimeoutMs{5000};
-constexpr uint32_t kMinimumFTInfoTimeoutMs{100};
-constexpr uint32_t kMaximumFTInfoTimeoutMs{300000};  // 5 minutes max
-
-namespace options {
-
-/// Register the "--ft-info-timeout-ms" flag. Controls the timeout for FT.INFO
-/// operations
-static auto ft_info_timeout_ms =
-    vmsdk::config::NumberBuilder(
-        kFTInfoTimeoutMsConfig,   // name
-        kDefaultFTInfoTimeoutMs,  // default timeout (5 seconds)
-        kMinimumFTInfoTimeoutMs,  // min timeout (100ms)
-        kMaximumFTInfoTimeoutMs)  // max timeout (5 minutes)
-        .Build();
-
-vmsdk::config::Number &GetFTInfoTimeoutMs() {
-  return dynamic_cast<vmsdk::config::Number &>(*ft_info_timeout_ms);
-}
-
-}  // namespace options
 
 absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                        int argc) {

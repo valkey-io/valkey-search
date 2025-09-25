@@ -445,135 +445,61 @@ void RadixTree<Target, reverse>::TrimBranchFromTree(
                     BytePath{static_cast<char>(children.begin()->first)},
                     std::move(children.begin()->second)};
 
-                // TODO: iterate down to first node that has a target or isn't
-                // compressed then connect this new compressed node to it if it
-                // has a target or its parent isn't a compressed node. Otherwise
-                // connect the parent to it.
-
-                // Now let's see if we have a new change of compressed nodes we can merge
-                // Node* new_parent;
-                // Node* new_child;
-
+                // Now let's see if we have a new chain of compressed nodes we
+                // can merge
                 BytePath new_edge;
-
-                // Find the new parent
-                // Node* parent = n;
-                // Node* next_parent;
-                // do {
-                //   new_edge += std::get<std::pair<BytePath, std::unique_ptr<Node>>>(parent->children).first;
-                //   next_parent = node_path.back();
-                //   node_path.pop_back();
-                //   // Move to the next parent if the current parent doesn't have
-                //   // a target and the next parent is a compressed node
-                //   // (In reality we should only go up at most one level)
-                // } while (parent->target == std::nullopt &&
-                //          std::holds_alternative<
-                //              std::pair<BytePath, std::unique_ptr<Node>>>(
-                //              next_parent->children));
 
                 // Find the new parent
                 // Move to the next parent if the current parent doesn't have
                 // a target and the next parent is a compressed node
                 // (In reality we should only go up at most one level)
                 Node* parent = n;
-                if (!node_path.empty()) {
-                  Node* next_parent = node_path.back();
+                Node* next_parent;
+                while (parent->target == std::nullopt && !node_path.empty()) {
+                  next_parent = node_path.back();
                   node_path.pop_back();
-                  while (parent->target == std::nullopt &&
-                          std::holds_alternative<
-                              std::pair<BytePath, std::unique_ptr<Node>>>(
-                              next_parent->children))
-                  {
-                    new_edge.insert(0, std::get<std::pair<BytePath, std::unique_ptr<Node>>>(next_parent->children).first);
-                    parent = next_parent;
-                    if (node_path.empty()) {break;}
-                    next_parent = node_path.back();
-                    node_path.pop_back();
+                  if (!std::holds_alternative<
+                          std::pair<BytePath, std::unique_ptr<Node>>>(
+                          next_parent->children)) {
+                    break;
                   }
-              }
+                  new_edge.insert(
+                      0, std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
+                             next_parent->children)
+                             .first);
+                  parent = next_parent;
+                }
 
                 // Find the new child
                 // Move to the next child if the current child doesn't have
                 // a target and is a compressed node
                 // (In reality we should only go down at most one level)
                 Node* child_parent = n;
-                auto& children = std::get<std::pair<BytePath, std::unique_ptr<Node>>>(n->children);
+                auto& children =
+                    std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
+                        n->children);
                 new_edge += children.first;
                 Node* child = children.second.get();
                 while (child->target == std::nullopt &&
                        std::holds_alternative<
                            std::pair<BytePath, std::unique_ptr<Node>>>(
                            child->children)) {
-                  auto& children = std::get<std::pair<BytePath, std::unique_ptr<Node>>>(child->children);
+                  auto& children =
+                      std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
+                          child->children);
                   new_edge += children.first;
                   child_parent = child;
                   child = children.second.get();
                 }
 
-                // Connect the parent to the child
-                // We need to move the unique_ptr from its current location
-                parent->children = std::pair{new_edge, std::move(std::get<std::pair<BytePath, std::unique_ptr<Node>>>(child_parent->children).second)};
-
-                // // We don't necessarily need to keep it as a distinct node if
-                // it
-                // // doesn't have a target
-                // if (n->target == std::nullopt) {
-                //   Node* parent_node =
-                //       !node_path.empty() ? node_path.back() : nullptr;
-                //   Node* child_node =
-                //       std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
-                //           n->children)
-                //           .second.get();
-
-                //   bool parent_compressed =
-                //       parent_node &&
-                //       std::holds_alternative<
-                //           std::pair<BytePath, std::unique_ptr<Node>>>(
-                //           parent_node->children);
-                //   bool child_compressed = std::holds_alternative<
-                //       std::pair<BytePath, std::unique_ptr<Node>>>(
-                //       child_node->children);
-
-                //   if (parent_compressed && child_compressed) {
-                //     // Connect the parent to its great grandchild
-                //     auto& parent_node_child =
-                //         std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
-                //             parent_node->children);
-                //     auto& node_child =
-                //         std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
-                //             n->children);
-                //     auto& child_node_child =
-                //         std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
-                //             child_node->children);
-
-                //     parent_node_child.first +=
-                //         node_child.first + child_node_child.first;
-                //     parent_node_child.second =
-                //         std::move(child_node_child.second);
-                //   } else if (parent_compressed) {
-                //     // Connect the parent to its grandchild
-                //     auto& parent_node_child =
-                //         std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
-                //             parent_node->children);
-                //     auto& node_child =
-                //         std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
-                //             n->children);
-
-                //     parent_node_child.first += node_child.first;
-                //     parent_node_child.second = std::move(node_child.second);
-                //   } else if (child_compressed) {
-                //     // Connect the node to its grandchild
-                //     auto& node_child =
-                //         std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
-                //             n->children);
-                //     auto& child_node_child =
-                //         std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
-                //             child_node->children);
-
-                //     node_child.first += child_node_child.first;
-                //     node_child.second = std::move(child_node_child.second);
-                // }
-                // }
+                // Connect the parent to the child, moving ownership of the
+                // child Node to the parent
+                parent->children = std::pair{
+                    new_edge,
+                    std::move(
+                        std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
+                            child_parent->children)
+                            .second)};
               } else {
                 CHECK(false) << "We shouldn't have a branching node with "
                                 "zero children";

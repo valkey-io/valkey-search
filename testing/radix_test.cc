@@ -250,14 +250,12 @@ TEST_F(RadixTreeTest, DeleteLeafNodeWordSimpleScenarios) {
 }
 
 TEST_F(RadixTreeTest, DeleteLeafNodeWordComplexScenarios) {
-  // Test all three scenarios where a branch node gets converted to a compressed
-  // node. parent_compressed = the branch nodes parent is a compressed node
-  // child_compressed = the branch nodes child is a compressed node
+  // Test scenarios where a branch node gets converted to a compressed
+  // node, causing compressed nodes to be merged
 
-  // ========================================================================
-  // Scenario 1: parent_compressed && child_compressed (connect parent to its
-  // great grandchild)
-  // ========================================================================
+  // ==========================================================================
+  // Scenario 1: Connect parent to its great grandchild
+  // ==========================================================================
   // Initial tree structure:
   //                  [compressed]
   //                   "x" |
@@ -297,9 +295,9 @@ TEST_F(RadixTreeTest, DeleteLeafNodeWordComplexScenarios) {
   // Reset tree
   prefix_tree_ = std::make_unique<RadixTree<TestTarget, false>>();
 
-  // ========================================================================
-  // Scenario 2: parent_compressed (connect parent to its grandchild)
-  // ========================================================================
+  // ==========================================================================
+  // Scenario 2: Connect parent to its grandchild
+  // ==========================================================================
   // Initial tree structure:
   //                  [compressed]
   //                 "cat" |
@@ -338,9 +336,10 @@ TEST_F(RadixTreeTest, DeleteLeafNodeWordComplexScenarios) {
   // Reset tree
   prefix_tree_ = std::make_unique<RadixTree<TestTarget, false>>();
 
-  // ========================================================================
-  // Scenario 3: child_compressed (connect node to its grandchild)
-  // ========================================================================
+  // =========================================================================
+  // Scenario 3: Connect node to its grandchild when parent isn't a compressed
+  // node (it doesn't exist in this case)
+  // =========================================================================
   // Initial tree structure:
   //                   [branching]
   //               "d" /     \ "r"
@@ -377,6 +376,10 @@ TEST_F(RadixTreeTest, DeleteLeafNodeWordComplexScenarios) {
   // Reset tree
   prefix_tree_ = std::make_unique<RadixTree<TestTarget, false>>();
 
+  // ==========================================================================
+  // Scenario 4: Connect node to its grandchild since node has a target and must
+  // still exist
+  // ==========================================================================
   // Initial tree structure:
   //                  [compressed]
   //                   "x" |

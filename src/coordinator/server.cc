@@ -48,8 +48,7 @@
 
 namespace valkey_search::coordinator {
 
-CONTROLLED_BOOLEAN(IgnoreGrpcRequest, false);
-CONTROLLED_BOOLEAN(ForceRemoteFailOnce, false);
+CONTROLLED_SIZE_T(ForceRemoteFailCount, 0);
 
 grpc::ServerUnaryReactor* Service::GetGlobalMetadata(
     grpc::CallbackServerContext* context,
@@ -251,11 +250,8 @@ grpc::ServerUnaryReactor* Service::InfoIndexPartition(
   auto latency_sample = SAMPLE_EVERY_N(100);
   grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
   // simulate grpc timeout for testing only
-  if (IgnoreGrpcRequest.GetValue()) {
-    return reactor;
-  }
-  if (ForceRemoteFailOnce.GetValue()) {
-    ForceRemoteFailOnce.SetValue("no");
+  if (ForceRemoteFailCount.GetValue() > 0) {
+    ForceRemoteFailCount.Decrement();
     return reactor;
   }
   vmsdk::RunByMain([reactor, response, request,

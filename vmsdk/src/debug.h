@@ -95,6 +95,11 @@ struct Controlled : private ControlledBase {
     VMSDK_ASSIGN_OR_RETURN(value_, vmsdk::To<T>(value));
     return absl::OkStatus();
   }
+  template <typename U = T>
+  typename std::enable_if<std::is_arithmetic<U>::value, void>::type Decrement(
+      U amount = 1) {
+    value_.fetch_sub(amount, std::memory_order_relaxed);
+  }
   Controlled(absl::string_view name, T default_value)
       : ControlledBase(name), value_(default_value) {}
 
@@ -124,7 +129,6 @@ inline absl::Status Controlled<bool>::SetValue(absl::string_view value) {
   }
 };
 
-// consider changing controlled boolean from static to inline type
 #define CONTROLLED_BOOLEAN(name, default_value) \
   static vmsdk::debug::Controlled<bool> name(#name, default_value)
 #define CONTROLLED_INT(name, default_value) \

@@ -101,6 +101,10 @@ class FanoutOperationBase {
           this->OnResponse(resp, target);
         } else {
           ++Metrics::GetStats().info_fanout_fail_cnt;
+          VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+              << "FANOUT_DEBUG: Local node error, status code: "
+              << status.error_code()
+              << ", error message: " << status.error_message();
           this->OnError(status, resp.error_type(), target);
         }
         this->RpcDone();
@@ -108,7 +112,10 @@ class FanoutOperationBase {
     } else {
       auto client = client_pool_->GetClient(target.address);
       if (!client) {
-        VMSDK_LOG(WARNING, nullptr) << "Found invalid client!";
+        ++Metrics::GetStats().info_fanout_fail_cnt;
+        VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+            << "FANOUT_DEBUG: Found invalid client on target "
+            << target.address;
         this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
                       coordinator::FanoutErrorType::COMMUNICATION_ERROR,
                       target);

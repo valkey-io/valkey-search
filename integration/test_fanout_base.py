@@ -6,7 +6,8 @@ from valkeytestframework.util import waiters
 from test_info_primary import is_index_on_all_nodes
 from valkey.exceptions import ResponseError, ConnectionError
 import pytest
-from info_search_parser import InfoSearchParser
+
+MAX_RETRIES = "4294967295"
 
 class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
 
@@ -26,12 +27,12 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
 
         waiters.wait_for_true(lambda: is_index_on_all_nodes(self, index_name))
         # force remote node to fail once and trigger retry
-        assert node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceRemoteFailOnce yes") == b"OK"
+        assert node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceRemoteFailCount 1") == b"OK"
 
         node0.execute_command("FT.INFO", index_name, "PRIMARY")
-        info_search_result = node0.execute_command("INFO SEARCH")
-        info_search_parser = InfoSearchParser(info_search_result)
-        retry_count = int(info_search_parser.fanout_retries)
+
+        # check retry count
+        retry_count = node0.info("SEARCH")["search_info_fanout_retry_count"]
         assert retry_count == 1, f"Expected retry_count to be equal to 1, got {retry_count}"
 
     def test_fanout_shutdown(self):
@@ -81,10 +82,16 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
         ) == b"OK"
         waiters.wait_for_true(lambda: is_index_on_all_nodes(self, index_name))
 
-        assert node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET IgnoreGrpcRequest yes") == b"OK"
+        # force timeout by enabling continuous remote failure
+        assert node1.execute_command(
+            "FT._DEBUG CONTROLLED_VARIABLE SET ForceRemoteFailCount ", 
+            MAX_RETRIES
+        ) == b"OK"
 
         with pytest.raises(ResponseError) as ei:
             node0.execute_command("FT.INFO", index_name, "PRIMARY")
         assert "Unable to contact all cluster members" in str(ei.value)
 
-        assert node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET IgnoreGrpcRequest no") == b"OK"
+        assert node1.execute_command(
+            "FT._DEBUG CONTROLLED_VARIABLE SET ForceRemoteFailCount 0", 
+        ) == b"OK"

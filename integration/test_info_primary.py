@@ -4,7 +4,6 @@ from valkey.client import Valkey
 from valkeytestframework.conftest import resource_port_tracker
 from valkeytestframework.util import waiters
 from ft_info_parser import FTInfoParser
-from info_search_parser import InfoSearchParser
 
 def verify_error_response(client, cmd, expected_err_reply):
     try:
@@ -97,16 +96,14 @@ class TestFTInfoPrimary(ValkeySearchClusterTestCaseDebugMode):
 
         waiters.wait_for_true(lambda: self.is_indexing_complete(node0, index_name, N))
 
-        assert node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceRemoteFailOnce yes") == b"OK"
+        assert node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceRemoteFailCount 1") == b"OK"
 
         raw = node0.execute_command("FT.INFO", index_name, "PRIMARY")
         parser = FTInfoParser([])
         info = parser._parse_key_value_list(raw)
 
         # check retry count
-        info_search_result = node0.execute_command("INFO SEARCH")
-        info_search_parser = InfoSearchParser(info_search_result)
-        retry_count = int(info_search_parser.fanout_retries)
+        retry_count = node0.info("SEARCH")["search_info_fanout_retry_count"]
         assert retry_count == 1, f"Expected retry_count to be equal to 1, got {retry_count}"
 
         # check primary info results

@@ -1,19 +1,10 @@
-import time
 from valkey_search_test_case import ValkeySearchClusterTestCaseDebugMode
 from valkey.cluster import ValkeyCluster
 from valkey.client import Valkey
 from valkeytestframework.conftest import resource_port_tracker
 from valkeytestframework.util import waiters
-import pytest
-import re
-
-def _parse_info_kv_list(reply):
-    it = iter(reply)
-    out = {}
-    for k in it:
-        v = next(it, None)
-        out[k.decode() if isinstance(k, bytes) else k] = v.decode() if isinstance(v, bytes) else v
-    return out
+from ft_info_parser import FTInfoParser
+from info_search_parser import InfoSearchParser
 
 def verify_error_response(client, cmd, expected_err_reply):
     try:
@@ -45,7 +36,8 @@ class TestFTInfoPrimary(ValkeySearchClusterTestCaseDebugMode):
 
     def is_indexing_complete(self, node, index_name, N):
         raw = node.execute_command("FT.INFO", index_name, "PRIMARY")
-        info = _parse_info_kv_list(raw)
+        parser = FTInfoParser([])
+        info = parser._parse_key_value_list(raw)
         if not info:
             return False
         num_docs = int(info["num_docs"])
@@ -73,25 +65,22 @@ class TestFTInfoPrimary(ValkeySearchClusterTestCaseDebugMode):
         waiters.wait_for_true(lambda: self.is_indexing_complete(node0, index_name, N))
 
         raw = node0.execute_command("FT.INFO", index_name, "PRIMARY")
-        info = _parse_info_kv_list(raw)
+        parser = FTInfoParser([])
+        info = parser._parse_key_value_list(raw)
 
+        # check primary info results
         assert info is not None
-        mode = info.get("mode")
-        index_name = info.get("index_name")
-        assert (mode in (b"primary", "primary"))
-        assert (index_name in (b"index1", "index1"))
+        assert str(info.get("index_name")) == index_name
+        assert str(info.get("mode")) == "primary"
+        assert int(info["num_docs"]) == N
+        assert int(info["num_records"]) == N
+        assert int(info["hash_indexing_failures"]) == 0
 
-        num_docs = int(info["num_docs"])
-        num_records = int(info["num_records"])
-        hash_fail = int(info["hash_indexing_failures"])
-
-        assert num_docs == N
-        assert num_records == N
-        assert hash_fail == 0
     
     def test_ft_info_primary_retry(self):
         cluster: ValkeyCluster = self.new_cluster_client()
         node0: Valkey = self.new_client_for_primary(0)
+        node1: Valkey = self.new_client_for_primary(1)
         index_name = "index1"
 
         assert node0.execute_command(
@@ -108,32 +97,22 @@ class TestFTInfoPrimary(ValkeySearchClusterTestCaseDebugMode):
 
         waiters.wait_for_true(lambda: self.is_indexing_complete(node0, index_name, N))
 
-        assert node0.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceRetry yes") == b"OK"
+        assert node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceRemoteFailOnce yes") == b"OK"
 
         raw = node0.execute_command("FT.INFO", index_name, "PRIMARY")
+        parser = FTInfoParser([])
+        info = parser._parse_key_value_list(raw)
 
         # check retry count
-        info_search_str = str(node0.execute_command("INFO SEARCH"))
-        pattern = r'search_fanout_retry_count:(\d+)'
-        match = re.search(pattern, info_search_str)
-        if not match:
-            assert False, f"search_fanout_retry_count not found in INFO SEARCH results!"
-        retry_count = int(match.group(1))
-        assert retry_count > 0, f"Expected retry_count to be greater than 0, got {retry_count}"
+        info_search_result = node0.execute_command("INFO SEARCH")
+        info_search_parser = InfoSearchParser(info_search_result)
+        retry_count = int(info_search_parser.fanout_retries)
+        assert retry_count == 1, f"Expected retry_count to be equal to 1, got {retry_count}"
 
         # check primary info results
-        info = _parse_info_kv_list(raw)
         assert info is not None
-        mode = info.get("mode")
-        index_name = info.get("index_name")
-        assert (mode in (b"primary", "primary"))
-        assert (index_name in (b"index1", "index1"))
-        num_docs = int(info["num_docs"])
-        num_records = int(info["num_records"])
-        hash_fail = int(info["hash_indexing_failures"])
-        assert num_docs == N
-        assert num_records == N
-        assert hash_fail == 0
-
-        assert node0.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceRetry no") == b"OK"
-
+        assert str(info.get("index_name")) == index_name
+        assert str(info.get("mode")) == "primary"
+        assert int(info["num_docs"]) == N
+        assert int(info["num_records"]) == N
+        assert int(info["hash_indexing_failures"]) == 0

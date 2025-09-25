@@ -26,10 +26,6 @@
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
-namespace vmsdk::debug {
-extern Controlled<bool> ForceRetry;
-}
-
 namespace valkey_search::query::fanout {
 
 constexpr unsigned kNoValkeyTimeout = 86400000;
@@ -48,7 +44,6 @@ class FanoutOperationBase {
     deadline_tp_ = std::chrono::steady_clock::now() +
                    std::chrono::milliseconds(GetTimeoutMs());
     targets_ = GetTargets(ctx);
-    Metrics::GetStats().fanout_retry_cnt.store(0);
     StartFanoutRound();
   }
 
@@ -105,24 +100,12 @@ class FanoutOperationBase {
         if (status.ok()) {
           this->OnResponse(resp, target);
         } else {
+          ++Metrics::GetStats().info_fanout_fail_cnt;
           this->OnError(status, resp.error_type(), target);
         }
         this->RpcDone();
       });
     } else {
-      // Testing code path. This forces 10 retries for testing only when
-      // ForceRetry is enabled
-      if (vmsdk::debug::ForceRetry.GetValue() &&
-          Metrics::GetStats().fanout_retry_cnt < 10) {
-        std::thread([this, target]() {
-          this->OnError(grpc::Status(grpc::StatusCode::INTERNAL,
-                                     "Forced remote failure for testing"),
-                        coordinator::FanoutErrorType::COMMUNICATION_ERROR,
-                        target);
-          this->RpcDone();
-        }).detach();
-        return;
-      }
       auto client = client_pool_->GetClient(target.address);
       if (!client) {
         VMSDK_LOG(WARNING, nullptr) << "Found invalid client!";
@@ -138,6 +121,7 @@ class FanoutOperationBase {
             if (status.ok()) {
               this->OnResponse(resp, target);
             } else {
+              ++Metrics::GetStats().info_fanout_fail_cnt;
               VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
                   << "FANOUT_DEBUG: InvokeRemoteRpc error on target "
                   << target.address << ", status code: " << status.error_code()
@@ -195,7 +179,8 @@ class FanoutOperationBase {
                             int argc) = 0;
 
   virtual int GenerateTimeoutReply(ValkeyModuleCtx* ctx) {
-    return ValkeyModule_ReplyWithError(ctx, "Request timed out");
+    return ValkeyModule_ReplyWithError(ctx,
+                                       "Unable to contact all cluster members");
   }
 
   virtual int GenerateErrorReply(ValkeyModuleCtx* ctx) {
@@ -266,7 +251,7 @@ class FanoutOperationBase {
         return;
       }
       if (ShouldRetry()) {
-        ++Metrics::GetStats().fanout_retry_cnt;
+        ++Metrics::GetStats().info_fanout_retry_cnt;
         ResetBaseForRetry();
         ResetForRetry();
         StartFanoutRound();

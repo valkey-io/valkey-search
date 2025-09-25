@@ -37,6 +37,7 @@
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -46,6 +47,9 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::coordinator {
+
+CONTROLLED_BOOLEAN(IgnoreGrpcRequest, false);
+CONTROLLED_BOOLEAN(ForceRemoteFailOnce, false);
 
 grpc::ServerUnaryReactor* Service::GetGlobalMetadata(
     grpc::CallbackServerContext* context,
@@ -246,7 +250,14 @@ grpc::ServerUnaryReactor* Service::InfoIndexPartition(
   GRPCSuspensionGuard guard(GRPCSuspender::Instance());
   auto latency_sample = SAMPLE_EVERY_N(100);
   grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
-
+  // simulate grpc timeout for testing only
+  if (IgnoreGrpcRequest.GetValue()) {
+    return reactor;
+  }
+  if (ForceRemoteFailOnce.GetValue()) {
+    ForceRemoteFailOnce.SetValue("no");
+    return reactor;
+  }
   vmsdk::RunByMain([reactor, response, request,
                     latency_sample = std::move(latency_sample)]() mutable {
     auto [status, info_response] = Service::GenerateInfoResponse(*request);

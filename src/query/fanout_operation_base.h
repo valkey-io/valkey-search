@@ -26,10 +26,6 @@
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
-namespace vmsdk::debug {
-extern Controlled<bool> ForceRetry;
-}
-
 namespace valkey_search::query::fanout {
 
 constexpr unsigned kNoValkeyTimeout = 86400000;
@@ -48,7 +44,8 @@ class FanoutOperationBase {
     deadline_tp_ = std::chrono::steady_clock::now() +
                    std::chrono::milliseconds(GetTimeoutMs());
     targets_ = GetTargets(ctx);
-    Metrics::GetStats().fanout_retry_cnt.store(0);
+    Metrics::GetStats().info_fanout_retry_cnt.store(0);
+    Metrics::GetStats().info_fanout_fail_cnt.store(0);
     StartFanoutRound();
   }
 
@@ -115,28 +112,6 @@ class FanoutOperationBase {
         this->RpcDone();
       });
     } else {
-      // Testing code path. This forces 10 retries for testing only when
-      // ForceRetry is enabled
-      if (vmsdk::debug::ForceRetry.GetValue() &&
-          Metrics::GetStats().fanout_retry_cnt < 10) {
-        std::thread([this, target]() {
-          this->OnError(grpc::Status(grpc::StatusCode::INTERNAL,
-                                     "Forced remote failure for testing"),
-                        coordinator::FanoutErrorType::COMMUNICATION_ERROR,
-                        target);
-          this->RpcDone();
-        }).detach();
-        return;
-      }
-      auto client = client_pool_->GetClient(target.address);
-      if (!client) {
-        VMSDK_LOG(WARNING, nullptr) << "Found invalid client!";
-        this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
-                      coordinator::FanoutErrorType::COMMUNICATION_ERROR,
-                      target);
-        this->RpcDone();
-        return;
-      }
       auto client = client_pool_->GetClient(target.address);
       if (!client) {
         ++Metrics::GetStats().info_fanout_fail_cnt;
@@ -286,49 +261,6 @@ class FanoutOperationBase {
       }
       if (ShouldRetry()) {
         ++Metrics::GetStats().info_fanout_retry_cnt;
-        ResetBaseForRetry();
-        ResetForRetry();
-        StartFanoutRound();
-      } else {
-        OnCompletion();
-      }
-    }
-    // Log inconsistent state errors
-    if (!inconsistent_state_error_nodes.empty()) {
-      error_message = "Inconsistent index state error found.";
-      for (const FanoutSearchTarget& target : inconsistent_state_error_nodes) {
-        if (target.type == FanoutSearchTarget::Type::kLocal) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 5)
-              << INCONSISTENT_STATE_ERROR_LOG_PREFIX << "LOCAL NODE";
-        } else {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
-              << INCONSISTENT_STATE_ERROR_LOG_PREFIX << target.address;
-        }
-      }
-    }
-    return ValkeyModule_ReplyWithError(ctx, error_message.c_str());
-  }
-
-  unsigned IsOperationTimedOut() const {
-    using namespace std::chrono;
-    return steady_clock::now() >= deadline_tp_;
-  }
-
-  void RpcDone() {
-    bool done = false;
-    {
-      absl::MutexLock lock(&mutex_);
-      if (--outstanding_ == 0) {
-        done = true;
-      }
-    }
-    if (done) {
-      if (IsOperationTimedOut()) {
-        OnTimeout();
-        return;
-      }
-      if (ShouldRetry()) {
-        ++Metrics::GetStats().fanout_retry_cnt;
         ResetBaseForRetry();
         ResetForRetry();
         StartFanoutRound();

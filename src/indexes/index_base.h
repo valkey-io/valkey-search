@@ -22,6 +22,7 @@
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/memory_tracker.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
@@ -40,7 +41,8 @@ const absl::NoDestructor<absl::flat_hash_map<absl::string_view, IndexerType>>
 
 class IndexBase {
  public:
-  explicit IndexBase(IndexerType indexer_type) : indexer_type_(indexer_type) {}
+  explicit IndexBase(IndexerType indexer_type, MemoryPool& memory_pool)
+      : indexer_type_(indexer_type), memory_pool_(memory_pool) {}
   virtual ~IndexBase() = default;
 
   // Add/Remove/Modify will return true if the operation was successful, false
@@ -66,6 +68,11 @@ class IndexBase {
     return input;
   }
   virtual uint64_t GetRecordCount() const = 0;
+
+  MemoryPool& GetMemoryPool() { return memory_pool_; }
+
+ protected:
+  MemoryPool& memory_pool_;
 
  private:
   IndexerType indexer_type_{IndexerType::kNone};

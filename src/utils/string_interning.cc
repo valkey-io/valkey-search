@@ -22,6 +22,8 @@ MemoryPool StringInternStore::memory_pool_{0};
 
 InternedString::InternedString(absl::string_view str, bool shared)
     : length_(str.length()), is_shared_(shared), is_data_owner_(true) {
+  IsolatedMemoryScope scope { StringInternStore::memory_pool_ };
+
   data_ = new char[length_ + 1];
   memcpy(data_, str.data(), length_);
   data_[length_] = '\0';

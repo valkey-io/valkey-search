@@ -23,14 +23,16 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
             "SCHEMA", "price", "NUMERIC"
         ) == b"OK"
 
+        retry_count_before = node0.info("SEARCH")["search_info_fanout_retry_count"]
+
         # force remote node to fail once and trigger retry
         assert node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceRemoteFailCount 1") == b"OK"
 
         node0.execute_command("FT.INFO", index_name, "PRIMARY")
 
         # check retry count
-        retry_count = node0.info("SEARCH")["search_info_fanout_retry_count"]
-        assert retry_count == 1, f"Expected retry_count to be equal to 1, got {retry_count}"
+        retry_count_after = node0.info("SEARCH")["search_info_fanout_retry_count"]
+        assert retry_count_after == retry_count_before + 1, f"Expected retry_count increment by 1, got {retry_count_after - retry_count_before}"
 
     def test_fanout_shutdown(self):
         cluster = self.new_cluster_client()

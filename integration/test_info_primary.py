@@ -76,6 +76,8 @@ class TestFTInfoPrimary(ValkeySearchClusterTestCaseDebugMode):
 
         waiters.wait_for_true(lambda: self.is_indexing_complete(node0, index_name, N))
 
+        retry_count_before = node0.info("SEARCH")["search_info_fanout_retry_count"]
+
         assert node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceRemoteFailCount 1") == b"OK"
 
         raw = node0.execute_command("FT.INFO", index_name, "PRIMARY")
@@ -83,8 +85,8 @@ class TestFTInfoPrimary(ValkeySearchClusterTestCaseDebugMode):
         info = parser._parse_key_value_list(raw)
 
         # check retry count
-        retry_count = node0.info("SEARCH")["search_info_fanout_retry_count"]
-        assert retry_count == 1, f"Expected retry_count to be equal to 1, got {retry_count}"
+        retry_count_after = node0.info("SEARCH")["search_info_fanout_retry_count"]
+        assert retry_count_after == retry_count_before + 1, f"Expected retry_count increment by 1, got {retry_count_after - retry_count_before}"
 
         # check primary info results
         assert info is not None

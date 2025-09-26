@@ -44,8 +44,6 @@ class FanoutOperationBase {
     deadline_tp_ = std::chrono::steady_clock::now() +
                    std::chrono::milliseconds(GetTimeoutMs());
     targets_ = GetTargets(ctx);
-    Metrics::GetStats().info_fanout_retry_cnt.store(0);
-    Metrics::GetStats().info_fanout_fail_cnt.store(0);
     StartFanoutRound();
   }
 

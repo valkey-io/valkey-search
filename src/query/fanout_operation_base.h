@@ -26,10 +26,6 @@
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
-namespace vmsdk::debug {
-extern Controlled<bool> ForceRetry;
-}
-
 namespace valkey_search::query::fanout {
 
 constexpr unsigned kNoValkeyTimeout = 86400000;

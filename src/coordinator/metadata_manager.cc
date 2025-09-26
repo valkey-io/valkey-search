@@ -193,7 +193,6 @@ absl::Status MetadataManager::CreateEntry(
   // check for valid ctx to prevent test fail due to fake_ctx
   if (ctx && ValkeySearch::Instance().IsCluster() &&
       ValkeySearch::Instance().UsingCoordinator()) {
-    VMSDK_LOG(NOTICE, nullptr) << "Entering fanout operation part";
     // ft.create consistency check
     unsigned timeout_ms = options::GetFTInfoTimeoutMs().GetValue();
     auto op = new query::create_consistency_check_fanout_operation::

@@ -167,8 +167,8 @@ TEST_F(SchemaManagerTest, TestRemoveIndexSchema) {
         &fake_ctx_, []() {}, nullptr, coordinator_enabled));
     VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
         &fake_ctx_, test_index_schema_proto_));
-    VMSDK_EXPECT_OK(
-        SchemaManager::Instance().RemoveIndexSchema(db_num_, index_name_));
+    VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(
+        &fake_ctx_, db_num_, index_name_));
     EXPECT_EQ(SchemaManager::Instance()
                   .GetIndexSchema(db_num_, index_name_)
                   .status()
@@ -186,7 +186,7 @@ TEST_F(SchemaManagerTest, TestRemoveIndexSchemaNotFound) {
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() {}, nullptr, coordinator_enabled));
     EXPECT_EQ(SchemaManager::Instance()
-                  .RemoveIndexSchema(db_num_, index_name_)
+                  .RemoveIndexSchema(&fake_ctx_, db_num_, index_name_)
                   .code(),
               absl::StatusCode::kNotFound);
   }

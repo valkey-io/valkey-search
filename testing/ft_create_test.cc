@@ -96,7 +96,7 @@ TEST_P(FTCreateTest, FTCreateTests) {
     EXPECT_EQ(index.value()->GetIndexerType(), expected_index.indexer_type);
   }
   VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(
-      db_num, test_case.index_schema_name));
+      &fake_ctx_, db_num, test_case.index_schema_name));
 }
 
 INSTANTIATE_TEST_SUITE_P(

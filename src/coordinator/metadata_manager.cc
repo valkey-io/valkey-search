@@ -31,6 +31,7 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/util.h"
 #include "src/rdb_serialization.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -145,7 +146,7 @@ absl::StatusOr<google::protobuf::Any> MetadataManager::GetEntry(
   return metadata.type_namespace_map().at(type_name).entries().at(id).content();
 }
 
-absl::Status MetadataManager::CreateEntry(
+absl::StatusOr<MetadataManager::CreateEntryResult> MetadataManager::CreateEntry(
     absl::string_view type_name, absl::string_view id,
     std::unique_ptr<google::protobuf::Any> contents) {
   auto &registered_types = registered_types_.Get();
@@ -187,7 +188,7 @@ absl::Status MetadataManager::CreateEntry(
   metadata.mutable_version_header()->set_top_level_fingerprint(
       ComputeTopLevelFingerprint(metadata.type_namespace_map()));
   BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
-  return absl::OkStatus();
+  return CreateEntryResult{fingerprint, version};
 }
 
 absl::Status MetadataManager::DeleteEntry(absl::string_view type_name,
@@ -225,6 +226,7 @@ absl::Status MetadataManager::DeleteEntry(absl::string_view type_name,
   metadata.mutable_version_header()->set_top_level_fingerprint(
       ComputeTopLevelFingerprint(metadata.type_namespace_map()));
   BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
+  // TODO: ft.dropindex consistency check
   return absl::OkStatus();
 }
 

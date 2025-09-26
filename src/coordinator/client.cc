@@ -63,9 +63,6 @@ static constexpr int kCoordinatorQueryDefaultTimeout{120};
 static constexpr int kCoordinatorQueryMinTimeout{1};
 static constexpr int kCoordinatorQueryMaxTimeout{3600};
 
-// consider adding a config for per rpc timeout later
-static constexpr int kInfoRpcTimeout{2500};
-
 static auto query_connection_timeout =
     vmsdk::config::NumberBuilder(
         kCoordinatorQueryTimeout, kCoordinatorQueryDefaultTimeout,

@@ -129,7 +129,6 @@ inline absl::Status Controlled<bool>::SetValue(absl::string_view value) {
   }
 };
 
-// consider changing controlled boolean from static to inline type
 #define CONTROLLED_BOOLEAN(name, default_value) \
   static vmsdk::debug::Controlled<bool> name(#name, default_value)
 #define CONTROLLED_INT(name, default_value) \

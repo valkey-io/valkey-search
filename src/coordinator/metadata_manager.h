@@ -46,6 +46,11 @@ static constexpr highwayhash::HHKey kHashKey{
 
 class MetadataManager {
  public:
+  struct CreateEntryResult {
+    uint64_t fingerprint;
+    uint32_t version;
+  };
+
   MetadataManager(ValkeyModuleCtx *ctx, ClientPool &client_pool)
       : client_pool_(client_pool),
         detached_ctx_(vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx)) {
@@ -81,9 +86,9 @@ class MetadataManager {
   absl::StatusOr<google::protobuf::Any> GetEntry(absl::string_view type_name,
                                                  absl::string_view id);
 
-  absl::Status CreateEntry(ValkeyModuleCtx *ctx, absl::string_view type_name,
-                           absl::string_view id,
-                           std::unique_ptr<google::protobuf::Any> contents);
+  absl::StatusOr<CreateEntryResult> CreateEntry(
+      absl::string_view type_name, absl::string_view id,
+      std::unique_ptr<google::protobuf::Any> contents);
 
   absl::Status DeleteEntry(absl::string_view type_name, absl::string_view id);
 

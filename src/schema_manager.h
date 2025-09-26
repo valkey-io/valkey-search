@@ -22,6 +22,7 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/coordinator/coordinator.pb.h"
+#include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -51,8 +52,9 @@ class SchemaManager {
   SchemaManager(const SchemaManager &) = delete;
   SchemaManager &operator=(const SchemaManager &) = delete;
 
-  absl::Status CreateIndexSchema(
-      ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto)
+  absl::StatusOr<valkey_search::coordinator::MetadataManager::CreateEntryResult>
+  CreateIndexSchema(ValkeyModuleCtx *ctx,
+                    const data_model::IndexSchema &index_schema_proto)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   absl::Status ImportIndexSchema(std::shared_ptr<IndexSchema> index_schema)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);

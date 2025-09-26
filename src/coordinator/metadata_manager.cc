@@ -30,7 +30,6 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/util.h"
-#include "src/query/create_consistency_check_fanout_operation.h"
 #include "src/rdb_serialization.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/log.h"
@@ -147,8 +146,8 @@ absl::StatusOr<google::protobuf::Any> MetadataManager::GetEntry(
   return metadata.type_namespace_map().at(type_name).entries().at(id).content();
 }
 
-absl::Status MetadataManager::CreateEntry(
-    ValkeyModuleCtx *ctx, absl::string_view type_name, absl::string_view id,
+absl::StatusOr<MetadataManager::CreateEntryResult> MetadataManager::CreateEntry(
+    absl::string_view type_name, absl::string_view id,
     std::unique_ptr<google::protobuf::Any> contents) {
   auto &registered_types = registered_types_.Get();
   auto rt_it = registered_types.find(type_name);
@@ -189,20 +188,7 @@ absl::Status MetadataManager::CreateEntry(
   metadata.mutable_version_header()->set_top_level_fingerprint(
       ComputeTopLevelFingerprint(metadata.type_namespace_map()));
   BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
-
-  // check for valid ctx to prevent test fail due to fake_ctx
-  if (ctx && ValkeySearch::Instance().IsCluster() &&
-      ValkeySearch::Instance().UsingCoordinator()) {
-    // ft.create consistency check
-    unsigned timeout_ms = options::GetFTInfoTimeoutMs().GetValue();
-    auto op = new query::create_consistency_check_fanout_operation::
-        CreateConsistencyCheckFanoutOperation(ValkeyModule_GetSelectedDb(ctx),
-                                              std::string(id), timeout_ms,
-                                              fingerprint);
-    op->StartOperation(ctx);
-  }
-
-  return absl::OkStatus();
+  return CreateEntryResult{fingerprint, version};
 }
 
 absl::Status MetadataManager::DeleteEntry(absl::string_view type_name,

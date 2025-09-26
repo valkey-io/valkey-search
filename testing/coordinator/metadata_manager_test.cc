@@ -145,11 +145,9 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
       content = std::make_unique<google::protobuf::Any>();
       content->set_type_url("type.googleapis.com/FakeType");
       content->set_value(operation.content);
-      EXPECT_EQ(test_metadata_manager_
-                    ->CreateEntry(fake_ctx, operation.type_name, operation.id,
-                                  std::move(content))
-                    .code(),
-                test_case.expected_status_code);
+      auto result = test_metadata_manager_->CreateEntry(
+          operation.type_name, operation.id, std::move(content));
+      EXPECT_EQ(result.status().code(), test_case.expected_status_code);
     } else if (operation.operation_type ==
                EntryOperationTestParam::EntryOperation::kDelete) {
       EXPECT_EQ(

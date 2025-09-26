@@ -208,7 +208,8 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
   return absl::OkStatus();
 }
 
-absl::Status SchemaManager::CreateIndexSchema(
+absl::StatusOr<valkey_search::coordinator::MetadataManager::CreateEntryResult>
+SchemaManager::CreateIndexSchema(
     ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto) {
   const auto max_indexes = options::GetMaxIndexes().GetValue();
 
@@ -231,13 +232,15 @@ absl::Status SchemaManager::CreateIndexSchema(
     auto any_proto = std::make_unique<google::protobuf::Any>();
     any_proto->PackFrom(index_schema_proto);
     return coordinator::MetadataManager::Instance().CreateEntry(
-        ctx, kSchemaManagerMetadataTypeName, index_schema_proto.name(),
+        kSchemaManagerMetadataTypeName, index_schema_proto.name(),
         std::move(any_proto));
   }
 
   // In non-coordinated mode, apply the update inline.
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  return CreateIndexSchemaInternal(ctx, index_schema_proto);
+  VMSDK_RETURN_IF_ERROR(CreateIndexSchemaInternal(ctx, index_schema_proto));
+  // return dummy value in non-cluster mode
+  return coordinator::MetadataManager::CreateEntryResult{0, 0};
 }
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::GetIndexSchema(

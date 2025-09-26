@@ -3,7 +3,6 @@ from valkey.cluster import ValkeyCluster
 from valkey.client import Valkey
 from valkeytestframework.conftest import resource_port_tracker
 from valkeytestframework.util import waiters
-from test_info_primary import is_index_on_all_nodes
 from valkey.exceptions import ResponseError, ConnectionError
 import pytest
 
@@ -23,7 +22,7 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
             "PREFIX", "1", "doc:",
             "SCHEMA", "price", "NUMERIC"
         ) == b"OK"
-        waiters.wait_for_true(lambda: is_index_on_all_nodes(self, index_name))
+
         # force remote node to fail once and trigger retry
         assert node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceRemoteFailCount 1") == b"OK"
 
@@ -45,7 +44,6 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
             "PREFIX", "1", "doc:",
             "SCHEMA", "price", "NUMERIC"
         ) == b"OK"
-        waiters.wait_for_true(lambda: is_index_on_all_nodes(self, index_name))
         
         try:
             node1.execute_command("SHUTDOWN", "NOSAVE")
@@ -78,7 +76,6 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
             "PREFIX", "1", "doc:",
             "SCHEMA", "price", "NUMERIC"
         ) == b"OK"
-        waiters.wait_for_true(lambda: is_index_on_all_nodes(self, index_name))
 
         # force timeout by enabling continuous remote failure
         assert node1.execute_command(

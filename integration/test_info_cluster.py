@@ -3,7 +3,7 @@ from valkey.cluster import ValkeyCluster
 from valkey.client import Valkey
 from valkeytestframework.conftest import resource_port_tracker
 from valkeytestframework.util import waiters
-from test_info_primary import verify_error_response, is_index_on_all_nodes
+from test_info_primary import verify_error_response
 from ft_info_parser import FTInfoParser
 
 class TestFTInfoCluster(ValkeySearchClusterTestCaseDebugMode):
@@ -33,8 +33,7 @@ class TestFTInfoCluster(ValkeySearchClusterTestCaseDebugMode):
             "PREFIX", "1", "doc:",
             "SCHEMA", "price", "NUMERIC"
         ) == b"OK"
-        
-        waiters.wait_for_true(lambda: is_index_on_all_nodes(self, index_name))
+
         waiters.wait_for_true(lambda: self.is_backfill_complete(node0, index_name))
 
         raw = node0.execute_command("FT.INFO", index_name, "CLUSTER")
@@ -67,7 +66,6 @@ class TestFTInfoCluster(ValkeySearchClusterTestCaseDebugMode):
             "SCHEMA", "price", "NUMERIC"
         ) == b"OK"
         
-        waiters.wait_for_true(lambda: is_index_on_all_nodes(self, index_name))
         waiters.wait_for_true(lambda: self.is_backfill_complete(node0, index_name))
         
         assert node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceRemoteFailCount 1") == b"OK"

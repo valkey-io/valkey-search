@@ -14,23 +14,6 @@ def verify_error_response(client, cmd, expected_err_reply):
         assert str(e) == expected_err_reply, assert_error_msg
         return str(e)
 
-def is_index_on_all_nodes(cur, index_name):
-    """
-    Returns True if index exists on all nodes, False otherwise
-    """
-    cluster_size = getattr(cur, 'CLUSTER_SIZE', 3)
-    for i in range(cluster_size):
-        rg = cur.get_replication_group(i)
-        all_nodes = [rg.primary] + rg.replicas
-        for j, node in enumerate(all_nodes):
-            client = node.client if hasattr(node, 'client') else cur.new_client_for_primary(i)
-            index_list = client.execute_command("FT._LIST")
-            index_names = [idx.decode() if isinstance(idx, bytes) else str(idx) for idx in index_list]
-            if index_name not in index_names:
-                node_type = "primary" if j == 0 else f"replica-{j-1}"
-                return False
-    return True
-
 class TestFTInfoPrimary(ValkeySearchClusterTestCaseDebugMode):
 
     def is_indexing_complete(self, node, index_name, N):
@@ -54,8 +37,6 @@ class TestFTInfoPrimary(ValkeySearchClusterTestCaseDebugMode):
             "PREFIX", "1", "doc:",
             "SCHEMA", "price", "NUMERIC"
         ) == b"OK"
-
-        waiters.wait_for_true(lambda: is_index_on_all_nodes(self, index_name))
 
         N = 5
         for i in range(N):
@@ -89,7 +70,6 @@ class TestFTInfoPrimary(ValkeySearchClusterTestCaseDebugMode):
             "SCHEMA", "price", "NUMERIC"
         ) == b"OK"
 
-        waiters.wait_for_true(lambda: is_index_on_all_nodes(self, index_name))
         N = 5
         for i in range(N):
             cluster.execute_command("HSET", f"doc:{i}", "price", str(10 + i))

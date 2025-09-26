@@ -96,6 +96,7 @@ class IndexSchema : public KeyspaceEventSubscription,
       absl::string_view attribute_alias) const;
   virtual absl::StatusOr<std::string> GetIdentifier(
       absl::string_view attribute_alias) const;
+  absl::StatusOr<std::string> GetAlias(absl::string_view identifier) const;
   absl::StatusOr<vmsdk::UniqueValkeyString> DefaultReplyScoreAs(
       absl::string_view attribute_alias) const;
   absl::Status AddIndex(absl::string_view attribute_alias,
@@ -183,6 +184,7 @@ class IndexSchema : public KeyspaceEventSubscription,
  private:
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
   absl::flat_hash_map<std::string, Attribute> attributes_;
+  absl::flat_hash_map<std::string, std::string> identifier_to_alias_;
   KeyspaceEventManager *keyspace_event_manager_;
   std::vector<std::string> subscribed_key_prefixes_;
   std::unique_ptr<AttributeDataType> attribute_data_type_;

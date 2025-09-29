@@ -740,19 +740,13 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-<<<<<<< HEAD
-  int arrSize = 36;
-
   // Calculate additional array size for text-related fields only if text fields
   // exist
+  int arrSize = 24;
   if (text_index_schema_) {
     arrSize += 6;
   }
-
   ValkeyModule_ReplyWithArray(ctx, arrSize);
-=======
-  ValkeyModule_ReplyWithArray(ctx, 22);
->>>>>>> upstream/main
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
 

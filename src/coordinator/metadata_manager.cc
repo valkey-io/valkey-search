@@ -226,7 +226,6 @@ absl::Status MetadataManager::DeleteEntry(absl::string_view type_name,
   metadata.mutable_version_header()->set_top_level_fingerprint(
       ComputeTopLevelFingerprint(metadata.type_namespace_map()));
   BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
-  // TODO: ft.dropindex consistency check
   return absl::OkStatus();
 }
 

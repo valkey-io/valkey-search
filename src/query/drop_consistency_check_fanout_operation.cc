@@ -39,6 +39,7 @@ void DropConsistencyCheckFanoutOperation::OnResponse(
     [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
   // if the index exist on some node and returns a valid response, treat it as
   // inconsistent error
+  absl::MutexLock lock(&mutex_);
   inconsistent_state_error_nodes.push_back(target);
 }
 

@@ -30,8 +30,6 @@ class DropConsistencyCheckFanoutOperation
                                       const std::string& index_name,
                                       unsigned timeout_ms);
 
-  ~DropConsistencyCheckFanoutOperation() override;
-
   unsigned GetTimeoutMs() const override;
 
   coordinator::InfoIndexPartitionRequest GenerateRequest(

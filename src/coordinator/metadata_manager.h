@@ -30,6 +30,11 @@
 
 namespace valkey_search::coordinator {
 
+struct NewEntryFingerprintVersion {
+  uint64_t fingerprint;
+  uint32_t version;
+};
+
 using FingerprintCallback = absl::AnyInvocable<absl::StatusOr<uint64_t>(
     const google::protobuf::Any &metadata)>;
 using MetadataUpdateCallback = absl::AnyInvocable<absl::Status(
@@ -46,11 +51,6 @@ static constexpr highwayhash::HHKey kHashKey{
 
 class MetadataManager {
  public:
-  struct CreateEntryResult {
-    uint64_t fingerprint;
-    uint32_t version;
-  };
-
   MetadataManager(ValkeyModuleCtx *ctx, ClientPool &client_pool)
       : client_pool_(client_pool),
         detached_ctx_(vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx)) {
@@ -86,7 +86,7 @@ class MetadataManager {
   absl::StatusOr<google::protobuf::Any> GetEntry(absl::string_view type_name,
                                                  absl::string_view id);
 
-  absl::StatusOr<CreateEntryResult> CreateEntry(
+  absl::StatusOr<NewEntryFingerprintVersion> CreateEntry(
       absl::string_view type_name, absl::string_view id,
       std::unique_ptr<google::protobuf::Any> contents);
 

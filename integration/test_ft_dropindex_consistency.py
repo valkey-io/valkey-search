@@ -4,7 +4,6 @@ from valkey.client import Valkey
 from valkeytestframework.conftest import resource_port_tracker
 from valkey.exceptions import ResponseError
 import threading
-import time
 import pytest
 
 class TestFTDropindexConsistency(ValkeySearchClusterTestCaseDebugMode):

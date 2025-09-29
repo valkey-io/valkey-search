@@ -136,9 +136,11 @@ class FanoutOperationBase {
                   << target.address << ", status code: " << status.error_code()
                   << ", error message: " << status.error_message();
               if (status.error_code() == grpc::StatusCode::NOT_FOUND) {
-                resp.set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
+                resp.set_error_type(
+                    coordinator::FanoutErrorType::INDEX_NAME_ERROR);
               } else {
-                resp.set_error_type(coordinator::FanoutErrorType::COMMUNICATION_ERROR);
+                resp.set_error_type(
+                    coordinator::FanoutErrorType::COMMUNICATION_ERROR);
               }
               this->OnError(status, resp.error_type(), target);
             }

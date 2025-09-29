@@ -16,6 +16,12 @@ namespace options {
 
 constexpr uint32_t kHNSWDefaultBlockSize{10240};
 constexpr uint32_t kHNSWMinimumBlockSize{0};
+constexpr uint32_t kDefaultFTInfoTimeoutMs{5000};
+constexpr uint32_t kMinimumFTInfoTimeoutMs{100};
+constexpr uint32_t kMaximumFTInfoTimeoutMs{300000};
+constexpr uint32_t kDefaultFTInfoRpcTimeoutMs{2500};
+constexpr uint32_t kMinimumFTInfoRpcTimeoutMs{100};
+constexpr uint32_t kMaximumFTInfoRpcTimeoutMs{300000};
 
 namespace {
 
@@ -190,6 +196,28 @@ static auto high_priority_weight =
         })
         .Build();
 
+/// Register the "--ft-info-timeout-ms" flag. Controls the timeout for FT.INFO
+/// operations
+constexpr absl::string_view kFTInfoTimeoutMsConfig{"ft-info-timeout-ms"};
+static auto ft_info_timeout_ms =
+    vmsdk::config::NumberBuilder(
+        kFTInfoTimeoutMsConfig,   // name
+        kDefaultFTInfoTimeoutMs,  // default timeout (5 seconds)
+        kMinimumFTInfoTimeoutMs,  // min timeout (100ms)
+        kMaximumFTInfoTimeoutMs)  // max timeout (5 minutes)
+        .Build();
+
+/// Register the "--ft-info-rpc-timeout-ms" flag. Controls the timeout for
+/// FT.INFO operations
+constexpr absl::string_view kFTInfoRpcTimeoutMsConfig{"ft-info-rpc-timeout-ms"};
+static auto ft_info_rpc_timeout_ms =
+    vmsdk::config::NumberBuilder(
+        kFTInfoRpcTimeoutMsConfig,   // name
+        kDefaultFTInfoRpcTimeoutMs,  // default timeout (2.5 seconds)
+        kMinimumFTInfoRpcTimeoutMs,  // min timeout (100ms)
+        kMaximumFTInfoRpcTimeoutMs)  // max timeout (5 minutes)
+        .Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -236,6 +264,14 @@ const vmsdk::config::Boolean& GetEnablePartialResults() {
 
 vmsdk::config::Number& GetHighPriorityWeight() {
   return dynamic_cast<vmsdk::config::Number&>(*high_priority_weight);
+}
+
+vmsdk::config::Number& GetFTInfoTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number&>(*ft_info_timeout_ms);
+}
+
+vmsdk::config::Number& GetFTInfoRpcTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number&>(*ft_info_rpc_timeout_ms);
 }
 
 }  // namespace options

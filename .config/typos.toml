@@ -5,11 +5,22 @@ extend-exclude = [
     "third_party/snowball/**"
 ]
 
+<<<<<<< HEAD
 [default]
 extend-ignore-re = [
     "grea.*",
     "Grea.*",
 ]
+=======
+[default.extend-words]
+Fo = "Fo"
+InFo = "InFo"
+SeArCh = "SeArCh" 
+CrEaTe = "CrEaTe"
+LiSt = "LiSt"
+DeBuG = "DeBuG"
+DrOpInDeX = "DrOpInDeX"
+>>>>>>> upstream/main
 
 [type.cpp]
 extend-ignore-re = [

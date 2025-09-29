@@ -95,6 +95,11 @@ struct Controlled : private ControlledBase {
     VMSDK_ASSIGN_OR_RETURN(value_, vmsdk::To<T>(value));
     return absl::OkStatus();
   }
+  template <typename U = T>
+  typename std::enable_if<std::is_arithmetic<U>::value, void>::type Decrement(
+      U amount = 1) {
+    value_.fetch_sub(amount, std::memory_order_relaxed);
+  }
   Controlled(absl::string_view name, T default_value)
       : ControlledBase(name), value_(default_value) {}
 

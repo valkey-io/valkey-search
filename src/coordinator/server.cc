@@ -37,6 +37,7 @@
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -46,6 +47,8 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::coordinator {
+
+CONTROLLED_SIZE_T(ForceRemoteFailCount, 0);
 
 grpc::ServerUnaryReactor* Service::GetGlobalMetadata(
     grpc::CallbackServerContext* context,
@@ -182,6 +185,63 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
   return reactor;
 }
 
+std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
+Service::GenerateInfoResponse(
+    const coordinator::InfoIndexPartitionRequest& request) {
+  uint32_t db_num = request.db_num();
+  std::string index_name = request.index_name();
+  coordinator::InfoIndexPartitionResponse response;
+  auto status_or_schema =
+      SchemaManager::Instance().GetIndexSchema(db_num, index_name);
+  if (!status_or_schema.ok()) {
+    response.set_exists(false);
+    response.set_index_name(index_name);
+    response.set_error(status_or_schema.status().ToString());
+    response.set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
+    grpc::Status error_status(grpc::StatusCode::NOT_FOUND,
+                              status_or_schema.status().ToString());
+    return std::make_pair(error_status, response);
+  }
+  auto schema = std::move(status_or_schema.value());
+  IndexSchema::InfoIndexPartitionData data =
+      schema->GetInfoIndexPartitionData();
+
+  std::optional<uint64_t> fingerprint;
+  std::optional<uint32_t> version;
+
+  auto global_metadata =
+      coordinator::MetadataManager::Instance().GetGlobalMetadata();
+  CHECK(global_metadata->type_namespace_map().contains(
+      kSchemaManagerMetadataTypeName));
+  const auto& entry_map =
+      global_metadata->type_namespace_map().at(kSchemaManagerMetadataTypeName);
+  CHECK(entry_map.entries().contains(index_name));
+  const auto& entry = entry_map.entries().at(index_name);
+  fingerprint = entry.fingerprint();
+  version = entry.version();
+
+  response.set_exists(true);
+  response.set_index_name(index_name);
+  response.set_num_docs(data.num_docs);
+  response.set_num_records(data.num_records);
+  response.set_hash_indexing_failures(data.hash_indexing_failures);
+  response.set_backfill_scanned_count(data.backfill_scanned_count);
+  response.set_backfill_db_size(data.backfill_db_size);
+  response.set_backfill_inqueue_tasks(data.backfill_inqueue_tasks);
+  response.set_backfill_complete_percent(data.backfill_complete_percent);
+  response.set_backfill_in_progress(data.backfill_in_progress);
+  response.set_mutation_queue_size(data.mutation_queue_size);
+  response.set_recent_mutations_queue_delay(data.recent_mutations_queue_delay);
+  response.set_state(data.state);
+  if (fingerprint.has_value()) {
+    response.set_schema_fingerprint(fingerprint.value());
+  }
+  if (version.has_value()) {
+    response.set_version(version.value());
+  }
+  return std::make_pair(grpc::Status::OK, response);
+}
+
 grpc::ServerUnaryReactor* Service::InfoIndexPartition(
     grpc::CallbackServerContext* context,
     const InfoIndexPartitionRequest* request,
@@ -189,61 +249,16 @@ grpc::ServerUnaryReactor* Service::InfoIndexPartition(
   GRPCSuspensionGuard guard(GRPCSuspender::Instance());
   auto latency_sample = SAMPLE_EVERY_N(100);
   grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
-
-  vmsdk::RunByMain([reactor, response, idx = request->index_name(),
+  // simulate grpc timeout for testing only
+  if (ForceRemoteFailCount.GetValue() > 0) {
+    ForceRemoteFailCount.Decrement();
+    return reactor;
+  }
+  vmsdk::RunByMain([reactor, response, request,
                     latency_sample = std::move(latency_sample)]() mutable {
-    auto status_or_schema =
-        SchemaManager::Instance().GetIndexSchema(/*db=*/0, idx);
-    if (!status_or_schema.ok()) {
-      response->set_exists(false);
-      response->set_index_name(idx);
-      response->set_error(status_or_schema.status().ToString());
-      response->set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
-      reactor->Finish(ToGrpcStatus(status_or_schema.status()));
-      return;
-    }
-    auto schema = std::move(status_or_schema.value());
-    IndexSchema::InfoIndexPartitionData data =
-        schema->GetInfoIndexPartitionData();
-
-    std::optional<uint64_t> fingerprint;
-    std::optional<uint32_t> version;
-
-    // Get the full metadata to access both fingerprint and version
-    auto global_metadata =
-        coordinator::MetadataManager::Instance().GetGlobalMetadata();
-    if (global_metadata->type_namespace_map().contains(
-            kSchemaManagerMetadataTypeName)) {
-      const auto& entry_map = global_metadata->type_namespace_map().at(
-          kSchemaManagerMetadataTypeName);
-      if (entry_map.entries().contains(idx)) {
-        const auto& entry = entry_map.entries().at(idx);
-        fingerprint = entry.fingerprint();
-        version = entry.version();
-      }
-    }
-
-    response->set_exists(true);
-    response->set_index_name(idx);
-    response->set_num_docs(data.num_docs);
-    response->set_num_records(data.num_records);
-    response->set_hash_indexing_failures(data.hash_indexing_failures);
-    response->set_backfill_scanned_count(data.backfill_scanned_count);
-    response->set_backfill_db_size(data.backfill_db_size);
-    response->set_backfill_inqueue_tasks(data.backfill_inqueue_tasks);
-    response->set_backfill_complete_percent(data.backfill_complete_percent);
-    response->set_backfill_in_progress(data.backfill_in_progress);
-    response->set_mutation_queue_size(data.mutation_queue_size);
-    response->set_recent_mutations_queue_delay(
-        data.recent_mutations_queue_delay);
-    response->set_state(data.state);
-    if (fingerprint.has_value()) {
-      response->set_schema_fingerprint(fingerprint.value());
-    }
-    if (version.has_value()) {
-      response->set_version(version.value());
-    }
-    reactor->Finish(grpc::Status::OK);
+    auto [status, info_response] = Service::GenerateInfoResponse(*request);
+    *response = std::move(info_response);
+    reactor->Finish(status);
   });
   return reactor;
 }

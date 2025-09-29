@@ -4,6 +4,14 @@
 extend-exclude = [
 ]
 
+[default.extend-words]
+Fo = "Fo"
+InFo = "InFo"
+SeArCh = "SeArCh" 
+CrEaTe = "CrEaTe"
+LiSt = "LiSt"
+DeBuG = "DeBuG"
+DrOpInDeX = "DrOpInDeX"
 
 [type.cpp]
 extend-ignore-re = [

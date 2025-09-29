@@ -336,6 +336,7 @@ class ReplyCapture {
     std::optional<long long> long_long_value;  // NOLINT
     std::optional<std::string> simple_string_value;
     std::optional<std::string> string_value;
+    std::optional<std::string> err_string_value;
     std::optional<ReplyArray> array_value;
     std::optional<double> double_value;
   };
@@ -373,7 +374,11 @@ class ReplyCapture {
   }
   void ReplyWithError(const char *str) {
     auto result = AllocateElement();
-    result->string_value = std::string(str);
+    result->err_string_value = std::string(str);
+  }
+  void ReplyWithError(ValkeyModuleString *str) {
+    auto result = AllocateElement();
+    result->err_string_value = vmsdk::ToStringView(str);
   }
   void ReplyWithDouble(double val) {
     auto result = AllocateElement();
@@ -395,6 +400,8 @@ class ReplyCapture {
     } else if (element.string_value.has_value()) {
       return absl::StrFormat("$%d\r\n%s\r\n", element.string_value->size(),
                              *element.string_value);
+    } else if (element.err_string_value.has_value()) {
+      return absl::StrFormat("-%s\r\n", *element.err_string_value);
     } else if (element.array_value.has_value()) {
       std::string result =
           absl::StrFormat("*%d\r\n", element.array_value->target_length);

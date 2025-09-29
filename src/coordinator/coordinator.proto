@@ -139,8 +139,8 @@ message GetGlobalMetadataResponse {
 }
 
 message InfoIndexPartitionRequest {
-  string index_name = 1;
-  uint64 timeout_ms = 2;
+  uint32 db_num = 1;
+  string index_name = 2;
 }
 
 enum FanoutErrorType {

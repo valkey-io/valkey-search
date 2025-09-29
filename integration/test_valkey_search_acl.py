@@ -88,9 +88,71 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
         client.execute_command(user)
         user_name = user.split(" ")[2]
         client.execute_command(f"AUTH {user_name} search_pass")
-        # For each command assert if user should or should'nt access
+        # For each command assert if user should or shouldn't access
         for cmd, should_access in valkey_search_commands:
             self._verify_user_permissions(client, cmd, should_access)
+
+    @pytest.mark.parametrize(
+        "user,allowed_command",
+        [
+            ("ACL SETUSER user1 on >search_pass ~* &* -@all +fT.SeArCh", "FT.SEARCH"),
+            ("ACL SETUSER user1 on >search_pass ~* &* -@all +Ft.CrEaTe", "FT.CREATE"),
+            ("ACL SETUSER user1 on >search_pass ~* &* -@all +fT.InFo", "FT.INFO"),
+            ("ACL SETUSER user1 on >search_pass ~* &* -@all +Ft._LiSt", "FT._LIST"),
+            ("ACL SETUSER user1 on >search_pass ~* &* -@all +Ft.DrOpInDeX", "FT.DROPINDEX"),
+        ],
+    )
+    def test_acl_specific_search_commands_permissions(
+        self, user, allowed_command
+    ):
+        search_vector = struct.pack("<3f", *[1.0, 2.0, 3.0])
+        # List of search commands
+        valkey_search_commands = [
+            (
+                [
+                    "Ft.cReAtE",
+                    INDEX_NAME,
+                    "SCHEMA",
+                    "vector",
+                    "VECTOR",
+                    "HNSW",
+                    "6",
+                    "TYPE",
+                    "FLOAT32",
+                    "DIM",
+                    "3",
+                    "DISTANCE_METRIC",
+                    "COSINE",
+                ]
+            ),
+            (
+                [
+                    "FT.SEARCH",
+                    INDEX_NAME,
+                    "*=>[KNN 2 @vector $query_vector]",
+                    "PARAMS",
+                    "2",
+                    "query_vector",
+                    search_vector,
+                ]
+            ),
+            (["FT.INFO", INDEX_NAME]),
+            (["FT._LIST"]),
+            (["FT._DEBUG", "SHOW_INFO"]),
+            (["FT.DROPINDEX", INDEX_NAME]),
+        ]
+        client: Valkey = self.server.get_new_client()
+        # Create the user in test and switch to it
+        client.execute_command(user)
+        user_name = user.split(" ")[2]
+        client.execute_command(f"AUTH {user_name} search_pass")
+        # For each command assert if user should or shouldn't access
+        for cmd in valkey_search_commands:
+            should_access = allowed_command.lower() == cmd[0].lower()
+            self._verify_user_permissions(client, cmd, should_access)
+
+        info_client: Valkey = self.server.get_new_client()
+        assert info_client.info("STATS")["acl_access_denied_cmd"] == 5
 
     def test_index_with_several_prefixes_permissions(self):
         client: Valkey = self.server.get_new_client()

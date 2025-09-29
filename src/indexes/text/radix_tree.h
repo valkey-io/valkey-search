@@ -310,8 +310,8 @@ void RadixTree<Target, reverse>::Mutate(
             [&](std::monostate&) {
               // Leaf case - we're at a leaf and still have more of the word
               // remaining. Create a compressed path to a new leaf node.
-              std::unique_ptr<Node> new_leaf = std::make_unique<Node>(
-                  Node{0, std::nullopt, std::monostate{}});
+              std::unique_ptr<Node> new_leaf =
+                  std::make_unique<Node>(0, std::nullopt, std::monostate{});
               next = new_leaf.get();
               n->children = std::pair{BytePath(remaining), std::move(new_leaf)};
               remaining.remove_prefix(remaining.length());
@@ -354,8 +354,8 @@ void RadixTree<Target, reverse>::Mutate(
                 } else {
                   // Create an intermediate compressed node to the leaf
                   new_branches[path[0]] = std::make_unique<Node>(
-                      Node{0, std::nullopt,
-                           std::pair{path.substr(1), std::move(child.second)}});
+                      0, std::nullopt,
+                      std::pair{path.substr(1), std::move(child.second)});
                 }
                 n->children = std::move(new_branches);
                 // Next iteration will hit the branching path for the same node
@@ -363,9 +363,9 @@ void RadixTree<Target, reverse>::Mutate(
               } else {
                 // Partial match - split the compressed node into two at the
                 // branching point
-                std::unique_ptr<Node> new_node = std::make_unique<Node>(Node{
+                std::unique_ptr<Node> new_node = std::make_unique<Node>(
                     0, std::nullopt,
-                    std::pair{path.substr(match), std::move(child.second)}});
+                    std::pair{path.substr(match), std::move(child.second)});
                 child.first = path.substr(0, match);
                 child.second = std::move(new_node);
 

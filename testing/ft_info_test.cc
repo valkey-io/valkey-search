@@ -376,9 +376,8 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "happy_path_text_defaults",
             .test_cases =
                 {
-                    {
-                        .argv = {"FT.Info", "test_name"},
-                        .index_schema_pbtxt = R"(
+                    {.argv = {"FT.Info", "test_name"},
+                     .index_schema_pbtxt = R"(
                           name: "test_name"
                           db_num: 0
                           subscribed_key_prefixes: "prefix_1"
@@ -391,32 +390,31 @@ INSTANTIATE_TEST_SUITE_P(
                             }
                           }
                         )",
-                        .expect_return_failure = false,
-                        .expected_output =
-                          "*30\r\n+index_name\r\n+test_name\r\n+index_"
-                          "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
-                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
-                          "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+identifier\r\n+"
-                          "test_identifier_1\r\n+attribute\r\n+test_attribute_"
-                          "1\r\n+type\r\n+TEXT\r\n+WITH_SUFFIX_TRIE\r\n+0\r\n+"
-                          "MIN_STEM_SIZE\r\n:0\r\n+num_docs\r\n:0\r\n+num_"
-                          "records\r\n:0\r\n+hash_indexing_failures\r\n$1\r\n"
-                          "0\r\n+backfill_in_progress\r\n$1\r\n0\r\n+"
-                          "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
-                          "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
-                          "mutations_queue_delay\r\n$5\r\n0 sec\r\n+state\r\n+"
-                          "ready\r\n+punctuation\r\n+\r\n+stop_words\r\n*0\r\n+"
-                          "with_offsets\r\n+0\r\n+language\r\n+english\r\n"
-                    },
+                     .expect_return_failure = false,
+                     .expected_output =
+                         "*30\r\n+index_name\r\n+test_name\r\n+index_"
+                         "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
+                         "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
+                         "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
+                         "identifier\r\n+"
+                         "test_identifier_1\r\n+attribute\r\n+test_attribute_"
+                         "1\r\n+type\r\n+TEXT\r\n+WITH_SUFFIX_TRIE\r\n+0\r\n+"
+                         "MIN_STEM_SIZE\r\n:0\r\n+num_docs\r\n:0\r\n+num_"
+                         "records\r\n:0\r\n+hash_indexing_failures\r\n$1\r\n"
+                         "0\r\n+backfill_in_progress\r\n$1\r\n0\r\n+"
+                         "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
+                         "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
+                         "mutations_queue_delay\r\n$5\r\n0 sec\r\n+state\r\n+"
+                         "ready\r\n+punctuation\r\n+\r\n+stop_words\r\n*0\r\n+"
+                         "with_offsets\r\n+0\r\n+language\r\n+english\r\n"},
                 },
         },
         {
             .test_name = "happy_path_text_all_options",
             .test_cases =
                 {
-                    {
-                        .argv = {"FT.Info", "test_name"},
-                        .index_schema_pbtxt = R"(
+                    {.argv = {"FT.Info", "test_name"},
+                     .index_schema_pbtxt = R"(
                           name: "test_name"
                           db_num: 0
                           subscribed_key_prefixes: "prefix_1"
@@ -439,24 +437,24 @@ INSTANTIATE_TEST_SUITE_P(
                             }
                           }
                         )",
-                        .expect_return_failure = false,
-                        .expected_output =
-                          "*30\r\n+index_name\r\n+test_name\r\n+index_"
-                          "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
-                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
-                          "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+identifier\r\n+"
-                          "test_identifier_1\r\n+attribute\r\n+test_attribute_"
-                          "1\r\n+type\r\n+TEXT\r\n+WITH_SUFFIX_TRIE\r\n+1\r\n+"
-                          "NO_STEM\r\n+1\r\n+num_docs\r\n:0\r\n+num_"
-                          "records\r\n:0\r\n+hash_indexing_failures\r\n$1\r\n"
-                          "0\r\n+backfill_in_progress\r\n$1\r\n0\r\n+"
-                          "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
-                          "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
-                          "mutations_queue_delay\r\n$5\r\n0 sec\r\n+state\r\n+"
-                          "ready\r\n+punctuation\r\n+.,!?\r\n+stop_words\r\n*"
-                          "3\r\n+the\r\n+and\r\n+or\r\n+with_offsets\r\n+"
-                          "1\r\n+language\r\n+english\r\n"
-                    },
+                     .expect_return_failure = false,
+                     .expected_output =
+                         "*30\r\n+index_name\r\n+test_name\r\n+index_"
+                         "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
+                         "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
+                         "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
+                         "identifier\r\n+"
+                         "test_identifier_1\r\n+attribute\r\n+test_attribute_"
+                         "1\r\n+type\r\n+TEXT\r\n+WITH_SUFFIX_TRIE\r\n+1\r\n+"
+                         "NO_STEM\r\n+1\r\n+num_docs\r\n:0\r\n+num_"
+                         "records\r\n:0\r\n+hash_indexing_failures\r\n$1\r\n"
+                         "0\r\n+backfill_in_progress\r\n$1\r\n0\r\n+"
+                         "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
+                         "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
+                         "mutations_queue_delay\r\n$5\r\n0 sec\r\n+state\r\n+"
+                         "ready\r\n+punctuation\r\n+.,!?\r\n+stop_words\r\n*"
+                         "3\r\n+the\r\n+and\r\n+or\r\n+with_offsets\r\n+"
+                         "1\r\n+language\r\n+english\r\n"},
                 },
         },
         {

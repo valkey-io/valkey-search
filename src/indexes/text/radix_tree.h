@@ -190,9 +190,13 @@ struct RadixTree {
 
   Node root_;
 
+  // Restructures tree after a word is deleted from it
+  void PostDeleteTreeCleanup(absl::string_view word,
+                             std::deque<Node*>& node_path);
+
   /*
-   * Trims a branch from the tree when a word ending at a leaf node is deleted
-   * from the tree.
+   * Used by PostDeleteTreeCleanup to trim a branch from the tree when a word
+   * ending at a leaf node is deleted from the tree.
    *
    * For example, consider the tree with "xtest" and "xabc":
    *
@@ -388,36 +392,44 @@ void RadixTree<Target, reverse>::Mutate(
   } else {
     // Delete the word from the tree
     n->target = std::nullopt;
-    node_path.pop_back();
-
-    // Reconstruct the tree
-    std::visit(overloaded{
-                   [&](const std::monostate&) {
-                     // Leaf case - We need to trim the branch from the tree
-                     TrimBranchFromTree(word, node_path);
-                   },
-                   [&](const std::map<Byte, std::unique_ptr<Node>>& children) {
-                     // Branch case - Target node is a branching node and still
-                     // belongs in the tree as is
-                   },
-                   [&](std::pair<BytePath, std::unique_ptr<Node>>& child) {
-                     // Compressed case - If the target's parent is also a
-                     // compressed node, it can now point directly to the
-                     // target's child
-                     const auto& parent = node_path.back();
-                     if (std::holds_alternative<
-                             std::pair<BytePath, std::unique_ptr<Node>>>(
-                             parent->children)) {
-                       auto& parent_child =
-                           std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
-                               parent->children);
-                       parent_child.first += child.first;
-                       parent_child.second = std::move(child.second);
-                     }
-                   },
-               },
-               n->children);
+    PostDeleteTreeCleanup(word, node_path);
   }
+}
+
+template <typename Target, bool reverse>
+void RadixTree<Target, reverse>::PostDeleteTreeCleanup(
+    absl::string_view word, std::deque<Node*>& node_path) {
+  // Get the target node
+  Node* n = node_path.back();
+  node_path.pop_back();
+
+  // Reconstruct the tree
+  std::visit(overloaded{
+                 [&](const std::monostate&) {
+                   // Leaf case - We need to trim the branch from the tree
+                   TrimBranchFromTree(word, node_path);
+                 },
+                 [&](const std::map<Byte, std::unique_ptr<Node>>& children) {
+                   // Branch case - Target node is a branching node and still
+                   // belongs in the tree as is
+                 },
+                 [&](std::pair<BytePath, std::unique_ptr<Node>>& child) {
+                   // Compressed case - If the target's parent is also a
+                   // compressed node, it can now point directly to the
+                   // target's child
+                   const auto& parent = node_path.back();
+                   if (std::holds_alternative<
+                           std::pair<BytePath, std::unique_ptr<Node>>>(
+                           parent->children)) {
+                     auto& parent_child =
+                         std::get<std::pair<BytePath, std::unique_ptr<Node>>>(
+                             parent->children);
+                     parent_child.first += child.first;
+                     parent_child.second = std::move(child.second);
+                   }
+                 },
+             },
+             n->children);
 }
 
 template <typename Target, bool reverse>

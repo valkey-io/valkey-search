@@ -44,8 +44,6 @@ class FanoutOperationBase {
     deadline_tp_ = std::chrono::steady_clock::now() +
                    std::chrono::milliseconds(GetTimeoutMs());
     targets_ = GetTargets(ctx);
-    Metrics::GetStats().info_fanout_retry_cnt.store(0);
-    Metrics::GetStats().info_fanout_fail_cnt.store(0);
     StartFanoutRound();
   }
 
@@ -135,6 +133,8 @@ class FanoutOperationBase {
                   << "FANOUT_DEBUG: InvokeRemoteRpc error on target "
                   << target.address << ", status code: " << status.error_code()
                   << ", error message: " << status.error_message();
+              // if grpc failed, the response is invalid, so we need to manually
+              // set the error type
               if (status.error_code() == grpc::StatusCode::NOT_FOUND) {
                 resp.set_error_type(
                     coordinator::FanoutErrorType::INDEX_NAME_ERROR);

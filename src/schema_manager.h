@@ -52,7 +52,7 @@ class SchemaManager {
   SchemaManager(const SchemaManager &) = delete;
   SchemaManager &operator=(const SchemaManager &) = delete;
 
-  absl::StatusOr<valkey_search::coordinator::NewEntryFingerprintVersion>
+  absl::StatusOr<valkey_search::coordinator::IndexFingerprintVersion>
   CreateIndexSchema(ValkeyModuleCtx *ctx,
                     const data_model::IndexSchema &index_schema_proto)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);

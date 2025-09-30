@@ -23,7 +23,7 @@ class CreateConsistencyCheckFanoutOperation
  public:
   CreateConsistencyCheckFanoutOperation(
       uint32_t db_num, const std::string &index_name, unsigned timeout_ms,
-      coordinator::NewEntryFingerprintVersion new_entry_fingerprint_version)
+      coordinator::IndexFingerprintVersion new_entry_fingerprint_version)
       : ClusterInfoFanoutOperation(db_num, index_name, timeout_ms),
         new_entry_fingerprint_version_(new_entry_fingerprint_version) {}
 
@@ -31,8 +31,10 @@ class CreateConsistencyCheckFanoutOperation
                     int argc) override {
     // if the received fingerprint is not equal to the exact fingerprint
     // created in the ft.create command, report an error
-    if (schema_fingerprint_ != new_entry_fingerprint_version_.fingerprint ||
-        version_ != new_entry_fingerprint_version_.version) {
+    if (index_fingerprint_version_->fingerprint() !=
+            new_entry_fingerprint_version_.fingerprint() ||
+        index_fingerprint_version_->version() !=
+            new_entry_fingerprint_version_.version()) {
       return ValkeyModule_ReplyWithError(
           ctx,
           absl::StrFormat("Index %s already exists.", index_name_).c_str());
@@ -41,7 +43,7 @@ class CreateConsistencyCheckFanoutOperation
   }
 
  private:
-  coordinator::NewEntryFingerprintVersion new_entry_fingerprint_version_;
+  coordinator::IndexFingerprintVersion new_entry_fingerprint_version_;
 };
 
 absl::Status FTCreateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,

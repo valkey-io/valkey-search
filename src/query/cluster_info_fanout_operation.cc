@@ -58,21 +58,15 @@ void ClusterInfoFanoutOperation::OnResponse(
   bool should_call_error = false;
   grpc::Status error_status(grpc::StatusCode::OK, "");
   coordinator::FanoutErrorType error_type;
-
+  // check index fingerprint and version consistency
   {
     absl::MutexLock lock(&mutex_);
-    if (!schema_fingerprint_.has_value()) {
-      schema_fingerprint_ = resp.schema_fingerprint();
-    } else if (schema_fingerprint_.value() != resp.schema_fingerprint()) {
-      should_call_error = true;
-      error_status =
-          grpc::Status(grpc::StatusCode::INTERNAL,
-                       "Cluster not in a consistent state, please retry.");
-      error_type = coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR;
-    }
-    if (!version_.has_value()) {
-      version_ = resp.version();
-    } else if (version_.value() != resp.version()) {
+    const auto& resp_ifv = resp.index_fingerprint_version();
+    if (!index_fingerprint_version_.has_value()) {
+      index_fingerprint_version_ = resp.index_fingerprint_version();
+    } else if (index_fingerprint_version_->fingerprint() !=
+                   resp_ifv.fingerprint() ||
+               index_fingerprint_version_->version() != resp_ifv.version()) {
       should_call_error = true;
       error_status =
           grpc::Status(grpc::StatusCode::INTERNAL,
@@ -160,8 +154,7 @@ int ClusterInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
 
 void ClusterInfoFanoutOperation::ResetForRetry() {
   exists_ = false;
-  schema_fingerprint_.reset();
-  version_.reset();
+  index_fingerprint_version_.reset();
   backfill_complete_percent_max_ = 0.0f;
   backfill_complete_percent_min_ = 0.0f;
   backfill_in_progress_ = false;

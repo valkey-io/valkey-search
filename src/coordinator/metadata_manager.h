@@ -30,11 +30,6 @@
 
 namespace valkey_search::coordinator {
 
-struct NewEntryFingerprintVersion {
-  uint64_t fingerprint;
-  uint32_t version;
-};
-
 using FingerprintCallback = absl::AnyInvocable<absl::StatusOr<uint64_t>(
     const google::protobuf::Any &metadata)>;
 using MetadataUpdateCallback = absl::AnyInvocable<absl::Status(
@@ -86,7 +81,7 @@ class MetadataManager {
   absl::StatusOr<google::protobuf::Any> GetEntry(absl::string_view type_name,
                                                  absl::string_view id);
 
-  absl::StatusOr<NewEntryFingerprintVersion> CreateEntry(
+  absl::StatusOr<IndexFingerprintVersion> CreateEntry(
       absl::string_view type_name, absl::string_view id,
       std::unique_ptr<google::protobuf::Any> contents);
 

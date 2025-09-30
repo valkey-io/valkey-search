@@ -150,6 +150,11 @@ enum FanoutErrorType {
   COMMUNICATION_ERROR = 3;
 }
 
+message IndexFingerprintVersion {
+  uint64 fingerprint = 1;
+  uint32 version = 2;
+}
+
 message InfoIndexPartitionResponse {
   bool exists = 1;
   string index_name = 2;
@@ -165,8 +170,6 @@ message InfoIndexPartitionResponse {
   uint64 recent_mutations_queue_delay = 12;
   string state = 13;
   string error = 14;
-  optional uint64 schema_fingerprint = 15;
-  optional uint32 version = 16;
-  FanoutErrorType error_type = 17;
+  optional IndexFingerprintVersion index_fingerprint_version = 15;
+  FanoutErrorType error_type = 16;
 }
-

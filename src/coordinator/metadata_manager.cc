@@ -146,7 +146,7 @@ absl::StatusOr<google::protobuf::Any> MetadataManager::GetEntry(
   return metadata.type_namespace_map().at(type_name).entries().at(id).content();
 }
 
-absl::StatusOr<NewEntryFingerprintVersion> MetadataManager::CreateEntry(
+absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(
     absl::string_view type_name, absl::string_view id,
     std::unique_ptr<google::protobuf::Any> contents) {
   auto &registered_types = registered_types_.Get();
@@ -188,7 +188,10 @@ absl::StatusOr<NewEntryFingerprintVersion> MetadataManager::CreateEntry(
   metadata.mutable_version_header()->set_top_level_fingerprint(
       ComputeTopLevelFingerprint(metadata.type_namespace_map()));
   BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
-  return NewEntryFingerprintVersion{fingerprint, version};
+  IndexFingerprintVersion index_fingerprint_version;
+  index_fingerprint_version.set_fingerprint(fingerprint);
+  index_fingerprint_version.set_version(version);
+  return index_fingerprint_version;
 }
 
 absl::Status MetadataManager::DeleteEntry(absl::string_view type_name,

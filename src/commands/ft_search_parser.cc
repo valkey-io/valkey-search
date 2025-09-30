@@ -362,7 +362,7 @@ absl::Status PreParseQueryString(query::VectorSearchParameters &parameters) {
   }
   auto filter_expression =
       absl::string_view(parameters.parse_vars.query_string);
-  VMSDK_LOG(WARNING, nullptr)
+  VMSDK_LOG(DEBUG, nullptr)
       << "Query: '" << parameters.parse_vars.query_string << "'";
   auto pos = filter_expression.find(kVectorFilterDelimiter);
   absl::string_view pre_filter;

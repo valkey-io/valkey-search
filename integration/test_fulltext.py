@@ -17,7 +17,7 @@ This file contains tests for full text search.
 # Constants for text queries on Hash documents.
 text_index_on_hash = "FT.CREATE products ON HASH PREFIX 1 product: SCHEMA desc TEXT"
 hash_docs = [
-    ["HSET", "product:1", "category", "electronics", "name", "Laptop", "price", "999.99", "rating", "4.5", "desc", "1 2 3 4 5 6 7 8 9 0. Random Words. Random Words. Great oaks from little acorns grow. Impressive oak."],
+    ["HSET", "product:1", "category", "electronics", "name", "Laptop", "price", "999.99", "rating", "4.5", "desc", "1 2 3 4 5 6 7 8 9 0. Great oaks. Random Words. Random Words. Great oaks from little grey acorns grow. Impressive oak."],
     ["HSET", "product:2", "category", "electronics", "name", "Tablet", "price", "499.00", "rating", "4.0", "desc", "Random Words. Random Words. Interesting. Good beginning makes a good ending. Interesting desc"],
     ["HSET", "product:3", "category", "electronics", "name", "Phone", "price", "299.00", "rating", "3.8", "desc", "Random Words. Random Words. Ok, this document uses some more common words from other docs. Interesting desc, impressive tablet. Random Words."],
     ["HSET", "product:4", "category", "books", "name", "Book", "price", "19.99", "rating", "4.8", "desc", "Order Opposite. Random Words. Random Words. wonder of wonders. Uncommon random words. Random Words."],
@@ -91,6 +91,7 @@ class TestFullText(ValkeySearchTestCaseBase):
         for doc in hash_docs:
             assert client.execute_command(*doc) == 5
         # Perform the text search query with term and prefix operations that return a match.
+        # text_query_exact_phrase1 is crashing.
         match = [text_query_term, text_query_prefix, text_query_prefix2, text_query_exact_phrase1, text_query_exact_phrase2]
         for query in match:
             result = client.execute_command(*query)
@@ -116,18 +117,18 @@ class TestFullText(ValkeySearchTestCaseBase):
         # TODO: Update these queries to non stemmed versions after queries are stemmed.
         # Perform an exact phrase search operation on a unique phrase (exists in one doc).
         result1 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl"')
-        result2 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl acorn grow"')
+        result2 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl grey acorn grow"')
         assert result1[0] == 1 and result2[0] == 1
         assert result1[1] == b"product:1" and result2[1] == b"product:1"
         # TODO: Uncomment once we support the ability to iterate through words via proximity (and hence reset keys)
         # OR support the keys search across all words within the NextKey APIs in TextIterators
-        # result3 = client.execute_command("FT.SEARCH", "products", '@desc:great @desc:oa* @desc:from @desc:lit* @desc:acorn @desc:gr*')
-        # assert result3[0] == 1
-        # assert result3[1] == b"product:1"
-        # result3 = client.execute_command("FT.SEARCH", "products", '@desc:great @desc:oa* @desc:from @desc:lit* @desc:acorn @desc:grea*')
-        # assert result3[0] == 0
-        # result3 = client.execute_command("FT.SEARCH", "products", '@desc:great @desc:oa* @desc:from @desc:lit* @desc:acorn @desc:great')
-        # assert result3[0] == 0
+        result3 = client.execute_command("FT.SEARCH", "products", '@desc:great @desc:oa* @desc:from @desc:lit* @desc:gr* @desc:acorn @desc:gr*')
+        assert result3[0] == 1
+        assert result3[1] == b"product:1"
+        result3 = client.execute_command("FT.SEARCH", "products", '@desc:great @desc:oa* @desc:from @desc:lit* @desc:gr* @desc:acorn @desc:grea*')
+        assert result3[0] == 0
+        result3 = client.execute_command("FT.SEARCH", "products", '@desc:great @desc:oa* @desc:from @desc:lit* @desc:gr* @desc:acorn @desc:great')
+        assert result3[0] == 0
         # Perform an exact phrase search operation on a phrase existing in 2 documents.
         result = client.execute_command("FT.SEARCH", "products", '@desc:"interest desc"')
         assert result[0] == 2
@@ -310,7 +311,7 @@ class TestFullText(ValkeySearchTestCaseBase):
         language = parser.parsed_data.get("language", "")
         assert language == "english", f"Expected language 'english', got: '{language}'"
 
-    def test_text_search_per_field(self):
+    def test_text_per_field_search(self):
         """
         Test FT.SEARCH command with field-specific text searches.
         Return only documents where the term appears in the specified field.

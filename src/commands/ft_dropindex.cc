@@ -35,7 +35,7 @@ class DropConsistencyCheckFanoutOperation
             query::fanout::FanoutTargetMode::kAll>(),
         db_num_(db_num),
         index_name_(index_name),
-        timeout_ms_(timeout_ms) {};
+        timeout_ms_(timeout_ms){};
 
   unsigned GetTimeoutMs() const override { return timeout_ms_; }
 

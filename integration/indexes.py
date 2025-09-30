@@ -11,7 +11,7 @@ import logging, json
 import struct
 from enum import Enum
 
-class DataType(Enum):
+class KeyDataType(Enum):
     HASH = 1
     JSON = 2
 
@@ -26,8 +26,8 @@ class Field:
         self.name = name
         self.alias = alias if alias else name
 
-    def create(self, data_type: DataType) -> list[str]:
-        if data_type == DataType.JSON:
+    def create(self, data_type: KeyDataType) -> list[str]:
+        if data_type == KeyDataType.JSON:
             if not self.name.startswith("$."):
                 self.name = "$." + self.name
         if self.alias:
@@ -36,7 +36,7 @@ class Field:
             return [self.name]
 
     # @abstractmethod
-    def make_value(self, row: int, column: int, type: DataType) -> Union[str, bytes, float, list[float]]:
+    def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
         pass
 
 
@@ -62,7 +62,7 @@ class Vector(Field):
         self.efc = efc
         self.initialcap = initialcap
 
-    def create(self, data_type: DataType):
+    def create(self, data_type: KeyDataType):
         extra: list[str] = []
         if self.type == "HNSW":
             if self.m:
@@ -89,9 +89,9 @@ class Vector(Field):
             + extra
         )
 
-    def make_value(self, row: int, column: int, type: DataType) -> Union[str, bytes, float, list[float]]:
+    def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
         data = [float(i + row + column) for i in range(self.dim)]
-        if type == DataType.HASH:
+        if type == KeyDataType.HASH:
             return float_to_bytes(data)
         else:
             return data
@@ -100,11 +100,11 @@ class Numeric(Field):
     def __init__(self, name: str, alias: Union[str, None] = None):
         super().__init__(name, alias)
 
-    def create(self, data_type: DataType):
+    def create(self, data_type: KeyDataType):
         return super().create(data_type) + ["NUMERIC"]
 
-    def make_value(self, row: int, column: int, type: DataType) -> Union[str, bytes, float, list[float]]:
-        if type == DataType.HASH:
+    def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
+        if type == KeyDataType.HASH:
             return str(row + column)
         else:
             return row + column
@@ -120,13 +120,13 @@ class Tag(Field):
         super().__init__(name, alias)
         self.separator = separator
 
-    def create(self, data_type: DataType):
+    def create(self, data_type: KeyDataType):
         result = super().create(data_type) + ["TAG"]
         if self.separator:
             result += ["SEPARATOR", self.separator]
         return result
 
-    def make_value(self, row: int, column: int, type: DataType) -> Union[str, bytes, float, list[float]]:
+    def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
         return f"Tag:{row}:{column}"
 
 class Index:
@@ -135,7 +135,7 @@ class Index:
         name: str,
         fields: list[Field],
         prefixes: list[str] = [],
-        type: DataType = DataType.HASH,
+        type: KeyDataType = KeyDataType.HASH,
     ):
         self.name = name
         self.fields = fields
@@ -164,7 +164,7 @@ class Index:
         print("Loading data to ", client)
         for i in range(start_index, rows):
             data = self.make_data(i)
-            if self.type == DataType.HASH:
+            if self.type == KeyDataType.HASH:
                 client.hset(self.keyname(i), mapping=data)
             else:
                 client.execute_command("JSON.SET", self.keyname(i), "$", json.dumps(data))

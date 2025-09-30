@@ -27,7 +27,7 @@ def sum_of_remote_searches(nodes: list[Node]) -> int:
 def do_json_backfill_test(test, client, primary, replica):
     assert(primary.info("replication")["role"] == "master")
     assert(replica.info("replication")["role"] == "slave")
-    index = Index("test", [Vector("v", 3, type="FLAT")], type=DataType.JSON)
+    index = Index("test", [Vector("v", 3, type="FLAT")], type=KeyDataType.JSON)
     index.load_data(client, 100)
     replica.readonly()
     assert(primary.execute_command("DBSIZE") > 0)
@@ -81,8 +81,8 @@ class TestCreateNonVectorIndexes(ValkeySearchClusterTestCase):
         numeric_indx_name = "numeric"
         tag_idx_name = "tag"
         client = self.new_cluster_client()
-        index_numeric = Index(numeric_indx_name, [Numeric("n")], type=DataType.JSON)
-        index_tag = Index(tag_idx_name, [Tag("t")], type=DataType.JSON)
+        index_numeric = Index(numeric_indx_name, [Numeric("n")], type=KeyDataType.JSON)
+        index_tag = Index(tag_idx_name, [Tag("t")], type=KeyDataType.JSON)
         indexes = [index_numeric, index_tag]
         for index in indexes:
             index.load_data(client, 10)

@@ -96,16 +96,14 @@ TEST_P(FTDropIndexTest, FTDropIndexTests) {
         }
         if (test_case.expect_index_schema_exists_after_test) {
           VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(
-              &fake_ctx_, index_schema_proto.db_num(),
-              index_schema_proto.name()));
+              index_schema_proto.db_num(), index_schema_proto.name()));
           EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 0);
         } else {
-          EXPECT_EQ(
-              SchemaManager::Instance()
-                  .RemoveIndexSchema(&fake_ctx_, index_schema_proto.db_num(),
-                                     index_schema_proto.name())
-                  .code(),
-              absl::StatusCode::kNotFound);
+          EXPECT_EQ(SchemaManager::Instance()
+                        .RemoveIndexSchema(index_schema_proto.db_num(),
+                                           index_schema_proto.name())
+                        .code(),
+                    absl::StatusCode::kNotFound);
         }
       }
 

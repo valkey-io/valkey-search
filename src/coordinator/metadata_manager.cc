@@ -30,7 +30,6 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/util.h"
-#include "src/query/drop_consistency_check_fanout_operation.h"
 #include "src/rdb_serialization.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/log.h"
@@ -195,8 +194,7 @@ absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(
   return index_fingerprint_version;
 }
 
-absl::Status MetadataManager::DeleteEntry(ValkeyModuleCtx *ctx,
-                                          absl::string_view type_name,
+absl::Status MetadataManager::DeleteEntry(absl::string_view type_name,
                                           absl::string_view id) {
   auto &metadata = metadata_.Get();
   auto it = metadata.type_namespace_map().find(type_name);
@@ -231,18 +229,6 @@ absl::Status MetadataManager::DeleteEntry(ValkeyModuleCtx *ctx,
   metadata.mutable_version_header()->set_top_level_fingerprint(
       ComputeTopLevelFingerprint(metadata.type_namespace_map()));
   BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
-
-  // ft.dropindex consistency check
-  // check for valid ctx to prevent test fail due to fake_ctx
-  if (ctx && ValkeySearch::Instance().IsCluster() &&
-      ValkeySearch::Instance().UsingCoordinator()) {
-    unsigned timeout_ms = options::GetFTInfoTimeoutMs().GetValue();
-    auto op = new query::drop_consistency_check_fanout::
-        DropConsistencyCheckFanoutOperation(ValkeyModule_GetSelectedDb(ctx),
-                                            std::string(id), timeout_ms);
-    op->StartOperation(ctx);
-  }
-
   return absl::OkStatus();
 }
 

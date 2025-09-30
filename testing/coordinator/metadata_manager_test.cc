@@ -150,10 +150,10 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
       EXPECT_EQ(result.status().code(), test_case.expected_status_code);
     } else if (operation.operation_type ==
                EntryOperationTestParam::EntryOperation::kDelete) {
-      EXPECT_EQ(test_metadata_manager_
-                    ->DeleteEntry(fake_ctx, operation.type_name, operation.id)
-                    .code(),
-                test_case.expected_status_code);
+      EXPECT_EQ(
+          test_metadata_manager_->DeleteEntry(operation.type_name, operation.id)
+              .code(),
+          test_case.expected_status_code);
     }
   }
   EXPECT_THAT(callbacks_tracker,

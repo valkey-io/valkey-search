@@ -87,8 +87,6 @@ class TestFTDropindexConsistency(ValkeySearchClusterTestCaseDebugMode):
         thread0.join()
         thread1.join()
 
-        res = next(iter(results.values()))
-        err = next(iter(exceptions.values()))
-        assert "OK" in str(res)
-        err_msg = "Index with name '" + index_name + "' not found"
-        assert err_msg in str(err)
+        res1, res2 = results.values()
+        assert "OK" in str(res1)
+        assert "OK" in str(res2)

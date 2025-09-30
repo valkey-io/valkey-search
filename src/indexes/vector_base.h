@@ -133,7 +133,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   bool AddPrefilteredKey(
       absl::string_view query, uint64_t count, const InternedStringPtr& key,
       std::priority_queue<std::pair<float, hnswlib::labeltype>>& results,
-      absl::flat_hash_set<const char *>& top_keys) const;
+      absl::flat_hash_set<const char*>& top_keys) const;
   vmsdk::UniqueValkeyString NormalizeStringRecord(
       vmsdk::UniqueValkeyString record) const override;
   uint64_t GetRecordCount() const override;

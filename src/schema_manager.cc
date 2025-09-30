@@ -208,7 +208,8 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
   return absl::OkStatus();
 }
 
-absl::Status SchemaManager::CreateIndexSchema(
+absl::StatusOr<coordinator::IndexFingerprintVersion>
+SchemaManager::CreateIndexSchema(
     ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto) {
   const auto max_indexes = options::GetMaxIndexes().GetValue();
 
@@ -237,7 +238,12 @@ absl::Status SchemaManager::CreateIndexSchema(
 
   // In non-coordinated mode, apply the update inline.
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  return CreateIndexSchemaInternal(ctx, index_schema_proto);
+  VMSDK_RETURN_IF_ERROR(CreateIndexSchemaInternal(ctx, index_schema_proto));
+  // return dummy value in non-cluster mode
+  coordinator::IndexFingerprintVersion index_fingerprint_version;
+  index_fingerprint_version.set_fingerprint(0);
+  index_fingerprint_version.set_version(0);
+  return index_fingerprint_version;
 }
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::GetIndexSchema(

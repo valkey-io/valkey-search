@@ -57,10 +57,10 @@ class ClusterInfoFanoutOperation : public fanout::FanoutOperationBase<
   // decide which condition to run retry
   bool ShouldRetry() override;
 
- private:
+ protected:
   bool exists_;
-  std::optional<uint64_t> schema_fingerprint_;
-  std::optional<uint32_t> version_;
+  std::optional<coordinator::IndexFingerprintVersion>
+      index_fingerprint_version_;
   uint32_t db_num_;
   std::string index_name_;
   unsigned timeout_ms_;

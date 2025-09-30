@@ -88,8 +88,9 @@ TEST_F(SchemaManagerTest, TestCreateIndexSchema) {
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, [&callback_triggered]() { callback_triggered = true; },
         nullptr, coordinator_enabled));
-    VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
-        &fake_ctx_, test_index_schema_proto_));
+    VMSDK_EXPECT_OK(SchemaManager::Instance()
+                        .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
+                        .status());
     auto index_schema =
         SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
     VMSDK_EXPECT_OK(index_schema);
@@ -131,10 +132,12 @@ TEST_F(SchemaManagerTest, TestCreateIndexSchemaAlreadyExists) {
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, [&callback_triggered]() { callback_triggered++; }, nullptr,
         coordinator_enabled));
-    VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
-        &fake_ctx_, test_index_schema_proto_));
-    auto status = SchemaManager::Instance().CreateIndexSchema(
-        &fake_ctx_, test_index_schema_proto_);
+    VMSDK_EXPECT_OK(SchemaManager::Instance()
+                        .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
+                        .status());
+    auto status = SchemaManager::Instance()
+                      .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
+                      .status();
     EXPECT_EQ(status.code(), absl::StatusCode::kAlreadyExists);
     EXPECT_EQ(status.message(),
               absl::StrFormat("Index %s already exists.", index_name_));
@@ -152,6 +155,7 @@ TEST_F(SchemaManagerTest, TestCreateIndexSchemaInvalid) {
         &fake_ctx_, []() {}, nullptr, coordinator_enabled));
     EXPECT_EQ(SchemaManager::Instance()
                   .CreateIndexSchema(&fake_ctx_, data_model::IndexSchema())
+                  .status()
                   .code(),
               absl::StatusCode::kInvalidArgument);
   }
@@ -165,8 +169,9 @@ TEST_F(SchemaManagerTest, TestRemoveIndexSchema) {
     }
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() {}, nullptr, coordinator_enabled));
-    VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
-        &fake_ctx_, test_index_schema_proto_));
+    VMSDK_EXPECT_OK(SchemaManager::Instance()
+                        .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
+                        .status());
     VMSDK_EXPECT_OK(
         SchemaManager::Instance().RemoveIndexSchema(db_num_, index_name_));
     EXPECT_EQ(SchemaManager::Instance()
@@ -200,8 +205,9 @@ TEST_F(SchemaManagerTest, TestOnFlushDB) {
     }
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() {}, nullptr, coordinator_enabled));
-    VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
-        &fake_ctx_, test_index_schema_proto_));
+    VMSDK_EXPECT_OK(SchemaManager::Instance()
+                        .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
+                        .status());
     auto previous_schema_or =
         SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
     VMSDK_EXPECT_OK(previous_schema_or);

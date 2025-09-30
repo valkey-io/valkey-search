@@ -40,7 +40,6 @@ PrimaryInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&) {
 void PrimaryInfoFanoutOperation::OnResponse(
     const coordinator::InfoIndexPartitionResponse& resp,
     [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
-  absl::MutexLock lock(&mutex_);
   if (!resp.error().empty()) {
     grpc::Status status =
         grpc::Status(grpc::StatusCode::INTERNAL, resp.error());
@@ -53,34 +52,41 @@ void PrimaryInfoFanoutOperation::OnResponse(
     OnError(status, coordinator::FanoutErrorType::INDEX_NAME_ERROR, target);
     return;
   }
-  if (!schema_fingerprint_.has_value()) {
-    schema_fingerprint_ = resp.schema_fingerprint();
-  } else if (schema_fingerprint_.value() != resp.schema_fingerprint()) {
-    grpc::Status status =
-        grpc::Status(grpc::StatusCode::INTERNAL,
-                     "Cluster not in a consistent state, please retry.");
-    OnError(status, coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR,
-            target);
+
+  // Determine if we need to call OnError, do it outside the lock
+  // prevent double locking issue in OnError
+  bool should_call_error = false;
+  grpc::Status error_status(grpc::StatusCode::OK, "");
+  coordinator::FanoutErrorType error_type;
+
+  {
+    absl::MutexLock lock(&mutex_);
+    const auto& resp_ifv = resp.index_fingerprint_version();
+    if (!index_fingerprint_version_.has_value()) {
+      index_fingerprint_version_ = resp.index_fingerprint_version();
+    } else if (index_fingerprint_version_->fingerprint() !=
+                   resp_ifv.fingerprint() ||
+               index_fingerprint_version_->version() != resp_ifv.version()) {
+      should_call_error = true;
+      error_status =
+          grpc::Status(grpc::StatusCode::INTERNAL,
+                       "Cluster not in a consistent state, please retry.");
+      error_type = coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR;
+    }
+    if (resp.index_name() != index_name_) {
+      should_call_error = true;
+      error_status =
+          grpc::Status(grpc::StatusCode::INTERNAL,
+                       "Cluster not in a consistent state, please retry.");
+      error_type = coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR;
+    }
+  }
+
+  if (should_call_error) {
+    OnError(error_status, error_type, target);
     return;
   }
-  if (!version_.has_value()) {
-    version_ = resp.version();
-  } else if (version_.value() != resp.version()) {
-    grpc::Status status =
-        grpc::Status(grpc::StatusCode::INTERNAL,
-                     "Cluster not in a consistent state, please retry.");
-    OnError(status, coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR,
-            target);
-    return;
-  }
-  if (resp.index_name() != index_name_) {
-    grpc::Status status =
-        grpc::Status(grpc::StatusCode::INTERNAL,
-                     "Cluster not in a consistent state, please retry.");
-    OnError(status, coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR,
-            target);
-    return;
-  }
+
   exists_ = true;
   num_docs_ += resp.num_docs();
   num_records_ += resp.num_records();
@@ -130,8 +136,7 @@ int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
 
 void PrimaryInfoFanoutOperation::ResetForRetry() {
   exists_ = false;
-  schema_fingerprint_.reset();
-  version_.reset();
+  index_fingerprint_version_.reset();
   num_docs_ = 0;
   num_records_ = 0;
   hash_indexing_failures_ = 0;

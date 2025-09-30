@@ -74,7 +74,7 @@ constexpr absl::string_view kLocalOnly{"LOCALONLY"};
 constexpr absl::string_view kVectorFilterDelimiter = "=>";
 
 absl::StatusOr<absl::string_view> SubstituteParam(
-    query::VectorSearchParameters &parameters, absl::string_view source) {
+    query::SearchParameters &parameters, absl::string_view source) {
   if (source.empty() || source[0] != '$') {
     return source;
   } else {
@@ -90,7 +90,7 @@ absl::StatusOr<absl::string_view> SubstituteParam(
   }
 }
 
-absl::Status ParseKnnInner(query::VectorSearchParameters &parameters,
+absl::Status ParseKnnInner(query::SearchParameters &parameters,
                            std::string_view filter) {
   absl::InlinedVector<absl::string_view, 8> params =
       absl::StrSplit(filter, ' ', absl::SkipEmpty());
@@ -183,7 +183,7 @@ absl::StatusOr<FilterParseResults> ParsePreFilter(
   return parser.Parse();
 }
 
-absl::Status ParseKNN(query::VectorSearchParameters &parameters,
+absl::Status ParseKNN(query::SearchParameters &parameters,
                       absl::string_view filter_str) {
   if (filter_str.empty()) {
     return absl::InvalidArgumentError("Vector query clause is missing");
@@ -201,7 +201,7 @@ absl::Status ParseKNN(query::VectorSearchParameters &parameters,
                                          close_position - position - 1));
 }
 
-absl::Status Verify(query::VectorSearchParameters &parameters) {
+absl::Status Verify(query::SearchParameters &parameters) {
   // Only verify the vector KNN parameters for vector based queries.
   if (!parameters.IsNonVectorQuery()) {
     if (parameters.query.empty()) {
@@ -246,10 +246,10 @@ absl::Status Verify(query::VectorSearchParameters &parameters) {
   return absl::OkStatus();
 }
 
-std::unique_ptr<vmsdk::ParamParser<query::VectorSearchParameters>>
+std::unique_ptr<vmsdk::ParamParser<query::SearchParameters>>
 ConstructLimitParser() {
-  return std::make_unique<vmsdk::ParamParser<query::VectorSearchParameters>>(
-      [](query::VectorSearchParameters &parameters,
+  return std::make_unique<vmsdk::ParamParser<query::SearchParameters>>(
+      [](query::SearchParameters &parameters,
          vmsdk::ArgsIterator &itr) -> absl::Status {
         VMSDK_RETURN_IF_ERROR(
             vmsdk::ParseParamValue(itr, parameters.limit.first_index));
@@ -259,10 +259,10 @@ ConstructLimitParser() {
       });
 }
 
-std::unique_ptr<vmsdk::ParamParser<query::VectorSearchParameters>>
+std::unique_ptr<vmsdk::ParamParser<query::SearchParameters>>
 ConstructParamsParser() {
-  return std::make_unique<vmsdk::ParamParser<query::VectorSearchParameters>>(
-      [](query::VectorSearchParameters &parameters,
+  return std::make_unique<vmsdk::ParamParser<query::SearchParameters>>(
+      [](query::SearchParameters &parameters,
          vmsdk::ArgsIterator &itr) -> absl::Status {
         unsigned count{0};
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, count));
@@ -289,10 +289,10 @@ ConstructParamsParser() {
       });
 }
 
-std::unique_ptr<vmsdk::ParamParser<query::VectorSearchParameters>>
+std::unique_ptr<vmsdk::ParamParser<query::SearchParameters>>
 ConstructReturnParser() {
-  return std::make_unique<vmsdk::ParamParser<query::VectorSearchParameters>>(
-      [](query::VectorSearchParameters &parameters,
+  return std::make_unique<vmsdk::ParamParser<query::SearchParameters>>(
+      [](query::SearchParameters &parameters,
          vmsdk::ArgsIterator &itr) -> absl::Status {
         uint32_t cnt{0};
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
@@ -327,30 +327,30 @@ ConstructReturnParser() {
       });
 }
 
-vmsdk::KeyValueParser<query::VectorSearchParameters> CreateSearchParser() {
-  vmsdk::KeyValueParser<query::VectorSearchParameters> parser;
+vmsdk::KeyValueParser<query::SearchParameters> CreateSearchParser() {
+  vmsdk::KeyValueParser<query::SearchParameters> parser;
   parser.AddParamParser(
       kDialectParam,
-      GENERATE_VALUE_PARSER(query::VectorSearchParameters, dialect));
+      GENERATE_VALUE_PARSER(query::SearchParameters, dialect));
   parser.AddParamParser(
       kLocalOnly,
-      GENERATE_FLAG_PARSER(query::VectorSearchParameters, local_only));
+      GENERATE_FLAG_PARSER(query::SearchParameters, local_only));
   parser.AddParamParser(
       kTimeoutParam,
-      GENERATE_VALUE_PARSER(query::VectorSearchParameters, timeout_ms));
+      GENERATE_VALUE_PARSER(query::SearchParameters, timeout_ms));
   parser.AddParamParser(kLimitParam, ConstructLimitParser());
   parser.AddParamParser(
       kNoContentParam,
-      GENERATE_FLAG_PARSER(query::VectorSearchParameters, no_content));
+      GENERATE_FLAG_PARSER(query::SearchParameters, no_content));
   parser.AddParamParser(kReturnParam, ConstructReturnParser());
   parser.AddParamParser(kParamsParam, ConstructParamsParser());
   return parser;
 }
 
-static vmsdk::KeyValueParser<query::VectorSearchParameters> SearchParser =
+static vmsdk::KeyValueParser<query::SearchParameters> SearchParser =
     CreateSearchParser();
 
-absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
+absl::Status ParseQueryString(query::SearchParameters &parameters) {
   auto filter_expression =
       absl::string_view(parameters.parse_vars.query_string);
   auto pos = filter_expression.find(kVectorFilterDelimiter);
@@ -404,11 +404,11 @@ absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
 }
 }  // namespace
 
-absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
+absl::StatusOr<std::unique_ptr<query::SearchParameters>>
 ParseVectorSearchParameters(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc, const SchemaManager &schema_manager) {
   vmsdk::ArgsIterator itr{argv, argc};
-  auto parameters = std::make_unique<query::VectorSearchParameters>(
+  auto parameters = std::make_unique<query::SearchParameters>(
       options::GetDefaultTimeoutMs().GetValue(), nullptr);
   VMSDK_RETURN_IF_ERROR(
       vmsdk::ParseParamValue(itr, parameters->index_schema_name));

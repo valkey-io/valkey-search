@@ -124,7 +124,7 @@ bool VerifyFilter(const query::Predicate *predicate,
 
 absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
-    const query::VectorSearchParameters &parameters, absl::string_view key,
+    const query::SearchParameters &parameters, absl::string_view key,
     const std::string &vector_identifier) {
   absl::flat_hash_set<absl::string_view> identifiers;
   identifiers.insert(kJsonRootElementQuery);
@@ -158,7 +158,7 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
 
 absl::StatusOr<RecordsMap> GetContent(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
-    const query::VectorSearchParameters &parameters, absl::string_view key,
+    const query::SearchParameters &parameters, absl::string_view key,
     const std::string &vector_identifier) {
   if (attribute_data_type.ToProto() ==
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON &&
@@ -213,7 +213,7 @@ absl::StatusOr<RecordsMap> GetContent(
 void ProcessNonVectorNeighborsForReply(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     std::deque<indexes::Neighbor> &neighbors,
-    const query::VectorSearchParameters &parameters) {
+    const query::SearchParameters &parameters) {
   ProcessNeighborsForReply(ctx, attribute_data_type, neighbors, parameters, "");
 }
 
@@ -224,7 +224,7 @@ void ProcessNonVectorNeighborsForReply(
 void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
                               const AttributeDataType &attribute_data_type,
                               std::deque<indexes::Neighbor> &neighbors,
-                              const query::VectorSearchParameters &parameters,
+                              const query::SearchParameters &parameters,
                               const std::string &identifier) {
   const auto max_content_size =
       options::GetMaxSearchResultRecordSize().GetValue();

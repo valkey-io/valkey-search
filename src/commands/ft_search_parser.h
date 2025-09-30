@@ -32,7 +32,7 @@ struct LimitParameter {
   uint64_t number{10};
 };
 
-absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
+absl::StatusOr<std::unique_ptr<query::SearchParameters>>
 ParseVectorSearchParameters(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc, const SchemaManager &schema_manager);
 

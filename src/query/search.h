@@ -56,7 +56,7 @@ struct ReturnAttribute {
   vmsdk::UniqueValkeyString alias;
 };
 
-struct VectorSearchParameters {
+struct SearchParameters {
   mutable cancel::Token cancellation_token;
   std::shared_ptr<IndexSchema> index_schema;
   std::string index_schema_name;
@@ -87,7 +87,7 @@ struct VectorSearchParameters {
     }
   } parse_vars;
   bool IsNonVectorQuery() const { return attribute_alias.empty(); }
-  VectorSearchParameters(uint64_t timeout, grpc::CallbackServerContext* context)
+  SearchParameters(uint64_t timeout, grpc::CallbackServerContext* context)
       : timeout_ms(timeout),
         cancellation_token(cancel::Make(timeout, context)) {}
 };
@@ -95,19 +95,19 @@ struct VectorSearchParameters {
 // Callback to be called when the search is done.
 using SearchResponseCallback =
     absl::AnyInvocable<void(absl::StatusOr<std::deque<indexes::Neighbor>>&,
-                            std::unique_ptr<VectorSearchParameters>)>;
+                            std::unique_ptr<SearchParameters>)>;
 
 absl::StatusOr<std::deque<indexes::Neighbor>> Search(
-    const VectorSearchParameters& parameters, SearchMode search_mode);
+    const SearchParameters& parameters, SearchMode search_mode);
 
-absl::Status SearchAsync(std::unique_ptr<VectorSearchParameters> parameters,
+absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool* thread_pool,
                          SearchResponseCallback callback,
                          SearchMode search_mode);
 
 absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
     absl::StatusOr<std::deque<indexes::Neighbor>> results,
-    const VectorSearchParameters& parameters);
+    const SearchParameters& parameters);
 
 class Predicate;
 // Defined in the header to support testing
@@ -118,12 +118,11 @@ size_t EvaluateFilterAsPrimary(
 
 // Defined in the header to support testing
 absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
-    indexes::VectorBase* vector_index,
-    const VectorSearchParameters& parameters);
+    indexes::VectorBase* vector_index, const SearchParameters& parameters);
 
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
-    const VectorSearchParameters& parameters,
+    const SearchParameters& parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
     indexes::VectorBase* vector_index);
 

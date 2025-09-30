@@ -130,10 +130,10 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   }
   absl::StatusOr<InternedStringPtr> GetKeyDuringSearch(
       uint64_t internal_id) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  void AddPrefilteredKey(
+  bool AddPrefilteredKey(
       absl::string_view query, uint64_t count, const InternedStringPtr& key,
       std::priority_queue<std::pair<float, hnswlib::labeltype>>& results,
-      absl::flat_hash_set<hnswlib::labeltype>& top_keys) const;
+      absl::flat_hash_set<const char *>& top_keys) const;
   vmsdk::UniqueValkeyString NormalizeStringRecord(
       vmsdk::UniqueValkeyString record) const override;
   uint64_t GetRecordCount() const override;
@@ -241,7 +241,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
 };
 
-class InlineVectorEvaluator : public query::Evaluator {
+class PrefilterEvaluator : public query::Evaluator {
  public:
   bool Evaluate(const query::Predicate& predicate,
                 const InternedStringPtr& key);

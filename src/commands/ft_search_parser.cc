@@ -330,11 +330,9 @@ ConstructReturnParser() {
 vmsdk::KeyValueParser<query::SearchParameters> CreateSearchParser() {
   vmsdk::KeyValueParser<query::SearchParameters> parser;
   parser.AddParamParser(
-      kDialectParam,
-      GENERATE_VALUE_PARSER(query::SearchParameters, dialect));
+      kDialectParam, GENERATE_VALUE_PARSER(query::SearchParameters, dialect));
   parser.AddParamParser(
-      kLocalOnly,
-      GENERATE_FLAG_PARSER(query::SearchParameters, local_only));
+      kLocalOnly, GENERATE_FLAG_PARSER(query::SearchParameters, local_only));
   parser.AddParamParser(
       kTimeoutParam,
       GENERATE_VALUE_PARSER(query::SearchParameters, timeout_ms));

@@ -167,10 +167,7 @@ class Index:
             if self.type == DataType.HASH:
                 client.hset(self.keyname(i), mapping=data)
             else:
-                key = self.keyname(i)
-                print(f"KEY: {key}")
-                print(f"DATA: {data}")
-                client.execute_command("JSON.SET", key, "$", json.dumps(data))
+                client.execute_command("JSON.SET", self.keyname(i), "$", json.dumps(data))
 
     def load_data_with_ttl(self, client: valkey.client, rows: int, ttl_ms: int, start_index: int = 0):
         for i in range(start_index, rows):

@@ -196,7 +196,8 @@ void EvaluatePrefilteredKeys(
       const auto &key = **iterator;
       // TODO: add a bloom filter to ensure distinct keys are evaluated
       // only once.
-      if (!result_keys.contains(key->Str().data()) && evaluator.Evaluate(*predicate, key)) {
+      if (!result_keys.contains(key->Str().data()) &&
+          evaluator.Evaluate(*predicate, key)) {
         if (appender(key, result_keys)) {
           result_keys.insert(key->Str().data());
         }

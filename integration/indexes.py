@@ -9,6 +9,12 @@ import valkey
 from ft_info_parser import FTInfoParser
 import logging, json
 import struct
+from enum import Enum
+
+class KeyDataType(Enum):
+    HASH = 1
+    JSON = 2
+
 
 
 def float_to_bytes(flt: list[float]) -> bytes:
@@ -20,14 +26,17 @@ class Field:
         self.name = name
         self.alias = alias if alias else name
 
-    def create(self) -> list[str]:
+    def create(self, data_type: KeyDataType) -> list[str]:
+        if data_type == KeyDataType.JSON:
+            if not self.name.startswith("$."):
+                self.name = "$." + self.name
         if self.alias:
             return [self.name, "AS", self.alias]
         else:
             return [self.name]
 
     # @abstractmethod
-    def make_value(self, row: int, column: int, type:str) -> Union[str, bytes, float, list[float]]:
+    def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
         pass
 
 
@@ -53,7 +62,7 @@ class Vector(Field):
         self.efc = efc
         self.initialcap = initialcap
 
-    def create(self):
+    def create(self, data_type: KeyDataType):
         extra: list[str] = []
         if self.type == "HNSW":
             if self.m:
@@ -65,7 +74,7 @@ class Vector(Field):
             if self.initialcap:
                 extra += ["INITIAL_CAP", str(self.initialcap)]
         return (
-            super().create()
+            super().create(data_type)
             + [
                 "VECTOR",
                 self.type,
@@ -80,9 +89,9 @@ class Vector(Field):
             + extra
         )
 
-    def make_value(self, row: int, column: int, type: str) -> Union[str, bytes, float, list[float]]:
+    def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
         data = [float(i + row + column) for i in range(self.dim)]
-        if type == "HASH":
+        if type == KeyDataType.HASH:
             return float_to_bytes(data)
         else:
             return data
@@ -91,11 +100,11 @@ class Numeric(Field):
     def __init__(self, name: str, alias: Union[str, None] = None):
         super().__init__(name, alias)
 
-    def create(self):
-        return super().create() + ["NUMERIC"]
+    def create(self, data_type: KeyDataType):
+        return super().create(data_type) + ["NUMERIC"]
 
-    def make_value(self, row: int, column: int, type: str) -> Union[str, bytes, float, list[float]]:
-        if type == "HASH":
+    def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
+        if type == KeyDataType.HASH:
             return str(row + column)
         else:
             return row + column
@@ -111,13 +120,13 @@ class Tag(Field):
         super().__init__(name, alias)
         self.separator = separator
 
-    def create(self):
-        result = super().create() + ["TAG"]
+    def create(self, data_type: KeyDataType):
+        result = super().create(data_type) + ["TAG"]
         if self.separator:
             result += ["SEPARATOR", self.separator]
         return result
 
-    def make_value(self, row: int, column: int, type: str) -> Union[str, bytes, float, list[float]]:
+    def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
         return f"Tag:{row}:{column}"
 
 class Index:
@@ -126,7 +135,7 @@ class Index:
         name: str,
         fields: list[Field],
         prefixes: list[str] = [],
-        type: str = "HASH",
+        type: KeyDataType = KeyDataType.HASH,
     ):
         self.name = name
         self.fields = fields
@@ -139,7 +148,7 @@ class Index:
                 "FT.CREATE",
                 self.name,
                 "ON",
-                self.type,
+                self.type.name,
                 "PREFIX",
                 str(len(self.prefixes)),
             ]
@@ -147,7 +156,7 @@ class Index:
             + ["SCHEMA"]
         )
         for f in self.fields:
-            cmd += f.create()
+            cmd += f.create(self.type)
         print(f"Creating Index: {cmd}")
         client.execute_command(*cmd)
 
@@ -155,11 +164,9 @@ class Index:
         print("Loading data to ", client)
         for i in range(start_index, rows):
             data = self.make_data(i)
-            if self.type == "HASH":
-                #print("Loading ", self.keyname(i), data)
+            if self.type == KeyDataType.HASH:
                 client.hset(self.keyname(i), mapping=data)
             else:
-                #print("Loading ", self.keyname(i), json.dumps(data))
                 client.execute_command("JSON.SET", self.keyname(i), "$", json.dumps(data))
 
     def load_data_with_ttl(self, client: valkey.client, rows: int, ttl_ms: int, start_index: int = 0):
@@ -171,7 +178,7 @@ class Index:
 
     def keyname(self, row: int) -> str:
         prefix = self.prefixes[row % len(self.prefixes)] if self.prefixes else ""
-        return f"{prefix}:{row:08d}"
+        return f"{prefix}:{self.name}:{row:08d}"
 
     def make_data(self, row: int) -> dict[str, Union[str, bytes]]:
         """Make data for a particular row"""

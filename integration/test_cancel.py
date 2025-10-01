@@ -242,21 +242,14 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         self.execute_primaries(["flushall sync"])
 
         self.config_set("search.info-developer-visible", "yes")
+        client: Valkey = self.new_cluster_client()
         self.check_info("search_cancel-timeouts", 0)
 
         hnsw_index = Index("hnsw", [Vector("v", 3, type="HNSW"), Numeric("n")])
         flat_index = Index("flat", [Vector("v", 3, type="FLAT"), Numeric("n")])
 
-        # Use separate clients for each index creation
-        client1 = self.new_cluster_client()
-        hnsw_index.create(client1)
-        client1.close()
-        
-        client2 = self.new_cluster_client()
-        flat_index.create(client2)
-        client2.close()
-
-        client: Valkey = self.new_cluster_client()
+        hnsw_index.create(client)
+        flat_index.create(client)
         hnsw_index.load_data(client, 100)
         # Let the index properly processed
         waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 100, timeout=3)

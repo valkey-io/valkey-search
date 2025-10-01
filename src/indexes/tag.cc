@@ -345,4 +345,12 @@ uint64_t Tag::GetRecordCount() const {
   return tracked_tags_by_keys_.size();
 }
 
+absl::Status Tag::SaveIndexExtension(RDBChunkOutputStream output) const {
+  return absl::OkStatus();
+}
+
+absl::Status Tag::LoadIndexExtension(SupplementalContentChunkIter chunked_out) {
+  return absl::OkStatus();
+}
+
 }  // namespace valkey_search::indexes

@@ -134,6 +134,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   int GetAttributeCount() const { return attributes_.size(); }
 
   virtual absl::Status RDBSave(SafeRDB *rdb) const;
+  absl::Status SaveMutationQueue(RDBChunkOutputStream chunked_out) const;
+  absl::Status LoadMutationQueue(SupplementalContentChunkIter iter);
 
   static absl::StatusOr<std::shared_ptr<IndexSchema>> LoadFromRDB(
       ValkeyModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,

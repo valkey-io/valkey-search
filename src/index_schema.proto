@@ -29,6 +29,8 @@ message IndexSchema {
   repeated Attribute attributes = 6;
   Stats stats = 7;
   optional uint32 db_num = 8;
+  // V2 save/restore will have this field populated
+  optional bool backfill_completed = 9;
 }
 
 enum AttributeIndexType {

@@ -99,6 +99,10 @@ class MockIndex : public indexes::IndexBase {
   MOCK_METHOD(int, RespondWithInfo, (ValkeyModuleCtx * ctx), (const, override));
   MOCK_METHOD(absl::Status, SaveIndex, (RDBChunkOutputStream chunked_out),
               (const, override));
+  MOCK_METHOD(absl::Status, SaveIndexExtension, (RDBChunkOutputStream chunked_out),
+              (const, override));
+  MOCK_METHOD(absl::Status, LoadIndexExtension, (SupplementalContentChunkIter chunked_out),
+              (override));
   MOCK_METHOD((void), ForEachTrackedKey,
               (absl::AnyInvocable<void(const InternedStringPtr& key)> fn),
               (const, override));

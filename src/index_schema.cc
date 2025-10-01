@@ -59,6 +59,19 @@ namespace valkey_search {
 
 LogLevel GetLogSeverity(bool ok) { return ok ? DEBUG : WARNING; }
 
+static auto config_rdb_write_v2 =
+    vmsdk::config::BooleanBuilder("rdb_write_v2", false).Hidden().Build();
+static auto config_rdb_read_v2 = 
+    vmsdk::config::BooleanBuilder("rdb_read_v2", false).Hidden().Build();
+
+static bool RDBReadV2() {
+  return dynamic_cast<vmsdk::config::Boolean& >(*config_rdb_read_v2).GetValue();
+}
+
+static bool RDBWriteV2() {
+  return dynamic_cast<vmsdk::config::Boolean& >(*config_rdb_write_v2).GetValue();
+}
+
 IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
                                       absl::string_view name, int db_num)
     : cursor(vmsdk::MakeUniqueValkeyScanCursor()) {
@@ -821,10 +834,34 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
   rdb_section->set_allocated_index_schema_contents(
       index_schema_proto.release());
 
-  /* Each attribute has one index content and vector indices also have one
-   * key-to-id mapping */
-  size_t supplemental_count =
-      GetAttributeCount() +
+  /*
+    The legacy V1 format.
+    
+    Each non-vector attribute has one SUPPLEMENTAL_CONTENT_INDEX_CONTENT segment. 
+      That segment consists of a header and no additional content.
+    
+    Vector attributes have two segments.
+      One SUPPLEMENTAL_CONTENT_INDEX_CONTENT which has a header and the saved vector index data.
+      One SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP segment
+
+    The new V2 format is a superset of the V1 format.
+
+    Each non-vector attribute has two segments.
+      one SUPPLEMENTAL_CONTENT_INDEX_CONTENT segment which is a header only. (Same as V1)
+      one SUPPLEMENTAL_CONTENT_INDEX_EXTENSION segment which has saved index data
+    
+    Vector attributes are same as V1.
+
+    V2 also has a segment with SUPPLEMENTAL_CONTENT_MUTATION_QUEUE which is the
+    header and the contents of the mutation queue.
+  
+  */
+  size_t supplemental_count = 
+    RDBWriteV2() 
+      // For V2, we write two sections for each attribute plus the mutation queue
+      ? 2 * GetAttributeCount() + 1
+      // For V1, we write one section for each attribute plus an additional section for each vector attribute
+      : GetAttributeCount() +
       std::count_if(attributes_.begin(), attributes_.end(),
                     [](const auto &attribute) {
                       return IsVectorIndex(attribute.second.GetIndex());
@@ -852,9 +889,8 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
         << "IO error while saving supplemental content for index content for "
            "index name: "
         << this->name_ << " attribute: " << attribute.first << " to RDB";
-    RDBChunkOutputStream index_chunked_out(rdb);
     VMSDK_RETURN_IF_ERROR(
-        attribute.second.GetIndex()->SaveIndex(std::move(index_chunked_out)))
+        attribute.second.GetIndex()->SaveIndex(RDBChunkOutputStream(rdb)))
         << "IO error while saving Index contents (index name: " << this->name_
         << ", attribute: " << attribute.first << ") to RDB";
 
@@ -871,14 +907,64 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
           << "IO error while saving supplemental content for key to ID mapping "
              "for index name: "
           << this->name_ << " attribute: " << attribute.first << " to RDB";
-      RDBChunkOutputStream key_to_id_chunked_out(rdb);
       VMSDK_RETURN_IF_ERROR(
           dynamic_cast<const indexes::VectorBase *>(
               attribute.second.GetIndex().get())
-              ->SaveTrackedKeys(std::move(key_to_id_chunked_out)))
+              ->SaveTrackedKeys(RDBChunkOutputStream(rdb)))
           << "IO error while saving Key to ID mapping (index name: "
           << this->name_ << ", attribute: " << attribute.first << ") to RDB";
+    } else if (RDBWriteV2()) {
+      //
+      // V2 add index content extension
+      //
+      auto index_content_extension =
+          std::make_unique<data_model::SupplementalContentHeader>();
+      index_content_extension->set_type(
+          data_model::SUPPLEMENTAL_CONTENT_INDEX_EXTENSION);
+      index_content_extension->mutable_index_content_header()->set_allocated_attribute(
+          attribute.second.ToProto().release());
+      auto index_content_extension_str = index_content_extension->SerializeAsString();
+      VMSDK_RETURN_IF_ERROR(rdb->SaveStringBuffer(index_content_extension_str))
+          << "IO error while saving supplemental content for index content extension for "
+            "index name: "
+          << this->name_ << " attribute: " << attribute.first << " to RDB";
+      VMSDK_RETURN_IF_ERROR(
+          attribute.second.GetIndex()->SaveIndexExtension(RDBChunkOutputStream(rdb)))
+          << "IO error while saving Index content extension (index name: " << this->name_
+          << ", attribute: " << attribute.first << ") to RDB";
     }
+  }
+
+  if (RDBWriteV2()) {
+    //
+    // Save the Mutation Queue
+    //
+    auto mutation_queue = std::make_unique<data_model::SupplementalContentHeader>();
+    mutation_queue->set_type(data_model::SUPPLEMENTAL_CONTENT_MUTATION_QUEUE);
+    auto mutation_queue_str = mutation_queue->SerializeAsString();
+    VMSDK_RETURN_IF_ERROR(rdb->SaveStringBuffer(mutation_queue_str))
+        << "IO error while saving mutation queue for index name:" << this->name_;
+    VMSDK_RETURN_IF_ERROR(this->SaveMutationQueue(RDBChunkOutputStream(rdb)))
+        << "IO error while saving mutation queue for index name: " << this->name_;
+  }
+
+  return absl::OkStatus();
+}
+
+absl::Status IndexSchema::SaveMutationQueue(RDBChunkOutputStream chunked_out) const {
+  return absl::OkStatus();  
+}
+
+absl::Status IndexSchema::LoadMutationQueue(SupplementalContentChunkIter iter) {
+  return absl::OkStatus();
+}
+
+// We need to iterate over the chunks to consume them
+static absl::Status SkipSupplementalContent(SupplementalContentIter &supplemental_iter) {
+  auto chunk_it = supplemental_iter.IterateChunks();
+  while (chunk_it.HasNext()) {
+    VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto chunk_result,
+                            chunk_it.Next());
   }
   return absl::OkStatus();
 }
@@ -902,58 +988,69 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
   // Supplemental content will include indices and any content for them
   while (supplemental_iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto supplemental_content, supplemental_iter.Next());
-    if (ABSL_PREDICT_TRUE(!skip_loading_index_data) &&
-        supplemental_content->type() ==
-            data_model::SupplementalContentType::
-                SUPPLEMENTAL_CONTENT_INDEX_CONTENT) {
-      auto &attribute =
-          supplemental_content->index_content_header().attribute();
-      VMSDK_ASSIGN_OR_RETURN(std::shared_ptr<indexes::IndexBase> index,
-                             IndexFactory(ctx, index_schema.get(), attribute,
-                                          supplemental_iter.IterateChunks()));
-      VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
-          attribute.alias(), attribute.identifier(), index));
-    } else if (ABSL_PREDICT_TRUE(!skip_loading_index_data) &&
-               supplemental_content->type() ==
-                   data_model::SupplementalContentType::
-                       SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP) {
-      auto &attribute =
-          supplemental_content->key_to_id_map_header().attribute();
-      VMSDK_ASSIGN_OR_RETURN(auto index,
-                             index_schema->GetIndex(attribute.alias()),
-                             _ << "Key to ID mapping for " << attribute.alias()
-                               << " found before index definition.");
-      if (!IsVectorIndex(index)) {
-        return absl::InternalError(
-            absl::StrFormat("Key to ID mapping found for non vector index "
-                            "(index: %s, attribute: %s)",
-                            index_schema->GetName(), attribute.alias()));
-      }
-      auto vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
-      VMSDK_RETURN_IF_ERROR(vector_index->LoadTrackedKeys(
-          ctx, &index_schema->GetAttributeDataType(),
-          supplemental_iter.IterateChunks()));
+    if (skip_loading_index_data) {
+      VMSDK_RETURN_IF_ERROR(SkipSupplementalContent(supplemental_iter));
     } else {
-      if (ABSL_PREDICT_FALSE(skip_loading_index_data) &&
-          (supplemental_content->type() ==
-               data_model::SupplementalContentType::
-                   SUPPLEMENTAL_CONTENT_INDEX_CONTENT ||
-           supplemental_content->type() ==
-               data_model::SupplementalContentType::
-                   SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP)) {
-        VMSDK_LOG(NOTICE, ctx) << "Skipping supplemental content type: "
-                               << data_model::SupplementalContentType_Name(
-                                      supplemental_content->type());
-      } else {
-        VMSDK_LOG(NOTICE, ctx) << "Unknown supplemental content type: "
-                               << data_model::SupplementalContentType_Name(
-                                      supplemental_content->type());
-      }
-      // We need to iterate over the chunks to consume them
-      [[maybe_unused]] auto chunk_it = supplemental_iter.IterateChunks();
-      while (chunk_it.HasNext()) {
-        VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto chunk_result,
-                               chunk_it.Next());
+      switch (supplemental_content->type()) {
+        case data_model::SupplementalContentType::SUPPLEMENTAL_CONTENT_INDEX_CONTENT: {
+          auto &attribute =
+              supplemental_content->index_content_header().attribute();
+          VMSDK_ASSIGN_OR_RETURN(std::shared_ptr<indexes::IndexBase> index,
+                                IndexFactory(ctx, index_schema.get(), attribute,
+                                              supplemental_iter.IterateChunks()));
+          VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(attribute.alias(), attribute.identifier(), index));
+          break;
+        }
+        case data_model::SupplementalContentType::SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP: {
+          auto &attribute =
+              supplemental_content->key_to_id_map_header().attribute();
+          VMSDK_ASSIGN_OR_RETURN(auto index,
+                                index_schema->GetIndex(attribute.alias()),
+                                _ << "Key to ID mapping for " << attribute.alias()
+                                  << " found before index definition.");
+          if (!IsVectorIndex(index)) {
+            return absl::InternalError(
+                absl::StrFormat("Key to ID mapping found for non vector index "
+                                "(index: %s, attribute: %s)",
+                                index_schema->GetName(), attribute.alias()));
+          }
+          auto vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
+          VMSDK_RETURN_IF_ERROR(vector_index->LoadTrackedKeys(
+              ctx, &index_schema->GetAttributeDataType(),
+              supplemental_iter.IterateChunks()));
+          break;
+        }
+        case data_model::SupplementalContentType::SUPPLEMENTAL_CONTENT_INDEX_EXTENSION: {
+          if (!RDBReadV2()) {
+            VMSDK_LOG(NOTICE, ctx) << "Skipping supplemental index extension for attribute "
+              << supplemental_content->index_content_header().attribute();
+            VMSDK_RETURN_IF_ERROR(SkipSupplementalContent(supplemental_iter));
+          } else {
+            auto &attribute = supplemental_content->index_content_header().attribute();
+            VMSDK_ASSIGN_OR_RETURN(auto index,
+                                  index_schema->GetIndex(attribute.alias()),
+                                  _ << "Index extension for " << attribute.alias()
+                                    << " found before index definition.");
+            VMSDK_RETURN_IF_ERROR(index->LoadIndexExtension(supplemental_iter.IterateChunks()));
+          }
+        }
+        case data_model::SupplementalContentType::SUPPLEMENTAL_CONTENT_MUTATION_QUEUE: {
+          if (!RDBReadV2()) {
+            VMSDK_LOG(NOTICE, ctx) << "Skipping supplemental mutation queue";
+            VMSDK_RETURN_IF_ERROR(SkipSupplementalContent(supplemental_iter));
+          } else {
+            if (index_schema) {
+              VMSDK_RETURN_IF_ERROR(index_schema->LoadMutationQueue(supplemental_iter.IterateChunks()));
+            } else {
+              return absl::InternalError("Supplemental section mutation queue out of order");
+            }
+          }
+        }
+        default:
+          VMSDK_LOG(NOTICE, ctx) << "Unknown supplemental content type: "
+                                << supplemental_content->type();
+          VMSDK_RETURN_IF_ERROR(SkipSupplementalContent(supplemental_iter));
+          break;
       }
     }
   }

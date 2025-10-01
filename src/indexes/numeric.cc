@@ -259,4 +259,13 @@ uint64_t Numeric::GetRecordCount() const {
   return tracked_keys_.size();
 }
 
+absl::Status Numeric::SaveIndexExtension(RDBChunkOutputStream output) const {
+  return absl::OkStatus();
+}
+
+absl::Status Numeric::LoadIndexExtension(SupplementalContentChunkIter chunked_out) {
+  return absl::OkStatus();
+}
+
+
 }  // namespace valkey_search::indexes

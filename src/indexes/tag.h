@@ -47,6 +47,8 @@ class Tag : public IndexBase {
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
     return absl::OkStatus();
   }
+  absl::Status SaveIndexExtension(RDBChunkOutputStream chunked_out) const override;
+  absl::Status LoadIndexExtension(SupplementalContentChunkIter chunked_out) override;
 
   inline void ForEachTrackedKey(
       absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override {

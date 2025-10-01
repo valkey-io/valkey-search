@@ -7,9 +7,8 @@ ProximityIterator::ProximityIterator(
     bool in_order, FieldMaskPredicate field_mask,
     const InternedStringSet* untracked_keys)
     : iters_(std::move(iters)),
-      done_(false),
-      slop_(1),
-      in_order_(false),
+      slop_(slop),
+      in_order_(in_order),
       untracked_keys_(untracked_keys),
       current_key_(nullptr),
       current_start_pos_(std::nullopt),
@@ -17,11 +16,7 @@ ProximityIterator::ProximityIterator(
       field_mask_(field_mask) {
   VMSDK_LOG(WARNING, nullptr) << "PI::init";
   VMSDK_LOG(WARNING, nullptr) << "iters_ size" << iters_.size();
-  if (iters_.empty()) {
-    VMSDK_LOG(WARNING, nullptr) << "PI::init done 1";
-    done_ = true;
-    return;
-  }
+  CHECK(iters_.size() > 0);
   // Prime iterators to the first common key and valid position combo
   NextKey();
 }
@@ -30,9 +25,6 @@ uint64_t ProximityIterator::FieldMask() const { return field_mask_; }
 
 bool ProximityIterator::DoneKeys() const {
   VMSDK_LOG(WARNING, nullptr) << "PI::DoneKeys";
-  if (done_) {
-    return true;
-  }
   for (auto& c : iters_) {
     if (c->DoneKeys()) {
       return true;
@@ -142,9 +134,6 @@ bool ProximityIterator::SeekForwardKey(const InternedStringPtr& target_key) {
 
 bool ProximityIterator::DonePositions() const {
   VMSDK_LOG(WARNING, nullptr) << "PI::DonePositions";
-  if (done_) {
-    return true;
-  }
   for (auto& c : iters_) {
     if (c->DonePositions()) {
       return true;

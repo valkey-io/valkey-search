@@ -83,8 +83,6 @@ class ProximityIterator : public TextIterator {
  private:
   // List of all the Text Predicates contained in the Proximity AND.
   std::vector<std::unique_ptr<TextIterator>> iters_;
-  // Used to track if we are at the beginning of the iterator.
-  bool done_;
   size_t slop_;
   bool in_order_;
   // This is from the query and is used in exact phrase

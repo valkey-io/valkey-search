@@ -17,34 +17,30 @@ TermIterator::TermIterator(const WordIterator& word_iter, bool exact,
       data_(data),
       field_mask_(field_mask),
       word_iter_(word_iter),
-      target_posting_(nullptr),
-      key_iter_(),
-      pos_iter_(),
       current_key_(nullptr),
       current_position_(std::nullopt),
-      untracked_keys_(untracked_keys),
-      nomatch_(false) {
-  if (word_iter_.Done()) {
-    nomatch_ = true;
-    return;
+      untracked_keys_(untracked_keys) {
+  // This check for matching words is done for exact.
+  VMSDK_LOG(WARNING, nullptr) << "TI::Init{" << data_ << "}.";
+  while (!word_iter_.Done()) {
+    if (exact_ && word_iter_.GetWord() == data) {
+      key_iterators_.emplace_back(word_iter_.GetTarget()->GetKeyIterator());
+    }
+    word_iter_.Next();
   }
-  if (data_ != word_iter_.GetWord()) {
-    nomatch_ = true;
-    return;
-  }
-  target_posting_ = word_iter_.GetTarget();
-  key_iter_ = target_posting_->GetKeyIterator();
   // Prime the first key and position if they exist.
-  TermIterator::NextKey();
+  if (!key_iterators_.empty()) {
+    TermIterator::NextKey();
+  }
 }
 
 uint64_t TermIterator::FieldMask() const { return field_mask_; }
 
 bool TermIterator::DoneKeys() const {
-  if (nomatch_) {
-    return true;
+  for (const auto& key_iter : key_iterators_) {
+    if (key_iter.IsValid()) return false;
   }
-  return !key_iter_.IsValid();
+  return true;
 }
 
 const InternedStringPtr& TermIterator::CurrentKey() const {
@@ -54,58 +50,106 @@ const InternedStringPtr& TermIterator::CurrentKey() const {
 
 bool TermIterator::NextKey() {
   if (current_key_) {
-    key_iter_.NextKey();
-  }
-  // Loop until we find a key that satisfies the field mask
-  while (key_iter_.IsValid()) {
-    if (key_iter_.ContainsFields(field_mask_)) {
-      current_key_ = key_iter_.GetKey();
-      pos_iter_ = key_iter_.GetPositionIterator();
-      current_position_ = std::nullopt;
-      // We need to call NextPosition here if we dont want garbage values.
-      if (TermIterator::NextPosition()) {
-        return true;  // We have a key and a position
+    for (auto& key_iter : key_iterators_) {
+      VMSDK_LOG(WARNING, nullptr)
+          << "TI::NextKey{" << data_ << "}. Move to next key. Early Key";
+      if (key_iter.IsValid() &&
+          key_iter.GetKey()->Str() == current_key_->Str()) {
+        key_iter.NextKey();
       }
     }
-    key_iter_.NextKey();
   }
-  // No more valid keys
   current_key_ = nullptr;
-  return false;
+  current_position_ = std::nullopt;
+  for (auto& key_iter : key_iterators_) {
+    while (key_iter.IsValid() && !key_iter.ContainsFields(field_mask_)) {
+      VMSDK_LOG(WARNING, nullptr)
+          << "TI::NextKey{" << data_
+          << "}. Invalid field. Key: " << key_iter.GetKey()->Str();
+      key_iter.NextKey();
+    }
+    if (key_iter.IsValid()) {
+      auto key = key_iter.GetKey();
+      if (!current_key_ || key->Str() < current_key_->Str()) {
+        pos_iterators_.clear();
+        pos_iterators_.emplace_back(key_iter.GetPositionIterator());
+        current_key_ = key;
+        VMSDK_LOG(WARNING, nullptr)
+            << "TI::NextKey{" << data_
+            << "} - Found better key. CurrentKey: " << current_key_->Str();
+      } else if (key->Str() == current_key_->Str()) {
+        pos_iterators_.emplace_back(key_iter.GetPositionIterator());
+        VMSDK_LOG(WARNING, nullptr)
+            << "TI::NextKey{" << data_
+            << "} - Found same key. CurrentKey: " << current_key_->Str();
+      }
+    }
+  }
+  if (!current_key_) {
+    VMSDK_LOG(WARNING, nullptr)
+        << "TI::NextKey{" << data_ << "} - No more keys.";
+    return false;
+  }
+  NextPosition();
+  return true;
 }
 
 bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
-  // If current key is already >= target_key, no need to seek
+  VMSDK_LOG(WARNING, nullptr) << "TI::SeekForwardKey{" << data_
+                              << "} - TargetKey: " << target_key->Str();
   if (current_key_ && current_key_->Str() >= target_key->Str()) {
+    VMSDK_LOG(WARNING, nullptr)
+        << "TI::SeekForwardKey{" << data_
+        << "} - Already at or past target key. CurrentKey: "
+        << current_key_->Str();
     return true;
   }
-  // Seek key iterator to target_key or beyond.
-  // We optimize by not checking position / field constraints
-  // until we find the right key.
-  while (key_iter_.IsValid() && key_iter_.GetKey()->Str() < target_key->Str()) {
-    key_iter_.NextKey();
+  // Use SkipForwardKey to efficiently seek all iterators to target_key or
+  // beyond
+  for (auto& key_iter : key_iterators_) {
+    key_iter.SkipForwardKey(target_key);
   }
-  // Find next valid key/position combination using existing logic
-  while (key_iter_.IsValid()) {
-    if (key_iter_.ContainsFields(field_mask_)) {
-      current_key_ = key_iter_.GetKey();
-      pos_iter_ = key_iter_.GetPositionIterator();
-      current_position_ = std::nullopt;
-      if (NextPosition()) {
-        return true;
+  // Now find the minimum key using the same logic as NextKey
+  current_key_ = nullptr;
+  current_position_ = std::nullopt;
+  for (auto& key_iter : key_iterators_) {
+    while (key_iter.IsValid() && !key_iter.ContainsFields(field_mask_)) {
+      key_iter.NextKey();
+    }
+    if (key_iter.IsValid()) {
+      auto key = key_iter.GetKey();
+      if (!current_key_ || key->Str() < current_key_->Str()) {
+        // Test this candidate key by collecting its position iterators
+        pos_iterators_.clear();
+        pos_iterators_.emplace_back(key_iter.GetPositionIterator());
+        current_key_ = key;
+      } else if (key->Str() == current_key_->Str()) {
+        pos_iterators_.emplace_back(key_iter.GetPositionIterator());
       }
     }
-    key_iter_.NextKey();
   }
-  current_key_ = nullptr;
-  return false;
+  if (!current_key_) {
+    VMSDK_LOG(WARNING, nullptr)
+        << "TI::SeekForwardKey{" << data_ << "} - No more keys.";
+    return false;
+  }
+  // IMO, it can be replaced with just `NextPosition();`
+  if (!NextPosition()) {
+    current_key_ = nullptr;
+    return false;
+  }
+  VMSDK_LOG(WARNING, nullptr)
+      << "TI::SeekForwardKey{" << data_
+      << "} - Done Seeking. CurrentKey: " << current_key_->Str();
+  return true;
 }
 
 bool TermIterator::DonePositions() const {
-  if (nomatch_) {
-    return true;
+  VMSDK_LOG(WARNING, nullptr) << "TI::DonePositions{" << data_ << "}";
+  for (const auto& pos_iter : pos_iterators_) {
+    if (pos_iter.IsValid()) return false;
   }
-  return !pos_iter_.IsValid();
+  return true;
 }
 
 std::pair<uint32_t, uint32_t> TermIterator::CurrentPosition() const {
@@ -114,20 +158,39 @@ std::pair<uint32_t, uint32_t> TermIterator::CurrentPosition() const {
 }
 
 bool TermIterator::NextPosition() {
+  VMSDK_LOG(WARNING, nullptr) << "TI::NextPosition{" << data_ << "}";
   if (current_position_.has_value()) {
-    pos_iter_.NextPosition();
-  }
-  // Loop until we find a position that satisfies the field mask
-  while (pos_iter_.IsValid()) {
-    if (pos_iter_.GetFieldMask() & field_mask_) {
-      current_position_ = pos_iter_.GetPosition();
-      return true;
+    for (auto& pos_iter : pos_iterators_) {
+      if (pos_iter.IsValid() &&
+          pos_iter.GetPosition() == current_position_.value()) {
+        VMSDK_LOG(WARNING, nullptr)
+            << "TI::NextPosition{" << data_
+            << "} Moving to next. Cur Position: " << current_position_.value();
+        pos_iter.NextPosition();
+      }
     }
-    pos_iter_.NextPosition();
   }
-  // No more valid positions
-  current_position_ = std::nullopt;
-  return false;
+  uint32_t min_position = UINT32_MAX;
+  bool found = false;
+  for (auto& pos_iter : pos_iterators_) {
+    while (pos_iter.IsValid() && !(pos_iter.GetFieldMask() & field_mask_)) {
+      pos_iter.NextPosition();
+    }
+    if (pos_iter.IsValid()) {
+      uint32_t position = pos_iter.GetPosition();
+      if (position < min_position) {
+        min_position = position;
+        found = true;
+      }
+    }
+  }
+  if (!found) {
+    current_position_ = std::nullopt;
+    return false;
+  }
+  VMSDK_LOG(WARNING, nullptr) << "TI::NextPosition{" << data_ << "}. Valid pos";
+  current_position_ = min_position;
+  return true;
 }
 
 }  // namespace valkey_search::indexes::text

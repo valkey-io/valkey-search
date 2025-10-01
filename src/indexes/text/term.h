@@ -50,14 +50,12 @@ class TermIterator : public TextIterator {
   const uint32_t field_mask_;
 
   WordIterator word_iter_;
-  std::shared_ptr<Postings> target_posting_;
-  Postings::KeyIterator key_iter_;
-  Postings::PositionIterator pos_iter_;
+  std::vector<Postings::KeyIterator> key_iterators_;
+  std::vector<Postings::PositionIterator> pos_iterators_;
 
   InternedStringPtr current_key_;
   std::optional<uint32_t> current_position_;
   const InternedStringSet* untracked_keys_;
-  bool nomatch_;
 };
 
 }  // namespace valkey_search::indexes::text

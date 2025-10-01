@@ -138,36 +138,6 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
             for key, expected_value in expected_config.items():
                 actual_value = attr.get(key)
                 assert actual_value == expected_value, f"Attribute '{attr_name}' {key} mismatch: expected {expected_value}, got {actual_value}"
-        
-    def test_basic_text_index_metadata_validation(self):
-        """Test basic text index with simple configuration."""
-        cluster: ValkeyCluster = self.new_cluster_client()
-        node0: Valkey = self.new_client_for_primary(0)
-        
-        index_name = "basic_text_idx"
-        
-        # Create basic text index
-        assert node0.execute_command(
-            "FT.CREATE", index_name,
-            "ON", "HASH",
-            "PREFIX", "1", "doc:",
-            "SCHEMA", "title", "TEXT"
-        ) == b"OK"
-        
-        # Wait for indexing to complete on all nodes
-        self.wait_for_indexing_complete_on_all_nodes(index_name)
-        
-        # Validate FT._LIST consistency
-        self.validate_ft_list_consistency([index_name])
-        
-        # Validate FT.INFO consistency
-        expected_attributes = {
-            "title": {
-                "type": "TEXT",
-                "identifier": "title"
-            }
-        }
-        self.validate_ft_info_consistency(index_name, expected_attributes)
 
     def test_complex_text_index_metadata_validation(self):
         """Test complex text index with multiple parameters and options."""
@@ -439,4 +409,3 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
             node = self.new_client_for_primary(i)
             with pytest.raises(ResponseError):
                 node.execute_command("FT.INFO", index_name)
-

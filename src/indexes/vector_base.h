@@ -125,8 +125,10 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   bool GetNormalize() const { return normalize_; }
   std::unique_ptr<data_model::Index> ToProto() const override;
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override;
-  absl::Status SaveIndexExtension(RDBChunkOutputStream chunked_out) const override;
-  absl::Status LoadIndexExtension(SupplementalContentChunkIter chunked_out) override;
+  absl::Status SaveIndexExtension(
+      RDBChunkOutputStream chunked_out) const override;
+  absl::Status LoadIndexExtension(
+      SupplementalContentChunkIter chunked_out) override;
 
   absl::Status SaveTrackedKeys(RDBChunkOutputStream chunked_out) const
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);

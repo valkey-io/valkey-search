@@ -56,8 +56,10 @@ class IndexBase {
   virtual bool IsTracked(const InternedStringPtr& key) const = 0;
   IndexerType GetIndexerType() const { return indexer_type_; }
   virtual absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const = 0;
-  virtual absl::Status SaveIndexExtension(RDBChunkOutputStream chunked_out) const = 0;
-  virtual absl::Status LoadIndexExtension(SupplementalContentChunkIter chunked_out) = 0;
+  virtual absl::Status SaveIndexExtension(
+      RDBChunkOutputStream chunked_out) const = 0;
+  virtual absl::Status LoadIndexExtension(
+      SupplementalContentChunkIter chunked_out) = 0;
   virtual std::unique_ptr<data_model::Index> ToProto() const = 0;
   virtual void ForEachTrackedKey(
       absl::AnyInvocable<void(const InternedStringPtr&)> fn) const {}

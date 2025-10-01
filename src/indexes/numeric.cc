@@ -263,9 +263,9 @@ absl::Status Numeric::SaveIndexExtension(RDBChunkOutputStream output) const {
   return absl::OkStatus();
 }
 
-absl::Status Numeric::LoadIndexExtension(SupplementalContentChunkIter chunked_out) {
+absl::Status Numeric::LoadIndexExtension(
+    SupplementalContentChunkIter chunked_out) {
   return absl::OkStatus();
 }
-
 
 }  // namespace valkey_search::indexes

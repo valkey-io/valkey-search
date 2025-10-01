@@ -391,15 +391,15 @@ absl::Status VectorBase::SaveIndex(RDBChunkOutputStream chunked_out) const {
   return absl::OkStatus();
 }
 
-absl::Status VectorBase::SaveIndexExtension(RDBChunkOutputStream chunked_out) const {
+absl::Status VectorBase::SaveIndexExtension(
+    RDBChunkOutputStream chunked_out) const {
   CHECK(false);
 }
 
-absl::Status VectorBase::LoadIndexExtension(SupplementalContentChunkIter chunked_out) {
+absl::Status VectorBase::LoadIndexExtension(
+    SupplementalContentChunkIter chunked_out) {
   CHECK(false);
 }
-
-
 
 absl::Status VectorBase::SaveTrackedKeys(
     RDBChunkOutputStream chunked_out) const {

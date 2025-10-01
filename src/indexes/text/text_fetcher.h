@@ -31,8 +31,7 @@ class TextFetcher : public indexes::EntriesFetcherIteratorBase {
   const InternedStringPtr& operator*() const override;
 
  private:
-  std::unique_ptr<TextIterator>
-      iter_;  // List of all the Text Predicates contained in the Proximity AND.
+  std::unique_ptr<TextIterator> iter_;
 };
 }  // namespace valkey_search::indexes::text
 

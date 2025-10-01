@@ -42,7 +42,8 @@ bool WildCardIterator::DoneKeys() const {
 
 const InternedStringPtr& WildCardIterator::CurrentKey() const {
   CHECK(current_key_ != nullptr);
-  VMSDK_LOG(WARNING, nullptr) << "WI::CurrentKey{" << data_ << "}. Key: " <<  current_key_->Str();
+  VMSDK_LOG(WARNING, nullptr)
+      << "WI::CurrentKey{" << data_ << "}. Key: " << current_key_->Str();
   return current_key_;
 }
 
@@ -50,8 +51,10 @@ bool WildCardIterator::NextKey() {
   VMSDK_LOG(WARNING, nullptr) << "WI::NextKey{" << data_ << "}";
   if (current_key_) {
     for (auto& key_iter : key_iterators_) {
-      VMSDK_LOG(WARNING, nullptr) << "WI::NextKey{" << data_ << "}. Move to next key. Early Key";
-      if (key_iter.IsValid() && key_iter.GetKey()->Str() == current_key_->Str()) {
+      VMSDK_LOG(WARNING, nullptr)
+          << "WI::NextKey{" << data_ << "}. Move to next key. Early Key";
+      if (key_iter.IsValid() &&
+          key_iter.GetKey()->Str() == current_key_->Str()) {
         key_iter.NextKey();
       }
     }
@@ -60,8 +63,9 @@ bool WildCardIterator::NextKey() {
   current_position_ = std::nullopt;
   for (auto& key_iter : key_iterators_) {
     while (key_iter.IsValid() && !key_iter.ContainsFields(field_mask_)) {
-      VMSDK_LOG(WARNING, nullptr) << "WI::NextKey{" << data_ << "}. Invalid field. Key: "
-                                 << key_iter.GetKey()->Str();
+      VMSDK_LOG(WARNING, nullptr)
+          << "WI::NextKey{" << data_
+          << "}. Invalid field. Key: " << key_iter.GetKey()->Str();
       key_iter.NextKey();
     }
     if (key_iter.IsValid()) {
@@ -70,15 +74,20 @@ bool WildCardIterator::NextKey() {
         pos_iterators_.clear();
         pos_iterators_.emplace_back(key_iter.GetPositionIterator());
         current_key_ = key;
-        VMSDK_LOG(WARNING, nullptr) << "WI::NextKey{" << data_ << "} - Found better key. CurrentKey: " << current_key_->Str();
+        VMSDK_LOG(WARNING, nullptr)
+            << "WI::NextKey{" << data_
+            << "} - Found better key. CurrentKey: " << current_key_->Str();
       } else if (key->Str() == current_key_->Str()) {
         pos_iterators_.emplace_back(key_iter.GetPositionIterator());
-        VMSDK_LOG(WARNING, nullptr) << "WI::NextKey{" << data_ << "} - Found same key. CurrentKey: " << current_key_->Str();
+        VMSDK_LOG(WARNING, nullptr)
+            << "WI::NextKey{" << data_
+            << "} - Found same key. CurrentKey: " << current_key_->Str();
       }
     }
   }
   if (!current_key_) {
-    VMSDK_LOG(WARNING, nullptr) << "WI::NextKey{" << data_ << "} - No more keys.";
+    VMSDK_LOG(WARNING, nullptr)
+        << "WI::NextKey{" << data_ << "} - No more keys.";
     return false;
   }
   NextPosition();
@@ -86,12 +95,17 @@ bool WildCardIterator::NextKey() {
 }
 
 bool WildCardIterator::SeekForwardKey(const InternedStringPtr& target_key) {
-  VMSDK_LOG(WARNING, nullptr) << "WI::SeekForwardKey{" << data_ << "} - TargetKey: " << target_key->Str();
+  VMSDK_LOG(WARNING, nullptr) << "WI::SeekForwardKey{" << data_
+                              << "} - TargetKey: " << target_key->Str();
   if (current_key_ && current_key_->Str() >= target_key->Str()) {
-    VMSDK_LOG(WARNING, nullptr) << "WI::SeekForwardKey{" << data_ << "} - Already at or past target key. CurrentKey: " << current_key_->Str();
+    VMSDK_LOG(WARNING, nullptr)
+        << "WI::SeekForwardKey{" << data_
+        << "} - Already at or past target key. CurrentKey: "
+        << current_key_->Str();
     return true;
   }
-  // Use SkipForwardKey to efficiently seek all iterators to target_key or beyond
+  // Use SkipForwardKey to efficiently seek all iterators to target_key or
+  // beyond
   for (auto& key_iter : key_iterators_) {
     key_iter.SkipForwardKey(target_key);
   }
@@ -99,7 +113,6 @@ bool WildCardIterator::SeekForwardKey(const InternedStringPtr& target_key) {
   current_key_ = nullptr;
   current_position_ = std::nullopt;
   for (auto& key_iter : key_iterators_) {
-    // Should understand better what `key_iter.ContainsFields(field_mask_)` means....
     while (key_iter.IsValid() && !key_iter.ContainsFields(field_mask_)) {
       key_iter.NextKey();
     }
@@ -116,7 +129,8 @@ bool WildCardIterator::SeekForwardKey(const InternedStringPtr& target_key) {
     }
   }
   if (!current_key_) {
-    VMSDK_LOG(WARNING, nullptr) << "WI::SeekForwardKey{" << data_ << "} - No more keys.";
+    VMSDK_LOG(WARNING, nullptr)
+        << "WI::SeekForwardKey{" << data_ << "} - No more keys.";
     return false;
   }
   // IMO, it can be replaced with just `NextPosition();`
@@ -124,7 +138,9 @@ bool WildCardIterator::SeekForwardKey(const InternedStringPtr& target_key) {
     current_key_ = nullptr;
     return false;
   }
-  VMSDK_LOG(WARNING, nullptr) << "WI::SeekForwardKey{" << data_ << "} - Done Seeking. CurrentKey: " << current_key_->Str();
+  VMSDK_LOG(WARNING, nullptr)
+      << "WI::SeekForwardKey{" << data_
+      << "} - Done Seeking. CurrentKey: " << current_key_->Str();
   return true;
 }
 
@@ -146,9 +162,11 @@ bool WildCardIterator::NextPosition() {
   VMSDK_LOG(WARNING, nullptr) << "WI::NextPosition{" << data_ << "}";
   if (current_position_.has_value()) {
     for (auto& pos_iter : pos_iterators_) {
-      if (pos_iter.IsValid() && pos_iter.GetPosition() == current_position_.value()) {
-        VMSDK_LOG(WARNING, nullptr) << "WI::NextPosition{" << data_
-                            << "} Moving to next. Cur Position: " << current_position_.value();
+      if (pos_iter.IsValid() &&
+          pos_iter.GetPosition() == current_position_.value()) {
+        VMSDK_LOG(WARNING, nullptr)
+            << "WI::NextPosition{" << data_
+            << "} Moving to next. Cur Position: " << current_position_.value();
         pos_iter.NextPosition();
       }
     }

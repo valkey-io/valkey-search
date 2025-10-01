@@ -49,6 +49,7 @@
 namespace valkey_search::coordinator {
 
 CONTROLLED_SIZE_T(ForceRemoteFailCount, 0);
+CONTROLLED_SIZE_T(ForceIndexNotFoundError, 0);
 
 grpc::ServerUnaryReactor* Service::GetGlobalMetadata(
     grpc::CallbackServerContext* context,
@@ -193,7 +194,10 @@ Service::GenerateInfoResponse(
   coordinator::InfoIndexPartitionResponse response;
   auto status_or_schema =
       SchemaManager::Instance().GetIndexSchema(db_num, index_name);
-  if (!status_or_schema.ok()) {
+  if (!status_or_schema.ok() || ForceIndexNotFoundError.GetValue() > 0) {
+    if (ForceIndexNotFoundError.GetValue() > 0) {
+      ForceIndexNotFoundError.Decrement();
+    }
     response.set_exists(false);
     response.set_index_name(index_name);
     response.set_error(status_or_schema.status().ToString());

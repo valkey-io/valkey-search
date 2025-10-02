@@ -2,6 +2,7 @@ import time
 from valkey_search_test_case import ValkeySearchClusterTestCase
 from valkey.cluster import ValkeyCluster
 from valkey.client import Valkey
+from valkey import ResponseError
 from valkeytestframework.conftest import resource_port_tracker
 from valkeytestframework.util import waiters
 from test_info_primary import _parse_info_kv_list, verify_error_response
@@ -64,3 +65,31 @@ class TestFTInfoCluster(ValkeySearchClusterTestCase):
             "FT.INFO index123 CLUSTER",
             "Index with name 'index123' not found",
         )
+
+    def test_error_handling_metadata_validation(self):
+        """Test error handling consistency across cluster nodes."""
+        node0: Valkey = self.new_client_for_primary(0)
+        node1: Valkey = self.new_client_for_primary(1)
+        node2: Valkey = self.new_client_for_primary(2)
+        
+        # Test FT.INFO on non-existent index
+        for i, node in enumerate([node0, node1, node2]):
+            with pytest.raises(ResponseError) as exc_info:
+                node.execute_command("FT.INFO", "nonexistent_index")
+            assert "not found" in str(exc_info.value).lower(), f"Unexpected error message on node {i}: {exc_info.value}"
+        
+        # Test invalid FT.CREATE commands
+        invalid_commands = [
+            # Missing stopwords count
+            ["FT.CREATE", "invalid1", "ON", "HASH", "STOPWORDS", "the", "and", "SCHEMA", "field", "TEXT"],
+            # Missing punctuation value
+            ["FT.CREATE", "invalid2", "ON", "HASH", "PUNCTUATION", "SCHEMA", "field", "TEXT"],
+            # Invalid field type
+            ["FT.CREATE", "invalid3", "ON", "HASH", "SCHEMA", "field", "INVALID_TYPE"]
+        ]
+        
+        for cmd in invalid_commands:
+            # All nodes should reject the same invalid commands
+            for i, node in enumerate([node0, node1, node2]):
+                with pytest.raises(ResponseError):
+                    node.execute_command(*cmd)

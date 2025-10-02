@@ -458,6 +458,9 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
 
     def client_for_primary(self, index) -> Valkey:
         return self.replication_groups[index].primary.client
+    
+    def get_all_primary_clients(self) -> List[Valkey]:
+        return [rg.primary.client for rg in self.replication_groups]
 
     def get_replication_group(self, index) -> ReplicationGroup:
         return self.replication_groups[index]

@@ -28,53 +28,73 @@ Text::Text(const data_model::TextIndex& text_index_proto,
 
 absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
                                      absl::string_view data) {
-  valkey_search::indexes::text::Lexer lexer;
 
-  auto tokens =
-      lexer.Tokenize(data, text_index_schema_->GetPunctuationBitmap(),
-                     text_index_schema_->GetStemmer(), !no_stem_,
-                     min_stem_size_, text_index_schema_->GetStopWordsSet());
+  // TODO: Key Tracking
 
-  if (!tokens.ok()) {
-    if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {
-      return false;  // UTF-8 errors → hash_indexing_failures
-    }
-    return tokens.status();
-  }
+  // valkey_search::indexes::text::Lexer lexer;
 
-  for (uint32_t position = 0; position < tokens->size(); ++position) {
-    const auto& token = (*tokens)[position];
-    text_index_schema_->GetTextIndex()->prefix_.Mutate(
-        token,
-        [&](std::optional<std::shared_ptr<text::Postings>> existing)
-            -> std::optional<std::shared_ptr<text::Postings>> {
-          std::shared_ptr<text::Postings> postings;
-          if (existing.has_value()) {
-            postings = existing.value();
-          } else {
-            // Create new Postings object with schema configuration
-            bool save_positions = text_index_schema_->GetWithOffsets();
-            uint8_t num_text_fields = text_index_schema_->GetNumTextFields();
-            postings = std::make_shared<text::Postings>(save_positions,
-                                                        num_text_fields);
-          }
+  // auto tokens =
+  //     lexer.Tokenize(data, text_index_schema_->GetPunctuationBitmap(),
+  //                    text_index_schema_->GetStemmer(), !no_stem_,
+  //                    min_stem_size_, text_index_schema_->GetStopWordsSet());
 
-          postings->InsertPosting(key, text_field_number_, position);
-          return postings;
-        });
-  }
+  // if (!tokens.ok()) {
+  //   if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {
+  //     return false;  // UTF-8 errors → hash_indexing_failures
+  //   }
+  //   return tokens.status();
+  // }
 
-  return true;
+  // for (uint32_t position = 0; position < tokens->size(); ++position) {
+  //   const auto& token = (*tokens)[position];
+  //   text_index_schema_->GetTextIndex()->prefix_.Mutate(
+  //       token,
+  //       [&](std::optional<std::shared_ptr<text::Postings>> existing)
+  //           -> std::optional<std::shared_ptr<text::Postings>> {
+  //         std::shared_ptr<text::Postings> postings;
+  //         if (existing.has_value()) {
+  //           postings = existing.value();
+  //         } else {
+  //           // Create new Postings object with schema configuration
+  //           bool save_positions = text_index_schema_->GetWithOffsets();
+  //           uint8_t num_text_fields = text_index_schema_->GetNumTextFields();
+  //           postings = std::make_shared<text::Postings>(save_positions,
+  //                                                       num_text_fields);
+  //         }
+
+  //         postings->InsertPosting(key, text_field_number_, position);
+  //         return postings;
+  //       });
+  // }
+
+  return text_index_schema_->IndexAttributeData(key, data, text_field_number_, !no_stem_, min_stem_size_, with_suffix_trie_);
 }
 
 absl::StatusOr<bool> Text::RemoveRecord(const InternedStringPtr& key,
                                         DeletionType deletion_type) {
-  throw std::runtime_error("Text::RemoveRecord not implemented");
+  // if (text_field_number_ == 0 && deletion_type == DeletionType::kRecord) {
+  //   // Call API to clean up the whole key
+  // } else {
+  //   // Call API to clean up the key for this particular text attribute
+  //   // - how do we know what words? Could search through whole tree to find the ones with this field
+  //   // Can also think of a trick to remove whole tree and re-ingest it
+  // }
+  // throw std::runtime_error("Text::RemoveRecord not implemented");
+
+  // The old key value has already been removed from the index by a call to TextIndexSchema::DeleteKey() at
+  // this point so don't need to touch the index structures
+
+  // TODO: key tracking
+  return true;
 }
 
 absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr& key,
                                         absl::string_view data) {
-  throw std::runtime_error("Text::ModifyRecord not implemented");
+  // TODO: key tracking
+
+  // The old key value has already been removed from the index by a call to TextIndexSchema::DeleteKey() at
+  // this point so we simply add the new key data
+  return text_index_schema_->IndexAttributeData(key, data, text_field_number_, !no_stem_, min_stem_size_, with_suffix_trie_);
 }
 
 int Text::RespondWithInfo(ValkeyModuleCtx* ctx) const {

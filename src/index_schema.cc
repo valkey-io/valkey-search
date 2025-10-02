@@ -424,6 +424,11 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
                                       const InternedStringPtr &key) {
   vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
+  if (text_index_schema_) {
+    // Always clean up indexed words from all text attributes of the key up
+    // front
+    text_index_schema_->DeleteKeyData(key);
+  }
   for (auto &attribute_data_itr : mutated_attributes) {
     const auto itr = attributes_.find(attribute_data_itr.first);
     if (itr == attributes_.end()) {

@@ -120,8 +120,6 @@ class TestFullText(ValkeySearchTestCaseBase):
         result2 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl grey acorn grow"')
         assert result1[0] == 1 and result2[0] == 1
         assert result1[1] == b"product:1" and result2[1] == b"product:1"
-        # TODO: Uncomment once we support the ability to iterate through words via proximity (and hence reset keys)
-        # OR support the keys search across all words within the NextKey APIs in TextIterators
         result3 = client.execute_command("FT.SEARCH", "products", '@desc:great @desc:oa* @desc:from @desc:lit* @desc:gr* @desc:acorn @desc:gr*')
         assert result3[0] == 1
         assert result3[1] == b"product:1"
@@ -142,7 +140,6 @@ class TestFullText(ValkeySearchTestCaseBase):
         result = client.execute_command("FT.SEARCH", "products", '@desc:"uncommon random word"')
         assert result[0] == 1
         assert result[1] == b"product:4"
-        # TODO: Test for searches on tokens on a specific field when the same tokens exist in other text fields.
         # Test for searches on tokens that have common keys, but in-order does not match.
         result = client.execute_command("FT.SEARCH", "products", '@desc:"opposit order"')
         assert result[0] == 0

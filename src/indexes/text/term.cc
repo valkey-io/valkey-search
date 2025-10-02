@@ -9,24 +9,14 @@
 
 namespace valkey_search::indexes::text {
 
-TermIterator::TermIterator(const WordIterator& word_iter, bool exact,
-                           const absl::string_view data,
-                           const uint32_t field_mask,
-                           const InternedStringSet* untracked_keys)
-    : exact_(exact),
-      data_(data),
-      field_mask_(field_mask),
-      word_iter_(word_iter),
+TermIterator::TermIterator(
+    const std::vector<Postings::KeyIterator>& key_iterators,
+    const uint32_t field_mask, const InternedStringSet* untracked_keys)
+    : field_mask_(field_mask),
+      key_iterators_(key_iterators),
       current_key_(nullptr),
       current_position_(std::nullopt),
       untracked_keys_(untracked_keys) {
-  // This check for matching words is done for exact.
-  while (!word_iter_.Done()) {
-    if (exact_ && word_iter_.GetWord() == data) {
-      key_iterators_.emplace_back(word_iter_.GetTarget()->GetKeyIterator());
-    }
-    word_iter_.Next();
-  }
   // Prime the first key and position if they exist.
   if (!key_iterators_.empty()) {
     TermIterator::NextKey();

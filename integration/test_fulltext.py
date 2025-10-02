@@ -19,7 +19,7 @@ text_index_on_hash = "FT.CREATE products ON HASH PREFIX 1 product: SCHEMA desc T
 hash_docs = [
     ["HSET", "product:1", "category", "electronics", "name", "Laptop", "price", "999.99", "rating", "4.5", "desc", "1 2 3 4 5 6 7 8 9 0. Great oaks. Random Words. Random Words. Great oaks from little grey acorns grow. Impressive oak."],
     ["HSET", "product:2", "category", "electronics", "name", "Tablet", "price", "499.00", "rating", "4.0", "desc", "Random Words. Random Words. Interesting. Good beginning makes a good ending. Interesting desc"],
-    ["HSET", "product:3", "category", "electronics", "name", "Phone", "price", "299.00", "rating", "3.8", "desc", "Random Words. Random Words. Ok, this document uses some more common words from other docs. Interesting desc, impressive tablet. Random Words."],
+    ["HSET", "product:3", "category", "electronics", "name", "Phone", "price", "299.00", "rating", "3.8", "desc", "Random Words. Experience. Random Words. Ok, this document uses some more common words from other docs. Interesting desc, impressive tablet. Random Words."],
     ["HSET", "product:4", "category", "books", "name", "Book", "price", "19.99", "rating", "4.8", "desc", "Order Opposite. Random Words. Random Words. wonder of wonders. Uncommon random words. Random Words."],
     ["HSET", "product:5", "category", "books", "name", "Book2", "price", "19.99", "rating", "1.0", "desc", "Unique slop word. Random Words. Random Words. greased the inspector's palm"]
 ]
@@ -114,6 +114,13 @@ class TestFullText(ValkeySearchTestCaseBase):
         assert (result[1] == b"product:1" and result[3] == b"product:5") or (
             result[1] == b"product:5" and result[3] == b"product:1"
         )
+        # Test Prefix wildcard searches with a single match. Also, check that when the starting of the word
+        # is missing, no matches are found.
+        result1 = client.execute_command("FT.SEARCH", "products", '@desc:experi*')
+        result2 = client.execute_command("FT.SEARCH", "products", '@desc:expe*')
+        result3 = client.execute_command("FT.SEARCH", "products", '@desc:xpe*')
+        assert result1[0] == 1 and result2[0] == 1 and result3[0] == 0
+        assert result1[1] == b"product:3" and result2[1] == b"product:3"
         # TODO: Update these queries to non stemmed versions after queries are stemmed.
         # Perform an exact phrase search operation on a unique phrase (exists in one doc).
         result1 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl"')

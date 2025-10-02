@@ -30,8 +30,8 @@ Top level iterator for a Term
 */
 class TermIterator : public TextIterator {
  public:
-  TermIterator(const WordIterator& word_iter, bool exact,
-               const absl::string_view data, const uint32_t field_mask,
+  TermIterator(const std::vector<Postings::KeyIterator>& key_iterators,
+               const uint32_t field_mask,
                const InternedStringSet* untracked_keys = nullptr);
   uint64_t FieldMask() const override;
   // Key-level iteration
@@ -45,11 +45,8 @@ class TermIterator : public TextIterator {
   bool NextPosition() override;
 
  private:
-  const bool exact_;
-  const absl::string_view data_;
   const uint32_t field_mask_;
 
-  WordIterator word_iter_;
   std::vector<Postings::KeyIterator> key_iterators_;
   std::vector<Postings::PositionIterator> pos_iterators_;
 

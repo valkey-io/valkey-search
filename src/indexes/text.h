@@ -21,7 +21,6 @@
 #include "src/indexes/text/term.h"
 #include "src/indexes/text/text_fetcher.h"
 #include "src/indexes/text/text_index.h"
-#include "src/indexes/text/wildcard.h"
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"

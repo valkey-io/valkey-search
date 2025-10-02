@@ -143,16 +143,42 @@ std::unique_ptr<text::TextIterator> Text::EntriesFetcher::BuildTextIterator(
   if (auto term = dynamic_cast<const query::TermPredicate*>(predicate)) {
     auto word_iter =
         text_index_->prefix_.GetWordIterator(term->GetTextString());
-    return std::make_unique<text::TermIterator>(word_iter, /*exact=*/true,
-                                                term->GetTextString(),
-                                                field_mask_, untracked_keys_);
+    std::vector<text::Postings::KeyIterator> key_iterators;
+    // Check for matching words is done for exact.
+    while (!word_iter.Done()) {
+      if (word_iter.GetWord() == term->GetTextString()) {
+        key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
+      }
+      word_iter.Next();
+    }
+    return std::make_unique<text::TermIterator>(key_iterators, field_mask_,
+                                                untracked_keys_);
   }
   if (auto prefix = dynamic_cast<const query::PrefixPredicate*>(predicate)) {
     auto word_iter =
         text_index_->prefix_.GetWordIterator(prefix->GetTextString());
-    return std::make_unique<text::WildCardIterator>(
-        word_iter, text::WildCardOperation::kPrefix, prefix->GetTextString(),
-        field_mask_, untracked_keys_);
+    std::vector<text::Postings::KeyIterator> key_iterators;
+    while (!word_iter.Done()) {
+      key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
+      word_iter.Next();
+    }
+    return std::make_unique<text::TermIterator>(key_iterators, field_mask_,
+                                                untracked_keys_);
+  }
+  if (auto suffix = dynamic_cast<const query::SuffixPredicate*>(predicate)) {
+    // Safety check since we must already handle this in the query level.
+    CHECK(text_index_->suffix_.has_value())
+        << "Text index does not have suffix trie enabled.";
+    std::string reversed_word(suffix->GetTextString().rbegin(),
+                              suffix->GetTextString().rend());
+    auto word_iter = text_index_->suffix_->GetWordIterator(reversed_word);
+    std::vector<text::Postings::KeyIterator> key_iterators;
+    while (!word_iter.Done()) {
+      key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
+      word_iter.Next();
+    }
+    return std::make_unique<text::TermIterator>(key_iterators, field_mask_,
+                                                untracked_keys_);
   }
   if (auto proximity =
           dynamic_cast<const query::ProximityPredicate*>(predicate)) {

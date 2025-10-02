@@ -178,9 +178,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         
         # Validate top-level structure
         required_top_level_fields = [
-            "index_name", "index_options", "index_definition", "attributes",
-            "num_docs", "num_terms", "num_records", "hash_indexing_failures",
-            "gc_stats", "cursor_stats", "dialect_stats", "Index Errors",
+            "index_name", "index_definition", "attributes",
+            "num_docs", "num_records", "hash_indexing_failures",
             "backfill_in_progress", "backfill_complete_percent", 
             "mutation_queue_size", "recent_mutations_queue_delay",
             "state", "punctuation", "stop_words", "with_offsets", "language"

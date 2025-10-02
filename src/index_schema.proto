@@ -30,6 +30,7 @@ message IndexSchema {
   Stats stats = 7;
   optional uint32 db_num = 8;
 
+  // TODO: make these optional so that we can give them default values if loading an old version RDB
   string punctuation = 9;
   bool with_offsets = 10;
   repeated string stop_words = 11;

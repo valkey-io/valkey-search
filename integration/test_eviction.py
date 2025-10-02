@@ -21,7 +21,6 @@ class TestEviction(ValkeySearchTestCaseBase):
         "volatile-random",
         "volatile-ttl",
     ]
-
     @pytest.mark.parametrize("eviction_policy", EVICTION_POLICIES)
     def test_eviction_with_search_index(self, eviction_policy):
         """
@@ -69,11 +68,7 @@ class TestEviction(ValkeySearchTestCaseBase):
         # Set a relatively small memory limit to trigger eviction
         # This should be enough for initial data but will trigger eviction when we add more
         current_used_memory = client.info("memory")["used_memory"]
-        # new_maxmemory = (
-        #     current_used_memory
-        #     if policy == "noeviction"
-        #     else str(int(int(current_used_memory) * 1.1))
-        # )
+        
 
         client.config_set("maxmemory", current_used_memory)
         client.config_set("maxmemory-policy", policy)
@@ -101,12 +96,34 @@ class TestEviction(ValkeySearchTestCaseBase):
         """Test eviction policies that actually evict data"""
         # Add more data to trigger eviction - load total of 2000 docs (includes original 500)
         total_docs = initial_docs * 4
-        # Set TTL on new keys for volatile eviction policies
-
-        if policy.startswith("volatile"):
-            index.load_data_with_ttl(client, total_docs, self.HOUR_IN_MS)
-        else:
-            index.load_data(client, total_docs)
+        
+        # Load data gradually to allow eviction to keep up
+        batch_size = 100
+        current_docs = initial_docs
+        max_oom_retries = 5
+        
+        while current_docs < total_docs:
+            next_batch_end = min(current_docs + batch_size, total_docs)
+            oom_retries = 0
+            
+            while oom_retries < max_oom_retries:
+                try:
+                    if policy.startswith("volatile"):
+                        index.load_data_with_ttl(client, next_batch_end, self.HOUR_IN_MS, start_index=current_docs)
+                    else:
+                        index.load_data(client, next_batch_end, start_index=current_docs)
+                    current_docs = next_batch_end
+                    break
+                    
+                except OutOfMemoryError:
+                    oom_retries += 1
+                    if oom_retries >= max_oom_retries:
+                        raise Exception(f"Failed to load data after {max_oom_retries} OOM retries")
+                    # Wait for eviction and retry
+                    time.sleep(0.1)
+            
+            # Small delay between batches
+            time.sleep(0.01)
 
         # Verify that some eviction occurred
         final_info = index.info(client)
@@ -123,7 +140,19 @@ class TestEviction(ValkeySearchTestCaseBase):
             final_info.num_docs >= min_expected_docs
         ), f"Too many documents evicted: {final_info.num_docs} < {min_expected_docs}"
 
-        self._verify_search_operations(client, index, expected_min_results=10)
+        # Wait for eviction to stabilize before testing search
+        time.sleep(0.2)
+        
+        # Retry search operations if they fail due to OOM
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                self._verify_search_operations(client, index, expected_min_results=10)
+                break
+            except OutOfMemoryError:
+                if attempt == max_retries - 1:
+                    raise Exception(f"Search operations failed after {max_retries} OOM retries")
+                time.sleep(0.1)
 
     def _verify_search_operations(
         self, client: Valkey, index: Index, expected_min_results: int

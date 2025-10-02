@@ -125,6 +125,9 @@ class Metrics {
     std::atomic<uint64_t> time_slice_write_time{0};  // microseconds, cumulative
     std::atomic<uint64_t> time_slice_upserts{0};
     std::atomic<uint64_t> time_slice_deletes{0};
+
+    std::atomic<uint64_t> info_fanout_retry_cnt{0};
+    std::atomic<uint64_t> info_fanout_fail_cnt{0};
   };
   static Stats& GetStats() { return GetInstance().stats_; }
 

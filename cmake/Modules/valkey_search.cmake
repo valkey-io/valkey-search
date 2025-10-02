@@ -67,7 +67,7 @@ function(valkey_search_target_update_san_flags TARGET)
     target_compile_options(${TARGET} PRIVATE -O1)
     target_compile_options(${TARGET} PRIVATE -fno-omit-frame-pointer)
     target_compile_options(${TARGET} PRIVATE "-fsanitize=${SAN_BUILD}")
-   
+
     target_compile_options(${TARGET} PRIVATE -fno-lto)
     target_compile_definitions(${TARGET} PRIVATE "SAN_BUILD=${SAN_BUILD}")
   endif()
@@ -114,7 +114,10 @@ function(valkey_search_target_update_compile_flags TARGET)
   target_compile_options(${TARGET} PRIVATE -mtune=generic)
   target_compile_options(${TARGET} PRIVATE -gdwarf-5)
   target_compile_options(${TARGET} PRIVATE -gz=zlib)
-  target_compile_options(${TARGET} PRIVATE -ffile-prefix-map=${CMAKE_SOURCE_DIR}=)
+  if(NOT VALKEY_SEARCH_DEBUG_BUILD)
+    target_compile_options(${TARGET}
+                           PRIVATE -ffile-prefix-map=${CMAKE_SOURCE_DIR}=)
+  endif()
   target_compile_options(${TARGET} PRIVATE -ffast-math)
   target_compile_options(${TARGET} PRIVATE -funroll-loops)
   target_compile_options(${TARGET} PRIVATE -ftree-vectorize)
@@ -195,7 +198,7 @@ macro(finalize_test_flags __TARGET)
   target_link_libraries(${__TARGET} PRIVATE GTest::gtest GTest::gtest_main
                                             GTest::gmock)
   if(SAN_BUILD)
-  target_link_options(${__TARGET} PRIVATE "-fsanitize=${SAN_BUILD}")
-   
+    target_link_options(${__TARGET} PRIVATE "-fsanitize=${SAN_BUILD}")
+
   endif()
 endmacro()

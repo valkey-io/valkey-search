@@ -16,6 +16,12 @@ namespace options {
 
 constexpr uint32_t kHNSWDefaultBlockSize{10240};
 constexpr uint32_t kHNSWMinimumBlockSize{0};
+constexpr uint32_t kDefaultFTInfoTimeoutMs{5000};
+constexpr uint32_t kMinimumFTInfoTimeoutMs{100};
+constexpr uint32_t kMaximumFTInfoTimeoutMs{300000};
+constexpr uint32_t kDefaultFTInfoRpcTimeoutMs{2500};
+constexpr uint32_t kMinimumFTInfoRpcTimeoutMs{100};
+constexpr uint32_t kMaximumFTInfoRpcTimeoutMs{300000};
 
 namespace {
 
@@ -171,6 +177,47 @@ static auto log_level =
 constexpr absl::string_view kEnablePartialResults{"enable-partial-results"};
 static config::Boolean enable_partial_results(kEnablePartialResults, true);
 
+/// Configure the weight for high priority tasks in thread pools (0-100)
+/// Low priority weight = 100 - high_priority_weight
+constexpr absl::string_view kHighPriorityWeight{"high-priority-weight"};
+static auto high_priority_weight =
+    config::NumberBuilder(kHighPriorityWeight, 100, 0,
+                          100)  // Default 100%, range 0-100
+        .WithModifyCallback([](auto new_value) {
+          // Update both reader and writer thread pools
+          auto reader_pool = ValkeySearch::Instance().GetReaderThreadPool();
+          auto writer_pool = ValkeySearch::Instance().GetWriterThreadPool();
+          if (reader_pool) {
+            reader_pool->SetHighPriorityWeight(new_value);
+          }
+          if (writer_pool) {
+            writer_pool->SetHighPriorityWeight(new_value);
+          }
+        })
+        .Build();
+
+/// Register the "--ft-info-timeout-ms" flag. Controls the timeout for FT.INFO
+/// operations
+constexpr absl::string_view kFTInfoTimeoutMsConfig{"ft-info-timeout-ms"};
+static auto ft_info_timeout_ms =
+    vmsdk::config::NumberBuilder(
+        kFTInfoTimeoutMsConfig,   // name
+        kDefaultFTInfoTimeoutMs,  // default timeout (5 seconds)
+        kMinimumFTInfoTimeoutMs,  // min timeout (100ms)
+        kMaximumFTInfoTimeoutMs)  // max timeout (5 minutes)
+        .Build();
+
+/// Register the "--ft-info-rpc-timeout-ms" flag. Controls the timeout for
+/// FT.INFO operations
+constexpr absl::string_view kFTInfoRpcTimeoutMsConfig{"ft-info-rpc-timeout-ms"};
+static auto ft_info_rpc_timeout_ms =
+    vmsdk::config::NumberBuilder(
+        kFTInfoRpcTimeoutMsConfig,   // name
+        kDefaultFTInfoRpcTimeoutMs,  // default timeout (2.5 seconds)
+        kMinimumFTInfoRpcTimeoutMs,  // min timeout (100ms)
+        kMaximumFTInfoRpcTimeoutMs)  // max timeout (5 minutes)
+        .Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -213,6 +260,18 @@ absl::Status Reset() {
 
 const vmsdk::config::Boolean& GetEnablePartialResults() {
   return static_cast<vmsdk::config::Boolean&>(enable_partial_results);
+}
+
+vmsdk::config::Number& GetHighPriorityWeight() {
+  return dynamic_cast<vmsdk::config::Number&>(*high_priority_weight);
+}
+
+vmsdk::config::Number& GetFTInfoTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number&>(*ft_info_timeout_ms);
+}
+
+vmsdk::config::Number& GetFTInfoRpcTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number&>(*ft_info_rpc_timeout_ms);
 }
 
 }  // namespace options

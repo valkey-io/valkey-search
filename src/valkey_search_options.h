@@ -52,5 +52,14 @@ absl::Status Reset();
 /// Allow delivery of partial results when timeout occurs
 const config::Boolean& GetEnablePartialResults();
 
+/// Return the configuration entry for high priority weight in thread pools
+config::Number& GetHighPriorityWeight();
+
+/// Return the timeout for ft.info fanout command
+config::Number& GetFTInfoTimeoutMs();
+
+/// Return the rpc timeout for ft.info fanout command
+config::Number& GetFTInfoRpcTimeoutMs();
+
 }  // namespace options
 }  // namespace valkey_search

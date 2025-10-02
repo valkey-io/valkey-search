@@ -25,20 +25,20 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
                                        coordinator::InfoIndexPartitionResponse,
                                        fanout::FanoutTargetMode::kPrimary> {
  public:
-  PrimaryInfoFanoutOperation(std::string index_name, unsigned timeout_ms);
+  PrimaryInfoFanoutOperation(uint32_t db_num, const std::string& index_name,
+                             unsigned timeout_ms);
 
   unsigned GetTimeoutMs() const override;
 
   coordinator::InfoIndexPartitionRequest GenerateRequest(
-      const fanout::FanoutSearchTarget&, unsigned timeout_ms) override;
+      const fanout::FanoutSearchTarget&) override;
 
   void OnResponse(const coordinator::InfoIndexPartitionResponse& resp,
                   [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
 
-  coordinator::InfoIndexPartitionResponse GetLocalResponse(
-      ValkeyModuleCtx* ctx,
-      const coordinator::InfoIndexPartitionRequest& request,
-      [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
+  std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
+  GetLocalResponse(const coordinator::InfoIndexPartitionRequest& request,
+                   [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
 
   void InvokeRemoteRpc(
       coordinator::Client* client,
@@ -51,12 +51,19 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
   int GenerateReply(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,
                     int argc) override;
 
+  // reset and clean the fields for new round of retry
+  void ResetForRetry() override;
+
+  // decide which condition to run retry
+  bool ShouldRetry() override;
+
  private:
   bool exists_;
   std::optional<uint64_t> schema_fingerprint_;
   std::optional<uint32_t> version_;
+  uint32_t db_num_;
   std::string index_name_;
-  std::optional<unsigned> timeout_ms_;
+  unsigned timeout_ms_;
   uint64_t num_docs_;
   uint64_t num_records_;
   uint64_t hash_indexing_failures_;

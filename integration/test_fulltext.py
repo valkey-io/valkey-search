@@ -286,15 +286,44 @@ class TestFullText(ValkeySearchTestCaseBase):
 
     def test_default_ingestion_pipeline(self):
         """
-        Test comprehensive ingestion pipeline: FT.CREATE → HSET → FT.SEARCH with full tokenization
+        Test comprehensive ingestion pipeline: FT.CREATE → HSET → FT.SEARCH with full tokenization,
+        index metadata validation with data, and index lifecycle management.
         """
         client: Valkey = self.server.get_new_client()
-        client.execute_command("FT.CREATE idx ON HASH SCHEMA content TEXT")
-        client.execute_command("HSET", "doc:1", "content", "The quick-running searches are finding EFFECTIVE results!")
-        client.execute_command("HSET", "doc:2", "content", "But slow searches aren't working...")
         
-        # List of queries with pass/fail expectations
-        test_cases = [
+        # Comprehensive test: Create index with multiple field types for both tokenization and metadata validation
+        comprehensive_index = "comprehensive_test_idx"
+        
+        # Create index with multiple field types
+        assert client.execute_command(
+            "FT.CREATE", comprehensive_index,
+            "ON", "HASH",
+            "PREFIX", "1", "doc:",
+            "SCHEMA", "title", "TEXT", "content", "TEXT", "score", "NUMERIC"
+        ) == b"OK"
+        
+        # Insert test data that covers both tokenization and metadata validation
+        test_docs = [
+            {"key": "doc:1", "title": "First Document", "content": "The quick-running searches are finding EFFECTIVE results!", "score": "10"},
+            {"key": "doc:2", "title": "Second Document", "content": "But slow searches aren't working...", "score": "20"},
+            {"key": "doc:3", "title": "Third Document", "content": "This is the third document content", "score": "30"},
+            {"key": "doc:4", "title": "Fourth Document", "content": "This is the fourth document content", "score": "40"},
+            {"key": "doc:5", "title": "Fifth Document", "content": "This is the fifth document content", "score": "50"}
+        ]
+        
+        for doc in test_docs:
+            client.execute_command("HSET", doc["key"], "title", doc["title"], "content", doc["content"], "score", doc["score"])
+        
+        # Wait for indexing to complete
+        def check_is_backfill_complete(index_name):
+            info = client.execute_command("FT.INFO", index_name)
+            parser = FTInfoParser(info)
+            return parser.is_backfill_complete()
+        
+        waiters.wait_for_equal(lambda: check_is_backfill_complete(comprehensive_index), True, timeout=15)
+        
+        # Test tokenization functionality with the indexed data
+        tokenization_test_cases = [
             ("quick*", True, "Punctuation tokenization - hyphen creates word boundaries"),
             ("effect*", True, "Case insensitivity - lowercase matches uppercase"),
             ("the", False, "Stop word filtering - common words filtered out"),
@@ -303,14 +332,108 @@ class TestFullText(ValkeySearchTestCaseBase):
         ]
         
         expected_key = b'doc:1'
-        expected_fields = [b'content', b"The quick-running searches are finding EFFECTIVE results!"]
+        expected_fields = [b'title', b'First Document', b'content', b"The quick-running searches are finding EFFECTIVE results!", b'score', b'10']
         
-        for query_term, should_match, description in test_cases:
-            result = client.execute_command("FT.SEARCH", "idx", f'@content:"{query_term}"')
+        for query_term, should_match, description in tokenization_test_cases:
+            result = client.execute_command("FT.SEARCH", comprehensive_index, f'@content:"{query_term}"')
             if should_match:
-                assert result[0] == 1 and result[1] == expected_key and result[2] == expected_fields, f"Failed: {description}"
+                assert result[0] == 1, f"Failed: {description} - expected 1 result, got {result[0]}"
+                assert result[1] == expected_key, f"Failed: {description} - wrong document key"
+                # Check that the returned fields contain the expected content
+                returned_fields = dict(zip(result[2][::2], result[2][1::2]))
+                assert returned_fields[b'content'] == b"The quick-running searches are finding EFFECTIVE results!", f"Failed: {description} - wrong content"
             else:
-                assert result[0] == 0, f"Failed: {description}"
+                assert result[0] == 0, f"Failed: {description} - expected 0 results, got {result[0]}"
+        
+        # Validate index exists in FT._LIST
+        index_list = client.execute_command("FT._LIST")
+        index_names = [item.decode('utf-8') if isinstance(item, bytes) else str(item) for item in index_list]
+        assert comprehensive_index in index_names, f"Index {comprehensive_index} not found in FT._LIST"
+        
+        # Validate FT.INFO structure and attributes
+        info_response = client.execute_command("FT.INFO", comprehensive_index)
+        parser = FTInfoParser(info_response)
+        
+        # Validate expected attributes exist with correct types
+        expected_attributes = {
+            "title": {"type": "TEXT", "identifier": "title"},
+            "content": {"type": "TEXT", "identifier": "content"},
+            "score": {"type": "NUMERIC", "identifier": "score"}
+        }
+        
+        for attr_name, expected_config in expected_attributes.items():
+            attr = parser.get_attribute_by_name(attr_name)
+            assert attr is not None, f"Expected attribute '{attr_name}' not found"
+            
+            for key, expected_value in expected_config.items():
+                actual_value = attr.get(key)
+                assert actual_value == expected_value, f"Attribute '{attr_name}' {key} mismatch: expected {expected_value}, got {actual_value}"
+        
+        # Validate indexing state
+        assert parser.is_ready(), "Index is not in ready state"
+        assert parser.is_backfill_complete(), "Index backfill not complete"
+        
+        # Test additional search functionality with different fields
+        search_result = client.execute_command("FT.SEARCH", comprehensive_index, '@title:"first"')
+        assert search_result[0] == 1, "Should find one document with 'first' in title"
+        assert search_result[1] == b"doc:1", "Should find the first document"
+        
+        # Test numeric field search
+        search_result = client.execute_command("FT.SEARCH", comprehensive_index, '@score:[30 50]')
+        assert search_result[0] == 3, "Should find three documents with scores between 30-50"
+        
+        # Index lifecycle management
+        lifecycle_index = "lifecycle_test_idx"
+        
+        # Create index
+        assert client.execute_command(
+            "FT.CREATE", lifecycle_index,
+            "ON", "HASH",
+            "PREFIX", "1", "test:",
+            "SCHEMA", "field1", "TEXT"
+        ) == b"OK"
+        
+        # Wait for indexing to complete
+        waiters.wait_for_equal(lambda: check_is_backfill_complete(lifecycle_index), True, timeout=10)
+        
+        # Validate index appears in list
+        index_list = client.execute_command("FT._LIST")
+        index_names = [item.decode('utf-8') if isinstance(item, bytes) else str(item) for item in index_list]
+        assert lifecycle_index in index_names, f"Index {lifecycle_index} not found in FT._LIST after creation"
+        
+        # Add some data
+        client.execute_command("HSET", "test:1", "field1", "test value")
+        
+        # Wait for indexing
+        waiters.wait_for_equal(lambda: check_is_backfill_complete(lifecycle_index), True, timeout=10)
+        
+        # Validate metadata is still consistent
+        info_response = client.execute_command("FT.INFO", lifecycle_index)
+        parser = FTInfoParser(info_response)
+        
+        field1_attr = parser.get_attribute_by_name("field1")
+        assert field1_attr is not None, "field1 attribute not found"
+        assert field1_attr.get("type") == "TEXT", "field1 should be TEXT type"
+        assert field1_attr.get("identifier") == "field1", "field1 identifier mismatch"
+        
+        # Test search works
+        search_result = client.execute_command("FT.SEARCH", lifecycle_index, '@field1:"test"')
+        assert search_result[0] == 1, "Should find the test document"
+        
+        # Drop index
+        assert client.execute_command("FT.DROPINDEX", lifecycle_index) == b"OK"
+        
+        # Validate index is removed from list
+        import time
+        time.sleep(0.5)  # Brief wait for cleanup
+        
+        index_list = client.execute_command("FT._LIST")
+        index_names = [item.decode('utf-8') if isinstance(item, bytes) else str(item) for item in index_list]
+        assert lifecycle_index not in index_names, f"Index {lifecycle_index} still exists after drop"
+        
+        # Validate FT.INFO fails after drop
+        with pytest.raises(ResponseError):
+            client.execute_command("FT.INFO", lifecycle_index)
 
     def test_multi_text_field(self):
         """

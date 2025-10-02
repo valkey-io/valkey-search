@@ -217,8 +217,6 @@ void Postings::InsertPosting(const Key& key, size_t field_index,
     effective_position = 0;
   }
 
-  bool is_new_key =
-      impl_->key_to_positions_.find(key) == impl_->key_to_positions_.end();
   auto& pos_map = impl_->key_to_positions_[key];
 
   // Check if position already exists
@@ -239,10 +237,7 @@ void Postings::InsertPosting(const Key& key, size_t field_index,
 void Postings::RemoveKey(const Key& key) {
   IsolatedMemoryScope scope{memory_pool_};
 
-  auto it = impl_->key_to_positions_.find(key);
-  if (it != impl_->key_to_positions_.end()) {
-    impl_->key_to_positions_.erase(it);
-  }
+  impl_->key_to_positions_.erase(key);
 }
 
 // Get total number of document keys

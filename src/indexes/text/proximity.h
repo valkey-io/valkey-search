@@ -96,10 +96,8 @@ class ProximityIterator : public TextIterator {
   const InternedStringSet* untracked_keys_;
 
   bool FindCommonKey();
-  bool IsValidPositionCombination(
-      const std::vector<std::pair<uint32_t, uint32_t>>& positions) const;
   std::optional<size_t> FindViolatingIterator(
-    const std::vector<std::pair<uint32_t, uint32_t>>& positions) const;
+      const std::vector<std::pair<uint32_t, uint32_t>>& positions) const;
 };
 }  // namespace valkey_search::indexes::text
 

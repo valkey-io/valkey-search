@@ -192,12 +192,21 @@ Service::GenerateInfoResponse(
   uint32_t db_num = request.db_num();
   std::string index_name = request.index_name();
   coordinator::InfoIndexPartitionResponse response;
+  // test path: simulate index not found error
+  if (ForceIndexNotFoundError.GetValue() > 0) {
+    ForceIndexNotFoundError.Decrement();
+    std::string test_error_str =
+        "Test Error: Index " + index_name + " not found";
+    response.set_exists(false);
+    response.set_index_name(index_name);
+    response.set_error(test_error_str);
+    response.set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
+    grpc::Status error_status(grpc::StatusCode::NOT_FOUND, test_error_str);
+    return std::make_pair(error_status, response);
+  }
   auto status_or_schema =
       SchemaManager::Instance().GetIndexSchema(db_num, index_name);
-  if (!status_or_schema.ok() || ForceIndexNotFoundError.GetValue() > 0) {
-    if (ForceIndexNotFoundError.GetValue() > 0) {
-      ForceIndexNotFoundError.Decrement();
-    }
+  if (!status_or_schema.ok()) {
     response.set_exists(false);
     response.set_index_name(index_name);
     response.set_error(status_or_schema.status().ToString());
@@ -251,7 +260,7 @@ grpc::ServerUnaryReactor* Service::InfoIndexPartition(
   GRPCSuspensionGuard guard(GRPCSuspender::Instance());
   auto latency_sample = SAMPLE_EVERY_N(100);
   grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
-  // simulate grpc timeout for testing only
+  // test path: simulate grpc timeout
   if (ForceRemoteFailCount.GetValue() > 0) {
     ForceRemoteFailCount.Decrement();
     return reactor;

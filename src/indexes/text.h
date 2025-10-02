@@ -104,23 +104,6 @@ class Text : public IndexBase {
       const query::TextPredicate& predicate,
       bool negate) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
-  // Statistics methods for FT.INFO
-  uint64_t GetTotalPositions() const;
-  uint64_t GetNumTerms() const;
-  uint64_t GetTotalTermFrequency() const;
-  
-  // Memory usage methods
-  uint64_t GetPostingsMemoryUsage() const;
-  uint64_t GetRadixTreeMemoryUsage() const;
-  uint64_t GetPositionMemoryUsage() const;
-  uint64_t GetTotalTextIndexMemoryUsage() const;
-  
-  // Statistical averages methods
-  double GetTotalTermsPerDocAvg(uint64_t num_docs) const;
-  double GetTotalTextIndexSizePerDocAvg(uint64_t num_docs) const;
-  double GetPositionSizePerTermAvg() const;
-  double GetTotalTextIndexSizePerTermAvg() const;
-
  private:
   // Each text field index within the schema is assigned a unique number, this
   // is used by the Postings object to identify fields.

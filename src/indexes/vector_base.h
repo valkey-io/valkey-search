@@ -127,8 +127,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override;
   absl::Status SaveIndexExtension(
       RDBChunkOutputStream chunked_out) const override;
-  absl::Status LoadIndexExtension(
-      SupplementalContentChunkIter chunked_out) override;
+  absl::Status LoadIndexExtension(RDBChunkInputStream chunked_in) override;
 
   absl::Status SaveTrackedKeys(RDBChunkOutputStream chunked_out) const
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);

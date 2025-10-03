@@ -45,7 +45,11 @@ Numeric::Numeric(const data_model::NumericIndex& numeric_index_proto)
 
 absl::StatusOr<bool> Numeric::AddRecord(const InternedStringPtr& key,
                                         absl::string_view data) {
-  auto value = ParseNumber(data);
+  return AddRecordInternal(key, ParseNumber(data));
+}
+
+absl::StatusOr<bool> Numeric::AddRecordInternal(const InternedStringPtr& key,
+                                                std::optional<double> value) {
   absl::MutexLock lock(&index_mutex_);
   if (!value.has_value()) {
     untracked_keys_.insert(key);
@@ -260,11 +264,71 @@ uint64_t Numeric::GetRecordCount() const {
 }
 
 absl::Status Numeric::SaveIndexExtension(RDBChunkOutputStream output) const {
+  size_t untracked_key_count = untracked_keys_.size();
+  size_t tracked_key_count = tracked_keys_.size();
+  VMSDK_RETURN_IF_ERROR(output.SaveObject(untracked_key_count));
+  VMSDK_RETURN_IF_ERROR(output.SaveObject(tracked_key_count));
+
+  for (const auto& key_ptr : untracked_keys_) {
+    VMSDK_RETURN_IF_ERROR(output.SaveString(key_ptr->Str()));
+    //
+    // Ensure no duplicate keys (which would cause a load error)
+    //
+    if (tracked_keys_.contains(key_ptr)) {
+      DCHECK(false);
+      return absl::InternalError("Numeric field save duplicate key");
+    }
+  }
+
+  for (const auto& [key_ptr, value] : tracked_keys_) {
+    VMSDK_RETURN_IF_ERROR(output.SaveString(key_ptr->Str()));
+    VMSDK_RETURN_IF_ERROR(output.SaveObject<double>(value));
+  }
+
   return absl::OkStatus();
 }
 
-absl::Status Numeric::LoadIndexExtension(
-    SupplementalContentChunkIter chunked_out) {
+absl::Status Numeric::LoadIndexExtension(RDBChunkInputStream input) {
+  VMSDK_ASSIGN_OR_RETURN(size_t untracked_key_count, input.LoadObject<size_t>(),
+                         _ << "RDB: Numeric load error on untracked_key_count");
+  VMSDK_ASSIGN_OR_RETURN(size_t tracked_key_count, input.LoadObject<size_t>(),
+                         _ << "RDB: Numeric load error on tracked_key_count");
+
+  for (size_t i = 0; i < untracked_key_count; ++i) {
+    VMSDK_ASSIGN_OR_RETURN(
+        auto key, input.LoadString(),
+        _ << "RDB: Numeric load key error on key number " << i);
+    auto key_ptr = StringInternStore::Instance().Intern(key);
+    VMSDK_ASSIGN_OR_RETURN(
+        auto tracked, AddRecordInternal(key_ptr, std::nullopt),
+        _ << "RDB: Numeric load error on insert for key number " << i);
+    if (tracked) {
+      return absl::InternalError(absl::StrCat(
+          "RDB: Numeric field reload error on untracked Key number: ", i));
+    }
+  }
+
+  for (size_t i = 0; i < tracked_key_count; ++i) {
+    VMSDK_ASSIGN_OR_RETURN(
+        auto key, input.LoadString(),
+        _ << "RDB: Numeric load error on tracked key number " << i);
+    auto key_ptr = StringInternStore::Instance().Intern(key);
+    VMSDK_ASSIGN_OR_RETURN(
+        auto value, input.LoadObject<double>(),
+        _ << "RDB: Numeric load error on value for key number " << i);
+    VMSDK_ASSIGN_OR_RETURN(
+        auto tracked, AddRecordInternal(key_ptr, value),
+        _ << "RDB: Numeric load error on insert for key number " << i);
+    if (!tracked) {
+      return absl::InternalError(absl::StrCat(
+          "RDB: Numeric field reload error on tracked key number ", i));
+    }
+  }
+
+  if (!input.AtEnd()) {
+    return absl::InternalError("RDB: Numeric Extra data records found");
+  }
+
   return absl::OkStatus();
 }
 

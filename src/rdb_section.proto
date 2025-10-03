@@ -62,7 +62,7 @@ message KeyToIDMappingHeader {
 
 // V2 Saved Mutation Queue
 message MutationQueueHeader {
-
+  bool backfilling = 1;
 }
 
 message SupplementalContentHeader {

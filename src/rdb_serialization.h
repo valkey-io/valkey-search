@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdlib>
+#include <type_traits>
 
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -20,6 +21,7 @@
 #include "third_party/hnswlib/iostream.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
@@ -306,6 +308,24 @@ class RDBChunkInputStream : public hnswlib::InputStream {
   RDBChunkInputStream &operator=(RDBChunkInputStream &other) = delete;
   absl::StatusOr<std::unique_ptr<std::string>> LoadChunk() override;
 
+  absl::StatusOr<std::string> LoadString() {
+    VMSDK_ASSIGN_OR_RETURN(auto str, LoadChunk());
+    return *str.release();
+  }
+
+  template <typename T, std::enable_if_t<std::is_trivial<T>::value &&
+                                             std::is_standard_layout<T>::value,
+                                         bool> = true>
+  absl::StatusOr<T> LoadObject() {
+    VMSDK_ASSIGN_OR_RETURN(auto buffer, LoadChunk());
+    if (buffer->size() != sizeof(T)) {
+      return absl::InternalError("Mismatched size protocol error");
+    }
+    return *reinterpret_cast<const T *>(buffer->data());
+  }
+
+  bool AtEnd() const { return !iter_.HasNext(); }
+
  private:
   SupplementalContentChunkIter iter_;
 };
@@ -336,6 +356,15 @@ class RDBChunkOutputStream : public hnswlib::OutputStream {
     }
   }
   absl::Status SaveChunk(const char *data, size_t len) override;
+  absl::Status SaveString(const std::string_view s) {
+    return SaveChunk(s.data(), s.size());
+  }
+  template <typename T, std::enable_if_t<std::is_trivial<T>::value &&
+                                             std::is_standard_layout<T>::value,
+                                         bool> = true>
+  absl::Status SaveObject(const T &object) {
+    return this->SaveChunk(reinterpret_cast<const char *>(&object), sizeof(T));
+  }
   absl::Status Close();
 
  private:

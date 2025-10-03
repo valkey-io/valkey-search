@@ -396,8 +396,7 @@ absl::Status VectorBase::SaveIndexExtension(
   CHECK(false);
 }
 
-absl::Status VectorBase::LoadIndexExtension(
-    SupplementalContentChunkIter chunked_out) {
+absl::Status VectorBase::LoadIndexExtension(RDBChunkInputStream chunked_in) {
   CHECK(false);
 }
 

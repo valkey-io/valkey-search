@@ -134,8 +134,9 @@ class IndexSchema : public KeyspaceEventSubscription,
   int GetAttributeCount() const { return attributes_.size(); }
 
   virtual absl::Status RDBSave(SafeRDB *rdb) const;
-  absl::Status SaveMutationQueue(RDBChunkOutputStream chunked_out) const;
-  absl::Status LoadMutationQueue(SupplementalContentChunkIter iter);
+  absl::Status SaveMutationQueue(RDBChunkOutputStream output) const;
+  absl::Status LoadMutationQueue(ValkeyModuleCtx *ctx,
+                                 RDBChunkInputStream input);
 
   static absl::StatusOr<std::shared_ptr<IndexSchema>> LoadFromRDB(
       ValkeyModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,
@@ -192,6 +193,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::unique_ptr<AttributeDataType> attribute_data_type_;
   std::string name_;
   uint32_t db_num_{0};
+  bool loaded_v2_{false};
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   InternedStringMap<DocumentMutation> tracked_mutated_records_

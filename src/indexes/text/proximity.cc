@@ -13,8 +13,11 @@ ProximityIterator::ProximityIterator(
       current_start_pos_(std::nullopt),
       current_end_pos_(std::nullopt),
       field_mask_(field_mask) {
-  CHECK(iters_.size() > 0) << "must have at least one text iterator";
+  CHECK(!iters_.empty()) << "must have at least one text iterator";
   CHECK(slop_ >= 0) << "slop must be non-negative";
+  // Pre-allocate vectors used for positional checks to avoid reallocation
+  positions_.resize(iters_.size());
+  pos_with_idx_.resize(iters_.size());
   // Prime iterators to the first common key and valid position combo
   NextKey();
 }
@@ -22,8 +25,8 @@ ProximityIterator::ProximityIterator(
 uint64_t ProximityIterator::FieldMask() const { return field_mask_; }
 
 bool ProximityIterator::DoneKeys() const {
-  for (auto& c : iters_) {
-    if (c->DoneKeys()) {
+  for (auto& iter : iters_) {
+    if (iter->DoneKeys()) {
       return true;
     }
   }
@@ -39,9 +42,9 @@ bool ProximityIterator::NextKey() {
   // On the second call onwards, advance any text iterators that are still
   // sitting on the old key.
   auto advance = [&]() -> void {
-    for (auto& c : iters_) {
-      if (!c->DoneKeys() && c->CurrentKey() == current_key_) {
-        c->NextKey();
+    for (auto& iter : iters_) {
+      if (!iter->DoneKeys() && iter->CurrentKey() == current_key_) {
+        iter->NextKey();
       }
     }
   };
@@ -109,9 +112,9 @@ bool ProximityIterator::SeekForwardKey(const InternedStringPtr& target_key) {
       }
     }
     // Advance past current key and try again
-    for (auto& c : iters_) {
-      if (!c->DoneKeys() && c->CurrentKey() == current_key_) {
-        c->NextKey();
+    for (auto& iter : iters_) {
+      if (!iter->DoneKeys() && iter->CurrentKey() == current_key_) {
+        iter->NextKey();
       }
     }
   }
@@ -120,8 +123,8 @@ bool ProximityIterator::SeekForwardKey(const InternedStringPtr& target_key) {
 }
 
 bool ProximityIterator::DonePositions() const {
-  for (auto& c : iters_) {
-    if (c->DonePositions()) {
+  for (auto& iter : iters_) {
+    if (iter->DonePositions()) {
       return true;
     }
   }
@@ -133,37 +136,35 @@ std::pair<uint32_t, uint32_t> ProximityIterator::CurrentPosition() const {
   return std::make_pair(current_start_pos_.value(), current_end_pos_.value());
 }
 
-std::optional<size_t> ProximityIterator::FindViolatingIterator(
-    const std::vector<std::pair<uint32_t, uint32_t>>& positions) const {
-  const size_t n = positions.size();
+std::optional<size_t> ProximityIterator::FindViolatingIterator() const {
+  const size_t n = positions_.size();
   if (in_order_) {
     for (size_t i = 0; i < n - 1; ++i) {
       // Check overlap / ordering violations.
-      if (positions[i].second >= positions[i + 1].first) {
+      if (positions_[i].second >= positions_[i + 1].first) {
         return i + 1;
       }
       // Check slop violations.
       if (slop_ >= 0 &&
-          positions[i + 1].first - positions[i].second - 1 > slop_) {
+          positions_[i + 1].first - positions_[i].second - 1 > slop_) {
         return i;
       }
     }
     return std::nullopt;
   }
   // For unordered, use an index mapping to help validate constraints.
-  std::vector<std::pair<uint32_t, size_t>> pos_with_idx;
   for (size_t i = 0; i < n; ++i) {
-    pos_with_idx.emplace_back(positions[i].first, i);
+    pos_with_idx_[i] = {positions_[i].first, i};
   }
-  std::sort(pos_with_idx.begin(), pos_with_idx.end());
+  std::sort(pos_with_idx_.begin(), pos_with_idx_.end());
   for (size_t i = 0; i < n - 1; ++i) {
-    size_t curr_idx = pos_with_idx[i].second;
-    size_t next_idx = pos_with_idx[i + 1].second;
-    if (positions[curr_idx].second >= positions[next_idx].first) {
+    size_t curr_idx = pos_with_idx_[i].second;
+    size_t next_idx = pos_with_idx_[i + 1].second;
+    if (positions_[curr_idx].second >= positions_[next_idx].first) {
       return next_idx;
     }
     if (slop_ >= 0 &&
-        positions[next_idx].first - positions[curr_idx].second - 1 > slop_) {
+        positions_[next_idx].first - positions_[curr_idx].second - 1 > slop_) {
       return curr_idx;
     }
   }
@@ -172,15 +173,14 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator(
 
 bool ProximityIterator::NextPosition() {
   const size_t n = iters_.size();
-  std::vector<std::pair<uint32_t, uint32_t>> positions(n);
   bool should_advance = current_start_pos_.has_value();
   while (!DonePositions()) {
     for (size_t i = 0; i < n; ++i) {
-      positions[i] = iters_[i]->CurrentPosition();
+      positions_[i] = iters_[i]->CurrentPosition();
     }
     if (should_advance) {
       should_advance = false;
-      if (auto iter_to_advance = FindViolatingIterator(positions)) {
+      if (auto iter_to_advance = FindViolatingIterator()) {
         iters_[*iter_to_advance]->NextPosition();
       } else {
         // No violations, advance first non-done iterator
@@ -194,9 +194,9 @@ bool ProximityIterator::NextPosition() {
       continue;
     }
     // No violations mean that this positional combination is valid.
-    if (!FindViolatingIterator(positions).has_value()) {
-      current_start_pos_ = positions[0].first;
-      current_end_pos_ = positions[n - 1].second;
+    if (!FindViolatingIterator().has_value()) {
+      current_start_pos_ = positions_[0].first;
+      current_end_pos_ = positions_[n - 1].second;
       return true;
     }
     should_advance = true;

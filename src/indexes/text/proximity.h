@@ -32,7 +32,7 @@ asc order.
 
 Note: The construction of ProximityPredicate (and therefore ProximityIterator)
 happens only when all terms in the query are on the same field and also only
-when the query involves some positional constraint (ßinorder or slop). Also, the
+when the query involves some positional constraint (inorder or slop). Also, the
 ProximityIterator can contain nested ProximityIterators and this happens when
 there is a ProximityOR term inside a ProximityAND term.
 
@@ -67,17 +67,18 @@ class ProximityIterator : public TextIterator {
   size_t slop_;
   bool in_order_;
   uint64_t field_mask_;
-
+  // Current key/position
   InternedStringPtr current_key_;
   std::optional<uint32_t> current_start_pos_;
   std::optional<uint32_t> current_end_pos_;
-
+  // Vectors used for positional checks
+  mutable std::vector<std::pair<uint32_t, uint32_t>> positions_;
+  mutable std::vector<std::pair<uint32_t, size_t>> pos_with_idx_;
   // Used for Negate
   const InternedStringSet* untracked_keys_;
 
   bool FindCommonKey();
-  std::optional<size_t> FindViolatingIterator(
-      const std::vector<std::pair<uint32_t, uint32_t>>& positions) const;
+  std::optional<size_t> FindViolatingIterator() const;
 };
 }  // namespace valkey_search::indexes::text
 

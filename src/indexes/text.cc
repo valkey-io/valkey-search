@@ -151,8 +151,8 @@ std::unique_ptr<text::TextIterator> Text::EntriesFetcher::BuildTextIterator(
       }
       word_iter.Next();
     }
-    return std::make_unique<text::TermIterator>(key_iterators, field_mask_,
-                                                untracked_keys_);
+    return std::make_unique<text::TermIterator>(std::move(key_iterators),
+                                                field_mask_, untracked_keys_);
   }
   if (auto prefix = dynamic_cast<const query::PrefixPredicate*>(predicate)) {
     auto word_iter =
@@ -162,8 +162,8 @@ std::unique_ptr<text::TextIterator> Text::EntriesFetcher::BuildTextIterator(
       key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
       word_iter.Next();
     }
-    return std::make_unique<text::TermIterator>(key_iterators, field_mask_,
-                                                untracked_keys_);
+    return std::make_unique<text::TermIterator>(std::move(key_iterators),
+                                                field_mask_, untracked_keys_);
   }
   if (auto suffix = dynamic_cast<const query::SuffixPredicate*>(predicate)) {
     // Safety check since we must already handle this in the query level.
@@ -177,8 +177,8 @@ std::unique_ptr<text::TextIterator> Text::EntriesFetcher::BuildTextIterator(
       key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
       word_iter.Next();
     }
-    return std::make_unique<text::TermIterator>(key_iterators, field_mask_,
-                                                untracked_keys_);
+    return std::make_unique<text::TermIterator>(std::move(key_iterators),
+                                                field_mask_, untracked_keys_);
   }
   if (auto proximity =
           dynamic_cast<const query::ProximityPredicate*>(predicate)) {

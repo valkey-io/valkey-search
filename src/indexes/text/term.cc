@@ -9,11 +9,11 @@
 
 namespace valkey_search::indexes::text {
 
-TermIterator::TermIterator(
-    const std::vector<Postings::KeyIterator>& key_iterators,
-    const uint64_t field_mask, const InternedStringSet* untracked_keys)
+TermIterator::TermIterator(std::vector<Postings::KeyIterator>&& key_iterators,
+                           const uint64_t field_mask,
+                           const InternedStringSet* untracked_keys)
     : field_mask_(field_mask),
-      key_iterators_(key_iterators),
+      key_iterators_(std::move(key_iterators)),
       current_key_(nullptr),
       current_position_(std::nullopt),
       untracked_keys_(untracked_keys) {
@@ -37,6 +37,33 @@ const InternedStringPtr& TermIterator::CurrentKey() const {
   return current_key_;
 }
 
+bool TermIterator::FindMinimumValidKey() {
+  current_key_ = nullptr;
+  current_position_ = std::nullopt;
+  for (auto& key_iter : key_iterators_) {
+    while (key_iter.IsValid() && !key_iter.ContainsFields(field_mask_)) {
+      key_iter.NextKey();
+    }
+    if (key_iter.IsValid()) {
+      const auto& key = key_iter.GetKey();
+      if (!current_key_ || key->Str() < current_key_->Str()) {
+        pos_iterators_.clear();
+        pos_iterators_.emplace_back(key_iter.GetPositionIterator());
+        current_key_ = key;
+      } else if (key->Str() == current_key_->Str()) {
+        pos_iterators_.emplace_back(key_iter.GetPositionIterator());
+      }
+    }
+  }
+  if (!current_key_) {
+    return false;
+  }
+  // No need to check since we know that at least one position exists based on
+  // ContainsFields.
+  TermIterator::NextPosition();
+  return true;
+}
+
 bool TermIterator::NextKey() {
   if (current_key_) {
     for (auto& key_iter : key_iterators_) {
@@ -46,67 +73,19 @@ bool TermIterator::NextKey() {
       }
     }
   }
-  current_key_ = nullptr;
-  current_position_ = std::nullopt;
-  for (auto& key_iter : key_iterators_) {
-    while (key_iter.IsValid() && !key_iter.ContainsFields(field_mask_)) {
-      key_iter.NextKey();
-    }
-    if (key_iter.IsValid()) {
-      auto key = key_iter.GetKey();
-      if (!current_key_ || key->Str() < current_key_->Str()) {
-        pos_iterators_.clear();
-        pos_iterators_.emplace_back(key_iter.GetPositionIterator());
-        current_key_ = key;
-      } else if (key->Str() == current_key_->Str()) {
-        pos_iterators_.emplace_back(key_iter.GetPositionIterator());
-      }
-    }
-  }
-  if (!current_key_) {
-    return false;
-  }
-  // No need to check since we know that at least one position exists based on
-  // ContainsFields.
-  NextPosition();
-  return true;
+  return FindMinimumValidKey();
 }
 
 bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
   if (current_key_ && current_key_->Str() >= target_key->Str()) {
     return true;
   }
-  // Use SkipForwardKey to efficiently seek all iterators to target_key or
+  // Use SkipForwardKey to efficiently seek all key iterators to target_key or
   // beyond
   for (auto& key_iter : key_iterators_) {
     key_iter.SkipForwardKey(target_key);
   }
-  // Now find the minimum key using the same logic as NextKey
-  current_key_ = nullptr;
-  current_position_ = std::nullopt;
-  for (auto& key_iter : key_iterators_) {
-    while (key_iter.IsValid() && !key_iter.ContainsFields(field_mask_)) {
-      key_iter.NextKey();
-    }
-    if (key_iter.IsValid()) {
-      auto key = key_iter.GetKey();
-      if (!current_key_ || key->Str() < current_key_->Str()) {
-        // Test this candidate key by collecting its position iterators
-        pos_iterators_.clear();
-        pos_iterators_.emplace_back(key_iter.GetPositionIterator());
-        current_key_ = key;
-      } else if (key->Str() == current_key_->Str()) {
-        pos_iterators_.emplace_back(key_iter.GetPositionIterator());
-      }
-    }
-  }
-  if (!current_key_) {
-    return false;
-  }
-  // No need to check since we know that at least one position exists based on
-  // ContainsFields.
-  NextPosition();
-  return true;
+  return FindMinimumValidKey();
 }
 
 bool TermIterator::DonePositions() const {

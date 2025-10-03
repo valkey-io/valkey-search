@@ -16,5 +16,6 @@ extend-ignore-re = [
 [type.cpp]
 extend-ignore-re = [
     "baNAna",
-    "eXIst"
+    "eXIst",
+    "worl*"
 ]

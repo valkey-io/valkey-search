@@ -67,8 +67,8 @@ into the codebase efficiently enough to be deployed in production code.
 #include "absl/functional/function_ref.h"
 #include "absl/log/check.h"
 #include "absl/strings/string_view.h"
-#include "vmsdk/src/memory_tracker.h"
 #include "vmsdk/src/memory_allocation_overrides.h"
+#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search::indexes::text {
 

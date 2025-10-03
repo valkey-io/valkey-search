@@ -99,9 +99,10 @@ class TextIndexSchema {
 
   // Whether to store position offsets for phrase queries
   bool with_offsets_ = false;
-  
+
   const char* GetLanguageString() const;
-  
+
+ public:
   // FT.INFO memory stats for text index
   uint64_t GetTotalPositions() const;
   uint64_t GetNumTerms() const;
@@ -114,7 +115,6 @@ class TextIndexSchema {
   double GetTotalTextIndexSizePerDocAvg(uint64_t num_docs) const;
   double GetPositionSizePerTermAvg() const;
   double GetTotalTextIndexSizePerTermAvg() const;
-  
 };
 
 }  // namespace valkey_search::indexes::text

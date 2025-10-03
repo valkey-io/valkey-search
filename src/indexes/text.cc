@@ -156,5 +156,4 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
   return nullptr;
 }
 
-
 }  // namespace valkey_search::indexes

@@ -10,7 +10,7 @@
 namespace valkey_search::indexes::text {
 
 TermIterator::TermIterator(std::vector<Postings::KeyIterator>&& key_iterators,
-                           const uint64_t field_mask,
+                           const FieldMaskPredicate field_mask,
                            const InternedStringSet* untracked_keys)
     : field_mask_(field_mask),
       key_iterators_(std::move(key_iterators)),
@@ -23,7 +23,7 @@ TermIterator::TermIterator(std::vector<Postings::KeyIterator>&& key_iterators,
   }
 }
 
-uint64_t TermIterator::FieldMask() const { return field_mask_; }
+FieldMaskPredicate TermIterator::FieldMask() const { return field_mask_; }
 
 bool TermIterator::DoneKeys() const {
   for (const auto& key_iter : key_iterators_) {
@@ -95,9 +95,9 @@ bool TermIterator::DonePositions() const {
   return true;
 }
 
-std::pair<uint32_t, uint32_t> TermIterator::CurrentPosition() const {
+PositionRange TermIterator::CurrentPosition() const {
   CHECK(current_position_.has_value());
-  return std::make_pair(current_position_.value(), current_position_.value());
+  return PositionRange(current_position_.value(), current_position_.value());
 }
 
 bool TermIterator::NextPosition() {

@@ -13,7 +13,6 @@
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/lexer.h"
-#include "src/indexes/text/posting.h"
 
 namespace valkey_search::indexes {
 

@@ -19,7 +19,7 @@ namespace valkey_search::indexes::text {
 Top level iterator for proximity queries (exact phrase / proximity).
 
 ProximityIterator coordinates multiple TextIterators to find documents where
-terms appear within a specified distance (slop) and optionally in order.
+terms appear within a specified distance (slop) and/or inorder.
 
 ProximityIterator Responsibilities:
 - Manages a vector of TextIterators (TermIterator, ProximityIterator,
@@ -38,8 +38,8 @@ there is a ProximityOR term inside a ProximityAND term.
 
 Example of a simple proximity search: For query `hello worl*` with constraints
 of (slop=2, in_order=true):
-- TextIterator[0] - TermIterator managing posting iteration of "hello"
-- TextIterator[1] - WildCardIterator managing postings iteration of "worl*"
+- TextIterator[0] - TermIterator managing postings iteration of "hello"
+- TextIterator[1] - TermIterator managing postings iteration of "worl*"
 - ProximityIterator finds positions where wildcard matches appear within
   2 words of allowed slop after "hello" in the same key / document and field.
 
@@ -48,17 +48,18 @@ class ProximityIterator : public TextIterator {
  public:
   ProximityIterator(std::vector<std::unique_ptr<TextIterator>>&& iters,
                     const size_t slop, const bool in_order,
-                    const uint64_t field_mask,
+                    const FieldMaskPredicate field_mask,
                     const InternedStringSet* untracked_keys = nullptr);
-  uint64_t FieldMask() const override;
+  /* Implementation of TextIterator APIs */
+  FieldMaskPredicate FieldMask() const override;
   // Key-level iteration
   bool DoneKeys() const override;
-  const InternedStringPtr& CurrentKey() const override;
+  const Key& CurrentKey() const override;
   bool NextKey() override;
-  bool SeekForwardKey(const InternedStringPtr& target_key) override;
+  bool SeekForwardKey(const Key& target_key) override;
   // Position-level iteration
   bool DonePositions() const override;
-  std::pair<uint32_t, uint32_t> CurrentPosition() const override;
+  PositionRange CurrentPosition() const override;
   bool NextPosition() override;
 
  private:
@@ -66,14 +67,13 @@ class ProximityIterator : public TextIterator {
   std::vector<std::unique_ptr<TextIterator>> iters_;
   size_t slop_;
   bool in_order_;
-  uint64_t field_mask_;
+  FieldMaskPredicate field_mask_;
   // Current key/position
-  InternedStringPtr current_key_;
-  std::optional<uint32_t> current_start_pos_;
-  std::optional<uint32_t> current_end_pos_;
+  Key current_key_;
+  std::optional<PositionRange> current_position_;
   // Vectors used for positional checks
-  mutable std::vector<std::pair<uint32_t, uint32_t>> positions_;
-  mutable std::vector<std::pair<uint32_t, size_t>> pos_with_idx_;
+  mutable std::vector<PositionRange> positions_;
+  mutable std::vector<std::pair<Position, size_t>> pos_with_idx_;
   // Used for Negate
   const InternedStringSet* untracked_keys_;
 

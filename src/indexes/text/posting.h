@@ -44,6 +44,7 @@ namespace valkey_search::indexes::text {
 
 using Key = InternedStringPtr;
 using Position = uint32_t;
+using FieldMaskPredicate = uint64_t;
 
 // Field mask interface optimized for different field counts
 class FieldMask {

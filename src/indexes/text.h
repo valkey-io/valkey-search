@@ -17,6 +17,7 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/text/posting.h"
 #include "src/indexes/text/proximity.h"
 #include "src/indexes/text/term.h"
 #include "src/indexes/text/text_fetcher.h"
@@ -29,7 +30,6 @@ namespace valkey_search::indexes {
 
 using WordIterator =
     text::RadixTree<std::shared_ptr<text::Postings>, false>::WordIterator;
-using FieldMaskPredicate = uint64_t;
 
 /**
  * Text per-field index implementation for full-text search functionality.
@@ -84,7 +84,7 @@ class Text : public IndexBase {
     EntriesFetcher(size_t size,
                    const std::shared_ptr<text::TextIndex>& text_index,
                    const InternedStringSet* untracked_keys = nullptr,
-                   FieldMaskPredicate field_mask = ~0ULL)
+                   text::FieldMaskPredicate field_mask = ~0ULL)
         : size_(size),
           text_index_(text_index),
           untracked_keys_(untracked_keys),
@@ -105,7 +105,7 @@ class Text : public IndexBase {
     const query::TextPredicate* predicate_;
     absl::string_view data_;
     bool no_field_{false};
-    FieldMaskPredicate field_mask_;
+    text::FieldMaskPredicate field_mask_;
   };
 
   // Calculate size based on the predicate.

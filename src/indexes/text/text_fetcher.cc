@@ -14,9 +14,7 @@ TextFetcher::TextFetcher(std::unique_ptr<TextIterator> iter)
 
 bool TextFetcher::Done() const { return iter_->DoneKeys(); }
 
-const InternedStringPtr& TextFetcher::operator*() const {
-  return iter_->CurrentKey();
-}
+const Key& TextFetcher::operator*() const { return iter_->CurrentKey(); }
 
 void TextFetcher::Next() { iter_->NextKey(); }
 

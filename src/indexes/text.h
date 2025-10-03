@@ -67,17 +67,6 @@ class Text : public IndexBase {
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  public:
-  // Abstract for Text. Every text operation will have a specific
-  // implementation.
-  class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
-   public:
-    bool Done() const override;
-    void Next() override;
-    const InternedStringPtr& operator*() const override;
-
-   private:
-  };
-
   // Common EntriesFetcher impl for all Text operations.
   class EntriesFetcher : public EntriesFetcherBase {
    public:

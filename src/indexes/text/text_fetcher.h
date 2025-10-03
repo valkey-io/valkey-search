@@ -18,7 +18,7 @@ class TextFetcher : public indexes::EntriesFetcherIteratorBase {
   TextFetcher(std::unique_ptr<TextIterator> iter);
 
   bool Done() const override;
-  const InternedStringPtr& operator*() const override;
+  const Key& operator*() const override;
   void Next() override;
 
  private:

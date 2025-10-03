@@ -183,6 +183,7 @@ std::unique_ptr<text::TextIterator> Text::EntriesFetcher::BuildTextIterator(
   if (auto proximity =
           dynamic_cast<const query::ProximityPredicate*>(predicate)) {
     std::vector<std::unique_ptr<text::TextIterator>> vec;
+    vec.reserve(proximity->Terms().size());
     for (const auto& term : proximity->Terms()) {
       vec.emplace_back(BuildTextIterator(term.get()));
     }

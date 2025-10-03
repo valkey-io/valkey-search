@@ -11,11 +11,11 @@ extend-ignore-re = [
     "Grea.*",
     "opposit",
     "uniqu",
+    "worl*"
 ]
 
 [type.cpp]
 extend-ignore-re = [
     "baNAna",
     "eXIst",
-    "worl*"
 ]

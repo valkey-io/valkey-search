@@ -8,30 +8,34 @@
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 
-#include <cstddef>
 #include <vector>
 
-#include "src/indexes/index_base.h"
 #include "src/indexes/text/posting.h"
-#include "src/indexes/text/radix_tree.h"
 #include "src/indexes/text/text_iterator.h"
-#include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes::text {
 
-using FieldMaskPredicate = uint64_t;
-using WordIterator = RadixTree<std::shared_ptr<Postings>, false>::WordIterator;
-
 /*
 
+Top level iterator for a Term.
 
-Top level iterator for a Term
+TermIterator Responsibilities:
+- Manages a vector of posting (key) iterator/s, which operates in lexical order.
+- Key iteration (of documents) takes place by advancing the posting iterator who
+is on the smallest key until it is on a key whose field matches the field mask
+of the search operation. Since multiple posting iterators can have the same key
+amd same field, we create a vector of position iterators, one from each posting
+iterator who are on the same key & field. Once no more keys are found, DoneKeys
+returns true.
+- Position iteration happens across all the position iterators, allowing us to
+search for positions across all the required words within the same key and same
+field. Once no more positions are found, DonePositions returns true.
 
 */
 class TermIterator : public TextIterator {
  public:
   TermIterator(const std::vector<Postings::KeyIterator>& key_iterators,
-               const uint32_t field_mask,
+               const uint64_t field_mask,
                const InternedStringSet* untracked_keys = nullptr);
   uint64_t FieldMask() const override;
   // Key-level iteration
@@ -45,7 +49,7 @@ class TermIterator : public TextIterator {
   bool NextPosition() override;
 
  private:
-  const uint32_t field_mask_;
+  const uint64_t field_mask_;
 
   std::vector<Postings::KeyIterator> key_iterators_;
   std::vector<Postings::PositionIterator> pos_iterators_;

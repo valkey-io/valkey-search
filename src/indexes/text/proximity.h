@@ -8,66 +8,47 @@
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_PHRASE_H_
 
-#include <cstddef>
 #include <vector>
 
-#include "src/indexes/index_base.h"
-#include "src/indexes/text/posting.h"
-#include "src/indexes/text/radix_tree.h"
 #include "src/indexes/text/text_iterator.h"
-#include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes::text {
 
-using FieldMaskPredicate = uint64_t;
-using WordIterator = RadixTree<std::shared_ptr<Postings>, false>::WordIterator;
-
 /*
 
+Top level iterator for proximity queries (exact phrase / proximity).
 
-Top level iterator for a phrase.
+ProximityIterator coordinates multiple TextIterators to find documents where
+terms appear within a specified distance (slop) and optionally in order.
 
-Proximity is defined as a sequence of words that can be separated by up to
-'slop' words. Optionally, the order of the words can be required or not.
+ProximityIterator Responsibilities:
+- Manages a vector of TextIterators (TermIterator, ProximityIterator,
+potentially others in the future).
+- Performs key-level iteration across all text iterators to find common key.
+Relies on the TextIterator contract of NextKey API being in lexical order.
+- Performs position-level proximity validation (slop and ordering/overlap
+constraints). Relies on the TextIterator contract of NextPosition API being in
+asc order.
 
-This is implemented as a merge operation on the various Word Iterators passed
-in. The code below is conceptual and is written like a Python generator
+Note: The construction of ProximityPredicate (and therefore ProximityIterator)
+happens only when all terms in the query are on the same field and also only
+when the query involves some positional constraint (ßinorder or slop). Also, the
+ProximityIterator can contain nested ProximityIterators and this happens when
+there is a ProximityOR term inside a ProximityAND term.
 
-for (word0 : all words in word[0]) {
-  for (word1 : all words in word[1]) {
-    for (word2 : all words in word[2]) {
-       match_one_word_combination([word0, word1, word2, ...]);
-    }
-  }
-}
+Example of a simple proximity search: For query `hello worl*` with constraints
+of (slop=2, in_order=true):
+- TextIterator[0] - TermIterator managing posting iteration of "hello"
+- TextIterator[1] - WildCardIterator managing postings iteration of "worl*"
+- ProximityIterator finds positions where wildcard matches appear within
+  2 words of allowed slop after "hello" in the same key / document and field.
 
-void match_one_word_combination(words) {
-   KeyIterators[*] = words[*].GetKeyIterators();
-   while (! Any KeyIterators.Done()) {
-    if (KeyIterators[*] all point to same key) {
-      process_one_key(KeyIterators[*])
-    }
-    Find lexically smallest KeyIterator and Advance it to the Next Smallest Key
-    }
-   }
-}
-// Need to handle the fields, this is a bit mask on the positions iterator
-void process_one_key(KeyIterators[*]) {
-  PositionIterators[*] = KeyIterators[*].GetPositionIterators();
-  while (! Any PositionIterators.Done()) {
-    if (PositionIterators[*] satisfy the Slop and In-order requirements) {
-      Yield word;
-    }
-    Find smallest PositionIterator and advance it to the next Smallest Position
-Iterator.
-
-  }
-}
 */
 class ProximityIterator : public TextIterator {
  public:
   ProximityIterator(std::vector<std::unique_ptr<TextIterator>>&& iters,
-                    size_t slop, bool in_order, FieldMaskPredicate field_mask,
+                    const size_t slop, const bool in_order,
+                    const uint64_t field_mask,
                     const InternedStringSet* untracked_keys = nullptr);
   uint64_t FieldMask() const override;
   // Key-level iteration
@@ -85,7 +66,6 @@ class ProximityIterator : public TextIterator {
   std::vector<std::unique_ptr<TextIterator>> iters_;
   size_t slop_;
   bool in_order_;
-  // This is from the query and is used in exact phrase
   uint64_t field_mask_;
 
   InternedStringPtr current_key_;

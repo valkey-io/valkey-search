@@ -262,14 +262,14 @@ class ProximityPredicate : public TextPredicate {
  public:
   ProximityPredicate(std::vector<std::unique_ptr<TextPredicate>> terms,
                      uint32_t slop = 0, bool inorder = true);
-  uint32_t GetSlop() const { return slop_; }
-  bool IsInOrder() const { return inorder_; }
+  uint32_t Slop() const { return slop_; }
+  bool InOrder() const { return inorder_; }
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const std::string_view& text) const override { return false; }
   const indexes::Text* GetIndex() const override {
     return terms_[0]->GetIndex();
   }
-  const std::vector<std::unique_ptr<TextPredicate>>& GetTerms() const {
+  const std::vector<std::unique_ptr<TextPredicate>>& Terms() const {
     return terms_;
   }
 

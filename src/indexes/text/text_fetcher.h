@@ -8,19 +8,10 @@
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_FETCHER_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_FETCHER_H_
 
-#include <cstddef>
-#include <vector>
-
 #include "src/indexes/index_base.h"
-#include "src/indexes/text/posting.h"
-#include "src/indexes/text/radix_tree.h"
 #include "src/indexes/text/text_iterator.h"
-#include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes::text {
-
-using FieldMaskPredicate = uint64_t;
-using WordIterator = RadixTree<std::shared_ptr<Postings>, false>::WordIterator;
 
 class TextFetcher : public indexes::EntriesFetcherIteratorBase {
  public:

@@ -128,8 +128,8 @@ std::unique_ptr<Text::EntriesFetcher> Text::Search(
       CalculateSize(predicate), text_index_schema_->GetTextIndex(),
       negate ? &untracked_keys_ : nullptr);
   fetcher->predicate_ = &predicate;
-  // TODO : We only support single field queries for now. Change below when we
-  // support multiple and all fields.
+  // TODO : Update for the default search case (all fields).
+  // The TextPredicate needs to support a GetFieldMask API to indicate this.
   fetcher->field_mask_ = 1ULL << text_field_number_;
   return fetcher;
 }
@@ -183,7 +183,7 @@ std::unique_ptr<text::TextIterator> Text::EntriesFetcher::BuildTextIterator(
   if (auto proximity =
           dynamic_cast<const query::ProximityPredicate*>(predicate)) {
     std::vector<std::unique_ptr<text::TextIterator>> vec;
-    for (const auto& term : proximity->GetTerms()) {
+    for (const auto& term : proximity->Terms()) {
       vec.emplace_back(BuildTextIterator(term.get()));
     }
     // CHECK that all iterators have the same field mask and crash otherwise.
@@ -198,7 +198,7 @@ std::unique_ptr<text::TextIterator> Text::EntriesFetcher::BuildTextIterator(
                                    "the matching fields in child iterators";
     }
     return std::make_unique<text::ProximityIterator>(
-        std::move(vec), /*slop=*/0, /*in_order=*/true, field_mask_,
+        std::move(vec), proximity->Slop(), proximity->InOrder(), field_mask_,
         untracked_keys_);
   }
   CHECK(false) << "Unsupported TextPredicate type";

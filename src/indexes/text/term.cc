@@ -11,7 +11,7 @@ namespace valkey_search::indexes::text {
 
 TermIterator::TermIterator(
     const std::vector<Postings::KeyIterator>& key_iterators,
-    const uint32_t field_mask, const InternedStringSet* untracked_keys)
+    const uint64_t field_mask, const InternedStringSet* untracked_keys)
     : field_mask_(field_mask),
       key_iterators_(key_iterators),
       current_key_(nullptr),

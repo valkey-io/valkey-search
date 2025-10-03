@@ -29,6 +29,7 @@ namespace valkey_search::indexes {
 
 using WordIterator =
     text::RadixTree<std::shared_ptr<text::Postings>, false>::WordIterator;
+using FieldMaskPredicate = uint64_t;
 
 /**
  * Text per-field index implementation for full-text search functionality.
@@ -83,7 +84,7 @@ class Text : public IndexBase {
     EntriesFetcher(size_t size,
                    const std::shared_ptr<text::TextIndex>& text_index,
                    const InternedStringSet* untracked_keys = nullptr,
-                   text::FieldMaskPredicate field_mask = ~0ULL)
+                   FieldMaskPredicate field_mask = ~0ULL)
         : size_(size),
           text_index_(text_index),
           untracked_keys_(untracked_keys),
@@ -104,7 +105,7 @@ class Text : public IndexBase {
     const query::TextPredicate* predicate_;
     absl::string_view data_;
     bool no_field_{false};
-    text::FieldMaskPredicate field_mask_;
+    FieldMaskPredicate field_mask_;
   };
 
   // Calculate size based on the predicate.

@@ -5,10 +5,8 @@
  *
  */
 
-#ifndef VALKEY_SEARCH_INDEXES_TEXT_WORD_ITERATOR_H_
-#define VALKEY_SEARCH_INDEXES_TEXT_WORD_ITERATOR_H_
-
-#include <cstddef>
+#ifndef VALKEY_SEARCH_INDEXES_TEXT_ITERATOR_H_
+#define VALKEY_SEARCH_INDEXES_TEXT_ITERATOR_H_
 
 #include "src/utils/string_interning.h"
 

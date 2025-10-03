@@ -140,9 +140,9 @@ void PrintPredicate(const query::Predicate* pred, int depth, bool last,
     case query::PredicateType::kText: {
       if (auto prox = dynamic_cast<const query::ProximityPredicate*>(pred)) {
         VMSDK_LOG(WARNING, nullptr)
-            << prefix << "PROXIMITY(slop=" << prox->GetSlop()
-            << ", inorder=" << prox->IsInOrder() << ")\n";
-        const auto& terms = prox->GetTerms();
+            << prefix << "PROXIMITY(slop=" << prox->Slop()
+            << ", inorder=" << prox->InOrder() << ")\n";
+        const auto& terms = prox->Terms();
         for (size_t i = 0; i < terms.size(); ++i)
           PrintPredicate(terms[i].get(), depth + 1, i == terms.size() - 1,
                          valid);

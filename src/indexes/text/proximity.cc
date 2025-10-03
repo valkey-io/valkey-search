@@ -4,8 +4,7 @@ namespace valkey_search::indexes::text {
 
 ProximityIterator::ProximityIterator(
     std::vector<std::unique_ptr<TextIterator>>&& iters, size_t slop,
-    bool in_order, FieldMaskPredicate field_mask,
-    const InternedStringSet* untracked_keys)
+    bool in_order, uint64_t field_mask, const InternedStringSet* untracked_keys)
     : iters_(std::move(iters)),
       slop_(slop),
       in_order_(in_order),

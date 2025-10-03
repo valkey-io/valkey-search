@@ -757,7 +757,6 @@ uint64_t IndexSchema::CountRecords() const {
   return record_cnt;
 }
 
-
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   // Calculate additional array size for text-related fields only if text fields
   // exist
@@ -794,43 +793,95 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
 
   ValkeyModule_ReplyWithSimpleString(ctx, "num_docs");
   ValkeyModule_ReplyWithLongLong(ctx, stats_.document_cnt);
-  
+
   ValkeyModule_ReplyWithSimpleString(ctx, "num_unique_terms");
-  ValkeyModule_ReplyWithLongLong(ctx, text_index_schema_ ? text_index_schema_->GetNumTerms() : 0);
-  
+  ValkeyModule_ReplyWithLongLong(
+      ctx, text_index_schema_ ? text_index_schema_->GetNumTerms() : 0);
+
   ValkeyModule_ReplyWithSimpleString(ctx, "num_total_terms");
-  ValkeyModule_ReplyWithLongLong(ctx, text_index_schema_ ? text_index_schema_->GetTotalTermFrequency() : 0);
-  
+  ValkeyModule_ReplyWithLongLong(
+      ctx,
+      text_index_schema_ ? text_index_schema_->GetTotalTermFrequency() : 0);
+
   ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
   ValkeyModule_ReplyWithLongLong(ctx, CountRecords());
-  
+
   ValkeyModule_ReplyWithSimpleString(ctx, "posting_sz_mb");
-  ValkeyModule_ReplyWithCString(ctx, absl::StrFormat("%.6f", text_index_schema_ ? text_index_schema_->GetPostingsMemoryUsage() / (1024.0 * 1024.0) : 0.0).c_str());
-  
+  ValkeyModule_ReplyWithCString(
+      ctx, absl::StrFormat("%.6f",
+                           text_index_schema_
+                               ? text_index_schema_->GetPostingsMemoryUsage() /
+                                     (1024.0 * 1024.0)
+                               : 0.0)
+               .c_str());
+
   ValkeyModule_ReplyWithSimpleString(ctx, "position_sz_mb");
-  ValkeyModule_ReplyWithCString(ctx, absl::StrFormat("%.6f", text_index_schema_ ? text_index_schema_->GetPositionMemoryUsage() / (1024.0 * 1024.0) : 0.0).c_str());
-  
+  ValkeyModule_ReplyWithCString(
+      ctx, absl::StrFormat("%.6f",
+                           text_index_schema_
+                               ? text_index_schema_->GetPositionMemoryUsage() /
+                                     (1024.0 * 1024.0)
+                               : 0.0)
+               .c_str());
+
   ValkeyModule_ReplyWithSimpleString(ctx, "total_postings");
-  ValkeyModule_ReplyWithLongLong(ctx, text_index_schema_ ? text_index_schema_->GetNumTerms() : 0);
-  
+  ValkeyModule_ReplyWithLongLong(
+      ctx, text_index_schema_ ? text_index_schema_->GetNumTerms() : 0);
+
   ValkeyModule_ReplyWithSimpleString(ctx, "radix_sz_mb");
-  ValkeyModule_ReplyWithCString(ctx, absl::StrFormat("%.6f", text_index_schema_ ? text_index_schema_->GetRadixTreeMemoryUsage() / (1024.0 * 1024.0) : 0.0).c_str());
-  
+  ValkeyModule_ReplyWithCString(
+      ctx, absl::StrFormat("%.6f",
+                           text_index_schema_
+                               ? text_index_schema_->GetRadixTreeMemoryUsage() /
+                                     (1024.0 * 1024.0)
+                               : 0.0)
+               .c_str());
+
   ValkeyModule_ReplyWithSimpleString(ctx, "total_text_index_sz_mb");
-  ValkeyModule_ReplyWithCString(ctx, absl::StrFormat("%.6f", text_index_schema_ ? text_index_schema_->GetTotalTextIndexMemoryUsage() / (1024.0 * 1024.0) : 0.0).c_str());
-  
+  ValkeyModule_ReplyWithCString(
+      ctx,
+      absl::StrFormat("%.6f",
+                      text_index_schema_
+                          ? text_index_schema_->GetTotalTextIndexMemoryUsage() /
+                                (1024.0 * 1024.0)
+                          : 0.0)
+          .c_str());
+
   ValkeyModule_ReplyWithSimpleString(ctx, "total_terms_per_doc_avg");
-  ValkeyModule_ReplyWithCString(ctx, absl::StrFormat("%.2f", text_index_schema_ ? text_index_schema_->GetTotalTermsPerDocAvg(stats_.document_cnt) : 0.0).c_str());
-  
+  ValkeyModule_ReplyWithCString(
+      ctx,
+      absl::StrFormat("%.2f", text_index_schema_
+                                  ? text_index_schema_->GetTotalTermsPerDocAvg(
+                                        stats_.document_cnt)
+                                  : 0.0)
+          .c_str());
+
   ValkeyModule_ReplyWithSimpleString(ctx, "total_text_index_sz_per_doc_avg");
-  ValkeyModule_ReplyWithCString(ctx, absl::StrFormat("%.2f", text_index_schema_ ? text_index_schema_->GetTotalTextIndexSizePerDocAvg(stats_.document_cnt) : 0.0).c_str());
-  
+  ValkeyModule_ReplyWithCString(
+      ctx, absl::StrFormat(
+               "%.2f", text_index_schema_
+                           ? text_index_schema_->GetTotalTextIndexSizePerDocAvg(
+                                 stats_.document_cnt)
+                           : 0.0)
+               .c_str());
+
   ValkeyModule_ReplyWithSimpleString(ctx, "position_sz_per_term_avg");
-  ValkeyModule_ReplyWithCString(ctx, absl::StrFormat("%.2f", text_index_schema_ ? text_index_schema_->GetPositionSizePerTermAvg() : 0.0).c_str());
-  
+  ValkeyModule_ReplyWithCString(
+      ctx, absl::StrFormat("%.2f",
+                           text_index_schema_
+                               ? text_index_schema_->GetPositionSizePerTermAvg()
+                               : 0.0)
+               .c_str());
+
   ValkeyModule_ReplyWithSimpleString(ctx, "total_text_index_sz_per_term_avg");
-  ValkeyModule_ReplyWithCString(ctx, absl::StrFormat("%.2f", text_index_schema_ ? text_index_schema_->GetTotalTextIndexSizePerTermAvg() : 0.0).c_str());
-  
+  ValkeyModule_ReplyWithCString(
+      ctx,
+      absl::StrFormat(
+          "%.2f", text_index_schema_
+                      ? text_index_schema_->GetTotalTextIndexSizePerTermAvg()
+                      : 0.0)
+          .c_str());
+
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%lu", stats_.subscription_add.skipped_cnt).c_str());

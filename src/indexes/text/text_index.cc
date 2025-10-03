@@ -158,11 +158,11 @@ uint64_t TextIndexSchema::GetTotalPositions() const {
   if (!text_index_) {
     return 0;
   }
-  
+
   uint64_t total_positions = 0;
-  
+
   auto word_iter = text_index_->prefix_.GetWordIterator("");
-  
+
   while (!word_iter.Done()) {
     auto postings = word_iter.GetTarget();
     if (postings) {
@@ -170,7 +170,7 @@ uint64_t TextIndexSchema::GetTotalPositions() const {
     }
     word_iter.Next();
   }
-  
+
   return total_positions;
 }
 
@@ -178,16 +178,16 @@ uint64_t TextIndexSchema::GetNumTerms() const {
   if (!text_index_) {
     return 0;
   }
-  
+
   uint64_t num_terms = 0;
-  
+
   auto word_iter = text_index_->prefix_.GetWordIterator("");
-  
+
   while (!word_iter.Done()) {
     num_terms++;
     word_iter.Next();
   }
-  
+
   return num_terms;
 }
 
@@ -195,11 +195,11 @@ uint64_t TextIndexSchema::GetTotalTermFrequency() const {
   if (!text_index_) {
     return 0;
   }
-  
+
   uint64_t total_term_freq = 0;
-  
+
   auto word_iter = text_index_->prefix_.GetWordIterator("");
-  
+
   while (!word_iter.Done()) {
     auto postings = word_iter.GetTarget();
     if (postings) {
@@ -207,7 +207,7 @@ uint64_t TextIndexSchema::GetTotalTermFrequency() const {
     }
     word_iter.Next();
   }
-  
+
   return total_term_freq;
 }
 
@@ -241,7 +241,8 @@ double TextIndexSchema::GetTotalTermsPerDocAvg(uint64_t num_docs) const {
   return static_cast<double>(GetTotalTermFrequency()) / num_docs;
 }
 
-double TextIndexSchema::GetTotalTextIndexSizePerDocAvg(uint64_t num_docs) const {
+double TextIndexSchema::GetTotalTextIndexSizePerDocAvg(
+    uint64_t num_docs) const {
   if (num_docs == 0) {
     return 0.0;
   }

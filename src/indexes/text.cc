@@ -182,7 +182,6 @@ uint64_t Text::GetTotalTermFrequency() const {
   return total_term_freq;
 }
 
-
 }  // namespace valkey_search::indexes
 
 // Implement the TextPredicate BuildTextIterator virtual method

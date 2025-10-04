@@ -354,12 +354,12 @@ TEST_F(RDBSerializationTest, PerformRDBSaveOneRDBSection) {
   EXPECT_CALL(*test_cb.mock_callbacks, load(testing::_, testing::_, testing::_))
       .Times(0);
   EXPECT_CALL(*test_cb.mock_callbacks, save(testing::_, testing::_, testing::_))
-      .WillOnce(testing::Invoke(
+      .WillOnce(
           [](ValkeyModuleCtx* ctx, SafeRDB* rdb, int when) -> absl::Status {
             EXPECT_EQ(when, VALKEYMODULE_AUX_BEFORE_RDB);
             VMSDK_EXPECT_OK(rdb->SaveStringBuffer("test-string"));
             return absl::OkStatus();
-          }));
+          });
   EXPECT_CALL(*test_cb.mock_callbacks,
               section_count(&fake_ctx_, VALKEYMODULE_AUX_BEFORE_RDB))
       .WillOnce(testing::Return(1));

@@ -406,7 +406,7 @@ TEST_P(FanoutTest, TestFanout) {
                   GetClient(target.target.address))
           .WillOnce(Return(mock_client));
       EXPECT_CALL(*mock_client, SearchIndexPartition(testing::_, testing::_))
-          .WillOnce(Invoke(
+          .WillOnce(
               [target, search_parameters](auto request, auto callback) mutable {
                 search_parameters.mutable_limit()->set_first_index(
                     request->limit().first_index());
@@ -437,7 +437,7 @@ TEST_P(FanoutTest, TestFanout) {
                   }
                 }
                 callback(grpc::Status::OK, response);
-              }));
+              });
     }
   }
 

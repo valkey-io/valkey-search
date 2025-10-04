@@ -46,6 +46,7 @@
 #include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/blocked_client.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -64,9 +65,9 @@ LogLevel GetLogSeverity(bool ok) { return ok ? DEBUG : WARNING; }
 // Controls and stats for V2 RDB file
 //
 static auto config_rdb_write_v2 =
-    vmsdk::config::BooleanBuilder("rdb_write_v2", false).Hidden().Build();
+    vmsdk::config::BooleanBuilder("rdb-write-v2", false).Dev().Build();
 static auto config_rdb_read_v2 =
-    vmsdk::config::BooleanBuilder("rdb_read_v2", false).Hidden().Build();
+    vmsdk::config::BooleanBuilder("rdb-read-v2", false).Dev().Build();
 
 static bool RDBReadV2() {
   return dynamic_cast<vmsdk::config::Boolean &>(*config_rdb_read_v2).GetValue();
@@ -81,6 +82,10 @@ static vmsdk::info_field::Integer rdb_load_sections(
     "rdb_stats", "rdb_load_sections",
     vmsdk::info_field::IntegerBuilder().Dev());
 
+static vmsdk::info_field::Integer rdb_load_skipped_sections(
+    "rdb_stats", "rdb_load_skipped_sections",
+    vmsdk::info_field::IntegerBuilder().Dev());
+
 static vmsdk::info_field::Integer rdb_load_mutation_entries(
     "rdb_stats", "rdb_load_mutation_entries",
     vmsdk::info_field::IntegerBuilder().Dev());
@@ -89,19 +94,12 @@ static vmsdk::info_field::Integer rdb_save_sections(
     "rdb_stats", "rdb_save_sections",
     vmsdk::info_field::IntegerBuilder().Dev());
 
-static vmsdk::info_field::Integer rdb_save_mutation_entries(
-    "rdb_stats", "rdb_save_mutation_entries",
-    vmsdk::info_field::IntegerBuilder().Dev());
-
 IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
                                       absl::string_view name, int db_num)
     : cursor(vmsdk::MakeUniqueValkeyScanCursor()) {
   scan_ctx = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);
   ValkeyModule_SelectDb(scan_ctx.get(), db_num);
   db_size = ValkeyModule_DbSize(scan_ctx.get());
-  VMSDK_LOG(NOTICE, ctx) << "Starting backfill for index schema in DB "
-                         << db_num << ": " << name << " (size: " << db_size
-                         << ")";
 }
 
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
@@ -432,10 +430,18 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
   if (added) {
     switch (attribute_data_type_->ToProto()) {
       case data_model::ATTRIBUTE_DATA_TYPE_HASH:
-        Metrics::GetStats().ingest_hash_keys++;
+        if (from_backfill) {
+          Metrics::GetStats().backfill_hash_keys++;
+        } else {
+          Metrics::GetStats().ingest_hash_keys++;
+        }
         break;
       case data_model::ATTRIBUTE_DATA_TYPE_JSON:
-        Metrics::GetStats().ingest_json_keys++;
+        if (from_backfill) {
+          Metrics::GetStats().backfill_json_keys++;
+        } else {
+          Metrics::GetStats().ingest_json_keys++;
+        }
         break;
       default:
         CHECK(false);
@@ -596,6 +602,7 @@ void IndexSchema::ScheduleMutation(bool from_backfill,
       [from_backfill, weak_index_schema = GetWeakPtr(),
        ctx = detached_ctx_.get(), delay_capturer = CreateQueueDelayCapturer(),
        key_str = std::move(key), blocking_counter]() mutable {
+        PAUSEPOINT("block_mutation_queue");
         auto index_schema = weak_index_schema.lock();
         if (ABSL_PREDICT_FALSE(!index_schema)) {
           return;
@@ -682,10 +689,17 @@ void IndexSchema::BackfillScanCallback(ValkeyModuleCtx *ctx,
   }
 }
 
+CONTROLLED_BOOLEAN(StopBackfill, false);
+
 uint32_t IndexSchema::PerformBackfill(ValkeyModuleCtx *ctx,
                                       uint32_t batch_size) {
   auto &backfill_job = backfill_job_.Get();
   if (!backfill_job.has_value() || backfill_job->IsScanDone()) {
+    return 0;
+  }
+
+  if (StopBackfill.GetValue()) {
+    VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 1) << "Backfill stopped by request";
     return 0;
   }
 
@@ -855,6 +869,8 @@ static absl::Status SaveSupplementalSection(
   rdb_save_sections.Increment();
   auto header = std::make_unique<data_model::SupplementalContentHeader>();
   header->set_type(type);
+  VMSDK_LOG(NOTICE, nullptr) << "Writing supplemental section type "
+                             << data_model::SupplementalContentType_Name(type);
   init(*header);
   auto header_str = header->SerializeAsString();
   VMSDK_RETURN_IF_ERROR(rdb->SaveStringBuffer(header_str));
@@ -912,6 +928,8 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
       << " in DB: " << this->db_num_ << " to RDB";
 
   for (auto &attribute : attributes_) {
+    VMSDK_LOG(NOTICE, nullptr)
+        << "Starting to save attribute: " << attribute.second.GetAlias();
     // Note that the serialized attribute proto is also stored as part of the
     // serialized index schema proto above. We store here again to avoid any
     // dependencies on the ordering of multiple attributes.
@@ -938,9 +956,6 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
                           dynamic_cast<const indexes::VectorBase *>(
                               attribute.second.GetIndex().get()))));
     } else if (RDBWriteV2()) {
-      //
-      // V2 add index content extension
-      //
       VMSDK_RETURN_IF_ERROR(SaveSupplementalSection(
           rdb, data_model::SUPPLEMENTAL_CONTENT_INDEX_EXTENSION,
           [&](auto &header) {
@@ -953,14 +968,14 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
   }
 
   if (RDBWriteV2()) {
-    //
-    // Save the Mutation Queue
-    //
     VMSDK_RETURN_IF_ERROR(SaveSupplementalSection(
         rdb, data_model::SUPPLEMENTAL_CONTENT_MUTATION_QUEUE,
         [&](auto &header) {
           header.mutable_mutation_queue_header()->set_backfilling(
-              backfill_job_.Get().has_value());
+              IsBackfillInProgress());
+          VMSDK_LOG(WARNING, nullptr)
+              << "RDB: Saving Mutation Queue Backfill = "
+              << header.mutation_queue_header().backfilling();
         },
         std::bind_front(&IndexSchema::SaveMutationQueue, this)));
   }
@@ -969,10 +984,11 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
 }
 
 absl::Status IndexSchema::SaveMutationQueue(RDBChunkOutputStream out) const {
+  VMSDK_LOG(NOTICE, nullptr) << "Writing Mutation Queue, records = "
+                             << tracked_mutated_records_.size();
   VMSDK_RETURN_IF_ERROR(out.SaveObject(tracked_mutated_records_.size()));
   for (const auto &[key, value] : tracked_mutated_records_) {
     VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
-    rdb_save_mutation_entries.Increment();
   }
   return absl::OkStatus();
 }
@@ -980,11 +996,11 @@ absl::Status IndexSchema::SaveMutationQueue(RDBChunkOutputStream out) const {
 absl::Status IndexSchema::LoadMutationQueue(ValkeyModuleCtx *ctx,
                                             RDBChunkInputStream input) {
   VMSDK_ASSIGN_OR_RETURN(size_t count, input.LoadObject<size_t>());
+  rdb_load_mutation_entries.Increment(count);
   for (size_t i = 0; i < count; ++i) {
     VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
     auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
     ProcessKeyspaceNotification(ctx, keyname.get(), false);
-    rdb_load_mutation_entries.Increment();
   }
   loaded_v2_ = true;
   return absl::OkStatus();
@@ -992,7 +1008,10 @@ absl::Status IndexSchema::LoadMutationQueue(ValkeyModuleCtx *ctx,
 
 // We need to iterate over the chunks to consume them
 static absl::Status SkipSupplementalContent(
-    SupplementalContentIter &supplemental_iter) {
+    SupplementalContentIter &supplemental_iter, std::string_view reason) {
+  rdb_load_skipped_sections.Increment();
+  VMSDK_LOG(NOTICE, nullptr)
+      << "Skipping supplemental content section (" << reason << ")";
   auto chunk_it = supplemental_iter.IterateChunks();
   while (chunk_it.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto chunk_result, chunk_it.Next());
@@ -1021,13 +1040,16 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
     VMSDK_ASSIGN_OR_RETURN(auto supplemental_content, supplemental_iter.Next());
     rdb_load_sections.Increment();
     if (skip_loading_index_data) {
-      VMSDK_RETURN_IF_ERROR(SkipSupplementalContent(supplemental_iter));
+      VMSDK_RETURN_IF_ERROR(
+          SkipSupplementalContent(supplemental_iter, "due to configuration"));
     } else {
       switch (supplemental_content->type()) {
         case data_model::SupplementalContentType::
             SUPPLEMENTAL_CONTENT_INDEX_CONTENT: {
           auto &attribute =
               supplemental_content->index_content_header().attribute();
+          VMSDK_LOG(NOTICE, nullptr)
+              << "Loading Index Content for attribute: " << attribute.alias();
           VMSDK_ASSIGN_OR_RETURN(
               std::shared_ptr<indexes::IndexBase> index,
               IndexFactory(ctx, index_schema.get(), attribute,
@@ -1040,6 +1062,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
             SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP: {
           auto &attribute =
               supplemental_content->key_to_id_map_header().attribute();
+          VMSDK_LOG(NOTICE, nullptr)
+              << "Loading Key to ID Map Content for attribute: "
+              << attribute.alias();
           VMSDK_ASSIGN_OR_RETURN(
               auto index, index_schema->GetIndex(attribute.alias()),
               _ << "Key to ID mapping found before index definition.");
@@ -1055,25 +1080,29 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
         }
         case data_model::SupplementalContentType::
             SUPPLEMENTAL_CONTENT_INDEX_EXTENSION: {
+          auto &attribute =
+              supplemental_content->index_content_header().attribute();
+          VMSDK_LOG(NOTICE, nullptr)
+              << "Loading Index Content Extension for attribute: "
+              << attribute.alias();
           if (!RDBReadV2()) {
-            VMSDK_LOG(NOTICE, ctx)
-                << "Skipping supplemental index extension for attribute ";
-            VMSDK_RETURN_IF_ERROR(SkipSupplementalContent(supplemental_iter));
+            VMSDK_RETURN_IF_ERROR(
+                SkipSupplementalContent(supplemental_iter, attribute.alias()));
           } else {
-            auto &attribute =
-                supplemental_content->index_content_header().attribute();
             VMSDK_ASSIGN_OR_RETURN(
                 auto index, index_schema->GetIndex(attribute.alias()),
                 _ << "Index extension found before index definition.");
             VMSDK_RETURN_IF_ERROR(index->LoadIndexExtension(
                 RDBChunkInputStream(supplemental_iter.IterateChunks())));
           }
+          break;
         }
         case data_model::SupplementalContentType::
             SUPPLEMENTAL_CONTENT_MUTATION_QUEUE: {
+          VMSDK_LOG(NOTICE, nullptr) << "Loading Mutation Queue";
           if (!RDBReadV2()) {
-            VMSDK_LOG(NOTICE, ctx) << "Skipping supplemental mutation queue";
-            VMSDK_RETURN_IF_ERROR(SkipSupplementalContent(supplemental_iter));
+            VMSDK_RETURN_IF_ERROR(
+                SkipSupplementalContent(supplemental_iter, "mutation queue"));
           } else {
             if (index_schema) {
               VMSDK_RETURN_IF_ERROR(index_schema->LoadMutationQueue(
@@ -1089,11 +1118,13 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
                   "Supplemental section mutation queue out of order");
             }
           }
+          break;
         }
         default:
           VMSDK_LOG(NOTICE, ctx) << "Unknown supplemental content type: "
                                  << supplemental_content->type();
-          VMSDK_RETURN_IF_ERROR(SkipSupplementalContent(supplemental_iter));
+          VMSDK_RETURN_IF_ERROR(
+              SkipSupplementalContent(supplemental_iter, "unknown type"));
           break;
       }
     }

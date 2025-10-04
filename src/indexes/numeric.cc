@@ -25,7 +25,16 @@
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+
+static vmsdk::info_field::Integer rdb_load_numbers_tracked(
+    "rdb_stats", "rdb_load_numbers_tracked",
+    vmsdk::info_field::IntegerBuilder().Dev());
+
+static vmsdk::info_field::Integer rdb_load_numbers_untracked(
+    "rdb_stats", "rdb_load_numbers_untracked",
+    vmsdk::info_field::IntegerBuilder().Dev());
 
 namespace valkey_search::indexes {
 namespace {
@@ -268,6 +277,8 @@ absl::Status Numeric::SaveIndexExtension(RDBChunkOutputStream output) const {
   size_t tracked_key_count = tracked_keys_.size();
   VMSDK_RETURN_IF_ERROR(output.SaveObject(untracked_key_count));
   VMSDK_RETURN_IF_ERROR(output.SaveObject(tracked_key_count));
+  VMSDK_LOG(NOTICE, nullptr) << "Saving Numeric tracked: " << tracked_key_count
+                             << " Untracked:" << untracked_key_count;
 
   for (const auto& key_ptr : untracked_keys_) {
     VMSDK_RETURN_IF_ERROR(output.SaveString(key_ptr->Str()));
@@ -293,6 +304,9 @@ absl::Status Numeric::LoadIndexExtension(RDBChunkInputStream input) {
                          _ << "RDB: Numeric load error on untracked_key_count");
   VMSDK_ASSIGN_OR_RETURN(size_t tracked_key_count, input.LoadObject<size_t>(),
                          _ << "RDB: Numeric load error on tracked_key_count");
+
+  rdb_load_numbers_untracked.Increment(untracked_key_count);
+  rdb_load_numbers_tracked.Increment(tracked_key_count);
 
   for (size_t i = 0; i < untracked_key_count; ++i) {
     VMSDK_ASSIGN_OR_RETURN(

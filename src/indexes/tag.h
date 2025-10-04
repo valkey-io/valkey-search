@@ -45,6 +45,7 @@ class Tag : public IndexBase {
   int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
   bool IsTracked(const InternedStringPtr& key) const override;
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
+    VMSDK_LOG(NOTICE, nullptr) << "Saving Tag empty";
     return absl::OkStatus();
   }
   absl::Status SaveIndexExtension(

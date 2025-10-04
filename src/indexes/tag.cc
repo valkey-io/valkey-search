@@ -26,7 +26,16 @@
 #include "src/query/predicate.h"
 #include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+
+static vmsdk::info_field::Integer rdb_load_tags_tracked(
+    "rdb_stats", "rdb_load_tags_tracked",
+    vmsdk::info_field::IntegerBuilder().Dev());
+
+static vmsdk::info_field::Integer rdb_load_tags_untracked(
+    "rdb_stats", "rdb_load_tags_untracked",
+    vmsdk::info_field::IntegerBuilder().Dev());
 
 namespace valkey_search::indexes {
 
@@ -350,6 +359,8 @@ absl::Status Tag::SaveIndexExtension(RDBChunkOutputStream output) const {
   size_t tracked_key_count = tracked_tags_by_keys_.size();
   VMSDK_RETURN_IF_ERROR(output.SaveObject(untracked_key_count));
   VMSDK_RETURN_IF_ERROR(output.SaveObject(tracked_key_count));
+  VMSDK_LOG(NOTICE, nullptr) << "Saving Tag tracked: " << tracked_key_count
+                             << " Untracked:" << untracked_key_count;
 
   for (const auto& key_ptr : untracked_keys_) {
     VMSDK_RETURN_IF_ERROR(output.SaveString(key_ptr->Str()));
@@ -375,6 +386,9 @@ absl::Status Tag::LoadIndexExtension(RDBChunkInputStream input) {
                          _ << "RDB: Tag load failure on untracked_key_count");
   VMSDK_ASSIGN_OR_RETURN(size_t tracked_key_count, input.LoadObject<size_t>(),
                          _ << "RDB: Tag load failure on tracked_key_count");
+
+  rdb_load_tags_untracked.Increment(untracked_key_count);
+  rdb_load_tags_tracked.Increment(tracked_key_count);
 
   for (size_t i = 0; i < untracked_key_count; ++i) {
     VMSDK_ASSIGN_OR_RETURN(

@@ -106,6 +106,7 @@ inline int MakeValkeyVersion(int major, int minor, int patch) {
   CHECK(major < 256 && minor < 256 && patch < 256);
   return (major << 16) | (minor << 8) | patch;
 }
+std::string StringToHex(std::string_view s);
 
 // Checks if a numeric value falls within an optional inclusive range [min,
 // max]. The range is inclusive: a value is considered valid if min <= value <=

@@ -83,6 +83,7 @@ def do_save_restore_test(test, write_v2: bool, read_v2: bool):
     test.client.execute_command("save")
     os.environ["SKIPLOGCLEAN"] = "1"
     test.server.restart(remove_rdb=False)
+    time.sleep(5)
     print(test.client.ping())
     verify_data(test.client)
     test.client.execute_command("CONFIG SET search.info-developer-visible yes")

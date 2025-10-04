@@ -25,7 +25,7 @@ def check_keys(received_keys, expected_keys):
     received_set = set(received_keys)
     expected_set = set(expected_keys)
     print("Result.keys ", received_set)
-    print("exected.keys", expected_set)
+    print("expected.keys", expected_set)
     assert received_set == expected_set
 
 def do_search(client: Valkey.client, query: str, extra: list[str] = []) -> dict[str, dict[str, str]]:

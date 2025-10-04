@@ -91,7 +91,7 @@ absl::StatusOr<absl::flat_hash_set<absl::string_view>> Tag::ParseSearchTags(
     if (tag.back() == '*') {
       if (!IsValidPrefix(tag)) {
         return absl::InvalidArgumentError(
-            absl::StrCat("RDB: Tag string `", tag, "` ends with multiple *."));
+            absl::StrCat("Tag string `", tag, "` ends with multiple *."));
       }
       // Prefix tags that are shorter than min length are ignored.
       if (tag.length() <= kDefaultMinPrefixLength) {

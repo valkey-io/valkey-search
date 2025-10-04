@@ -402,8 +402,6 @@ absl::Status VectorBase::LoadIndexExtension(RDBChunkInputStream chunked_in) {
 
 absl::Status VectorBase::SaveTrackedKeys(
     RDBChunkOutputStream chunked_out) const {
-  VMSDK_LOG(NOTICE, nullptr)
-      << "Save Vector, tracked_keys " << tracked_metadata_by_key_.size();
   absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
   for (const auto &[key, metadata] : tracked_metadata_by_key_) {
     data_model::TrackedKeyMetadata metadata_pb;

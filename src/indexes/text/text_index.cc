@@ -126,29 +126,30 @@ absl::StatusOr<bool> TextIndexSchema::IndexAttributeData(const InternedStringPtr
 }
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
-  std::optional<TextIndex> key_index;
+  TextIndex* key_index = nullptr;
   {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
     auto it = per_key_text_indexes_.find(key);
     if (it != per_key_text_indexes_.end()) {
-      key_index.emplace(std::move(it->second));
+      key_index = &it->second;
     }
   }
 
-  if (key_index.has_value()) {
+  if (key_index) {
     std::lock_guard<std::mutex> main_tree_guard(text_index_->mutex_);
 
-    // Cleanup prefix tree
+    // Cleanup schema-level text index
     auto iter = key_index->prefix_.GetWordIterator("");
     while (!iter.Done()) {
       std::string_view word = iter.GetWord();
       text_index_->prefix_.Mutate(word, [&](auto existing) {
         return RemoveKeyFromPostings(existing, key);
       });
-    }
 
-    if (text_index_->suffix_.has_value()) {
-      // TODO: Cleanup suffix tree
+      if (text_index_->suffix_.has_value()) {
+        // TODO: Cleanup suffix tree
+      }
+      iter.Next();
     }
   }
 }

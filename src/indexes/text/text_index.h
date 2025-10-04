@@ -14,8 +14,8 @@
 #include <mutex>
 #include <optional>
 
-#include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/container/node_hash_map.h"
 #include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
@@ -49,7 +49,7 @@ struct TextIndex {
   RadixTree<std::shared_ptr<Postings>, false> prefix_;
   std::optional<RadixTree<std::shared_ptr<Postings>, true>> suffix_;
 
-  // Dumb lock to prevent concurrent tree mutations for now
+  // TODO: develop a proper TextIndex locking scheme
   std::mutex mutex_;
 };
 
@@ -58,7 +58,6 @@ class TextIndexSchema {
   TextIndexSchema(data_model::Language language, const std::string& punctuation,
                   bool with_offsets,
                   const std::vector<std::string>& stop_words);
-  ~TextIndexSchema();
 
   absl::StatusOr<bool> IndexAttributeData(const InternedStringPtr& key, absl::string_view data, size_t text_field_number,
                  bool stem, size_t min_stem_size, bool suffix);
@@ -92,7 +91,7 @@ class TextIndexSchema {
   // This object must also ensure that updates of this object are multi-thread
   // safe.
   //
-  absl::flat_hash_map<Key, TextIndex> per_key_text_indexes_;
+  absl::node_hash_map<Key, TextIndex> per_key_text_indexes_;
 
   Lexer lexer_;
 

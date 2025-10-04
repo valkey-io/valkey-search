@@ -60,7 +60,7 @@ struct Lexer {
  private:
   mutable sb_stemmer* stemmer_ = nullptr;
 
-  // TODO: Create a little connection pool of stemmers protected by this mutex
+  // TODO: Create a little pool of stemmers protected by this mutex
   mutable std::mutex stemmer_mutex_;
 
   std::string StemWord(const std::string& word, bool stemming_enabled, uint32_t min_stem_size) const;

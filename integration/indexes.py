@@ -171,7 +171,7 @@ class Index:
             self.write_data(client, i, data)
 
     def write_data(self, client: valkey.client, i:int, data: dict[str, str | bytes]):
-        if self.type == "HASH":
+        if self.type == KeyDataType.HASH:
             client.hset(self.keyname(i), mapping=data)
         else:
             client.execute_command("JSON.SET", self.keyname(i), "$", json.dumps(data))

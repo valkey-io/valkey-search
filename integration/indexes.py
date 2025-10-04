@@ -180,7 +180,7 @@ class Index:
         for i in range(start_index, rows):
             data = self.make_data(i)
             self.write_data(client, i, data)
-            client.pexpire(key, ttl_ms)
+            client.pexpire(self.keyname(i), ttl_ms)
 
     def keyname(self, row: int) -> str:
         prefix = self.prefixes[row % len(self.prefixes)] if self.prefixes else ""

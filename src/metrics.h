@@ -127,6 +127,7 @@ class Metrics {
 
     std::atomic<uint64_t> info_fanout_retry_cnt{0};
     std::atomic<uint64_t> info_fanout_fail_cnt{0};
+    std::atomic<uint64_t> pause_handle_cluster_message_round_cnt{0};
   };
   static Stats& GetStats() { return GetInstance().stats_; }
 

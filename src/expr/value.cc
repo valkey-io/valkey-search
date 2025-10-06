@@ -72,9 +72,9 @@ std::string FormatDouble(double d) {
       return "nan";
     }
   } else {
-    std::ostringstream os;
-    os << std::setprecision(11) << d;
-    return os.str();
+    char storage[50];
+    size_t output_chars = snprintf(storage, sizeof(storage), "%.11g", d);
+    return {storage, output_chars};
   }
 }
 

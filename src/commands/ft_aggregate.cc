@@ -161,64 +161,56 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
   if (value.IsNil()) {
     return false;
   } else {
+    DBG << "ReplyWithValue " << name << "\n";
     if (data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
       ValkeyModule_ReplyWithSimpleString(ctx, name.data());
       auto value_sv = value.AsStringView();
       ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
       DBG << "HASH: " << name << ":" << value_sv << "\n";
     } else {
-      DBG << "ReplyWithValue " << name << "\n";
-      std::ostringstream ss;
+      char double_storage[50];
+      std::string_view value_view;
       if (name == "$") {
+        value_view = value.AsStringView();
         DBG << "Overriding for field name of $ " << int(field_type) << "\n";
         DBG << "Input: " << value.AsStringView() << "\n";
-        ValkeyModule_ReplyWithSimpleString(ctx, name.data());
-        if (dialect == 2) {
-          ss << value.AsStringView();
-        } else {
-          ss << '[' << value.AsStringView() << ']';
-        }
       } else {
         switch (field_type) {
-          case indexes::IndexerType::kNone:
-            DBG << "kNone: " << value.AsStringView() << "\n";
-            ValkeyModule_ReplyWithSimpleString(ctx, name.data());
-            ss << value.AsStringView();
+          case indexes::IndexerType::kTag:
+          case indexes::IndexerType::kNone: {
+            value_view = value.AsStringView();
+            DBG << "JSON kTag: " << value_view << "\n";
             break;
+          }
           case indexes::IndexerType::kNumeric: {
             auto dble = value.AsDouble();
             if (!dble) {
               return false;
             }
-            ValkeyModule_ReplyWithSimpleString(ctx, name.data());
-            DBG << "kNumeric: " << *dble << "\n";
-            if (dialect == 2) {
-              ss << *dble;
-            } else {
-              ss << '[' << *dble << ']';
-            }
+            auto double_size = snprintf(double_storage, sizeof(double_storage),
+                                        "%.11g", *dble);
+            value_view = std::string_view(double_storage, double_size);
+            DBG << "JSON kNumeric:" << value_view << "\n";
             break;
           }
-          case indexes::IndexerType::kTag:
-            DBG << "kTag: " << value.AsStringView() << "\n";
-            // Todo: Handle Escaped Characters
-            ValkeyModule_ReplyWithSimpleString(ctx, name.data());
-            if (dialect == 2) {
-              ss << value.AsStringView();
-            } else {
-              ss << '[' << '"' << value.AsStringView() << '"'
-                 << ']';  // Todo: Handle Escaped Characters
-            }
-            break;
           default:
             DBG << "Unsupported field type for reply: " << int(field_type)
                 << "\n";
             assert("Unsupported field type" == nullptr);
         }
       }
-      std::string s = ss.str();
-      DBG << "JSON: " << name << ":" << s << "\n";
-      ValkeyModule_ReplyWithStringBuffer(ctx, s.data(), s.size());
+      ValkeyModule_ReplyWithSimpleString(ctx, name.data());
+      if (dialect == 2) {
+        ValkeyModule_ReplyWithStringBuffer(ctx, value_view.data(),
+                                           value_view.size());
+      } else {
+        std::string s;
+        s = '[';
+        s += value_view;
+        s += ']';
+        DBG << "Dialect != 2: " << s << "\n";
+        ValkeyModule_ReplyWithStringBuffer(ctx, s.data(), s.size());
+      }
     }
   }
   return true;

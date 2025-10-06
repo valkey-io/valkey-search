@@ -14,6 +14,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/radix_tree.h"
+#include "src/indexes/text/text_index.h"
 #include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes::text {
@@ -31,7 +32,11 @@ class TermIterator : public indexes::EntriesFetcherIteratorBase {
  public:
   TermIterator(const WordIterator& word, const absl::string_view data,
                const FieldMaskPredicate field_mask,
-               const InternedStringSet* untracked_keys = nullptr);
+               const InternedStringSet* untracked_keys = nullptr,
+               bool stemming_enabled = false,
+               std::shared_ptr<TextIndexSchema> text_index_schema = nullptr,
+               uint32_t min_stem_size = 0,
+               std::shared_ptr<TextIndex> text_index = nullptr);
 
   bool Done() const override;
   void Next() override;
@@ -49,6 +54,14 @@ class TermIterator : public indexes::EntriesFetcherIteratorBase {
   const InternedStringSet* untracked_keys_;
   InternedStringPtr current_key_;
   FieldMaskPredicate field_mask_;
+  
+  // Stemming support
+  bool stemming_enabled_ = false;
+  std::shared_ptr<TextIndexSchema> text_index_schema_;
+  uint32_t min_stem_size_ = 0;
+  std::shared_ptr<TextIndex> text_index_;
+  std::shared_ptr<StemTarget> stem_target_;
+  StemTarget::iterator stem_word_iter_;
 };
 
 }  // namespace valkey_search::indexes::text

@@ -101,6 +101,11 @@ class Text : public IndexBase {
     absl::string_view data_;
     bool no_field_{false};
     text::FieldMaskPredicate field_mask_;
+    
+    // Stemming configuration
+    std::shared_ptr<text::TextIndexSchema> text_index_schema_;
+    bool no_stem_;
+    int32_t min_stem_size_;
   };
 
   // Calculate size based on the predicate.

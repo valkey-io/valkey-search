@@ -56,6 +56,42 @@ class TestFTInfoPrimary(ValkeySearchClusterTestCaseDebugMode):
         assert int(info["num_records"]) == N
         assert int(info["hash_indexing_failures"]) == 0
 
+    def test_ft_info_primary_force_index_name_error_retry(self):
+        cluster: ValkeyCluster = self.new_cluster_client()
+        node0: Valkey = self.new_client_for_primary(0)
+        node1: Valkey = self.new_client_for_primary(1)
+        index_name = "index1"
+
+        assert node0.execute_command(
+            "FT.CREATE", index_name,
+            "ON", "HASH",
+            "PREFIX", "1", "doc:",
+            "SCHEMA", "price", "NUMERIC"
+        ) == b"OK"
+
+        N = 5
+        for i in range(N):
+            cluster.execute_command("HSET", f"doc:{i}", "price", str(10 + i))
+
+        waiters.wait_for_true(lambda: self.is_indexing_complete(node0, index_name, N))
+        retry_count_before = node0.info("SEARCH")["search_info_fanout_retry_count"]
+        assert node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceIndexNotFoundError 3") == b"OK"
+
+        raw = node0.execute_command("FT.INFO", index_name, "PRIMARY")
+        parser = FTInfoParser([])
+        info = parser._parse_key_value_list(raw)
+
+        # check primary info results
+        assert info is not None
+        assert str(info.get("index_name")) == index_name
+        assert str(info.get("mode")) == "primary"
+        assert int(info["num_docs"]) == N
+        assert int(info["num_records"]) == N
+        assert int(info["hash_indexing_failures"]) == 0
+
+        retry_count_after = node0.info("SEARCH")["search_info_fanout_retry_count"]
+
+        assert retry_count_before + 3 == retry_count_after, f"Expected retry_count increment by 3, got {retry_count_after - retry_count_before}"
     
     def test_ft_info_primary_retry(self):
         cluster: ValkeyCluster = self.new_cluster_client()

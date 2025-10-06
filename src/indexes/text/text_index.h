@@ -11,6 +11,7 @@
 #include <bitset>
 #include <cctype>
 #include <memory>
+#include <mutex>
 #include <optional>
 
 #include "absl/container/flat_hash_map.h"
@@ -29,6 +30,9 @@ using Key = valkey_search::InternedStringPtr;
 using Position = uint32_t;
 using PunctuationBitmap = std::bitset<256>;
 
+// StemTarget stores the set of original words that stem to a particular root
+using StemTarget = absl::flat_hash_set<std::string>;
+
 struct TextIndex {
   TextIndex() = default;
   ~TextIndex() = default;
@@ -45,6 +49,9 @@ struct TextIndex {
   //
   RadixTree<std::shared_ptr<Postings>, false> prefix_;
   std::optional<RadixTree<std::shared_ptr<Postings>, true>> suffix_;
+  
+  // Separate stem tree that maps stem roots to their parent words.
+  RadixTree<std::shared_ptr<StemTarget>, false> stem_;
 };
 
 class TextIndexSchema {
@@ -66,6 +73,7 @@ class TextIndexSchema {
   }
   data_model::Language GetLanguage() const { return language_; }
   sb_stemmer* GetStemmer() const { return stemmer_; };
+  std::mutex* GetStemmerMutex() const { return &stemmer_mutex_; };
   bool GetWithOffsets() const { return with_offsets_; }
 
  private:
@@ -96,6 +104,9 @@ class TextIndexSchema {
 
   // Stemmer reused across all operations for this index
   mutable sb_stemmer* stemmer_ = nullptr;
+  
+  // Mutex to protect stemmer access from multiple threads
+  mutable std::mutex stemmer_mutex_;
 
   // Whether to store position offsets for phrase queries
   bool with_offsets_ = false;

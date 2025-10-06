@@ -81,7 +81,8 @@ TEST_P(LexerParameterizedTest, TokenizeTest) {
   auto result =
       lexer_->Tokenize(test_case.input, schema->GetPunctuationBitmap(),
                        schema->GetStemmer(), test_case.stemming_enabled,
-                       test_case.min_stem_size, schema->GetStopWordsSet());
+                       test_case.min_stem_size, schema->GetStopWordsSet(),
+                       nullptr, schema->GetStemmerMutex());
 
   ASSERT_TRUE(result.ok()) << "Test case: " << test_case.description;
   EXPECT_EQ(*result, test_case.expected)
@@ -172,7 +173,8 @@ TEST_F(LexerTest, InvalidUTF8) {
   auto result =
       lexer_->Tokenize(invalid_utf8, text_schema_->GetPunctuationBitmap(),
                        text_schema_->GetStemmer(), stemming_enabled_,
-                       min_stem_size_, text_schema_->GetStopWordsSet());
+                       min_stem_size_, text_schema_->GetStopWordsSet(),
+                       nullptr, text_schema_->GetStemmerMutex());
   EXPECT_FALSE(result.ok());
   EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument);
   EXPECT_EQ(result.status().message(), "Invalid UTF-8");
@@ -183,7 +185,8 @@ TEST_F(LexerTest, LongWord) {
   auto result =
       lexer_->Tokenize(long_word, text_schema_->GetPunctuationBitmap(),
                        text_schema_->GetStemmer(), stemming_enabled_,
-                       min_stem_size_, text_schema_->GetStopWordsSet());
+                       min_stem_size_, text_schema_->GetStopWordsSet(),
+                       nullptr, text_schema_->GetStemmerMutex());
   ASSERT_TRUE(result.ok());
   EXPECT_EQ(*result, std::vector<std::string>({long_word}));
 }
@@ -202,7 +205,8 @@ TEST_F(LexerTest, EmptyStopWordsHandling) {
   auto result =
       lexer_->Tokenize("Hello, world! TESTING 123 with-dashes and/or symbols",
                        no_stop_schema->GetPunctuationBitmap(),
-                       no_stop_schema->GetStemmer(), true, 3, empty_set);
+                       no_stop_schema->GetStemmer(), true, 3, empty_set,
+                       nullptr, no_stop_schema->GetStemmerMutex());
 
   ASSERT_TRUE(result.ok());
   EXPECT_EQ(*result,

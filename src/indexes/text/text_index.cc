@@ -9,6 +9,7 @@
 
 #include "absl/strings/ascii.h"
 #include "libstemmer.h"
+#include "third_party/snowball/language_mapping.h"
 
 namespace valkey_search::indexes::text {
 
@@ -63,12 +64,11 @@ TextIndexSchema::~TextIndexSchema() {
 }
 
 const char* TextIndexSchema::GetLanguageString() const {
-  switch (language_) {
-    case data_model::LANGUAGE_ENGLISH:
-      return "english";
-    default:
-      return "english";
+  auto it = snowball::language_map.find(language_);
+  if (it != snowball::language_map.end()) {
+    return it->second;
   }
+  return "english";  // fallback
 }
 
 }  // namespace valkey_search::indexes::text

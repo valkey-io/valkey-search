@@ -30,22 +30,28 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
                                      absl::string_view data) {
   valkey_search::indexes::text::Lexer lexer;
 
-  auto tokens =
+  std::vector<std::string> stemmed_words;
+  auto original_words =
       lexer.Tokenize(data, text_index_schema_->GetPunctuationBitmap(),
                      text_index_schema_->GetStemmer(), !no_stem_,
-                     min_stem_size_, text_index_schema_->GetStopWordsSet());
+                     min_stem_size_, text_index_schema_->GetStopWordsSet(),
+                     !no_stem_ ? &stemmed_words : nullptr,
+                     text_index_schema_->GetStemmerMutex());
 
-  if (!tokens.ok()) {
-    if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {
+  if (!original_words.ok()) {
+    if (original_words.status().code() == absl::StatusCode::kInvalidArgument) {
       return false;  // UTF-8 errors → hash_indexing_failures
     }
-    return tokens.status();
+    return original_words.status();
   }
 
-  for (uint32_t position = 0; position < tokens->size(); ++position) {
-    const auto& token = (*tokens)[position];
+  size_t stemmed_index = 0;
+  for (uint32_t position = 0; position < original_words->size(); ++position) {
+    const auto& original_word = (*original_words)[position];
+    
+    // Index the original word in the prefix tree
     text_index_schema_->GetTextIndex()->prefix_.Mutate(
-        token,
+        original_word,
         [&](std::optional<std::shared_ptr<text::Postings>> existing)
             -> std::optional<std::shared_ptr<text::Postings>> {
           std::shared_ptr<text::Postings> postings;
@@ -62,6 +68,25 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
           postings->InsertPosting(key, text_field_number_, position);
           return postings;
         });
+
+    // If stemming occurred, update the stem tree
+    if (!no_stem_ && stemmed_index < stemmed_words.size()) {
+      const auto& stemmed_word = stemmed_words[stemmed_index];
+      text_index_schema_->GetTextIndex()->stem_.Mutate(
+          stemmed_word,
+          [&](std::optional<std::shared_ptr<text::StemTarget>> existing)
+              -> std::optional<std::shared_ptr<text::StemTarget>> {
+            std::shared_ptr<text::StemTarget> stem_target;
+            if (existing.has_value()) {
+              stem_target = existing.value();
+            } else {
+              stem_target = std::make_shared<text::StemTarget>();
+            }
+            stem_target->insert(original_word);
+            return stem_target;
+          });
+      stemmed_index++;
+    }
   }
 
   return true;
@@ -129,6 +154,9 @@ std::unique_ptr<Text::EntriesFetcher> Text::Search(
       CalculateSize(predicate), text_index_schema_->GetTextIndex(),
       negate ? &untracked_keys_ : nullptr);
   fetcher->predicate_ = &predicate;
+  fetcher->text_index_schema_ = text_index_schema_;
+  fetcher->no_stem_ = no_stem_;
+  fetcher->min_stem_size_ = min_stem_size_;
   // TODO : We only support single field queries for now. Change below when we
   // support multiple and all fields.
   fetcher->field_mask_ = 1ULL << text_field_number_;
@@ -141,7 +169,8 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
   if (auto term = dynamic_cast<const query::TermPredicate*>(predicate_)) {
     auto iter = text_index_->prefix_.GetWordIterator(term->GetTextString());
     auto itr = std::make_unique<text::TermIterator>(
-        iter, term->GetTextString(), field_mask_, untracked_keys_);
+        iter, term->GetTextString(), field_mask_, untracked_keys_,
+        !no_stem_, text_index_schema_, min_stem_size_, text_index_);
     itr->Next();
     return itr;
   } else if (auto prefix =

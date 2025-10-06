@@ -25,6 +25,7 @@ Tokenization Pipeline:
 */
 
 #include <bitset>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -40,7 +41,9 @@ struct Lexer {
   absl::StatusOr<std::vector<std::string>> Tokenize(
       absl::string_view text, const std::bitset<256>& punct_bitmap,
       sb_stemmer* stemmer, bool stemming_enabled, uint32_t min_stem_size,
-      const absl::flat_hash_set<std::string>& stop_words_set) const;
+      const absl::flat_hash_set<std::string>& stop_words_set,
+      std::vector<std::string>* stemmed_words = nullptr,
+      std::mutex* stemmer_mutex = nullptr) const;
 
   // Punctuation checking API
   static bool IsPunctuation(char c, const std::bitset<256>& punct_bitmap) {
@@ -54,9 +57,12 @@ struct Lexer {
     return stop_words_set.contains(lowercase_word);
   }
 
- private:
+  // Stemming API
   std::string StemWord(const std::string& word, sb_stemmer* stemmer,
-                       bool stemming_enabled, uint32_t min_stem_size) const;
+                       bool stemming_enabled, uint32_t min_stem_size,
+                       std::mutex* stemmer_mutex) const;
+
+ private:
 
   // UTF-8 processing helpers
   bool IsValidUtf8(absl::string_view text) const;

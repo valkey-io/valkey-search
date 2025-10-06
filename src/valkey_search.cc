@@ -576,6 +576,10 @@ static vmsdk::info_field::Integer
         vmsdk::info_field::IntegerBuilder()
             .App()
             .Computed([]() -> int64_t {
+              // prevent failure in unit tests
+              if (!coordinator::MetadataManager::IsInitialized()) {
+                return 0;
+              }
               return coordinator::MetadataManager::Instance()
                   .GetMetadataReconciliationCompletedCount();
             })

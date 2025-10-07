@@ -11,8 +11,8 @@
 #include "src/keyspace_event_manager.h"
 #include "src/valkey_search.h"
 #include "vmsdk/src/module.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 #include "vmsdk/src/utils.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 #define MODULE_VERSION 10000
 /* The release stage is used in order to provide release status information.
@@ -102,12 +102,13 @@ vmsdk::module::Options options = {
     .on_load =
         [](ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
            [[maybe_unused]] const vmsdk::module::Options &options) {
-
           auto server_version = ValkeyModule_GetServerVersion();
           if (server_version < MINIMUM_VALKEY_VERSION) {
-            VMSDK_LOG(WARNING, ctx) << "Minimum required server version is " 
+            VMSDK_LOG(WARNING, ctx)
+                << "Minimum required server version is "
                 << vmsdk::DisplayValkeyVersion(MINIMUM_VALKEY_VERSION)
-                << ", Current version is " << vmsdk::DisplayValkeyVersion(server_version);
+                << ", Current version is "
+                << vmsdk::DisplayValkeyVersion(server_version);
             return absl::InvalidArgumentError("Invalid version");
           }
           valkey_search::KeyspaceEventManager::InitInstance(

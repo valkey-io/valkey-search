@@ -25,8 +25,6 @@ struct sb_stemmer;
 
 namespace valkey_search::indexes::text {
 
-using Key = valkey_search::InternedStringPtr;
-using Position = uint32_t;
 using PunctuationBitmap = std::bitset<256>;
 
 struct TextIndex {

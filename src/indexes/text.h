@@ -17,9 +17,11 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/text/posting.h"
+#include "src/indexes/text/proximity.h"
 #include "src/indexes/text/term.h"
+#include "src/indexes/text/text_fetcher.h"
 #include "src/indexes/text/text_index.h"
-#include "src/indexes/text/wildcard.h"
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -65,17 +67,6 @@ class Text : public IndexBase {
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  public:
-  // Abstract for Text. Every text operation will have a specific
-  // implementation.
-  class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
-   public:
-    bool Done() const override;
-    void Next() override;
-    const InternedStringPtr& operator*() const override;
-
-   private:
-  };
-
   // Common EntriesFetcher impl for all Text operations.
   class EntriesFetcher : public EntriesFetcherBase {
    public:
@@ -89,6 +80,9 @@ class Text : public IndexBase {
           field_mask_(field_mask) {}
 
     size_t Size() const override;
+
+    std::unique_ptr<text::TextIterator> BuildTextIterator(
+        const query::TextPredicate* predicate);
 
     // Factory method that creates the appropriate text iterator
     // based on the text predicate's operation type.

@@ -50,7 +50,7 @@ class TermIterator : public TextIterator {
   bool SeekForwardKey(const Key& target_key) override;
   // Position-level iteration
   bool DonePositions() const override;
-  PositionRange CurrentPosition() const override;
+  const PositionRange& CurrentPosition() const override;
   bool NextPosition() override;
   /* Implementation of APIs unique to TermIterator */
   // It is possible to implement a `CurrentKeyIterVecIdx` API that returns the
@@ -62,7 +62,7 @@ class TermIterator : public TextIterator {
   std::vector<Postings::KeyIterator> key_iterators_;
   std::vector<Postings::PositionIterator> pos_iterators_;
   Key current_key_;
-  std::optional<Position> current_position_;
+  std::optional<PositionRange> current_position_;
   const InternedStringSet* untracked_keys_;
   bool FindMinimumValidKey();
 };

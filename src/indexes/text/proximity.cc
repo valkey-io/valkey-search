@@ -75,11 +75,11 @@ bool ProximityIterator::FindCommonKey() {
   Key max_key = nullptr;
   for (auto& iter : iters_) {
     auto k = iter->CurrentKey();
-    if (!min_key || k->Str() < min_key->Str()) min_key = k;
-    if (!max_key || k->Str() > max_key->Str()) max_key = k;
+    if (!min_key || k < min_key) min_key = k;
+    if (!max_key || k > max_key) max_key = k;
   }
   // 2) If min == max, we found a common key
-  if (min_key->Str() == max_key->Str()) {
+  if (min_key == max_key) {
     current_key_ = max_key;
     return true;
   }
@@ -92,12 +92,12 @@ bool ProximityIterator::FindCommonKey() {
 
 bool ProximityIterator::SeekForwardKey(const Key& target_key) {
   // If current key is already >= target_key, no need to seek
-  if (current_key_ && current_key_->Str() >= target_key->Str()) {
+  if (current_key_ && current_key_ >= target_key) {
     return true;
   }
   // Skip all keys less than target_key for all iterators
   for (auto& iter : iters_) {
-    if (!iter->DoneKeys() && iter->CurrentKey()->Str() < target_key->Str()) {
+    if (!iter->DoneKeys() && iter->CurrentKey() < target_key) {
       iter->SeekForwardKey(target_key);
     }
   }
@@ -129,12 +129,12 @@ bool ProximityIterator::DonePositions() const {
   return false;
 }
 
-PositionRange ProximityIterator::CurrentPosition() const {
+const PositionRange& ProximityIterator::CurrentPosition() const {
   CHECK(current_position_.has_value());
   return current_position_.value();
 }
 
-std::optional<size_t> ProximityIterator::FindViolatingIterator() const {
+std::optional<size_t> ProximityIterator::FindViolatingIterator() {
   const size_t n = positions_.size();
   if (in_order_) {
     for (size_t i = 0; i < n - 1; ++i) {

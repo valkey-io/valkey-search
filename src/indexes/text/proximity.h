@@ -59,7 +59,7 @@ class ProximityIterator : public TextIterator {
   bool SeekForwardKey(const Key& target_key) override;
   // Position-level iteration
   bool DonePositions() const override;
-  PositionRange CurrentPosition() const override;
+  const PositionRange& CurrentPosition() const override;
   bool NextPosition() override;
 
  private:
@@ -72,13 +72,13 @@ class ProximityIterator : public TextIterator {
   Key current_key_;
   std::optional<PositionRange> current_position_;
   // Vectors used for positional checks
-  mutable std::vector<PositionRange> positions_;
-  mutable std::vector<std::pair<Position, size_t>> pos_with_idx_;
+  std::vector<PositionRange> positions_;
+  std::vector<std::pair<Position, size_t>> pos_with_idx_;
   // Used for Negate
   const InternedStringSet* untracked_keys_;
 
   bool FindCommonKey();
-  std::optional<size_t> FindViolatingIterator() const;
+  std::optional<size_t> FindViolatingIterator();
 };
 }  // namespace valkey_search::indexes::text
 

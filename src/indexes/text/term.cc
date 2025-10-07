@@ -46,11 +46,11 @@ bool TermIterator::FindMinimumValidKey() {
     }
     if (key_iter.IsValid()) {
       const auto& key = key_iter.GetKey();
-      if (!current_key_ || key->Str() < current_key_->Str()) {
+      if (!current_key_ || key < current_key_) {
         pos_iterators_.clear();
         pos_iterators_.emplace_back(key_iter.GetPositionIterator());
         current_key_ = key;
-      } else if (key->Str() == current_key_->Str()) {
+      } else if (key == current_key_) {
         pos_iterators_.emplace_back(key_iter.GetPositionIterator());
       }
     }
@@ -67,8 +67,7 @@ bool TermIterator::FindMinimumValidKey() {
 bool TermIterator::NextKey() {
   if (current_key_) {
     for (auto& key_iter : key_iterators_) {
-      if (key_iter.IsValid() &&
-          key_iter.GetKey()->Str() == current_key_->Str()) {
+      if (key_iter.IsValid() && key_iter.GetKey() == current_key_) {
         key_iter.NextKey();
       }
     }
@@ -77,7 +76,7 @@ bool TermIterator::NextKey() {
 }
 
 bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
-  if (current_key_ && current_key_->Str() >= target_key->Str()) {
+  if (current_key_ && current_key_ >= target_key) {
     return true;
   }
   // Use SkipForwardKey to efficiently seek all key iterators to target_key or
@@ -95,16 +94,16 @@ bool TermIterator::DonePositions() const {
   return true;
 }
 
-PositionRange TermIterator::CurrentPosition() const {
+const PositionRange& TermIterator::CurrentPosition() const {
   CHECK(current_position_.has_value());
-  return PositionRange(current_position_.value(), current_position_.value());
+  return current_position_.value();
 }
 
 bool TermIterator::NextPosition() {
   if (current_position_.has_value()) {
     for (auto& pos_iter : pos_iterators_) {
       if (pos_iter.IsValid() &&
-          pos_iter.GetPosition() == current_position_.value()) {
+          pos_iter.GetPosition() == current_position_.value().start) {
         pos_iter.NextPosition();
       }
     }
@@ -127,7 +126,7 @@ bool TermIterator::NextPosition() {
     current_position_ = std::nullopt;
     return false;
   }
-  current_position_ = min_position;
+  current_position_ = PositionRange{min_position, min_position};
   return true;
 }
 

@@ -137,9 +137,9 @@ struct Postings {
 
     // Iterator state - pointer to key_to_positions map
     using PositionMap = std::map<Position, std::unique_ptr<class FieldMask>>;
-    const std::map<Key, PositionMap, InternedStringPtrLess>* key_map_;
-    std::map<Key, PositionMap, InternedStringPtrLess>::const_iterator current_;
-    std::map<Key, PositionMap, InternedStringPtrLess>::const_iterator end_;
+    const std::map<Key, PositionMap>* key_map_;
+    std::map<Key, PositionMap>::const_iterator current_;
+    std::map<Key, PositionMap>::const_iterator end_;
   };
 
   // The Position Iterator

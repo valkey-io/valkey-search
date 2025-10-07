@@ -24,6 +24,10 @@ class Numeric;
 class Tag;
 }  // namespace valkey_search::indexes
 
+namespace valkey_search::indexes::text {
+class TextIterator;
+}
+
 namespace valkey_search::query {
 
 enum class PredicateType {
@@ -139,6 +143,8 @@ class TextPredicate : public Predicate {
   virtual bool Evaluate(Evaluator& evaluator) const = 0;
   virtual bool Evaluate(const std::string_view& text) const = 0;
   virtual const indexes::Text* GetIndex() const = 0;
+  virtual std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
+      const void* fetcher) const = 0;
 };
 
 class TermPredicate : public TextPredicate {
@@ -156,6 +162,8 @@ class TermPredicate : public TextPredicate {
   absl::string_view GetTextString() const { return term_; }
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const std::string_view& text) const override;
+  std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
+      const void* fetcher) const override;
 
  private:
   const indexes::Text* index_;
@@ -179,6 +187,8 @@ class PrefixPredicate : public TextPredicate {
   absl::string_view GetTextString() const { return term_; }
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const std::string_view& text) const override;
+  std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
+      const void* fetcher) const override;
 
  private:
   const indexes::Text* index_;
@@ -202,6 +212,8 @@ class SuffixPredicate : public TextPredicate {
   absl::string_view GetTextString() const { return term_; }
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const std::string_view& text) const override;
+  std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
+      const void* fetcher) const override;
 
  private:
   const indexes::Text* index_;
@@ -225,6 +237,8 @@ class InfixPredicate : public TextPredicate {
   absl::string_view GetTextString() const { return term_; }
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const std::string_view& text) const override;
+  std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
+      const void* fetcher) const override;
 
  private:
   const indexes::Text* index_;
@@ -249,6 +263,8 @@ class FuzzyPredicate : public TextPredicate {
   uint32_t GetDistance() const { return distance_; }
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const std::string_view& text) const override;
+  std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
+      const void* fetcher) const override;
 
  private:
   const indexes::Text* index_;
@@ -262,14 +278,16 @@ class ProximityPredicate : public TextPredicate {
  public:
   ProximityPredicate(std::vector<std::unique_ptr<TextPredicate>> terms,
                      uint32_t slop = 0, bool inorder = true);
-  uint32_t GetSlop() const { return slop_; }
-  bool IsInOrder() const { return inorder_; }
+  uint32_t Slop() const { return slop_; }
+  bool InOrder() const { return inorder_; }
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const std::string_view& text) const override { return false; }
+  std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
+      const void* fetcher) const override;
   const indexes::Text* GetIndex() const override {
     return terms_[0]->GetIndex();
   }
-  const std::vector<std::unique_ptr<TextPredicate>>& GetTerms() const {
+  const std::vector<std::unique_ptr<TextPredicate>>& Terms() const {
     return terms_;
   }
 

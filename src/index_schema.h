@@ -116,12 +116,12 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline const std::string &GetName() const { return name_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
 
-  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
-    return text_index_schema_;
-  }
   void CreateTextIndexSchema() {
     text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
         language_, punctuation_, with_offsets_, stop_words_);
+  }
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+    return text_index_schema_;
   }
 
   void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type, const char *event,
@@ -261,6 +261,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   bool DeleteIfNotInValkeyDict(ValkeyModuleCtx *ctx, ValkeyModuleString *key,
                                const Attribute &attribute);
   vmsdk::BlockedClientCategory GetBlockedCategoryFromProto() const;
+  bool InTrackedMutationRecords(const InternedStringPtr &key,
+                                const std::string &identifier) const;
   bool TrackMutatedRecord(ValkeyModuleCtx *ctx, const InternedStringPtr &key,
                           MutatedAttributes &&mutated_attributes,
                           bool from_backfill, bool block_client,

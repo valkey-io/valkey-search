@@ -152,9 +152,9 @@ class Index:
         print(f"Creating Index: {cmd}")
         client.execute_command(*cmd)
 
-    def load_data(self, client: valkey.client, rows: int):
+    def load_data(self, client: valkey.client, rows: int, start_index: int = 0):
         print("Loading data to ", client)
-        for i in range(0, rows):
+        for i in range(start_index, rows):
             data = self.make_data(i)
             if self.type == "HASH":
                 #print("Loading ", self.keyname(i), data)
@@ -163,8 +163,8 @@ class Index:
                 #print("Loading ", self.keyname(i), json.dumps(data))
                 client.execute_command("JSON.SET", self.keyname(i), "$", json.dumps(data))
 
-    def load_data_with_ttl(self, client: valkey.client, rows: int, ttl_ms: int):
-        for i in range(0, rows):
+    def load_data_with_ttl(self, client: valkey.client, rows: int, ttl_ms: int, start_index: int = 0):
+        for i in range(start_index, rows):
             data = self.make_data(i)
             key = self.keyname(i)
             client.hset(key, mapping=data)
@@ -188,4 +188,4 @@ class Index:
         return parser
     
     def backfill_complete(self, client: valkey.client) -> bool:
-        return IndexingTestHelper.is_backfill_complete_simple(client, self.name)
+        return IndexingTestHelper.is_backfill_complete_on_node(client, self.name)

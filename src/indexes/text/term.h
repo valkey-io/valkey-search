@@ -8,47 +8,63 @@
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 
-#include <cstddef>
 #include <vector>
 
-#include "src/indexes/index_base.h"
-#include "src/indexes/text/posting.h"
-#include "src/indexes/text/radix_tree.h"
-#include "src/utils/string_interning.h"
+#include "src/indexes/text/text_iterator.h"
 
 namespace valkey_search::indexes::text {
 
-using FieldMaskPredicate = uint64_t;
-using WordIterator = RadixTree<std::shared_ptr<Postings>, false>::WordIterator;
-
 /*
 
+Top level iterator for a Term.
+This is a union of the postings key iterators and derived position iterators
+allowing a single lexically ordered iteration of keys and positions (where the
+word/s, based on postings, exist in the key).
 
-Top level iterator for a Term
+TermIterator Responsibilities:
+- Manages a vector of posting (key) iterator/s, which operates in lexical order.
+- Key iteration (of documents) takes place by advancing the posting iterator who
+is on the smallest key until it is on a key whose field matches the field mask
+of the search operation. Since multiple posting iterators can have the same key
+amd same field, we create a vector of position iterators, one from each posting
+iterator who are on the same key & field. Once no more keys are found, DoneKeys
+returns true. Through this process, it "merges" multiple posting iterators.
+- Position iteration happens across all the position iterators, allowing us to
+search for positions in asc order across all the required words within the same
+key and same field. Once no more positions are found, DonePositions returns
+true. Thus, position iteration is a union of all position iterators obtained
+from all the posting iterators that are on the current key and field mask.
 
 */
-class TermIterator : public indexes::EntriesFetcherIteratorBase {
+class TermIterator : public TextIterator {
  public:
-  TermIterator(const WordIterator& word, const absl::string_view data,
+  TermIterator(std::vector<Postings::KeyIterator>&& key_iterators,
                const FieldMaskPredicate field_mask,
                const InternedStringSet* untracked_keys = nullptr);
-
-  bool Done() const override;
-  void Next() override;
-  const InternedStringPtr& operator*() const override;
+  /* Implementation of TextIterator APIs */
+  FieldMaskPredicate FieldMask() const override;
+  // Key-level iteration
+  bool DoneKeys() const override;
+  const Key& CurrentKey() const override;
+  bool NextKey() override;
+  bool SeekForwardKey(const Key& target_key) override;
+  // Position-level iteration
+  bool DonePositions() const override;
+  const PositionRange& CurrentPosition() const override;
+  bool NextPosition() override;
+  /* Implementation of APIs unique to TermIterator */
+  // It is possible to implement a `CurrentKeyIterVecIdx` API that returns the
+  // index of the vector of the posting iterator (provided on init) that matches
+  // the current position
 
  private:
-  WordIterator word_;
-  std::shared_ptr<Postings> target_posting_;
-  Postings::KeyIterator key_iter_;
-  const absl::string_view data_;
-  uint32_t current_idx_ = 0;
-  bool begin_ =
-      true;  // Used to track if we are at the beginning of the iterator.
-  bool nomatch_ = false;
+  const FieldMaskPredicate field_mask_;
+  std::vector<Postings::KeyIterator> key_iterators_;
+  std::vector<Postings::PositionIterator> pos_iterators_;
+  Key current_key_;
+  std::optional<PositionRange> current_position_;
   const InternedStringSet* untracked_keys_;
-  InternedStringPtr current_key_;
-  FieldMaskPredicate field_mask_;
+  bool FindMinimumValidKey();
 };
 
 }  // namespace valkey_search::indexes::text

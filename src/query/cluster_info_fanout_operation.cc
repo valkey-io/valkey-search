@@ -12,11 +12,12 @@
 
 namespace valkey_search::query::cluster_info_fanout {
 
-ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(std::string index_name,
-                                                       unsigned timeout_ms)
+ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(
+    uint32_t db_num, const std::string& index_name, unsigned timeout_ms)
     : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
                                   coordinator::InfoIndexPartitionResponse,
                                   fanout::FanoutTargetMode::kAll>(),
+      db_num_(db_num),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
       exists_(false),
@@ -25,15 +26,14 @@ ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(std::string index_name,
       backfill_in_progress_(false) {}
 
 unsigned ClusterInfoFanoutOperation::GetTimeoutMs() const {
-  return timeout_ms_.value_or(5000);
+  return timeout_ms_;
 }
 
 coordinator::InfoIndexPartitionRequest
-ClusterInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&,
-                                            unsigned timeout_ms) {
+ClusterInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&) {
   coordinator::InfoIndexPartitionRequest req;
+  req.set_db_num(db_num_);
   req.set_index_name(index_name_);
-  req.set_timeout_ms(timeout_ms);
   return req;
 }
 
@@ -102,57 +102,11 @@ void ClusterInfoFanoutOperation::OnResponse(
   }
 }
 
-coordinator::InfoIndexPartitionResponse
+std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
 ClusterInfoFanoutOperation::GetLocalResponse(
-    ValkeyModuleCtx* ctx, const coordinator::InfoIndexPartitionRequest& request,
+    const coordinator::InfoIndexPartitionRequest& request,
     [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
-  auto index_schema_result = SchemaManager::Instance().GetIndexSchema(
-      ValkeyModule_GetSelectedDb(ctx), request.index_name());
-
-  coordinator::InfoIndexPartitionResponse resp;
-
-  if (!index_schema_result.ok()) {
-    resp.set_exists(false);
-    resp.set_index_name(request.index_name());
-    resp.set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
-    return resp;
-  }
-
-  auto index_schema = index_schema_result.value();
-  IndexSchema::InfoIndexPartitionData data =
-      index_schema->GetInfoIndexPartitionData();
-
-  std::optional<uint64_t> fingerprint;
-  std::optional<uint32_t> version;
-
-  auto global_metadata =
-      coordinator::MetadataManager::Instance().GetGlobalMetadata();
-  if (global_metadata->type_namespace_map().contains(
-          kSchemaManagerMetadataTypeName)) {
-    const auto& entry_map = global_metadata->type_namespace_map().at(
-        kSchemaManagerMetadataTypeName);
-    if (entry_map.entries().contains(request.index_name())) {
-      const auto& entry = entry_map.entries().at(request.index_name());
-      fingerprint = entry.fingerprint();
-      version = entry.version();
-    }
-  }
-
-  if (!fingerprint.has_value() || !version.has_value()) {
-    resp.set_exists(false);
-    resp.set_index_name(request.index_name());
-    resp.set_error_type(coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR);
-    return resp;
-  }
-  resp.set_exists(true);
-  resp.set_index_name(request.index_name());
-  resp.set_backfill_complete_percent(data.backfill_complete_percent);
-  resp.set_backfill_in_progress(data.backfill_in_progress);
-  resp.set_state(data.state);
-  resp.set_schema_fingerprint(fingerprint.value());
-  resp.set_version(version.value());
-  resp.set_error("");
-  return resp;
+  return coordinator::Service::GenerateInfoResponse(request);
 }
 
 void ClusterInfoFanoutOperation::InvokeRemoteRpc(
@@ -190,6 +144,22 @@ int ClusterInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
   ValkeyModule_ReplyWithSimpleString(ctx, "state");
   ValkeyModule_ReplyWithSimpleString(ctx, state_.c_str());
   return VALKEYMODULE_OK;
+}
+
+void ClusterInfoFanoutOperation::ResetForRetry() {
+  exists_ = false;
+  schema_fingerprint_.reset();
+  version_.reset();
+  backfill_complete_percent_max_ = 0.0f;
+  backfill_complete_percent_min_ = 0.0f;
+  backfill_in_progress_ = false;
+  state_ = "";
+}
+
+// retry condition: (1) inconsistent state (2) network error
+bool ClusterInfoFanoutOperation::ShouldRetry() {
+  return !inconsistent_state_error_nodes.empty() ||
+         !communication_error_nodes.empty();
 }
 
 }  // namespace valkey_search::query::cluster_info_fanout

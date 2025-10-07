@@ -171,7 +171,7 @@ class Postings::Impl {
  public:
   bool save_positions_;
   size_t num_text_fields_;
-  std::map<Key, PositionMap, InternedStringPtrLess> key_to_positions_;
+  std::map<Key, PositionMap> key_to_positions_;
 
   Impl(bool save_positions, size_t num_text_fields)
       : save_positions_(save_positions), num_text_fields_(num_text_fields) {}

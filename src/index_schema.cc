@@ -75,7 +75,6 @@ IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     ValkeyModuleCtx *ctx, IndexSchema *index_schema,
     const data_model::Attribute &attribute,
-    const data_model::IndexSchema *index_schema_proto,
     std::optional<SupplementalContentChunkIter> iter) {
   const auto &index = attribute.index();
   switch (index.index_type_case()) {
@@ -86,6 +85,7 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
       return std::make_shared<indexes::Numeric>(index.numeric_index());
     }
     case data_model::Index::IndexTypeCase::kTextIndex: {
+      // Create the TextIndexSchema if this is the first Text index we're seeing
       if (!index_schema->GetTextIndexSchema()) {
         index_schema->CreateTextIndexSchema();
       }
@@ -179,9 +179,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
   VMSDK_RETURN_IF_ERROR(res->Init(ctx));
   if (!skip_attributes) {
     for (const auto &attribute : index_schema_proto.attributes()) {
-      VMSDK_ASSIGN_OR_RETURN(std::shared_ptr<indexes::IndexBase> index,
-                             IndexFactory(ctx, res.get(), attribute,
-                                          &index_schema_proto, std::nullopt));
+      VMSDK_ASSIGN_OR_RETURN(
+          std::shared_ptr<indexes::IndexBase> index,
+          IndexFactory(ctx, res.get(), attribute, std::nullopt));
       VMSDK_RETURN_IF_ERROR(
           res->AddIndex(attribute.alias(), attribute.identifier(), index));
     }
@@ -382,6 +382,12 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     vmsdk::UniqueValkeyString record = VectorExternalizer::Instance().GetRecord(
         ctx, attribute_data_type_.get(), key_obj.get(), key_cstr,
         attribute.GetIdentifier(), is_module_owned);
+    // Early return on record not found just if the record not tracked.
+    // Otherwise, it will be processed as a delete
+    if (!record && !attribute.GetIndex()->IsTracked(interned_key) &&
+        !InTrackedMutationRecords(interned_key, attribute.GetIdentifier())) {
+      return;
+    }
     if (!is_module_owned) {
       // A record which are owned by the module were not modified and are
       // already tracked in the vector registry.
@@ -734,19 +740,15 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  int arrSize = 36;
-
   // Calculate additional array size for text-related fields only if text fields
   // exist
+  int arrSize = 24;
   if (text_index_schema_) {
     arrSize += 6;
   }
-
   ValkeyModule_ReplyWithArray(ctx, arrSize);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
-  ValkeyModule_ReplyWithSimpleString(ctx, "index_options");
-  ValkeyModule_ReplyWithArray(ctx, 0);
 
   ValkeyModule_ReplyWithSimpleString(ctx, "index_definition");
   ValkeyModule_ReplyWithArray(ctx, 6);
@@ -773,64 +775,11 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
 
   ValkeyModule_ReplyWithSimpleString(ctx, "num_docs");
   ValkeyModule_ReplyWithLongLong(ctx, stats_.document_cnt);
-  // hard-code num_terms to 0 as it's related to fulltext indexes:
-  ValkeyModule_ReplyWithSimpleString(ctx, "num_terms");
-  ValkeyModule_ReplyWithLongLong(ctx, 0);
   ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
   ValkeyModule_ReplyWithLongLong(ctx, CountRecords());
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%lu", stats_.subscription_add.skipped_cnt).c_str());
-
-  ValkeyModule_ReplyWithSimpleString(ctx, "gc_stats");
-  ValkeyModule_ReplyWithArray(ctx, 14);
-  ValkeyModule_ReplyWithSimpleString(ctx, "bytes_collected");
-  ValkeyModule_ReplyWithCString(ctx, "0");
-  ValkeyModule_ReplyWithSimpleString(ctx, "total_ms_run");
-  ValkeyModule_ReplyWithCString(ctx, "0");
-  ValkeyModule_ReplyWithSimpleString(ctx, "total_cycles");
-  ValkeyModule_ReplyWithCString(ctx, "0");
-  ValkeyModule_ReplyWithSimpleString(ctx, "average_cycle_time_ms");
-  ValkeyModule_ReplyWithCString(ctx, "nan");
-  ValkeyModule_ReplyWithSimpleString(ctx, "last_run_time_ms");
-  ValkeyModule_ReplyWithCString(ctx, "0");
-  ValkeyModule_ReplyWithSimpleString(ctx, "gc_numeric_trees_missed");
-  ValkeyModule_ReplyWithCString(ctx, "0");
-  ValkeyModule_ReplyWithSimpleString(ctx, "gc_blocks_denied");
-  ValkeyModule_ReplyWithCString(ctx, "0");
-
-  ValkeyModule_ReplyWithSimpleString(ctx, "cursor_stats");
-  ValkeyModule_ReplyWithArray(ctx, 8);
-  ValkeyModule_ReplyWithSimpleString(ctx, "global_idle");
-  ValkeyModule_ReplyWithLongLong(ctx, 0);
-  ValkeyModule_ReplyWithSimpleString(ctx, "global_total");
-  ValkeyModule_ReplyWithLongLong(ctx, 0);
-  ValkeyModule_ReplyWithSimpleString(ctx, "index_capacity");
-  ValkeyModule_ReplyWithLongLong(ctx, 0);
-  ValkeyModule_ReplyWithSimpleString(ctx, "index_total");
-  ValkeyModule_ReplyWithLongLong(ctx, 0);
-
-  ValkeyModule_ReplyWithSimpleString(ctx, "dialect_stats");
-  ValkeyModule_ReplyWithArray(ctx, 8);
-  ValkeyModule_ReplyWithSimpleString(ctx, "dialect_1");
-  ValkeyModule_ReplyWithLongLong(ctx, 0);
-  ValkeyModule_ReplyWithSimpleString(ctx, "dialect_2");
-  ValkeyModule_ReplyWithLongLong(ctx, 0);
-  ValkeyModule_ReplyWithSimpleString(ctx, "dialect_3");
-  ValkeyModule_ReplyWithLongLong(ctx, 0);
-  ValkeyModule_ReplyWithSimpleString(ctx, "dialect_4");
-  ValkeyModule_ReplyWithLongLong(ctx, 0);
-
-  ValkeyModule_ReplyWithSimpleString(ctx, "Index Errors");
-  ValkeyModule_ReplyWithArray(ctx, 8);
-  ValkeyModule_ReplyWithSimpleString(ctx, "indexing failures");
-  ValkeyModule_ReplyWithLongLong(ctx, 0);
-  ValkeyModule_ReplyWithSimpleString(ctx, "last indexing error");
-  ValkeyModule_ReplyWithSimpleString(ctx, "N/A");
-  ValkeyModule_ReplyWithSimpleString(ctx, "last indexing error key");
-  ValkeyModule_ReplyWithCString(ctx, "N/A");
-  ValkeyModule_ReplyWithSimpleString(ctx, "background indexing status");
-  ValkeyModule_ReplyWithSimpleString(ctx, "OK");
 
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_in_progress");
   ValkeyModule_ReplyWithCString(
@@ -907,6 +856,7 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
       google::protobuf::RepeatedPtrFieldBackInserter(
           index_schema_proto->mutable_attributes()),
       [](const auto &attribute) { return *attribute.second.ToProto(); });
+
   return index_schema_proto;
 }
 
@@ -1006,7 +956,6 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           supplemental_content->index_content_header().attribute();
       VMSDK_ASSIGN_OR_RETURN(std::shared_ptr<indexes::IndexBase> index,
                              IndexFactory(ctx, index_schema.get(), attribute,
-                                          index_schema_proto.get(),
                                           supplemental_iter.IterateChunks()));
       VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
           attribute.alias(), attribute.identifier(), index));
@@ -1127,6 +1076,20 @@ vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
     default:
       return vmsdk::BlockedClientCategory::kOther;
   }
+}
+
+bool IndexSchema::InTrackedMutationRecords(
+    const InternedStringPtr &key, const std::string &identifier) const {
+  absl::MutexLock lock(&mutated_records_mutex_);
+  auto itr = tracked_mutated_records_.find(key);
+  if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
+    return false;
+  }
+  if (itr->second.attributes->find(identifier) ==
+      itr->second.attributes->end()) {
+    return false;
+  }
+  return true;
 }
 // Returns true if the inserted key not exists otherwise false
 bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,

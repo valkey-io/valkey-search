@@ -23,8 +23,10 @@ class CreateConsistencyCheckFanoutOperation
  public:
   CreateConsistencyCheckFanoutOperation(
       uint32_t db_num, const std::string &index_name, unsigned timeout_ms,
-      coordinator::IndexFingerprintVersion new_entry_fingerprint_version)
-      : ClusterInfoFanoutOperation(db_num, index_name, timeout_ms),
+      coordinator::IndexFingerprintVersion new_entry_fingerprint_version,
+      bool allshards_required, bool consistency_required)
+      : ClusterInfoFanoutOperation(db_num, index_name, timeout_ms,
+                                   allshards_required, consistency_required),
         new_entry_fingerprint_version_(new_entry_fingerprint_version) {}
 
   int GenerateReply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
@@ -66,7 +68,7 @@ absl::Status FTCreateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     unsigned timeout_ms = options::GetFTInfoTimeoutMs().GetValue();
     auto op = new CreateConsistencyCheckFanoutOperation(
         ValkeyModule_GetSelectedDb(ctx), index_schema_proto.name(), timeout_ms,
-        new_entry_fingerprint_version);
+        new_entry_fingerprint_version, true, true);
     op->StartOperation(ctx);
   } else {
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");

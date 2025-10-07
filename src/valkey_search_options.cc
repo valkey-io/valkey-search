@@ -218,6 +218,18 @@ static auto ft_info_rpc_timeout_ms =
         kMaximumFTInfoRpcTimeoutMs)  // max timeout (5 minutes)
         .Build();
 
+/// Default option for FT.INFO ALLSHARDS/SOMESHARDS arg
+constexpr absl::string_view kFTInfoDefaultAllshardsRequired{
+    "ft-info-default-allshards-required"};
+static auto ft_info_default_allshards_required =
+    config::BooleanBuilder(kFTInfoDefaultAllshardsRequired, true).Build();
+
+/// Default option for FT.INFO CONSISTENT/INCONSISTENT arg
+constexpr absl::string_view kFTInfoDefaultConsistencyRequired{
+    "ft-info-default-consistency-required"};
+static auto ft_info_default_consistency_required =
+    config::BooleanBuilder(kFTInfoDefaultConsistencyRequired, true).Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -272,6 +284,16 @@ vmsdk::config::Number& GetFTInfoTimeoutMs() {
 
 vmsdk::config::Number& GetFTInfoRpcTimeoutMs() {
   return dynamic_cast<vmsdk::config::Number&>(*ft_info_rpc_timeout_ms);
+}
+
+const vmsdk::config::Boolean& GetFTInfoDefaultAllshardsRequired() {
+  return dynamic_cast<const vmsdk::config::Boolean&>(
+      *ft_info_default_allshards_required);
+}
+
+const vmsdk::config::Boolean& GetFTInfoDefaultConsistencyRequired() {
+  return dynamic_cast<const vmsdk::config::Boolean&>(
+      *ft_info_default_consistency_required);
 }
 
 }  // namespace options

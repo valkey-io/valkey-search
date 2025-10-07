@@ -28,11 +28,14 @@ class DropConsistencyCheckFanoutOperation
  public:
   DropConsistencyCheckFanoutOperation(uint32_t db_num,
                                       const std::string& index_name,
-                                      unsigned timeout_ms)
+                                      unsigned timeout_ms,
+                                      bool allshards_required,
+                                      bool consistency_required)
       : query::fanout::FanoutOperationBase<
             coordinator::InfoIndexPartitionRequest,
             coordinator::InfoIndexPartitionResponse,
-            query::fanout::FanoutTargetMode::kAll>(),
+            query::fanout::FanoutTargetMode::kAll>(allshards_required,
+                                                   consistency_required),
         db_num_(db_num),
         index_name_(index_name),
         timeout_ms_(timeout_ms){};
@@ -123,7 +126,7 @@ absl::Status FTDropIndexCmd(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,
     unsigned timeout_ms = options::GetFTInfoTimeoutMs().GetValue();
     auto op = new DropConsistencyCheckFanoutOperation(
         ValkeyModule_GetSelectedDb(ctx), std::string(index_schema_name),
-        timeout_ms);
+        timeout_ms, true, true);
     op->StartOperation(ctx);
   } else {
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");

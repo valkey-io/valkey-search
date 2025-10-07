@@ -96,6 +96,13 @@ bool MultiOrLua(ValkeyModuleCtx *ctx);
 
 size_t DisplayAsSIBytes(size_t value, char *buffer, size_t buffer_size);
 
+std::string DisplayValkeyVersion(int version_word);
+
+inline int MakeValkeyVersion(int major, int minor, int patch) {
+  CHECK(major < 256 && minor < 256 && patch < 256);
+  return (major << 16) | (minor << 8) | patch;
+}
+
 // Checks if a numeric value falls within an optional inclusive range [min,
 // max]. The range is inclusive: a value is considered valid if min <= value <=
 // max. If either boundary is not specified (`std::nullopt`), that check is

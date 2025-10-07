@@ -4,20 +4,25 @@ from valkey.client import Valkey
 from valkeytestframework.conftest import resource_port_tracker
 from valkey.exceptions import ResponseError
 from valkeytestframework.util import waiters
-import threading
+from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 RETRY_MIN_THRESHOLD=50
 
-def do_dropindex(node0, index_name, dropindex_result):
+def do_dropindex(node0, index_name):
+    dropindex_result = [None]
     try:
         dropindex_result[0] = node0.execute_command("FT.DROPINDEX", index_name)
     except Exception as e:
         dropindex_result[0] = e
+    return dropindex_result
 
 # type0: reset handle cluster message pausepoint on node1 first
 # type1: reset consistency check pausepoint on node0 first
-def run_pausepoint_reset(type, node0, node1, reset_pausepoint_result, reset_pause_handle_message_result, exceptions):
+def run_pausepoint_reset(type, node0, node1):
+    reset_pausepoint_result = [None]
+    reset_pause_handle_message_result = [None]
+    exceptions = [None]
     try:
         def wait_for_pausepoint():
             res = str(node0.execute_command("FT._DEBUG PAUSEPOINT TEST fanout_remote_pausepoint"))
@@ -44,14 +49,19 @@ def run_pausepoint_reset(type, node0, node1, reset_pausepoint_result, reset_paus
             )
             # reset consistency check pausepoint second
             reset_pausepoint_result[0] = node0.execute_command("FT._DEBUG PAUSEPOINT RESET fanout_remote_pausepoint")
-
         elif type == 1:
             # reset consistency check pausepoint first
             reset_pausepoint_result[0] = node0.execute_command("FT._DEBUG PAUSEPOINT RESET fanout_remote_pausepoint")
             # reset handle cluster message pausepoint second
             reset_pause_handle_message_result[0] = node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
+        else:
+            # reset pausepoint in invalid type case to prevent infinite loop
+            reset_pausepoint_result[0] = node0.execute_command("FT._DEBUG PAUSEPOINT RESET fanout_remote_pausepoint")
+            reset_pause_handle_message_result[0] = node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
+            exceptions[0] = ValueError(f"Invalid type {type} for pausepoint order control. Must be 0 or 1")
     except Exception as e:
         exceptions[0] = e
+    return reset_pausepoint_result, reset_pause_handle_message_result, exceptions
 
 class TestFTDropindexConsistency(ValkeySearchClusterTestCaseDebugMode):
 
@@ -113,24 +123,15 @@ class TestFTDropindexConsistency(ValkeySearchClusterTestCaseDebugMode):
         assert node0.execute_command("FT._DEBUG PAUSEPOINT SET fanout_remote_pausepoint") == b"OK"
         assert node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage yes") == b"OK"
 
-        dropindex_result = [None]
-        reset_pausepoint_result = [None]
-        reset_pause_handle_message_result = [None]
-        exceptions = [None]
-        
-        # thread on node0 to start dropindex
-        thread1 = threading.Thread(target=do_dropindex, args=(node0, index_name, dropindex_result))
-        # thread to synchronize and release pausepoint
-        thread2 = threading.Thread(
-            target=run_pausepoint_reset, 
-            args=(0, node0, node1, reset_pausepoint_result, reset_pause_handle_message_result, exceptions)
-        )
+        # use ThreadPoolExecutor to get return values from function
+        with ThreadPoolExecutor() as executor:
+            future1 = executor.submit(do_dropindex, node0, index_name)
+            future2 = executor.submit(run_pausepoint_reset, 0, node0, node1)
+            
+            dropindex_result = future1.result(timeout=10)
+            reset_pausepoint_result, reset_pause_handle_message_result, exceptions = future2.result(timeout=10)
 
-        thread1.start()
-        thread2.start()
-        thread1.join(timeout=10)
-        thread2.join(timeout=10)
-
+        assert exceptions[0] is None, f"Unexpected exception: {exceptions[0]}"
         assert dropindex_result[0] == b"OK"
         # assert no retry when handle message on node1 released first
         # taking the threshold to account for retries caused by grpc launch latency
@@ -160,24 +161,14 @@ class TestFTDropindexConsistency(ValkeySearchClusterTestCaseDebugMode):
         assert node0.execute_command("FT._DEBUG PAUSEPOINT SET fanout_remote_pausepoint") == b"OK"
         assert node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage yes") == b"OK"
 
-        dropindex_result = [None]
-        reset_pausepoint_result = [None]
-        reset_pause_handle_message_result = [None]
-        exceptions = [None]
-        
-        # thread on node0 to start dropindex
-        thread1 = threading.Thread(target=do_dropindex, args=(node0, index_name, dropindex_result))
-        # thread to synchronize and release pausepoint
-        thread2 = threading.Thread(
-            target=run_pausepoint_reset, 
-            args=(1, node0, node1, reset_pausepoint_result, reset_pause_handle_message_result, exceptions)
-        )
+        with ThreadPoolExecutor() as executor:
+            future1 = executor.submit(do_dropindex, node0, index_name)
+            future2 = executor.submit(run_pausepoint_reset, 2, node0, node1)
+            
+            dropindex_result = future1.result(timeout=10)
+            reset_pausepoint_result, reset_pause_handle_message_result, exceptions = future2.result(timeout=10)
 
-        thread1.start()
-        thread2.start()
-        thread1.join(timeout=10)
-        thread2.join(timeout=10)
-
+        assert exceptions[0] is None, f"Unexpected exception: {exceptions[0]}"
         assert dropindex_result[0] == b"OK"
         retry_count_after = node0.info("SEARCH")["search_info_fanout_retry_count"]
         assert retry_count_after - retry_count_before > RETRY_MIN_THRESHOLD

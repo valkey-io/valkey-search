@@ -163,7 +163,7 @@ class TestFTDropindexConsistency(ValkeySearchClusterTestCaseDebugMode):
 
         with ThreadPoolExecutor() as executor:
             future1 = executor.submit(do_dropindex, node0, index_name)
-            future2 = executor.submit(run_pausepoint_reset, 2, node0, node1)
+            future2 = executor.submit(run_pausepoint_reset, 1, node0, node1)
             
             dropindex_result = future1.result(timeout=10)
             reset_pausepoint_result, reset_pause_handle_message_result, exceptions = future2.result(timeout=10)

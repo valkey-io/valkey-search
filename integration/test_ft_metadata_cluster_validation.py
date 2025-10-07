@@ -7,6 +7,7 @@ from valkeytestframework.conftest import resource_port_tracker
 from valkeytestframework.util import waiters
 from ft_info_parser import FTInfoParser
 from typing import List, Dict, Any
+from utils import IndexingTestHelper
 
 
 class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
@@ -17,24 +18,12 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
     return consistent results across all cluster nodes.
     """
 
-    def is_indexing_complete_on_node(self, node: Valkey, index_name: str) -> bool:
-        """Check if indexing is complete on a specific node."""
-        try:
-            info_response = node.execute_command("FT.INFO", index_name)
-            parser = FTInfoParser(info_response)
-            return parser.is_backfill_complete() and parser.is_ready()
-        except ResponseError:
-            return False
-
     def wait_for_indexing_complete_on_all_nodes(self, index_name: str, timeout: int = 10):
         """Wait for indexing to complete on all cluster nodes."""
-        for i in range(self.CLUSTER_SIZE):
-            node = self.new_client_for_primary(i)
-            waiters.wait_for_equal(
-                lambda node=node: self.is_indexing_complete_on_node(node, index_name),
-                True,
-                timeout=timeout
-            )
+        nodes = [self.new_client_for_primary(i) for i in range(self.CLUSTER_SIZE)]
+        success = IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(nodes, index_name, timeout)
+        if not success:
+            raise TimeoutError(f"Indexing did not complete on all nodes within {timeout} seconds for index '{index_name}'")
 
     def get_ft_list_from_all_nodes(self) -> List[List[bytes]]:
         """Get FT._LIST results from all cluster nodes."""
@@ -50,13 +39,8 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
         results = []
         for i in range(self.CLUSTER_SIZE):
             node = self.new_client_for_primary(i)
-            try:
-                info_response = node.execute_command("FT.INFO", index_name)
-                parser = FTInfoParser(info_response)
-                results.append(parser)
-            except ResponseError as e:
-                # If index doesn't exist on this node, we still want to track this
-                results.append(None)
+            parser = IndexingTestHelper.get_ft_info(node, index_name)
+            results.append(parser)
         return results
 
     def validate_ft_list_consistency(self, expected_indexes: List[str]):

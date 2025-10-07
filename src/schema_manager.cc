@@ -69,6 +69,11 @@ vmsdk::config::Number &GetMaxIndexes() {
   return dynamic_cast<vmsdk::config::Number &>(*max_indexes);
 }
 
+//register callback for max index creation
+void MaxIndexCreationCallback() {  
+    vmsdk::config::SetGetMaxIndexesCallback(GetMaxIndexes);  // register callback
+}
+
 /// Register the "--backfill-batch-size" flag. Controls the max number of
 /// indexes we can have.
 static auto backfill_batch_size =
@@ -231,6 +236,7 @@ SchemaManager::CreateIndexSchema(
     }
     auto any_proto = std::make_unique<google::protobuf::Any>();
     any_proto->PackFrom(index_schema_proto);
+    //index created, set the schema max indexes 
     return coordinator::MetadataManager::Instance().CreateEntry(
         kSchemaManagerMetadataTypeName, index_schema_proto.name(),
         std::move(any_proto));
@@ -243,6 +249,8 @@ SchemaManager::CreateIndexSchema(
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   index_fingerprint_version.set_fingerprint(0);
   index_fingerprint_version.set_version(0);
+  //set the max indexes in callback 
+  options::MaxIndexCreationCallback();
   return index_fingerprint_version;
 }
 

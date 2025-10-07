@@ -18,6 +18,16 @@
 namespace vmsdk {
 namespace config {
 
+//callbacks for checking config set earlier
+// module_config.cc
+
+#include "module_config.h"
+#include <iostream>
+
+static GetMaxIndexesCallback g_getMaxIndexes = nullptr;
+
+void SetGetMaxIndexesCallback(GetMaxIndexesCallback cb) { g_getMaxIndexes = cb;}
+
 /// Controls the modules debug mode flag. We set it here to "true" to allow
 /// Valkey to load the configurations first time when the module loaded. Once
 /// this is done, we set it back to false. If the user passes "--debug-mode yes"
@@ -41,6 +51,17 @@ template <typename T>
 static int OnSetConfig(const char *config_name, T value, void *priv_data,
                        ValkeyModuleString **err) {
   auto entry = static_cast<ConfigBase<T> *>(priv_data);
+  if(config_name == "max-indexes"){
+    if (g_getMaxIndexes != nullptr) {
+    if(static_cast<int>(value) <= static_cast<int>(g_getMaxIndexes().GetValue()))
+      {
+        ValkeyModule_CreateStringPrintf(nullptr, "%s","Command rejected, configured operational limit is lower than the configured index schema");
+        return VALKEYMODULE_ERR;
+
+      }
+    }
+  }
+
   CHECK(entry) << "null private data for configuration Number entry.";
   auto res = entry->SetValue(value);  // Calls "Validate" internally
   if (!res.ok()) {

@@ -39,6 +39,7 @@ enum Flags {
 constexpr absl::string_view kDebugMode{"debug-mode"};
 bool IsDebugModeEnabled();
 
+
 /// Support Valkey configuration entries in a one-liner.
 ///
 /// Example usage:
@@ -322,6 +323,11 @@ class String : public ConfigBase<std::string> {
   mutable UniqueValkeyString cached_string_;
   FRIEND_TEST(Builder, ConfigBuilder);
 };
+
+//callbacks for func returning Numbers
+//callbacks for internal module changes for configs #376
+using GetMaxIndexesCallback = Number& (*)();
+void SetGetMaxIndexesCallback(GetMaxIndexesCallback cb);
 
 template <typename ValkeyT>
 class ConfigBuilder {

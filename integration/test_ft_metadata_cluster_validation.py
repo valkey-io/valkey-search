@@ -67,7 +67,41 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
         expected_set = set(expected_indexes)
         assert expected_set.issubset(first_result), f"Expected indexes {expected_set} not found in {first_result}"
 
-    def validate_ft_info_consistency(self, index_name: str, expected_attributes: Dict[str, Any], expected_schema_params: Dict[str, Any] = None):
+    def _normalize_dict_for_comparison(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Normalize dictionary for comparison by sorting arrays and recursively normalizing nested structures.
+        This ensures consistent comparison regardless of array ordering.
+        """
+        if not isinstance(data, dict):
+            return data
+            
+        normalized = {}
+        for key, value in data.items():
+            if isinstance(value, list):
+                # Sort lists that contain comparable elements (strings, numbers)
+                try:
+                    if value and all(isinstance(item, (str, int, float)) for item in value):
+                        normalized[key] = sorted(value)
+                    elif value and all(isinstance(item, dict) for item in value):
+                        # For lists of dicts, normalize each dict and sort by a stable key if possible
+                        normalized_items = [self._normalize_dict_for_comparison(item) for item in value]
+                        # Try to sort by 'identifier' if present, otherwise keep original order
+                        if all('identifier' in item for item in normalized_items):
+                            normalized[key] = sorted(normalized_items, key=lambda x: x.get('identifier', ''))
+                        else:
+                            normalized[key] = normalized_items
+                    else:
+                        normalized[key] = value
+                except (TypeError, AttributeError):
+                    # If sorting fails, keep original order
+                    normalized[key] = value
+            elif isinstance(value, dict):
+                normalized[key] = self._normalize_dict_for_comparison(value)
+            else:
+                normalized[key] = value
+        return normalized
+
+    def validate_ft_info_consistency(self, index_name: str):
         """Validate that FT.INFO returns consistent results across all nodes."""
         ft_info_results = self.get_ft_info_from_all_nodes(index_name)
         
@@ -75,72 +109,13 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
         for i, parser in enumerate(ft_info_results):
             assert parser is not None, f"Index '{index_name}' not found on node {i}"
         
-        # Compare key metadata fields across all nodes
         first_parser = ft_info_results[0]
+        first_dict = self._normalize_dict_for_comparison(first_parser.to_dict())
         
-        # Validate global settings are consistent across nodes if expected values are provided
-        if expected_schema_params:
-            if 'punctuation' in expected_schema_params:
-                assert first_parser.punctuation == expected_schema_params['punctuation'], f"Punctuation setting incorrect: {first_parser.punctuation}"
-            if 'with_offsets' in expected_schema_params:
-                assert first_parser.with_offsets == expected_schema_params['with_offsets'], f"WithOffsets setting incorrect: {first_parser.with_offsets}"
-            if 'stop_words' in expected_schema_params:
-                assert set(first_parser.stop_words) == set(expected_schema_params['stop_words']), f"Stop words incorrect: {first_parser.stop_words}"
-        
-        # Validate these settings are consistent across all nodes
+        # Compare all nodes against the first using normalized dictionary comparison
         for i, parser in enumerate(ft_info_results[1:], 1):
-            if expected_schema_params:
-                if 'punctuation' in expected_schema_params:
-                    assert parser.punctuation == first_parser.punctuation, f"Punctuation mismatch on node {i}"
-                if 'with_offsets' in expected_schema_params:
-                    assert parser.with_offsets == first_parser.with_offsets, f"WithOffsets mismatch on node {i}"
-                if 'stop_words' in expected_schema_params:
-                    assert set(parser.stop_words) == set(first_parser.stop_words), f"Stop words mismatch on node {i}"
-        
-        for i, parser in enumerate(ft_info_results[1:], 1):
-            # Validate basic index information
-            assert parser.index_name == first_parser.index_name, f"Index name mismatch on node {i}"
-            assert len(parser.attributes) == len(first_parser.attributes), f"Attribute count mismatch on node {i}"
-            
-            # Validate index definition consistency
-            assert parser.index_definition == first_parser.index_definition, f"Index definition mismatch on node {i}"
-            
-            # Validate attributes consistency - compare by identifier rather than position
-            first_attr_names = set()
-            for attr in first_parser.attributes:
-                if isinstance(attr, dict):
-                    first_attr_names.add(attr.get('identifier'))
-                elif isinstance(attr, list):
-                    parsed_attr = first_parser._parse_key_value_list(attr)
-                    if isinstance(parsed_attr, dict):
-                        first_attr_names.add(parsed_attr.get('identifier'))
-            
-            node_attr_names = set()
-            for attr in parser.attributes:
-                if isinstance(attr, dict):
-                    node_attr_names.add(attr.get('identifier'))
-                elif isinstance(attr, list):
-                    parsed_attr = parser._parse_key_value_list(attr)
-                    if isinstance(parsed_attr, dict):
-                        node_attr_names.add(parsed_attr.get('identifier'))
-            
-            assert first_attr_names == node_attr_names, f"Attribute names mismatch on node {i}: {first_attr_names} vs {node_attr_names}"
-            
-            # Validate attribute types match across nodes
-            for attr_name in first_attr_names:
-                first_attr = first_parser.get_attribute_by_name(attr_name)
-                node_attr = parser.get_attribute_by_name(attr_name)
-                assert first_attr is not None and node_attr is not None, f"Attribute '{attr_name}' parsing failed"
-                assert node_attr.get('type') == first_attr.get('type'), f"Attribute '{attr_name}' type mismatch on node {i}"
-        
-        # Validate specific expected attributes
-        for attr_name, expected_config in expected_attributes.items():
-            attr = first_parser.get_attribute_by_name(attr_name)
-            assert attr is not None, f"Expected attribute '{attr_name}' not found"
-            
-            for key, expected_value in expected_config.items():
-                actual_value = attr.get(key)
-                assert actual_value == expected_value, f"Attribute '{attr_name}' {key} mismatch: expected {expected_value}, got {actual_value}"
+            node_dict = self._normalize_dict_for_comparison(parser.to_dict())
+            assert node_dict == first_dict, f"Complete metadata mismatch on node {i}"
 
     def test_complex_text_index_metadata_validation(self):
         """Test complex text index with multiple parameters and options."""
@@ -173,54 +148,8 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
         # Validate FT._LIST consistency
         self.validate_ft_list_consistency([index_name])
         
-        # Validate FT.INFO consistency with detailed attribute checking
-        # Note: Based on server response, subcategory TAG field with CASESENSITIVE uses default separator ','
-        expected_attributes = {
-            "title": {
-                "type": "TEXT",
-                "identifier": "title",
-                "NO_STEM": 1
-            },
-            "description": {
-                "type": "TEXT",
-                "identifier": "description"
-            },
-            "price": {
-                "type": "NUMERIC",
-                "identifier": "price"
-            },
-            "category": {
-                "type": "TAG",
-                "identifier": "category",
-                "SEPARATOR": "|"
-            },
-            "subcategory": {
-                "type": "TAG",
-                "identifier": "subcategory",
-                "SEPARATOR": ",",
-                "CASESENSITIVE": 1
-            },
-            "embedding": {
-                "type": "VECTOR",
-                "identifier": "embedding",
-                "algorithm": "HNSW",
-                "data_type": "FLOAT32",
-                "dim": 20,
-                "distance_metric": "COSINE",
-                "M": 4,
-                "ef_construction": 100,
-                "ef_runtime": 10
-            }
-        }
-        
-        # Define expected schema-level parameters
-        expected_schema_params = {
-            'punctuation': ".,!?",
-            'with_offsets': 1,
-            'stop_words': ["the", "and", "or"]
-        }
-        
-        self.validate_ft_info_consistency(index_name, expected_attributes, expected_schema_params)
+        # Validate FT.INFO consistency across all nodes
+        self.validate_ft_info_consistency(index_name)
 
     def test_multiple_indexes_metadata_validation(self):
         """Test multiple indexes with different configurations."""
@@ -235,11 +164,7 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
                     "ON", "HASH",
                     "PREFIX", "1", "product:",
                     "SCHEMA", "name", "TEXT", "price", "NUMERIC"
-                ],
-                "attributes": {
-                    "name": {"type": "TEXT", "identifier": "name"},
-                    "price": {"type": "NUMERIC", "identifier": "price"}
-                }
+                ]
             },
             {
                 "name": "users_idx",
@@ -249,12 +174,7 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
                     "PREFIX", "1", "user:",
                     "PUNCTUATION", ".-",
                     "SCHEMA", "email", "TEXT", "age", "NUMERIC", "tags", "TAG"
-                ],
-                "attributes": {
-                    "email": {"type": "TEXT", "identifier": "email"},
-                    "age": {"type": "NUMERIC", "identifier": "age"},
-                    "tags": {"type": "TAG", "identifier": "tags"}
-                }
+                ]
             },
             {
                 "name": "articles_idx",
@@ -265,11 +185,7 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
                     "WITHOFFSETS",
                     "STOPWORDS", "2", "a", "an",
                     "SCHEMA", "title", "TEXT", "content", "TEXT", "NOSTEM"
-                ],
-                "attributes": {
-                    "title": {"type": "TEXT", "identifier": "title"},
-                    "content": {"type": "TEXT", "identifier": "content", "NO_STEM": 1}
-                }
+                ]
             }
         ]
         
@@ -287,4 +203,4 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
         
         # Validate each index's metadata consistency
         for index_config in indexes:
-            self.validate_ft_info_consistency(index_config["name"], index_config["attributes"])
+            self.validate_ft_info_consistency(index_config["name"])

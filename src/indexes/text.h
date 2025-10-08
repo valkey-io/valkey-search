@@ -39,6 +39,10 @@ class Text : public IndexBase {
   explicit Text(const data_model::TextIndex& text_index_proto,
                 std::shared_ptr<text::TextIndexSchema> text_index_schema);
 
+  std::string ApplyStemming(absl::string_view token, bool stem) const;
+  std::shared_ptr<text::TextIndexSchema> GetTextIndexSchema() const {
+    return text_index_schema_;
+  }
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);

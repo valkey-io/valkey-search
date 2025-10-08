@@ -25,6 +25,16 @@ Text::Text(const data_model::TextIndex& text_index_proto,
       no_stem_(text_index_proto.no_stem()),
       min_stem_size_(text_index_proto.min_stem_size()) {}
 
+
+std::string Text::ApplyStemming(absl::string_view token, bool stem) const {
+  indexes::text::Lexer lexer;
+  // std::string word = absl::AsciiStrToLower(token);
+  std::string word(token);
+  return lexer.StemWord(word, text_index_schema_->GetStemmer(), stem, min_stem_size_);
+}
+
+
+
 absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
                                      absl::string_view data) {
   valkey_search::indexes::text::Lexer lexer;

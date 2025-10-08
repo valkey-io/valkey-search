@@ -18,6 +18,7 @@
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
 #include "vmsdk/src/module_config.h"
+#include "src/indexes/text/lexer.h"
 
 namespace valkey_search {
 namespace indexes {

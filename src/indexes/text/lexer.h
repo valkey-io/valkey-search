@@ -54,7 +54,6 @@ struct Lexer {
     return stop_words_set.contains(lowercase_word);
   }
 
- private:
   std::string StemWord(const std::string& word, sb_stemmer* stemmer,
                        bool stemming_enabled, uint32_t min_stem_size) const;
 

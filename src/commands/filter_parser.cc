@@ -449,6 +449,7 @@ std::unique_ptr<query::Predicate> WrapPredicate(
 
 static const uint32_t FUZZY_MAX_DISTANCE = 3;
 
+// TODO: Add Stemming support
 absl::StatusOr<std::unique_ptr<query::TextPredicate>>
 FilterParser::BuildSingleTextPredicate(const std::string& field_name,
                                        absl::string_view raw_token) {
@@ -517,68 +518,190 @@ FilterParser::BuildSingleTextPredicate(const std::string& field_name,
         text_index, identifier, field_name, std::string(core));
   }
   // --- Term ---
+  bool should_stem = true;
+  std::string stemmed_token = text_index->ApplyStemming(token, should_stem);
   return std::make_unique<query::TermPredicate>(text_index, identifier,
-                                                field_name, std::string(token));
+                                                field_name, stemmed_token);
 }
 
-// TODO: Needs punctuation handing
+// // Q_TODO: Needs punctuation handing
+// absl::StatusOr<std::vector<std::unique_ptr<query::TextPredicate>>>
+// FilterParser::ParseOneTextAtomIntoTerms(const std::string& field_for_default) {
+//   std::vector<std::unique_ptr<query::TextPredicate>> terms;
+//   SkipWhitespace();
+//   auto push_token = [&](std::string& tok) -> absl::Status {
+//     if (tok.empty()) return absl::OkStatus();
+//     // Q_TODO: convert to lower case, check if not stopword.
+//     // Else skip BuildSingleTextPredicate, but do the rest of the fn.
+//     VMSDK_ASSIGN_OR_RETURN(auto t,
+//                            BuildSingleTextPredicate(field_for_default, tok));
+//     terms.push_back(std::move(t));
+//     tok.clear();
+//     return absl::OkStatus();
+//   };
+//   // Exact Phrase / Term query parsing.
+//   if (Match('"')) {
+//     // Q_TODO: Do not allow the following characters in the exact phrase/term:
+//     // $ % * ( ) - { } | ; : @ " (this indicates the end, unless escaped) ' [ ] ~
+//     // Unless they are escaped, these are not allowed
+//     std::string curr;
+//     while (!IsEnd()) {
+//       char c = Peek();
+//       if (c == '"') {
+//         ++pos_;
+//         break;
+//       }
+//       if (std::isspace(static_cast<unsigned char>(c))) {
+//         VMSDK_RETURN_IF_ERROR(push_token(curr));
+//         ++pos_;
+//       } else {
+//         curr.push_back(c);
+//         ++pos_;
+//       }
+//     }
+//     VMSDK_RETURN_IF_ERROR(push_token(curr));
+//     if (terms.empty()) return absl::InvalidArgumentError("Empty quoted string");
+//     return terms;  // exact phrase realized later by proximity (slop=0,
+//                    // inorder=true)
+//   }
+//   // Reads one raw term / token (unquoted) stopping on space, ')', '|', '{', '[', or
+//   // start of '@field'
+//   std::string tok;
+//   bool seen_nonwildcard = false;
+//   while (pos_ < expression_.size()) {
+//     char c = expression_[pos_];
+//     if (std::isspace(static_cast<unsigned char>(c)) || c == ')' || c == '|' ||
+//         c == '{' || c == '[' || c == '@')
+//       break;
+//     tok.push_back(c);
+//     ++pos_;
+//     // If we encounter a tailing * (wildcard) after content, break to split into
+//     // a new predicate.
+//     if (c == '*' && seen_nonwildcard) {
+//       break;
+//     }
+//     if (c != '*') {
+//       seen_nonwildcard = true;
+//     }
+//   }
+//   if (tok.empty()) return absl::InvalidArgumentError("Empty text token");
+//   // Q_TODO: convert to lower case, check if not stopword.
+//   // Else skip BuildSingleTextPredicate, but do the rest of the fn.
+//   VMSDK_ASSIGN_OR_RETURN(auto t,
+//                          BuildSingleTextPredicate(field_for_default, tok));
+//   terms.push_back(std::move(t));
+//   return terms;
+// }
+
+static const std::string kQuerySyntaxChars = "$%*()-{}|;:@\"'[]~";
+
+bool IsSpecialSyntaxChar(char c) {
+  return kQuerySyntaxChars.find(c) != std::string::npos;
+}
+
 absl::StatusOr<std::vector<std::unique_ptr<query::TextPredicate>>>
 FilterParser::ParseOneTextAtomIntoTerms(const std::string& field_for_default) {
+  // Get text index for punctuation and stop word configuration
+  auto index = index_schema_.GetIndex(field_for_default);
+  if (!index.ok() || index.value()->GetIndexerType() != indexes::IndexerType::kText) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("`", field_for_default, "` is not indexed as a text field"));
+  }
+  auto* text_index = dynamic_cast<const indexes::Text*>(index.value().get());
+  auto text_index_schema = text_index->GetTextIndexSchema();
   std::vector<std::unique_ptr<query::TextPredicate>> terms;
-  SkipWhitespace();
+  indexes::text::Lexer lexer;
   auto push_token = [&](std::string& tok) -> absl::Status {
     if (tok.empty()) return absl::OkStatus();
-    VMSDK_ASSIGN_OR_RETURN(auto t,
-                           BuildSingleTextPredicate(field_for_default, tok));
+    std::string lower = absl::AsciiStrToLower(tok);
+    if (lexer.IsStopWord(lower, text_index_schema->GetStopWordsSet())) {
+      tok.clear();
+      return absl::OkStatus();
+    }
+    VMSDK_ASSIGN_OR_RETURN(auto t, BuildSingleTextPredicate(field_for_default, lower));
     terms.push_back(std::move(t));
     tok.clear();
     return absl::OkStatus();
   };
-  if (Match('"')) {
-    std::string curr;
-    while (!IsEnd()) {
-      char c = Peek();
-      if (c == '"') {
+
+  std::string curr;
+  bool escaped = false;
+  bool in_quotes = false;
+
+  while (!IsEnd()) {
+    char c = Peek();
+    
+    // Handle quote termination
+    if (c == '"' && !escaped) {
+      if (!in_quotes) {
+        // Start quote mode
+        in_quotes = true;
+        ++pos_;
+        continue;
+      } else {
+        // End quote mode
         ++pos_;
         break;
       }
-      if (std::isspace(static_cast<unsigned char>(c))) {
-        VMSDK_RETURN_IF_ERROR(push_token(curr));
-        ++pos_;
-      } else {
-        curr.push_back(c);
-        ++pos_;
-      }
     }
-    VMSDK_RETURN_IF_ERROR(push_token(curr));
-    if (terms.empty()) return absl::InvalidArgumentError("Empty quoted string");
-    return terms;  // exact phrase realized later by proximity (slop=0,
-                   // inorder=true)
-  }
-  // Reads one raw token (unquoted) stopping on space, ')', '|', '{', '[', or
-  // start of '@field'
-  std::string tok;
-  bool seen_nonwildcard = false;
-  while (pos_ < expression_.size()) {
-    char c = expression_[pos_];
-    if (std::isspace(static_cast<unsigned char>(c)) || c == ')' || c == '|' ||
-        c == '{' || c == '[' || c == '@')
+    
+    // Handle escaping
+    // TODO: validate
+    if (escaped) {
+      curr.push_back(c);
+      escaped = false;
+      ++pos_;
+      continue;
+    }
+    if (c == '\\') {
+      escaped = true;
+      ++pos_;
+      continue;
+    }
+    // Handle wildcard breaking (unquoted only)
+    // TODO: curr.size() > 1 && curr != "*" is redundant.
+    // TODO: Can we do this smarter? or do we have to do the same for fuzzy?
+    if (!in_quotes && c == '*' && curr.size() > 1 && curr != "*") {
+      curr.push_back(c);
+      ++pos_;
+      VMSDK_RETURN_IF_ERROR(push_token(curr));
       break;
-    tok.push_back(c);
+    }
+
+    if (!in_quotes && !escaped && (c == ')' || c == '|' || c == '(' || c == '@')) {
+      VMSDK_RETURN_IF_ERROR(push_token(curr));
+      break;
+    }
+
+    // Handle special characters (only in quotes)
+    // TODO: Need to check about quotes. If they dont match outer quotes, we are good. if match, they need to be escaped
+    // if they dont match, they do not need to be escaped.
+    // Need to really understand how to implement the rejection logic without rejecting valid queries:
+    // quick-running is valid.
+    // if (!escaped && IsSpecialSyntaxChar(c)) {
+    //   return absl::InvalidArgumentError(
+    //       absl::StrCat("Unescaped special character '", std::string(1, c), "' in quoted string"));
+    // }
+
+    // TODO: I have concerns with punctuation including characters which should NOT be delimiters in queries.
+    if (std::isspace(static_cast<unsigned char>(c)) || lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())) {
+    // if (std::isspace(static_cast<unsigned char>(c))) {
+      VMSDK_RETURN_IF_ERROR(push_token(curr));
+      // Handle the case of non exact phrase.
+      if (!in_quotes) break;
+      ++pos_;
+      continue;
+    }
+    
+    // Regular character
+    curr.push_back(c);
     ++pos_;
-    // If we encounter a tailing * (wildcard) after content, break to split into
-    // a new predicate.
-    if (c == '*' && seen_nonwildcard) {
-      break;
-    }
-    if (c != '*') {
-      seen_nonwildcard = true;
-    }
   }
-  if (tok.empty()) return absl::InvalidArgumentError("Empty text token");
-  VMSDK_ASSIGN_OR_RETURN(auto t,
-                         BuildSingleTextPredicate(field_for_default, tok));
-  terms.push_back(std::move(t));
+
+  VMSDK_RETURN_IF_ERROR(push_token(curr));
+  // TODO: In redis-search, they do not allow stop words in exact phrase
+  // Also, we need to handle cases where this fn is called and a stop word if found with nothing else. vec is empty here.
+  if (terms.empty()) return absl::InvalidArgumentError("Empty text token");
   return terms;
 }
 

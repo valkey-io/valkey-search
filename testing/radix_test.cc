@@ -36,20 +36,20 @@ class RadixTreeTest : public vmsdk::ValkeyTest {
 
   void AddWords(const std::vector<std::pair<std::string, int>>& words) {
     for (const auto& [word, value] : words) {
-      prefix_tree_->Mutate(word, [value](auto) { return TestTarget(value); });
+      prefix_tree_->MutateTarget(word, [value](auto) { return TestTarget(value); });
     }
   }
 
   void DeleteWords(const std::vector<std::string>& words) {
     for (const auto& word : words) {
-      prefix_tree_->Mutate(
+      prefix_tree_->MutateTarget(
           word, [](auto) -> std::optional<TestTarget> { return std::nullopt; });
     }
   }
 
   void VerifyWords(const std::vector<std::pair<std::string, int>>& expected) {
     for (const auto& [word, value] : expected) {
-      prefix_tree_->Mutate(word, [value, word](auto existing) {
+      prefix_tree_->MutateTarget(word, [value, word](auto existing) {
         EXPECT_TRUE(existing.has_value())
             << "Word '" << word << "' should exist";
         EXPECT_EQ(existing->value, value)
@@ -61,7 +61,7 @@ class RadixTreeTest : public vmsdk::ValkeyTest {
 
   void VerifyWordsDeleted(const std::vector<std::string>& words) {
     for (const auto& word : words) {
-      prefix_tree_->Mutate(word, [&word](auto existing) {
+      prefix_tree_->MutateTarget(word, [&word](auto existing) {
         EXPECT_FALSE(existing.has_value())
             << "Word '" << word << "' should be deleted";
         return existing;
@@ -435,7 +435,7 @@ TEST_F(RadixTreeTest, WordIteratorEmpty) {
 }
 
 TEST_F(RadixTreeTest, WordIteratorNoMatch) {
-  prefix_tree_->Mutate("hello", [](auto) { return TestTarget(1); });
+  prefix_tree_->MutateTarget("hello", [](auto) { return TestTarget(1); });
 
   // Test iterator with non-matching prefix
   auto iter = prefix_tree_->GetWordIterator("world");
@@ -443,7 +443,7 @@ TEST_F(RadixTreeTest, WordIteratorNoMatch) {
 }
 
 TEST_F(RadixTreeTest, WordIteratorSingleWord) {
-  prefix_tree_->Mutate("test", [](auto) { return TestTarget(42); });
+  prefix_tree_->MutateTarget("test", [](auto) { return TestTarget(42); });
 
   auto iter = prefix_tree_->GetWordIterator("test");
   EXPECT_FALSE(iter.Done());
@@ -560,7 +560,7 @@ TEST_F(RadixTreeTest, WordIteratorLargeScale) {
   for (const auto& w : words) {
     word_counts[w]++;
     // Add word to tree, incrementing count each time
-    prefix_tree_->Mutate(w, [](auto existing) {
+    prefix_tree_->MutateTarget(w, [](auto existing) {
       if (existing.has_value()) {
         return TestTarget(existing->value + 1);
       } else {
@@ -583,7 +583,7 @@ TEST_F(RadixTreeTest, WordIteratorLargeScale) {
       std::default_random_engine{static_cast<unsigned>(std::time(nullptr))});
   std::set<std::string> words_to_delete(words.begin(), words.begin() + 100);
   for (const auto& w : words_to_delete) {
-    prefix_tree_->Mutate(w, [](auto) { return std::nullopt; });
+    prefix_tree_->MutateTarget(w, [](auto) { return std::nullopt; });
     word_counts.erase(w);
   }
   word_pairs = std::vector<std::pair<std::string, int>>(word_counts.begin(),
@@ -592,7 +592,7 @@ TEST_F(RadixTreeTest, WordIteratorLargeScale) {
 
   // Delete all words
   for (const auto& w : words) {
-    prefix_tree_->Mutate(w, [](auto) { return std::nullopt; });
+    prefix_tree_->MutateTarget(w, [](auto) { return std::nullopt; });
   }
   // clang-format off
   VerifyTreeStructure({

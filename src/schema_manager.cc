@@ -217,7 +217,7 @@ absl::StatusOr<coordinator::IndexFingerprintVersion>
 SchemaManager::CreateIndexSchema(
     ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto) {
   const auto max_indexes = options::GetMaxIndexes().GetValue();
-
+  options::MaxIndexCreationCallback();
   VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
       SchemaManager::Instance().GetNumberOfIndexSchemas() + 1, std::nullopt,
       max_indexes))
@@ -250,7 +250,6 @@ SchemaManager::CreateIndexSchema(
   index_fingerprint_version.set_fingerprint(0);
   index_fingerprint_version.set_version(0);
   //set the max indexes in callback 
-  options::MaxIndexCreationCallback();
   return index_fingerprint_version;
 }
 

@@ -26,7 +26,8 @@ namespace config {
 
 static GetMaxIndexesCallback g_getMaxIndexes = nullptr;
 
-void SetGetMaxIndexesCallback(GetMaxIndexesCallback cb) { g_getMaxIndexes = cb;}
+void SetGetMaxIndexesCallback(GetMaxIndexesCallback cb) { std::cout<<"callback called"<<std::endl;
+g_getMaxIndexes = cb;}
 
 /// Controls the modules debug mode flag. We set it here to "true" to allow
 /// Valkey to load the configurations first time when the module loaded. Once
@@ -51,7 +52,7 @@ template <typename T>
 static int OnSetConfig(const char *config_name, T value, void *priv_data,
                        ValkeyModuleString **err) {
   auto entry = static_cast<ConfigBase<T> *>(priv_data);
-  if(config_name == "max-indexes"){
+  if(std::strcmp(config_name,"max-indexes") == 0){
     if (g_getMaxIndexes != nullptr) {
     if(static_cast<int>(value) <= static_cast<int>(g_getMaxIndexes().GetValue()))
       {

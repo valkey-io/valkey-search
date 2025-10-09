@@ -729,4 +729,63 @@ static vmsdk::info_field::Integer total_indexing_time(
       return 0;
     }));
 
+
+/*
+An 8/1.0 encoded string won't have a hashtag anywhere and is always for db_num == 0
+An 9/1.1 encoded string will always have a psuedo-hashtag at the START AND 
+      may have a real hashtag after that.
+
+Decoded strings that lack a hashtag and are for db_num == 0, are encoded with the 8/1.0 rules
+All other decoded strings are encoded according to the 9/1.1 rules.
+
+A pseudo-hashtag is of the format: {dddd}
+dddd is the database number, i.e., ascii digits 0-9 ONLY.
+Characters after the database number up to the trailing right brace are explicitly ignored -- but preserved --
+allowing for potential future forward/reverse compatibility.
+
+*/    
+IndexName::IndexName(absl::string_view encoded_name) : encoded_name_(encoded_name) {
+  auto hash_tag = vmsdk::ParseHashTag(encoded_name_);
+  if (hash_tag) {
+    std::string_view front_tag = *hash_tag;
+    CHECK(encoded_name.size() >= 3); // To have a hashtag, you must have at least 3 chars
+    if (front_tag.data() == (encoded_name_.data() + 1)) {
+      std::string db_num_str;
+      while (!front_tag.empty() && std::isdigit(front_tag.front())) {
+        db_num_str += front_tag.front();
+        front_tag.remove_prefix(1);
+      }
+      if (!front_tag.empty()) {
+        VMSDK_LOG_EVERY_N(NOTICE, nullptr, 1000) << "Ignoring extended index name metadata";
+      }
+      if (!db_num_str.empty()) {
+        // Found valid 9/1.1 encoding.
+        db_num_ = std::stoul(db_num_str);
+        decoded_name_ = encoded_name_.substr(hash_tag->size()+2);
+        hash_tag_ = vmsdk::ParseHashTag(decoded_name_);
+        return;
+      }
+    }
+    VMSDK_LOG_EVERY_N(WARNING, nullptr, 10) << "Found invalid encoded index name: " << encoded_name;
+  }
+  //
+  // Assume 8/1.0 encoding.
+  decoded_name_ = encoded_name;
+  db_num_ = 0;
+  hash_tag_ = hash_tag;
+}
+
+IndexName::IndexName(uint32_t db_num, absl::string_view decoded_name) 
+  : db_num_(db_num), decoded_name_(decoded_name) {
+  hash_tag_ = vmsdk::ParseHashTag(decoded_name_);
+  if (hash_tag_.has_value() || db_num != 0) {
+    //
+    // this is ALWAYS a 9/1.1 format
+    //
+    encoded_name_ = absl::StrCat("{", db_num, "}", decoded_name_);
+  } else {
+    encoded_name_ = decoded_name_;
+  }
+}
+
 }  // namespace valkey_search

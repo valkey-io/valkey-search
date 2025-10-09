@@ -510,4 +510,37 @@ TEST_P(OnSwapDBCallbackTest, OnSwapDBCallback) {
                                             : test_case.index_schema_db_num);
 }
 
+TEST(IndexNameTest, IndexName) {
+  for (std::string prefix  : {"", "a", "abc", "{", "}"}) {
+    for (std::string hash_tag : {"", "{a}", "{b}", "{}"}) {
+      for (std::string suffix : {"", "x", "xy", "{", "}", "{}"}) {
+        for (uint32_t db_num : {0, 1}) {
+          std::string name = prefix + hash_tag + suffix;
+          //
+          // Construct a IndexName
+          //
+          std::cout << "Doing test: DB:" << db_num << " name:'" << name << "'\n";
+          IndexName forward(db_num, name);
+          //
+          // Now reverse it and compare equality
+          //
+          IndexName reverse(forward.GetEncodedName());
+          EXPECT_EQ(forward.GetDecodedName(), reverse.GetDecodedName());
+          EXPECT_EQ(forward.GetDbNum(), reverse.GetDbNum());
+          EXPECT_EQ(forward.GetHashTag(), reverse.GetHashTag());
+          EXPECT_EQ(forward.GetEncodedName(), reverse.GetEncodedName());
+          //
+          // And re-forward it
+          //
+          IndexName re_forward(reverse.GetDbNum(), reverse.GetDecodedName());
+          EXPECT_EQ(re_forward.GetDecodedName(), reverse.GetDecodedName());
+          EXPECT_EQ(re_forward.GetDbNum(), reverse.GetDbNum());
+          EXPECT_EQ(re_forward.GetHashTag(), reverse.GetHashTag());
+          EXPECT_EQ(re_forward.GetEncodedName(), reverse.GetEncodedName());
+        }
+      }
+    }
+  }
+}
+
 }  // namespace valkey_search

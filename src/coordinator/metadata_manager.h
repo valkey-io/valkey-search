@@ -43,7 +43,6 @@ static constexpr uint8_t kMetadataBroadcastClusterMessageReceiverId = 0x00;
 static constexpr highwayhash::HHKey kHashKey{
     0x9736bad976c904ea, 0x08f963a1a52eece9, 0x1ea3f3f773f3b510,
     0x9290a6b4e4db3d51};
-
 class MetadataManager {
  public:
   MetadataManager(ValkeyModuleCtx *ctx, ClientPool &client_pool)

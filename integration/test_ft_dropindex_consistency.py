@@ -10,19 +10,19 @@ import pytest
 RETRY_MIN_THRESHOLD=50
 
 def do_dropindex(node0, index_name):
-    dropindex_result = [None]
+    dropindex_result = None
     try:
-        dropindex_result[0] = node0.execute_command("FT.DROPINDEX", index_name)
+        dropindex_result = node0.execute_command("FT.DROPINDEX", index_name)
     except Exception as e:
-        dropindex_result[0] = e
+        dropindex_result = e
     return dropindex_result
 
 # type0: reset handle cluster message pausepoint on node1 first
 # type1: reset consistency check pausepoint on node0 first
 def run_pausepoint_reset(type, node0, node1):
-    reset_pausepoint_result = [None]
-    reset_pause_handle_message_result = [None]
-    exceptions = [None]
+    reset_pausepoint_result = None
+    reset_pause_handle_message_result = None
+    exception = None
     try:
         def wait_for_pausepoint():
             res = str(node0.execute_command("FT._DEBUG PAUSEPOINT TEST fanout_remote_pausepoint"))
@@ -40,7 +40,7 @@ def run_pausepoint_reset(type, node0, node1):
         if type == 0:
             metadata_reconciliation_completed_count_before = node1.info("SEARCH")["search_coordinator_metadata_reconciliation_completed_count"]
             # reset handle cluster message pausepoint first
-            reset_pause_handle_message_result[0] = node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
+            reset_pause_handle_message_result = node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
             # wait for metadata to reconcile
             waiters.wait_for_true(
                 lambda: int(node1.info("SEARCH")["search_coordinator_metadata_reconciliation_completed_count"]) 
@@ -48,20 +48,20 @@ def run_pausepoint_reset(type, node0, node1):
                 timeout=5
             )
             # reset consistency check pausepoint second
-            reset_pausepoint_result[0] = node0.execute_command("FT._DEBUG PAUSEPOINT RESET fanout_remote_pausepoint")
+            reset_pausepoint_result = node0.execute_command("FT._DEBUG PAUSEPOINT RESET fanout_remote_pausepoint")
         elif type == 1:
             # reset consistency check pausepoint first
-            reset_pausepoint_result[0] = node0.execute_command("FT._DEBUG PAUSEPOINT RESET fanout_remote_pausepoint")
+            reset_pausepoint_result = node0.execute_command("FT._DEBUG PAUSEPOINT RESET fanout_remote_pausepoint")
             # reset handle cluster message pausepoint second
-            reset_pause_handle_message_result[0] = node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
+            reset_pause_handle_message_result = node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
         else:
             # reset pausepoint in invalid type case to prevent infinite loop
-            reset_pausepoint_result[0] = node0.execute_command("FT._DEBUG PAUSEPOINT RESET fanout_remote_pausepoint")
-            reset_pause_handle_message_result[0] = node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
-            exceptions[0] = ValueError(f"Invalid type {type} for pausepoint order control. Must be 0 or 1")
+            reset_pausepoint_result = node0.execute_command("FT._DEBUG PAUSEPOINT RESET fanout_remote_pausepoint")
+            reset_pause_handle_message_result = node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
+            exception = ValueError(f"Invalid type {type} for pausepoint order control. Must be 0 or 1")
     except Exception as e:
-        exceptions[0] = e
-    return reset_pausepoint_result, reset_pause_handle_message_result, exceptions
+        exception = e
+    return reset_pausepoint_result, reset_pause_handle_message_result, exception
 
 class TestFTDropindexConsistency(ValkeySearchClusterTestCaseDebugMode):
 
@@ -129,10 +129,10 @@ class TestFTDropindexConsistency(ValkeySearchClusterTestCaseDebugMode):
             future2 = executor.submit(run_pausepoint_reset, 0, node0, node1)
             
             dropindex_result = future1.result(timeout=10)
-            reset_pausepoint_result, reset_pause_handle_message_result, exceptions = future2.result(timeout=10)
+            reset_pausepoint_result, reset_pause_handle_message_result, exception = future2.result(timeout=10)
 
-        assert exceptions[0] is None, f"Unexpected exception: {exceptions[0]}"
-        assert dropindex_result[0] == b"OK"
+        assert exception is None, f"Unexpected exception: {exception}"
+        assert dropindex_result == b"OK"
         # assert no retry when handle message on node1 released first
         # taking the threshold to account for retries caused by grpc launch latency
         retry_count_after = node0.info("SEARCH")["search_info_fanout_retry_count"]
@@ -166,10 +166,10 @@ class TestFTDropindexConsistency(ValkeySearchClusterTestCaseDebugMode):
             future2 = executor.submit(run_pausepoint_reset, 1, node0, node1)
             
             dropindex_result = future1.result(timeout=10)
-            reset_pausepoint_result, reset_pause_handle_message_result, exceptions = future2.result(timeout=10)
+            reset_pausepoint_result, reset_pause_handle_message_result, exception = future2.result(timeout=10)
 
-        assert exceptions[0] is None, f"Unexpected exception: {exceptions[0]}"
-        assert dropindex_result[0] == b"OK"
+        assert exception is None, f"Unexpected exception: {exception}"
+        assert dropindex_result == b"OK"
         retry_count_after = node0.info("SEARCH")["search_info_fanout_retry_count"]
         assert retry_count_after - retry_count_before > RETRY_MIN_THRESHOLD
         pause_handle_cluster_message_round_count = int(node1.info("SEARCH")["search_pause_handle_cluster_message_round_count"])

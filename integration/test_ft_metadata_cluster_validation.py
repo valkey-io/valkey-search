@@ -18,21 +18,11 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
     return consistent results across all cluster nodes.
     """
 
-    def wait_for_indexing_complete_on_all_nodes(self, index_name: str, timeout: int = 10):
+    def wait_for_indexing_complete_on_all_nodes(self, index_name: str):
         """Wait for indexing to complete on all cluster nodes."""
         nodes = [self.new_client_for_primary(i) for i in range(self.CLUSTER_SIZE)]
-        success = IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(nodes, index_name, timeout)
-        if not success:
-            raise TimeoutError(f"Indexing did not complete on all nodes within {timeout} seconds for index '{index_name}'")
+        IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(nodes, index_name)
 
-    def get_ft_list_from_all_nodes(self) -> List[List[bytes]]:
-        """Get FT._LIST results from all cluster nodes."""
-        results = []
-        for i in range(self.CLUSTER_SIZE):
-            node = self.new_client_for_primary(i)
-            result = node.execute_command("FT._LIST")
-            results.append(result)
-        return results
 
     def get_ft_info_from_all_nodes(self, index_name: str) -> List[FTInfoParser]:
         """Get FT.INFO results from all cluster nodes."""
@@ -45,18 +35,12 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
 
     def validate_ft_list_consistency(self, expected_indexes: List[str]):
         """Validate that FT._LIST returns consistent results across all nodes."""
-        ft_list_results = self.get_ft_list_from_all_nodes()
-        
-        # Convert all results to sets of strings for comparison
+        # Get normalized results from all nodes using the updated get_ft_list function
         normalized_results = []
-        for result in ft_list_results:
-            normalized = set()
-            for item in result:
-                if isinstance(item, bytes):
-                    normalized.add(item.decode('utf-8'))
-                else:
-                    normalized.add(str(item))
-            normalized_results.append(normalized)
+        for i in range(self.CLUSTER_SIZE):
+            node = self.new_client_for_primary(i)
+            result = IndexingTestHelper.get_ft_list(node)
+            normalized_results.append(result)
         
         # All nodes should have the same set of indexes
         first_result = normalized_results[0]
@@ -72,31 +56,25 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
         Normalize dictionary for comparison by sorting arrays and recursively normalizing nested structures.
         This ensures consistent comparison regardless of array ordering.
         """
-        if not isinstance(data, dict):
-            return data
+        assert isinstance(data, dict), "Input must be a dictionary"
             
         normalized = {}
         for key, value in data.items():
             if isinstance(value, list):
-                # Sort lists that contain comparable elements (strings, numbers)
-                try:
-                    if value and all(isinstance(item, (str, int, float)) for item in value):
-                        normalized[key] = sorted(value)
-                    elif value and all(isinstance(item, dict) for item in value):
-                        # For lists of dicts, normalize each dict and sort by a stable key if possible
-                        normalized_items = [self._normalize_dict_for_comparison(item) for item in value]
-                        # Try to sort by 'identifier' if present, otherwise keep original order
-                        if all('identifier' in item for item in normalized_items):
-                            normalized[key] = sorted(normalized_items, key=lambda x: x.get('identifier', ''))
-                        else:
-                            normalized[key] = normalized_items
+                # Sort lists that contain comparable elements (strings, numbers) --> STOPWORDS LIST
+                if value and all(isinstance(item, (str, int, float)) for item in value):
+                    normalized[key] = sorted(value)
+                elif value and all(isinstance(item, dict) for item in value):
+                    # Recursively normalise a list of dict
+                    normalized_items = [self._normalize_dict_for_comparison(item) for item in value]
+                    # Try to sort a list of attribute dictionary (different fields of text, tag, etc) 
+                    # by field 'identifier'
+                    if all('identifier' in item for item in normalized_items):
+                        normalized[key] = sorted(normalized_items, key=lambda x: x.get('identifier', ''))
                     else:
-                        normalized[key] = value
-                except (TypeError, AttributeError):
-                    # If sorting fails, keep original order
+                        normalized[key] = normalized_items
+                else:
                     normalized[key] = value
-            elif isinstance(value, dict):
-                normalized[key] = self._normalize_dict_for_comparison(value)
             else:
                 normalized[key] = value
         return normalized
@@ -110,6 +88,7 @@ class TestFTMetadataClusterValidation(ValkeySearchClusterTestCase):
             assert parser is not None, f"Index '{index_name}' not found on node {i}"
         
         first_parser = ft_info_results[0]
+        # raise Exception(first_parser.to_dict())
         first_dict = self._normalize_dict_for_comparison(first_parser.to_dict())
         
         # Compare all nodes against the first using normalized dictionary comparison

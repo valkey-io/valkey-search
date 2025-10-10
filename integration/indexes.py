@@ -7,7 +7,6 @@ from typing import Tuple, Union
 # from pyparsing import abstractmethod
 import valkey
 from ft_info_parser import FTInfoParser
-from utils import IndexingTestHelper
 import logging, json
 import struct
 
@@ -182,10 +181,9 @@ class Index:
         return d
 
     def info(self, client: valkey.client) -> FTInfoParser:
-        parser = IndexingTestHelper.get_ft_info(client, self.name)
-        if parser is None:
-            raise Exception(f"Failed to get FT.INFO for index {self.name}")
-        return parser
+        res = client.execute_command("FT.INFO", self.name)
+        return FTInfoParser(res)
     
     def backfill_complete(self, client: valkey.client) -> bool:
-        return IndexingTestHelper.is_backfill_complete_on_node(client, self.name)
+        res = self.info(client)
+        return res.backfill_in_progress == 0

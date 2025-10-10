@@ -13,16 +13,28 @@ class IndexingTestHelper:
     """
     
     @staticmethod
-    def get_ft_info(client: Valkey, index_name: str) -> Optional[FTInfoParser]:
+    def get_ft_info(client: Valkey, index_name: str, cluster=False) -> FTInfoParser:
         """Execute FT.INFO command and return FTInfoParser instance."""
-        try:
+        if cluster:
+            info_response = client.execute_command("FT.INFO", index_name, "CLUSTER")
+        else:
             info_response = client.execute_command("FT.INFO", index_name)
-            return FTInfoParser(info_response)
-        except ResponseError:
-            return None
+        return FTInfoParser(info_response)
     
     @staticmethod
-    def is_indexing_complete_on_node(node: Valkey, index_name: str) -> bool:
+    def get_ft_list(client: Valkey) -> set:
+        """Execute FT._LIST command and return normalized set of index names as strings."""
+        result = client.execute_command("FT._LIST")
+        normalized = set()
+        for item in result:
+            if isinstance(item, bytes):
+                normalized.add(item.decode('utf-8'))
+            else:
+                normalized.add(str(item))
+        return normalized
+    
+    @staticmethod
+    def is_indexing_complete_on_node(client: Valkey, index_name: str) -> bool:
         """
         Check if indexing is complete on a specific node.
         
@@ -30,42 +42,31 @@ class IndexingTestHelper:
         and that the index is in ready state.
         
         """
-        parser = IndexingTestHelper.get_ft_info(node, index_name)
-        return parser.is_backfill_complete() and parser.is_ready() if parser else False
+        parser = IndexingTestHelper.get_ft_info(client, index_name)
+        return parser.is_backfill_complete() and parser.is_ready()
 
     @staticmethod
     def is_backfill_complete_on_node(client: Valkey, index_name: str) -> bool:
         """Check if backfill is complete on a single node."""
         parser = IndexingTestHelper.get_ft_info(client, index_name)
-        return parser.is_backfill_complete() if parser else False
+        return parser.is_backfill_complete()
 
     
     @staticmethod
-    def is_indexing_complete_cluster(node: Valkey, index_name: str) -> bool:
-        """Check if indexing is complete on a cluster node using CLUSTER mode."""
-        try:
-            raw = node.execute_command("FT.INFO", index_name, "CLUSTER")
-            parser = FTInfoParser(raw)
-            return parser.is_backfill_complete() and parser.is_ready()
-        except ResponseError:
-            return False
+    def is_indexing_complete_cluster(client: Valkey, index_name: str) -> bool:
+        """Check if indexing is complete on a cluster node using CLUSTER mode.""" 
+        parser = IndexingTestHelper.get_ft_info(client, index_name, cluster=True)
+        return parser.is_backfill_complete() and parser.is_ready()
     
     @staticmethod
-    def wait_for_indexing_complete_on_all_nodes(nodes: list, index_name: str, timeout: int = 10) -> bool:
+    def wait_for_indexing_complete_on_all_nodes(clients: list, index_name: str):
         """Wait for indexing to complete on all provided nodes."""
-        import time
-        start_time = time.time()
+        from valkeytestframework.util.waiters import wait_for_true
         
-        while time.time() - start_time < timeout:
-            all_complete = True
-            for node in nodes:
-                if not IndexingTestHelper.is_indexing_complete_on_node(node, index_name):
-                    all_complete = False
-                    break
-            
-            if all_complete:
-                return True
-            
-            time.sleep(0.1)  # Small delay between checks
+        def check_all_nodes_complete():
+            return all(
+                IndexingTestHelper.is_indexing_complete_on_node(client, index_name) 
+                for client in clients
+            )
         
-        return False
+        wait_for_true(check_all_nodes_complete)

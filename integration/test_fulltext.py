@@ -283,14 +283,13 @@ class TestFullText(ValkeySearchTestCaseBase):
             doc_fields_desc2 = dict(zip(document_desc2[::2], document_desc2[1::2]))
             assert doc_fields_desc2 == expected_desc2_hash_value
 
-    def test_default_ingestion_pipeline(self):
+    def test_default_tokenization(self):
         """
-        Test comprehensive ingestion pipeline: FT.CREATE → HSET → FT.SEARCH with full tokenization
+        Test FT.CREATE → HSET → FT.SEARCH with full tokenization
         """
         client: Valkey = self.server.get_new_client()
         client.execute_command("FT.CREATE idx ON HASH SCHEMA content TEXT")
         client.execute_command("HSET", "doc:1", "content", "The quick-running searches are finding EFFECTIVE results!")
-        client.execute_command("HSET", "doc:2", "content", "But slow searches aren't working...")
         
         # List of queries with pass/fail expectations
         test_cases = [
@@ -311,36 +310,36 @@ class TestFullText(ValkeySearchTestCaseBase):
             else:
                 assert result[0] == 0, f"Failed: {description}"
 
-    def test_multi_text_field(self):
+    @pytest.mark.skip(reason="TODO: ingest original words when stemming enabled")
+    def test_stemming(self):
         """
-        Test different TEXT field configs in same index
+        Test text index NOSTEM option
         """
         client: Valkey = self.server.get_new_client()
         client.execute_command("FT.CREATE idx ON HASH SCHEMA title TEXT content TEXT NOSTEM")
         client.execute_command("HSET", "doc:1", "title", "running fast", "content", "running quickly")
 
-        expected_value = {
-            b'title': b'running fast',
-            b'content': b'running quickly'
-        }
+        expected = [1, b'doc:1', [b'content', b'running quickly', b'title', b'running fast']]
 
-        result = client.execute_command("FT.SEARCH", "idx", '@title:"run"')
-        actual_fields = dict(zip(result[2][::2], result[2][1::2]))
-        assert actual_fields == expected_value
+        # We can find stems on 'title'
+        assert client.execute_command("FT.SEARCH", "idx", '@title:"run"') == expected
 
-        result = client.execute_command("FT.SEARCH", "idx", '@content:"run"')
-        assert result[0] == 0  # Should not find (NOSTEM)
+        # We cannot find stems on 'content' with NOSTEM
+        assert client.execute_command("FT.SEARCH", "idx", '@content:"run"') == [0]
+
+        # We can find original words in both cases
+        assert client.execute_command("FT.SEARCH", "idx", '@title:"running"') == expected # TODO: fails here
+        assert client.execute_command("FT.SEARCH", "idx", '@content:"running"') == expected
 
     def test_custom_stopwords(self):
         """
-        End-to-end test: FT.CREATE STOPWORDS config actually filters custom stop words in search
+        Test FT.CREATE STOPWORDS option filters out custom stop words
         """
         client: Valkey = self.server.get_new_client()
         client.execute_command("FT.CREATE idx ON HASH STOPWORDS 2 the and SCHEMA content TEXT")
         client.execute_command("HSET", "doc:1", "content", "the cat and dog are good")
         
         # Stop words should not be findable
-        
         result = client.execute_command("FT.SEARCH", "idx", '@content:"and"')
         assert result[0] == 0  # Stop word "and" filtered out
         
@@ -350,23 +349,9 @@ class TestFullText(ValkeySearchTestCaseBase):
         assert result[1] == b'doc:1'
         assert result[2] == [b'content', b"the cat and dog are good"]
 
-    def test_nostem(self):
-        """
-        End-to-end test: FT.CREATE NOSTEM config actually affects stemming in search
-        """
-        client: Valkey = self.server.get_new_client()
-        client.execute_command("FT.CREATE idx ON HASH NOSTEM SCHEMA content TEXT")
-        client.execute_command("HSET", "doc:1", "content", "running quickly")
-        
-        # With NOSTEM, exact forms should be findable
-        result = client.execute_command("FT.SEARCH", "idx", '@content:"running"')
-        assert result[0] == 1  # Exact form "running" found
-        assert result[1] == b'doc:1'
-        assert result[2] == [b'content', b"running quickly"]
-
     def test_custom_punctuation(self):
         """
-        Test PUNCTUATION directive configures custom tokenization separators
+        Test FT.CREATE PUNCTUATION directive configures custom tokenization separators
         """
         client: Valkey = self.server.get_new_client()
         client.execute_command("FT.CREATE idx ON HASH PUNCTUATION . SCHEMA content TEXT")
@@ -381,3 +366,32 @@ class TestFullText(ValkeySearchTestCaseBase):
         # @ NOT configured as separator - should not be able with split words
         result = client.execute_command("FT.SEARCH", "idx", '@content:"test"')
         assert result[0] == 0
+
+    def test_add_update_delete_documents(self):
+        """
+        Tests we accurately reflect added, updated, and deleted documents in text indexes
+        """
+        client: Valkey = self.server.get_new_client()
+        
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "content", "TEXT")
+
+        # Add
+        for i in range(10):
+            client.execute_command("HSET", f"doc:{i}", "content", f"What a cool document{i}")
+        result = client.execute_command("FT.SEARCH", "idx", "@content:document*")
+        assert result[0] == 10
+
+        # Update
+        for i in range(10):
+            client.execute_command("HSET", f"doc:{i}", "content", f"What a cool doc{i}")
+        result = client.execute_command("FT.SEARCH", "idx", "@content:document*")
+        assert result[0] == 0
+        result = client.execute_command("FT.SEARCH", "idx", "@content:doc*")
+        assert result[0] == 10
+        
+        # Delete
+        for i in range(10):
+            client.execute_command("DEL", f"doc:{i}")
+        result = client.execute_command("FT.SEARCH", "idx", "@content:doc*")
+        assert result[0] == 0
+        

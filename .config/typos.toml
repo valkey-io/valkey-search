@@ -9,6 +9,9 @@ extend-exclude = [
 extend-ignore-re = [
     "grea.*",
     "Grea.*",
+    "opposit",
+    "uniqu",
+    "worl*"
 ]
 [default.extend-words]
 Fo = "Fo"
@@ -22,5 +25,5 @@ DrOpInDeX = "DrOpInDeX"
 [type.cpp]
 extend-ignore-re = [
     "baNAna",
-    "eXIst"
+    "eXIst",
 ]

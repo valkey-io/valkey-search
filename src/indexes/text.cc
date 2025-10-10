@@ -13,7 +13,6 @@
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/lexer.h"
-#include "src/indexes/text/posting.h"
 
 namespace valkey_search::indexes {
 
@@ -105,8 +104,8 @@ std::unique_ptr<Text::EntriesFetcher> Text::Search(
       CalculateSize(predicate), text_index_schema_->GetTextIndex(),
       negate ? &untracked_keys_ : nullptr);
   fetcher->predicate_ = &predicate;
-  // TODO : We only support single field queries for now. Change below when we
-  // support multiple and all fields.
+  // TODO : Update for the default search case (all fields).
+  // The TextPredicate needs to support a GetFieldMask API to indicate this.
   fetcher->field_mask_ = 1ULL << text_field_number_;
   return fetcher;
 }
@@ -114,22 +113,87 @@ std::unique_ptr<Text::EntriesFetcher> Text::Search(
 size_t Text::EntriesFetcher::Size() const { return size_; }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
-  if (auto term = dynamic_cast<const query::TermPredicate*>(predicate_)) {
-    auto iter = text_index_->prefix_.GetWordIterator(term->GetTextString());
-    auto itr = std::make_unique<text::TermIterator>(
-        iter, term->GetTextString(), field_mask_, untracked_keys_);
-    itr->Next();
-    return itr;
-  } else if (auto prefix =
-                 dynamic_cast<const query::PrefixPredicate*>(predicate_)) {
-    auto iter = text_index_->prefix_.GetWordIterator(prefix->GetTextString());
-    auto itr = std::make_unique<text::WildCardIterator>(
-        iter, text::WildCardOperation::kPrefix, field_mask_, untracked_keys_);
-    itr->Next();
-    return itr;
-  }
-  CHECK(false) << "Unsupported TextPredicate operation";
-  return nullptr;
+  auto iter = predicate_->BuildTextIterator(this);
+  return std::make_unique<text::TextFetcher>(std::move(iter));
 }
 
 }  // namespace valkey_search::indexes
+
+// Implement the TextPredicate BuildTextIterator virtual method
+namespace valkey_search::query {
+
+std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
+    const void* fetcher_ptr) const {
+  const auto* fetcher =
+      static_cast<const indexes::Text::EntriesFetcher*>(fetcher_ptr);
+  auto word_iter =
+      fetcher->text_index_->prefix_.GetWordIterator(GetTextString());
+  std::vector<indexes::text::Postings::KeyIterator> key_iterators;
+  while (!word_iter.Done()) {
+    if (word_iter.GetWord() == GetTextString()) {
+      key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
+    }
+    word_iter.Next();
+  }
+  return std::make_unique<indexes::text::TermIterator>(
+      std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_);
+}
+
+std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
+    const void* fetcher_ptr) const {
+  const auto* fetcher =
+      static_cast<const indexes::Text::EntriesFetcher*>(fetcher_ptr);
+  auto word_iter =
+      fetcher->text_index_->prefix_.GetWordIterator(GetTextString());
+  std::vector<indexes::text::Postings::KeyIterator> key_iterators;
+  while (!word_iter.Done()) {
+    key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
+    word_iter.Next();
+  }
+  return std::make_unique<indexes::text::TermIterator>(
+      std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_);
+}
+
+std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
+    const void* fetcher_ptr) const {
+  const auto* fetcher =
+      static_cast<const indexes::Text::EntriesFetcher*>(fetcher_ptr);
+  CHECK(fetcher->text_index_->suffix_.has_value())
+      << "Text index does not have suffix trie enabled.";
+  std::string reversed_word(GetTextString().rbegin(), GetTextString().rend());
+  auto word_iter =
+      fetcher->text_index_->suffix_->GetWordIterator(reversed_word);
+  std::vector<indexes::text::Postings::KeyIterator> key_iterators;
+  while (!word_iter.Done()) {
+    key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
+    word_iter.Next();
+  }
+  return std::make_unique<indexes::text::TermIterator>(
+      std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_);
+}
+
+std::unique_ptr<indexes::text::TextIterator>
+ProximityPredicate::BuildTextIterator(const void* fetcher_ptr) const {
+  const auto* fetcher =
+      static_cast<const indexes::Text::EntriesFetcher*>(fetcher_ptr);
+  std::vector<std::unique_ptr<indexes::text::TextIterator>> vec;
+  vec.reserve(terms_.size());
+  for (const auto& term : terms_) {
+    vec.emplace_back(term->BuildTextIterator(fetcher));
+  }
+  return std::make_unique<indexes::text::ProximityIterator>(
+      std::move(vec), slop_, inorder_, fetcher->field_mask_,
+      fetcher->untracked_keys_);
+}
+
+std::unique_ptr<indexes::text::TextIterator> InfixPredicate::BuildTextIterator(
+    const void* fetcher_ptr) const {
+  CHECK(false) << "Unsupported TextPredicate type";
+}
+
+std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
+    const void* fetcher_ptr) const {
+  CHECK(false) << "Unsupported TextPredicate type";
+}
+
+}  // namespace valkey_search::query

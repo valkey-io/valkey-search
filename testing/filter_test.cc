@@ -525,15 +525,15 @@ INSTANTIATE_TEST_SUITE_P(
         {
             .test_name = "proximity1",
             .filter = "@text_field1:\"hello my name is\"",
-            .create_success = false,
-            .create_expected_error_message = "Unsupported query operation",
+            .create_success = true,
+            .evaluate_success = true,
         },
         {
             .test_name = "proximity2",
             .filter = "@text_field1:hello @text_field2:my @text_field1:name "
                       "@text_field2:is",
-            .create_success = false,
-            .create_expected_error_message = "Unsupported query operation",
+            .create_success = true,
+            .evaluate_success = true,
         },
         {
             .test_name = "proximity3",

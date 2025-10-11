@@ -27,16 +27,18 @@ Text::Text(const data_model::TextIndex& text_index_proto,
 
 absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
                                      absl::string_view data) {
-
   // TODO: Key Tracking
 
-  return text_index_schema_->IndexAttributeData(key, data, text_field_number_, !no_stem_, min_stem_size_, with_suffix_trie_);
+  return text_index_schema_->IndexAttributeData(key, data, text_field_number_,
+                                                !no_stem_, min_stem_size_,
+                                                with_suffix_trie_);
 }
 
 absl::StatusOr<bool> Text::RemoveRecord(const InternedStringPtr& key,
                                         DeletionType deletion_type) {
-  // The old key value has already been removed from the index by a call to TextIndexSchema::DeleteKey(),
-  // so there is no need to touch the index structures here
+  // The old key value has already been removed from the index by a call to
+  // TextIndexSchema::DeleteKey(), so there is no need to touch the index
+  // structures here
 
   // TODO: key tracking
 
@@ -47,9 +49,12 @@ absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr& key,
                                         absl::string_view data) {
   // TODO: key tracking
 
-  // The old key value has already been removed from the index by a call to TextIndexSchema::DeleteKey() at
-  // this point, so we simply add the new key data
-  return text_index_schema_->IndexAttributeData(key, data, text_field_number_, !no_stem_, min_stem_size_, with_suffix_trie_);
+  // The old key value has already been removed from the index by a call to
+  // TextIndexSchema::DeleteKey() at this point, so we simply add the new key
+  // data
+  return text_index_schema_->IndexAttributeData(key, data, text_field_number_,
+                                                !no_stem_, min_stem_size_,
+                                                with_suffix_trie_);
 }
 
 int Text::RespondWithInfo(ValkeyModuleCtx* ctx) const {

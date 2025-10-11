@@ -78,8 +78,8 @@ TEST_P(LexerParameterizedTest, TokenizeTest) {
 
   auto result =
       lexer_->Tokenize(test_case.input, schema->GetPunctuationBitmap(),
-                       test_case.stemming_enabled,
-                       test_case.min_stem_size, schema->GetStopWordsSet());
+                       test_case.stemming_enabled, test_case.min_stem_size,
+                       schema->GetStopWordsSet());
 
   ASSERT_TRUE(result.ok()) << "Test case: " << test_case.description;
   EXPECT_EQ(*result, test_case.expected)
@@ -167,10 +167,9 @@ INSTANTIATE_TEST_SUITE_P(
 // Separate tests for error cases and special scenarios
 TEST_F(LexerTest, InvalidUTF8) {
   std::string invalid_utf8 = "hello \xFF\xFE world";
-  auto result =
-      lexer_->Tokenize(invalid_utf8, text_schema_->GetPunctuationBitmap(),
-                       stemming_enabled_,
-                       min_stem_size_, text_schema_->GetStopWordsSet());
+  auto result = lexer_->Tokenize(
+      invalid_utf8, text_schema_->GetPunctuationBitmap(), stemming_enabled_,
+      min_stem_size_, text_schema_->GetStopWordsSet());
   EXPECT_FALSE(result.ok());
   EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument);
   EXPECT_EQ(result.status().message(), "Invalid UTF-8");
@@ -178,10 +177,9 @@ TEST_F(LexerTest, InvalidUTF8) {
 
 TEST_F(LexerTest, LongWord) {
   std::string long_word(1000, 'a');
-  auto result =
-      lexer_->Tokenize(long_word, text_schema_->GetPunctuationBitmap(),
-                       stemming_enabled_,
-                       min_stem_size_, text_schema_->GetStopWordsSet());
+  auto result = lexer_->Tokenize(
+      long_word, text_schema_->GetPunctuationBitmap(), stemming_enabled_,
+      min_stem_size_, text_schema_->GetStopWordsSet());
   ASSERT_TRUE(result.ok());
   EXPECT_EQ(*result, std::vector<std::string>({long_word}));
 }
@@ -197,10 +195,9 @@ TEST_F(LexerTest, EmptyStopWordsHandling) {
   const auto& empty_set = no_stop_schema->GetStopWordsSet();
 
   // Test tokenization with empty stop words - all words preserved
-  auto result =
-      lexer_->Tokenize("Hello, world! TESTING 123 with-dashes and/or symbols",
-                       no_stop_schema->GetPunctuationBitmap(),
-                        true, 3, empty_set);
+  auto result = lexer_->Tokenize(
+      "Hello, world! TESTING 123 with-dashes and/or symbols",
+      no_stop_schema->GetPunctuationBitmap(), true, 3, empty_set);
 
   ASSERT_TRUE(result.ok());
   EXPECT_EQ(*result,

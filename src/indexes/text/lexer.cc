@@ -59,8 +59,7 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
   return tokens;
 }
 
-std::string Lexer::StemWord(const std::string& word,
-                            bool stemming_enabled,
+std::string Lexer::StemWord(const std::string& word, bool stemming_enabled,
                             uint32_t min_stem_size) const {
   if (word.empty() || !stemming_enabled || word.length() < min_stem_size) {
     return word;
@@ -68,7 +67,8 @@ std::string Lexer::StemWord(const std::string& word,
   std::lock_guard<std::mutex> guard(stemmer_mutex_);
 
   const sb_symbol* stemmed = sb_stemmer_stem(
-      stemmer_, reinterpret_cast<const sb_symbol*>(word.c_str()), word.length());
+      stemmer_, reinterpret_cast<const sb_symbol*>(word.c_str()),
+      word.length());
 
   DCHECK(stemmed) << "Stemming failed for word: " + word;
 

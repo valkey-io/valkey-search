@@ -19,10 +19,9 @@
 #include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/text/lexer.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/radix_tree.h"
-#include "src/indexes/text/lexer.h"
-
 
 struct sb_stemmer;
 
@@ -57,8 +56,10 @@ class TextIndexSchema {
                   bool with_offsets,
                   const std::vector<std::string>& stop_words);
 
-  absl::StatusOr<bool> IndexAttributeData(const InternedStringPtr& key, absl::string_view data, size_t text_field_number,
-                 bool stem, size_t min_stem_size, bool suffix);
+  absl::StatusOr<bool> IndexAttributeData(const InternedStringPtr& key,
+                                          absl::string_view data,
+                                          size_t text_field_number, bool stem,
+                                          size_t min_stem_size, bool suffix);
   void DeleteKeyData(const InternedStringPtr& key);
 
   uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }

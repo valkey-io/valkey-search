@@ -36,7 +36,8 @@ class RadixTreeTest : public vmsdk::ValkeyTest {
 
   void AddWords(const std::vector<std::pair<std::string, int>>& words) {
     for (const auto& [word, value] : words) {
-      prefix_tree_->MutateTarget(word, [value](auto) { return TestTarget(value); });
+      prefix_tree_->MutateTarget(word,
+                                 [value](auto) { return TestTarget(value); });
     }
   }
 

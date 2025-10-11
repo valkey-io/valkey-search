@@ -101,9 +101,7 @@ struct RadixTree {
   // nullopt new_target will cause the word to be added and
   // then immediately deleted from the tree.
   //
-  void SetTarget(
-    absl::string_view word,
-    std::optional<Target> new_target);
+  void SetTarget(absl::string_view word, std::optional<Target> new_target);
 
   //
   // Applies the mutation function to the target of the given word to generate
@@ -323,9 +321,8 @@ struct RadixTree {
 };
 
 template <typename Target, bool reverse>
-void RadixTree<Target, reverse>::SetTarget(
-  absl::string_view word,
-  std::optional<Target> new_target) {
+void RadixTree<Target, reverse>::SetTarget(absl::string_view word,
+                                           std::optional<Target> new_target) {
   CHECK(!word.empty()) << "Can't add the target for an empty word";
   std::deque<Node*> node_path = GetOrCreateWordPath(word);
   Node* n = node_path.back();
@@ -360,7 +357,8 @@ std::optional<Target> RadixTree<Target, reverse>::MutateTarget(
 }
 
 template <typename Target, bool reverse>
-std::deque<typename RadixTree<Target, reverse>::Node*> RadixTree<Target, reverse>::GetOrCreateWordPath(absl::string_view word) {
+std::deque<typename RadixTree<Target, reverse>::Node*>
+RadixTree<Target, reverse>::GetOrCreateWordPath(absl::string_view word) {
   Node* n = &root_;
   absl::string_view remaining = word;
   std::deque<Node*> node_path{n};

@@ -160,37 +160,38 @@ absl::StatusOr<bool> TextIndexSchema::IndexAttributeData(
 }
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
-    TextIndex* key_index = nullptr;
-    {
-      std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
-      auto it = per_key_text_indexes_.find(key);
-      if (it != per_key_text_indexes_.end()) {
-        key_index = &it->second;
-      }
-    }
-
-    if (key_index) {
-      std::lock_guard<std::mutex> main_tree_guard(text_index_->mutex_);
-
-      // Cleanup schema-level text index
-      auto iter = key_index->prefix_.GetWordIterator("");
-      while (!iter.Done()) {
-        std::string_view word = iter.GetWord();
-        std::optional<std::shared_ptr<Postings>> new_target = text_index_->prefix_.MutateTarget(word, [&](auto existing) {
-          return RemoveKeyFromPostings(existing, key);
-        });
-        if (text_index_->suffix_.has_value()) {
-          std::string reverse_word(word.rbegin(), word.rend());
-          text_index_->suffix_.value().SetTarget(reverse_word, new_target);
-        }
-        iter.Next();
-      }
-    }
-
-    {
-      std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
-      per_key_text_indexes_.erase(key);
+  TextIndex* key_index = nullptr;
+  {
+    std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
+    auto it = per_key_text_indexes_.find(key);
+    if (it != per_key_text_indexes_.end()) {
+      key_index = &it->second;
     }
   }
+
+  if (key_index) {
+    std::lock_guard<std::mutex> main_tree_guard(text_index_->mutex_);
+
+    // Cleanup schema-level text index
+    auto iter = key_index->prefix_.GetWordIterator("");
+    while (!iter.Done()) {
+      std::string_view word = iter.GetWord();
+      std::optional<std::shared_ptr<Postings>> new_target =
+          text_index_->prefix_.MutateTarget(word, [&](auto existing) {
+            return RemoveKeyFromPostings(existing, key);
+          });
+      if (text_index_->suffix_.has_value()) {
+        std::string reverse_word(word.rbegin(), word.rend());
+        text_index_->suffix_.value().SetTarget(reverse_word, new_target);
+      }
+      iter.Next();
+    }
+  }
+
+  {
+    std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
+    per_key_text_indexes_.erase(key);
+  }
+}
 
 }  // namespace valkey_search::indexes::text

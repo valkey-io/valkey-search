@@ -352,7 +352,6 @@ class FTInfoParser:
         # Basic info
         lines.append(f"State: {self.state}")
         lines.append(f"Documents: {self.num_docs}")
-        lines.append(f"Terms: {self.num_terms}")
         lines.append(f"Records: {self.num_records}")
 
         if self.has_indexing_failures():

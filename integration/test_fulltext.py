@@ -7,6 +7,7 @@ from ft_info_parser import FTInfoParser
 from valkeytestframework.util import waiters
 import threading
 import time
+from utils import IndexingTestHelper
 
 """
 This file contains tests for full text search.
@@ -242,8 +243,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         assert client.execute_command(*command_args) == b"OK"
         assert b"idx4" in client.execute_command("FT._LIST")
         
-        info_response = client.execute_command("FT.INFO", "idx4")
-        parser = FTInfoParser(info_response)
+        parser = IndexingTestHelper.get_ft_info(client, "idx4")
+        assert parser is not None
         
         # Validate top-level structure
         required_top_level_fields = [
@@ -274,16 +275,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         assert tag_attr["type"] == "TAG"
         assert tag_attr.get("SEPARATOR") == "|"
 
-        def check_is_backfill_complete(idxname):
-            """
-            Helper function to check if backfill is complete.
-            """
-            info = client.execute_command("FT.INFO", idxname)
-            parser = FTInfoParser(info)
-            return parser.is_backfill_complete()
-        
         # Validate backfill fields
-        waiters.wait_for_equal(lambda: check_is_backfill_complete("idx4"), True, timeout=5)
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx4")        
         
         # Add validation checks for specific fields
         assert parser.num_docs == 0, f"num_docs should be zero"
@@ -525,7 +518,7 @@ class TestFullText(ValkeySearchTestCaseBase):
         
         # Create the index
         clients[0].execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "content", "TEXT")
-        time.sleep(0.1)
+        IndexingTestHelper.wait_for_backfill_complete_on_node(clients[0], "idx")        
         
         # Phase 1: Concurrent ADD
         def add_documents(client_id):

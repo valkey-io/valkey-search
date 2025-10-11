@@ -124,7 +124,6 @@ struct RadixTree {
   // (which is normal) then no locking is required within the mutate function
   // itself.
   //
-  //
   std::optional<Target> MutateTarget(
       absl::string_view word,
       absl::FunctionRef<std::optional<Target>(std::optional<Target>)> mutate);

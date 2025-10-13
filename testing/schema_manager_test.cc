@@ -511,7 +511,7 @@ TEST_P(OnSwapDBCallbackTest, OnSwapDBCallback) {
 }
 
 TEST(IndexNameTest, IndexName) {
-  for (std::string prefix  : {"", "a", "abc", "{", "}"}) {
+  for (std::string prefix : {"", "a", "abc", "{", "}"}) {
     for (std::string hash_tag : {"", "{a}", "{b}", "{}"}) {
       for (std::string suffix : {"", "x", "xy", "{", "}", "{}"}) {
         for (uint32_t db_num : {0, 1}) {
@@ -519,7 +519,8 @@ TEST(IndexNameTest, IndexName) {
           //
           // Construct a IndexName
           //
-          std::cout << "Doing test: DB:" << db_num << " name:'" << name << "'\n";
+          std::cout << "Doing test: DB:" << db_num << " name:'" << name
+                    << "'\n";
           IndexName forward(db_num, name);
           //
           // Now reverse it and compare equality

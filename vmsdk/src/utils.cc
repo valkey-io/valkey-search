@@ -308,4 +308,36 @@ std::optional<std::string> JsonUnquote(absl::string_view sv) {
   return result;
 }
 
+static const char *hex_chars = "0123456789abcdef";
+
+std::string PrintableBytes(absl::string_view sv) {
+  std::string result;
+  for (const auto &c : sv) {
+    if (std::isprint(c)) {
+      if (c == '\\') {
+        result += c;
+      }
+      result += c;
+    } else {
+      result += '\\';
+      switch (c) {
+        case '\n':
+          result += 'n';
+          break;
+        case '\r':
+          result += 'r';
+          break;
+        case '\t':
+          result += 't';
+          break;
+        default:
+          result += hex_chars[(c >> 4) & 0xf];
+          result += hex_chars[c & 0xf];
+          break;
+      }
+    }
+  }
+  return result;
+}
+
 }  // namespace vmsdk

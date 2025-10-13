@@ -93,6 +93,7 @@ message SearchIndexPartitionRequest {
   bool no_content = 11;
   optional Predicate root_filter_predicate = 12;
   repeated ReturnParameter return_parameters = 13;
+  uint32 db_num = 14;
 }
 
 message NeighborEntry {
@@ -172,4 +173,5 @@ message InfoIndexPartitionResponse {
   string error = 14;
   optional IndexFingerprintVersion index_fingerprint_version = 15;
   FanoutErrorType error_type = 16;
+  uint32 db_num = 17;
 }

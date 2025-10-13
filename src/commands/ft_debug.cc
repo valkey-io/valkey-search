@@ -10,6 +10,7 @@
 
 #include "module_config.h"
 #include "src/commands/commands.h"
+#include "src/coordinator/metadata_manager.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
@@ -144,6 +145,8 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
        "list all controlled variables and their values"},
       {"FT._DEBUG PAUSEPOINT [ SET | RESET | TEST | LIST] <pausepoint>",
        "control pause points"},
+      {"FT_DEBUG SHOW_METADATA",
+       "list internal metadata manager table namespace"},
   };
   ValkeyModule_ReplySetArrayLength(ctx, 2 * help_text.size());
   for (auto &pair : help_text) {
@@ -185,6 +188,9 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return PausePointControlCmd(ctx, itr);
   } else if (keyword == "CONTROLLED_VARIABLE") {
     return ControlledCmd(ctx, itr);
+  } else if (keyword == "SHOW_METADATA") {
+    return valkey_search::coordinator::MetadataManager::Instance().ShowMetadata(
+        ctx, itr);
   } else if (keyword == "HELP") {
     return HelpCmd(ctx, itr);
   } else {

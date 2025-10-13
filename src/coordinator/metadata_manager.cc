@@ -23,7 +23,9 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "command_parser.h"
 #include "google/protobuf/any.pb.h"
+#include "google/protobuf/util/json_util.h"
 #include "grpcpp/support/status.h"
 #include "highwayhash/arch_specific.h"
 #include "highwayhash/highwayhash.h"
@@ -31,7 +33,6 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/util.h"
 #include "src/rdb_serialization.h"
-#include "src/valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -353,7 +354,7 @@ void MetadataManager::HandleBroadcastedMetadata(
                           schema = std::unique_ptr<GlobalMetadata>(
                               response.release_metadata()),
                           address = std::move(address)] {
-          VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
+          VMSDK_LOG_EVERY_N(WARNING, ctx, 1)
               << "Got GlobalMetadata from " << address << ": "
               << schema->DebugString();
           auto &metadata_manager = MetadataManager::Instance();
@@ -363,7 +364,7 @@ void MetadataManager::HandleBroadcastedMetadata(
                 << "Failed to reconcile schemas: " << status.message();
             return;
           }
-          VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
+          VMSDK_LOG_EVERY_N(WARNING, ctx, 1)
               << "Successfully reconciled schemas! New GlobalMetadata: "
               << metadata_manager.GetGlobalMetadata()->DebugString();
         });
@@ -656,4 +657,16 @@ void MetadataManager::RegisterForClusterMessages(ValkeyModuleCtx *ctx) {
       ctx, coordinator::kMetadataBroadcastClusterMessageReceiverId,
       MetadataManagerOnClusterMessageCallback);
 }
+
+absl::Status MetadataManager::ShowMetadata(
+    ValkeyModuleCtx *ctx, [[maybe_unused]] vmsdk::ArgsIterator &itr) const {
+  auto metadata = metadata_.Get().DebugString();
+  VMSDK_LOG(WARNING, ctx) << "Metadata: " << metadata;
+  google::protobuf::util::JsonPrintOptions options;
+  options.always_print_fields_with_no_presence = true;
+  [[maybe_unused]] auto status = google::protobuf::util::MessageToJsonString(metadata_.Get(), &metadata, options);  
+  ValkeyModule_ReplyWithStringBuffer(ctx, metadata.data(), metadata.size());
+  return absl::OkStatus();
+}
+
 }  // namespace valkey_search::coordinator

@@ -177,7 +177,7 @@ void SendReplyTest::DoSendReplyTest(
     neighbors.push_back(ToIndexesNeighbor(neighbor));
   }
   auto parameters =
-      std::make_unique<query::VectorSearchParameters>(10000, nullptr);
+      std::make_unique<query::VectorSearchParameters>(10000, nullptr, 0);
   parameters->index_schema = test_index_schema;
   parameters->attribute_alias = attribute_alias;
   parameters->score_as = vmsdk::MakeUniqueValkeyString(score_as);

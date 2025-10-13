@@ -398,7 +398,7 @@ class PerformVectorSearchTest
 TEST_P(PerformVectorSearchTest, PerformVectorSearchTest) {
   auto index_schema = CreateIndexSchemaWithMultipleAttributes();
   const PerformVectorSearchTestCase &test_case = GetParam();
-  query::VectorSearchParameters params(100000, nullptr);
+  query::VectorSearchParameters params(100000, nullptr, 0);
   params.index_schema_name = kIndexSchemaName;
   params.attribute_alias = kVectorAttributeAlias;
   params.score_as = vmsdk::MakeUniqueValkeyString(kScoreAs);
@@ -481,7 +481,7 @@ TEST_P(FetchFilteredKeysTest, ParseParams) {
   auto vector_index = dynamic_cast<indexes::VectorBase *>(
       index_schema->GetIndex(kVectorAttributeAlias)->get());
   const FetchFilteredKeysTestCase &test_case = GetParam();
-  query::VectorSearchParameters params(100000, nullptr);
+  query::VectorSearchParameters params(100000, nullptr, 0);
   FilterParser parser(*index_schema, test_case.filter);
   params.filter_parse_results = std::move(parser.Parse().value());
   params.k = 100;
@@ -559,7 +559,7 @@ TEST_P(SearchTest, ParseParams) {
   const auto &param = GetParam();
   IndexerType indexer_type = std::get<0>(param);
   SearchTestCase test_case = std::get<1>(param);
-  query::VectorSearchParameters params(100000, nullptr);
+  query::VectorSearchParameters params(100000, nullptr, 0);
   params.index_schema = CreateIndexSchemaWithMultipleAttributes(indexer_type);
   params.index_schema_name = kIndexSchemaName;
   params.attribute_alias = kVectorAttributeAlias;
@@ -836,7 +836,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
     }
   }
 
-  auto parameters = query::VectorSearchParameters(100000, nullptr);
+  auto parameters = query::VectorSearchParameters(100000, nullptr, 0);
   parameters.index_schema = index_schema;
   for (auto &attribute : test_case.return_attributes) {
     auto identifier = vmsdk::MakeUniqueValkeyString(attribute.identifier);

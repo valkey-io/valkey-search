@@ -188,12 +188,14 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
 std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
 Service::GenerateInfoResponse(
     const coordinator::InfoIndexPartitionRequest& request) {
+  VMSDK_LOG(WARNING, nullptr) << "DELETE: INFO REQUEST " << request.ShortDebugString();
   uint32_t db_num = request.db_num();
   std::string index_name = request.index_name();
   coordinator::InfoIndexPartitionResponse response;
   auto status_or_schema =
       SchemaManager::Instance().GetIndexSchema(db_num, index_name);
   if (!status_or_schema.ok()) {
+    VMSDK_LOG(WARNING, nullptr) << "DELETE: NOT_FOUND: " << status_or_schema.status().ToString();
     response.set_exists(false);
     response.set_index_name(index_name);
     response.set_error(status_or_schema.status().ToString());
@@ -214,14 +216,17 @@ Service::GenerateInfoResponse(
       kSchemaManagerMetadataTypeName));
   const auto& entry_map =
       global_metadata->type_namespace_map().at(kSchemaManagerMetadataTypeName);
-  CHECK(entry_map.entries().contains(index_name));
-  const auto& entry = entry_map.entries().at(index_name);
+  std::string encoded_index_name =
+      IndexName(db_num, index_name).GetEncodedName();
+  CHECK(entry_map.entries().contains(encoded_index_name));
+  const auto& entry = entry_map.entries().at(encoded_index_name);
   index_fingerprint_version.emplace();
   index_fingerprint_version->set_fingerprint(entry.fingerprint());
   index_fingerprint_version->set_version(entry.version());
 
   response.set_exists(true);
   response.set_index_name(index_name);
+  response.set_db_num(db_num);
   response.set_num_docs(data.num_docs);
   response.set_num_records(data.num_records);
   response.set_hash_indexing_failures(data.hash_indexing_failures);
@@ -237,6 +242,7 @@ Service::GenerateInfoResponse(
     *response.mutable_index_fingerprint_version() =
         std::move(index_fingerprint_version.value());
   }
+  VMSDK_LOG(WARNING, nullptr) << "DELETE: Found index: " << response.ShortDebugString();
   return std::make_pair(grpc::Status::OK, response);
 }
 

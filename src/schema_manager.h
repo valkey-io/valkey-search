@@ -64,12 +64,12 @@ struct IndexName {
   IndexName(uint32_t db_num, absl::string_view decoded_name);
 
   // return the non-encoded name
-  const std::string& GetDecodedName() const { return decoded_name_; }
-  const std::string& GetEncodedName() const { return encoded_name_; }
+  const std::string &GetDecodedName() const { return decoded_name_; }
+  const std::string &GetEncodedName() const { return encoded_name_; }
   uint32_t GetDbNum() const { return db_num_; }
   std::optional<absl::string_view> GetHashTag() const { return hash_tag_; }
 
-private:
+ private:
   uint32_t db_num_;
   std::optional<absl::string_view> hash_tag_;
   std::string decoded_name_;

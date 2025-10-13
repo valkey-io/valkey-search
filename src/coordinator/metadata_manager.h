@@ -19,6 +19,7 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "command_parser.h"
 #include "google/protobuf/any.pb.h"
 #include "highwayhash/hh_types.h"
 #include "src/coordinator/client_pool.h"
@@ -139,6 +140,9 @@ class MetadataManager {
   static bool IsInitialized();
   static void InitInstance(std::unique_ptr<MetadataManager> instance);
   static MetadataManager &Instance();
+
+  absl::Status ShowMetadata(ValkeyModuleCtx *ctx,
+                            vmsdk::ArgsIterator &iter) const;
 
  private:
   struct RegisteredType {

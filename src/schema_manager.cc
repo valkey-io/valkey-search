@@ -148,6 +148,7 @@ absl::Status GenerateIndexAlreadyExistsError(absl::string_view name) {
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::LookupInternal(
     uint32_t db_num, absl::string_view name) const {
+  VMSDK_LOG(WARNING, nullptr) << "LOOKUP: " << db_num << " : " << name;
   auto db_itr = db_to_index_schemas_.find(db_num);
   if (db_itr == db_to_index_schemas_.end()) {
     return absl::NotFoundError(absl::StrCat("Index schema not found: ", name));
@@ -220,19 +221,20 @@ SchemaManager::CreateIndexSchema(
       << "). Cannot create additional indexes.";
 
   if (coordinator_enabled_) {
-    CHECK(index_schema_proto.db_num() == 0)
-        << "In cluster mode, we only support DB 0";
     // In coordinated mode, use the metadata_manager as the source of truth.
     // It will callback into us with the update.
+    IndexName index_name(index_schema_proto.db_num(),
+                         index_schema_proto.name());
     if (coordinator::MetadataManager::Instance()
-            .GetEntry(kSchemaManagerMetadataTypeName, index_schema_proto.name())
+            .GetEntry(kSchemaManagerMetadataTypeName,
+                      index_name.GetEncodedName())
             .ok()) {
       return GenerateIndexAlreadyExistsError(index_schema_proto.name());
     }
     auto any_proto = std::make_unique<google::protobuf::Any>();
     any_proto->PackFrom(index_schema_proto);
     return coordinator::MetadataManager::Instance().CreateEntry(
-        kSchemaManagerMetadataTypeName, index_schema_proto.name(),
+        kSchemaManagerMetadataTypeName, index_name.GetEncodedName(),
         std::move(any_proto));
   }
 
@@ -278,11 +280,11 @@ SchemaManager::RemoveIndexSchemaInternal(uint32_t db_num,
 absl::Status SchemaManager::RemoveIndexSchema(uint32_t db_num,
                                               absl::string_view name) {
   if (coordinator_enabled_) {
-    CHECK(db_num == 0) << "In cluster mode, we only support DB 0";
     // In coordinated mode, use the metadata_manager as the source of truth.
     // It will callback into us with the update.
+    IndexName encoded(db_num, name);
     auto status = coordinator::MetadataManager::Instance().DeleteEntry(
-        kSchemaManagerMetadataTypeName, name);
+        kSchemaManagerMetadataTypeName, encoded.GetEncodedName());
     if (status.ok()) {
       return status;
     } else if (absl::IsNotFound(status)) {
@@ -349,8 +351,9 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
 absl::Status SchemaManager::OnMetadataCallback(
     absl::string_view id, const google::protobuf::Any *metadata) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  IndexName encoded_index_name(id);
   // Note that there is only DB 0 in cluster mode, so we can hardcode this.
-  auto status = RemoveIndexSchemaInternal(0, id);
+  auto status = RemoveIndexSchemaInternal(encoded_index_name.GetDbNum(), encoded_index_name.GetDecodedName());
   if (!status.ok() && !absl::IsNotFound(status.status())) {
     return status.status();
   }
@@ -729,26 +732,29 @@ static vmsdk::info_field::Integer total_indexing_time(
       return 0;
     }));
 
-
 /*
-An 8/1.0 encoded string won't have a hashtag anywhere and is always for db_num == 0
-An 9/1.1 encoded string will always have a psuedo-hashtag at the START AND 
+An 8/1.0 encoded string won't have a hashtag anywhere and is always for db_num
+== 0 An 9/1.1 encoded string will always have a psuedo-hashtag at the START AND
       may have a real hashtag after that.
 
-Decoded strings that lack a hashtag and are for db_num == 0, are encoded with the 8/1.0 rules
-All other decoded strings are encoded according to the 9/1.1 rules.
+Decoded strings that lack a hashtag and are for db_num == 0, are encoded with
+the 8/1.0 rules All other decoded strings are encoded according to the 9/1.1
+rules.
 
 A pseudo-hashtag is of the format: {dddd}
 dddd is the database number, i.e., ascii digits 0-9 ONLY.
-Characters after the database number up to the trailing right brace are explicitly ignored -- but preserved --
-allowing for potential future forward/reverse compatibility.
+Characters after the database number up to the trailing right brace are
+explicitly ignored -- but preserved -- allowing for potential future
+forward/reverse compatibility.
 
-*/    
-IndexName::IndexName(absl::string_view encoded_name) : encoded_name_(encoded_name) {
+*/
+IndexName::IndexName(absl::string_view encoded_name)
+    : encoded_name_(encoded_name) {
   auto hash_tag = vmsdk::ParseHashTag(encoded_name_);
   if (hash_tag) {
     std::string_view front_tag = *hash_tag;
-    CHECK(encoded_name.size() >= 3); // To have a hashtag, you must have at least 3 chars
+    CHECK(encoded_name.size() >=
+          3);  // To have a hashtag, you must have at least 3 chars
     if (front_tag.data() == (encoded_name_.data() + 1)) {
       std::string db_num_str;
       while (!front_tag.empty() && std::isdigit(front_tag.front())) {
@@ -756,17 +762,19 @@ IndexName::IndexName(absl::string_view encoded_name) : encoded_name_(encoded_nam
         front_tag.remove_prefix(1);
       }
       if (!front_tag.empty()) {
-        VMSDK_LOG_EVERY_N(NOTICE, nullptr, 1000) << "Ignoring extended index name metadata";
+        VMSDK_LOG_EVERY_N(NOTICE, nullptr, 1000)
+            << "Ignoring extended index name metadata";
       }
       if (!db_num_str.empty()) {
         // Found valid 9/1.1 encoding.
         db_num_ = std::stoul(db_num_str);
-        decoded_name_ = encoded_name_.substr(hash_tag->size()+2);
+        decoded_name_ = encoded_name_.substr(hash_tag->size() + 2);
         hash_tag_ = vmsdk::ParseHashTag(decoded_name_);
         return;
       }
     }
-    VMSDK_LOG_EVERY_N(WARNING, nullptr, 10) << "Found invalid encoded index name: " << encoded_name;
+    VMSDK_LOG_EVERY_N(WARNING, nullptr, 10)
+        << "Found invalid encoded index name: " << encoded_name;
   }
   //
   // Assume 8/1.0 encoding.
@@ -775,8 +783,8 @@ IndexName::IndexName(absl::string_view encoded_name) : encoded_name_(encoded_nam
   hash_tag_ = hash_tag;
 }
 
-IndexName::IndexName(uint32_t db_num, absl::string_view decoded_name) 
-  : db_num_(db_num), decoded_name_(decoded_name) {
+IndexName::IndexName(uint32_t db_num, absl::string_view decoded_name)
+    : db_num_(db_num), decoded_name_(decoded_name) {
   hash_tag_ = vmsdk::ParseHashTag(decoded_name_);
   if (hash_tag_.has_value() || db_num != 0) {
     //

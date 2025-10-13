@@ -120,12 +120,12 @@ absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
 GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
                               grpc::CallbackServerContext* context) {
   auto parameters = std::make_unique<query::VectorSearchParameters>(
-      request.timeout_ms(), context);
+      request.timeout_ms(), context, request.db_num());
   parameters->index_schema_name = request.index_schema_name();
   parameters->attribute_alias = request.attribute_alias();
   VMSDK_ASSIGN_OR_RETURN(
       parameters->index_schema,
-      SchemaManager::Instance().GetIndexSchema(0, request.index_schema_name()));
+      SchemaManager::Instance().GetIndexSchema(request.db_num(), request.index_schema_name()));
   if (request.has_score_as()) {
     parameters->score_as = vmsdk::MakeUniqueValkeyString(request.score_as());
   } else {
@@ -227,6 +227,7 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
     const query::VectorSearchParameters& parameters) {
   auto request = std::make_unique<SearchIndexPartitionRequest>();
   request->set_index_schema_name(parameters.index_schema_name);
+  request->set_db_num(parameters.db_num_);
   request->set_attribute_alias(parameters.attribute_alias);
   request->set_score_as(vmsdk::ToStringView(parameters.score_as.get()));
   request->set_query(parameters.query);

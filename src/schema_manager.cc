@@ -353,7 +353,8 @@ absl::Status SchemaManager::OnMetadataCallback(
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   IndexName encoded_index_name(id);
   // Note that there is only DB 0 in cluster mode, so we can hardcode this.
-  auto status = RemoveIndexSchemaInternal(encoded_index_name.GetDbNum(), encoded_index_name.GetDecodedName());
+  auto status = RemoveIndexSchemaInternal(encoded_index_name.GetDbNum(),
+                                          encoded_index_name.GetDecodedName());
   if (!status.ok() && !absl::IsNotFound(status.status())) {
     return status.status();
   }

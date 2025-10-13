@@ -664,7 +664,8 @@ absl::Status MetadataManager::ShowMetadata(
   VMSDK_LOG(WARNING, ctx) << "Metadata: " << metadata;
   google::protobuf::util::JsonPrintOptions options;
   options.always_print_fields_with_no_presence = true;
-  [[maybe_unused]] auto status = google::protobuf::util::MessageToJsonString(metadata_.Get(), &metadata, options);  
+  [[maybe_unused]] auto status = google::protobuf::util::MessageToJsonString(
+      metadata_.Get(), &metadata, options);
   ValkeyModule_ReplyWithStringBuffer(ctx, metadata.data(), metadata.size());
   return absl::OkStatus();
 }

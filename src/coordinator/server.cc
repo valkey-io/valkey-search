@@ -188,14 +188,16 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
 std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
 Service::GenerateInfoResponse(
     const coordinator::InfoIndexPartitionRequest& request) {
-  VMSDK_LOG(WARNING, nullptr) << "DELETE: INFO REQUEST " << request.ShortDebugString();
+  VMSDK_LOG(WARNING, nullptr)
+      << "DELETE: INFO REQUEST " << request.ShortDebugString();
   uint32_t db_num = request.db_num();
   std::string index_name = request.index_name();
   coordinator::InfoIndexPartitionResponse response;
   auto status_or_schema =
       SchemaManager::Instance().GetIndexSchema(db_num, index_name);
   if (!status_or_schema.ok()) {
-    VMSDK_LOG(WARNING, nullptr) << "DELETE: NOT_FOUND: " << status_or_schema.status().ToString();
+    VMSDK_LOG(WARNING, nullptr)
+        << "DELETE: NOT_FOUND: " << status_or_schema.status().ToString();
     response.set_exists(false);
     response.set_index_name(index_name);
     response.set_error(status_or_schema.status().ToString());
@@ -242,7 +244,8 @@ Service::GenerateInfoResponse(
     *response.mutable_index_fingerprint_version() =
         std::move(index_fingerprint_version.value());
   }
-  VMSDK_LOG(WARNING, nullptr) << "DELETE: Found index: " << response.ShortDebugString();
+  VMSDK_LOG(WARNING, nullptr)
+      << "DELETE: Found index: " << response.ShortDebugString();
   return std::make_pair(grpc::Status::OK, response);
 }
 

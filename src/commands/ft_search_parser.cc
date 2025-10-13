@@ -453,7 +453,8 @@ ParseVectorSearchParameters(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc, const SchemaManager &schema_manager) {
   vmsdk::ArgsIterator itr{argv, argc};
   auto parameters = std::make_unique<query::VectorSearchParameters>(
-      options::GetDefaultTimeoutMs().GetValue(), nullptr, ValkeyModule_GetSelectedDb(ctx));
+      options::GetDefaultTimeoutMs().GetValue(), nullptr,
+      ValkeyModule_GetSelectedDb(ctx));
   VMSDK_RETURN_IF_ERROR(
       vmsdk::ParseParamValue(itr, parameters->index_schema_name));
   VMSDK_ASSIGN_OR_RETURN(

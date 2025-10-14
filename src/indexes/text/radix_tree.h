@@ -88,11 +88,12 @@ struct RadixTree {
   RadixTree() = default;
 
   //
-  // Adds a target to the for the given word. If the target already exists,
-  // it will be replaced by the new target. An empty target will cause the
-  // word to be deleted from the tree.
+  // Adds the target for the given word, replacing the existing target
+  // if there is one. Providing an empty target will cause the word to be
+  // deleted from the tree. Only use this API when you don't care about any
+  // existing target.
   //
-  // This function is explicitly multi-thread safe and is
+  // (TODO) This function is explicitly multi-thread safe and is
   // designed to allow other mutations to be performed on other words and
   // targets simultaneously, with minimal collisions.
   //
@@ -104,16 +105,17 @@ struct RadixTree {
   void SetTarget(absl::string_view word, std::optional<Target> new_target);
 
   //
-  // Applies the mutation function to the target of the given word to generate
+  // Applies the mutation function to the current target of the word to generate
   // a new target. If the word doesn't already exist, a path for it will be
-  // first added to the tree. The new target is also returned to the caller.
+  // first added to the tree and the target will be std::nullopt. The new target
+  // is returned to the caller.
   //
   // The input parameter to the mutate function will be nullopt if there is no
   // entry for this word. Otherwise it will contain the value for this word. The
   // return value of the mutate function is the new value for this word. if the
   // return value is nullopt then this word is deleted from the RadixTree.
   //
-  // This function is explicitly multi-thread safe and is
+  // (TODO) This function is explicitly multi-thread safe and is
   // designed to allow other mutations to be performed on other words and
   // targets simultaneously, with minimal collisions.
   //

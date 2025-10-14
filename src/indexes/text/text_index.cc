@@ -114,6 +114,10 @@ absl::StatusOr<bool> TextIndexSchema::IndexAttributeData(
     key_index = &per_key_text_indexes_[key];
   }
 
+  // TODO: Once we optimize the postings object for space efficiency, it won't
+  // be cheap to incrementally update. We likely want to build the position map
+  // structure up front for each word in the key and then merge them into the
+  // trees' posting objects at the end of the key ingestion.
   for (uint32_t position = 0; position < tokens->size(); ++position) {
     const auto& token = (*tokens)[position];
     const std::optional<std::string> reverse_token =

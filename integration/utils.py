@@ -73,4 +73,4 @@ class IndexingTestHelper:
                 for client in clients
             )
         
-        wait_for_true(check_all_nodes_complete)
+        waiters.wait_for_true(check_all_nodes_complete)

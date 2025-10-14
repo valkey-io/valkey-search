@@ -86,6 +86,10 @@ int RunByMain(absl::AnyInvocable<void()> fn, bool force_async = false);
 
 std::string WrongArity(absl::string_view cmd);
 
+inline std::ostream &operator<<(std::ostream &os, ValkeyModuleString *s) {
+  return os << (*(std::string *)s);
+}
+
 //
 // Parse out a hash tag from a string view
 //
@@ -109,6 +113,13 @@ inline int MakeValkeyVersion(int major, int minor, int patch) {
 // skipped.
 absl::Status VerifyRange(long long num_value, std::optional<long long> min,
                          std::optional<long long> max);
+std::optional<std::string> JsonUnquote(absl::string_view sv);
+
+struct JsonQuotedStringView {
+  absl::string_view view_;
+  friend std::ostream &operator<<(std::ostream &os,
+                                  const JsonQuotedStringView &js);
+};
 
 #define VMSDK_NON_COPYABLE(ClassName)    \
   ClassName(const ClassName &) = delete; \

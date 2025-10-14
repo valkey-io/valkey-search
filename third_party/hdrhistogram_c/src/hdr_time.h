@@ -12,10 +12,9 @@
 
 #if defined(_WIN32) || defined(_WIN64) || defined(__CYGWIN__)
 
-typedef struct hdr_timespec
-{
-    long tv_sec;
-    long tv_nsec;
+typedef struct hdr_timespec {
+  long tv_sec;
+  long tv_nsec;
 } hdr_timespec;
 
 #else
@@ -36,7 +35,7 @@ void hdr_gettime(hdr_timespec* t);
 
 void hdr_getnow(hdr_timespec* t);
 
-double hdr_timespec_as_double(const hdr_timespec* t);
+double hdr_timespec_AsDouble(const hdr_timespec* t);
 
 /* Assumes only millisecond accuracy. */
 void hdr_timespec_from_double(hdr_timespec* t, double value);
@@ -46,4 +45,3 @@ void hdr_timespec_from_double(hdr_timespec* t, double value);
 #endif
 
 #endif
-

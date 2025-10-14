@@ -1,8 +1,10 @@
 add_subdirectory(coordinator)
-add_subdirectory(utils)
 add_subdirectory(commands)
-add_subdirectory(query)
 add_subdirectory(indexes)
+add_subdirectory(expr)
+add_subdirectory(query)
+add_subdirectory(utils)
+
 set(SRCS_MODULE_LOADER ${CMAKE_CURRENT_LIST_DIR}/module_loader.cc)
 
 # This is the module target
@@ -20,6 +22,7 @@ target_link_libraries(libsearch PUBLIC commands)
 target_link_libraries(libsearch PUBLIC module)
 target_link_libraries(libsearch PUBLIC valkey_module)
 target_link_libraries(libsearch PUBLIC server_events)
+target_link_libraries(libsearch PUBLIC expr)
 
 list(APPEND THIRD_PARTY_LIBS coordinator_grpc_proto)
 list(APPEND THIRD_PARTY_LIBS coordinator_cc_proto)

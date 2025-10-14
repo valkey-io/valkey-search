@@ -114,7 +114,8 @@ absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
                                                index_schema_name));
   RealIndexInterface index_interface(index_schema);
   auto params = std::make_unique<AggregateParameters>(
-      options::GetDefaultTimeoutMs().GetValue(), &index_interface);
+      options::GetDefaultTimeoutMs().GetValue(), &index_interface,
+      ValkeyModule_GetSelectedDb(ctx));
   DBG << "AggregateParameters created for index: " << index_schema_name << " @"
       << (void *)params.get() << "\n";
   params->index_schema_name = std::move(index_schema_name);

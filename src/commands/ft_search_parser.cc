@@ -182,7 +182,7 @@ absl::StatusOr<FilterParseResults> ParsePreFilter(
 absl::Status ParseKNN(query::VectorSearchParameters &parameters,
                       absl::string_view filter_str) {
   if (filter_str.empty()) {
-    return absl::InvalidArgumentError("Vector query clause is missing1");
+    return absl::InvalidArgumentError("Vector query clause is missing");
   }
   VMSDK_ASSIGN_OR_RETURN(auto close_position,
                          FindCloseSquareBracket(filter_str));

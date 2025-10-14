@@ -23,11 +23,11 @@
   extern "C" {                                                              \
   int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,  \
                           int argc) {                                       \
-    vmsdk::TrackCurrentAsMainThread();                                      \
     if (auto status = vmsdk::module::OnLoad(ctx, argv, argc, options);      \
         status != VALKEYMODULE_OK) {                                        \
       return status;                                                        \
     }                                                                       \
+    vmsdk::TrackCurrentAsMainThread();                                      \
                                                                             \
     if (options.on_load.has_value()) {                                      \
       return vmsdk::module::OnLoadDone(                                     \

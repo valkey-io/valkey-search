@@ -32,6 +32,9 @@ struct Result {
 int Reply(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
           [[maybe_unused]] int argc);
 
+int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
+            [[maybe_unused]] int argc);
+
 void Free(ValkeyModuleCtx * /*ctx*/, void *privdata);
 
 }  // namespace async

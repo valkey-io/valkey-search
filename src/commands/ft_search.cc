@@ -26,6 +26,7 @@
 #include "absl/strings/string_view.h"
 #include "src/acl.h"
 #include "src/commands/commands.h"
+#include "src/commands/ft_aggregate.h"
 #include "src/commands/ft_search_parser.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
@@ -178,6 +179,11 @@ void SendReply(ValkeyModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
     ValkeyModule_ReplyWithError(ctx,
                                 "Search operation cancelled due to timeout");
     ++Metrics::GetStats().query_failed_requests_cnt;
+    return;
+  }
+  if (auto agg = dynamic_cast<aggregate::AggregateParameters *>(
+          const_cast<query::SearchParameters *>(&parameters))) {
+    aggregate::SendAggReply(ctx, neighbors, *agg);
     return;
   }
   // Increment success counter.

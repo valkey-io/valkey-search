@@ -7,7 +7,7 @@ from valkey.exceptions import ResponseError, ConnectionError
 import pytest, time, logging
 from indexes import *
 
-class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
+class TestDBNum(ValkeySearchClusterTestCaseDebugMode):
     def setup_connections(self):
         self.client00 = self.get_primary(0).connect();
         self.client00.select(0)

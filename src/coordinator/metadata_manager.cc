@@ -354,7 +354,7 @@ void MetadataManager::HandleBroadcastedMetadata(
                           schema = std::unique_ptr<GlobalMetadata>(
                               response.release_metadata()),
                           address = std::move(address)] {
-          VMSDK_LOG_EVERY_N(WARNING, ctx, 1)
+          VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
               << "Got GlobalMetadata from " << address << ": "
               << schema->DebugString();
           auto &metadata_manager = MetadataManager::Instance();
@@ -364,7 +364,7 @@ void MetadataManager::HandleBroadcastedMetadata(
                 << "Failed to reconcile schemas: " << status.message();
             return;
           }
-          VMSDK_LOG_EVERY_N(WARNING, ctx, 1)
+          VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
               << "Successfully reconciled schemas! New GlobalMetadata: "
               << metadata_manager.GetGlobalMetadata()->DebugString();
         });

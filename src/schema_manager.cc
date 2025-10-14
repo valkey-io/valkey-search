@@ -148,7 +148,6 @@ absl::Status GenerateIndexAlreadyExistsError(absl::string_view name) {
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::LookupInternal(
     uint32_t db_num, absl::string_view name) const {
-  VMSDK_LOG(WARNING, nullptr) << "LOOKUP: " << db_num << " : " << name;
   auto db_itr = db_to_index_schemas_.find(db_num);
   if (db_itr == db_to_index_schemas_.end()) {
     return absl::NotFoundError(absl::StrCat("Index schema not found: ", name));

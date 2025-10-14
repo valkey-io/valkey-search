@@ -733,9 +733,9 @@ static vmsdk::info_field::Integer total_indexing_time(
     }));
 
 /*
-An 8/1.0 encoded string won't have a hashtag anywhere and is always for db_num
-== 0 An 9/1.1 encoded string will always have a psuedo-hashtag at the START AND
-      may have a real hashtag after that.
+An 8/1.0 encoded string won't have a hashtag anywhere and is always for 
+  db_num == 0 An 9/1.1 encoded string will always have a false-hashtag at 
+  the START AND may have a real hashtag after that.
 
 Decoded strings that lack a hashtag and are for db_num == 0, are encoded with
 the 8/1.0 rules All other decoded strings are encoded according to the 9/1.1

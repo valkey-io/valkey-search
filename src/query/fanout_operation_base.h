@@ -35,6 +35,11 @@ class FanoutOperationBase {
  public:
   explicit FanoutOperationBase() = default;
 
+  explicit FanoutOperationBase(bool allshards_required,
+                               bool consistency_required)
+      : allshards_required_(allshards_required),
+        consistency_required_(consistency_required) {}
+
   virtual ~FanoutOperationBase() = default;
 
   void StartOperation(ValkeyModuleCtx* ctx) {
@@ -61,7 +66,8 @@ class FanoutOperationBase {
     if (!op) {
       return ValkeyModule_ReplyWithError(ctx, "No reply data");
     }
-    if (op->timeout_occurred_) {
+    // generate timeout reply only in ALLSHARDS mode
+    if (op->allshards_required_ && op->timeout_occurred_) {
       return op->GenerateTimeoutReply(ctx);
     }
     return op->GenerateReply(ctx, argv, argc);
@@ -292,6 +298,8 @@ class FanoutOperationBase {
   std::vector<FanoutSearchTarget> targets_;
   std::chrono::steady_clock::time_point deadline_tp_;
   bool timeout_occurred_ = false;
+  bool allshards_required_ = true;
+  bool consistency_required_ = true;
 };
 
 }  // namespace valkey_search::query::fanout

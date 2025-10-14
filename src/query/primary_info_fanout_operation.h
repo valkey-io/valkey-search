@@ -26,7 +26,8 @@ class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
                                        fanout::FanoutTargetMode::kPrimary> {
  public:
   PrimaryInfoFanoutOperation(uint32_t db_num, const std::string& index_name,
-                             unsigned timeout_ms);
+                             unsigned timeout_ms, bool allshards_required,
+                             bool consistency_required);
 
   unsigned GetTimeoutMs() const override;
 

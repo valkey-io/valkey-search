@@ -9,14 +9,19 @@
 
 #include "src/coordinator/metadata_manager.h"
 #include "src/schema_manager.h"
+#include "vmsdk/src/debug.h"
 
 namespace valkey_search::query::primary_info_fanout {
 
+CONTROLLED_BOOLEAN(ForceInfoPrimaryInconsistentError, false);
+
 PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
-    uint32_t db_num, const std::string& index_name, unsigned timeout_ms)
+    uint32_t db_num, const std::string& index_name, unsigned timeout_ms,
+    bool allshards_required, bool consistency_required)
     : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
                                   coordinator::InfoIndexPartitionResponse,
-                                  fanout::FanoutTargetMode::kPrimary>(),
+                                  fanout::FanoutTargetMode::kPrimary>(
+          allshards_required, consistency_required),
       db_num_(db_num),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
@@ -53,38 +58,51 @@ void PrimaryInfoFanoutOperation::OnResponse(
     return;
   }
 
-  // Determine if we need to call OnError, do it outside the lock
-  // prevent double locking issue in OnError
-  bool should_call_error = false;
-  grpc::Status error_status(grpc::StatusCode::OK, "");
-  coordinator::FanoutErrorType error_type;
+  // check fingerprint and version consistency only in CONSISTENT mode
+  if (consistency_required_) {
+    // Determine if we need to call OnError, do it outside the lock
+    // prevent double locking issue in OnError
+    bool should_call_error = false;
+    grpc::Status error_status(grpc::StatusCode::OK, "");
+    coordinator::FanoutErrorType error_type;
 
-  {
-    absl::MutexLock lock(&mutex_);
-    const auto& resp_ifv = resp.index_fingerprint_version();
-    if (!index_fingerprint_version_.has_value()) {
-      index_fingerprint_version_ = resp.index_fingerprint_version();
-    } else if (index_fingerprint_version_->fingerprint() !=
-                   resp_ifv.fingerprint() ||
-               index_fingerprint_version_->version() != resp_ifv.version()) {
-      should_call_error = true;
+    // testing only: force inconsistent error
+    if (ForceInfoPrimaryInconsistentError.GetValue()) {
       error_status =
           grpc::Status(grpc::StatusCode::INTERNAL,
                        "Cluster not in a consistent state, please retry.");
       error_type = coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR;
+      OnError(error_status, error_type, target);
+      return;
     }
-    if (resp.index_name() != index_name_) {
-      should_call_error = true;
-      error_status =
-          grpc::Status(grpc::StatusCode::INTERNAL,
-                       "Cluster not in a consistent state, please retry.");
-      error_type = coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR;
-    }
-  }
 
-  if (should_call_error) {
-    OnError(error_status, error_type, target);
-    return;
+    {
+      absl::MutexLock lock(&mutex_);
+      const auto& resp_ifv = resp.index_fingerprint_version();
+      if (!index_fingerprint_version_.has_value()) {
+        index_fingerprint_version_ = resp.index_fingerprint_version();
+      } else if (index_fingerprint_version_->fingerprint() !=
+                     resp_ifv.fingerprint() ||
+                 index_fingerprint_version_->version() != resp_ifv.version()) {
+        should_call_error = true;
+        error_status =
+            grpc::Status(grpc::StatusCode::INTERNAL,
+                         "Cluster not in a consistent state, please retry.");
+        error_type = coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR;
+      }
+      if (resp.index_name() != index_name_) {
+        should_call_error = true;
+        error_status =
+            grpc::Status(grpc::StatusCode::INTERNAL,
+                         "Cluster not in a consistent state, please retry.");
+        error_type = coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR;
+      }
+    }
+
+    if (should_call_error) {
+      OnError(error_status, error_type, target);
+      return;
+    }
   }
 
   exists_ = true;
@@ -115,8 +133,9 @@ void PrimaryInfoFanoutOperation::InvokeRemoteRpc(
 int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
                                               ValkeyModuleString** argv,
                                               int argc) {
-  if (!index_name_error_nodes.empty() || !communication_error_nodes.empty() ||
-      !inconsistent_state_error_nodes.empty()) {
+  if (allshards_required_ &&
+      (!index_name_error_nodes.empty() || !communication_error_nodes.empty() ||
+       !inconsistent_state_error_nodes.empty())) {
     return FanoutOperationBase::GenerateErrorReply(ctx);
   }
   ValkeyModule_ReplyWithArray(ctx, 10);

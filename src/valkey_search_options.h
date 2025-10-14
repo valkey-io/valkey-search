@@ -61,5 +61,12 @@ config::Number& GetFTInfoTimeoutMs();
 /// Return the rpc timeout for ft.info fanout command
 config::Number& GetFTInfoRpcTimeoutMs();
 
+/// Return the configuration entry for default allshards requirement in FT.INFO
+const config::Boolean& GetFTInfoDefaultAllshardsRequired();
+
+/// Return the configuration entry for default consistency requirement in
+/// FT.INFO
+const config::Boolean& GetFTInfoDefaultConsistencyRequired();
+
 }  // namespace options
 }  // namespace valkey_search

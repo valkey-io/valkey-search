@@ -49,6 +49,7 @@
 namespace valkey_search::coordinator {
 
 CONTROLLED_SIZE_T(ForceRemoteFailCount, 0);
+CONTROLLED_SIZE_T(ForceLocalFailCount, 0);
 
 grpc::ServerUnaryReactor* Service::GetGlobalMetadata(
     grpc::CallbackServerContext* context,
@@ -191,6 +192,17 @@ Service::GenerateInfoResponse(
   uint32_t db_num = request.db_num();
   std::string index_name = request.index_name();
   coordinator::InfoIndexPartitionResponse response;
+  // testing only: force ft.info fail on local
+  if (ForceLocalFailCount.GetValue() > 0) {
+    ForceLocalFailCount.Decrement();
+    response.set_exists(false);
+    response.set_index_name(index_name);
+    std::string err_msg = "Forced local error";
+    response.set_error(err_msg);
+    response.set_error_type(coordinator::FanoutErrorType::COMMUNICATION_ERROR);
+    grpc::Status error_status(grpc::StatusCode::INTERNAL, err_msg);
+    return std::make_pair(error_status, response);
+  }
   auto status_or_schema =
       SchemaManager::Instance().GetIndexSchema(db_num, index_name);
   if (!status_or_schema.ok()) {

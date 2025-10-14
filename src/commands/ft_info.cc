@@ -37,47 +37,71 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   itr.Next();
   VMSDK_ASSIGN_OR_RETURN(auto itr_arg, itr.Get());
   auto index_schema_name = vmsdk::ToStringView(itr_arg);
+  itr.Next();
 
-  bool is_global = false;
+  bool is_cluster_and_using_coordinator =
+      ValkeySearch::Instance().IsCluster() &&
+      ValkeySearch::Instance().UsingCoordinator();
   bool is_primary = false;
   bool is_cluster = false;
+  bool allshards_required =
+      options::GetFTInfoDefaultAllshardsRequired().GetValue();
+  bool consistency_required =
+      options::GetFTInfoDefaultConsistencyRequired().GetValue();
   unsigned timeout_ms = options::GetFTInfoTimeoutMs().GetValue();
 
-  if (argc == 2) {
-    is_global = false;
-  } else if (argc == 3) {
+  while (itr.HasNext()) {
+    VMSDK_ASSIGN_OR_RETURN(auto arg, itr.Get());
+    auto arg_str = vmsdk::ToStringView(arg);
     itr.Next();
-    VMSDK_ASSIGN_OR_RETURN(auto scope_arg, itr.Get());
-    auto scope = vmsdk::ToStringView(scope_arg);
 
-    if (absl::EqualsIgnoreCase(scope, "LOCAL")) {
-      is_global = false;
-    } else if (absl::EqualsIgnoreCase(scope, "PRIMARY")) {
-      if (!ValkeySearch::Instance().IsCluster() ||
-          !ValkeySearch::Instance().UsingCoordinator()) {
+    if (absl::EqualsIgnoreCase(arg_str, "PRIMARY")) {
+      if (!is_cluster_and_using_coordinator) {
         ValkeyModule_ReplyWithError(
             ctx, "ERR PRIMARY option is not valid in this configuration");
         return absl::OkStatus();
       }
       is_primary = true;
-    } else if (absl::EqualsIgnoreCase(scope, "CLUSTER")) {
-      if (!ValkeySearch::Instance().IsCluster() ||
-          !ValkeySearch::Instance().UsingCoordinator()) {
+    } else if (absl::EqualsIgnoreCase(arg_str, "CLUSTER")) {
+      if (!is_cluster_and_using_coordinator) {
         ValkeyModule_ReplyWithError(
             ctx, "ERR CLUSTER option is not valid in this configuration");
         return absl::OkStatus();
       }
       is_cluster = true;
+    } else if (absl::EqualsIgnoreCase(arg_str, "ALLSHARDS")) {
+      if (!is_cluster_and_using_coordinator) {
+        ValkeyModule_ReplyWithError(
+            ctx, "ERR ALLSHARDS option is not valid in this configuration");
+        return absl::OkStatus();
+      }
+      allshards_required = true;
+    } else if (absl::EqualsIgnoreCase(arg_str, "SOMESHARDS")) {
+      if (!is_cluster_and_using_coordinator) {
+        ValkeyModule_ReplyWithError(
+            ctx, "ERR SOMESHARDS option is not valid in this configuration");
+        return absl::OkStatus();
+      }
+      allshards_required = false;
+    } else if (absl::EqualsIgnoreCase(arg_str, "CONSISTENT")) {
+      if (!is_cluster_and_using_coordinator) {
+        ValkeyModule_ReplyWithError(
+            ctx, "ERR CONSISTENT option is not valid in this configuration");
+        return absl::OkStatus();
+      }
+      consistency_required = true;
+    } else if (absl::EqualsIgnoreCase(arg_str, "INCONSISTENT")) {
+      if (!is_cluster_and_using_coordinator) {
+        ValkeyModule_ReplyWithError(
+            ctx, "ERR INCONSISTENT option is not valid in this configuration");
+        return absl::OkStatus();
+      }
+      consistency_required = false;
     } else {
       ValkeyModule_ReplyWithError(
-          ctx,
-          "ERR Invalid scope parameter. Must be LOCAL, PRIMARY or CLUSTER");
+          ctx, absl::StrFormat("ERR Unknown argument: %s", arg_str).c_str());
       return absl::OkStatus();
     }
-  } else {
-    // Invalid number of parameters
-    ValkeyModule_ReplyWithError(ctx, vmsdk::WrongArity(kInfoCommand).c_str());
-    return absl::OkStatus();
   }
 
   // ACL check
@@ -94,12 +118,12 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   if (is_primary) {
     auto op = new query::primary_info_fanout::PrimaryInfoFanoutOperation(
         ValkeyModule_GetSelectedDb(ctx), std::string(index_schema_name),
-        timeout_ms);
+        timeout_ms, allshards_required, consistency_required);
     op->StartOperation(ctx);
   } else if (is_cluster) {
     auto op = new query::cluster_info_fanout::ClusterInfoFanoutOperation(
         ValkeyModule_GetSelectedDb(ctx), std::string(index_schema_name),
-        timeout_ms);
+        timeout_ms, allshards_required, consistency_required);
     op->StartOperation(ctx);
   } else {
     VMSDK_LOG(DEBUG, ctx) << "==========Using Local Scope==========";

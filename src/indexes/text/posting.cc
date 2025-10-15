@@ -16,6 +16,8 @@
 
 #include "absl/log/check.h"
 #include "src/index_schema.h"
+#include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/memory_allocation_overrides.h"
 
 namespace valkey_search::indexes::text {
 
@@ -52,6 +54,8 @@ using Uint64FieldMask = FieldMaskImpl<uint64_t, 64>;
 
 // Factory method to create optimal field mask based on field count
 std::unique_ptr<FieldMask> FieldMask::Create(size_t num_fields) {
+  IsolatedMemoryScope scope{Postings::memory_pool_};
+
   CHECK(num_fields > 0) << "num_fields must be greater than 0";
   CHECK(num_fields <= 64) << "Too many text fields (max 64 supported)";
 
@@ -164,6 +168,9 @@ template class FieldMaskImpl<uint64_t, 64>;
 
 // Basic Postings Object Implementation
 
+// Static memory pool for tracking posting memory usage
+MemoryPool Postings::memory_pool_{0};
+
 // Position map type alias - maps position to optimized FieldMask objects
 using PositionMap = std::map<Position, std::unique_ptr<FieldMask>>;
 
@@ -177,13 +184,23 @@ class Postings::Impl {
       : save_positions_(save_positions), num_text_fields_(num_text_fields) {}
 };
 
-Postings::Postings(bool save_positions, size_t num_text_fields)
-    : impl_(std::make_unique<Impl>(save_positions, num_text_fields)) {
+Postings::Postings(bool save_positions, size_t num_text_fields) {
+  IsolatedMemoryScope scope{memory_pool_};
+  impl_ = std::make_unique<Impl>(save_positions, num_text_fields);
   CHECK(impl_ != nullptr) << "Failed to create Postings implementation";
 }
 
-// Automatic cleanup via unique_ptr
-Postings::~Postings() = default;
+// Destructor with proper memory tracking and cleanup
+Postings::~Postings() {
+  IsolatedMemoryScope scope{memory_pool_};
+
+  // Explicit cleanup of the implementation
+  if (impl_) {
+    // Clear all key-to-position mappings to ensure proper cleanup
+    // This will trigger destructors for all FieldMask objects
+    impl_->key_to_positions_.clear();
+  }
+}
 
 // Check if posting list contains any documents
 bool Postings::IsEmpty() const { return impl_->key_to_positions_.empty(); }
@@ -191,6 +208,8 @@ bool Postings::IsEmpty() const { return impl_->key_to_positions_.empty(); }
 // Insert a posting entry for a key and field
 void Postings::InsertPosting(const Key& key, size_t field_index,
                              Position position) {
+  IsolatedMemoryScope scope{memory_pool_};
+
   CHECK(field_index < impl_->num_text_fields_) << "Field index out of range";
 
   Position effective_position;
@@ -223,6 +242,8 @@ void Postings::InsertPosting(const Key& key, size_t field_index,
 
 // Remove a document key and all its positions
 void Postings::RemoveKey(const Key& key) {
+  IsolatedMemoryScope scope{memory_pool_};
+
   impl_->key_to_positions_.erase(key);
 }
 
@@ -230,7 +251,7 @@ void Postings::RemoveKey(const Key& key) {
 size_t Postings::GetKeyCount() const { return impl_->key_to_positions_.size(); }
 
 // Get total number of position entries across all keys
-size_t Postings::GetPostingCount() const {
+size_t Postings::GetPositionCount() const {
   size_t total = 0;
   for (const auto& [key, positions] : impl_->key_to_positions_) {
     total += positions.size();
@@ -362,5 +383,8 @@ uint64_t Postings::PositionIterator::GetFieldMask() const {
       << "PositionIterator is invalid or exhausted";
   return current_->second->AsUint64();
 }
+
+// Memory tracking implementation
+int64_t Postings::GetMemoryUsage() { return memory_pool_.GetUsage(); }
 
 }  // namespace valkey_search::indexes::text

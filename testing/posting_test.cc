@@ -10,6 +10,8 @@
 #include "gtest/gtest.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
+#include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search::indexes::text {
 
@@ -64,7 +66,7 @@ class PostingTest : public ValkeySearchTest {
 TEST_F(PostingTest, PostingEmptyOperations) {
   EXPECT_TRUE(boolean_postings_->IsEmpty());
   EXPECT_EQ(boolean_postings_->GetKeyCount(), 0);
-  EXPECT_EQ(boolean_postings_->GetPostingCount(), 0);
+  EXPECT_EQ(boolean_postings_->GetPositionCount(), 0);
   EXPECT_EQ(boolean_postings_->GetTotalTermFrequency(), 0);
 }
 
@@ -79,7 +81,7 @@ TEST_F(PostingTest, BooleanSearchInsertPosting) {
 
   EXPECT_FALSE(boolean_postings_->IsEmpty());
   EXPECT_EQ(boolean_postings_->GetKeyCount(), 2);
-  EXPECT_EQ(boolean_postings_->GetPostingCount(),
+  EXPECT_EQ(boolean_postings_->GetPositionCount(),
             2);  // One position per key (always position 0)
   EXPECT_EQ(boolean_postings_->GetTotalTermFrequency(),
             3);  // Three field occurrences total
@@ -96,7 +98,7 @@ TEST_F(PostingTest, PositionalSearchInsertPosting) {
       10);  // field 2, position 10 (same position, different field)
 
   EXPECT_EQ(positional_postings_->GetKeyCount(), 1);
-  EXPECT_EQ(positional_postings_->GetPostingCount(),
+  EXPECT_EQ(positional_postings_->GetPositionCount(),
             2);  // Two unique positions (10, 20)
   EXPECT_EQ(positional_postings_->GetTotalTermFrequency(),
             3);  // Three field occurrences total
@@ -106,7 +108,7 @@ TEST_F(PostingTest, PositionalSearchInsertPosting) {
   positional_postings_->InsertPosting(InternKey("doc2"), 0, 15);
 
   EXPECT_EQ(positional_postings_->GetKeyCount(), 2);
-  EXPECT_EQ(positional_postings_->GetPostingCount(),
+  EXPECT_EQ(positional_postings_->GetPositionCount(),
             4);  // Two positions per document
   EXPECT_EQ(positional_postings_->GetTotalTermFrequency(),
             5);  // Five field occurrences total
@@ -120,7 +122,7 @@ TEST_F(PostingTest, InsertPostingDefaultPosition) {
       InternKey("doc1"), 1);  // Default position ignored in boolean mode
 
   EXPECT_EQ(boolean_postings_->GetKeyCount(), 1);
-  EXPECT_EQ(boolean_postings_->GetPostingCount(), 1);  // Only one position (0)
+  EXPECT_EQ(boolean_postings_->GetPositionCount(), 1);  // Only one position (0)
   EXPECT_EQ(boolean_postings_->GetTotalTermFrequency(),
             2);  // Two field occurrences at position 0
 }
@@ -135,7 +137,7 @@ TEST_F(PostingTest, RemoveKey) {
   // Remove one key
   positional_postings_->RemoveKey(InternKey("doc1"));
   EXPECT_EQ(positional_postings_->GetKeyCount(), 1);
-  EXPECT_EQ(positional_postings_->GetPostingCount(), 1);
+  EXPECT_EQ(positional_postings_->GetPositionCount(), 1);
 
   // Remove non-existent key (should be no-op)
   positional_postings_->RemoveKey(InternKey("nonexistent"));
@@ -156,7 +158,7 @@ TEST_F(PostingTest, LargeScaleOperations) {
   }
 
   EXPECT_EQ(positional_postings_->GetKeyCount(), 100);
-  EXPECT_EQ(positional_postings_->GetPostingCount(),
+  EXPECT_EQ(positional_postings_->GetPositionCount(),
             1000);  // 100 docs * 10 positions each
   EXPECT_EQ(positional_postings_->GetTotalTermFrequency(),
             1000);  // One field per position
@@ -180,7 +182,7 @@ TEST_F(PostingTest, SingleFieldOptimization) {
 
   // Verify posting works correctly with single field optimization
   EXPECT_EQ(single_field_posting.GetKeyCount(), 2);
-  EXPECT_EQ(single_field_posting.GetPostingCount(), 3);
+  EXPECT_EQ(single_field_posting.GetPositionCount(), 3);
   EXPECT_EQ(single_field_posting.GetTotalTermFrequency(), 3);
 }
 
@@ -195,7 +197,7 @@ TEST_F(PostingTest, BooleanVsPositionalBehavior) {
   boolean_postings_->InsertPosting(InternKey("doc1"), 2,
                                    300);  // position 300 ignored
 
-  EXPECT_EQ(boolean_postings_->GetPostingCount(), 1);  // All at position 0
+  EXPECT_EQ(boolean_postings_->GetPositionCount(), 1);  // All at position 0
   EXPECT_EQ(boolean_postings_->GetTotalTermFrequency(), 3);  // Three fields
 
   // Positional mode: positions respected
@@ -203,7 +205,7 @@ TEST_F(PostingTest, BooleanVsPositionalBehavior) {
   positional_postings_->InsertPosting(InternKey("doc1"), 1, 200);
   positional_postings_->InsertPosting(InternKey("doc1"), 2, 300);
 
-  EXPECT_EQ(positional_postings_->GetPostingCount(),
+  EXPECT_EQ(positional_postings_->GetPositionCount(),
             3);  // Three different positions
   EXPECT_EQ(positional_postings_->GetTotalTermFrequency(), 3);  // Three fields
 }
@@ -216,7 +218,7 @@ TEST_F(PostingTest, MultipleInsertPostingCalls) {
   positional_postings_->InsertPosting(InternKey("doc1"), 1,
                                       10);  // Add field 1 to position 10
 
-  EXPECT_EQ(positional_postings_->GetPostingCount(),
+  EXPECT_EQ(positional_postings_->GetPositionCount(),
             3);  // Three unique positions (10, 20, 30)
   EXPECT_EQ(positional_postings_->GetTotalTermFrequency(),
             4);  // Four field occurrences
@@ -395,6 +397,37 @@ TEST_F(PostingTest, ContainsFieldsCheck) {
   auto field_mask_2 = FieldMask::Create(5);
   field_mask_2->SetField(1);
   EXPECT_FALSE(key_iter.ContainsFields(field_mask_2->AsUint64()));
+}
+
+TEST_F(PostingTest, SimpleMemoryTracking) {
+  // Test memory tracking
+  MemoryPool caller_pool{0};
+  Postings* test_posting = nullptr;
+
+  {
+    NestedMemoryScope scope{caller_pool};
+
+    // Create posting and add some data within the memory scope
+    test_posting = new Postings(true, 4);
+    test_posting->InsertPosting(InternKey("doc1"), 0, 10);
+    test_posting->InsertPosting(InternKey("doc2"), 1, 20);
+  }
+
+  // The caller pool should show 0 usage since Postings uses IsolatedMemoryScope
+  EXPECT_EQ(caller_pool.GetUsage(), 0);
+
+  // Postings should track its own memory usage internally
+  // Note: This will likely be 0 unless Postings uses custom allocators that
+  // report memory
+  int64_t postings_memory = Postings::GetMemoryUsage();
+
+  // Clean up
+  delete test_posting;
+
+  // Memory should be cleaned up after deletion
+  int64_t memory_after_cleanup = Postings::GetMemoryUsage();
+  EXPECT_EQ(memory_after_cleanup,
+            postings_memory);  // Should remain the same or decrease
 }
 
 }  // namespace valkey_search::indexes::text

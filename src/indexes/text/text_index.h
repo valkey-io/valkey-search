@@ -99,6 +99,20 @@ class TextIndexSchema {
   bool with_offsets_ = false;
 
   const char* GetLanguageString() const;
+
+ public:
+  // FT.INFO memory stats for text index
+  uint64_t GetTotalPositions() const;
+  uint64_t GetNumTerms() const;
+  uint64_t GetTotalTermFrequency() const;
+  uint64_t GetPostingsMemoryUsage() const;
+  uint64_t GetRadixTreeMemoryUsage() const;
+  uint64_t GetPositionMemoryUsage() const;
+  uint64_t GetTotalTextIndexMemoryUsage() const;
+  double GetTotalTermsPerDocAvg(uint64_t num_docs) const;
+  double GetTotalTextIndexSizePerDocAvg(uint64_t num_docs) const;
+  double GetPositionSizePerTermAvg() const;
+  double GetTotalTextIndexSizePerTermAvg() const;
 };
 
 }  // namespace valkey_search::indexes::text

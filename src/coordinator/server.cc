@@ -49,6 +49,7 @@
 namespace valkey_search::coordinator {
 
 CONTROLLED_SIZE_T(ForceRemoteFailCount, 0);
+CONTROLLED_SIZE_T(ForceIndexNotFoundError, 0);
 
 grpc::ServerUnaryReactor* Service::GetGlobalMetadata(
     grpc::CallbackServerContext* context,
@@ -191,6 +192,18 @@ Service::GenerateInfoResponse(
   uint32_t db_num = request.db_num();
   std::string index_name = request.index_name();
   coordinator::InfoIndexPartitionResponse response;
+  // test path: simulate index not found error
+  if (ForceIndexNotFoundError.GetValue() > 0) {
+    ForceIndexNotFoundError.Decrement();
+    std::string test_error_str =
+        "Test Error: Index " + index_name + " not found";
+    response.set_exists(false);
+    response.set_index_name(index_name);
+    response.set_error(test_error_str);
+    response.set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
+    grpc::Status error_status(grpc::StatusCode::NOT_FOUND, test_error_str);
+    return std::make_pair(error_status, response);
+  }
   auto status_or_schema =
       SchemaManager::Instance().GetIndexSchema(db_num, index_name);
   if (!status_or_schema.ok()) {

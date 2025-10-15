@@ -185,13 +185,24 @@ class Postings::Impl {
 };
 
 Postings::Postings(bool save_positions, size_t num_text_fields)
-    : impl_(std::make_unique<Impl>(save_positions, num_text_fields)) {
+     {
   IsolatedMemoryScope scope{memory_pool_};
+  impl_ = std::make_unique<Impl>(save_positions, num_text_fields);
   CHECK(impl_ != nullptr) << "Failed to create Postings implementation";
 }
 
-// Automatic cleanup via unique_ptr
-Postings::~Postings() { IsolatedMemoryScope scope{memory_pool_}; }
+// Destructor with proper memory tracking and cleanup
+Postings::~Postings() {
+  IsolatedMemoryScope scope{memory_pool_};
+  
+  // Explicit cleanup of the implementation
+  if (impl_) {
+    // Clear all key-to-position mappings to ensure proper cleanup
+    // This will trigger destructors for all FieldMask objects
+    impl_->key_to_positions_.clear();
+
+  }
+}
 
 // Check if posting list contains any documents
 bool Postings::IsEmpty() const { return impl_->key_to_positions_.empty(); }

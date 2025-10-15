@@ -412,8 +412,7 @@ absl::Status PreParseQueryString(query::SearchParameters &parameters) {
   return absl::OkStatus();
 }
 
-absl::Status PostParseVectorParameters(
-    query::VectorSearchParameters &parameters) {
+absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
   VMSDK_ASSIGN_OR_RETURN(
       auto k_string,
       SubstituteParam(parameters, parameters.parse_vars.k_string));
@@ -438,7 +437,7 @@ absl::Status PostParseVectorParameters(
   return absl::OkStatus();
 }
 
-absl::Status PostParseQueryString(query::VectorSearchParameters &parameters) {
+absl::Status PostParseQueryString(query::SearchParameters &parameters) {
   if (parameters.IsVectorQuery()) {
     VMSDK_RETURN_IF_ERROR(PostParseVectorParameters(parameters)).SetPrepend()
         << "Error parsing vector similarity parameters: ";

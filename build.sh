@@ -396,8 +396,18 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     fi
     export TEST_PATTERN=${TEST_PATTERN}
     export INTEG_RETRIES=${INTEG_RETRIES}
+    params=""
+    if [[ "${BUILD_CONFIG}" == "debug" ]]; then
+        params="${params} --debug"
+    fi
+    if [[ "${SAN_BUILD}" == "address" ]]; then
+        params="${params} --asan"
+    fi
+    if [[ "${SAN_BUILD}" == "thread" ]]; then
+        params="${params} --tsan"
+    fi
     # Run will run ASan or normal tests based on the environment variable SAN_BUILD
-    ./run.sh
+    ./run.sh ${params}
     popd >/dev/null
 fi
 

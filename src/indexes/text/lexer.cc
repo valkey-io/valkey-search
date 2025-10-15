@@ -14,9 +14,14 @@
 
 namespace valkey_search::indexes::text {
 
+Lexer::Lexer(const char* language)
+    : stemmer_(sb_stemmer_new(language, "UTF_8")) {}
+
+Lexer::~Lexer() { sb_stemmer_delete(stemmer_); }
+
 absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
     absl::string_view text, const std::bitset<256>& punct_bitmap,
-    sb_stemmer* stemmer, bool stemming_enabled, uint32_t min_stem_size,
+    bool stemming_enabled, uint32_t min_stem_size,
     const absl::flat_hash_set<std::string>& stop_words_set) const {
   if (!IsValidUtf8(text)) {
     return absl::InvalidArgumentError("Invalid UTF-8");
@@ -45,7 +50,7 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
         continue;  // Skip stop words
       }
 
-      word = StemWord(word, stemmer, stemming_enabled, min_stem_size);
+      word = StemWord(word, stemming_enabled, min_stem_size);
 
       tokens.push_back(std::move(word));
     }
@@ -54,21 +59,20 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
   return tokens;
 }
 
-std::string Lexer::StemWord(const std::string& word, sb_stemmer* stemmer,
-                            bool stemming_enabled,
+std::string Lexer::StemWord(const std::string& word, bool stemming_enabled,
                             uint32_t min_stem_size) const {
   if (word.empty() || !stemming_enabled || word.length() < min_stem_size) {
     return word;
   }
-
-  CHECK(stemmer) << "Stemmer not initialized";
+  std::lock_guard<std::mutex> guard(stemmer_mutex_);
 
   const sb_symbol* stemmed = sb_stemmer_stem(
-      stemmer, reinterpret_cast<const sb_symbol*>(word.c_str()), word.length());
+      stemmer_, reinterpret_cast<const sb_symbol*>(word.c_str()),
+      word.length());
 
   DCHECK(stemmed) << "Stemming failed for word: " + word;
 
-  int stemmed_length = sb_stemmer_length(stemmer);
+  int stemmed_length = sb_stemmer_length(stemmer_);
   return std::string(reinterpret_cast<const char*>(stemmed), stemmed_length);
 }
 

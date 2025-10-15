@@ -37,9 +37,12 @@ struct sb_stemmer;
 namespace valkey_search::indexes::text {
 
 struct Lexer {
+  Lexer(const char*);
+  ~Lexer();
+
   absl::StatusOr<std::vector<std::string>> Tokenize(
       absl::string_view text, const std::bitset<256>& punct_bitmap,
-      sb_stemmer* stemmer, bool stemming_enabled, uint32_t min_stem_size,
+      bool stemming_enabled, uint32_t min_stem_size,
       const absl::flat_hash_set<std::string>& stop_words_set) const;
 
   // Punctuation checking API
@@ -55,8 +58,13 @@ struct Lexer {
   }
 
  private:
-  std::string StemWord(const std::string& word, sb_stemmer* stemmer,
-                       bool stemming_enabled, uint32_t min_stem_size) const;
+  mutable sb_stemmer* stemmer_ = nullptr;
+
+  // TODO: Create a little pool of stemmers protected by this mutex
+  mutable std::mutex stemmer_mutex_;
+
+  std::string StemWord(const std::string& word, bool stemming_enabled,
+                       uint32_t min_stem_size) const;
 
   // UTF-8 processing helpers
   bool IsValidUtf8(absl::string_view text) const;

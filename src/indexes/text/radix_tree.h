@@ -88,8 +88,34 @@ struct RadixTree {
   RadixTree() = default;
 
   //
-  // This function is the only way to mutate the RadixTree, all other functions
-  // are read-only. This function is explicitly multi-thread safe and is
+  // Adds the target for the given word, replacing the existing target
+  // if there is one. Providing an empty target will cause the word to be
+  // deleted from the tree. Only use this API when you don't care about any
+  // existing target.
+  //
+  // (TODO) This function is explicitly multi-thread safe and is
+  // designed to allow other mutations to be performed on other words and
+  // targets simultaneously, with minimal collisions.
+  //
+  // It's expected that the caller will know whether or not the word
+  // exists. Passing in a word that doesn't exist along with a
+  // nullopt new_target will cause the word to be added and
+  // then immediately deleted from the tree.
+  //
+  void SetTarget(absl::string_view word, std::optional<Target> new_target);
+
+  //
+  // Applies the mutation function to the current target of the word to generate
+  // a new target. If the word doesn't already exist, a path for it will be
+  // first added to the tree and the target will be std::nullopt. The new target
+  // is returned to the caller.
+  //
+  // The input parameter to the mutate function will be nullopt if there is no
+  // entry for this word. Otherwise it will contain the value for this word. The
+  // return value of the mutate function is the new value for this word. if the
+  // return value is nullopt then this word is deleted from the RadixTree.
+  //
+  // (TODO) This function is explicitly multi-thread safe and is
   // designed to allow other mutations to be performed on other words and
   // targets simultaneously, with minimal collisions.
   //
@@ -98,13 +124,7 @@ struct RadixTree {
   // (which is normal) then no locking is required within the mutate function
   // itself.
   //
-  // The input parameter to the mutate function will be nullopt if there is no
-  // entry for this word. Otherwise it will contain the value for this word. The
-  // return value of the mutate function is the new value for this word. if the
-  // return value is nullopt then this word is deleted from the RadixTree.
-  //
-  //
-  void Mutate(
+  std::optional<Target> MutateTarget(
       absl::string_view word,
       absl::FunctionRef<std::optional<Target>(std::optional<Target>)> mutate);
 
@@ -189,6 +209,9 @@ struct RadixTree {
   };
 
   Node root_;
+
+  // Gets the path of nodes for the given word, creating it if it doesn't exist.
+  std::deque<Node*> GetOrCreateWordPath(absl::string_view word);
 
   // Restructures tree after a word is deleted from it
   void PostDeleteTreeCleanup(absl::string_view word,
@@ -300,10 +323,44 @@ struct RadixTree {
 };
 
 template <typename Target, bool reverse>
-void RadixTree<Target, reverse>::Mutate(
+void RadixTree<Target, reverse>::SetTarget(absl::string_view word,
+                                           std::optional<Target> new_target) {
+  CHECK(!word.empty()) << "Can't add the target for an empty word";
+  std::deque<Node*> node_path = GetOrCreateWordPath(word);
+  Node* n = node_path.back();
+  if (new_target) {
+    n->target = new_target;
+  } else {
+    // Delete the word from the tree
+    n->target = std::nullopt;
+    PostDeleteTreeCleanup(word, node_path);
+  }
+}
+
+template <typename Target, bool reverse>
+std::optional<Target> RadixTree<Target, reverse>::MutateTarget(
     absl::string_view word,
     absl::FunctionRef<std::optional<Target>(std::optional<Target>)> mutate) {
-  CHECK(!word.empty()) << "Can't mutate the target at an empty word";
+  CHECK(!word.empty()) << "Can't mutate the target for an empty word";
+  std::deque<Node*> node_path = GetOrCreateWordPath(word);
+  Node* n = node_path.back();
+
+  // Apply mutating function
+  std::optional<Target> new_target = mutate(n->target);
+
+  if (new_target) {
+    n->target = new_target;
+  } else {
+    // Delete the word from the tree
+    n->target = std::nullopt;
+    PostDeleteTreeCleanup(word, node_path);
+  }
+  return new_target;
+}
+
+template <typename Target, bool reverse>
+std::deque<typename RadixTree<Target, reverse>::Node*>
+RadixTree<Target, reverse>::GetOrCreateWordPath(absl::string_view word) {
   Node* n = &root_;
   absl::string_view remaining = word;
   std::deque<Node*> node_path{n};
@@ -384,16 +441,7 @@ void RadixTree<Target, reverse>::Mutate(
       node_path.push_back(n);
     }
   }
-
-  std::optional<Target> new_target = mutate(n->target);
-
-  if (new_target) {
-    n->target = new_target;
-  } else {
-    // Delete the word from the tree
-    n->target = std::nullopt;
-    PostDeleteTreeCleanup(word, node_path);
-  }
+  return node_path;
 }
 
 template <typename Target, bool reverse>

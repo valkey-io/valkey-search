@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 from valkey.client import Valkey
 from valkey import ResponseError
 from ft_info_parser import FTInfoParser
+from valkeytestframework.util import waiters
 
 class IndexingTestHelper:
     """
@@ -51,6 +52,10 @@ class IndexingTestHelper:
         parser = IndexingTestHelper.get_ft_info(client, index_name)
         return parser.is_backfill_complete()
 
+    @staticmethod
+    def wait_for_backfill_complete_on_node(client: Valkey, index_name: str) -> bool:
+        """Check if backfill is complete on a single node."""
+        waiters.wait_for_true(lambda: IndexingTestHelper.is_backfill_complete_on_node(client, index_name))
     
     @staticmethod
     def is_indexing_complete_cluster(client: Valkey, index_name: str) -> bool:
@@ -61,7 +66,6 @@ class IndexingTestHelper:
     @staticmethod
     def wait_for_indexing_complete_on_all_nodes(clients: list, index_name: str):
         """Wait for indexing to complete on all provided nodes."""
-        from valkeytestframework.util.waiters import wait_for_true
         
         def check_all_nodes_complete():
             return all(
@@ -69,4 +73,4 @@ class IndexingTestHelper:
                 for client in clients
             )
         
-        wait_for_true(check_all_nodes_complete)
+        waiters.wait_for_true(check_all_nodes_complete)

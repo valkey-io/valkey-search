@@ -39,13 +39,13 @@ namespace valkey_search::query {
 void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
                               const AttributeDataType &attribute_data_type,
                               std::deque<indexes::Neighbor> &neighbors,
-                              const query::VectorSearchParameters &parameters,
+                              const query::SearchParameters &parameters,
                               const std::string &identifier);
 
 void ProcessNonVectorNeighborsForReply(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     std::deque<indexes::Neighbor> &neighbors,
-    const query::VectorSearchParameters &parameters);
+    const query::SearchParameters &parameters);
 
 }  // namespace valkey_search::query
 

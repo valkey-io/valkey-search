@@ -17,12 +17,12 @@
 
 namespace valkey_search::coordinator {
 
-absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
+absl::StatusOr<std::unique_ptr<query::SearchParameters>>
 GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
                               grpc::CallbackServerContext* context);
 
 std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
-    const query::VectorSearchParameters& parameters);
+    const query::SearchParameters& parameters);
 
 }  // namespace valkey_search::coordinator
 

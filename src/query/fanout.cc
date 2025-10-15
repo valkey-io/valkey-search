@@ -63,12 +63,12 @@ struct SearchPartitionResultsTracker {
       results ABSL_GUARDED_BY(mutex);
   int outstanding_requests ABSL_GUARDED_BY(mutex);
   query::SearchResponseCallback callback;
-  std::unique_ptr<VectorSearchParameters> parameters ABSL_GUARDED_BY(mutex);
+  std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
   std::atomic_bool reached_oom{false};
 
-  SearchPartitionResultsTracker(
-      int outstanding_requests, int k, query::SearchResponseCallback callback,
-      std::unique_ptr<VectorSearchParameters> parameters)
+  SearchPartitionResultsTracker(int outstanding_requests, int k,
+                                query::SearchResponseCallback callback,
+                                std::unique_ptr<SearchParameters> parameters)
       : outstanding_requests(outstanding_requests),
         callback(std::move(callback)),
         parameters(std::move(parameters)) {}
@@ -188,7 +188,7 @@ void PerformRemoteSearchRequestAsync(
 absl::Status PerformSearchFanoutAsync(
     ValkeyModuleCtx *ctx, std::vector<FanoutSearchTarget> &search_targets,
     coordinator::ClientPool *coordinator_client_pool,
-    std::unique_ptr<VectorSearchParameters> parameters,
+    std::unique_ptr<SearchParameters> parameters,
     vmsdk::ThreadPool *thread_pool, query::SearchResponseCallback callback) {
   auto request = coordinator::ParametersToGRPCSearchRequest(*parameters);
   // There should be no limit for the fanout search, so put some safe values,
@@ -229,7 +229,7 @@ absl::Status PerformSearchFanoutAsync(
     VMSDK_RETURN_IF_ERROR(query::SearchAsync(
         std::move(local_parameters), thread_pool,
         [tracker](absl::StatusOr<std::deque<indexes::Neighbor>> &neighbors,
-                  std::unique_ptr<VectorSearchParameters> parameters) {
+                  std::unique_ptr<SearchParameters> parameters) {
           if (neighbors.ok()) {
             tracker->AddResults(*neighbors);
           } else {

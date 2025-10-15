@@ -31,7 +31,7 @@ struct TextFieldIndex : public indexes::IndexBase {
       const InternedStringPtr& key, DeletionType deletion_type) override;
   virtual absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
                                             absl::string_view data) override;
-  virtual int RespondWithInfo(RedisModuleCtx* ctx) const override;
+  virtual int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
   virtual bool IsTracked(const InternedStringPtr& key) const override;
   virtual absl::Status SaveIndex(RDBOutputStream& rdb_stream) const override;
 

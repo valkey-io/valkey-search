@@ -20,7 +20,7 @@ namespace valkey_search {
 class ValkeySearch;
 // Declared here to support testing
 void SendReply(ValkeyModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
-               const query::VectorSearchParameters &parameters);
+               query::VectorSearchParameters &parameters);
 namespace async {
 
 struct Result {
@@ -31,6 +31,9 @@ struct Result {
 
 int Reply(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
           [[maybe_unused]] int argc);
+
+int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
+            [[maybe_unused]] int argc);
 
 void Free(ValkeyModuleCtx * /*ctx*/, void *privdata);
 

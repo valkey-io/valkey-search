@@ -11,6 +11,7 @@
 #include "src/keyspace_event_manager.h"
 #include "src/valkey_search.h"
 #include "vmsdk/src/module.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 #define MODULE_VERSION 10000
@@ -20,6 +21,10 @@
  * When the version is released the status will be "ga". */
 #define MODULE_RELEASE_STAGE "rc1"
 
+//
+// Set the minimum acceptable server version
+//
+#define MINIMUM_VALKEY_VERSION vmsdk::MakeValkeyVersion(8, 1, 1)
 namespace {
 
 // Strip the '@' prefix from command categories (e.g., @read)
@@ -92,11 +97,28 @@ vmsdk::module::Options options = {
                           vmsdk::module::kAdminFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTDebugCmd>,
             },
-        }  // namespace
-    ,
+            {
+                .cmd_name = valkey_search::kAggregateCommand,
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kSearchCmdPermissions),
+                .flags = {vmsdk::module::kReadOnlyFlag,
+                          vmsdk::module::kDenyOOMFlag},
+                .cmd_func =
+                    &vmsdk::CreateCommand<valkey_search::FTAggregateCmd>,
+            },
+        },
     .on_load =
         [](ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
            [[maybe_unused]] const vmsdk::module::Options &options) {
+          auto server_version = ValkeyModule_GetServerVersion();
+          if (server_version < MINIMUM_VALKEY_VERSION) {
+            VMSDK_LOG(WARNING, ctx)
+                << "Minimum required server version is "
+                << vmsdk::DisplayValkeyVersion(MINIMUM_VALKEY_VERSION)
+                << ", Current version is "
+                << vmsdk::DisplayValkeyVersion(server_version);
+            return absl::InvalidArgumentError("Invalid version");
+          }
           valkey_search::KeyspaceEventManager::InitInstance(
               std::make_unique<valkey_search::KeyspaceEventManager>());
           valkey_search::ValkeySearch::InitInstance(

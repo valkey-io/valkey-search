@@ -45,6 +45,27 @@ class TestFTCreateConsistency(ValkeySearchClusterTestCaseDebugMode):
             "SCHEMA", "price", "NUMERIC"
         ) == b"OK"
     
+    def test_create_force_index_name_error_retry(self):
+        cluster: ValkeyCluster = self.new_cluster_client()
+        node0: Valkey = self.new_client_for_primary(0)
+        node1: Valkey = self.new_client_for_primary(1)
+        index_name = "index1"
+
+        retry_count_before = node0.info("SEARCH")["search_info_fanout_retry_count"]
+
+        assert node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceIndexNotFoundError 3") == b"OK"
+
+        assert node0.execute_command(
+            "FT.CREATE", index_name,
+            "ON", "HASH",
+            "PREFIX", "1", "doc:",
+            "SCHEMA", "price", "NUMERIC"
+        ) == b"OK"
+
+        retry_count_after = node0.info("SEARCH")["search_info_fanout_retry_count"]
+
+        assert retry_count_before + 3 == retry_count_after, f"Expected retry_count increment by 3, got {retry_count_after - retry_count_before}"
+
     def test_duplicate_creation(self):
         cluster: ValkeyCluster = self.new_cluster_client()
         node0: Valkey = self.new_client_for_primary(0)

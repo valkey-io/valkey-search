@@ -92,21 +92,25 @@ class MockIndex : public indexes::IndexBase {
   MOCK_METHOD(absl::StatusOr<bool>, ModifyRecord,
               (const InternedStringPtr& key, absl::string_view data),
               (override));
-  MOCK_METHOD(bool, IsTracked, (const InternedStringPtr& key),
-              (const, override));
   MOCK_METHOD(std::unique_ptr<data_model::Index>, ToProto, (),
               (const, override));
   MOCK_METHOD(int, RespondWithInfo, (ValkeyModuleCtx * ctx), (const, override));
   MOCK_METHOD(absl::Status, SaveIndex, (RDBChunkOutputStream chunked_out),
               (const, override));
-  MOCK_METHOD(absl::Status, SaveIndexExtension,
-              (RDBChunkOutputStream chunked_out), (const, override));
-  MOCK_METHOD(absl::Status, LoadIndexExtension,
-              (RDBChunkInputStream chunked_in), (override));
-  MOCK_METHOD((void), ForEachTrackedKey,
-              (absl::AnyInvocable<void(const InternedStringPtr& key)> fn),
+  MOCK_METHOD((size_t), GetTrackedKeyCount, (), (const, override));
+  MOCK_METHOD((size_t), GetUnTrackedKeyCount, (), (const, override));
+  MOCK_METHOD(bool, IsTracked, (const InternedStringPtr& key),
               (const, override));
-  MOCK_METHOD((uint64_t), GetRecordCount, (), (const, override));
+  MOCK_METHOD(bool, IsUnTracked, (const InternedStringPtr& key),
+              (const, override));
+  MOCK_METHOD(
+      (absl::Status), ForEachTrackedKey,
+      (absl::AnyInvocable<absl::Status(const InternedStringPtr& key)> fn),
+      (const, override));
+  MOCK_METHOD(
+      (absl::Status), ForEachUnTrackedKey,
+      (absl::AnyInvocable<absl::Status(const InternedStringPtr& key)> fn),
+      (const, override));
 };
 
 class MockKeyspaceEventSubscription : public KeyspaceEventSubscription {

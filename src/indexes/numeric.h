@@ -93,18 +93,21 @@ class Numeric : public IndexBase {
                                     absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
-  bool IsTracked(const InternedStringPtr& key) const override;
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
     return absl::OkStatus();
   }
-  inline void ForEachTrackedKey(
-      absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override {
-    absl::MutexLock lock(&index_mutex_);
-    for (const auto& [key, _] : tracked_keys_) {
-      fn(key);
-    }
-  }
-  uint64_t GetRecordCount() const override;
+
+  size_t GetTrackedKeyCount() const override;
+  size_t GetUnTrackedKeyCount() const override;
+  bool IsTracked(const InternedStringPtr& key) const override;
+  bool IsUnTracked(const InternedStringPtr& key) const override;
+  absl::Status ForEachTrackedKey(
+      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      const override;
+  absl::Status ForEachUnTrackedKey(
+      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      const override;
+
   std::unique_ptr<data_model::Index> ToProto() const override;
 
   const double* GetValue(const InternedStringPtr& key) const

@@ -53,21 +53,24 @@ class IndexBase {
   virtual absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
                                             absl::string_view data) = 0;
   virtual int RespondWithInfo(ValkeyModuleCtx* ctx) const = 0;
-  virtual bool IsTracked(const InternedStringPtr& key) const = 0;
   IndexerType GetIndexerType() const { return indexer_type_; }
   virtual absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const = 0;
-  virtual absl::Status SaveIndexExtension(
-      RDBChunkOutputStream chunked_out) const = 0;
-  virtual absl::Status LoadIndexExtension(RDBChunkInputStream chunked_in) = 0;
+
   virtual std::unique_ptr<data_model::Index> ToProto() const = 0;
-  virtual void ForEachTrackedKey(
-      absl::AnyInvocable<void(const InternedStringPtr&)> fn) const {}
+
+  virtual size_t GetTrackedKeyCount() const = 0;
+  virtual size_t GetUnTrackedKeyCount() const = 0;
+  virtual bool IsTracked(const InternedStringPtr& key) const = 0;
+  virtual bool IsUnTracked(const InternedStringPtr& key) const = 0;
+  virtual absl::Status ForEachTrackedKey(
+      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const = 0;
+  virtual absl::Status ForEachUnTrackedKey(
+      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const = 0;
 
   virtual vmsdk::UniqueValkeyString NormalizeStringRecord(
       vmsdk::UniqueValkeyString input) const {
     return input;
   }
-  virtual uint64_t GetRecordCount() const = 0;
 
  private:
   IndexerType indexer_type_{IndexerType::kNone};

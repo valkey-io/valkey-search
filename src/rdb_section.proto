@@ -38,18 +38,9 @@ message RDBSection {
 
 enum SupplementalContentType {
   SUPPLEMENTAL_CONTENT_UNSPECIFIED = 0;
-
-  // For Vector Indexes, this is the contents of the index. For Non-vector indexes this is empty (just a header)
-  SUPPLEMENTAL_CONTENT_INDEX_CONTENT = 1;  // Header: IndexContentHeader
-
-  // For HNSW Indexes, this contains HNSWLib internal ID to key mapping
-  SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP = 2;  // Header: KeyToIDMappingHeader
-
-  // V2. Only for non-vector indexes. Contents of the index
-  SUPPLEMENTAL_CONTENT_INDEX_EXTENSION = 3; // V2 extension for index contents, Header: IndexContentHeader
-
-  // V2. Saved Mutation Queue
-  SUPPLEMENTAL_CONTENT_MUTATION_QUEUE = 4; // V2 saved mutation queue, Header: MutationQueueHeader
+  SUPPLEMENTAL_CONTENT_INDEX_CONTENT = 1;
+  SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP = 2;
+  SUPPLEMENTAL_CONTENT_INDEX_EXTENSION = 3;
 }
 
 message IndexContentHeader {

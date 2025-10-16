@@ -6,7 +6,7 @@ import subprocess
 import shutil
 import socket
 from valkey import ResponseError, Valkey
-from valkey_search_test_case import ValkeySearchTestCaseBase, ValkeySearchTestCaseDebugMode
+from valkey_search_test_case import ValkeySearchTestCaseDebugMode, ValkeySearchTestCaseDebugMode
 from valkeytestframework.conftest import resource_port_tracker
 from indexes import *
 import pytest
@@ -64,6 +64,7 @@ def load_data(client: Valkey.client):
     records = make_data()
     for i in range(0, len(records)):
         index.write_data(client, i, records[i])
+    return len(records)
 
 def verify_data(client: Valkey.client):
     '''
@@ -77,11 +78,23 @@ def verify_data(client: Valkey.client):
 
 def do_save_restore_test(test, write_v2: bool, read_v2: bool):
     index.create(test.client, True)
-    load_data(test.client)
+    key_count = load_data(test.client)
     verify_data(test.client)
-
+    test.client.config_set("search.rdb-validate-on-write", "yes")
     test.client.execute_command("save")
     os.environ["SKIPLOGCLEAN"] = "1"
+    test.client.execute_command("CONFIG SET search.info-developer-visible yes")
+    i = test.client.info("search")
+    print("Info after save: ", i)
+    writes = [
+        i["search_rdb_save_sections"],
+        i["search_rdb_save_keys"],
+        i["search_rdb_save_mutation_entries"],
+     ]
+    if write_v2:
+        assert writes == [5, key_count, 0]
+    else:
+        assert writes == [4, 0, 0]
     test.server.restart(remove_rdb=False)
     time.sleep(5)
     print(test.client.ping())
@@ -89,24 +102,22 @@ def do_save_restore_test(test, write_v2: bool, read_v2: bool):
     test.client.execute_command("CONFIG SET search.info-developer-visible yes")
 
     i = test.client.info("search")
-    print("Info: ", i)
+    print("Info after load: ", i)
     reads = [
         i["search_rdb_load_sections"],
-        i["search_rdb_load_skipped_sections"],
-        i["search_rdb_load_tags_tracked"],
-        i["search_rdb_load_tags_untracked"],
-        i["search_rdb_load_numbers_tracked"],
-        i["search_rdb_load_numbers_untracked"],
+        i["search_rdb_load_sections_skipped"],
+        i["search_rdb_load_keys"],
+        i["search_rdb_load_mutation_entries"],
      ]
     if not write_v2:
-        assert reads == [4, 0, 0, 0, 0, 0]
+        assert reads == [4, 0, 0, 0]
     elif read_v2:
-        assert reads == [7, 0, 12, 1, 12, 1]
+        assert reads == [5, 0, key_count, 0]
     else:
-        assert reads == [7, 3, 0, 0, 0, 0]
+        assert reads == [5, 1, 0, 0]
     
 
-class TestSaveRestore_v1_v1(ValkeySearchTestCaseBase):
+class TestSaveRestore_v1_v1(ValkeySearchTestCaseDebugMode):
     def append_startup_args(self, args):
         args["search.rdb_write_v2"] = "no"
         args["search.rdb_read_v2"] = "no"
@@ -115,7 +126,7 @@ class TestSaveRestore_v1_v1(ValkeySearchTestCaseBase):
     def test_saverestore_v1_v1(self):
         do_save_restore_test(self, False, False)
 
-class TestSaveRestore_v1_v2(ValkeySearchTestCaseBase):
+class TestSaveRestore_v1_v2(ValkeySearchTestCaseDebugMode):
     def append_startup_args(self, args):
         args["search.rdb_write_v2"] = "no"
         args["search.rdb_read_v2"] = "yes"
@@ -124,7 +135,7 @@ class TestSaveRestore_v1_v2(ValkeySearchTestCaseBase):
     def test_saverestore_v1_v2(self):
         do_save_restore_test(self, False, True)
 
-class TestSaveRestore_v2_v1(ValkeySearchTestCaseBase):
+class TestSaveRestore_v2_v1(ValkeySearchTestCaseDebugMode):
     def append_startup_args(self, args):
         args["search.rdb_write_v2"] = "yes"
         args["search.rdb_read_v2"] = "no"
@@ -133,7 +144,7 @@ class TestSaveRestore_v2_v1(ValkeySearchTestCaseBase):
     def test_saverestore_v2_v1(self):
         do_save_restore_test(self, True, False)
 
-class TestSaveRestore_v2_v2(ValkeySearchTestCaseBase):
+class TestSaveRestore_v2_v2(ValkeySearchTestCaseDebugMode):
     def append_startup_args(self, args):
         args["search.rdb_write_v2"] = "yes"
         args["search.rdb_read_v2"] = "yes"

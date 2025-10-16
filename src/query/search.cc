@@ -394,27 +394,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> DoSearch(
   ++Metrics::GetStats().time_slice_queries;
   // Handle non vector queries first where attribute_alias is empty.
   if (parameters.IsNonVectorQuery()) {
-<<<<<<< HEAD
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
-    size_t qualified_entries = EvaluateFilterAsPrimary(
-        parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
-        false);
-    // Collect matching keys
-    std::deque<indexes::Neighbor> neighbors;
-    while (!entries_fetchers.empty()) {
-      auto fetcher = std::move(entries_fetchers.front());
-      entries_fetchers.pop();
-      auto iterator = fetcher->Begin();
-      while (!iterator->Done()) {
-        const InternedStringPtr &label = **iterator;
-        neighbors.push_back(indexes::Neighbor{label, 0.0f});
-        iterator->Next();
-      }
-    }
-    return neighbors;
-=======
     return SearchNonVectorQuery(parameters);
->>>>>>> main
   }
   VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
                                          parameters.attribute_alias));

@@ -100,8 +100,7 @@ bool PrefilterEvaluator::EvaluateNumeric(
   return predicate.Evaluate(value);
 }
 
-bool InlineVectorEvaluator::EvaluateText(
-    const query::TextPredicate &predicate) {
+bool PrefilterEvaluator::EvaluateText(const query::TextPredicate &predicate) {
   // CHECK(key_);
   // auto text = predicate.GetIndex()->GetRawValue(*key_);
   // return predicate.Evaluate(*text);

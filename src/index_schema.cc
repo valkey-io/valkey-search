@@ -100,6 +100,9 @@ IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
   scan_ctx = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);
   ValkeyModule_SelectDb(scan_ctx.get(), db_num);
   db_size = ValkeyModule_DbSize(scan_ctx.get());
+  VMSDK_LOG(NOTICE, ctx) << "Starting backfill for index schema in DB "
+                         << db_num << ": " << name << " (size: " << db_size
+                         << ")";
 }
 
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
@@ -1156,7 +1159,7 @@ void IndexSchema::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
 
 void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
   if (loaded_v2_) {
-    VMSDK_LOG(NOTICE, ctx) << "New format RDB load completed, "
+    VMSDK_LOG(NOTICE, ctx) << "RDB load completed, "
                            << " Mutation Queue contains "
                            << tracked_mutated_records_.size() << " entries."
                            << (backfill_job_.Get().has_value()

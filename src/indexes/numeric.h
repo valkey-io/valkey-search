@@ -97,9 +97,6 @@ class Numeric : public IndexBase {
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
     return absl::OkStatus();
   }
-  absl::Status SaveIndexExtension(
-      RDBChunkOutputStream chunked_out) const override;
-  absl::Status LoadIndexExtension(RDBChunkInputStream chunked_in) override;
   inline void ForEachTrackedKey(
       absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override {
     absl::MutexLock lock(&index_mutex_);
@@ -168,9 +165,6 @@ class Numeric : public IndexBase {
       bool negate) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  private:
-  absl::StatusOr<bool> AddRecordInternal(const InternedStringPtr& key,
-                                         std::optional<double> data);
-
   mutable absl::Mutex index_mutex_;
   InternedStringMap<double> tracked_keys_ ABSL_GUARDED_BY(index_mutex_);
   // untracked keys is needed to support negate filtering

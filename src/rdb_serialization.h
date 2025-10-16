@@ -19,7 +19,6 @@
 #include "absl/strings/string_view.h"
 #include "src/rdb_section.pb.h"
 #include "third_party/hnswlib/iostream.h"
-#include "type_conversions.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -72,10 +71,6 @@ inline std::string HumanReadableSemanticVersion(uint64_t semantic_version) {
                          semantic_version & 0xFF);
 }
 
-//#define DBG(name, x) \
-//  VMSDK_LOG(WARNING, nullptr) << "SafeRDB " << name << " : " << x
-#define DBG(name, x)
-
 /* SafeRDB wraps a ValkeyModuleIO object and performs IO error checking,
  * returning absl::StatusOr to force error handling on the caller side. */
 class SafeRDB {
@@ -84,7 +79,6 @@ class SafeRDB {
 
   virtual absl::StatusOr<size_t> LoadSizeT() {
     auto val = ValkeyModule_LoadUnsigned(rdb_);
-    DBG("LoadSizeT", val);
     if (ValkeyModule_IsIOError(rdb_)) {
       return absl::InternalError("ValkeyModule_LoadUnsigned failed");
     }
@@ -93,7 +87,6 @@ class SafeRDB {
 
   virtual absl::StatusOr<unsigned int> LoadUnsigned() {
     auto val = ValkeyModule_LoadUnsigned(rdb_);
-    DBG("LoadUnSigned", val);
     if (ValkeyModule_IsIOError(rdb_)) {
       return absl::InternalError("ValkeyModule_LoadUnsigned failed");
     }
@@ -102,7 +95,6 @@ class SafeRDB {
 
   virtual absl::StatusOr<int> LoadSigned() {
     auto val = ValkeyModule_LoadSigned(rdb_);
-    DBG("LoadSigned", val);
     if (ValkeyModule_IsIOError(rdb_)) {
       return absl::InternalError("ValkeyModule_LoadSigned failed");
     }
@@ -111,7 +103,6 @@ class SafeRDB {
 
   virtual absl::StatusOr<double> LoadDouble() {
     auto val = ValkeyModule_LoadDouble(rdb_);
-    DBG("LoadDouble", val);
     if (ValkeyModule_IsIOError(rdb_)) {
       return absl::InternalError("ValkeyModule_LoadDouble failed");
     }
@@ -120,7 +111,6 @@ class SafeRDB {
 
   virtual absl::StatusOr<vmsdk::UniqueValkeyString> LoadString() {
     auto str = vmsdk::UniqueValkeyString(ValkeyModule_LoadString(rdb_));
-    DBG("Load string", vmsdk::StringToHex(vmsdk::ToStringView(str.get())));
     if (ValkeyModule_IsIOError(rdb_)) {
       return absl::InternalError("ValkeyModule_LoadString failed");
     }
@@ -130,7 +120,6 @@ class SafeRDB {
 
   virtual absl::Status SaveSizeT(size_t val) {
     ValkeyModule_SaveUnsigned(rdb_, val);
-    DBG("SaveSizeT", val);
     if (ValkeyModule_IsIOError(rdb_)) {
       return absl::InternalError("ValkeyModule_SaveUnsigned failed");
     }
@@ -139,7 +128,6 @@ class SafeRDB {
 
   virtual absl::Status SaveUnsigned(unsigned int val) {
     ValkeyModule_SaveUnsigned(rdb_, val);
-    DBG("SaveUnsigned", val);
     if (ValkeyModule_IsIOError(rdb_)) {
       return absl::InternalError("ValkeyModule_SaveUnsigned failed");
     }
@@ -148,7 +136,6 @@ class SafeRDB {
 
   virtual absl::Status SaveSigned(int val) {
     ValkeyModule_SaveSigned(rdb_, val);
-    DBG("SaveSigned", val);
     if (ValkeyModule_IsIOError(rdb_)) {
       return absl::InternalError("ValkeyModule_SaveSigned failed");
     }
@@ -157,7 +144,6 @@ class SafeRDB {
 
   virtual absl::Status SaveDouble(double val) {
     ValkeyModule_SaveDouble(rdb_, val);
-    DBG("SaveDouble", val);
     if (ValkeyModule_IsIOError(rdb_)) {
       return absl::InternalError("ValkeyModule_SaveDouble failed");
     }
@@ -166,7 +152,6 @@ class SafeRDB {
 
   virtual absl::Status SaveStringBuffer(absl::string_view buf) {
     ValkeyModule_SaveStringBuffer(rdb_, buf.data(), buf.size());
-    DBG("SaveString", vmsdk::StringToHex(buf));
     if (ValkeyModule_IsIOError(rdb_)) {
       return absl::InternalError("ValkeyModule_SaveStringBuffer failed");
     }

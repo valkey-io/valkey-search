@@ -7,12 +7,20 @@
 #ifndef VALKEYSEARCH_UTILS_SCANNER_H
 #define VALKEYSEARCH_UTILS_SCANNER_H
 
+<<<<<<< HEAD
+=======
+#include <absl/log/check.h>
+
+>>>>>>> main
 #include <cctype>
 #include <cuchar>
 #include <optional>
 
 #include "absl/strings/string_view.h"
+<<<<<<< HEAD
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+=======
+>>>>>>> main
 
 namespace valkey_search {
 namespace utils {
@@ -75,7 +83,11 @@ class Scanner {
   }
 
   bool PopByte(Char c) {
+<<<<<<< HEAD
     ValkeyModule_Assert(c != kEOF);
+=======
+    CHECK(c != kEOF);
+>>>>>>> main
     if (PeekByte() == c) {
       pos_++;
       return true;
@@ -168,9 +180,15 @@ class Scanner {
     if (ec == std::errc::invalid_argument) {
       return std::nullopt;
     }
+<<<<<<< HEAD
     ValkeyModule_Assert(ec == std::errc());
     pos_ = ptr - sv_.data();
     ValkeyModule_Assert(pos_ <= sv_.size());
+=======
+    CHECK(ec == std::errc());
+    pos_ = ptr - sv_.data();
+    CHECK(pos_ <= sv_.size());
+>>>>>>> main
 #else
     absl::string_view s(sv_);
     s.remove_prefix(pos_);
@@ -181,7 +199,11 @@ class Scanner {
       return std::nullopt;
     }
     pos_ += scanned - null_terminated.data();
+<<<<<<< HEAD
     ValkeyModule_Assert(pos_ <= sv_.size());
+=======
+    CHECK(pos_ <= sv_.size());
+>>>>>>> main
 #endif
     return d;
   }
@@ -216,7 +238,11 @@ class Scanner {
     } else {
       // std::cerr << "Found invalid codepoint " << codepoint << "(" << std::hex
       // << size_t(codepoint) << ")\n";
+<<<<<<< HEAD
       ValkeyModule_Assert(false);
+=======
+      CHECK(false);
+>>>>>>> main
     }
     return s;
   }

@@ -155,23 +155,25 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
 
 absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                         int argc) {
+  std::string msg;
   if (!vmsdk::config::IsDebugModeEnabled()) {
     // Pretend like we don't exist
-    std::ostringstream msg;
-    msg << "ERR unknown command '" << vmsdk::ToStringView(argv[0])
-        << "', with args beginning with:";
+    msg = "ERR unknown command '";
+    msg += vmsdk::ToStringView(argv[0]);
+    msg += "', with args beginning with:";
     for (int i = 1; i < argc; ++i) {
-      msg << " '" << vmsdk::ToStringView(argv[i]) << "'";
+      msg += " '";
+      msg += vmsdk::ToStringView(argv[i]);
+      msg += "'";
     }
-    ValkeyModule_ReplyWithError(ctx, msg.str().data());
+    ValkeyModule_ReplyWithError(ctx, msg.data());
     return absl::OkStatus();
   }
-  std::string msg;
   for (int i = 1; i < argc; ++i) {
     msg += " ";
-    msg += std::string(vmsdk::ToStringView(argv[i]));
+    msg += vmsdk::ToStringView(argv[i]);
   }
-  VMSDK_LOG(WARNING, ctx) << "FT._DEBUG" << msg;
+  VMSDK_LOG(WARNING, ctx) << "FT._DEBUG: " << msg;
   vmsdk::ArgsIterator itr{argv, argc};
   itr.Next();  // Skip the command name
   std::string keyword;

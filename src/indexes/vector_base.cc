@@ -79,21 +79,21 @@ std::unique_ptr<hnswlib::SpaceInterface<T>> CreateSpace(
 }  // namespace
 
 namespace indexes {
-bool InlineVectorEvaluator::Evaluate(const query::Predicate &predicate,
-                                     const InternedStringPtr &key) {
+bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
+                                  const InternedStringPtr &key) {
   key_ = &key;
   auto res = predicate.Evaluate(*this);
   key_ = nullptr;
   return res;
 }
 
-bool InlineVectorEvaluator::EvaluateTags(const query::TagPredicate &predicate) {
+bool PrefilterEvaluator::EvaluateTags(const query::TagPredicate &predicate) {
   bool case_sensitive = true;
   auto tags = predicate.GetIndex()->GetValue(*key_, case_sensitive);
   return predicate.Evaluate(tags, case_sensitive);
 }
 
-bool InlineVectorEvaluator::EvaluateNumeric(
+bool PrefilterEvaluator::EvaluateNumeric(
     const query::NumericPredicate &predicate) {
   CHECK(key_);
   auto value = predicate.GetIndex()->GetValue(*key_);
@@ -489,24 +489,27 @@ VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
   return ComputeDistanceFromRecordImpl(internal_id, query);
 }
 
-void VectorBase::AddPrefilteredKey(
+bool VectorBase::AddPrefilteredKey(
     absl::string_view query, uint64_t count, const InternedStringPtr &key,
     std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
-    absl::flat_hash_set<hnswlib::labeltype> &top_keys) const {
+    absl::flat_hash_set<const char *> &top_keys) const {
   auto result = ComputeDistanceFromRecord(key, query);
-  if (!result.ok() || top_keys.contains(result.value().second)) {
-    return;
+  if (!result.ok()) {
+    return false;
   }
   if (results.size() < count) {
     results.emplace(result.value());
-    top_keys.insert(result.value().second);
-  } else if (result.value().first < results.top().first) {
+    return true;
+  }
+  if (result.value().first < results.top().first) {
     auto top = results.top();
-    top_keys.erase(top.second);
+    auto vector_key = GetKeyDuringSearch(top.second);
+    top_keys.erase(vector_key.value()->Str().data());
     results.pop();
     results.emplace(result.value());
-    top_keys.insert(result.value().second);
+    return true;
   }
+  return false;
 }
 
 vmsdk::UniqueValkeyString VectorBase::NormalizeStringRecord(

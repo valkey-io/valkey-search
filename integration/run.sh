@@ -51,6 +51,11 @@ while [ $# -gt 0 ]; do
     print_usage
     exit 0
     ;;
+  --debug-on-crash)
+    shift || true
+    export DEBUG_ON_CRASH="yes"
+    LOG_INFO "Debug-on-crash enabled"
+    ;;
   *)
     print_usage
     exit 1

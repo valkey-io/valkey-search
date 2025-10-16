@@ -28,6 +28,7 @@ Usage: build.sh [options...]
     --configure                       Run cmake stage (aka configure stage).
     --verbose | -v                    Run verbose build.
     --debug                           Build for debug version.
+    --debug-on-crash                  Enable interactive gdb debugging on a valkey-server crash for oss integration tests (single test mode only).
     --clean                           Clean the current build configuration (debug or release).
     --format                          Applies clang-format. (Run in dev container environment to ensure correct clang-format version)
     --run-tests                       Run all tests. Optionally, pass a test name to run: "--run-tests=<test-name>".
@@ -150,6 +151,13 @@ while [ $# -gt 0 ]; do
     --help | -h)
         print_usage
         exit 0
+        ;;
+    --debug-on-crash)
+        export DEBUG_ON_CRASH="yes"
+        BUILD_CONFIG="debug"  # Force debug build for better debugging
+        shift || true
+        echo "Debug-on-crash enabled - will drop into gdb on valkey-server crash"
+        echo "Automatically enabling debug build for better debugging symbols"
         ;;
     *)
         echo "Unknown argument: ${arg}"
@@ -405,6 +413,9 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     fi
     if [[ "${SAN_BUILD}" == "thread" ]]; then
         params="${params} --tsan"
+    fi
+    if [[ "${DEBUG_ON_CRASH}" == "yes" ]]; then
+        params="${params} --debug-on-crash"
     fi
     # Run will run ASan or normal tests based on the environment variable SAN_BUILD
     ./run.sh ${params}

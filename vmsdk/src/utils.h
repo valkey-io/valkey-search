@@ -86,6 +86,10 @@ int RunByMain(absl::AnyInvocable<void()> fn, bool force_async = false);
 
 std::string WrongArity(absl::string_view cmd);
 
+inline std::ostream &operator<<(std::ostream &os, ValkeyModuleString *s) {
+  return os << (*(std::string *)s);
+}
+
 //
 // Parse out a hash tag from a string view
 //
@@ -96,12 +100,26 @@ bool MultiOrLua(ValkeyModuleCtx *ctx);
 
 size_t DisplayAsSIBytes(size_t value, char *buffer, size_t buffer_size);
 
+std::string DisplayValkeyVersion(int version_word);
+
+inline int MakeValkeyVersion(int major, int minor, int patch) {
+  CHECK(major < 256 && minor < 256 && patch < 256);
+  return (major << 16) | (minor << 8) | patch;
+}
+
 // Checks if a numeric value falls within an optional inclusive range [min,
 // max]. The range is inclusive: a value is considered valid if min <= value <=
 // max. If either boundary is not specified (`std::nullopt`), that check is
 // skipped.
 absl::Status VerifyRange(long long num_value, std::optional<long long> min,
                          std::optional<long long> max);
+std::optional<std::string> JsonUnquote(absl::string_view sv);
+
+struct JsonQuotedStringView {
+  absl::string_view view_;
+  friend std::ostream &operator<<(std::ostream &os,
+                                  const JsonQuotedStringView &js);
+};
 
 #define VMSDK_NON_COPYABLE(ClassName)    \
   ClassName(const ClassName &) = delete; \

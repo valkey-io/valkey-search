@@ -49,6 +49,7 @@
 namespace valkey_search::coordinator {
 
 CONTROLLED_SIZE_T(ForceRemoteFailCount, 0);
+CONTROLLED_SIZE_T(ForceIndexNotFoundError, 0);
 
 grpc::ServerUnaryReactor* Service::GetGlobalMetadata(
     grpc::CallbackServerContext* context,
@@ -131,7 +132,7 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
       std::move(*vector_search_parameters), reader_thread_pool_,
       [response, reactor, latency_sample = std::move(latency_sample)](
           auto& neighbors,
-          std::unique_ptr<query::VectorSearchParameters> parameters) mutable {
+          std::unique_ptr<query::SearchParameters> parameters) mutable {
         if (!neighbors.ok()) {
           reactor->Finish(ToGrpcStatus(neighbors.status()));
           RecordSearchMetrics(true, std::move(latency_sample));
@@ -191,6 +192,18 @@ Service::GenerateInfoResponse(
   uint32_t db_num = request.db_num();
   std::string index_name = request.index_name();
   coordinator::InfoIndexPartitionResponse response;
+  // test path: simulate index not found error
+  if (ForceIndexNotFoundError.GetValue() > 0) {
+    ForceIndexNotFoundError.Decrement();
+    std::string test_error_str =
+        "Test Error: Index " + index_name + " not found";
+    response.set_exists(false);
+    response.set_index_name(index_name);
+    response.set_error(test_error_str);
+    response.set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
+    grpc::Status error_status(grpc::StatusCode::NOT_FOUND, test_error_str);
+    return std::make_pair(error_status, response);
+  }
   auto status_or_schema =
       SchemaManager::Instance().GetIndexSchema(db_num, index_name);
   if (!status_or_schema.ok()) {
@@ -206,8 +219,7 @@ Service::GenerateInfoResponse(
   IndexSchema::InfoIndexPartitionData data =
       schema->GetInfoIndexPartitionData();
 
-  std::optional<uint64_t> fingerprint;
-  std::optional<uint32_t> version;
+  std::optional<coordinator::IndexFingerprintVersion> index_fingerprint_version;
 
   auto global_metadata =
       coordinator::MetadataManager::Instance().GetGlobalMetadata();
@@ -217,8 +229,9 @@ Service::GenerateInfoResponse(
       global_metadata->type_namespace_map().at(kSchemaManagerMetadataTypeName);
   CHECK(entry_map.entries().contains(index_name));
   const auto& entry = entry_map.entries().at(index_name);
-  fingerprint = entry.fingerprint();
-  version = entry.version();
+  index_fingerprint_version.emplace();
+  index_fingerprint_version->set_fingerprint(entry.fingerprint());
+  index_fingerprint_version->set_version(entry.version());
 
   response.set_exists(true);
   response.set_index_name(index_name);
@@ -233,11 +246,9 @@ Service::GenerateInfoResponse(
   response.set_mutation_queue_size(data.mutation_queue_size);
   response.set_recent_mutations_queue_delay(data.recent_mutations_queue_delay);
   response.set_state(data.state);
-  if (fingerprint.has_value()) {
-    response.set_schema_fingerprint(fingerprint.value());
-  }
-  if (version.has_value()) {
-    response.set_version(version.value());
+  if (index_fingerprint_version.has_value()) {
+    *response.mutable_index_fingerprint_version() =
+        std::move(index_fingerprint_version.value());
   }
   return std::make_pair(grpc::Status::OK, response);
 }

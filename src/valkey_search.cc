@@ -28,7 +28,6 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/coordinator/server.h"
 #include "src/coordinator/util.h"
-#include "src/index_schema.h"
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
@@ -570,6 +569,23 @@ static vmsdk::info_field::Integer coordinator_last_time_since_healthy_metadata(
           return ValkeySearch::Instance().UsingCoordinator();
         }));
 
+static vmsdk::info_field::Integer
+    coordinator_metadata_reconciliation_completed_count(
+        "coordinator", "coordinator_metadata_reconciliation_completed_count",
+        vmsdk::info_field::IntegerBuilder()
+            .App()
+            .Computed([]() -> int64_t {
+              // prevent failure in unit tests
+              if (!coordinator::MetadataManager::IsInitialized()) {
+                return 0;
+              }
+              return coordinator::MetadataManager::Instance()
+                  .GetMetadataReconciliationCompletedCount();
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator();
+            }));
+
 static vmsdk::info_field::String
     coordinator_client_get_global_metadata_success_latency_usec(
         "coordinator",
@@ -758,6 +774,12 @@ static vmsdk::info_field::Integer info_fanout_fail_count(
     "fanout", "info_fanout_fail_count",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
       return Metrics::GetStats().info_fanout_fail_cnt;
+    }));
+
+static vmsdk::info_field::Integer pause_handle_cluster_message_round_cnt(
+    "fanout", "pause_handle_cluster_message_round_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().pause_handle_cluster_message_round_cnt;
     }));
 
 #ifdef DEBUG_INFO

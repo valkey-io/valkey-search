@@ -112,3 +112,4 @@ cd ${CI_DIR}
 
 prepare_env
 build_and_run_tests
+echo It ran stuff > /workspace/test-results/x.y

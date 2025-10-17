@@ -51,7 +51,7 @@ class RecordsMapValue {
 
 using RecordsMap = absl::flat_hash_map<absl::string_view, RecordsMapValue>;
 
-std::ostream &operator<<(std::ostream &os, const RecordsMap &map) {
+inline std::ostream &operator<<(std::ostream &os, const RecordsMap &map) {
   for (const auto &[name, value] : map) {
     os << name << "=>" << value << ",";
   }

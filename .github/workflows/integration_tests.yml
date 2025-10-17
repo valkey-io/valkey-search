@@ -31,7 +31,7 @@ jobs:
         run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
       - name: Run Integration Tests
-        run: docker run --privileged --rm \
+        run: docker run --privileged --rm
           --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results
           --mount type
           -v "$(pwd):/workspace"

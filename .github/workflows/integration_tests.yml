@@ -32,13 +32,13 @@ jobs:
 
       - name: Run Integration Tests
         run: docker run --privileged --rm \
-          --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results \
+          --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results
           --mount type
-          -v "$(pwd):/workspace" \
-          --user "ubuntu:ubuntu" \
-          presubmit-image \
-          sudo ci/build_ubuntu.sh \
-          --run-integration-tests \
+          -v "$(pwd):/workspace"
+          --user "ubuntu:ubuntu"
+          presubmit-image
+          sudo ci/build_ubuntu.sh
+          --run-integration-tests
           --retries=3
 
       # Upload test results as artifacts

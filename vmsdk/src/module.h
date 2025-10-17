@@ -23,6 +23,10 @@
   extern "C" {                                                              \
   int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,  \
                           int argc) {                                       \
+    if (!vmsdk::verifyLoadedOnlyOnce()) {                                   \
+      VMSDK_LOG(NOTICE, ctx) << "Module cannot be loaded more than once";   \
+      return VALKEYMODULE_ERR;                                              \
+    }                                                                       \
     vmsdk::TrackCurrentAsMainThread();                                      \
     if (auto status = vmsdk::module::OnLoad(ctx, argv, argc, options);      \
         status != VALKEYMODULE_OK) {                                        \

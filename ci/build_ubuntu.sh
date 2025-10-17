@@ -88,10 +88,10 @@ function prepare_env() {
 function save_test_output() {
     echo Saving Test Output, CURRENT DIRECTORY IS ${PWD}
     echo ROOT DIRECTORY IS ${ROOT_DIR}
-    cp ${VALKEY_JSON_PATH} test-results
-    cp ${VALKEY_SERVER_PATH} test-results
-    cp ${VALKEY_SEARCH_PATH } test-results
-    cp /workspace/.build-release/integration/.valkey-test-framework test-results
+    cp /workspace/.build-release/valkey-json/build/src/libjson.so test-results
+    cp /workspace/.build-release/valkey-server/.build-release/bin/valkey-server test-results
+    cp /workspace/.build-release/libsearch.so test-results
+    cp -r /workspace/.build-release/integration/.valkey-test-framework test-results
     echo Copied `find /workspace/.build-release/integration/.valkey-test-framework -print' | wc -l` test files to output directory
     ls /workspace/.build-release/integration/.valkey-test-framework
     ls /workspace/test-results

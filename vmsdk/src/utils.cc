@@ -54,10 +54,10 @@ int StopTimerFromBackgroundThread(
 }
 
 bool verifyLoadedOnlyOnce() {
-    static bool prev_loaded = false;
-    if (prev_loaded) return false;
-    prev_loaded = true;
-    return true;
+  static bool prev_loaded = false;
+  if (prev_loaded) return false;
+  prev_loaded = true;
+  return true;
 }
 
 void TrackCurrentAsMainThread() {

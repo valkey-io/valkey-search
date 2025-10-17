@@ -45,4 +45,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: integration-test-results
-          path: $(pwd)/test-results/
+          path: test-results

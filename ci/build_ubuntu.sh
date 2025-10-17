@@ -112,4 +112,8 @@ cd ${CI_DIR}
 
 prepare_env
 build_and_run_tests
+echo CURRENT DIRECTORY IS ${PWD}
 echo It ran stuff > /workspace/test-results/x.y
+echo COPIED STUFF TO OUTPUT FILES
+ls /workspace/test-results
+echo `ls test-results`

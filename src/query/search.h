@@ -57,7 +57,7 @@ struct ReturnAttribute {
   vmsdk::UniqueValkeyString alias;
 };
 
-std::ostream& operator<<(std::ostream& os, const ReturnAttribute& r) {
+inline std::ostream& operator<<(std::ostream& os, const ReturnAttribute& r) {
   os << vmsdk::ToStringView(r.identifier.get());
   if (r.alias) {
     os << "[alias: " << vmsdk::ToStringView(r.alias.get()) << ']';

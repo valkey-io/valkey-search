@@ -595,6 +595,8 @@ FilterParser::BuildSingleTextPredicate(const std::string& field_name,
 
 static const std::string kQuerySyntaxChars = "$%*()-{}|;:@\"'[]~";
 
+// What we use in ingestion: ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|"
+
 bool IsSpecialSyntaxChar(char c) {
   return kQuerySyntaxChars.find(c) != std::string::npos;
 }
@@ -627,10 +629,8 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::string& field_for_default) {
   std::string curr;
   bool escaped = false;
   bool in_quotes = false;
-
   while (!IsEnd()) {
     char c = Peek();
-    
     // Handle quote termination
     if (c == '"' && !escaped) {
       if (!in_quotes) {
@@ -644,9 +644,7 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::string& field_for_default) {
         break;
       }
     }
-    
-    // Handle escaping
-    // TODO: validate
+    // TODO: test and confirm this code handles escaped chars.
     if (escaped) {
       curr.push_back(c);
       escaped = false;
@@ -659,15 +657,16 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::string& field_for_default) {
       continue;
     }
     // Handle wildcard breaking (unquoted only)
-    // TODO: curr.size() > 1 && curr != "*" is redundant.
-    // TODO: Can we do this smarter? or do we have to do the same for fuzzy?
-    if (!in_quotes && c == '*' && curr.size() > 1 && curr != "*") {
-      curr.push_back(c);
-      ++pos_;
-      VMSDK_RETURN_IF_ERROR(push_token(curr));
+    // TODO: Do we have to do the same for fuzzy?
+    // if (!in_quotes && !escaped && c == '*' && curr.size() > 1) {
+    //   curr.push_back(c);
+    //   ++pos_;
+    //   VMSDK_RETURN_IF_ERROR(push_token(curr));
+    //   break;
+    // }
+    if (!in_quotes && !escaped && c == '-' && curr.size() == 0) {
       break;
     }
-
     if (!in_quotes && !escaped && (c == ')' || c == '|' || c == '(' || c == '@')) {
       VMSDK_RETURN_IF_ERROR(push_token(curr));
       break;
@@ -684,7 +683,7 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::string& field_for_default) {
     // }
 
     // TODO: I have concerns with punctuation including characters which should NOT be delimiters in queries.
-    if (std::isspace(static_cast<unsigned char>(c)) || lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())) {
+    if (!(c == '%' || c == '*') && (std::isspace(static_cast<unsigned char>(c)) || (!escaped && lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())))) {
     // if (std::isspace(static_cast<unsigned char>(c))) {
       VMSDK_RETURN_IF_ERROR(push_token(curr));
       // Handle the case of non exact phrase.

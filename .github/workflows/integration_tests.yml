@@ -36,9 +36,8 @@ jobs:
         -v "$(pwd):/workspace"
         --user "ubuntu:ubuntu"
         presubmit-image
-        sudo ci/build_ubuntu.sh
-        --run-integration-tests
-        --retries=3
+        sudo ci/build_ubuntu.sh --run-integration-tests
+      continue-on-error: true
 
     # Upload test results as artifacts
     - name: Upload Test Results

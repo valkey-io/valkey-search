@@ -86,16 +86,13 @@ function prepare_env() {
 }
 
 function save_test_output() {
-    echo Saving Test Output, CURRENT DIRECTORY IS ${PWD}
-    echo ROOT DIRECTORY IS ${ROOT_DIR}
-    cp /workspace/.build-release/valkey-json/build/src/libjson.so test-results
-    cp /workspace/.build-release/valkey-server/.build-release/bin/valkey-server test-results
-    cp /workspace/.build-release/libsearch.so test-results
-    cp -r /workspace/.build-release/integration/.valkey-test-framework test-results
-    echo Copied `find /workspace/.build-release/integration/.valkey-test-framework -print' | wc -l` test files to output directory
-    ls /workspace/.build-release/integration/.valkey-test-framework
-    ls /workspace/test-results
-
+    local result_dir=${ROOT_DIR}/.build-release${san_suffix}
+    echo Results Directory is ${result_dir}
+    cp ${result_dir}/valkey-json/build/src/libjson.so ${ROOT_DIR}/test-results
+    cp ${result_dir}/valkey-server/.build-release/bin/valkey-server ${ROOT_DIR}/test-results
+    cp ${result_dir}/libsearch.so ${ROOT_DIR}/test-results
+    cp -r -P ${result_dir}/integration/.valkey-test-framework ${ROOT_DIR}/test-results
+    mv ${ROOT_DIR}/test-results/.valkey-test-framework ${ROOT_DIR}/test-results/valkey-test-framework
 }
 
 function cleanup() {
@@ -115,6 +112,9 @@ function build_and_run_tests() {
     local CMAKE_DIR=${DEPS_DIR}/lib/cmake
     # Let CMake find <Package>-config.cmake files by updating the CMAKE_PREFIX_PATH variable
     export CMAKE_PREFIX_PATH=${CMAKE_DIR}/protobuf:${CMAKE_DIR}/absl:${CMAKE_DIR}/grpc:${CMAKE_DIR}/GTest:${CMAKE_DIR}/utf8_range:${DEPS_DIR}
+    # enable core dumps
+    ulimit -c unlimited
+    echo 'core.%p' | sudo tee /proc/sys/kernel/core_pattern
     (cd ${ROOT_DIR} && ./build.sh --use-system-modules --test-errors-stdout ${BUILD_SH_ARGS})
 }
 

@@ -43,11 +43,16 @@ class FilterParser {
 
   absl::StatusOr<std::string> ResolveTextFieldOrDefault(
       const std::optional<std::string>& maybe_field);
+//   absl::StatusOr<std::unique_ptr<query::TextPredicate>>
+//   BuildSingleTextPredicate(const std::string& field_name,
+//                            absl::string_view raw_token);
   absl::StatusOr<std::unique_ptr<query::TextPredicate>>
-  BuildSingleTextPredicate(const std::string& field_name,
-                           absl::string_view raw_token);
+    BuildSingleTextPredicate(const indexes::Text* text_index,
+                        const indexes::text::Lexer& lexer,
+                        const std::optional<std::string>& field_name,
+                        absl::string_view raw_token);
   absl::StatusOr<std::vector<std::unique_ptr<query::TextPredicate>>>
-  ParseOneTextAtomIntoTerms(const std::string& field_for_default);
+  ParseOneTextAtomIntoTerms(const std::optional<std::string>& maybe_field);
   absl::StatusOr<std::unique_ptr<query::Predicate>> ParseTextGroup(
       const std::string& initial_field);
   absl::StatusOr<bool> IsMatchAllExpression();

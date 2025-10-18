@@ -266,6 +266,28 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexSchema::GetIndex(
   return itr->second.GetIndex();
 }
 
+
+std::vector<std::string> IndexSchema::GetAllTextIdentifiers() const {
+  std::vector<std::string> identifiers;
+  for (const auto& [alias, attribute] : attributes_) {
+    auto index = attribute.GetIndex();
+    if (index->GetIndexerType() == indexes::IndexerType::kText) {
+      identifiers.push_back(attribute.GetIdentifier());
+    }
+  }
+  return identifiers;
+}
+
+absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexSchema::GetFirstTextIndex() const {
+  for (const auto& [alias, attribute] : attributes_) {
+    auto index = attribute.GetIndex();
+    if (index->GetIndexerType() == indexes::IndexerType::kText) {
+      return index;
+    }
+  }
+  return absl::NotFoundError("No text index found in schema");
+}
+
 absl::StatusOr<std::string> IndexSchema::GetIdentifier(
     absl::string_view attribute_alias) const {
   auto itr = attributes_.find(std::string{attribute_alias});

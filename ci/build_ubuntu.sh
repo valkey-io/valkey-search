@@ -85,11 +85,24 @@ function prepare_env() {
     fi
 }
 
+function save_test_output() {
+    echo Saving Test Output, CURRENT DIRECTORY IS ${PWD}
+    echo ROOT DIRECTORY IS ${ROOT_DIR}
+    cp /workspace/.build-release/valkey-json/build/src/libjson.so test-results
+    cp /workspace/.build-release/valkey-server/.build-release/bin/valkey-server test-results
+    cp /workspace/.build-release/libsearch.so test-results
+    cp -r /workspace/.build-release/integration/.valkey-test-framework test-results
+    echo Copied `find /workspace/.build-release/integration/.valkey-test-framework -print' | wc -l` test files to output directory
+    ls /workspace/.build-release/integration/.valkey-test-framework
+    ls /workspace/test-results
+
+}
+
 function cleanup() {
     # This method is called just before the script exits
     local exit_code=$?
     LOG_INFO "Cleaning up before exit"
-
+    save_test_output
     if [[ $exit_code -ne 0 ]]; then
         LOG_ERROR "Script ended with error code ${exit_code}"
     else
@@ -112,3 +125,4 @@ cd ${CI_DIR}
 
 prepare_env
 build_and_run_tests
+

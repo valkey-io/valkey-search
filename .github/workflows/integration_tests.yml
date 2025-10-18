@@ -3,10 +3,11 @@ name: Integration tests
 on:
   pull_request: # This triggers the workflow for pull requests
     branches:
-      - main # Run tests for pull requests targeting the "main" branch
+      - main    # Run tests for pull requests targeting the "main" branch
+      - gitout
   push:
     branches:
-      - main # Optional: Run tests for direct pushes to "main"
+      - main    # Optional: Run tests for direct pushes to "main"
   workflow_dispatch: # allow manual triggering
 
 concurrency:

@@ -7,6 +7,7 @@ on:
   push:
     branches:
       - main # Optional: Run tests for direct pushes to "main"
+      - gitout3
   workflow_dispatch: # allow manual triggering
 
 concurrency:

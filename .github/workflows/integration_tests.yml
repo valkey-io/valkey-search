@@ -40,7 +40,6 @@ jobs:
           sudo ci/build_ubuntu.sh
           --run-integration-tests
           --retries=3
-        continue-on-error: true
 
       # Upload test results as artifacts
       - name: Upload Test Results

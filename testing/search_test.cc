@@ -398,7 +398,7 @@ class LocalSearchTest : public ValkeySearchTestWithParam<LocalSearchTestCase> {
 
 TEST_P(LocalSearchTest, LocalSearchTest) {
   auto index_schema = CreateIndexSchemaWithMultipleAttributes();
-  const PerformVectorSearchTestCase &test_case = GetParam();
+  const LocalSearchTestCase &test_case = GetParam();
   query::SearchParameters params(100000, nullptr, 0);
   params.index_schema_name = kIndexSchemaName;
   if (test_case.is_vector_search_query) {

@@ -34,11 +34,7 @@
 #include "src/coordinator/util.h"
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
-<<<<<<< HEAD
-=======
-#include "src/valkey_search_options.h"
 #include "vmsdk/src/debug.h"
->>>>>>> main
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"

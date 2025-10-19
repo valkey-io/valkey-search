@@ -53,6 +53,13 @@ int StopTimerFromBackgroundThread(
   });
 }
 
+bool verifyLoadedOnlyOnce() {
+  static bool prev_loaded = false;
+  if (prev_loaded) return false;
+  prev_loaded = true;
+  return true;
+}
+
 void TrackCurrentAsMainThread() {
   CHECK(!set_main_thread);
   is_main_thread = true;

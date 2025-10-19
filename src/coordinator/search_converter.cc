@@ -116,10 +116,10 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
   CHECK(false);
 }
 
-absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
+absl::StatusOr<std::unique_ptr<query::SearchParameters>>
 GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
                               grpc::CallbackServerContext* context) {
-  auto parameters = std::make_unique<query::VectorSearchParameters>(
+  auto parameters = std::make_unique<query::SearchParameters>(
       request.timeout_ms(), context, request.db_num());
   parameters->index_schema_name = request.index_schema_name();
   parameters->attribute_alias = request.attribute_alias();
@@ -224,7 +224,7 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
 }
 
 std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
-    const query::VectorSearchParameters& parameters) {
+    const query::SearchParameters& parameters) {
   auto request = std::make_unique<SearchIndexPartitionRequest>();
   request->set_index_schema_name(parameters.index_schema_name);
   request->set_db_num(parameters.db_num_);

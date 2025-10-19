@@ -34,7 +34,7 @@ struct IndexInterface {
 };
 
 struct AggregateParameters : public expr::Expression::CompileContext,
-                             public query::VectorSearchParameters {
+                             public query::SearchParameters {
   ~AggregateParameters() override = default;
   bool loadall_{false};
   std::vector<std::string> loads_;
@@ -119,7 +119,7 @@ struct AggregateParameters : public expr::Expression::CompileContext,
 
   AggregateParameters(uint64_t timeout, IndexInterface* index_interface,
                       uint32_t db_num)
-      : query::VectorSearchParameters(timeout, nullptr, db_num) {
+      : query::SearchParameters(timeout, nullptr, db_num) {
     parse_vars_.index_interface_ = index_interface;
   }
 

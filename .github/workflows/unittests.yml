@@ -31,7 +31,6 @@ jobs:
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
     - name: Run Tests
-      run: docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image sudo ci/build_ubuntu.sh --run-tests --unittest-output=/workspace/test-results
       run: mkdir test-results && docker run --privileged --rm
         --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results
         -v "$(pwd):/workspace"

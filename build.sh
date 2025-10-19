@@ -89,10 +89,22 @@ while [ $# -gt 0 ]; do
         shift || true
         echo "Running test ${RUN_TEST}"
         ;;
+    --uniitest-output=*)
+        UNITTEST_OUTPUT="${arg#*=}"
+        shift || true
+        #echo "Unit Test Output Directory: ${UNITTEST_OUTPUT}"
+        # Not currently implemented in build.sh, but used by upstream build_ubuntu.sh
+        ;;
     --run-integration-tests)
         INTEGRATION_TEST="yes"
         shift || true
         echo "Running integration tests (all)"
+        ;;
+    --integration-output=*)
+        INTEGRATION_OUTPUT="${arg#*=}"
+        shift || true
+        # echo "Integration Test Output Directory: ${INTEGRATION_OUTPUT}"
+        # Not currently implemented in build.sh, but used by upstream build_ubuntu.sh
         ;;
     --run-integration-tests=*)
         INTEGRATION_TEST="yes"

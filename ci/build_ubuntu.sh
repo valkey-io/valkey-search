@@ -110,6 +110,11 @@ function save_integration_output() {
 
 function save_unittest_output() {
     echo Saving unit test output to ${UNITTEST_OUTPUT}
+    local result_dir=${ROOT_DIR}/.build-release${san_suffix}
+    echo Results Directory is ${result_dir}
+    ls -l ${result_dir}/tests
+    cp -r -P ${result_dir}/tests ${UNITTEST_OUTPUT}
+
 }
 
 function cleanup() {

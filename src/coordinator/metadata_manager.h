@@ -34,7 +34,7 @@ namespace valkey_search::coordinator {
 using FingerprintCallback = absl::AnyInvocable<absl::StatusOr<uint64_t>(
     const google::protobuf::Any &metadata)>;
 using MetadataUpdateCallback = absl::AnyInvocable<absl::Status(
-    absl::string_view, const google::protobuf::Any *metadata)>;
+    uint32_t db_num, absl::string_view, const google::protobuf::Any *metadata)>;
 using AuxSaveCallback = void (*)(ValkeyModuleIO *rdb, int when);
 using AuxLoadCallback = int (*)(ValkeyModuleIO *rdb, int encver, int when);
 static constexpr int kEncodingVersion = 0;
@@ -74,18 +74,24 @@ class MetadataManager {
       const google::protobuf::Map<std::string, GlobalMetadataEntryMap>
           &type_namespace_map);
 
-  absl::Status TriggerCallbacks(absl::string_view type_name,
+  absl::Status TriggerCallbacks(absl::string_view type_name, uint32_t db_num,
                                 absl::string_view id,
                                 const GlobalMetadataEntry &entry);
 
   absl::StatusOr<google::protobuf::Any> GetEntry(absl::string_view type_name,
+                                                 uint32_t db_num,
                                                  absl::string_view id);
 
   absl::StatusOr<IndexFingerprintVersion> CreateEntry(
-      absl::string_view type_name, absl::string_view id,
+      absl::string_view type_name, uint32_t db_num, absl::string_view id,
       std::unique_ptr<google::protobuf::Any> contents);
 
-  absl::Status DeleteEntry(absl::string_view type_name, absl::string_view id);
+  absl::Status DeleteEntry(absl::string_view type_name, uint32_t db_num,
+                           absl::string_view id);
+
+  absl::StatusOr<IndexFingerprintVersion> GetFingerprintAndVersion(
+      absl::string_view type_name, uint32_t db_num,
+      absl::string_view index_name);
 
   std::unique_ptr<GlobalMetadata> GetGlobalMetadata();
 
@@ -143,6 +149,12 @@ class MetadataManager {
 
   absl::Status ShowMetadata(ValkeyModuleCtx *ctx,
                             vmsdk::ArgsIterator &iter) const;
+  static std::string EncodeDbNum(uint32_t db_num, absl::string_view id);
+  struct DecodedDbNum {
+    uint32_t db_num;
+    std::string id;
+  };
+  static DecodedDbNum DecodeDbNum(absl::string_view encoded_id);
 
  private:
   struct RegisteredType {
@@ -163,6 +175,7 @@ class MetadataManager {
   coordinator::ClientPool &client_pool_;
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
   std::atomic_int64_t last_healthy_metadata_millis_{0};
+  std::atomic_int64_t metadata_reconciliation_completed_count_{0};
 };
 }  // namespace valkey_search::coordinator
 

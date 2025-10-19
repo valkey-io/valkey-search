@@ -38,6 +38,26 @@
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
+/*
+
+The original metadata manager was designed to provide a 2-level hierarchy:
+<type-name, object-name>. This lead to the wire-format tied to:
+
+ Map<string, Map<string,protobuf>>.
+
+With Valkey 9, the introduction of DB num into CME creates a desire for a
+three-level hierarchy: <type-name, db-num, object-name>. This 3-level
+internal namespace is mapped into an external two-level namespace to provide
+backward and some degree of forward compatibility.
+
+The mapping is done by manipulating the object name. It is known that
+pre-Valkey 9 object names cannot contain a valid hash-tag. This provides the
+necessary information to distinguish between an object name and an encoded
+<db_num, object_name> pair. Objects with a db_num of 0 are stored the same
+way as pre-Valkey 9 objects, providing backward compatibility.
+
+*/
+
 namespace valkey_search::coordinator {
 namespace {
 
@@ -118,13 +138,13 @@ uint64_t MetadataManager::ComputeTopLevelFingerprint(
 }
 
 absl::Status MetadataManager::TriggerCallbacks(
-    absl::string_view type_name, absl::string_view id,
+    absl::string_view type_name, uint32_t db_num, absl::string_view id,
     const GlobalMetadataEntry &entry) {
   auto &registered_types = registered_types_.Get();
   auto it = registered_types.find(type_name);
   if (it != registered_types.end()) {
     return registered_types.at(type_name).update_callback(
-        id, entry.has_content() ? &entry.content() : nullptr);
+        db_num, id, entry.has_content() ? &entry.content() : nullptr);
   }
   VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 10)
       << "No type registered for: " << type_name << ", skipping callback";
@@ -132,24 +152,30 @@ absl::Status MetadataManager::TriggerCallbacks(
 }
 
 absl::StatusOr<google::protobuf::Any> MetadataManager::GetEntry(
-    absl::string_view type_name, absl::string_view id) {
+    absl::string_view type_name, uint32_t db_num, absl::string_view id) {
+  auto encoded_id = EncodeDbNum(db_num, id);
   auto &metadata = metadata_.Get();
   if (!metadata.type_namespace_map().contains(type_name) ||
       !metadata.type_namespace_map().at(type_name).entries().contains(id) ||
       !metadata.type_namespace_map()
            .at(type_name)
            .entries()
-           .at(id)
+           .at(encoded_id)
            .has_content()) {
     return absl::NotFoundError(
-        absl::StrCat("Entry not found: ", type_name, " ", id));
+        absl::StrCat("Entry not found: ", type_name, " ", db_num, " ", id));
   }
-  return metadata.type_namespace_map().at(type_name).entries().at(id).content();
+  return metadata.type_namespace_map()
+      .at(type_name)
+      .entries()
+      .at(encoded_id)
+      .content();
 }
 
 absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(
-    absl::string_view type_name, absl::string_view id,
+    absl::string_view type_name, uint32_t db_num, absl::string_view id,
     std::unique_ptr<google::protobuf::Any> contents) {
+  auto encoded_id = EncodeDbNum(db_num, id);
   auto &registered_types = registered_types_.Get();
   auto rt_it = registered_types.find(type_name);
   if (rt_it == registered_types.end()) {
@@ -160,7 +186,7 @@ absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(
   auto &metadata = metadata_.Get();
   auto it = metadata.type_namespace_map().find(type_name);
   if (it != metadata.type_namespace_map().end()) {
-    auto inner_it = it->second.entries().find(id);
+    auto inner_it = it->second.entries().find(encoded_id);
     if (inner_it != it->second.entries().end()) {
       version = inner_it->second.version() + 1;
     }
@@ -175,14 +201,14 @@ absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(
   new_entry.set_encoding_version(rt_it->second.encoding_version);
   new_entry.set_allocated_content(contents.release());
 
-  auto callback_status = TriggerCallbacks(type_name, id, new_entry);
+  auto callback_status = TriggerCallbacks(type_name, db_num, id, new_entry);
   if (!callback_status.ok()) {
     return callback_status;
   }
 
   auto insert_result = metadata.mutable_type_namespace_map()->insert(
       {std::string(type_name), GlobalMetadataEntryMap()});
-  (*insert_result.first->second.mutable_entries())[id] = new_entry;
+  (*insert_result.first->second.mutable_entries())[encoded_id] = new_entry;
   // NOLINTNEXTLINE
   metadata.mutable_version_header()->set_top_level_version(
       metadata.version_header().top_level_version() + 1);
@@ -196,34 +222,36 @@ absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(
 }
 
 absl::Status MetadataManager::DeleteEntry(absl::string_view type_name,
+                                          uint32_t db_num,
                                           absl::string_view id) {
+  auto encoded_id = EncodeDbNum(db_num, id);
   auto &metadata = metadata_.Get();
   auto it = metadata.type_namespace_map().find(type_name);
   if (it == metadata.type_namespace_map().end()) {
     return absl::NotFoundError(
         absl::StrCat("Entry not found: ", type_name, " ", id));
   }
-  auto inner_it = it->second.entries().find(id);
+  auto inner_it = it->second.entries().find(encoded_id);
   if (inner_it == it->second.entries().end()) {
     return absl::NotFoundError(
-        absl::StrCat("Entry not found: ", type_name, " ", id));
+        absl::StrCat("Entry not found: ", type_name, " ", db_num, " ", id));
   }
   if (!inner_it->second.has_content()) {
     return absl::NotFoundError(
-        absl::StrCat("Entry not found: ", type_name, " ", id));
+        absl::StrCat("Entry not found: ", type_name, " ", db_num, " ", id));
   }
   GlobalMetadataEntry new_entry;
   new_entry.set_version(inner_it->second.version() + 1);
-  // Note that fingerprint and encoding version are not set and will default to
-  // 0.
+  // Note that fingerprint and encoding version are not set and will default
+  // to 0.
 
-  auto callback_status = TriggerCallbacks(type_name, id, new_entry);
+  auto callback_status = TriggerCallbacks(type_name, db_num, id, new_entry);
   if (!callback_status.ok()) {
     return callback_status;
   }
 
-  (*(*metadata.mutable_type_namespace_map())[type_name].mutable_entries())[id] =
-      new_entry;
+  (*(*metadata.mutable_type_namespace_map())[type_name]
+        .mutable_entries())[encoded_id] = new_entry;
 
   metadata.mutable_version_header()->set_top_level_version(
       metadata.version_header().top_level_version() + 1);
@@ -237,6 +265,27 @@ std::unique_ptr<GlobalMetadata> MetadataManager::GetGlobalMetadata() {
   auto result = std::make_unique<GlobalMetadata>();
   result->CopyFrom(metadata_.Get());
   return result;
+}
+
+absl::StatusOr<IndexFingerprintVersion>
+MetadataManager::GetFingerprintAndVersion(absl::string_view type_name,
+                                          uint32_t db_num,
+                                          absl::string_view id) {
+  IndexFingerprintVersion result;
+  auto encoded_id = EncodeDbNum(db_num, id);
+  auto &metadata = metadata_.Get();
+  if (metadata.type_namespace_map().contains(type_name) &&
+      metadata.type_namespace_map().at(type_name).entries().contains(
+          encoded_id)) {
+    const auto &entry =
+        metadata.type_namespace_map().at(type_name).entries().at(encoded_id);
+    IndexFingerprintVersion index_fingerprint_version;
+    index_fingerprint_version.set_fingerprint(entry.fingerprint());
+    index_fingerprint_version.set_version(entry.version());
+    return index_fingerprint_version;
+  }
+  return absl::NotFoundError(
+      absl::StrCat("Entry not found: ", type_name, " ", db_num, " ", id));
 }
 
 void MetadataManager::RegisterType(absl::string_view type_name,
@@ -434,7 +483,9 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
       }
 
       if (trigger_callbacks) {
-        auto result = TriggerCallbacks(type_name, id, proposed_entry);
+        auto decoded = DecodeDbNum(id);
+        auto result = TriggerCallbacks(type_name, decoded.db_num, decoded.id,
+                                       proposed_entry);
         if (!result.ok()) {
           VMSDK_LOG(WARNING, detached_ctx_.get())
               << "Failed during reconciliation callback: %s"
@@ -452,8 +503,8 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
       ComputeTopLevelFingerprint(result.type_namespace_map());
   result.mutable_version_header()->set_top_level_fingerprint(new_fingerprint);
 
-  // The new version is the max of the old version and the proposed version. We
-  // also bump the version if the fingerprint changed, as this indicates a
+  // The new version is the max of the old version and the proposed version.
+  // We also bump the version if the fingerprint changed, as this indicates a
   // distinct version.
   auto old_version = metadata.version_header().top_level_version();
   auto new_version =
@@ -575,10 +626,11 @@ void MetadataManager::OnServerCronCallback(
     [[maybe_unused]] uint64_t subevent, [[maybe_unused]] void *data) {
   static bool timer_started = false;
   if (!timer_started) {
-    // The first server cron tick after the FT.CREATE is run needs to kick start
-    // the timer. This can't be done during normal server event subscription
-    // because timers cannot be safely created in background threads (the GIL
-    // does not protect event loop code which uses the timers).
+    // The first server cron tick after the FT.CREATE is run needs to kick
+    // start the timer. This can't be done during normal server event
+    // subscription because timers cannot be safely created in background
+    // threads (the GIL does not protect event loop code which uses the
+    // timers).
     timer_started = true;
     ValkeyModule_CreateTimer(
         ctx,
@@ -668,6 +720,61 @@ absl::Status MetadataManager::ShowMetadata(
       metadata_.Get(), &metadata, options);
   ValkeyModule_ReplyWithStringBuffer(ctx, metadata.data(), metadata.size());
   return absl::OkStatus();
+}
+
+/*
+An 8/1.0 encoded string won't have a hashtag anywhere and is always for
+  db_num == 0 An 9/1.1 encoded string will always have a false-hashtag at
+  the START AND may have a real hashtag after that.
+
+Decoded strings that lack a hashtag and are for db_num == 0, are encoded with
+the 8/1.0 rules All other decoded strings are encoded according to the 9/1.1
+rules.
+
+A pseudo-hashtag is of the format: {dddd}
+dddd is the database number, i.e., ascii digits 0-9 ONLY.
+Characters after the database number up to the trailing right brace are
+explicitly ignored -- but preserved -- allowing for potential future
+forward/reverse compatibility.
+
+*/
+MetadataManager::DecodedDbNum MetadataManager::DecodeDbNum(
+    absl::string_view encoded) {
+  auto hash_tag = vmsdk::ParseHashTag(encoded);
+  if (hash_tag) {
+    std::string_view front_tag = *hash_tag;
+    CHECK(encoded.size() >= 3);  // hash_tag means >= 3 chars
+    if (front_tag.data() == (encoded.data() + 1)) {
+      std::string db_num_str;
+      while (!front_tag.empty() && std::isdigit(front_tag.front())) {
+        db_num_str += front_tag.front();
+        front_tag.remove_prefix(1);
+      }
+      if (!front_tag.empty()) {
+        VMSDK_LOG_EVERY_N(NOTICE, nullptr, 1000)
+            << "Ignoring extended index name metadata";
+      }
+      if (!db_num_str.empty()) {
+        // Found valid 9/1.1 encoding.
+        return {.db_num = static_cast<uint32_t>(std::stoul(db_num_str)),
+                .id = std::string(encoded.substr(hash_tag->size() + 2))};
+      }
+    }
+    VMSDK_LOG_EVERY_N(WARNING, nullptr, 10)
+        << "Found invalid encoded index name: " << encoded;
+  }
+  // Assume 8/1.0 encoding.
+  return {.db_num = 0, .id = std::string(encoded)};
+}
+
+std::string MetadataManager::EncodeDbNum(uint32_t db_num,
+                                         absl::string_view id) {
+  if (db_num == 0) {
+    // 8/1.0 encoding.
+    return std::string(id);
+  }
+  // 9/1.1 encoding.
+  return absl::StrCat("{", db_num, "}", id);
 }
 
 }  // namespace valkey_search::coordinator

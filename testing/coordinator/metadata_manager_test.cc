@@ -48,12 +48,13 @@ struct TypeToRegister {
 
 struct CallbackResult {
   std::string type_name;
+  uint32_t db_num;
   std::string id;
   bool has_content;
 
   bool operator==(const CallbackResult& other) const {
     return type_name == other.type_name && id == other.id &&
-           has_content == other.has_content;
+           db_num == other.db_num && has_content == other.has_content;
   }
 };
 
@@ -66,6 +67,7 @@ struct EntryOperationTestParam {
     };
     Operation operation_type;
     std::string type_name;
+    uint32_t db_num{0};
     std::string id;
     std::string content;
   };
@@ -112,9 +114,11 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
         [&](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
           return type_to_register.fingerprint_to_return;
         },
-        [&](absl::string_view id, const google::protobuf::Any* metadata) {
+        [&](uint32_t db_num, absl::string_view id,
+            const google::protobuf::Any* metadata) {
           CallbackResult callback_result{
               .type_name = type_to_register.type_name,
+              .db_num = db_num,
               .id = std::string(id),
               .has_content = metadata != nullptr,
           };
@@ -146,12 +150,14 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
       content->set_type_url("type.googleapis.com/FakeType");
       content->set_value(operation.content);
       auto result = test_metadata_manager_->CreateEntry(
-          operation.type_name, operation.id, std::move(content));
+          operation.type_name, operation.db_num, operation.id,
+          std::move(content));
       EXPECT_EQ(result.status().code(), test_case.expected_status_code);
     } else if (operation.operation_type ==
                EntryOperationTestParam::EntryOperation::kDelete) {
       EXPECT_EQ(
-          test_metadata_manager_->DeleteEntry(operation.type_name, operation.id)
+          test_metadata_manager_
+              ->DeleteEntry(operation.type_name, operation.db_num, operation.id)
               .code(),
           test_case.expected_status_code);
     }
@@ -531,9 +537,11 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
         [&](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
           return type_to_register.fingerprint_to_return;
         },
-        [&](absl::string_view id, const google::protobuf::Any* metadata) {
+        [&](uint32_t db_num, absl::string_view id,
+            const google::protobuf::Any* metadata) {
           callbacks_tracker.push_back(CallbackResult{
               .type_name = type_to_register.type_name,
+              .db_num = db_num,
               .id = std::string(id),
               .has_content = metadata != nullptr,
           });
@@ -1917,7 +1925,8 @@ TEST_F(MetadataManagerTimestampTest,
       [](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
         return 1234;
       },
-      [](absl::string_view id, const google::protobuf::Any* metadata) {
+      [](uint32_t db_num, absl::string_view id,
+         const google::protobuf::Any* metadata) {
         return absl::InternalError("Callback failed");
       });
 
@@ -2013,6 +2022,35 @@ TEST_F(MetadataManagerTimestampTest, TestTimestampPersistsAcrossLoadMetadata) {
   // Timestamp should be updated to current time
   EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
             0);
+}
+
+TEST(IndexNameTest, IndexName) {
+  for (std::string prefix : {"", "a", "abc", "{", "}"}) {
+    for (std::string hash_tag : {"", "{a}", "{b}", "{}"}) {
+      for (std::string suffix : {"", "x", "xy", "{", "}", "{}"}) {
+        for (uint32_t db_num : {0, 1}) {
+          std::string id = prefix + hash_tag + suffix;
+          //
+          // Construct a IndexName
+          //
+          std::cout << "Doing test: DB:" << db_num << " name:'" << id << "'\n";
+          std::string encoded = MetadataManager::EncodeDbNum(db_num, id);
+          //
+          // Now reverse it and compare equality
+          //
+          auto decoded = MetadataManager::DecodeDbNum(encoded);
+          EXPECT_EQ(id, decoded.id);
+          EXPECT_EQ(db_num, decoded.db_num);
+          //
+          // And re-forward it
+          //
+          auto re_forward =
+              MetadataManager::EncodeDbNum(decoded.db_num, decoded.id);
+          EXPECT_EQ(re_forward, encoded);
+        }
+      }
+    }
+  }
 }
 
 }  // namespace valkey_search::coordinator

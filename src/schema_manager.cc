@@ -131,19 +131,23 @@ SchemaManager::SchemaManager(
     coordinator::MetadataManager::Instance().RegisterType(
         kSchemaManagerMetadataTypeName, kMetadataEncodingVersion,
         ComputeFingerprint,
-        [this](absl::string_view id, const google::protobuf::Any *metadata)
-            -> absl::Status { return this->OnMetadataCallback(id, metadata); });
+        [this](uint32_t db_num, absl::string_view id,
+               const google::protobuf::Any *metadata) -> absl::Status {
+          return this->OnMetadataCallback(db_num, id, metadata);
+        });
   }
 }
 
-absl::Status GenerateIndexNotFoundError(absl::string_view name) {
-  return absl::NotFoundError(
-      absl::StrFormat("Index with name '%s' not found", name));
+absl::Status GenerateIndexNotFoundError(uint32_t db_num,
+                                        absl::string_view name) {
+  return absl::NotFoundError(absl::StrFormat(
+      "Index with name '%s' not found in database %d", name, db_num));
 }
 
-absl::Status GenerateIndexAlreadyExistsError(absl::string_view name) {
+absl::Status GenerateIndexAlreadyExistsError(uint32_t db_num,
+                                             absl::string_view name) {
   return absl::AlreadyExistsError(
-      absl::StrFormat("Index %s already exists.", name));
+      absl::StrFormat("Index %s in database %d already exists.", name, db_num));
 }
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::LookupInternal(
@@ -174,7 +178,7 @@ absl::Status SchemaManager::ImportIndexSchema(
   const std::string &name = index_schema->GetName();
   auto existing_entry = LookupInternal(db_num, name);
   if (existing_entry.ok()) {
-    return GenerateIndexAlreadyExistsError(name);
+    return GenerateIndexAlreadyExistsError(db_num, name);
   }
 
   db_to_index_schemas_[db_num][name] = std::move(index_schema);
@@ -191,7 +195,7 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
   const std::string &name = index_schema_proto.name();
   auto existing_entry = LookupInternal(db_num, name);
   if (existing_entry.ok()) {
-    return GenerateIndexAlreadyExistsError(index_schema_proto.name());
+    return GenerateIndexAlreadyExistsError(db_num, index_schema_proto.name());
   }
 
   VMSDK_ASSIGN_OR_RETURN(
@@ -222,19 +226,18 @@ SchemaManager::CreateIndexSchema(
   if (coordinator_enabled_) {
     // In coordinated mode, use the metadata_manager as the source of truth.
     // It will callback into us with the update.
-    IndexName index_name(index_schema_proto.db_num(),
-                         index_schema_proto.name());
     if (coordinator::MetadataManager::Instance()
             .GetEntry(kSchemaManagerMetadataTypeName,
-                      index_name.GetEncodedName())
+                      index_schema_proto.db_num(), index_schema_proto.name())
             .ok()) {
-      return GenerateIndexAlreadyExistsError(index_schema_proto.name());
+      return GenerateIndexAlreadyExistsError(index_schema_proto.db_num(),
+                                             index_schema_proto.name());
     }
     auto any_proto = std::make_unique<google::protobuf::Any>();
     any_proto->PackFrom(index_schema_proto);
     return coordinator::MetadataManager::Instance().CreateEntry(
-        kSchemaManagerMetadataTypeName, index_name.GetEncodedName(),
-        std::move(any_proto));
+        kSchemaManagerMetadataTypeName, index_schema_proto.db_num(),
+        index_schema_proto.name(), std::move(any_proto));
   }
 
   // In non-coordinated mode, apply the update inline.
@@ -252,7 +255,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::GetIndexSchema(
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto existing_entry = LookupInternal(db_num, name);
   if (!existing_entry.ok()) {
-    return GenerateIndexNotFoundError(name);
+    return GenerateIndexNotFoundError(db_num, name);
   }
   return existing_entry.value();
 }
@@ -262,7 +265,7 @@ SchemaManager::RemoveIndexSchemaInternal(uint32_t db_num,
                                          absl::string_view name) {
   auto existing_entry = LookupInternal(db_num, name);
   if (!existing_entry.ok()) {
-    return GenerateIndexNotFoundError(name);
+    return GenerateIndexNotFoundError(db_num, name);
   }
   auto result = std::move(db_to_index_schemas_[db_num][name]);
   db_to_index_schemas_[db_num].erase(name);
@@ -281,13 +284,12 @@ absl::Status SchemaManager::RemoveIndexSchema(uint32_t db_num,
   if (coordinator_enabled_) {
     // In coordinated mode, use the metadata_manager as the source of truth.
     // It will callback into us with the update.
-    IndexName encoded(db_num, name);
     auto status = coordinator::MetadataManager::Instance().DeleteEntry(
-        kSchemaManagerMetadataTypeName, encoded.GetEncodedName());
+        kSchemaManagerMetadataTypeName, db_num, name);
     if (status.ok()) {
       return status;
     } else if (absl::IsNotFound(status)) {
-      return GenerateIndexNotFoundError(name);
+      return GenerateIndexNotFoundError(db_num, name);
     } else {
       return absl::InternalError(status.message());
     }
@@ -348,12 +350,11 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
 }
 
 absl::Status SchemaManager::OnMetadataCallback(
-    absl::string_view id, const google::protobuf::Any *metadata) {
+    uint32_t db_num, absl::string_view id,
+    const google::protobuf::Any *metadata) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  IndexName encoded_index_name(id);
   // Note that there is only DB 0 in cluster mode, so we can hardcode this.
-  auto status = RemoveIndexSchemaInternal(encoded_index_name.GetDbNum(),
-                                          encoded_index_name.GetDecodedName());
+  auto status = RemoveIndexSchemaInternal(db_num, id);
   if (!status.ok() && !absl::IsNotFound(status.status())) {
     return status.status();
   }
@@ -731,69 +732,5 @@ static vmsdk::info_field::Integer total_indexing_time(
       // TODO: need to implement indexing time tracking
       return 0;
     }));
-
-/*
-An 8/1.0 encoded string won't have a hashtag anywhere and is always for
-  db_num == 0 An 9/1.1 encoded string will always have a false-hashtag at
-  the START AND may have a real hashtag after that.
-
-Decoded strings that lack a hashtag and are for db_num == 0, are encoded with
-the 8/1.0 rules All other decoded strings are encoded according to the 9/1.1
-rules.
-
-A pseudo-hashtag is of the format: {dddd}
-dddd is the database number, i.e., ascii digits 0-9 ONLY.
-Characters after the database number up to the trailing right brace are
-explicitly ignored -- but preserved -- allowing for potential future
-forward/reverse compatibility.
-
-*/
-IndexName::IndexName(absl::string_view encoded_name)
-    : encoded_name_(encoded_name) {
-  auto hash_tag = vmsdk::ParseHashTag(encoded_name_);
-  if (hash_tag) {
-    std::string_view front_tag = *hash_tag;
-    CHECK(encoded_name.size() >=
-          3);  // To have a hashtag, you must have at least 3 chars
-    if (front_tag.data() == (encoded_name_.data() + 1)) {
-      std::string db_num_str;
-      while (!front_tag.empty() && std::isdigit(front_tag.front())) {
-        db_num_str += front_tag.front();
-        front_tag.remove_prefix(1);
-      }
-      if (!front_tag.empty()) {
-        VMSDK_LOG_EVERY_N(NOTICE, nullptr, 1000)
-            << "Ignoring extended index name metadata";
-      }
-      if (!db_num_str.empty()) {
-        // Found valid 9/1.1 encoding.
-        db_num_ = std::stoul(db_num_str);
-        decoded_name_ = encoded_name_.substr(hash_tag->size() + 2);
-        hash_tag_ = vmsdk::ParseHashTag(decoded_name_);
-        return;
-      }
-    }
-    VMSDK_LOG_EVERY_N(WARNING, nullptr, 10)
-        << "Found invalid encoded index name: " << encoded_name;
-  }
-  //
-  // Assume 8/1.0 encoding.
-  decoded_name_ = encoded_name;
-  db_num_ = 0;
-  hash_tag_ = hash_tag;
-}
-
-IndexName::IndexName(uint32_t db_num, absl::string_view decoded_name)
-    : db_num_(db_num), decoded_name_(decoded_name) {
-  hash_tag_ = vmsdk::ParseHashTag(decoded_name_);
-  if (hash_tag_.has_value() || db_num != 0) {
-    //
-    // this is ALWAYS a 9/1.1 format
-    //
-    encoded_name_ = absl::StrCat("{", db_num, "}", decoded_name_);
-  } else {
-    encoded_name_ = decoded_name_;
-  }
-}
 
 }  // namespace valkey_search

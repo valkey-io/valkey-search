@@ -188,6 +188,7 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
 std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
 Service::GenerateInfoResponse(
     const coordinator::InfoIndexPartitionRequest& request) {
+  vmsdk::VerifyMainThread();
   uint32_t db_num = request.db_num();
   std::string index_name = request.index_name();
   coordinator::InfoIndexPartitionResponse response;
@@ -208,19 +209,14 @@ Service::GenerateInfoResponse(
 
   std::optional<coordinator::IndexFingerprintVersion> index_fingerprint_version;
 
-  auto global_metadata =
-      coordinator::MetadataManager::Instance().GetGlobalMetadata();
-  CHECK(global_metadata->type_namespace_map().contains(
-      kSchemaManagerMetadataTypeName));
-  const auto& entry_map =
-      global_metadata->type_namespace_map().at(kSchemaManagerMetadataTypeName);
-  std::string encoded_index_name =
-      IndexName(db_num, index_name).GetEncodedName();
-  CHECK(entry_map.entries().contains(encoded_index_name));
-  const auto& entry = entry_map.entries().at(encoded_index_name);
+  auto entry =
+      coordinator::MetadataManager::Instance().GetFingerprintAndVersion(
+          kSchemaManagerMetadataTypeName, db_num, index_name);
+  CHECK(entry.ok());
+
   index_fingerprint_version.emplace();
-  index_fingerprint_version->set_fingerprint(entry.fingerprint());
-  index_fingerprint_version->set_version(entry.version());
+  index_fingerprint_version->set_fingerprint(entry->fingerprint());
+  index_fingerprint_version->set_version(entry->version());
 
   response.set_exists(true);
   response.set_index_name(index_name);

@@ -139,8 +139,9 @@ TEST_F(SchemaManagerTest, TestCreateIndexSchemaAlreadyExists) {
                       .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
                       .status();
     EXPECT_EQ(status.code(), absl::StatusCode::kAlreadyExists);
-    EXPECT_EQ(status.message(),
-              absl::StrFormat("Index %s already exists.", index_name_));
+    EXPECT_EQ(
+        status.message(),
+        absl::StrFormat("Index %s in database 0 already exists.", index_name_));
     EXPECT_EQ(callback_triggered, 1);
   }
 }
@@ -508,40 +509,6 @@ TEST_P(OnSwapDBCallbackTest, OnSwapDBCallback) {
   EXPECT_EQ(test_index_schema->db_num_, expected_dbnum != -1
                                             ? expected_dbnum
                                             : test_case.index_schema_db_num);
-}
-
-TEST(IndexNameTest, IndexName) {
-  for (std::string prefix : {"", "a", "abc", "{", "}"}) {
-    for (std::string hash_tag : {"", "{a}", "{b}", "{}"}) {
-      for (std::string suffix : {"", "x", "xy", "{", "}", "{}"}) {
-        for (uint32_t db_num : {0, 1}) {
-          std::string name = prefix + hash_tag + suffix;
-          //
-          // Construct a IndexName
-          //
-          std::cout << "Doing test: DB:" << db_num << " name:'" << name
-                    << "'\n";
-          IndexName forward(db_num, name);
-          //
-          // Now reverse it and compare equality
-          //
-          IndexName reverse(forward.GetEncodedName());
-          EXPECT_EQ(forward.GetDecodedName(), reverse.GetDecodedName());
-          EXPECT_EQ(forward.GetDbNum(), reverse.GetDbNum());
-          EXPECT_EQ(forward.GetHashTag(), reverse.GetHashTag());
-          EXPECT_EQ(forward.GetEncodedName(), reverse.GetEncodedName());
-          //
-          // And re-forward it
-          //
-          IndexName re_forward(reverse.GetDbNum(), reverse.GetDecodedName());
-          EXPECT_EQ(re_forward.GetDecodedName(), reverse.GetDecodedName());
-          EXPECT_EQ(re_forward.GetDbNum(), reverse.GetDbNum());
-          EXPECT_EQ(re_forward.GetHashTag(), reverse.GetHashTag());
-          EXPECT_EQ(re_forward.GetEncodedName(), reverse.GetEncodedName());
-        }
-      }
-    }
-  }
 }
 
 }  // namespace valkey_search

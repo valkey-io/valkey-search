@@ -141,7 +141,7 @@ function build_and_run_tests() {
     export CMAKE_PREFIX_PATH=${CMAKE_DIR}/protobuf:${CMAKE_DIR}/absl:${CMAKE_DIR}/grpc:${CMAKE_DIR}/GTest:${CMAKE_DIR}/utf8_range:${DEPS_DIR}
     # enable core dumps
     echo Enabling core dumps
-    sudo ulimit -c unlimited
+    ulimit -c unlimited
     echo 'core.%p' | sudo tee /proc/sys/kernel/core_pattern
     (cd ${ROOT_DIR} && ./build.sh --use-system-modules --test-errors-stdout ${BUILD_SH_ARGS})
 }

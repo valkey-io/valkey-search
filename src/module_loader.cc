@@ -24,7 +24,6 @@
 //
 // Set the minimum acceptable server version
 //
-#define MINIMUM_VALKEY_VERSION vmsdk::MakeValkeyVersion(8, 1, 1)
 namespace {
 
 // Strip the '@' prefix from command categories (e.g., @read)
@@ -46,6 +45,7 @@ vmsdk::module::Options options = {
         valkey_search::kSearchCategory,
     }),
     .version = MODULE_VERSION,
+    .minimum_valkey_version = vmsdk::MakeValkeyVersion(8, 1, 1),
     .info = valkey_search::ModuleInfo,
     .commands =
         {
@@ -110,15 +110,6 @@ vmsdk::module::Options options = {
     .on_load =
         [](ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
            [[maybe_unused]] const vmsdk::module::Options &options) {
-          auto server_version = ValkeyModule_GetServerVersion();
-          if (server_version < MINIMUM_VALKEY_VERSION) {
-            VMSDK_LOG(WARNING, ctx)
-                << "Minimum required server version is "
-                << vmsdk::DisplayValkeyVersion(MINIMUM_VALKEY_VERSION)
-                << ", Current version is "
-                << vmsdk::DisplayValkeyVersion(server_version);
-            return absl::InvalidArgumentError("Invalid version");
-          }
           valkey_search::KeyspaceEventManager::InitInstance(
               std::make_unique<valkey_search::KeyspaceEventManager>());
           valkey_search::ValkeySearch::InitInstance(

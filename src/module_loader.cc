@@ -24,6 +24,8 @@
 //
 // Set the minimum acceptable server version
 //
+#define MINIMUM_VALKEY_VERSION vmsdk::MakeValkeyVersion(8, 1, 1)
+
 namespace {
 
 // Strip the '@' prefix from command categories (e.g., @read)
@@ -45,7 +47,7 @@ vmsdk::module::Options options = {
         valkey_search::kSearchCategory,
     }),
     .version = MODULE_VERSION,
-    .minimum_valkey_version = vmsdk::MakeValkeyVersion(8, 1, 1),
+    .minimum_valkey_version = MINIMUM_VALKEY_VERSION,
     .info = valkey_search::ModuleInfo,
     .commands =
         {

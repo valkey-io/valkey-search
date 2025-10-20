@@ -218,18 +218,21 @@ static auto ft_info_rpc_timeout_ms =
         kMaximumFTInfoRpcTimeoutMs)  // max timeout (5 minutes)
         .Build();
 
-/// Register the "--low-utilization-threshold" flag. Controls the CPU utilization
-/// threshold below which local node is preferred in fanout operations
-constexpr absl::string_view kLowUtilizationThresholdConfig{"low-utilization-threshold"};
+/// Register the "--low-utilization-threshold" flag. Controls the CPU
+/// utilization threshold below which local node is preferred in fanout
+/// operations
+constexpr absl::string_view kLowUtilizationThresholdConfig{
+    "low-utilization-threshold"};
 constexpr uint32_t kDefaultLowUtilizationThreshold{50};  // 50% CPU utilization
 constexpr uint32_t kMinimumLowUtilizationThreshold{0};   // 0% CPU utilization
-constexpr uint32_t kMaximumLowUtilizationThreshold{100}; // 100% CPU utilization
+constexpr uint32_t kMaximumLowUtilizationThreshold{
+    100};  // 100% CPU utilization
 static auto low_utilization_threshold =
     vmsdk::config::NumberBuilder(
-        kLowUtilizationThresholdConfig,     // name
-        kDefaultLowUtilizationThreshold,    // default threshold (50%)
-        kMinimumLowUtilizationThreshold,    // min threshold (0%)
-        kMaximumLowUtilizationThreshold)    // max threshold (100%)
+        kLowUtilizationThresholdConfig,   // name
+        kDefaultLowUtilizationThreshold,  // default threshold (50%)
+        kMinimumLowUtilizationThreshold,  // min threshold (0%)
+        kMaximumLowUtilizationThreshold)  // max threshold (100%)
         .Build();
 
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }

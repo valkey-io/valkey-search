@@ -116,8 +116,8 @@ class TestFanout(ValkeySearchClusterTestCase):
     @pytest.mark.parametrize(
         "setup_test", [{"replica_count": 2}], indirect=True
     )
-    @pytest.mark.parametrize("threashold", [0, 100])
-    def test_fanout_low_utilization_fanout(self, threashold):
+    @pytest.mark.parametrize("threshold", [0, 100])
+    def test_fanout_low_utilization_fanout(self, threshold):
 
         number_of_searches_to_run = 10
         rg = self.get_replication_group(0)
@@ -125,7 +125,7 @@ class TestFanout(ValkeySearchClusterTestCase):
         assert(primary.info("replication")["role"] == "master")
         
         # Set the fanout low utilization threshold
-        primary.execute_command("CONFIG", "SET", "search.low-utilization-threshold", threashold)
+        primary.execute_command("CONFIG", "SET", "search.low-utilization-threshold", threshold)
         
         index = Index("test", [Vector("v", 3, type="FLAT")], type=KeyDataType.HASH)
         index.create(primary)
@@ -143,12 +143,12 @@ class TestFanout(ValkeySearchClusterTestCase):
             result = primary.execute_command(*search_command(index.name))
             assert(len(result) > 1)
         
-        if threashold:
-            # threashold == 100 means we are always under utilize and prefer to do local search on the shard
+        if threshold:
+            # threshold == 100 means we are always under utilize and prefer to do local search on the shard
             # Assert replicas of the primary run some of the search queries 
             assert(sum_of_remote_searches(rg.replicas) == 0)
         else:
-            # threashold == 0 means we are always "too busy"
+            # threshold == 0 means we are always "too busy"
             # Assert replicas of the primary didn't run any search queries
             assert(sum_of_remote_searches(rg.replicas) > 0)
         

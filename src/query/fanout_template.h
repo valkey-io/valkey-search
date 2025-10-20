@@ -60,15 +60,15 @@ class FanoutTemplate {
     // Get the configured threshold
     double threshold = static_cast<double>(
         valkey_search::options::GetLowUtilizationThreshold().GetValue());
-    
+
     // Check CPU utilization from both reader and writer thread pools
     auto& valkey_search_instance = valkey_search::ValkeySearch::Instance();
     auto reader_pool = valkey_search_instance.GetReaderThreadPool();
     auto writer_pool = valkey_search_instance.GetWriterThreadPool();
-    
+
     double avg_cpu = 0.0;
     int pool_count = 0;
-    
+
     if (reader_pool) {
       auto cpu_result = reader_pool->GetAvgCPUPercentage();
       if (cpu_result.ok()) {
@@ -76,7 +76,7 @@ class FanoutTemplate {
         pool_count++;
       }
     }
-    
+
     if (writer_pool) {
       auto cpu_result = writer_pool->GetAvgCPUPercentage();
       if (cpu_result.ok()) {
@@ -84,12 +84,12 @@ class FanoutTemplate {
         pool_count++;
       }
     }
-    
+
     if (pool_count == 0) {
       // If we can't get CPU info, default to not preferring local
       return false;
     }
-    
+
     avg_cpu /= pool_count;
     return avg_cpu < threshold;
   }
@@ -231,32 +231,33 @@ class FanoutTemplate {
       // Select targets for each shard based on preference
       absl::BitGen gen;
       bool prefer_local = IsSystemUnderLowUtilization();
-      
+
       for (const auto& [shard_id, shard_targets] : shard_id_to_targets) {
         if (shard_targets.empty()) {
           continue;
         }
-        
+
         // Select target based on preference
         if (prefer_local && shard_targets.size() > 1) {
           // Look for local target first
-          auto local_it = std::find_if(shard_targets.begin(), shard_targets.end(),
-                                       [](const TargetType& target) {
-                                         if constexpr (std::is_same_v<TargetType, FanoutSearchTarget>) {
-                                           return target.type == FanoutSearchTarget::Type::kLocal;
-                                         } else {
-                                           // For custom target types, we can't check the type
-                                           // Fall back to random selection
-                                           return false;
-                                         }
-                                       });
-          
+          auto local_it = std::find_if(
+              shard_targets.begin(), shard_targets.end(),
+              [](const TargetType& target) {
+                if constexpr (std::is_same_v<TargetType, FanoutSearchTarget>) {
+                  return target.type == FanoutSearchTarget::Type::kLocal;
+                } else {
+                  // For custom target types, we can't check the type
+                  // Fall back to random selection
+                  return false;
+                }
+              });
+
           if (local_it != shard_targets.end()) {
             selected_targets.push_back(*local_it);
             continue;
           }
         }
-        
+
         // Random selection (fallback or normal mode)
         size_t index = absl::Uniform(gen, 0u, shard_targets.size());
         selected_targets.push_back(shard_targets[index]);

@@ -33,6 +33,8 @@ namespace valkey_search::coordinator {
 
 using FingerprintCallback = absl::AnyInvocable<absl::StatusOr<uint64_t>(
     const google::protobuf::Any &metadata)>;
+using EncodingVersionCallback = absl::AnyInvocable<absl::StatusOr<uint32_t>(
+    const google::protobuf::Any &metadata)>;
 using MetadataUpdateCallback = absl::AnyInvocable<absl::Status(
     uint32_t db_num, absl::string_view, const google::protobuf::Any *metadata)>;
 using AuxSaveCallback = void (*)(ValkeyModuleIO *rdb, int when);
@@ -100,15 +102,23 @@ class MetadataManager {
   // accept updates to that type both locally and over the cluster bus.
   //
   // * type_name should be a unique string identifying the type.
-  // * encoding_version should be bumped any time the underlying metadata format
-  // is changed.
   // * fingerprint_callback should be a function for computing the fingerprint
   // of the metadata for the given encoding version. This function can only
   // change when the encoding version is bumped.
   // * update_callback will be called whenever the metadata is updated.
-  void RegisterType(absl::string_view type_name, uint32_t encoding_version,
+  //
+  // Each entry has an encoding version associated with it.  When an entry
+  // is created or updated locally, the encoding version is computed using the
+  // encoding_version parameter passed to RegisterType. When an entry is updated
+  // from the cluster bus, the encoding version is read from the metadata entry
+  // itself. If the encoding version in the new metadata entry is greater than
+  // the max_encoding_version registered for the type, the update will be
+  // rejected.
+  //
+  void RegisterType(absl::string_view type_name, uint32_t max_encoding_version,
                     FingerprintCallback fingerprint_callback,
-                    MetadataUpdateCallback callback);
+                    MetadataUpdateCallback callback,
+                    EncodingVersionCallback encoding_version_callback);
 
   void BroadcastMetadata(ValkeyModuleCtx *ctx);
 
@@ -128,6 +138,7 @@ class MetadataManager {
       std::unique_ptr<GlobalMetadataVersionHeader> header);
 
   absl::Status ReconcileMetadata(const GlobalMetadata &proposed,
+                                 absl::string_view source,
                                  bool trigger_callbacks = true,
                                  bool prefer_incoming = false);
 
@@ -163,7 +174,8 @@ class MetadataManager {
 
  private:
   struct RegisteredType {
-    uint32_t encoding_version;
+    uint32_t max_encoding_version;
+    EncodingVersionCallback encoding_version_callback;
     FingerprintCallback fingerprint_callback;
     MetadataUpdateCallback update_callback;
   };

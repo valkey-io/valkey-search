@@ -210,11 +210,13 @@ absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(
   VMSDK_ASSIGN_OR_RETURN(
       auto fingerprint,
       ComputeFingerprint(type_name, *contents, registered_types));
+  VMSDK_ASSIGN_OR_RETURN(auto encoding_version,
+                         rt_it->second.encoding_version_callback(*contents));
 
   GlobalMetadataEntry new_entry;
   new_entry.set_version(version);
   new_entry.set_fingerprint(fingerprint);
-  new_entry.set_encoding_version(rt_it->second.encoding_version);
+  new_entry.set_encoding_version(encoding_version);
   new_entry.set_allocated_content(contents.release());
 
   auto callback_status = TriggerCallbacks(type_name, db_num, id, new_entry);
@@ -304,16 +306,18 @@ MetadataManager::GetFingerprintAndVersion(absl::string_view type_name,
       absl::StrCat("Entry not found: ", type_name, " ", db_num, " ", id));
 }
 
-void MetadataManager::RegisterType(absl::string_view type_name,
-                                   uint32_t encoding_version,
-                                   FingerprintCallback fingerprint_callback,
-                                   MetadataUpdateCallback callback) {
+void MetadataManager::RegisterType(
+    absl::string_view type_name, uint32_t max_encoding_version,
+    FingerprintCallback fingerprint_callback, MetadataUpdateCallback callback,
+    EncodingVersionCallback encoding_version_callback) {
   auto insert_result =
       registered_types_.Get().insert(std::pair<std::string, RegisteredType>{
-          type_name, RegisteredType{.encoding_version = encoding_version,
-                                    .fingerprint_callback =
-                                        std::move(fingerprint_callback),
-                                    .update_callback = std::move(callback)}});
+          type_name,
+          RegisteredType{
+              .max_encoding_version = max_encoding_version,
+              .encoding_version_callback = std::move(encoding_version_callback),
+              .fingerprint_callback = std::move(fingerprint_callback),
+              .update_callback = std::move(callback)}});
   VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 10)
       << "Type already registered for: " << type_name;
   DCHECK(insert_result.second);
@@ -445,7 +449,7 @@ void MetadataManager::HandleBroadcastedMetadata(
               << "Got GlobalMetadata from " << address << ": "
               << schema->DebugString();
           auto &metadata_manager = MetadataManager::Instance();
-          auto status = metadata_manager.ReconcileMetadata(*schema);
+          auto status = metadata_manager.ReconcileMetadata(*schema, address);
           if (!status.ok()) {
             VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
                 << "Failed to reconcile schemas: " << status.message();
@@ -459,6 +463,7 @@ void MetadataManager::HandleBroadcastedMetadata(
 }
 
 absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
+                                                absl::string_view source,
                                                 bool trigger_callbacks,
                                                 bool prefer_incoming) {
   // We synthesize the new version in a new variable, so that if we need to
@@ -473,7 +478,18 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
     auto insert_result = result.mutable_type_namespace_map()->insert(
         {type_name, GlobalMetadataEntryMap()});
     auto &existing_inner_map = insert_result.first->second;
+    auto &registered_types = registered_types_.Get();
+    auto rt_it = registered_types.find(type_name);
     for (const auto &[id, proposed_entry] : proposed_inner_map.entries()) {
+      if (rt_it != registered_types.end() &&
+          rt_it->second.max_encoding_version <
+              proposed_entry.encoding_version()) {
+        VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 10)
+            << "Invalid encoding version (" << proposed_entry.encoding_version()
+            << ") for: " << type_name << ", skipping entry " << id << " from "
+            << source;
+        continue;
+      }
       auto it = existing_inner_map.entries().find(id);
       if (it != existing_inner_map.entries().end() && !prefer_incoming) {
         auto &existing_entry = it->second;
@@ -501,11 +517,10 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
 
       auto mutable_entries = existing_inner_map.mutable_entries();
       (*mutable_entries)[id] = proposed_entry;
-      auto &registered_types = registered_types_.Get();
-      auto rt_it = registered_types.find(type_name);
       if (rt_it != registered_types.end() && proposed_entry.has_content() &&
-          proposed_entry.encoding_version() < rt_it->second.encoding_version) {
-        // If the encoding version is less than the current version, we need
+          proposed_entry.encoding_version() <
+              rt_it->second.max_encoding_version) {
+        // If the encoding version is less than the current max version, we need
         // to re-fingerprint the entry. New fields being added may result in
         // unstable fingerprinting.
         //
@@ -515,9 +530,11 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
             auto fingerprint,
             ComputeFingerprint(type_name, proposed_entry.content(),
                                registered_types));
+        VMSDK_ASSIGN_OR_RETURN(
+            auto encoding_version,
+            rt_it->second.encoding_version_callback(proposed_entry.content()));
         (*mutable_entries)[id].set_fingerprint(fingerprint);
-        (*mutable_entries)[id].set_encoding_version(
-            rt_it->second.encoding_version);
+        (*mutable_entries)[id].set_encoding_version(encoding_version);
       }
 
       if (trigger_callbacks) {
@@ -527,7 +544,8 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
         if (!result.ok()) {
           VMSDK_LOG(WARNING, detached_ctx_.get())
               << "Failed during reconciliation callback: %s"
-              << result.message().data();
+              << result.message().data() << " for type " << type_name << ", id "
+              << id << " from " << source;
           return result;
         }
       }
@@ -634,6 +652,7 @@ absl::Status MetadataManager::LoadMetadata(
     // could happen if a module triggers a load after we have already been
     // running.
     VMSDK_RETURN_IF_ERROR(ReconcileMetadata(section->global_metadata_contents(),
+                                            "RDB Load",
                                             /*trigger_callbacks=*/false,
                                             /*prefer_incoming=*/true));
   }
@@ -691,7 +710,7 @@ void MetadataManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     // Clear the local metadata, then use ReconcileMetadata to recompute
     // fingerprints in case encoding has changed.
     metadata_ = GlobalMetadata();
-    auto status = ReconcileMetadata(staged_metadata_.Get(),
+    auto status = ReconcileMetadata(staged_metadata_.Get(), "RDB Load Staged",
                                     /*trigger_callbacks=*/false,
                                     /*prefer_incoming=*/true);
     if (!status.ok()) {

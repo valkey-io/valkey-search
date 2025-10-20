@@ -129,12 +129,13 @@ SchemaManager::SchemaManager(
           }});
   if (coordinator_enabled) {
     coordinator::MetadataManager::Instance().RegisterType(
-        kSchemaManagerMetadataTypeName, kMetadataEncodingVersion,
-        ComputeFingerprint,
+        kSchemaManagerMetadataTypeName,
+        SchemaManagerEncodingVersion::kMaximumSupported, ComputeFingerprint,
         [this](uint32_t db_num, absl::string_view id,
                const google::protobuf::Any *metadata) -> absl::Status {
           return this->OnMetadataCallback(db_num, id, metadata);
-        });
+        },
+        ComputeEncodingVersion);
   }
 }
 
@@ -347,6 +348,25 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
   highwayhash::HighwayHashT(&state, serialized_entry.data(),
                             serialized_entry.size(), &entry_fingerprint);
   return entry_fingerprint;
+}
+
+//
+// Determine the minimum encoding version required to interpret the metadata for
+// this Schema
+//
+absl::StatusOr<uint32_t> SchemaManager::ComputeEncodingVersion(
+    const google::protobuf::Any &metadata) {
+  auto unpacked = std::make_unique<data_model::IndexSchema>();
+  if (!metadata.UnpackTo(unpacked.get())) {
+    return absl::InternalError(
+        "Unable to unpack metadata for index schema fingerprint "
+        "calculation");
+  }
+  if (unpacked->has_db_num() && unpacked->db_num() != 0) {
+    return SchemaManagerEncodingVersion::kDbNumSupport;
+  } else {
+    return SchemaManagerEncodingVersion::kInitialRelease;
+  }
 }
 
 absl::Status SchemaManager::OnMetadataCallback(

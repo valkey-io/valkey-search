@@ -124,7 +124,8 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
           };
           callbacks_tracker.push_back(std::move(callback_result));
           return type_to_register.status_to_return;
-        });
+        },
+        [&](auto) { return type_to_register.encoding_version; });
   }
   if (test_case.expect_num_broadcasts > 0) {
     EXPECT_CALL(*kMockValkeyModule,
@@ -546,7 +547,8 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
               .has_content = metadata != nullptr,
           });
           return type_to_register.status_to_return;
-        });
+        },
+        [&](auto) { return type_to_register.encoding_version; });
   }
 
   if (test_case.expect_broadcast) {
@@ -1166,7 +1168,7 @@ INSTANTIATE_TEST_SUITE_P(
                 )",
         },
         {
-            .test_name = "CollisionResolveByEncodingVersionAcceptProposed",
+            .test_name = "RejectHigherEncodingVersion",
             .existing_metadata_pbtxt = R"(
                 version_header {
                   top_level_version: 1
@@ -1222,14 +1224,7 @@ INSTANTIATE_TEST_SUITE_P(
             .get_global_metadata_status = absl::OkStatus(),
             .expect_get_cluster_node_info = true,
             .expect_reconcile = true,
-            .expected_callbacks =
-                {
-                    {
-                        .type_name = "my_type",
-                        .id = "my_id",
-                        .has_content = true,
-                    },
-                },
+            .expected_callbacks = {},
             .expected_metadata_pbtxt = R"(
                   version_header {
                     top_level_version: 1
@@ -1241,11 +1236,11 @@ INSTANTIATE_TEST_SUITE_P(
                         key: "my_id"
                         value {
                           version: 1
-                          fingerprint: 1111
-                          encoding_version: 2
+                          fingerprint: 9999
+                          encoding_version: 1
                           content {
                             type_url: "type.googleapis.com/FakeType"
-                            value: "serialized_content_2"
+                            value: "serialized_content_1"
                           }
                         }
                       }
@@ -1833,7 +1828,8 @@ TEST_F(MetadataManagerTimestampTest,
             -1);
 
   // Reconcile metadata successfully
-  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(proposed_metadata));
+  VMSDK_EXPECT_OK(
+      test_metadata_manager_->ReconcileMetadata(proposed_metadata, "test"));
 
   // Now should return 0 (current time - current time = 0)
   EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
@@ -1853,7 +1849,8 @@ TEST_F(MetadataManagerTimestampTest, TestTimestampCalculation) {
       kV1Metadata, &proposed_metadata));
 
   // Reconcile metadata at time 1000000ms
-  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(proposed_metadata));
+  VMSDK_EXPECT_OK(
+      test_metadata_manager_->ReconcileMetadata(proposed_metadata, "test"));
 
   // Test various time differences
   struct TestCase {
@@ -1890,7 +1887,8 @@ TEST_F(MetadataManagerTimestampTest,
       google::protobuf::TextFormat::ParseFromString(kV2Metadata, &metadata2));
 
   // First reconciliation at time 1000000ms
-  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(metadata1));
+  VMSDK_EXPECT_OK(
+      test_metadata_manager_->ReconcileMetadata(metadata1, "test  "));
   EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
             0);
 
@@ -1900,7 +1898,7 @@ TEST_F(MetadataManagerTimestampTest,
             10000);
 
   // Second reconciliation - should update timestamp to current time
-  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(metadata2));
+  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(metadata2, "test"));
   EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
             0);
 
@@ -1928,10 +1926,12 @@ TEST_F(MetadataManagerTimestampTest,
       [](uint32_t db_num, absl::string_view id,
          const google::protobuf::Any* metadata) {
         return absl::InternalError("Callback failed");
-      });
+      },
+      [](auto) { return 1; });
 
   // Reconciliation should fail due to callback failure
-  auto status = test_metadata_manager_->ReconcileMetadata(proposed_metadata);
+  auto status =
+      test_metadata_manager_->ReconcileMetadata(proposed_metadata, "test");
   EXPECT_FALSE(status.ok());
 
   // But timestamp should not be updated since reconciliation failed
@@ -1947,7 +1947,8 @@ TEST_F(MetadataManagerTimestampTest, TestConcurrentAccess) {
       kV1Metadata, &proposed_metadata));
 
   // First, reconcile some metadata so we have a valid timestamp
-  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(proposed_metadata));
+  VMSDK_EXPECT_OK(
+      test_metadata_manager_->ReconcileMetadata(proposed_metadata, "test"));
 
   constexpr int kNumThreads = 8;
   constexpr int kCallsPerThread = 100;
@@ -2000,7 +2001,8 @@ TEST_F(MetadataManagerTimestampTest, TestTimestampPersistsAcrossLoadMetadata) {
       kV1Metadata, &proposed_metadata));
 
   // First reconciliation
-  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(proposed_metadata));
+  VMSDK_EXPECT_OK(
+      test_metadata_manager_->ReconcileMetadata(proposed_metadata, "test"));
   EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
             0);
 

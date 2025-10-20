@@ -92,7 +92,7 @@ while [ $# -gt 0 ]; do
     --unittest-output=*)
         UNITTEST_OUTPUT="${arg#*=}"
         shift || true
-        #echo "Unit Test Output Directory: ${UNITTEST_OUTPUT}"
+        echo "Unit Test Output Directory: ${UNITTEST_OUTPUT} ** not yet implemented **"
         # Not currently implemented in build.sh, but used by upstream build_ubuntu.sh
         ;;
     --run-integration-tests)
@@ -103,7 +103,7 @@ while [ $# -gt 0 ]; do
     --integration-output=*)
         INTEGRATION_OUTPUT="${arg#*=}"
         shift || true
-        # echo "Integration Test Output Directory: ${INTEGRATION_OUTPUT}"
+        echo "Integration Test Output Directory: ${INTEGRATION_OUTPUT} ** not yet implemented **"
         # Not currently implemented in build.sh, but used by upstream build_ubuntu.sh
         ;;
     --run-integration-tests=*)
@@ -152,6 +152,7 @@ while [ $# -gt 0 ]; do
         exit 0
         ;;
     *)
+        echo "Unknown argument: ${arg}"
         print_usage
         exit 1
         ;;

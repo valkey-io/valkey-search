@@ -34,7 +34,7 @@ template <typename T>
 static T OnGetConfig(const char *config_name, void *priv_data) {
   auto entry = static_cast<ConfigBase<T> *>(priv_data);
   CHECK(entry) << "null private data for Boolean configuration entry.";
-  return static_cast<int>(entry->GetValue());
+  return entry->GetValue();
 }
 
 template <typename T>

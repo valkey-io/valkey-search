@@ -789,9 +789,9 @@ absl::Status MetadataManager::ShowMetadata(
 }
 
 /*
-An 8/1.0 encoded string won't have a hashtag anywhere and is always for
-  db_num == 0 An 9/1.1 encoded string will always have a false-hashtag at
-  the START AND may have a real hashtag after that.
+An 8/1.0(Valkey 8, Search 1.0) encoded string won't have a hashtag anywhere and
+is always for db_num == 0 An 9/1.1 encoded string will always have a
+false-hashtag at the START AND may have a real hashtag after that.
 
 Decoded strings that lack a hashtag and are for db_num == 0, are encoded with
 the 8/1.0 rules All other decoded strings are encoded according to the 9/1.1
@@ -817,7 +817,7 @@ MetadataManager::DecodedDbNum MetadataManager::DecodeDbNum(
         front_tag.remove_prefix(1);
       }
       if (!front_tag.empty()) {
-        VMSDK_LOG_EVERY_N(NOTICE, nullptr, 1000)
+        VMSDK_LOG_EVERY_N_SEC(NOTICE, nullptr, 10)
             << "Ignoring extended index name metadata";
       }
       if (!db_num_str.empty()) {

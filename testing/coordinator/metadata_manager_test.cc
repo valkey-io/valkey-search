@@ -40,10 +40,11 @@ using ::testing::ValuesIn;
 
 struct TypeToRegister {
   std::string type_name;
-  uint64_t encoding_version{1};
+  uint64_t max_encoding_version{1};
   absl::Status status_to_return;
   absl::StatusOr<uint64_t> fingerprint_to_return{
       absl::UnimplementedError("Fingerprint not set")};
+  absl::StatusOr<uint32_t> encoding_version_to_return{1};
 };
 
 struct CallbackResult {
@@ -110,7 +111,7 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
   std::vector<CallbackResult> callbacks_tracker;
   for (auto& type_to_register : test_case.types_to_register) {
     test_metadata_manager_->RegisterType(
-        type_to_register.type_name, type_to_register.encoding_version,
+        type_to_register.type_name, type_to_register.max_encoding_version,
         [&](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
           return type_to_register.fingerprint_to_return;
         },
@@ -125,7 +126,7 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
           callbacks_tracker.push_back(std::move(callback_result));
           return type_to_register.status_to_return;
         },
-        [&](auto) { return type_to_register.encoding_version; });
+        [&](auto) { return type_to_register.encoding_version_to_return; });
   }
   if (test_case.expect_num_broadcasts > 0) {
     EXPECT_CALL(*kMockValkeyModule,
@@ -534,7 +535,7 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
   std::vector<CallbackResult> callbacks_tracker;
   for (const auto& type_to_register : test_case.types_to_register) {
     test_metadata_manager_->RegisterType(
-        type_to_register.type_name, type_to_register.encoding_version,
+        type_to_register.type_name, type_to_register.max_encoding_version,
         [&](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
           return type_to_register.fingerprint_to_return;
         },
@@ -548,7 +549,7 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
           });
           return type_to_register.status_to_return;
         },
-        [&](auto) { return type_to_register.encoding_version; });
+        [&](auto) { return type_to_register.encoding_version_to_return; });
   }
 
   if (test_case.expect_broadcast) {
@@ -623,6 +624,10 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
                                      test_case.expected_callbacks.end()));
 
   auto actual_metadata = test_metadata_manager_->GetGlobalMetadata();
+  std::cout << "Actual Metadata: " << actual_metadata->DebugString()
+            << std::endl;
+  std::cout << "Expected Metadata: " << expected_metadata.DebugString()
+            << std::endl;
   EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
       *actual_metadata, expected_metadata));
 }
@@ -840,9 +845,10 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .encoding_version = 2,
+                        .max_encoding_version = 2,
                         .status_to_return = absl::OkStatus(),
                         .fingerprint_to_return = 5678,
+                        .encoding_version_to_return = 2,
                     },
                 },
             .get_global_metadata_status = absl::OkStatus(),
@@ -888,7 +894,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .encoding_version = 2,
+                        .max_encoding_version = 2,
                         .status_to_return = absl::OkStatus(),
                         .fingerprint_to_return = absl::InternalError("Failed"),
                     },
@@ -948,7 +954,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .encoding_version = 1,
+                        .max_encoding_version = 1,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
@@ -1049,7 +1055,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .encoding_version = 1,
+                        .max_encoding_version = 1,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
@@ -1137,7 +1143,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .encoding_version = 1,
+                        .max_encoding_version = 1,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
@@ -1168,7 +1174,7 @@ INSTANTIATE_TEST_SUITE_P(
                 )",
         },
         {
-            .test_name = "RejectHigherEncodingVersion",
+            .test_name = "CollisionResolveByEncodingVersionAcceptProposed",
             .existing_metadata_pbtxt = R"(
                 version_header {
                   top_level_version: 1
@@ -1217,14 +1223,21 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .encoding_version = 1,
+                        .max_encoding_version = 2,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
             .get_global_metadata_status = absl::OkStatus(),
             .expect_get_cluster_node_info = true,
             .expect_reconcile = true,
-            .expected_callbacks = {},
+            .expected_callbacks =
+                {
+                    {
+                        .type_name = "my_type",
+                        .id = "my_id",
+                        .has_content = true,
+                    },
+                },
             .expected_metadata_pbtxt = R"(
                   version_header {
                     top_level_version: 1
@@ -1236,11 +1249,11 @@ INSTANTIATE_TEST_SUITE_P(
                         key: "my_id"
                         value {
                           version: 1
-                          fingerprint: 9999
-                          encoding_version: 1
+                          fingerprint: 1111
+                          encoding_version: 2
                           content {
                             type_url: "type.googleapis.com/FakeType"
-                            value: "serialized_content_1"
+                            value: "serialized_content_2"
                           }
                         }
                       }
@@ -1298,7 +1311,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .encoding_version = 2,
+                        .max_encoding_version = 2,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
@@ -1318,6 +1331,86 @@ INSTANTIATE_TEST_SUITE_P(
                         version: 1
                         fingerprint: 1111
                         encoding_version: 2
+                        content {
+                          type_url: "type.googleapis.com/FakeType"
+                          value: "serialized_content_1"
+                        }
+                      }
+                    }
+                  }
+                }
+              )",
+        },
+        {
+            .test_name = "EncodingVersionTooLarge",
+            .existing_metadata_pbtxt = R"(
+                version_header {
+                  top_level_version: 1
+                }
+                type_namespace_map {
+                  key: "my_type"
+                  value {
+                    entries {
+                      key: "my_id"
+                      value {
+                        version: 1
+                        fingerprint: 1111
+                        encoding_version: 1
+                        content {
+                          type_url: "type.googleapis.com/FakeType"
+                          value: "serialized_content_1"
+                        }
+                      }
+                    }
+                  }
+                }
+              )",
+            .proposed_metadata_pbtxt = R"(
+                version_header {
+                  top_level_version: 1
+                }
+                type_namespace_map {
+                  key: "my_type"
+                  value {
+                    entries {
+                      key: "my_id"
+                      value {
+                        version: 2
+                        fingerprint: 9999
+                        encoding_version: 2
+                        content {
+                          type_url: "type.googleapis.com/FakeType"
+                          value: "serialized_content_2"
+                        }
+                      }
+                    }
+                  }
+                }
+              )",
+            .types_to_register =
+                {
+                    {
+                        .type_name = "my_type",
+                        .max_encoding_version = 1,
+                        .status_to_return = absl::OkStatus(),
+                    },
+                },
+            .get_global_metadata_status = absl::OkStatus(),
+            .expect_get_cluster_node_info = true,
+            .expect_reconcile = true,
+            .expected_metadata_pbtxt = R"(
+                version_header {
+                  top_level_version: 1
+                }
+                type_namespace_map {
+                  key: "my_type"
+                  value {
+                    entries {
+                      key: "my_id"
+                      value {
+                        version: 1
+                        fingerprint: 1111
+                        encoding_version: 1
                         content {
                           type_url: "type.googleapis.com/FakeType"
                           value: "serialized_content_1"
@@ -1374,7 +1467,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .encoding_version = 1,
+                        .max_encoding_version = 1,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
@@ -1501,7 +1594,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .encoding_version = 2,
+                        .max_encoding_version = 2,
                         .status_to_return = absl::OkStatus(),
                     },
                 },

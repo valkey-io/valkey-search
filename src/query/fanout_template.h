@@ -2,9 +2,11 @@
 
 #include <netinet/in.h>
 
+#include <algorithm>
 #include <functional>
 #include <ostream>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
@@ -13,6 +15,8 @@
 #include "absl/strings/str_cat.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/util.h"
+#include "src/valkey_search.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -51,6 +55,45 @@ struct FanoutSearchTarget {
 // Template class for fanout operations across cluster nodes
 class FanoutTemplate {
  public:
+  // Helper function to check if system is under low utilization
+  static bool IsSystemUnderLowUtilization() {
+    // Get the configured threshold
+    double threshold = static_cast<double>(
+        valkey_search::options::GetLowUtilizationThreshold().GetValue());
+    
+    // Check CPU utilization from both reader and writer thread pools
+    auto& valkey_search_instance = valkey_search::ValkeySearch::Instance();
+    auto reader_pool = valkey_search_instance.GetReaderThreadPool();
+    auto writer_pool = valkey_search_instance.GetWriterThreadPool();
+    
+    double avg_cpu = 0.0;
+    int pool_count = 0;
+    
+    if (reader_pool) {
+      auto cpu_result = reader_pool->GetAvgCPUPercentage();
+      if (cpu_result.ok()) {
+        avg_cpu += cpu_result.value();
+        pool_count++;
+      }
+    }
+    
+    if (writer_pool) {
+      auto cpu_result = writer_pool->GetAvgCPUPercentage();
+      if (cpu_result.ok()) {
+        avg_cpu += cpu_result.value();
+        pool_count++;
+      }
+    }
+    
+    if (pool_count == 0) {
+      // If we can't get CPU info, default to not preferring local
+      return false;
+    }
+    
+    avg_cpu /= pool_count;
+    return avg_cpu < threshold;
+  }
+
   // Convenience method for FanoutSearchTarget with default lambdas
   static std::vector<FanoutSearchTarget> GetTargets(
       ValkeyModuleCtx* ctx,
@@ -146,8 +189,8 @@ class FanoutTemplate {
             target_mode == FanoutTargetMode::kReplicasOnly);
       // Original logic: group master and replica into shards and randomly
       // select one, unless confined to replicas only
-      absl::flat_hash_map<std::string, std::vector<size_t>>
-          shard_id_to_node_indices;
+      absl::flat_hash_map<std::string, std::vector<TargetType>>
+          shard_id_to_targets;
 
       for (size_t i = 0; i < num_nodes; ++i) {
         std::string node_id(nodes.get()[i], VALKEYMODULE_NODE_ID_LEN);
@@ -176,35 +219,47 @@ class FanoutTemplate {
           }
         }
 
-        // Store only the node index
-        shard_id_to_node_indices[master_id_str].push_back(i);
-      }
-
-      // Random selection first, then create only the selected target objects
-      absl::BitGen gen;
-      for (const auto& [shard_id, node_indices] : shard_id_to_node_indices) {
-        size_t index = absl::Uniform(gen, 0u, node_indices.size());
-        size_t selected_node_index = node_indices.at(index);
-
-        // Re-fetch node info only for the selected node
-        std::string node_id(nodes.get()[selected_node_index],
-                            VALKEYMODULE_NODE_ID_LEN);
-        char ip[INET6_ADDRSTRLEN] = "";
-        char master_id[VALKEYMODULE_NODE_ID_LEN] = "";
-        int port;
-        int flags;
-        if (ValkeyModule_GetClusterNodeInfo(ctx, node_id.c_str(), ip, master_id,
-                                            &port, &flags) != VALKEYMODULE_OK) {
-          continue;
-        }
-
-        // Create target object only for the selected node
+        // Create and store the target directly
         if (flags & VALKEYMODULE_NODE_MYSELF) {
-          selected_targets.push_back(create_local_target());
+          shard_id_to_targets[master_id_str].push_back(create_local_target());
         } else {
-          selected_targets.push_back(create_remote_target(
+          shard_id_to_targets[master_id_str].push_back(create_remote_target(
               absl::StrCat(ip, ":", coordinator::GetCoordinatorPort(port))));
         }
+      }
+
+      // Select targets for each shard based on preference
+      absl::BitGen gen;
+      bool prefer_local = IsSystemUnderLowUtilization();
+      
+      for (const auto& [shard_id, shard_targets] : shard_id_to_targets) {
+        if (shard_targets.empty()) {
+          continue;
+        }
+        
+        // Select target based on preference
+        if (prefer_local && shard_targets.size() > 1) {
+          // Look for local target first
+          auto local_it = std::find_if(shard_targets.begin(), shard_targets.end(),
+                                       [](const TargetType& target) {
+                                         if constexpr (std::is_same_v<TargetType, FanoutSearchTarget>) {
+                                           return target.type == FanoutSearchTarget::Type::kLocal;
+                                         } else {
+                                           // For custom target types, we can't check the type
+                                           // Fall back to random selection
+                                           return false;
+                                         }
+                                       });
+          
+          if (local_it != shard_targets.end()) {
+            selected_targets.push_back(*local_it);
+            continue;
+          }
+        }
+        
+        // Random selection (fallback or normal mode)
+        size_t index = absl::Uniform(gen, 0u, shard_targets.size());
+        selected_targets.push_back(shard_targets[index]);
       }
     }
     return selected_targets;

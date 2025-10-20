@@ -61,5 +61,12 @@ config::Number& GetFTInfoTimeoutMs();
 /// Return the rpc timeout for ft.info fanout command
 config::Number& GetFTInfoRpcTimeoutMs();
 
+/// Return the queue wait threshold for preferring local node in fanout
+/// (milliseconds)
+config::Number& GetLocalFanoutQueueWaitThreshold();
+
+/// Return the sample queue size for thread pool wait time tracking
+config::Number& GetThreadPoolWaitTimeSamples();
+
 }  // namespace options
 }  // namespace valkey_search

@@ -8,6 +8,7 @@
 #include "vmsdk/src/thread_pool.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <memory>
 #include <numeric>
@@ -51,10 +52,13 @@ void *RunWorkerThread(void *arg) {
 
 namespace vmsdk {
 
-ThreadPool::ThreadPool(const std::string &name_prefix, size_t num_threads)
+ThreadPool::ThreadPool(const std::string &name_prefix, size_t num_threads,
+                       size_t sample_queue_size)
     : initial_thread_count_(num_threads),
       priority_tasks_(static_cast<int>(ThreadPool::Priority::kMax) + 1),
-      name_prefix_(name_prefix) {}
+      name_prefix_(name_prefix),
+      sample_queue_size_(sample_queue_size),
+      wait_time_samples_(sample_queue_size, 0.0) {}
 
 void ThreadPool::StartWorkers() {
   CHECK(!started_);
@@ -83,6 +87,10 @@ absl::StatusOr<double> ThreadPool::GetAvgCPUPercentage() {
     return sum_all_cpus;
   }
   return sum_all_cpus / cpu_results.size();
+}
+
+absl::StatusOr<double> ThreadPool::GetRecentQueueWaitTime() {
+  return recent_avg_wait_time_.load();
 }
 
 bool ThreadPool::Schedule(absl::AnyInvocable<void()> task, Priority priority) {
@@ -316,13 +324,57 @@ int ThreadPool::GetHighPriorityWeight() const {
   return high_priority_weight_.load(std::memory_order_relaxed);
 }
 
+void ThreadPool::AddWaitTimeSample(
+    std::chrono::steady_clock::time_point enqueue_time) {
+  double wait_time_ms = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now() - enqueue_time).count() / 1000.0;
+  
+  double old_sample = (current_sample_count_ >= sample_queue_size_) 
+      ? wait_time_samples_[sample_index_] : 0.0;
+  
+  wait_time_samples_[sample_index_] = wait_time_ms;
+  
+  if (current_sample_count_ < sample_queue_size_) current_sample_count_++;
+  
+  double current_avg = recent_avg_wait_time_.load();
+  double new_avg = current_avg + (wait_time_ms - old_sample) / 
+      std::min(current_sample_count_, sample_queue_size_);
+  recent_avg_wait_time_.store(new_avg);
+  
+  sample_index_ = (sample_index_ + 1) % sample_queue_size_;
+}
+
+void ThreadPool::ClearWaitTimeSamples() {
+  current_sample_count_ = 0;
+  sample_index_ = 0;
+  recent_avg_wait_time_.store(0.0);
+}
+
+void ThreadPool::ResizeSampleQueue(size_t new_size) {
+  absl::MutexLock lock(&queue_mutex_);
+  sample_queue_size_ = new_size;
+  wait_time_samples_.resize(new_size, 0.0);
+  ClearWaitTimeSamples();
+}
+
 std::optional<absl::AnyInvocable<void()>> ThreadPool::TryGetNextTask() {
+  // Clear samples when all queues are empty
+  bool all_empty = std::all_of(priority_tasks_.begin(), priority_tasks_.end(),
+                               [](const auto &queue) { return queue.empty(); });
+  if (all_empty) {
+    ClearWaitTimeSamples();
+    return std::nullopt;
+  }
+
   // Check for kMax priority first - always takes precedence
   if (!GetPriorityTasksQueue(Priority::kMax).empty()) {
     auto &max_queue = GetPriorityTasksQueue(Priority::kMax);
-    auto task = std::move(max_queue.front());
+    auto task_with_time = std::move(max_queue.front());
     max_queue.pop();
-    return task;
+
+    AddWaitTimeSample(task_with_time.enqueue_time);
+
+    return std::move(task_with_time.task);
   }
 
   // No kMax tasks - apply fairness between kHigh and kLow
@@ -362,9 +414,12 @@ std::optional<absl::AnyInvocable<void()>> ThreadPool::TryGetNextTask() {
   }
 
   auto &selected_queue = GetPriorityTasksQueue(selected_priority);
-  auto task = std::move(selected_queue.front());
+  auto task_with_time = std::move(selected_queue.front());
   selected_queue.pop();
-  return task;
+
+  AddWaitTimeSample(task_with_time.enqueue_time);
+
+  return std::move(task_with_time.task);
 }
 
 }  // namespace vmsdk

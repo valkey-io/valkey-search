@@ -735,4 +735,66 @@ TEST_P(ThreadPoolFairnessDistributionTest, MaxPriorityPreservation) {
   EXPECT_EQ(max_executed.load(), tasks_per_priority);
 }
 
+// ============================================================================
+// QUEUE WAIT TIME TRACKING TESTS
+// ============================================================================
+
+TEST_F(ThreadPoolTest, QueueWaitTimeTracking) {
+  // Test that our queue wait time tracking works correctly
+  ThreadPool pool("test", 2);
+  pool.StartWorkers();
+
+  // Initially, no queue wait time should be recorded
+  auto initial_wait_time = pool.GetRecentQueueWaitTime();
+  ASSERT_TRUE(initial_wait_time.ok());
+  EXPECT_EQ(initial_wait_time.value(), 0.0);
+
+  // Schedule some tasks that will create queue wait time
+  for (int i = 0; i < 5; ++i) {
+    pool.Schedule(
+        [i]() { std::this_thread::sleep_for(std::chrono::milliseconds(50)); },
+        ThreadPool::Priority::kHigh);
+  }
+
+  // Wait for tasks to process
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+  // Now there should be some queue wait time recorded
+  auto final_wait_time = pool.GetRecentQueueWaitTime();
+  ASSERT_TRUE(final_wait_time.ok());
+  EXPECT_GT(final_wait_time.value(), 0.0);
+
+  pool.JoinWorkers();
+}
+
+TEST_F(ThreadPoolTest, QueueWaitTimeWithDifferentPriorities) {
+  // Test queue wait time tracking with different priority tasks
+  ThreadPool pool("test", 1);  // Single thread to ensure queuing
+  pool.StartWorkers();
+
+  // Schedule high priority tasks
+  for (int i = 0; i < 3; ++i) {
+    pool.Schedule(
+        [i]() { std::this_thread::sleep_for(std::chrono::milliseconds(30)); },
+        ThreadPool::Priority::kHigh);
+  }
+
+  // Schedule low priority tasks
+  for (int i = 0; i < 3; ++i) {
+    pool.Schedule(
+        [i]() { std::this_thread::sleep_for(std::chrono::milliseconds(30)); },
+        ThreadPool::Priority::kLow);
+  }
+
+  // Wait for tasks to process
+  std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+  // Verify queue wait time is tracked
+  auto wait_time = pool.GetRecentQueueWaitTime();
+  ASSERT_TRUE(wait_time.ok());
+  EXPECT_GT(wait_time.value(), 0.0);
+
+  pool.JoinWorkers();
+}
+
 }  // namespace vmsdk

@@ -89,7 +89,7 @@ while [ $# -gt 0 ]; do
         shift || true
         echo "Running test ${RUN_TEST}"
         ;;
-    --uniitest-output=*)
+    --unittest-output=*)
         UNITTEST_OUTPUT="${arg#*=}"
         shift || true
         #echo "Unit Test Output Directory: ${UNITTEST_OUTPUT}"

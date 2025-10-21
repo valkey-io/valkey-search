@@ -114,7 +114,7 @@ TEST_F(TagIndexTest, ModifyRecordWithEmptyString) {
   auto entries_fetcher = index->Search(predicate, false);
 
   EXPECT_EQ(entries_fetcher->Size(), 0);
-  EXPECT_EQ(index->GetRecordCount(), 0);
+  EXPECT_EQ(index->GetTrackedKeyCount(), 0);
 }
 
 TEST_F(TagIndexTest, KeyTrackingTest) {

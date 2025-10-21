@@ -277,12 +277,6 @@ absl::StatusOr<std::vector<char>> VectorBase::GetValue(
   return result;
 }
 
-bool VectorBase::IsTracked(const InternedStringPtr &key) const {
-  absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
-  auto it = tracked_metadata_by_key_.find(key);
-  return (it != tracked_metadata_by_key_.end());
-}
-
 absl::StatusOr<bool> VectorBase::RemoveRecord(
     const InternedStringPtr &key,
     [[maybe_unused]] indexes::DeletionType deletion_type) {
@@ -524,9 +518,35 @@ vmsdk::UniqueValkeyString VectorBase::NormalizeStringRecord(
   return vmsdk::MakeUniqueValkeyString(binary_string);
 }
 
-uint64_t VectorBase::GetRecordCount() const {
+size_t VectorBase::GetTrackedKeyCount() const {
   absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
   return key_by_internal_id_.size();
+}
+
+size_t VectorBase::GetUnTrackedKeyCount() const { return 0; }
+
+bool VectorBase::IsTracked(const InternedStringPtr &key) const {
+  absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
+  auto it = tracked_metadata_by_key_.find(key);
+  return (it != tracked_metadata_by_key_.end());
+}
+
+bool VectorBase::IsUnTracked(const InternedStringPtr &key) const {
+  return false;
+}
+
+absl::Status VectorBase::ForEachTrackedKey(
+    absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
+  absl::MutexLock lock(&key_to_metadata_mutex_);
+  for (const auto &[key, _] : tracked_metadata_by_key_) {
+    VMSDK_RETURN_IF_ERROR(fn(key));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status VectorBase::ForEachUnTrackedKey(
+    absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
+  return absl::OkStatus();
 }
 
 template void VectorBase::Init<float>(

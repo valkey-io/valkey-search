@@ -119,8 +119,6 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
                                         indexes::DeletionType::kNone) override;
   absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
                                     absl::string_view record) override;
-  bool IsTracked(const InternedStringPtr& key) const override
-      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   virtual size_t GetCapacity() const = 0;
   bool GetNormalize() const { return normalize_; }
   std::unique_ptr<data_model::Index> ToProto() const override;
@@ -130,13 +128,19 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   absl::Status LoadTrackedKeys(ValkeyModuleCtx* ctx,
                                const AttributeDataType* attribute_data_type,
                                SupplementalContentChunkIter&& iter);
-  void ForEachTrackedKey(
-      absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override {
-    absl::MutexLock lock(&key_to_metadata_mutex_);
-    for (const auto& [key, _] : tracked_metadata_by_key_) {
-      fn(key);
-    }
-  }
+
+  size_t GetTrackedKeyCount() const override;
+  size_t GetUnTrackedKeyCount() const override;
+  bool IsTracked(const InternedStringPtr& key) const override
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+  bool IsUnTracked(const InternedStringPtr& key) const override;
+  absl::Status ForEachTrackedKey(
+      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      const override;
+  absl::Status ForEachUnTrackedKey(
+      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      const override;
+
   absl::StatusOr<InternedStringPtr> GetKeyDuringSearch(
       uint64_t internal_id) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   bool AddPrefilteredKey(
@@ -145,7 +149,6 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       absl::flat_hash_set<const char*>& top_keys) const;
   vmsdk::UniqueValkeyString NormalizeStringRecord(
       vmsdk::UniqueValkeyString record) const override;
-  uint64_t GetRecordCount() const override;
   template <typename T>
   absl::StatusOr<std::deque<Neighbor>> CreateReply(
       std::priority_queue<std::pair<T, hnswlib::labeltype>>& knn_res);

@@ -78,7 +78,7 @@ jobs:
 
           for FILE in $MODIFIED_FILES; do
             echo "Running clang-format check on $FILE"
-            docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image \
+            docker run --rm --privileged -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image \
             bash -c "ci/check_clang_format.sh \"$FILE\""
             
             # TODO: Enable clang tidy after the existing code is tidied

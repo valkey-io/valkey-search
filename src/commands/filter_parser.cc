@@ -554,8 +554,6 @@ FilterParser::BuildSingleTextPredicate(const indexes::Text* text_index,
   return std::make_unique<query::TermPredicate>(text_index, field_mask, stemmed_token);
 }
 
-// What we use in ingestion: ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|"
-
 absl::StatusOr<std::vector<std::unique_ptr<query::TextPredicate>>>
 FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_for_default) {
   // Get text index for punctuation and stop word configuration
@@ -619,36 +617,26 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
     if (!in_quotes && !escaped && (c == ')' || c == '|' || c == '(' || c == '@' || c == '-')) {
       break;
     }
+    if (!in_quotes && !escaped && c == '*') {
+      curr.push_back(c);
+      ++pos_;
+      // If curr starts with '*', continue parsing to get the suffix pattern
+      if (curr.size() == 1) {
+        continue;
+      }
+      break;
+    }
+    // if (!in_quotes && !escaped && c == '%') {
+
+    // }
     // TODO: Test that we don't strip out valid characters in the search query.
-    if (!(c == '%' || c == '*') && (std::isspace(static_cast<unsigned char>(c)) || (!escaped && lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())))) {
+    // What we use in ingestion: ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|"
+    if (!(c == '%') && (!escaped && lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap()))) {
       VMSDK_RETURN_IF_ERROR(push_token(curr));
       // Handle the case of non exact phrase.
       if (!in_quotes) break;
       ++pos_;
       continue;
-    }
-    if (!in_quotes && !escaped && c == '*') {
-      curr.push_back(c);
-      ++pos_;
-      // // If this is the first character (suffix pattern like *h), continue parsing
-      // if (curr.size() == 1) {
-      //   continue;
-      // }
-      // // Otherwise it's a prefix pattern (like hello*), push token and break
-      // VMSDK_RETURN_IF_ERROR(push_token(curr));
-      // Always break after encountering *, regardless of position
-      // This allows the caller to handle the next part separately
-      // VMSDK_RETURN_IF_ERROR(push_token(curr));
-      // break;
-
-      // If curr starts with '*', continue parsing to get the suffix pattern
-      if (curr.size() == 1 && curr[0] == '*') {
-        continue;
-      }
-      
-      // Otherwise, we have a prefix pattern, break after the *
-      VMSDK_RETURN_IF_ERROR(push_token(curr));
-      break;
     }
     // Regular character
     curr.push_back(c);

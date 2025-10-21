@@ -24,6 +24,7 @@
 
 namespace valkey_search {
 
+// Check this:
 static constexpr absl::string_view kDefaultPunctuation =
     ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|";
 

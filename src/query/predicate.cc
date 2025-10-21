@@ -26,12 +26,11 @@ bool NegatePredicate::Evaluate(Evaluator& evaluator) const {
 }
 
 TermPredicate::TermPredicate(const indexes::Text* index,
-                             absl::string_view identifier,
-                             absl::string_view alias, std::string term)
+                            FieldMaskPredicate field_mask, std::string term)
     : TextPredicate(),
       index_(index),
-      identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
-      alias_(alias),
+      // identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
+      field_mask_(field_mask),
       term_(term) {}
 
 bool TermPredicate::Evaluate(Evaluator& evaluator) const {
@@ -45,12 +44,12 @@ bool TermPredicate::Evaluate(const std::string_view& text) const {
 }
 
 PrefixPredicate::PrefixPredicate(const indexes::Text* index,
-                                 absl::string_view identifier,
-                                 absl::string_view alias, std::string term)
+                            FieldMaskPredicate field_mask, std::string term)
     : TextPredicate(),
       index_(index),
-      identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
-      alias_(alias),
+      // identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
+      // alias_(alias),
+      field_mask_(field_mask),
       term_(term) {}
 
 bool PrefixPredicate::Evaluate(Evaluator& evaluator) const {
@@ -63,12 +62,12 @@ bool PrefixPredicate::Evaluate(const std::string_view& text) const {
 }
 
 SuffixPredicate::SuffixPredicate(const indexes::Text* index,
-                                 absl::string_view identifier,
-                                 absl::string_view alias, std::string term)
+                            FieldMaskPredicate field_mask, std::string term)
     : TextPredicate(),
       index_(index),
-      identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
-      alias_(alias),
+      // identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
+      // alias_(alias),
+      field_mask_(field_mask),
       term_(term) {}
 
 bool SuffixPredicate::Evaluate(Evaluator& evaluator) const {
@@ -81,12 +80,12 @@ bool SuffixPredicate::Evaluate(const std::string_view& text) const {
 }
 
 InfixPredicate::InfixPredicate(const indexes::Text* index,
-                               absl::string_view identifier,
-                               absl::string_view alias, std::string term)
+                            FieldMaskPredicate field_mask, std::string term)
     : TextPredicate(),
       index_(index),
-      identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
-      alias_(alias),
+      // identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
+      // alias_(alias),
+      field_mask_(field_mask),
       term_(term) {}
 
 bool InfixPredicate::Evaluate(Evaluator& evaluator) const {
@@ -99,13 +98,13 @@ bool InfixPredicate::Evaluate(const std::string_view& text) const {
 }
 
 FuzzyPredicate::FuzzyPredicate(const indexes::Text* index,
-                               absl::string_view identifier,
-                               absl::string_view alias, std::string term,
+                               FieldMaskPredicate field_mask, std::string term,
                                uint32_t distance)
     : TextPredicate(),
       index_(index),
-      identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
-      alias_(alias),
+      // identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
+      // alias_(alias),
+      field_mask_(field_mask),
       term_(term),
       distance_(distance) {}
 

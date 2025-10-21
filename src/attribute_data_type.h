@@ -43,6 +43,7 @@ class RecordsMapValue {
   absl::variant<ValkeyModuleString *, vmsdk::UniqueValkeyString> identifier_;
 };
 
+// Change to struct
 using RecordsMap = absl::flat_hash_map<absl::string_view, RecordsMapValue>;
 
 class AttributeDataType {

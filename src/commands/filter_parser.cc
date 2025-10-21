@@ -149,28 +149,28 @@ void PrintPredicate(const query::Predicate* pred, int depth, bool last,
       } else if (auto term = dynamic_cast<const query::TermPredicate*>(pred)) {
         VMSDK_LOG(WARNING, nullptr)
             << prefix << "TERM(" << term->GetTextString() << ")_"
-            << term->GetIdentifier() << "\n";
+            << term->GetFieldMask() << "\n";
       } else if (auto pre = dynamic_cast<const query::PrefixPredicate*>(pred)) {
         VMSDK_LOG(WARNING, nullptr)
             << prefix << "PREFIX(" << pre->GetTextString() << ")_"
-            << pre->GetIdentifier() << "\n";
+            << pre->GetFieldMask() << "\n";
       } else if (auto pre = dynamic_cast<const query::SuffixPredicate*>(pred)) {
         valid = false;
         VMSDK_LOG(WARNING, nullptr)
             << prefix << "Suffix(" << pre->GetTextString() << ")_"
-            << pre->GetIdentifier() << "\n";
+            << pre->GetFieldMask() << "\n";
       } else if (auto pre = dynamic_cast<const query::InfixPredicate*>(pred)) {
         valid = false;
         VMSDK_LOG(WARNING, nullptr)
             << prefix << "Infix(" << pre->GetTextString() << ")_"
-            << pre->GetIdentifier() << "\n";
+            << pre->GetFieldMask() << "\n";
       } else if (auto fuzzy =
                      dynamic_cast<const query::FuzzyPredicate*>(pred)) {
         valid = false;
         VMSDK_LOG(WARNING, nullptr)
             << prefix << "FUZZY(" << fuzzy->GetTextString()
             << ", distance=" << fuzzy->GetDistance() << ")_"
-            << fuzzy->GetIdentifier() << "\n";
+            << fuzzy->GetFieldMask() << "\n";
       } else {
         valid = false;
         VMSDK_LOG(WARNING, nullptr) << prefix << "UNKNOWN TEXT\n";
@@ -459,25 +459,38 @@ FilterParser::BuildSingleTextPredicate(const indexes::Text* text_index,
   if (token.empty()) {
     return absl::InvalidArgumentError("Empty text token");
   }
+  uint64_t field_mask;
   // TODO: If no field specified, add all the text fields here.
-  // if (!field_name.has_value()) {
-  //   // Add all text field identifiers to filter_identifiers_
-  //   auto text_identifiers = index_schema_.GetAllTextIdentifiers();
-  //   for (const auto& identifier : text_identifiers) {
-  //     filter_identifiers_.insert(identifier);
-  //   }
-  // } else {
-  //   auto identifier = index_schema_.GetIdentifier(field_name.value()).value();
-  //   filter_identifiers_.insert(identifier);
-  // }
+  if (!field_name.has_value()) {
+    // Global search - set all bits
+    field_mask = ~0ULL;
+    // Add all text field identifiers to filter_identifiers_
+    auto text_identifiers = index_schema_.GetAllTextIdentifiers();
+    for (const auto& identifier : text_identifiers) {
+      filter_identifiers_.insert(identifier);
+    }
+  } else {
+    auto identifier = index_schema_.GetIdentifier(field_name.value()).value();
+    filter_identifiers_.insert(identifier);
+    // Set single bit for this specific field
+    auto field_number = text_index->GetTextFieldNumber();
+    field_mask = 1ULL << field_number;
+  }
   // Delete the code below and implement the code above. It needs a 
   // solution for the predicates. They currently require an alias and a field identifier.
-  if (!field_name.has_value()) {
-    return absl::InvalidArgumentError("Missing field name");
-  }
-  auto identifier = index_schema_.GetIdentifier(*field_name).value();
-  filter_identifiers_.insert(identifier);
+  // Can we hack this by using the first text field in the schema as the
+  // identifier? Do we even need the identifier for text predicates?
+  // // DELETE START
+  // VMSDK_LOG(WARNING, nullptr) << "Do i get here10?";
+  // if (!field_name.has_value()) {
+  //   return absl::InvalidArgumentError("Missing field name");
+  // }
+  // auto identifier = index_schema_.GetIdentifier(*field_name).value();
+  // filter_identifiers_.insert(identifier);
+  // auto field_mask = 1ULL << text_index->GetTextFieldNumber();
+  // // DELETE STOP
   // --- Fuzzy ---
+  VMSDK_LOG(WARNING, nullptr) << "Do i get here9?";
   size_t lead_pct = 0;
   while (lead_pct < token.size() && token[lead_pct] == '%') {
     ++lead_pct;
@@ -503,38 +516,42 @@ FilterParser::BuildSingleTextPredicate(const indexes::Text* text_index,
       return absl::InvalidArgumentError("Empty fuzzy token");
     }
     return std::make_unique<query::FuzzyPredicate>(
-        text_index, identifier, *field_name, std::string(core), lead_pct);
+        text_index, field_mask, std::string(core), lead_pct);
   }
   // --- Wildcard ---
+  VMSDK_LOG(WARNING, nullptr) << "The wildcard string is: " << token;
   bool starts_star = !token.empty() && token.front() == '*';
   bool ends_star = !token.empty() && token.back() == '*';
   if (starts_star || ends_star) {
     absl::string_view core = token;
     if (starts_star) core.remove_prefix(1);
-    if (ends_star) core.remove_suffix(1);
+    if (!core.empty() && ends_star) core.remove_suffix(1);
     if (core.empty()) {
       return absl::InvalidArgumentError(
           "Wildcard token must contain at least one character besides '*'");
     }
+    VMSDK_LOG(WARNING, nullptr) << "Core Size: " << core.size();
+    VMSDK_LOG(WARNING, nullptr) << "Core: " << core;
     if (starts_star && ends_star) {
       return std::make_unique<query::InfixPredicate>(
-          text_index, identifier, *field_name, std::string(core));
+          text_index, field_mask, std::string(core));
     }
     if (starts_star) {
       return std::make_unique<query::SuffixPredicate>(
-          text_index, identifier, *field_name, std::string(core));
+          text_index, field_mask, std::string(core));
     }
     return std::make_unique<query::PrefixPredicate>(
-        text_index, identifier, *field_name, std::string(core));
+        text_index, field_mask, std::string(core));
   }
   // --- Term ---
   // TODO: Set this based on the command arguments.
+  VMSDK_LOG(WARNING, nullptr) << "Do i get here1?";
   bool should_stem = true;
   auto text_index_schema = text_index->GetTextIndexSchema();
   std::string word(token);
+  VMSDK_LOG(WARNING, nullptr) << "Do i get here2?";
   std::string stemmed_token = lexer.StemWord(word, text_index_schema->GetStemmer(), should_stem, text_index->GetMinStemSize());
-  return std::make_unique<query::TermPredicate>(text_index, identifier,
-                                                *field_name, stemmed_token);
+  return std::make_unique<query::TermPredicate>(text_index, field_mask, stemmed_token);
 }
 
 // What we use in ingestion: ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|"
@@ -599,10 +616,7 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
       ++pos_;
       continue;
     }
-    if (!in_quotes && !escaped && c == '-' && curr.empty()) {
-      break;
-    }
-    if (!in_quotes && !escaped && (c == ')' || c == '|' || c == '(' || c == '@')) {
+    if (!in_quotes && !escaped && (c == ')' || c == '|' || c == '(' || c == '@' || c == '-')) {
       break;
     }
     // TODO: Test that we don't strip out valid characters in the search query.
@@ -612,6 +626,29 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
       if (!in_quotes) break;
       ++pos_;
       continue;
+    }
+    if (!in_quotes && !escaped && c == '*') {
+      curr.push_back(c);
+      ++pos_;
+      // // If this is the first character (suffix pattern like *h), continue parsing
+      // if (curr.size() == 1) {
+      //   continue;
+      // }
+      // // Otherwise it's a prefix pattern (like hello*), push token and break
+      // VMSDK_RETURN_IF_ERROR(push_token(curr));
+      // Always break after encountering *, regardless of position
+      // This allows the caller to handle the next part separately
+      // VMSDK_RETURN_IF_ERROR(push_token(curr));
+      // break;
+
+      // If curr starts with '*', continue parsing to get the suffix pattern
+      if (curr.size() == 1 && curr[0] == '*') {
+        continue;
+      }
+      
+      // Otherwise, we have a prefix pattern, break after the *
+      VMSDK_RETURN_IF_ERROR(push_token(curr));
+      break;
     }
     // Regular character
     curr.push_back(c);

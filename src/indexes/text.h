@@ -108,6 +108,8 @@ class Text : public IndexBase {
   virtual std::unique_ptr<EntriesFetcher> Search(
       const query::TextPredicate& predicate,
       bool negate) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  
+  size_t GetTextFieldNumber() const { return text_field_number_; }
 
  private:
   // Each text field index within the schema is assigned a unique number, this

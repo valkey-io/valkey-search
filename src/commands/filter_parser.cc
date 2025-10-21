@@ -490,7 +490,7 @@ FilterParser::BuildSingleTextPredicate(const indexes::Text* text_index,
   // auto field_mask = 1ULL << text_index->GetTextFieldNumber();
   // // DELETE STOP
   // --- Fuzzy ---
-  VMSDK_LOG(WARNING, nullptr) << "Do i get here9?";
+  VMSDK_LOG(WARNING, nullptr) << "Attempt fuzzy: " << token;
   size_t lead_pct = 0;
   while (lead_pct < token.size() && token[lead_pct] == '%') {
     ++lead_pct;
@@ -617,23 +617,45 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
     if (!in_quotes && !escaped && (c == ')' || c == '|' || c == '(' || c == '@' || c == '-')) {
       break;
     }
-    if (!in_quotes && !escaped && c == '*') {
+    // if (!in_quotes && !escaped && c == '*') {
+    //   curr.push_back(c);
+    //   ++pos_;
+    //   // If curr starts with '*', continue parsing to get the suffix pattern
+    //   if (curr.size() == 1) {
+    //     continue;
+    //   }
+    //   break;
+    // }
+    // // if (!in_quotes && !escaped && c == '%') {
+
+    // // }
+    // TODO: Test that we don't strip out valid characters in the search query.
+    // What we use in ingestion: ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|"
+    if (!in_quotes && !escaped && (c == '*')) {
       curr.push_back(c);
       ++pos_;
-      // If curr starts with '*', continue parsing to get the suffix pattern
+      // If this is the first character, continue parsing
       if (curr.size() == 1) {
         continue;
       }
+      // Otherwise, we have content before this special char, so break
       break;
     }
-    // if (!in_quotes && !escaped && c == '%') {
-
+    // if (!in_quotes && !escaped && (c == '%')) {
+    //   // If this is the first character, continue parsing
+    //   if (!curr.empty()) {
+    //     if (curr.front() == '%') {
+    //       curr.push_back(c);
+    //       ++pos_;
+    //     }
+    //     break;
+    //   }
+    //   curr.push_back(c);
+    //   ++pos_;
+    //   continue;
     // }
-    // TODO: Test that we don't strip out valid characters in the search query.
-    // What we use in ingestion: ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|"
-    if (!(c == '%') && (!escaped && lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap()))) {
+    if (c != '%' && !escaped && lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())) {
       VMSDK_RETURN_IF_ERROR(push_token(curr));
-      // Handle the case of non exact phrase.
       if (!in_quotes) break;
       ++pos_;
       continue;

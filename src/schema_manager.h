@@ -40,8 +40,8 @@ namespace options {
 
 /// Return the maximum number of indexes allowed to create.
 vmsdk::config::Number &GetMaxIndexes();
-void MaxIndexCreationCallback();
-
+//callback for config update
+void MaxIndexCreationCallback(uint32_t);
 }  // namespace options
 class SchemaManager {
  public:

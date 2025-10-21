@@ -69,10 +69,12 @@ vmsdk::config::Number &GetMaxIndexes() {
   return dynamic_cast<vmsdk::config::Number &>(*max_indexes);
 }
 
-//register callback for max index creation
-void MaxIndexCreationCallback() {  
-    vmsdk::config::SetGetMaxIndexesCallback(GetMaxIndexes);  // register callback
+// register callback for max index creation
+void MaxIndexCreationCallback(uint32_t current_indexes) {
+  vmsdk::config::SetGetMaxIndexesCallback(
+      GetMaxIndexes, &current_indexes);  // register callback
 }
+
 
 /// Register the "--backfill-batch-size" flag. Controls the max number of
 /// indexes we can have.
@@ -87,6 +89,10 @@ static auto backfill_batch_size =
 
 vmsdk::config::Number &GetBackfillBatchSize() {
   return dynamic_cast<vmsdk::config::Number &>(*backfill_batch_size);
+}
+
+uint64_t GetMaxIndexesOptionUpdate() {
+  return vmsdk::config::g_updatedmax_index;
 }
 
 }  // namespace options
@@ -217,7 +223,8 @@ absl::StatusOr<coordinator::IndexFingerprintVersion>
 SchemaManager::CreateIndexSchema(
     ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto) {
   const auto max_indexes = options::GetMaxIndexes().GetValue();
-  options::MaxIndexCreationCallback();
+  uint32_t current_indexes = SchemaManager::Instance().GetNumberOfIndexSchemas() + 1;
+  options::MaxIndexCreationCallback(current_indexes); 
   VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
       SchemaManager::Instance().GetNumberOfIndexSchemas() + 1, std::nullopt,
       max_indexes))
@@ -617,6 +624,15 @@ absl::Status SchemaManager::LoadIndex(
                          _ << "Failed to load index schema from RDB!");
   uint32_t db_num = index_schema->GetDBNum();
   const std::string &name = index_schema->GetName();
+  uint32_t numIndex = this->GetNumberOfIndexSchemas();
+  uint32_t updatedindex = options::GetMaxIndexesOptionUpdate();
+  std::cout << "Indexes = " << numIndex<< "updated =" << updatedindex << std::endl;
+  if (updatedindex != 0 && numIndex >= updatedindex) {
+         return absl::InternalError(
+                 absl::StrFormat("Unable to load indexes for max index %d as current "
+                        "indexes exceeds the limit %d",
+                        updatedindex, numIndex));
+  }
 
   // Select the DB number in the context for subsequent usage.
   if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {

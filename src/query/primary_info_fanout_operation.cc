@@ -9,14 +9,16 @@
 
 #include "src/coordinator/metadata_manager.h"
 #include "src/schema_manager.h"
+#include "vmsdk/src/cluster_map.h"
 
 namespace valkey_search::query::primary_info_fanout {
 
 PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
     uint32_t db_num, const std::string& index_name, unsigned timeout_ms)
-    : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
-                                  coordinator::InfoIndexPartitionResponse,
-                                  fanout::FanoutTargetMode::kPrimary>(),
+    : fanout::FanoutOperationBase<
+          coordinator::InfoIndexPartitionRequest,
+          coordinator::InfoIndexPartitionResponse,
+          vmsdk::cluster_map::FanoutTargetMode::kPrimary>(),
       db_num_(db_num),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
@@ -25,12 +27,22 @@ PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
       num_records_(0),
       hash_indexing_failures_(0) {}
 
+std::vector<vmsdk::cluster_map::NodeInfo>
+PrimaryInfoFanoutOperation::GetTargets() const {
+  auto targets = ValkeySearch::Instance().GetClusterMap()->GetPrimaryTargets();
+  for (size_t i = 0; i < targets.size(); ++i) {
+    VMSDK_LOG(NOTICE, nullptr) << "Target[" << i << "]: " << targets[i];
+  }
+  return targets;
+}
+
 unsigned PrimaryInfoFanoutOperation::GetTimeoutMs() const {
   return timeout_ms_;
 }
 
 coordinator::InfoIndexPartitionRequest
-PrimaryInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&) {
+PrimaryInfoFanoutOperation::GenerateRequest(
+    const vmsdk::cluster_map::NodeInfo&) {
   coordinator::InfoIndexPartitionRequest req;
   req.set_db_num(db_num_);
   req.set_index_name(index_name_);
@@ -39,7 +51,7 @@ PrimaryInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&) {
 
 void PrimaryInfoFanoutOperation::OnResponse(
     const coordinator::InfoIndexPartitionResponse& resp,
-    [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
+    [[maybe_unused]] const vmsdk::cluster_map::NodeInfo& target) {
   if (!resp.error().empty()) {
     grpc::Status status =
         grpc::Status(grpc::StatusCode::INTERNAL, resp.error());
@@ -96,7 +108,7 @@ void PrimaryInfoFanoutOperation::OnResponse(
 std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
 PrimaryInfoFanoutOperation::GetLocalResponse(
     const coordinator::InfoIndexPartitionRequest& request,
-    [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
+    [[maybe_unused]] const vmsdk::cluster_map::NodeInfo& target) {
   return coordinator::Service::GenerateInfoResponse(request);
 }
 

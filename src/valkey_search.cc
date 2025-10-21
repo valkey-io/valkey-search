@@ -939,6 +939,14 @@ void ValkeySearch::OnServerCronCallback(ValkeyModuleCtx *ctx,
           absl::Seconds(options::GetMaxWorkerSuspensionSecs().GetValue())) {
     ResumeWriterThreadPool(ctx, /*is_expired=*/true);
   }
+  // refresh cluster map in cluster mode
+  if (options::GetUseCoordinator().GetValue() && IsCluster()) {
+    if (!cluster_map_refresh_watch_.has_value() ||
+        cluster_map_refresh_watch_->Duration() > absl::Seconds(1)) {
+      RefreshClusterMap(ctx);
+      cluster_map_refresh_watch_ = vmsdk::StopWatch();
+    }
+  }
 }
 
 void ValkeySearch::OnForkChildCallback(ValkeyModuleCtx *ctx,
@@ -1027,6 +1035,8 @@ absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
     coordinator::MetadataManager::InitInstance(
         std::make_unique<coordinator::MetadataManager>(ctx, *client_pool_));
     coordinator::MetadataManager::Instance().RegisterForClusterMessages(ctx);
+    // create initial cluster map when server startup
+    cluster_map_ = vmsdk::cluster_map::ClusterMap::CreateNewClusterMap(ctx);
   }
   SchemaManager::InitInstance(std::make_unique<SchemaManager>(
       ctx, server_events::SubscribeToServerEvents, writer_thread_pool_.get(),

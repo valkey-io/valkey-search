@@ -144,3 +144,15 @@ set(SRCS_MEMORY_TRACKER
     ${CMAKE_CURRENT_LIST_DIR}/memory_tracker.h)
 valkey_search_add_static_library(memory_tracker "${SRCS_MEMORY_TRACKER}")
 target_include_directories(memory_tracker PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+
+set(SRCS_CLUSTER_MAP ${CMAKE_CURRENT_LIST_DIR}/cluster_map.cc
+                     ${CMAKE_CURRENT_LIST_DIR}/cluster_map.h)
+
+valkey_search_add_static_library(cluster_map "${SRCS_CLUSTER_MAP}")
+target_include_directories(cluster_map PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(cluster_map PUBLIC valkey_module)
+if(APPLE)
+  target_link_libraries(cluster_map PUBLIC absl::core_headers)
+else()
+  target_link_libraries(cluster_map PUBLIC ${GRPC_LIB})
+endif()

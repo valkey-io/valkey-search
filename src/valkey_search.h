@@ -21,6 +21,7 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/server.h"
 #include "src/index_schema.h"
+#include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -97,6 +98,25 @@ class ValkeySearch {
   // of the program.
   ValkeyModuleCtx *GetBackgroundCtx() const { return ctx_; }
 
+  // Get current cluster map (thread-safe)
+  std::shared_ptr<vmsdk::cluster_map::ClusterMap> GetClusterMap() const {
+    return cluster_map_.load();
+  }
+
+  // Update cluster map with a new one (thread-safe atomic swap)
+  void UpdateClusterMap(
+      std::shared_ptr<vmsdk::cluster_map::ClusterMap> new_map) {
+    cluster_map_.store(new_map);
+  }
+
+  // Refresh cluster map by creating a new one from current cluster state
+  void RefreshClusterMap(ValkeyModuleCtx *ctx) {
+    auto new_map = vmsdk::cluster_map::ClusterMap::CreateNewClusterMap(ctx);
+    if (new_map) {
+      UpdateClusterMap(new_map);
+    }
+  }
+
  protected:
   std::unique_ptr<vmsdk::ThreadPool> reader_thread_pool_;
   std::unique_ptr<vmsdk::ThreadPool> writer_thread_pool_;
@@ -117,9 +137,11 @@ class ValkeySearch {
   uint64_t inc_id_{0};
   ValkeyModuleCtx *ctx_{nullptr};
   std::optional<vmsdk::StopWatch> writer_thread_pool_suspend_watch_;
+  std::optional<vmsdk::StopWatch> cluster_map_refresh_watch_;
 
   std::unique_ptr<coordinator::Server> coordinator_;
   std::unique_ptr<coordinator::ClientPool> client_pool_;
+  std::atomic<std::shared_ptr<vmsdk::cluster_map::ClusterMap>> cluster_map_;
 };
 void ModuleInfo(ValkeyModuleInfoCtx *ctx, int for_crash_report);
 }  // namespace valkey_search

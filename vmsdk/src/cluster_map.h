@@ -9,17 +9,19 @@
 #define VMSDK_SRC_CLUSTER_MAP_H_
 
 #include <bitset>
+#include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "src/query/fanout_template.h"
-#include "src/valkeymodule.h"
+#include "absl/container/flat_hash_map.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
 namespace cluster_map {
 
-const size_t NUM_SLOTS = 16384;
+const size_t k_num_slots = 16384;
 
 // Enumeration for fanout target modes
 enum class FanoutTargetMode {
@@ -30,22 +32,25 @@ enum class FanoutTargetMode {
 };
 
 struct NodeInfo {
-  enum Type {
+  enum NodeRole { kPrimary, kReplica };
+  enum NodeLocation {
     kLocal,
     kRemote,
   };
   std::string node_id;
-  Type type;
-  // Empty string if type is kLocal.
+  NodeRole role;
+  NodeLocation location;
+  // Empty string if location is kLocal.
   std::string address;
 
   bool operator==(const NodeInfo& other) const {
-    return type == other.type && address == other.address;
+    return role == other.role && location == other.location &&
+           address == other.address;
   }
 
   friend std::ostream& operator<<(std::ostream& os, const NodeInfo& target) {
-    os << "NodeInfo{type: " << target.type << ", address: " << target.address
-       << "}";
+    os << "NodeInfo{role: " << target.role << ", location: " << target.location
+       << ", address: " << target.address << "}";
     return os;
   }
 };
@@ -53,42 +58,41 @@ struct NodeInfo {
 struct ShardInfo {
   // shard_id is the primary node id
   std::string shard_id;
-  std::string primary_address;
-  std::vector<std::string> replica_addresses;
-  std::vector<uint16_t> owned_slots;
+  // primary node can be empty
+  std::optional<NodeInfo> primary;
+  std::vector<NodeInfo> replicas;
+  std::set<uint16_t> owned_slots;
   // Hash of owned_slots vector
   uint64_t slots_fingerprint;
 };
 
 class ClusterMap {
  public:
+  // Create a new cluster map by querying current cluster state
+  // This builds the map in the background and can be called from any thread
+  static std::shared_ptr<ClusterMap> CreateNewClusterMap(ValkeyModuleCtx* ctx);
+
+  // return pre-generated target vectors
   const std::vector<NodeInfo>& GetPrimaryTargets() const;
   const std::vector<NodeInfo>& GetReplicaTargets() const;
-  const std::vector<NodeInfo>& GetRandomTargets() const;
   const std::vector<NodeInfo>& GetAllTargets() const;
 
-  // create a new cluster map in the background
-  static std::shared_ptr<ClusterMap> CreateNewClusterMap(ValkeyModuleCtx* ctx);
+  // generate a random targets vector from cluster bus
+  std::vector<NodeInfo> GetRandomTargets(ValkeyModuleCtx* ctx);
 
   // slot ownership checks
   bool IsSlotOwned(uint16_t slot) const;
 
-  // shard lookups
+  // shard lookups, will return nullptr if shard does not exist
   const ShardInfo* GetShardById(std::string_view shard_id) const;
   const absl::flat_hash_map<std::string, ShardInfo>& GetAllShards() const;
 
   // get cluster level slot fingerprint
   uint64_t GetClusterSlotsFingerprint() const;
 
-  // get fingerprint for a specific shard
-  uint64_t GetShardSlotsFingerprint(std::string_view shard_id) const;
-
  private:
   // 1: slot is owned by this cluster, 0: slot is not owned by this cluster
-  std::bitset<NUM_SLOTS> owned_slots_;
-
-  // slot-to-shard lookup
-  std::array<std::string, NUM_SLOTS> slot_to_shard_id_;
+  std::bitset<k_num_slots> owned_slots_;
 
   absl::flat_hash_map<std::string, ShardInfo> shards_;
 
@@ -98,12 +102,11 @@ class ClusterMap {
   // Pre-computed target lists
   std::vector<NodeInfo> primary_targets_;
   std::vector<NodeInfo> replica_targets_;
-  std::vector<NodeInfo> random_targets_;
   std::vector<NodeInfo> all_targets_;
 
   // private helper function to refresh targets in CreateNewClusterMap
-  std::vector<NodeInfo> GetTargets(ValkeyModuleCtx* ctx,
-                                   FanoutTargetMode target_mode);
+  static std::vector<NodeInfo> GetTargets(ValkeyModuleCtx* ctx,
+                                          FanoutTargetMode target_mode);
 };
 
 }  // namespace cluster_map

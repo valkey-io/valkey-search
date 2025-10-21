@@ -26,6 +26,7 @@ Tokenization Pipeline:
 
 #include <bitset>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
@@ -58,13 +59,23 @@ struct Lexer {
   }
 
  private:
-  mutable sb_stemmer* stemmer_ = nullptr;
+  const char* language_;
 
-  // TODO: Create a little pool of stemmers protected by this mutex
-  mutable std::mutex stemmer_mutex_;
+  class ThreadLocalStemmerCache {
+   private:
+    std::unordered_map<std::string, sb_stemmer*> cache_;
+
+   public:
+    ~ThreadLocalStemmerCache();
+    sb_stemmer* GetOrCreateStemmer(const std::string& language);
+  };
+
+  // Thread-local stemmer cache - each ingestion worker thread gets a stemmer
+  // for each language it tokenizes at least once
+  static thread_local ThreadLocalStemmerCache stemmer_cache_;
 
   std::string StemWord(const std::string& word, bool stemming_enabled,
-                       uint32_t min_stem_size) const;
+                       uint32_t min_stem_size, sb_stemmer* stemmer) const;
 
   // UTF-8 processing helpers
   bool IsValidUtf8(absl::string_view text) const;

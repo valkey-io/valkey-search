@@ -14,10 +14,31 @@
 
 namespace valkey_search::indexes::text {
 
-Lexer::Lexer(const char* language)
-    : stemmer_(sb_stemmer_new(language, "UTF_8")) {}
+thread_local Lexer::ThreadLocalStemmerCache Lexer::stemmer_cache_;
 
-Lexer::~Lexer() { sb_stemmer_delete(stemmer_); }
+// Clean up thread-local stemmers when the thread exits
+Lexer::ThreadLocalStemmerCache::~ThreadLocalStemmerCache() {
+  for (auto& [lang, stemmer] : cache_) {
+    if (stemmer) {
+      sb_stemmer_delete(stemmer);
+    }
+  }
+}
+
+sb_stemmer* Lexer::ThreadLocalStemmerCache::GetOrCreateStemmer(
+    const std::string& language) {
+  auto it = cache_.find(language);
+  if (it == cache_.end()) {
+    sb_stemmer* stemmer = sb_stemmer_new(language.c_str(), "UTF_8");
+    cache_[language] = stemmer;
+    return stemmer;
+  }
+  return it->second;
+}
+
+Lexer::Lexer(const char* language) : language_(language) {}
+
+Lexer::~Lexer() {}
 
 absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
     absl::string_view text, const std::bitset<256>& punct_bitmap,
@@ -27,8 +48,10 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
     return absl::InvalidArgumentError("Invalid UTF-8");
   }
 
+  // Get or create the thread-local stemmer for this lexer's language
+  sb_stemmer* stemmer =
+      stemming_enabled ? stemmer_cache_.GetOrCreateStemmer(language_) : nullptr;
   std::vector<std::string> tokens;
-
   size_t pos = 0;
   while (pos < text.size()) {
     while (pos < text.size() && Lexer::IsPunctuation(text[pos], punct_bitmap)) {
@@ -50,7 +73,7 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
         continue;  // Skip stop words
       }
 
-      word = StemWord(word, stemming_enabled, min_stem_size);
+      word = StemWord(word, stemming_enabled, min_stem_size, stemmer);
 
       tokens.push_back(std::move(word));
     }
@@ -60,19 +83,20 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
 }
 
 std::string Lexer::StemWord(const std::string& word, bool stemming_enabled,
-                            uint32_t min_stem_size) const {
+                            uint32_t min_stem_size, sb_stemmer* stemmer) const {
   if (word.empty() || !stemming_enabled || word.length() < min_stem_size) {
     return word;
   }
-  std::lock_guard<std::mutex> guard(stemmer_mutex_);
 
+  DCHECK(stemmer) << "Stemmer is null";
+
+  // Use the passed stemmer (already retrieved from cache in Tokenize)
   const sb_symbol* stemmed = sb_stemmer_stem(
-      stemmer_, reinterpret_cast<const sb_symbol*>(word.c_str()),
-      word.length());
+      stemmer, reinterpret_cast<const sb_symbol*>(word.c_str()), word.length());
 
   DCHECK(stemmed) << "Stemming failed for word: " + word;
 
-  int stemmed_length = sb_stemmer_length(stemmer_);
+  int stemmed_length = sb_stemmer_length(stemmer);
   return std::string(reinterpret_cast<const char*>(stemmed), stemmed_length);
 }
 

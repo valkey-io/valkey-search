@@ -460,6 +460,55 @@ FilterParser::BuildSingleTextPredicate(const indexes::Text* text_index,
   if (token.empty()) {
     return absl::InvalidArgumentError("Empty text token");
   }
+  VMSDK_LOG(WARNING, nullptr) << "BuildSingleTextPredicate: " << token;
+  // Check if token contains escaped characters
+  // bool has_escapes = token.find("\\") != std::string::npos;
+
+  // if (has_escapes) {
+  //   std::string processed_token;
+  //   // for (size_t i = 0; i < token.size(); ++i) {
+  //   //   if (token[i] == '\\' && i + 1 < token.size()) {
+  //   //     // Skip backslash, add next character
+  //   //     processed_token += token[i + 1];
+  //   //     ++i;
+  //   //   } else {
+  //   //     processed_token += token[i];
+  //   //   }
+  //   // }
+  //   // Remove all backslashes - they're just escape markers
+  //   for (char c : token) {
+  //     if (c != '\\') {
+  //       processed_token += c;
+  //     }
+  //   }
+  //   token = processed_token;
+  // }
+
+  // std::string processed_token;
+  // for (size_t i = 0; i < token.size(); ++i) {
+  //   if (token[i] == '\\') {
+  //     if (i + 1 < token.size()) {
+  //       if (token[i + 1] == '\\') {
+  //         // \\ becomes single \
+  //         processed_token += '\\';
+  //         ++i; // Skip the second backslash
+  //       } else {
+  //         // \x becomes x (remove escape backslash)
+  //         processed_token += token[i + 1];
+  //         ++i; // Skip the escaped character
+  //       }
+  //     } else {
+  //       // Trailing \ - keep it
+  //       processed_token += '\\';
+  //     }
+  //   } else {
+  //     processed_token += token[i];
+  //   }
+  // }
+  // token = processed_token;
+
+
+  VMSDK_LOG(WARNING, nullptr) << "Processed BuildSingleTextPredicate: " << token;
   uint64_t field_mask;
   if (!field_name.has_value()) {
     field_mask = ~0ULL;
@@ -548,8 +597,8 @@ FilterParser::BuildSingleTextPredicate(const indexes::Text* text_index,
   // --- Term ---
   bool should_stem = true;
   auto text_index_schema = text_index->GetTextIndexSchema();
-  std::string processed_word = process_escapes(token);
-  return std::make_unique<query::TermPredicate>(text_index, field_mask, processed_word);
+  // std::string processed_word = process_escapes(token);
+  return std::make_unique<query::TermPredicate>(text_index, field_mask,  std::string(token));
 }
 
 
@@ -697,7 +746,7 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
     char c = Peek();
     // Handle quote termination
     if (c == '"' && !escaped) {
-      if (!in_quotes) {
+      if (!in_quotes && curr.empty() && terms.empty()) {
         // Start quote mode
         in_quotes = true;
         ++pos_;
@@ -709,32 +758,81 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
       }
     }
     // TODO: Test and confirm this code handles escaped chars.
+    // if (c == '\\') {
+    //   if (pos_ + 1 < expression_.size() && expression_[pos_ + 1] == '\\') {
+    //     // Double backslash - add literal backslash
+    //     curr.push_back('\\');
+    //     curr.push_back('\\');
+    //     pos_ += 2; // Skip both backslashes
+    //     continue;
+    //   } else {
+    //     // Single backslash - push current token and start new one
+    //     VMSDK_RETURN_IF_ERROR(push_token(curr));
+    //     escaped = true;
+    //     ++pos_;
+    //     break;
+    //   }
+    // }
+    // if (escaped) {
+    //   curr.push_back(c);
+    //   escaped = false;
+    //   ++pos_;
+    //   continue;
+    // }
+    if (c == '\\') {
+      // Count consecutive backslashes
+      size_t backslash_count = 0;
+      size_t temp_pos = pos_;
+      while (temp_pos < expression_.size() && expression_[temp_pos] == '\\') {
+        backslash_count++;
+        temp_pos++;
+      }
+      pos_ += backslash_count;
+      if (in_quotes) {
+        // Inside quotes: any backslashes (≥1) become single literal backslash
+        if (backslash_count > 0) {
+          curr.push_back('\\');
+          continue;
+        }
+      } else {
+        // Outside quotes: use odd/even logic
+        if (backslash_count % 2 == 0) {
+          // Even number: add single literal backslash, continue as single token
+          curr.push_back('\\');
+          continue;
+        } else {
+          // Odd number: add single literal backslash, push token, and break              char c = Peek();
+          char c_temp = Peek();
+          if (!lexer.IsPunctuation(c_temp, text_index_schema->GetPunctuationBitmap())) {
+            if (backslash_count > 1) {
+              curr.push_back('\\');
+            }
+            break;
+          }
+          escaped = true;
+          continue;
+        }
+      }
+    }
     if (escaped) {
-      curr.push_back('\\');
       curr.push_back(c);
       escaped = false;
       ++pos_;
       continue;
     }
-    if (c == '\\') {
-      escaped = true;
-      ++pos_;
-      continue;
-    }
+    // These are query syntax which are handled in the higher level parsing fns.
+    // Break to yield back.
     if (!in_quotes && !escaped && (c == ')' || c == '|' || c == '(' || c == '@' || c == '-')) {
-      break;
+      break; 
     }
+    // These are unhandled characters which we need to skip over.
+    // Advance and Break to parse as a new token.
     if (!in_quotes && !escaped && c != '%' && c != '*' && lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())) {
+      ++pos_; 
       break;
     }
     // TODO: Test that we don't strip out valid characters in the search query.
     // What we use in ingestion: ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|"
-    // if (c != '%' && c != '*' && !escaped && lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())) {
-    //   VMSDK_RETURN_IF_ERROR(push_token(curr));
-    //   if (!in_quotes) break;
-    //   ++pos_;
-    //   continue;
-    // }
     if (in_quotes && !escaped && lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())) {
       VMSDK_RETURN_IF_ERROR(push_token(curr));
       ++pos_;
@@ -749,13 +847,6 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
   // Also, we need to handle cases where this fn is called and a stop word if found with nothing else. vec is empty here.
   // if (terms.empty()) return absl::InvalidArgumentError("Empty text token");
   return terms;
-}
-
-absl::StatusOr<std::string> FilterParser::ResolveTextFieldOrDefault(
-    const std::optional<std::string>& maybe_field) {
-  if (maybe_field.has_value()) return *maybe_field;
-  // Placeholder for default text field
-  return std::string("__default__");
 }
 
 // TODO:

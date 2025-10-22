@@ -52,8 +52,8 @@ struct Lexer {
   std::bitset<256> punct_bitmap_;
   absl::flat_hash_set<std::string> stop_words_set_;
 
-  // Thread-local stemmer cache. Stemmers will be owned by threads and shared
-  // amongst the Lexer instances, since a stemmer instance is not thread-safe.
+  // Thread-local stemmer cache. Since a stemmer instance is not thread-safe,
+  // stemmers will be owned by threads and shared amongst the Lexer instances.
   // Each ingestion worker thread gets a stemmer for each language it tokenizes
   // at least once.
   class ThreadLocalStemmerCache {

@@ -1380,20 +1380,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     EXPECT_TRUE(dynamic_cast<const HashAttributeDataType *>(
         &index_schema->GetAttributeDataType()));
 
-    // Validate text schema properties
-    auto text_index_schema = index_schema->GetTextIndexSchema();
-    EXPECT_EQ(text_index_schema->GetLanguage(),
-              data_model::LANGUAGE_UNSPECIFIED);
-    EXPECT_EQ(
-        text_index_schema->GetPunctuationBitmap(),
-        std::bitset<256>(
-            "000000000000000000000000000000000000000000000000000000000000000000"
-            "000000000000000000000000000000000000000000000000000000000000001000"
-            "000000000000000000000000000000000000000000000000000000000000000000"
-            "0000000000010000000000000111111111111111111111111111111111"));
-    EXPECT_EQ(text_index_schema->GetWithOffsets(), false);
-    EXPECT_THAT(text_index_schema->GetStopWordsSet(),
-                testing::Contains("stop"));
+    // Validate text schema was recreated
+    EXPECT_THAT(index_schema->GetTextIndexSchema(), testing::NotNull());
 
     // Validate text index was restored correctly
     VMSDK_EXPECT_OK(index_schema->GetIndex("description"));

@@ -16,35 +16,35 @@ namespace valkey_search::indexes::text {
 
 namespace {
 
-bool IsWhitespace(unsigned char c) {
-  return std::isspace(c) || std::iscntrl(c);
-}
+// bool IsWhitespace(unsigned char c) {
+//   return std::isspace(c) || std::iscntrl(c);
+// }
 
-PunctuationBitmap BuildPunctuationBitmap(const std::string& punctuation) {
-  PunctuationBitmap bitmap;
-  bitmap.reset();
+// PunctuationBitmap BuildPunctuationBitmap(const std::string& punctuation) {
+//   PunctuationBitmap bitmap;
+//   bitmap.reset();
 
-  for (int i = 0; i < 256; ++i) {
-    if (IsWhitespace(static_cast<unsigned char>(i))) {
-      bitmap.set(i);
-    }
-  }
+//   for (int i = 0; i < 256; ++i) {
+//     if (IsWhitespace(static_cast<unsigned char>(i))) {
+//       bitmap.set(i);
+//     }
+//   }
 
-  for (char c : punctuation) {
-    bitmap.set(static_cast<unsigned char>(c));
-  }
+//   for (char c : punctuation) {
+//     bitmap.set(static_cast<unsigned char>(c));
+//   }
 
-  return bitmap;
-}
+//   return bitmap;
+// }
 
-absl::flat_hash_set<std::string> BuildStopWordsSet(
-    const std::vector<std::string>& stop_words) {
-  absl::flat_hash_set<std::string> stop_words_set;
-  for (const auto& word : stop_words) {
-    stop_words_set.insert(absl::AsciiStrToLower(word));
-  }
-  return stop_words_set;
-}
+// absl::flat_hash_set<std::string> BuildStopWordsSet(
+//     const std::vector<std::string>& stop_words) {
+//   absl::flat_hash_set<std::string> stop_words_set;
+//   for (const auto& word : stop_words) {
+//     stop_words_set.insert(absl::AsciiStrToLower(word));
+//   }
+//   return stop_words_set;
+// }
 
 std::optional<std::shared_ptr<text::Postings>> AddWordToPostings(
     std::optional<std::shared_ptr<text::Postings>> existing,
@@ -80,26 +80,16 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
                                  const std::string& punctuation,
                                  bool with_offsets,
                                  const std::vector<std::string>& stop_words)
-    : language_(language),
-      punct_bitmap_(BuildPunctuationBitmap(punctuation)),
-      stop_words_set_(BuildStopWordsSet(stop_words)),
+    :  // language_(language),
+       // punct_bitmap_(BuildPunctuationBitmap(punctuation)),
+       // stop_words_set_(BuildStopWordsSet(stop_words)),
       with_offsets_(with_offsets),
-      lexer_(Lexer(GetLanguageString())) {}
-
-const char* TextIndexSchema::GetLanguageString() const {
-  switch (language_) {
-    case data_model::LANGUAGE_ENGLISH:
-      return "english";
-    default:
-      return "english";
-  }
-}
+      lexer_(language, punctuation, stop_words) {}
 
 absl::StatusOr<bool> TextIndexSchema::IndexAttributeData(
     const InternedStringPtr& key, absl::string_view data,
     size_t text_field_number, bool stem, size_t min_stem_size, bool suffix) {
-  auto tokens = lexer_.Tokenize(data, GetPunctuationBitmap(), stem,
-                                min_stem_size, GetStopWordsSet());
+  auto tokens = lexer_.Tokenize(data, stem, min_stem_size);
 
   if (!tokens.ok()) {
     if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {

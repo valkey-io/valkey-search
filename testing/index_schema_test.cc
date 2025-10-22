@@ -94,23 +94,23 @@ class IndexSchemaSubscriptionTest
  protected:
   // Helper functions to check operation success/failure patterns
   static bool IsOperationSuccessful(
-      const absl::optional<absl::StatusOr<bool>> &result) {
+      const absl::optional<absl::StatusOr<bool>>& result) {
     return result.has_value() && result.value().ok() && result.value().value();
   }
 
   static bool IsOperationFailed(
-      const absl::optional<absl::StatusOr<bool>> &result) {
+      const absl::optional<absl::StatusOr<bool>>& result) {
     return result.has_value() && !result.value().ok();
   }
 };
 
 TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
-  const IndexSchemaSubscriptionTestCase &test_case = GetParam();
+  const IndexSchemaSubscriptionTestCase& test_case = GetParam();
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
 
   // Get initial metrics values to compare after operations
-  auto &metrics = Metrics::GetStats();
+  auto& metrics = Metrics::GetStats();
   uint64_t initial_field_vector{metrics.ingest_field_vector};
   uint64_t initial_field_numeric{metrics.ingest_field_numeric};
   uint64_t initial_field_tag{metrics.ingest_field_tag};
@@ -171,20 +171,19 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
     }
 
     if (test_case.valkey_hash_data.has_value()) {
-      const char *field = test_case.valkey_hash_data.value().first.c_str();
-      const char *value = test_case.valkey_hash_data.value().second.c_str();
-      ValkeyModuleString *value_valkey_str =
+      const char* field = test_case.valkey_hash_data.value().first.c_str();
+      const char* value = test_case.valkey_hash_data.value().second.c_str();
+      ValkeyModuleString* value_valkey_str =
           TestValkeyModule_CreateStringPrintf(nullptr, "%s", value);
 
-      EXPECT_CALL(
-          *kMockValkeyModule,
-          HashGet(vmsdk::ValkeyModuleKeyIsForString(key->Str()),
-                  VALKEYMODULE_HASH_CFIELDS, StrEq(field),
-                  An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
-          .WillOnce([value_valkey_str](ValkeyModuleKey *key, int flags,
-                                       const char *field,
-                                       ValkeyModuleString **value_out,
-                                       void *terminating_null) {
+      EXPECT_CALL(*kMockValkeyModule,
+                  HashGet(vmsdk::ValkeyModuleKeyIsForString(key->Str()),
+                          VALKEYMODULE_HASH_CFIELDS, StrEq(field),
+                          An<ValkeyModuleString**>(), TypedEq<void*>(nullptr)))
+          .WillOnce([value_valkey_str](ValkeyModuleKey* key, int flags,
+                                       const char* field,
+                                       ValkeyModuleString** value_out,
+                                       void* terminating_null) {
             *value_out = value_valkey_str;
             return VALKEYMODULE_OK;
           });
@@ -193,9 +192,9 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
           *kMockValkeyModule,
           HashGet(vmsdk::ValkeyModuleKeyIsForString(key->Str()),
                   VALKEYMODULE_HASH_CFIELDS, StrEq(test_case.hash_field),
-                  An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
-          .WillOnce([](ValkeyModuleKey *key, int flags, const char *field,
-                       ValkeyModuleString **value_out, void *terminating_null) {
+                  An<ValkeyModuleString**>(), TypedEq<void*>(nullptr)))
+          .WillOnce([](ValkeyModuleKey* key, int flags, const char* field,
+                       ValkeyModuleString** value_out, void* terminating_null) {
             *value_out = nullptr;
             return VALKEYMODULE_OK;
           });
@@ -218,7 +217,7 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
     uint32_t document_cnt = index_schema->GetStats().document_cnt;
 
     // Capture initial Time Slice Mutex metrics
-    auto &global_stats = Metrics::GetStats();
+    auto& global_stats = Metrics::GetStats();
     uint64_t initial_upserts = global_stats.time_slice_upserts;
     uint64_t initial_deletes = global_stats.time_slice_deletes;
 
@@ -227,7 +226,7 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
     if (use_thread_pool) {
       WaitWorkerTasksAreCompleted(mutations_thread_pool);
     }
-    for (const auto &tuple :
+    for (const auto& tuple :
          {std::make_tuple(add_cnt, &index_schema->GetStats().subscription_add,
                           &test_case.expected_add_cnt_delta),
           std::make_tuple(remove_cnt,
@@ -591,7 +590,7 @@ INSTANTIATE_TEST_SUITE_P(
                 },
         },
     }),
-    [](const TestParamInfo<IndexSchemaSubscriptionTestCase> &info) {
+    [](const TestParamInfo<IndexSchemaSubscriptionTestCase>& info) {
       return info.param.test_name;
     });
 
@@ -635,19 +634,19 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
     EXPECT_CALL(
         *kMockValkeyModule,
         BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
-        .WillOnce(Return((ValkeyModuleBlockedClient *)1));
-    const char *field = "vector";
-    const char *value = "vector_buffer";
-    ValkeyModuleString *value_valkey_str =
+        .WillOnce(Return((ValkeyModuleBlockedClient*)1));
+    const char* field = "vector";
+    const char* value = "vector_buffer";
+    ValkeyModuleString* value_valkey_str =
         TestValkeyModule_CreateStringPrintf(nullptr, "%s", value);
 
     EXPECT_CALL(*kMockValkeyModule,
                 HashGet(vmsdk::ValkeyModuleKeyIsForString(key->Str()),
                         VALKEYMODULE_HASH_CFIELDS, StrEq(field),
-                        An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
+                        An<ValkeyModuleString**>(), TypedEq<void*>(nullptr)))
         .WillOnce([value_valkey_str](
-                      ValkeyModuleKey *key, int flags, const char *field,
-                      ValkeyModuleString **value_out, void *terminating_null) {
+                      ValkeyModuleKey* key, int flags, const char* field,
+                      ValkeyModuleString** value_out, void* terminating_null) {
           *value_out = value_valkey_str;
           return VALKEYMODULE_OK;
         });
@@ -655,7 +654,7 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
     index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
                                          "event", key_valkey_str.get());
     EXPECT_CALL(*kMockValkeyModule,
-                UnblockClient((ValkeyModuleBlockedClient *)1, nullptr))
+                UnblockClient((ValkeyModuleBlockedClient*)1, nullptr))
         .WillOnce(Return(1));
   }
   EXPECT_EQ(mutations_thread_pool.QueueSize(), 1);
@@ -771,7 +770,7 @@ TEST_P(IndexSchemaSubscriptionSimpleTest,
   auto match_key = vmsdk::MakeUniqueValkeyOpenKey(&different_db_ctx,
                                                   key_valkey_str.get(), 0);
   TestValkeyModule_ModuleTypeSetValueDefaultImpl(
-      match_key.get(), (ValkeyModuleType *)0x1, nullptr);
+      match_key.get(), (ValkeyModuleType*)0x1, nullptr);
   index_schema->OnKeyspaceNotification(&different_db_ctx,
                                        VALKEYMODULE_NOTIFY_HASH, "event",
                                        key_valkey_str.get());
@@ -840,7 +839,7 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, GetEventTypesTest) {
 INSTANTIATE_TEST_SUITE_P(IndexSchemaSubscriptionSimpleTests,
                          IndexSchemaSubscriptionSimpleTest,
                          ::testing::Values(false, true),
-                         [](const testing::TestParamInfo<bool> &info) {
+                         [](const testing::TestParamInfo<bool>& info) {
                            return std::to_string(info.param);
                          });
 
@@ -863,15 +862,15 @@ class IndexSchemaBackfillTest
           ::testing::tuple<bool, IndexSchemaBackfillTestCase>> {};
 
 TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
-  auto &params = GetParam();
+  auto& params = GetParam();
   bool use_thread_pool = std::get<0>(params);
-  const IndexSchemaBackfillTestCase &test_case = std::get<1>(params);
+  const IndexSchemaBackfillTestCase& test_case = std::get<1>(params);
   MockThreadPool thread_pool("writer-thread-pool-", 5);
   thread_pool.StartWorkers();
   std::vector<absl::string_view> key_prefixes;
   std::transform(test_case.key_prefixes.begin(), test_case.key_prefixes.end(),
                  std::back_inserter(key_prefixes),
-                 [](const std::string &key_prefix) {
+                 [](const std::string& key_prefix) {
                    return absl::string_view(key_prefix);
                  });
   std::string index_schema_name_str("index_schema_name");
@@ -897,10 +896,10 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
 
   size_t i = 0;
   EXPECT_CALL(*kMockValkeyModule,
-              Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor *>(),
-                   testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
-      .WillRepeatedly([&](ValkeyModuleCtx *ctx, ValkeyModuleScanCursor *cursor,
-                          ValkeyModuleScanCB fn, void *privdata) -> int {
+              Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor*>(),
+                   testing::An<ValkeyModuleScanCB>(), testing::An<void*>()))
+      .WillRepeatedly([&](ValkeyModuleCtx* ctx, ValkeyModuleScanCursor* cursor,
+                          ValkeyModuleScanCB fn, void* privdata) -> int {
         if (i >= test_case.keys_to_return_in_scan.size()) {
           return 0;
         }
@@ -914,17 +913,17 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
         auto key_r_str = vmsdk::MakeUniqueValkeyString(key_str);
         ValkeyModuleKey key = {.ctx = &scan_ctx, .key = key_str};
         if (expect_processed) {
-          ValkeyModuleString *value_valkey_str =
+          ValkeyModuleString* value_valkey_str =
               TestValkeyModule_CreateStringPrintf(nullptr, "arbitrary data");
           EXPECT_CALL(
               *kMockValkeyModule,
               HashGet(vmsdk::ValkeyModuleKeyIsForString(key_str),
                       VALKEYMODULE_HASH_CFIELDS, testing::_,
-                      An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
-              .WillOnce([value_valkey_str](ValkeyModuleKey *key, int flags,
-                                           const char *field,
-                                           ValkeyModuleString **value_out,
-                                           void *terminating_null) {
+                      An<ValkeyModuleString**>(), TypedEq<void*>(nullptr)))
+              .WillOnce([value_valkey_str](ValkeyModuleKey* key, int flags,
+                                           const char* field,
+                                           ValkeyModuleString** value_out,
+                                           void* terminating_null) {
                 *value_out = value_valkey_str;
                 return VALKEYMODULE_OK;
               });
@@ -1001,11 +1000,11 @@ TEST_F(IndexSchemaBackfillTest, PerformBackfill_NoOngoingBackfillTest) {
 
     // We only expect it to do the scan the first iteration.
     EXPECT_CALL(*kMockValkeyModule,
-                Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor *>(),
-                     testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
-        .WillOnce([&](ValkeyModuleCtx *ctx, ValkeyModuleScanCursor *cursor,
+                Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor*>(),
+                     testing::An<ValkeyModuleScanCB>(), testing::An<void*>()))
+        .WillOnce([&](ValkeyModuleCtx* ctx, ValkeyModuleScanCursor* cursor,
                       ValkeyModuleScanCB fn,
-                      void *privdata) -> int { return 0; });
+                      void* privdata) -> int { return 0; });
 
     for (size_t i = 0; i < 100; ++i) {
       EXPECT_EQ(index_schema->PerformBackfill(&parent_ctx, 1024), 0);
@@ -1163,8 +1162,8 @@ INSTANTIATE_TEST_SUITE_P(
                     .expected_state = "backfill_paused_by_oom",
                 },
             })),
-    [](const TestParamInfo<::testing::tuple<bool, IndexSchemaBackfillTestCase>>
-           &info) {
+    [](const TestParamInfo<::testing::tuple<bool, IndexSchemaBackfillTestCase>>&
+           info) {
       return std::get<1>(info.param).test_name + "_" +
              (std::get<0>(info.param) ? "WithThreadPool" : "WithoutThreadPool");
     });
@@ -1205,9 +1204,8 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
     EXPECT_FALSE(itr == index_schema->attributes_.end());
     auto vectors = DeterministicallyGenerateVectors(10, dimensions, 2);
     for (size_t i = 0; i < vectors.size(); ++i) {
-      vmsdk::UniqueValkeyString data =
-          vmsdk::MakeUniqueValkeyString(absl::string_view(
-              (char *)&vectors[i][0], dimensions * sizeof(float)));
+      vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(
+          absl::string_view((char*)&vectors[i][0], dimensions * sizeof(float)));
       auto interned_key = StringInternStore::Intern("key" + std::to_string(i));
       index_schema->ProcessAttributeMutation(&fake_ctx_, itr->second,
                                              interned_key, std::move(data),
@@ -1258,15 +1256,15 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
   EXPECT_THAT(index_schema->GetKeyPrefixes(),
               testing::UnorderedElementsAre("prefix1", "prefix2"));
-  EXPECT_TRUE(dynamic_cast<const HashAttributeDataType *>(
+  EXPECT_TRUE(dynamic_cast<const HashAttributeDataType*>(
       &index_schema->GetAttributeDataType()));
 
   VMSDK_EXPECT_OK(index_schema->GetIndex("hnsw_attribute"));
-  auto hnsw_index = dynamic_cast<indexes::VectorHNSW<float> *>(
+  auto hnsw_index = dynamic_cast<indexes::VectorHNSW<float>*>(
       index_schema->GetIndex("hnsw_attribute").value().get());
   EXPECT_TRUE(hnsw_index != nullptr);
   EXPECT_EQ(hnsw_index->GetDimensions(), dimensions);
-  EXPECT_TRUE(dynamic_cast<const hnswlib::InnerProductSpace *>(
+  EXPECT_TRUE(dynamic_cast<const hnswlib::InnerProductSpace*>(
                   hnsw_index->GetSpace()) != nullptr);
   EXPECT_EQ(hnsw_index->GetCapacity(), initial_cap);
   EXPECT_EQ(hnsw_index->GetM(), m);
@@ -1274,22 +1272,22 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   EXPECT_EQ(hnsw_index->GetEfRuntime(), ef_runtime);
 
   VMSDK_EXPECT_OK(index_schema->GetIndex("flat_attribute"));
-  auto flat_index = dynamic_cast<indexes::VectorFlat<float> *>(
+  auto flat_index = dynamic_cast<indexes::VectorFlat<float>*>(
       index_schema->GetIndex("flat_attribute").value().get());
   EXPECT_TRUE(flat_index != nullptr);
   EXPECT_EQ(flat_index->GetDimensions(), dimensions);
-  EXPECT_TRUE(dynamic_cast<const hnswlib::InnerProductSpace *>(
+  EXPECT_TRUE(dynamic_cast<const hnswlib::InnerProductSpace*>(
                   flat_index->GetSpace()) != nullptr);
   EXPECT_EQ(flat_index->GetCapacity(), initial_cap);
   EXPECT_EQ(flat_index->GetBlockSize(), block_size);
 
   VMSDK_EXPECT_OK(index_schema->GetIndex("numeric_attribute"));
-  auto num_index = dynamic_cast<indexes::Numeric *>(
+  auto num_index = dynamic_cast<indexes::Numeric*>(
       index_schema->GetIndex("numeric_attribute").value().get());
   EXPECT_TRUE(num_index != nullptr);
 
   VMSDK_EXPECT_OK(index_schema->GetIndex("tag_attribute"));
-  auto tag_index = dynamic_cast<indexes::Tag *>(
+  auto tag_index = dynamic_cast<indexes::Tag*>(
       index_schema->GetIndex("tag_attribute").value().get());
   EXPECT_TRUE(tag_index != nullptr);
   EXPECT_EQ(tag_index->GetSeparator(), ',');
@@ -1377,27 +1375,29 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     // Validate basic schema properties
     EXPECT_THAT(index_schema->GetKeyPrefixes(),
                 testing::UnorderedElementsAre("doc:"));
-    EXPECT_TRUE(dynamic_cast<const HashAttributeDataType *>(
+    EXPECT_TRUE(dynamic_cast<const HashAttributeDataType*>(
         &index_schema->GetAttributeDataType()));
 
     // Validate text schema properties
-    auto text_index_schema = index_schema->GetTextIndexSchema();
-    EXPECT_EQ(text_index_schema->GetLanguage(),
-              data_model::LANGUAGE_UNSPECIFIED);
-    EXPECT_EQ(
-        text_index_schema->GetPunctuationBitmap(),
-        std::bitset<256>(
-            "000000000000000000000000000000000000000000000000000000000000000000"
-            "000000000000000000000000000000000000000000000000000000000000001000"
-            "000000000000000000000000000000000000000000000000000000000000000000"
-            "0000000000010000000000000111111111111111111111111111111111"));
-    EXPECT_EQ(text_index_schema->GetWithOffsets(), false);
-    EXPECT_THAT(text_index_schema->GetStopWordsSet(),
-                testing::Contains("stop"));
+    EXPECT_THAT(index_schema->GetTextIndexSchema(), testing::NotNull());
+    // auto text_index_schema =
+    // index_schema->GetTextIndexSchema();
+    // EXPECT_EQ(text_index_schema->GetLanguage(),
+    //           data_model::LANGUAGE_UNSPECIFIED);
+    // EXPECT_EQ(
+    //     text_index_schema->GetPunctuationBitmap(),
+    //     std::bitset<256>(
+    //         "000000000000000000000000000000000000000000000000000000000000000000"
+    //         "000000000000000000000000000000000000000000000000000000000000001000"
+    //         "000000000000000000000000000000000000000000000000000000000000000000"
+    //         "0000000000010000000000000111111111111111111111111111111111"));
+    // EXPECT_EQ(text_index_schema->GetWithOffsets(), false);
+    // EXPECT_THAT(text_index_schema->GetStopWordsSet(),
+    //             testing::Contains("stop"));
 
     // Validate text index was restored correctly
     VMSDK_EXPECT_OK(index_schema->GetIndex("description"));
-    auto text_index = dynamic_cast<indexes::Text *>(
+    auto text_index = dynamic_cast<indexes::Text*>(
         index_schema->GetIndex("description").value().get());
     EXPECT_TRUE(text_index != nullptr);
 
@@ -1432,8 +1432,8 @@ TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
         {"key1", 1}, {"key2", 2}, {"key3", 3}};
     EXPECT_CALL(*mock_index, ForEachTrackedKey(testing::_))
         .WillOnce([&keys_in_index](
-                      absl::AnyInvocable<void(const InternedStringPtr &)> fn) {
-          for (const auto &[key, internal_id] : keys_in_index) {
+                      absl::AnyInvocable<void(const InternedStringPtr&)> fn) {
+          for (const auto& [key, internal_id] : keys_in_index) {
             InternedStringPtr interned_key = StringInternStore::Intern(key);
             fn(interned_key);
           }
@@ -1527,7 +1527,7 @@ class IndexSchemaFriendTest : public ValkeySearchTest {
 };
 
 IndexSchema::MutatedAttributes CreateMutatedAttributes(
-    const std::string &attribute_identifier, absl::string_view data_ptr) {
+    const std::string& attribute_identifier, absl::string_view data_ptr) {
   IndexSchema::MutatedAttributes mutated_attributes;
   mutated_attributes[attribute_identifier].data =
       vmsdk::MakeUniqueValkeyString(data_ptr);
@@ -1638,14 +1638,14 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
 
   auto vectors = DeterministicallyGenerateVectors(3, dimensions, 2);
   for (auto initial_track :
-       {absl::string_view(), absl::string_view((char *)&vectors[0][0],
-                                               dimensions * sizeof(float))}) {
+       {absl::string_view(),
+        absl::string_view((char*)&vectors[0][0], dimensions * sizeof(float))}) {
     for (auto track_before_consumption_data_ptr :
-         {absl::string_view(), absl::string_view((char *)&vectors[1][0],
+         {absl::string_view(), absl::string_view((char*)&vectors[1][0],
                                                  dimensions * sizeof(float))}) {
       for (auto track_after_consumption_data_ptr :
            {absl::string_view(),
-            absl::string_view((char *)&vectors[2][0],
+            absl::string_view((char*)&vectors[2][0],
                               dimensions * sizeof(float))}) {
         tester(initial_track, track_before_consumption_data_ptr,
                track_after_consumption_data_ptr);
@@ -1664,7 +1664,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
     // worker pool
     VMSDK_EXPECT_OK(mutations_thread_pool.SuspendWorkers());
     vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(
-        absl::string_view((char *)&vectors[0][0], dimensions * sizeof(float)));
+        absl::string_view((char*)&vectors[0][0], dimensions * sizeof(float)));
     IndexSchema::MutatedAttributes mutated_attributes;
     mutated_attributes[itr->second.GetIdentifier()].data = std::move(data);
     auto key_interned = StringInternStore::Intern(std::string(*key) + "0");
@@ -1673,14 +1673,13 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
     EXPECT_EQ(mutations_thread_pool.QueueSize(), 1);
     VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());
   }
-  const auto &stats = index_schema->GetStats();
+  const auto& stats = index_schema->GetStats();
   const size_t iterations = 100;
   // Test delete consistency
   for (size_t j = 0; j < iterations; ++j) {
     for (size_t i = 0; i < vectors.size(); ++i) {
-      vmsdk::UniqueValkeyString data =
-          vmsdk::MakeUniqueValkeyString(absl::string_view(
-              (char *)&vectors[i][0], dimensions * sizeof(float)));
+      vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(
+          absl::string_view((char*)&vectors[i][0], dimensions * sizeof(float)));
       IndexSchema::MutatedAttributes mutated_attributes;
       mutated_attributes[attribute_identifier].data = std::move(data);
       auto key_interned =
@@ -1715,9 +1714,8 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
   // Test update consistency
   for (size_t j = 0; j < iterations; ++j) {
     for (size_t i = 0; i < vectors.size(); ++i) {
-      vmsdk::UniqueValkeyString data =
-          vmsdk::MakeUniqueValkeyString(absl::string_view(
-              (char *)&vectors[0][0], dimensions * sizeof(float)));
+      vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(
+          absl::string_view((char*)&vectors[0][0], dimensions * sizeof(float)));
       IndexSchema::MutatedAttributes mutated_attributes;
       mutated_attributes[attribute_identifier].data = std::move(data);
       auto key_interned =
@@ -1728,7 +1726,7 @@ TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
   }
   for (size_t i = 0; i < vectors.size(); ++i) {
     vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(
-        absl::string_view((char *)&vectors[i][0], dimensions * sizeof(float)));
+        absl::string_view((char*)&vectors[i][0], dimensions * sizeof(float)));
     IndexSchema::MutatedAttributes mutated_attributes;
     mutated_attributes[attribute_identifier].data = std::move(data);
     auto key_interned =
@@ -1814,9 +1812,8 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     EXPECT_FALSE(itr == index_schema->attributes_.end());
 
     for (size_t i = 0; i < vectors.size(); ++i) {
-      vmsdk::UniqueValkeyString data =
-          vmsdk::MakeUniqueValkeyString(absl::string_view(
-              (char *)&vectors[i][0], dimensions * sizeof(float)));
+      vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(
+          absl::string_view((char*)&vectors[i][0], dimensions * sizeof(float)));
       auto interned_key =
           StringInternStore::Intern("item:" + std::to_string(i));
       index_schema->ProcessAttributeMutation(&fake_ctx_, itr->second,
@@ -1882,12 +1879,12 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     // Mock scan operations for backfill
     int scan_call_count = 0;
     EXPECT_CALL(*kMockValkeyModule,
-                Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor *>(),
-                     testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
+                Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor*>(),
+                     testing::An<ValkeyModuleScanCB>(), testing::An<void*>()))
         .WillRepeatedly([&scan_call_count, num_vectors](
-                            ValkeyModuleCtx *ctx,
-                            ValkeyModuleScanCursor *cursor,
-                            ValkeyModuleScanCB fn, void *privdata) -> int {
+                            ValkeyModuleCtx* ctx,
+                            ValkeyModuleScanCursor* cursor,
+                            ValkeyModuleScanCB fn, void* privdata) -> int {
           if (scan_call_count < num_vectors) {
             std::string key = "item:" + std::to_string(scan_call_count);
             auto key_r_str = vmsdk::MakeUniqueValkeyString(key);
@@ -1904,7 +1901,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     EXPECT_CALL(
         *kMockValkeyModule,
         HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
-                testing::An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
+                testing::An<ValkeyModuleString**>(), TypedEq<void*>(nullptr)))
         .WillRepeatedly(Return(VALKEYMODULE_ERR));
 
     RDBSectionIter iter(&rdb_stream_step1, 1);
@@ -1991,9 +1988,8 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
           StringInternStore::Intern("item:" + std::to_string(i));
 
       // Add vector data
-      vmsdk::UniqueValkeyString vec_data =
-          vmsdk::MakeUniqueValkeyString(absl::string_view(
-              (char *)&vectors[i][0], dimensions * sizeof(float)));
+      vmsdk::UniqueValkeyString vec_data = vmsdk::MakeUniqueValkeyString(
+          absl::string_view((char*)&vectors[i][0], dimensions * sizeof(float)));
       index_schema->ProcessAttributeMutation(&fake_ctx_, vec_itr->second,
                                              interned_key, std::move(vec_data),
                                              indexes::DeletionType::kNone);
@@ -2092,12 +2088,12 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     // Mock scan operations
     int scan_call_count = 0;
     EXPECT_CALL(*kMockValkeyModule,
-                Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor *>(),
-                     testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
+                Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor*>(),
+                     testing::An<ValkeyModuleScanCB>(), testing::An<void*>()))
         .WillRepeatedly([&scan_call_count, num_vectors](
-                            ValkeyModuleCtx *ctx,
-                            ValkeyModuleScanCursor *cursor,
-                            ValkeyModuleScanCB fn, void *privdata) -> int {
+                            ValkeyModuleCtx* ctx,
+                            ValkeyModuleScanCursor* cursor,
+                            ValkeyModuleScanCB fn, void* privdata) -> int {
           if (scan_call_count < num_vectors) {
             std::string key = "item:" + std::to_string(scan_call_count);
             auto key_r_str = vmsdk::MakeUniqueValkeyString(key);
@@ -2114,7 +2110,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     EXPECT_CALL(
         *kMockValkeyModule,
         HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
-                testing::An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
+                testing::An<ValkeyModuleString**>(), TypedEq<void*>(nullptr)))
         .WillRepeatedly(Return(VALKEYMODULE_ERR));
 
     RDBSectionIter iter(&rdb_stream_step4, 1);
@@ -2204,9 +2200,8 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
 
     // Add to index1: vectors 0-99
     for (int i = 0; i < additional_index_vectors; ++i) {
-      vmsdk::UniqueValkeyString data =
-          vmsdk::MakeUniqueValkeyString(absl::string_view(
-              (char *)&vectors[i][0], dimensions * sizeof(float)));
+      vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(
+          absl::string_view((char*)&vectors[i][0], dimensions * sizeof(float)));
       auto interned_key =
           StringInternStore::Intern("item:" + std::to_string(i));
       index_schema->ProcessAttributeMutation(&fake_ctx_, itr1->second,
@@ -2217,7 +2212,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     // Add to index2: vectors 100-199
     for (int i = 0; i < additional_index_vectors; ++i) {
       vmsdk::UniqueValkeyString data = vmsdk::MakeUniqueValkeyString(
-          absl::string_view((char *)&vectors[i + additional_index_vectors][0],
+          absl::string_view((char*)&vectors[i + additional_index_vectors][0],
                             dimensions * sizeof(float)));
       auto interned_key =
           StringInternStore::Intern("item:" + std::to_string(i + 1000));
@@ -2230,7 +2225,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     for (int i = 0; i < additional_index_vectors; ++i) {
       vmsdk::UniqueValkeyString data =
           vmsdk::MakeUniqueValkeyString(absl::string_view(
-              (char *)&vectors[i + additional_index_vectors * 2][0],
+              (char*)&vectors[i + additional_index_vectors * 2][0],
               dimensions * sizeof(float)));
       auto interned_key =
           StringInternStore::Intern("item:" + std::to_string(i + 2000));

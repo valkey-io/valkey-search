@@ -14,6 +14,51 @@
 
 namespace valkey_search::indexes::text {
 
+using PunctuationBitmap = std::bitset<256>;
+
+namespace {
+
+bool IsWhitespace(unsigned char c) {
+  return std::isspace(c) || std::iscntrl(c);
+}
+
+PunctuationBitmap BuildPunctuationBitmap(const std::string& punctuation) {
+  PunctuationBitmap bitmap;
+  bitmap.reset();
+
+  for (int i = 0; i < 256; ++i) {
+    if (IsWhitespace(static_cast<unsigned char>(i))) {
+      bitmap.set(i);
+    }
+  }
+
+  for (char c : punctuation) {
+    bitmap.set(static_cast<unsigned char>(c));
+  }
+
+  return bitmap;
+}
+
+absl::flat_hash_set<std::string> BuildStopWordsSet(
+    const std::vector<std::string>& stop_words) {
+  absl::flat_hash_set<std::string> stop_words_set;
+  for (const auto& word : stop_words) {
+    stop_words_set.insert(absl::AsciiStrToLower(word));
+  }
+  return stop_words_set;
+}
+
+const char* GetLanguageString(data_model::Language language) {
+  switch (language) {
+    case data_model::LANGUAGE_ENGLISH:
+      return "english";
+    default:
+      return "english";
+  }
+}
+
+}  // namespace
+
 thread_local Lexer::ThreadLocalStemmerCache Lexer::stemmer_cache_;
 
 // Clean up thread-local stemmers when the thread exits
@@ -26,24 +71,25 @@ Lexer::ThreadLocalStemmerCache::~ThreadLocalStemmerCache() {
 }
 
 sb_stemmer* Lexer::ThreadLocalStemmerCache::GetOrCreateStemmer(
-    const std::string& language) {
+    data_model::Language language) {
   auto it = cache_.find(language);
   if (it == cache_.end()) {
-    sb_stemmer* stemmer = sb_stemmer_new(language.c_str(), "UTF_8");
+    sb_stemmer* stemmer = sb_stemmer_new(GetLanguageString(language), "UTF_8");
     cache_[language] = stemmer;
     return stemmer;
   }
   return it->second;
 }
 
-Lexer::Lexer(const char* language) : language_(language) {}
-
-Lexer::~Lexer() {}
+Lexer::Lexer(data_model::Language language, const std::string& punctuation,
+             const std::vector<std::string>& stop_words)
+    : language_(language),
+      punct_bitmap_(BuildPunctuationBitmap(punctuation)),
+      stop_words_set_(BuildStopWordsSet(stop_words)) {}
 
 absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
-    absl::string_view text, const std::bitset<256>& punct_bitmap,
-    bool stemming_enabled, uint32_t min_stem_size,
-    const absl::flat_hash_set<std::string>& stop_words_set) const {
+    absl::string_view text, bool stemming_enabled,
+    uint32_t min_stem_size) const {
   if (!IsValidUtf8(text)) {
     return absl::InvalidArgumentError("Invalid UTF-8");
   }
@@ -54,13 +100,12 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
   std::vector<std::string> tokens;
   size_t pos = 0;
   while (pos < text.size()) {
-    while (pos < text.size() && Lexer::IsPunctuation(text[pos], punct_bitmap)) {
+    while (pos < text.size() && IsPunctuation(text[pos])) {
       pos++;
     }
 
     size_t word_start = pos;
-    while (pos < text.size() &&
-           !Lexer::IsPunctuation(text[pos], punct_bitmap)) {
+    while (pos < text.size() && !IsPunctuation(text[pos])) {
       pos++;
     }
 
@@ -69,7 +114,7 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
 
       std::string word = absl::AsciiStrToLower(word_view);
 
-      if (Lexer::IsStopWord(word, stop_words_set)) {
+      if (IsStopWord(word)) {
         continue;  // Skip stop words
       }
 

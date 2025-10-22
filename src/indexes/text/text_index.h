@@ -64,7 +64,6 @@ class TextIndexSchema {
 
   uint8_t GetNumTextFields() const { return num_text_fields_; }
   std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
-  bool GetWithOffsets() const { return with_offsets_; }
 
  private:
   uint8_t num_text_fields_ = 0;

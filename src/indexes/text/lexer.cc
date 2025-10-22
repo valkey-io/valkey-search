@@ -59,18 +59,16 @@ const char* GetLanguageString(data_model::Language language) {
 
 }  // namespace
 
-thread_local Lexer::ThreadLocalStemmerCache Lexer::stemmer_cache_;
+thread_local Lexer::StemmerCache Lexer::stemmer_cache_;
 
 // Clean up thread-local stemmers when the thread exits
-Lexer::ThreadLocalStemmerCache::~ThreadLocalStemmerCache() {
+Lexer::StemmerCache::~StemmerCache() {
   for (auto& [lang, stemmer] : cache_) {
-    if (stemmer) {
-      sb_stemmer_delete(stemmer);
-    }
+    sb_stemmer_delete(stemmer);
   }
 }
 
-sb_stemmer* Lexer::ThreadLocalStemmerCache::GetOrCreateStemmer(
+sb_stemmer* Lexer::StemmerCache::GetOrCreateStemmer(
     data_model::Language language) {
   auto it = cache_.find(language);
   if (it == cache_.end()) {
@@ -135,7 +133,6 @@ std::string Lexer::StemWord(const std::string& word, bool stemming_enabled,
 
   DCHECK(stemmer) << "Stemmer is null";
 
-  // Use the passed stemmer (already retrieved from cache in Tokenize)
   const sb_symbol* stemmed = sb_stemmer_stem(
       stemmer, reinterpret_cast<const sb_symbol*>(word.c_str()), word.length());
 

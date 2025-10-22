@@ -56,20 +56,19 @@ struct Lexer {
   // stemmers will be owned by threads and shared amongst the Lexer instances.
   // Each ingestion worker thread gets a stemmer for each language it tokenizes
   // at least once.
-  class ThreadLocalStemmerCache {
+  class StemmerCache {
    private:
     std::unordered_map<data_model::Language, sb_stemmer*> cache_;
 
    public:
-    ~ThreadLocalStemmerCache();
+    ~StemmerCache();
     sb_stemmer* GetOrCreateStemmer(data_model::Language language);
   };
-  static thread_local ThreadLocalStemmerCache stemmer_cache_;
+  static thread_local StemmerCache stemmer_cache_;
 
   std::string StemWord(const std::string& word, bool stemming_enabled,
                        uint32_t min_stem_size, sb_stemmer* stemmer) const;
 
-  // Private helper methods operating on instance data
   bool IsPunctuation(char c) const {
     return punct_bitmap_[static_cast<unsigned char>(c)];
   }

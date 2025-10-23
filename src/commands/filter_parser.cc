@@ -449,8 +449,6 @@ std::unique_ptr<query::Predicate> WrapPredicate(
 
 static const uint32_t FUZZY_MAX_DISTANCE = 3;
 
-
-
 absl::StatusOr<std::unique_ptr<query::TextPredicate>>
 FilterParser::BuildSingleTextPredicate(const indexes::Text* text_index,
                                        const indexes::text::Lexer& lexer,
@@ -463,32 +461,31 @@ FilterParser::BuildSingleTextPredicate(const indexes::Text* text_index,
   VMSDK_LOG(WARNING, nullptr) << "BuildSingleTextPredicate: " << token;
   VMSDK_LOG(WARNING, nullptr) << "Processed BuildSingleTextPredicate: " << token;
   uint64_t field_mask;
-  if (!field_name.has_value()) {
+  if (field_name.has_value()) {
+    auto identifier = index_schema_.GetIdentifier(field_name.value()).value();
+    filter_identifiers_.insert(identifier);
+    field_mask = 1ULL << text_index->GetTextFieldNumber();
+  } else {
     field_mask = ~0ULL;
     auto text_identifiers = index_schema_.GetAllTextIdentifiers();
     for (const auto& identifier : text_identifiers) {
       filter_identifiers_.insert(identifier);
     }
-  } else {
-    auto identifier = index_schema_.GetIdentifier(field_name.value()).value();
-    filter_identifiers_.insert(identifier);
-    auto field_number = text_index->GetTextFieldNumber();
-    field_mask = 1ULL << field_number;
   }
   // Helper function to check if character at position is escaped
   auto is_escaped = [&](size_t pos) -> bool {
     return pos > 0 && token[pos - 1] == '\\';
   };
-  // Helper function to process escaped characters in a string
-  auto process_escapes = [](absl::string_view str) -> std::string {
-    std::string result;
-    for (size_t i = 0; i < str.size(); ++i) {
-      if (str[i] != '\\') {
-        result += str[i];
-      }
-    }
-    return result;
-  };
+  // // Helper function to process escaped characters in a string
+  // auto process_escapes = [](absl::string_view str) -> std::string {
+  //   std::string result;
+  //   for (size_t i = 0; i < str.size(); ++i) {
+  //     if (str[i] != '\\') {
+  //       result += str[i];
+  //     }
+  //   }
+  //   return result;
+  // };
   // --- Fuzzy ---
   bool starts_percent = !token.empty() && token.front() == '%' && !is_escaped(0);
   bool ends_percent = !token.empty() && token.back() == '%' && !is_escaped(token.size() - 1);
@@ -518,40 +515,37 @@ FilterParser::BuildSingleTextPredicate(const indexes::Text* text_index,
       if (core.empty()) {
         return absl::InvalidArgumentError("Empty fuzzy token");
       }
-      std::string processed_core = process_escapes(core);
       return std::make_unique<query::FuzzyPredicate>(
-          text_index, field_mask, processed_core, lead_pct);
+          text_index, field_mask, std::string(core), lead_pct);
     }
   }
   // --- Wildcard ---
   bool starts_star = !token.empty() && token.front() == '*' && !is_escaped(0);
   bool ends_star = !token.empty() && token.back() == '*' && !is_escaped(token.size() - 1);
-
   if (starts_star || ends_star) {
     absl::string_view core = token;
     if (starts_star) core.remove_prefix(1);
-    if (!core.empty() && ends_star) core.remove_suffix(1);
+    if (ends_star && !core.empty()) core.remove_suffix(1);
     if (core.empty()) {
       return absl::InvalidArgumentError(
           "Wildcard token must contain at least one character besides '*'");
     }
-    std::string processed_core = process_escapes(core);
+    // std::string processed_core = process_escapes(core);
     if (starts_star && ends_star) {
       return std::make_unique<query::InfixPredicate>(
-          text_index, field_mask, processed_core);
+          text_index, field_mask, std::string(core));
     }
     if (starts_star) {
-      return std::make_unique<query::SuffixPredicate>(
-          text_index, field_mask, processed_core);
+      return std::make_unique<query::SuffixPredicate>(text_index, field_mask, std::string(core));
     }
-    return std::make_unique<query::PrefixPredicate>(
-        text_index, field_mask, processed_core);
+    return std::make_unique<query::PrefixPredicate>(text_index, field_mask, std::string(core));
   }
   // --- Term ---
-  bool should_stem = true;
   auto text_index_schema = text_index->GetTextIndexSchema();
-  // std::string processed_word = process_escapes(token);
-  return std::make_unique<query::TermPredicate>(text_index, field_mask,  std::string(token));
+  bool should_stem = true;
+  std::string word(token);
+  auto stemmed_token = lexer.StemWord(word, text_index_schema->GetStemmer(), should_stem, text_index->GetMinStemSize());
+  return std::make_unique<query::TermPredicate>(text_index, field_mask, stemmed_token);
 }
 
 absl::StatusOr<std::vector<std::unique_ptr<query::TextPredicate>>>
@@ -648,6 +642,8 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
     // Regular character
     curr.push_back(c);
     ++pos_;
+    // VERY IMPORTANT NOTE: This is an easy entry point to perform left to right parsing.
+    // It might simplify escaped char handling. Especially, when implementing code to handle escaped query syntax itself.
   }
   VMSDK_RETURN_IF_ERROR(push_token(curr));
   // TODO: In redis-search, they do not allow stop words in exact phrase

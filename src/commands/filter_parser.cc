@@ -461,53 +461,6 @@ FilterParser::BuildSingleTextPredicate(const indexes::Text* text_index,
     return absl::InvalidArgumentError("Empty text token");
   }
   VMSDK_LOG(WARNING, nullptr) << "BuildSingleTextPredicate: " << token;
-  // Check if token contains escaped characters
-  // bool has_escapes = token.find("\\") != std::string::npos;
-
-  // if (has_escapes) {
-  //   std::string processed_token;
-  //   // for (size_t i = 0; i < token.size(); ++i) {
-  //   //   if (token[i] == '\\' && i + 1 < token.size()) {
-  //   //     // Skip backslash, add next character
-  //   //     processed_token += token[i + 1];
-  //   //     ++i;
-  //   //   } else {
-  //   //     processed_token += token[i];
-  //   //   }
-  //   // }
-  //   // Remove all backslashes - they're just escape markers
-  //   for (char c : token) {
-  //     if (c != '\\') {
-  //       processed_token += c;
-  //     }
-  //   }
-  //   token = processed_token;
-  // }
-
-  // std::string processed_token;
-  // for (size_t i = 0; i < token.size(); ++i) {
-  //   if (token[i] == '\\') {
-  //     if (i + 1 < token.size()) {
-  //       if (token[i + 1] == '\\') {
-  //         // \\ becomes single \
-  //         processed_token += '\\';
-  //         ++i; // Skip the second backslash
-  //       } else {
-  //         // \x becomes x (remove escape backslash)
-  //         processed_token += token[i + 1];
-  //         ++i; // Skip the escaped character
-  //       }
-  //     } else {
-  //       // Trailing \ - keep it
-  //       processed_token += '\\';
-  //     }
-  //   } else {
-  //     processed_token += token[i];
-  //   }
-  // }
-  // token = processed_token;
-
-
   VMSDK_LOG(WARNING, nullptr) << "Processed BuildSingleTextPredicate: " << token;
   uint64_t field_mask;
   if (!field_name.has_value()) {
@@ -601,124 +554,12 @@ FilterParser::BuildSingleTextPredicate(const indexes::Text* text_index,
   return std::make_unique<query::TermPredicate>(text_index, field_mask,  std::string(token));
 }
 
-
-
-// Why does predicate use an identifier? can we remove it for text?
-// Why does it use a field name in a string format? can we remove it in text and use a field mask?
-// absl::StatusOr<std::unique_ptr<query::TextPredicate>>
-// FilterParser::BuildSingleTextPredicate(const indexes::Text* text_index,
-//                                        const indexes::text::Lexer& lexer,
-//                                        const std::optional<std::string>& field_name,
-//                                        absl::string_view raw_token) {
-//   absl::string_view token = absl::StripAsciiWhitespace(raw_token);
-//   if (token.empty()) {
-//     return absl::InvalidArgumentError("Empty text token");
-//   }
-//   uint64_t field_mask;
-//   // TODO: If no field specified, add all the text fields here.
-//   if (!field_name.has_value()) {
-//     // Global search - set all bits
-//     field_mask = ~0ULL;
-//     // Add all text field identifiers to filter_identifiers_
-//     auto text_identifiers = index_schema_.GetAllTextIdentifiers();
-//     for (const auto& identifier : text_identifiers) {
-//       filter_identifiers_.insert(identifier);
-//     }
-//   } else {
-//     auto identifier = index_schema_.GetIdentifier(field_name.value()).value();
-//     filter_identifiers_.insert(identifier);
-//     // Set single bit for this specific field
-//     auto field_number = text_index->GetTextFieldNumber();
-//     field_mask = 1ULL << field_number;
-//   }
-//   // Delete the code below and implement the code above. It needs a 
-//   // solution for the predicates. They currently require an alias and a field identifier.
-//   // Can we hack this by using the first text field in the schema as the
-//   // identifier? Do we even need the identifier for text predicates?
-//   // // DELETE START
-//   // VMSDK_LOG(WARNING, nullptr) << "Do i get here10?";
-//   // if (!field_name.has_value()) {
-//   //   return absl::InvalidArgumentError("Missing field name");
-//   // }
-//   // auto identifier = index_schema_.GetIdentifier(*field_name).value();
-//   // filter_identifiers_.insert(identifier);
-//   // auto field_mask = 1ULL << text_index->GetTextFieldNumber();
-//   // // DELETE STOP
-//   // --- Fuzzy ---
-//   VMSDK_LOG(WARNING, nullptr) << "Attempt fuzzy: " << token;
-//   size_t lead_pct = 0;
-//   while (lead_pct < token.size() && token[lead_pct] == '%') {
-//     ++lead_pct;
-//     if (lead_pct > FUZZY_MAX_DISTANCE) {
-//       return absl::InvalidArgumentError("Too many leading '%' markers");
-//     }
-//   }
-//   size_t tail_pct = 0;
-//   while (tail_pct < token.size() && token[token.size() - 1 - tail_pct] == '%') {
-//     ++tail_pct;
-//     if (tail_pct > FUZZY_MAX_DISTANCE) {
-//       return absl::InvalidArgumentError("Too many trailing '%' markers");
-//     }
-//   }
-//   if (lead_pct || tail_pct) {
-//     if (lead_pct != tail_pct) {
-//       return absl::InvalidArgumentError("Mismatched fuzzy '%' markers");
-//     }
-//     absl::string_view core = token;
-//     core.remove_prefix(lead_pct);
-//     core.remove_suffix(tail_pct);
-//     if (core.empty()) {
-//       return absl::InvalidArgumentError("Empty fuzzy token");
-//     }
-//     return std::make_unique<query::FuzzyPredicate>(
-//         text_index, field_mask, std::string(core), lead_pct);
-//   }
-//   // --- Wildcard ---
-//   VMSDK_LOG(WARNING, nullptr) << "The wildcard string is: " << token;
-//   bool starts_star = !token.empty() && token.front() == '*';
-//   bool ends_star = !token.empty() && token.back() == '*';
-//   if (starts_star || ends_star) {
-//     absl::string_view core = token;
-//     if (starts_star) core.remove_prefix(1);
-//     if (!core.empty() && ends_star) core.remove_suffix(1);
-//     if (core.empty()) {
-//       return absl::InvalidArgumentError(
-//           "Wildcard token must contain at least one character besides '*'");
-//     }
-//     VMSDK_LOG(WARNING, nullptr) << "Core Size: " << core.size();
-//     VMSDK_LOG(WARNING, nullptr) << "Core: " << core;
-//     if (starts_star && ends_star) {
-//       return std::make_unique<query::InfixPredicate>(
-//           text_index, field_mask, std::string(core));
-//     }
-//     if (starts_star) {
-//       return std::make_unique<query::SuffixPredicate>(
-//           text_index, field_mask, std::string(core));
-//     }
-//     return std::make_unique<query::PrefixPredicate>(
-//         text_index, field_mask, std::string(core));
-//   }
-//   // --- Term ---
-//   // TODO: Set this based on the command arguments.
-//   VMSDK_LOG(WARNING, nullptr) << "Do i get here1?";
-//   bool should_stem = true;
-//   auto text_index_schema = text_index->GetTextIndexSchema();
-//   std::string word(token);
-//   VMSDK_LOG(WARNING, nullptr) << "Do i get here2?";
-//   std::string stemmed_token = lexer.StemWord(word, text_index_schema->GetStemmer(), should_stem, text_index->GetMinStemSize());
-//   return std::make_unique<query::TermPredicate>(text_index, field_mask, stemmed_token);
-// }
-
 absl::StatusOr<std::vector<std::unique_ptr<query::TextPredicate>>>
 FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_for_default) {
   // Get text index for punctuation and stop word configuration
-  absl::StatusOr<std::shared_ptr<indexes::IndexBase>> index;
-  if (field_for_default.has_value()) {
-    index = index_schema_.GetIndex(field_for_default.value());
-  } else {
-    // Pick the first text index in the schema
-    index = index_schema_.GetFirstTextIndex();
-  }
+  auto index = field_for_default.has_value() 
+      ? index_schema_.GetIndex(field_for_default.value())
+      : index_schema_.GetFirstTextIndex();
   if (!index.ok() || index.value()->GetIndexerType() != indexes::IndexerType::kText) {
     return absl::InvalidArgumentError(
         absl::StrCat("Index does not have any text field"));
@@ -734,11 +575,12 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
       tok.clear();
       return absl::OkStatus();
     }
-    VMSDK_ASSIGN_OR_RETURN(auto t, BuildSingleTextPredicate(text_index, lexer, field_for_default, lower));
-    terms.push_back(std::move(t));
+    VMSDK_ASSIGN_OR_RETURN(auto term, BuildSingleTextPredicate(text_index, lexer, field_for_default, lower));
+    terms.push_back(std::move(term));
     tok.clear();
     return absl::OkStatus();
   };
+  size_t backslash_count = 0;
   std::string curr;
   bool escaped = false;
   bool in_quotes = false;
@@ -746,73 +588,37 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
     char c = Peek();
     // Handle quote termination
     if (c == '"' && !escaped) {
-      if (!in_quotes && curr.empty() && terms.empty()) {
-        // Start quote mode
-        in_quotes = true;
-        ++pos_;
-        continue;
-      } else {
-        // End quote mode
-        ++pos_;
-        break;
-      }
+      in_quotes = !in_quotes;
+      bool first_term = curr.empty() && terms.empty();
+      ++pos_;
+      if (in_quotes && first_term) continue;
+      break;
     }
-    // TODO: Test and confirm this code handles escaped chars.
-    // if (c == '\\') {
-    //   if (pos_ + 1 < expression_.size() && expression_[pos_ + 1] == '\\') {
-    //     // Double backslash - add literal backslash
-    //     curr.push_back('\\');
-    //     curr.push_back('\\');
-    //     pos_ += 2; // Skip both backslashes
-    //     continue;
-    //   } else {
-    //     // Single backslash - push current token and start new one
-    //     VMSDK_RETURN_IF_ERROR(push_token(curr));
-    //     escaped = true;
-    //     ++pos_;
-    //     break;
-    //   }
-    // }
-    // if (escaped) {
-    //   curr.push_back(c);
-    //   escaped = false;
-    //   ++pos_;
-    //   continue;
-    // }
+    // Count backslashes
     if (c == '\\') {
-      // Count consecutive backslashes
-      size_t backslash_count = 0;
-      size_t temp_pos = pos_;
-      while (temp_pos < expression_.size() && expression_[temp_pos] == '\\') {
-        backslash_count++;
-        temp_pos++;
-      }
-      pos_ += backslash_count;
+      backslash_count++;
+      ++pos_;
+      continue;
+    }
+    // Process accumulated backslashes
+    if (backslash_count > 0) {
       if (in_quotes) {
-        // Inside quotes: any backslashes (≥1) become single literal backslash
-        if (backslash_count > 0) {
-          curr.push_back('\\');
-          continue;
+        if (backslash_count % 2 == 0 || !lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())) {
+            curr.push_back('\\');
+        } else {
+            escaped = true;
         }
       } else {
-        // Outside quotes: use odd/even logic
         if (backslash_count % 2 == 0) {
-          // Even number: add single literal backslash, continue as single token
-          curr.push_back('\\');
-          continue;
-        } else {
-          // Odd number: add single literal backslash, push token, and break              char c = Peek();
-          char c_temp = Peek();
-          if (!lexer.IsPunctuation(c_temp, text_index_schema->GetPunctuationBitmap())) {
-            if (backslash_count > 1) {
-              curr.push_back('\\');
-            }
+            curr.push_back('\\');
+        } else if (!lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())) {
+            if (backslash_count > 1) curr.push_back('\\');
             break;
-          }
-          escaped = true;
-          continue;
+        } else {
+            escaped = true;
         }
       }
+      backslash_count = 0;
     }
     if (escaped) {
       curr.push_back(c);
@@ -826,13 +632,14 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
       break; 
     }
     // These are unhandled characters which we need to skip over.
-    // Advance and Break to parse as a new token.
+    // This is done by advancing and breaking to parse as a new token.
     if (!in_quotes && !escaped && c != '%' && c != '*' && lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())) {
       ++pos_; 
       break;
     }
     // TODO: Test that we don't strip out valid characters in the search query.
     // What we use in ingestion: ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|"
+    // IMPORTANT Note: They do not skip $ _ : characters when in quotes.
     if (in_quotes && !escaped && lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())) {
       VMSDK_RETURN_IF_ERROR(push_token(curr));
       ++pos_;
@@ -844,18 +651,11 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
   }
   VMSDK_RETURN_IF_ERROR(push_token(curr));
   // TODO: In redis-search, they do not allow stop words in exact phrase
-  // Also, we need to handle cases where this fn is called and a stop word if found with nothing else. vec is empty here.
-  // if (terms.empty()) return absl::InvalidArgumentError("Empty text token");
   return terms;
 }
 
 // TODO:
-// - Handle negation
-// - Handle parenthesis by including terms in the proximity predicate. This
-// requires folding this fn in the caller site.
-// - Handle parsing and setup of default text field predicates
-// - Try to move out nested standard operations (negate/numeric/tag/parenthesis)
-// back to the caller site and reduce responsibilities of the text parser
+// Remove this function once we flatten AND and OR, and delete ProximityAND.
 absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextGroup(
     const std::string& initial_field) {
   std::vector<std::unique_ptr<query::TextPredicate>> all_terms;
@@ -895,8 +695,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextGroup(
       }
     }
     // Parse next text atom (first or subsequent)
-    // VMSDK_ASSIGN_OR_RETURN(auto resolved,
-    //                        ResolveTextFieldOrDefault(field_for_atom));
     VMSDK_ASSIGN_OR_RETURN(auto terms, ParseOneTextAtomIntoTerms(field_for_atom));
     for (auto& t : terms) all_terms.push_back(std::move(t));
     // Only use initial_field for first atom

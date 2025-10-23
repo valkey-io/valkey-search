@@ -582,6 +582,10 @@ void IndexSchema::ScheduleMutation(bool from_backfill,
       ++stats_.backfill_inqueue_tasks;
     }
   }
+  {
+    absl::MutexLock lock(&inflight_keys_mutex_);
+    inflight_keys_.insert(key);
+  }
   mutations_thread_pool_->Schedule(
       [from_backfill, weak_index_schema = GetWeakPtr(),
        ctx = detached_ctx_.get(), delay_capturer = CreateQueueDelayCapturer(),
@@ -647,13 +651,19 @@ void IndexSchema::ProcessSingleMutationAsync(ValkeyModuleCtx *ctx,
     }
     SyncProcessMutation(ctx, mutation_record.value(), key);
   } while (true);
-  absl::MutexLock lock(&stats_.mutex_);
-  --stats_.mutation_queue_size_;
-  if (ABSL_PREDICT_FALSE(from_backfill)) {
-    --stats_.backfill_inqueue_tasks;
+  {
+    absl::MutexLock lock(&stats_.mutex_);
+    --stats_.mutation_queue_size_;
+    if (ABSL_PREDICT_FALSE(from_backfill)) {
+      --stats_.backfill_inqueue_tasks;
+    }
+    if (ABSL_PREDICT_FALSE(delay_capturer)) {
+      stats_.mutations_queue_delay_ = delay_capturer->Duration();
+    }
   }
-  if (ABSL_PREDICT_FALSE(delay_capturer)) {
-    stats_.mutations_queue_delay_ = delay_capturer->Duration();
+  {
+    absl::MutexLock lock(&inflight_keys_mutex_);
+    inflight_keys_.erase(key);
   }
 }
 

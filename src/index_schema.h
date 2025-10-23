@@ -155,6 +155,11 @@ class IndexSchema : public KeyspaceEventSubscription,
   virtual void OnLoadingEnded(ValkeyModuleCtx *ctx);
 
   inline const Stats &GetStats() const { return stats_; }
+  
+  bool IsKeyInflight(const InternedStringPtr &key) const {
+    absl::MutexLock lock(&inflight_keys_mutex_);
+    return inflight_keys_.contains(key);
+  }
   void ProcessSingleMutationAsync(ValkeyModuleCtx *ctx, bool from_backfill,
                                   const InternedStringPtr &key,
                                   vmsdk::StopWatch *delay_capturer);
@@ -210,6 +215,9 @@ class IndexSchema : public KeyspaceEventSubscription,
       ABSL_GUARDED_BY(mutated_records_mutex_);
   bool is_destructing_ ABSL_GUARDED_BY(mutated_records_mutex_){false};
   mutable absl::Mutex mutated_records_mutex_;
+
+  InternedStringSet inflight_keys_ ABSL_GUARDED_BY(inflight_keys_mutex_);
+  mutable absl::Mutex inflight_keys_mutex_;
 
   struct BackfillJob {
     BackfillJob() = delete;

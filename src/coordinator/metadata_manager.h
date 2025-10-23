@@ -31,8 +31,9 @@
 
 namespace valkey_search::coordinator {
 
-using FingerprintCallback = absl::AnyInvocable<absl::StatusOr<uint64_t>(
-    const google::protobuf::Any &metadata)>;
+using FingerprintCallback =
+    absl::AnyInvocable<absl::StatusOr<vmsdk::SemanticVersion>(
+        const google::protobuf::Any &metadata)>;
 using EncodingVersionCallback = absl::AnyInvocable<absl::StatusOr<uint32_t>(
     const google::protobuf::Any &metadata)>;
 using MetadataUpdateCallback = absl::AnyInvocable<absl::Status(
@@ -66,15 +67,15 @@ class MetadataManager {
             .section_count = [this](ValkeyModuleCtx *ctx, int when) -> int {
               return GetSectionsCount();
             },
-            .minimum_semantic_version = [](ValkeyModuleCtx *ctx,
-                                           int when) -> int {
-              return 0x010000;  // Always use 1.0.0 for now
-            }});
+            .minimum_semantic_version = [](ValkeyModuleCtx *ctx, int when)
+                -> int { return Instance().ComputeRDBVersion(); }});
   }
 
   static uint64_t ComputeTopLevelFingerprint(
       const google::protobuf::Map<std::string, GlobalMetadataEntryMap>
           &type_namespace_map);
+
+  vmsdk::SemanticVersion ComputeRDBVersion() const;
 
   absl::Status TriggerCallbacks(absl::string_view type_name, uint32_t db_num,
                                 absl::string_view id,

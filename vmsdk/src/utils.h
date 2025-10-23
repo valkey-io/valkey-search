@@ -7,6 +7,8 @@
 
 #ifndef VMSDK_SRC_UTILS_H_
 #define VMSDK_SRC_UTILS_H_
+#include <absl/strings/str_format.h>
+
 #include <optional>
 #include <string>
 #include <utility>
@@ -116,6 +118,34 @@ std::string PrintableBytes(absl::string_view sv);
 absl::Status VerifyRange(long long num_value, std::optional<long long> min,
                          std::optional<long long> max);
 std::optional<std::string> JsonUnquote(absl::string_view sv);
+
+//
+// Class for Semantic Version
+//
+class SemanticVersion {
+ public:
+  constexpr SemanticVersion(uint8_t major, uint8_t minor, uint8_t patch)
+      : version_((static_cast<unsigned>(major) << 16) |
+                 (static_cast<unsigned>(minor) << 8) |
+                 static_cast<unsigned>(patch)) {}
+  constexpr SemanticVersion(unsigned version) : version_(version) {}
+  unsigned Major() const { return (version_ >> 16) & 0xFF; }
+  unsigned Minor() const { return (version_ >> 8) & 0xFF; }
+  unsigned Patch() const { return (version_) & 0xFF; }
+  operator unsigned() const { return version_; }
+  std::string ToString() const {
+    return absl::StrFormat("%d.%d.%d", Major(), Minor(), Patch());
+  }
+
+  auto operator<=>(const SemanticVersion &other) const = default;
+
+ private:
+  unsigned version_;
+};
+
+inline std::ostream &operator<<(std::ostream &os, const SemanticVersion &sv) {
+  return os << sv.ToString();
+}
 
 struct JsonQuotedStringView {
   absl::string_view view_;

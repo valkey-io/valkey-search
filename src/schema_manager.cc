@@ -129,13 +129,13 @@ SchemaManager::SchemaManager(
           }});
   if (coordinator_enabled) {
     coordinator::MetadataManager::Instance().RegisterType(
-        kSchemaManagerMetadataTypeName,
-        SchemaManagerEncodingVersion::kMaximumSupported, ComputeFingerprint,
+        kSchemaManagerMetadataTypeName, kCurrentSemanticVersion,
+        ComputeFingerprint,
         [this](uint32_t db_num, absl::string_view id,
                const google::protobuf::Any *metadata) -> absl::Status {
           return this->OnMetadataCallback(db_num, id, metadata);
         },
-        ComputeEncodingVersion);
+        ComputeSemanticVersion);
   }
 }
 
@@ -354,7 +354,7 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
 // Determine the minimum encoding version required to interpret the metadata for
 // this Schema
 //
-absl::StatusOr<uint32_t> SchemaManager::ComputeEncodingVersion(
+absl::StatusOr<vmsdk::SemanticVersion> SchemaManager::ComputeSemanticVersion(
     const google::protobuf::Any &metadata) {
   auto unpacked = std::make_unique<data_model::IndexSchema>();
   if (!metadata.UnpackTo(unpacked.get())) {
@@ -363,9 +363,9 @@ absl::StatusOr<uint32_t> SchemaManager::ComputeEncodingVersion(
         "calculation");
   }
   if (unpacked->has_db_num() && unpacked->db_num() != 0) {
-    return SchemaManagerEncodingVersion::kDbNumSupport;
+    return valkey_search::kSemanticVersion11;
   } else {
-    return SchemaManagerEncodingVersion::kInitialRelease;
+    return valkey_search::kSemanticVersion10;
   }
 }
 

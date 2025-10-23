@@ -33,16 +33,6 @@
 namespace valkey_search {
 
 constexpr absl::string_view kSchemaManagerMetadataTypeName{"vs_index_schema"};
-//
-// Encoding Versions for SchemaManager Metadata
-//
-enum SchemaManagerEncodingVersion : uint32_t {
-  kInvalid = 0,
-  kInitialRelease = 1,
-  kDbNumSupport = 2,
-
-  kMaximumSupported = kDbNumSupport
-};
 
 namespace options {
 
@@ -112,7 +102,7 @@ class SchemaManager {
   absl::Status SaveIndexes(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when);
   static absl::StatusOr<uint64_t> ComputeFingerprint(
       const google::protobuf::Any &metadata);
-  static absl::StatusOr<uint32_t> ComputeEncodingVersion(
+  static absl::StatusOr<vmsdk::SemanticVersion> ComputeSemanticVersion(
       const google::protobuf::Any &metadata);
 
  private:

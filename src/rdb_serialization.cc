@@ -146,13 +146,14 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
         encver, kCurrentEncVer));
   }
   VMSDK_ASSIGN_OR_RETURN(
-      auto min_semantic_version, rdb->LoadUnsigned(),
+      auto min_semantic_version_int, rdb->LoadUnsigned(),
       _ << "IO error reading semantic version from RDB. Failing RDB load.");
+  auto min_semantic_version = vmsdk::SemanticVersion(min_semantic_version_int);
   if (min_semantic_version > kCurrentSemanticVersion) {
     return absl::InternalError(absl::StrCat(
         "ValkeySearch RDB contents require minimum version ",
-        HumanReadableSemanticVersion(min_semantic_version), " and we are on ",
-        HumanReadableSemanticVersion(kCurrentSemanticVersion),
+        min_semantic_version.ToString(), " and we are on ",
+        kCurrentSemanticVersion.ToString(),
         ". If you are downgrading, ensure all feature usage on the new "
         "version of ValkeySearch is supported by this version and retry."));
   }

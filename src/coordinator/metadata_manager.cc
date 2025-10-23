@@ -29,6 +29,7 @@
 #include "grpcpp/support/status.h"
 #include "highwayhash/arch_specific.h"
 #include "highwayhash/highwayhash.h"
+#include "module_config.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/util.h"
@@ -69,6 +70,22 @@ constexpr float kMetadataBroadcastJitterRatio = 0.5;
 }  // namespace
 
 CONTROLLED_BOOLEAN(PauseHandleClusterMessage, false);
+
+//
+// If true, unknown encoding version metadata entries will be dropped rather
+// than rejecting the entire metadata update.
+// This might be useful in recoverying from a scenario where a node with a newer
+// version has written metadata that an older version node cannot understand.
+//
+static auto DropUnknownEncodingVersionMetadataConfig =
+    vmsdk::config::BooleanBuilder("drop-unknown-encoding-version", false)
+        .Build();
+
+static bool DropUnknownEncodingVersionMetadata() {
+  return dynamic_cast<const vmsdk::config::Boolean &>(
+             *DropUnknownEncodingVersionMetadataConfig)
+      .GetValue();
+}
 
 void DelayedClusterMessageTimerCallback(ValkeyModuleCtx *ctx, void *data) {
   auto *params = static_cast<
@@ -484,6 +501,16 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
       if (rt_it != registered_types.end() &&
           rt_it->second.max_encoding_version <
               proposed_entry.encoding_version()) {
+        if (!DropUnknownEncodingVersionMetadata()) {
+          VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 10)
+              << "Invalid/Unknown encoding version ("
+              << proposed_entry.encoding_version() << ") for: " << type_name
+              << ", for entry " << id << " from " << source
+              << ", Cluster converge is prohibited.";
+          return absl::InvalidArgumentError(absl::StrCat(
+              "Invalid encoding version (", proposed_entry.encoding_version(),
+              ") for: ", type_name, ", entry ", id, " from ", source));
+        }
         VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 10)
             << "Invalid encoding version (" << proposed_entry.encoding_version()
             << ") for: " << type_name << ", skipping entry " << id << " from "
@@ -786,6 +813,22 @@ absl::Status MetadataManager::ShowMetadata(
       metadata_.Get(), &metadata, options);
   ValkeyModule_ReplyWithStringBuffer(ctx, metadata.data(), metadata.size());
   return absl::OkStatus();
+}
+
+vmsdk::SemanticVersion MetadataManager::ComputeRDBVersion() const {
+  vmsdk::SemanticVersion max_encoding_version = 0;
+  for (auto &[type_name, inner_map] : metadata_.Get().type_namespace_map()) {
+    auto it = registered_types_.Get().find(type_name);
+    if (it == registered_types_.Get().end()) {
+      continue;
+    }
+    for (auto &[id, entry] : inner_map.entries()) {
+      max_encoding_version =
+          std::max(vmsdk::SemanticVersion(entry.encoding_version()),
+                   max_encoding_version);
+    }
+  }
+  return max_encoding_version;
 }
 
 /*

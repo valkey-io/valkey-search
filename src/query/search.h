@@ -82,6 +82,11 @@ struct SearchParameters {
   bool no_content{false};
   FilterParseResults filter_parse_results;
   std::vector<ReturnAttribute> return_attributes;
+  bool no_stop_words{false};
+  bool inorder{false};
+  int slop{0};
+  bool verbatim{false};
+  std::string language;
   struct ParseTimeVariables {
     // Members of this struct are only valid during the parsing of
     // VectorSearchParameters on the mainthread. They get cleared

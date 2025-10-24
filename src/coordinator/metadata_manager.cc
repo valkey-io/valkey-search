@@ -71,22 +71,6 @@ constexpr float kMetadataBroadcastJitterRatio = 0.5;
 
 CONTROLLED_BOOLEAN(PauseHandleClusterMessage, false);
 
-//
-// If true, unknown encoding version metadata entries will be dropped rather
-// than rejecting the entire metadata update.
-// This might be useful in recoverying from a scenario where a node with a newer
-// version has written metadata that an older version node cannot understand.
-//
-static auto DropUnknownEncodingVersionMetadataConfig =
-    vmsdk::config::BooleanBuilder("drop-unknown-encoding-version", false)
-        .Build();
-
-static bool DropUnknownEncodingVersionMetadata() {
-  return dynamic_cast<const vmsdk::config::Boolean &>(
-             *DropUnknownEncodingVersionMetadataConfig)
-      .GetValue();
-}
-
 void DelayedClusterMessageTimerCallback(ValkeyModuleCtx *ctx, void *data) {
   auto *params = static_cast<
       std::tuple<std::string, std::unique_ptr<GlobalMetadataVersionHeader>> *>(
@@ -501,21 +485,14 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
       if (rt_it != registered_types.end() &&
           rt_it->second.max_encoding_version <
               proposed_entry.encoding_version()) {
-        if (!DropUnknownEncodingVersionMetadata()) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 10)
-              << "Invalid/Unknown encoding version ("
-              << proposed_entry.encoding_version() << ") for: " << type_name
-              << ", for entry " << id << " from " << source
-              << ", Cluster converge is prohibited.";
-          return absl::InvalidArgumentError(absl::StrCat(
-              "Invalid encoding version (", proposed_entry.encoding_version(),
-              ") for: ", type_name, ", entry ", id, " from ", source));
-        }
         VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 10)
-            << "Invalid encoding version (" << proposed_entry.encoding_version()
-            << ") for: " << type_name << ", skipping entry " << id << " from "
-            << source;
-        continue;
+            << "Invalid/Unknown encoding version ("
+            << proposed_entry.encoding_version() << ") for: " << type_name
+            << ", for entry " << id << " from " << source
+            << ", Cluster converge is prohibited.";
+        return absl::InvalidArgumentError(absl::StrCat(
+            "Invalid encoding version (", proposed_entry.encoding_version(),
+            ") for: ", type_name, ", entry ", id, " from ", source));
       }
       auto it = existing_inner_map.entries().find(id);
       if (it != existing_inner_map.entries().end() && !prefer_incoming) {

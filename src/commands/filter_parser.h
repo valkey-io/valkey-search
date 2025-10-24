@@ -41,8 +41,20 @@ class FilterParser {
   size_t node_count_{0};
   absl::flat_hash_set<std::string> filter_identifiers_;
 
-  size_t FindTokenEndWithEscapes(bool in_quotes, const indexes::text::TextIndexSchema* text_index_schema);
-  std::string ProcessEscapesInRange(size_t start, size_t end, bool in_quotes, const indexes::text::TextIndexSchema* text_index_schema);
+
+struct TokenResult {
+    size_t end_pos;
+    std::unique_ptr<query::TextPredicate> predicate;
+};
+
+absl::StatusOr<TokenResult> ParseTokenAndBuildPredicate(
+    bool in_quotes, 
+    const indexes::text::TextIndexSchema* text_index_schema,
+    const indexes::Text* text_index,
+    uint64_t field_mask);
+
+//   size_t FindTokenEndWithEscapes(bool in_quotes, const indexes::text::TextIndexSchema* text_index_schema);
+//   std::string ProcessEscapesInRange(size_t start, size_t end, bool in_quotes, const indexes::text::TextIndexSchema* text_index_schema);
 
   absl::StatusOr<std::string> ResolveTextFieldOrDefault(
       const std::optional<std::string>& maybe_field);

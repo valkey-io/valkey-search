@@ -145,6 +145,7 @@ class TextPredicate : public Predicate {
   virtual bool Evaluate(Evaluator& evaluator) const = 0;
   virtual bool Evaluate(const std::string_view& text) const = 0;
   virtual const indexes::Text* GetIndex() const = 0;
+  virtual const FieldMaskPredicate GetFieldMask() const = 0;
   virtual std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const = 0;
 };
@@ -167,7 +168,7 @@ class TermPredicate : public TextPredicate {
   bool Evaluate(const std::string_view& text) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
-  FieldMaskPredicate GetFieldMask() const { return field_mask_; }
+  const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
 
  private:
   const indexes::Text* index_;
@@ -187,7 +188,7 @@ class PrefixPredicate : public TextPredicate {
   bool Evaluate(const std::string_view& text) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
-  FieldMaskPredicate GetFieldMask() const { return field_mask_; }
+  const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
 
  private:
   const indexes::Text* index_;
@@ -204,7 +205,7 @@ class SuffixPredicate : public TextPredicate {
   bool Evaluate(const std::string_view& text) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
-  FieldMaskPredicate GetFieldMask() const { return field_mask_; }
+  const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
 
  private:
   const indexes::Text* index_;
@@ -221,7 +222,7 @@ class InfixPredicate : public TextPredicate {
   bool Evaluate(const std::string_view& text) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
-  FieldMaskPredicate GetFieldMask() const { return field_mask_; }
+  const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
 
  private:
   const indexes::Text* index_;
@@ -239,7 +240,7 @@ class FuzzyPredicate : public TextPredicate {
   bool Evaluate(const std::string_view& text) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
-  FieldMaskPredicate GetFieldMask() const { return field_mask_; }
+  const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
 
  private:
   const indexes::Text* index_;
@@ -260,6 +261,9 @@ class ProximityPredicate : public TextPredicate {
       const void* fetcher) const override;
   const indexes::Text* GetIndex() const override {
     return terms_[0]->GetIndex();
+  }
+  const FieldMaskPredicate GetFieldMask() const override {
+    return terms_[0]->GetFieldMask();
   }
   const std::vector<std::unique_ptr<TextPredicate>>& Terms() const {
     return terms_;

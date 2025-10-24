@@ -137,9 +137,7 @@ std::unique_ptr<Text::EntriesFetcher> Text::Search(
       CalculateSize(predicate), text_index_schema_->GetTextIndex(),
       negate ? &untracked_keys_ : nullptr);
   fetcher->predicate_ = &predicate;
-  // TODO : Update for the default search case (all fields).
-  // The TextPredicate needs to support a GetFieldMask API to indicate this.
-  fetcher->field_mask_ = 1ULL << text_field_number_;
+  fetcher->field_mask_ = predicate.GetFieldMask();
   return fetcher;
 }
 

@@ -69,6 +69,11 @@ struct FTSearchParserTestCase {
   std::string search_parameters_str;
   uint64_t timeout_ms{query::kTimeoutMS};
   bool vector_query{true};
+  bool no_stop_words{false};
+  bool verbatim{false};
+  bool inorder{false};
+  int slop{0};
+  std::string language;
 };
 
 class FTSearchParserTest
@@ -178,10 +183,15 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
   if (test_case.vector_query) {
     auto floats_vec = FloatToValkeyStringVector(floats);
     args.insert(args.end(), floats_vec.begin(), floats_vec.end());
+  }
+  // Add search parameters for both vector and non-vector queries
+  if (!test_case.search_parameters_str.empty()) {
     auto search_parameters_vec =
         vmsdk::ToValkeyStringVector(test_case.search_parameters_str);
     args.insert(args.end(), search_parameters_vec.begin(),
                 search_parameters_vec.end());
+  }
+  if (test_case.vector_query) {
     if (!kDialectOptions[dialect_itr].second.empty()) {
       auto dialect_vec =
           vmsdk::ToValkeyStringVector(kDialectOptions[dialect_itr].second);
@@ -250,6 +260,32 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
     } else {
       EXPECT_EQ(search_params.value()->timeout_ms, test_case.timeout_ms);
     }
+
+    // Validate all search parameters
+    EXPECT_EQ(search_params.value()->no_stop_words, test_case.no_stop_words);
+    EXPECT_EQ(search_params.value()->verbatim, test_case.verbatim);
+    EXPECT_EQ(search_params.value()->inorder, test_case.inorder);
+    EXPECT_EQ(search_params.value()->slop, test_case.slop);
+
+    // Check language parameter
+    std::string expected_language;
+    if (!test_case.search_parameters_str.empty() &&
+        test_case.search_parameters_str.find("LANGUAGE") != std::string::npos) {
+      // Extract expected language from search_parameters_str
+      std::istringstream iss(test_case.search_parameters_str);
+      std::string token;
+      bool next_is_language = false;
+      while (iss >> token) {
+        if (next_is_language) {
+          expected_language = token;
+          break;
+        }
+        if (token == "LANGUAGE") {
+          next_is_language = true;
+        }
+      }
+    }
+    EXPECT_EQ(search_params.value()->language, expected_language);
   } else {
     std::cerr << "Failed to parse command: `" << vmsdk::ToStringView(args[0])
               << "` Because: " << search_params.status().message() << "\n";
@@ -706,6 +742,194 @@ INSTANTIATE_TEST_SUITE_P(
                 "Error parsing vector similarity parameters: `[KNN 10 @vec1 "
                 "]`. Blob attribute "
                 "argument is missing",
+        },
+        {
+            .test_name = "language_parameter_english",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "LANGUAGE english",
+        },
+        {
+            .test_name = "language_parameter_french",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "LANGUAGE french",
+        },
+        {
+            .test_name = "language_parameter_non_vector_query",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "LANGUAGE portuguese",
+            .vector_query = false,
+        },
+        // NOSTOPWORDS parameter tests
+        {
+            .test_name = "nostopwords_vector_query",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "NOSTOPWORDS",
+            .no_stop_words = true,
+        },
+        {
+            .test_name = "nostopwords_non_vector_query",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "NOSTOPWORDS",
+            .vector_query = false,
+            .no_stop_words = true,
+        },
+        // VERBATIM parameter tests
+        {
+            .test_name = "verbatim_vector_query",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "VERBATIM",
+            .verbatim = true,
+        },
+        {
+            .test_name = "verbatim_non_vector_query",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "VERBATIM",
+            .vector_query = false,
+            .verbatim = true,
+        },
+        // INORDER parameter tests
+        {
+            .test_name = "inorder_vector_query",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "INORDER",
+            .inorder = true,
+        },
+        {
+            .test_name = "inorder_non_vector_query",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "INORDER",
+            .vector_query = false,
+            .inorder = true,
+        },
+        // SLOP parameter tests
+        {
+            .test_name = "slop_vector_query",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "SLOP 3",
+            .slop = 3,
+        },
+        {
+            .test_name = "slop_non_vector_query",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "SLOP 5",
+            .vector_query = false,
+            .slop = 5,
+        },
+        {
+            .test_name = "slop_zero_value",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "SLOP 0",
+            .slop = 0,
+        },
+        // Combined parameter tests
+        {
+            .test_name = "multiple_parameters_vector_query",
+            .success = true,
+            .params_str = " PARAMS 4 EF 150",
+            .filter_str = "* =>[KNN 10 @vec $BLOB EF_RUNTIME $EF]",
+            .k = 10,
+            .ef = 150,
+            .search_parameters_str =
+                "LANGUAGE english NOSTOPWORDS VERBATIM INORDER SLOP 2",
+            .no_stop_words = true,
+            .verbatim = true,
+            .inorder = true,
+            .slop = 2,
+        },
+        {
+            .test_name = "multiple_parameters_non_vector_query",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str =
+                "LANGUAGE spanish NOSTOPWORDS VERBATIM SLOP 1",
+            .vector_query = false,
+            .no_stop_words = true,
+            .verbatim = true,
+            .slop = 1,
+        },
+        {
+            .test_name = "all_parameters_combined",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 8 @vec $BLOB]",
+            .k = 8,
+            .search_parameters_str = "LANGUAGE german NOSTOPWORDS VERBATIM "
+                                     "INORDER SLOP 4 TIMEOUT 300",
+            .timeout_ms = 300,
+            .no_stop_words = true,
+            .verbatim = true,
+            .inorder = true,
+            .slop = 4,
+        },
+        // Mixed with existing parameters
+        {
+            .test_name = "search_params_with_return_and_timeout",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 7 @vec $BLOB]",
+            .k = 7,
+            .return_str = "",
+            .return_attributes = {{"field1", "field1"}, {"field2", "field2"}},
+            .search_parameters_str = "RETURN 2 field1 field2 LANGUAGE french "
+                                     "NOSTOPWORDS TIMEOUT 400",
+            .timeout_ms = 400,
+            .no_stop_words = true,
         },
     }),
     [](const TestParamInfo<FTSearchParserTestCase> &info) {

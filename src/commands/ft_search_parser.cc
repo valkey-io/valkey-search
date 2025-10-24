@@ -72,6 +72,11 @@ constexpr absl::string_view kTimeoutParam{"TIMEOUT"};
 constexpr absl::string_view kAsParam{"AS"};
 constexpr absl::string_view kLocalOnly{"LOCALONLY"};
 constexpr absl::string_view kVectorFilterDelimiter = "=>";
+constexpr absl::string_view kNoStopWords{"NOSTOPWORDS"};
+constexpr absl::string_view kSlop{"SLOP"};
+constexpr absl::string_view kInorder{"INORDER"};
+constexpr absl::string_view kLanguage{"LANGUAGE"};
+constexpr absl::string_view kVerbatim{"VERBATIM"};
 
 absl::StatusOr<absl::string_view> SubstituteParam(
     query::SearchParameters &parameters, absl::string_view source) {
@@ -338,6 +343,17 @@ vmsdk::KeyValueParser<query::SearchParameters> CreateSearchParser() {
       GENERATE_FLAG_PARSER(query::SearchParameters, no_content));
   parser.AddParamParser(kReturnParam, ConstructReturnParser());
   parser.AddParamParser(kParamsParam, ConstructParamsParser());
+  parser.AddParamParser(
+      kNoStopWords,
+      GENERATE_FLAG_PARSER(query::SearchParameters, no_stop_words));
+  parser.AddParamParser(kInorder,
+                        GENERATE_FLAG_PARSER(query::SearchParameters, inorder));
+  parser.AddParamParser(
+      kVerbatim, GENERATE_FLAG_PARSER(query::SearchParameters, verbatim));
+  parser.AddParamParser(kSlop,
+                        GENERATE_VALUE_PARSER(query::SearchParameters, slop));
+  parser.AddParamParser(
+      kLanguage, GENERATE_VALUE_PARSER(query::SearchParameters, language));
   return parser;
 }
 

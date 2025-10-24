@@ -36,6 +36,7 @@
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
 #include "src/vector_externalizer.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -55,7 +56,7 @@ constexpr uint32_t kIndexSchemaBackfillBatchSize{10240};
 
 namespace options {
 
-/// Register the "--max-indexes" flag. Controls the max number of indexes we can
+/// Register the "--max-indexes the max number of indexes we can
 /// have.
 static auto max_indexes =
     vmsdk::config::NumberBuilder(kMaxIndexesConfig,  // name
@@ -123,10 +124,8 @@ SchemaManager::SchemaManager(
           .section_count = [this](ValkeyModuleCtx *ctx, int when) -> int {
             return this->GetNumberOfIndexSchemas();
           },
-          .minimum_semantic_version = [](ValkeyModuleCtx *ctx,
-                                         int when) -> int {
-            return 0x010000;  // Always use 1.0.0 for now
-          }});
+          .minimum_semantic_version = [this](ValkeyModuleCtx *ctx, int when)
+              -> int { return this->ComputeSemanticVersionOfIndexes(); }});
   if (coordinator_enabled) {
     coordinator::MetadataManager::Instance().RegisterType(
         kSchemaManagerMetadataTypeName, kCurrentSemanticVersion,
@@ -354,8 +353,16 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
 // Determine the minimum encoding version required to interpret the metadata for
 // this Schema
 //
+CONTROLLED_INT(override_semantic_version, 0);
+
 absl::StatusOr<vmsdk::SemanticVersion> SchemaManager::ComputeSemanticVersion(
     const google::protobuf::Any &metadata) {
+  if (override_semantic_version.GetValue() != 0) {
+    VMSDK_LOG(WARNING, nullptr)
+        << "Overriding index schema semantic version to "
+        << override_semantic_version.GetValue();
+    return override_semantic_version.GetValue();
+  }
   auto unpacked = std::make_unique<data_model::IndexSchema>();
   if (!metadata.UnpackTo(unpacked.get())) {
     return absl::InternalError(
@@ -404,6 +411,25 @@ uint64_t SchemaManager::GetNumberOfIndexSchemas() const {
     num_schemas += schema_map.size();
   }
   return num_schemas;
+}
+vmsdk::SemanticVersion SchemaManager::ComputeSemanticVersionOfIndexes() const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  auto max_version = vmsdk::SemanticVersion(0);
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      google::protobuf::Any any;
+      any.PackFrom(*schema->ToProto());
+      auto semantic_version = ComputeSemanticVersion(any);
+      if (semantic_version.ok()) {
+        max_version = std::max(max_version, *semantic_version);
+      } else {
+        VMSDK_LOG(WARNING, nullptr)
+            << "Unable to compute semantic version for index schema " << name
+            << ": " << semantic_version.status().message();
+      }
+    }
+  }
+  return max_version;
 }
 uint64_t SchemaManager::GetNumberOfAttributes() const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);

@@ -149,6 +149,9 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
       auto min_semantic_version_int, rdb->LoadUnsigned(),
       _ << "IO error reading semantic version from RDB. Failing RDB load.");
   auto min_semantic_version = vmsdk::SemanticVersion(min_semantic_version_int);
+  VMSDK_LOG(DEBUG, ctx) << absl::StrFormat(
+      "RDB contains minimum semantic version %s",
+      min_semantic_version.ToString());
   if (min_semantic_version > kCurrentSemanticVersion) {
     return absl::InternalError(absl::StrCat(
         "ValkeySearch RDB contents require minimum version ",
@@ -231,10 +234,17 @@ absl::Status PerformRDBSave(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when) {
         registeredRDBSectionCallback.second.section_count(ctx, when);
 
     if (section_counts[rdb_section_type] > 0) {
+      auto this_semantic_version =
+          registeredRDBSectionCallback.second.minimum_semantic_version(ctx,
+                                                                       when);
+      VMSDK_LOG(DEBUG, ctx)
+          << "RDB section type "
+          << data_model::RDBSectionType_Name(rdb_section_type)
+          << " requires minimum semantic version "
+          << vmsdk::SemanticVersion(this_semantic_version).ToString();
+
       min_semantic_version =
-          std::max(min_semantic_version,
-                   registeredRDBSectionCallback.second.minimum_semantic_version(
-                       ctx, when));
+          std::max(min_semantic_version, this_semantic_version);
     }
     rdb_section_count += section_counts[rdb_section_type];
   }

@@ -40,20 +40,22 @@ using ::testing::ValuesIn;
 
 struct TypeToRegister {
   std::string type_name;
-  uint64_t encoding_version{1};
+  uint64_t max_encoding_version{1};
   absl::Status status_to_return;
   absl::StatusOr<uint64_t> fingerprint_to_return{
       absl::UnimplementedError("Fingerprint not set")};
+  absl::StatusOr<uint32_t> encoding_version_to_return{1};
 };
 
 struct CallbackResult {
   std::string type_name;
+  uint32_t db_num;
   std::string id;
   bool has_content;
 
   bool operator==(const CallbackResult& other) const {
     return type_name == other.type_name && id == other.id &&
-           has_content == other.has_content;
+           db_num == other.db_num && has_content == other.has_content;
   }
 };
 
@@ -66,6 +68,7 @@ struct EntryOperationTestParam {
     };
     Operation operation_type;
     std::string type_name;
+    uint32_t db_num{0};
     std::string id;
     std::string content;
   };
@@ -108,19 +111,22 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
   std::vector<CallbackResult> callbacks_tracker;
   for (auto& type_to_register : test_case.types_to_register) {
     test_metadata_manager_->RegisterType(
-        type_to_register.type_name, type_to_register.encoding_version,
+        type_to_register.type_name, type_to_register.max_encoding_version,
         [&](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
           return type_to_register.fingerprint_to_return;
         },
-        [&](absl::string_view id, const google::protobuf::Any* metadata) {
+        [&](uint32_t db_num, absl::string_view id,
+            const google::protobuf::Any* metadata) {
           CallbackResult callback_result{
               .type_name = type_to_register.type_name,
+              .db_num = db_num,
               .id = std::string(id),
               .has_content = metadata != nullptr,
           };
           callbacks_tracker.push_back(std::move(callback_result));
           return type_to_register.status_to_return;
-        });
+        },
+        [&](auto) { return type_to_register.encoding_version_to_return; });
   }
   if (test_case.expect_num_broadcasts > 0) {
     EXPECT_CALL(*kMockValkeyModule,
@@ -146,12 +152,14 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
       content->set_type_url("type.googleapis.com/FakeType");
       content->set_value(operation.content);
       auto result = test_metadata_manager_->CreateEntry(
-          operation.type_name, operation.id, std::move(content));
+          operation.type_name, operation.db_num, operation.id,
+          std::move(content));
       EXPECT_EQ(result.status().code(), test_case.expected_status_code);
     } else if (operation.operation_type ==
                EntryOperationTestParam::EntryOperation::kDelete) {
       EXPECT_EQ(
-          test_metadata_manager_->DeleteEntry(operation.type_name, operation.id)
+          test_metadata_manager_
+              ->DeleteEntry(operation.type_name, operation.db_num, operation.id)
               .code(),
           test_case.expected_status_code);
     }
@@ -527,18 +535,21 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
   std::vector<CallbackResult> callbacks_tracker;
   for (const auto& type_to_register : test_case.types_to_register) {
     test_metadata_manager_->RegisterType(
-        type_to_register.type_name, type_to_register.encoding_version,
+        type_to_register.type_name, type_to_register.max_encoding_version,
         [&](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
           return type_to_register.fingerprint_to_return;
         },
-        [&](absl::string_view id, const google::protobuf::Any* metadata) {
+        [&](uint32_t db_num, absl::string_view id,
+            const google::protobuf::Any* metadata) {
           callbacks_tracker.push_back(CallbackResult{
               .type_name = type_to_register.type_name,
+              .db_num = db_num,
               .id = std::string(id),
               .has_content = metadata != nullptr,
           });
           return type_to_register.status_to_return;
-        });
+        },
+        [&](auto) { return type_to_register.encoding_version_to_return; });
   }
 
   if (test_case.expect_broadcast) {
@@ -613,6 +624,10 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
                                      test_case.expected_callbacks.end()));
 
   auto actual_metadata = test_metadata_manager_->GetGlobalMetadata();
+  std::cout << "Actual Metadata: " << actual_metadata->DebugString()
+            << std::endl;
+  std::cout << "Expected Metadata: " << expected_metadata.DebugString()
+            << std::endl;
   EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
       *actual_metadata, expected_metadata));
 }
@@ -830,9 +845,10 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .encoding_version = 2,
+                        .max_encoding_version = 2,
                         .status_to_return = absl::OkStatus(),
                         .fingerprint_to_return = 5678,
+                        .encoding_version_to_return = 2,
                     },
                 },
             .get_global_metadata_status = absl::OkStatus(),
@@ -878,7 +894,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .encoding_version = 2,
+                        .max_encoding_version = 2,
                         .status_to_return = absl::OkStatus(),
                         .fingerprint_to_return = absl::InternalError("Failed"),
                     },
@@ -938,7 +954,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .encoding_version = 1,
+                        .max_encoding_version = 1,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
@@ -1039,7 +1055,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .encoding_version = 1,
+                        .max_encoding_version = 1,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
@@ -1127,7 +1143,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .encoding_version = 1,
+                        .max_encoding_version = 1,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
@@ -1207,7 +1223,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .encoding_version = 1,
+                        .max_encoding_version = 2,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
@@ -1295,7 +1311,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .encoding_version = 2,
+                        .max_encoding_version = 2,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
@@ -1315,6 +1331,86 @@ INSTANTIATE_TEST_SUITE_P(
                         version: 1
                         fingerprint: 1111
                         encoding_version: 2
+                        content {
+                          type_url: "type.googleapis.com/FakeType"
+                          value: "serialized_content_1"
+                        }
+                      }
+                    }
+                  }
+                }
+              )",
+        },
+        {
+            .test_name = "EncodingVersionTooLarge",
+            .existing_metadata_pbtxt = R"(
+                version_header {
+                  top_level_version: 1
+                }
+                type_namespace_map {
+                  key: "my_type"
+                  value {
+                    entries {
+                      key: "my_id"
+                      value {
+                        version: 1
+                        fingerprint: 1111
+                        encoding_version: 1
+                        content {
+                          type_url: "type.googleapis.com/FakeType"
+                          value: "serialized_content_1"
+                        }
+                      }
+                    }
+                  }
+                }
+              )",
+            .proposed_metadata_pbtxt = R"(
+                version_header {
+                  top_level_version: 1
+                }
+                type_namespace_map {
+                  key: "my_type"
+                  value {
+                    entries {
+                      key: "my_id"
+                      value {
+                        version: 2
+                        fingerprint: 9999
+                        encoding_version: 2
+                        content {
+                          type_url: "type.googleapis.com/FakeType"
+                          value: "serialized_content_2"
+                        }
+                      }
+                    }
+                  }
+                }
+              )",
+            .types_to_register =
+                {
+                    {
+                        .type_name = "my_type",
+                        .max_encoding_version = 1,
+                        .status_to_return = absl::OkStatus(),
+                    },
+                },
+            .get_global_metadata_status = absl::OkStatus(),
+            .expect_get_cluster_node_info = true,
+            .expect_reconcile = true,
+            .expected_metadata_pbtxt = R"(
+                version_header {
+                  top_level_version: 1
+                }
+                type_namespace_map {
+                  key: "my_type"
+                  value {
+                    entries {
+                      key: "my_id"
+                      value {
+                        version: 1
+                        fingerprint: 1111
+                        encoding_version: 1
                         content {
                           type_url: "type.googleapis.com/FakeType"
                           value: "serialized_content_1"
@@ -1371,7 +1467,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .encoding_version = 1,
+                        .max_encoding_version = 1,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
@@ -1498,7 +1594,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .encoding_version = 2,
+                        .max_encoding_version = 2,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
@@ -1825,7 +1921,8 @@ TEST_F(MetadataManagerTimestampTest,
             -1);
 
   // Reconcile metadata successfully
-  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(proposed_metadata));
+  VMSDK_EXPECT_OK(
+      test_metadata_manager_->ReconcileMetadata(proposed_metadata, "test"));
 
   // Now should return 0 (current time - current time = 0)
   EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
@@ -1845,7 +1942,8 @@ TEST_F(MetadataManagerTimestampTest, TestTimestampCalculation) {
       kV1Metadata, &proposed_metadata));
 
   // Reconcile metadata at time 1000000ms
-  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(proposed_metadata));
+  VMSDK_EXPECT_OK(
+      test_metadata_manager_->ReconcileMetadata(proposed_metadata, "test"));
 
   // Test various time differences
   struct TestCase {
@@ -1882,7 +1980,8 @@ TEST_F(MetadataManagerTimestampTest,
       google::protobuf::TextFormat::ParseFromString(kV2Metadata, &metadata2));
 
   // First reconciliation at time 1000000ms
-  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(metadata1));
+  VMSDK_EXPECT_OK(
+      test_metadata_manager_->ReconcileMetadata(metadata1, "test  "));
   EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
             0);
 
@@ -1892,7 +1991,7 @@ TEST_F(MetadataManagerTimestampTest,
             10000);
 
   // Second reconciliation - should update timestamp to current time
-  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(metadata2));
+  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(metadata2, "test"));
   EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
             0);
 
@@ -1917,12 +2016,15 @@ TEST_F(MetadataManagerTimestampTest,
       [](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
         return 1234;
       },
-      [](absl::string_view id, const google::protobuf::Any* metadata) {
+      [](uint32_t db_num, absl::string_view id,
+         const google::protobuf::Any* metadata) {
         return absl::InternalError("Callback failed");
-      });
+      },
+      [](auto) { return 1; });
 
   // Reconciliation should fail due to callback failure
-  auto status = test_metadata_manager_->ReconcileMetadata(proposed_metadata);
+  auto status =
+      test_metadata_manager_->ReconcileMetadata(proposed_metadata, "test");
   EXPECT_FALSE(status.ok());
 
   // But timestamp should not be updated since reconciliation failed
@@ -1938,7 +2040,8 @@ TEST_F(MetadataManagerTimestampTest, TestConcurrentAccess) {
       kV1Metadata, &proposed_metadata));
 
   // First, reconcile some metadata so we have a valid timestamp
-  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(proposed_metadata));
+  VMSDK_EXPECT_OK(
+      test_metadata_manager_->ReconcileMetadata(proposed_metadata, "test"));
 
   constexpr int kNumThreads = 8;
   constexpr int kCallsPerThread = 100;
@@ -1991,7 +2094,8 @@ TEST_F(MetadataManagerTimestampTest, TestTimestampPersistsAcrossLoadMetadata) {
       kV1Metadata, &proposed_metadata));
 
   // First reconciliation
-  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(proposed_metadata));
+  VMSDK_EXPECT_OK(
+      test_metadata_manager_->ReconcileMetadata(proposed_metadata, "test"));
   EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
             0);
 
@@ -2013,6 +2117,35 @@ TEST_F(MetadataManagerTimestampTest, TestTimestampPersistsAcrossLoadMetadata) {
   // Timestamp should be updated to current time
   EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
             0);
+}
+
+TEST(IndexNameTest, IndexName) {
+  for (std::string prefix : {"", "a", "abc", "{", "}"}) {
+    for (std::string hash_tag : {"", "{a}", "{b}", "{}"}) {
+      for (std::string suffix : {"", "x", "xy", "{", "}", "{}"}) {
+        for (uint32_t db_num : {0, 1}) {
+          std::string id = prefix + hash_tag + suffix;
+          //
+          // Construct a IndexName
+          //
+          std::cout << "Doing test: DB:" << db_num << " name:'" << id << "'\n";
+          std::string encoded = MetadataManager::EncodeDbNum(db_num, id);
+          //
+          // Now reverse it and compare equality
+          //
+          auto decoded = MetadataManager::DecodeDbNum(encoded);
+          EXPECT_EQ(id, decoded.id);
+          EXPECT_EQ(db_num, decoded.db_num);
+          //
+          // And re-forward it
+          //
+          auto re_forward =
+              MetadataManager::EncodeDbNum(decoded.db_num, decoded.id);
+          EXPECT_EQ(re_forward, encoded);
+        }
+      }
+    }
+  }
 }
 
 }  // namespace valkey_search::coordinator

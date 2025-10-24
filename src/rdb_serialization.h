@@ -14,7 +14,6 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "src/rdb_section.pb.h"
 #include "third_party/hnswlib/iostream.h"
@@ -25,8 +24,38 @@
 namespace valkey_search {
 
 constexpr uint32_t kCurrentEncVer = 1;
-// Format is 0xMMmmpp (M=major, m=minor, p=patch)
-constexpr uint64_t kCurrentSemanticVersion = 0x010000;
+//
+// Semantic Versioning
+//
+// RDB contents are written with a semantic version tag. This tag
+// indicates the minimum version of ValkeySearch required to read the RDB
+// contents.
+//
+// Before an RDB is written, each metadata object is queried for
+// its minimum required semantic version (aka encoding_version). The maximum of
+// these versions is written as the semantic version of the RDB. This
+// enables forward compatibility, i.e., newer ValkeySearch versions can write
+// RDBs that older versions can read, as long no new features are used that
+// require the newer version.
+//
+// The 1.0 code line has this version in the RDB.
+// It is compatible with Valkey 8.
+//
+constexpr vmsdk::SemanticVersion kSemanticVersion10(1, 0, 0);
+//
+// Valkey 9 introduced DB num into the CME metadata, requiring changes to the
+// RDB serialization format. This is represented by semantic version 1.1.0.
+//
+constexpr vmsdk::SemanticVersion kSemanticVersion11(1, 1, 0);
+
+//
+// This is the current semantic version which is also the maximum semantic
+// version that this ValkeySearch version can read. When you introduce
+// incompatible changes to the RDB serialization format, update this version
+// too, or you won't be able to read RDBs written by your own code.
+//
+constexpr vmsdk::SemanticVersion kCurrentSemanticVersion = kSemanticVersion11;
+
 constexpr absl::string_view kValkeySearchModuleTypeName{"Vk-Search"};
 
 class SafeRDB;
@@ -62,12 +91,6 @@ using RDBSectionCallbacks = struct RDBSectionCallbacks {
 // Static mapping from section type to callback.
 extern absl::flat_hash_map<data_model::RDBSectionType, RDBSectionCallbacks>
     kRegisteredRDBSectionCallbacks;
-
-inline std::string HumanReadableSemanticVersion(uint64_t semantic_version) {
-  return absl::StrFormat("%d.%d.%d", (semantic_version >> 16) & 0xFF,
-                         (semantic_version >> 8) & 0xFF,
-                         semantic_version & 0xFF);
-}
 
 /* SafeRDB wraps a ValkeyModuleIO object and performs IO error checking,
  * returning absl::StatusOr to force error handling on the caller side. */

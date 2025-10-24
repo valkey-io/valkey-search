@@ -25,12 +25,10 @@ class ClusterInfoFanoutOperation
     : public fanout::FanoutOperationBase<
           coordinator::InfoIndexPartitionRequest,
           coordinator::InfoIndexPartitionResponse,
-          vmsdk::cluster_map::FanoutTargetMode::kAll> {
+          fanout::FanoutTargetMode::kAll> {
  public:
   ClusterInfoFanoutOperation(uint32_t db_num, const std::string& index_name,
                              unsigned timeout_ms);
-
-  std::vector<vmsdk::cluster_map::NodeInfo> GetTargets() const override;
 
   unsigned GetTimeoutMs() const override;
 

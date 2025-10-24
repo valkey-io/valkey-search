@@ -27,15 +27,6 @@ PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
       num_records_(0),
       hash_indexing_failures_(0) {}
 
-std::vector<vmsdk::cluster_map::NodeInfo>
-PrimaryInfoFanoutOperation::GetTargets() const {
-  auto targets = ValkeySearch::Instance().GetClusterMap()->GetPrimaryTargets();
-  for (size_t i = 0; i < targets.size(); ++i) {
-    VMSDK_LOG(NOTICE, nullptr) << "Target[" << i << "]: " << targets[i];
-  }
-  return targets;
-}
-
 unsigned PrimaryInfoFanoutOperation::GetTimeoutMs() const {
   return timeout_ms_;
 }

@@ -31,8 +31,7 @@ namespace valkey_search::query::fanout {
 
 constexpr unsigned kNoValkeyTimeout = 86400000;
 
-template <typename Request, typename Response,
-          vmsdk::cluster_map::FanoutTargetMode kTargetMode>
+template <typename Request, typename Response, FanoutTargetMode kTargetMode>
 class FanoutOperationBase {
  public:
   explicit FanoutOperationBase() = default;
@@ -45,19 +44,7 @@ class FanoutOperationBase {
     blocked_client_->MeasureTimeStart();
     deadline_tp_ = std::chrono::steady_clock::now() +
                    std::chrono::milliseconds(GetTimeoutMs());
-
-    targets_ = GetTargets();
-    // If we only got 1 local target, the cluster map is likely stale
-    // Refresh it to get the full cluster topology
-    if (targets_.size() == 1 &&
-        targets_[0].location == vmsdk::cluster_map::NodeInfo::kLocal) {
-      VMSDK_LOG(NOTICE, ctx)
-          << "Only 1 local target found in cluster mode, "
-          << "refreshing cluster map to get full topology...";
-      ValkeySearch::Instance().RefreshClusterMap(ctx);
-      VMSDK_LOG(NOTICE, ctx) << "Cluster map refreshed";
-    }
-
+    targets_ = GetTargets(ctx);
     StartFanoutRound();
   }
 
@@ -100,14 +87,16 @@ class FanoutOperationBase {
     }
   }
 
-  virtual std::vector<vmsdk::cluster_map::NodeInfo> GetTargets() const = 0;
+  std::vector<FanoutSearchTarget> GetTargets(ValkeyModuleCtx* ctx) const {
+    return query::fanout::FanoutTemplate::GetTargets(ctx, kTargetMode);
+  }
 
-  void IssueRpc(const vmsdk::cluster_map::NodeInfo& target,
-                const Request& request, unsigned timeout_ms) {
+  void IssueRpc(const FanoutSearchTarget& target, const Request& request,
+                unsigned timeout_ms) {
     coordinator::ClientPool* client_pool_ =
         ValkeySearch::Instance().GetCoordinatorClientPool();
 
-    if (target.location == vmsdk::cluster_map::NodeInfo::kLocal) {
+    if (target.type == FanoutSearchTarget::Type::kLocal) {
       vmsdk::RunByMain([this, target, request]() {
         auto [status, resp] = this->GetLocalResponse(request, target);
         if (status.ok()) {
@@ -164,7 +153,7 @@ class FanoutOperationBase {
   }
 
   virtual std::pair<grpc::Status, Response> GetLocalResponse(
-      const Request&, [[maybe_unused]] const vmsdk::cluster_map::NodeInfo&) = 0;
+      const Request&, [[maybe_unused]] const FanoutSearchTarget&) = 0;
 
   virtual void InvokeRemoteRpc(coordinator::Client*, const Request&,
                                std::function<void(grpc::Status, Response&)>,
@@ -173,15 +162,14 @@ class FanoutOperationBase {
   virtual unsigned GetTimeoutMs() const = 0;
 
   virtual Request GenerateRequest(
-      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo&) = 0;
+      [[maybe_unused]] const FanoutSearchTarget&) = 0;
 
-  virtual void OnResponse(
-      const Response&,
-      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo&) = 0;
+  virtual void OnResponse(const Response&,
+                          [[maybe_unused]] const FanoutSearchTarget&) = 0;
 
   virtual void OnError(grpc::Status status,
                        coordinator::FanoutErrorType error_type,
-                       const vmsdk::cluster_map::NodeInfo& target) {
+                       const FanoutSearchTarget& target) {
     absl::MutexLock lock(&mutex_);
     if (error_type == coordinator::FanoutErrorType::INDEX_NAME_ERROR) {
       index_name_error_nodes.push_back(target);
@@ -219,9 +207,8 @@ class FanoutOperationBase {
     // Log index name errors
     if (!index_name_error_nodes.empty()) {
       error_message = "Index name not found.";
-      for (const vmsdk::cluster_map::NodeInfo& target :
-           index_name_error_nodes) {
-        if (target.location == vmsdk::cluster_map::NodeInfo::kLocal) {
+      for (const FanoutSearchTarget& target : index_name_error_nodes) {
+        if (target.type == FanoutSearchTarget::Type::kLocal) {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << INDEX_NAME_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
@@ -233,9 +220,8 @@ class FanoutOperationBase {
     // Log communication errors
     if (!communication_error_nodes.empty()) {
       error_message = "Communication error between nodes found.";
-      for (const vmsdk::cluster_map::NodeInfo& target :
-           communication_error_nodes) {
-        if (target.location == vmsdk::cluster_map::NodeInfo::kLocal) {
+      for (const FanoutSearchTarget& target : communication_error_nodes) {
+        if (target.type == FanoutSearchTarget::Type::kLocal) {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << COMMUNICATION_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
@@ -247,9 +233,8 @@ class FanoutOperationBase {
     // Log inconsistent state errors
     if (!inconsistent_state_error_nodes.empty()) {
       error_message = "Inconsistent index state error found.";
-      for (const vmsdk::cluster_map::NodeInfo& target :
-           inconsistent_state_error_nodes) {
-        if (target.location == vmsdk::cluster_map::NodeInfo::kLocal) {
+      for (const FanoutSearchTarget& target : inconsistent_state_error_nodes) {
+        if (target.type == FanoutSearchTarget::Type::kLocal) {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << INCONSISTENT_STATE_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
@@ -303,10 +288,10 @@ class FanoutOperationBase {
   unsigned outstanding_{0};
   absl::Mutex mutex_;
   std::unique_ptr<vmsdk::BlockedClient> blocked_client_;
-  std::vector<vmsdk::cluster_map::NodeInfo> index_name_error_nodes;
-  std::vector<vmsdk::cluster_map::NodeInfo> inconsistent_state_error_nodes;
-  std::vector<vmsdk::cluster_map::NodeInfo> communication_error_nodes;
-  std::vector<vmsdk::cluster_map::NodeInfo> targets_;
+  std::vector<FanoutSearchTarget> index_name_error_nodes;
+  std::vector<FanoutSearchTarget> inconsistent_state_error_nodes;
+  std::vector<FanoutSearchTarget> communication_error_nodes;
+  std::vector<FanoutSearchTarget> targets_;
   std::chrono::steady_clock::time_point deadline_tp_;
   bool timeout_occurred_ = false;
 };

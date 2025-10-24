@@ -25,7 +25,7 @@ class DropConsistencyCheckFanoutOperation
     : public query::fanout::FanoutOperationBase<
           coordinator::InfoIndexPartitionRequest,
           coordinator::InfoIndexPartitionResponse,
-          vmsdk::cluster_map::FanoutTargetMode::kAll> {
+          fanout::FanoutTargetMode::kAll> {
  public:
   DropConsistencyCheckFanoutOperation(uint32_t db_num,
                                       const std::string& index_name,
@@ -33,14 +33,10 @@ class DropConsistencyCheckFanoutOperation
       : query::fanout::FanoutOperationBase<
             coordinator::InfoIndexPartitionRequest,
             coordinator::InfoIndexPartitionResponse,
-            vmsdk::cluster_map::FanoutTargetMode::kAll>(),
+            fanout::FanoutTargetMode::kAll>(),
         db_num_(db_num),
         index_name_(index_name),
         timeout_ms_(timeout_ms){};
-
-  std::vector<vmsdk::cluster_map::NodeInfo> GetTargets() const {
-    return ValkeySearch::Instance().GetClusterMap()->GetAllTargets();
-  }
 
   unsigned GetTimeoutMs() const override { return timeout_ms_; }
 

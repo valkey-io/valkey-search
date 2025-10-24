@@ -943,7 +943,17 @@ void ValkeySearch::OnServerCronCallback(ValkeyModuleCtx *ctx,
   if (options::GetUseCoordinator().GetValue() && IsCluster()) {
     if (!cluster_map_refresh_watch_.has_value() ||
         cluster_map_refresh_watch_->Duration() > absl::Seconds(1)) {
-      RefreshClusterMap(ctx);
+      VMSDK_LOG(NOTICE, nullptr) << "Refreshing cluster map in cron...";
+      // Use thread-safe context for calling CLUSTER SLOTS
+      // ValkeyModuleCtx *detached_ctx =
+      //     ValkeyModule_GetDetachedThreadSafeContext(ctx);
+      // RefreshClusterMap(detached_ctx);
+      // ValkeyModule_FreeThreadSafeContext(detached_ctx);
+
+      RefreshClusterMap(GetBackgroundCtx());
+
+      VMSDK_LOG(NOTICE, nullptr) << "Cluster map refresh completed";
+
       cluster_map_refresh_watch_ = vmsdk::StopWatch();
     }
   }

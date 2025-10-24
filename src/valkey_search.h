@@ -111,9 +111,14 @@ class ValkeySearch {
 
   // Refresh cluster map by creating a new one from current cluster state
   void RefreshClusterMap(ValkeyModuleCtx *ctx) {
+    VMSDK_LOG(NOTICE, ctx) << "RefreshClusterMap called";
     auto new_map = vmsdk::cluster_map::ClusterMap::CreateNewClusterMap(ctx);
     if (new_map) {
+      VMSDK_LOG(NOTICE, ctx) << "Updating cluster map with new map, is_full="
+                             << new_map->GetIsClusterMapFull();
       UpdateClusterMap(new_map);
+    } else {
+      VMSDK_LOG(WARNING, ctx) << "CreateNewClusterMap returned nullptr";
     }
   }
 

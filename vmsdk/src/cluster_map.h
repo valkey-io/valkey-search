@@ -77,6 +77,8 @@ class ClusterMap {
   const std::vector<NodeInfo>& GetReplicaTargets() const;
   const std::vector<NodeInfo>& GetAllTargets() const;
 
+  bool GetIsClusterMapFull() const;
+
   // generate a random targets vector from cluster bus
   std::vector<NodeInfo> GetRandomTargets(ValkeyModuleCtx* ctx);
 
@@ -98,6 +100,8 @@ class ClusterMap {
 
   // Cluster-level fingerprint (hash of all shard fingerprints)
   uint64_t cluster_slots_fingerprint_;
+
+  bool is_cluster_map_full_;
 
   // Pre-computed target lists
   std::vector<NodeInfo> primary_targets_;

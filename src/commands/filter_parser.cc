@@ -387,8 +387,6 @@ absl::StatusOr<bool> FilterParser::IsMatchAllExpression() {
       }
     } else {
       break;
-      // // If we encounter any other character, this is not a match-all expression
-      // return false;
     }
   }
   if (!found_asterisk) {
@@ -680,8 +678,9 @@ size_t FilterParser::FindTokenEndWithEscapes(bool in_quotes, const indexes::text
   size_t current_pos = pos_;
   size_t backslash_count = 0;
   bool escaped = false;
-  size_t perc_count = 0;
+  size_t pct_count = 0;
   bool is_blackslash_punct = lexer.IsPunctuation('\\', text_index_schema->GetPunctuationBitmap());
+  bool starts_with_star = false;
   while (current_pos < expression_.size()) {
     char ch = expression_[current_pos];
     if (ch == '\\') {
@@ -712,23 +711,47 @@ size_t FilterParser::FindTokenEndWithEscapes(bool in_quotes, const indexes::text
       ++current_pos;
       continue;
     }
-    // if (!in_quotes && ch == '%' && pos_ + perc_count == current_pos) {
-    //   perc_count++;
-    //   ++current_pos;
-    //   continue;
-    // }
-    // if (!in_quotes && ch == '%' && pos_ + perc_count != current_pos) {
-    //   perc_count--;
-    //   ++current_pos;
-    //   continue;
-    // }
     if (ch == '"') break;
     if (!in_quotes && (ch == ')' || ch == '|' || ch == '(' || ch == '@' || ch == '-')) break;
     if (!in_quotes && ch != '%' && ch != '*' && lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) break;
     if (in_quotes && lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) break;
-    // if (!in_quotes && current_pos > pos_ && ch == '*') {
-    //   break;
-    // }
+    // Break at fuzzy pattern boundaries
+    if (!in_quotes && ch == '%') {
+      // Check if we're at the end of a complete fuzzy pattern
+      if (current_pos == pos_) {
+        while (current_pos < expression_.size() && expression_[current_pos] == '%') {
+          pct_count++;
+          current_pos++;
+          if (pct_count > FUZZY_MAX_DISTANCE) {
+            // This is an error case.
+            break;
+          }
+        }
+        continue;
+      }
+      // We have a valid fuzzy start, check if current position could start another
+      while (pct_count > 0 && current_pos < expression_.size() && expression_[current_pos] == '%') {
+        pct_count--;
+        current_pos++;
+      }
+      break;
+    }
+    // Can be condensed a lot.
+    if (!in_quotes && ch == '*') {
+      if (current_pos == pos_) {
+        starts_with_star = true;
+      } else {
+        if (starts_with_star) {
+          // Completed Infix
+          ++current_pos;
+          break;
+        } else {
+          // Completed Prefix
+          ++current_pos;
+          break;
+        }
+      }
+    }
     ++current_pos;
   }
   return current_pos;

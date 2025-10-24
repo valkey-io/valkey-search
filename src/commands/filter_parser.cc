@@ -598,20 +598,20 @@ static const uint32_t FUZZY_MAX_DISTANCE = 3;
 //     // Process accumulated backslashes
 //     if (backslash_count > 0) {
 //       if (in_quotes) {
-//         if (backslash_count % 2 == 0 || !lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())) {
-//             curr.push_back('\\');
-//         } else {
-//             escaped = true;
-//         }
+        // if (backslash_count % 2 == 0 || !lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())) {
+        //     curr.push_back('\\');
+        // } else {
+        //     escaped = true;
+        // }
 //       } else {
-//         if (backslash_count % 2 == 0) {
-//             curr.push_back('\\');
-//         } else if (!lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())) {
-//             if (backslash_count > 1) curr.push_back('\\');
-//             break;
-//         } else {
-//             escaped = true;
-//         }
+        // if (backslash_count % 2 == 0) {
+        //     curr.push_back('\\');
+        // } else if (!lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())) {
+        //     if (backslash_count > 1) curr.push_back('\\');
+        //     break;
+        // } else {
+        //     escaped = true;
+        // }
 //       }
 //       backslash_count = 0;
 //     }
@@ -937,22 +937,35 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
     if (backslash_count > 0) {
       bool should_escape = false;
       if (in_quotes) {
-        if (backslash_count % 2 == 1 && lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) {
-          should_escape = true;
-        } else if (backslash_count % 2 == 0 || !lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) {
-          processed_content.append(backslash_count / 2, '\\');
-          if (backslash_count % 2 == 1) processed_content.push_back('\\');
+        // if (backslash_count % 2 == 1 && lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) {
+        //   should_escape = true;
+        // } else if (backslash_count % 2 == 0 || !lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) {
+        //   processed_content.append(backslash_count / 2, '\\');
+        //   if (backslash_count % 2 == 1) processed_content.push_back('\\');
+        // }
+        if (backslash_count % 2 == 0 || !lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) {
+            processed_content.push_back('\\');
+        } else {
+            should_escape = true;
         }
       } else {
+        // if (backslash_count % 2 == 0) {
+        //   processed_content.append(backslash_count / 2, '\\');
+        // } else if (!lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) {
+        //   processed_content.append(backslash_count / 2, '\\');
+        //   if (backslash_count > 1) processed_content.push_back('\\');
+        //   break; // End token
+        // } else {
+        //   processed_content.append(backslash_count / 2, '\\');
+        //   should_escape = true;
+        // }
         if (backslash_count % 2 == 0) {
-          processed_content.append(backslash_count / 2, '\\');
+            processed_content.push_back('\\');
         } else if (!lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) {
-          processed_content.append(backslash_count / 2, '\\');
-          if (backslash_count > 1) processed_content.push_back('\\');
-          break; // End token
+            if (backslash_count > 1) processed_content.push_back('\\');
+            break;
         } else {
-          processed_content.append(backslash_count / 2, '\\');
-          should_escape = true;
+            should_escape = true;
         }
       }
       if (should_escape) {
@@ -960,6 +973,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
         ++current_pos;
         backslash_count = 0;
         found_content = true;
+        should_escape = false;
         continue;
       }
       backslash_count = 0;
@@ -968,7 +982,9 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
     if (ch == '"') break;
     if (!in_quotes && (ch == ')' || ch == '|' || ch == '(' || ch == '@' || ch == '-')) break;
     if (!in_quotes && ch != '%' && ch != '*' && lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) break;
-    if (in_quotes && lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) break;
+    // For comatibility, the $ : _ characters are not stripped out.
+    if (in_quotes && lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap()) && 
+      ch != '$' && ch != ':' && ch != '_') break;
     // Handle special characters for predicate detection
     if (!in_quotes && ch == '%') {
       if (current_pos == pos_) {
@@ -988,14 +1004,15 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
       //   continue;
       // } 
       else {
+        // NOOP IF statement. It is handled below.
+        // if (!starts_with_percent) {
+        //   break;
+        // }
         // Trailing percent - count them
-        size_t temp_pos = current_pos;
-        while (temp_pos < expression_.size() && expression_[temp_pos] == '%' && trailing_percent_count < leading_percent_count) {
+        while (current_pos < expression_.size() && expression_[current_pos] == '%' && trailing_percent_count < leading_percent_count) {
           trailing_percent_count++;
-          temp_pos++;
-          if (trailing_percent_count > FUZZY_MAX_DISTANCE) break;
+          current_pos++;
         }
-        current_pos = temp_pos;
         break;
       }
     }
@@ -1028,9 +1045,9 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
       return absl::InvalidArgumentError("Invalid fuzzy '%' markers");
     }
   } else if (!in_quotes && starts_with_star) {
-    if (trailing_percent_count > 0) {
-      return absl::InvalidArgumentError("Mixed wildcard and fuzzy markers");
-    }
+    // if (trailing_percent_count > 0) {
+    //   return absl::InvalidArgumentError("Mixed wildcard and fuzzy markers");
+    // }
     if (processed_content.empty()) {
       return absl::InvalidArgumentError("Invalid wildcard '*' markers");
     }

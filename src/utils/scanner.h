@@ -14,7 +14,6 @@
 #include <optional>
 
 #include "absl/strings/string_view.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 namespace utils {

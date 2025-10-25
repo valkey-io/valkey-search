@@ -135,5 +135,3 @@ Each element is an array of field name and value pairs.
 ### Authentication and Authorization
 
 Same security issues as with ```FT.SEARCH```
-
-

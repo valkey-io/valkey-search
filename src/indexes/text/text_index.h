@@ -27,8 +27,6 @@ struct sb_stemmer;
 
 namespace valkey_search::indexes::text {
 
-using PunctuationBitmap = std::bitset<256>;
-
 struct TextIndex {
   TextIndex() = default;
   ~TextIndex() = default;
@@ -66,14 +64,6 @@ class TextIndexSchema {
 
   uint8_t GetNumTextFields() const { return num_text_fields_; }
   std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
-  const PunctuationBitmap& GetPunctuationBitmap() const {
-    return punct_bitmap_;
-  }
-  const absl::flat_hash_set<std::string>& GetStopWordsSet() const {
-    return stop_words_set_;
-  }
-  data_model::Language GetLanguage() const { return language_; }
-  bool GetWithOffsets() const { return with_offsets_; }
 
  private:
   uint8_t num_text_fields_ = 0;
@@ -97,19 +87,8 @@ class TextIndexSchema {
   // Prevent concurrent mutations to per_key_text_indexes_
   std::mutex per_key_text_indexes_mutex_;
 
-  // Punctuation bitmap
-  PunctuationBitmap punct_bitmap_;
-
-  // Stop words set for filtering during tokenization
-  absl::flat_hash_set<std::string> stop_words_set_;
-
-  // Language needed for stemmer creation
-  data_model::Language language_ = data_model::LANGUAGE_UNSPECIFIED;
-
   // Whether to store position offsets for phrase queries
   bool with_offsets_ = false;
-
-  const char* GetLanguageString() const;
 };
 
 }  // namespace valkey_search::indexes::text

@@ -31,40 +31,38 @@ Tokenization Pipeline:
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "src/index_schema.pb.h"
 
 struct sb_stemmer;
 
 namespace valkey_search::indexes::text {
 
 struct Lexer {
-  Lexer(const char*);
-  ~Lexer();
+  Lexer(data_model::Language language, const std::string& punctuation,
+        const std::vector<std::string>& stop_words);
+  ~Lexer() = default;
 
   absl::StatusOr<std::vector<std::string>> Tokenize(
-      absl::string_view text, const std::bitset<256>& punct_bitmap,
-      bool stemming_enabled, uint32_t min_stem_size,
-      const absl::flat_hash_set<std::string>& stop_words_set) const;
-
-  // Punctuation checking API
-  static bool IsPunctuation(char c, const std::bitset<256>& punct_bitmap) {
-    return punct_bitmap[static_cast<unsigned char>(c)];
-  }
-
-  // Stop word checking API (expects lowercase input)
-  static bool IsStopWord(
-      const std::string& lowercase_word,
-      const absl::flat_hash_set<std::string>& stop_words_set) {
-    return stop_words_set.contains(lowercase_word);
-  }
+      absl::string_view text, bool stemming_enabled,
+      uint32_t min_stem_size) const;
 
  private:
-  mutable sb_stemmer* stemmer_ = nullptr;
+  data_model::Language language_;
+  std::bitset<256> punct_bitmap_;
+  absl::flat_hash_set<std::string> stop_words_set_;
 
-  // TODO: Create a little pool of stemmers protected by this mutex
-  mutable std::mutex stemmer_mutex_;
+  sb_stemmer* GetStemmer() const;
 
   std::string StemWord(const std::string& word, bool stemming_enabled,
-                       uint32_t min_stem_size) const;
+                       uint32_t min_stem_size, sb_stemmer* stemmer) const;
+
+  bool IsPunctuation(char c) const {
+    return punct_bitmap_[static_cast<unsigned char>(c)];
+  }
+
+  bool IsStopWord(const std::string& lowercase_word) const {
+    return stop_words_set_.contains(lowercase_word);
+  }
 
   // UTF-8 processing helpers
   bool IsValidUtf8(absl::string_view text) const;

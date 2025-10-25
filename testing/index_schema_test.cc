@@ -1314,7 +1314,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   {
     // Set index schema text properties to values different than the IndexSchema
     // defaults
-    data_model::Language language = data_model::LANGUAGE_UNSPECIFIED;
+    data_model::Language language =
+        data_model::LANGUAGE_ENGLISH;  // Only one supported language right now
     std::string punctuation = ".";
     bool with_offsets = false;
     std::vector<std::string> stop_words = {"stop"};
@@ -1381,19 +1382,15 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
         &index_schema->GetAttributeDataType()));
 
     // Validate text schema properties
-    auto text_index_schema = index_schema->GetTextIndexSchema();
-    EXPECT_EQ(text_index_schema->GetLanguage(),
-              data_model::LANGUAGE_UNSPECIFIED);
-    EXPECT_EQ(
-        text_index_schema->GetPunctuationBitmap(),
-        std::bitset<256>(
-            "000000000000000000000000000000000000000000000000000000000000000000"
-            "000000000000000000000000000000000000000000000000000000000000001000"
-            "000000000000000000000000000000000000000000000000000000000000000000"
-            "0000000000010000000000000111111111111111111111111111111111"));
-    EXPECT_EQ(text_index_schema->GetWithOffsets(), false);
-    EXPECT_THAT(text_index_schema->GetStopWordsSet(),
-                testing::Contains("stop"));
+    auto schema_proto = index_schema->ToProto();
+    EXPECT_EQ(schema_proto->language(), data_model::LANGUAGE_ENGLISH);
+    EXPECT_EQ(schema_proto->punctuation(), ".");
+    EXPECT_EQ(schema_proto->with_offsets(), false);
+    EXPECT_THAT(schema_proto->stop_words(),
+                testing::UnorderedElementsAre("stop"));
+
+    // Validate text index schema was recreated
+    EXPECT_THAT(index_schema->GetTextIndexSchema(), testing::NotNull());
 
     // Validate text index was restored correctly
     VMSDK_EXPECT_OK(index_schema->GetIndex("description"));

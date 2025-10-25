@@ -81,6 +81,7 @@ class IndexTeser : public T {
 class MockIndex : public indexes::IndexBase {
  public:
   MockIndex() : indexes::IndexBase(indexes::IndexerType::kNone) {}
+  MockIndex(indexes::IndexerType type) : indexes::IndexBase(type) {}
   MOCK_METHOD(absl::StatusOr<bool>, AddRecord,
               (const InternedStringPtr& key, absl::string_view data),
               (override));
@@ -124,7 +125,7 @@ class MockAttributeDataType : public AttributeDataType {
   MOCK_METHOD(int, GetValkeyEventTypes, (), (override, const));
   MOCK_METHOD((absl::StatusOr<RecordsMap>), FetchAllRecords,
               (ValkeyModuleCtx * ctx, const std::string& query_attribute_name,
-               absl::string_view key,
+               ValkeyModuleKey* open_key, absl::string_view key,
                const absl::flat_hash_set<absl::string_view>& identifiers),
               (override, const));
   MOCK_METHOD((data_model::AttributeDataType), ToProto, (), (override, const));
@@ -206,6 +207,11 @@ data_model::VectorIndex CreateFlatVectorIndexProto(
     int dimensions, data_model::DistanceMetric distance_metric, int initial_cap,
     uint32_t block_size);
 
+data_model::NumericIndex CreateNumericIndexProto();
+
+data_model::TagIndex CreateTagIndexProto(const std::string& separator = ",",
+                                         bool case_sensitive = false);
+
 class MockIndexSchema : public IndexSchema {
  public:
   static absl::StatusOr<std::shared_ptr<MockIndexSchema>> Create(
@@ -227,9 +233,9 @@ class MockIndexSchema : public IndexSchema {
   MockIndexSchema(ValkeyModuleCtx* ctx,
                   const data_model::IndexSchema& index_schema_proto,
                   std::unique_ptr<AttributeDataType> attribute_data_type,
-                  vmsdk::ThreadPool* mutations_thread_pool)
+                  vmsdk::ThreadPool* mutations_thread_pool, bool reload = false)
       : IndexSchema(ctx, index_schema_proto, std::move(attribute_data_type),
-                    mutations_thread_pool) {
+                    mutations_thread_pool, reload) {
     ON_CALL(*this, OnLoadingEnded(testing::_))
         .WillByDefault(testing::Invoke([this](ValkeyModuleCtx* ctx) {
           return IndexSchema::OnLoadingEnded(ctx);
@@ -268,7 +274,6 @@ class TestableValkeySearch : public ValkeySearch {
   vmsdk::ThreadPool* GetReaderThreadPool() const {
     return reader_thread_pool_.get();
   }
-  size_t GetMaxWorkerThreadPoolSuspensionSec() const override { return 1; }
 };
 
 class TestableSchemaManager : public SchemaManager {

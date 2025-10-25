@@ -16,6 +16,8 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
+#include "src/valkey_search.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/type_conversions.h"
@@ -23,6 +25,10 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
+static JsonSharedAPIGetValueFn json_get;
+static std::optional<bool> is_json_loaded;
+void ResetJsonLoadedCache() { is_json_loaded = std::nullopt; }
+
 absl::StatusOr<vmsdk::UniqueValkeyString> HashAttributeDataType::GetRecord(
     [[maybe_unused]] ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
     [[maybe_unused]] absl::string_view key,
@@ -53,6 +59,7 @@ void HashScanCallback(ValkeyModuleKey *key, ValkeyModuleString *field,
   if (field_str.empty()) {
     return;
   }
+  // This needs to be empty for non vector queries.
   if (callback_data->identifiers.empty() ||
       callback_data->identifiers.contains(field_str)) {
     callback_data->key_value_content.emplace(
@@ -71,7 +78,7 @@ bool HashHasRecord(ValkeyModuleKey *key, absl::string_view identifier) {
 
 absl::StatusOr<RecordsMap> HashAttributeDataType::FetchAllRecords(
     ValkeyModuleCtx *ctx, const std::string &vector_identifier,
-    absl::string_view key,
+    [[maybe_unused]] ValkeyModuleKey *open_key, absl::string_view key,
     const absl::flat_hash_set<absl::string_view> &identifiers) const {
   vmsdk::VerifyMainThread();
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
@@ -81,7 +88,9 @@ absl::StatusOr<RecordsMap> HashAttributeDataType::FetchAllRecords(
     return absl::NotFoundError(
         absl::StrCat("No such record with key: `", vector_identifier, "`"));
   }
-  if (!HashHasRecord(key_obj.get(), vector_identifier)) {
+  // Only check for vector_identifier if it's not empty (vector queries)
+  if (!vector_identifier.empty() &&
+      !HashHasRecord(key_obj.get(), vector_identifier)) {
     return absl::NotFoundError(absl::StrCat("No such record with identifier: `",
                                             vector_identifier, "`"));
   }
@@ -93,15 +102,8 @@ absl::StatusOr<RecordsMap> HashAttributeDataType::FetchAllRecords(
   return std::move(callback_data.key_value_content);
 }
 
-absl::string_view TrimBrackets(absl::string_view record) {
-  if (absl::ConsumePrefix(&record, "[")) {
-    absl::ConsumeSuffix(&record, "]");
-  }
-  return record;
-}
-
-absl::StatusOr<vmsdk::UniqueValkeyString> NormalizeJsonRecord(
-    absl::string_view record) {
+absl::Status NormalizeJsonRecord(absl::string_view record,
+                                 vmsdk::UniqueValkeyString &out_record) {
   if (!record.empty() && record[0] != '[') {
     return absl::NotFoundError("Invalid record");
   }
@@ -114,14 +116,39 @@ absl::StatusOr<vmsdk::UniqueValkeyString> NormalizeJsonRecord(
   if (record.empty()) {
     return absl::NotFoundError("Empty record");
   }
-  return vmsdk::MakeUniqueValkeyString(record);
+  auto record_ptr = vmsdk::MakeUniqueValkeyString(record);
+  out_record.swap(record_ptr);
+  return absl::OkStatus();
 }
-
-absl::StatusOr<vmsdk::UniqueValkeyString> JsonAttributeDataType::GetRecord(
-    ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleKey *open_key,
-    absl::string_view key, absl::string_view identifier) const {
+// GetJsonRecord is the actual implementation for retrieving a JSON value.
+// If the JSON module is not loaded, it returns an error.
+// It prefers using the JSON shared API, and falls back to VM_Call if the API is
+// unavailable. On success, the result is stored in the `record` input
+// parameter. The caller may only check for the existence of the identifier
+// by passing nullptr as the `record` value.
+absl::Status GetJsonRecord(ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
+                           absl::string_view key, absl::string_view identifier,
+                           vmsdk::UniqueValkeyString *record) {
   vmsdk::VerifyMainThread();
-
+  if (!IsJsonModuleSupported(ctx)) {
+    return absl::UnavailableError("The JSON module is not supported");
+  }
+  if (json_get) {
+    if (!open_key) {
+      return absl::NotFoundError(absl::StrCat("Key not found: `", key, "`"));
+    }
+    ValkeyModuleString *record_str = nullptr;
+    if (json_get(open_key, identifier.data(), &record_str) ==
+        VALKEYMODULE_ERR) {
+      return absl::NotFoundError(
+          absl::StrCat("No such record with identifier: `", identifier, "`"));
+    }
+    auto record_tmp = vmsdk::UniqueValkeyString(record_str);
+    if (!record) {
+      return absl::OkStatus();
+    }
+    return NormalizeJsonRecord(vmsdk::ToStringView(record_tmp.get()), *record);
+  }
   auto reply = vmsdk::UniquePtrValkeyCallReply(ValkeyModule_Call(
       ctx, kJsonCmd.data(), "cc", key.data(), identifier.data()));
   if (reply == nullptr) {
@@ -129,31 +156,37 @@ absl::StatusOr<vmsdk::UniqueValkeyString> JsonAttributeDataType::GetRecord(
         absl::StrCat("No such record with identifier: `", identifier, "`"));
   }
   auto reply_type = ValkeyModule_CallReplyType(reply.get());
-  if (reply_type == VALKEYMODULE_REPLY_STRING) {
-    auto reply_str = vmsdk::UniqueValkeyString(
-        ValkeyModule_CreateStringFromCallReply(reply.get()));
-    return NormalizeJsonRecord(vmsdk::ToStringView(reply_str.get()));
+  if (reply_type != VALKEYMODULE_REPLY_STRING) {
+    return absl::NotFoundError(
+        absl::StrCat(kJsonCmd.data(), " returned a non string value"));
   }
-  return absl::NotFoundError("Json.get returned a non string value");
+  auto reply_str = vmsdk::UniqueValkeyString(
+      ValkeyModule_CreateStringFromCallReply(reply.get()));
+  if (!record) {
+    return absl::OkStatus();
+  }
+  return NormalizeJsonRecord(vmsdk::ToStringView(reply_str.get()), *record);
+}
+
+absl::StatusOr<vmsdk::UniqueValkeyString> JsonAttributeDataType::GetRecord(
+    ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key, absl::string_view key,
+    absl::string_view identifier) const {
+  vmsdk::UniqueValkeyString record;
+  VMSDK_RETURN_IF_ERROR(GetJsonRecord(ctx, open_key, key, identifier, &record));
+  return record;
 }
 
 absl::StatusOr<RecordsMap> JsonAttributeDataType::FetchAllRecords(
     ValkeyModuleCtx *ctx, const std::string &vector_identifier,
-    absl::string_view key,
+    ValkeyModuleKey *open_key, absl::string_view key,
     const absl::flat_hash_set<absl::string_view> &identifiers) const {
-  vmsdk::VerifyMainThread();
-  // Validating that a JSON object with the key exists with the vector
-  // identifier
-  auto reply = vmsdk::UniquePtrValkeyCallReply(ValkeyModule_Call(
-      ctx, kJsonCmd.data(), "cc", key.data(), vector_identifier.c_str()));
-  if (reply == nullptr ||
-      ValkeyModule_CallReplyType(reply.get()) != VALKEYMODULE_REPLY_STRING) {
-    return absl::NotFoundError(absl::StrCat("No such record with identifier: `",
-                                            vector_identifier, "`"));
-  }
+  // First, validate that a JSON object exists for the given key using the
+  // vector identifier.
+  VMSDK_RETURN_IF_ERROR(
+      GetJsonRecord(ctx, open_key, key, vector_identifier, nullptr));
   RecordsMap key_value_content;
   for (const auto &identifier : identifiers) {
-    auto str = GetRecord(ctx, nullptr, key, identifier);
+    auto str = GetRecord(ctx, open_key, key, identifier);
     if (!str.ok()) {
       continue;
     }
@@ -164,7 +197,26 @@ absl::StatusOr<RecordsMap> JsonAttributeDataType::FetchAllRecords(
   return key_value_content;
 }
 
-bool IsJsonModuleLoaded(ValkeyModuleCtx *ctx) {
-  return vmsdk::IsModuleLoaded(ctx, "json");
+bool IsJsonModuleSupported(ValkeyModuleCtx *ctx) {
+  // Use positive caching only. Note: the JSON module may be loaded after
+  // initialization.
+  if (is_json_loaded.has_value() && is_json_loaded.value()) {
+    return is_json_loaded.value();
+  }
+  is_json_loaded = vmsdk::IsModuleLoaded(ctx, "json");
+  if (!is_json_loaded.value()) {
+    return false;
+  }
+  json_get =
+      (JsonSharedAPIGetValueFn)ValkeyModule_GetSharedAPI(ctx, "JSON_GetValue");
+  // Note: In cluster mode, replicas must have the JSON module loaded to access
+  // the JSON shared API. Otherwise, invoking commands via ValkeyModule_Call
+  // from a replica will result in a MOVED response.
+  if (!json_get && ValkeySearch::Instance().IsCluster()) {
+    VMSDK_LOG(WARNING, ctx)
+        << "Note: When cluster mode is enabled, valkey-search requires "
+           "valkey-json version 1.02 or higher for proper JSON support.";
+  }
+  return true;
 }
 }  // namespace valkey_search

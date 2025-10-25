@@ -6,39 +6,39 @@ ROOT_DIR=$(readlink -f $(dirname $0))
 VERBOSE_ARGS=""
 CMAKE_TARGET=""
 CMAKE_EXTRA_ARGS=""
+FORMAT="no"
 RUN_TEST=""
 RUN_BUILD="yes"
 DUMP_TEST_ERRORS_STDOUT="no"
 NINJA_TOOL="ninja"
 INTEGRATION_TEST="no"
-ASAN_BUILD="no"
+SAN_BUILD="no"
 ARGV=$@
 EXIT_CODE=0
-
-# Constants
-BOLD_PINK='\e[35;1m'
-RESET='\e[0m'
-GREEN='\e[32;1m'
-RED='\e[31;1m'
-BLUE='\e[34;1m'
+INTEG_RETRIES=1
+JOBS=""
 
 echo "Root directory: ${ROOT_DIR}"
 
 function print_usage() {
-cat<<EOF
+    cat <<EOF
 Usage: build.sh [options...]
 
-    --help | -h               Print this help message and exit.
-    --configure               Run cmake stage (aka configure stage).
-    --verbose | -v            Run verbose build.
-    --debug                   Build for debug version.
-    --clean                   Clean the current build configuration (debug or release).
-    --run-tests               Run all tests. Optionally, pass a test name to run: "--run-tests=<test-name>".
-    --no-build                By default, build.sh always triggers a build. This option disables this behavior.
-    --test-errors-stdout      When a test fails, dump the captured tests output to stdout.
-    --run-integration-tests   Run integration tests.
-    --use-system-modules      Use system's installed gRPC, Protobuf & Abseil dependencies.
-    --asan                    Build with address sanitizer enabled.
+    --help | -h                       Print this help message and exit.
+    --configure                       Run cmake stage (aka configure stage).
+    --verbose | -v                    Run verbose build.
+    --debug                           Build for debug version.
+    --clean                           Clean the current build configuration (debug or release).
+    --format                          Applies clang-format. (Run in dev container environment to ensure correct clang-format version)
+    --run-tests                       Run all tests. Optionally, pass a test name to run: "--run-tests=<test-name>".
+    --no-build                        By default, build.sh always triggers a build. This option disables this behavior.
+    --test-errors-stdout              When a test fails, dump the captured tests output to stdout.
+    --run-integration-tests[=pattern] Run integration tests.
+    --use-system-modules              Use system's installed gRPC, Protobuf & Abseil dependencies.
+    --asan                            Build with address sanitizer enabled.
+    --tsan                            Build with thread sanitizer enabled.
+    --retries=N                       Attempt to run integration tests N times. Default is 1.
+    --jobs=N                          Limit the build workers to N. Default: use all available cores.
 
 Example usage:
 
@@ -52,8 +52,7 @@ EOF
 }
 
 ## Parse command line arguments
-while [ $# -gt 0 ]
-do
+while [ $# -gt 0 ]; do
     arg=$1
     case $arg in
     --clean)
@@ -76,6 +75,10 @@ do
         RUN_BUILD="no"
         echo "Running build: no"
         ;;
+    --format)
+        FORMAT="yes"
+        shift || true
+        ;;
     --run-tests)
         RUN_TEST="all"
         shift || true
@@ -86,10 +89,32 @@ do
         shift || true
         echo "Running test ${RUN_TEST}"
         ;;
+    --unittest-output=*)
+        UNITTEST_OUTPUT="${arg#*=}"
+        shift || true
+        # echo "Unit Test Output Directory: ${UNITTEST_OUTPUT} ** not yet implemented **"
+        # Not currently implemented in build.sh, but used by upstream build_ubuntu.sh
+        ;;
     --run-integration-tests)
         INTEGRATION_TEST="yes"
         shift || true
-        echo "Running integration tests"
+        echo "Running integration tests (all)"
+        ;;
+    --integration-output=*)
+        INTEGRATION_OUTPUT="${arg#*=}"
+        shift || true
+        # echo "Integration Test Output Directory: ${INTEGRATION_OUTPUT} ** not yet implemented **"
+        # Not currently implemented in build.sh, but used by upstream build_ubuntu.sh
+        ;;
+    --run-integration-tests=*)
+        INTEGRATION_TEST="yes"
+        TEST_PATTERN=${1#*=}
+        shift || true
+        echo "Running integration tests with pattern=${TEST_PATTERN}"
+        ;;
+    --retries=*)
+        INTEG_RETRIES=${1#*=}
+        shift || true
         ;;
     --test-errors-stdout)
         DUMP_TEST_ERRORS_STDOUT="yes"
@@ -102,36 +127,42 @@ do
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
     --asan)
-        CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DASAN_BUILD=ON"
-        ASAN_BUILD="yes"
+        CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DSAN_BUILD=address"
+        SAN_BUILD="address"
         shift || true
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
-    --verbose|-v)
+    --tsan)
+        CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DSAN_BUILD=thread"
+        SAN_BUILD="thread"
+        shift || true
+        echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
+        ;;
+    --jobs=*)
+        JOBS=${1#*=}
+        shift || true
+        ;;
+    --verbose | -v)
         shift || true
         VERBOSE_ARGS="-v"
         echo "Verbose build: true"
         ;;
-    --help|-h)
+    --help | -h)
         print_usage
         exit 0
         ;;
     *)
+        echo "Unknown argument: ${arg}"
         print_usage
         exit 1
         ;;
     esac
 done
 
-# Capitalize a word. This method is compatible with bash-3 and bash-4
-function capitalize_string() {
-    local string=$1
-    local first_char=${string:0:1}
-    local remainder=${string:1}
-    first_char=$(echo "${first_char}" | tr '[:lower:]' '[:upper:]')
-    remainder=$(echo "${remainder}" | tr '[:upper:]' '[:lower:]')
-    echo ${first_char}${remainder}
-}
+# Import our functions, needs to be done after parsing the command line arguments
+export SAN_BUILD
+export ROOT_DIR
+. ${ROOT_DIR}/scripts/common.rc
 
 function configure() {
     printf "${BOLD_PINK}Running cmake...${RESET}\n"
@@ -148,11 +179,15 @@ function build() {
     printf "${BOLD_PINK}Building${RESET}\n"
     if [ -d ${BUILD_DIR} ]; then
         cd ${BUILD_DIR}
-        ${NINJA_TOOL} ${VERBOSE_ARGS} ${CMAKE_TARGET}
+        if [ -z "${JOBS}" ]; then
+            ${NINJA_TOOL} ${VERBOSE_ARGS} ${CMAKE_TARGET}
+        else
+            ${NINJA_TOOL} -j ${JOBS} ${VERBOSE_ARGS} ${CMAKE_TARGET}
+        fi
         cd ${ROOT_DIR}
 
         printf "\n${GREEN}Build Successful!${RESET}\n\n"
-        printf "${BOLD_PINK}Module path:${RESET} ${BUILD_DIR}/libsearch.so\n\n"
+        printf "${BOLD_PINK}Module path:${RESET} ${BUILD_DIR}/libsearch.${MODULE_EXT}\n\n"
 
         if [ -z "${RUN_TEST}" ]; then
             printf "You may want to run the unit tests by executing:\n"
@@ -160,8 +195,15 @@ function build() {
         fi
 
         printf "To load the module, execute the following command:\n"
-        printf "    valkey-server --loadmodule ${BUILD_DIR}/libsearch.so\n\n"
+        printf "    valkey-server --loadmodule ${BUILD_DIR}/libsearch.${MODULE_EXT}\n\n"
     fi
+}
+
+function format() {
+    cd ${ROOT_DIR}
+    printf "Formatting...\n"
+    find src testing vmsdk/src vmsdk/testing -name "*.h" -o -name "*.cc" | xargs clang-format -i
+    printf "Applied clang-format\n"
 }
 
 function print_test_prefix() {
@@ -185,9 +227,9 @@ function print_test_error_and_exit() {
         cp /dev/null ${TEST_OUTPUT_FILE}
     fi
 
-    # When running tests with ASan enabled, do not terminate the execution after the first failure continue
+    # When running tests with sanitizer enabled, do not terminate the execution after the first failure continue
     # running the remainder of the tests
-    if [[ "${ASAN_BUILD}" == "no" ]]; then
+    if [[ "${SAN_BUILD}" == "no" ]]; then
         print_test_summary
         exit 1
     else
@@ -200,7 +242,7 @@ function check_tool() {
     local tool_name=$1
     local message=$2
     printf "Checking for ${tool_name}..."
-    command -v ${tool_name} > /dev/null || \
+    command -v ${tool_name} >/dev/null ||
         (printf "${RED}failed${RESET}.\n${RED}ERROR${RESET} - could not locate tool '${tool_name}'. ${message}\n" && exit 1)
     printf "${GREEN}ok${RESET}\n"
 }
@@ -218,7 +260,7 @@ function check_tools() {
     else
         # Check for ninja. On RedHat based Linux, it is called ninja-build, while on Debian based Linux, it is simply ninja
         # Ubuntu / Mint et al will report "ID_LIKE=debian"
-        local debian_output=$(cat /etc/*-release|grep -i debian|wc -l)
+        local debian_output=$(cat /etc/*-release | grep -i debian | wc -l)
         if [ ${debian_output} -gt 0 ]; then
             NINJA_TOOL="ninja"
         else
@@ -242,8 +284,8 @@ function is_configure_required() {
         echo "yes"
         return
     fi
-    local build_file_lastmodified=$(date -r ${ninja_build_file} +%s)
-    local cmake_files=$(find ${ROOT_DIR} -name "CMakeLists.txt" -o -name "*.cmake"| grep -v ".build-release" | grep -v ".build-debug")
+    local build_file_lastmodified=$(get_file_last_modified ${ninja_build_file})
+    local cmake_files=$(find ${ROOT_DIR} -name "CMakeLists.txt" -o -name "*.cmake" | grep -v ".build-release" | grep -v ".build-debug")
     for cmake_file in ${cmake_files}; do
         local cmake_file_modified=$(date -r ${cmake_file} +%s)
         if [ ${cmake_file_modified} -gt ${build_file_lastmodified} ]; then
@@ -254,18 +296,27 @@ function is_configure_required() {
     echo "no"
 }
 
-
 cleanup() {
-  cd ${ROOT_DIR}
+    cd ${ROOT_DIR}
 }
 
 # Ensure cleanup runs on exit
 trap cleanup EXIT
+export CMAKE_POLICY_VERSION_MINIMUM=3.5
+
+if [[ "${FORMAT}" == "yes" ]]; then
+    format
+fi
 
 BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
-if [[ "${ASAN_BUILD}" == "yes" ]]; then
-    printf "${BOLD_PINK}ASAN build is enabled${RESET}\n"
-    BUILD_DIR=${BUILD_DIR}-asan
+if [[ "${SAN_BUILD}" != "no" ]]; then
+    printf "${BOLD_PINK}${SAN_BUILD} sanitizer build is enabled${RESET}\n"
+    if [[ "${SAN_BUILD}" == "address" ]]; then
+        BUILD_DIR=${BUILD_DIR}-asan
+    else
+        BUILD_DIR=${BUILD_DIR}-tsan
+        export TSAN_OPTIONS="suppressions=${ROOT_DIR}/ci/tsan.supp"
+    fi
 fi
 
 TESTS_DIR=${BUILD_DIR}/tests
@@ -276,7 +327,7 @@ FORCE_CMAKE=$(is_configure_required)
 printf "${GREEN}${FORCE_CMAKE}${RESET}\n"
 check_tools
 
-START_TIME=`date +%s`
+START_TIME=$(date +%s)
 if [[ "${RUN_CMAKE}" == "yes" ]] || [[ "${FORCE_CMAKE}" == "yes" ]]; then
     configure
 fi
@@ -285,12 +336,12 @@ if [[ "${RUN_BUILD}" == "yes" ]]; then
     build
 fi
 
-END_TIME=`date +%s`
+END_TIME=$(date +%s)
 BUILD_RUNTIME=$((END_TIME - START_TIME))
 
-START_TIME=`date +%s`
+START_TIME=$(date +%s)
 
-if [[ "${ASAN_BUILD}" == "yes" ]]; then
+if [[ "${SAN_BUILD}" != "no" ]]; then
     export ASAN_OPTIONS="detect_odr_violation=0"
 fi
 
@@ -298,35 +349,58 @@ if [[ "${RUN_TEST}" == "all" ]]; then
     rm -f ${TEST_OUTPUT_FILE}
     TESTS=$(ls ${TESTS_DIR}/*_test)
     for test in $TESTS; do
-        echo "==> Running executable: ${test}" >> ${TEST_OUTPUT_FILE}
-        echo "" >> ${TEST_OUTPUT_FILE}
+        echo "==> Running executable: ${test}" >>${TEST_OUTPUT_FILE}
+        echo "" >>${TEST_OUTPUT_FILE}
         print_test_prefix "${test}"
-        (${test} >> ${TEST_OUTPUT_FILE} 2>&1 && print_test_ok) || print_test_error_and_exit
+        (${test} >>${TEST_OUTPUT_FILE} 2>&1 && print_test_ok) || print_test_error_and_exit
     done
     print_test_summary
 elif [ ! -z "${RUN_TEST}" ]; then
     rm -f ${TEST_OUTPUT_FILE}
-    echo "==> Running executable: ${TESTS_DIR}/${RUN_TEST}" >> ${TEST_OUTPUT_FILE}
-    echo "" >> ${TEST_OUTPUT_FILE}
+    echo "==> Running executable: ${TESTS_DIR}/${RUN_TEST}" >>${TEST_OUTPUT_FILE}
+    echo "" >>${TEST_OUTPUT_FILE}
     print_test_prefix "${TESTS_DIR}/${RUN_TEST}"
     (${TESTS_DIR}/${RUN_TEST} && print_test_ok) || print_test_error_and_exit
     print_test_summary
 elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
-    cd testing/integration
-    params=""
-    if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
-        params=" --test-errors-stdout"
-    fi
-    if [[ "${BUILD_CONFIG}" == "debug" ]]; then
-        params="${params} --debug"
+    if [ ! -z "${TEST_PATTERN}" ]; then
+        echo ""
+        LOG_WARNING " ** TEST_PATTERN is found, skipping Abseil based integration tests **"
+        echo ""
+    else
+        # Abseil based tests do not support filtering tests based on "-k" flag
+        # so when the TEST_PATTERN env variable is found, skip Abseil based tests
+        pushd testing/integration >/dev/null
+        params=""
+        if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
+            params=" --test-errors-stdout"
+        fi
+        if [[ "${BUILD_CONFIG}" == "debug" ]]; then
+            params="${params} --debug"
+        fi
+
+        if [[ "${SAN_BUILD}" == "address" ]]; then
+            params="${params} --asan"
+        fi
+        if [[ "${SAN_BUILD}" == "thread" ]]; then
+            params="${params} --tsan"
+        fi
+        ./run.sh ${params}
+        popd >/dev/null
     fi
 
-    if [[ "${ASAN_BUILD}" == "yes" ]]; then
-        params="${params} --asan"
+    # Run OSS integration tests
+    pushd integration >/dev/null
+    if [[ "${TEST_PATTERN}" == "oss" ]]; then
+        TEST_PATTERN=""
     fi
-    ./run.sh ${params}
+    export TEST_PATTERN=${TEST_PATTERN}
+    export INTEG_RETRIES=${INTEG_RETRIES}
+    # Run will run ASan or normal tests based on the environment variable SAN_BUILD
+    ./run.sh
+    popd >/dev/null
 fi
 
-END_TIME=`date +%s`
+END_TIME=$(date +%s)
 TEST_RUNTIME=$((END_TIME - START_TIME))
 exit ${EXIT_CODE}

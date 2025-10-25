@@ -167,16 +167,14 @@ absl::StatusOr<bool> Tag::RemoveRecord(const InternedStringPtr& key,
 }
 
 int Tag::RespondWithInfo(ValkeyModuleCtx* ctx) const {
-  auto num_replies = 6;
+  auto num_replies = 8;
   ValkeyModule_ReplyWithSimpleString(ctx, "type");
   ValkeyModule_ReplyWithSimpleString(ctx, "TAG");
   ValkeyModule_ReplyWithSimpleString(ctx, "SEPARATOR");
   ValkeyModule_ReplyWithSimpleString(
       ctx, std::string(&separator_, sizeof(char)).c_str());
-  if (case_sensitive_) {
-    num_replies++;
-    ValkeyModule_ReplyWithSimpleString(ctx, "CASESENSITIVE");
-  }
+  ValkeyModule_ReplyWithSimpleString(ctx, "CASESENSITIVE");
+  ValkeyModule_ReplyWithSimpleString(ctx, case_sensitive_ ? "1" : "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "size");
   absl::MutexLock lock(&index_mutex_);
   ValkeyModule_ReplyWithCString(
@@ -307,7 +305,7 @@ std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
         PatriciaNodeIndex* node = it.Value();
         if (node != nullptr) {
           auto res = entries.insert(node);
-          if (res.second) {
+          if (res.second && node->value.has_value()) {
             size += node->value.value().size();
           }
         }
@@ -317,7 +315,7 @@ std::unique_ptr<Tag::EntriesFetcher> Tag::Search(
       PatriciaNodeIndex* node = tree_.ExactMatcher(tag);
       if (node != nullptr) {
         auto res = entries.insert(node);
-        if (res.second) {
+        if (res.second && node->value.has_value()) {
           size += node->value.value().size();
         }
       }

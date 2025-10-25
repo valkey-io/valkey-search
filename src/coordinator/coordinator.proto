@@ -27,6 +27,10 @@ service Coordinator {
   rpc SearchIndexPartition(SearchIndexPartitionRequest)
       returns (SearchIndexPartitionResponse) {
   }
+  // Get index info across cluster
+  rpc InfoIndexPartition(InfoIndexPartitionRequest)
+      returns (InfoIndexPartitionResponse) {
+  }
 }
 
 message LimitParameter {
@@ -132,4 +136,40 @@ message GlobalMetadataEntry {
 message GetGlobalMetadataRequest {}
 message GetGlobalMetadataResponse {
   GlobalMetadata metadata = 1;
+}
+
+message InfoIndexPartitionRequest {
+  uint32 db_num = 1;
+  string index_name = 2;
+}
+
+enum FanoutErrorType {
+  OK = 0;
+  INDEX_NAME_ERROR = 1;
+  INCONSISTENT_STATE_ERROR = 2;
+  COMMUNICATION_ERROR = 3;
+}
+
+message IndexFingerprintVersion {
+  uint64 fingerprint = 1;
+  uint32 version = 2;
+}
+
+message InfoIndexPartitionResponse {
+  bool exists = 1;
+  string index_name = 2;
+  uint64 num_docs = 3;
+  uint64 num_records = 4;
+  uint64 hash_indexing_failures = 5;
+  uint64 backfill_scanned_count = 6;
+  uint64 backfill_db_size = 7;
+  uint64 backfill_inqueue_tasks = 8;
+  float backfill_complete_percent = 9;
+  bool backfill_in_progress = 10;
+  uint64 mutation_queue_size = 11;
+  uint64 recent_mutations_queue_delay = 12;
+  string state = 13;
+  string error = 14;
+  optional IndexFingerprintVersion index_fingerprint_version = 15;
+  FanoutErrorType error_type = 16;
 }

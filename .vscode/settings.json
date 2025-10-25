@@ -4,7 +4,7 @@
     "terminal.integrated.defaultProfile.osx": "bash",
     "clangd.path": "/usr/bin/clangd",
     "C_Cpp.codeAnalysis.runAutomatically": true,
-    "editor.formatOnSave": false,
+    "editor.formatOnSave": true,
     "C_Cpp.intelliSenseEngine": "disabled",
     "C_Cpp.codeAnalysis.clangTidy.enabled": true,
     "C_Cpp.codeAnalysis.clangTidy.useBuildPath": true,

@@ -21,6 +21,7 @@
 #include "absl/strings/str_cat.h"
 #include "hnswlib.h"
 #include "iostream.h"
+#include "src/metrics.h"
 #include "third_party/hnswlib/index.pb.h"
 #include "visited_list_pool.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -185,6 +186,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       }
       linkLists_->clear();
     }
+    valkey_search::Metrics::GetStats().reclaimable_memory -=
+        num_deleted_ * vector_size_;
     cur_element_count_ = 0;
     visited_list_pool_.reset(nullptr);
   }
@@ -344,6 +347,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   searchBaseLayerST(
       tableint ep_id, const void *data_point, size_t ef,
       BaseFilterFunctor *isIdAllowed = nullptr,
+      BaseCancellationFunctor *isCancelled = nullptr,  // VALKEYSEARCH
       BaseSearchStopCondition<dist_t> *stop_condition = nullptr) const {
     VisitedList *vl = visited_list_pool_->getFreeVisitedList();
     vl_type *visited_array = vl->mass;
@@ -386,6 +390,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       if (bare_bone_search) {
         flag_stop_search = candidate_dist > lowerBound;
       } else {
+        if (isCancelled && isCancelled->isCancelled()) { // VALKEYSEARCH
+          flag_stop_search = true; // VALKEYSEARCH
+        } else // VALKEYSEARCH
         if (stop_condition) {
           flag_stop_search =
               stop_condition->should_stop_search(candidate_dist, lowerBound);
@@ -897,6 +904,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     for (size_t i = 0; i < cur_element_count_; i++) {
       if (isMarkedDeleted(i)) {
         num_deleted_ += 1;
+        valkey_search::Metrics::GetStats().reclaimable_memory += vector_size_;
         if (allow_replace_deleted_) {
           deleted_elements.insert(i);
         }
@@ -963,6 +971,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       unsigned char *ll_cur = ((unsigned char *)get_linklist0(internalId)) + 2;
       *ll_cur |= DELETE_MARK;
       num_deleted_ += 1;
+      valkey_search::Metrics::GetStats().reclaimable_memory += vector_size_;
       if (allow_replace_deleted_) {
         std::unique_lock<std::mutex> lock_deleted_elements(
             deleted_elements_lock);
@@ -1006,6 +1015,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       unsigned char *ll_cur = ((unsigned char *)get_linklist0(internalId)) + 2;
       *ll_cur &= ~DELETE_MARK;
       num_deleted_ -= 1;
+      valkey_search::Metrics::GetStats().reclaimable_memory -= vector_size_;
       if (allow_replace_deleted_) {
         std::unique_lock<std::mutex> lock_deleted_elements(
             deleted_elements_lock);
@@ -1298,15 +1308,15 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       label_lookup_[label] = cur_c;
     }
 
+    std::unique_lock<std::mutex> templock(global);
+    int maxlevelcopy = maxlevel_;
     std::unique_lock<std::mutex> lock_el(link_list_locks_[cur_c]);
     int curlevel = getRandomLevel(mult_);
     if (level > 0) curlevel = level;
-
+    if (curlevel <= maxlevelcopy) {
+      templock.unlock();
+    }
     element_levels_[cur_c] = curlevel;
-
-    std::unique_lock<std::mutex> templock(global);
-    int maxlevelcopy = maxlevel_;
-    if (curlevel <= maxlevelcopy) templock.unlock();
     tableint currObj = enterpoint_node_;
     tableint enterpoint_copy = enterpoint_node_;
 
@@ -1392,13 +1402,17 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   }
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
       const void *query_data, size_t k,
-      BaseFilterFunctor *isIdAllowed = nullptr) const {
-    return searchKnn(query_data, k, std::nullopt, isIdAllowed);
+      BaseFilterFunctor *isIdAllowed = nullptr,
+      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
+    ) const {
+    return searchKnn(query_data, k, std::nullopt, isIdAllowed, isCancelled);
   }
 
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
       const void *query_data, size_t k, std::optional<size_t> ef_runtime,
-      BaseFilterFunctor *isIdAllowed = nullptr) const {
+      BaseFilterFunctor *isIdAllowed = nullptr,
+      BaseCancellationFunctor *isCancelled = nullptr // VALKEYSEARCH
+    ) const {
     std::priority_queue<std::pair<dist_t, labeltype>> result;
     if (cur_element_count_ == 0) return result;
 
@@ -1438,15 +1452,15 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         std::vector<std::pair<dist_t, tableint>>,
                         CompareByFirst>
         top_candidates;
-    bool bare_bone_search = !num_deleted_ && !isIdAllowed;
+    bool bare_bone_search = !num_deleted_ && !isIdAllowed && !isCancelled; // VALKEYSEARCH
     if (bare_bone_search) {
       top_candidates = searchBaseLayerST<true>(
           currObj, query_data, std::max(ef_runtime.value_or(ef_), k),
-          isIdAllowed);
+          isIdAllowed, isCancelled);
     } else {
       top_candidates = searchBaseLayerST<false>(
           currObj, query_data, std::max(ef_runtime.value_or(ef_), k),
-          isIdAllowed);
+          isIdAllowed, isCancelled);
     }
 
     while (top_candidates.size() > k) {
@@ -1504,7 +1518,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         CompareByFirst>
         top_candidates;
     top_candidates = searchBaseLayerST<false>(currObj, query_data, 0,
-                                              isIdAllowed, &stop_condition);
+                                              isIdAllowed, nullptr, &stop_condition);
 
     size_t sz = top_candidates.size();
     result.resize(sz);

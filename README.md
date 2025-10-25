@@ -48,6 +48,24 @@ valkey-search uses a **hybrid approach** with a query planner that selects the m
 - **Pre-filtering**
 - **Inline-filtering:** Filters results during the similarity search process.
 
+## Skip Index on RDB Load
+
+valkey-search includes an operational feature to mitigate issues in indexes. If set to true, index schema is loaded from rdb, but indexes are not loaded, they are created empty and will be re-filled by the backfill process.
+
+### Configuration
+
+The config is non-modifiable and should be provided to search module on load.
+```sh
+valkey-server --loadmodule /path/to/libsearch.so --skip-rdb-load yes
+```
+
+### Benefits
+
+- **Index consistency**: Recover from corrupted or inconsistent vector indexes
+- **Deleted Memory reclaim**: If index has many deleted vectors rebuilding the index during startup will free this memory
+
+When enabled, vector indexes are rebuilt via the backfill process while non-vector indexes (TAG, NUMERIC) continue to work immediately. 
+
 ## Build Instructions
 
 ### Install basic tools

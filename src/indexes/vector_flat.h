@@ -23,6 +23,7 @@
 #include "src/attribute_data_type.h"
 #include "src/indexes/vector_base.h"
 #include "src/rdb_serialization.h"
+#include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
 #include "third_party/hnswlib/bruteforce.h"
 #include "third_party/hnswlib/hnswlib.h"
@@ -57,6 +58,7 @@ class VectorFlat : public VectorBase {
   }
   absl::StatusOr<std::deque<Neighbor>> Search(
       absl::string_view query, uint64_t count,
+      cancel::Token& cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr)
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
 

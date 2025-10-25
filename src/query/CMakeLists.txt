@@ -57,7 +57,11 @@ target_link_libraries(search_header INTERFACE managed_pointers)
 target_link_libraries(search_header INTERFACE thread_pool)
 
 set(SRCS_FANOUT ${CMAKE_CURRENT_LIST_DIR}/fanout.cc
-                ${CMAKE_CURRENT_LIST_DIR}/fanout.h)
+                ${CMAKE_CURRENT_LIST_DIR}/fanout.h
+                ${CMAKE_CURRENT_LIST_DIR}/primary_info_fanout_operation.cc
+                ${CMAKE_CURRENT_LIST_DIR}/primary_info_fanout_operation.h
+                ${CMAKE_CURRENT_LIST_DIR}/cluster_info_fanout_operation.cc
+                ${CMAKE_CURRENT_LIST_DIR}/cluster_info_fanout_operation.h)
 
 valkey_search_add_static_library(fanout "${SRCS_FANOUT}")
 target_include_directories(fanout PUBLIC ${CMAKE_CURRENT_LIST_DIR})

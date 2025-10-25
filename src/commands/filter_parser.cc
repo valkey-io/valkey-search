@@ -21,15 +21,57 @@
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
-#include "src/valkey_search_options.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/status/status_macros.h"
 
 namespace valkey_search {
+
+namespace options {
+
+/// Register the "--query-string-depth" flag. Controls the depth of the query
+/// string parsing from the FT.SEARCH cmd.
+constexpr absl::string_view kQueryStringDepthConfig{"query-string-depth"};
+constexpr uint32_t kDefaultQueryStringDepth{1000};
+constexpr uint32_t kMinimumQueryStringDepth{1};
+static auto query_string_depth =
+    config::NumberBuilder(kQueryStringDepthConfig,   // name
+                          kDefaultQueryStringDepth,  // default size
+                          kMinimumQueryStringDepth,  // min size
+                          UINT_MAX)                  // max size
+        .WithValidationCallback(CHECK_RANGE(kMinimumQueryStringDepth, UINT_MAX,
+                                            kQueryStringDepthConfig))
+        .Build();
+
+/// Register the "query-string-terms-count" flag. Controls the size of the
+/// query string parsing from the FT.SEARCH cmd. The number of nodes in the
+/// predicate tree.
+constexpr absl::string_view kQueryStringTermsCountConfig{
+    "query-string-terms-count"};
+constexpr uint32_t kDefaultQueryTermsCount{16};
+constexpr uint32_t kMaxQueryTermsCount{32};
+static auto query_terms_count =
+    config::NumberBuilder(kQueryStringTermsCountConfig,  // name
+                          kDefaultQueryTermsCount,       // default size
+                          1,                             // min size
+                          kMaxQueryTermsCount)           // max size
+        .WithValidationCallback(
+            CHECK_RANGE(1, kMaxQueryTermsCount, kQueryStringTermsCountConfig))
+        .Build();
+
+vmsdk::config::Number& GetQueryStringDepth() {
+  return dynamic_cast<vmsdk::config::Number&>(*query_string_depth);
+}
+
+vmsdk::config::Number& GetQueryStringTermsCount() {
+  return dynamic_cast<vmsdk::config::Number&>(*query_terms_count);
+}
+
+}  // namespace options
 
 namespace {
 #if defined(__clang__)
@@ -158,9 +200,9 @@ FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
   }
   auto numeric_index =
       dynamic_cast<const indexes::Numeric*>(index.value().get());
-  return std::make_unique<query::NumericPredicate>(numeric_index, identifier,
-                                                   start, is_inclusive_start,
-                                                   end, is_inclusive_end);
+  return std::make_unique<query::NumericPredicate>(
+      numeric_index, attribute_alias, identifier, start, is_inclusive_start,
+      end, is_inclusive_end);
 }
 
 absl::StatusOr<absl::string_view> FilterParser::ParseTagString() {
@@ -193,8 +235,8 @@ FilterParser::ParseTagPredicate(const std::string& attribute_alias) {
   auto tag_index = dynamic_cast<indexes::Tag*>(index.value().get());
   VMSDK_ASSIGN_OR_RETURN(auto tag_string, ParseTagString());
   VMSDK_ASSIGN_OR_RETURN(auto parsed_tags, ParseTags(tag_string, tag_index));
-  return std::make_unique<query::TagPredicate>(tag_index, identifier,
-                                               tag_string, parsed_tags);
+  return std::make_unique<query::TagPredicate>(
+      tag_index, attribute_alias, identifier, tag_string, parsed_tags);
 }
 
 absl::Status UnexpectedChar(absl::string_view expression, size_t pos) {
@@ -300,9 +342,9 @@ std::unique_ptr<query::Predicate> WrapPredicate(
 // than 100 is expressed as [(100 inf].
 // 10. Numeric filters are inclusive. Exclusive min or max are expressed with (
 // prepended to the number, for example, [(100 (200].
-absl::StatusOr<std::unique_ptr<query::Predicate>>
-FilterParser::ParseExpression(uint32_t level) {
-  if (level++ >= options::GetQueryStringDepth()) {
+absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseExpression(
+    uint32_t level) {
+  if (level++ >= options::GetQueryStringDepth().GetValue()) {
     return absl::InvalidArgumentError("Query string is too complex");
   }
   std::unique_ptr<query::Predicate> prev_predicate;
@@ -322,6 +364,9 @@ FilterParser::ParseExpression(uint32_t level) {
             absl::StrCat("Expected ')' after expression got '",
                          expression_.substr(pos_, 1), "'. Position: ", pos_));
       }
+      if (prev_predicate) {
+        node_count_++;  // Count the ComposedPredicate Node
+      }
       prev_predicate =
           WrapPredicate(std::move(prev_predicate), std::move(predicate), negate,
                         query::LogicalOperator::kAnd);
@@ -330,25 +375,38 @@ FilterParser::ParseExpression(uint32_t level) {
         return UnexpectedChar(expression_, pos_ - 1);
       }
       VMSDK_ASSIGN_OR_RETURN(predicate, ParseExpression(level));
+      if (prev_predicate) {
+        node_count_++;  // Count the ComposedPredicate Node
+      }
       prev_predicate =
           WrapPredicate(std::move(prev_predicate), std::move(predicate), negate,
                         query::LogicalOperator::kOr);
     } else {
       VMSDK_ASSIGN_OR_RETURN(auto field_name, ParseFieldName());
       if (Match('[')) {
+        node_count_++;  // Count the NumericPredicate Node
         VMSDK_ASSIGN_OR_RETURN(predicate, ParseNumericPredicate(field_name));
       } else if (Match('{')) {
+        node_count_++;  // Count the TagPredicate Node
         VMSDK_ASSIGN_OR_RETURN(predicate, ParseTagPredicate(field_name));
       } else {
         return absl::InvalidArgumentError(
             absl::StrCat("Expected '[', '{', got '",
                          expression_.substr(pos_, 1), "'. Position: ", pos_));
       }
+      if (prev_predicate) {
+        node_count_++;  // Count the ComposedPredicate Node
+      }
       prev_predicate =
           WrapPredicate(std::move(prev_predicate), std::move(predicate), negate,
                         query::LogicalOperator::kAnd);
     }
     SkipWhitespace();
+    auto max_node_count = options::GetQueryStringTermsCount().GetValue();
+    VMSDK_RETURN_IF_ERROR(
+        vmsdk::VerifyRange(node_count_, std::nullopt, max_node_count))
+        << "Query string is too complex: max number of terms can't exceed "
+        << max_node_count;
   }
   return prev_predicate;
 }

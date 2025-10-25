@@ -22,10 +22,14 @@ else()
   target_link_libraries(concurrency PUBLIC ${GRPC_LIB})
 endif()
 
-set(SRCS_UTILS ${CMAKE_CURRENT_LIST_DIR}/utils.cc
-               ${CMAKE_CURRENT_LIST_DIR}/utils.h
+set(SRCS_UTILS
+               ${CMAKE_CURRENT_LIST_DIR}/debug.cc
+               ${CMAKE_CURRENT_LIST_DIR}/debug.h
        	       ${CMAKE_CURRENT_LIST_DIR}/info.h
-               ${CMAKE_CURRENT_LIST_DIR}/info.cc)
+               ${CMAKE_CURRENT_LIST_DIR}/info.cc
+               ${CMAKE_CURRENT_LIST_DIR}/utils.cc
+               ${CMAKE_CURRENT_LIST_DIR}/utils.h
+               )
 
 valkey_search_add_static_library(utils "${SRCS_UTILS}")
 target_include_directories(utils PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -111,6 +115,7 @@ set(SRCS_MEMORY_ALLOCATION ${CMAKE_CURRENT_LIST_DIR}/memory_allocation.cc
 
 valkey_search_add_static_library(memory_allocation "${SRCS_MEMORY_ALLOCATION}")
 target_include_directories(memory_allocation PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(memory_allocation PUBLIC memory_tracker)
 
 set(SRCS_TYPE_CONVERSIONS ${CMAKE_CURRENT_LIST_DIR}/type_conversions.h)
 
@@ -133,3 +138,9 @@ target_link_libraries(blocked_client PUBLIC utils)
 target_link_libraries(blocked_client PUBLIC module)
 target_link_libraries(blocked_client PUBLIC log)
 target_link_libraries(blocked_client PUBLIC valkey_module)
+
+set(SRCS_MEMORY_TRACKER 
+    ${CMAKE_CURRENT_LIST_DIR}/memory_tracker.cc
+    ${CMAKE_CURRENT_LIST_DIR}/memory_tracker.h)
+valkey_search_add_static_library(memory_tracker "${SRCS_MEMORY_TRACKER}")
+target_include_directories(memory_tracker PUBLIC ${CMAKE_CURRENT_LIST_DIR})

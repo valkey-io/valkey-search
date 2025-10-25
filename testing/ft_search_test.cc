@@ -29,10 +29,13 @@
 #include "gtest/gtest.h"
 #include "re2/re2.h"
 #include "src/commands/commands.h"
+#include "src/commands/ft_create_parser.h"
+#include "src/commands/ft_search_parser.h"
 #include "src/coordinator/client.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
+#include "src/metrics.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
@@ -45,6 +48,7 @@
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/thread_pool.h"
+#include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
@@ -172,7 +176,7 @@ void SendReplyTest::DoSendReplyTest(
   for (const auto &neighbor : input.neighbors) {
     neighbors.push_back(ToIndexesNeighbor(neighbor));
   }
-  auto parameters = std::make_unique<query::VectorSearchParameters>();
+  auto parameters = std::make_unique<query::SearchParameters>(10000, nullptr);
   parameters->index_schema = test_index_schema;
   parameters->attribute_alias = attribute_alias;
   parameters->score_as = vmsdk::MakeUniqueValkeyString(score_as);
@@ -457,7 +461,7 @@ class FTSearchTest : public ValkeySearchTestWithParam<
 };
 
 std::string GetNodeId(int i) {
-  return std::string(VALKEYMODULE_NODE_ID_LEN, 'a' + i);
+  return {VALKEYMODULE_NODE_ID_LEN, static_cast<char>('a' + i)};
 }
 
 TEST_P(FTSearchTest, FTSearchTests) {
@@ -501,7 +505,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
           delete[] ids;
         });
     for (size_t i = 0; i < node_ids.size(); ++i) {
-      auto node_id = node_ids[i];
+      const auto &node_id = node_ids[i];
       EXPECT_CALL(
           *kMockValkeyModule,
           GetClusterNodeInfo(testing::_, testing::StrEq(node_id), testing::_,
@@ -557,9 +561,18 @@ TEST_P(FTSearchTest, FTSearchTests) {
               OpenKey(&fake_ctx_, An<ValkeyModuleString *>(), testing::_))
       .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
   auto index_schema = CreateVectorHNSWSchema(index_name, &fake_ctx_).value();
-  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_)).Times(::testing::AnyNumber());
+  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
   auto vectors = DeterministicallyGenerateVectors(100, dimensions, 10.0);
   AddVectors(vectors);
+
+  // Capture initial metrics before starting searches
+  auto &stats = Metrics::GetStats();
+  auto &mrmw_stats = vmsdk::GetGlobalTimeSlicedMRMWStats();
+  uint64_t initial_queries = stats.time_slice_queries;
+  uint64_t initial_read_periods = mrmw_stats.read_periods;
+  uint64_t initial_read_time = mrmw_stats.read_time_microseconds;
+
   RE2 reply_regex(R"(\*3\r\n:1\r\n\+\d+\r\n\*2\r\n\+score\r\n\+.*\r\n)");
   uint64_t i = 0;
   for (auto &vector : vectors) {
@@ -613,6 +626,11 @@ TEST_P(FTSearchTest, FTSearchTests) {
       TestValkeyModule_FreeString(&fake_ctx_, cmd_arg);
     }
   }
+
+  // Verify that metrics were incremented correctly
+  EXPECT_EQ(stats.time_slice_queries, initial_queries + vectors.size());
+  EXPECT_GT(mrmw_stats.read_periods, initial_read_periods);
+  EXPECT_GT(mrmw_stats.read_time_microseconds, initial_read_time);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -643,6 +661,128 @@ INSTANTIATE_TEST_SUITE_P(
              (std::get<1>(info.param) ? "WithThreadPool"
                                       : "WithoutThreadPool") +
              "_" + (std::get<0>(info.param) ? "WithFanout" : "WithoutFanout");
+    });
+
+// Struct to hold parameters for max limit tests
+struct MaxLimitTestCase {
+  std::string test_name;
+  std::function<absl::Status()> set_limit_func;
+  std::function<absl::Status()> reset_limit_func;
+  std::vector<std::string> valid_argv;
+  std::vector<std::string> exceed_argv;
+  std::string expected_error_message;
+};
+
+class FTSearchMaxLimitTest
+    : public ValkeySearchTestWithParam<MaxLimitTestCase> {
+ public:
+  void AddVectors(const std::vector<std::vector<float>> &vectors) {
+    auto index_schema =
+        SchemaManager::Instance().GetIndexSchema(db_num, index_name);
+    VMSDK_EXPECT_OK(index_schema);
+    auto index = index_schema.value()->GetIndex("vector");
+    VMSDK_EXPECT_OK(index);
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      auto key = std::to_string(i);
+      std::string vector = std::string((char *)vectors[i].data(),
+                                       vectors[i].size() * sizeof(float));
+      auto interned_key = StringInternStore::Intern(key);
+
+      VMSDK_EXPECT_OK(index.value()->AddRecord(interned_key, vector));
+    }
+  }
+
+ protected:
+  std::shared_ptr<IndexSchema> index_schema_;
+  std::vector<std::vector<float>> vectors_;
+  const std::string index_name = "my_index";
+  int dimensions = 100;
+  int db_num = 0;
+};
+
+TEST_P(FTSearchMaxLimitTest, FTSearchMaxLimitTest) {
+  const MaxLimitTestCase &test_case = GetParam();
+
+  // Set the limit to the specified value for this test
+  VMSDK_EXPECT_OK(test_case.set_limit_func());
+
+  auto index_schema = CreateVectorHNSWSchema(index_name, &fake_ctx_).value();
+  auto vectors = DeterministicallyGenerateVectors(1, dimensions, 10.0);
+  AddVectors(vectors);
+  uint64_t i = 0;
+  for (auto &vector : vectors) {
+    ++i;
+    std::vector<ValkeyModuleString *> cmd_argv;
+    std::transform(
+        test_case.exceed_argv.begin(), test_case.exceed_argv.end(),
+        std::back_inserter(cmd_argv), [&](std::string val) {
+          if (val == "$index_name") {
+            return ValkeyModule_CreateString(&fake_ctx_, index_name.data(),
+                                             index_name.size());
+          }
+          if (val == "$embedding") {
+            return ValkeyModule_CreateString(&fake_ctx_, (char *)vector.data(),
+                                             vector.size() * sizeof(float));
+          }
+          return ValkeyModule_CreateString(&fake_ctx_, val.data(), val.size());
+        });
+    EXPECT_EQ(vmsdk::CreateCommand<FTSearchCmd>(&fake_ctx_, cmd_argv.data(),
+                                                cmd_argv.size()),
+              0);
+
+    EXPECT_EQ(fake_ctx_.reply_capture.GetReply(),
+              test_case.expected_error_message);
+
+    VMSDK_EXPECT_OK(test_case.reset_limit_func());
+
+    for (auto cmd_arg : cmd_argv) {
+      TestValkeyModule_FreeString(&fake_ctx_, cmd_arg);
+    }
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    FTSearchMaxLimitTests, FTSearchMaxLimitTest,
+    ValuesIn<MaxLimitTestCase>({
+        {
+            .test_name = "MaxKnnLimit",
+            .set_limit_func = []() { return options::GetMaxKnn().SetValue(5); },
+            .reset_limit_func =
+                []() { return options::GetMaxKnn().SetValue(1000); },
+            .valid_argv = {"FT.SEARCH", "my_index",
+                           "*=>[KNN 5 @vector $query_vector AS score]",
+                           "params", "2", "query_vector", "$embedding",
+                           "DIALECT", "2"},
+            .exceed_argv = {"FT.SEARCH", "my_index",
+                            "*=>[KNN 6 @vector $query_vector AS score]",
+                            "params", "2", "query_vector", "$embedding",
+                            "DIALECT", "2"},
+            .expected_error_message =
+                "-Invalid range: Value above maximum; KNN parameter "
+                "must be a positive integer greater than 0 and cannot exceed "
+                "5.\r\n",
+        },
+        {
+            .test_name = "MaxEfRuntimeLimit",
+            .set_limit_func =
+                []() { return options::GetMaxEfRuntime().SetValue(5); },
+            .reset_limit_func =
+                []() { return options::GetMaxEfRuntime().SetValue(100); },
+            .valid_argv =
+                {"FT.SEARCH", "my_index",
+                 "*=>[KNN 3 @vector $query_vector EF_RUNTIME 5 AS score]",
+                 "params", "2", "query_vector", "$embedding", "DIALECT", "2"},
+            .exceed_argv =
+                {"FT.SEARCH", "my_index",
+                 "*=>[KNN 3 @vector $query_vector EF_RUNTIME 6 AS score]",
+                 "params", "2", "query_vector", "$embedding", "DIALECT", "2"},
+            .expected_error_message =
+                "-Invalid range: Value above maximum; `EF_RUNTIME` must "
+                "be a positive integer greater than 0 and cannot exceed 5.\r\n",
+        },
+    }),
+    [](const TestParamInfo<MaxLimitTestCase> &info) {
+      return info.param.test_name;
     });
 
 }  // namespace

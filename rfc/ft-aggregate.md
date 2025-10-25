@@ -72,7 +72,7 @@ The standard 6 comparison operators: ==, !=, <, <=, >, >= are provided and can o
 
 The boolean operators and (&&), or (||)  and negate(!) are provided and treat numeric zero as false and all other values as true.
 
-Builtin functions are invoked with a name and a parenthesized list of arguments separated by commas. In general, arguments can be arbitraty expressions. 
+Builtin functions are invoked with a name and a parenthesized list of arguments separated by commas. In general, arguments can be arbitrary expressions. 
 
 Supported numeric functions include:
 
@@ -94,9 +94,9 @@ Supported string functions include:
 | upper(s) | Convert to upper case |
 | lower(s) | Convert to lower case |
 | startswith(s1, s2) | 1 if s2 matches the start of s1 otherwise 0 |
-| contains(s1, s2) | The number of occurences of s2 in s1 |
+| contains(s1, s2) | The number of occurrences of s2 in s1 |
 | strlen(s) | Number of bytes in the string |
-| substr(s, offset, length) | The string extraced from s starting at offset for length characters. A length of -1 means the remainder of the string |
+| substr(s, offset, length) | The string extracted from s starting at offset for length characters. A length of -1 means the remainder of the string |
 
 #### ```LIMIT``` Stage
 
@@ -104,7 +104,7 @@ The first offset records are dropped, the next num records are retained and rema
 
 #### ```SORTBY``` Stage
 
-The records in the result are sorted according using the specified properies and ordering. If the ``MAX``` clause is present then only first first num records are retained.
+The records in the result are sorted according using the specified properties and ordering. If the ``MAX``` clause is present then only first first num records are retained.
 
 #### ```GROUPBY``` Stage
 
@@ -135,4 +135,5 @@ Each element is an array of field name and value pairs.
 ### Authentication and Authorization
 
 Same security issues as with ```FT.SEARCH```
+
 

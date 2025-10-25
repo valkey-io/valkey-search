@@ -8,6 +8,7 @@
 #ifndef VALKEYSEARCH_SRC_COORDINATOR_METADATA_MANAGER_H_
 #define VALKEYSEARCH_SRC_COORDINATOR_METADATA_MANAGER_H_
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -80,8 +81,9 @@ class MetadataManager {
   absl::StatusOr<google::protobuf::Any> GetEntry(absl::string_view type_name,
                                                  absl::string_view id);
 
-  absl::Status CreateEntry(absl::string_view type_name, absl::string_view id,
-                           std::unique_ptr<google::protobuf::Any> contents);
+  absl::StatusOr<IndexFingerprintVersion> CreateEntry(
+      absl::string_view type_name, absl::string_view id,
+      std::unique_ptr<google::protobuf::Any> contents);
 
   absl::Status DeleteEntry(absl::string_view type_name, absl::string_view id);
 
@@ -106,6 +108,10 @@ class MetadataManager {
 
   void BroadcastMetadata(ValkeyModuleCtx *ctx,
                          const GlobalMetadataVersionHeader &version_header);
+
+  void DelayHandleClusterMessage(
+      ValkeyModuleCtx *ctx, const char *sender_id,
+      std::unique_ptr<GlobalMetadataVersionHeader> header);
 
   void HandleClusterMessage(ValkeyModuleCtx *ctx, const char *sender_id,
                             uint8_t type, const unsigned char *payload,
@@ -133,6 +139,9 @@ class MetadataManager {
                             SupplementalContentIter &&supplemental_iter);
   void RegisterForClusterMessages(ValkeyModuleCtx *ctx);
 
+  int64_t GetMilliSecondsSinceLastHealthyMetadata() const;
+  int64_t GetMetadataReconciliationCompletedCount() const;
+
   static bool IsInitialized();
   static void InitInstance(std::unique_ptr<MetadataManager> instance);
   static MetadataManager &Instance();
@@ -155,6 +164,8 @@ class MetadataManager {
       registered_types_;
   coordinator::ClientPool &client_pool_;
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
+  std::atomic_int64_t last_healthy_metadata_millis_{0};
+  std::atomic_int64_t metadata_reconciliation_completed_count_{0};
 };
 }  // namespace valkey_search::coordinator
 

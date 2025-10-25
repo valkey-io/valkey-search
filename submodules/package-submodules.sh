@@ -6,7 +6,11 @@ do
     arg=$1
     case $arg in
     --asan)
-        ASAN_BUILD="yes"
+        SAN_BUILD="address"
+        shift || true
+        ;;
+    --tsan)
+        SAN_BUILD="thread"
         shift || true
         ;;
     *)
@@ -15,14 +19,16 @@ do
     esac
 done
 
-if [[ "${ASAN_BUILD}" == "yes" ]]; then
-    asan_suffix="-asan"
+if [[ "${SAN_BUILD}" == "address" ]]; then
+    san_suffix="-asan"
     echo "Building with ASAN enabled"
+elif [[ "${SAN_BUILD}" == "thread" ]]; then
+    san_suffix="-tsan"
+    echo "Building with TSAN enabled"
 fi
 
-
 ROOT_DIR=$(readlink -f $(dirname $0)/..)
-BUILD_DIR=$(readlink -f $(dirname $0))/.build-release${asan_suffix}
+BUILD_DIR=$(readlink -f $(dirname $0))/.build-release${san_suffix}
 SRC_DIR=${BUILD_DIR}/.src
 INSTALL_DIR=${BUILD_DIR}/install
 
@@ -56,11 +62,11 @@ function build_submodule() {
     mkdir -p ${SRC_DIR}/${MODULE_NAME}/.build-release
     cd $_
     export CXXFLAGS="-Wno-missing-requires -Wno-attributes -Wno-deprecated -Wno-return-type -Wno-stringop-overflow -Wno-deprecated-declarations"
-    if [[ "${ASAN_BUILD}" == "1" ]]; then
-        echo "Passing ASAN flags"
-        export CXXFLAGS="-fsanitize=address ${CXXFLAGS}"
-        export CFLAGS="-fsanitize=address ${CFLAGS}"
-        export LDFLAGS="-fsanitize=address ${LDFLAGS}"
+    if [[ "${SAN_BUILD}" == "address" || "${SAN_BUILD}" == "thread" ]]; then
+        echo "Passing ${SAN_BUILD} sanatizer flags"
+        export CXXFLAGS="-fsanitize=${SAN_BUILD} ${CXXFLAGS}"
+        export CFLAGS="-fsanitize=${SAN_BUILD} ${CFLAGS}"
+        export LDFLAGS="-fsanitize=${SAN_BUILD} ${LDFLAGS}"
     fi
     cmake .. -GNinja ${CMAKE_BASE_ARGS} ${MODULE_CMAKE_ARGS}
     ninja ${INSTALL}
@@ -111,7 +117,7 @@ function get_deb_suffix() {
         distro=$(echo "$distro" | tr '[:upper:]' '[:lower:]')
     fi
 
-    echo valkey-search-deps-${distro}${asan_suffix}-${arch}
+    echo valkey-search-deps-${distro}${san_suffix}-${arch}
 }
 
 ARCH=$(get_arch_spec)
@@ -119,8 +125,8 @@ DEB_NAME=$(get_deb_suffix)
 DEB_ROOT=${BUILD_DIR}/${DEB_NAME}
 rm -fr ${DEB_ROOT}
 mkdir -p ${DEB_ROOT}/DEBIAN
-mkdir -p ${DEB_ROOT}/opt/valkey-search-deps${asan_suffix}
-cp -fr ${INSTALL_DIR}/* ${DEB_ROOT}/opt/valkey-search-deps${asan_suffix}
+mkdir -p ${DEB_ROOT}/opt/valkey-search-deps${san_suffix}
+cp -fr ${INSTALL_DIR}/* ${DEB_ROOT}/opt/valkey-search-deps${san_suffix}
 cat<<EOF > ${DEB_ROOT}/DEBIAN/control
 Package: ${DEB_NAME}
 Version: 1.0

@@ -7,6 +7,8 @@
 
 #include "src/attribute_data_type.h"
 
+#include <absl/strings/strip.h>
+
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -21,6 +23,7 @@
 #include "gtest/gtest.h"
 #include "testing/common.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -165,7 +168,8 @@ TEST_P(HashAttributeDataTypeTest, HashFetchAllRecords) {
   const FetchAllRecordsTestCase &test_case = std::get<2>(params);
   auto key = expect_exists_key ? exists_key.get() : not_exists_key.get();
   EXPECT_CALL(*kMockValkeyModule, OpenKey(&fake_ctx, testing::_, testing::_))
-      .WillOnce([&](ValkeyModuleCtx *ctx, ValkeyModuleString *key, int flags) {
+      .WillRepeatedly([&](ValkeyModuleCtx *ctx, ValkeyModuleString *key,
+                          int flags) {
         return vmsdk::ToStringView(key) == vmsdk::ToStringView(exists_key.get())
                    ? TestValkeyModule_OpenKeyDefaultImpl(&fake_ctx,
                                                          exists_key.get(), 0)
@@ -213,9 +217,13 @@ TEST_P(HashAttributeDataTypeTest, HashFetchAllRecords) {
   }
   auto identifiers = ToStringViewSet(test_case.identifiers);
   EXPECT_EQ(identifiers.size(), test_case.identifiers.size());
+  auto key_str = vmsdk::MakeUniqueValkeyString(vmsdk::ToStringView(key));
+  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+      &fake_ctx, key_str.get(),
+      VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
   auto records = hash_attribute_data_type.FetchAllRecords(
-      &fake_ctx, std::string(identifier), vmsdk::ToStringView(key),
-      identifiers);
+      &fake_ctx, std::string(identifier), key_obj.get(),
+      vmsdk::ToStringView(key), identifiers);
   if (expect_exists_key && expect_exists_identifier) {
     VMSDK_EXPECT_OK(records);
     if (records.ok()) {
@@ -272,11 +280,36 @@ INSTANTIATE_TEST_SUITE_P(
 
 class JsonAttributeDataTypeTest
     : public ValkeySearchTestWithParam<
-          ::testing::tuple<bool, FetchAllRecordsTestCase>> {
- protected:
+          ::testing::tuple<bool, bool, FetchAllRecordsTestCase>> {
+ public:
+  void SetUp() override {
+    ValkeySearchTestWithParam::SetUp();
+    key_str = vmsdk::MakeUniqueValkeyString("key");
+    key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+        &fake_ctx, key_str.get(),
+        VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+    vmsdk::SetModuleLoaded("json");
+  }
+
+  void TearDown() override {
+    key_str.reset();
+    key_obj.reset();
+    ValkeySearchTestWithParam::TearDown();
+  }
+
   ValkeyModuleCtx fake_ctx;
   JsonAttributeDataType json_attribute_data_type;
+  vmsdk::UniqueValkeyString key_str;
+  vmsdk::UniqueValkeyOpenKey key_obj;
+  const std::string query_attribute_name = "vector_json_path";
+  absl::flat_hash_map<std::string, std::string> json_path_results = {
+      {"$", "[\"res0\"]"},
+      {"json_path_results1", "[\"res1\"]"},
+      {"json_path_results2", "[\"res2\"]"}};
+  ;
 };
+
+static JsonAttributeDataTypeTest *current_test;
 
 TEST_F(JsonAttributeDataTypeTest, JsonBasic) {
   EXPECT_EQ(json_attribute_data_type.GetValkeyEventTypes(),
@@ -321,25 +354,70 @@ void CheckJsonGetRecord(
       });
 }
 
-TEST_F(JsonAttributeDataTypeTest, JsonGetRecord) {
-  absl::flat_hash_map<std::string, std::string> json_path_results{
-      {"$", "[res0]"},
-      {"json_path_results1", "res1"},
-      {"json_path_results2", "res2"}};
-  absl::flat_hash_set<std::string> identifiers{"$", "false"};
+int MyJsonSharedAPIGetValue(ValkeyModuleKey *key, const char *path,
+                            ValkeyModuleString **result) {
+  auto itr = current_test->json_path_results.find(path);
+  if (itr == current_test->json_path_results.end()) {
+    return VALKEYMODULE_ERR;
+  }
+  *result =
+      vmsdk::MakeUniqueValkeyString(absl::string_view(itr->second)).release();
+  return VALKEYMODULE_OK;
+}
+
+absl::string_view NormalizeValue(absl::string_view record) {
+  if (absl::ConsumePrefix(&record, "[")) {
+    absl::ConsumeSuffix(&record, "]");
+  }
+  if (absl::ConsumePrefix(&record, "\"")) {
+    absl::ConsumeSuffix(&record, "\"");
+  }
+  return record;
+}
+
+TEST_P(JsonAttributeDataTypeTest, JsonGetRecord) {
+  auto &params = GetParam();
+  auto use_shared_api = std::get<1>(params);
+  const FetchAllRecordsTestCase &test_case = std::get<2>(params);
+  const auto identifiers = ToStringViewSet(test_case.identifiers);
+  current_test = this;
   for (const auto &identifier : identifiers) {
+    if (use_shared_api) {
+      ResetJsonLoadedCache();
+      EXPECT_CALL(*kMockValkeyModule,
+                  GetSharedAPI(&fake_ctx, testing::StrEq("JSON_GetValue")))
+          .WillOnce([&](ValkeyModuleCtx *ctx, const char *cmd) {
+            return (void *)MyJsonSharedAPIGetValue;
+          });
+      auto record = json_attribute_data_type.GetRecord(
+          &fake_ctx, key_obj.get(), vmsdk::ToStringView(key_str.get()).data(),
+          identifier);
+      if (record.ok()) {
+        EXPECT_TRUE(json_path_results.contains(identifier));
+        auto res_str = std::string(json_path_results.find(identifier)->second);
+        EXPECT_EQ(vmsdk::ToStringView(record.value().get()),
+                  NormalizeValue(res_str));
+      } else {
+        EXPECT_FALSE(json_path_results.contains(identifier));
+        EXPECT_EQ(record.status().code(), absl::StatusCode::kNotFound);
+      }
+      continue;
+    }
+    ResetJsonLoadedCache();
     for (int module_reply_type = VALKEYMODULE_REPLY_UNKNOWN;
          module_reply_type < VALKEYMODULE_REPLY_ATTRIBUTE * 2;
          module_reply_type++) {
       CheckJsonGetRecord(fake_ctx, identifier, module_reply_type,
                          json_path_results);
-      auto record = json_attribute_data_type.GetRecord(&fake_ctx, nullptr,
-                                                       "key", identifier);
+      auto record = json_attribute_data_type.GetRecord(
+          &fake_ctx, key_obj.get(), vmsdk::ToStringView(key_str.get()).data(),
+          identifier);
       if (record.ok()) {
         EXPECT_TRUE(json_path_results.contains(identifier));
         EXPECT_EQ(module_reply_type, VALKEYMODULE_REPLY_STRING);
+        auto res_str = std::string(json_path_results.find(identifier)->second);
         EXPECT_EQ(vmsdk::ToStringView(record.value().get()),
-                  TrimBrackets(json_path_results[identifier]));
+                  NormalizeValue(res_str));
       } else {
         EXPECT_FALSE(json_path_results.contains(identifier) &&
                      module_reply_type == VALKEYMODULE_REPLY_STRING);
@@ -349,23 +427,50 @@ TEST_F(JsonAttributeDataTypeTest, JsonGetRecord) {
   }
 }
 
+std::unordered_map<std::string, std::string> NormalizeExpected(
+    const std::unordered_map<std::string, std::string> &map) {
+  auto ret = map;
+  for (const auto &entry : ret) {
+    absl::string_view value = NormalizeValue(entry.second);
+    ret[entry.first] = std::string(value);
+  }
+  return ret;
+}
+
 TEST_P(JsonAttributeDataTypeTest, JsonFetchAllRecords) {
-  absl::flat_hash_map<std::string, std::string> json_path_results{
-      {"$", "[res0]"},
-      {"json_path_results1", "[res1]"},
-      {"json_path_results2", "[res2]"}};
   ValkeyModuleCallReply reply;
   auto &params = GetParam();
   auto expect_exists_key = std::get<0>(params);
-  const FetchAllRecordsTestCase &test_case = std::get<1>(params);
-  std::string query_attribute_name = "vector_json_path";
+  auto use_shared_api = std::get<1>(params);
+  const FetchAllRecordsTestCase &test_case = std::get<2>(params);
+  const auto identifiers = ToStringViewSet(test_case.identifiers);
+  current_test = this;
+  if (use_shared_api) {
+    ResetJsonLoadedCache();
+    EXPECT_CALL(*kMockValkeyModule,
+                GetSharedAPI(&fake_ctx, testing::StrEq("JSON_GetValue")))
+        .WillOnce([&](ValkeyModuleCtx *ctx, const char *cmd) {
+          return (void *)MyJsonSharedAPIGetValue;
+        });
+    auto records = json_attribute_data_type.FetchAllRecords(
+        &fake_ctx, query_attribute_name, key_obj.get(),
+        vmsdk::ToStringView(key_str.get()).data(), identifiers);
+    if (records.ok()) {
+      EXPECT_EQ(ToStringMap(records.value()),
+                NormalizeExpected(test_case.expected_records_map));
+      return;
+    }
+    EXPECT_EQ(records.status().code(), absl::StatusCode::kNotFound);
+    return;
+  }
+  ResetJsonLoadedCache();
   for (int module_reply_type = VALKEYMODULE_REPLY_UNKNOWN;
        module_reply_type < VALKEYMODULE_REPLY_ATTRIBUTE * 2;
        module_reply_type++) {
-    EXPECT_CALL(
-        *kMockValkeyModule,
-        Call(&fake_ctx, testing::StrEq(kJsonCmd), testing::StrEq("cc"),
-             testing::StrEq("key"), testing::StrEq(query_attribute_name)))
+    EXPECT_CALL(*kMockValkeyModule,
+                Call(&fake_ctx, testing::StrEq(kJsonCmd), testing::StrEq("cc"),
+                     testing::StrEq(vmsdk::ToStringView(key_str.get()).data()),
+                     testing::StrEq(query_attribute_name)))
         .WillOnce([&](ValkeyModuleCtx *ctx, const char *cmd, const char *fmt,
                       const char *arg1,
                       const char *arg2) -> ValkeyModuleCallReply * {
@@ -392,28 +497,29 @@ TEST_P(JsonAttributeDataTypeTest, JsonFetchAllRecords) {
         }
       }
     }
-    auto identifiers = ToStringViewSet(test_case.identifiers);
     auto records = json_attribute_data_type.FetchAllRecords(
-        &fake_ctx, query_attribute_name, "key", identifiers);
+        &fake_ctx, query_attribute_name, key_obj.get(),
+        vmsdk::ToStringView(key_str.get()).data(), identifiers);
     if (records.ok()) {
       EXPECT_EQ(module_reply_type, VALKEYMODULE_REPLY_STRING);
-      EXPECT_EQ(ToStringMap(records.value()), test_case.expected_records_map);
-    } else {
-      EXPECT_FALSE(expect_exists_key &&
-                   module_reply_type == VALKEYMODULE_REPLY_STRING);
-      EXPECT_EQ(records.status().code(), absl::StatusCode::kNotFound);
+      EXPECT_EQ(ToStringMap(records.value()),
+                NormalizeExpected(test_case.expected_records_map));
+      return;
     }
+    EXPECT_FALSE(expect_exists_key &&
+                 module_reply_type == VALKEYMODULE_REPLY_STRING);
+    EXPECT_EQ(records.status().code(), absl::StatusCode::kNotFound);
   }
 }
 
 INSTANTIATE_TEST_SUITE_P(
     JsonHashAttributeDataTypeTests, JsonAttributeDataTypeTest,
     testing::Combine(
-        testing::Bool(),
+        testing::Bool(), testing::Bool(),
         testing::ValuesIn<FetchAllRecordsTestCase>({
             {
                 .test_name = "single_identifier",
-                .identifiers = {"$"},
+                .identifiers = {"$", "false"},
                 .expected_records_map = {{"$", "res0"}},
             },
             {
@@ -423,12 +529,14 @@ INSTANTIATE_TEST_SUITE_P(
                                          {"json_path_results2", "res2"}},
             },
         })),
-    [](const TestParamInfo<::testing::tuple<bool, FetchAllRecordsTestCase>>
-           &info) {
+    [](const TestParamInfo<
+        ::testing::tuple<bool, bool, FetchAllRecordsTestCase>> &info) {
       auto expect_exists_key = std::get<0>(info.param);
-      return std::get<1>(info.param).test_name + "_" +
+      auto use_shared_api = std::get<1>(info.param);
+      return std::get<2>(info.param).test_name + "_" +
              (expect_exists_key ? "expect_exists_key"
-                                : "expect_not_exists_key");
+                                : "expect_not_exists_key") +
+             "_" + (use_shared_api ? "use_shared_api" : "use_call_api");
     });
 
 }  // namespace

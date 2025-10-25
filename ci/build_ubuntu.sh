@@ -11,14 +11,35 @@ RESET='\e[0m'
 GREEN='\e[32;1m'
 RED='\e[31;1m'
 
-## Search for --asan
+san_suffix=""
+INTEGRATION_OUTPUT=""
+UNITTEST_OUTPUT=""
+## Search for --asan/--tsan
 while [ $# -gt 0 ]
 do
     arg=$1
     case $arg in
     --asan)
-        ASAN_BUILD="yes"
+        SAN_BUILD="address"
         shift || true
+        san_suffix="-asan"
+        echo "Building with ASAN enabled"
+        ;;
+    --tsan)
+        SAN_BUILD="thread"
+        shift || true
+        san_suffix="-tsan"
+        echo "Building with TSAN enabled"
+        ;;
+    --integration-output=*)
+        INTEGRATION_OUTPUT="${arg#*=}"
+        shift || true
+        echo "Integration Test Output Directory: ${INTEGRATION_OUTPUT}"
+        ;;
+    --unittest-output=*)
+        UNITTEST_OUTPUT="${arg#*=}"
+        shift || true
+        echo "Unit Test Output Directory: ${UNITTEST_OUTPUT}"
         ;;
     *)
         shift || true
@@ -26,11 +47,6 @@ do
     esac
 done
 
-asan_suffix=""
-if [[ "${ASAN_BUILD}" == "yes" ]]; then
-    asan_suffix="-asan"
-    echo "Building with ASAN enabled"
-fi
 
 function LOG_INFO() {
     printf "${GREEN}INFO ${RESET} $1\n"
@@ -59,7 +75,7 @@ function get_deb_suffix() {
         DISTRO=${DISTRO_ID}-${CODENAME}
         DISTRO=$(echo "$DISTRO" | tr '[:upper:]' '[:lower:]')
     fi
-    echo valkey-search-deps-${DISTRO}${asan_suffix}-${ARCH}.deb
+    echo valkey-search-deps-${DISTRO}${san_suffix}-${ARCH}.deb
 }
 
 function download_deb() {
@@ -71,7 +87,7 @@ function download_deb() {
 # Prepare the environment before getting started
 function prepare_env() {
     local deb_package=$(get_deb_suffix)
-    if [ ! -d /opt/valkey-search-deps${asan_suffix}/ ]; then
+    if [ ! -d /opt/valkey-search-deps${san_suffix}/ ]; then
         # Fetch the deb from github
         download_deb ${deb_package}
         LOG_INFO "Installing ${ROOT_DIR}/debs/${deb_package}"
@@ -81,11 +97,36 @@ function prepare_env() {
     fi
 }
 
+function save_integration_output() {
+    echo Saving integration test output to ${INTEGRATION_OUTPUT}
+    local result_dir=${ROOT_DIR}/.build-release${san_suffix}
+    echo Results Directory is ${result_dir}
+    cp ${result_dir}/valkey-json/build/src/libjson.so ${INTEGRATION_OUTPUT}
+    cp ${result_dir}/valkey-server/.build-release/bin/valkey-server ${INTEGRATION_OUTPUT}
+    cp ${result_dir}/libsearch.so ${INTEGRATION_OUTPUT}
+    cp -r -P ${result_dir}/integration/.valkey-test-framework ${INTEGRATION_OUTPUT}
+    mv ${INTEGRATION_OUTPUT}/.valkey-test-framework ${INTEGRATION_OUTPUT}/valkey-test-framework
+}
+
+function save_unittest_output() {
+    echo Saving unit test output to ${UNITTEST_OUTPUT}
+    local result_dir=${ROOT_DIR}/.build-release${san_suffix}
+    echo Results Directory is ${result_dir}
+    ls -l ${result_dir}/tests
+    cp -r -P ${result_dir}/tests ${UNITTEST_OUTPUT}
+    cp ${result_dir}/tests.out ${UNITTEST_OUTPUT}
+}
+
 function cleanup() {
     # This method is called just before the script exits
     local exit_code=$?
     LOG_INFO "Cleaning up before exit"
-
+    if [[ -n "$INTEGRATION_OUTPUT" ]]; then
+       save_integration_output
+    fi
+    if [[ -n "$UNITTEST_OUTPUT" ]]; then
+       save_unittest_output
+    fi
     if [[ $exit_code -ne 0 ]]; then
         LOG_ERROR "Script ended with error code ${exit_code}"
     else
@@ -94,10 +135,14 @@ function cleanup() {
 }
 
 function build_and_run_tests() {
-    local DEPS_DIR=/opt/valkey-search-deps${asan_suffix}
+    local DEPS_DIR=/opt/valkey-search-deps${san_suffix}
     local CMAKE_DIR=${DEPS_DIR}/lib/cmake
     # Let CMake find <Package>-config.cmake files by updating the CMAKE_PREFIX_PATH variable
     export CMAKE_PREFIX_PATH=${CMAKE_DIR}/protobuf:${CMAKE_DIR}/absl:${CMAKE_DIR}/grpc:${CMAKE_DIR}/GTest:${CMAKE_DIR}/utf8_range:${DEPS_DIR}
+    # enable core dumps
+    echo Enabling core dumps
+    ulimit -c unlimited
+    echo 'core.%p' | sudo tee /proc/sys/kernel/core_pattern
     (cd ${ROOT_DIR} && ./build.sh --use-system-modules --test-errors-stdout ${BUILD_SH_ARGS})
 }
 
@@ -108,3 +153,4 @@ cd ${CI_DIR}
 
 prepare_env
 build_and_run_tests
+

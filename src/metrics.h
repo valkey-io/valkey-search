@@ -27,10 +27,13 @@ class Metrics {
   ~Metrics() = default;
 
   struct Stats {
+    uint64_t reclaimable_memory{0};
     uint64_t query_successful_requests_cnt{0};
     uint64_t query_failed_requests_cnt{0};
+    uint64_t query_result_record_dropped_cnt{0};
     uint64_t query_hybrid_requests_cnt{0};
-    uint64_t query_inline_filtering_requests_cnt{0};
+    std::atomic<uint64_t> query_inline_filtering_requests_cnt{0};
+    std::atomic<uint64_t> query_prefiltering_requests_cnt{0};
     std::atomic<uint64_t> hnsw_add_exceptions_cnt{0};
     std::atomic<uint64_t> hnsw_remove_exceptions_cnt{0};
     std::atomic<uint64_t> hnsw_modify_exceptions_cnt{0};
@@ -69,6 +72,18 @@ class Metrics {
         0};
     std::atomic<uint64_t> coordinator_bytes_out{0};
     std::atomic<uint64_t> coordinator_bytes_in{0};
+
+    // Global ingestion stats (counts across all indexes)
+    std::atomic<uint64_t> ingest_hash_keys{0};
+    std::atomic<uint64_t> ingest_hash_blocked{0};
+    std::atomic<uint64_t> ingest_json_keys{0};
+    std::atomic<uint64_t> ingest_json_blocked{0};
+    std::atomic<uint64_t> ingest_field_vector{0};
+    std::atomic<uint64_t> ingest_field_numeric{0};
+    std::atomic<uint64_t> ingest_field_tag{0};
+    std::atomic<uint64_t> ingest_last_batch_size{0};
+    std::atomic<uint64_t> ingest_total_batches{0};
+    std::atomic<uint64_t> ingest_total_failures{0};
     vmsdk::LatencySampler
         coordinator_client_get_global_metadata_failure_latency{
             absl::ToInt64Nanoseconds(absl::Nanoseconds(1)),
@@ -101,6 +116,18 @@ class Metrics {
         coordinator_server_search_index_partition_success_latency{
             absl::ToInt64Nanoseconds(absl::Nanoseconds(1)),
             absl::ToInt64Nanoseconds(absl::Seconds(1)), LATENCY_PRECISION};
+    // Time Slice Mutex metrics
+    std::atomic<uint64_t> time_slice_read_periods{0};
+    std::atomic<uint64_t> time_slice_read_time{0};  // microseconds, cumulative
+    std::atomic<uint64_t> time_slice_queries{0};
+    std::atomic<uint64_t> time_slice_write_periods{0};
+    std::atomic<uint64_t> time_slice_write_time{0};  // microseconds, cumulative
+    std::atomic<uint64_t> time_slice_upserts{0};
+    std::atomic<uint64_t> time_slice_deletes{0};
+
+    std::atomic<uint64_t> info_fanout_retry_cnt{0};
+    std::atomic<uint64_t> info_fanout_fail_cnt{0};
+    std::atomic<uint64_t> pause_handle_cluster_message_round_cnt{0};
   };
   static Stats& GetStats() { return GetInstance().stats_; }
 

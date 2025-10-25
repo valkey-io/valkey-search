@@ -68,6 +68,15 @@ struct Neighbor {
     }
     return *this;
   }
+  friend std::ostream& operator<<(std::ostream& os, const Neighbor& n) {
+    os << "Key: " << n.external_id->Str() << " Dist: " << n.distance;
+    if (n.attribute_contents.has_value()) {
+      os << ' ' << *n.attribute_contents;
+    } else {
+      os << " [NoContents]";
+    }
+    return os;
+  }
 };
 
 const absl::NoDestructor<absl::flat_hash_map<
@@ -130,10 +139,10 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   }
   absl::StatusOr<InternedStringPtr> GetKeyDuringSearch(
       uint64_t internal_id) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  void AddPrefilteredKey(
+  bool AddPrefilteredKey(
       absl::string_view query, uint64_t count, const InternedStringPtr& key,
       std::priority_queue<std::pair<float, hnswlib::labeltype>>& results,
-      absl::flat_hash_set<hnswlib::labeltype>& top_keys) const;
+      absl::flat_hash_set<const char*>& top_keys) const;
   vmsdk::UniqueValkeyString NormalizeStringRecord(
       vmsdk::UniqueValkeyString record) const override;
   uint64_t GetRecordCount() const override;
@@ -155,11 +164,11 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
         dimensions_(dimensions),
         attribute_identifier_(attribute_identifier),
         attribute_data_type_(attribute_data_type)
-#ifndef ASAN_BUILD
+#ifndef SAN_BUILD
         ,
         vector_allocator_(CREATE_UNIQUE_PTR(
             FixedSizeAllocator, dimensions * sizeof(float) + 1, true))
-#endif  // !ASAN_BUILD
+#endif  // !SAN_BUILD
   {
   }
 
@@ -241,7 +250,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
 };
 
-class InlineVectorEvaluator : public query::Evaluator {
+class PrefilterEvaluator : public query::Evaluator {
  public:
   bool Evaluate(const query::Predicate& predicate,
                 const InternedStringPtr& key);

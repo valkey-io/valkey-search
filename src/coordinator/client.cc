@@ -27,8 +27,11 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/grpc_suspender.h"
 #include "src/metrics.h"
+#include "src/valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 
 namespace valkey_search::coordinator {
 
@@ -36,7 +39,7 @@ namespace valkey_search::coordinator {
 constexpr absl::string_view kRetryPolicy =
     "{\"methodConfig\" : [{"
     "   \"name\" : [{\"service\": \"valkey_search.coordinator.Coordinator\"}],"
-    "   \"waitForReady\": false,"
+    "   \"waitForReady\": true,"
     "   \"retryPolicy\": {"
     "     \"maxAttempts\": 5,"
     "     \"initialBackoff\": \"0.100s\","
@@ -47,11 +50,24 @@ constexpr absl::string_view kRetryPolicy =
     "       \"UNKNOWN\","
     "       \"RESOURCE_EXHAUSTED\","
     "       \"INTERNAL\","
-    "       \"DATA_LOSS\""
+    "       \"DATA_LOSS\","
+    "       \"NOT_FOUND\""
     "     ]"
     "    }"
     "}]}";
 // clang-format on
+
+static constexpr absl::string_view kCoordinatorQueryTimeout{
+    "coordinator-query-timeout-secs"};
+static constexpr int kCoordinatorQueryDefaultTimeout{120};
+static constexpr int kCoordinatorQueryMinTimeout{1};
+static constexpr int kCoordinatorQueryMaxTimeout{3600};
+
+static auto query_connection_timeout =
+    vmsdk::config::NumberBuilder(
+        kCoordinatorQueryTimeout, kCoordinatorQueryDefaultTimeout,
+        kCoordinatorQueryMinTimeout, kCoordinatorQueryMaxTimeout)
+        .Build();
 
 grpc::ChannelArguments& GetChannelArgs() {
   static absl::once_flag once;
@@ -76,9 +92,9 @@ std::shared_ptr<Client> ClientImpl::MakeInsecureClient(
                                       Coordinator::NewStub(channel));
 }
 
-ClientImpl::ClientImpl(vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx,
-                       absl::string_view address,
-                       std::unique_ptr<Coordinator::Stub> stub)
+ClientImpl::ClientImpl(
+    vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx,
+    absl::string_view address, std::unique_ptr<Coordinator::Stub> stub)
     : detached_ctx_(std::move(detached_ctx)),
       address_(address),
       stub_(std::move(stub)) {}
@@ -132,7 +148,7 @@ void ClientImpl::SearchIndexPartition(
   };
   auto args = std::make_unique<SearchIndexPartitionArgs>();
   args->context.set_deadline(absl::ToChronoTime(
-      absl::Now() + absl::Milliseconds(request->timeout_ms())));
+      absl::Now() + absl::Seconds(query_connection_timeout->GetValue())));
   args->callback = std::move(done);
   args->request = std::move(request);
   args->latency_sample = SAMPLE_EVERY_N(100);
@@ -161,6 +177,44 @@ void ClientImpl::SearchIndexPartition(
               .coordinator_client_search_index_partition_failure_latency
               .SubmitSample(std::move(args->latency_sample));
           // No need to count bytes on error
+        }
+      });
+}
+
+void ClientImpl::InfoIndexPartition(
+    std::unique_ptr<InfoIndexPartitionRequest> request,
+    InfoIndexPartitionCallback done, int timeout_ms) {
+  struct InfoIndexPartitionArgs {
+    ::grpc::ClientContext context;
+    std::unique_ptr<InfoIndexPartitionRequest> request;
+    InfoIndexPartitionResponse response;
+    InfoIndexPartitionCallback callback;
+    std::unique_ptr<vmsdk::StopWatch> latency_sample;
+  };
+  auto args = std::make_unique<InfoIndexPartitionArgs>();
+  args->context.set_deadline(absl::ToChronoTime(
+      absl::Now() +
+      absl::Milliseconds(options::GetFTInfoRpcTimeoutMs().GetValue())));
+  args->callback = std::move(done);
+  args->request = std::move(request);
+  args->latency_sample = SAMPLE_EVERY_N(100);
+  auto args_raw = args.release();
+  Metrics::GetStats().coordinator_bytes_out.fetch_add(
+      args_raw->request->ByteSizeLong(), std::memory_order_relaxed);
+  stub_->async()->InfoIndexPartition(
+      &args_raw->context, args_raw->request.get(), &args_raw->response,
+      // std::function is not move-only
+      [args_raw](grpc::Status s) mutable {
+        if (!vmsdk::IsMainThread()) {
+          PAUSEPOINT("fanout_remote_pausepoint");
+        }
+        GRPCSuspensionGuard guard(GRPCSuspender::Instance());
+        auto args = std::unique_ptr<InfoIndexPartitionArgs>(args_raw);
+        args->callback(s, args->response);
+        // (Optional) record metrics here
+        if (s.ok()) {
+          Metrics::GetStats().coordinator_bytes_in.fetch_add(
+              args->response.ByteSizeLong(), std::memory_order_relaxed);
         }
       });
 }

@@ -18,6 +18,14 @@
 namespace vmsdk {
 namespace config {
 
+/// Controls the modules debug mode flag. We set it here to "true" to allow
+/// Valkey to load the configurations first time when the module loaded. Once
+/// this is done, we set it back to false. If the user passes "--debug-mode yes"
+/// we will change it back to "true".
+static auto debug_mode = BooleanBuilder(kDebugMode, true).Hidden().Build();
+
+bool IsDebugModeEnabled() { return debug_mode->GetValue(); }
+
 namespace {
 
 constexpr absl::string_view kUseCoordinator = "--use-coordinator";
@@ -35,6 +43,31 @@ static int OnSetConfig(const char *config_name, T value, void *priv_data,
   auto entry = static_cast<ConfigBase<T> *>(priv_data);
   CHECK(entry) << "null private data for configuration Number entry.";
   auto res = entry->SetValue(value);  // Calls "Validate" internally
+  if (!res.ok()) {
+    if (err) {
+      *err =
+          ValkeyModule_CreateStringPrintf(nullptr, "%s", res.message().data());
+    }
+    return VALKEYMODULE_ERR;
+  }
+
+  entry->NotifyChanged();
+  return VALKEYMODULE_OK;
+}
+
+static ValkeyModuleString *OnGetStringConfig(const char *config_name,
+                                             void *priv_data) {
+  auto entry = static_cast<String *>(priv_data);
+  CHECK(entry) << "null private data";
+  return entry->GetCachedValkeyString();
+}
+
+static int OnSetStringConfig(const char *config_name, ValkeyModuleString *value,
+                             void *priv_data, ValkeyModuleString **err) {
+  auto entry = static_cast<String *>(priv_data);
+  CHECK(entry) << "null private data";
+  auto sv = vmsdk::ToStringView(value);
+  auto res = entry->SetValue(sv.data());  // Calls "Validate" internally
   if (!res.ok()) {
     if (err) {
       *err =
@@ -85,6 +118,8 @@ absl::Status ModuleConfigManager::Init(ValkeyModuleCtx *ctx) {
 absl::Status ModuleConfigManager::ParseAndLoadArgv(ValkeyModuleCtx *ctx,
                                                    ValkeyModuleString **argv,
                                                    int argc) {
+  // reset the debug mode to "false".
+  debug_mode->SetValueOrLog(false, LogLevel::kWarning);
   vmsdk::ArgsIterator iter{argv, argc};
   while (iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto key, iter.Get());
@@ -266,6 +301,30 @@ absl::Status Boolean::FromString(std::string_view value) {
     return absl::InvalidArgumentError(
         absl::StrFormat("Invalid boolean value: '%s'", value));
   }
+  return absl::OkStatus();
+}
+
+String::String(std::string_view name, std::string_view default_value)
+    : ConfigBase(name), value_(default_value) {}
+
+absl::Status String::Register(ValkeyModuleCtx *ctx) {
+  if (ValkeyModule_RegisterStringConfig(ctx,
+                                        name_.data(),       // Name
+                                        value_.c_str(),     // Default value
+                                        flags_,             // Flags
+                                        OnGetStringConfig,  // Get callback
+                                        OnSetStringConfig,  // Set callback
+                                        nullptr,  // Apply callback (optional)
+                                        this      // privdata
+                                        ) != VALKEYMODULE_OK) {
+    return absl::InternalError(
+        absl::StrCat("Failed to register String configuration entry: ", name_));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status String::FromString(std::string_view value) {
+  SetValueOrLog(value.data(), WARNING);
   return absl::OkStatus();
 }
 

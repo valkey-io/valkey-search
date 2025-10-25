@@ -229,5 +229,92 @@ TEST_F(ConfigTest, ParseArgsMissingValue) {
   FreeValkeyArgs(args);
 }
 
+TEST_F(ConfigTest, CheckStringConfig) {
+  auto str =
+      config::StringBuilder("cpu-list", "1,2,3,4")
+          .WithValidationCallback([](std::string new_val) -> absl::Status {
+            if (new_val == "5,6") {
+              return absl::OkStatus();
+            } else {
+              return absl::InvalidArgumentError("We only accept 5,6");
+            }
+          })
+          .Build();
+  auto args = vmsdk::ToValkeyStringVector("--cpu-list 5,6");
+  auto res = ModuleConfigManager::Instance().Init(&fake_ctx);
+  EXPECT_TRUE(res.ok());
+  res = ModuleConfigManager::Instance().ParseAndLoadArgv(&fake_ctx, args.data(),
+                                                         args.size());
+  EXPECT_TRUE(res.ok());
+  EXPECT_EQ(str->GetValue(), "5,6");
+
+  res = str->SetValue("7,8");
+  EXPECT_FALSE(res.ok());  // should fail validation
+  EXPECT_EQ(
+      res.code(),
+      absl::StatusCode::kInvalidArgument);  // Failure reason: invalid argument
+  FreeValkeyArgs(args);
+}
+
+template <typename Value>
+void CheckValue(std::shared_ptr<config::ConfigBase<Value>> conf,
+                bool debug_mode, Value new_value) {
+  Value old_val = conf->GetValue();
+  absl::Status st = conf->SetValue(new_value);
+  if (debug_mode) {
+    EXPECT_TRUE(st.ok());
+    EXPECT_EQ(new_value, conf->GetValue());
+  } else {
+    EXPECT_FALSE(st.ok());
+    EXPECT_TRUE(absl::IsPermissionDenied(st));
+    EXPECT_EQ(old_val, conf->GetValue());
+  }
+}
+
+TEST_F(ConfigTest, CheckDebugConfiguration) {
+  std::array<bool, 2> cases = {false, true};
+  for (auto debug_mode : cases) {
+    absl::Status st = absl::OkStatus();
+    std::string debug_mode_str = "no";
+    if (debug_mode) {
+      debug_mode_str = "yes";
+    }
+    std::stringstream ss;
+    ss << "--debug-mode " << debug_mode_str;
+    auto args = vmsdk::ToValkeyStringVector(ss.str());
+
+    auto res = ModuleConfigManager::Instance().Init(&fake_ctx);
+    EXPECT_TRUE(res.ok());
+    res = ModuleConfigManager::Instance().ParseAndLoadArgv(
+        &fake_ctx, args.data(), args.size());
+
+    EXPECT_EQ(vmsdk::config::IsDebugModeEnabled(), debug_mode);
+
+    // Check boolean
+    auto bool_config = config::BooleanBuilder("my-bool", true).Dev().Build();
+    CheckValue(bool_config, debug_mode, false);
+
+    // Check number
+    auto num_config = config::NumberBuilder("my-num", 42, 0, 100).Dev().Build();
+    CheckValue(num_config, debug_mode, 43LL);
+
+    // Check string
+    auto str_config =
+        config::StringBuilder("my-str", "hello world").Dev().Build();
+    CheckValue(str_config, debug_mode, std::string{"valkey-search"});
+
+    // Check enum
+    const std::vector<int> enum_values = {0, 1, 2};
+    const std::vector<std::string_view> enum_names = {"0", "1", "2"};
+
+    auto enum_config =
+        config::EnumBuilder("my-enum", 0, enum_names, enum_values)
+            .Dev()
+            .Build();
+    CheckValue(enum_config, debug_mode, 2);
+    FreeValkeyArgs(args);
+  }
+}
+
 }  // namespace
 }  // namespace vmsdk

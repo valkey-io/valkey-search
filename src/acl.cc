@@ -181,36 +181,6 @@ bool StringEndsWithWildCardMatch(const char *pattern, int pattern_len,
 
 namespace {
 
-bool IsAllowedCommands(
-    const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
-    absl::string_view acl_cmds) {
-  bool allowed = false;
-
-  for (const auto acl_cmd : absl::StrSplit(acl_cmds, ' ', absl::SkipEmpty())) {
-    auto cmd = absl::string_view(acl_cmd.data(), acl_cmd.size());
-    if (absl::EqualsIgnoreCase(cmd, "+@all") ||
-        absl::EqualsIgnoreCase(cmd, "allcommands")) {
-      allowed = true;
-    } else if (absl::EqualsIgnoreCase(cmd, "-@all") ||
-               absl::EqualsIgnoreCase(cmd, "nocommands")) {
-      allowed = false;
-    } else if (!acl_cmd.empty() &&
-               module_allowed_cmds.contains(
-                   absl::string_view(acl_cmd.data() + 1, acl_cmd.size() - 1))) {
-      if (cmd.starts_with('+')) {
-        allowed = true;
-      } else if (cmd.starts_with('-')) {
-        allowed = false;
-      } else {
-        // This should not happen. All ACL command expression starts with +, -,
-        // or all/no command alias.
-        CHECK(false);
-      }
-    }
-  }
-  return allowed;
-}
-
 absl::string_view CallReplyStringToStringView(ValkeyModuleCallReply *r) {
   size_t l;
   const char *r_c_str = ValkeyModule_CallReplyStringPtr(r, &l);
@@ -228,12 +198,10 @@ std::vector<absl::string_view> GetKeysWithAllowedCommands(
     const std::vector<acl::ValkeyAclGetUserReplyView> &acl_views) {
   std::vector<absl::string_view> keys;
   for (const auto &acl_view : acl_views) {
-    if (IsAllowedCommands(module_allowed_cmds, acl_view.cmds)) {
-      for (const auto acl_key :
-           absl::StrSplit(acl_view.keys, ' ', absl::SkipEmpty())) {
-        keys.insert(keys.end(),
-                    absl::string_view(acl_key.data(), acl_key.size()));
-      }
+    for (const auto acl_key :
+         absl::StrSplit(acl_view.keys, ' ', absl::SkipEmpty())) {
+      keys.insert(keys.end(),
+                  absl::string_view(acl_key.data(), acl_key.size()));
     }
   }
   return keys;
@@ -341,17 +309,20 @@ absl::Status AclPrefixCheck(
 
   // If no index prefixes are given from the module, it should have permission
   // to access ALL keys.
-  if (module_prefixes.empty() && IsPrefixAllowed("", acl_keys)) {
-    return absl::OkStatus();
+  if (module_prefixes.empty() && !IsPrefixAllowed("", acl_keys)) {
+    return absl::PermissionDeniedError(
+        "The user doesn't have a permission to execute a command");
   }
 
+  // We allow the user to execute command only if the user has permissions for
+  // ALL of the prefixes of the index
   for (const auto &module_prefix : module_prefixes) {
-    if (IsPrefixAllowed(module_prefix, acl_keys)) {
-      return absl::OkStatus();
+    if (!IsPrefixAllowed(module_prefix, acl_keys)) {
+      return absl::PermissionDeniedError(
+          "The user doesn't have a permission to execute a command");
     }
   }
-  return absl::PermissionDeniedError(
-      "The user doesn't have a permission to execute a command");
+  return absl::OkStatus();
 }
 
 absl::Status AclPrefixCheck(

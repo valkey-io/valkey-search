@@ -1,0 +1,47 @@
+name: unittests-tsan
+
+on:
+  pull_request: # This triggers the workflow for pull requests
+    branches:
+      - main    # Run tests for pull requests targeting the "main" branch
+  push:
+    branches:
+      - main    # Optional: Run tests for direct pushes to "main"
+  workflow_dispatch: # allow manual triggering
+
+concurrency:
+  group: unittests-tsan-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cmake-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Checkout the code from the repository
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    # Set up Docker to build and run the container
+    - name: Set up Docker
+      uses: docker/setup-buildx-action@v2
+
+    # Build the Docker image from the Dockerfile in your repo
+    - name: Build Docker Image
+      run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
+
+    - name: Run Tests TSAN
+      run: mkdir test-results && docker run --privileged --rm
+        --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results
+        -v "$(pwd):/workspace"
+        --user "ubuntu:ubuntu"
+        presubmit-image
+        sudo ci/build_ubuntu.sh --run-tests --tsan --unittest-output=/workspace/test-results
+      continue-on-error: true
+
+     # Upload test results as artifacts
+    - name: Upload Test Results
+      uses: actions/upload-artifact@v4
+      with:
+        name: unittest-results
+        path: test-results

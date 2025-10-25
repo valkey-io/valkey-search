@@ -6,6 +6,7 @@
 
 #include "src/indexes/text/lexer.h"
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/strings/ascii.h"
@@ -53,31 +54,23 @@ const char* GetLanguageString(data_model::Language language) {
     case data_model::LANGUAGE_ENGLISH:
       return "english";
     default:
-      return "english";
+      CHECK(false) << "Unexpected language";
   }
 }
+
+struct StemmerDeleter {
+  void operator()(sb_stemmer* stemmer) const { sb_stemmer_delete(stemmer); }
+};
+
+using StemmerPtr = std::unique_ptr<sb_stemmer, StemmerDeleter>;
+
+// Thread-local stemmer cache. Since a stemmer instance is not thread-safe,
+// stemmers will be owned by threads and shared amongst the Lexer instances.
+// Each ingestion worker thread gets a stemmer for each language it tokenizes
+// at least once.
+thread_local absl::flat_hash_map<data_model::Language, StemmerPtr> stemmers_;
 
 }  // namespace
-
-thread_local Lexer::StemmerCache Lexer::stemmer_cache_;
-
-// Clean up thread-local stemmers when the thread exits
-Lexer::StemmerCache::~StemmerCache() {
-  for (auto& [lang, stemmer] : cache_) {
-    sb_stemmer_delete(stemmer);
-  }
-}
-
-sb_stemmer* Lexer::StemmerCache::GetOrCreateStemmer(
-    data_model::Language language) {
-  auto it = cache_.find(language);
-  if (it == cache_.end()) {
-    sb_stemmer* stemmer = sb_stemmer_new(GetLanguageString(language), "UTF_8");
-    cache_[language] = stemmer;
-    return stemmer;
-  }
-  return it->second;
-}
 
 Lexer::Lexer(data_model::Language language, const std::string& punctuation,
              const std::vector<std::string>& stop_words)
@@ -93,8 +86,7 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
   }
 
   // Get or create the thread-local stemmer for this lexer's language
-  sb_stemmer* stemmer =
-      stemming_enabled ? stemmer_cache_.GetOrCreateStemmer(language_) : nullptr;
+  sb_stemmer* stemmer = stemming_enabled ? GetStemmer() : nullptr;
   std::vector<std::string> tokens;
   size_t pos = 0;
   while (pos < text.size()) {
@@ -123,6 +115,19 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
   }
 
   return tokens;
+}
+
+// Returns a thread-local cached stemmer for this lexer's language, creating it
+// on first access.
+sb_stemmer* Lexer::GetStemmer() const {
+  auto it = stemmers_.find(language_);
+  if (it == stemmers_.end()) {
+    StemmerPtr stemmer(sb_stemmer_new(GetLanguageString(language_), "UTF_8"));
+    sb_stemmer* raw_ptr = stemmer.get();
+    stemmers_[language_] = std::move(stemmer);
+    return raw_ptr;
+  }
+  return it->second.get();
 }
 
 std::string Lexer::StemWord(const std::string& word, bool stemming_enabled,

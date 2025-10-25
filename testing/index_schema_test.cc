@@ -1314,7 +1314,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   {
     // Set index schema text properties to values different than the IndexSchema
     // defaults
-    data_model::Language language = data_model::LANGUAGE_UNSPECIFIED;
+    data_model::Language language =
+        data_model::LANGUAGE_ENGLISH;  // Only one supported language right now
     std::string punctuation = ".";
     bool with_offsets = false;
     std::vector<std::string> stop_words = {"stop"};
@@ -1380,7 +1381,15 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     EXPECT_TRUE(dynamic_cast<const HashAttributeDataType *>(
         &index_schema->GetAttributeDataType()));
 
-    // Validate text schema was recreated
+    // Validate text schema properties
+    auto schema_proto = index_schema->ToProto();
+    EXPECT_EQ(schema_proto->language(), data_model::LANGUAGE_ENGLISH);
+    EXPECT_EQ(schema_proto->punctuation(), ".");
+    EXPECT_EQ(schema_proto->with_offsets(), false);
+    EXPECT_THAT(schema_proto->stop_words(),
+                testing::UnorderedElementsAre("stop"));
+
+    // Validate text index schema was recreated
     EXPECT_THAT(index_schema->GetTextIndexSchema(), testing::NotNull());
 
     // Validate text index was restored correctly

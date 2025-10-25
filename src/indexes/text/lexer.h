@@ -26,7 +26,6 @@ Tokenization Pipeline:
 
 #include <bitset>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
@@ -52,19 +51,7 @@ struct Lexer {
   std::bitset<256> punct_bitmap_;
   absl::flat_hash_set<std::string> stop_words_set_;
 
-  // Thread-local stemmer cache. Since a stemmer instance is not thread-safe,
-  // stemmers will be owned by threads and shared amongst the Lexer instances.
-  // Each ingestion worker thread gets a stemmer for each language it tokenizes
-  // at least once.
-  class StemmerCache {
-   private:
-    std::unordered_map<data_model::Language, sb_stemmer*> cache_;
-
-   public:
-    ~StemmerCache();
-    sb_stemmer* GetOrCreateStemmer(data_model::Language language);
-  };
-  static thread_local StemmerCache stemmer_cache_;
+  sb_stemmer* GetStemmer() const;
 
   std::string StemWord(const std::string& word, bool stemming_enabled,
                        uint32_t min_stem_size, sb_stemmer* stemmer) const;

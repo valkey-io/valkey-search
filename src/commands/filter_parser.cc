@@ -920,10 +920,8 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
   std::string processed_content;
   // State tracking for predicate detection
   bool starts_with_star = false;
-  bool starts_with_percent = false;
   size_t leading_percent_count = 0;
   size_t trailing_percent_count = 0;
-  bool found_content = false;
   bool ends_with_star = false;
   while (current_pos < expression_.size()) {
     char ch = expression_[current_pos];
@@ -937,28 +935,12 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
     if (backslash_count > 0) {
       bool should_escape = false;
       if (in_quotes) {
-        // if (backslash_count % 2 == 1 && lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) {
-        //   should_escape = true;
-        // } else if (backslash_count % 2 == 0 || !lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) {
-        //   processed_content.append(backslash_count / 2, '\\');
-        //   if (backslash_count % 2 == 1) processed_content.push_back('\\');
-        // }
         if (backslash_count % 2 == 0 || !lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) {
             processed_content.push_back('\\');
         } else {
             should_escape = true;
         }
       } else {
-        // if (backslash_count % 2 == 0) {
-        //   processed_content.append(backslash_count / 2, '\\');
-        // } else if (!lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) {
-        //   processed_content.append(backslash_count / 2, '\\');
-        //   if (backslash_count > 1) processed_content.push_back('\\');
-        //   break; // End token
-        // } else {
-        //   processed_content.append(backslash_count / 2, '\\');
-        //   should_escape = true;
-        // }
         if (backslash_count % 2 == 0) {
             processed_content.push_back('\\');
         } else if (!lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) {
@@ -972,7 +954,6 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
         processed_content.push_back(ch);
         ++current_pos;
         backslash_count = 0;
-        found_content = true;
         should_escape = false;
         continue;
       }
@@ -994,20 +975,10 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
           current_pos++;
           if (leading_percent_count > FUZZY_MAX_DISTANCE) break;
         }
-        starts_with_percent = true;
         continue;
       }
-      // else if (!found_content) {
-      //   // Still in leading percents, continue counting
-      //   leading_percent_count++;
-      //   current_pos++;
-      //   continue;
-      // } 
       else {
-        // NOOP IF statement. It is handled below.
-        // if (!starts_with_percent) {
-        //   break;
-        // }
+        // If there was no starting percent, we break.
         // Trailing percent - count them
         while (current_pos < expression_.size() && expression_[current_pos] == '%' && trailing_percent_count < leading_percent_count) {
           trailing_percent_count++;
@@ -1030,11 +1001,10 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
     }
     // Regular character
     processed_content.push_back(ch);
-    found_content = true;
     ++current_pos;
   }
   // Build predicate directly based on detected pattern
-  if (!in_quotes && starts_with_percent && leading_percent_count > 0) {
+  if (!in_quotes && leading_percent_count > 0) {
     if (trailing_percent_count == leading_percent_count && leading_percent_count <= FUZZY_MAX_DISTANCE) {
       if (processed_content.empty()) {
         return absl::InvalidArgumentError("Empty fuzzy token");
@@ -1045,9 +1015,6 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
       return absl::InvalidArgumentError("Invalid fuzzy '%' markers");
     }
   } else if (!in_quotes && starts_with_star) {
-    // if (trailing_percent_count > 0) {
-    //   return absl::InvalidArgumentError("Mixed wildcard and fuzzy markers");
-    // }
     if (processed_content.empty()) {
       return absl::InvalidArgumentError("Invalid wildcard '*' markers");
     }
@@ -1069,9 +1036,9 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
     if (lexer.IsStopWord(lower_content, text_index_schema->GetStopWordsSet()) || lower_content.empty()) {
       return FilterParser::TokenResult{current_pos, nullptr}; // Skip stop words
     }
-    bool should_stem = true;
+    bool should_stem = true || !in_quotes;
     auto stemmed_token = lexer.StemWord(lower_content, text_index_schema->GetStemmer(), should_stem, text_index->GetMinStemSize());
-    return FilterParser::TokenResult{current_pos, std::make_unique<query::TermPredicate>(text_index, field_mask, stemmed_token)};
+    return FilterParser::TokenResult{current_pos, std::make_unique<query::TermPredicate>(text_index, field_mask, stemmed_token, !should_stem)};
   }
 }
 
@@ -1102,6 +1069,7 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
   while (!IsEnd()) {
     char c = Peek();
     if (c == '"') {
+      VMSDK_LOG(WARNING, nullptr) << "quote detected. in_quotes: " << in_quotes;
       in_quotes = !in_quotes;
       ++pos_;
       if (in_quotes && terms.empty()) continue;
@@ -1112,6 +1080,7 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
     } 
     size_t token_start = pos_;
     VMSDK_ASSIGN_OR_RETURN(auto result, ParseTokenAndBuildPredicate(in_quotes, text_index_schema.get(), text_index, field_mask));
+    // If this happens, we are either done or were on a punctuation character.
     if (token_start == result.end_pos) {
       if (!IsEnd()) ++pos_;
       continue;
@@ -1167,6 +1136,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextGroup(
     // Parse next text atom (first or subsequent)
     VMSDK_ASSIGN_OR_RETURN(auto terms, ParseOneTextAtomIntoTerms(field_for_atom));
     for (auto& t : terms) all_terms.push_back(std::move(t));
+    // if (all_terms.size() > 1) break;
     // Only use initial_field for first atom
     current_field.clear();
   }

@@ -152,7 +152,7 @@ class TextPredicate : public Predicate {
 
 class TermPredicate : public TextPredicate {
  public:
-  TermPredicate(const indexes::Text* index, FieldMaskPredicate field_mask, std::string term);
+  TermPredicate(const indexes::Text* index, FieldMaskPredicate field_mask, std::string term, bool exact);
   // From the Index, we need to set the FieldMask. It is obtainable from the text.
   // But if no field is specified (Option-None), use all.
   const indexes::Text* GetIndex() const { return index_; }
@@ -177,6 +177,7 @@ class TermPredicate : public TextPredicate {
   // TODO: Add a field mask
   FieldMaskPredicate field_mask_;
   std::string term_;
+  bool exact_;
 };
 
 class PrefixPredicate : public TextPredicate {

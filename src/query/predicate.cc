@@ -26,12 +26,13 @@ bool NegatePredicate::Evaluate(Evaluator& evaluator) const {
 }
 
 TermPredicate::TermPredicate(const indexes::Text* index,
-                            FieldMaskPredicate field_mask, std::string term)
+                            FieldMaskPredicate field_mask, std::string term, bool exact_)
     : TextPredicate(),
       index_(index),
       // identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
       field_mask_(field_mask),
-      term_(term) {}
+      term_(term),
+      exact_(exact_) {}
 
 bool TermPredicate::Evaluate(Evaluator& evaluator) const {
   // call dynamic dispatch on the evaluator

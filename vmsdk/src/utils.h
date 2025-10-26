@@ -47,6 +47,7 @@ int StopTimerFromBackgroundThread(
     ValkeyModuleCtx *ctx, ValkeyModuleTimerID timer_id,
     absl::AnyInvocable<void(void *)> user_data_deleter);
 
+bool verifyLoadedOnlyOnce();
 void TrackCurrentAsMainThread();
 bool IsMainThread();
 inline void VerifyMainThread() { CHECK(IsMainThread()); }

@@ -241,6 +241,18 @@ TEST_P(LoadTest, load) {
         .Times(1);
   }
   if (test_case.use_coordinator) {
+    // Mock GetClusterNodesList and CLUSTER SLOTS
+    EXPECT_CALL(*kMockValkeyModule, GetClusterNodesList(testing::_, testing::_))
+        .WillRepeatedly(testing::Invoke(
+            [](ValkeyModuleCtx* ctx, size_t* numnodes) -> char** {
+              *numnodes = 0;
+              return nullptr;
+            }));
+    EXPECT_CALL(*kMockValkeyModule,
+                Call(testing::_, testing::StrEq("CLUSTER"), testing::StrEq("c"),
+                     testing::StrEq("SLOTS")))
+        .WillRepeatedly(testing::Return(nullptr));
+
     if (test_case.use_valkey_port) {
       ValkeyModuleCallReply tls_array_reply;
       ValkeyModuleCallReply tls_string_reply;

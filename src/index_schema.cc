@@ -760,7 +760,7 @@ uint64_t IndexSchema::CountRecords() const {
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   // Calculate additional array size for text-related fields only if text fields
   // exist
-  int arrSize = 24;
+  int arrSize = 42;
   if (text_index_schema_) {
     arrSize += 6;
   }

@@ -121,6 +121,7 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
   auto iter = predicate_->BuildTextIterator(this);
   return std::make_unique<text::TextFetcher>(std::move(iter));
 }
+
 }  // namespace valkey_search::indexes
 
 // Implement the TextPredicate BuildTextIterator virtual method

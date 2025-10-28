@@ -27,6 +27,16 @@ struct sb_stemmer;
 
 namespace valkey_search::indexes::text {
 
+// FT.INFO counters for text info fields
+struct TextIndexMetadata {
+  uint64_t total_positions = 0;
+  uint64_t num_unique_terms = 0;
+  uint64_t total_term_frequency = 0;
+  std::mutex mtx;
+};
+
+TextIndexMetadata& GetTextIndexMetadata();
+
 struct TextIndex {
   TextIndex() = default;
   ~TextIndex() = default;
@@ -93,7 +103,7 @@ class TextIndexSchema {
  public:
   // FT.INFO memory stats for text index
   uint64_t GetTotalPositions() const;
-  uint64_t GetNumTerms() const;
+  uint64_t GetNumUniqueTerms() const;
   uint64_t GetTotalTermFrequency() const;
   uint64_t GetPostingsMemoryUsage() const;
   uint64_t GetRadixTreeMemoryUsage() const;

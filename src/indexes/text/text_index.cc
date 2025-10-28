@@ -14,6 +14,11 @@
 
 namespace valkey_search::indexes::text {
 
+TextIndexMetadata& GetTextIndexMetadata() {
+  static TextIndexMetadata metadata;
+  return metadata;
+}
+
 namespace {
 
 std::optional<std::shared_ptr<text::Postings>> AddWordToPostings(
@@ -21,13 +26,23 @@ std::optional<std::shared_ptr<text::Postings>> AddWordToPostings(
     const InternedStringPtr& key, size_t text_field_number, uint32_t position,
     bool save_positions, uint8_t num_text_fields) {
   std::shared_ptr<text::Postings> postings;
+  bool is_new_term = false;
   if (existing.has_value()) {
     postings = existing.value();
   } else {
     postings =
         std::make_shared<text::Postings>(save_positions, num_text_fields);
+    is_new_term = true;
   }
   postings->InsertPosting(key, text_field_number, position);
+  
+  auto& metadata = GetTextIndexMetadata();
+  std::lock_guard<std::mutex> lock(metadata.mtx);
+  if (is_new_term) {
+    metadata.num_unique_terms++;
+  }
+  metadata.total_term_frequency++;
+  
   return postings;
 }
 
@@ -37,9 +52,13 @@ std::optional<std::shared_ptr<text::Postings>> RemoveKeyFromPostings(
   CHECK(existing.has_value()) << "Per-key tree became unaligned";
   auto postings = existing.value();
   postings->RemoveKey(key);
+  
   if (!postings->IsEmpty()) {
     return postings;
   } else {
+    auto& metadata = GetTextIndexMetadata();
+    std::lock_guard<std::mutex> lock(metadata.mtx);
+    metadata.num_unique_terms--;
     return std::nullopt;
   }
 }
@@ -155,60 +174,21 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
 }
 
 uint64_t TextIndexSchema::GetTotalPositions() const {
-  if (!text_index_) {
-    return 0;
-  }
-
-  uint64_t total_positions = 0;
-
-  auto word_iter = text_index_->prefix_.GetWordIterator("");
-
-  while (!word_iter.Done()) {
-    auto postings = word_iter.GetTarget();
-    if (postings) {
-      total_positions += postings->GetPositionCount();
-    }
-    word_iter.Next();
-  }
-
-  return total_positions;
+  auto& metadata = GetTextIndexMetadata();
+  std::lock_guard<std::mutex> lock(metadata.mtx);
+  return metadata.total_positions;
 }
 
-uint64_t TextIndexSchema::GetNumTerms() const {
-  if (!text_index_) {
-    return 0;
-  }
-
-  uint64_t num_terms = 0;
-
-  auto word_iter = text_index_->prefix_.GetWordIterator("");
-
-  while (!word_iter.Done()) {
-    num_terms++;
-    word_iter.Next();
-  }
-
-  return num_terms;
+uint64_t TextIndexSchema::GetNumUniqueTerms() const {
+  auto& metadata = GetTextIndexMetadata();
+  std::lock_guard<std::mutex> lock(metadata.mtx);
+  return metadata.num_unique_terms;
 }
 
 uint64_t TextIndexSchema::GetTotalTermFrequency() const {
-  if (!text_index_) {
-    return 0;
-  }
-
-  uint64_t total_term_freq = 0;
-
-  auto word_iter = text_index_->prefix_.GetWordIterator("");
-
-  while (!word_iter.Done()) {
-    auto postings = word_iter.GetTarget();
-    if (postings) {
-      total_term_freq += postings->GetTotalTermFrequency();
-    }
-    word_iter.Next();
-  }
-
-  return total_term_freq;
+  auto& metadata = GetTextIndexMetadata();
+  std::lock_guard<std::mutex> lock(metadata.mtx);
+  return metadata.total_term_frequency;
 }
 
 uint64_t TextIndexSchema::GetPostingsMemoryUsage() const {
@@ -258,7 +238,7 @@ double TextIndexSchema::GetPositionSizePerTermAvg() const {
 }
 
 double TextIndexSchema::GetTotalTextIndexSizePerTermAvg() const {
-  uint64_t num_terms = GetNumTerms();
+  uint64_t num_terms = GetNumUniqueTerms();
   if (num_terms == 0) {
     return 0.0;
   }

@@ -796,7 +796,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
 
   ValkeyModule_ReplyWithSimpleString(ctx, "num_unique_terms");
   ValkeyModule_ReplyWithLongLong(
-      ctx, text_index_schema_ ? text_index_schema_->GetNumTerms() : 0);
+      ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
 
   ValkeyModule_ReplyWithSimpleString(ctx, "num_total_terms");
   ValkeyModule_ReplyWithLongLong(
@@ -826,7 +826,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
 
   ValkeyModule_ReplyWithSimpleString(ctx, "total_postings");
   ValkeyModule_ReplyWithLongLong(
-      ctx, text_index_schema_ ? text_index_schema_->GetNumTerms() : 0);
+      ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
 
   ValkeyModule_ReplyWithSimpleString(ctx, "radix_sz_mb");
   ValkeyModule_ReplyWithCString(

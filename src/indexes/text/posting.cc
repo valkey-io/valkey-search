@@ -16,6 +16,7 @@
 
 #include "absl/log/check.h"
 #include "src/index_schema.h"
+#include "src/indexes/text/text_index.h"
 #include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/memory_allocation_overrides.h"
 
@@ -237,12 +238,33 @@ void Postings::InsertPosting(const Key& key, size_t field_index,
     auto field_mask = FieldMask::Create(impl_->num_text_fields_);
     field_mask->SetField(field_index);
     pos_map[effective_position] = std::move(field_mask);
+    
+    auto& metadata = GetTextIndexMetadata();
+    std::lock_guard<std::mutex> lock(metadata.mtx);
+    metadata.total_positions++;
   }
 }
 
 // Remove a document key and all its positions
 void Postings::RemoveKey(const Key& key) {
   IsolatedMemoryScope scope{memory_pool_};
+
+  // TODO: Naively decrementing total term frequency,  can be made more efficient by adding 
+  // total term frequency count for each position map with optimized position map implementation
+  auto it = impl_->key_to_positions_.find(key);
+  if (it != impl_->key_to_positions_.end()) {
+    uint64_t positions_to_remove = it->second.size();
+    uint64_t term_freq_to_remove = 0;
+    
+    for (const auto& [position, field_mask] : it->second) {
+      term_freq_to_remove += field_mask->CountSetFields();
+    }
+    
+    auto& metadata = GetTextIndexMetadata();
+    std::lock_guard<std::mutex> lock(metadata.mtx);
+    metadata.total_positions -= positions_to_remove;
+    metadata.total_term_frequency -= term_freq_to_remove;
+  }
 
   impl_->key_to_positions_.erase(key);
 }

@@ -722,3 +722,6 @@ class TestFullText(ValkeySearchTestCaseBase):
         print(f"  Posting Memory: {info_data['posting_sz_mb']:.4f} MB")
         print(f"  Position Memory: {info_data['position_sz_mb']:.4f} MB")
         print(f"  Radix Memory: {info_data['radix_sz_mb']:.4f} MB")
+        
+        # TODO : Add verification of cleanup after keys deleted. 
+        # Deletion pending of per_key_index, On deletion only prefix tree cleared

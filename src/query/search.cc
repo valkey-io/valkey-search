@@ -170,7 +170,9 @@ size_t EvaluateFilterAsPrimary(
   }
   if (predicate->GetType() == PredicateType::kText) {
     auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
-    auto fetcher = text_predicate->GetIndex()->Search(*text_predicate, negate);
+    // auto fetcher = text_predicate->GetIndex()->Search(*text_predicate, negate);
+    auto fetcher = std::unique_ptr<indexes::EntriesFetcherBase>(
+      static_cast<indexes::EntriesFetcherBase*>(text_predicate->Search(negate)));
     size_t size = fetcher->Size();
     entries_fetchers.push(std::move(fetcher));
     return size;

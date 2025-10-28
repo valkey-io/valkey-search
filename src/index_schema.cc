@@ -277,7 +277,7 @@ std::vector<std::string> IndexSchema::GetAllTextIdentifiers() const {
   }
   return identifiers;
 }
-
+// For reference, this is the field level index class.
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexSchema::GetFirstTextIndex() const {
   for (const auto& [alias, attribute] : attributes_) {
     auto index = attribute.GetIndex();

@@ -437,6 +437,7 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
                                       const InternedStringPtr &key) {
   vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
+
   if (text_index_schema_) {
     // Always clean up indexed words from all text attributes of the key up
     // front
@@ -450,6 +451,11 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     ProcessAttributeMutation(ctx, itr->second, key,
                              std::move(attribute_data_itr.second.data),
                              attribute_data_itr.second.deletion_type);
+  }
+  if (text_index_schema_) {
+    // TODO(Brennan): commit the token positions maps for this key after all
+    // attributes have been added
+    // - essentially commit the key
   }
 }
 

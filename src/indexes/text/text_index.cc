@@ -44,6 +44,9 @@ std::optional<std::shared_ptr<text::Postings>> RemoveKeyFromPostings(
   }
 }
 
+using PositionMap = absl::flat_hash_map<Position, std::unique_ptr<FieldMask>>;
+using TokenPositions = absl::flat_hash_map<std::string, PositionMap>;
+
 }  // namespace
 
 TextIndexSchema::TextIndexSchema(data_model::Language language,
@@ -64,57 +67,72 @@ absl::StatusOr<bool> TextIndexSchema::IndexAttributeData(
     return tokens.status();
   }
 
-  TextIndex* key_index;  // Key-specific index
-  {
-    std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
-    key_index = &per_key_text_indexes_[key];
-  }
-
-  // TODO: Once we optimize the postings object for space efficiency, it won't
-  // be cheap to incrementally update. We likely want to build the position map
-  // structure up front for each word in the key and then merge them into the
-  // trees' posting objects at the end of the key ingestion.
+  // Map tokens -> positions -> field-masks
+  TokenPositions token_positions;
   for (uint32_t position = 0; position < tokens->size(); ++position) {
-    const auto& token = (*tokens)[position];
-    const std::optional<std::string> reverse_token =
-        suffix ? std::optional<std::string>(
-                     std::string(token.rbegin(), token.rend()))
-               : std::nullopt;
-
-    // Mutate key index
-    {
-      std::lock_guard<std::mutex> key_guard(key_index->mutex_);
-      std::optional<std::shared_ptr<Postings>> new_target =
-          key_index->prefix_.MutateTarget(token, [&](auto existing) {
-            return AddWordToPostings(existing, key, text_field_number, position,
-                                     with_offsets_, num_text_fields_);
-          });
-
-      if (suffix) {
-        if (!key_index->suffix_.has_value()) {
-          key_index->suffix_.emplace();
-        }
-        key_index->suffix_.value().SetTarget(*reverse_token, new_target);
-      }
-    }
-
-    // Mutate schema index
-    {
-      std::lock_guard<std::mutex> schema_guard(text_index_->mutex_);
-      std::optional<std::shared_ptr<Postings>> new_target =
-          text_index_->prefix_.MutateTarget(token, [&](auto existing) {
-            return AddWordToPostings(existing, key, text_field_number, position,
-                                     with_offsets_, num_text_fields_);
-          });
-
-      if (suffix) {
-        if (!text_index_->suffix_.has_value()) {
-          text_index_->suffix_.emplace();
-        }
-        text_index_->suffix_.value().SetTarget(*reverse_token, new_target);
-      }
-    }
+    const auto& token = tokens.value()[position];
+    auto& positions = token_positions[token];
+    auto [pos_it, _] =
+        positions.try_emplace(position, FieldMask::Create(num_text_fields_));
+    pos_it->second->SetField(text_field_number);
   }
+
+  in_progress_key_updates_[key] = token_positions;
+
+  // TextIndex* key_index;  // Key-specific index
+  // {
+  //   std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
+  //   key_index = &per_key_text_indexes_[key];
+  // }
+
+  // // TODO: Once we optimize the postings object for space efficiency, it
+  // won't
+  // // be cheap to incrementally update. We likely want to build the position
+  // map
+  // // structure up front for each word in the key and then merge them into the
+  // // trees' posting objects at the end of the key ingestion.
+  // for (uint32_t position = 0; position < tokens->size(); ++position) {
+  //   const auto& token = (*tokens)[position];
+  //   const std::optional<std::string> reverse_token =
+  //       suffix ? std::optional<std::string>(
+  //                    std::string(token.rbegin(), token.rend()))
+  //              : std::nullopt;
+
+  //   // Mutate key index
+  //   {
+  //     std::optional<std::shared_ptr<Postings>> new_target =
+  //         key_index->prefix_.MutateTarget(token, [&](auto existing) {
+  //           return AddWordToPostings(existing, key, text_field_number,
+  //           position,
+  //                                    with_offsets_, num_text_fields_);
+  //         });
+
+  //     if (suffix) {
+  //       if (!key_index->suffix_.has_value()) {
+  //         key_index->suffix_.emplace();
+  //       }
+  //       key_index->suffix_.value().SetTarget(*reverse_token, new_target);
+  //     }
+  //   }
+
+  //   // Mutate schema index
+  //   {
+  //     std::lock_guard<std::mutex> schema_guard(text_index_->mutex_);
+  //     std::optional<std::shared_ptr<Postings>> new_target =
+  //         text_index_->prefix_.MutateTarget(token, [&](auto existing) {
+  //           return AddWordToPostings(existing, key, text_field_number,
+  //           position,
+  //                                    with_offsets_, num_text_fields_);
+  //         });
+
+  //     if (suffix) {
+  //       if (!text_index_->suffix_.has_value()) {
+  //         text_index_->suffix_.emplace();
+  //       }
+  //       text_index_->suffix_.value().SetTarget(*reverse_token, new_target);
+  //     }
+  //   }
+  // }
 
   return true;
 }
@@ -130,7 +148,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
   }
 
   if (key_index) {
-    std::lock_guard<std::mutex> main_tree_guard(text_index_->mutex_);
+    std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
 
     // Cleanup schema-level text index
     auto iter = key_index->prefix_.GetWordIterator("");

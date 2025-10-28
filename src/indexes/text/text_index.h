@@ -43,9 +43,6 @@ struct TextIndex {
   //
   RadixTree<std::shared_ptr<Postings>, false> prefix_;
   std::optional<RadixTree<std::shared_ptr<Postings>, true>> suffix_;
-
-  // TODO: develop a proper TextIndex locking scheme
-  std::mutex mutex_;
 };
 
 class TextIndexSchema {
@@ -73,6 +70,12 @@ class TextIndexSchema {
   //
   std::shared_ptr<TextIndex> text_index_ = std::make_shared<TextIndex>();
 
+  // Prevent concurrent mutations to schema-level text index
+  // TODO: develop a finer-grained TextIndex locking scheme (although building
+  // the position map outside the tree is already a step towards reducing
+  // locking contention)
+  std::mutex text_index_mutex_;
+
   //
   // To support the Delete record and the post-filtering case, there is a
   // separate table of postings that are indexed by Key.
@@ -82,10 +85,23 @@ class TextIndexSchema {
   //
   absl::node_hash_map<Key, TextIndex> per_key_text_indexes_;
 
+  // Prevent concurrent mutations to per-key text index map
+  std::mutex per_key_text_indexes_mutex_;
+
   Lexer lexer_;
 
-  // Prevent concurrent mutations to per_key_text_indexes_
-  std::mutex per_key_text_indexes_mutex_;
+  // Key updates are fanned out to each attribute's IndexBase object. Since text
+  // indexing operates at the schema-level, any new text data to insert for a
+  // key is accumulated across all attributes here and committed into the text
+  // index structures at the end.
+  // using PositionMap = absl::flat_hash_map<Position,
+  // std::unique_ptr<FieldMask>>; using TokenPositions =
+  // absl::flat_hash_map<std::string, PositionMap>;
+  absl::flat_hash_map<
+      Key, absl::flat_hash_map<
+               std::string,
+               absl::flat_hash_map<Position, std::unique_ptr<FieldMask>>>>
+      in_progress_key_updates_;
 
   // Whether to store position offsets for phrase queries
   bool with_offsets_ = false;

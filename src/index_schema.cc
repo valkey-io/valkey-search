@@ -278,14 +278,16 @@ std::vector<std::string> IndexSchema::GetAllTextIdentifiers() const {
   return identifiers;
 }
 // For reference, this is the field level index class.
-absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexSchema::GetFirstTextIndex() const {
+uint32_t IndexSchema::MinStemSizeAcrossTextIndexes() const {
+  uint32_t min_stem_size = kDefaultMinStemSize;
   for (const auto& [alias, attribute] : attributes_) {
     auto index = attribute.GetIndex();
     if (index->GetIndexerType() == indexes::IndexerType::kText) {
-      return index;
+      auto* text_index = dynamic_cast<const indexes::Text*>(index.get());
+      min_stem_size = std::min(min_stem_size, text_index->GetMinStemSize());
     }
   }
-  return absl::NotFoundError("No text index found in schema");
+  return min_stem_size;
 }
 
 absl::StatusOr<std::string> IndexSchema::GetIdentifier(

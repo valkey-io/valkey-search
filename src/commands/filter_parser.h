@@ -50,17 +50,10 @@ struct TokenResult {
 absl::StatusOr<TokenResult> ParseTokenAndBuildPredicate(
     bool in_quotes, 
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    const indexes::Text* text_index,
-    uint64_t field_mask);
-
-//   size_t FindTokenEndWithEscapes(bool in_quotes, const indexes::text::TextIndexSchema* text_index_schema);
-//   std::string ProcessEscapesInRange(size_t start, size_t end, bool in_quotes, const indexes::text::TextIndexSchema* text_index_schema);
+    uint64_t field_mask, uint32_t min_stem_size);
 
   absl::StatusOr<std::string> ResolveTextFieldOrDefault(
       const std::optional<std::string>& maybe_field);
-//   absl::StatusOr<std::unique_ptr<query::TextPredicate>>
-//   BuildSingleTextPredicate(const std::string& field_name,
-//                            absl::string_view raw_token);
   absl::StatusOr<std::unique_ptr<query::TextPredicate>>
     BuildSingleTextPredicate(const indexes::Text* text_index,
                     const indexes::text::Lexer& lexer,

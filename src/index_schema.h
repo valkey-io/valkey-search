@@ -39,6 +39,7 @@
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
+#include "src/commands/ft_create_parser.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -96,7 +97,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
       absl::string_view attribute_alias) const;
   std::vector<std::string> GetAllTextIdentifiers() const;
-  absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetFirstTextIndex() const;
+  uint32_t MinStemSizeAcrossTextIndexes() const;
   virtual absl::StatusOr<std::string> GetIdentifier(
       absl::string_view attribute_alias) const;
   absl::StatusOr<vmsdk::UniqueValkeyString> DefaultReplyScoreAs(

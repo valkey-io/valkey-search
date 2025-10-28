@@ -450,535 +450,12 @@ std::unique_ptr<query::Predicate> WrapPredicate(
 
 static const uint32_t FUZZY_MAX_DISTANCE = 3;
 
-// absl::StatusOr<std::unique_ptr<query::TextPredicate>>
-// FilterParser::BuildSingleTextPredicate(const indexes::Text* text_index,
-//                                        const indexes::text::Lexer& lexer,
-//                                        const std::optional<std::string>& field_name,
-//                                        absl::string_view raw_token) {
-//   absl::string_view token = absl::StripAsciiWhitespace(raw_token);
-//   if (token.empty()) {
-//     return absl::InvalidArgumentError("Empty text token");
-//   }
-//   VMSDK_LOG(WARNING, nullptr) << "BuildSingleTextPredicate: " << token;
-//   VMSDK_LOG(WARNING, nullptr) << "Processed BuildSingleTextPredicate: " << token;
-//   uint64_t field_mask;
-//   if (field_name.has_value()) {
-//     auto identifier = index_schema_.GetIdentifier(field_name.value()).value();
-//     filter_identifiers_.insert(identifier);
-//     field_mask = 1ULL << text_index->GetTextFieldNumber();
-//   } else {
-//     field_mask = ~0ULL;
-//     auto text_identifiers = index_schema_.GetAllTextIdentifiers();
-//     for (const auto& identifier : text_identifiers) {
-//       filter_identifiers_.insert(identifier);
-//     }
-//   }
-//   // Helper function to check if character at position is escaped
-//   auto is_escaped = [&](size_t pos) -> bool {
-//     return pos > 0 && token[pos - 1] == '\\';
-//   };
-//   // // Helper function to process escaped characters in a string
-//   // auto process_escapes = [](absl::string_view str) -> std::string {
-//   //   std::string result;
-//   //   for (size_t i = 0; i < str.size(); ++i) {
-//   //     if (str[i] != '\\') {
-//   //       result += str[i];
-//   //     }
-//   //   }
-//   //   return result;
-//   // };
-//   // --- Fuzzy ---
-//   bool starts_percent = !token.empty() && token.front() == '%' && !is_escaped(0);
-//   bool ends_percent = !token.empty() && token.back() == '%' && !is_escaped(token.size() - 1);
-//   if (starts_percent || ends_percent) {
-//     size_t lead_pct = 0;
-//     while (lead_pct < token.size() && token[lead_pct] == '%' && !is_escaped(lead_pct)) {
-//       ++lead_pct;
-//       if (lead_pct > FUZZY_MAX_DISTANCE) {
-//         return absl::InvalidArgumentError("Too many leading '%' markers");
-//       }
-//     }
-//     size_t tail_pct = 0;
-//     while (tail_pct < token.size() && token[token.size() - 1 - tail_pct] == '%' && 
-//            !is_escaped(token.size() - 1 - tail_pct)) {
-//       ++tail_pct;
-//       if (tail_pct > FUZZY_MAX_DISTANCE) {
-//         return absl::InvalidArgumentError("Too many trailing '%' markers");
-//       }
-//     }
-//     if (lead_pct || tail_pct) {
-//       if (lead_pct != tail_pct) {
-//         return absl::InvalidArgumentError("Mismatched fuzzy '%' markers");
-//       }
-//       absl::string_view core = token;
-//       core.remove_prefix(lead_pct);
-//       core.remove_suffix(tail_pct);
-      // if (core.empty()) {
-      //   return absl::InvalidArgumentError("Empty fuzzy token");
-      // }
-//       return std::make_unique<query::FuzzyPredicate>(
-//           text_index, field_mask, std::string(core), lead_pct);
-//     }
-//   }
-//   // --- Wildcard ---
-//   bool starts_star = !token.empty() && token.front() == '*' && !is_escaped(0);
-//   bool ends_star = !token.empty() && token.back() == '*' && !is_escaped(token.size() - 1);
-//   if (starts_star || ends_star) {
-//     absl::string_view core = token;
-//     if (starts_star) core.remove_prefix(1);
-//     if (ends_star && !core.empty()) core.remove_suffix(1);
-//     if (core.empty()) {
-//       return absl::InvalidArgumentError(
-//           "Wildcard token must contain at least one character besides '*'");
-//     }
-//     // std::string processed_core = process_escapes(core);
-//     if (starts_star && ends_star) {
-//       return std::make_unique<query::InfixPredicate>(
-//           text_index, field_mask, std::string(core));
-//     }
-//     if (starts_star) {
-//       return std::make_unique<query::SuffixPredicate>(text_index, field_mask, std::string(core));
-//     }
-//     return std::make_unique<query::PrefixPredicate>(text_index, field_mask, std::string(core));
-//   }
-//   // --- Term ---
-//   auto text_index_schema = text_index->GetTextIndexSchema();
-//   bool should_stem = true;
-//   std::string word(token);
-//   auto stemmed_token = lexer.StemWord(word, text_index_schema->GetStemmer(), should_stem, text_index->GetMinStemSize());
-//   return std::make_unique<query::TermPredicate>(text_index, field_mask, stemmed_token);
-// }
-
-// absl::StatusOr<std::vector<std::unique_ptr<query::TextPredicate>>>
-// FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_for_default) {
-//   // Get text index for punctuation and stop word configuration
-//   auto index = field_for_default.has_value() 
-//       ? index_schema_.GetIndex(field_for_default.value())
-//       : index_schema_.GetFirstTextIndex();
-//   if (!index.ok() || index.value()->GetIndexerType() != indexes::IndexerType::kText) {
-//     return absl::InvalidArgumentError(
-//         absl::StrCat("Index does not have any text field"));
-//   }
-//   auto* text_index = dynamic_cast<const indexes::Text*>(index.value().get());
-//   auto text_index_schema = text_index->GetTextIndexSchema();
-//   std::vector<std::unique_ptr<query::TextPredicate>> terms;
-//   indexes::text::Lexer lexer;
-//   auto push_token = [&](std::string& tok) -> absl::Status {
-//     if (tok.empty()) return absl::OkStatus();
-//     std::string lower = absl::AsciiStrToLower(tok);
-//     if (lexer.IsStopWord(lower, text_index_schema->GetStopWordsSet())) {
-//       tok.clear();
-//       return absl::OkStatus();
-//     }
-//     VMSDK_ASSIGN_OR_RETURN(auto term, BuildSingleTextPredicate(text_index, lexer, field_for_default, lower));
-//     terms.push_back(std::move(term));
-//     tok.clear();
-//     return absl::OkStatus();
-//   };
-//   size_t backslash_count = 0;
-//   std::string curr;
-//   bool escaped = false;
-//   bool in_quotes = false;
-//   while (!IsEnd()) {
-//     char c = Peek();
-//     // Handle quote termination
-//     if (c == '"' && !escaped) {
-//       in_quotes = !in_quotes;
-//       bool first_term = curr.empty() && terms.empty();
-//       ++pos_;
-//       if (in_quotes && first_term) continue;
-//       break;
-//     }
-//     // Count backslashes
-//     if (c == '\\') {
-//       backslash_count++;
-//       ++pos_;
-//       continue;
-//     }
-//     // Process accumulated backslashes
-//     if (backslash_count > 0) {
-//       if (in_quotes) {
-        // if (backslash_count % 2 == 0 || !lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())) {
-        //     curr.push_back('\\');
-        // } else {
-        //     escaped = true;
-        // }
-//       } else {
-        // if (backslash_count % 2 == 0) {
-        //     curr.push_back('\\');
-        // } else if (!lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())) {
-        //     if (backslash_count > 1) curr.push_back('\\');
-        //     break;
-        // } else {
-        //     escaped = true;
-        // }
-//       }
-//       backslash_count = 0;
-//     }
-//     // Option 1 - We could potentially delete this block since we have careful handling in the code below it.
-//     // We can set escape to false after pushing the char at the end.
-//     // Option 2 - (Recommended) We can keep this block and delete the escaped handling in the code below it.
-//     // Therefore, if we encounter * or % when we are not in quotes, handle the wildcard / fuzzy logic.
-//     if (escaped) {
-//       curr.push_back(c);
-//       escaped = false;
-//       ++pos_;
-//       continue;
-//     }
-//     // These are query syntax which are handled in the higher level parsing fns.
-//     // Break to yield back.
-//     if (!in_quotes && !escaped && (c == ')' || c == '|' || c == '(' || c == '@' || c == '-')) {
-//       break; 
-//     }
-//     // These are unhandled characters which we need to skip over.
-//     // This is done by advancing and breaking to parse as a new token.
-//     if (!in_quotes && !escaped && c != '%' && c != '*' && lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())) {
-//       ++pos_; 
-//       break;
-//     }
-//     // TODO: Test that we don't strip out valid characters in the search query.
-//     // What we use in ingestion: ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|"
-//     // IMPORTANT Note: They do not skip $ _ : characters when in quotes.
-//     if (in_quotes && !escaped && lexer.IsPunctuation(c, text_index_schema->GetPunctuationBitmap())) {
-//       VMSDK_RETURN_IF_ERROR(push_token(curr));
-//       ++pos_;
-//       continue;
-//     }
-//     // Regular character
-//     curr.push_back(c);
-//     ++pos_;
-//     // VERY IMPORTANT NOTE: This is an easy entry point to perform left to right parsing.
-//     // It might simplify escaped char handling. Especially, when implementing code to handle escaped query syntax itself.
-//     // Rules to achieve this:
-//     // 1. Identify the boundary
-//     // 2. Validate any syntax specifications. For example, fuzzy needs ensuring the distance matches on left and right.
-//     // 3. Take start and end and then pass it to a function which can build the predicate (you can decide if you want a single method,
-//     // or a specific one for each text preficate).
-
-//     // Parse Infix OR Suffix
-//     if (c == '*') {
-    
-//     }
-//     // Parse Fuzzy
-//     else if (c == '%') {
-
-//     }
-//     // Parse Term OR Prefix
-//     else {
-
-//     }
-//   }
-//   VMSDK_RETURN_IF_ERROR(push_token(curr));
-//   // TODO: In redis-search, they do not allow stop words in exact phrase
-//   return terms;
-// }
-
-
-
-
-
-
-// size_t FilterParser::FindTokenEndWithEscapes(bool in_quotes, const indexes::text::TextIndexSchema* text_index_schema) {
-//   indexes::text::Lexer lexer;
-//   size_t current_pos = pos_;
-//   size_t backslash_count = 0;
-//   bool escaped = false;
-//   size_t pct_count = 0;
-//   bool is_blackslash_punct = lexer.IsPunctuation('\\', text_index_schema->GetPunctuationBitmap());
-//   bool starts_with_star = false;
-//   while (current_pos < expression_.size()) {
-//     char ch = expression_[current_pos];
-//     if (ch == '\\') {
-//       backslash_count++;
-//       ++current_pos;
-//       continue;
-//     }
-//     if (backslash_count > 0) {
-//       if (in_quotes) {
-//         if (backslash_count % 2 == 0 || !lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) {
-//           // Keep backslash, continue
-//         } else {
-//           escaped = true;
-//         }
-//       } else {
-//         if (backslash_count % 2 == 0) {
-//           // Keep backslash, continue
-//         } else if (!lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) {
-//           break; // End token
-//         } else {
-//           escaped = true;
-//         }
-//       }
-//       backslash_count = 0;
-//     }
-//     if (escaped) {
-//       escaped = false;
-//       ++current_pos;
-//       continue;
-//     }
-//     if (ch == '"') break;
-//     if (!in_quotes && (ch == ')' || ch == '|' || ch == '(' || ch == '@' || ch == '-')) break;
-//     if (!in_quotes && ch != '%' && ch != '*' && lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) break;
-//     if (in_quotes && lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) break;
-//     // Break at fuzzy pattern boundaries
-//     if (!in_quotes && ch == '%') {
-//       // Check if we're at the end of a complete fuzzy pattern
-//       if (current_pos == pos_) {
-//         while (current_pos < expression_.size() && expression_[current_pos] == '%') {
-//           pct_count++;
-//           current_pos++;
-//           if (pct_count > FUZZY_MAX_DISTANCE) {
-//             // This is an error case.
-//             break;
-//           }
-//         }
-//         continue;
-//       }
-//       // We have a valid fuzzy start, check if current position could start another
-//       while (pct_count > 0 && current_pos < expression_.size() && expression_[current_pos] == '%') {
-//         pct_count--;
-//         current_pos++;
-//       }
-//       break;
-//     }
-//     // Can be condensed a lot.
-//     if (!in_quotes && ch == '*') {
-//       if (current_pos == pos_) {
-//         starts_with_star = true;
-//       } else {
-//         if (starts_with_star) {
-//           // Completed Infix
-//           ++current_pos;
-//           break;
-//         } else {
-//           // Completed Prefix
-//           ++current_pos;
-//           break;
-//         }
-//       }
-//     }
-//     ++current_pos;
-//   }
-//   return current_pos;
-// }
-
-// std::string FilterParser::ProcessEscapesInRange(size_t start, size_t end, bool in_quotes, const indexes::text::TextIndexSchema* text_index_schema) {
-//   indexes::text::Lexer lexer;
-//   std::string result;
-//   size_t pos = start;
-//   size_t backslash_count = 0;
-//   while (pos < end) {
-//     char ch = expression_[pos];
-//     if (ch == '\\') {
-//       backslash_count++;
-//       ++pos;
-//       continue;
-//     }
-//     if (backslash_count > 0) {
-//       if (in_quotes) {
-//         if (backslash_count % 2 == 0 || !lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap())) {
-//           result.push_back('\\');
-//         }
-//       } else {
-//         if (backslash_count % 2 == 0) {
-//           result.push_back('\\');
-//         }
-//       }
-//       backslash_count = 0;
-//     }
-//     result.push_back(ch);
-//     ++pos;
-//   }
-//   return result;
-// }
-
-// absl::StatusOr<std::vector<std::unique_ptr<query::TextPredicate>>>
-// FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_for_default) {
-//   auto index = field_for_default.has_value() 
-//       ? index_schema_.GetIndex(field_for_default.value())
-//       : index_schema_.GetFirstTextIndex();
-//   if (!index.ok() || index.value()->GetIndexerType() != indexes::IndexerType::kText) {
-//     return absl::InvalidArgumentError(
-//         absl::StrCat("Index does not have any text field"));
-//   }
-//   auto* text_index = dynamic_cast<const indexes::Text*>(index.value().get());
-//   auto text_index_schema = text_index->GetTextIndexSchema();
-//   std::vector<std::unique_ptr<query::TextPredicate>> terms;
-//   indexes::text::Lexer lexer;
-//   uint64_t field_mask;
-//   if (field_for_default.has_value()) {
-//     auto identifier = index_schema_.GetIdentifier(field_for_default.value()).value();
-//     filter_identifiers_.insert(identifier);
-//     field_mask = 1ULL << text_index->GetTextFieldNumber();
-//   } else {
-//     field_mask = ~0ULL;
-//     auto text_identifiers = index_schema_.GetAllTextIdentifiers();
-//     for (const auto& identifier : text_identifiers) {
-//       filter_identifiers_.insert(identifier);
-//     }
-//   }
-//   bool in_quotes = false;
-//   while (!IsEnd()) {
-//     char c = Peek();
-//     if (c == '"') {
-//       in_quotes = !in_quotes;
-//       ++pos_;
-//       if (in_quotes && terms.empty()) continue;
-//       break;
-//     }
-//     if (!in_quotes && (c == ')' || c == '|' || c == '(' || c == '@' || c == '-')) {
-//       break;
-//     }
-//     // Find token boundaries
-//     size_t token_start = pos_;
-//     size_t token_end = FindTokenEndWithEscapes(in_quotes, text_index_schema.get());
-//     if (token_start == token_end) {
-//       if (!IsEnd()) ++pos_;
-//       continue;
-//     }
-//     // Analyze RAW token to determine predicate type
-//     absl::string_view raw_token = expression_.substr(token_start, token_end - token_start);
-//     auto is_escaped_in_raw = [&](size_t pos) -> bool {
-//       return pos > 0 && raw_token[pos - 1] == '\\';
-//     };
-//     // Fuzzy logic - check RAW token
-//     bool starts_percent = !raw_token.empty() && raw_token.front() == '%' && !is_escaped_in_raw(0);
-//     bool ends_percent = !raw_token.empty() && raw_token.back() == '%' && !is_escaped_in_raw(raw_token.size() - 1);
-//     if (!in_quotes && (starts_percent || ends_percent)) {
-//       size_t lead_pct = 0;
-//       while (lead_pct < raw_token.size() && raw_token[lead_pct] == '%' && !is_escaped_in_raw(lead_pct)) {
-//         ++lead_pct;
-//         if (lead_pct > FUZZY_MAX_DISTANCE) break;
-//       }
-//       size_t tail_pct = 0;
-//       while (tail_pct < raw_token.size() && raw_token[raw_token.size() - 1 - tail_pct] == '%' && 
-//              !is_escaped_in_raw(raw_token.size() - 1 - tail_pct)) {
-//         ++tail_pct;
-//         if (tail_pct > FUZZY_MAX_DISTANCE) break;
-//       }
-//       // Need to handle mismatched distance.
-//       if (lead_pct && tail_pct && lead_pct == tail_pct && lead_pct <= FUZZY_MAX_DISTANCE) {
-//         // Process escapes only for core content
-//         std::string core = ProcessEscapesInRange(token_start + lead_pct, token_end - tail_pct, in_quotes, text_index_schema.get());
-//         if (core.empty()) {
-//           return absl::InvalidArgumentError("Empty fuzzy token");
-//         }
-//         std::string lower_core = absl::AsciiStrToLower(core);
-//         terms.push_back(std::make_unique<query::FuzzyPredicate>(text_index, field_mask, lower_core, lead_pct));
-//         pos_ = token_end;
-//         break;
-//       } else {
-//         return absl::InvalidArgumentError("Invalid fuzzy '%' markers");
-//       }
-//     }
-//     // Wildcard logic - check RAW token
-//     bool starts_star = !raw_token.empty() && raw_token.front() == '*' && !is_escaped_in_raw(0);
-//     bool ends_star = !raw_token.empty() && raw_token.back() == '*' && !is_escaped_in_raw(raw_token.size() - 1);
-//     if (!in_quotes && (starts_star || ends_star)) {
-//       size_t prefix_len = starts_star ? 1 : 0;
-//       size_t suffix_len = ends_star ? 1 : 0;
-//       VMSDK_LOG(WARNING, nullptr) << "wildcard token: " << raw_token << " starts_star: " << starts_star << " ends_star: " << ends_star;
-//       if (raw_token.size() > prefix_len + suffix_len) {
-//         // Process escapes only for core content
-//         std::string core = ProcessEscapesInRange(token_start + prefix_len, token_end - suffix_len, in_quotes, text_index_schema.get());
-//         std::string lower_core = absl::AsciiStrToLower(core);
-//         if (starts_star && ends_star) {
-//           terms.push_back(std::make_unique<query::InfixPredicate>(text_index, field_mask, lower_core));
-//         } else if (starts_star) {
-//           terms.push_back(std::make_unique<query::SuffixPredicate>(text_index, field_mask, lower_core));
-//         } else {
-//           terms.push_back(std::make_unique<query::PrefixPredicate>(text_index, field_mask, lower_core));
-//         }
-//         pos_ = token_end;
-//         break;
-//       } else {
-//         return absl::InvalidArgumentError("Invalid wildcard '*' markers");
-//       }
-//     }
-//     // Term - process entire token
-//     std::string processed_token = ProcessEscapesInRange(token_start, token_end, in_quotes, text_index_schema.get());
-//     std::string lower = absl::AsciiStrToLower(processed_token);
-//     if (!lexer.IsStopWord(lower, text_index_schema->GetStopWordsSet()) && !lower.empty()) {
-//       bool should_stem = true;
-//       auto stemmed_token = lexer.StemWord(lower, text_index_schema->GetStemmer(), should_stem, text_index->GetMinStemSize());
-//       terms.push_back(std::make_unique<query::TermPredicate>(text_index, field_mask, stemmed_token));
-//     }
-//     pos_ = token_end;
-//   }
-//   return terms;
-// }
-
-// TODO:
-// Remove this function once we flatten AND and OR, and delete ProximityAND.
-// absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextGroup(
-//     const std::string& initial_field) {
-//   std::vector<std::unique_ptr<query::TextPredicate>> all_terms;
-//   std::vector<std::unique_ptr<query::Predicate>> extra_terms;
-//   std::string current_field = initial_field;
-//   while (!IsEnd()) {
-//     SkipWhitespace();
-//     if (IsEnd()) break;
-//     char c = Peek();
-//     // Stop text group if next is OR/Negate
-//     if (c == '|' || c == '-') break;
-//     // Currently, parenthesis is not included in Proximity predicate. This needs
-//     // to be addressed.
-//     if (c == '(' || c == ')') break;
-//     std::optional<std::string> field_for_atom;
-//     if (!current_field.empty()) {
-//       field_for_atom = current_field;
-//     }
-//     // Field override or numeric/tag
-//     if (c == '@') {
-//       VMSDK_ASSIGN_OR_RETURN(current_field, ParseFieldName());
-//       field_for_atom = current_field;
-//       SkipWhitespace();
-//       if (!IsEnd()) {
-//         if (Match('[')) {
-//           VMSDK_ASSIGN_OR_RETURN(auto numeric,
-//                                  ParseNumericPredicate(current_field));
-//           extra_terms.push_back(std::move(numeric));
-//           continue;
-//         } else if (Match('{')) {
-//           VMSDK_ASSIGN_OR_RETURN(auto tag, ParseTagPredicate(current_field));
-//           extra_terms.push_back(std::move(tag));
-//           continue;
-//         }
-//       } else {
-//         return absl::InvalidArgumentError("Invalid query string");
-//       }
-//     }
-//     // Parse next text atom (first or subsequent)
-//     VMSDK_ASSIGN_OR_RETURN(auto terms, ParseOneTextAtomIntoTerms(field_for_atom));
-//     for (auto& t : terms) all_terms.push_back(std::move(t));
-//     // Only use initial_field for first atom
-//     current_field.clear();
-//   }
-//   // Build main predicate from text terms
-//   std::unique_ptr<query::Predicate> prox;
-//   if (all_terms.size() == 1) {
-//     prox = std::move(all_terms[0]);
-//   } else if (!all_terms.empty()) {
-//     prox = std::make_unique<query::ProximityPredicate>(
-//         std::move(all_terms), /*slop=*/0, /*inorder=*/true);
-//   } else {
-//     return absl::InvalidArgumentError("Invalid query string");
-//   }
-//   // Append numeric/tag predicates
-//   for (auto& extra : extra_terms) {
-//     bool neg = false;
-//     prox = WrapPredicate(std::move(prox), std::move(extra), neg,
-//                          query::LogicalOperator::kAnd);
-//   }
-//   return prox;
-// }
-
 absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredicate(
     bool in_quotes, 
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    const indexes::Text* text_index,
-    uint64_t field_mask) {
+    uint64_t field_mask, uint32_t min_stem_size) {
   indexes::text::Lexer lexer;
+  // const auto& lexer = text_index_schema->GetLexer();
   size_t current_pos = pos_;
   size_t backslash_count = 0;
   std::string processed_content;
@@ -1084,6 +561,9 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
     if (processed_content.empty()) {
       return absl::InvalidArgumentError("Invalid wildcard '*' markers");
     }
+    if (!text_index_schema->GetTextIndex()->suffix_.has_value()) {
+      return absl::InvalidArgumentError("Index created without Suffix Trie");
+    }
     std::string lower_content = absl::AsciiStrToLower(processed_content);
     if (ends_with_star) {
       return FilterParser::TokenResult{current_pos, std::make_unique<query::InfixPredicate>(text_index_schema, field_mask, lower_content)};
@@ -1104,34 +584,37 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
     if (remove_stopwords && (lexer.IsStopWord(lower_content, text_index_schema->GetStopWordsSet()) || lower_content.empty())) {
       return FilterParser::TokenResult{current_pos, nullptr}; // Skip stop words
     }
-    auto stemmed_token = lexer.StemWord(lower_content, text_index_schema->GetStemmer(), !exact, text_index->GetMinStemSize());
+    auto stemmed_token = lexer.StemWord(lower_content, text_index_schema->GetStemmer(), !exact, min_stem_size);
     return FilterParser::TokenResult{current_pos, std::make_unique<query::TermPredicate>(text_index_schema, field_mask, stemmed_token, exact)};
   }
 }
 
 absl::StatusOr<std::unique_ptr<query::Predicate>>
-// absl::StatusOr<std::vector<std::unique_ptr<query::TextPredicate>>>
 FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_for_default) {
-  auto index = field_for_default.has_value() 
-      ? index_schema_.GetIndex(field_for_default.value())
-      : index_schema_.GetFirstTextIndex();
-  if (!index.ok() || index.value()->GetIndexerType() != indexes::IndexerType::kText) {
+  auto text_index_schema = index_schema_.GetTextIndexSchema();
+  if (!text_index_schema) {
     return absl::InvalidArgumentError("Index does not have any text field");
   }
-  auto* text_index = dynamic_cast<const indexes::Text*>(index.value().get());
-  auto text_index_schema = text_index->GetTextIndexSchema();
   std::vector<std::unique_ptr<query::TextPredicate>> terms;
   uint64_t field_mask;
+  uint32_t min_stem_size;
   if (field_for_default.has_value()) {
+    auto index = index_schema_.GetIndex(field_for_default.value());
+    if (!index.ok() || index.value()->GetIndexerType() != indexes::IndexerType::kText) {
+      return absl::InvalidArgumentError("Index does not have any text field");
+    }
+    auto* text_index = dynamic_cast<const indexes::Text*>(index.value().get());
     auto identifier = index_schema_.GetIdentifier(field_for_default.value()).value();
     filter_identifiers_.insert(identifier);
     field_mask = 1ULL << text_index->GetTextFieldNumber();
+    min_stem_size = text_index->GetMinStemSize();
   } else {
-    field_mask = ~0ULL;
     auto text_identifiers = index_schema_.GetAllTextIdentifiers();
     for (const auto& identifier : text_identifiers) {
       filter_identifiers_.insert(identifier);
     }
+    field_mask = ~0ULL;
+    min_stem_size = index_schema_.MinStemSizeAcrossTextIndexes();
   }
   bool in_quotes = false;
   while (!IsEnd()) {
@@ -1155,7 +638,7 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
       break;
     } 
     size_t token_start = pos_;
-    VMSDK_ASSIGN_OR_RETURN(auto result, ParseTokenAndBuildPredicate(in_quotes, text_index_schema, text_index, field_mask));
+    VMSDK_ASSIGN_OR_RETURN(auto result, ParseTokenAndBuildPredicate(in_quotes, text_index_schema, field_mask, min_stem_size));
     // If this happens, we are either done or were on a punctuation character.
     if (token_start == result.end_pos) {
       ++pos_;
@@ -1175,6 +658,9 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
       std::move(terms), /*slop=*/0, /*inorder=*/true);
     node_count_ += terms.size(); 
   } else {
+    if (terms.empty()) {
+      return absl::InvalidArgumentError("Empty text atom");
+    }
     pred = std::move(terms[0]);
   }
   return pred;

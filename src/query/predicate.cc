@@ -29,7 +29,6 @@ TermPredicate::TermPredicate(std::shared_ptr<indexes::text::TextIndexSchema> tex
                             FieldMaskPredicate field_mask, std::string term, bool exact_)
     : TextPredicate(),
       text_index_schema_(text_index_schema),
-      // identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
       field_mask_(field_mask),
       term_(term),
       exact_(exact_) {}
@@ -48,8 +47,6 @@ PrefixPredicate::PrefixPredicate(std::shared_ptr<indexes::text::TextIndexSchema>
                             FieldMaskPredicate field_mask, std::string term)
     : TextPredicate(),
       text_index_schema_(text_index_schema),
-      // identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
-      // alias_(alias),
       field_mask_(field_mask),
       term_(term) {}
 
@@ -66,8 +63,6 @@ SuffixPredicate::SuffixPredicate(std::shared_ptr<indexes::text::TextIndexSchema>
                             FieldMaskPredicate field_mask, std::string term)
     : TextPredicate(),
       text_index_schema_(text_index_schema),
-      // identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
-      // alias_(alias),
       field_mask_(field_mask),
       term_(term) {}
 
@@ -84,8 +79,6 @@ InfixPredicate::InfixPredicate(std::shared_ptr<indexes::text::TextIndexSchema> t
                             FieldMaskPredicate field_mask, std::string term)
     : TextPredicate(),
       text_index_schema_(text_index_schema),
-      // identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
-      // alias_(alias),
       field_mask_(field_mask),
       term_(term) {}
 
@@ -103,8 +96,6 @@ FuzzyPredicate::FuzzyPredicate(std::shared_ptr<indexes::text::TextIndexSchema> t
                                uint32_t distance)
     : TextPredicate(),
       text_index_schema_(text_index_schema),
-      // identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
-      // alias_(alias),
       field_mask_(field_mask),
       term_(term),
       distance_(distance) {}

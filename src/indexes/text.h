@@ -39,11 +39,10 @@ class Text : public IndexBase {
   explicit Text(const data_model::TextIndex& text_index_proto,
                 std::shared_ptr<text::TextIndexSchema> text_index_schema);
 
-  // std::string ApplyStemming(absl::string_view token, bool stem) const;
   std::shared_ptr<text::TextIndexSchema> GetTextIndexSchema() const {
     return text_index_schema_;
   }
-  int32_t GetMinStemSize() const { return min_stem_size_; }
+  uint32_t GetMinStemSize() const { return min_stem_size_; }
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
@@ -97,8 +96,6 @@ class Text : public IndexBase {
     const InternedStringSet* untracked_keys_;
     std::shared_ptr<text::TextIndex> text_index_;
     const query::TextPredicate* predicate_;
-    // absl::string_view data_;
-    // bool no_field_{false};
     text::FieldMaskPredicate field_mask_;
   };
 
@@ -119,7 +116,7 @@ class Text : public IndexBase {
 
   bool with_suffix_trie_;
   bool no_stem_;
-  int32_t min_stem_size_;
+  uint32_t min_stem_size_;
 
   // TODO: Map to track which keys are indexed and their raw data
 

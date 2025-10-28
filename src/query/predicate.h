@@ -156,17 +156,7 @@ class TextPredicate : public Predicate {
 class TermPredicate : public TextPredicate {
  public:
   TermPredicate(std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema, FieldMaskPredicate field_mask, std::string term, bool exact);
-  // From the Index, we need to set the FieldMask. It is obtainable from the text.
-  // But if no field is specified (Option-None), use all.
-  // const indexes::Text* GetIndex() const { return index_; }
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const { return text_index_schema_; }
-  // absl::string_view GetAlias() const { return alias_; }
-  // absl::string_view GetIdentifier() const {
-  //   return vmsdk::ToStringView(identifier_.get());
-  // }
-  // vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
-  //   return vmsdk::RetainUniqueValkeyString(identifier_.get());
-  // }
   absl::string_view GetTextString() const { return term_; }
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const std::string_view& text) const override;
@@ -175,11 +165,7 @@ class TermPredicate : public TextPredicate {
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
 
  private:
-  // const indexes::Text* index_;
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
-  // vmsdk::UniqueValkeyString identifier_;
-  // absl::string_view alias_;
-  // TODO: Add a field mask
   FieldMaskPredicate field_mask_;
   std::string term_;
   bool exact_;
@@ -188,7 +174,6 @@ class TermPredicate : public TextPredicate {
 class PrefixPredicate : public TextPredicate {
  public:
   PrefixPredicate(std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema, FieldMaskPredicate field_mask, std::string term);
-  // const indexes::Text* GetIndex() const { return index_; }
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const { return text_index_schema_; }
   absl::string_view GetTextString() const { return term_; }
   bool Evaluate(Evaluator& evaluator) const override;
@@ -198,7 +183,6 @@ class PrefixPredicate : public TextPredicate {
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
 
  private:
-  // const indexes::Text* index_;
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
   FieldMaskPredicate field_mask_;
   std::string term_;
@@ -207,7 +191,6 @@ class PrefixPredicate : public TextPredicate {
 class SuffixPredicate : public TextPredicate {
  public:
   SuffixPredicate(std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema, FieldMaskPredicate field_mask, std::string term);
-  // const indexes::Text* GetIndex() const { return index_; }
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const { return text_index_schema_; }
   absl::string_view GetTextString() const { return term_; }
   bool Evaluate(Evaluator& evaluator) const override;
@@ -218,7 +201,6 @@ class SuffixPredicate : public TextPredicate {
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
-  // const indexes::Text* index_;
   FieldMaskPredicate field_mask_;
   std::string term_;
 };
@@ -226,7 +208,6 @@ class SuffixPredicate : public TextPredicate {
 class InfixPredicate : public TextPredicate {
  public:
   InfixPredicate(std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema, FieldMaskPredicate field_mask, std::string term);
-  // const indexes::Text* GetIndex() const { return index_; }
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const { return text_index_schema_; }
   absl::string_view GetTextString() const { return term_; }
   bool Evaluate(Evaluator& evaluator) const override;
@@ -237,7 +218,6 @@ class InfixPredicate : public TextPredicate {
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
-  // const indexes::Text* index_;
   FieldMaskPredicate field_mask_;
   std::string term_;
 };
@@ -245,7 +225,6 @@ class InfixPredicate : public TextPredicate {
 class FuzzyPredicate : public TextPredicate {
  public:
   FuzzyPredicate(std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema, FieldMaskPredicate field_mask, std::string term, uint32_t distance);
-  // const indexes::Text* GetIndex() const { return index_; }
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const { return text_index_schema_; }
   absl::string_view GetTextString() const { return term_; }
   uint32_t GetDistance() const { return distance_; }
@@ -257,7 +236,6 @@ class FuzzyPredicate : public TextPredicate {
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
-  // const indexes::Text* index_;
   FieldMaskPredicate field_mask_;
   std::string term_;
   uint32_t distance_;
@@ -273,9 +251,6 @@ class ProximityPredicate : public TextPredicate {
   bool Evaluate(const std::string_view& text) const override { return false; }
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
-  // const indexes::Text* GetIndex() const override {
-  //   return terms_[0]->GetIndex();
-  // }
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
     return terms_[0]->GetTextIndexSchema();
   }

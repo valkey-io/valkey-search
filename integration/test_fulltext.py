@@ -641,3 +641,84 @@ class TestFullText(ValkeySearchTestCaseBase):
     def test_suffix_search(self):
         # TODO
         pass
+
+    def test_ft_info_text_index_fields(self):
+        """
+        Test FT.INFO text index specific fields after inserting documents.
+        Validates text index memory usage and statistics fields.
+        """
+        client: Valkey = self.server.get_new_client()
+        
+        # Create the text index using existing pattern
+        assert client.execute_command(text_index_on_hash) == b"OK"
+        
+        # Insert documents using existing hash_docs
+        for doc in hash_docs:
+            assert client.execute_command(*doc) == 5
+        
+        # Get FT.INFO and parse the response
+        raw_info = client.execute_command("FT.INFO", "products")
+        parser = FTInfoParser(raw_info)
+        info_data = parser.parsed_data
+        
+        # Validate basic document counts
+        assert info_data["num_docs"] == 5, f"Expected 5 documents, got {info_data['num_docs']}"
+        
+        # Text index specific fields to validate
+        text_index_fields = [
+            "num_unique_terms",          # Total number of unique terms in the text index
+            "num_total_terms",           # Total frequency of all terms across all documents  
+            "posting_sz_mb",             # Memory used by posting lists (inverted index data) in MB
+            "position_sz_mb",            # Memory used by position information for phrase queries in MB
+            "total_postings",            # Total number of posting lists (equals unique terms)
+            "radix_sz_mb",               # Memory used by the radix tree (term dictionary) in MB
+            "total_text_index_sz_mb",    # Total memory used by all text index components in MB
+            "total_terms_per_doc_avg"    # Average number of terms per document
+        ]
+        
+        # Validate that all text index fields are present and have reasonable values
+        for field in text_index_fields:
+            assert field in info_data, f"Missing text index field: {field}"
+            value = info_data[field]
+            
+            if field == "num_unique_terms":
+                assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
+                assert value >= 10, f"Expected at least 10 unique terms, got {value}"
+                
+            elif field == "num_total_terms":
+                assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
+                assert value >= info_data["num_unique_terms"], f"Total terms {value} should be >= unique terms {info_data['num_unique_terms']}"
+                
+            elif field in ["posting_sz_mb", "position_sz_mb", "radix_sz_mb", "total_text_index_sz_mb"]:
+                assert isinstance(value, (int, float)) and value >= 0, f"{field} should be non-negative number, got {value}"
+                if field == "total_text_index_sz_mb":
+                    assert value > 0, f"Total text index size should be > 0, got {value}"
+                    
+            elif field == "total_postings":
+                assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
+                assert value == info_data["num_unique_terms"], f"Total postings {value} should equal unique terms {info_data['num_unique_terms']}"
+                
+            elif field == "total_terms_per_doc_avg":
+                assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
+                assert value >= 5, f"Expected average terms per doc >= 5, got {value}"
+        
+        # Validate memory relationships
+        total_memory = info_data["total_text_index_sz_mb"]
+        posting_memory = info_data["posting_sz_mb"]
+        position_memory = info_data["position_sz_mb"]
+        radix_memory = info_data["radix_sz_mb"]
+        
+        # Total memory should be at least the sum of components
+        component_sum = posting_memory + radix_memory
+        assert total_memory == component_sum, f"Total memory {total_memory} should be >= component sum {component_sum}"
+        
+        print(f"Text Index Statistics Validation Passed:")
+        print(f"  Documents: {info_data['num_docs']}")
+        print(f"  Unique Terms: {info_data['num_unique_terms']}")
+        print(f"  Total Terms: {info_data['num_total_terms']}")
+        print(f"  Total Postings: {info_data['total_postings']}")
+        print(f"  Avg Terms/Doc: {info_data['total_terms_per_doc_avg']:.2f}")
+        print(f"  Total Memory: {info_data['total_text_index_sz_mb']:.4f} MB")
+        print(f"  Posting Memory: {info_data['posting_sz_mb']:.4f} MB")
+        print(f"  Position Memory: {info_data['position_sz_mb']:.4f} MB")
+        print(f"  Radix Memory: {info_data['radix_sz_mb']:.4f} MB")

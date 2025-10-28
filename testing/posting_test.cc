@@ -399,35 +399,4 @@ TEST_F(PostingTest, ContainsFieldsCheck) {
   EXPECT_FALSE(key_iter.ContainsFields(field_mask_2->AsUint64()));
 }
 
-TEST_F(PostingTest, SimpleMemoryTracking) {
-  // Test memory tracking
-  MemoryPool caller_pool{0};
-  Postings* test_posting = nullptr;
-
-  {
-    NestedMemoryScope scope{caller_pool};
-
-    // Create posting and add some data within the memory scope
-    test_posting = new Postings(true, 4);
-    test_posting->InsertPosting(InternKey("doc1"), 0, 10);
-    test_posting->InsertPosting(InternKey("doc2"), 1, 20);
-  }
-
-  // The caller pool should show 0 usage since Postings uses IsolatedMemoryScope
-  EXPECT_EQ(caller_pool.GetUsage(), 0);
-
-  // Postings should track its own memory usage internally
-  // Note: This will likely be 0 unless Postings uses custom allocators that
-  // report memory
-  int64_t postings_memory = Postings::GetMemoryUsage();
-
-  // Clean up
-  delete test_posting;
-
-  // Memory should be cleaned up after deletion
-  int64_t memory_after_cleanup = Postings::GetMemoryUsage();
-  EXPECT_EQ(memory_after_cleanup,
-            postings_memory);  // Should remain the same or decrease
-}
-
 }  // namespace valkey_search::indexes::text

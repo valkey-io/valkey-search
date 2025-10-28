@@ -41,10 +41,10 @@ class FilterParser {
   size_t node_count_{0};
   absl::flat_hash_set<std::string> filter_identifiers_;
 
-
 struct TokenResult {
     size_t end_pos;
     std::unique_ptr<query::TextPredicate> predicate;
+    bool break_query_syntax;
 };
 
 absl::StatusOr<TokenResult> ParseTokenAndBuildPredicate(

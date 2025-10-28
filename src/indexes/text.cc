@@ -121,16 +121,6 @@ size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
   return 0;
 }
 
-// std::unique_ptr<Text::EntriesFetcher> Text::Search(
-//     const query::TextPredicate& predicate, bool negate) const {
-//   auto fetcher = std::make_unique<EntriesFetcher>(
-//       CalculateSize(predicate), text_index_schema_->GetTextIndex(),
-//       negate ? &untracked_keys_ : nullptr);
-//   fetcher->predicate_ = &predicate;
-//   fetcher->field_mask_ = predicate.GetFieldMask();
-//   return fetcher;
-// }
-
 size_t Text::EntriesFetcher::Size() const { return size_; }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {

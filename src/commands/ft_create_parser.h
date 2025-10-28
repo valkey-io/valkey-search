@@ -24,7 +24,6 @@
 
 namespace valkey_search {
 
-// Check this:
 static constexpr absl::string_view kDefaultPunctuation =
     ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|";
 static uint32_t kDefaultMinStemSize = 4;

@@ -155,7 +155,6 @@ void PrintPredicate(const query::Predicate* pred, int depth, bool last,
             << prefix << "PREFIX(" << pre->GetTextString() << ")_"
             << pre->GetFieldMask() << "\n";
       } else if (auto pre = dynamic_cast<const query::SuffixPredicate*>(pred)) {
-        valid = false;
         VMSDK_LOG(WARNING, nullptr)
             << prefix << "Suffix(" << pre->GetTextString() << ")_"
             << pre->GetFieldMask() << "\n";
@@ -477,18 +476,18 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
       bool should_escape = false;
       if (in_quotes) {
         if (backslash_count % 2 == 0 || !lexer.IsPunctuation(ch, text_index_schema.get()->GetPunctuationBitmap())) {
-            processed_content.push_back('\\');
+          processed_content.push_back('\\');
         } else {
-            should_escape = true;
+          should_escape = true;
         }
       } else {
         if (backslash_count % 2 == 0) {
-            processed_content.push_back('\\');
+          processed_content.push_back('\\');
         } else if (!lexer.IsPunctuation(ch, text_index_schema.get()->GetPunctuationBitmap())) {
-            if (backslash_count > 1) processed_content.push_back('\\');
-            break;
+          if (backslash_count > 1) processed_content.push_back('\\');
+          break;
         } else {
-            should_escape = true;
+          should_escape = true;
         }
       }
       backslash_count = 0;
@@ -620,11 +619,9 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
   while (!IsEnd()) {
     char c = Peek();
     if (c == '"') {
-      VMSDK_LOG(WARNING, nullptr) << "quote detected. in_quotes: " << in_quotes;
       in_quotes = !in_quotes;
       ++pos_;
       if (in_quotes && terms.empty()) continue;
-      VMSDK_LOG(WARNING, nullptr) << "breaking out of text atom. c: " << c;
       break;
     }
     // There is a duplicate check in the child fn. We can remove this IF we have
@@ -634,7 +631,6 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
     // Quotes: Nothing. All of the above return errors OR strip it.
     // For text, if any of the above are seen, reject the query.
     if (!in_quotes && (c == ')' || c == '|' || c == '(' || c == '@' || c == '-')) {
-      VMSDK_LOG(WARNING, nullptr) << "breaking out of text atom. c: " << c;
       break;
     } 
     size_t token_start = pos_;
@@ -642,7 +638,6 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
     // If this happens, we are either done or were on a punctuation character.
     if (token_start == result.end_pos) {
       ++pos_;
-      VMSDK_LOG(WARNING, nullptr) << "no token advanced. skipping.";
       continue;
     }
     if (result.predicate) {
@@ -651,7 +646,6 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
     pos_ = result.end_pos;
   }
   std::unique_ptr<query::Predicate> pred;
-    VMSDK_LOG(WARNING, nullptr) << "terms.size(): " << terms.size();
   if (terms.size() > 1) {
     // TODO: Swap ProximityPredicate with ComposedANDPredicate once it is flattened.
     pred = std::make_unique<query::ProximityPredicate>(
@@ -659,7 +653,7 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
     node_count_ += terms.size(); 
   } else {
     if (terms.empty()) {
-      return absl::InvalidArgumentError("Empty text atom");
+      return absl::InvalidArgumentError("Invalid Query Syntax");
     }
     pred = std::move(terms[0]);
   }

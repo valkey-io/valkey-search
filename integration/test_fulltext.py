@@ -690,7 +690,7 @@ class TestFullText(ValkeySearchTestCaseBase):
                 assert value >= info_data["num_unique_terms"], f"Total terms {value} should be >= unique terms {info_data['num_unique_terms']}"
                 
             elif field in ["posting_sz_mb", "position_sz_mb", "radix_sz_mb", "total_text_index_sz_mb"]:
-                assert isinstance(value, (int, float)) and value >= 0, f"{field} should be non-negative number, got {value}"
+                assert isinstance(value, (int, float)) and value > 0, f"{field} should be non-negative number, got {value}"
                 if field == "total_text_index_sz_mb":
                     assert value > 0, f"Total text index size should be > 0, got {value}"
                     

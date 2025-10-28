@@ -35,14 +35,14 @@ std::optional<std::shared_ptr<text::Postings>> AddWordToPostings(
     is_new_term = true;
   }
   postings->InsertPosting(key, text_field_number, position);
-  
+
   auto& metadata = GetTextIndexMetadata();
   std::lock_guard<std::mutex> lock(metadata.mtx);
   if (is_new_term) {
     metadata.num_unique_terms++;
   }
   metadata.total_term_frequency++;
-  
+
   return postings;
 }
 
@@ -52,7 +52,7 @@ std::optional<std::shared_ptr<text::Postings>> RemoveKeyFromPostings(
   CHECK(existing.has_value()) << "Per-key tree became unaligned";
   auto postings = existing.value();
   postings->RemoveKey(key);
-  
+
   if (!postings->IsEmpty()) {
     return postings;
   } else {

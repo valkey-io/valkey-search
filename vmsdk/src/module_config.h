@@ -38,7 +38,8 @@ enum Flags {
 /// Return true if debug mode is enabled. "search.debug-mode == yes"
 constexpr absl::string_view kDebugMode{"debug-mode"};
 bool IsDebugModeEnabled();
-
+//config updated persist
+int64_t g_updatedmax_index;
 /// Support Valkey configuration entries in a one-liner.
 ///
 /// Example usage:
@@ -322,6 +323,9 @@ class String : public ConfigBase<std::string> {
   mutable UniqueValkeyString cached_string_;
   FRIEND_TEST(Builder, ConfigBuilder);
 };
+// callbacks for internal module changes for configs #376
+using GetMaxIndexesCallback = Number &(*)();
+void SetGetMaxIndexesCallback(GetMaxIndexesCallback cb, uint32_t *);
 
 template <typename ValkeyT>
 class ConfigBuilder {

@@ -117,12 +117,14 @@ class FanoutOperationBase {
         this->RpcDone();
       });
     } else {
-      auto client = client_pool_->GetClient(target.address);
+      std::string clinet_ip_port = absl::StrCat(
+          target.ip, ":", coordinator::GetCoordinatorPort(target.port));
+      auto client = client_pool_->GetClient(clinet_ip_port);
       if (!client) {
         ++Metrics::GetStats().info_fanout_fail_cnt;
         VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
             << "FANOUT_DEBUG: Found invalid client on target "
-            << target.address;
+            << clinet_ip_port;
         this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
                       coordinator::FanoutErrorType::COMMUNICATION_ERROR,
                       target);
@@ -131,14 +133,14 @@ class FanoutOperationBase {
       }
       this->InvokeRemoteRpc(
           client.get(), request,
-          [this, target](grpc::Status status, Response& resp) {
+          [this, target, clinet_ip_port](grpc::Status status, Response& resp) {
             if (status.ok()) {
               this->OnResponse(resp, target);
             } else {
               ++Metrics::GetStats().info_fanout_fail_cnt;
               VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
                   << "FANOUT_DEBUG: InvokeRemoteRpc error on target "
-                  << target.address << ", status code: " << status.error_code()
+                  << clinet_ip_port << ", status code: " << status.error_code()
                   << ", error message: " << status.error_message();
               // if grpc failed, the response is invalid, so we need to manually
               // set the error type
@@ -221,7 +223,9 @@ class FanoutOperationBase {
               << INDEX_NAME_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
-              << INDEX_NAME_ERROR_LOG_PREFIX << target.address;
+              << INDEX_NAME_ERROR_LOG_PREFIX
+              << absl::StrCat(target.ip, ":",
+                              coordinator::GetCoordinatorPort(target.port));
         }
       }
     }
@@ -236,7 +240,9 @@ class FanoutOperationBase {
               << COMMUNICATION_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
-              << COMMUNICATION_ERROR_LOG_PREFIX << target.address;
+              << COMMUNICATION_ERROR_LOG_PREFIX
+              << absl::StrCat(target.ip, ":",
+                              coordinator::GetCoordinatorPort(target.port));
         }
       }
     }
@@ -251,7 +257,9 @@ class FanoutOperationBase {
               << INCONSISTENT_STATE_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
-              << INCONSISTENT_STATE_ERROR_LOG_PREFIX << target.address;
+              << INCONSISTENT_STATE_ERROR_LOG_PREFIX
+              << absl::StrCat(target.ip, ":",
+                              coordinator::GetCoordinatorPort(target.port));
         }
       }
     }

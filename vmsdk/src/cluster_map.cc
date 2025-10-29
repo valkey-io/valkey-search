@@ -21,21 +21,6 @@
 namespace vmsdk {
 namespace cluster_map {
 
-namespace coordinator {
-// Coordinator port offset - same as in src/coordinator/util.h
-// This offset results in 26673 for Valkey default port 6379 - which is COORD
-// on a telephone keypad.
-static constexpr int kCoordinatorPortOffset = 20294;
-
-inline int GetCoordinatorPort(int valkey_port) {
-  // TODO Make handling of TLS more robust
-  if (valkey_port == 6378) {
-    return valkey_port + kCoordinatorPortOffset + 1;
-  }
-  return valkey_port + kCoordinatorPortOffset;
-}
-}  // namespace coordinator
-
 // configurable variable for cluster map expiration time
 static auto cluster_map_expiration_ms =
     vmsdk::config::Number("cluster-map-expiration-ms",
@@ -204,7 +189,7 @@ std::shared_ptr<ClusterMap> ClusterMap::CreateNewClusterMap(
       }
     }
     // node info is an array
-    // (1) address (2) port number (3) node_id (4) hostname (optional)
+    // (1) ip (2) port number (3) node_id (4) hostname (optional)
     // parse primary node
     ValkeyModuleCallReply* primary_node_arr =
         ValkeyModule_CallReplyArrayElement(slot_range, 2);
@@ -294,14 +279,7 @@ std::shared_ptr<ClusterMap> ClusterMap::CreateNewClusterMap(
         .location = is_local_shard ? NodeInfo::NodeLocation::kLocal
                                    : NodeInfo::NodeLocation::kRemote,
         .ip = primary_ip,
-        .port = is_local_shard ? 0
-                               : coordinator::GetCoordinatorPort(
-                                     static_cast<int>(primary_port)),
-        .address =
-            is_local_shard
-                ? ""
-                : absl::StrCat(primary_ip, ":",
-                               coordinator::GetCoordinatorPort(primary_port)),
+        .port = is_local_shard ? 0 : static_cast<int>(primary_port),
         .shard = nullptr  // Will be set after inserting shard
     };
 
@@ -314,14 +292,7 @@ std::shared_ptr<ClusterMap> ClusterMap::CreateNewClusterMap(
           .location = is_local_shard ? NodeInfo::NodeLocation::kLocal
                                      : NodeInfo::NodeLocation::kRemote,
           .ip = replica_ip,
-          .port = is_local_shard ? 0
-                                 : coordinator::GetCoordinatorPort(
-                                       static_cast<int>(replica_port)),
-          .address =
-              is_local_shard
-                  ? ""
-                  : absl::StrCat(replica_ip, ":",
-                                 coordinator::GetCoordinatorPort(replica_port)),
+          .port = is_local_shard ? 0 : static_cast<int>(replica_port),
           .shard = nullptr};
       replicas.push_back(replica_node);
     }
@@ -489,8 +460,10 @@ void ClusterMap::PrintClusterMap(std::shared_ptr<ClusterMap> map) {
           << (primary.location == NodeInfo::NodeLocation::kLocal ? "Local"
                                                                  : "Remote");
       VMSDK_LOG(NOTICE, nullptr)
-          << "    address: "
-          << (primary.address.empty() ? "(local)" : primary.address);
+          << "    ip: " << (primary.ip.empty() ? "(local)" : primary.ip);
+      VMSDK_LOG(NOTICE, nullptr)
+          << "    port: "
+          << (primary.port == 0 ? "(local)" : absl::StrCat(primary.port));
     } else {
       VMSDK_LOG(NOTICE, nullptr) << "  Primary Node: (none)";
     }
@@ -511,8 +484,10 @@ void ClusterMap::PrintClusterMap(std::shared_ptr<ClusterMap> map) {
           << (replica.location == NodeInfo::NodeLocation::kLocal ? "Local"
                                                                  : "Remote");
       VMSDK_LOG(NOTICE, nullptr)
-          << "    address: "
-          << (replica.address.empty() ? "(local)" : replica.address);
+          << "    ip: " << (replica.ip.empty() ? "(local)" : replica.ip);
+      VMSDK_LOG(NOTICE, nullptr)
+          << "    port: "
+          << (replica.port == 0 ? "(local)" : absl::StrCat(replica.port));
     }
   }
 

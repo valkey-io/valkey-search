@@ -47,8 +47,8 @@ struct NodeInfo {
   NodeLocation location;
   // Empty string if location is kLocal.
   std::string ip;
+  // 0 if location is kLocal
   int port;
-  std::string address;
   // Pointer to the shard this node belongs to
   const ShardInfo* shard = nullptr;
 

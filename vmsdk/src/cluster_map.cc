@@ -15,6 +15,7 @@
 #include "absl/strings/str_cat.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
@@ -35,7 +36,12 @@ inline int GetCoordinatorPort(int valkey_port) {
 }
 }  // namespace coordinator
 
-bool ClusterMap::GetIsClusterMapFull() const { return is_cluster_map_full_; }
+// configurable variable for cluster map expiration time
+static auto cluster_map_expiration_ms =
+    vmsdk::config::Number("cluster-map-expiration-ms",
+                          5000,      // default: 5 seconds
+                          1000,      // min: 1 second
+                          3600000);  // max: 1 hour
 
 // return pre-generated primary targets
 const std::vector<NodeInfo>& ClusterMap::GetPrimaryTargets() const {
@@ -52,14 +58,6 @@ const std::vector<NodeInfo>& ClusterMap::GetAllTargets() const {
   return all_targets_;
 }
 
-// generate a random targets vector from cluster bus (not pre-generated)
-std::vector<NodeInfo> ClusterMap::GetRandomTargets(ValkeyModuleCtx* ctx) {
-  return GetTargets(ctx, FanoutTargetMode::kRandom);
-}
-
-// slot ownership checks
-bool ClusterMap::IsSlotOwned(uint16_t slot) const { return owned_slots_[slot]; }
-
 // shard lookups, will return nullptr if shard does not exist
 const ShardInfo* ClusterMap::GetShardById(std::string_view shard_id) const {
   auto it = shards_.find(std::string(shard_id));
@@ -69,375 +67,463 @@ const ShardInfo* ClusterMap::GetShardById(std::string_view shard_id) const {
   return nullptr;
 }
 
-// return all shards as a map
-const absl::flat_hash_map<std::string, ShardInfo>& ClusterMap::GetAllShards()
-    const {
-  return shards_;
+const ShardInfo* ClusterMap::GetShardBySlot(uint16_t slot) const {
+  // Find the first entry with start_slot > slot
+  auto it = slot_to_shard_map_.upper_bound(slot);
+  // If it's the first entry, slot is before any range
+  if (it == slot_to_shard_map_.begin()) {
+    return nullptr;
+  }
+  // Move back to the entry that could contain this slot
+  --it;
+  // Check if slot is within the range [start_slot, end_slot]
+  uint16_t start_slot = it->first;
+  uint16_t end_slot = it->second.first;
+  if (slot >= start_slot && slot <= end_slot) {
+    // Return the shard pointer
+    return it->second.second;
+  }
+  // Slot is in a gap, return nullptr
+  return nullptr;
 }
 
-// get cluster level slot fingerprint
-uint64_t ClusterMap::GetClusterSlotsFingerprint() const {
-  return cluster_slots_fingerprint_;
-}
-
-// private helper function to refresh targets in CreateNewClusterMap
-std::vector<NodeInfo> ClusterMap::GetTargets(ValkeyModuleCtx* ctx,
-                                             FanoutTargetMode target_mode) {
-  size_t num_nodes;
-  auto nodes = vmsdk::MakeUniqueValkeyClusterNodesList(ctx, &num_nodes);
-
-  std::vector<NodeInfo> selected_targets;
-
-  if (target_mode == FanoutTargetMode::kPrimary) {
-    // Select all primary (master) nodes directly
-    for (size_t i = 0; i < num_nodes; ++i) {
-      std::string node_id(nodes.get()[i], VALKEYMODULE_NODE_ID_LEN);
-      char ip[INET6_ADDRSTRLEN] = "";
-      char master_id[VALKEYMODULE_NODE_ID_LEN] = "";
-      int port;
-      int flags;
-
-      if (ValkeyModule_GetClusterNodeInfo(ctx, node_id.c_str(), ip, master_id,
-                                          &port, &flags) != VALKEYMODULE_OK) {
-        VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
-            << "Failed to get node info for node " << node_id
-            << ", skipping node...";
-        continue;
-      }
-
-      if (flags & (VALKEYMODULE_NODE_PFAIL | VALKEYMODULE_NODE_FAIL)) {
-        VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
-            << "Node " << node_id << " (" << ip
-            << ") is failing, skipping for fanout...";
-        continue;
-      }
-
-      // Only select master nodes
-      if (flags & VALKEYMODULE_NODE_MASTER) {
-        NodeInfo node_info;
-        node_info.node_id = node_id;
-        node_info.role = NodeInfo::NodeRole::kPrimary;
-        if (flags & VALKEYMODULE_NODE_MYSELF) {
-          node_info.location = NodeInfo::NodeLocation::kLocal;
-          node_info.address = "";
-        } else {
-          node_info.location = NodeInfo::NodeLocation::kRemote;
-          node_info.address =
-              absl::StrCat(ip, ":", coordinator::GetCoordinatorPort(port));
-        }
-        selected_targets.push_back(std::move(node_info));
-      }
+// generate a random targets vector with one node from each shard
+std::vector<NodeInfo> ClusterMap::GetRandomTargets() {
+  std::vector<NodeInfo> random_targets;
+  absl::BitGen gen;
+  for (const auto& [shard_id, shard_info] : shards_) {
+    // Collect all nodes in this shard (primary + replicas)
+    std::vector<NodeInfo> shard_nodes;
+    if (shard_info.primary.has_value()) {
+      shard_nodes.push_back(shard_info.primary.value());
     }
-  } else if (target_mode == FanoutTargetMode::kAll) {
-    // Select all nodes (both primary and replica)
-    for (size_t i = 0; i < num_nodes; ++i) {
-      std::string node_id(nodes.get()[i], VALKEYMODULE_NODE_ID_LEN);
-      char ip[INET6_ADDRSTRLEN] = "";
-      char master_id[VALKEYMODULE_NODE_ID_LEN] = "";
-      int port;
-      int flags;
-      if (ValkeyModule_GetClusterNodeInfo(ctx, node_id.c_str(), ip, master_id,
-                                          &port, &flags) != VALKEYMODULE_OK) {
-        VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
-            << "Failed to get node info for node " << node_id
-            << ", skipping node...";
-        continue;
-      }
-
-      if (flags & (VALKEYMODULE_NODE_PFAIL | VALKEYMODULE_NODE_FAIL)) {
-        VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
-            << "Node " << node_id << " (" << ip
-            << ") is failing, skipping for fanout...";
-        continue;
-      }
-
-      // Select all nodes (both master and replica)
-      NodeInfo node_info;
-      node_info.node_id = node_id;
-      node_info.role = (flags & VALKEYMODULE_NODE_MASTER)
-                           ? NodeInfo::NodeRole::kPrimary
-                           : NodeInfo::NodeRole::kReplica;
-      if (flags & VALKEYMODULE_NODE_MYSELF) {
-        node_info.location = NodeInfo::NodeLocation::kLocal;
-        node_info.address = "";
-      } else {
-        node_info.location = NodeInfo::NodeLocation::kRemote;
-        node_info.address =
-            absl::StrCat(ip, ":", coordinator::GetCoordinatorPort(port));
-      }
-      selected_targets.push_back(std::move(node_info));
+    for (const auto& replica : shard_info.replicas) {
+      shard_nodes.push_back(replica);
     }
-  } else {
-    CHECK(target_mode == FanoutTargetMode::kRandom ||
-          target_mode == FanoutTargetMode::kReplicasOnly);
-    // Original logic: group master and replica into shards and randomly
-    // select one, unless confined to replicas only
-    absl::flat_hash_map<std::string, std::vector<size_t>>
-        shard_id_to_node_indices;
-
-    for (size_t i = 0; i < num_nodes; ++i) {
-      std::string node_id(nodes.get()[i], VALKEYMODULE_NODE_ID_LEN);
-      char ip[INET6_ADDRSTRLEN] = "";
-      char master_id[VALKEYMODULE_NODE_ID_LEN] = "";
-      int port;
-      int flags;
-      if (ValkeyModule_GetClusterNodeInfo(ctx, node_id.c_str(), ip, master_id,
-                                          &port, &flags) != VALKEYMODULE_OK) {
-        VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
-            << "Failed to get node info for node " << node_id
-            << ", skipping node...";
-        continue;
-      }
-      auto master_id_str = std::string(master_id, VALKEYMODULE_NODE_ID_LEN);
-      if (flags & (VALKEYMODULE_NODE_PFAIL | VALKEYMODULE_NODE_FAIL)) {
-        VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
-            << "Node " << node_id << " (" << ip
-            << ") is failing, skipping for fanout...";
-        continue;
-      }
-      if (flags & VALKEYMODULE_NODE_MASTER) {
-        master_id_str = node_id;
-        if (target_mode == FanoutTargetMode::kReplicasOnly) {
-          continue;
-        }
-      }
-
-      // Store only the node index
-      shard_id_to_node_indices[master_id_str].push_back(i);
-    }
-
-    // Random selection first, then create only the selected target objects
-    absl::BitGen gen;
-    for (const auto& [shard_id, node_indices] : shard_id_to_node_indices) {
-      size_t index = absl::Uniform(gen, 0u, node_indices.size());
-      size_t selected_node_index = node_indices.at(index);
-
-      // Re-fetch node info only for the selected node
-      std::string node_id(nodes.get()[selected_node_index],
-                          VALKEYMODULE_NODE_ID_LEN);
-      char ip[INET6_ADDRSTRLEN] = "";
-      char master_id[VALKEYMODULE_NODE_ID_LEN] = "";
-      int port;
-      int flags;
-      if (ValkeyModule_GetClusterNodeInfo(ctx, node_id.c_str(), ip, master_id,
-                                          &port, &flags) != VALKEYMODULE_OK) {
-        continue;
-      }
-
-      // Create target object only for the selected node
-      NodeInfo node_info;
-      node_info.node_id = node_id;
-      node_info.role = (flags & VALKEYMODULE_NODE_MASTER)
-                           ? NodeInfo::NodeRole::kPrimary
-                           : NodeInfo::NodeRole::kReplica;
-      if (flags & VALKEYMODULE_NODE_MYSELF) {
-        node_info.location = NodeInfo::NodeLocation::kLocal;
-        node_info.address = "";
-      } else {
-        node_info.location = NodeInfo::NodeLocation::kRemote;
-        node_info.address =
-            absl::StrCat(ip, ":", coordinator::GetCoordinatorPort(port));
-      }
-      selected_targets.push_back(std::move(node_info));
+    // Randomly select one node from this shard
+    if (!shard_nodes.empty()) {
+      size_t index = absl::Uniform(gen, 0u, shard_nodes.size());
+      random_targets.push_back(shard_nodes[index]);
     }
   }
-  return selected_targets;
+  return random_targets;
 }
 
-// create a new cluster map in the background
+// For shard fingerprint - just sum all slots
+uint64_t ClusterMap::compute_shard_fingerprint(
+    const std::set<uint16_t>& slots) {
+  uint64_t fingerprint = 0;
+  for (uint16_t slot : slots) {
+    fingerprint += slot;
+  }
+  return fingerprint;
+}
+
+// For cluster fingerprint - sum all shard fingerprints with shard ID hash
+uint64_t ClusterMap::compute_cluster_fingerprint(
+    const absl::flat_hash_map<std::string, ShardInfo>& shards) {
+  uint64_t fingerprint = 0;
+
+  for (const auto& [shard_id, shard] : shards) {
+    // Simple string hash that's deterministic
+    uint64_t shard_id_hash = 0;
+    for (char c : shard_id) {
+      shard_id_hash = shard_id_hash * 31 + c;
+    }
+
+    fingerprint += shard.slots_fingerprint + shard_id_hash;
+  }
+
+  return fingerprint;
+}
+
+// create a new cluster map
 std::shared_ptr<ClusterMap> ClusterMap::CreateNewClusterMap(
     ValkeyModuleCtx* ctx) {
   auto new_map = std::shared_ptr<ClusterMap>(new ClusterMap());
-
-  // Pre-compute all target lists
-  new_map->primary_targets_ = GetTargets(ctx, FanoutTargetMode::kPrimary);
-  new_map->replica_targets_ = GetTargets(ctx, FanoutTargetMode::kReplicasOnly);
-  new_map->all_targets_ = GetTargets(ctx, FanoutTargetMode::kAll);
+  new_map->is_cluster_map_full_ = false;
 
   // call CLUSTER_SLOTS from Valkey Module API
   auto reply = vmsdk::UniquePtrValkeyCallReply(
       ValkeyModule_Call(ctx, "CLUSTER", "c", "SLOTS"));
-  if (reply == nullptr) {
-    // if Valkey Module API returns nullptr, return an empty map
-    VMSDK_IO_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-        << "CLUSTER_MAP_ERROR: CLUSTER SLOTS call returns nullptr";
-    new_map->is_cluster_map_full_ = false;
-    return new_map;
-  }
+  CHECK(reply)
+      << "CLUSTER_MAP_ERROR: ValkeyModule_Call CLUSTER SLOTS returned nullptr";
 
   auto reply_type = ValkeyModule_CallReplyType(reply.get());
-  if (reply_type != VALKEYMODULE_REPLY_ARRAY) {
-    // if Valkey Module API returns incorrect type, return an empty map
-    VMSDK_IO_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-        << "CLUSTER_MAP_ERROR: CLUSTER SLOTS call returns incorrect type, "
-           "expect VALKEYMODULE_REPLY_ARRAY but got "
-        << reply_type;
-    new_map->is_cluster_map_full_ = false;
-    return new_map;
-  }
-
-  // Track which slots have been assigned across the entire cluster
-  std::bitset<k_num_slots> assigned_slots;
+  CHECK(reply_type == VALKEYMODULE_REPLY_ARRAY)
+      << "CLUSTER_MAP_ERROR: ValkeyModule_Call CLUSTER SLOTS returns incorrect "
+         "type, expect VALKEYMODULE_REPLY_ARRAY but got "
+      << reply_type;
 
   // Get local node ID to identify which shard we belong to
-  char my_node_id[VALKEYMODULE_NODE_ID_LEN];
-  size_t len = ValkeyModule_CallReplyLength(reply.get());
+  const char* my_node_id = ValkeyModule_GetMyClusterID();
+  CHECK(my_node_id)
+      << "CLUSTER_MAP_ERROR:ValkeyModule_GetMyClusterID returned nullptr";
 
   // reply is an array of arrays
   // each array element should contain at least 3 elements
   // (1) start slot range (2) end slot range (3) master info (4)... replica info
+  size_t len = ValkeyModule_CallReplyLength(reply.get());
   for (size_t i = 0; i < len; ++i) {
     ValkeyModuleCallReply* slot_range =
         ValkeyModule_CallReplyArrayElement(reply.get(), i);
-    if (!slot_range ||
-        ValkeyModule_CallReplyType(slot_range) != VALKEYMODULE_REPLY_ARRAY) {
-      continue;
-    }
+    CHECK(slot_range)
+        << "CLUSTER_MAP_ERROR: ValkeyModule_Call CLUSTER SLOTS result returned "
+           "invalid slot range sub-array";
+    auto slot_range_type = ValkeyModule_CallReplyType(slot_range);
+    CHECK(slot_range_type == VALKEYMODULE_REPLY_ARRAY)
+        << "CLUSTER_MAP_ERROR: ValkeyModule_Call CLUSTER SLOTS result returns "
+           "incorrect slot range sub-array type, expect "
+           "VALKEYMODULE_REPLY_ARRAY but got "
+        << slot_range_type;
+
     size_t slot_len = ValkeyModule_CallReplyLength(slot_range);
     // each array element should have at least 3 elements
-    if (slot_len < 3) {
-      continue;
-    }
+    CHECK(slot_len >= 3)
+        << "CLUSTER_MAP_ERROR: ValkeyModule_Call CLUSTER "
+           "SLOTS result returned a slot range sub-array with invalid length, "
+           "should be at least 3";
     // Get start and end slots
     ValkeyModuleCallReply* start_slot =
         ValkeyModule_CallReplyArrayElement(slot_range, 0);
+    CHECK(ValkeyModule_CallReplyType(start_slot) == VALKEYMODULE_REPLY_INTEGER)
+        << "CLUSTER_MAP_ERROR: start slot expect INTEGER type, got"
+        << ValkeyModule_CallReplyType(start_slot);
     ValkeyModuleCallReply* end_slot =
         ValkeyModule_CallReplyArrayElement(slot_range, 1);
+    CHECK(ValkeyModule_CallReplyType(end_slot) == VALKEYMODULE_REPLY_INTEGER)
+        << "CLUSTER_MAP_ERROR: end slot expect INTEGER type, got"
+        << ValkeyModule_CallReplyType(end_slot);
     long long start = ValkeyModule_CallReplyInteger(start_slot);
     long long end = ValkeyModule_CallReplyInteger(end_slot);
     // Mark slots as assigned in cluster
     std::set<uint16_t> slot_set;
     for (long long slot = start; slot <= end; slot++) {
       if (slot >= 0 && slot < k_num_slots) {
-        assigned_slots[slot] = true;
         slot_set.insert(static_cast<uint16_t>(slot));
       }
     }
     // node info is an array
     // (1) address (2) port number (3) node_id (4) hostname (optional)
-    // Get master node ID
-    ValkeyModuleCallReply* master_node =
+    // parse primary node
+    ValkeyModuleCallReply* primary_node_arr =
         ValkeyModule_CallReplyArrayElement(slot_range, 2);
-    if (!master_node || ValkeyModule_CallReplyLength(master_node) < 3) {
-      continue;
-    }
-    size_t master_id_len;
-    const char* master_id_str = ValkeyModule_CallReplyStringPtr(
-        ValkeyModule_CallReplyArrayElement(master_node, 2), &master_id_len);
-    std::string master_id(master_id_str, master_id_len);
+    CHECK(primary_node_arr)
+        << "CLUSTER_MAP_ERROR: primary node subarray returned nullptr";
+    CHECK(ValkeyModule_CallReplyLength(primary_node_arr) >= 3)
+        << "CLUSTER_MAP_ERROR: primary node subarray returned invalid length, "
+           "expected >= 3";
+    // get primary node id
+    size_t primary_id_len;
+    const char* primary_id_char = ValkeyModule_CallReplyStringPtr(
+        ValkeyModule_CallReplyArrayElement(primary_node_arr, 2),
+        &primary_id_len);
+    CHECK(primary_id_char)
+        << "CLUSTER_MAP_ERROR: primary node id returned nullptr";
+    std::string primary_id(primary_id_char, primary_id_len);
 
-    // Check if any node in this shard is local
+    // get primary IP and port
+    size_t primary_ip_len;
+    const char* primary_ip_char = ValkeyModule_CallReplyStringPtr(
+        ValkeyModule_CallReplyArrayElement(primary_node_arr, 0),
+        &primary_ip_len);
+    CHECK(primary_ip_char)
+        << "CLUSTER_MAP_ERROR: primary node ip returned nullptr";
+    std::string primary_ip(primary_ip_char, primary_ip_len);
+
+    long long primary_port = ValkeyModule_CallReplyInteger(
+        ValkeyModule_CallReplyArrayElement(primary_node_arr, 1));
+    CHECK(primary_port)
+        << "CLUSTER_MAP_ERROR: primary node port returned nullptr";
+
+    // First pass: determine if this is a local shard by checking ALL nodes
     bool is_local_shard = false;
-    for (size_t j = 2; j < slot_len; j++) {
-      ValkeyModuleCallReply* node =
+
+    // Check primary
+    if (primary_id_len == VALKEYMODULE_NODE_ID_LEN &&
+        memcmp(primary_id_char, my_node_id, VALKEYMODULE_NODE_ID_LEN) == 0) {
+      is_local_shard = true;
+    }
+
+    // Parse all replica node IDs first
+    std::vector<std::tuple<std::string, std::string, long long>> replica_data;
+    for (size_t j = 3; j < slot_len; j++) {
+      ValkeyModuleCallReply* replica_node_arr =
           ValkeyModule_CallReplyArrayElement(slot_range, j);
-      if (!node || ValkeyModule_CallReplyLength(node) < 3) continue;
+      CHECK(replica_node_arr)
+          << "CLUSTER_MAP_ERROR: replica node subarray returned nullptr";
+      CHECK(ValkeyModule_CallReplyLength(replica_node_arr) >= 3)
+          << "CLUSTER_MAP_ERROR: replica node subarray returned invalid "
+             "length, "
+             "should be >= 3";
 
-      size_t node_id_len;
-      const char* node_id_str = ValkeyModule_CallReplyStringPtr(
-          ValkeyModule_CallReplyArrayElement(node, 2), &node_id_len);
-      std::string node_id(node_id_str, node_id_len);
+      size_t replica_id_len;
+      const char* replica_id_char = ValkeyModule_CallReplyStringPtr(
+          ValkeyModule_CallReplyArrayElement(replica_node_arr, 2),
+          &replica_id_len);
+      CHECK(replica_id_char)
+          << "CLUSTER_MAP_ERROR: replica node id returned nullptr";
 
-      char ip[INET6_ADDRSTRLEN];
-      char master_buf[VALKEYMODULE_NODE_ID_LEN];
-      int port, flags;
-      if (ValkeyModule_GetClusterNodeInfo(ctx, node_id.c_str(), ip, master_buf,
-                                          &port, &flags) == VALKEYMODULE_OK &&
-          (flags & VALKEYMODULE_NODE_MYSELF)) {
+      size_t replica_ip_len;
+      const char* replica_ip_char = ValkeyModule_CallReplyStringPtr(
+          ValkeyModule_CallReplyArrayElement(replica_node_arr, 0),
+          &replica_ip_len);
+      CHECK(replica_ip_char)
+          << "CLUSTER_MAP_ERROR: replica node ip returned nullptr";
+
+      long long replica_port = ValkeyModule_CallReplyInteger(
+          ValkeyModule_CallReplyArrayElement(replica_node_arr, 1));
+      CHECK(replica_port)
+          << "CLUSTER_MAP_ERROR: replica node port returned nullptr";
+
+      replica_data.emplace_back(std::string(replica_id_char, replica_id_len),
+                                std::string(replica_ip_char, replica_ip_len),
+                                replica_port);
+
+      // Check if this replica is the local node
+      if (!is_local_shard && replica_id_len == VALKEYMODULE_NODE_ID_LEN &&
+          memcmp(replica_id_char, my_node_id, VALKEYMODULE_NODE_ID_LEN) == 0) {
         is_local_shard = true;
-        break;
       }
     }
+
+    // Create primary NodeInfo
+    NodeInfo primary_node{
+        .node_id = primary_id,
+        .role = NodeInfo::NodeRole::kPrimary,
+        .location = is_local_shard ? NodeInfo::NodeLocation::kLocal
+                                   : NodeInfo::NodeLocation::kRemote,
+        .ip = primary_ip,
+        .port = is_local_shard ? 0
+                               : coordinator::GetCoordinatorPort(
+                                     static_cast<int>(primary_port)),
+        .address =
+            is_local_shard
+                ? ""
+                : absl::StrCat(primary_ip, ":",
+                               coordinator::GetCoordinatorPort(primary_port)),
+        .shard = nullptr  // Will be set after inserting shard
+    };
+
+    // create replica NodeInfo objects using parsed data
+    std::vector<NodeInfo> replicas;
+    for (const auto& [replica_id, replica_ip, replica_port] : replica_data) {
+      NodeInfo replica_node{
+          .node_id = replica_id,
+          .role = NodeInfo::NodeRole::kReplica,
+          .location = is_local_shard ? NodeInfo::NodeLocation::kLocal
+                                     : NodeInfo::NodeLocation::kRemote,
+          .ip = replica_ip,
+          .port = is_local_shard ? 0
+                                 : coordinator::GetCoordinatorPort(
+                                       static_cast<int>(replica_port)),
+          .address =
+              is_local_shard
+                  ? ""
+                  : absl::StrCat(replica_ip, ":",
+                                 coordinator::GetCoordinatorPort(replica_port)),
+          .shard = nullptr};
+      replicas.push_back(replica_node);
+    }
+
     // Mark owned slots
     if (is_local_shard) {
       for (long long slot = start; slot <= end; slot++) {
-        if (slot >= 0 && slot < k_num_slots) {
-          new_map->owned_slots_[slot] = true;
-        }
+        CHECK(slot >= 0 && slot < k_num_slots)
+            << "CLUSTER_MAP_ERROR: invalid slot number";
+        new_map->owned_slots_[slot] = true;
       }
     }
     // Update shards map
-    auto it = new_map->shards_.find(master_id);
-    if (it == new_map->shards_.end()) {
-      ShardInfo shard;
-      shard.shard_id = master_id;
-      shard.owned_slots = slot_set;
-      shard.slots_fingerprint = 0;
-      new_map->shards_[master_id] = std::move(shard);
-    } else {
-      it->second.owned_slots.insert(slot_set.begin(), slot_set.end());
+    CHECK(new_map->shards_.find(primary_id) == new_map->shards_.end())
+        << "CLUSTER_MAP_ERROR: Duplicate master_id in CLUSTER SLOTS response";
+
+    ShardInfo shard;
+    shard.shard_id = primary_id;
+    shard.owned_slots = slot_set;
+    // compute shard-level slot fingerprint
+    shard.slots_fingerprint = compute_shard_fingerprint(slot_set);
+    shard.primary = primary_node;
+    shard.replicas = std::move(replicas);
+    // Insert shard into map
+    auto [inserted_it, success] =
+        new_map->shards_.insert({primary_id, std::move(shard)});
+    CHECK(success) << "CLUSTER_MAP_ERROR: Failed to insert shard";
+
+    // Build slot_to_shard_map_ entry
+    // The slot range [start, end] maps to this shard
+    new_map->slot_to_shard_map_[static_cast<uint16_t>(start)] =
+        std::make_pair(static_cast<uint16_t>(end), &(inserted_it->second));
+
+    // Fix shard pointers in NodeInfo
+    if (inserted_it->second.primary.has_value()) {
+      inserted_it->second.primary->shard = &(inserted_it->second);
+      // Add to primary_targets and all_targets
+      new_map->primary_targets_.push_back(inserted_it->second.primary.value());
+      new_map->all_targets_.push_back(inserted_it->second.primary.value());
+    }
+    for (auto& replica : inserted_it->second.replicas) {
+      replica.shard = &(inserted_it->second);
+      // Add to replica_targets and all_targets
+      new_map->replica_targets_.push_back(replica);
+      new_map->all_targets_.push_back(replica);
     }
   }
-  new_map->is_cluster_map_full_ = assigned_slots.all();
+
+  // check is cluster map full using slot to shard map
+  if (!new_map->slot_to_shard_map_.empty()) {
+    // Check if first range starts at 0
+    auto it = new_map->slot_to_shard_map_.begin();
+    if (it->first == 0) {
+      uint16_t expected_next = 0;
+      bool has_gap = false;
+      for (const auto& [start_slot, range_and_shard] :
+           new_map->slot_to_shard_map_) {
+        uint16_t end_slot = range_and_shard.first;
+        // Check if there's a gap
+        if (start_slot != expected_next) {
+          has_gap = true;
+          break;
+        }
+        // Update expected next slot
+        expected_next = end_slot + 1;
+      }
+      // Check if we covered all slots and no gaps
+      if (!has_gap && expected_next == k_num_slots) {
+        new_map->is_cluster_map_full_ = true;
+      }
+    }
+  }
+
+  // Compute cluster-level fingerprint
+  new_map->cluster_slots_fingerprint_ =
+      compute_cluster_fingerprint(new_map->shards_);
+
+  // record the creation timestamp
+  new_map->expiration_tp_ =
+      std::chrono::steady_clock::now() +
+      std::chrono::milliseconds(cluster_map_expiration_ms.GetValue());
+
   return new_map;
 }
 
-// helper function to print out cluster map for debug
+// debug only, print out cluster map
 void ClusterMap::PrintClusterMap(std::shared_ptr<ClusterMap> map) {
-  // Log cluster map state
   VMSDK_LOG(NOTICE, nullptr) << "=== Cluster Map Created ===";
   VMSDK_LOG(NOTICE, nullptr)
       << "is_cluster_map_full_: " << map->is_cluster_map_full_;
-  // Log owned_slots_
+  VMSDK_LOG(NOTICE, nullptr)
+      << "cluster_slots_fingerprint_: " << map->cluster_slots_fingerprint_;
+
+  // Print owned slots using slot_to_shard_map_
   size_t owned_count = map->owned_slots_.count();
   VMSDK_LOG(NOTICE, nullptr) << "owned_slots_ count: " << owned_count;
   if (owned_count > 0) {
     std::string owned_ranges;
-    int range_start = -1;
-    int range_end = -1;
-    for (size_t i = 0; i < k_num_slots; i++) {
-      if (map->owned_slots_[i]) {
-        if (range_start == -1) {
-          range_start = i;
-          range_end = i;
-        } else if (i == range_end + 1) {
-          range_end = i;
-        } else {
+    for (const auto& [start_slot, range_and_shard] : map->slot_to_shard_map_) {
+      uint16_t end_slot = range_and_shard.first;
+      const ShardInfo* shard = range_and_shard.second;
+
+      // Only include if this is a local shard
+      if (shard->primary.has_value() &&
+          shard->primary->location == NodeInfo::NodeLocation::kLocal) {
+        if (!owned_ranges.empty()) owned_ranges += ", ";
+        owned_ranges +=
+            std::to_string(start_slot) + "-" + std::to_string(end_slot);
+      } else {
+        // Check replicas
+        bool is_local = false;
+        for (const auto& replica : shard->replicas) {
+          if (replica.location == NodeInfo::NodeLocation::kLocal) {
+            is_local = true;
+            break;
+          }
+        }
+        if (is_local) {
           if (!owned_ranges.empty()) owned_ranges += ", ";
           owned_ranges +=
-              std::to_string(range_start) + "-" + std::to_string(range_end);
-          range_start = i;
-          range_end = i;
+              std::to_string(start_slot) + "-" + std::to_string(end_slot);
         }
       }
     }
-    if (range_start != -1) {
-      if (!owned_ranges.empty()) owned_ranges += ", ";
-      owned_ranges +=
-          std::to_string(range_start) + "-" + std::to_string(range_end);
+    if (!owned_ranges.empty()) {
+      VMSDK_LOG(NOTICE, nullptr) << "owned_slots_ ranges: " << owned_ranges;
     }
-    VMSDK_LOG(NOTICE, nullptr) << "owned_slots_ ranges: " << owned_ranges;
   }
 
-  // Log shards_
+  // Print shards
   VMSDK_LOG(NOTICE, nullptr) << "shards_ count: " << map->shards_.size();
   for (const auto& [shard_id, shard_info] : map->shards_) {
     VMSDK_LOG(NOTICE, nullptr) << "Shard ID: " << shard_id;
     VMSDK_LOG(NOTICE, nullptr)
         << "  owned_slots count: " << shard_info.owned_slots.size();
+    VMSDK_LOG(NOTICE, nullptr)
+        << "  slots_fingerprint: " << shard_info.slots_fingerprint;
+
+    // Simplified slot range printing using slot_to_shard_map_
     if (!shard_info.owned_slots.empty()) {
       std::string slot_ranges;
-      auto it = shard_info.owned_slots.begin();
-      int range_start = *it;
-      int range_end = *it;
-      ++it;
-      for (; it != shard_info.owned_slots.end(); ++it) {
-        if (*it == range_end + 1) {
-          range_end = *it;
-        } else {
+      for (const auto& [start_slot, range_and_shard] :
+           map->slot_to_shard_map_) {
+        if (range_and_shard.second == &shard_info) {
+          uint16_t end_slot = range_and_shard.first;
           if (!slot_ranges.empty()) slot_ranges += ", ";
           slot_ranges +=
-              std::to_string(range_start) + "-" + std::to_string(range_end);
-          range_start = *it;
-          range_end = *it;
+              std::to_string(start_slot) + "-" + std::to_string(end_slot);
         }
       }
-      if (!slot_ranges.empty()) slot_ranges += ", ";
-      slot_ranges +=
-          std::to_string(range_start) + "-" + std::to_string(range_end);
       VMSDK_LOG(NOTICE, nullptr) << "  slot ranges: " << slot_ranges;
     }
+
+    // Print primary node info
+    if (shard_info.primary.has_value()) {
+      const auto& primary = shard_info.primary.value();
+      VMSDK_LOG(NOTICE, nullptr) << "  Primary Node:";
+      VMSDK_LOG(NOTICE, nullptr) << "    node_id: " << primary.node_id;
+      VMSDK_LOG(NOTICE, nullptr)
+          << "    role: "
+          << (primary.role == NodeInfo::NodeRole::kPrimary ? "Primary"
+                                                           : "Replica");
+      VMSDK_LOG(NOTICE, nullptr)
+          << "    location: "
+          << (primary.location == NodeInfo::NodeLocation::kLocal ? "Local"
+                                                                 : "Remote");
+      VMSDK_LOG(NOTICE, nullptr)
+          << "    address: "
+          << (primary.address.empty() ? "(local)" : primary.address);
+    } else {
+      VMSDK_LOG(NOTICE, nullptr) << "  Primary Node: (none)";
+    }
+
+    // Print replica nodes info
+    VMSDK_LOG(NOTICE, nullptr)
+        << "  Replicas count: " << shard_info.replicas.size();
+    for (size_t i = 0; i < shard_info.replicas.size(); ++i) {
+      const auto& replica = shard_info.replicas[i];
+      VMSDK_LOG(NOTICE, nullptr) << "  Replica[" << i << "]:";
+      VMSDK_LOG(NOTICE, nullptr) << "    node_id: " << replica.node_id;
+      VMSDK_LOG(NOTICE, nullptr)
+          << "    role: "
+          << (replica.role == NodeInfo::NodeRole::kPrimary ? "Primary"
+                                                           : "Replica");
+      VMSDK_LOG(NOTICE, nullptr)
+          << "    location: "
+          << (replica.location == NodeInfo::NodeLocation::kLocal ? "Local"
+                                                                 : "Remote");
+      VMSDK_LOG(NOTICE, nullptr)
+          << "    address: "
+          << (replica.address.empty() ? "(local)" : replica.address);
+    }
   }
+
+  // Print pre-computed target lists (unchanged)
+  VMSDK_LOG(NOTICE, nullptr)
+      << "primary_targets_ count: " << map->primary_targets_.size();
+  VMSDK_LOG(NOTICE, nullptr)
+      << "replica_targets_ count: " << map->replica_targets_.size();
+  VMSDK_LOG(NOTICE, nullptr)
+      << "all_targets_ count: " << map->all_targets_.size();
+
   VMSDK_LOG(NOTICE, nullptr) << "=== End Cluster Map ===";
 }
 

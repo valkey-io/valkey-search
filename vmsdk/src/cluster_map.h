@@ -9,6 +9,7 @@
 #define VMSDK_SRC_CLUSTER_MAP_H_
 
 #include <bitset>
+#include <chrono>
 #include <optional>
 #include <set>
 #include <string>
@@ -32,6 +33,9 @@ enum class FanoutTargetMode {
 
 const size_t k_num_slots = 16384;
 
+// forward declaration to solve circular dependency
+struct ShardInfo;
+
 struct NodeInfo {
   enum NodeRole { kPrimary, kReplica };
   enum NodeLocation {
@@ -42,16 +46,17 @@ struct NodeInfo {
   NodeRole role;
   NodeLocation location;
   // Empty string if location is kLocal.
+  std::string ip;
+  int port;
   std::string address;
+  // Pointer to the shard this node belongs to
+  const ShardInfo* shard = nullptr;
 
-  bool operator==(const NodeInfo& other) const {
-    return role == other.role && location == other.location &&
-           address == other.address;
-  }
+  auto operator<=>(const NodeInfo&) const = default;
 
   friend std::ostream& operator<<(std::ostream& os, const NodeInfo& target) {
     os << "NodeInfo{role: " << target.role << ", location: " << target.location
-       << ", address: " << target.address << "}";
+       << ", address: " << target.ip << ":" << target.port << "}";
     return os;
   }
 };
@@ -70,7 +75,8 @@ struct ShardInfo {
 class ClusterMap {
  public:
   // Create a new cluster map by querying current cluster state
-  // This builds the map in the background and can be called from any thread
+  // Reads would still access the existing cluster map; the new cluster map
+  // would replace the existing map once the creation is finished
   static std::shared_ptr<ClusterMap> CreateNewClusterMap(ValkeyModuleCtx* ctx);
 
   // return pre-generated target vectors
@@ -78,26 +84,40 @@ class ClusterMap {
   const std::vector<NodeInfo>& GetReplicaTargets() const;
   const std::vector<NodeInfo>& GetAllTargets() const;
 
-  bool GetIsClusterMapFull() const;
+  std::chrono::steady_clock::time_point GetExpirationTime() const {
+    return expiration_tp_;
+  }
+
+  // are all the slots assigned to some shard
+  bool GetIsClusterMapFull() const { return is_cluster_map_full_; }
 
   // generate a random targets vector from cluster bus
-  std::vector<NodeInfo> GetRandomTargets(ValkeyModuleCtx* ctx);
+  std::vector<NodeInfo> GetRandomTargets();
 
-  // slot ownership checks
-  bool IsSlotOwned(uint16_t slot) const;
+  // do I own this slot
+  bool IOwnSlot(uint16_t slot) const { return owned_slots_[slot]; }
 
-  // shard lookups, will return nullptr if shard does not exist
+  // shard lookups, will return nullptr if shard not found
   const ShardInfo* GetShardById(std::string_view shard_id) const;
-  const absl::flat_hash_map<std::string, ShardInfo>& GetAllShards() const;
+
+  // shard lookup by slot, return nullptr if shard not found
+  const ShardInfo* GetShardBySlot(uint16_t slot) const;
 
   // get cluster level slot fingerprint
-  uint64_t GetClusterSlotsFingerprint() const;
+  uint64_t GetClusterSlotsFingerprint() const {
+    return cluster_slots_fingerprint_;
+  }
 
  private:
+  std::chrono::steady_clock::time_point expiration_tp_;
+
   // 1: slot is owned by this cluster, 0: slot is not owned by this cluster
   std::bitset<k_num_slots> owned_slots_;
 
   absl::flat_hash_map<std::string, ShardInfo> shards_;
+
+  // An ordered map, key is start slot, value is end slot and ShardInfo
+  std::map<uint16_t, std::pair<uint16_t, const ShardInfo*>> slot_to_shard_map_;
 
   // Cluster-level fingerprint (hash of all shard fingerprints)
   uint64_t cluster_slots_fingerprint_;
@@ -109,12 +129,13 @@ class ClusterMap {
   std::vector<NodeInfo> replica_targets_;
   std::vector<NodeInfo> all_targets_;
 
-  // private helper function to refresh targets in CreateNewClusterMap
-  static std::vector<NodeInfo> GetTargets(ValkeyModuleCtx* ctx,
-                                          FanoutTargetMode target_mode);
-
   // helper function to print out cluster map for debug
   static void PrintClusterMap(std::shared_ptr<ClusterMap> map);
+
+  static uint64_t compute_shard_fingerprint(const std::set<uint16_t>& slots);
+
+  static uint64_t compute_cluster_fingerprint(
+      const absl::flat_hash_map<std::string, ShardInfo>& shards);
 };
 
 }  // namespace cluster_map

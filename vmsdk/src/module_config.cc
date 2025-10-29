@@ -17,8 +17,7 @@
 
 namespace vmsdk {
 namespace config {
-// module_config.cc
-// callbacks impl for config updates
+
 static GetMaxIndexesCallback g_getMaxIndexes = nullptr;
 static uint32_t g_current_index = 0;
 void SetGetMaxIndexesCallback(GetMaxIndexesCallback cb,

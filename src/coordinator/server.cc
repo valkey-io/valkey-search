@@ -132,7 +132,7 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
       std::move(*vector_search_parameters), reader_thread_pool_,
       [response, reactor, latency_sample = std::move(latency_sample)](
           auto& neighbors,
-          std::unique_ptr<query::VectorSearchParameters> parameters) mutable {
+          std::unique_ptr<query::SearchParameters> parameters) mutable {
         if (!neighbors.ok()) {
           reactor->Finish(ToGrpcStatus(neighbors.status()));
           RecordSearchMetrics(true, std::move(latency_sample));

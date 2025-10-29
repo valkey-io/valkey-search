@@ -27,7 +27,7 @@ namespace valkey_search::query::fanout {
 absl::Status PerformSearchFanoutAsync(
     ValkeyModuleCtx* ctx, std::vector<FanoutSearchTarget>& search_targets,
     coordinator::ClientPool* coordinator_client_pool,
-    std::unique_ptr<query::VectorSearchParameters> parameters,
+    std::unique_ptr<query::SearchParameters> parameters,
     vmsdk::ThreadPool* thread_pool, query::SearchResponseCallback callback);
 
 std::vector<FanoutSearchTarget> GetSearchTargetsForFanout(

@@ -134,7 +134,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*42\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*46\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -201,7 +201,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*42\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*46\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -258,7 +258,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*42\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*46\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -310,7 +310,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*42\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*46\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -360,7 +360,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*42\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*46\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -435,7 +435,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*48\r\n+index_name\r\n+test_name\r\n+index_"
+                         "*52\r\n+index_name\r\n+test_name\r\n+index_"
                          "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                          "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
@@ -493,7 +493,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*48\r\n+index_name\r\n+test_name\r\n+index_"
+                         "*52\r\n+index_name\r\n+test_name\r\n+index_"
                          "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                          "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"

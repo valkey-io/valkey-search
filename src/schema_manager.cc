@@ -69,7 +69,6 @@ vmsdk::config::Number &GetMaxIndexes() {
   return dynamic_cast<vmsdk::config::Number &>(*max_indexes);
 }
 
-// register callback for max index creation
 void MaxIndexCreationCallback(uint32_t current_indexes) {
   vmsdk::config::SetGetMaxIndexesCallback(
       GetMaxIndexes, &current_indexes);  // register callback

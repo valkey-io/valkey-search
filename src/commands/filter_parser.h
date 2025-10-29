@@ -44,7 +44,7 @@ class FilterParser {
 struct TokenResult {
     size_t end_pos;
     std::unique_ptr<query::TextPredicate> predicate;
-    bool break_query_syntax;
+    bool break_on_query_syntax;
 };
 
 absl::StatusOr<TokenResult> ParseTokenAndBuildPredicate(

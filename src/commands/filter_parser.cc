@@ -397,7 +397,6 @@ absl::StatusOr<bool> FilterParser::IsMatchAllExpression() {
     }
     return absl::InvalidArgumentError("Missing `)`");
   }
-  // return UnexpectedChar(expression_, pos_);
   return false;
 }
 
@@ -462,6 +461,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
   bool ends_with_star = false;
   size_t leading_percent_count = 0;
   size_t trailing_percent_count = 0;
+  bool break_on_query_syntax = false;
   while (current_pos < expression_.size()) {
     char ch = expression_[current_pos];
     // Handle backslashes
@@ -497,15 +497,23 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
         continue;
       }
     }
-    // Check for token boundaries
+    // Break on non text specific query syntax characters.
+    if (!in_quotes && (ch == ')' || ch == '|' || ch == '(' || ch == '@')) {
+      break_on_query_syntax = true;
+      break;
+    }
+    // - characters in the middle of text tokens are not negate. If they are in the beginning, break.
+    if (!in_quotes && ch == '-' && processed_content.empty()) {
+      break_on_query_syntax = true;
+      break;
+    }
+    // Break to complete an exact phrase or start a new exact phrase.
     if (ch == '"') break;
-    if (!in_quotes && (ch == ')' || ch == '|' || ch == '(' || ch == '@' || ch == '-')) break;
-    if (!in_quotes && ch != '%' && ch != '*' && lexer.IsPunctuation(ch)) break;
-    // Note:
+    // Break on all punctuation characters, except text query syntax chars such as % and * for non quote cases.
+    // Note (Remove this Note):
     // In quotes, we don't break on `:`, but we do strip it out. Also, we allow `$` and `_` to be used in words as well as to exist on their own as tokens.
     // In non quotes, we strip out `_` on its own. But when used with other characters, it is allowed.
-    if (in_quotes && lexer.IsPunctuation(ch)) break;
-    // if (in_quotes && lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap()) && ch != '$') break;
+    if ((!in_quotes && ch != '%' && ch != '*' || in_quotes) && lexer.IsPunctuation(ch)) break;
     // Handle fuzzy token boundary detection
     if (!in_quotes && ch == '%') {
       if (current_pos == pos_) {
@@ -551,7 +559,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
         return absl::InvalidArgumentError("Empty fuzzy token");
       }
       std::string lower_content = absl::AsciiStrToLower(processed_content);
-      return FilterParser::TokenResult{current_pos, std::make_unique<query::FuzzyPredicate>(text_index_schema, field_mask, lower_content, leading_percent_count)};
+      return FilterParser::TokenResult{current_pos, std::make_unique<query::FuzzyPredicate>(text_index_schema, field_mask, lower_content, leading_percent_count), break_on_query_syntax};
     } else {
       return absl::InvalidArgumentError("Invalid fuzzy '%' markers");
     }
@@ -564,16 +572,16 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
     }
     std::string lower_content = absl::AsciiStrToLower(processed_content);
     if (ends_with_star) {
-      return FilterParser::TokenResult{current_pos, std::make_unique<query::InfixPredicate>(text_index_schema, field_mask, lower_content)};
+      return FilterParser::TokenResult{current_pos, std::make_unique<query::InfixPredicate>(text_index_schema, field_mask, lower_content), break_on_query_syntax};
     } else {
-      return FilterParser::TokenResult{current_pos, std::make_unique<query::SuffixPredicate>(text_index_schema, field_mask, lower_content)};
+      return FilterParser::TokenResult{current_pos, std::make_unique<query::SuffixPredicate>(text_index_schema, field_mask, lower_content), break_on_query_syntax};
     }
   } else if (!in_quotes && ends_with_star) {
     if (processed_content.empty()) {
       return absl::InvalidArgumentError("Invalid wildcard '*' markers");
     }
     std::string lower_content = absl::AsciiStrToLower(processed_content);
-    return FilterParser::TokenResult{current_pos, std::make_unique<query::PrefixPredicate>(text_index_schema, field_mask, lower_content)};
+    return FilterParser::TokenResult{current_pos, std::make_unique<query::PrefixPredicate>(text_index_schema, field_mask, lower_content), break_on_query_syntax};
   } else {
     // Term predicate (default case) - apply stopword check and stemming
     std::string content = absl::AsciiStrToLower(processed_content);
@@ -582,12 +590,12 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
     // Replace false with the NOSTOPWORDS flag from the FT.SEARCH.
     bool remove_stopwords = false || !in_quotes;
     if ((remove_stopwords && lexer.IsStopWord(content) || content.empty())) {
-      return FilterParser::TokenResult{current_pos, nullptr}; // Skip stop words and empty words.
+      return FilterParser::TokenResult{current_pos, nullptr, break_on_query_syntax}; // Skip stop words and empty words.
     }
     if (min_stem_size.has_value()) {
       content = lexer.StemWord(content, !exact, *min_stem_size, lexer.GetStemmer());
     }
-    return FilterParser::TokenResult{current_pos, std::make_unique<query::TermPredicate>(text_index_schema, field_mask, content, exact)};
+    return FilterParser::TokenResult{current_pos, std::make_unique<query::TermPredicate>(text_index_schema, field_mask, content, exact), break_on_query_syntax};
   }
 }
 
@@ -633,24 +641,22 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
       }
       break;
     }
-    // There is a duplicate check in the child fn. We can remove this IF we have
-    // ParseTokenAndBuildPredicate return an indicator if we should break out of this fn.
-    // TODO: Find out all the query syntax characters which redis-search returns an error on.
+    // Note (Remove this Note):
     // Non Quotes includes: { } [ ] : ; $
     // Quotes: Nothing. All of the above return errors OR strip it.
     // For text, if any of the above are seen, reject the query.
-    if (!in_quotes && (c == ')' || c == '|' || c == '(' || c == '@' || c == '-')) {
-      break;
-    } 
     size_t token_start = pos_;
     VMSDK_ASSIGN_OR_RETURN(auto result, ParseTokenAndBuildPredicate(in_quotes, text_index_schema, field_mask, min_stem_size));
-    // If this happens, we are either done or were on a punctuation character.
+    if (result.predicate) {
+      terms.push_back(std::move(result.predicate));
+    }
+    if (result.break_on_query_syntax) {
+      break;
+    }
+    // If this happens, we are either done (at the end of the prefilter string) or were on a punctuation character which should be consumed.
     if (token_start == result.end_pos) {
       ++pos_;
       continue;
-    }
-    if (result.predicate) {
-      terms.push_back(std::move(result.predicate));
     }
     pos_ = result.end_pos;
   }

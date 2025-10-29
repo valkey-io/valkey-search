@@ -24,6 +24,7 @@
 #include "absl/status/statusor.h"
 #include "src/commands/filter_parser.h"
 #include "src/index_schema.h"
+#include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
@@ -82,11 +83,10 @@ struct SearchParameters {
   bool no_content{false};
   FilterParseResults filter_parse_results;
   std::vector<ReturnAttribute> return_attributes;
-  bool no_stop_words{false};
   bool inorder{false};
-  int slop{0};
+  unsigned int slop{0};
   bool verbatim{false};
-  std::string language;
+  data_model::Language language{data_model::LANGUAGE_ENGLISH};
   struct ParseTimeVariables {
     // Members of this struct are only valid during the parsing of
     // VectorSearchParameters on the mainthread. They get cleared

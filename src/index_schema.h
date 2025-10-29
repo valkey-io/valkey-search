@@ -97,7 +97,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
       absl::string_view attribute_alias) const;
   std::vector<std::string> GetAllTextIdentifiers() const;
-  uint32_t MinStemSizeAcrossTextIndexes() const;
+  std::optional<uint32_t> MinStemSizeAcrossTextIndexes() const;
   virtual absl::StatusOr<std::string> GetIdentifier(
       absl::string_view attribute_alias) const;
   absl::StatusOr<vmsdk::UniqueValkeyString> DefaultReplyScoreAs(

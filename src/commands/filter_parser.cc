@@ -452,7 +452,7 @@ static const uint32_t FUZZY_MAX_DISTANCE = 3;
 absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredicate(
     bool in_quotes, 
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    uint64_t field_mask, uint32_t min_stem_size) {
+    uint64_t field_mask, std::optional<uint32_t> min_stem_size) {
   indexes::text::Lexer lexer;
   // const auto& lexer = text_index_schema->GetLexer();
   size_t current_pos = pos_;
@@ -577,14 +577,19 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
     return FilterParser::TokenResult{current_pos, std::make_unique<query::PrefixPredicate>(text_index_schema, field_mask, lower_content)};
   } else {
     // Term predicate (default case) - apply stopword check and stemming
-    std::string lower_content = absl::AsciiStrToLower(processed_content);
-    bool exact = true || !in_quotes;
-    bool remove_stopwords = true;
-    if (remove_stopwords && (lexer.IsStopWord(lower_content, text_index_schema->GetStopWordsSet()) || lower_content.empty())) {
-      return FilterParser::TokenResult{current_pos, nullptr}; // Skip stop words
+    std::string content = absl::AsciiStrToLower(processed_content);
+    // Replace false with the VERBATIM flag from the FT.SEARCH.
+    bool exact = false || in_quotes;
+    // Replace false with the NOSTOPWORDS flag from the FT.SEARCH.
+    bool remove_stopwords = false || !in_quotes;
+    if ((remove_stopwords && lexer.IsStopWord(content, text_index_schema->GetStopWordsSet()) || content.empty())) {
+      return FilterParser::TokenResult{current_pos, nullptr}; // Skip stop words and empty words.
     }
-    auto stemmed_token = lexer.StemWord(lower_content, text_index_schema->GetStemmer(), !exact, min_stem_size);
-    return FilterParser::TokenResult{current_pos, std::make_unique<query::TermPredicate>(text_index_schema, field_mask, stemmed_token, exact)};
+    if (min_stem_size.has_value()) {
+      VMSDK_LOG(WARNING, nullptr) << "Stemming word: " << content;
+      content = lexer.StemWord(content, text_index_schema->GetStemmer(), !exact, *min_stem_size);
+    }
+    return FilterParser::TokenResult{current_pos, std::make_unique<query::TermPredicate>(text_index_schema, field_mask, content, exact)};
   }
 }
 
@@ -596,7 +601,7 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
   }
   std::vector<std::unique_ptr<query::TextPredicate>> terms;
   uint64_t field_mask;
-  uint32_t min_stem_size;
+  std::optional<uint32_t> min_stem_size = std::nullopt;
   if (field_for_default.has_value()) {
     auto index = index_schema_.GetIndex(field_for_default.value());
     if (!index.ok() || index.value()->GetIndexerType() != indexes::IndexerType::kText) {
@@ -606,7 +611,9 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
     auto identifier = index_schema_.GetIdentifier(field_for_default.value()).value();
     filter_identifiers_.insert(identifier);
     field_mask = 1ULL << text_index->GetTextFieldNumber();
-    min_stem_size = text_index->GetMinStemSize();
+    if (text_index->IsStemmingEnabled()) {
+      min_stem_size = text_index->GetMinStemSize();
+    }
   } else {
     auto text_identifiers = index_schema_.GetAllTextIdentifiers();
     for (const auto& identifier : text_identifiers) {
@@ -616,12 +623,16 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
     min_stem_size = index_schema_.MinStemSizeAcrossTextIndexes();
   }
   bool in_quotes = false;
+  bool exact = false;
   while (!IsEnd()) {
     char c = Peek();
     if (c == '"') {
       in_quotes = !in_quotes;
       ++pos_;
-      if (in_quotes && terms.empty()) continue;
+      if (in_quotes && terms.empty()) {
+        exact = true;
+        continue;
+      }
       break;
     }
     // There is a duplicate check in the child fn. We can remove this IF we have
@@ -647,9 +658,17 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
   }
   std::unique_ptr<query::Predicate> pred;
   if (terms.size() > 1) {
+    // TODO: Set these based on the FT.SEARCH command parameters.
+    uint32_t slop = 0;
+    bool inorder = false;
+    if (exact) {
+      slop = 0;
+      inorder = true;
+    }
     // TODO: Swap ProximityPredicate with ComposedANDPredicate once it is flattened.
+    // Once that happens, we need to add slop and inorder properties to ComposedANDPredicate.
     pred = std::make_unique<query::ProximityPredicate>(
-      std::move(terms), /*slop=*/0, /*inorder=*/true);
+      std::move(terms), slop, inorder);
     node_count_ += terms.size(); 
   } else {
     if (terms.empty()) {

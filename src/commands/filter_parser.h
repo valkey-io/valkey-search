@@ -50,7 +50,7 @@ struct TokenResult {
 absl::StatusOr<TokenResult> ParseTokenAndBuildPredicate(
     bool in_quotes, 
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    uint64_t field_mask, uint32_t min_stem_size);
+    uint64_t field_mask, std::optional<uint32_t> min_stem_size);
 
   absl::StatusOr<std::string> ResolveTextFieldOrDefault(
       const std::optional<std::string>& maybe_field);

@@ -277,15 +277,22 @@ std::vector<std::string> IndexSchema::GetAllTextIdentifiers() const {
   }
   return identifiers;
 }
-// For reference, this is the field level index class.
-uint32_t IndexSchema::MinStemSizeAcrossTextIndexes() const {
+
+std::optional<uint32_t> IndexSchema::MinStemSizeAcrossTextIndexes() const {
   uint32_t min_stem_size = kDefaultMinStemSize;
+  bool is_stemming_enabled = false;
   for (const auto& [alias, attribute] : attributes_) {
     auto index = attribute.GetIndex();
     if (index->GetIndexerType() == indexes::IndexerType::kText) {
       auto* text_index = dynamic_cast<const indexes::Text*>(index.get());
       min_stem_size = std::min(min_stem_size, text_index->GetMinStemSize());
+      if (text_index->IsStemmingEnabled()) {
+        is_stemming_enabled = true;
+      }
     }
+  }
+  if (!is_stemming_enabled) {
+    return std::nullopt;
   }
   return min_stem_size;
 }

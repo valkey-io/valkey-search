@@ -326,6 +326,7 @@ class String : public ConfigBase<std::string> {
   FRIEND_TEST(Builder, ConfigBuilder);
 };
 
+//callbacks for index updates
 using GetMaxIndexesCallback = Number &(*)();
 void SetGetMaxIndexesCallback(GetMaxIndexesCallback cb, uint32_t *);
 

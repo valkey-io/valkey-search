@@ -19,6 +19,7 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "command_parser.h"
 #include "google/protobuf/any.pb.h"
 #include "highwayhash/hh_types.h"
 #include "src/coordinator/client_pool.h"
@@ -30,10 +31,13 @@
 
 namespace valkey_search::coordinator {
 
-using FingerprintCallback = absl::AnyInvocable<absl::StatusOr<uint64_t>(
+using FingerprintCallback =
+    absl::AnyInvocable<absl::StatusOr<vmsdk::SemanticVersion>(
+        const google::protobuf::Any &metadata)>;
+using EncodingVersionCallback = absl::AnyInvocable<absl::StatusOr<uint32_t>(
     const google::protobuf::Any &metadata)>;
 using MetadataUpdateCallback = absl::AnyInvocable<absl::Status(
-    absl::string_view, const google::protobuf::Any *metadata)>;
+    uint32_t db_num, absl::string_view, const google::protobuf::Any *metadata)>;
 using AuxSaveCallback = void (*)(ValkeyModuleIO *rdb, int when);
 using AuxLoadCallback = int (*)(ValkeyModuleIO *rdb, int encver, int when);
 static constexpr int kEncodingVersion = 0;
@@ -43,7 +47,6 @@ static constexpr uint8_t kMetadataBroadcastClusterMessageReceiverId = 0x00;
 static constexpr highwayhash::HHKey kHashKey{
     0x9736bad976c904ea, 0x08f963a1a52eece9, 0x1ea3f3f773f3b510,
     0x9290a6b4e4db3d51};
-
 class MetadataManager {
  public:
   MetadataManager(ValkeyModuleCtx *ctx, ClientPool &client_pool)
@@ -64,28 +67,34 @@ class MetadataManager {
             .section_count = [this](ValkeyModuleCtx *ctx, int when) -> int {
               return GetSectionsCount();
             },
-            .minimum_semantic_version = [](ValkeyModuleCtx *ctx,
-                                           int when) -> int {
-              return 0x010000;  // Always use 1.0.0 for now
-            }});
+            .minimum_semantic_version = [](ValkeyModuleCtx *ctx, int when)
+                -> int { return Instance().ComputeRDBVersion(); }});
   }
 
   static uint64_t ComputeTopLevelFingerprint(
       const google::protobuf::Map<std::string, GlobalMetadataEntryMap>
           &type_namespace_map);
 
-  absl::Status TriggerCallbacks(absl::string_view type_name,
+  vmsdk::SemanticVersion ComputeRDBVersion() const;
+
+  absl::Status TriggerCallbacks(absl::string_view type_name, uint32_t db_num,
                                 absl::string_view id,
                                 const GlobalMetadataEntry &entry);
 
   absl::StatusOr<google::protobuf::Any> GetEntry(absl::string_view type_name,
+                                                 uint32_t db_num,
                                                  absl::string_view id);
 
   absl::StatusOr<IndexFingerprintVersion> CreateEntry(
-      absl::string_view type_name, absl::string_view id,
+      absl::string_view type_name, uint32_t db_num, absl::string_view id,
       std::unique_ptr<google::protobuf::Any> contents);
 
-  absl::Status DeleteEntry(absl::string_view type_name, absl::string_view id);
+  absl::Status DeleteEntry(absl::string_view type_name, uint32_t db_num,
+                           absl::string_view id);
+
+  absl::StatusOr<IndexFingerprintVersion> GetFingerprintAndVersion(
+      absl::string_view type_name, uint32_t db_num,
+      absl::string_view index_name);
 
   std::unique_ptr<GlobalMetadata> GetGlobalMetadata();
 
@@ -94,15 +103,23 @@ class MetadataManager {
   // accept updates to that type both locally and over the cluster bus.
   //
   // * type_name should be a unique string identifying the type.
-  // * encoding_version should be bumped any time the underlying metadata format
-  // is changed.
   // * fingerprint_callback should be a function for computing the fingerprint
   // of the metadata for the given encoding version. This function can only
   // change when the encoding version is bumped.
   // * update_callback will be called whenever the metadata is updated.
-  void RegisterType(absl::string_view type_name, uint32_t encoding_version,
+  //
+  // Each entry has an encoding version associated with it.  When an entry
+  // is created or updated locally, the encoding version is computed using the
+  // encoding_version parameter passed to RegisterType. When an entry is updated
+  // from the cluster bus, the encoding version is read from the metadata entry
+  // itself. If the encoding version in the new metadata entry is greater than
+  // the max_encoding_version registered for the type, the update will be
+  // rejected.
+  //
+  void RegisterType(absl::string_view type_name, uint32_t max_encoding_version,
                     FingerprintCallback fingerprint_callback,
-                    MetadataUpdateCallback callback);
+                    MetadataUpdateCallback callback,
+                    EncodingVersionCallback encoding_version_callback);
 
   void BroadcastMetadata(ValkeyModuleCtx *ctx);
 
@@ -122,6 +139,7 @@ class MetadataManager {
       std::unique_ptr<GlobalMetadataVersionHeader> header);
 
   absl::Status ReconcileMetadata(const GlobalMetadata &proposed,
+                                 absl::string_view source,
                                  bool trigger_callbacks = true,
                                  bool prefer_incoming = false);
 
@@ -146,9 +164,19 @@ class MetadataManager {
   static void InitInstance(std::unique_ptr<MetadataManager> instance);
   static MetadataManager &Instance();
 
+  absl::Status ShowMetadata(ValkeyModuleCtx *ctx,
+                            vmsdk::ArgsIterator &iter) const;
+  static std::string EncodeDbNum(uint32_t db_num, absl::string_view id);
+  struct DecodedDbNum {
+    uint32_t db_num;
+    std::string id;
+  };
+  static DecodedDbNum DecodeDbNum(absl::string_view encoded_id);
+
  private:
   struct RegisteredType {
-    uint32_t encoding_version;
+    uint32_t max_encoding_version;
+    EncodingVersionCallback encoding_version_callback;
     FingerprintCallback fingerprint_callback;
     MetadataUpdateCallback update_callback;
   };

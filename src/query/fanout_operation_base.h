@@ -117,14 +117,14 @@ class FanoutOperationBase {
         this->RpcDone();
       });
     } else {
-      std::string clinet_ip_port = absl::StrCat(
+      std::string client_ip_port = absl::StrCat(
           target.ip, ":", coordinator::GetCoordinatorPort(target.port));
-      auto client = client_pool_->GetClient(clinet_ip_port);
+      auto client = client_pool_->GetClient(client_ip_port);
       if (!client) {
         ++Metrics::GetStats().info_fanout_fail_cnt;
         VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
             << "FANOUT_DEBUG: Found invalid client on target "
-            << clinet_ip_port;
+            << client_ip_port;
         this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
                       coordinator::FanoutErrorType::COMMUNICATION_ERROR,
                       target);
@@ -133,14 +133,14 @@ class FanoutOperationBase {
       }
       this->InvokeRemoteRpc(
           client.get(), request,
-          [this, target, clinet_ip_port](grpc::Status status, Response& resp) {
+          [this, target, client_ip_port](grpc::Status status, Response& resp) {
             if (status.ok()) {
               this->OnResponse(resp, target);
             } else {
               ++Metrics::GetStats().info_fanout_fail_cnt;
               VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
                   << "FANOUT_DEBUG: InvokeRemoteRpc error on target "
-                  << clinet_ip_port << ", status code: " << status.error_code()
+                  << client_ip_port << ", status code: " << status.error_code()
                   << ", error message: " << status.error_message();
               // if grpc failed, the response is invalid, so we need to manually
               // set the error type

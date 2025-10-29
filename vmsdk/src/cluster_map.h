@@ -72,6 +72,12 @@ struct ShardInfo {
   uint64_t slots_fingerprint;
 };
 
+struct SlotRangeInfo {
+  uint16_t start_slot;
+  uint16_t end_slot;
+  std::string shard_id;
+};
+
 class ClusterMap {
  public:
   // Create a new cluster map by querying current cluster state
@@ -136,6 +142,32 @@ class ClusterMap {
 
   static uint64_t compute_cluster_fingerprint(
       const absl::flat_hash_map<std::string, ShardInfo>& shards);
+
+  // Helper functions for CreateNewClusterMap
+  static NodeInfo ParseNodeInfo(ValkeyModuleCallReply* node_arr,
+                                bool is_local_shard, NodeInfo::NodeRole role);
+
+  static bool IsLocalShard(ValkeyModuleCallReply* slot_range,
+                           const char* my_node_id);
+
+  static void ProcessSlotRange(
+      ValkeyModuleCallReply* slot_range, const char* my_node_id,
+      absl::flat_hash_map<std::string, ShardInfo>& shards,
+      std::bitset<k_num_slots>& owned_slots,
+      std::vector<NodeInfo>& primary_targets,
+      std::vector<NodeInfo>& replica_targets,
+      std::vector<NodeInfo>& all_targets,
+      std::vector<SlotRangeInfo>& slot_ranges);
+
+  static void BuildSlotToShardMap(
+      std::map<uint16_t, std::pair<uint16_t, const ShardInfo*>>&
+          slot_to_shard_map,
+      const absl::flat_hash_map<std::string, ShardInfo>& shards,
+      const std::vector<SlotRangeInfo>& slot_ranges);
+
+  static bool CheckClusterMapFull(
+      const std::map<uint16_t, std::pair<uint16_t, const ShardInfo*>>&
+          slot_map);
 };
 
 }  // namespace cluster_map

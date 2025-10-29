@@ -122,255 +122,232 @@ uint64_t ClusterMap::compute_cluster_fingerprint(
   return fingerprint;
 }
 
-// create a new cluster map
+// Helper function to parse node info from CLUSTER SLOTS reply
+NodeInfo ClusterMap::ParseNodeInfo(ValkeyModuleCallReply* node_arr,
+                                   bool is_local_shard,
+                                   NodeInfo::NodeRole role) {
+  CHECK(node_arr) << "CLUSTER_MAP_ERROR: node subarray returned nullptr";
+  CHECK(ValkeyModule_CallReplyLength(node_arr) >= 3)
+      << "CLUSTER_MAP_ERROR: node subarray returned invalid length, expected "
+         ">= 3";
+
+  // Get node ID
+  size_t node_id_len;
+  const char* node_id_char = ValkeyModule_CallReplyStringPtr(
+      ValkeyModule_CallReplyArrayElement(node_arr, 2), &node_id_len);
+  CHECK(node_id_char) << "CLUSTER_MAP_ERROR: node id returned nullptr";
+
+  // Get IP
+  size_t node_ip_len;
+  const char* node_ip_char = ValkeyModule_CallReplyStringPtr(
+      ValkeyModule_CallReplyArrayElement(node_arr, 0), &node_ip_len);
+  CHECK(node_ip_char) << "CLUSTER_MAP_ERROR: node ip returned nullptr";
+
+  // Get port
+  long long node_port = ValkeyModule_CallReplyInteger(
+      ValkeyModule_CallReplyArrayElement(node_arr, 1));
+  CHECK(node_port) << "CLUSTER_MAP_ERROR: node port returned nullptr";
+
+  return NodeInfo{.node_id = std::string(node_id_char, node_id_len),
+                  .role = role,
+                  .location = is_local_shard ? NodeInfo::NodeLocation::kLocal
+                                             : NodeInfo::NodeLocation::kRemote,
+                  .ip = std::string(node_ip_char, node_ip_len),
+                  .port = is_local_shard ? 0 : static_cast<int>(node_port),
+                  .shard = nullptr};
+}
+
+// Helper function to check if any node in the slot range is local
+bool ClusterMap::IsLocalShard(ValkeyModuleCallReply* slot_range,
+                              const char* my_node_id) {
+  size_t slot_len = ValkeyModule_CallReplyLength(slot_range);
+
+  // Check all nodes (primary at index 2, replicas at index 3+)
+  for (size_t i = 2; i < slot_len; i++) {
+    ValkeyModuleCallReply* node_arr =
+        ValkeyModule_CallReplyArrayElement(slot_range, i);
+    if (!node_arr) continue;
+
+    size_t node_id_len;
+    const char* node_id_char = ValkeyModule_CallReplyStringPtr(
+        ValkeyModule_CallReplyArrayElement(node_arr, 2), &node_id_len);
+
+    if (node_id_char && node_id_len == VALKEYMODULE_NODE_ID_LEN &&
+        memcmp(node_id_char, my_node_id, VALKEYMODULE_NODE_ID_LEN) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Helper function to parse slot range and create ShardInfo
+void ClusterMap::ProcessSlotRange(
+    ValkeyModuleCallReply* slot_range, const char* my_node_id,
+    absl::flat_hash_map<std::string, ShardInfo>& shards,
+    std::bitset<k_num_slots>& owned_slots,
+    std::vector<NodeInfo>& primary_targets,
+    std::vector<NodeInfo>& replica_targets, std::vector<NodeInfo>& all_targets,
+    std::vector<SlotRangeInfo>& slot_ranges) {
+  CHECK(slot_range)
+      << "CLUSTER_MAP_ERROR: ValkeyModule_Call CLUSTER SLOTS result returned "
+         "invalid slot range sub-array";
+  CHECK(ValkeyModule_CallReplyType(slot_range) == VALKEYMODULE_REPLY_ARRAY)
+      << "CLUSTER_MAP_ERROR: slot range sub-array has incorrect type";
+
+  size_t slot_len = ValkeyModule_CallReplyLength(slot_range);
+  CHECK(slot_len >= 3) << "CLUSTER_MAP_ERROR: slot range sub-array has invalid "
+                          "length, should be at least 3";
+
+  // Parse start and end slots
+  long long start = ValkeyModule_CallReplyInteger(
+      ValkeyModule_CallReplyArrayElement(slot_range, 0));
+  long long end = ValkeyModule_CallReplyInteger(
+      ValkeyModule_CallReplyArrayElement(slot_range, 1));
+
+  // Build slot set
+  std::set<uint16_t> slot_set;
+  for (long long slot = start; slot <= end; slot++) {
+    if (slot >= 0 && slot < k_num_slots) {
+      slot_set.insert(static_cast<uint16_t>(slot));
+    }
+  }
+
+  // Determine if this is a local shard
+  bool is_local_shard = IsLocalShard(slot_range, my_node_id);
+
+  // Parse primary node
+  ValkeyModuleCallReply* primary_node_arr =
+      ValkeyModule_CallReplyArrayElement(slot_range, 2);
+  NodeInfo primary_node = ParseNodeInfo(primary_node_arr, is_local_shard,
+                                        NodeInfo::NodeRole::kPrimary);
+
+  // Parse replica nodes
+  std::vector<NodeInfo> replicas;
+  for (size_t j = 3; j < slot_len; j++) {
+    ValkeyModuleCallReply* replica_node_arr =
+        ValkeyModule_CallReplyArrayElement(slot_range, j);
+    replicas.push_back(ParseNodeInfo(replica_node_arr, is_local_shard,
+                                     NodeInfo::NodeRole::kReplica));
+  }
+
+  // Mark owned slots if local
+  if (is_local_shard) {
+    for (long long slot = start; slot <= end; slot++) {
+      CHECK(slot >= 0 && slot < k_num_slots)
+          << "CLUSTER_MAP_ERROR: invalid slot number";
+      owned_slots[slot] = true;
+    }
+  }
+
+  // Create and insert ShardInfo
+  std::string shard_id = primary_node.node_id;
+  CHECK(shards.find(shard_id) == shards.end())
+      << "CLUSTER_MAP_ERROR: Duplicate shard_id in CLUSTER SLOTS response";
+
+  ShardInfo shard;
+  shard.shard_id = shard_id;
+  shard.owned_slots = slot_set;
+  shard.slots_fingerprint = ClusterMap::compute_shard_fingerprint(slot_set);
+  shard.primary = primary_node;
+  shard.replicas = std::move(replicas);
+
+  auto [inserted_it, success] = shards.insert({shard_id, std::move(shard)});
+  CHECK(success) << "CLUSTER_MAP_ERROR: Failed to insert shard";
+
+  // Store slot range info for later
+  slot_ranges.push_back(
+      {static_cast<uint16_t>(start), static_cast<uint16_t>(end), shard_id});
+
+  // Fix shard pointers and populate target lists
+  if (inserted_it->second.primary.has_value()) {
+    inserted_it->second.primary->shard = &(inserted_it->second);
+    primary_targets.push_back(inserted_it->second.primary.value());
+    all_targets.push_back(inserted_it->second.primary.value());
+  }
+  for (auto& replica : inserted_it->second.replicas) {
+    replica.shard = &(inserted_it->second);
+    replica_targets.push_back(replica);
+    all_targets.push_back(replica);
+  }
+}
+
+// Helper function to build slot-to-shard map
+void ClusterMap::BuildSlotToShardMap(
+    std::map<uint16_t, std::pair<uint16_t, const ShardInfo*>>&
+        slot_to_shard_map,
+    const absl::flat_hash_map<std::string, ShardInfo>& shards,
+    const std::vector<SlotRangeInfo>& slot_ranges) {
+  for (const auto& range_info : slot_ranges) {
+    auto shard_it = shards.find(range_info.shard_id);
+    CHECK(shard_it != shards.end())
+        << "CLUSTER_MAP_ERROR: Shard not found when building slot map";
+    slot_to_shard_map[range_info.start_slot] =
+        std::make_pair(range_info.end_slot, &(shard_it->second));
+  }
+}
+
+// Helper function to check if cluster map is full
+bool ClusterMap::CheckClusterMapFull(
+    const std::map<uint16_t, std::pair<uint16_t, const ShardInfo*>>& slot_map) {
+  if (slot_map.empty() || slot_map.begin()->first != 0) {
+    return false;
+  }
+
+  uint16_t expected_next = 0;
+  for (const auto& [start_slot, range_and_shard] : slot_map) {
+    if (start_slot != expected_next) {
+      return false;
+    }
+    expected_next = range_and_shard.first + 1;
+  }
+
+  return expected_next == k_num_slots;
+}
+
+// Main function - now much cleaner
 std::shared_ptr<ClusterMap> ClusterMap::CreateNewClusterMap(
     ValkeyModuleCtx* ctx) {
   auto new_map = std::shared_ptr<ClusterMap>(new ClusterMap());
   new_map->is_cluster_map_full_ = false;
 
-  // call CLUSTER_SLOTS from Valkey Module API
+  // Call CLUSTER SLOTS
   auto reply = vmsdk::UniquePtrValkeyCallReply(
       ValkeyModule_Call(ctx, "CLUSTER", "c", "SLOTS"));
   CHECK(reply)
       << "CLUSTER_MAP_ERROR: ValkeyModule_Call CLUSTER SLOTS returned nullptr";
+  CHECK(ValkeyModule_CallReplyType(reply.get()) == VALKEYMODULE_REPLY_ARRAY)
+      << "CLUSTER_MAP_ERROR: CLUSTER SLOTS returns incorrect type";
 
-  auto reply_type = ValkeyModule_CallReplyType(reply.get());
-  CHECK(reply_type == VALKEYMODULE_REPLY_ARRAY)
-      << "CLUSTER_MAP_ERROR: ValkeyModule_Call CLUSTER SLOTS returns incorrect "
-         "type, expect VALKEYMODULE_REPLY_ARRAY but got "
-      << reply_type;
-
-  // Get local node ID to identify which shard we belong to
+  // Get local node ID
   const char* my_node_id = ValkeyModule_GetMyClusterID();
   CHECK(my_node_id)
-      << "CLUSTER_MAP_ERROR:ValkeyModule_GetMyClusterID returned nullptr";
+      << "CLUSTER_MAP_ERROR: ValkeyModule_GetMyClusterID returned nullptr";
 
-  // reply is an array of arrays
-  // each array element should contain at least 3 elements
-  // (1) start slot range (2) end slot range (3) master info (4)... replica info
+  // Process each slot range
+  std::vector<SlotRangeInfo> slot_ranges;
   size_t len = ValkeyModule_CallReplyLength(reply.get());
   for (size_t i = 0; i < len; ++i) {
     ValkeyModuleCallReply* slot_range =
         ValkeyModule_CallReplyArrayElement(reply.get(), i);
-    CHECK(slot_range)
-        << "CLUSTER_MAP_ERROR: ValkeyModule_Call CLUSTER SLOTS result returned "
-           "invalid slot range sub-array";
-    auto slot_range_type = ValkeyModule_CallReplyType(slot_range);
-    CHECK(slot_range_type == VALKEYMODULE_REPLY_ARRAY)
-        << "CLUSTER_MAP_ERROR: ValkeyModule_Call CLUSTER SLOTS result returns "
-           "incorrect slot range sub-array type, expect "
-           "VALKEYMODULE_REPLY_ARRAY but got "
-        << slot_range_type;
-
-    size_t slot_len = ValkeyModule_CallReplyLength(slot_range);
-    // each array element should have at least 3 elements
-    CHECK(slot_len >= 3)
-        << "CLUSTER_MAP_ERROR: ValkeyModule_Call CLUSTER "
-           "SLOTS result returned a slot range sub-array with invalid length, "
-           "should be at least 3";
-    // Get start and end slots
-    ValkeyModuleCallReply* start_slot =
-        ValkeyModule_CallReplyArrayElement(slot_range, 0);
-    CHECK(ValkeyModule_CallReplyType(start_slot) == VALKEYMODULE_REPLY_INTEGER)
-        << "CLUSTER_MAP_ERROR: start slot expect INTEGER type, got"
-        << ValkeyModule_CallReplyType(start_slot);
-    ValkeyModuleCallReply* end_slot =
-        ValkeyModule_CallReplyArrayElement(slot_range, 1);
-    CHECK(ValkeyModule_CallReplyType(end_slot) == VALKEYMODULE_REPLY_INTEGER)
-        << "CLUSTER_MAP_ERROR: end slot expect INTEGER type, got"
-        << ValkeyModule_CallReplyType(end_slot);
-    long long start = ValkeyModule_CallReplyInteger(start_slot);
-    long long end = ValkeyModule_CallReplyInteger(end_slot);
-    // Mark slots as assigned in cluster
-    std::set<uint16_t> slot_set;
-    for (long long slot = start; slot <= end; slot++) {
-      if (slot >= 0 && slot < k_num_slots) {
-        slot_set.insert(static_cast<uint16_t>(slot));
-      }
-    }
-    // node info is an array
-    // (1) ip (2) port number (3) node_id (4) hostname (optional)
-    // parse primary node
-    ValkeyModuleCallReply* primary_node_arr =
-        ValkeyModule_CallReplyArrayElement(slot_range, 2);
-    CHECK(primary_node_arr)
-        << "CLUSTER_MAP_ERROR: primary node subarray returned nullptr";
-    CHECK(ValkeyModule_CallReplyLength(primary_node_arr) >= 3)
-        << "CLUSTER_MAP_ERROR: primary node subarray returned invalid length, "
-           "expected >= 3";
-    // get primary node id
-    size_t primary_id_len;
-    const char* primary_id_char = ValkeyModule_CallReplyStringPtr(
-        ValkeyModule_CallReplyArrayElement(primary_node_arr, 2),
-        &primary_id_len);
-    CHECK(primary_id_char)
-        << "CLUSTER_MAP_ERROR: primary node id returned nullptr";
-    std::string primary_id(primary_id_char, primary_id_len);
-
-    // get primary IP and port
-    size_t primary_ip_len;
-    const char* primary_ip_char = ValkeyModule_CallReplyStringPtr(
-        ValkeyModule_CallReplyArrayElement(primary_node_arr, 0),
-        &primary_ip_len);
-    CHECK(primary_ip_char)
-        << "CLUSTER_MAP_ERROR: primary node ip returned nullptr";
-    std::string primary_ip(primary_ip_char, primary_ip_len);
-
-    long long primary_port = ValkeyModule_CallReplyInteger(
-        ValkeyModule_CallReplyArrayElement(primary_node_arr, 1));
-    CHECK(primary_port)
-        << "CLUSTER_MAP_ERROR: primary node port returned nullptr";
-
-    // First pass: determine if this is a local shard by checking ALL nodes
-    bool is_local_shard = false;
-
-    // Check primary
-    if (primary_id_len == VALKEYMODULE_NODE_ID_LEN &&
-        memcmp(primary_id_char, my_node_id, VALKEYMODULE_NODE_ID_LEN) == 0) {
-      is_local_shard = true;
-    }
-
-    // Parse all replica node IDs first
-    std::vector<std::tuple<std::string, std::string, long long>> replica_data;
-    for (size_t j = 3; j < slot_len; j++) {
-      ValkeyModuleCallReply* replica_node_arr =
-          ValkeyModule_CallReplyArrayElement(slot_range, j);
-      CHECK(replica_node_arr)
-          << "CLUSTER_MAP_ERROR: replica node subarray returned nullptr";
-      CHECK(ValkeyModule_CallReplyLength(replica_node_arr) >= 3)
-          << "CLUSTER_MAP_ERROR: replica node subarray returned invalid "
-             "length, "
-             "should be >= 3";
-
-      size_t replica_id_len;
-      const char* replica_id_char = ValkeyModule_CallReplyStringPtr(
-          ValkeyModule_CallReplyArrayElement(replica_node_arr, 2),
-          &replica_id_len);
-      CHECK(replica_id_char)
-          << "CLUSTER_MAP_ERROR: replica node id returned nullptr";
-
-      size_t replica_ip_len;
-      const char* replica_ip_char = ValkeyModule_CallReplyStringPtr(
-          ValkeyModule_CallReplyArrayElement(replica_node_arr, 0),
-          &replica_ip_len);
-      CHECK(replica_ip_char)
-          << "CLUSTER_MAP_ERROR: replica node ip returned nullptr";
-
-      long long replica_port = ValkeyModule_CallReplyInteger(
-          ValkeyModule_CallReplyArrayElement(replica_node_arr, 1));
-      CHECK(replica_port)
-          << "CLUSTER_MAP_ERROR: replica node port returned nullptr";
-
-      replica_data.emplace_back(std::string(replica_id_char, replica_id_len),
-                                std::string(replica_ip_char, replica_ip_len),
-                                replica_port);
-
-      // Check if this replica is the local node
-      if (!is_local_shard && replica_id_len == VALKEYMODULE_NODE_ID_LEN &&
-          memcmp(replica_id_char, my_node_id, VALKEYMODULE_NODE_ID_LEN) == 0) {
-        is_local_shard = true;
-      }
-    }
-
-    // Create primary NodeInfo
-    NodeInfo primary_node{
-        .node_id = primary_id,
-        .role = NodeInfo::NodeRole::kPrimary,
-        .location = is_local_shard ? NodeInfo::NodeLocation::kLocal
-                                   : NodeInfo::NodeLocation::kRemote,
-        .ip = primary_ip,
-        .port = is_local_shard ? 0 : static_cast<int>(primary_port),
-        .shard = nullptr  // Will be set after inserting shard
-    };
-
-    // create replica NodeInfo objects using parsed data
-    std::vector<NodeInfo> replicas;
-    for (const auto& [replica_id, replica_ip, replica_port] : replica_data) {
-      NodeInfo replica_node{
-          .node_id = replica_id,
-          .role = NodeInfo::NodeRole::kReplica,
-          .location = is_local_shard ? NodeInfo::NodeLocation::kLocal
-                                     : NodeInfo::NodeLocation::kRemote,
-          .ip = replica_ip,
-          .port = is_local_shard ? 0 : static_cast<int>(replica_port),
-          .shard = nullptr};
-      replicas.push_back(replica_node);
-    }
-
-    // Mark owned slots
-    if (is_local_shard) {
-      for (long long slot = start; slot <= end; slot++) {
-        CHECK(slot >= 0 && slot < k_num_slots)
-            << "CLUSTER_MAP_ERROR: invalid slot number";
-        new_map->owned_slots_[slot] = true;
-      }
-    }
-    // Update shards map
-    CHECK(new_map->shards_.find(primary_id) == new_map->shards_.end())
-        << "CLUSTER_MAP_ERROR: Duplicate master_id in CLUSTER SLOTS response";
-
-    ShardInfo shard;
-    shard.shard_id = primary_id;
-    shard.owned_slots = slot_set;
-    // compute shard-level slot fingerprint
-    shard.slots_fingerprint = compute_shard_fingerprint(slot_set);
-    shard.primary = primary_node;
-    shard.replicas = std::move(replicas);
-    // Insert shard into map
-    auto [inserted_it, success] =
-        new_map->shards_.insert({primary_id, std::move(shard)});
-    CHECK(success) << "CLUSTER_MAP_ERROR: Failed to insert shard";
-
-    // Build slot_to_shard_map_ entry
-    // The slot range [start, end] maps to this shard
-    new_map->slot_to_shard_map_[static_cast<uint16_t>(start)] =
-        std::make_pair(static_cast<uint16_t>(end), &(inserted_it->second));
-
-    // Fix shard pointers in NodeInfo
-    if (inserted_it->second.primary.has_value()) {
-      inserted_it->second.primary->shard = &(inserted_it->second);
-      // Add to primary_targets and all_targets
-      new_map->primary_targets_.push_back(inserted_it->second.primary.value());
-      new_map->all_targets_.push_back(inserted_it->second.primary.value());
-    }
-    for (auto& replica : inserted_it->second.replicas) {
-      replica.shard = &(inserted_it->second);
-      // Add to replica_targets and all_targets
-      new_map->replica_targets_.push_back(replica);
-      new_map->all_targets_.push_back(replica);
-    }
+    ProcessSlotRange(slot_range, my_node_id, new_map->shards_,
+                     new_map->owned_slots_, new_map->primary_targets_,
+                     new_map->replica_targets_, new_map->all_targets_,
+                     slot_ranges);
   }
 
-  // check is cluster map full using slot to shard map
-  if (!new_map->slot_to_shard_map_.empty()) {
-    // Check if first range starts at 0
-    auto it = new_map->slot_to_shard_map_.begin();
-    if (it->first == 0) {
-      uint16_t expected_next = 0;
-      bool has_gap = false;
-      for (const auto& [start_slot, range_and_shard] :
-           new_map->slot_to_shard_map_) {
-        uint16_t end_slot = range_and_shard.first;
-        // Check if there's a gap
-        if (start_slot != expected_next) {
-          has_gap = true;
-          break;
-        }
-        // Update expected next slot
-        expected_next = end_slot + 1;
-      }
-      // Check if we covered all slots and no gaps
-      if (!has_gap && expected_next == k_num_slots) {
-        new_map->is_cluster_map_full_ = true;
-      }
-    }
-  }
+  // Build slot-to-shard map
+  BuildSlotToShardMap(new_map->slot_to_shard_map_, new_map->shards_,
+                      slot_ranges);
+
+  // Check if cluster map is full
+  new_map->is_cluster_map_full_ =
+      CheckClusterMapFull(new_map->slot_to_shard_map_);
 
   // Compute cluster-level fingerprint
   new_map->cluster_slots_fingerprint_ =
       compute_cluster_fingerprint(new_map->shards_);
 
-  // record the creation timestamp
+  // Set expiration time
   new_map->expiration_tp_ =
       std::chrono::steady_clock::now() +
       std::chrono::milliseconds(cluster_map_expiration_ms.GetValue());

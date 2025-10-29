@@ -133,6 +133,15 @@ class FanoutOperationBase {
                   << "FANOUT_DEBUG: InvokeRemoteRpc error on target "
                   << target.address << ", status code: " << status.error_code()
                   << ", error message: " << status.error_message();
+              // if grpc failed, the response is invalid, so we need to manually
+              // set the error type
+              if (status.error_code() == grpc::StatusCode::NOT_FOUND) {
+                resp.set_error_type(
+                    coordinator::FanoutErrorType::INDEX_NAME_ERROR);
+              } else {
+                resp.set_error_type(
+                    coordinator::FanoutErrorType::COMMUNICATION_ERROR);
+              }
               this->OnError(status, resp.error_type(), target);
             }
             this->RpcDone();

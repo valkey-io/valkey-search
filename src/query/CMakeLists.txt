@@ -58,7 +58,6 @@ target_link_libraries(search_header INTERFACE thread_pool)
 
 set(SRCS_FANOUT ${CMAKE_CURRENT_LIST_DIR}/fanout.cc
                 ${CMAKE_CURRENT_LIST_DIR}/fanout.h
-                ${CMAKE_CURRENT_LIST_DIR}/fanout_operation_base.h
                 ${CMAKE_CURRENT_LIST_DIR}/primary_info_fanout_operation.cc
                 ${CMAKE_CURRENT_LIST_DIR}/primary_info_fanout_operation.h
                 ${CMAKE_CURRENT_LIST_DIR}/cluster_info_fanout_operation.cc

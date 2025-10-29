@@ -21,8 +21,6 @@
 
 namespace valkey_search::indexes::text {
 
-using Lexer = valkey_search::indexes::text::Lexer;
-
 // Test case structure for parameterized tests
 struct LexerTestCase {
   std::string input;
@@ -35,34 +33,22 @@ struct LexerTestCase {
 
 class LexerTest : public ::testing::Test {
  protected:
-  void SetUp() override {
-    lexer_ = std::make_unique<Lexer>();
-
-    // Create TextIndexSchema to get real bitmap (tests real integration)
-    std::vector<std::string> stop_words = {"the", "and", "or"};
-    text_schema_ = std::make_shared<TextIndexSchema>(
-        data_model::LANGUAGE_ENGLISH,
-        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", true, stop_words);
-
-    language_ = "english";
-    stemming_enabled_ = true;
-    min_stem_size_ = 3;
+  std::unique_ptr<Lexer> CreateLexer(
+      const std::string& punctuation,
+      const std::vector<std::string> stop_words) {
+    return std::make_unique<Lexer>(
+        data_model::LANGUAGE_ENGLISH, punctuation,
+        stop_words);  // We only support english for now
   }
 
-  std::shared_ptr<TextIndexSchema> text_schema_;
+  const std::string default_punctuation_ =
+      " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
+  const std::vector<std::string> default_stop_words_ = {"the", "and", "or"};
+  bool default_stemming_enabled_ = true;
+  uint32_t default_min_stem_size_ = 3;
 
-  // Helper method to create a custom TextIndexSchema with specific punctuation
-  std::shared_ptr<TextIndexSchema> CreateCustomTextSchema(
-      const std::string& punctuation) {
-    std::vector<std::string> stop_words = {"the", "and", "or"};
-    return std::make_shared<TextIndexSchema>(data_model::LANGUAGE_ENGLISH,
-                                             punctuation, true, stop_words);
-  }
-
-  std::unique_ptr<Lexer> lexer_;
-  std::string language_;
-  bool stemming_enabled_;
-  uint32_t min_stem_size_;
+  std::unique_ptr<Lexer> lexer_ =
+      CreateLexer(default_punctuation_, default_stop_words_);
 };
 
 // Parameterized test for comprehensive tokenization testing
@@ -73,15 +59,12 @@ class LexerParameterizedTest
 TEST_P(LexerParameterizedTest, TokenizeTest) {
   const auto& test_case = GetParam();
 
-  std::shared_ptr<TextIndexSchema> schema = text_schema_;
   if (!test_case.custom_punctuation.empty()) {
-    schema = CreateCustomTextSchema(test_case.custom_punctuation);
+    lexer_ = CreateLexer(test_case.custom_punctuation, default_stop_words_);
   }
 
-  auto result =
-      lexer_->Tokenize(test_case.input, schema->GetPunctuationBitmap(),
-                       schema->GetStemmer(), test_case.stemming_enabled,
-                       test_case.min_stem_size, schema->GetStopWordsSet());
+  auto result = lexer_->Tokenize(test_case.input, test_case.stemming_enabled,
+                                 test_case.min_stem_size);
 
   ASSERT_TRUE(result.ok()) << "Test case: " << test_case.description;
   EXPECT_EQ(*result, test_case.expected)
@@ -169,10 +152,8 @@ INSTANTIATE_TEST_SUITE_P(
 // Separate tests for error cases and special scenarios
 TEST_F(LexerTest, InvalidUTF8) {
   std::string invalid_utf8 = "hello \xFF\xFE world";
-  auto result =
-      lexer_->Tokenize(invalid_utf8, text_schema_->GetPunctuationBitmap(),
-                       text_schema_->GetStemmer(), stemming_enabled_,
-                       min_stem_size_, text_schema_->GetStopWordsSet());
+  auto result = lexer_->Tokenize(invalid_utf8, default_stemming_enabled_,
+                                 default_min_stem_size_);
   EXPECT_FALSE(result.ok());
   EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument);
   EXPECT_EQ(result.status().message(), "Invalid UTF-8");
@@ -180,29 +161,20 @@ TEST_F(LexerTest, InvalidUTF8) {
 
 TEST_F(LexerTest, LongWord) {
   std::string long_word(1000, 'a');
-  auto result =
-      lexer_->Tokenize(long_word, text_schema_->GetPunctuationBitmap(),
-                       text_schema_->GetStemmer(), stemming_enabled_,
-                       min_stem_size_, text_schema_->GetStopWordsSet());
+  auto result = lexer_->Tokenize(long_word, default_stemming_enabled_,
+                                 default_min_stem_size_);
   ASSERT_TRUE(result.ok());
   EXPECT_EQ(*result, std::vector<std::string>({long_word}));
 }
 
 // Test empty stop words set behavior
 TEST_F(LexerTest, EmptyStopWordsHandling) {
-  // Create schema with no stop words
-  std::vector<std::string> empty_stop_words;
-  auto no_stop_schema = std::make_shared<TextIndexSchema>(
-      data_model::LANGUAGE_ENGLISH, " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
-      true, empty_stop_words);
-
-  const auto& empty_set = no_stop_schema->GetStopWordsSet();
+  // Create Lexer with no stop words
+  lexer_ = CreateLexer(default_punctuation_, {});
 
   // Test tokenization with empty stop words - all words preserved
-  auto result =
-      lexer_->Tokenize("Hello, world! TESTING 123 with-dashes and/or symbols",
-                       no_stop_schema->GetPunctuationBitmap(),
-                       no_stop_schema->GetStemmer(), true, 3, empty_set);
+  auto result = lexer_->Tokenize(
+      "Hello, world! TESTING 123 with-dashes and/or symbols", true, 3);
 
   ASSERT_TRUE(result.ok());
   EXPECT_EQ(*result,

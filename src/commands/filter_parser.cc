@@ -453,8 +453,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
     bool in_quotes, 
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     uint64_t field_mask, std::optional<uint32_t> min_stem_size) {
-  indexes::text::Lexer lexer;
-  // const auto& lexer = text_index_schema->GetLexer();
+  indexes::text::Lexer lexer = text_index_schema->GetLexer();
   size_t current_pos = pos_;
   size_t backslash_count = 0;
   std::string processed_content;
@@ -475,7 +474,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
     if (backslash_count > 0) {
       bool should_escape = false;
       if (in_quotes) {
-        if (backslash_count % 2 == 0 || !lexer.IsPunctuation(ch, text_index_schema.get()->GetPunctuationBitmap())) {
+        if (backslash_count % 2 == 0 || !lexer.IsPunctuation(ch)) {
           processed_content.push_back('\\');
         } else {
           should_escape = true;
@@ -483,7 +482,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
       } else {
         if (backslash_count % 2 == 0) {
           processed_content.push_back('\\');
-        } else if (!lexer.IsPunctuation(ch, text_index_schema.get()->GetPunctuationBitmap())) {
+        } else if (!lexer.IsPunctuation(ch)) {
           if (backslash_count > 1) processed_content.push_back('\\');
           break;
         } else {
@@ -501,11 +500,11 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
     // Check for token boundaries
     if (ch == '"') break;
     if (!in_quotes && (ch == ')' || ch == '|' || ch == '(' || ch == '@' || ch == '-')) break;
-    if (!in_quotes && ch != '%' && ch != '*' && lexer.IsPunctuation(ch, text_index_schema.get()->GetPunctuationBitmap())) break;
+    if (!in_quotes && ch != '%' && ch != '*' && lexer.IsPunctuation(ch)) break;
     // Note:
     // In quotes, we don't break on `:`, but we do strip it out. Also, we allow `$` and `_` to be used in words as well as to exist on their own as tokens.
     // In non quotes, we strip out `_` on its own. But when used with other characters, it is allowed.
-    if (in_quotes && lexer.IsPunctuation(ch, text_index_schema.get()->GetPunctuationBitmap())) break;
+    if (in_quotes && lexer.IsPunctuation(ch)) break;
     // if (in_quotes && lexer.IsPunctuation(ch, text_index_schema->GetPunctuationBitmap()) && ch != '$') break;
     // Handle fuzzy token boundary detection
     if (!in_quotes && ch == '%') {
@@ -582,12 +581,11 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseTokenAndBuildPredic
     bool exact = false || in_quotes;
     // Replace false with the NOSTOPWORDS flag from the FT.SEARCH.
     bool remove_stopwords = false || !in_quotes;
-    if ((remove_stopwords && lexer.IsStopWord(content, text_index_schema->GetStopWordsSet()) || content.empty())) {
+    if ((remove_stopwords && lexer.IsStopWord(content) || content.empty())) {
       return FilterParser::TokenResult{current_pos, nullptr}; // Skip stop words and empty words.
     }
     if (min_stem_size.has_value()) {
-      VMSDK_LOG(WARNING, nullptr) << "Stemming word: " << content;
-      content = lexer.StemWord(content, text_index_schema->GetStemmer(), !exact, *min_stem_size);
+      content = lexer.StemWord(content, !exact, *min_stem_size, lexer.GetStemmer());
     }
     return FilterParser::TokenResult{current_pos, std::make_unique<query::TermPredicate>(text_index_schema, field_mask, content, exact)};
   }

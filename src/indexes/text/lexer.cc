@@ -6,6 +6,7 @@
 
 #include "src/indexes/text/lexer.h"
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/strings/ascii.h"
@@ -14,25 +15,87 @@
 
 namespace valkey_search::indexes::text {
 
+using PunctuationBitmap = std::bitset<256>;
+
+namespace {
+
+bool IsWhitespace(unsigned char c) {
+  return std::isspace(c) || std::iscntrl(c);
+}
+
+PunctuationBitmap BuildPunctuationBitmap(const std::string& punctuation) {
+  PunctuationBitmap bitmap;
+  bitmap.reset();
+
+  for (int i = 0; i < 256; ++i) {
+    if (IsWhitespace(static_cast<unsigned char>(i))) {
+      bitmap.set(i);
+    }
+  }
+
+  for (char c : punctuation) {
+    bitmap.set(static_cast<unsigned char>(c));
+  }
+
+  return bitmap;
+}
+
+absl::flat_hash_set<std::string> BuildStopWordsSet(
+    const std::vector<std::string>& stop_words) {
+  absl::flat_hash_set<std::string> stop_words_set;
+  for (const auto& word : stop_words) {
+    stop_words_set.insert(absl::AsciiStrToLower(word));
+  }
+  return stop_words_set;
+}
+
+const char* GetLanguageString(data_model::Language language) {
+  switch (language) {
+    case data_model::LANGUAGE_ENGLISH:
+      return "english";
+    default:
+      CHECK(false) << "Unexpected language";
+  }
+}
+
+struct StemmerDeleter {
+  void operator()(sb_stemmer* stemmer) const { sb_stemmer_delete(stemmer); }
+};
+
+using StemmerPtr = std::unique_ptr<sb_stemmer, StemmerDeleter>;
+
+// Thread-local stemmer cache. Since a stemmer instance is not thread-safe,
+// stemmers will be owned by threads and shared amongst the Lexer instances.
+// Each ingestion worker thread gets a stemmer for each language it tokenizes
+// at least once.
+thread_local absl::flat_hash_map<data_model::Language, StemmerPtr> stemmers_;
+
+}  // namespace
+
+Lexer::Lexer(data_model::Language language, const std::string& punctuation,
+             const std::vector<std::string>& stop_words)
+    : language_(language),
+      punct_bitmap_(BuildPunctuationBitmap(punctuation)),
+      stop_words_set_(BuildStopWordsSet(stop_words)) {}
+
 absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
-    absl::string_view text, const std::bitset<256>& punct_bitmap,
-    sb_stemmer* stemmer, bool stemming_enabled, uint32_t min_stem_size,
-    const absl::flat_hash_set<std::string>& stop_words_set) const {
+    absl::string_view text, bool stemming_enabled,
+    uint32_t min_stem_size) const {
   if (!IsValidUtf8(text)) {
     return absl::InvalidArgumentError("Invalid UTF-8");
   }
 
+  // Get or create the thread-local stemmer for this lexer's language
+  sb_stemmer* stemmer = stemming_enabled ? GetStemmer() : nullptr;
   std::vector<std::string> tokens;
-
   size_t pos = 0;
   while (pos < text.size()) {
-    while (pos < text.size() && Lexer::IsPunctuation(text[pos], punct_bitmap)) {
+    while (pos < text.size() && IsPunctuation(text[pos])) {
       pos++;
     }
 
     size_t word_start = pos;
-    while (pos < text.size() &&
-           !Lexer::IsPunctuation(text[pos], punct_bitmap)) {
+    while (pos < text.size() && !IsPunctuation(text[pos])) {
       pos++;
     }
 
@@ -41,11 +104,11 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
 
       std::string word = absl::AsciiStrToLower(word_view);
 
-      if (Lexer::IsStopWord(word, stop_words_set)) {
+      if (IsStopWord(word)) {
         continue;  // Skip stop words
       }
 
-      word = StemWord(word, stemmer, stemming_enabled, min_stem_size);
+      word = StemWord(word, stemming_enabled, min_stem_size, stemmer);
 
       tokens.push_back(std::move(word));
     }
@@ -54,14 +117,26 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
   return tokens;
 }
 
-std::string Lexer::StemWord(const std::string& word, sb_stemmer* stemmer,
-                            bool stemming_enabled,
-                            uint32_t min_stem_size) const {
+// Returns a thread-local cached stemmer for this lexer's language, creating it
+// on first access.
+sb_stemmer* Lexer::GetStemmer() const {
+  auto it = stemmers_.find(language_);
+  if (it == stemmers_.end()) {
+    StemmerPtr stemmer(sb_stemmer_new(GetLanguageString(language_), "UTF_8"));
+    sb_stemmer* raw_ptr = stemmer.get();
+    stemmers_[language_] = std::move(stemmer);
+    return raw_ptr;
+  }
+  return it->second.get();
+}
+
+std::string Lexer::StemWord(const std::string& word, bool stemming_enabled,
+                            uint32_t min_stem_size, sb_stemmer* stemmer) const {
   if (word.empty() || !stemming_enabled || word.length() < min_stem_size) {
     return word;
   }
 
-  CHECK(stemmer) << "Stemmer not initialized";
+  DCHECK(stemmer) << "Stemmer is null";
 
   const sb_symbol* stemmed = sb_stemmer_stem(
       stemmer, reinterpret_cast<const sb_symbol*>(word.c_str()), word.length());

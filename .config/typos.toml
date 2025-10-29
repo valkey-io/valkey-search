@@ -21,6 +21,7 @@ CrEaTe = "CrEaTe"
 LiSt = "LiSt"
 DeBuG = "DeBuG"
 DrOpInDeX = "DrOpInDeX"
+updat = "updat" # Used for stem matching
 
 [type.cpp]
 extend-ignore-re = [

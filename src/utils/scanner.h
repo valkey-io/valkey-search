@@ -7,6 +7,8 @@
 #ifndef VALKEYSEARCH_UTILS_SCANNER_H
 #define VALKEYSEARCH_UTILS_SCANNER_H
 
+#include <absl/log/check.h>
+
 #include <cctype>
 #include <cuchar>
 #include <optional>
@@ -75,7 +77,7 @@ class Scanner {
   }
 
   bool PopByte(Char c) {
-    ValkeyModule_Assert(c != kEOF);
+    CHECK(c != kEOF);
     if (PeekByte() == c) {
       pos_++;
       return true;
@@ -168,9 +170,9 @@ class Scanner {
     if (ec == std::errc::invalid_argument) {
       return std::nullopt;
     }
-    ValkeyModule_Assert(ec == std::errc());
+    CHECK(ec == std::errc());
     pos_ = ptr - sv_.data();
-    ValkeyModule_Assert(pos_ <= sv_.size());
+    CHECK(pos_ <= sv_.size());
 #else
     absl::string_view s(sv_);
     s.remove_prefix(pos_);
@@ -181,7 +183,7 @@ class Scanner {
       return std::nullopt;
     }
     pos_ += scanned - null_terminated.data();
-    ValkeyModule_Assert(pos_ <= sv_.size());
+    CHECK(pos_ <= sv_.size());
 #endif
     return d;
   }
@@ -216,7 +218,7 @@ class Scanner {
     } else {
       // std::cerr << "Found invalid codepoint " << codepoint << "(" << std::hex
       // << size_t(codepoint) << ")\n";
-      ValkeyModule_Assert(false);
+      CHECK(false);
     }
     return s;
   }

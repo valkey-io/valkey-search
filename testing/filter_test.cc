@@ -38,7 +38,7 @@ struct FilterTestCase {
 
 class FilterTest : public ValkeySearchTestWithParam<FilterTestCase> {
  public:
-  indexes::InlineVectorEvaluator evaluator_;
+  indexes::PrefilterEvaluator evaluator_;
 };
 
 void InitIndexSchema(MockIndexSchema *index_schema) {

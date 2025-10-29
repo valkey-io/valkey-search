@@ -113,12 +113,15 @@ absl::string_view LookupKeyByValue(
 class VectorBase : public IndexBase, public hnswlib::VectorTracker {
  public:
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
-                                 absl::string_view record) override;
+                                 absl::string_view record) override
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<bool> RemoveRecord(const InternedStringPtr& key,
                                     indexes::DeletionType deletion_type =
-                                        indexes::DeletionType::kNone) override;
+                                        indexes::DeletionType::kNone) override
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
-                                    absl::string_view record) override;
+                                    absl::string_view record) override
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   virtual size_t GetCapacity() const = 0;
   bool GetNormalize() const { return normalize_; }
   std::unique_ptr<data_model::Index> ToProto() const override;
@@ -129,17 +132,19 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
                                const AttributeDataType* attribute_data_type,
                                SupplementalContentChunkIter&& iter);
 
-  size_t GetTrackedKeyCount() const override;
-  size_t GetUnTrackedKeyCount() const override;
+  size_t GetTrackedKeyCount() const override
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+  size_t GetUnTrackedKeyCount() const override
+      ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   bool IsTracked(const InternedStringPtr& key) const override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   bool IsUnTracked(const InternedStringPtr& key) const override;
   absl::Status ForEachTrackedKey(
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
-      const override;
+      const override ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::Status ForEachUnTrackedKey(
       absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
-      const override;
+      const override ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
 
   absl::StatusOr<InternedStringPtr> GetKeyDuringSearch(
       uint64_t internal_id) const ABSL_NO_THREAD_SAFETY_ANALYSIS;

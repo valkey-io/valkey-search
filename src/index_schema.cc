@@ -90,6 +90,8 @@ DEV_INTEGER_COUNTER(rdb_stats, rdb_load_keys);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_save_sections);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_load_sections);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_load_sections_skipped);
+DEV_INTEGER_COUNTER(rdb_stats, rdb_save_multi_exec_entries);
+DEV_INTEGER_COUNTER(rdb_stats, rdb_load_multi_exec_entries);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_save_mutation_entries);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_load_mutation_entries);
 
@@ -563,7 +565,7 @@ void IndexSchema::ProcessMultiQueue() {
   vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
   while (!multi_mutations.keys.empty()) {
     auto key = multi_mutations.keys.front();
-    multi_mutations.keys.pop();
+    multi_mutations.keys.pop_front();
     ScheduleMutation(false, key, vmsdk::ThreadPool::Priority::kMax,
                      multi_mutations.blocking_counter.get());
   }
@@ -573,7 +575,7 @@ void IndexSchema::ProcessMultiQueue() {
 
 void IndexSchema::EnqueueMultiMutation(const InternedStringPtr &key) {
   auto &multi_mutations = multi_mutations_.Get();
-  multi_mutations.keys.push(key);
+  multi_mutations.keys.push_back(key);
   if (multi_mutations.keys.size() >= mutations_thread_pool_->Size() &&
       !schedule_multi_exec_processing_.Get()) {
     schedule_multi_exec_processing_.Get() = true;
@@ -972,40 +974,38 @@ absl::Status IndexSchema::ValidateIndex() const {
   for (const auto &[name, attr] : attributes_) {
     auto idx = attr.GetIndex();
     size_t cnt = idx->GetTrackedKeyCount() + idx->GetUnTrackedKeyCount();
-    if (cnt != oracle_key_count) {
-      if (IsVectorIndex(idx) && cnt < oracle_key_count) {
-        continue;
+    if (IsVectorIndex(idx) ? cnt <= oracle_key_count
+                           : cnt == oracle_key_count) {
+      continue;
+    }
+    VMSDK_LOG(WARNING, nullptr)
+        << "Index validation failed for index " << name
+        << " expected key count " << oracle_key_count << " got " << cnt;
+    //
+    // Ok, do a detailed comparison
+    //
+    auto larger_index = (cnt > oracle_key_count) ? idx : oracle_index;
+    auto larger_name = (cnt > oracle_key_count) ? name : oracle_name;
+    auto smaller_index = (cnt > oracle_key_count) ? oracle_index : idx;
+    auto smaller_name = (cnt > oracle_key_count) ? oracle_name : name;
+    auto key_check = [&](const InternedStringPtr &key) {
+      if (!smaller_index->IsTracked(key) && !smaller_index->IsUnTracked(key)) {
+        VMSDK_LOG(WARNING, nullptr)
+            << "Key found in " << larger_name << " not found in "
+            << smaller_name << ": " << key->Str();
+        status = absl::InternalError(
+            absl::StrCat("Key found in ", larger_name, " not found in ",
+                         smaller_name, ": ", key->Str()));
       }
-      VMSDK_LOG(WARNING, nullptr)
-          << "Index validation failed for index " << name
-          << " expected key count " << oracle_key_count << " got " << cnt;
-      //
-      // Ok, do a detailed comparison
-      //
-      auto larger_index = (cnt > oracle_key_count) ? idx : oracle_index;
-      auto larger_name = (cnt > oracle_key_count) ? name : oracle_name;
-      auto smaller_index = (cnt > oracle_key_count) ? oracle_index : idx;
-      auto smaller_name = (cnt > oracle_key_count) ? oracle_name : name;
-      auto key_check = [&](const InternedStringPtr &key) {
-        if (!smaller_index->IsTracked(key) &&
-            !smaller_index->IsUnTracked(key)) {
-          VMSDK_LOG(WARNING, nullptr)
-              << "Key found in " << larger_name << " not found in "
-              << smaller_name << ": " << key->Str();
-          status = absl::InternalError(
-              absl::StrCat("Key found in ", larger_name, " not found in ",
-                           smaller_name, ": ", key->Str()));
-          return absl::OkStatus();
-        }
-      };
-      auto status1 = larger_index->ForEachTrackedKey(key_check);
-      if (!status1.ok()) {
-        status = status1;
-      }
-      auto status2 = larger_index->ForEachUnTrackedKey(key_check);
-      if (!status2.ok()) {
-        status = status1;
-      }
+      return absl::OkStatus();
+    };
+    auto status1 = larger_index->ForEachTrackedKey(key_check);
+    if (!status1.ok()) {
+      status = status1;
+    }
+    auto status2 = larger_index->ForEachUnTrackedKey(key_check);
+    if (!status2.ok()) {
+      status = status2;
     }
   }
   return status;
@@ -1016,36 +1016,64 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
     VMSDK_RETURN_IF_ERROR(ValidateIndex());
   }
   //
-  // Need to find an attribute index that has the right tracked/untracked
-  // keys. Any non-vector index will do. But it there are only vector
-  // indexes we will use that.
+  // To reconstruct an index-schema, we want to ingest all of the keys that are
+  // currently within the index. If there is a non-vector index, we can use the
+  // tracked and untracked key lists from that index. If there is ONLY vector
+  // indexes, then this key list is not needed as there aren't any non-vector
+  // indexes to ingest.
   //
-  auto index = attributes_.begin()->second.GetIndex();
+  // The V1 format doesn't have this list and substitutes a backfill to rebuild.
+  // In the absence of support for SKIPINITIALSCAN the backfill is sufficient to
+  // determine which keys are in the index. However, once we support this option
+  // it's no longer possible to determine which keys are in the index without
+  // storing them explicitly. Thus the V2 format includes this key list
+  // explicitly which will trivially enable the SKIPINITIALSCAN option.
+  //
+  std::shared_ptr<indexes::IndexBase> index;
   for (const auto &attribute : attributes_) {
     if (!IsVectorIndex(attribute.second.GetIndex())) {
       index = attribute.second.GetIndex();
       break;
     }
   }
-  size_t key_count =
-      index->GetTrackedKeyCount() + index->GetUnTrackedKeyCount();
-  VMSDK_RETURN_IF_ERROR(out.SaveObject(key_count));
-  rdb_save_keys.Increment(key_count);
-  VMSDK_LOG(DEBUG, nullptr) << "Writing Index Extension, keys = " << key_count;
+  if (!index) {
+    VMSDK_RETURN_IF_ERROR(out.SaveObject<size_t>(0));  // zero keys
+  } else {
+    size_t key_count =
+        index->GetTrackedKeyCount() + index->GetUnTrackedKeyCount();
+    VMSDK_RETURN_IF_ERROR(out.SaveObject(key_count));
+    rdb_save_keys.Increment(key_count);
+    VMSDK_LOG(DEBUG, nullptr)
+        << "Writing Index Extension, keys = " << key_count;
 
-  auto write_a_key = [&](const InternedStringPtr &key) {
-    key_count--;
-    return out.SaveString(key->Str());
-  };
-  VMSDK_RETURN_IF_ERROR(index->ForEachTrackedKey(write_a_key));
-  VMSDK_RETURN_IF_ERROR(index->ForEachUnTrackedKey(write_a_key));
-  CHECK(key_count == 0) << "Key count mismatch for index " << GetName();
-
+    auto write_a_key = [&](const InternedStringPtr &key) {
+      key_count--;
+      return out.SaveString(key->Str());
+    };
+    VMSDK_RETURN_IF_ERROR(index->ForEachTrackedKey(write_a_key));
+    VMSDK_RETURN_IF_ERROR(index->ForEachUnTrackedKey(write_a_key));
+    CHECK(key_count == 0) << "Key count mismatch for index " << GetName();
+  }
+  //
+  // Write out the mutation queue entries
+  //
   VMSDK_LOG(DEBUG, nullptr) << "Writing Mutation Queue, records = "
                             << tracked_mutated_records_.size();
   VMSDK_RETURN_IF_ERROR(out.SaveObject(tracked_mutated_records_.size()));
   rdb_save_mutation_entries.Increment(tracked_mutated_records_.size());
   for (const auto &[key, value] : tracked_mutated_records_) {
+    VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
+  }
+  //
+  // Write out the multi/exec queued keys
+  //
+  VMSDK_RETURN_IF_ERROR(
+      out.SaveObject<size_t>(multi_mutations_.Get().keys.size()));
+  rdb_save_multi_exec_entries.Increment(multi_mutations_.Get().keys.size());
+  VMSDK_LOG(DEBUG, nullptr) << "Writing Multi/Exec Queue, records = "
+                            << multi_mutations_.Get().keys.size();
+  for (const auto &key : multi_mutations_.Get().keys) {
+    CHECK(tracked_mutated_records_.find(key) != tracked_mutated_records_.end());
     VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
   }
   return absl::OkStatus();
@@ -1068,6 +1096,23 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
     VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
     auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
     ProcessKeyspaceNotification(ctx, keyname.get(), false);
+  }
+  VMSDK_ASSIGN_OR_RETURN(size_t multi_count, input.LoadObject<size_t>());
+  rdb_load_multi_exec_entries.Increment(multi_count);
+  VMSDK_LOG(DEBUG, ctx) << "Loading Multi/Exec Entries, entries = "
+                        << multi_count;
+  for (size_t i = 0; i < count; ++i) {
+    VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
+    if (tracked_mutated_records_.find(StringInternStore::Intern(keyname_str)) ==
+        tracked_mutated_records_.end()) {
+      VMSDK_LOG(WARNING, ctx)
+          << "Multi/Exec key not found in mutation tracked records: "
+          << keyname_str;
+      return absl::InternalError(
+          "Multi/Exec key not found in mutation tracked records");
+    }
+    auto keyname = StringInternStore::Intern(keyname_str);
+    EnqueueMultiMutation(keyname);
   }
   loaded_v2_ = true;
   return absl::OkStatus();

@@ -202,6 +202,38 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         ]
         assert reads == [len(records)]
 
+    def test_multi_exec_queue(self):
+        self.client.execute_command("ft._debug PAUSEPOINT SET block_mutation_queue")
+        self.client.execute_command("CONFIG SET search.info-developer-visible yes")
+        index.create(self.client, True)
+        records = make_data()
+        #
+        # Now, load the data as a multi/exec... But this won't block us.
+        #
+        self.client.execute_command("MULTI")
+        for i in range(len(records)):
+            index.write_data(self.client, i, records[i])
+        self.client.execute_command("EXEC")
+
+        self.client.execute_command("save")
+
+        i = self.client.info("search")
+        assert i["search_rdb_save_multi_exec_entries"] == len(records)
+
+        self.client.execute_command("ft._debug pausepoint reset block_mutation_queue")
+
+        verify_data(self.client)
+        os.environ["SKIPLOGCLEAN"] = "1"
+        self.server.restart(remove_rdb=False)
+        verify_data(self.client)
+        self.client.execute_command("CONFIG SET search.info-developer-visible yes")
+        i = self.client.info("search")
+        print("Info: ", i)
+        reads = [
+            i["search_rdb_load_multi_exec_entries"],
+        ]
+        assert reads == [len(records)]
+
     def test_saverestore_backfill(self):
         #
         # Delay the backfill and ensure that with new format we will trigger the backfill....

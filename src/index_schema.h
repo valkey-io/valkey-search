@@ -270,7 +270,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   mutable vmsdk::TimeSlicedMRMWMutex time_sliced_mutex_;
   struct MultiMutations {
     std::unique_ptr<absl::BlockingCounter> blocking_counter;
-    std::queue<InternedStringPtr> keys;
+    std::deque<InternedStringPtr> keys;
   };
   vmsdk::MainThreadAccessGuard<MultiMutations> multi_mutations_;
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};

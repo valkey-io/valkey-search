@@ -121,7 +121,7 @@ class TestFullText(ValkeySearchTestCaseBase):
         result3 = client.execute_command("FT.SEARCH", "products", '@desc:xpe*')
         assert result1[0] == 1 and result2[0] == 1 and result3[0] == 0
         assert result1[1] == b"product:3" and result2[1] == b"product:3"
-        # TODO: Update these queries to non stemmed versions after we ingest into the stem tree.
+        # TODO: Update these queries to non stemmed versions once the stem tree is supported and ingestion is updated.
         # Perform an exact phrase search operation on a unique phrase (exists in one doc).
         result1 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl"')
         result2 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl grey acorn grow"')
@@ -374,7 +374,9 @@ class TestFullText(ValkeySearchTestCaseBase):
             ("quick*", True, "Punctuation tokenization - hyphen creates word boundaries"),
             ("effect*", True, "Case insensitivity - lowercase matches uppercase"),
             ("\"The quick-running searches are finding EFFECTIVE results!\"", False, "Stop word cannot be used in exact phrase searches"),
-            ("\"quick-running searches finding EFFECTIVE results!\"", True, "Stop word cannot be used in exact phrase searches"),
+            # TODO: Change to True once the stem tree is supported and ingestion is updated.
+            ("\"quick-running searches finding EFFECTIVE results!\"", False, "Exact phrase without stopwords"),
+            ("\"quick-run search find EFFECT result!\"", True, "Exact Phrase Query without stopwords and using stemmed words"),
             ("find*", True, "Prefix wildcard - matches 'finding'"),
             ("nonexistent", False, "Non-existent terms return no results")
         ]

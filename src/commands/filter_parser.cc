@@ -638,7 +638,7 @@ FilterParser::ParseOneTextAtomIntoTerms(const std::optional<std::string>& field_
     // There is a duplicate check in the child fn. We can remove this IF we have
     // ParseTokenAndBuildPredicate return an indicator if we should break out of this fn.
     // TODO: Find out all the query syntax characters which redis-search returns an error on.
-    // Non Quotes inludes: { } [ ] : ; $
+    // Non Quotes includes: { } [ ] : ; $
     // Quotes: Nothing. All of the above return errors OR strip it.
     // For text, if any of the above are seen, reject the query.
     if (!in_quotes && (c == ')' || c == '|' || c == '(' || c == '@' || c == '-')) {

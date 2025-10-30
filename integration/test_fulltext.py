@@ -657,8 +657,7 @@ class TestFullText(ValkeySearchTestCaseBase):
             assert client.execute_command(*doc) == 5
         
         # Get FT.INFO and parse the response
-        raw_info = client.execute_command("FT.INFO", "products")
-        parser = FTInfoParser(raw_info)
+        parser = IndexingTestHelper.get_ft_info(client, "products")
         info_data = parser.parsed_data
         
         # Validate basic document counts

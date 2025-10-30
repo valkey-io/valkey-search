@@ -298,6 +298,46 @@ class FTInfoParser:
         offsets = self.parsed_data.get("with_offsets")
         return bool(offsets) if offsets is not None else None
 
+    @property
+    def num_unique_terms(self) -> Optional[int]:
+        """Get the number of unique terms in the text index."""
+        return self.parsed_data.get("num_unique_terms")
+
+    @property
+    def num_total_terms(self) -> Optional[int]:
+        """Get the total frequency of all terms across all documents."""
+        return self.parsed_data.get("num_total_terms")
+
+    @property
+    def posting_sz_mb(self) -> Optional[float]:
+        """Get the memory used by posting lists (inverted index data) in MB."""
+        return self.parsed_data.get("posting_sz_mb")
+
+    @property
+    def position_sz_mb(self) -> Optional[float]:
+        """Get the memory used by position information for phrase queries in MB."""
+        return self.parsed_data.get("position_sz_mb")
+
+    @property
+    def total_postings(self) -> Optional[int]:
+        """Get the total number of posting lists (equals unique terms)."""
+        return self.parsed_data.get("total_postings")
+
+    @property
+    def radix_sz_mb(self) -> Optional[float]:
+        """Get the memory used by the radix tree (term dictionary) in MB."""
+        return self.parsed_data.get("radix_sz_mb")
+
+    @property
+    def total_text_index_sz_mb(self) -> Optional[float]:
+        """Get the total memory used by all text index components in MB."""
+        return self.parsed_data.get("total_text_index_sz_mb")
+
+    @property
+    def total_terms_per_doc_avg(self) -> Optional[float]:
+        """Get the average number of terms per document."""
+        return self.parsed_data.get("total_terms_per_doc_avg")
+
     def get_vector_dimensions(self, field_name: str) -> Optional[int]:
         """
         Get the dimensions of a vector field.

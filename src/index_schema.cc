@@ -739,7 +739,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
 
   ValkeyModule_ReplyWithSimpleString(ctx, "index_definition");
-  ValkeyModule_ReplyWithArray(ctx, 6);
+  ValkeyModule_ReplyWithArray(ctx, 8);
   ValkeyModule_ReplyWithSimpleString(ctx, "key_type");
   ValkeyModule_ReplyWithSimpleString(ctx,
                                      attribute_data_type_->ToString().c_str());
@@ -752,6 +752,8 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   // supported.
   ValkeyModule_ReplyWithSimpleString(ctx, "default_score");
   ValkeyModule_ReplyWithCString(ctx, "1");
+  ValkeyModule_ReplyWithSimpleString(ctx, "indexes_all");
+  ValkeyModule_ReplyWithSimpleString(ctx, "false");
 
   ValkeyModule_ReplyWithSimpleString(ctx, "attributes");
   ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);

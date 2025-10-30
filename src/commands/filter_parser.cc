@@ -670,7 +670,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
       filter_identifiers_.insert(identifier);
     }
     // Set field mask to include all text fields in the index schema.
-    field_mask = index_schema_.GetAllTextFieldsMask();
     field_mask = ~0ULL;
     // When no field was specified, we use the min stem across all text fields
     // in the index schema. This helps ensure the root of the text token can be

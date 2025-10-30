@@ -19,6 +19,7 @@
 #include "vmsdk/src/type_conversions.h"
 
 namespace valkey_search::indexes {
+class Text;
 class Numeric;
 class Tag;
 }  // namespace valkey_search::indexes

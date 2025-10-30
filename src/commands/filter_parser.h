@@ -46,17 +46,13 @@ class FilterParser {
     std::unique_ptr<query::TextPredicate> predicate;
     bool break_on_query_syntax;
   };
-  absl::StatusOr<TokenResult> ParseTextTokens(
+  absl::StatusOr<TokenResult> ParseTokenAndBuildPredicate(
       bool in_quotes,
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       uint64_t field_mask, std::optional<uint32_t> min_stem_size);
-  absl::StatusOr<std::unique_ptr<query::TextPredicate>>
-  BuildSingleTextPredicate(const indexes::Text* text_index,
-                           const indexes::text::Lexer& lexer,
-                           const std::optional<std::string>& field_name,
-                           absl::string_view raw_token);
-  absl::StatusOr<std::unique_ptr<query::Predicate>> absl::StatusOr<bool>
-  IsMatchAllExpression();
+  absl::StatusOr<std::unique_ptr<query::Predicate>> ParseTextTokens(
+      const std::optional<std::string>& field_for_default);
+  absl::StatusOr<bool> IsMatchAllExpression();
   absl::StatusOr<std::unique_ptr<query::Predicate>> ParseExpression(
       uint32_t level);
   absl::StatusOr<std::unique_ptr<query::NumericPredicate>>

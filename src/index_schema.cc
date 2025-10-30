@@ -953,17 +953,24 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
 
 absl::Status IndexSchema::ValidateIndex() const {
   absl::Status status = absl::OkStatus();
+ //
+  // Find a non-vector index as the oracle
+  // If all indexes are vector indexes, no validation is needed
   //
-  // Again, find a non-vector index as the oracle
-  //
-  auto oracle_index = attributes_.begin()->second.GetIndex();
-  auto oracle_name = attributes_.begin()->first;
+  std::shared_ptr<indexes::IndexBase> oracle_index = nullptr;
+  std::string oracle_name;
+  
   for (const auto &attribute : attributes_) {
     if (!IsVectorIndex(attribute.second.GetIndex())) {
       oracle_index = attribute.second.GetIndex();
       oracle_name = attribute.first;
       break;
     }
+  }
+  
+  // If no non-vector index found, all indexes are vectors - no validation needed
+  if (oracle_index == nullptr) {
+    return absl::OkStatus();
   }
   size_t oracle_key_count =
       oracle_index->GetTrackedKeyCount() + oracle_index->GetUnTrackedKeyCount();

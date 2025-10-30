@@ -200,3 +200,6 @@ class Index:
     def backfill_complete(self, client: valkey.client) -> bool:
         res = self.info(client)
         return res.backfill_in_progress == 0
+
+    def has_field(self, name: str) -> bool:
+        return any(f.name == name for f in self.fields)

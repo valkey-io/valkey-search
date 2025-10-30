@@ -74,13 +74,7 @@ constexpr absl::string_view kLocalOnly{"LOCALONLY"};
 constexpr absl::string_view kVectorFilterDelimiter = "=>";
 constexpr absl::string_view kSlop{"SLOP"};
 constexpr absl::string_view kInorder{"INORDER"};
-constexpr absl::string_view kLanguage{"LANGUAGE"};
 constexpr absl::string_view kVerbatim{"VERBATIM"};
-
-// Language lookup map for enum parsing (English only, case-insensitive)
-const absl::NoDestructor<
-    absl::flat_hash_map<absl::string_view, data_model::Language>>
-    kLanguageByStr({{"ENGLISH", data_model::LANGUAGE_ENGLISH}});
 
 absl::StatusOr<absl::string_view> SubstituteParam(
     query::SearchParameters &parameters, absl::string_view source) {
@@ -353,9 +347,6 @@ vmsdk::KeyValueParser<query::SearchParameters> CreateSearchParser() {
       kVerbatim, GENERATE_FLAG_PARSER(query::SearchParameters, verbatim));
   parser.AddParamParser(kSlop,
                         GENERATE_VALUE_PARSER(query::SearchParameters, slop));
-  parser.AddParamParser(
-      kLanguage,
-      GENERATE_ENUM_PARSER(query::SearchParameters, language, *kLanguageByStr));
   return parser;
 }
 

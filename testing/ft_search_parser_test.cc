@@ -71,8 +71,7 @@ struct FTSearchParserTestCase {
   bool vector_query{true};
   bool verbatim{false};
   bool inorder{false};
-  int slop{0};
-  data_model::Language language{data_model::LANGUAGE_ENGLISH};
+  std::optional<unsigned> slop{};
 };
 
 class FTSearchParserTest
@@ -264,9 +263,6 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
     EXPECT_EQ(search_params.value()->verbatim, test_case.verbatim);
     EXPECT_EQ(search_params.value()->inorder, test_case.inorder);
     EXPECT_EQ(search_params.value()->slop, test_case.slop);
-
-    // Check language parameter (now using enum)
-    EXPECT_EQ(search_params.value()->language, test_case.language);
   } else {
     std::cerr << "Failed to parse command: `" << vmsdk::ToStringView(args[0])
               << "` Because: " << search_params.status().message() << "\n";
@@ -724,37 +720,6 @@ INSTANTIATE_TEST_SUITE_P(
                 "]`. Blob attribute "
                 "argument is missing",
         },
-        {
-            .test_name = "language_parameter_english",
-            .success = true,
-            .params_str = " PARAMS 2",
-            .filter_str = "* =>[KNN 5 @vec $BLOB]",
-            .k = 5,
-            .search_parameters_str = "LANGUAGE english",
-            .language = data_model::LANGUAGE_ENGLISH,
-        },
-        {
-            .test_name = "language_parameter_unsupported_spanish",
-            .success = false,
-            .params_str = " PARAMS 2",
-            .filter_str = "* =>[KNN 5 @vec $BLOB]",
-            .k = 5,
-            .expected_error_message =
-                "Error parsing value for the parameter `LANGUAGE`",
-            .search_parameters_str = "LANGUAGE spanish",
-        },
-        {
-            .test_name = "language_parameter_non_vector_query",
-            .success = true,
-            .params_str = "",
-            .filter_str = "@attribute_identifier_1:[300 1000]",
-            .attribute_alias = "",
-            .k = 0,
-            .ef = 0,
-            .score_as = "",
-            .search_parameters_str = "LANGUAGE english",
-            .vector_query = false,
-        },
         // VERBATIM parameter tests
         {
             .test_name = "verbatim_vector_query",
@@ -841,11 +806,10 @@ INSTANTIATE_TEST_SUITE_P(
             .filter_str = "* =>[KNN 10 @vec $BLOB EF_RUNTIME $EF]",
             .k = 10,
             .ef = 150,
-            .search_parameters_str = "LANGUAGE english VERBATIM INORDER SLOP 2",
+            .search_parameters_str = "VERBATIM INORDER SLOP 2",
             .verbatim = true,
             .inorder = true,
             .slop = 2,
-            .language = data_model::LANGUAGE_ENGLISH,
         },
         {
             .test_name = "multiple_parameters_non_vector_query",
@@ -856,7 +820,7 @@ INSTANTIATE_TEST_SUITE_P(
             .k = 0,
             .ef = 0,
             .score_as = "",
-            .search_parameters_str = "LANGUAGE english VERBATIM SLOP 1",
+            .search_parameters_str = "VERBATIM SLOP 1",
             .vector_query = false,
             .verbatim = true,
             .slop = 1,
@@ -883,19 +847,8 @@ INSTANTIATE_TEST_SUITE_P(
             .k = 7,
             .return_str = "",
             .return_attributes = {{"field1", "field1"}, {"field2", "field2"}},
-            .search_parameters_str = "RETURN 2 field1 field2 LANGUAGE english "
-                                     "TIMEOUT 400",
+            .search_parameters_str = "RETURN 2 field1 field2 TIMEOUT 400",
             .timeout_ms = 400,
-        },
-        {
-            .test_name = "default_language_no_parameter",
-            .success = true,
-            .params_str = " PARAMS 2",
-            .filter_str = "* =>[KNN 5 @vec $BLOB]",
-            .k = 5,
-            .search_parameters_str = "",  // No LANGUAGE parameter specified
-            .language =
-                data_model::LANGUAGE_ENGLISH,  // Default language is used
         },
         // Negative SLOP parameter tests
         {

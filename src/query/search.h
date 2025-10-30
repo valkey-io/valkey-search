@@ -84,9 +84,8 @@ struct SearchParameters {
   FilterParseResults filter_parse_results;
   std::vector<ReturnAttribute> return_attributes;
   bool inorder{false};
-  unsigned int slop{0};
+  std::optional<uint32_t> slop;
   bool verbatim{false};
-  data_model::Language language{data_model::LANGUAGE_ENGLISH};
   struct ParseTimeVariables {
     // Members of this struct are only valid during the parsing of
     // VectorSearchParameters on the mainthread. They get cleared

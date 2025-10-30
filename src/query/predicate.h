@@ -298,20 +298,26 @@ class ProximityPredicate : public TextPredicate {
 };
 
 enum class LogicalOperator { kAnd, kOr };
-// Composed Predicate (AND/OR)
+// Composed Predicate (AND/OR) - N-ary structure
 class ComposedPredicate : public Predicate {
  public:
-  ComposedPredicate(std::unique_ptr<Predicate> lhs_predicate,
-                    std::unique_ptr<Predicate> rhs_predicate,
-                    LogicalOperator logical_op);
+  // N-ary constructor
+  ComposedPredicate(LogicalOperator logical_op,
+                    std::vector<std::unique_ptr<Predicate>> children);
 
   bool Evaluate(Evaluator& evaluator) const override;
-  const Predicate* GetLhsPredicate() const { return lhs_predicate_.get(); }
-  const Predicate* GetRhsPredicate() const { return rhs_predicate_.get(); }
+  
+  // N-ary interface
+  const std::vector<std::unique_ptr<Predicate>>& GetChildren() const { 
+    return children_; 
+  }
+  size_t GetChildCount() const { return children_.size(); }
+  
+  // Add a child predicate (for building N-ary trees)
+  void AddChild(std::unique_ptr<Predicate> child);
 
  private:
-  std::unique_ptr<Predicate> lhs_predicate_;
-  std::unique_ptr<Predicate> rhs_predicate_;
+  std::vector<std::unique_ptr<Predicate>> children_;
 };
 
 }  // namespace valkey_search::query

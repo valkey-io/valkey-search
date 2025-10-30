@@ -16,9 +16,9 @@
 #include "absl/strings/string_view.h"
 #include "src/index_schema.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text/lexer.h"
 #include "src/query/predicate.h"
 #include "vmsdk/src/module_config.h"
-#include "src/indexes/text/lexer.h"
 
 namespace valkey_search {
 namespace indexes {
@@ -41,29 +41,22 @@ class FilterParser {
   size_t node_count_{0};
   absl::flat_hash_set<std::string> filter_identifiers_;
 
-struct TokenResult {
+  struct TokenResult {
     size_t end_pos;
     std::unique_ptr<query::TextPredicate> predicate;
     bool break_on_query_syntax;
-};
-
-absl::StatusOr<TokenResult> ParseTokenAndBuildPredicate(
-    bool in_quotes, 
-    std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    uint64_t field_mask, std::optional<uint32_t> min_stem_size);
-
-  absl::StatusOr<std::string> ResolveTextFieldOrDefault(
-      const std::optional<std::string>& maybe_field);
+  };
+  absl::StatusOr<TokenResult> ParseTextTokens(
+      bool in_quotes,
+      std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
+      uint64_t field_mask, std::optional<uint32_t> min_stem_size);
   absl::StatusOr<std::unique_ptr<query::TextPredicate>>
-    BuildSingleTextPredicate(const indexes::Text* text_index,
-                    const indexes::text::Lexer& lexer,
-                        const std::optional<std::string>& field_name,
-                        absl::string_view raw_token);
-absl::StatusOr<std::unique_ptr<query::Predicate>>
-  ParseOneTextAtomIntoTerms(const std::optional<std::string>& maybe_field);
-  absl::StatusOr<std::unique_ptr<query::Predicate>> ParseTextGroup(
-      const std::string& initial_field);
-  absl::StatusOr<bool> IsMatchAllExpression();
+  BuildSingleTextPredicate(const indexes::Text* text_index,
+                           const indexes::text::Lexer& lexer,
+                           const std::optional<std::string>& field_name,
+                           absl::string_view raw_token);
+  absl::StatusOr<std::unique_ptr<query::Predicate>> absl::StatusOr<bool>
+  IsMatchAllExpression();
   absl::StatusOr<std::unique_ptr<query::Predicate>> ParseExpression(
       uint32_t level);
   absl::StatusOr<std::unique_ptr<query::NumericPredicate>>

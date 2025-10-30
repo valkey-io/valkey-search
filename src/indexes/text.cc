@@ -116,9 +116,9 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
 namespace valkey_search::query {
 
 void* TextPredicate::Search(bool negate) const {
+  // TODO: Add logic to calculate the size based on number of keys estimated.
   auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
-      0, GetTextIndexSchema()->GetTextIndex(),
-      nullptr, GetFieldMask());
+      0, GetTextIndexSchema()->GetTextIndex(), nullptr, GetFieldMask());
   fetcher->predicate_ = this;
   return fetcher.release();
 }

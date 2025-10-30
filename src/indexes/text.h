@@ -102,7 +102,7 @@ class Text : public IndexBase {
 
   // Calculate size based on the predicate.
   size_t CalculateSize(const query::TextPredicate& predicate) const;
-  
+
   size_t GetTextFieldNumber() const { return text_field_number_; }
 
  private:

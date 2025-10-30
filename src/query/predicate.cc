@@ -25,8 +25,9 @@ bool NegatePredicate::Evaluate(Evaluator& evaluator) const {
   return !predicate_->Evaluate(evaluator);
 }
 
-TermPredicate::TermPredicate(std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-                            FieldMaskPredicate field_mask, std::string term, bool exact_)
+TermPredicate::TermPredicate(
+    std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
+    FieldMaskPredicate field_mask, std::string term, bool exact_)
     : TextPredicate(),
       text_index_schema_(text_index_schema),
       field_mask_(field_mask),
@@ -43,8 +44,9 @@ bool TermPredicate::Evaluate(const std::string_view& text) const {
   return text == term_;  // exact match
 }
 
-PrefixPredicate::PrefixPredicate(std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-                            FieldMaskPredicate field_mask, std::string term)
+PrefixPredicate::PrefixPredicate(
+    std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
+    FieldMaskPredicate field_mask, std::string term)
     : TextPredicate(),
       text_index_schema_(text_index_schema),
       field_mask_(field_mask),
@@ -59,8 +61,9 @@ bool PrefixPredicate::Evaluate(const std::string_view& text) const {
   return absl::StartsWith(text, term_);
 }
 
-SuffixPredicate::SuffixPredicate(std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-                            FieldMaskPredicate field_mask, std::string term)
+SuffixPredicate::SuffixPredicate(
+    std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
+    FieldMaskPredicate field_mask, std::string term)
     : TextPredicate(),
       text_index_schema_(text_index_schema),
       field_mask_(field_mask),
@@ -75,8 +78,9 @@ bool SuffixPredicate::Evaluate(const std::string_view& text) const {
   return absl::EndsWith(text, term_);
 }
 
-InfixPredicate::InfixPredicate(std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-                            FieldMaskPredicate field_mask, std::string term)
+InfixPredicate::InfixPredicate(
+    std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
+    FieldMaskPredicate field_mask, std::string term)
     : TextPredicate(),
       text_index_schema_(text_index_schema),
       field_mask_(field_mask),
@@ -91,9 +95,9 @@ bool InfixPredicate::Evaluate(const std::string_view& text) const {
   return absl::StrContains(text, term_);
 }
 
-FuzzyPredicate::FuzzyPredicate(std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-                               FieldMaskPredicate field_mask, std::string term,
-                               uint32_t distance)
+FuzzyPredicate::FuzzyPredicate(
+    std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
+    FieldMaskPredicate field_mask, std::string term, uint32_t distance)
     : TextPredicate(),
       text_index_schema_(text_index_schema),
       field_mask_(field_mask),

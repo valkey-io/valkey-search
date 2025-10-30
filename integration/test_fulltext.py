@@ -667,5 +667,26 @@ class TestFullText(ValkeySearchTestCaseBase):
         perform_concurrent_searches(clients, num_clients, delete_searches, "DELETE")
 
     def test_suffix_search(self):
-        # TODO
-        pass
+        """Test suffix search functionality using *suffix pattern"""
+        # Create index
+        self.client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "content", "TEXT", "WITHSUFFIXTRIE", "NOSTEM")
+        # Add test documents
+        self.client.execute_command("HSET", "doc:1", "content", "running jumping walking")
+        self.client.execute_command("HSET", "doc:2", "content", "testing debugging coding")
+        self.client.execute_command("HSET", "doc:3", "content", "reading writing speaking")
+        self.client.execute_command("HSET", "doc:4", "content", "swimming diving surfing")
+        # Test suffix search with *ing
+        result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ing")
+        assert result[0] == 4  # All documents contain words ending with 'ing'
+        # Test suffix search with *ing (should match running, jumping, walking, etc.)
+        result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ning")
+        assert result[0] == 1  # Only doc:1 has "running"
+        # Test suffix search with *ing
+        result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ping")
+        assert result[0] == 1  # Only doc:1 has "jumping"
+        # Test suffix search with *ing
+        result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ding")
+        assert result[0] == 2  # doc:2 has "coding", doc:3 has "reading"
+        # Test non-matching suffix
+        result = self.client.execute_command("FT.SEARCH", "idx", "@content:*xyz")
+        assert result[0] == 0  # No matches

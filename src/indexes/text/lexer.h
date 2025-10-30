@@ -47,7 +47,7 @@ struct Lexer {
       uint32_t min_stem_size) const;
 
   std::string StemWord(const std::string& word, bool stemming_enabled,
-                      uint32_t min_stem_size, sb_stemmer* stemmer) const;
+                       uint32_t min_stem_size, sb_stemmer* stemmer) const;
   bool IsPunctuation(char c) const {
     return punct_bitmap_[static_cast<unsigned char>(c)];
   }
@@ -55,7 +55,8 @@ struct Lexer {
   bool IsStopWord(const std::string& lowercase_word) const {
     return stop_words_set_.contains(lowercase_word);
   }
-  sb_stemmer* GetStemmer() const;                   
+  sb_stemmer* GetStemmer() const;
+
  private:
   data_model::Language language_;
   std::bitset<256> punct_bitmap_;

@@ -111,9 +111,9 @@ absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateIndexSchema(
   VMSDK_ASSIGN_OR_RETURN(
       auto test_index_schema,
       MockIndexSchema::Create(
-                            fake_ctx, index_schema_key, *key_prefixes,
-                            std::make_unique<valkey_search::HashAttributeDataType>(), writer_thread_pool,
-                            language, punctuation, with_offsets, stop_words));
+          fake_ctx, index_schema_key, *key_prefixes,
+          std::make_unique<valkey_search::HashAttributeDataType>(),
+          writer_thread_pool, language, punctuation, with_offsets, stop_words));
   VMSDK_RETURN_IF_ERROR(
       SchemaManager::Instance().ImportIndexSchema(test_index_schema));
   return test_index_schema;

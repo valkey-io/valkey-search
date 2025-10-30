@@ -494,13 +494,15 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "exact_suffix",
             .filter = "@text_field1:*word",
             .create_success = false,
-            .create_expected_error_message = "Index created without Suffix Trie",
+            .create_expected_error_message =
+                "Index created without Suffix Trie",
         },
         {
             .test_name = "exact_inffix",
             .filter = "@text_field1:*word*",
             .create_success = false,
-            .create_expected_error_message = "Index created without Suffix Trie",
+            .create_expected_error_message =
+                "Index created without Suffix Trie",
         },
         {
             .test_name = "exact_fuzzy1",
@@ -553,7 +555,8 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "default_field_with_escape1",
-            .filter = "\"\\\\\\\\\\Hello, \\how \\\\are \\\\\\you \\\\\\\\doing?\"",
+            .filter =
+                "\"\\\\\\\\\\Hello, \\how \\\\are \\\\\\you \\\\\\\\doing?\"",
             .create_success = true,
             .evaluate_success = true,
         },
@@ -571,10 +574,11 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "default_field_with_escape4",
-            .filter = "\\\\\\\\\\(Hello, \\$how \\\\\\*are \\\\\\-you \\\\\\\\\\%doing?",
+            .filter = "\\\\\\\\\\(Hello, \\$how \\\\\\*are \\\\\\-you "
+                      "\\\\\\\\\\%doing?",
             .create_success = true,
             .evaluate_success = true,
-        },        
+        },
         {
             .test_name = "default_field_with_escape5",
             .filter = "Hello, how are you\\% doing",
@@ -591,7 +595,8 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "default_field_with_all_operations",
             .filter = "%Hllo%, how are *ou do* *oda*",
             .create_success = false,
-            .create_expected_error_message = "Index created without Suffix Trie",
+            .create_expected_error_message =
+                "Index created without Suffix Trie",
         },
         {
             .test_name = "proximity3",
@@ -602,7 +607,9 @@ INSTANTIATE_TEST_SUITE_P(
                 "@tag_field_1:{books} @text_field2:Neural | "
                 "@text_field1:%%%word%%% @text_field2:network",
             .create_success = false,
-            .create_expected_error_message = "Invalid range: Value above maximum; Query string is too complex: max number of terms can't exceed 16",
+            .create_expected_error_message =
+                "Invalid range: Value above maximum; Query string is too "
+                "complex: max number of terms can't exceed 16",
         },
         {
             .test_name = "invalid_fuzzy1",
@@ -630,7 +637,8 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "invalid_escape1",
-            .filter = "\\\\\\\\\\(Hello, \\$how \\\\*are \\\\\\-you \\\\\\\\%doing?",
+            .filter =
+                "\\\\\\\\\\(Hello, \\$how \\\\*are \\\\\\-you \\\\\\\\%doing?",
             .create_success = false,
             .create_expected_error_message = "Invalid fuzzy '%' markers",
         },
@@ -644,7 +652,8 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "invalid_wildcard2",
             .filter = "Hello, how are *you** doing",
             .create_success = false,
-            .create_expected_error_message = "Index created without Suffix Trie",
+            .create_expected_error_message =
+                "Index created without Suffix Trie",
         },
         {
             .test_name = "bad_filter_1",
@@ -680,8 +689,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "bad_filter_5",
             .filter = "@num_field_2.0 : [23 25] $  @num_field_2.0:[0 2.5] ",
             .create_success = false,
-            .create_expected_error_message =
-                "Invalid Query Syntax",
+            .create_expected_error_message = "Invalid Query Syntax",
         },
         {
             .test_name = "bad_filter_6",

@@ -218,8 +218,8 @@ INSTANTIATE_TEST_SUITE_P(
                     },
                 },
         },
-	{
-	    .test_name = "happy_path_tag_no_flags",
+        {
+            .test_name = "happy_path_tag_no_flags",
             .test_cases =
                 {
                     {
@@ -244,8 +244,9 @@ INSTANTIATE_TEST_SUITE_P(
                             "*22\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*8\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
-                            "default_score\r\n$1\r\n1\r\n+indexes_all\r\n+false\r\n+"
-			    "attributes\r\n*1\r\n*"
+                            "default_score\r\n$1\r\n1\r\n+indexes_all\r\n+"
+                            "false\r\n+"
+                            "attributes\r\n*1\r\n*"
                             "12\r\n+identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+type\r\n+"
                             "TAG\r\n+SEPARATOR\r\n+@\r\n+CASESENSITIVE\r\n+"
@@ -260,7 +261,7 @@ INSTANTIATE_TEST_SUITE_P(
                             "+state\r\n+ready\r\n",
                     },
                 },
-	},
+        },
         {
             .test_name = "happy_path_tag_case_sensitive_true",
             .test_cases =
@@ -288,8 +289,9 @@ INSTANTIATE_TEST_SUITE_P(
                             "*22\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*8\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
-                            "default_score\r\n$1\r\n1\r\n+indexes_all\r\n+false\r\n+"
-			    "attributes\r\n*1\r\n*"
+                            "default_score\r\n$1\r\n1\r\n+indexes_all\r\n+"
+                            "false\r\n+"
+                            "attributes\r\n*1\r\n*"
                             "12\r\n+identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+type\r\n+"
                             "TAG\r\n+SEPARATOR\r\n+@\r\n+CASESENSITIVE\r\n+"

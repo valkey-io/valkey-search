@@ -319,6 +319,8 @@ class RDBChunkInputStream : public hnswlib::InputStream {
   absl::StatusOr<T> LoadObject() {
     VMSDK_ASSIGN_OR_RETURN(auto buffer, LoadChunk());
     if (buffer->size() != sizeof(T)) {
+      DCHECK(false) << "Mismatched size protocol error: expected " << sizeof(T)
+                    << " got " << buffer->size();
       return absl::InternalError("Mismatched size protocol error");
     }
     return *reinterpret_cast<const T *>(buffer->data());

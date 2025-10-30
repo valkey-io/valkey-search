@@ -953,13 +953,13 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
 
 absl::Status IndexSchema::ValidateIndex() const {
   absl::Status status = absl::OkStatus();
- //
+  //
   // Find a non-vector index as the oracle
   // If all indexes are vector indexes, no validation is needed
   //
   std::shared_ptr<indexes::IndexBase> oracle_index = nullptr;
   std::string oracle_name;
-  
+
   for (const auto &attribute : attributes_) {
     if (!IsVectorIndex(attribute.second.GetIndex())) {
       oracle_index = attribute.second.GetIndex();
@@ -967,8 +967,9 @@ absl::Status IndexSchema::ValidateIndex() const {
       break;
     }
   }
-  
-  // If no non-vector index found, all indexes are vectors - no validation needed
+
+  // If no non-vector index found, all indexes are vectors - no validation
+  // needed
   if (oracle_index == nullptr) {
     return absl::OkStatus();
   }
@@ -1207,9 +1208,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
             if (index_schema) {
               VMSDK_RETURN_IF_ERROR(index_schema->LoadIndexExtension(
                   ctx, RDBChunkInputStream(supplemental_iter.IterateChunks())));
-              bool backfilling =
-                  supplemental_content->mutation_queue_header().backfilling();
-              if (!backfilling) {
+              if (!supplemental_content->mutation_queue_header()
+                       .backfilling()) {
                 VMSDK_LOG(DEBUG, ctx) << "Backfill suppressed.";
                 index_schema->backfill_job_.Get() = std::nullopt;
               }

@@ -29,7 +29,7 @@ absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
                                      absl::string_view data) {
   // TODO: Key Tracking
 
-  return text_index_schema_->IndexAttributeData(key, data, text_field_number_,
+  return text_index_schema_->StageAttributeData(key, data, text_field_number_,
                                                 !no_stem_, min_stem_size_,
                                                 with_suffix_trie_);
 }
@@ -52,7 +52,7 @@ absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr& key,
   // The old key value has already been removed from the index by a call to
   // TextIndexSchema::DeleteKey() at this point, so we simply add the new key
   // data
-  return text_index_schema_->IndexAttributeData(key, data, text_field_number_,
+  return text_index_schema_->StageAttributeData(key, data, text_field_number_,
                                                 !no_stem_, min_stem_size_,
                                                 with_suffix_trie_);
 }

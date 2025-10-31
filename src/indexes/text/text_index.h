@@ -27,6 +27,8 @@ struct sb_stemmer;
 
 namespace valkey_search::indexes::text {
 
+using TokenPositions = absl::flat_hash_map<std::string, PositionMap>;
+
 struct TextIndex {
   TextIndex() = default;
   ~TextIndex() = default;
@@ -51,10 +53,11 @@ class TextIndexSchema {
                   bool with_offsets,
                   const std::vector<std::string>& stop_words);
 
-  absl::StatusOr<bool> IndexAttributeData(const InternedStringPtr& key,
+  absl::StatusOr<bool> StageAttributeData(const InternedStringPtr& key,
                                           absl::string_view data,
                                           size_t text_field_number, bool stem,
                                           size_t min_stem_size, bool suffix);
+  void CommitKeyData(const InternedStringPtr& key);
   void DeleteKeyData(const InternedStringPtr& key);
 
   uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }
@@ -93,15 +96,10 @@ class TextIndexSchema {
   // Key updates are fanned out to each attribute's IndexBase object. Since text
   // indexing operates at the schema-level, any new text data to insert for a
   // key is accumulated across all attributes here and committed into the text
-  // index structures at the end.
-  // using PositionMap = absl::flat_hash_map<Position,
-  // std::unique_ptr<FieldMask>>; using TokenPositions =
-  // absl::flat_hash_map<std::string, PositionMap>;
-  absl::flat_hash_map<
-      Key, absl::flat_hash_map<
-               std::string,
-               absl::flat_hash_map<Position, std::unique_ptr<FieldMask>>>>
-      in_progress_key_updates_;
+  // index structures at the end for efficiency.
+  absl::node_hash_map<Key, TokenPositions> in_progress_key_updates_;
+
+  std::mutex in_progress_key_updates_mutex_;
 
   // Whether to store position offsets for phrase queries
   bool with_offsets_ = false;

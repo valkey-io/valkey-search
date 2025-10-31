@@ -453,9 +453,9 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                              attribute_data_itr.second.deletion_type);
   }
   if (text_index_schema_) {
-    // TODO(Brennan): commit the token positions maps for this key after all
-    // attributes have been added
-    // - essentially commit the key
+    // Text index structures operate at the schmema-level so we commit the
+    // updates to all Text attributes in one operation for efficiency
+    text_index_schema_->CommitKeyData(key);
   }
 }
 

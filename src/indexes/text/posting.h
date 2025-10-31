@@ -61,6 +61,8 @@ class FieldMask {
   virtual size_t MaxFields() const = 0;
 };
 
+using PositionMap = std::map<Position, std::unique_ptr<FieldMask>>;
+
 //
 // this is the logical view of a posting.
 //
@@ -73,24 +75,22 @@ struct Posting {
 struct Postings {
   struct KeyIterator;
   struct PositionIterator;
-  // Construct a posting. If save_positions is off, then any keys that
-  // are inserted have an assumed single position of 0.
-  // The "num_text_fields" entry identifies how many bits of the field-mask are
-  // required and is used to select the representation.
-  explicit Postings(bool save_positions, size_t num_text_fields);
 
-  // Destructor
-  ~Postings();
+  Postings() = default;
+  ~Postings() = default;
 
   // Are there any postings in this object?
   bool IsEmpty() const;
 
-  // Insert a posting entry for a key and field
-  // If save_positions=false: Only key and field are stored (position ignored if
-  // provided) If save_positions=true: Key, position, and field are stored
-  // (position must be provided)
-  void InsertPosting(const Key& key, size_t field_index,
-                     Position position = UINT32_MAX);
+  // // Insert a posting entry for a key and field
+  // // If save_positions=false: Only key and field are stored (position ignored
+  // if
+  // // provided) If save_positions=true: Key, position, and field are stored
+  // // (position must be provided)
+  // void InsertPosting(const Key& key, size_t field_index,
+  //                    Position position = UINT32_MAX);
+
+  void InsertKey(const Key& key, PositionMap& pos_map);
 
   // Remove a key and all positions for it
   void RemoveKey(const Key& key);
@@ -171,8 +171,7 @@ struct Postings {
   };
 
  private:
-  class Impl;
-  std::unique_ptr<Impl> impl_;
+  std::map<Key, PositionMap> key_to_positions_;
 };
 
 }  // namespace valkey_search::indexes::text

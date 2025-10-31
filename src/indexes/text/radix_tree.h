@@ -88,7 +88,6 @@ struct RadixTree {
   struct WordIterator;
   struct PathIterator;
   RadixTree() = default;
-  ~RadixTree() = default;
 
   //
   // Adds the target for the given word, replacing the existing target

@@ -793,19 +793,19 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
 
   ValkeyModule_ReplyWithSimpleString(ctx, "num_docs");
   ValkeyModule_ReplyWithLongLong(ctx, stats_.document_cnt);
-
-  ValkeyModule_ReplyWithSimpleString(ctx, "num_unique_terms");
-  ValkeyModule_ReplyWithLongLong(
-      ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
-
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
+  ValkeyModule_ReplyWithLongLong(ctx, CountRecords());
+  // Text Index info fields
   ValkeyModule_ReplyWithSimpleString(ctx, "num_total_terms");
   ValkeyModule_ReplyWithLongLong(
       ctx,
       text_index_schema_ ? text_index_schema_->GetTotalTermFrequency() : 0);
-
-  ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
-  ValkeyModule_ReplyWithLongLong(ctx, CountRecords());
-
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_unique_terms");
+  ValkeyModule_ReplyWithLongLong(
+      ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "total_postings");
+  ValkeyModule_ReplyWithLongLong(
+      ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
   ValkeyModule_ReplyWithSimpleString(ctx, "posting_sz_mb");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%.6f",
@@ -814,7 +814,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
                                      (1024.0 * 1024.0)
                                : 0.0)
                .c_str());
-
   ValkeyModule_ReplyWithSimpleString(ctx, "position_sz_mb");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%.6f",
@@ -823,11 +822,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
                                      (1024.0 * 1024.0)
                                : 0.0)
                .c_str());
-
-  ValkeyModule_ReplyWithSimpleString(ctx, "total_postings");
-  ValkeyModule_ReplyWithLongLong(
-      ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
-
   ValkeyModule_ReplyWithSimpleString(ctx, "radix_sz_mb");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%.6f",
@@ -836,7 +830,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
                                      (1024.0 * 1024.0)
                                : 0.0)
                .c_str());
-
   ValkeyModule_ReplyWithSimpleString(ctx, "total_text_index_sz_mb");
   ValkeyModule_ReplyWithCString(
       ctx,
@@ -846,7 +839,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
                                 (1024.0 * 1024.0)
                           : 0.0)
           .c_str());
-
   ValkeyModule_ReplyWithSimpleString(ctx, "total_terms_per_doc_avg");
   ValkeyModule_ReplyWithCString(
       ctx,
@@ -855,7 +847,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
                                         stats_.document_cnt)
                                   : 0.0)
           .c_str());
-
   ValkeyModule_ReplyWithSimpleString(ctx, "total_text_index_sz_per_doc_avg");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat(
@@ -864,7 +855,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
                                  stats_.document_cnt)
                            : 0.0)
                .c_str());
-
   ValkeyModule_ReplyWithSimpleString(ctx, "position_sz_per_term_avg");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%.2f",
@@ -881,7 +871,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
                       ? text_index_schema_->GetTotalTextIndexSizePerTermAvg()
                       : 0.0)
           .c_str());
-
+  // Text Index info fields end
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%lu", stats_.subscription_add.skipped_cnt).c_str());

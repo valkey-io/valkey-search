@@ -200,6 +200,8 @@ Postings::~Postings() {
     // Clear all key-to-position mappings to ensure proper cleanup
     // This will trigger destructors for all FieldMask objects
     impl_->key_to_positions_.clear();
+
+    impl_.reset();
   }
 }
 

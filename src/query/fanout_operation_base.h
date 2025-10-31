@@ -101,7 +101,7 @@ class FanoutOperationBase {
     coordinator::ClientPool* client_pool_ =
         ValkeySearch::Instance().GetCoordinatorClientPool();
 
-    if (target.location == vmsdk::cluster_map::NodeInfo::NodeLocation::kLocal) {
+    if (target.is_local) {
       vmsdk::RunByMain([this, target, request]() {
         auto [status, resp] = this->GetLocalResponse(request, target);
         if (status.ok()) {
@@ -118,7 +118,8 @@ class FanoutOperationBase {
       });
     } else {
       std::string client_ip_port = absl::StrCat(
-          target.ip, ":", coordinator::GetCoordinatorPort(target.port));
+          target.socket_address.ip, ":",
+          coordinator::GetCoordinatorPort(target.socket_address.port));
       auto client = client_pool_->GetClient(client_ip_port);
       if (!client) {
         ++Metrics::GetStats().info_fanout_fail_cnt;
@@ -217,15 +218,15 @@ class FanoutOperationBase {
       error_message = "Index name not found.";
       for (const vmsdk::cluster_map::NodeInfo& target :
            index_name_error_nodes) {
-        if (target.location ==
-            vmsdk::cluster_map::NodeInfo::NodeLocation::kLocal) {
+        if (target.is_local) {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << INDEX_NAME_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << INDEX_NAME_ERROR_LOG_PREFIX
-              << absl::StrCat(target.ip, ":",
-                              coordinator::GetCoordinatorPort(target.port));
+              << absl::StrCat(target.socket_address.ip, ":",
+                              coordinator::GetCoordinatorPort(
+                                  target.socket_address.port));
         }
       }
     }
@@ -234,15 +235,15 @@ class FanoutOperationBase {
       error_message = "Communication error between nodes found.";
       for (const vmsdk::cluster_map::NodeInfo& target :
            communication_error_nodes) {
-        if (target.location ==
-            vmsdk::cluster_map::NodeInfo::NodeLocation::kLocal) {
+        if (target.is_local) {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << COMMUNICATION_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << COMMUNICATION_ERROR_LOG_PREFIX
-              << absl::StrCat(target.ip, ":",
-                              coordinator::GetCoordinatorPort(target.port));
+              << absl::StrCat(target.socket_address.ip, ":",
+                              coordinator::GetCoordinatorPort(
+                                  target.socket_address.port));
         }
       }
     }
@@ -251,15 +252,15 @@ class FanoutOperationBase {
       error_message = "Inconsistent index state error found.";
       for (const vmsdk::cluster_map::NodeInfo& target :
            inconsistent_state_error_nodes) {
-        if (target.location ==
-            vmsdk::cluster_map::NodeInfo::NodeLocation::kLocal) {
+        if (target.is_local) {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << INCONSISTENT_STATE_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << INCONSISTENT_STATE_ERROR_LOG_PREFIX
-              << absl::StrCat(target.ip, ":",
-                              coordinator::GetCoordinatorPort(target.port));
+              << absl::StrCat(target.socket_address.ip, ":",
+                              coordinator::GetCoordinatorPort(
+                                  target.socket_address.port));
         }
       }
     }

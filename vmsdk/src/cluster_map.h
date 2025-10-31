@@ -10,6 +10,7 @@
 
 #include <bitset>
 #include <chrono>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -17,11 +18,19 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "highwayhash/arch_specific.h"
+#include "highwayhash/hh_types.h"
+#include "highwayhash/highwayhash.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
 
 namespace cluster_map {
+
+static constexpr highwayhash::HHKey kHashKey{
+    0x9736bad976c904ea, 0x08f963a1a52eece9, 0x1ea3f3f773f3b510,
+    0x9290a6b4e4db3d51};
 
 // Enumeration for fanout target modes
 enum class FanoutTargetMode {
@@ -37,26 +46,20 @@ const size_t k_num_slots = 16384;
 struct ShardInfo;
 
 struct NodeInfo {
-  enum NodeRole { kPrimary, kReplica };
-  enum NodeLocation {
-    kLocal,
-    kRemote,
-  };
   std::string node_id;
-  NodeRole role;
-  NodeLocation location;
-  // Empty string if location is kLocal.
-  std::string ip;
-  // 0 if location is kLocal
-  int port;
+  bool is_primary;
+  bool is_local;
+  SocketAddress socket_address;
   // Pointer to the shard this node belongs to
   const ShardInfo* shard = nullptr;
 
   auto operator<=>(const NodeInfo&) const = default;
 
   friend std::ostream& operator<<(std::ostream& os, const NodeInfo& target) {
-    os << "NodeInfo{role: " << target.role << ", location: " << target.location
-       << ", address: " << target.ip << ":" << target.port << "}";
+    os << "NodeInfo{role: " << (target.is_primary ? "primary" : "replica")
+       << ", location: " << (target.is_local ? "local" : "remote")
+       << ", address: " << target.socket_address.ip << ":"
+       << target.socket_address.port << "}";
     return os;
   }
 };
@@ -67,8 +70,9 @@ struct ShardInfo {
   // primary node can be empty
   std::optional<NodeInfo> primary;
   std::vector<NodeInfo> replicas;
-  std::set<uint16_t> owned_slots;
-  // Hash of owned_slots vector
+  // map start slot to end slot
+  std::map<uint16_t, uint16_t> owned_slots;
+  // Hash of owned_slots
   uint64_t slots_fingerprint;
 };
 
@@ -86,9 +90,13 @@ class ClusterMap {
   static std::shared_ptr<ClusterMap> CreateNewClusterMap(ValkeyModuleCtx* ctx);
 
   // return pre-generated target vectors
-  const std::vector<NodeInfo>& GetPrimaryTargets() const;
-  const std::vector<NodeInfo>& GetReplicaTargets() const;
-  const std::vector<NodeInfo>& GetAllTargets() const;
+  const std::vector<NodeInfo>& GetPrimaryTargets() const {
+    return primary_targets_;
+  };
+  const std::vector<NodeInfo>& GetReplicaTargets() const {
+    return replica_targets_;
+  };
+  const std::vector<NodeInfo>& GetAllTargets() const { return all_targets_; };
 
   std::chrono::steady_clock::time_point GetExpirationTime() const {
     return expiration_tp_;
@@ -138,36 +146,26 @@ class ClusterMap {
   // helper function to print out cluster map for debug
   static void PrintClusterMap(std::shared_ptr<ClusterMap> map);
 
-  static uint64_t compute_shard_fingerprint(const std::set<uint16_t>& slots);
+  // helper function to create shard fingerprint
+  uint64_t ComputeShardFingerprint(
+      const std::map<uint16_t, uint16_t>& slot_ranges);
 
-  static uint64_t compute_cluster_fingerprint(
-      const absl::flat_hash_map<std::string, ShardInfo>& shards);
+  // helper function to create cluster level fingerprint
+  uint64_t ComputeClusterFingerprint();
 
   // Helper functions for CreateNewClusterMap
-  static NodeInfo ParseNodeInfo(ValkeyModuleCallReply* node_arr,
-                                bool is_local_shard, NodeInfo::NodeRole role);
+  NodeInfo ParseNodeInfo(ValkeyModuleCallReply* node_arr, bool is_local_shard,
+                         bool is_primary);
 
-  static bool IsLocalShard(ValkeyModuleCallReply* slot_range,
-                           const char* my_node_id);
+  bool IsLocalShard(ValkeyModuleCallReply* slot_range, const char* my_node_id);
 
-  static void ProcessSlotRange(
-      ValkeyModuleCallReply* slot_range, const char* my_node_id,
-      absl::flat_hash_map<std::string, ShardInfo>& shards,
-      std::bitset<k_num_slots>& owned_slots,
-      std::vector<NodeInfo>& primary_targets,
-      std::vector<NodeInfo>& replica_targets,
-      std::vector<NodeInfo>& all_targets,
-      std::vector<SlotRangeInfo>& slot_ranges);
+  void ProcessSlotRange(ValkeyModuleCallReply* slot_range,
+                        const char* my_node_id,
+                        std::vector<SlotRangeInfo>& slot_ranges);
 
-  static void BuildSlotToShardMap(
-      std::map<uint16_t, std::pair<uint16_t, const ShardInfo*>>&
-          slot_to_shard_map,
-      const absl::flat_hash_map<std::string, ShardInfo>& shards,
-      const std::vector<SlotRangeInfo>& slot_ranges);
+  void BuildSlotToShardMap(const std::vector<SlotRangeInfo>& slot_ranges);
 
-  static bool CheckClusterMapFull(
-      const std::map<uint16_t, std::pair<uint16_t, const ShardInfo*>>&
-          slot_map);
+  bool CheckClusterMapFull();
 };
 
 }  // namespace cluster_map

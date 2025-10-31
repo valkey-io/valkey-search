@@ -134,5 +134,12 @@ struct JsonQuotedStringView {
   VMSDK_NON_COPYABLE(ClassName);                  \
   VMSDK_NON_MOVABLE(ClassName)
 
+struct SocketAddress {
+  // empty string if local
+  std::string ip;
+  // 0 if local
+  uint16_t port;
+};
+
 }  // namespace vmsdk
 #endif  // VMSDK_SRC_UTILS_H_

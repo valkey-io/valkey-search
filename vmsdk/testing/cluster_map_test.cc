@@ -211,12 +211,12 @@ class ClusterMapTest : public vmsdk::ValkeyTest {
     EXPECT_EQ(all_targets.size(), expected_primaries + expected_replicas);
 
     for (const auto& target : primary_targets) {
-      EXPECT_EQ(target.role, NodeInfo::NodeRole::kPrimary);
+      EXPECT_TRUE(target.is_primary);
       EXPECT_NE(target.shard, nullptr);
     }
 
     for (const auto& target : replica_targets) {
-      EXPECT_EQ(target.role, NodeInfo::NodeRole::kReplica);
+      EXPECT_FALSE(target.is_primary);
       EXPECT_NE(target.shard, nullptr);
     }
   }
@@ -427,6 +427,37 @@ TEST_F(ClusterMapTest, SingleSlotRangeTest) {
   EXPECT_EQ(shard->shard_id, primary_ids.at(0));
 }
 
+TEST_F(ClusterMapTest, DiscreteSlotRangeTest) {
+  std::vector<SlotRangeConfig> ranges = {
+      {.start_slot = 0,
+       .end_slot = 5460,
+       .master = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0)},
+       .replicas = {NodeConfig{"127.0.0.1", 30004, replica_ids.at(0)}}},
+      {.start_slot = 5461,
+       .end_slot = 10922,
+       .master = NodeConfig{"127.0.0.1", 30002, primary_ids.at(1)},
+       .replicas = {NodeConfig{"127.0.0.1", 30005, replica_ids.at(1)}}},
+      {.start_slot = 10923,
+       .end_slot = 16383,
+       .master = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0)},
+       .replicas = {NodeConfig{"127.0.0.1", 30004, replica_ids.at(0)}}}};
+
+  auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
+
+  ASSERT_NE(cluster_map, nullptr);
+  EXPECT_TRUE(cluster_map->GetIsClusterMapFull());
+  EXPECT_TRUE(cluster_map->IOwnSlot(0));
+  EXPECT_TRUE(cluster_map->IOwnSlot(5460));
+  EXPECT_FALSE(cluster_map->IOwnSlot(5461));
+  EXPECT_FALSE(cluster_map->IOwnSlot(10922));
+  EXPECT_TRUE(cluster_map->IOwnSlot(10923));
+  EXPECT_TRUE(cluster_map->IOwnSlot(16383));
+
+  EXPECT_EQ(cluster_map->GetPrimaryTargets().size(), 2);
+  EXPECT_EQ(cluster_map->GetReplicaTargets().size(), 2);
+  EXPECT_EQ(cluster_map->GetAllTargets().size(), 4);
+}
+
 // ============================================================================
 // Replica and Node Location Tests
 // ============================================================================
@@ -457,14 +488,14 @@ TEST_F(ClusterMapTest, LocalNodeIsReplicaTest) {
   // Verify both nodes in first shard are marked as local
   const ShardInfo* shard = cluster_map->GetShardById(primary_ids.at(0));
   ASSERT_NE(shard, nullptr);
-  EXPECT_EQ(shard->primary->location, NodeInfo::NodeLocation::kLocal);
-  EXPECT_EQ(shard->replicas[0].location, NodeInfo::NodeLocation::kLocal);
+  EXPECT_TRUE(shard->primary->is_local);
+  EXPECT_TRUE(shard->replicas[0].is_local);
 
   // Second shard should be remote
   const ShardInfo* shard2 = cluster_map->GetShardById(primary_ids.at(1));
   ASSERT_NE(shard2, nullptr);
-  EXPECT_EQ(shard2->primary->location, NodeInfo::NodeLocation::kRemote);
-  EXPECT_EQ(shard2->replicas[0].location, NodeInfo::NodeLocation::kRemote);
+  EXPECT_FALSE(shard2->primary->is_local);
+  EXPECT_FALSE(shard2->replicas[0].is_local);
 }
 
 TEST_F(ClusterMapTest, MultipleReplicasPerShardTest) {
@@ -487,7 +518,7 @@ TEST_F(ClusterMapTest, MultipleReplicasPerShardTest) {
 
   for (const auto& replica : shard->replicas) {
     EXPECT_EQ(replica.shard, shard);
-    EXPECT_EQ(replica.role, NodeInfo::NodeRole::kReplica);
+    EXPECT_FALSE(replica.is_primary);
   }
 
   VerifyTargetListConsistency(cluster_map.get(), 1, 3);
@@ -585,9 +616,9 @@ TEST_F(ClusterMapTest, ExpirationTimeTest) {
   EXPECT_GT(expiration, after);
 
   // Expiration should be reasonable (within expected range)
-  // Default is 5000ms, so should be roughly 5 seconds from creation
-  auto min_expiration = before + std::chrono::milliseconds(4000);
-  auto max_expiration = after + std::chrono::milliseconds(6000);
+  // Default is 250ms
+  auto min_expiration = before + std::chrono::milliseconds(100);
+  auto max_expiration = after + std::chrono::milliseconds(300);
   EXPECT_GE(expiration, min_expiration);
   EXPECT_LE(expiration, max_expiration);
 }

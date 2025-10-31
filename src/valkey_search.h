@@ -100,13 +100,13 @@ class ValkeySearch {
 
   // Get current cluster map (thread-safe)
   std::shared_ptr<vmsdk::cluster_map::ClusterMap> GetClusterMap() const {
-    return cluster_map_.load();
+    return std::atomic_load(&cluster_map_);
   }
 
   // Update cluster map with a new one (thread-safe atomic swap)
   void UpdateClusterMap(
       std::shared_ptr<vmsdk::cluster_map::ClusterMap> new_map) {
-    cluster_map_.store(new_map);
+    std::atomic_store(&cluster_map_, new_map);
   }
 
   // Refresh cluster map by creating a new one from current cluster state
@@ -143,7 +143,7 @@ class ValkeySearch {
 
   std::unique_ptr<coordinator::Server> coordinator_;
   std::unique_ptr<coordinator::ClientPool> client_pool_;
-  std::atomic<std::shared_ptr<vmsdk::cluster_map::ClusterMap>> cluster_map_;
+  std::shared_ptr<vmsdk::cluster_map::ClusterMap> cluster_map_;
 };
 void ModuleInfo(ValkeyModuleInfoCtx *ctx, int for_crash_report);
 }  // namespace valkey_search

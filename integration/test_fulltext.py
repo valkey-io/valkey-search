@@ -668,12 +668,11 @@ class TestFullText(ValkeySearchTestCaseBase):
         text_index_fields = [
             "num_unique_terms",          # Total number of unique terms in the text index
             "num_total_terms",           # Total frequency of all terms across all documents  
-            "posting_sz_mb",             # Memory used by posting lists (inverted index data) in MB
-            "position_sz_mb",            # Memory used by position information for phrase queries in MB
+            "posting_sz_bytes",          # Memory used by posting lists (inverted index data) in bytes
+            "position_sz_bytes",         # Memory used by position information for phrase queries in bytes
             "total_postings",            # Total number of posting lists (equals unique terms)
-            "radix_sz_mb",               # Memory used by the radix tree (term dictionary) in MB
-            "total_text_index_sz_mb",    # Total memory used by all text index components in MB
-            "total_terms_per_doc_avg"    # Average number of terms per document
+            "radix_sz_bytes",            # Memory used by the radix tree (term dictionary) in bytes
+            "total_text_index_sz_bytes"  # Total memory used by all text index components in bytes
         ]
         
         # Validate that all text index fields are present and have reasonable values
@@ -689,39 +688,85 @@ class TestFullText(ValkeySearchTestCaseBase):
                 assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
                 assert value >= info_data["num_unique_terms"], f"Total terms {value} should be >= unique terms {info_data['num_unique_terms']}"
                 
-            elif field in ["posting_sz_mb", "position_sz_mb", "radix_sz_mb", "total_text_index_sz_mb"]:
-                assert (isinstance(value, (int, float)) and value > 0) or \
+            elif field in ["posting_sz_bytes", "position_sz_bytes", "radix_sz_bytes", "total_text_index_sz_bytes"]:
+                assert (isinstance(value, int) and value > 0) or \
                        (os.environ.get('SAN_BUILD', 'no') != 'no' and value == 0), \
-                       f"{field} should be positive number, got {value}"
+                       f"{field} should be positive integer, got {value}"
                     
             elif field == "total_postings":
                 assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
                 assert value == info_data["num_unique_terms"], f"Total postings {value} should equal unique terms {info_data['num_unique_terms']}"
-                
-            elif field == "total_terms_per_doc_avg":
-                assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
-                assert value >= 5, f"Expected average terms per doc >= 5, got {value}"
         
         # Validate memory relationships
-        total_memory = info_data["total_text_index_sz_mb"]
-        posting_memory = info_data["posting_sz_mb"]
-        position_memory = info_data["position_sz_mb"]
-        radix_memory = info_data["radix_sz_mb"]
+        total_memory = info_data["total_text_index_sz_bytes"]
+        posting_memory = info_data["posting_sz_bytes"]
+        position_memory = info_data["position_sz_bytes"]
+        radix_memory = info_data["radix_sz_bytes"]
         
         # Total memory should be at least the sum of components
         component_sum = posting_memory + radix_memory
-        assert total_memory == component_sum, f"Total memory {total_memory} should be >= component sum {component_sum}"
+        assert total_memory == component_sum, f"Total memory {total_memory} should equal component sum {component_sum}"
         
         print(f"Text Index Statistics Validation Passed:")
         print(f"  Documents: {info_data['num_docs']}")
         print(f"  Unique Terms: {info_data['num_unique_terms']}")
         print(f"  Total Terms: {info_data['num_total_terms']}")
         print(f"  Total Postings: {info_data['total_postings']}")
-        print(f"  Avg Terms/Doc: {info_data['total_terms_per_doc_avg']:.2f}")
-        print(f"  Total Memory: {info_data['total_text_index_sz_mb']:.4f} MB")
-        print(f"  Posting Memory: {info_data['posting_sz_mb']:.4f} MB")
-        print(f"  Position Memory: {info_data['position_sz_mb']:.4f} MB")
-        print(f"  Radix Memory: {info_data['radix_sz_mb']:.4f} MB")
+        print(f"  Total Memory: {info_data['total_text_index_sz_bytes']} bytes")
+        print(f"  Posting Memory: {info_data['posting_sz_bytes']} bytes")
+        print(f"  Position Memory: {info_data['position_sz_bytes']} bytes")
+        print(f"  Radix Memory: {info_data['radix_sz_bytes']} bytes")
+
+        # Test cleanup after document deletion
+        print("\nTesting cleanup after document deletion...")
         
-        # TODO : Add verification of cleanup after keys deleted. 
+        # Store initial memory values
+        initial_posting_memory = info_data['posting_sz_bytes']
+        initial_radix_memory = info_data['radix_sz_bytes']
+        initial_position_memory = info_data['position_sz_bytes']
+        initial_total_memory = info_data['total_text_index_sz_bytes']
+        initial_unique_terms = info_data['num_unique_terms']
+        initial_total_terms = info_data['num_total_terms']
+        
+        # Delete all documents
+        for doc in hash_docs:
+            key = doc[1]  # Extract key from HSET command
+            client.execute_command("DEL", key)
+        
+        # Get FT.INFO after deletion
+        parser_after_delete = IndexingTestHelper.get_ft_info(client, "products")
+        info_after_delete = parser_after_delete.parsed_data
+        
+        # Verify document count is zero
+        assert info_after_delete["num_docs"] == 0, f"Expected 0 documents after deletion, got {info_after_delete['num_docs']}"
+        
+        # Verify all metrics decreased after deletion
+        assert info_after_delete['posting_sz_bytes'] < initial_posting_memory, \
+            f"Posting memory should decrease: {info_after_delete['posting_sz_bytes']} >= {initial_posting_memory}"
+        assert info_after_delete['radix_sz_bytes'] < initial_radix_memory, \
+            f"Radix memory should decrease: {info_after_delete['radix_sz_bytes']} >= {initial_radix_memory}"
+        assert info_after_delete['position_sz_bytes'] < initial_position_memory, \
+            f"Position memory should decrease: {info_after_delete['position_sz_bytes']} >= {initial_position_memory}"
+        assert info_after_delete['total_text_index_sz_bytes'] < initial_total_memory, \
+            f"Total memory should decrease: {info_after_delete['total_text_index_sz_bytes']} >= {initial_total_memory}"
+        assert info_after_delete['num_unique_terms'] < initial_unique_terms, \
+            f"Unique terms should decrease: {info_after_delete['num_unique_terms']} >= {initial_unique_terms}"
+        assert info_after_delete['num_total_terms'] < initial_total_terms, \
+            f"Total terms should decrease: {info_after_delete['num_total_terms']} >= {initial_total_terms}"
+        
+        print(f"  After deletion - Documents: {info_after_delete['num_docs']}")
+        print(f"  After deletion - Unique Terms: {info_after_delete['num_unique_terms']}")
+        print(f"  After deletion - Total Terms: {info_after_delete['num_total_terms']}")
+        print(f"  After deletion - Posting Memory: {info_after_delete['posting_sz_bytes']} bytes")
+        print(f"  After deletion - Radix Memory: {info_after_delete['radix_sz_bytes']} bytes")
+        print(f"  After deletion - Total Memory: {info_after_delete['total_text_index_sz_bytes']} bytes")
+        
+        # Now delete the index and verify complete cleanup
+        client.execute_command("FT.DROPINDEX", "products")
+        
+        # Verify index no longer exists
+        indices = client.execute_command("FT._LIST")
+        assert b"products" not in indices, "Index should not exist after FT.DROPINDEX"
+        
+        print("\nCleanup verification passed!")
         # Deletion pending of per_key_index, On deletion only prefix tree cleared

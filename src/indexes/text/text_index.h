@@ -8,6 +8,7 @@
 #ifndef VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 #define VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 
+#include <atomic>
 #include <bitset>
 #include <cctype>
 #include <memory>
@@ -29,10 +30,9 @@ namespace valkey_search::indexes::text {
 
 // FT.INFO counters for text info fields
 struct TextIndexMetadata {
-  uint64_t total_positions = 0;
-  uint64_t num_unique_terms = 0;
-  uint64_t total_term_frequency = 0;
-  std::mutex mtx;
+  std::atomic<uint64_t> total_positions{0};
+  std::atomic<uint64_t> num_unique_terms{0};
+  std::atomic<uint64_t> total_term_frequency{0};
 };
 
 TextIndexMetadata& GetTextIndexMetadata();
@@ -109,10 +109,6 @@ class TextIndexSchema {
   uint64_t GetRadixTreeMemoryUsage() const;
   uint64_t GetPositionMemoryUsage() const;
   uint64_t GetTotalTextIndexMemoryUsage() const;
-  double GetTotalTermsPerDocAvg(uint64_t num_docs) const;
-  double GetTotalTextIndexSizePerDocAvg(uint64_t num_docs) const;
-  double GetPositionSizePerTermAvg() const;
-  double GetTotalTextIndexSizePerTermAvg() const;
 };
 
 }  // namespace valkey_search::indexes::text

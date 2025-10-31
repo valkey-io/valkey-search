@@ -193,15 +193,21 @@ Postings::Postings(bool save_positions, size_t num_text_fields) {
 
 // Destructor with proper memory tracking and cleanup
 Postings::~Postings() {
-  IsolatedMemoryScope scope{memory_pool_};
-
-  // Explicit cleanup of the implementation
-  if (impl_) {
-    // Clear all key-to-position mappings to ensure proper cleanup
-    // This will trigger destructors for all FieldMask objects
-    impl_->key_to_positions_.clear();
-
-    impl_.reset();
+  // Thread-local flag to prevent infinite recursion
+  thread_local bool in_postings_destructor = false;
+  
+  if (!in_postings_destructor) {
+    in_postings_destructor = true;
+    IsolatedMemoryScope scope{memory_pool_};
+    
+    // Explicit cleanup of the implementation
+    if (impl_) {
+      // Clear all key-to-position mappings to ensure proper cleanup
+      // This will trigger destructors for all FieldMask objects
+      impl_->key_to_positions_.clear();
+    }
+    this->~Postings();  // call myself recursively
+    in_postings_destructor = false;
   }
 }
 
@@ -242,7 +248,6 @@ void Postings::InsertPosting(const Key& key, size_t field_index,
     pos_map[effective_position] = std::move(field_mask);
 
     auto& metadata = GetTextIndexMetadata();
-    std::lock_guard<std::mutex> lock(metadata.mtx);
     metadata.total_positions++;
   }
 }
@@ -264,7 +269,6 @@ void Postings::RemoveKey(const Key& key) {
     }
 
     auto& metadata = GetTextIndexMetadata();
-    std::lock_guard<std::mutex> lock(metadata.mtx);
     metadata.total_positions -= positions_to_remove;
     metadata.total_term_frequency -= term_freq_to_remove;
   }

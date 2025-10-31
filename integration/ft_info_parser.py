@@ -309,14 +309,14 @@ class FTInfoParser:
         return self.parsed_data.get("num_total_terms")
 
     @property
-    def posting_sz_mb(self) -> Optional[float]:
-        """Get the memory used by posting lists (inverted index data) in MB."""
-        return self.parsed_data.get("posting_sz_mb")
+    def posting_sz_bytes(self) -> Optional[int]:
+        """Get the memory used by posting lists (inverted index data) in bytes."""
+        return self.parsed_data.get("posting_sz_bytes")
 
     @property
-    def position_sz_mb(self) -> Optional[float]:
-        """Get the memory used by position information for phrase queries in MB."""
-        return self.parsed_data.get("position_sz_mb")
+    def position_sz_bytes(self) -> Optional[int]:
+        """Get the memory used by position information for phrase queries in bytes."""
+        return self.parsed_data.get("position_sz_bytes")
 
     @property
     def total_postings(self) -> Optional[int]:
@@ -324,19 +324,14 @@ class FTInfoParser:
         return self.parsed_data.get("total_postings")
 
     @property
-    def radix_sz_mb(self) -> Optional[float]:
-        """Get the memory used by the radix tree (term dictionary) in MB."""
-        return self.parsed_data.get("radix_sz_mb")
+    def radix_sz_bytes(self) -> Optional[int]:
+        """Get the memory used by the radix tree (term dictionary) in bytes."""
+        return self.parsed_data.get("radix_sz_bytes")
 
     @property
-    def total_text_index_sz_mb(self) -> Optional[float]:
-        """Get the total memory used by all text index components in MB."""
-        return self.parsed_data.get("total_text_index_sz_mb")
-
-    @property
-    def total_terms_per_doc_avg(self) -> Optional[float]:
-        """Get the average number of terms per document."""
-        return self.parsed_data.get("total_terms_per_doc_avg")
+    def total_text_index_sz_bytes(self) -> Optional[int]:
+        """Get the total memory used by all text index components in bytes."""
+        return self.parsed_data.get("total_text_index_sz_bytes")
 
     def get_vector_dimensions(self, field_name: str) -> Optional[int]:
         """

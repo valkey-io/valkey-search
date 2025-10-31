@@ -30,8 +30,6 @@ namespace valkey_search::indexes::text {
 using TokenPositions = absl::flat_hash_map<std::string, PositionMap>;
 
 struct TextIndex {
-  TextIndex() = default;
-  ~TextIndex() = default;
   //
   // The main query data structure maps Words into Postings objects. This
   // is always done with a prefix tree. Optionally, a suffix tree can also be

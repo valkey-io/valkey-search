@@ -90,7 +90,7 @@ struct Postings {
   // void InsertPosting(const Key& key, size_t field_index,
   //                    Position position = UINT32_MAX);
 
-  void InsertKey(const Key& key, PositionMap& pos_map);
+  void InsertKey(const Key& key, PositionMap pos_map);
 
   // Remove a key and all positions for it
   void RemoveKey(const Key& key);

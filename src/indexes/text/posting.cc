@@ -195,11 +195,11 @@ Postings::Postings(bool save_positions, size_t num_text_fields) {
 Postings::~Postings() {
   // Thread-local flag to prevent infinite recursion
   thread_local bool in_postings_destructor = false;
-  
+
   if (!in_postings_destructor) {
     in_postings_destructor = true;
     IsolatedMemoryScope scope{memory_pool_};
-    
+
     // Explicit cleanup of the implementation
     if (impl_) {
       // Clear all key-to-position mappings to ensure proper cleanup

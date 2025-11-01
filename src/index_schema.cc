@@ -808,16 +808,21 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
       ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
   ValkeyModule_ReplyWithSimpleString(ctx, "posting_sz_bytes");
   ValkeyModule_ReplyWithLongLong(
-      ctx, text_index_schema_ ? text_index_schema_->GetPostingsMemoryUsage() : 0);
+      ctx,
+      text_index_schema_ ? text_index_schema_->GetPostingsMemoryUsage() : 0);
   ValkeyModule_ReplyWithSimpleString(ctx, "position_sz_bytes");
   ValkeyModule_ReplyWithLongLong(
-      ctx, text_index_schema_ ? text_index_schema_->GetPositionMemoryUsage() : 0);
+      ctx,
+      text_index_schema_ ? text_index_schema_->GetPositionMemoryUsage() : 0);
   ValkeyModule_ReplyWithSimpleString(ctx, "radix_sz_bytes");
   ValkeyModule_ReplyWithLongLong(
-      ctx, text_index_schema_ ? text_index_schema_->GetRadixTreeMemoryUsage() : 0);
+      ctx,
+      text_index_schema_ ? text_index_schema_->GetRadixTreeMemoryUsage() : 0);
   ValkeyModule_ReplyWithSimpleString(ctx, "total_text_index_sz_bytes");
   ValkeyModule_ReplyWithLongLong(
-      ctx, text_index_schema_ ? text_index_schema_->GetTotalTextIndexMemoryUsage() : 0);
+      ctx, text_index_schema_
+               ? text_index_schema_->GetTotalTextIndexMemoryUsage()
+               : 0);
   // Text Index info fields end
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(

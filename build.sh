@@ -151,6 +151,78 @@ export SAN_BUILD
 export ROOT_DIR
 . ${ROOT_DIR}/scripts/common.rc
 
+function build_icu_if_needed() {
+    printf "${BOLD_PINK}Checking ICU dependencies...${RESET}\n"
+    
+    local ICU_SOURCE_DIR="${ROOT_DIR}/third_party/icu/source"
+    local ICU_BUILD_DIR="${BUILD_DIR}/icu"
+    
+    # ICU source is committed to repository - no download needed
+    if [ ! -d "${ICU_SOURCE_DIR}" ]; then
+        printf "${RED}ERROR: ICU source not found in third_party/icu/source${RESET}\n"
+        printf "ICU source should be committed to the repository.\n"
+        exit 1
+    fi
+    
+    # Check if ICU static libraries exist in build directory (clean approach)
+    if [ -f "${ICU_BUILD_DIR}/install/lib/libicudata.a" ] && \
+       [ -f "${ICU_BUILD_DIR}/install/lib/libicui18n.a" ] && \
+       [ -f "${ICU_BUILD_DIR}/install/lib/libicuuc.a" ]; then
+        printf "${GREEN}ICU static libraries found in build directory${RESET}\n"
+        return 0
+    fi
+    
+    printf "${BOLD_PINK}Building ICU with static data packaging...${RESET}\n"
+    
+    # Create clean build directory (out-of-tree build)
+    rm -rf "${ICU_BUILD_DIR}"
+    mkdir -p "${ICU_BUILD_DIR}"
+    cd "${ICU_BUILD_DIR}"
+    
+    printf "Configuring ICU for static linking with embedded data...\n"
+    
+    # Configure with static data packaging
+    "${ICU_SOURCE_DIR}/configure" \
+        --enable-static \
+        --disable-shared \
+        --with-data-packaging=static \
+        --disable-extras \
+        --disable-icuio \
+        --disable-layout \
+        --disable-tests \
+        --disable-samples \
+        --enable-tools \
+        --prefix="${ICU_BUILD_DIR}/install" \
+        CFLAGS="-O2 -fPIC" \
+        CXXFLAGS="-O2 -fPIC"
+    
+    printf "Building ICU static libraries...\n"
+    
+    # Build with static data mode
+    make PKGDATA_MODE=static -j$(nproc)
+    
+    printf "Installing ICU libraries...\n"
+    
+    # Install to build directory
+    make install PKGDATA_MODE=static
+    
+    cd "${ROOT_DIR}"
+    
+    # Verify libraries were created in build directory
+    if [ -f "${ICU_BUILD_DIR}/install/lib/libicudata.a" ] && \
+       [ -f "${ICU_BUILD_DIR}/install/lib/libicui18n.a" ] && \
+       [ -f "${ICU_BUILD_DIR}/install/lib/libicuuc.a" ]; then
+        printf "${GREEN}SUCCESS: ICU static libraries built successfully${RESET}\n"
+        printf "Libraries created in build directory:\n"
+        ls -lh "${ICU_BUILD_DIR}/install/lib/"*.a
+        printf "Source directory kept clean\n"
+    else
+        printf "${RED}ERROR: ICU static libraries not found after build${RESET}\n"
+        exit 1
+    fi
+}
+
+
 function configure() {
     printf "${BOLD_PINK}Running cmake...${RESET}\n"
     mkdir -p ${BUILD_DIR}
@@ -315,6 +387,10 @@ printf "${GREEN}${FORCE_CMAKE}${RESET}\n"
 check_tools
 
 START_TIME=$(date +%s)
+
+# Build ICU dependencies before configuring cmake
+build_icu_if_needed
+
 if [[ "${RUN_CMAKE}" == "yes" ]] || [[ "${FORCE_CMAKE}" == "yes" ]]; then
     configure
 fi

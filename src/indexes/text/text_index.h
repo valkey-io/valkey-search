@@ -27,7 +27,8 @@ struct sb_stemmer;
 
 namespace valkey_search::indexes::text {
 
-using TokenPositions = absl::flat_hash_map<std::string, PositionMap>;
+// token -> (PositionMap, suffix support)
+using TokenPositions = absl::flat_hash_map<std::string, std::pair<PositionMap, bool>>;
 
 struct TextIndex {
   //

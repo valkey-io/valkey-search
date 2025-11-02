@@ -87,7 +87,8 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     uint32_t position =
         with_offsets_ ? i
                       : 0;  // If positional info is disabled we default to 0
-    auto& positions = (*token_positions)[token];
+    auto& [positions, suffix_eligible] = (*token_positions)[token];
+    if (suffix) suffix_eligible = true;
     auto [pos_it, _] =
         positions.try_emplace(position, FieldMask::Create(num_text_fields_));
     pos_it->second->SetField(text_field_number);
@@ -107,14 +108,10 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
 
   TextIndex key_index{};
 
-  // TODO(Brennan): handle suffix
-  // Search logic needs to handle suffix filtering
-  bool suffix = true;
-
   // Index the key's tokens
   for (auto& entry : token_positions) {
     const std::string& token = entry.first;
-    PositionMap& pos_map = entry.second;
+    auto& [pos_map, suffix] = entry.second;
 
     const std::optional<std::string> reverse_token =
         suffix ? std::optional<std::string>(

@@ -201,8 +201,8 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
   }
   std::cerr << "\n";
 
-  auto search_params = ParseVectorSearchParameters(&fake_ctx, &args[0],
-                                                   args.size(), schema_manager);
+  auto search_params = SearchCommand::ParseParameters(
+      &fake_ctx, &args[0], args.size(), schema_manager);
   bool expected_success = dialect_expected_success && limit_expected_success &&
                           test_case.success && !add_end_unexpected_param &&
                           timeout_expected_success;

@@ -445,11 +445,11 @@ absl::Status PostParseQueryString(query::SearchParameters &parameters) {
   return absl::OkStatus();
 }
 
-absl::StatusOr<std::unique_ptr<query::SearchParameters>>
-ParseVectorSearchParameters(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
-                            int argc, const SchemaManager &schema_manager) {
+absl::StatusOr<std::unique_ptr<QueryCommand>> SearchCommand::ParseParameters(
+    ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
+    const SchemaManager &schema_manager) {
   vmsdk::ArgsIterator itr{argv, argc};
-  auto parameters = std::make_unique<query::SearchParameters>(
+  auto parameters = std::make_unique<SearchCommand>(
       options::GetDefaultTimeoutMs().GetValue(), nullptr);
   VMSDK_RETURN_IF_ERROR(
       vmsdk::ParseParamValue(itr, parameters->index_schema_name));

@@ -10,6 +10,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
+#include "src/commands/commands.h"
 #include "src/expr/expr.h"
 #include "src/expr/value.h"
 #include "src/query/search.h"
@@ -34,8 +35,10 @@ struct IndexInterface {
 };
 
 struct AggregateParameters : public expr::Expression::CompileContext,
-                             public query::SearchParameters {
+                             public QueryCommand {
   ~AggregateParameters() override = default;
+  void SendReply(ValkeyModuleCtx* ctx,
+                 std::deque<indexes::Neighbor>& neighbors) override;
   bool loadall_{false};
   std::vector<std::string> loads_;
   bool load_key{false};
@@ -118,7 +121,7 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   }
 
   AggregateParameters(uint64_t timeout, IndexInterface* index_interface)
-      : query::SearchParameters(timeout, nullptr) {
+      : QueryCommand(timeout, nullptr) {
     parse_vars_.index_interface_ = index_interface;
   }
 
@@ -267,7 +270,7 @@ class SortBy : public Stage {
   }
 };
 
-absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseAggregateParameters(
+absl::StatusOr<std::unique_ptr<QueryCommand>> ParseAggregateParameters(
     ValkeyModuleCtx* ctx, ValkeyModuleString** argv, int argc,
     const SchemaManager& schema_manager);
 

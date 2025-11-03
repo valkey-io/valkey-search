@@ -1,6 +1,7 @@
 # See https://github.com/crate-ci/typos/blob/master/docs/reference.md to configure typos
 
 [files]
+ignore-hidden = true
 extend-exclude = [
 ]
 
@@ -12,6 +13,7 @@ CrEaTe = "CrEaTe"
 LiSt = "LiSt"
 DeBuG = "DeBuG"
 DrOpInDeX = "DrOpInDeX"
+Clangd = "Clangd"
 
 [type.cpp]
 extend-ignore-re = [

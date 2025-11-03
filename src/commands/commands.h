@@ -11,6 +11,8 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
+#include "src/query/search.h"
+#include "src/schema_manager.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
@@ -74,6 +76,41 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                         int argc);
 absl::Status FTAggregateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc);
+
+//
+// Common stuff for FT.SEARCH and FT.AGGREGATE command
+//
+struct QueryCommand : public query::SearchParameters {
+  QueryCommand(uint64_t timeout, grpc::CallbackServerContext *context)
+      : query::SearchParameters(timeout, context) {}
+  //
+  // Start of command.
+  //
+  static absl::Status Execute(
+      ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
+      absl::StatusOr<std::unique_ptr<QueryCommand>> (*parse_command)(
+          ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
+          const SchemaManager &manager));
+
+  //
+  // Executed on Main Thread after merge
+  //
+  virtual void SendReply(ValkeyModuleCtx *ctx,
+                         std::deque<indexes::Neighbor> &neighbors) = 0;
+};
+
+namespace async {
+
+int Reply(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
+          [[maybe_unused]] int argc);
+
+int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
+            [[maybe_unused]] int argc);
+
+void Free(ValkeyModuleCtx * /*ctx*/, void *privdata);
+
+}  // namespace async
+
 }  // namespace valkey_search
 
 #endif  // VALKEYSEARCH_SRC_COMMANDS_COMMANDS_H_

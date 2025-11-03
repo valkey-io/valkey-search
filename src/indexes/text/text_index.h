@@ -28,7 +28,8 @@ struct sb_stemmer;
 namespace valkey_search::indexes::text {
 
 // token -> (PositionMap, suffix support)
-using TokenPositions = absl::flat_hash_map<std::string, std::pair<PositionMap, bool>>;
+using TokenPositions =
+    absl::flat_hash_map<std::string, std::pair<PositionMap, bool>>;
 
 struct TextIndex {
   //
@@ -73,9 +74,7 @@ class TextIndexSchema {
   std::shared_ptr<TextIndex> text_index_ = std::make_shared<TextIndex>();
 
   // Prevent concurrent mutations to schema-level text index
-  // TODO: develop a finer-grained TextIndex locking scheme (although building
-  // the position map outside the tree is already a step towards reducing
-  // locking contention)
+  // TODO: develop a finer-grained TextIndex locking scheme
   std::mutex text_index_mutex_;
 
   //
@@ -98,6 +97,7 @@ class TextIndexSchema {
   // index structures at the end for efficiency.
   absl::node_hash_map<Key, TokenPositions> in_progress_key_updates_;
 
+  // Prevent concurrent mutations to in-progress key updates map
   std::mutex in_progress_key_updates_mutex_;
 
   // Whether to store position offsets for phrase queries

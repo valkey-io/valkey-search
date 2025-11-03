@@ -164,44 +164,8 @@ template class FieldMaskImpl<uint64_t, 64>;
 
 // Basic Postings Object Implementation
 
-// // Position map type alias - maps position to optimized FieldMask objects
-// using PositionMap = std::map<Position, std::unique_ptr<FieldMask>>;
-
 // Check if posting list contains any documents
 bool Postings::IsEmpty() const { return key_to_positions_.empty(); }
-
-// // Insert a posting entry for a key and field
-// void Postings::InsertPosting(const Key& key, size_t field_index,
-//                              Position position) {
-//   CHECK(field_index < impl_->num_text_fields_) << "Field index out of range";
-
-//   Position effective_position;
-
-//   if (impl_->save_positions_) {
-//     // In positional mode, position must be explicitly provided
-//     CHECK(position != UINT32_MAX)
-//         << "Position must be provided in positional mode";
-//     effective_position = position;
-//   } else {
-//     // For boolean search mode, always use position 0 regardless of input
-//     effective_position = 0;
-//   }
-
-//   auto& pos_map = impl_->key_to_positions_[key];
-
-//   // Check if position already exists
-//   auto it = pos_map.find(effective_position);
-
-//   if (it != pos_map.end()) {
-//     // Position exists - add field to existing FieldMask object
-//     it->second->SetField(field_index);
-//   } else {
-//     // New position - create entry with this field
-//     auto field_mask = FieldMask::Create(impl_->num_text_fields_);
-//     field_mask->SetField(field_index);
-//     pos_map[effective_position] = std::move(field_mask);
-//   }
-// }
 
 void Postings::InsertKey(const Key& key, PositionMap pos_map) {
   // TODO: Compress the positions map.

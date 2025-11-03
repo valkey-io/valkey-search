@@ -76,20 +76,10 @@ struct Postings {
   struct KeyIterator;
   struct PositionIterator;
 
-  Postings() = default;
-  ~Postings() = default;
-
   // Are there any postings in this object?
   bool IsEmpty() const;
 
-  // // Insert a posting entry for a key and field
-  // // If save_positions=false: Only key and field are stored (position ignored
-  // if
-  // // provided) If save_positions=true: Key, position, and field are stored
-  // // (position must be provided)
-  // void InsertPosting(const Key& key, size_t field_index,
-  //                    Position position = UINT32_MAX);
-
+  // Insert the key with its position map
   void InsertKey(const Key& key, PositionMap pos_map);
 
   // Remove a key and all positions for it

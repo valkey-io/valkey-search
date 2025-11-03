@@ -29,7 +29,6 @@ class PostingTest : public ValkeySearchTest {
 
   std::unique_ptr<Postings> postings_;
 
-  // Helper: maps positions to field sets
   PositionMap CreatePositionMap(
       std::initializer_list<std::pair<Position, std::vector<size_t>>>
           pos_fields_pairs,
@@ -80,7 +79,8 @@ TEST_F(PostingTest, InsertionCounters) {
   postings_->InsertKey(InternKey("doc1"), CreatePositionMap({{10, {0, 2}}}));
   EXPECT_EQ(postings_->GetKeyCount(), 1);
   EXPECT_EQ(postings_->GetPostingCount(), 1);
-  EXPECT_EQ(postings_->GetTotalTermFrequency(), 2);  // 2 fields have the term at position 10
+  EXPECT_EQ(postings_->GetTotalTermFrequency(),
+            2);  // 2 fields have the term at position 10
 }
 
 TEST_F(PostingTest, RemoveKey) {
@@ -151,7 +151,8 @@ TEST_F(PostingTest, KeyIteratorSkipForward) {
 
 TEST_F(PostingTest, PositionIteratorBasic) {
   // Add test data with multiple positions for one key
-  postings_->InsertKey(InternKey("doc1"), CreatePositionMap({{10, {0}}, {20, {1}}, {30, {2}}}));
+  postings_->InsertKey(InternKey("doc1"),
+                       CreatePositionMap({{10, {0}}, {20, {1}}, {30, {2}}}));
 
   // Get key iterator and position iterator
   auto key_iter = postings_->GetKeyIterator();
@@ -181,7 +182,8 @@ TEST_F(PostingTest, PositionIteratorBasic) {
 
 TEST_F(PostingTest, PositionIteratorSkipForward) {
   // Add test data with gaps in positions
-  postings_->InsertKey(InternKey("doc1"), CreatePositionMap({{10, {0}}, {30, {1}}, {50, {2}}}));
+  postings_->InsertKey(InternKey("doc1"),
+                       CreatePositionMap({{10, {0}}, {30, {1}}, {50, {2}}}));
 
   auto key_iter = postings_->GetKeyIterator();
   auto pos_iter = key_iter.GetPositionIterator();
@@ -204,7 +206,8 @@ TEST_F(PostingTest, PositionIteratorSkipForward) {
 
 TEST_F(PostingTest, IteratorWithMultipleFields) {
   // Test position with multiple fields set
-  postings_->InsertKey(InternKey("doc1"), CreatePositionMap({{10, {0, 2}}, {20, {1}}}));
+  postings_->InsertKey(InternKey("doc1"),
+                       CreatePositionMap({{10, {0, 2}}, {20, {1}}}));
 
   auto key_iter = postings_->GetKeyIterator();
   auto pos_iter = key_iter.GetPositionIterator();
@@ -268,33 +271,34 @@ TEST_F(PostingTest, LargeScaleOperations) {
   // multiple fields per position, and overlapping positions across documents
   size_t total_positions = 0;
   size_t total_term_frequency = 0;
-  
+
   for (int doc = 0; doc < 100; ++doc) {
     PositionMap pos_map;
     int num_positions = 1 + (std::rand() % 1000);  // 1-1000 positions per doc
-    
+
     for (int i = 0; i < num_positions; ++i) {
       Position pos = std::rand() % 10000;
       if (pos_map.count(pos)) continue;  // Skip duplicates within same doc
-      
+
       auto field_mask = FieldMask::Create(5);
       int num_fields = 1 + (std::rand() % 3);  // 1-3 fields per position
       for (int f = 0; f < num_fields; ++f) {
         field_mask->SetField(std::rand() % 5);
       }
-      
+
       total_term_frequency += field_mask->CountSetFields();
       pos_map[pos] = std::move(field_mask);
     }
-    
+
     total_positions += pos_map.size();
-    postings_->InsertKey(InternKey("doc" + std::to_string(doc)), std::move(pos_map));
+    postings_->InsertKey(InternKey("doc" + std::to_string(doc)),
+                         std::move(pos_map));
   }
 
   EXPECT_EQ(postings_->GetKeyCount(), 100);
   EXPECT_EQ(postings_->GetPostingCount(), total_positions);
   EXPECT_EQ(postings_->GetTotalTermFrequency(), total_term_frequency);
-  
+
   // Verify all keys are iterable with valid positions
   auto key_iter = postings_->GetKeyIterator();
   size_t key_count = 0;

@@ -281,7 +281,7 @@ TEST_F(PostingTest, LargeScaleOperations) {
       if (pos_map.count(pos)) continue;  // Skip duplicates within same doc
 
       auto field_mask = FieldMask::Create(5);
-      int num_fields = 1 + (std::rand() % 3);  // 1-3 fields per position
+      int num_fields = 1 + (std::rand() % 5);  // 1-5 fields per position
       for (int f = 0; f < num_fields; ++f) {
         field_mask->SetField(std::rand() % 5);
       }
@@ -308,6 +308,63 @@ TEST_F(PostingTest, LargeScaleOperations) {
     key_count++;
   }
   EXPECT_EQ(key_count, 100);
+}
+
+TEST_F(PostingTest, FieldMaskImplementations) {
+  postings_->InsertKey(InternKey("doc1"),
+                       CreatePositionMap({{10, {0}}, {20, {0}}}, 1));
+  postings_->InsertKey(InternKey("doc2"),
+                       CreatePositionMap({{15, {0, 2}}, {25, {1, 3}}}, 5));
+  postings_->InsertKey(InternKey("doc3"),
+                       CreatePositionMap({{30, {0, 8}}, {40, {5}}}, 9));
+
+  EXPECT_EQ(postings_->GetTotalTermFrequency(), 9);  // 2 + 4 + 3
+
+  auto key_iter = postings_->GetKeyIterator();
+
+  // Iterate through all keys and verify field masks for each
+  // Note: iteration order is determined by interned string pointers
+  int keys_verified = 0;
+  while (key_iter.IsValid()) {
+    std::string key = std::string(key_iter.GetKey()->Str());
+    auto pos_iter = key_iter.GetPositionIterator();
+
+    if (key == "doc1") {
+      // doc1: SingleFieldMask (1 field total)
+      EXPECT_TRUE(pos_iter.IsValid());
+      EXPECT_EQ(pos_iter.GetFieldMask(), 1);  // Field 0 at position 10
+      pos_iter.NextPosition();
+      EXPECT_TRUE(pos_iter.IsValid());
+      EXPECT_EQ(pos_iter.GetFieldMask(), 1);  // Field 0 at position 20
+      pos_iter.NextPosition();
+      EXPECT_FALSE(pos_iter.IsValid());
+      keys_verified++;
+    } else if (key == "doc2") {
+      // doc2: ByteFieldMask (5 fields total)
+      EXPECT_TRUE(pos_iter.IsValid());
+      EXPECT_EQ(pos_iter.GetFieldMask(), 5);  // Fields 0, 2 at position 15
+      pos_iter.NextPosition();
+      EXPECT_TRUE(pos_iter.IsValid());
+      EXPECT_EQ(pos_iter.GetFieldMask(), 10);  // Fields 1, 3 at position 25
+      pos_iter.NextPosition();
+      EXPECT_FALSE(pos_iter.IsValid());
+      keys_verified++;
+    } else if (key == "doc3") {
+      // doc3: Uint64FieldMask (9 fields total)
+      EXPECT_TRUE(pos_iter.IsValid());
+      EXPECT_EQ(pos_iter.GetFieldMask(), 0x101);  // Fields 0, 8 at position 30
+      pos_iter.NextPosition();
+      EXPECT_TRUE(pos_iter.IsValid());
+      EXPECT_EQ(pos_iter.GetFieldMask(), 0x20);  // Field 5 at position 40
+      pos_iter.NextPosition();
+      EXPECT_FALSE(pos_iter.IsValid());
+      keys_verified++;
+    }
+
+    key_iter.NextKey();
+  }
+
+  EXPECT_EQ(keys_verified, 3);
 }
 
 }  // namespace valkey_search::indexes::text

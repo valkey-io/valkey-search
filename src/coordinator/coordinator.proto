@@ -53,13 +53,11 @@ message NumericPredicate {
 }
 
 message AndPredicate {
-  Predicate lhs = 1;
-  Predicate rhs = 2;
+  repeated Predicate children = 1;
 }
 
 message OrPredicate {
-  Predicate lhs = 1;
-  Predicate rhs = 2;
+  repeated Predicate children = 1;
 }
 
 message NegatePredicate {

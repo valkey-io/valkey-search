@@ -119,8 +119,9 @@ void PrintPredicate(const query::Predicate* pred, int depth, bool last,
             if (!node) return;
             if (node->GetType() == pred->GetType()) {
               auto c = dynamic_cast<const query::ComposedPredicate*>(node);
-              collect(c->GetLhsPredicate());
-              collect(c->GetRhsPredicate());
+              for (const auto& child : c->GetChildren()) {
+                collect(child.get());
+              }
             } else {
               children.push_back(node);
             }
@@ -442,9 +443,13 @@ std::unique_ptr<query::Predicate> WrapPredicate(
   if (!prev_predicate) {
     return MayNegatePredicate(std::move(predicate), negate);
   }
-  return std::make_unique<query::ComposedPredicate>(
-      std::move(prev_predicate),
-      MayNegatePredicate(std::move(predicate), negate), logical_operator);
+  
+  // Create vector of children for N-ary constructor
+  std::vector<std::unique_ptr<query::Predicate>> children;
+  children.push_back(std::move(prev_predicate));
+  children.push_back(MayNegatePredicate(std::move(predicate), negate));
+  
+  return std::make_unique<query::ComposedPredicate>(logical_operator, std::move(children));
 };
 
 static const uint32_t FUZZY_MAX_DISTANCE = 3;

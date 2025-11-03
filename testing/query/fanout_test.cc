@@ -309,35 +309,39 @@ INSTANTIATE_TEST_SUITE_P(
                 no_content: false
                 root_filter_predicate: {
                   and: {
-                    lhs: {
-                      negate: {
-                        predicate: {
-                          tag: {
-                            attribute_alias: "tag_alias"
-                            raw_tag_string: "content1"
+                    children: [
+                      {
+                        negate: {
+                          predicate: {
+                            tag: {
+                              attribute_alias: "tag_alias"
+                              raw_tag_string: "content1"
+                            }
                           }
+                        }
+                      },
+                      {
+                        or: {
+                          children: [
+                            {
+                              tag: {
+                                attribute_alias: "tag_alias"
+                                raw_tag_string: "content2,content3"
+                              }
+                            },
+                            {
+                              numeric: {
+                                attribute_alias: "numeric_alias"
+                                start: 0.1
+                                is_inclusive_start: true
+                                end: 0.2
+                                is_inclusive_end: true
+                              }
+                            }
+                          ]
                         }
                       }
-                    }
-                    rhs: {
-                      or: {
-                        lhs: {
-                          tag: {
-                            attribute_alias: "tag_alias"
-                            raw_tag_string: "content2,content3"
-                          }
-                        }
-                        rhs: {
-                          numeric: {
-                            attribute_alias: "numeric_alias"
-                            start: 0.1
-                            is_inclusive_start: true
-                            end: 0.2
-                            is_inclusive_end: true
-                          }
-                        }
-                      }
-                    }
+                    ]
                   }
                 }
             )",

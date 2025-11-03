@@ -210,29 +210,43 @@ bool TagPredicate::Evaluate(
   return false;
 }
 
-ComposedPredicate::ComposedPredicate(std::unique_ptr<Predicate> lhs_predicate,
-                                     std::unique_ptr<Predicate> rhs_predicate,
-                                     LogicalOperator logical_op)
+ComposedPredicate::ComposedPredicate(LogicalOperator logical_op,
+                                     std::vector<std::unique_ptr<Predicate>> children)
     : Predicate(logical_op == LogicalOperator::kAnd
                     ? PredicateType::kComposedAnd
                     : PredicateType::kComposedOr),
-      lhs_predicate_(std::move(lhs_predicate)),
-      rhs_predicate_(std::move(rhs_predicate)) {}
+      children_(std::move(children)) {}
+
+void ComposedPredicate::AddChild(std::unique_ptr<Predicate> child) {
+  children_.push_back(std::move(child));
+}
 
 bool ComposedPredicate::Evaluate(Evaluator& evaluator) const {
-  if (GetType() == PredicateType::kComposedAnd) {
-    auto lhs = lhs_predicate_->Evaluate(evaluator);
-    VMSDK_LOG(DEBUG, nullptr) << "Inline evaluate AND predicate lhs: " << lhs;
-    auto rhs = rhs_predicate_->Evaluate(evaluator);
-    VMSDK_LOG(DEBUG, nullptr) << "Inline evaluate AND predicate rhs: " << rhs;
-    return lhs && rhs;
+  if (children_.empty()) {
+    return true; // Empty predicate evaluates to true
   }
 
-  auto lhs = lhs_predicate_->Evaluate(evaluator);
-  VMSDK_LOG(DEBUG, nullptr) << "Inline evaluate OR predicate lhs: " << lhs;
-  auto rhs = rhs_predicate_->Evaluate(evaluator);
-  VMSDK_LOG(DEBUG, nullptr) << "Inline evaluate OR predicate rhs: " << rhs;
-  return lhs || rhs;
+  if (GetType() == PredicateType::kComposedAnd) {
+    // For AND: all children must be true
+    for (const auto& child : children_) {
+      bool result = child->Evaluate(evaluator);
+      VMSDK_LOG(DEBUG, nullptr) << "Inline evaluate AND predicate child: " << result;
+      if (!result) {
+        return false; // Short-circuit on first false
+      }
+    }
+    return true;
+  } else {
+    // For OR: at least one child must be true
+    for (const auto& child : children_) {
+      bool result = child->Evaluate(evaluator);
+      VMSDK_LOG(DEBUG, nullptr) << "Inline evaluate OR predicate child: " << result;
+      if (result) {
+        return true; // Short-circuit on first true
+      }
+    }
+    return false;
+  }
 }
 
 }  // namespace valkey_search::query

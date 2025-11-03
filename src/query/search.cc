@@ -128,29 +128,41 @@ size_t EvaluateFilterAsPrimary(
       predicate->GetType() == PredicateType::kComposedOr) {
     auto composed_predicate =
         dynamic_cast<const ComposedPredicate *>(predicate);
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>
-        lhs_entries_fetchers;
-    auto lhs_predicate = composed_predicate->GetLhsPredicate();
-    auto lhs =
-        EvaluateFilterAsPrimary(lhs_predicate, lhs_entries_fetchers, negate);
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>
-        rhs_entries_fetchers;
-    auto rhs_predicate = composed_predicate->GetRhsPredicate();
-    auto rhs =
-        EvaluateFilterAsPrimary(rhs_predicate, rhs_entries_fetchers, negate);
-    auto predicate_type =
-        EvaluateAsComposedPredicate(composed_predicate, negate);
-    if (predicate_type == PredicateType::kComposedAnd) {
-      if (lhs < rhs) {
-        AppendQueue(entries_fetchers, lhs_entries_fetchers);
-        return lhs;
-      }
-      AppendQueue(entries_fetchers, rhs_entries_fetchers);
-      return rhs;
+    
+    // Process all children in the N-ary structure
+    // Use vectors of pointers to avoid copying non-copyable queues
+    std::vector<std::unique_ptr<std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>>> child_fetchers;
+    std::vector<size_t> child_sizes;
+    
+    for (const auto& child : composed_predicate->GetChildren()) {
+      auto child_queue = std::make_unique<std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>>();
+      size_t child_size = EvaluateFilterAsPrimary(child.get(), *child_queue, negate);
+      child_fetchers.push_back(std::move(child_queue));
+      child_sizes.push_back(child_size);
     }
-    AppendQueue(entries_fetchers, lhs_entries_fetchers);
-    AppendQueue(entries_fetchers, rhs_entries_fetchers);
-    return lhs + rhs;
+    
+    auto predicate_type = EvaluateAsComposedPredicate(composed_predicate, negate);
+    if (predicate_type == PredicateType::kComposedAnd) {
+      // For AND: find the smallest result set to optimize performance
+      size_t min_size = SIZE_MAX;
+      size_t min_index = 0;
+      for (size_t i = 0; i < child_sizes.size(); ++i) {
+        if (child_sizes[i] < min_size) {
+          min_size = child_sizes[i];
+          min_index = i;
+        }
+      }
+      AppendQueue(entries_fetchers, *child_fetchers[min_index]);
+      return min_size;
+    } else {
+      // For OR: combine all result sets
+      size_t total_size = 0;
+      for (size_t i = 0; i < child_fetchers.size(); ++i) {
+        AppendQueue(entries_fetchers, *child_fetchers[i]);
+        total_size += child_sizes[i];
+      }
+      return total_size;
+    }
   }
   if (predicate->GetType() == PredicateType::kTag) {
     auto tag_predicate = dynamic_cast<const TagPredicate *>(predicate);

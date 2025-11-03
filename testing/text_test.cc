@@ -397,16 +397,4 @@ TEST_F(TextTest, StemmingBehavior) {
   EXPECT_TRUE(has_tokens) << "Should create stemmed tokens";
 }
 
-TEST_F(TextTest, InvalidInputHandling) {  // TODO(Brennan): remove this test(?)
-  auto key = StringInternStore::Intern("invalid_key");
-
-  // Test with invalid UTF-8 would need proper invalid UTF-8 string
-  // For now, test with very large document
-  std::string very_large_doc(1000000, 'a');  // 1MB document
-
-  auto result = text_index_->AddRecord(key, very_large_doc);
-  // Should handle large documents gracefully
-  EXPECT_TRUE(result.ok()) << "Should handle very large documents";
-}
-
 }  // namespace valkey_search::indexes

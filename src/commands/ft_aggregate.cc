@@ -156,7 +156,7 @@ absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
 
 bool ReplyWithValue(ValkeyModuleCtx *ctx,
                     data_model::AttributeDataType data_type,
-                    std::string_view name, indexes::IndexerType field_type,
+                    std::string_view name, indexes::IndexerType indexer_type,
                     const expr::Value &value, int dialect) {
   if (value.IsNil()) {
     return false;
@@ -172,10 +172,10 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
       std::string_view value_view;
       if (name == "$") {
         value_view = value.AsStringView();
-        DBG << "Overriding for field name of $ " << int(field_type) << "\n";
+        DBG << "Overriding for field name of $ " << int(indexer_type) << "\n";
         DBG << "Input: " << value.AsStringView() << "\n";
       } else {
-        switch (field_type) {
+        switch (indexer_type) {
           case indexes::IndexerType::kTag:
           case indexes::IndexerType::kNone: {
             value_view = value.AsStringView();
@@ -194,9 +194,8 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
             break;
           }
           default:
-            DBG << "Unsupported field type for reply: " << int(field_type)
-                << "\n";
-            assert("Unsupported field type" == nullptr);
+            assert("Unsupported field type" == nullptr)
+                << " Received type " << indexer_type;
         }
       }
       ValkeyModule_ReplyWithSimpleString(ctx, name.data());
@@ -204,11 +203,7 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
         ValkeyModule_ReplyWithStringBuffer(ctx, value_view.data(),
                                            value_view.size());
       } else {
-        std::string s;
-        s = '[';
-        s += value_view;
-        s += ']';
-        DBG << "Dialect != 2: " << s << "\n";
+        std::string s = absl::StrCat("[", value_view, "]");
         ValkeyModule_ReplyWithStringBuffer(ctx, s.data(), s.size());
       }
     }
@@ -246,7 +241,6 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
   //
   auto data_type = parameters.index_schema->GetAttributeDataType().ToProto();
   RecordSet records(&parameters);
-  // Todo: fix this  for (auto &n : neighbors) {
   for (auto &n : neighbors) {
     auto rec =
         std::make_unique<Record>(parameters.record_indexes_by_alias_.size());
@@ -254,36 +248,30 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
     if (parameters.load_key) {
       rec->fields_.at(key_index) = expr::Value(n.external_id.get()->Str());
     }
-    if (/* todo: parameters.addscores_ */ true) {
+    if (parameters.IsVectorQuery()) {
       rec->fields_.at(scores_index) = expr::Value(n.distance);
     }
     // For the fields that were fetched, stash them into the RecordSet
     if (n.attribute_contents.has_value() && !parameters.no_content) {
       for (auto &[name, records_map_value] : *n.attribute_contents) {
         auto value = vmsdk::ToStringView(records_map_value.value.get());
-        size_t record_index;
-        bool found_index = false;
+        std::optional<size_t> record_index;
         if (auto by_alias = parameters.record_indexes_by_alias_.find(name);
             by_alias != parameters.record_indexes_by_alias_.end()) {
           record_index = by_alias->second;
-          found_index = true;
           assert(record_index < rec->field_.size());
         } else if (auto by_identifier =
                        parameters.record_indexes_by_identifier_.find(name);
                    by_identifier !=
                    parameters.record_indexes_by_identifier_.end()) {
           record_index = by_identifier->second;
-          found_index = true;
           assert(record_index < rec->field_.size());
         }
-        if (found_index) {
+        if (record_index) {
           // Need to find the field type
-          indexes::IndexerType field_type =
-              parameters.record_info_by_index_[record_index].data_type_;
-          DBG << "Attribute_contents: " << name << " : " << value
-              << " Index:" << record_index << " FieldType:" << int(field_type)
-              << "\n";
-          switch (field_type) {
+          indexes::IndexerType indexer_type =
+              parameters.record_info_by_index_[*record_index].data_type_;
+          switch (indexer_type) {
             case indexes::IndexerType::kNumeric: {
               auto numeric_value = vmsdk::To<double>(value);
               if (numeric_value.ok()) {
@@ -302,9 +290,6 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
               } else {
                 auto v = vmsdk::JsonUnquote(value);
                 if (v) {
-                  DBG << "De-quoting:\n"
-                      << value << "\nBecame:\n"
-                      << *v << "\n";
                   rec->fields_[record_index] = expr::Value(std::move(*v));
                 } else {
                   goto drop_record;

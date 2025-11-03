@@ -61,22 +61,22 @@ static RecordSet MakeData(size_t m) {
   return result;
 }
 
-struct AggregateExecTest : public vmsdk::RedisTest {
+struct AggregateExecTest : public vmsdk::ValkeyTest {
   void SetUp() override {
     fakeIndex.fields_ = {
         {"n1", indexes::IndexerType::kNumeric},
         {"n2", indexes::IndexerType::kNumeric},
     };
-    vmsdk::RedisTest::SetUp();
+    vmsdk::ValkeyTest::SetUp();
   }
-  void TearDown() override { vmsdk::RedisTest::TearDown(); }
+  void TearDown() override { vmsdk::ValkeyTest::TearDown(); }
   FakeIndexInterface fakeIndex;
 
   std::unique_ptr<AggregateParameters> MakeStages(absl::string_view test) {
-    auto argv = vmsdk::ToRedisStringVector(test);
+    auto argv = vmsdk::ToValkeyStringVector(test);
     vmsdk::ArgsIterator itr(argv.data(), argv.size());
 
-    auto params = std::make_unique<AggregateParameters>(&fakeIndex);
+    auto params = std::make_unique<AggregateParameters>(0, &fakeIndex);
     EXPECT_EQ(
         params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric),
         0);
@@ -245,7 +245,7 @@ TEST_F(AggregateExecTest, ReducerTest) {
       {"groupby 1 @n2 reduce sum 1 @n1", 4, {6}},
       {"groupby 1 @n2 reduce stddev 1 @n1", 4, {1.2909944487358056}},
       {"groupby 1 @n2 reduce count_distinct 1 @n1", 4, {4}},
-  };
+      {"groupby 1 @n2 reduce avg 1 @n1", 4, {1.5}}};
   for (auto& tc : testcases) {
     std::cerr << "GroupTest: " << tc.text_ << "\n";
     auto param = MakeStages(tc.text_);

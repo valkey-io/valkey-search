@@ -77,7 +77,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
         continue;
       }
       VMSDK_ASSIGN_OR_RETURN(auto indexer, params.index_schema->GetIndex(load));
-      auto field_type = indexer->GetIndexerType();
+      auto indexer_type = indexer->GetIndexerType();
       auto schema_identifier = params.index_schema->GetIdentifier(load);
       if (schema_identifier.ok()) {
         DBG << " (alias: " << *schema_identifier << ", " << load << ")";
@@ -85,7 +85,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
             .identifier = vmsdk::MakeUniqueValkeyString(*schema_identifier),
             .attribute_alias = vmsdk::MakeUniqueValkeyString(load),
             .alias = vmsdk::MakeUniqueValkeyString(load)});
-        params.AddRecordAttribute(*schema_identifier, load, field_type);
+        params.AddRecordAttribute(*schema_identifier, load, indexer_type);
       } else {
         DBG << " " << load;
         params.return_attributes.emplace_back(query::ReturnAttribute{

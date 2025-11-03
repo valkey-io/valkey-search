@@ -51,15 +51,15 @@ struct FakeIndexInterface : public IndexInterface {
   }
 };
 
-struct AggregateTest : public vmsdk::RedisTest {
+struct AggregateTest : public vmsdk::ValkeyTest {
   void SetUp() override {
     fake_index.fields_ = {
         {"n1", indexes::IndexerType::kNumeric},
         {"n2", indexes::IndexerType::kNumeric},
     };
-    vmsdk::RedisTest::SetUp();
+    vmsdk::ValkeyTest::SetUp();
   }
-  void TearDown() override { vmsdk::RedisTest::TearDown(); }
+  void TearDown() override { vmsdk::ValkeyTest::TearDown(); }
   FakeIndexInterface fake_index;
 };
 
@@ -105,10 +105,10 @@ static void DoPrefaceTestCase(FakeIndexInterface *fake_index, std::string test,
                               DialectTestValue dialect_test,
                               LoadsTestValue loads_test) {
   std::cerr << "Running test: '" << test << "'\n";
-  auto argv = vmsdk::ToRedisStringVector(test);
+  auto argv = vmsdk::ToValkeyStringVector(test);
   vmsdk::ArgsIterator itr(argv.data(), argv.size());
 
-  AggregateParameters params(fake_index);
+  AggregateParameters params(query::kTimeoutMS, fake_index);
 
   auto parser = CreateAggregateParser();
 
@@ -207,7 +207,7 @@ static std::vector<TestStage> TestStages{
     {"apply x", nullptr},
     {"apply @n1", nullptr},
     {"apply @n1 xx", nullptr},
-    {"APPLY @n1 as ferd", "APPLY: ferd := @n1"},
+    {"APPLY @n1 as freddy", "APPLY: freddy := @n1"},
 };
 
 static void DoStageTest(FakeIndexInterface *fake_index,
@@ -220,10 +220,10 @@ static void DoStageTest(FakeIndexInterface *fake_index,
     any_bad |= TestStages[ix].stage_out_ == nullptr;
   }
   std::cout << "Doing case " << text << "\n";
-  auto argv = vmsdk::ToRedisStringVector(text);
+  auto argv = vmsdk::ToValkeyStringVector(text);
   vmsdk::ArgsIterator itr(argv.data(), argv.size());
 
-  AggregateParameters params(fake_index);
+  AggregateParameters params(0, fake_index);
 
   auto parser = CreateAggregateParser();
   auto result = parser.Parse(params, itr);

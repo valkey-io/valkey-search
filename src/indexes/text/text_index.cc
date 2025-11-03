@@ -11,8 +11,14 @@
 #include "absl/status/status.h"
 #include "absl/strings/ascii.h"
 #include "libstemmer.h"
+#include "vmsdk/src/memory_allocation.h"
 
 namespace valkey_search::indexes::text {
+
+// Static memory pool for TextIndexSchema
+MemoryPool TextIndexSchema::memory_pool_{0};
+
+int64_t TextIndexSchema::GetMemoryUsage() { return memory_pool_.GetUsage(); }
 
 TextIndexMetadata& GetTextIndexMetadata() {
   static TextIndexMetadata metadata;
@@ -72,6 +78,8 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
 absl::StatusOr<bool> TextIndexSchema::IndexAttributeData(
     const InternedStringPtr& key, absl::string_view data,
     size_t text_field_number, bool stem, size_t min_stem_size, bool suffix) {
+  NestedMemoryScope scope{memory_pool_};
+
   auto tokens = lexer_.Tokenize(data, stem, min_stem_size);
 
   if (!tokens.ok()) {
@@ -137,6 +145,7 @@ absl::StatusOr<bool> TextIndexSchema::IndexAttributeData(
 }
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
+  NestedMemoryScope scope{memory_pool_};
   TextIndex* key_index = nullptr;
   {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
@@ -197,7 +206,8 @@ uint64_t TextIndexSchema::GetRadixTreeMemoryUsage() const {
   if (!text_index_) {
     return 0;
   }
-  return RadixTree<std::shared_ptr<Postings>, false>::GetMemoryUsage();
+  return RadixTree<std::shared_ptr<Postings>, false>::GetMemoryUsage() -
+         GetPostingsMemoryUsage();
 }
 
 uint64_t TextIndexSchema::GetPositionMemoryUsage() const {
@@ -206,7 +216,7 @@ uint64_t TextIndexSchema::GetPositionMemoryUsage() const {
 }
 
 uint64_t TextIndexSchema::GetTotalTextIndexMemoryUsage() const {
-  return GetPostingsMemoryUsage() + GetRadixTreeMemoryUsage();
+  return TextIndexSchema::GetMemoryUsage();
 }
 
 }  // namespace valkey_search::indexes::text

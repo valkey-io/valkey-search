@@ -70,6 +70,10 @@ class TextIndexSchema {
                                           size_t min_stem_size, bool suffix);
   void DeleteKeyData(const InternedStringPtr& key);
 
+  // Memory tracking
+  static MemoryPool memory_pool_;
+  static int64_t GetMemoryUsage();
+
   uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }
 
   uint8_t GetNumTextFields() const { return num_text_fields_; }

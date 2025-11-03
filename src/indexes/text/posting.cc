@@ -55,8 +55,6 @@ using Uint64FieldMask = FieldMaskImpl<uint64_t, 64>;
 
 // Factory method to create optimal field mask based on field count
 std::unique_ptr<FieldMask> FieldMask::Create(size_t num_fields) {
-  IsolatedMemoryScope scope{Postings::memory_pool_};
-
   CHECK(num_fields > 0) << "num_fields must be greater than 0";
   CHECK(num_fields <= 64) << "Too many text fields (max 64 supported)";
 
@@ -186,28 +184,22 @@ class Postings::Impl {
 };
 
 Postings::Postings(bool save_positions, size_t num_text_fields) {
-  IsolatedMemoryScope scope{memory_pool_};
+  NestedMemoryScope scope{memory_pool_};
   impl_ = std::make_unique<Impl>(save_positions, num_text_fields);
   CHECK(impl_ != nullptr) << "Failed to create Postings implementation";
 }
 
 // Destructor with proper memory tracking and cleanup
 Postings::~Postings() {
-  // Thread-local flag to prevent infinite recursion
-  thread_local bool in_postings_destructor = false;
+  // Track only Postings-specific memory
+  NestedMemoryScope scope{memory_pool_};
 
-  if (!in_postings_destructor) {
-    in_postings_destructor = true;
-    IsolatedMemoryScope scope{memory_pool_};
-
-    // Explicit cleanup of the implementation
-    if (impl_) {
-      // Clear all key-to-position mappings to ensure proper cleanup
-      // This will trigger destructors for all FieldMask objects
-      impl_->key_to_positions_.clear();
-    }
-    this->~Postings();  // call myself recursively
-    in_postings_destructor = false;
+  // Explicit cleanup of the implementation
+  if (impl_) {
+    // Clear all key-to-position mappings to ensure proper cleanup
+    // This will trigger destructors for all FieldMask objects
+    impl_->key_to_positions_.clear();
+    impl_.reset();
   }
 }
 
@@ -217,7 +209,7 @@ bool Postings::IsEmpty() const { return impl_->key_to_positions_.empty(); }
 // Insert a posting entry for a key and field
 void Postings::InsertPosting(const Key& key, size_t field_index,
                              Position position) {
-  IsolatedMemoryScope scope{memory_pool_};
+  NestedMemoryScope scope{memory_pool_};
 
   CHECK(field_index < impl_->num_text_fields_) << "Field index out of range";
 
@@ -254,7 +246,7 @@ void Postings::InsertPosting(const Key& key, size_t field_index,
 
 // Remove a document key and all its positions
 void Postings::RemoveKey(const Key& key) {
-  IsolatedMemoryScope scope{memory_pool_};
+  NestedMemoryScope scope{memory_pool_};
 
   // TODO: Naively decrementing total term frequency,  can be made more
   // efficient by adding total term frequency count for each position map with

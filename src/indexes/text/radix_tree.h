@@ -356,7 +356,7 @@ template <typename Target, bool reverse>
 std::optional<Target> RadixTree<Target, reverse>::MutateTarget(
     absl::string_view word,
     absl::FunctionRef<std::optional<Target>(std::optional<Target>)> mutate) {
-  IsolatedMemoryScope scope{memory_pool_};
+  NestedMemoryScope scope{memory_pool_};
   CHECK(!word.empty()) << "Can't mutate the target for an empty word";
   std::deque<Node*> node_path = GetOrCreateWordPath(word);
   Node* n = node_path.back();

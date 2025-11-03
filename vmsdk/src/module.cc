@@ -82,6 +82,20 @@ int OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
                      "Failed to init logging, %s", status.message().data());
     return VALKEYMODULE_ERR;
   }
+  if (ValkeyModule_GetServerVersion == nullptr) {
+    VMSDK_LOG(WARNING, ctx)
+        << "ValkeyModule_GetServerVersion function is not available";
+    return VALKEYMODULE_ERR;
+  }
+  auto server_version = ValkeyModule_GetServerVersion();
+  if (server_version < options.minimum_valkey_version) {
+    VMSDK_LOG(WARNING, ctx)
+        << "Minimum required server version is "
+        << vmsdk::DisplayValkeyVersion(options.minimum_valkey_version)
+        << ", Current version is "
+        << vmsdk::DisplayValkeyVersion(server_version);
+    return VALKEYMODULE_ERR;
+  }
   if (auto status = AddACLCategories(ctx, options.acl_categories);
       !status.ok()) {
     ValkeyModule_Log(ctx, VALKEYMODULE_LOGLEVEL_WARNING, "%s",

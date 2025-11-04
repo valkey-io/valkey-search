@@ -18,7 +18,7 @@ namespace {
 
 std::optional<std::shared_ptr<Postings>> AddKeyToPostings(
     std::optional<std::shared_ptr<Postings>> existing,
-    const InternedStringPtr& key, PositionMap& pos_map) {
+    const InternedStringPtr& key, PositionMap&& pos_map) {
   std::shared_ptr<Postings> postings;
   if (existing.has_value()) {
     postings = existing.value();
@@ -112,7 +112,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
       std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
       updated_target =
           text_index_->prefix_.MutateTarget(token, [&](auto existing) {
-            return AddKeyToPostings(existing, key, pos_map);
+            return AddKeyToPostings(existing, key, std::move(pos_map));
           });
       if (suffix) {
         if (!text_index_->suffix_.has_value()) {

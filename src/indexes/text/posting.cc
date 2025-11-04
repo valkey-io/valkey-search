@@ -167,7 +167,7 @@ template class FieldMaskImpl<uint64_t, 64>;
 // Check if posting list contains any documents
 bool Postings::IsEmpty() const { return key_to_positions_.empty(); }
 
-void Postings::InsertKey(const Key& key, PositionMap pos_map) {
+void Postings::InsertKey(const Key& key, PositionMap&& pos_map) {
   // TODO: Compress the positions map.
   key_to_positions_[key] = std::move(pos_map);
 }

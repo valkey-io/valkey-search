@@ -89,6 +89,10 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
   {
     std::lock_guard<std::mutex> guard(in_progress_key_updates_mutex_);
     auto node = in_progress_key_updates_.extract(key);
+    // Exit early if the key contains no new text updates
+    if (node.empty()) {
+      return;
+    }
     token_positions = std::move(node.mapped());
   }
 
@@ -142,16 +146,16 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
   // Extract the per-key index
-  absl::node_hash_map<Key, TextIndex>::node_type node;
+  TextIndex key_index;
   {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
-    node = per_key_text_indexes_.extract(key);
+    auto node = per_key_text_indexes_.extract(key);
     if (node.empty()) {
       return;
     }
+    key_index = std::move(node.mapped());
   }
 
-  TextIndex& key_index = node.mapped();
   auto iter = key_index.prefix_.GetWordIterator("");
 
   // Cleanup schema-level text index

@@ -80,7 +80,7 @@ struct Postings {
   bool IsEmpty() const;
 
   // Insert the key with its position map
-  void InsertKey(const Key& key, PositionMap pos_map);
+  void InsertKey(const Key& key, PositionMap&& pos_map);
 
   // Remove a key and all positions for it
   void RemoveKey(const Key& key);

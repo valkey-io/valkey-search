@@ -30,16 +30,11 @@ void WriteUint32(char* ptr, uint32_t value) {
 }
 
 // Calculate bytes needed for field mask based on num_text_fields
+// Each byte stores 7 bits (bit 7 is used as encoding flag)
 uint8_t GetFieldMaskBytes(size_t num_text_fields) {
   if (num_text_fields <= 1) return 0;
-  if (num_text_fields <= 8) return 1;
-  if (num_text_fields <= 16) return 2;
-  if (num_text_fields <= 24) return 3;
-  if (num_text_fields <= 32) return 4;
-  if (num_text_fields <= 40) return 5;
-  if (num_text_fields <= 48) return 6;
-  if (num_text_fields <= 56) return 7;
-  return 8;  // Up to 64 fields
+  // Each byte can store 7 bits of field mask (bit 7 is the flag bit)
+  return (num_text_fields + 6) / 7;  // Ceiling division
 }
 
 // Determine encoding scheme based on position map characteristics
@@ -282,19 +277,20 @@ void FreeFlatPositionMap(FlatPositionMap flat_map) {
 
 // Iterator implementation
 FlatPositionMapIterator::FlatPositionMapIterator(FlatPositionMap flat_map)
-    : flat_map_(flat_map), current_ptr_(nullptr), cumulative_position_(0) {
+    : flat_map_(flat_map), current_ptr_(nullptr), cumulative_position_(0),
+      positions_read_(0), total_positions_(0) {
   if (flat_map_ != nullptr) {
     uint32_t header = ReadUint32(flat_map_);
-    uint32_t num_positions = (header >> 3);
+    total_positions_ = (header >> 3);
     EncodingScheme scheme = static_cast<EncodingScheme>((header >> 1) & 0x3);
 
-    if (num_positions > 0) {
+    if (total_positions_ > 0) {
       // Skip header
       current_ptr_ = flat_map_ + 4;
 
       // Skip partition map if binary search encoding
       if (scheme == EncodingScheme::BINARY_SEARCH) {
-        uint32_t num_partitions = CalculateNumPartitions(num_positions);
+        uint32_t num_partitions = CalculateNumPartitions(total_positions_);
         current_ptr_ += num_partitions * 8;
       }
     }
@@ -302,11 +298,11 @@ FlatPositionMapIterator::FlatPositionMapIterator(FlatPositionMap flat_map)
 }
 
 bool FlatPositionMapIterator::IsValid(size_t num_text_fields) const {
-  return current_ptr_ != nullptr;
+  return current_ptr_ != nullptr && positions_read_ < total_positions_;
 }
 
 void FlatPositionMapIterator::Next(size_t num_text_fields) {
-  if (current_ptr_ == nullptr) return;
+  if (!IsValid(num_text_fields)) return;
 
   uint32_t header = ReadUint32(flat_map_);
   EncodingScheme scheme = static_cast<EncodingScheme>((header >> 1) & 0x3);
@@ -336,6 +332,14 @@ void FlatPositionMapIterator::Next(size_t num_text_fields) {
     for (uint8_t i = 0; i < field_bytes; ++i) {
       current_ptr_++;
     }
+  }
+
+  // Increment positions read counter
+  positions_read_++;
+
+  // If we've read all positions, invalidate the iterator
+  if (positions_read_ >= total_positions_) {
+    current_ptr_ = nullptr;
   }
 }
 

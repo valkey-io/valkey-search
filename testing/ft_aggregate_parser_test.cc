@@ -108,7 +108,9 @@ static void DoPrefaceTestCase(FakeIndexInterface *fake_index, std::string test,
   auto argv = vmsdk::ToValkeyStringVector(test);
   vmsdk::ArgsIterator itr(argv.data(), argv.size());
 
-  AggregateParameters params(query::kTimeoutMS, fake_index);
+  AggregateParameters params;
+  params.timeout_ms = query::kTimeoutMS;
+  params.parse_vars_.index_interface_ = fake_index;
 
   auto parser = CreateAggregateParser();
 
@@ -223,7 +225,9 @@ static void DoStageTest(FakeIndexInterface *fake_index,
   auto argv = vmsdk::ToValkeyStringVector(text);
   vmsdk::ArgsIterator itr(argv.data(), argv.size());
 
-  AggregateParameters params(0, fake_index);
+  AggregateParameters params;
+  params.timeout_ms = 0;
+  params.parse_vars_.index_interface_ = fake_index;
 
   auto parser = CreateAggregateParser();
   auto result = parser.Parse(params, itr);

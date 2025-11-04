@@ -29,14 +29,12 @@
 #include "src/indexes/index_base.h"
 #include "src/metrics.h"
 #include "src/query/search.h"
-#include "src/schema_manager.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
@@ -445,30 +443,17 @@ absl::Status PostParseQueryString(query::SearchParameters &parameters) {
   return absl::OkStatus();
 }
 
-absl::StatusOr<std::unique_ptr<QueryCommand>> SearchCommand::ParseParameters(
-    ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
-    const SchemaManager &schema_manager) {
-  vmsdk::ArgsIterator itr{argv, argc};
-  auto parameters = std::make_unique<SearchCommand>(
-      options::GetDefaultTimeoutMs().GetValue(), nullptr);
-  VMSDK_RETURN_IF_ERROR(
-      vmsdk::ParseParamValue(itr, parameters->index_schema_name));
-  VMSDK_ASSIGN_OR_RETURN(
-      parameters->index_schema,
-      SchemaManager::Instance().GetIndexSchema(ValkeyModule_GetSelectedDb(ctx),
-                                               parameters->index_schema_name));
-  VMSDK_RETURN_IF_ERROR(
-      vmsdk::ParseParamValue(itr, parameters->parse_vars.query_string));
-  VMSDK_RETURN_IF_ERROR(SearchParser.Parse(*parameters, itr));
+absl::Status SearchCommand::ParseCommand(vmsdk::ArgsIterator &itr) {
+  VMSDK_RETURN_IF_ERROR(SearchParser.Parse(*this, itr));
   if (itr.DistanceEnd() > 0) {
     return absl::InvalidArgumentError(
         absl::StrCat("Unexpected parameter at position ", (itr.Position() + 1),
                      ":", vmsdk::ToStringView(itr.Get().value())));
   }
-  VMSDK_RETURN_IF_ERROR(PreParseQueryString(*parameters));
-  VMSDK_RETURN_IF_ERROR(PostParseQueryString(*parameters));
-  VMSDK_RETURN_IF_ERROR(Verify(*parameters));
-  parameters->parse_vars.ClearAtEndOfParse();
-  return parameters;
+  VMSDK_RETURN_IF_ERROR(PreParseQueryString(*this));
+  VMSDK_RETURN_IF_ERROR(PostParseQueryString(*this));
+  VMSDK_RETURN_IF_ERROR(Verify(*this));
+  return absl::OkStatus();
 }
+
 }  // namespace valkey_search

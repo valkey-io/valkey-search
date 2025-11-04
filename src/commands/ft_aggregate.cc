@@ -12,13 +12,10 @@
 #include "ft_search_parser.h"
 #include "src/commands/commands.h"
 #include "src/commands/ft_aggregate_exec.h"
-#include "src/commands/ft_create_parser.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/metrics.h"
 #include "src/query/response_generator.h"
-#include "src/schema_manager.h"
-#include "vmsdk/src/debug.h"
 
 namespace valkey_search {
 namespace aggregate {
@@ -83,55 +80,38 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   return absl::OkStatus();
 }
 
-absl::StatusOr<std::unique_ptr<QueryCommand>> ParseCommand(
-    ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
-    const SchemaManager &schema_manager) {
+absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   static vmsdk::KeyValueParser<AggregateParameters> parser =
       CreateAggregateParser();
-  vmsdk::ArgsIterator itr{argv, argc};
-  std::string index_schema_name;
-  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, index_schema_name));
-  VMSDK_ASSIGN_OR_RETURN(
-      auto index_schema,
-      SchemaManager::Instance().GetIndexSchema(ValkeyModule_GetSelectedDb(ctx),
-                                               index_schema_name));
-  RealIndexInterface index_interface(index_schema);
-  auto params = std::make_unique<AggregateParameters>(
-      options::GetDefaultTimeoutMs().GetValue(), &index_interface);
-  params->index_schema_name = std::move(index_schema_name);
-  params->index_schema = std::move(index_schema);
+  RealIndexInterface real_index_interface(index_schema);
+  parse_vars_.index_interface_ = &real_index_interface;
 
-  VMSDK_RETURN_IF_ERROR(
-      vmsdk::ParseParamValue(itr, params->parse_vars.query_string));
-
-  VMSDK_RETURN_IF_ERROR(PreParseQueryString(*params));
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, parse_vars.query_string));
+  VMSDK_RETURN_IF_ERROR(PreParseQueryString(*this));
   // Ensure that key is first value if it gets included...
-  CHECK(params->AddRecordAttribute("__key", "__key",
-                                   indexes::IndexerType::kNone) == 0);
-  auto score_sv = vmsdk::ToStringView(params->score_as.get());
-  CHECK(params->AddRecordAttribute(score_sv, score_sv,
-                                   indexes::IndexerType::kNone) == 1);
+  CHECK(AddRecordAttribute("__key", "__key", indexes::IndexerType::kNone) == 0);
+  auto score_sv = vmsdk::ToStringView(score_as.get());
+  CHECK(AddRecordAttribute(score_sv, score_sv, indexes::IndexerType::kNone) ==
+        1);
 
-  VMSDK_RETURN_IF_ERROR(parser.Parse(*params, itr, true));
+  VMSDK_RETURN_IF_ERROR(parser.Parse(*this, itr, true));
   if (itr.DistanceEnd() > 0) {
     return absl::InvalidArgumentError(
         absl::StrCat("Unexpected parameter at position ", (itr.Position() + 1),
                      ":", vmsdk::ToStringView(itr.Get().value())));
   }
 
-  if (params->dialect < 2 || params->dialect > 4) {
+  if (dialect < 2 || dialect > 4) {
     return absl::InvalidArgumentError("Only Dialects 2, 3 and 4 are supported");
   }
 
-  params->limit.number =
-      std::numeric_limits<uint64_t>::max();  // Override default of 10 from
-                                             // search
+  limit.number = std::numeric_limits<uint64_t>::max();  // Override default of
+                                                        // 10 from search
 
-  VMSDK_RETURN_IF_ERROR(PostParseQueryString(*params));
-  VMSDK_RETURN_IF_ERROR(ManipulateReturnsClause(*params));
+  VMSDK_RETURN_IF_ERROR(PostParseQueryString(*this));
+  VMSDK_RETURN_IF_ERROR(ManipulateReturnsClause(*this));
 
-  params->parse_vars.ClearAtEndOfParse();
-  return std::move(params);
+  return absl::OkStatus();
 }
 
 bool ReplyWithValue(ValkeyModuleCtx *ctx,
@@ -337,7 +317,9 @@ void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,
 
 absl::Status FTAggregateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc) {
-  return QueryCommand::Execute(ctx, argv, argc, aggregate::ParseCommand);
+  return QueryCommand::Execute(
+      ctx, argv, argc,
+      std::unique_ptr<QueryCommand>(new aggregate::AggregateParameters));
 }
 
 }  // namespace valkey_search

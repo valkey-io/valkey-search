@@ -19,4 +19,8 @@ Clangd = "Clangd"
 extend-ignore-re = [
     "baNAna",
     "eXIst",
+    "DIALEC",
+    "nghi",
+    "bubu",
+    "Teser"
 ]

@@ -76,7 +76,8 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
     auto argv = vmsdk::ToValkeyStringVector(test);
     vmsdk::ArgsIterator itr(argv.data(), argv.size());
 
-    auto params = std::make_unique<AggregateParameters>(0, &fakeIndex);
+    auto params = std::make_unique<AggregateParameters>();
+    params->parse_vars_.index_interface_ = &fakeIndex;
     EXPECT_EQ(
         params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric),
         0);

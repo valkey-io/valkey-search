@@ -197,12 +197,30 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
 
   std::cerr << "Executing cmd: ";
   for (auto &a : args) {
-    std::cerr << vmsdk::ToStringView(a) << " ";
+    std::cerr << "'" << vmsdk::ToStringView(a) << "' ";
   }
   std::cerr << "\n";
 
-  auto search_params = SearchCommand::ParseParameters(
-      &fake_ctx, &args[0], args.size(), schema_manager);
+  // Repro semantics of command startup
+  vmsdk::ArgsIterator itr{&args[0], int(args.size())};
+  absl::StatusOr<std::unique_ptr<SearchCommand>> search_params(
+      std::make_unique<SearchCommand>());
+  (*search_params)->timeout_ms = 50000;
+  (*search_params)->index_schema_name = vmsdk::ToStringView(*itr.PopNext());
+  (*search_params)->parse_vars.query_string =
+      vmsdk::ToStringView(*itr.PopNext());
+  auto this_index_schema =
+      schema_manager.GetIndexSchema(0, (*search_params)->index_schema_name);
+  if (!this_index_schema.ok()) {
+    search_params = this_index_schema.status();
+  } else {
+    (*search_params)->index_schema = *this_index_schema;
+    auto sts = (*search_params)->ParseCommand(itr);
+    if (!sts.ok()) {
+      search_params = sts;
+    }
+  }
+
   bool expected_success = dialect_expected_success && limit_expected_success &&
                           test_case.success && !add_end_unexpected_param &&
                           timeout_expected_success;

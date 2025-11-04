@@ -11,8 +11,8 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
+#include "command_parser.h"
 #include "src/query/search.h"
-#include "src/schema_manager.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
@@ -81,17 +81,17 @@ absl::Status FTAggregateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 // Common stuff for FT.SEARCH and FT.AGGREGATE command
 //
 struct QueryCommand : public query::SearchParameters {
-  QueryCommand(uint64_t timeout, grpc::CallbackServerContext *context)
-      : query::SearchParameters(timeout, context) {}
+  QueryCommand() : query::SearchParameters(0, nullptr) {}
   //
   // Start of command.
   //
-  static absl::Status Execute(
-      ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
-      absl::StatusOr<std::unique_ptr<QueryCommand>> (*parse_command)(
-          ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
-          const SchemaManager &manager));
+  static absl::Status Execute(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                              int argc, std::unique_ptr<QueryCommand> cmd);
 
+  //
+  // Parse command (after index and query string)
+  //
+  virtual absl::Status ParseCommand(vmsdk::ArgsIterator &itr) = 0;
   //
   // Executed on Main Thread after merge
   //

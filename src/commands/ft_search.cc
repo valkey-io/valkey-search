@@ -26,7 +26,6 @@
 #include "src/metrics.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
-#include "vmsdk/src/debug.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -195,7 +194,8 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
 
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc) {
-  return QueryCommand::Execute(ctx, argv, argc, SearchCommand::ParseParameters);
+  return QueryCommand::Execute(
+      ctx, argv, argc, std::unique_ptr<QueryCommand>(new SearchCommand));
 }
 
 }  // namespace valkey_search

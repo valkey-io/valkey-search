@@ -8,9 +8,11 @@
 #include "src/commands/commands.h"
 
 #include "fanout.h"
+#include "ft_create_parser.h"
 #include "src/acl.h"
 #include "src/commands/ft_search.h"
 #include "src/query/search.h"
+#include "src/schema_manager.h"
 #include "src/valkey_search.h"
 #include "valkey_search_options.h"
 #include "vmsdk/src/debug.h"
@@ -55,16 +57,23 @@ CONTROLLED_BOOLEAN(ForceReplicasOnly, false);
 //
 // Common Class for FT.SEARCH and FT.AGGREGATE command
 //
-absl::Status QueryCommand::Execute(
-    ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
-    absl::StatusOr<std::unique_ptr<QueryCommand>> (*parse_command)(
-        ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
-        const SchemaManager &manager)) {
+absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
+                                   ValkeyModuleString **argv, int argc,
+                                   std::unique_ptr<QueryCommand> parameters) {
   auto status = [&]() -> absl::Status {
     auto &schema_manager = SchemaManager::Instance();
+    vmsdk::ArgsIterator itr{argv + 1, argc - 1};
+    parameters->timeout_ms = options::GetDefaultTimeoutMs().GetValue();
+    VMSDK_RETURN_IF_ERROR(
+        vmsdk::ParseParamValue(itr, parameters->index_schema_name));
     VMSDK_ASSIGN_OR_RETURN(
-        auto parameters,
-        (*parse_command)(ctx, argv + 1, argc - 1, schema_manager));
+        parameters->index_schema,
+        SchemaManager::Instance().GetIndexSchema(
+            ValkeyModule_GetSelectedDb(ctx), parameters->index_schema_name));
+    VMSDK_RETURN_IF_ERROR(
+        vmsdk::ParseParamValue(itr, parameters->parse_vars.query_string));
+    VMSDK_RETURN_IF_ERROR(parameters->ParseCommand(itr));
+    parameters->parse_vars.ClearAtEndOfParse();
     parameters->cancellation_token =
         cancel::Make(parameters->timeout_ms, nullptr);
     static const auto permissions =

@@ -176,7 +176,8 @@ void SendReplyTest::DoSendReplyTest(
   for (const auto &neighbor : input.neighbors) {
     neighbors.push_back(ToIndexesNeighbor(neighbor));
   }
-  auto parameters = std::make_unique<SearchCommand>(10000, nullptr);
+  auto parameters = std::make_unique<SearchCommand>();
+  parameters->timeout_ms = 10000;
   parameters->index_schema = test_index_schema;
   parameters->attribute_alias = attribute_alias;
   parameters->score_as = vmsdk::MakeUniqueValkeyString(score_as);

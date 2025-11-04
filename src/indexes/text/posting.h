@@ -111,9 +111,6 @@ struct Postings {
   // Get a Key iterator.
   KeyIterator GetKeyIterator() const;
 
-  // Memory tracking
-  static int64_t GetMemoryUsage();
-
   // The Key Iterator
   struct KeyIterator {
     // Is valid?
@@ -174,16 +171,7 @@ struct Postings {
     PositionMap::const_iterator end_;
   };
 
- public:
-  static MemoryPool memory_pool_;
-
  private:
-  // Used for testing.
-  static void SetMemoryUsage(int64_t value) {
-    memory_pool_.Reset();
-    memory_pool_.Add(value);
-  }
-
   class Impl;
   std::unique_ptr<Impl> impl_;
 };

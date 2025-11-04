@@ -28,14 +28,23 @@ struct sb_stemmer;
 
 namespace valkey_search::indexes::text {
 
-// FT.INFO counters for text info fields
+// Forward declaration
+class TextIndexSchema;
+
+// Function to get current TextIndexSchema for accessing metadata
+TextIndexSchema* GetTextIndexSchema();
+
+// FT.INFO counters for text info fields and memory pools
 struct TextIndexMetadata {
   std::atomic<uint64_t> total_positions{0};
   std::atomic<uint64_t> num_unique_terms{0};
   std::atomic<uint64_t> total_term_frequency{0};
+  
+  // Memory pools for text index components
+  MemoryPool posting_memory_pool_{0};
+  MemoryPool radix_memory_pool_{0};
+  MemoryPool text_index_memory_pool_{0};
 };
-
-TextIndexMetadata& GetTextIndexMetadata();
 
 struct TextIndex {
   TextIndex() = default;
@@ -70,17 +79,20 @@ class TextIndexSchema {
                                           size_t min_stem_size, bool suffix);
   void DeleteKeyData(const InternedStringPtr& key);
 
-  // Memory tracking
-  static MemoryPool memory_pool_;
-  static int64_t GetMemoryUsage();
-
   uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }
 
   uint8_t GetNumTextFields() const { return num_text_fields_; }
   std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
+  
+  // Access to metadata for memory pool usage
+  TextIndexMetadata& GetMetadata() { return metadata_; }
+  const TextIndexMetadata& GetMetadata() const { return metadata_; }
 
  private:
   uint8_t num_text_fields_ = 0;
+  
+  // Each schema instance has its own metadata with memory pools
+  TextIndexMetadata metadata_;
 
   //
   // This is the main index of all Text fields in this index schema

@@ -134,7 +134,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*38\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -154,10 +154,6 @@ INSTANTIATE_TEST_SUITE_P(
                             "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+num_"
                             "total_terms\r\n:0\r\n+num_unique_terms\r\n:0\r\n+"
                             "total_postings\r\n:0\r\n+"
-                            "posting_sz_bytes\r\n:0\r\n+"
-                            "position_sz_bytes\r\n:0\r\n+"
-                            "radix_sz_bytes\r\n:0\r\n+"
-                            "total_text_index_sz_bytes\r\n:0\r\n+"
                             "hash_indexing_failures\r\n$1\r\n0\r\n+"
                             "backfill_in_"
                             "progress\r\n$1\r\n0\r\n+backfill_complete_"
@@ -198,7 +194,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*38\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -216,10 +212,6 @@ INSTANTIATE_TEST_SUITE_P(
                             "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+num_"
                             "total_terms\r\n:0\r\n+num_unique_terms\r\n:0\r\n+"
                             "total_postings\r\n:0\r\n+"
-                            "posting_sz_bytes\r\n:0\r\n+"
-                            "position_sz_bytes\r\n:0\r\n+"
-                            "radix_sz_bytes\r\n:0\r\n+"
-                            "total_text_index_sz_bytes\r\n:0\r\n+"
                             "hash_indexing_failures\r\n$1\r\n0\r\n+"
                             "backfill_in_progress\r\n$1\r\n0\r\n+backfill_"
                             "complete_percent\r\n$8\r\n1.000000\r\n+mutation_"
@@ -252,7 +244,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*38\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -263,10 +255,6 @@ INSTANTIATE_TEST_SUITE_P(
                             "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+num_"
                             "total_terms\r\n:0\r\n+num_unique_terms\r\n:0\r\n+"
                             "total_postings\r\n:0\r\n+"
-                            "posting_sz_bytes\r\n:0\r\n+"
-                            "position_sz_bytes\r\n:0\r\n+"
-                            "radix_sz_bytes\r\n:0\r\n+"
-                            "total_text_index_sz_bytes\r\n:0\r\n+"
                             "hash_indexing_failures\r\n$1\r\n0\r\n+"
                             "backfill_in_progress\r\n$1\r\n0\r\n+"
                             "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
@@ -301,7 +289,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*38\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -313,10 +301,6 @@ INSTANTIATE_TEST_SUITE_P(
                             "unique_"
                             "terms\r\n:0\r\n+"
                             "total_postings\r\n:0\r\n+"
-                            "posting_sz_bytes\r\n:0\r\n+"
-                            "position_sz_bytes\r\n:0\r\n+"
-                            "radix_sz_bytes\r\n:0\r\n+"
-                            "total_text_index_sz_bytes\r\n:0\r\n+"
                             "hash_indexing_failures\r\n$1\r\n0\r\n+"
                             "backfill_in_"
                             "progress\r\n$1\r\n0\r\n+backfill_complete_"
@@ -348,7 +332,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*38\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -358,10 +342,6 @@ INSTANTIATE_TEST_SUITE_P(
                             "0\r\n+num_records\r\n:0\r\n+num_total_"
                             "terms\r\n:0\r\n+num_unique_terms\r\n:0\r\n+"
                             "total_postings\r\n:0\r\n+"
-                            "posting_sz_bytes\r\n:0\r\n+"
-                            "position_sz_bytes\r\n:0\r\n+"
-                            "radix_sz_bytes\r\n:0\r\n+"
-                            "total_text_index_sz_bytes\r\n:0\r\n+"
                             "hash_indexing_failures\r\n$"
                             "1\r\n0\r\n+backfill_in_progress\r\n$1\r\n0\r\n+"
                             "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
@@ -419,7 +399,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*44\r\n+index_name\r\n+test_name\r\n+index_"
+                         "*36\r\n+index_name\r\n+test_name\r\n+index_"
                          "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                          "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
@@ -431,10 +411,6 @@ INSTANTIATE_TEST_SUITE_P(
                          "total_terms\r\n:0\r\n+num_"
                          "unique_terms\r\n:0\r\n+"
                          "total_postings\r\n:0\r\n+"
-                         "posting_sz_bytes\r\n:0\r\n+"
-                         "position_sz_bytes\r\n:0\r\n+"
-                         "radix_sz_bytes\r\n:0\r\n+"
-                         "total_text_index_sz_bytes\r\n:0\r\n+"
                          "hash_indexing_failures\r\n$1\r\n"
                          "0\r\n+backfill_in_progress\r\n$1\r\n0\r\n+"
                          "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
@@ -474,7 +450,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*44\r\n+index_name\r\n+test_name\r\n+index_"
+                         "*36\r\n+index_name\r\n+test_name\r\n+index_"
                          "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                          "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
@@ -486,10 +462,6 @@ INSTANTIATE_TEST_SUITE_P(
                          "total_terms\r\n:0\r\n+num_unique_"
                          "terms\r\n:0\r\n+"
                          "total_postings\r\n:0\r\n+"
-                         "posting_sz_bytes\r\n:0\r\n+"
-                         "position_sz_bytes\r\n:0\r\n+"
-                         "radix_sz_bytes\r\n:0\r\n+"
-                         "total_text_index_sz_bytes\r\n:0\r\n+"
                          "hash_indexing_failures\r\n$1\r\n"
                          "0\r\n+backfill_in_progress\r\n$1\r\n0\r\n+"
                          "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"

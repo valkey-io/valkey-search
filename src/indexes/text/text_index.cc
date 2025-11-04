@@ -15,14 +15,13 @@
 
 namespace valkey_search::indexes::text {
 
-// Static memory pool for TextIndexSchema
-MemoryPool TextIndexSchema::memory_pool_{0};
+// Track current TextIndexSchema for accessing metadata
+thread_local TextIndexSchema* current_schema_ = nullptr;
 
-int64_t TextIndexSchema::GetMemoryUsage() { return memory_pool_.GetUsage(); }
-
-TextIndexMetadata& GetTextIndexMetadata() {
-  static TextIndexMetadata metadata;
-  return metadata;
+TextIndexSchema* GetTextIndexSchema() {
+  CHECK(current_schema_ != nullptr) 
+      << "No TextIndexSchema context set";
+  return current_schema_;
 }
 
 namespace {
@@ -42,7 +41,7 @@ std::optional<std::shared_ptr<text::Postings>> AddWordToPostings(
   }
   postings->InsertPosting(key, text_field_number, position);
 
-  auto& metadata = GetTextIndexMetadata();
+  auto& metadata = GetTextIndexSchema()->GetMetadata();
   if (is_new_term) {
     metadata.num_unique_terms++;
   }
@@ -61,7 +60,7 @@ std::optional<std::shared_ptr<text::Postings>> RemoveKeyFromPostings(
   if (!postings->IsEmpty()) {
     return postings;
   } else {
-    auto& metadata = GetTextIndexMetadata();
+    auto& metadata = GetTextIndexSchema()->GetMetadata();
     metadata.num_unique_terms--;
     return std::nullopt;
   }
@@ -78,7 +77,8 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
 absl::StatusOr<bool> TextIndexSchema::IndexAttributeData(
     const InternedStringPtr& key, absl::string_view data,
     size_t text_field_number, bool stem, size_t min_stem_size, bool suffix) {
-  NestedMemoryScope scope{memory_pool_};
+  current_schema_ = this;
+  NestedMemoryScope scope{metadata_.text_index_memory_pool_};
 
   auto tokens = lexer_.Tokenize(data, stem, min_stem_size);
 
@@ -109,6 +109,7 @@ absl::StatusOr<bool> TextIndexSchema::IndexAttributeData(
     // Mutate key index
     {
       std::lock_guard<std::mutex> key_guard(key_index->mutex_);
+      NestedMemoryScope radix_scope{metadata_.radix_memory_pool_};
       std::optional<std::shared_ptr<Postings>> new_target =
           key_index->prefix_.MutateTarget(token, [&](auto existing) {
             return AddWordToPostings(existing, key, text_field_number, position,
@@ -126,6 +127,7 @@ absl::StatusOr<bool> TextIndexSchema::IndexAttributeData(
     // Mutate schema index
     {
       std::lock_guard<std::mutex> schema_guard(text_index_->mutex_);
+      NestedMemoryScope radix_scope{metadata_.radix_memory_pool_};
       std::optional<std::shared_ptr<Postings>> new_target =
           text_index_->prefix_.MutateTarget(token, [&](auto existing) {
             return AddWordToPostings(existing, key, text_field_number, position,
@@ -145,7 +147,8 @@ absl::StatusOr<bool> TextIndexSchema::IndexAttributeData(
 }
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
-  NestedMemoryScope scope{memory_pool_};
+  current_schema_ = this;
+  NestedMemoryScope scope{metadata_.text_index_memory_pool_};
   TextIndex* key_index = nullptr;
   {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
@@ -162,6 +165,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
     auto iter = key_index->prefix_.GetWordIterator("");
     while (!iter.Done()) {
       std::string_view word = iter.GetWord();
+      NestedMemoryScope radix_scope{metadata_.radix_memory_pool_};
       std::optional<std::shared_ptr<Postings>> new_target =
           text_index_->prefix_.MutateTarget(word, [&](auto existing) {
             return RemoveKeyFromPostings(existing, key);
@@ -181,42 +185,39 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
 }
 
 uint64_t TextIndexSchema::GetTotalPositions() const {
-  auto& metadata = GetTextIndexMetadata();
-  return metadata.total_positions.load();
+  return metadata_.total_positions.load();
 }
 
 uint64_t TextIndexSchema::GetNumUniqueTerms() const {
-  auto& metadata = GetTextIndexMetadata();
-  return metadata.num_unique_terms.load();
+  return metadata_.num_unique_terms.load();
 }
 
 uint64_t TextIndexSchema::GetTotalTermFrequency() const {
-  auto& metadata = GetTextIndexMetadata();
-  return metadata.total_term_frequency.load();
+  return metadata_.total_term_frequency.load();
 }
 
 uint64_t TextIndexSchema::GetPostingsMemoryUsage() const {
   if (!text_index_) {
     return 0;
   }
-  return Postings::GetMemoryUsage();
+  return metadata_.posting_memory_pool_.GetUsage();
 }
 
 uint64_t TextIndexSchema::GetRadixTreeMemoryUsage() const {
   if (!text_index_) {
     return 0;
   }
-  return RadixTree<std::shared_ptr<Postings>, false>::GetMemoryUsage() -
-         GetPostingsMemoryUsage();
+  return metadata_.radix_memory_pool_.GetUsage() - metadata_.posting_memory_pool_.GetUsage();
 }
 
+// Note: This is a subset of the memory reported by GetPostingsMemoryUsage(),
 uint64_t TextIndexSchema::GetPositionMemoryUsage() const {
   uint64_t total_positions = GetTotalPositions();
   return total_positions * sizeof(uint32_t);
 }
 
 uint64_t TextIndexSchema::GetTotalTextIndexMemoryUsage() const {
-  return TextIndexSchema::GetMemoryUsage();
+  return metadata_.text_index_memory_pool_.GetUsage();
 }
 
 }  // namespace valkey_search::indexes::text

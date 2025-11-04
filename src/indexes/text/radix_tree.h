@@ -152,10 +152,6 @@ struct RadixTree {
   // Prints tree structure
   void DebugPrintTree(const std::string& label = "") const;
 
-  // Memory tracking
-  static MemoryPool memory_pool_;
-  static int64_t GetMemoryUsage();
-
  private:
   /*
    * This is the first iteration of a RadixTree. It will be optimized in the
@@ -328,14 +324,6 @@ struct RadixTree {
   };
 };
 
-// Static memory pool for RadixTree instances
-template <typename Target, bool reverse>
-MemoryPool RadixTree<Target, reverse>::memory_pool_{0};
-
-template <typename Target, bool reverse>
-int64_t RadixTree<Target, reverse>::GetMemoryUsage() {
-  return memory_pool_.GetUsage();
-}
 
 template <typename Target, bool reverse>
 void RadixTree<Target, reverse>::SetTarget(absl::string_view word,
@@ -356,7 +344,6 @@ template <typename Target, bool reverse>
 std::optional<Target> RadixTree<Target, reverse>::MutateTarget(
     absl::string_view word,
     absl::FunctionRef<std::optional<Target>(std::optional<Target>)> mutate) {
-  NestedMemoryScope scope{memory_pool_};
   CHECK(!word.empty()) << "Can't mutate the target for an empty word";
   std::deque<Node*> node_path = GetOrCreateWordPath(word);
   Node* n = node_path.back();

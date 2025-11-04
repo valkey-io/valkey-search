@@ -1,7 +1,7 @@
 import pytest
 from valkey import ResponseError
 from valkey.client import Valkey
-from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkey_search_test_case import ValkeySearchTestCaseBase, ValkeySearchTestCaseDebugMode
 from valkeytestframework.conftest import resource_port_tracker
 from ft_info_parser import FTInfoParser
 from valkeytestframework.util import waiters
@@ -251,9 +251,9 @@ class TestFullText(ValkeySearchTestCaseBase):
         required_top_level_fields = [
             "index_name", "index_definition", "attributes",
             "num_docs", "num_records", "hash_indexing_failures",
-            "backfill_in_progress", "backfill_complete_percent",
+            "backfill_in_progress", "backfill_complete_percent", 
             "mutation_queue_size", "recent_mutations_queue_delay",
-            "state", "punctuation", "stop_words"
+            "state", "punctuation", "stop_words", "with_offsets", "language"
         ]
         
         for field in required_top_level_fields:
@@ -301,15 +301,13 @@ class TestFullText(ValkeySearchTestCaseBase):
         assert isinstance(stop_words, list), f"stop_words should be list, got: {type(stop_words)}"
         assert set(stop_words) == {"the", "and"}, f"Expected stop_words ['the', 'and'], got: {stop_words}"
         
-        # Validate with_offsets setting (only present when text_index_schema exists)
+        # Validate with_offsets setting
         with_offsets = parser.parsed_data.get("with_offsets")
-        if with_offsets is not None:
-            assert with_offsets == 1, f"with_offsets is set to true any other value is wrong"
+        assert with_offsets == 1, f"with_offsets is set to true any other value is wrong"
         
-        # Validate language setting (only present when text_index_schema exists)
-        language = parser.parsed_data.get("language")
-        if language is not None:
-            assert language == "english", f"Expected language 'english', got: '{language}'"
+        # Validate language setting
+        language = parser.parsed_data.get("language", "")
+        assert language == "english", f"Expected language 'english', got: '{language}'"
 
     def test_text_per_field_search(self):
         """
@@ -642,6 +640,11 @@ class TestFullText(ValkeySearchTestCaseBase):
     def test_suffix_search(self):
         # TODO
         pass
+
+class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
+    """
+    Tests that require debug mode enabled for memory statistics validation.
+    """
 
     def test_ft_info_text_index_fields(self):
         """

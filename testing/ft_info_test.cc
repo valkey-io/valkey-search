@@ -134,7 +134,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*24\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -151,7 +151,9 @@ INSTANTIATE_TEST_SUITE_P(
                             "ef_runtime\r\n:30\r\n+"
                             "capacity\r\n:100\r\n+"
                             "size\r\n$1\r\n0\r\n+"
-                            "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+"
+                            "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+num_"
+                            "total_terms\r\n:0\r\n+num_unique_terms\r\n:0\r\n+"
+                            "total_postings\r\n:0\r\n+"
                             "hash_indexing_failures\r\n$1\r\n0\r\n+"
                             "backfill_in_"
                             "progress\r\n$1\r\n0\r\n+backfill_complete_"
@@ -192,7 +194,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*24\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -207,9 +209,10 @@ INSTANTIATE_TEST_SUITE_P(
                             "block_size\r\n:1024\r\n+"
                             "capacity\r\n:100\r\n+"
                             "size\r\n$1\r\n0\r\n+"
-                            "num_docs\r\n:0\r\n+"
-                            "num_records\r\n:0\r\n+hash_"
-                            "indexing_failures\r\n$1\r\n0\r\n+"
+                            "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+num_"
+                            "total_terms\r\n:0\r\n+num_unique_terms\r\n:0\r\n+"
+                            "total_postings\r\n:0\r\n+"
+                            "hash_indexing_failures\r\n$1\r\n0\r\n+"
                             "backfill_in_progress\r\n$1\r\n0\r\n+backfill_"
                             "complete_percent\r\n$8\r\n1.000000\r\n+mutation_"
                             "queue_size\r\n$1\r\n0\r\n+recent_mutations_queue_"
@@ -241,7 +244,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*24\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
@@ -249,12 +252,13 @@ INSTANTIATE_TEST_SUITE_P(
                             "attribute\r\n+test_attribute_1\r\n+type\r\n+"
                             "TAG\r\n+SEPARATOR\r\n+@\r\n+CASESENSITIVE\r\n+"
                             "0\r\n+size\r\n$1\r\n0\r\n+"
-                            "num_docs\r\n:0\r\n+"
-                            "num_records\r\n:0\r\n+hash_indexing_failures\r\n$"
-                            "1\r\n0\r\n+"
-                            "backfill_in_progress\r\n$"
-                            "1\r\n0\r\n+backfill_complete_percent\r\n$8\r\n1."
-                            "000000\r\n+mutation_queue_size\r\n$1\r\n0\r\n+"
+                            "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+num_"
+                            "total_terms\r\n:0\r\n+num_unique_terms\r\n:0\r\n+"
+                            "total_postings\r\n:0\r\n+"
+                            "hash_indexing_failures\r\n$1\r\n0\r\n+"
+                            "backfill_in_progress\r\n$1\r\n0\r\n+"
+                            "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
+                            "mutation_queue_size\r\n$1\r\n0\r\n+"
                             "recent_mutations_queue_delay\r\n$5\r\n0 sec\r\n"
                             "+state\r\n+ready\r\n"
                             "+language\r\n+english\r\n",
@@ -285,16 +289,18 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*24\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
                             "12\r\n+identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+type\r\n+"
                             "TAG\r\n+SEPARATOR\r\n+@\r\n+CASESENSITIVE\r\n+"
-                            "1\r\n+"
-                            "size\r\n$1\r\n0\r\n+num_docs\r\n:0\r\n+"
-                            "num_records\r\n:0\r\n+"
+                            "1\r\n+size\r\n$1\r\n0\r\n+num_docs\r\n:0\r\n+num_"
+                            "records\r\n:0\r\n+num_total_terms\r\n:0\r\n+num_"
+                            "unique_"
+                            "terms\r\n:0\r\n+"
+                            "total_postings\r\n:0\r\n+"
                             "hash_indexing_failures\r\n$1\r\n0\r\n+"
                             "backfill_in_"
                             "progress\r\n$1\r\n0\r\n+backfill_complete_"
@@ -326,17 +332,18 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*24\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
                             "definition\r\n*6\r\n+key_"
                             "type\r\n+HASH\r\n+prefixes\r\n*1\r\n+prefix_1\r\n+"
                             "default_score\r\n$1\r\n1\r\n+attributes\r\n*1\r\n*"
                             "8\r\n+identifier\r\n+test_identifier_1\r\n+"
                             "attribute\r\n+test_attribute_1\r\n+type\r\n+"
                             "NUMERIC\r\n+size\r\n$1\r\n0\r\n+num_docs\r\n:"
-                            "0\r\n+num_records\r\n:0\r\n+hash_indexing_"
-                            "failures\r\n$"
-                            "1\r\n0\r\n+"
-                            "backfill_in_progress\r\n$1\r\n0\r\n+"
+                            "0\r\n+num_records\r\n:0\r\n+num_total_"
+                            "terms\r\n:0\r\n+num_unique_terms\r\n:0\r\n+"
+                            "total_postings\r\n:0\r\n+"
+                            "hash_indexing_failures\r\n$"
+                            "1\r\n0\r\n+backfill_in_progress\r\n$1\r\n0\r\n+"
                             "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
                             "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
                             "mutations_queue_delay\r\n$5\r\n0 sec\r\n+state\r\n"
@@ -392,7 +399,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*30\r\n+index_name\r\n+test_name\r\n+index_"
+                         "*36\r\n+index_name\r\n+test_name\r\n+index_"
                          "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                          "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
@@ -400,7 +407,11 @@ INSTANTIATE_TEST_SUITE_P(
                          "test_identifier_1\r\n+attribute\r\n+test_attribute_"
                          "1\r\n+type\r\n+TEXT\r\n+WITH_SUFFIX_TRIE\r\n+0\r\n+"
                          "MIN_STEM_SIZE\r\n:0\r\n+num_docs\r\n:0\r\n+num_"
-                         "records\r\n:0\r\n+hash_indexing_failures\r\n$1\r\n"
+                         "records\r\n:0\r\n+num_"
+                         "total_terms\r\n:0\r\n+num_"
+                         "unique_terms\r\n:0\r\n+"
+                         "total_postings\r\n:0\r\n+"
+                         "hash_indexing_failures\r\n$1\r\n"
                          "0\r\n+backfill_in_progress\r\n$1\r\n0\r\n+"
                          "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
                          "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
@@ -439,7 +450,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*30\r\n+index_name\r\n+test_name\r\n+index_"
+                         "*36\r\n+index_name\r\n+test_name\r\n+index_"
                          "definition\r\n*6\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n$"
                          "1\r\n1\r\n+attributes\r\n*1\r\n*10\r\n+"
@@ -447,7 +458,11 @@ INSTANTIATE_TEST_SUITE_P(
                          "test_identifier_1\r\n+attribute\r\n+test_attribute_"
                          "1\r\n+type\r\n+TEXT\r\n+WITH_SUFFIX_TRIE\r\n+1\r\n+"
                          "NO_STEM\r\n+1\r\n+num_docs\r\n:0\r\n+num_"
-                         "records\r\n:0\r\n+hash_indexing_failures\r\n$1\r\n"
+                         "records\r\n:0\r\n+num_"
+                         "total_terms\r\n:0\r\n+num_unique_"
+                         "terms\r\n:0\r\n+"
+                         "total_postings\r\n:0\r\n+"
+                         "hash_indexing_failures\r\n$1\r\n"
                          "0\r\n+backfill_in_progress\r\n$1\r\n0\r\n+"
                          "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
                          "mutation_queue_size\r\n$1\r\n0\r\n+recent_"

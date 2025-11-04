@@ -10,6 +10,8 @@
 #include "gtest/gtest.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
+#include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search::indexes::text {
 
@@ -49,21 +51,21 @@ TEST_F(PostingTest, InsertionCounters) {
   // Empty postings
   EXPECT_TRUE(postings_->IsEmpty());
   EXPECT_EQ(postings_->GetKeyCount(), 0);
-  EXPECT_EQ(postings_->GetPostingCount(), 0);
+  EXPECT_EQ(postings_->GetPositionCount(), 0);
   EXPECT_EQ(postings_->GetTotalTermFrequency(), 0);
 
   // Single key, single position, single field
   postings_->InsertKey(InternKey("doc1"), CreatePositionMap({{10, {0}}}));
   EXPECT_FALSE(postings_->IsEmpty());
   EXPECT_EQ(postings_->GetKeyCount(), 1);
-  EXPECT_EQ(postings_->GetPostingCount(), 1);
+  EXPECT_EQ(postings_->GetPositionCount(), 1);
   EXPECT_EQ(postings_->GetTotalTermFrequency(), 1);
 
   // Multiple keys
   postings_->InsertKey(InternKey("doc2"), CreatePositionMap({{20, {1}}}));
   postings_->InsertKey(InternKey("doc3"), CreatePositionMap({{30, {2}}}));
   EXPECT_EQ(postings_->GetKeyCount(), 3);
-  EXPECT_EQ(postings_->GetPostingCount(), 3);
+  EXPECT_EQ(postings_->GetPositionCount(), 3);
   EXPECT_EQ(postings_->GetTotalTermFrequency(), 3);
 
   // Single key with multiple positions
@@ -71,14 +73,14 @@ TEST_F(PostingTest, InsertionCounters) {
   postings_->InsertKey(InternKey("doc1"),
                        CreatePositionMap({{10, {0}}, {20, {0}}, {30, {1}}}));
   EXPECT_EQ(postings_->GetKeyCount(), 1);
-  EXPECT_EQ(postings_->GetPostingCount(), 3);
+  EXPECT_EQ(postings_->GetPositionCount(), 3);
   EXPECT_EQ(postings_->GetTotalTermFrequency(), 3);
 
   // Multiple fields at same position
   postings_ = std::make_unique<Postings>();
   postings_->InsertKey(InternKey("doc1"), CreatePositionMap({{10, {0, 2}}}));
   EXPECT_EQ(postings_->GetKeyCount(), 1);
-  EXPECT_EQ(postings_->GetPostingCount(), 1);
+  EXPECT_EQ(postings_->GetPositionCount(), 1);
   EXPECT_EQ(postings_->GetTotalTermFrequency(),
             2);  // 2 fields have the term at position 10
 }
@@ -91,7 +93,7 @@ TEST_F(PostingTest, RemoveKey) {
 
   postings_->RemoveKey(InternKey("doc1"));
   EXPECT_EQ(postings_->GetKeyCount(), 1);
-  EXPECT_EQ(postings_->GetPostingCount(), 1);
+  EXPECT_EQ(postings_->GetPositionCount(), 1);
 
   postings_->RemoveKey(InternKey("nonexistent"));
   EXPECT_EQ(postings_->GetKeyCount(), 1);
@@ -296,7 +298,7 @@ TEST_F(PostingTest, LargeScaleOperations) {
   }
 
   EXPECT_EQ(postings_->GetKeyCount(), 100);
-  EXPECT_EQ(postings_->GetPostingCount(), total_positions);
+  EXPECT_EQ(postings_->GetPositionCount(), total_positions);
   EXPECT_EQ(postings_->GetTotalTermFrequency(), total_term_frequency);
 
   // Verify all keys are iterable with valid positions

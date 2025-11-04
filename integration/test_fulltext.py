@@ -1,7 +1,7 @@
 import pytest
 from valkey import ResponseError
 from valkey.client import Valkey
-from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkey_search_test_case import ValkeySearchTestCaseBase, ValkeySearchTestCaseDebugMode
 from valkeytestframework.conftest import resource_port_tracker
 from ft_info_parser import FTInfoParser
 from valkeytestframework.util import waiters
@@ -639,3 +639,140 @@ class TestFullText(ValkeySearchTestCaseBase):
     def test_suffix_search(self):
         # TODO
         pass
+
+class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
+    """
+    Tests that require debug mode enabled for memory statistics validation.
+    """
+
+    def test_ft_info_text_index_fields(self):
+        """
+        Test FT.INFO text index specific fields after inserting documents.
+        Validates text index memory usage and statistics fields.
+        """
+        client: Valkey = self.server.get_new_client()
+        
+        # Create the text index using existing pattern
+        assert client.execute_command(text_index_on_hash) == b"OK"
+        
+        # Insert documents using existing hash_docs
+        for doc in hash_docs:
+            assert client.execute_command(*doc) == 5
+        
+        # Get FT.INFO and parse the response
+        parser = IndexingTestHelper.get_ft_info(client, "products")
+        info_data = parser.parsed_data
+        
+        # Validate basic document counts
+        assert info_data["num_docs"] == 5, f"Expected 5 documents, got {info_data['num_docs']}"
+        
+        # Text index specific fields to validate
+        text_index_fields = [
+            "num_unique_terms",          # Total number of unique terms in the text index
+            "num_total_terms",           # Total frequency of all terms across all documents  
+            "posting_sz_bytes",          # Memory used by posting lists (inverted index data) in bytes
+            "position_sz_bytes",         # Memory used by position information for phrase queries in bytes
+            "total_postings",            # Total number of posting lists (equals unique terms)
+            "radix_sz_bytes",            # Memory used by the radix tree (term dictionary) in bytes
+            "total_text_index_sz_bytes"  # Total memory used by all text index components in bytes
+        ]
+        
+        # Validate that all text index fields are present and have reasonable values
+        for field in text_index_fields:
+            assert field in info_data, f"Missing text index field: {field}"
+            value = info_data[field]
+            
+            if field == "num_unique_terms":
+                assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
+                assert value >= 10, f"Expected at least 10 unique terms, got {value}"
+                
+            elif field == "num_total_terms":
+                assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
+                assert value >= info_data["num_unique_terms"], f"Total terms {value} should be >= unique terms {info_data['num_unique_terms']}"
+                
+            elif field in ["posting_sz_bytes", "position_sz_bytes", "radix_sz_bytes", "total_text_index_sz_bytes"]:
+                assert (isinstance(value, int) and value > 0) or \
+                       (os.environ.get('SAN_BUILD', 'no') != 'no' and value == 0), \
+                       f"{field} should be positive integer, got {value}"
+                    
+            elif field == "total_postings":
+                assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
+                assert value == info_data["num_unique_terms"], f"Total postings {value} should equal unique terms {info_data['num_unique_terms']}"
+        
+        # Validate memory relationships
+        total_memory = info_data["total_text_index_sz_bytes"]
+        posting_memory = info_data["posting_sz_bytes"]
+        position_memory = info_data["position_sz_bytes"]
+        radix_memory = info_data["radix_sz_bytes"]
+        
+        # Total memory should be at least the sum of components
+        component_sum = posting_memory + radix_memory
+        assert total_memory >= component_sum, f"Total memory {total_memory} should equal component sum {component_sum}"
+        
+        print(f"Text Index Statistics Validation Passed:")
+        print(f"  Documents: {info_data['num_docs']}")
+        print(f"  Unique Terms: {info_data['num_unique_terms']}")
+        print(f"  Total Terms: {info_data['num_total_terms']}")
+        print(f"  Total Postings: {info_data['total_postings']}")
+        print(f"  Total Memory: {info_data['total_text_index_sz_bytes']} bytes")
+        print(f"  Posting Memory: {info_data['posting_sz_bytes']} bytes")
+        print(f"  Position Memory: {info_data['position_sz_bytes']} bytes")
+        print(f"  Radix Memory: {info_data['radix_sz_bytes']} bytes")
+
+        # Test cleanup after document deletion
+        print("\nTesting cleanup after document deletion...")
+        
+        # Store initial memory values
+        initial_posting_memory = info_data['posting_sz_bytes']
+        initial_radix_memory = info_data['radix_sz_bytes']
+        initial_position_memory = info_data['position_sz_bytes']
+        initial_total_memory = info_data['total_text_index_sz_bytes']
+        initial_unique_terms = info_data['num_unique_terms']
+        initial_total_terms = info_data['num_total_terms']
+        
+        # Delete all documents
+        for doc in hash_docs:
+            key = doc[1]  # Extract key from HSET command
+            client.execute_command("DEL", key)
+        
+        # Get FT.INFO after deletion
+        parser_after_delete = IndexingTestHelper.get_ft_info(client, "products")
+        info_after_delete = parser_after_delete.parsed_data
+        
+        # Verify document count is zero
+        assert info_after_delete["num_docs"] == 0, f"Expected 0 documents after deletion, got {info_after_delete['num_docs']}"
+        
+        # Verify complete cleanup for schema-level metrics
+        assert info_after_delete['posting_sz_bytes'] == 0, \
+            f"Posting memory should be zero after deletion: got {info_after_delete['posting_sz_bytes']}"
+        
+        
+        # Note: Postings are currently stored in per-key indexes. When we implement shared
+        # Posting objects across schema and key indexes, these metrics will reach zero on deletion.
+        assert info_after_delete['num_unique_terms'] < initial_unique_terms, \
+            f"Unique terms should decrease after deletion: {info_after_delete['num_unique_terms']} >= {initial_unique_terms}"
+        assert info_after_delete['num_total_terms'] < initial_total_terms, \
+            f"Total terms should decrease after deletion: {info_after_delete['num_total_terms']} >= {initial_total_terms}"
+        assert info_after_delete['position_sz_bytes'] < initial_position_memory, \
+            f"Position memory should decrease after deletion: {info_after_delete['position_sz_bytes']} >= {initial_position_memory}"
+        assert info_after_delete['total_text_index_sz_bytes'] < initial_total_memory, \
+            f"Total memory should decrease after deletion: {info_after_delete['total_text_index_sz_bytes']} >= {initial_total_memory}"
+        
+        # Note: radix_sz_bytes validation skipped - will be fixed in radix tree memory tracking cleanup task
+        
+        print(f"  After deletion - Documents: {info_after_delete['num_docs']}")
+        print(f"  After deletion - Unique Terms: {info_after_delete['num_unique_terms']}")
+        print(f"  After deletion - Total Terms: {info_after_delete['num_total_terms']}")
+        print(f"  After deletion - Posting Memory: {info_after_delete['posting_sz_bytes']} bytes")
+        print(f"  After deletion - Radix Memory: {info_after_delete['radix_sz_bytes']} bytes")
+        print(f"  After deletion - Total Memory: {info_after_delete['total_text_index_sz_bytes']} bytes")
+        
+        # Now delete the index and verify complete cleanup
+        client.execute_command("FT.DROPINDEX", "products")
+        
+        # Verify index no longer exists
+        indices = client.execute_command("FT._LIST")
+        assert b"products" not in indices, "Index should not exist after FT.DROPINDEX"
+        
+        print("\nCleanup verification passed!")
+        # Deletion pending of per_key_index, On deletion only prefix tree cleared

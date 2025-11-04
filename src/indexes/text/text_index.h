@@ -8,6 +8,7 @@
 #ifndef VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 #define VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 
+#include <atomic>
 #include <bitset>
 #include <cctype>
 #include <memory>
@@ -30,6 +31,23 @@ namespace valkey_search::indexes::text {
 // token -> (PositionMap, suffix support)
 using TokenPositions =
     absl::flat_hash_map<std::string, std::pair<PositionMap, bool>>;
+
+class TextIndexSchema;
+
+// Function to get current TextIndexSchema for accessing metadata
+TextIndexSchema* GetTextIndexSchema();
+
+// FT.INFO counters for text info fields and memory pools
+struct TextIndexMetadata {
+  std::atomic<uint64_t> total_positions{0};
+  std::atomic<uint64_t> num_unique_terms{0};
+  std::atomic<uint64_t> total_term_frequency{0};
+
+  // Memory pools for text index components
+  MemoryPool posting_memory_pool_{0};
+  MemoryPool radix_memory_pool_{0};
+  MemoryPool text_index_memory_pool_{0};
+};
 
 struct TextIndex {
   //
@@ -65,8 +83,16 @@ class TextIndexSchema {
   uint8_t GetNumTextFields() const { return num_text_fields_; }
   std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
 
+  // Access to metadata for memory pool usage
+  TextIndexMetadata& GetMetadata() { return metadata_; }
+  // const TextIndexMetadata& GetMetadata() const { return metadata_; } - when
+  // is TextIndexSchema ever const?
+
  private:
   uint8_t num_text_fields_ = 0;
+
+  // Each schema instance has its own metadata with memory pools
+  TextIndexMetadata metadata_;
 
   //
   // This is the main index of all Text fields in this index schema
@@ -102,6 +128,16 @@ class TextIndexSchema {
 
   // Whether to store position offsets for phrase queries
   bool with_offsets_ = false;
+
+ public:
+  // FT.INFO memory stats for text index
+  uint64_t GetTotalPositions() const;
+  uint64_t GetNumUniqueTerms() const;
+  uint64_t GetTotalTermFrequency() const;
+  uint64_t GetPostingsMemoryUsage() const;
+  uint64_t GetRadixTreeMemoryUsage() const;
+  uint64_t GetPositionMemoryUsage() const;
+  uint64_t GetTotalTextIndexMemoryUsage() const;
 };
 
 }  // namespace valkey_search::indexes::text

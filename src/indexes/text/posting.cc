@@ -167,19 +167,40 @@ template class FieldMaskImpl<uint64_t, 64>;
 // Check if posting list contains any documents
 bool Postings::IsEmpty() const { return key_to_positions_.empty(); }
 
+// TODO: develop a better strategy to track terms
+unsigned int count_num_terms(const PositionMap& pos_map) {
+  unsigned int num_terms = 0;
+  for (const auto& [_, field_mask] : pos_map) {
+    num_terms += field_mask->CountSetFields();
+  }
+  return num_terms;
+}
+
 void Postings::InsertKey(const Key& key, PositionMap&& pos_map) {
+  auto& metadata = GetTextIndexSchema()->GetMetadata();
+  metadata.total_positions += pos_map.size();
+  metadata.total_term_frequency += count_num_terms(pos_map);
+
   // TODO: Compress the positions map.
   key_to_positions_[key] = std::move(pos_map);
 }
 
 // Remove a document key and all its positions
-void Postings::RemoveKey(const Key& key) { key_to_positions_.erase(key); }
+void Postings::RemoveKey(const Key& key) {
+  auto node = key_to_positions_.extract(key);
+  if (node.empty()) return;
+  PositionMap& pos_map = node.mapped();
+
+  auto& metadata = GetTextIndexSchema()->GetMetadata();
+  metadata.total_positions -= pos_map.size();
+  metadata.total_term_frequency -= count_num_terms(pos_map);
+}
 
 // Get total number of document keys
 size_t Postings::GetKeyCount() const { return key_to_positions_.size(); }
 
 // Get total number of position entries across all keys
-size_t Postings::GetPostingCount() const {
+size_t Postings::GetPositionCount() const {
   size_t total = 0;
   for (const auto& [key, positions] : key_to_positions_) {
     total += positions.size();

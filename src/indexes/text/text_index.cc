@@ -11,8 +11,17 @@
 #include "absl/status/status.h"
 #include "absl/strings/ascii.h"
 #include "libstemmer.h"
+#include "vmsdk/src/memory_allocation.h"
 
 namespace valkey_search::indexes::text {
+
+// Track current TextIndexSchema for accessing metadata
+thread_local TextIndexSchema* current_schema_ = nullptr;
+
+TextIndexSchema* GetTextIndexSchema() {
+  CHECK(current_schema_ != nullptr) << "No TextIndexSchema context set";
+  return current_schema_;
+}
 
 namespace {
 
@@ -23,6 +32,7 @@ std::optional<std::shared_ptr<Postings>> AddKeyToPostings(
   if (existing.has_value()) {
     postings = existing.value();
   } else {
+    current_schema_->GetMetadata().num_unique_terms++;
     postings = std::make_shared<Postings>();
   }
   postings->InsertKey(key, std::move(pos_map));
@@ -35,9 +45,11 @@ std::optional<std::shared_ptr<Postings>> RemoveKeyFromPostings(
   CHECK(existing.has_value()) << "Per-key tree became unaligned";
   auto postings = existing.value();
   postings->RemoveKey(key);
+
   if (!postings->IsEmpty()) {
     return postings;
   } else {
+    current_schema_->GetMetadata().num_unique_terms--;
     return std::nullopt;
   }
 }
@@ -53,6 +65,9 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     const InternedStringPtr& key, absl::string_view data,
     size_t text_field_number, bool stem, size_t min_stem_size, bool suffix) {
+  current_schema_ = this;
+  NestedMemoryScope scope{metadata_.text_index_memory_pool_};
+
   auto tokens = lexer_.Tokenize(data, stem, min_stem_size);
 
   if (!tokens.ok()) {
@@ -84,6 +99,9 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
 }
 
 void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
+  current_schema_ = this;
+  NestedMemoryScope scope{metadata_.text_index_memory_pool_};
+
   // Retrieve the key's staged data
   TokenPositions token_positions;
   {
@@ -116,6 +134,12 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
       std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
       updated_target =
           text_index_->prefix_.MutateTarget(token, [&](auto existing) {
+            NestedMemoryScope scope{metadata_.posting_memory_pool_};
+            // Note: Right now this won't include the position map memory since
+            // it's already allocated and moved into the postings object. Once
+            // we start creating a serialized version instead then it will be
+            // tracked. At that point stop moving the pos_map and just pass a
+            // reference so that it doesn't get cleaned up in the memory scope.
             return AddKeyToPostings(existing, key, std::move(pos_map));
           });
       if (suffix) {
@@ -145,6 +169,9 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
 }
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
+  current_schema_ = this;
+  NestedMemoryScope scope{metadata_.text_index_memory_pool_};
+
   // Extract the per-key index
   TextIndex key_index;
   {
@@ -160,10 +187,12 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
 
   // Cleanup schema-level text index
   std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
+  NestedMemoryScope radix_scope{metadata_.radix_memory_pool_};
   while (!iter.Done()) {
     std::string_view word = iter.GetWord();
     std::optional<std::shared_ptr<Postings>> new_target =
         text_index_->prefix_.MutateTarget(word, [&](auto existing) {
+          NestedMemoryScope scope{metadata_.posting_memory_pool_};
           return RemoveKeyFromPostings(existing, key);
         });
     if (text_index_->suffix_.has_value()) {
@@ -172,6 +201,45 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
     }
     iter.Next();
   }
+}
+
+uint64_t TextIndexSchema::GetTotalPositions() const {
+  return metadata_.total_positions.load();
+}
+
+uint64_t TextIndexSchema::GetNumUniqueTerms() const {
+  return metadata_.num_unique_terms.load();
+}
+
+uint64_t TextIndexSchema::GetTotalTermFrequency() const {
+  return metadata_.total_term_frequency.load();
+}
+
+uint64_t TextIndexSchema::GetPostingsMemoryUsage() const {
+  if (!text_index_) {
+    return 0;
+  }
+  return metadata_.posting_memory_pool_.GetUsage();
+}
+
+uint64_t TextIndexSchema::GetRadixTreeMemoryUsage() const {
+  // TODO: not implemented
+  // if (!text_index_) {
+  //   return 0;
+  // }
+  // return metadata_.radix_memory_pool_.GetUsage() -
+  //        metadata_.posting_memory_pool_.GetUsage();
+  return 0;
+}
+
+// Note: This is a subset of the memory reported by GetPostingsMemoryUsage(),
+uint64_t TextIndexSchema::GetPositionMemoryUsage() const {
+  uint64_t total_positions = GetTotalPositions();
+  return total_positions * sizeof(uint32_t);
+}
+
+uint64_t TextIndexSchema::GetTotalTextIndexMemoryUsage() const {
+  return metadata_.text_index_memory_pool_.GetUsage();
 }
 
 }  // namespace valkey_search::indexes::text

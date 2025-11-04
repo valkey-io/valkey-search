@@ -72,7 +72,7 @@ struct GroupKey {
   }
 };
 
-std::ostream& operator<<(std::ostream& os, const Record& r) {
+inline std::ostream& operator<<(std::ostream& os, const Record& r) {
   for (auto& f : r.fields_) {
     if (&f != &r.fields_[0]) {
       os << ',';
@@ -91,8 +91,11 @@ std::ostream& operator<<(std::ostream& os, const Record& r) {
   return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const Record* r) { return os << *r; }
-std::ostream& operator<<(std::ostream& os, std::unique_ptr<Record> r) {
+inline std::ostream& operator<<(std::ostream& os, const Record* r) {
+  return os << *r;
+}
+
+inline std::ostream& operator<<(std::ostream& os, std::unique_ptr<Record> r) {
   return os << r.get();
 }
 

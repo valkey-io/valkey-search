@@ -50,6 +50,7 @@
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
@@ -794,9 +795,12 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  // Calculate additional array size for text-related fields only if text fields
-  // exist
-  int arrSize = 24;
+  int arrSize = 30;
+  // Debug Text index Memory info fields
+  if (vmsdk::config::IsDebugModeEnabled()) {
+    arrSize += 8;
+  }
+  // Text-attribute info fields
   if (text_index_schema_) {
     arrSize += 6;
   }
@@ -831,6 +835,39 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithLongLong(ctx, stats_.document_cnt);
   ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
   ValkeyModule_ReplyWithLongLong(ctx, CountRecords());
+  // Text Index info fields
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_total_terms");
+  ValkeyModule_ReplyWithLongLong(
+      ctx,
+      text_index_schema_ ? text_index_schema_->GetTotalTermFrequency() : 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_unique_terms");
+  ValkeyModule_ReplyWithLongLong(
+      ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "total_postings");
+  ValkeyModule_ReplyWithLongLong(
+      ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
+
+  // Memory statistics are only shown when debug mode is enabled
+  if (vmsdk::config::IsDebugModeEnabled()) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "posting_sz_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx,
+        text_index_schema_ ? text_index_schema_->GetPostingsMemoryUsage() : 0);
+    ValkeyModule_ReplyWithSimpleString(ctx, "position_sz_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx,
+        text_index_schema_ ? text_index_schema_->GetPositionMemoryUsage() : 0);
+    ValkeyModule_ReplyWithSimpleString(ctx, "radix_sz_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx,
+        text_index_schema_ ? text_index_schema_->GetRadixTreeMemoryUsage() : 0);
+    ValkeyModule_ReplyWithSimpleString(ctx, "total_text_index_sz_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx, text_index_schema_
+                 ? text_index_schema_->GetTotalTextIndexMemoryUsage()
+                 : 0);
+  }
+  // Text Index info fields end
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%lu", stats_.subscription_add.skipped_cnt).c_str());

@@ -2,7 +2,8 @@
 
 [files]
 extend-exclude = [
-    "third_party/snowball/**"
+    "third_party/snowball/**",
+    "third_party/icu/**"
 ]
 
 [default]

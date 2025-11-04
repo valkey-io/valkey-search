@@ -810,7 +810,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "total_postings");
   ValkeyModule_ReplyWithLongLong(
       ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
-  
+
   // Memory statistics are only shown when debug mode is enabled
   if (vmsdk::config::IsDebugModeEnabled()) {
     ValkeyModule_ReplyWithSimpleString(ctx, "posting_sz_bytes");

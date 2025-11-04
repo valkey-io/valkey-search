@@ -167,7 +167,6 @@ template class FieldMaskImpl<uint64_t, 64>;
 
 // Basic Postings Object Implementation
 
-
 // Position map type alias - maps position to optimized FieldMask objects
 using PositionMap = std::map<Position, std::unique_ptr<FieldMask>>;
 
@@ -182,7 +181,8 @@ class Postings::Impl {
 };
 
 Postings::Postings(bool save_positions, size_t num_text_fields) {
-  NestedMemoryScope scope{GetTextIndexSchema()->GetMetadata().posting_memory_pool_};
+  NestedMemoryScope scope{
+      GetTextIndexSchema()->GetMetadata().posting_memory_pool_};
   impl_ = std::make_unique<Impl>(save_positions, num_text_fields);
   CHECK(impl_ != nullptr) << "Failed to create Postings implementation";
 }
@@ -190,7 +190,8 @@ Postings::Postings(bool save_positions, size_t num_text_fields) {
 // Destructor with proper memory tracking and cleanup
 Postings::~Postings() {
   // Track only Postings-specific memory
-  NestedMemoryScope scope{GetTextIndexSchema()->GetMetadata().posting_memory_pool_};
+  NestedMemoryScope scope{
+      GetTextIndexSchema()->GetMetadata().posting_memory_pool_};
 
   // Explicit cleanup of the implementation
   if (impl_) {
@@ -207,7 +208,8 @@ bool Postings::IsEmpty() const { return impl_->key_to_positions_.empty(); }
 // Insert a posting entry for a key and field
 void Postings::InsertPosting(const Key& key, size_t field_index,
                              Position position) {
-  NestedMemoryScope scope{GetTextIndexSchema()->GetMetadata().posting_memory_pool_};
+  NestedMemoryScope scope{
+      GetTextIndexSchema()->GetMetadata().posting_memory_pool_};
 
   CHECK(field_index < impl_->num_text_fields_) << "Field index out of range";
 
@@ -244,7 +246,8 @@ void Postings::InsertPosting(const Key& key, size_t field_index,
 
 // Remove a document key and all its positions
 void Postings::RemoveKey(const Key& key) {
-  NestedMemoryScope scope{GetTextIndexSchema()->GetMetadata().posting_memory_pool_};
+  NestedMemoryScope scope{
+      GetTextIndexSchema()->GetMetadata().posting_memory_pool_};
 
   // TODO: Naively decrementing total term frequency,  can be made more
   // efficient by adding total term frequency count for each position map with
@@ -402,6 +405,5 @@ uint64_t Postings::PositionIterator::GetFieldMask() const {
       << "PositionIterator is invalid or exhausted";
   return current_->second->AsUint64();
 }
-
 
 }  // namespace valkey_search::indexes::text

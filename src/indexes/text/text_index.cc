@@ -19,8 +19,7 @@ namespace valkey_search::indexes::text {
 thread_local TextIndexSchema* current_schema_ = nullptr;
 
 TextIndexSchema* GetTextIndexSchema() {
-  CHECK(current_schema_ != nullptr) 
-      << "No TextIndexSchema context set";
+  CHECK(current_schema_ != nullptr) << "No TextIndexSchema context set";
   return current_schema_;
 }
 
@@ -207,7 +206,8 @@ uint64_t TextIndexSchema::GetRadixTreeMemoryUsage() const {
   if (!text_index_) {
     return 0;
   }
-  return metadata_.radix_memory_pool_.GetUsage() - metadata_.posting_memory_pool_.GetUsage();
+  return metadata_.radix_memory_pool_.GetUsage() -
+         metadata_.posting_memory_pool_.GetUsage();
 }
 
 // Note: This is a subset of the memory reported by GetPostingsMemoryUsage(),

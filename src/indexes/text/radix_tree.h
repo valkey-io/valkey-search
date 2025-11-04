@@ -324,7 +324,6 @@ struct RadixTree {
   };
 };
 
-
 template <typename Target, bool reverse>
 void RadixTree<Target, reverse>::SetTarget(absl::string_view word,
                                            std::optional<Target> new_target) {

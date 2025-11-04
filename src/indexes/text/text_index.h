@@ -39,7 +39,7 @@ struct TextIndexMetadata {
   std::atomic<uint64_t> total_positions{0};
   std::atomic<uint64_t> num_unique_terms{0};
   std::atomic<uint64_t> total_term_frequency{0};
-  
+
   // Memory pools for text index components
   MemoryPool posting_memory_pool_{0};
   MemoryPool radix_memory_pool_{0};
@@ -83,14 +83,14 @@ class TextIndexSchema {
 
   uint8_t GetNumTextFields() const { return num_text_fields_; }
   std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
-  
+
   // Access to metadata for memory pool usage
   TextIndexMetadata& GetMetadata() { return metadata_; }
   const TextIndexMetadata& GetMetadata() const { return metadata_; }
 
  private:
   uint8_t num_text_fields_ = 0;
-  
+
   // Each schema instance has its own metadata with memory pools
   TextIndexMetadata metadata_;
 

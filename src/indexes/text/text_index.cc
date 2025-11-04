@@ -187,7 +187,6 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
 
   // Cleanup schema-level text index
   std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
-  NestedMemoryScope radix_scope{metadata_.radix_memory_pool_};
   while (!iter.Done()) {
     std::string_view word = iter.GetWord();
     std::optional<std::shared_ptr<Postings>> new_target =

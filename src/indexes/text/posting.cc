@@ -17,7 +17,6 @@
 #include "absl/log/check.h"
 #include "src/index_schema.h"
 
-
 namespace valkey_search::indexes::text {
 
 // Internal FieldMask classes - not part of external interface

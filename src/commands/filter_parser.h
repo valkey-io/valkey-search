@@ -41,11 +41,23 @@ class FilterParser {
   size_t node_count_{0};
   absl::flat_hash_set<std::string> filter_identifiers_;
 
+
   struct TokenResult {
     size_t end_pos;
     std::unique_ptr<query::TextPredicate> predicate;
     bool break_on_query_syntax;
   };
+  // Add these two new function declarations in the private section:
+  absl::StatusOr<TokenResult> ParseQuotedToken(
+        std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
+        uint64_t field_mask, std::optional<uint32_t> min_stem_size);
+
+  absl::StatusOr<TokenResult> ParseUnquotedToken(
+        std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
+        uint64_t field_mask, std::optional<uint32_t> min_stem_size);
+
+
+
   absl::StatusOr<TokenResult> ParseTokenAndBuildPredicate(
       bool in_quotes,
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,

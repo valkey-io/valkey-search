@@ -85,8 +85,6 @@ class TextIndexSchema {
 
   // Access to metadata for memory pool usage
   TextIndexMetadata& GetMetadata() { return metadata_; }
-  // const TextIndexMetadata& GetMetadata() const { return metadata_; } - when
-  // is TextIndexSchema ever const?
 
  private:
   uint8_t num_text_fields_ = 0;

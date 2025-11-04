@@ -222,13 +222,8 @@ uint64_t TextIndexSchema::GetPostingsMemoryUsage() const {
 }
 
 uint64_t TextIndexSchema::GetRadixTreeMemoryUsage() const {
-  // TODO: not implemented
-  // if (!text_index_) {
-  //   return 0;
-  // }
-  // return metadata_.radix_memory_pool_.GetUsage() -
-  //        metadata_.posting_memory_pool_.GetUsage();
-  return 0;
+  // TODO: properly implement
+  return GetTotalTextIndexMemoryUsage() - GetPostingsMemoryUsage();
 }
 
 // Note: This is a subset of the memory reported by GetPostingsMemoryUsage(),

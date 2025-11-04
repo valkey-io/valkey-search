@@ -39,7 +39,6 @@ Key.
 #include <vector>
 
 #include "src/utils/string_interning.h"
-#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search::indexes::text {
 

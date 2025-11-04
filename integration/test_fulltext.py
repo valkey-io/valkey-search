@@ -7,7 +7,6 @@ from ft_info_parser import FTInfoParser
 from valkeytestframework.util import waiters
 import threading
 import time
-import os
 from utils import IndexingTestHelper
 
 """

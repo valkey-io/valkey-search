@@ -16,9 +16,7 @@
 
 #include "absl/log/check.h"
 #include "src/index_schema.h"
-#include "src/indexes/text/text_index.h"
-#include "vmsdk/src/memory_allocation.h"
-#include "vmsdk/src/memory_allocation_overrides.h"
+
 
 namespace valkey_search::indexes::text {
 

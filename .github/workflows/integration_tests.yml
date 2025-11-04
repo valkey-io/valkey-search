@@ -33,6 +33,8 @@ jobs:
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
     - name: Run Integration Tests
+      id: test-run
+      continue-on-error: true
       run: |
         mkdir test-results
         docker run --privileged --rm \
@@ -41,12 +43,20 @@ jobs:
           --user "ubuntu:ubuntu" \
           presubmit-image \
           sudo ci/build_ubuntu.sh --run-integration-tests --integration-output=/workspace/test-results
-        sudo chmod -R 755 test-results
-      continue-on-error: true
+
+    - name: Update Test Results Permissions
+      if: always()
+      run: sudo chmod -R 755 test-results
 
     # Upload test results as artifacts
     - name: Upload Test Results
       uses: actions/upload-artifact@v4
+      if: always()
       with:
         name: integration-test-results
         path: test-results
+
+    # Fail the job if tests failed
+    - name: Check Test Results
+      if: steps.test-run.outcome == 'failure'
+      run: exit 1

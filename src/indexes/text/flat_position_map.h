@@ -57,6 +57,8 @@ class FlatPositionMapIterator {
   FlatPositionMap flat_map_;
   const char* current_ptr_;
   Position cumulative_position_;
+  uint32_t positions_read_;
+  uint32_t total_positions_;
 };
 
 }  // namespace valkey_search::indexes::text

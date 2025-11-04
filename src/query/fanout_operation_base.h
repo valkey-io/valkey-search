@@ -45,9 +45,9 @@ class FanoutOperationBase {
     blocked_client_->MeasureTimeStart();
     deadline_tp_ = std::chrono::steady_clock::now() +
                    std::chrono::milliseconds(GetTimeoutMs());
-    // if current cluster map is not complete or the current cluster map
+    // if current cluster map is not consistent or the current cluster map
     // expires, refresh cluster map
-    if (!ValkeySearch::Instance().GetClusterMap()->GetIsClusterMapFull() ||
+    if (!ValkeySearch::Instance().GetClusterMap()->IsConsistent() ||
         std::chrono::steady_clock::now() >
             ValkeySearch::Instance().GetClusterMap()->GetExpirationTime()) {
       ValkeySearch::Instance().RefreshClusterMap(ctx);

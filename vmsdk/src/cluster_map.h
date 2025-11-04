@@ -15,6 +15,8 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
@@ -50,6 +52,9 @@ struct NodeInfo {
   bool is_primary;
   bool is_local;
   SocketAddress socket_address;
+  // a map containing all additional network metadata(the fourth entry of
+  // CLUSTER SLOTS response); can be empty
+  std::unordered_map<std::string, std::string> additional_network_metadata;
   // Pointer to the shard this node belongs to
   const ShardInfo* shard = nullptr;
 
@@ -103,7 +108,7 @@ class ClusterMap {
   }
 
   // are all the slots assigned to some shard
-  bool GetIsClusterMapFull() const { return is_cluster_map_full_; }
+  bool IsConsistent() const { return is_consistent_; }
 
   // generate a random targets vector from cluster bus
   std::vector<NodeInfo> GetRandomTargets();
@@ -125,6 +130,9 @@ class ClusterMap {
  private:
   std::chrono::steady_clock::time_point expiration_tp_;
 
+  // a map used for check duplicate socket addresses, node_id -> SocketAddress
+  std::unordered_map<std::string, SocketAddress> node_to_socket_map_;
+
   // 1: slot is owned by this cluster, 0: slot is not owned by this cluster
   std::bitset<k_num_slots> owned_slots_;
 
@@ -136,7 +144,7 @@ class ClusterMap {
   // Cluster-level fingerprint (hash of all shard fingerprints)
   uint64_t cluster_slots_fingerprint_;
 
-  bool is_cluster_map_full_;
+  bool is_consistent_;
 
   // Pre-computed target lists
   std::vector<NodeInfo> primary_targets_;
@@ -154,17 +162,27 @@ class ClusterMap {
   uint64_t ComputeClusterFingerprint();
 
   // Helper functions for CreateNewClusterMap
+  // parse a single node info
   NodeInfo ParseNodeInfo(ValkeyModuleCallReply* node_arr, bool is_local_shard,
                          bool is_primary);
 
+  // check is this a local shard
   bool IsLocalShard(ValkeyModuleCallReply* slot_range, const char* my_node_id);
 
+  // if multiple slot ranges belong to same shard, check is the shard consistent
+  bool IsExistingShardConsistent(const ShardInfo& existing_shard,
+                                 const NodeInfo& new_primary,
+                                 const std::vector<NodeInfo>& new_replicas);
+
+  // process each slot range array
   void ProcessSlotRange(ValkeyModuleCallReply* slot_range,
                         const char* my_node_id,
                         std::vector<SlotRangeInfo>& slot_ranges);
 
+  // build the slot_to_shard_map
   void BuildSlotToShardMap(const std::vector<SlotRangeInfo>& slot_ranges);
 
+  // check if all slots belong to some shard
   bool CheckClusterMapFull();
 };
 

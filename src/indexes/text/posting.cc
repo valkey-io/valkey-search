@@ -164,115 +164,45 @@ template class FieldMaskImpl<uint64_t, 64>;
 
 // Basic Postings Object Implementation
 
-// Position map type alias - maps position to optimized FieldMask objects
-using PositionMap = std::map<Position, std::unique_ptr<FieldMask>>;
-
-class Postings::Impl {
- public:
-  bool save_positions_;
-  size_t num_text_fields_;
-  std::map<Key, PositionMap> key_to_positions_;
-
-  Impl(bool save_positions, size_t num_text_fields)
-      : save_positions_(save_positions), num_text_fields_(num_text_fields) {}
-};
-
-Postings::Postings(bool save_positions, size_t num_text_fields) {
-  NestedMemoryScope scope{
-      GetTextIndexSchema()->GetMetadata().posting_memory_pool_};
-  impl_ = std::make_unique<Impl>(save_positions, num_text_fields);
-  CHECK(impl_ != nullptr) << "Failed to create Postings implementation";
-}
-
-// Destructor with proper memory tracking and cleanup
-Postings::~Postings() {
-  // Track only Postings-specific memory
-  NestedMemoryScope scope{
-      GetTextIndexSchema()->GetMetadata().posting_memory_pool_};
-
-  // Explicit cleanup of the implementation
-  if (impl_) {
-    // Clear all key-to-position mappings to ensure proper cleanup
-    // This will trigger destructors for all FieldMask objects
-    impl_->key_to_positions_.clear();
-    impl_.reset();
-  }
-}
-
 // Check if posting list contains any documents
-bool Postings::IsEmpty() const { return impl_->key_to_positions_.empty(); }
+bool Postings::IsEmpty() const { return key_to_positions_.empty(); }
 
-// Insert a posting entry for a key and field
-void Postings::InsertPosting(const Key& key, size_t field_index,
-                             Position position) {
-  NestedMemoryScope scope{
-      GetTextIndexSchema()->GetMetadata().posting_memory_pool_};
-
-  CHECK(field_index < impl_->num_text_fields_) << "Field index out of range";
-
-  Position effective_position;
-
-  if (impl_->save_positions_) {
-    // In positional mode, position must be explicitly provided
-    CHECK(position != UINT32_MAX)
-        << "Position must be provided in positional mode";
-    effective_position = position;
-  } else {
-    // For boolean search mode, always use position 0 regardless of input
-    effective_position = 0;
+// TODO: develop a better strategy to track terms
+unsigned int count_num_terms(const PositionMap& pos_map) {
+  unsigned int num_terms = 0;
+  for (const auto& [_, field_mask] : pos_map) {
+    num_terms += field_mask->CountSetFields();
   }
+  return num_terms;
+}
 
-  auto& pos_map = impl_->key_to_positions_[key];
+void Postings::InsertKey(const Key& key, PositionMap&& pos_map) {
+  auto& metadata = GetTextIndexSchema()->GetMetadata();
+  metadata.total_positions += pos_map.size();
+  metadata.total_term_frequency += count_num_terms(pos_map);
 
-  // Check if position already exists
-  auto it = pos_map.find(effective_position);
-
-  if (it != pos_map.end()) {
-    // Position exists - add field to existing FieldMask object
-    it->second->SetField(field_index);
-  } else {
-    // New position - create entry with this field
-    auto field_mask = FieldMask::Create(impl_->num_text_fields_);
-    field_mask->SetField(field_index);
-    pos_map[effective_position] = std::move(field_mask);
-
-    auto& metadata = GetTextIndexSchema()->GetMetadata();
-    metadata.total_positions++;
-  }
+  // TODO: Compress the positions map.
+  key_to_positions_[key] = std::move(pos_map);
 }
 
 // Remove a document key and all its positions
 void Postings::RemoveKey(const Key& key) {
-  NestedMemoryScope scope{
-      GetTextIndexSchema()->GetMetadata().posting_memory_pool_};
+  auto node = key_to_positions_.extract(key);
+  if (node.empty()) return;
+  PositionMap& pos_map = node.mapped();
 
-  // TODO: Naively decrementing total term frequency,  can be made more
-  // efficient by adding total term frequency count for each position map with
-  // optimized position map implementation
-  auto it = impl_->key_to_positions_.find(key);
-  if (it != impl_->key_to_positions_.end()) {
-    uint64_t positions_to_remove = it->second.size();
-    uint64_t term_freq_to_remove = 0;
-
-    for (const auto& [position, field_mask] : it->second) {
-      term_freq_to_remove += field_mask->CountSetFields();
-    }
-
-    auto& metadata = GetTextIndexSchema()->GetMetadata();
-    metadata.total_positions -= positions_to_remove;
-    metadata.total_term_frequency -= term_freq_to_remove;
-  }
-
-  impl_->key_to_positions_.erase(key);
+  auto& metadata = GetTextIndexSchema()->GetMetadata();
+  metadata.total_positions -= pos_map.size();
+  metadata.total_term_frequency -= count_num_terms(pos_map);
 }
 
 // Get total number of document keys
-size_t Postings::GetKeyCount() const { return impl_->key_to_positions_.size(); }
+size_t Postings::GetKeyCount() const { return key_to_positions_.size(); }
 
 // Get total number of position entries across all keys
 size_t Postings::GetPositionCount() const {
   size_t total = 0;
-  for (const auto& [key, positions] : impl_->key_to_positions_) {
+  for (const auto& [key, positions] : key_to_positions_) {
     total += positions.size();
   }
   return total;
@@ -281,7 +211,7 @@ size_t Postings::GetPositionCount() const {
 // Get total term frequency (sum of field occurrences across all positions)
 size_t Postings::GetTotalTermFrequency() const {
   size_t total_frequency = 0;
-  for (const auto& [key, positions] : impl_->key_to_positions_) {
+  for (const auto& [key, positions] : key_to_positions_) {
     for (const auto& [position, field_mask] : positions) {
       // Use efficient bit manipulation to count set fields (much faster!)
       total_frequency += field_mask->CountSetFields();
@@ -298,7 +228,7 @@ Postings* Postings::Defrag() { return this; }
 // Get a Key iterator
 Postings::KeyIterator Postings::GetKeyIterator() const {
   KeyIterator iterator;
-  iterator.key_map_ = &impl_->key_to_positions_;
+  iterator.key_map_ = &key_to_positions_;
   iterator.current_ = iterator.key_map_->begin();
   iterator.end_ = iterator.key_map_->end();
   return iterator;

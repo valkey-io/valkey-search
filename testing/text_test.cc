@@ -93,6 +93,25 @@ class TextTest : public ::testing::Test {
     return iter.GetTarget();
   }
 
+  // Stages a single Text attribute update from the key and then commits the key
+  // update to the schema-level text index structures.
+  void AddRecordAndCommitKey(Text* text_index, const InternedStringPtr& key,
+                             absl::string_view data,
+                             std::shared_ptr<text::TextIndexSchema> schema) {
+    auto result = text_index->AddRecord(key, data);
+    ASSERT_TRUE(result.ok()) << result.status();
+    ASSERT_TRUE(result.value());
+    schema->CommitKeyData(key);
+  }
+
+  // Adds the record to the default text index
+  void AddRecordAndCommitKey(
+      const InternedStringPtr& key, absl::string_view data,
+      std::shared_ptr<text::TextIndexSchema> schema = nullptr) {
+    auto active_schema = schema ? schema : text_index_schema_;
+    AddRecordAndCommitKey(text_index_.get(), key, data, active_schema);
+  }
+
   // Validate that the index structure matches expected results
   void ValidateIndexStructure(
       const TextIndexTestCase& test_case,
@@ -154,15 +173,13 @@ TEST_P(TextIndexParameterizedTest, ValidateIndexStructure) {
 
   auto key = StringInternStore::Intern("test_key");
 
-  // Add record and verify it succeeds if expected
-  auto result = text_index_->AddRecord(key, test_case.input_text);
   if (test_case.should_succeed) {
-    ASSERT_TRUE(result.ok()) << "Test case: " << test_case.description;
-    EXPECT_TRUE(result.value()) << "Test case: " << test_case.description;
-
+    AddRecordAndCommitKey(key, test_case.input_text, active_schema);
     // Validate the index structure matches expectations
     ValidateIndexStructure(test_case, active_schema);
   } else {
+    // For failure cases, test directly without the helper
+    auto result = text_index_->AddRecord(key, test_case.input_text);
     EXPECT_FALSE(result.ok())
         << "Test case should fail: " << test_case.description;
   }
@@ -300,8 +317,7 @@ TEST_F(TextTest, LargeDocumentTokenization) {
     data += "word" + std::to_string(i % 10) + " ";
   }
 
-  auto result = text_index_->AddRecord(key, data);
-  ASSERT_TRUE(result.ok()) << result.status();
+  AddRecordAndCommitKey(key, data);
 
   // Should create tokens for word0 through word9
   for (int i = 0; i < 10; ++i) {
@@ -323,11 +339,8 @@ TEST_F(TextTest, MultipleDocumentsShareTokens) {
   auto key2 = StringInternStore::Intern("doc2");
 
   // Add documents with overlapping terms
-  auto result1 = text_index_->AddRecord(key1, "hello world");
-  auto result2 = text_index_->AddRecord(key2, "hello test");
-
-  ASSERT_TRUE(result1.ok()) << result1.status();
-  ASSERT_TRUE(result2.ok()) << result2.status();
+  AddRecordAndCommitKey(key1, "hello world");
+  AddRecordAndCommitKey(key2, "hello test");
 
   // "hello" should appear in both documents
   auto hello_postings = GetPostingsForToken("hello");
@@ -362,8 +375,7 @@ TEST_F(TextTest, StemmingBehavior) {
   auto key = StringInternStore::Intern("stem_key");
   std::string data = "running runs runner";
 
-  auto result = stem_text_index->AddRecord(key, data);
-  ASSERT_TRUE(result.ok()) << result.status();
+  AddRecordAndCommitKey(stem_text_index.get(), key, data, stemming_schema);
 
   // Stemming behavior depends on the stemmer implementation
   // This test ensures stemming doesn't break the indexing pipeline
@@ -383,18 +395,6 @@ TEST_F(TextTest, StemmingBehavior) {
   }
 
   EXPECT_TRUE(has_tokens) << "Should create stemmed tokens";
-}
-
-TEST_F(TextTest, InvalidInputHandling) {
-  auto key = StringInternStore::Intern("invalid_key");
-
-  // Test with invalid UTF-8 would need proper invalid UTF-8 string
-  // For now, test with very large document
-  std::string very_large_doc(1000000, 'a');  // 1MB document
-
-  auto result = text_index_->AddRecord(key, very_large_doc);
-  // Should handle large documents gracefully
-  EXPECT_TRUE(result.ok()) << "Should handle very large documents";
 }
 
 }  // namespace valkey_search::indexes

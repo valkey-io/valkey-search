@@ -16,13 +16,13 @@
 
 namespace valkey_search::indexes::text {
 
-using PunctuationBitmap = std::bitset<256>;
-
 namespace {
 
 bool IsWhitespace(unsigned char c) {
   return std::isspace(c) || std::iscntrl(c);
 }
+
+using PunctuationBitmap = std::bitset<256>;
 
 PunctuationBitmap BuildPunctuationBitmap(const std::string& punctuation) {
   PunctuationBitmap bitmap;

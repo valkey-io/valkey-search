@@ -452,6 +452,11 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                              std::move(attribute_data_itr.second.data),
                              attribute_data_itr.second.deletion_type);
   }
+  if (text_index_schema_) {
+    // Text index structures operate at the schmema-level so we commit the
+    // updates to all Text attributes in one operation for efficiency
+    text_index_schema_->CommitKeyData(key);
+  }
 }
 
 void IndexSchema::ProcessAttributeMutation(

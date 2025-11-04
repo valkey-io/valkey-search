@@ -28,7 +28,10 @@ struct sb_stemmer;
 
 namespace valkey_search::indexes::text {
 
-// Forward declaration
+// token -> (PositionMap, suffix support)
+using TokenPositions =
+    absl::flat_hash_map<std::string, std::pair<PositionMap, bool>>;
+
 class TextIndexSchema;
 
 // Function to get current TextIndexSchema for accessing metadata
@@ -47,8 +50,6 @@ struct TextIndexMetadata {
 };
 
 struct TextIndex {
-  TextIndex() = default;
-  ~TextIndex() = default;
   //
   // The main query data structure maps Words into Postings objects. This
   // is always done with a prefix tree. Optionally, a suffix tree can also be
@@ -62,9 +63,6 @@ struct TextIndex {
   //
   RadixTree<std::shared_ptr<Postings>, false> prefix_;
   std::optional<RadixTree<std::shared_ptr<Postings>, true>> suffix_;
-
-  // TODO: develop a proper TextIndex locking scheme
-  std::mutex mutex_;
 };
 
 class TextIndexSchema {
@@ -73,10 +71,11 @@ class TextIndexSchema {
                   bool with_offsets,
                   const std::vector<std::string>& stop_words);
 
-  absl::StatusOr<bool> IndexAttributeData(const InternedStringPtr& key,
+  absl::StatusOr<bool> StageAttributeData(const InternedStringPtr& key,
                                           absl::string_view data,
                                           size_t text_field_number, bool stem,
                                           size_t min_stem_size, bool suffix);
+  void CommitKeyData(const InternedStringPtr& key);
   void DeleteKeyData(const InternedStringPtr& key);
 
   uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }
@@ -86,7 +85,6 @@ class TextIndexSchema {
 
   // Access to metadata for memory pool usage
   TextIndexMetadata& GetMetadata() { return metadata_; }
-  const TextIndexMetadata& GetMetadata() const { return metadata_; }
 
  private:
   uint8_t num_text_fields_ = 0;
@@ -99,6 +97,10 @@ class TextIndexSchema {
   //
   std::shared_ptr<TextIndex> text_index_ = std::make_shared<TextIndex>();
 
+  // Prevent concurrent mutations to schema-level text index
+  // TODO: develop a finer-grained TextIndex locking scheme
+  std::mutex text_index_mutex_;
+
   //
   // To support the Delete record and the post-filtering case, there is a
   // separate table of postings that are indexed by Key.
@@ -108,10 +110,19 @@ class TextIndexSchema {
   //
   absl::node_hash_map<Key, TextIndex> per_key_text_indexes_;
 
+  // Prevent concurrent mutations to per-key text index map
+  std::mutex per_key_text_indexes_mutex_;
+
   Lexer lexer_;
 
-  // Prevent concurrent mutations to per_key_text_indexes_
-  std::mutex per_key_text_indexes_mutex_;
+  // Key updates are fanned out to each attribute's IndexBase object. Since text
+  // indexing operates at the schema-level, any new text data to insert for a
+  // key is accumulated across all attributes here and committed into the text
+  // index structures at the end for efficiency.
+  absl::node_hash_map<Key, TokenPositions> in_progress_key_updates_;
+
+  // Prevent concurrent mutations to in-progress key updates map
+  std::mutex in_progress_key_updates_mutex_;
 
   // Whether to store position offsets for phrase queries
   bool with_offsets_ = false;

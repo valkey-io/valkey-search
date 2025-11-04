@@ -145,7 +145,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
   absl::node_hash_map<Key, TextIndex>::node_type node;
   {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
-    auto node = per_key_text_indexes_.extract(key);
+    node = per_key_text_indexes_.extract(key);
     if (node.empty()) {
       return;
     }

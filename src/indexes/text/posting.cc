@@ -177,13 +177,27 @@ class Postings::Impl {
       : save_positions_(save_positions), num_text_fields_(num_text_fields) {}
 };
 
-Postings::Postings(bool save_positions, size_t num_text_fields)
-    : impl_(std::make_unique<Impl>(save_positions, num_text_fields)) {
+Postings::Postings(bool save_positions, size_t num_text_fields) {
+  NestedMemoryScope scope{
+      GetTextIndexSchema()->GetMetadata().posting_memory_pool_};
+  impl_ = std::make_unique<Impl>(save_positions, num_text_fields);
   CHECK(impl_ != nullptr) << "Failed to create Postings implementation";
 }
 
-// Automatic cleanup via unique_ptr
-Postings::~Postings() = default;
+// Destructor with proper memory tracking and cleanup
+Postings::~Postings() {
+  // Track only Postings-specific memory
+  NestedMemoryScope scope{
+      GetTextIndexSchema()->GetMetadata().posting_memory_pool_};
+
+  // Explicit cleanup of the implementation
+  if (impl_) {
+    // Clear all key-to-position mappings to ensure proper cleanup
+    // This will trigger destructors for all FieldMask objects
+    impl_->key_to_positions_.clear();
+    impl_.reset();
+  }
+}
 
 // Check if posting list contains any documents
 bool Postings::IsEmpty() const { return impl_->key_to_positions_.empty(); }
@@ -191,6 +205,9 @@ bool Postings::IsEmpty() const { return impl_->key_to_positions_.empty(); }
 // Insert a posting entry for a key and field
 void Postings::InsertPosting(const Key& key, size_t field_index,
                              Position position) {
+  NestedMemoryScope scope{
+      GetTextIndexSchema()->GetMetadata().posting_memory_pool_};
+
   CHECK(field_index < impl_->num_text_fields_) << "Field index out of range";
 
   Position effective_position;
@@ -218,11 +235,34 @@ void Postings::InsertPosting(const Key& key, size_t field_index,
     auto field_mask = FieldMask::Create(impl_->num_text_fields_);
     field_mask->SetField(field_index);
     pos_map[effective_position] = std::move(field_mask);
+
+    auto& metadata = GetTextIndexSchema()->GetMetadata();
+    metadata.total_positions++;
   }
 }
 
 // Remove a document key and all its positions
 void Postings::RemoveKey(const Key& key) {
+  NestedMemoryScope scope{
+      GetTextIndexSchema()->GetMetadata().posting_memory_pool_};
+
+  // TODO: Naively decrementing total term frequency,  can be made more
+  // efficient by adding total term frequency count for each position map with
+  // optimized position map implementation
+  auto it = impl_->key_to_positions_.find(key);
+  if (it != impl_->key_to_positions_.end()) {
+    uint64_t positions_to_remove = it->second.size();
+    uint64_t term_freq_to_remove = 0;
+
+    for (const auto& [position, field_mask] : it->second) {
+      term_freq_to_remove += field_mask->CountSetFields();
+    }
+
+    auto& metadata = GetTextIndexSchema()->GetMetadata();
+    metadata.total_positions -= positions_to_remove;
+    metadata.total_term_frequency -= term_freq_to_remove;
+  }
+
   impl_->key_to_positions_.erase(key);
 }
 
@@ -230,7 +270,7 @@ void Postings::RemoveKey(const Key& key) {
 size_t Postings::GetKeyCount() const { return impl_->key_to_positions_.size(); }
 
 // Get total number of position entries across all keys
-size_t Postings::GetPostingCount() const {
+size_t Postings::GetPositionCount() const {
   size_t total = 0;
   for (const auto& [key, positions] : impl_->key_to_positions_) {
     total += positions.size();

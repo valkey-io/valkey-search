@@ -98,8 +98,8 @@ struct Postings {
   // Total number of keys
   size_t GetKeyCount() const;
 
-  // Total number of postings for all keys
-  size_t GetPostingCount() const;
+  // Total number of positions for all keys
+  size_t GetPositionCount() const;
 
   // Total frequency of the term across all keys and positions
   size_t GetTotalTermFrequency() const;

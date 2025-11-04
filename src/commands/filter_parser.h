@@ -24,6 +24,7 @@ namespace valkey_search {
 namespace indexes {
 class Tag;
 }  // namespace indexes
+using FieldMaskPredicate = uint64_t;
 struct FilterParseResults {
   std::unique_ptr<query::Predicate> root_predicate;
   absl::flat_hash_set<std::string> filter_identifiers;
@@ -41,27 +42,21 @@ class FilterParser {
   size_t node_count_{0};
   absl::flat_hash_set<std::string> filter_identifiers_;
 
+  absl::StatusOr<bool> HandleBackslashEscape(const indexes::text::Lexer& lexer,
+                                             std::string& processed_content);
 
   struct TokenResult {
-    size_t end_pos;
     std::unique_ptr<query::TextPredicate> predicate;
     bool break_on_query_syntax;
   };
   // Add these two new function declarations in the private section:
   absl::StatusOr<TokenResult> ParseQuotedToken(
-        std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-        uint64_t field_mask, std::optional<uint32_t> min_stem_size);
+      std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
+      FieldMaskPredicate field_mask, std::optional<uint32_t> min_stem_size);
 
   absl::StatusOr<TokenResult> ParseUnquotedToken(
-        std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-        uint64_t field_mask, std::optional<uint32_t> min_stem_size);
-
-
-
-  absl::StatusOr<TokenResult> ParseTokenAndBuildPredicate(
-      bool in_quotes,
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-      uint64_t field_mask, std::optional<uint32_t> min_stem_size);
+      FieldMaskPredicate field_mask, std::optional<uint32_t> min_stem_size);
   absl::StatusOr<std::unique_ptr<query::Predicate>> ParseTextTokens(
       const std::optional<std::string>& field_for_default);
   absl::StatusOr<bool> IsMatchAllExpression();

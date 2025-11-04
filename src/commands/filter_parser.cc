@@ -450,9 +450,12 @@ static const uint32_t FUZZY_MAX_DISTANCE = 3;
 
 // // Parses a single text predicate (one of either term, fuzzy, suffix, prefix,
 // // infix). Includes the behavior for parsing while inquotes vs not inquotes.
-// // Additionally, has punctuation handling for tokenization which can be escaped
-// // by users. Returns back to caller site upon reaching the end of one token and
-// // builds the predicate. Note: This can return early without a parsed predicate
+// // Additionally, has punctuation handling for tokenization which can be
+// escaped
+// // by users. Returns back to caller site upon reaching the end of one token
+// and
+// // builds the predicate. Note: This can return early without a parsed
+// predicate
 // // if there was only punctuation without any actual text content before
 // // encounting non text query syntax / the end of the expression.
 // absl::StatusOr<FilterParser::TokenResult>
@@ -510,7 +513,8 @@ static const uint32_t FUZZY_MAX_DISTANCE = 3;
 //       break_on_query_syntax = true;
 //       break;
 //     }
-//     // - characters in the middle of text tokens are not negate. If they are in
+//     // - characters in the middle of text tokens are not negate. If they are
+//     in
 //     // the beginning, break.
 //     if (!in_quotes && ch == '-' && processed_content.empty()) {
 //       break_on_query_syntax = true;
@@ -518,7 +522,8 @@ static const uint32_t FUZZY_MAX_DISTANCE = 3;
 //     }
 //     // Break to complete an exact phrase or start a new exact phrase.
 //     if (ch == '"') break;
-//     // Break on all punctuation characters, except text query syntax chars such
+//     // Break on all punctuation characters, except text query syntax chars
+//     such
 //     // as % and * for non quote cases.
 //     if ((!in_quotes && ch != '%' && ch != '*' || in_quotes) &&
 //         lexer.IsPunctuation(ch))
@@ -573,7 +578,8 @@ static const uint32_t FUZZY_MAX_DISTANCE = 3;
 //       }
 //       return FilterParser::TokenResult{
 //           current_pos,
-//           std::make_unique<query::FuzzyPredicate>(text_index_schema, field_mask,
+//           std::make_unique<query::FuzzyPredicate>(text_index_schema,
+//           field_mask,
 //                                                   std::move(token),
 //                                                   leading_percent_count),
 //           break_on_query_syntax};
@@ -590,7 +596,8 @@ static const uint32_t FUZZY_MAX_DISTANCE = 3;
 //     if (ends_with_star) {
 //       return FilterParser::TokenResult{
 //           current_pos,
-//           std::make_unique<query::InfixPredicate>(text_index_schema, field_mask,
+//           std::make_unique<query::InfixPredicate>(text_index_schema,
+//           field_mask,
 //                                                   std::move(token)),
 //           break_on_query_syntax};
 //     } else {
@@ -606,7 +613,8 @@ static const uint32_t FUZZY_MAX_DISTANCE = 3;
 //     }
 //     return FilterParser::TokenResult{
 //         current_pos,
-//         std::make_unique<query::PrefixPredicate>(text_index_schema, field_mask,
+//         std::make_unique<query::PrefixPredicate>(text_index_schema,
+//         field_mask,
 //                                                  std::move(token)),
 //         break_on_query_syntax};
 //   } else {
@@ -621,7 +629,8 @@ static const uint32_t FUZZY_MAX_DISTANCE = 3;
 //           break_on_query_syntax};  // Skip stop words and empty words.
 //     }
 //     if (min_stem_size.has_value()) {
-//       token = lexer.StemWord(token, !exact, *min_stem_size, lexer.GetStemmer());
+//       token = lexer.StemWord(token, !exact, *min_stem_size,
+//       lexer.GetStemmer());
 //     }
 //     return FilterParser::TokenResult{
 //         current_pos,
@@ -631,66 +640,57 @@ static const uint32_t FUZZY_MAX_DISTANCE = 3;
 //   }
 // }
 
-absl::StatusOr<FilterParser::TokenResult>
-FilterParser::ParseQuotedToken(
+absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
+    const indexes::text::Lexer& lexer, std::string& processed_content) {
+  if (!Match('\\', false)) {
+    // No backslash, continue normal processing of the same token.
+    return true;
+  }
+  if (!IsEnd()) {
+    char next_ch = Peek();
+    if (next_ch == '\\' || lexer.IsPunctuation(next_ch)) {
+      // If Double backslash, retain the double backslash
+      // If Single backslash with punct on right, retain the char on right
+      processed_content.push_back(next_ch);
+      ++pos_;
+      // Continue parsing the same token.
+      return true;
+    } else {
+      // Single backslash with non-punct on right, consume the backslash and
+      // break into a new token.
+      return false;
+    }
+  } else {
+    // Unescaped backslash at end of input is invalid.
+    return absl::InvalidArgumentError(
+        "Invalid escape sequence: backslash at end of input");
+  }
+}
+
+absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    uint64_t field_mask, std::optional<uint32_t> min_stem_size) {
+    FieldMaskPredicate field_mask, std::optional<uint32_t> min_stem_size) {
   const auto& lexer = text_index_schema->GetLexer();
-  size_t current_pos = pos_;
   size_t backslash_count = 0;
   std::string processed_content;
-  while (current_pos < expression_.size()) {
-    char ch = expression_[current_pos];
-    // if (ch == '\\') {
-    //   backslash_count++;
-    //   ++current_pos;
-    //   continue;
-    // }
-    // if (backslash_count > 0) {
-    //   if (backslash_count % 2 == 0 || !lexer.IsPunctuation(ch)) {
-    //     processed_content.push_back('\\');
-    //     backslash_count = 0;
-    //   } else {
-    //     processed_content.push_back(ch);
-    //     ++current_pos;
-    //     backslash_count = 0;
-    //     continue;
-    //   }
-    // }
-    if (ch == '\\') {
-      if (current_pos + 1 < expression_.size()) {
-        char next_ch = expression_[current_pos + 1];
-        if (next_ch == '\\') {
-          // Double backslash, keep double backslash
-          processed_content.push_back('\\');
-          current_pos += 2;
-          continue;
-        } else if (lexer.IsPunctuation(next_ch)) {
-          // Single backslash with punct on right, escape char on right
-          processed_content.push_back(next_ch);
-          current_pos += 2;
-          continue;
-        } else {
-          // Single backslash with non-punct on right, consume it and break
-          ++current_pos;
-          break;
-        }
-      } else {
-        return absl::InvalidArgumentError("Invalid escape sequence: backslash at end of input");
-      }
+  while (!IsEnd()) {
+    VMSDK_ASSIGN_OR_RETURN(bool should_continue,
+                           HandleBackslashEscape(lexer, processed_content));
+    if (!should_continue) {
+      break;
     }
     // Break to complete an exact phrase or start a new exact phrase.
+    char ch = Peek();
     if (ch == '"') break;
     if (lexer.IsPunctuation(ch)) break;
     processed_content.push_back(ch);
-    ++current_pos;
+    ++pos_;
   }
   std::string token = absl::AsciiStrToLower(processed_content);
   if (token.empty()) {
-    return FilterParser::TokenResult{current_pos, nullptr, false};
+    return FilterParser::TokenResult{nullptr, false};
   }
   return FilterParser::TokenResult{
-      current_pos,
       std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
                                              std::move(token), true),
       false};
@@ -700,62 +700,24 @@ FilterParser::ParseQuotedToken(
 // If single with punct on right, escape char on right.
 // If single with non-punct on right, consume it and break.
 // If double backslash, keep double backslash.
-absl::StatusOr<FilterParser::TokenResult>
-FilterParser::ParseUnquotedToken(
+// If final backslash (nothing to the right), return error.
+absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    uint64_t field_mask, std::optional<uint32_t> min_stem_size) {
+    FieldMaskPredicate field_mask, std::optional<uint32_t> min_stem_size) {
   const auto& lexer = text_index_schema->GetLexer();
-  size_t current_pos = pos_;
-  size_t backslash_count = 0;
   std::string processed_content;
   bool starts_with_star = false;
   bool ends_with_star = false;
   size_t leading_percent_count = 0;
   size_t trailing_percent_count = 0;
   bool break_on_query_syntax = false;
-  while (current_pos < expression_.size()) {
-    char ch = expression_[current_pos];
-    // if (ch == '\\') {
-    //   backslash_count++;
-    //   ++current_pos;
-    //   continue;
-    // }
-    // if (backslash_count > 0) {
-    //   if (backslash_count % 2 == 0) {
-    //     processed_content.push_back('\\');
-    //     backslash_count = 0;
-    //   } else if (!lexer.IsPunctuation(ch)) {
-    //     if (backslash_count > 1) processed_content.push_back('\\');
-    //     break;
-    //   } else {
-    //     processed_content.push_back(ch);
-    //     ++current_pos;
-    //     backslash_count = 0;
-    //     continue;
-    //   }
-    // }
-    if (ch == '\\') {
-      if (current_pos + 1 < expression_.size()) {
-        char next_ch = expression_[current_pos + 1];
-        if (next_ch == '\\') {
-          // Double backslash, keep double backslash
-          processed_content.push_back('\\');
-          current_pos += 2;
-          continue;
-        } else if (lexer.IsPunctuation(next_ch)) {
-          // Single backslash with punct on right, escape char on right
-          processed_content.push_back(next_ch);
-          current_pos += 2;
-          continue;
-        } else {
-          // Single backslash with non-punct on right, consume it and break
-          ++current_pos;
-          break;
-        }
-      } else {
-        return absl::InvalidArgumentError("Invalid escape sequence: backslash at end of input");
-      }
+  while (!IsEnd()) {
+    VMSDK_ASSIGN_OR_RETURN(bool should_continue,
+                           HandleBackslashEscape(lexer, processed_content));
+    if (!should_continue) {
+      break;
     }
+    char ch = Peek();
     // Break on non text specific query syntax characters.
     if (ch == ')' || ch == '|' || ch == '(' || ch == '@') {
       break_on_query_syntax = true;
@@ -769,81 +731,80 @@ FilterParser::ParseUnquotedToken(
     }
     // Break to complete an exact phrase or start a new exact phrase.
     if (ch == '"') break;
-    // Break on all punctuation characters, except text query syntax chars such
-    // as % and * for non quote cases.
-    if (ch != '%' && ch != '*' && lexer.IsPunctuation(ch)) break;
     // Handle fuzzy token boundary detection
     if (ch == '%') {
-      if (current_pos == pos_) {
+      if (processed_content.empty()) {
         // Leading percent
-        while (current_pos < expression_.size() && expression_[current_pos] == '%') {
+        while (Match('%', false)) {
           leading_percent_count++;
-          current_pos++;
           if (leading_percent_count > FUZZY_MAX_DISTANCE) break;
         }
         continue;
       } else {
-        // If there was no starting percent, we break.
-        // Trailing percent - count them
-        while (current_pos < expression_.size() && expression_[current_pos] == '%' &&
-               trailing_percent_count < leading_percent_count) {
+        // If there was no leading percent, we break.
+        // Else, we keep consuming trailing percent (to match the leading count)
+        // - count them
+        while (trailing_percent_count < leading_percent_count &&
+               Match('%', false)) {
           trailing_percent_count++;
-          current_pos++;
         }
         break;
       }
     }
     // Handle wildcard token boundary detection
-    if (ch == '*') {
-      if (current_pos == pos_) {
+    if (Match('*', false)) {
+      if (processed_content.empty() && !starts_with_star) {
         starts_with_star = true;
-        current_pos++;
         continue;
       } else {
         // Trailing star
         ends_with_star = true;
-        current_pos++;
         break;
       }
     }
+    // Break on all punctuation characters.
+    if (lexer.IsPunctuation(ch)) break;
     // Regular character
     processed_content.push_back(ch);
-    ++current_pos;
+    ++pos_;
   }
   std::string token = absl::AsciiStrToLower(processed_content);
   // Build predicate directly based on detected pattern
   if (leading_percent_count > 0) {
-    if (trailing_percent_count == leading_percent_count && leading_percent_count <= FUZZY_MAX_DISTANCE) {
+    if (trailing_percent_count == leading_percent_count &&
+        leading_percent_count <= FUZZY_MAX_DISTANCE) {
       if (token.empty()) return absl::InvalidArgumentError("Empty fuzzy token");
       return FilterParser::TokenResult{
-          current_pos,
           std::make_unique<query::FuzzyPredicate>(text_index_schema, field_mask,
-                                                  std::move(token), leading_percent_count),
+                                                  std::move(token),
+                                                  leading_percent_count),
           break_on_query_syntax};
     } else {
       return absl::InvalidArgumentError("Invalid fuzzy '%' markers");
     }
   } else if (starts_with_star) {
-    if (token.empty()) return absl::InvalidArgumentError("Invalid wildcard '*' markers");
+    if (token.empty())
+      return absl::InvalidArgumentError("Invalid wildcard '*' markers");
     if (!text_index_schema->GetTextIndex()->suffix_.has_value()) {
       return absl::InvalidArgumentError("Index created without Suffix Trie");
     }
     if (ends_with_star) {
       return FilterParser::TokenResult{
-          current_pos,
-          std::make_unique<query::InfixPredicate>(text_index_schema, field_mask, std::move(token)),
+          std::make_unique<query::InfixPredicate>(text_index_schema, field_mask,
+                                                  std::move(token)),
           break_on_query_syntax};
     } else {
       return FilterParser::TokenResult{
-          current_pos,
-          std::make_unique<query::SuffixPredicate>(text_index_schema, field_mask, std::move(token)),
+          std::make_unique<query::SuffixPredicate>(
+              text_index_schema, field_mask, std::move(token)),
           break_on_query_syntax};
     }
   } else if (ends_with_star) {
-    if (token.empty()) return absl::InvalidArgumentError("Invalid wildcard '*' markers");
+    if (token.empty())
+      return absl::InvalidArgumentError("Invalid wildcard '*' markers");
     return FilterParser::TokenResult{
-        current_pos,
-        std::make_unique<query::PrefixPredicate>(text_index_schema, field_mask, std::move(token)),
+        std::make_unique<query::PrefixPredicate>(text_index_schema, field_mask,
+                                                 std::move(token)),
         break_on_query_syntax};
   } else {
     // Term predicate handling:
@@ -851,27 +812,17 @@ FilterParser::ParseUnquotedToken(
     bool exact = false;
     if (lexer.IsStopWord(token) || token.empty()) {
       // Skip stop words and empty words.
-      return FilterParser::TokenResult{current_pos, nullptr, break_on_query_syntax};
+      return FilterParser::TokenResult{nullptr, break_on_query_syntax};
     }
     if (min_stem_size.has_value()) {
       token = lexer.StemWord(token, !exact, *min_stem_size, lexer.GetStemmer());
     }
     return FilterParser::TokenResult{
-        current_pos,
-        std::make_unique<query::TermPredicate>(text_index_schema, field_mask, std::move(token), exact),
+        std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
+                                               std::move(token), exact),
         break_on_query_syntax};
   }
 }
-
-absl::StatusOr<FilterParser::TokenResult>
-FilterParser::ParseTokenAndBuildPredicate(
-    bool in_quotes,
-    std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    uint64_t field_mask, std::optional<uint32_t> min_stem_size) {
-  return in_quotes ? ParseQuotedToken(text_index_schema, field_mask, min_stem_size)
-                   : ParseUnquotedToken(text_index_schema, field_mask, min_stem_size);
-}
-
 
 // This function is called when the characters detected are potentially those of
 // a text predicate. It can parse an exact phrase, or simply multiple text
@@ -887,7 +838,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     return absl::InvalidArgumentError("Index does not have any text field");
   }
   std::vector<std::unique_ptr<query::TextPredicate>> terms;
-  uint64_t field_mask;
+  FieldMaskPredicate field_mask;
   std::optional<uint32_t> min_stem_size = std::nullopt;
   // Handle default / every field (no field specifier) and specific
   // field query cases.
@@ -933,8 +884,10 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     }
     size_t token_start = pos_;
     VMSDK_ASSIGN_OR_RETURN(
-        auto result, ParseTokenAndBuildPredicate(in_quotes, text_index_schema,
-                                                 field_mask, min_stem_size));
+        auto result,
+        in_quotes
+            ? ParseQuotedToken(text_index_schema, field_mask, min_stem_size)
+            : ParseUnquotedToken(text_index_schema, field_mask, min_stem_size));
     if (result.predicate) {
       terms.push_back(std::move(result.predicate));
     }
@@ -943,11 +896,9 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     }
     // If this happens, we are either done (at the end of the prefilter string)
     // or were on a punctuation character which should be consumed.
-    if (token_start == result.end_pos) {
+    if (token_start == pos_) {
       ++pos_;
-      continue;
     }
-    pos_ = result.end_pos;
   }
   std::unique_ptr<query::Predicate> pred;
   if (terms.size() > 1) {

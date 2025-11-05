@@ -137,7 +137,7 @@ class ClusterMap {
   // 1: slot is owned by this cluster, 0: slot is not owned by this cluster
   std::bitset<k_num_slots> owned_slots_;
 
-  absl::flat_hash_map<std::string, ShardInfo> shards_;
+  absl::btree_map<std::string, ShardInfo> shards_;
 
   // An ordered map, key is start slot, value is end slot and ShardInfo
   absl::btree_map<uint16_t, std::pair<uint16_t, const ShardInfo*>>

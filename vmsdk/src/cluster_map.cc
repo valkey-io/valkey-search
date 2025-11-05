@@ -98,35 +98,11 @@ uint64_t ClusterMap::ComputeClusterFingerprint() {
   if (shards_.empty()) {
     return 0;
   }
-  // Collect and sort entries for deterministic ordering
-  struct ShardEntry {
-    uint64_t shard_id_hash;
-    uint64_t slots_fingerprint;
-  };
-  std::vector<ShardEntry> shard_entries;
-  shard_entries.reserve(shards_.size());
-  for (const auto& [shard_id, shard] : shards_) {
-    // Hash the shard ID
-    uint64_t shard_id_hash;
-    highwayhash::HHStateT<HH_TARGET> state(kHashKey);
-    highwayhash::HighwayHashT(&state, shard_id.c_str(), shard_id.size(),
-                              &shard_id_hash);
-
-    shard_entries.push_back({.shard_id_hash = shard_id_hash,
-                             .slots_fingerprint = shard.slots_fingerprint});
-  }
-  // Sort for deterministic ordering
-  std::sort(shard_entries.begin(), shard_entries.end(),
-            [](const ShardEntry& a, const ShardEntry& b) {
-              return a.shard_id_hash < b.shard_id_hash;
-            });
-  // Hash the sorted entries incrementally
   highwayhash::HighwayHashCatT<HH_TARGET> hasher(kHashKey);
-  for (const auto& entry : shard_entries) {
-    hasher.Append(reinterpret_cast<const char*>(&entry.shard_id_hash),
-                  sizeof(entry.shard_id_hash));
-    hasher.Append(reinterpret_cast<const char*>(&entry.slots_fingerprint),
-                  sizeof(entry.slots_fingerprint));
+  for (const auto& [shard_id, shard] : shards_) {
+    hasher.Append(shard_id.c_str(), shard_id.size());
+    hasher.Append(reinterpret_cast<const char*>(&shard.slots_fingerprint),
+                  sizeof(shard.slots_fingerprint));
   }
   uint64_t fingerprint;
   hasher.Finalize(&fingerprint);
@@ -387,15 +363,6 @@ bool ClusterMap::ProcessSlotRange(ValkeyModuleCallReply* slot_range,
   slot_ranges.push_back(
       {static_cast<uint16_t>(start), static_cast<uint16_t>(end), shard_id});
 
-  // Fix shard pointers
-  if (is_new_shard) {
-    if (shard_it->second.primary.has_value()) {
-      shard_it->second.primary->shard = &(shard_it->second);
-    }
-    for (auto& replica : shard_it->second.replicas) {
-      replica.shard = &(shard_it->second);
-    }
-  }
   return true;
 }
 
@@ -470,6 +437,23 @@ std::shared_ptr<ClusterMap> ClusterMap::CreateNewClusterMap(
     };
   }
 
+  // fix shard pointers after finished inserting all shards into shards_ map
+  // inserting additional shards into shards_ map after this would cause
+  // rebalance of btree and invalidate pointers in shards_ map
+  for (auto& [shard_id, shard] : new_map->shards_) {
+    // Fix primary pointer
+    if (shard.primary.has_value()) {
+      shard.primary->shard = &shard;
+    }
+    // Fix replica pointers
+    for (auto& replica : shard.replicas) {
+      replica.shard = &shard;
+    }
+  }
+
+  // Build slot-to-shard map
+  new_map->BuildSlotToShardMap(slot_ranges);
+
   // Populate target lists
   for (auto& [shard_id, shard] : new_map->shards_) {
     if (shard.primary.has_value()) {
@@ -481,9 +465,6 @@ std::shared_ptr<ClusterMap> ClusterMap::CreateNewClusterMap(
       new_map->all_targets_.push_back(replica);
     }
   }
-
-  // Build slot-to-shard map
-  new_map->BuildSlotToShardMap(slot_ranges);
 
   // Check if cluster map is full
   new_map->is_consistent_ &= new_map->CheckClusterMapFull();

@@ -178,12 +178,10 @@ absl::StatusOr<size_t> FindCloseSquareBracket(absl::string_view input) {
 
 absl::StatusOr<FilterParseResults> ParsePreFilter(
     const IndexSchema &index_schema, absl::string_view pre_filter,
-  const query::SearchParameters& search_params) {
-  TextParsingOptions options{
-    .verbatim = search_params.verbatim,
-    .inorder = search_params.inorder,
-    .slop = search_params.slop
-  };
+    const query::SearchParameters &search_params) {
+  TextParsingOptions options{.verbatim = search_params.verbatim,
+                             .inorder = search_params.inorder,
+                             .slop = search_params.slop};
   FilterParser parser(index_schema, pre_filter, options);
   return parser.Parse();
 }

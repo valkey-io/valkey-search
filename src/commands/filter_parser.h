@@ -51,19 +51,20 @@ class FilterParser {
 
   absl::StatusOr<bool> HandleBackslashEscape(const indexes::text::Lexer& lexer,
                                              std::string& processed_content);
-
   struct TokenResult {
     std::unique_ptr<query::TextPredicate> predicate;
     bool break_on_query_syntax;
   };
-  // Add these two new function declarations in the private section:
-  absl::StatusOr<TokenResult> ParseQuotedToken(
+  absl::StatusOr<TokenResult> ParseQuotedTextToken(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       FieldMaskPredicate field_mask, std::optional<uint32_t> min_stem_size);
 
-  absl::StatusOr<TokenResult> ParseUnquotedToken(
+  absl::StatusOr<TokenResult> ParseUnquotedTextToken(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       FieldMaskPredicate field_mask, std::optional<uint32_t> min_stem_size);
+  absl::Status SetupTextFieldConfiguration(
+      FieldMaskPredicate& field_mask, std::optional<uint32_t>& min_stem_size,
+      const std::optional<std::string>& field_name = std::nullopt);
   absl::StatusOr<std::unique_ptr<query::Predicate>> ParseTextTokens(
       const std::optional<std::string>& field_for_default);
   absl::StatusOr<bool> IsMatchAllExpression();

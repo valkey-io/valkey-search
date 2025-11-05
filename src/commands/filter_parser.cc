@@ -642,6 +642,7 @@ static const uint32_t FUZZY_MAX_DISTANCE = 3;
 //   }
 // }
 
+// Handle backslashes inside text content.
 absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
     const indexes::text::Lexer& lexer, std::string& processed_content) {
   if (!Match('\\', false)) {
@@ -669,7 +670,7 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
   }
 }
 
-absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedToken(
+absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     FieldMaskPredicate field_mask, std::optional<uint32_t> min_stem_size) {
   const auto& lexer = text_index_schema->GetLexer();
@@ -698,12 +699,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedToken(
       false};
 }
 
-// Quote
-// If single with punct on right, escape char on right.
-// If single with non-punct on right, consume it and break.
-// If double backslash, keep double backslash.
-// If final backslash (nothing to the right), return error.
-absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedToken(
+absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     FieldMaskPredicate field_mask, std::optional<uint32_t> min_stem_size) {
   const auto& lexer = text_index_schema->GetLexer();
@@ -825,33 +821,17 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedToken(
   }
 }
 
-// This function is called when the characters detected are potentially those of
-// a text predicate. It can parse an exact phrase, or simply multiple text
-// tokens (without field specifiers) and will return the grouped result of those
-// predicates. Currently, this is Proximity and will be changed to the
-// ComposedAND.
-// When non text query syntax is detected (not escaped), it breaks out and
-// returns back to the caller site with the parsed predicate.
-absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
-    const std::optional<std::string>& field_for_default) {
-  auto text_index_schema = index_schema_.GetTextIndexSchema();
-  if (!text_index_schema) {
-    return absl::InvalidArgumentError("Index does not have any text field");
-  }
-  std::vector<std::unique_ptr<query::TextPredicate>> terms;
-  FieldMaskPredicate field_mask;
-  std::optional<uint32_t> min_stem_size = std::nullopt;
-  // Handle default / every field (no field specifier) and specific
-  // field query cases.
-  if (field_for_default.has_value()) {
-    auto index = index_schema_.GetIndex(field_for_default.value());
+absl::Status FilterParser::SetupTextFieldConfiguration(
+    FieldMaskPredicate& field_mask, std::optional<uint32_t>& min_stem_size,
+    const std::optional<std::string>& field_name) {
+  if (field_name.has_value()) {
+    auto index = index_schema_.GetIndex(*field_name);
     if (!index.ok() ||
         index.value()->GetIndexerType() != indexes::IndexerType::kText) {
       return absl::InvalidArgumentError("Index does not have any text field");
     }
     auto* text_index = dynamic_cast<const indexes::Text*>(index.value().get());
-    auto identifier =
-        index_schema_.GetIdentifier(field_for_default.value()).value();
+    auto identifier = index_schema_.GetIdentifier(*field_name).value();
     filter_identifiers_.insert(identifier);
     field_mask = 1ULL << text_index->GetTextFieldNumber();
     if (text_index->IsStemmingEnabled()) {
@@ -870,6 +850,29 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     // searched for.
     min_stem_size = index_schema_.MinStemSizeAcrossTextIndexes();
   }
+  return absl::OkStatus();
+}
+
+// This function is called when the characters detected are potentially those of
+// a text predicate. It can parse an exact phrase, or simply multiple text
+// tokens (without field specifiers) and will return the grouped result of those
+// predicates. Currently, this is Proximity and will be changed to the
+// ComposedAND.
+// When non text query syntax is detected (not escaped), it breaks out and
+// returns back to the caller site with the parsed predicate.
+absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
+    const std::optional<std::string>& field_or_default) {
+  auto text_index_schema = index_schema_.GetTextIndexSchema();
+  if (!text_index_schema) {
+    return absl::InvalidArgumentError("Index does not have any text field");
+  }
+  std::vector<std::unique_ptr<query::TextPredicate>> terms;
+  // Handle default / every field (no field specifier) and specific
+  // field query cases.
+  FieldMaskPredicate field_mask;
+  std::optional<uint32_t> min_stem_size = std::nullopt;
+  VMSDK_RETURN_IF_ERROR(
+      SetupTextFieldConfiguration(field_mask, min_stem_size, field_or_default));
   bool in_quotes = false;
   bool exact_phrase = false;
   while (!IsEnd()) {
@@ -887,8 +890,9 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     VMSDK_ASSIGN_OR_RETURN(
         auto result,
         in_quotes
-            ? ParseQuotedToken(text_index_schema, field_mask, min_stem_size)
-            : ParseUnquotedToken(text_index_schema, field_mask, min_stem_size));
+            ? ParseQuotedTextToken(text_index_schema, field_mask, min_stem_size)
+            : ParseUnquotedTextToken(text_index_schema, field_mask,
+                                     min_stem_size));
     if (result.predicate) {
       terms.push_back(std::move(result.predicate));
     }

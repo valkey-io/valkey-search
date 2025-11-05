@@ -57,23 +57,23 @@ const ShardInfo* ClusterMap::GetShardBySlot(uint16_t slot) const {
   return nullptr;
 }
 
-// generate a random targets vector with one node from each shard
 std::vector<NodeInfo> ClusterMap::GetRandomTargets() {
   std::vector<NodeInfo> random_targets;
+  random_targets.reserve(shards_.size());
   absl::BitGen gen;
   for (const auto& [shard_id, shard_info] : shards_) {
-    // Collect all nodes in this shard (primary + replicas)
-    std::vector<NodeInfo> shard_nodes;
+    // Count total nodes in this shard
+    size_t node_count = shard_info.replicas.size();
     if (shard_info.primary.has_value()) {
-      shard_nodes.push_back(shard_info.primary.value());
+      node_count++;
     }
-    for (const auto& replica : shard_info.replicas) {
-      shard_nodes.push_back(replica);
-    }
-    // Randomly select one node from this shard
-    if (!shard_nodes.empty()) {
-      size_t index = absl::Uniform(gen, 0u, shard_nodes.size());
-      random_targets.push_back(shard_nodes[index]);
+    CHECK(node_count > 0);
+    size_t index = absl::Uniform(gen, 0u, node_count);
+    if (shard_info.primary.has_value() && index == 0) {
+      random_targets.push_back(shard_info.primary.value());
+    } else {
+      size_t replica_index = shard_info.primary.has_value() ? index - 1 : index;
+      random_targets.push_back(shard_info.replicas[replica_index]);
     }
   }
   return random_targets;
@@ -81,23 +81,15 @@ std::vector<NodeInfo> ClusterMap::GetRandomTargets() {
 
 // For shard fingerprint - hash the slot ranges
 uint64_t ClusterMap::ComputeShardFingerprint(
-    const std::map<uint16_t, uint16_t>& slot_ranges) {
-  if (slot_ranges.empty()) {
-    return 0;
-  }
-
-  // Convert map to vector for contiguous memory
-  std::vector<std::pair<uint16_t, uint16_t>> ranges_vec;
-  ranges_vec.reserve(slot_ranges.size());
+    const absl::btree_map<uint16_t, uint16_t>& slot_ranges) {
+  CHECK(!slot_ranges.empty());
+  highwayhash::HighwayHashCatT<HH_TARGET> hasher(kHashKey);
   for (const auto& [start, end] : slot_ranges) {
-    ranges_vec.push_back({start, end});
+    std::pair<uint16_t, uint16_t> range = {start, end};
+    hasher.Append(reinterpret_cast<const char*>(&range), sizeof(range));
   }
-
   uint64_t fingerprint;
-  highwayhash::HHStateT<HH_TARGET> state(kHashKey);
-  highwayhash::HighwayHashT(
-      &state, reinterpret_cast<const char*>(ranges_vec.data()),
-      ranges_vec.size() * sizeof(std::pair<uint16_t, uint16_t>), &fingerprint);
+  hasher.Finalize(&fingerprint);
   return fingerprint;
 }
 
@@ -106,15 +98,13 @@ uint64_t ClusterMap::ComputeClusterFingerprint() {
   if (shards_.empty()) {
     return 0;
   }
-
-  // Create a sorted vector for deterministic ordering
+  // Collect and sort entries for deterministic ordering
   struct ShardEntry {
     uint64_t shard_id_hash;
     uint64_t slots_fingerprint;
   };
   std::vector<ShardEntry> shard_entries;
   shard_entries.reserve(shards_.size());
-
   for (const auto& [shard_id, shard] : shards_) {
     // Hash the shard ID
     uint64_t shard_id_hash;
@@ -125,29 +115,56 @@ uint64_t ClusterMap::ComputeClusterFingerprint() {
     shard_entries.push_back({.shard_id_hash = shard_id_hash,
                              .slots_fingerprint = shard.slots_fingerprint});
   }
-
   // Sort for deterministic ordering
   std::sort(shard_entries.begin(), shard_entries.end(),
             [](const ShardEntry& a, const ShardEntry& b) {
               return a.shard_id_hash < b.shard_id_hash;
             });
-
-  // Hash the sorted entries
+  // Hash the sorted entries incrementally
+  highwayhash::HighwayHashCatT<HH_TARGET> hasher(kHashKey);
+  for (const auto& entry : shard_entries) {
+    hasher.Append(reinterpret_cast<const char*>(&entry.shard_id_hash),
+                  sizeof(entry.shard_id_hash));
+    hasher.Append(reinterpret_cast<const char*>(&entry.slots_fingerprint),
+                  sizeof(entry.slots_fingerprint));
+  }
   uint64_t fingerprint;
-  highwayhash::HHStateT<HH_TARGET> state(kHashKey);
-  highwayhash::HighwayHashT(
-      &state, reinterpret_cast<const char*>(shard_entries.data()),
-      shard_entries.size() * sizeof(ShardEntry), &fingerprint);
+  hasher.Finalize(&fingerprint);
   return fingerprint;
 }
 
 // Helper function to parse node info from CLUSTER SLOTS reply
-NodeInfo ClusterMap::ParseNodeInfo(ValkeyModuleCallReply* node_arr,
-                                   bool is_local_shard, bool is_primary) {
+std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
+    ValkeyModuleCallReply* node_arr, bool is_local_shard, bool is_primary) {
   CHECK(node_arr) << VALKEY_MODULE_CALL_ERROR_MSG;
   // each node array should have exactly 4 elements
   CHECK(ValkeyModule_CallReplyLength(node_arr) == 4)
       << VALKEY_MODULE_CALL_ERROR_MSG;
+
+  // Get primary endpoint
+  ValkeyModuleCallReply* primary_endpoint_reply =
+      ValkeyModule_CallReplyArrayElement(node_arr, 0);
+  if (!primary_endpoint_reply) {
+    VMSDK_LOG(WARNING, nullptr) << "Invalid node primary endpoint";
+    return std::nullopt;
+  }
+
+  size_t node_primary_endpoint_len;
+  const char* node_primary_endpoint_char = ValkeyModule_CallReplyStringPtr(
+      primary_endpoint_reply, &node_primary_endpoint_len);
+
+  // Check for invalid endpoint (nullptr, empty, or "?")
+  if (!node_primary_endpoint_char || node_primary_endpoint_len == 0 ||
+      (node_primary_endpoint_len == 1 &&
+       node_primary_endpoint_char[0] == '?')) {
+    VMSDK_LOG(WARNING, nullptr) << "Invalid node primary endpoint";
+    return std::nullopt;
+  }
+
+  // Get port
+  long long node_port = ValkeyModule_CallReplyInteger(
+      ValkeyModule_CallReplyArrayElement(node_arr, 1));
+  CHECK(node_port) << VALKEY_MODULE_CALL_ERROR_MSG;
 
   // Get node ID
   size_t node_id_len;
@@ -155,89 +172,70 @@ NodeInfo ClusterMap::ParseNodeInfo(ValkeyModuleCallReply* node_arr,
       ValkeyModule_CallReplyArrayElement(node_arr, 2), &node_id_len);
   CHECK(node_id_char) << VALKEY_MODULE_CALL_ERROR_MSG;
 
-  // Get IP
-  size_t node_ip_len;
-  const char* node_ip_char = ValkeyModule_CallReplyStringPtr(
-      ValkeyModule_CallReplyArrayElement(node_arr, 0), &node_ip_len);
-  CHECK(node_ip_char) << VALKEY_MODULE_CALL_ERROR_MSG;
-
-  // Get port
-  long long node_port = ValkeyModule_CallReplyInteger(
-      ValkeyModule_CallReplyArrayElement(node_arr, 1));
-  CHECK(node_port) << VALKEY_MODULE_CALL_ERROR_MSG;
-
   // Get additional network metadata
   // Depending on the client RESP protocol version, the additional network
   // metadata might be a map(RESP3), or a flattened array(RESP2)
-  std::unordered_map<std::string, std::string> additional_network_metadata;
+  absl::flat_hash_map<std::string, std::string> additional_network_metadata;
   auto reply_metadata = ValkeyModule_CallReplyArrayElement(node_arr, 3);
   CHECK(reply_metadata) << VALKEY_MODULE_CALL_ERROR_MSG;
-  CHECK(ValkeyModule_CallReplyType(reply_metadata) == VALKEYMODULE_REPLY_MAP ||
-        ValkeyModule_CallReplyType(reply_metadata) == VALKEYMODULE_REPLY_ARRAY)
-      << VALKEY_MODULE_CALL_ERROR_MSG;
-  if (ValkeyModule_CallReplyType(reply_metadata) == VALKEYMODULE_REPLY_MAP) {
-    ValkeyModuleCallReply* map_key;
-    ValkeyModuleCallReply* map_val;
-    int idx = 0;
-    while (ValkeyModule_CallReplyMapElement(reply_metadata, idx, &map_key,
-                                            &map_val) == VALKEYMODULE_OK) {
-      size_t key_len = 0;
-      const char* key_str = ValkeyModule_CallReplyStringPtr(map_key, &key_len);
-      size_t val_len;
-      const char* val_str = ValkeyModule_CallReplyStringPtr(map_val, &val_len);
-      additional_network_metadata[std::string(key_str, key_len)] =
-          std::string(val_str, val_len);
-      idx++;
+
+  auto insert_metadata = [&additional_network_metadata](
+                             ValkeyModuleCallReply* key_reply,
+                             ValkeyModuleCallReply* val_reply) {
+    size_t key_len;
+    const char* key_str = ValkeyModule_CallReplyStringPtr(key_reply, &key_len);
+    size_t val_len;
+    const char* val_str = ValkeyModule_CallReplyStringPtr(val_reply, &val_len);
+    additional_network_metadata[std::string(key_str, key_len)] =
+        std::string(val_str, val_len);
+  };
+
+  switch (ValkeyModule_CallReplyType(reply_metadata)) {
+    case VALKEYMODULE_REPLY_MAP: {
+      ValkeyModuleCallReply* map_key;
+      ValkeyModuleCallReply* map_val;
+      int idx = 0;
+      while (ValkeyModule_CallReplyMapElement(reply_metadata, idx, &map_key,
+                                              &map_val) == VALKEYMODULE_OK) {
+        insert_metadata(map_key, map_val);
+        idx++;
+      }
+      break;
     }
-  } else if (ValkeyModule_CallReplyType(reply_metadata) ==
-             VALKEYMODULE_REPLY_ARRAY) {
-    // format: ARRAY of [key1, val1, key2, val2, ...]
-    size_t array_len = ValkeyModule_CallReplyLength(reply_metadata);
-    for (size_t i = 0; i + 1 < array_len; i += 2) {
-      auto arr_key = ValkeyModule_CallReplyArrayElement(reply_metadata, i);
-      auto arr_val = ValkeyModule_CallReplyArrayElement(reply_metadata, i + 1);
-      size_t key_len;
-      const char* key_str = ValkeyModule_CallReplyStringPtr(arr_key, &key_len);
-      size_t val_len = 0;
-      const char* val_str = ValkeyModule_CallReplyStringPtr(arr_val, &val_len);
-      additional_network_metadata[std::string(key_str, key_len)] =
-          std::string(val_str, val_len);
+    case VALKEYMODULE_REPLY_ARRAY: {
+      // format: ARRAY of [key1, val1, key2, val2, ...]
+      size_t array_len = ValkeyModule_CallReplyLength(reply_metadata);
+      for (size_t i = 0; i + 1 < array_len; i += 2) {
+        auto arr_key = ValkeyModule_CallReplyArrayElement(reply_metadata, i);
+        auto arr_val =
+            ValkeyModule_CallReplyArrayElement(reply_metadata, i + 1);
+        insert_metadata(arr_key, arr_val);
+      }
+      break;
     }
+    default:
+      // crash if the reply is not map or array type
+      CHECK(false) << VALKEY_MODULE_CALL_ERROR_MSG;
   }
 
   std::string node_id_str = std::string(node_id_char, node_id_len);
-  SocketAddress addr{
-      .ip = is_local_shard ? "" : std::string(node_ip_char, node_ip_len),
-      .port = is_local_shard ? 0 : static_cast<uint16_t>(node_port)};
+  SocketAddress addr{.primary_endpoint = std::string(node_primary_endpoint_char,
+                                                     node_primary_endpoint_len),
+                     .port = static_cast<uint16_t>(node_port)};
 
   // Check for duplicate socket addresses across different nodes
-  // Skip check for local nodes (they all have empty ip and port 0)
-  if (!is_local_shard) {
-    auto it = node_to_socket_map_.find(node_id_str);
-    if (it != node_to_socket_map_.end()) {
-      // Node already seen - verify socket address matches
-      if (it->second != addr) {
-        VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-            << "Node " << node_id_str
-            << " has inconsistent socket addresses: " << it->second.ip << ":"
-            << it->second.port << " vs " << addr.ip << ":" << addr.port;
-        this->is_consistent_ = false;
-      }
-    } else {
-      // New node - check if this socket address is already used by another node
-      for (const auto& [existing_node_id, existing_addr] :
-           node_to_socket_map_) {
-        if (existing_addr == addr) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-              << "Duplicate socket address " << addr.ip << ":" << addr.port
-              << " found for different nodes: " << existing_node_id << " and "
-              << node_id_str;
-          this->is_consistent_ = false;
-          break;
-        }
-      }
-      node_to_socket_map_[node_id_str] = addr;
+  auto it = socket_addr_to_node_map.find(addr);
+  if (it != socket_addr_to_node_map.end()) {
+    // socket address already seen - check if it's the same node
+    if (it->second != node_id_str) {
+      VMSDK_LOG(WARNING, nullptr)
+          << "Socket address " << it->first.primary_endpoint << ":"
+          << it->first.port << " collision between nodes " << node_id_str
+          << " and " << it->second;
+      this->is_consistent_ = false;
     }
+  } else {
+    socket_addr_to_node_map[addr] = node_id_str;
   }
 
   return NodeInfo{.node_id = node_id_str,
@@ -303,7 +301,8 @@ bool ClusterMap::IsExistingShardConsistent(
 }
 
 // Helper function to parse slot range and create ShardInfo
-void ClusterMap::ProcessSlotRange(ValkeyModuleCallReply* slot_range,
+// return false if slot range is invalid
+bool ClusterMap::ProcessSlotRange(ValkeyModuleCallReply* slot_range,
                                   const char* my_node_id,
                                   std::vector<SlotRangeInfo>& slot_ranges) {
   CHECK(slot_range) << VALKEY_MODULE_CALL_ERROR_MSG;
@@ -324,7 +323,14 @@ void ClusterMap::ProcessSlotRange(ValkeyModuleCallReply* slot_range,
   // Parse primary node
   ValkeyModuleCallReply* primary_node_arr =
       ValkeyModule_CallReplyArrayElement(slot_range, 2);
-  NodeInfo primary_node = ParseNodeInfo(primary_node_arr, is_local_shard, true);
+  auto primary_node_opt = ParseNodeInfo(primary_node_arr, is_local_shard, true);
+  if (!primary_node_opt.has_value()) {
+    VMSDK_LOG(WARNING, nullptr) << "Dropping slot range [" << start << "-"
+                                << end << "] due to invalid primary node";
+    is_consistent_ = false;
+    return false;
+  }
+  NodeInfo primary_node = primary_node_opt.value();
 
   // Parse replica nodes
   std::vector<NodeInfo> replicas;
@@ -332,7 +338,14 @@ void ClusterMap::ProcessSlotRange(ValkeyModuleCallReply* slot_range,
   for (size_t j = 3; j < slot_len; j++) {
     ValkeyModuleCallReply* replica_node_arr =
         ValkeyModule_CallReplyArrayElement(slot_range, j);
-    replicas.push_back(ParseNodeInfo(replica_node_arr, is_local_shard, false));
+    auto replica_opt = ParseNodeInfo(replica_node_arr, is_local_shard, false);
+    if (!replica_opt.has_value()) {
+      VMSDK_LOG(WARNING, nullptr) << "Skipping invalid replica in slot range ["
+                                  << start << "-" << end << "]";
+      is_consistent_ = false;
+      return false;
+    }
+    replicas.push_back(replica_opt.value());
   }
 
   // Mark owned slots if local
@@ -349,44 +362,41 @@ void ClusterMap::ProcessSlotRange(ValkeyModuleCallReply* slot_range,
   bool is_new_shard = (shard_it == shards_.end());
 
   if (is_new_shard) {
-    ShardInfo shard;
+    auto [inserted_it, success] = shards_.insert({shard_id, ShardInfo{}});
+    shard_it = inserted_it;
+    ShardInfo& shard = shard_it->second;
     shard.shard_id = shard_id;
     shard.owned_slots[start] = end;
     // compute shard fingerprint later
     shard.slots_fingerprint = 0;
     shard.primary = primary_node;
     shard.replicas = std::move(replicas);
-
-    auto [inserted_it, success] = shards_.insert({shard_id, std::move(shard)});
-    shard_it = inserted_it;
   } else {
-    // Existing shard
-    // check if the shard info is consistent
+    // Existing shard, add slot range first
+    shard_it->second.owned_slots[start] = end;
+
+    // check shard consistency between existing and new one
     if (!IsExistingShardConsistent(shard_it->second, primary_node, replicas)) {
-      VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+      VMSDK_LOG(WARNING, nullptr)
           << "Inconsistency shard info found on existing slot ranges!";
       is_consistent_ = false;
     }
-    shard_it->second.owned_slots[start] = end;
   }
 
   // Store slot range info for later
   slot_ranges.push_back(
       {static_cast<uint16_t>(start), static_cast<uint16_t>(end), shard_id});
 
-  // Fix shard pointers and populate target lists
+  // Fix shard pointers
   if (is_new_shard) {
     if (shard_it->second.primary.has_value()) {
       shard_it->second.primary->shard = &(shard_it->second);
-      primary_targets_.push_back(shard_it->second.primary.value());
-      all_targets_.push_back(shard_it->second.primary.value());
     }
     for (auto& replica : shard_it->second.replicas) {
       replica.shard = &(shard_it->second);
-      replica_targets_.push_back(replica);
-      all_targets_.push_back(replica);
     }
   }
+  return true;
 }
 
 // Helper function to build slot-to-shard map
@@ -406,16 +416,29 @@ bool ClusterMap::CheckClusterMapFull() {
   if (slot_to_shard_map_.empty() || slot_to_shard_map_.begin()->first != 0) {
     return false;
   }
-
   uint16_t expected_next = 0;
+  size_t entries_processed = 0;
   for (const auto& [start_slot, range_and_shard] : slot_to_shard_map_) {
-    CHECK(start_slot >= expected_next) << "Duplicate slo ranges found";
+    CHECK(start_slot >= expected_next)
+        << "Slot " << start_slot << " overlaps with previous range ending at "
+        << (expected_next - 1);
     if (start_slot != expected_next) {
+      VMSDK_LOG(WARNING, nullptr)
+          << "Slot gap found: slots " << expected_next << " to "
+          << (start_slot - 1) << " are not covered";
       return false;
     }
     expected_next = range_and_shard.first + 1;
+    entries_processed++;
   }
-
+  // Verify we processed all entries in the map
+  if (entries_processed != slot_to_shard_map_.size()) {
+    VMSDK_LOG(WARNING, nullptr)
+        << "Slot map inconsistency: processed " << entries_processed
+        << " entries but map contains " << slot_to_shard_map_.size()
+        << " entries";
+    return false;
+  }
   return expected_next == k_num_slots;
 }
 
@@ -441,7 +464,22 @@ std::shared_ptr<ClusterMap> ClusterMap::CreateNewClusterMap(
   for (size_t i = 0; i < len; ++i) {
     ValkeyModuleCallReply* slot_range =
         ValkeyModule_CallReplyArrayElement(reply.get(), i);
-    new_map->ProcessSlotRange(slot_range, my_node_id, slot_ranges);
+    if (!new_map->ProcessSlotRange(slot_range, my_node_id, slot_ranges)) {
+      // Slot range was dropped, continue to next one
+      continue;
+    };
+  }
+
+  // Populate target lists
+  for (auto& [shard_id, shard] : new_map->shards_) {
+    if (shard.primary.has_value()) {
+      new_map->primary_targets_.push_back(shard.primary.value());
+      new_map->all_targets_.push_back(shard.primary.value());
+    }
+    for (const auto& replica : shard.replicas) {
+      new_map->replica_targets_.push_back(replica);
+      new_map->all_targets_.push_back(replica);
+    }
   }
 
   // Build slot-to-shard map
@@ -542,15 +580,9 @@ void ClusterMap::PrintClusterMap(std::shared_ptr<ClusterMap> map) {
           << "    role: " << (primary.is_primary ? "Primary" : "Replica");
       VMSDK_LOG(NOTICE, nullptr)
           << "    location: " << (primary.is_local ? "Local" : "Remote");
-      VMSDK_LOG(NOTICE, nullptr)
-          << "    ip: "
-          << (primary.socket_address.ip.empty() ? "(local)"
-                                                : primary.socket_address.ip);
-      VMSDK_LOG(NOTICE, nullptr)
-          << "    port: "
-          << (primary.socket_address.port == 0
-                  ? "(local)"
-                  : absl::StrCat(primary.socket_address.port));
+      VMSDK_LOG(NOTICE, nullptr) << "    primary_endpoint: "
+                                 << primary.socket_address.primary_endpoint;
+      VMSDK_LOG(NOTICE, nullptr) << "    port: " << primary.socket_address.port;
       if (!primary.additional_network_metadata.empty()) {
         VMSDK_LOG(NOTICE, nullptr) << "    additional_network_metadata:";
         for (const auto& [key, value] : primary.additional_network_metadata) {
@@ -574,15 +606,9 @@ void ClusterMap::PrintClusterMap(std::shared_ptr<ClusterMap> map) {
           << "    role: " << (replica.is_primary ? "Primary" : "Replica");
       VMSDK_LOG(NOTICE, nullptr)
           << "    location: " << (replica.is_local ? "Local" : "Remote");
-      VMSDK_LOG(NOTICE, nullptr)
-          << "    ip: "
-          << (replica.socket_address.ip.empty() ? "(local)"
-                                                : replica.socket_address.ip);
-      VMSDK_LOG(NOTICE, nullptr)
-          << "    port: "
-          << (replica.socket_address.port == 0
-                  ? "(local)"
-                  : absl::StrCat(replica.socket_address.port));
+      VMSDK_LOG(NOTICE, nullptr) << "    primary_endpoint: "
+                                 << replica.socket_address.primary_endpoint;
+      VMSDK_LOG(NOTICE, nullptr) << "    port: " << replica.socket_address.port;
       if (!replica.additional_network_metadata.empty()) {
         VMSDK_LOG(NOTICE, nullptr) << "    additional_network_metadata:";
         for (const auto& [key, value] : replica.additional_network_metadata) {

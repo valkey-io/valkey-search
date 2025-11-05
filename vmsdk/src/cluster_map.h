@@ -19,6 +19,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "absl/container/btree_map.h"
 #include "absl/container/flat_hash_map.h"
 #include "highwayhash/arch_specific.h"
 #include "highwayhash/hh_types.h"
@@ -54,7 +55,7 @@ struct NodeInfo {
   SocketAddress socket_address;
   // a map containing all additional network metadata(the fourth entry of
   // CLUSTER SLOTS response); can be empty
-  std::unordered_map<std::string, std::string> additional_network_metadata;
+  absl::flat_hash_map<std::string, std::string> additional_network_metadata;
   // Pointer to the shard this node belongs to
   const ShardInfo* shard = nullptr;
 
@@ -63,7 +64,7 @@ struct NodeInfo {
   friend std::ostream& operator<<(std::ostream& os, const NodeInfo& target) {
     os << "NodeInfo{role: " << (target.is_primary ? "primary" : "replica")
        << ", location: " << (target.is_local ? "local" : "remote")
-       << ", address: " << target.socket_address.ip << ":"
+       << ", address: " << target.socket_address.primary_endpoint << ":"
        << target.socket_address.port << "}";
     return os;
   }
@@ -76,7 +77,7 @@ struct ShardInfo {
   std::optional<NodeInfo> primary;
   std::vector<NodeInfo> replicas;
   // map start slot to end slot
-  std::map<uint16_t, uint16_t> owned_slots;
+  absl::btree_map<uint16_t, uint16_t> owned_slots;
   // Hash of owned_slots
   uint64_t slots_fingerprint;
 };
@@ -110,7 +111,7 @@ class ClusterMap {
   // are all the slots assigned to some shard
   bool IsConsistent() const { return is_consistent_; }
 
-  // generate a random targets vector from cluster bus
+  // generate a random targets vector with one node from each shard
   std::vector<NodeInfo> GetRandomTargets();
 
   // do I own this slot
@@ -130,8 +131,8 @@ class ClusterMap {
  private:
   std::chrono::steady_clock::time_point expiration_tp_;
 
-  // a map used for check duplicate socket addresses, node_id -> SocketAddress
-  std::unordered_map<std::string, SocketAddress> node_to_socket_map_;
+  // a map used for check duplicate socket addresses, SocketAddress -> node_id
+  absl::flat_hash_map<SocketAddress, std::string> socket_addr_to_node_map;
 
   // 1: slot is owned by this cluster, 0: slot is not owned by this cluster
   std::bitset<k_num_slots> owned_slots_;
@@ -139,7 +140,8 @@ class ClusterMap {
   absl::flat_hash_map<std::string, ShardInfo> shards_;
 
   // An ordered map, key is start slot, value is end slot and ShardInfo
-  std::map<uint16_t, std::pair<uint16_t, const ShardInfo*>> slot_to_shard_map_;
+  absl::btree_map<uint16_t, std::pair<uint16_t, const ShardInfo*>>
+      slot_to_shard_map_;
 
   // Cluster-level fingerprint (hash of all shard fingerprints)
   uint64_t cluster_slots_fingerprint_;
@@ -156,26 +158,27 @@ class ClusterMap {
 
   // helper function to create shard fingerprint
   uint64_t ComputeShardFingerprint(
-      const std::map<uint16_t, uint16_t>& slot_ranges);
+      const absl::btree_map<uint16_t, uint16_t>& slot_ranges);
 
   // helper function to create cluster level fingerprint
   uint64_t ComputeClusterFingerprint();
 
   // Helper functions for CreateNewClusterMap
-  // parse a single node info
-  NodeInfo ParseNodeInfo(ValkeyModuleCallReply* node_arr, bool is_local_shard,
-                         bool is_primary);
+  // parse and return a single node info, or return empty if node is invalid
+  std::optional<NodeInfo> ParseNodeInfo(ValkeyModuleCallReply* node_arr,
+                                        bool is_local_shard, bool is_primary);
 
   // check is this a local shard
   bool IsLocalShard(ValkeyModuleCallReply* slot_range, const char* my_node_id);
 
-  // if multiple slot ranges belong to same shard, check is the shard consistent
+  // if multiple slot ranges belong to same shard, check is the shard
+  // consistent
   bool IsExistingShardConsistent(const ShardInfo& existing_shard,
                                  const NodeInfo& new_primary,
                                  const std::vector<NodeInfo>& new_replicas);
 
-  // process each slot range array
-  void ProcessSlotRange(ValkeyModuleCallReply* slot_range,
+  // process each slot range array, return false if slot range is invalid
+  bool ProcessSlotRange(ValkeyModuleCallReply* slot_range,
                         const char* my_node_id,
                         std::vector<SlotRangeInfo>& slot_ranges);
 

@@ -24,14 +24,14 @@ namespace {
 
 // Helper structure to define a node (master or replica)
 struct NodeConfig {
-  std::string ip;
+  std::string primary_endpoint;
   int port;
   std::string node_id;  // 40-character hex string
   std::vector<std::string> additional_network_metadata;
 };
 
 struct NodeConfigWithMap {
-  std::string ip;
+  std::string primary_endpoint;
   int port;
   std::string node_id;  // 40-character hex string
   std::unordered_map<std::string, std::string> additional_network_metadata;
@@ -81,10 +81,11 @@ class ClusterMapTest : public vmsdk::ValkeyTest {
       "7890abcdef1234567890abcdef123456789abcdef",
       "890abcdef1234567890abcdef123456789abcdef1"};
 
-  // Helper: Create a node array [ip, port, node_id]
+  // Helper: Create a node array [primary_endpoint, port, node_id]
   CallReplyArray CreateNodeArray(const NodeConfig& node) {
     CallReplyArray node_array;
-    node_array.push_back(CreateValkeyModuleCallReply(CallReplyString(node.ip)));
+    node_array.push_back(
+        CreateValkeyModuleCallReply(CallReplyString(node.primary_endpoint)));
     node_array.push_back(
         CreateValkeyModuleCallReply(CallReplyInteger(node.port)));
     node_array.push_back(
@@ -210,11 +211,12 @@ class ClusterMapTest : public vmsdk::ValkeyTest {
     return ClusterMap::CreateNewClusterMap(&fake_ctx);
   }
 
-  // Helper: Create a node array with map metadata [ip, port, node_id,
-  // metadata_map]
+  // Helper: Create a node array with map metadata [primary_endpoint, port,
+  // node_id, metadata_map]
   CallReplyArray CreateNodeArrayWithMap(const NodeConfigWithMap& node) {
     CallReplyArray node_array;
-    node_array.push_back(CreateValkeyModuleCallReply(CallReplyString(node.ip)));
+    node_array.push_back(
+        CreateValkeyModuleCallReply(CallReplyString(node.primary_endpoint)));
     node_array.push_back(
         CreateValkeyModuleCallReply(CallReplyInteger(node.port)));
     node_array.push_back(
@@ -612,6 +614,32 @@ TEST_F(ClusterMapTest, DiscreteSlotRangeTest) {
   EXPECT_EQ(cluster_map->GetPrimaryTargets().size(), 2);
   EXPECT_EQ(cluster_map->GetReplicaTargets().size(), 2);
   EXPECT_EQ(cluster_map->GetAllTargets().size(), 4);
+}
+
+TEST_F(ClusterMapTest, InvalidPrimaryEndpoint) {
+  std::vector<SlotRangeConfig> ranges = {
+      {.start_slot = 0,
+       .end_slot = 5460,
+       .master = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+       .replicas = {NodeConfig{"127.0.0.1", 30004, replica_ids.at(0), {}}}},
+      {.start_slot = 5461,
+       .end_slot = 10922,
+       .master = NodeConfig{"", 30002, primary_ids.at(1), {}},
+       .replicas = {NodeConfig{"127.0.0.1", 30005, replica_ids.at(1), {}}}},
+      {.start_slot = 10923,
+       .end_slot = 16383,
+       .master = NodeConfig{"?", 30003, primary_ids.at(2), {}},
+       .replicas = {NodeConfig{"127.0.0.1", 30006, replica_ids.at(2), {}}}}};
+
+  auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
+
+  ASSERT_NE(cluster_map, nullptr);
+  ASSERT_FALSE(cluster_map->IsConsistent());
+  ASSERT_TRUE(cluster_map->IOwnSlot(0));
+  ASSERT_FALSE(cluster_map->IOwnSlot(10000));
+  EXPECT_EQ(cluster_map->GetPrimaryTargets().size(), 1);
+  EXPECT_EQ(cluster_map->GetReplicaTargets().size(), 1);
+  EXPECT_EQ(cluster_map->GetAllTargets().size(), 2);
 }
 
 // ============================================================================

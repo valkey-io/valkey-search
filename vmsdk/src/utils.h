@@ -135,9 +135,7 @@ struct JsonQuotedStringView {
   VMSDK_NON_MOVABLE(ClassName)
 
 struct SocketAddress {
-  // empty string if local
-  std::string ip;
-  // 0 if local
+  std::string primary_endpoint;
   uint16_t port;
 
   auto operator<=>(const SocketAddress &) const = default;
@@ -150,7 +148,7 @@ namespace std {
 template <>
 struct hash<vmsdk::SocketAddress> {
   size_t operator()(const vmsdk::SocketAddress &addr) const {
-    size_t h1 = std::hash<std::string>{}(addr.ip);
+    size_t h1 = std::hash<std::string>{}(addr.primary_endpoint);
     size_t h2 = std::hash<uint16_t>{}(addr.port);
     return h1 ^ (h2 << 1);
   }

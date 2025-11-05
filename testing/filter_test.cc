@@ -110,7 +110,7 @@ TEST_P(FilterTest, ParseParams) {
   InitIndexSchema(index_schema.get());
   EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
       .Times(::testing::AnyNumber());
-  FilterParser parser(*index_schema, test_case.filter);
+  FilterParser parser(*index_schema, test_case.filter, {});
   auto parse_results = parser.Parse();
   EXPECT_EQ(test_case.create_success, parse_results.ok());
   if (!test_case.create_success) {

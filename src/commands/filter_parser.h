@@ -25,17 +25,24 @@ namespace indexes {
 class Tag;
 }  // namespace indexes
 using FieldMaskPredicate = uint64_t;
+struct TextParsingOptions {
+  bool verbatim = false;
+  bool inorder = false;
+  std::optional<uint32_t> slop = std::nullopt;
+};
 struct FilterParseResults {
   std::unique_ptr<query::Predicate> root_predicate;
   absl::flat_hash_set<std::string> filter_identifiers;
 };
 class FilterParser {
  public:
-  FilterParser(const IndexSchema& index_schema, absl::string_view expression);
+  FilterParser(const IndexSchema& index_schema, absl::string_view expression,
+               const TextParsingOptions& options);
 
   absl::StatusOr<FilterParseResults> Parse();
 
  private:
+  const TextParsingOptions& options_;
   const IndexSchema& index_schema_;
   absl::string_view expression_;
   size_t pos_{0};

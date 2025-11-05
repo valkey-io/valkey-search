@@ -215,7 +215,7 @@ TEST_P(EvaluateFilterAsPrimaryTest, ParseParams) {
   const EvaluateFilterAsPrimaryTestCase &test_case = GetParam();
   auto index_schema = CreateIndexSchema(kIndexSchemaName).value();
   InitIndexSchema(index_schema.get());
-  FilterParser parser(*index_schema, test_case.filter);
+  FilterParser parser(*index_schema, test_case.filter, {});
   auto filter_parse_results = parser.Parse();
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   EXPECT_EQ(
@@ -410,7 +410,7 @@ TEST_P(LocalSearchTest, LocalSearchTest) {
   params.ef = kEfRuntime;
   std::vector<float> query_vector(kVectorDimensions, 1.0);
   params.query = VectorToStr(query_vector);
-  FilterParser parser(*index_schema, test_case.filter);
+  FilterParser parser(*index_schema, test_case.filter, {});
   params.filter_parse_results = std::move(parser.Parse().value());
   params.index_schema = index_schema;
   auto time_slice_queries = Metrics::GetStats().time_slice_queries.load();
@@ -505,7 +505,7 @@ TEST_P(FetchFilteredKeysTest, ParseParams) {
       index_schema->GetIndex(kVectorAttributeAlias)->get());
   const FetchFilteredKeysTestCase &test_case = GetParam();
   query::SearchParameters params(100000, nullptr);
-  FilterParser parser(*index_schema, test_case.filter);
+  FilterParser parser(*index_schema, test_case.filter, {});
   params.filter_parse_results = std::move(parser.Parse().value());
   params.k = 100;
   auto vectors = DeterministicallyGenerateVectors(1, kVectorDimensions, 10.0);
@@ -593,7 +593,7 @@ TEST_P(SearchTest, ParseParams) {
   std::vector<float> query_vector(kVectorDimensions, 0.0);
   params.query = VectorToStr(query_vector);
   if (!test_case.filter.empty()) {
-    FilterParser parser(*params.index_schema, test_case.filter);
+    FilterParser parser(*params.index_schema, test_case.filter, {});
     params.filter_parse_results = std::move(parser.Parse().value());
   }
   auto neighbors = Search(params, query::SearchMode::kLocal);

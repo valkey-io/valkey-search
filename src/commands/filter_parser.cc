@@ -199,9 +199,11 @@ void PrintPredicate(const query::Predicate* pred, int depth, bool last,
 }
 
 FilterParser::FilterParser(const IndexSchema& index_schema,
-                           absl::string_view expression)
+                           absl::string_view expression,
+                           const TextParsingOptions& options)
     : index_schema_(index_schema),
-      expression_(absl::StripAsciiWhitespace(expression)) {}
+      expression_(absl::StripAsciiWhitespace(expression)),
+      options_(options) {}
 
 bool FilterParser::Match(char expected, bool skip_whitespace) {
   if (skip_whitespace) {
@@ -808,14 +810,13 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedToken(
         break_on_query_syntax};
   } else {
     // Term predicate handling:
-    // Replace false with the VERBATIM flag from the FT.SEARCH.
-    bool exact = false;
+    bool exact = options_.verbatim;
     if (lexer.IsStopWord(token) || token.empty()) {
       // Skip stop words and empty words.
       return FilterParser::TokenResult{nullptr, break_on_query_syntax};
     }
-    if (min_stem_size.has_value()) {
-      token = lexer.StemWord(token, !exact, *min_stem_size, lexer.GetStemmer());
+    if (!exact && min_stem_size.has_value()) {
+      token = lexer.StemWord(token, true, *min_stem_size, lexer.GetStemmer());
     }
     return FilterParser::TokenResult{
         std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
@@ -870,14 +871,14 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     min_stem_size = index_schema_.MinStemSizeAcrossTextIndexes();
   }
   bool in_quotes = false;
-  bool exact = false;
+  bool exact_phrase = false;
   while (!IsEnd()) {
     char c = Peek();
     if (c == '"') {
       in_quotes = !in_quotes;
       ++pos_;
       if (in_quotes && terms.empty()) {
-        exact = true;
+        exact_phrase = true;
         continue;
       }
       break;
@@ -902,10 +903,9 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
   }
   std::unique_ptr<query::Predicate> pred;
   if (terms.size() > 1) {
-    // TODO: Set these based on the FT.SEARCH command parameters.
-    uint32_t slop = 0;
-    bool inorder = false;
-    if (exact) {
+    uint32_t slop = options_.slop.value_or(0);
+    bool inorder = options_.inorder;
+    if (exact_phrase) {
       slop = 0;
       inorder = true;
     }

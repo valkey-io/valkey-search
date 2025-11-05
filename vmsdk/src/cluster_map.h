@@ -112,7 +112,7 @@ class ClusterMap {
   bool IsConsistent() const { return is_consistent_; }
 
   // generate a random targets vector with one node from each shard
-  std::vector<NodeInfo> GetRandomTargets();
+  std::vector<NodeInfo> GetRandomTargets() const;
 
   // do I own this slot
   bool IOwnSlot(uint16_t slot) const { return owned_slots_[slot]; }

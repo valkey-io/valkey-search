@@ -57,7 +57,7 @@ const ShardInfo* ClusterMap::GetShardBySlot(uint16_t slot) const {
   return nullptr;
 }
 
-std::vector<NodeInfo> ClusterMap::GetRandomTargets() {
+std::vector<NodeInfo> ClusterMap::GetRandomTargets() const {
   std::vector<NodeInfo> random_targets;
   random_targets.reserve(shards_.size());
   absl::BitGen gen;

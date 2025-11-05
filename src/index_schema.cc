@@ -1071,6 +1071,8 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   rdb_save_mutation_entries.Increment(tracked_mutated_records_.size());
   for (const auto &[key, value] : tracked_mutated_records_) {
     VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
+    VMSDK_RETURN_IF_ERROR(out.SaveObject(value.from_backfill));
+    VMSDK_RETURN_IF_ERROR(out.SaveObject(value.from_multi));
   }
   //
   // Write out the multi/exec queued keys
@@ -1102,8 +1104,11 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
   rdb_load_mutation_entries.Increment(count);
   for (size_t i = 0; i < count; ++i) {
     VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
+    VMSDK_ASSIGN_OR_RETURN(auto from_backfill, input.LoadObject<bool>());
+    VMSDK_ASSIGN_OR_RETURN(auto from_multi, input.LoadObject<bool>());
+
     auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
-    ProcessKeyspaceNotification(ctx, keyname.get(), false);
+    ProcessKeyspaceNotification(ctx, keyname.get(), from_backfill);
   }
   VMSDK_ASSIGN_OR_RETURN(size_t multi_count, input.LoadObject<size_t>());
   rdb_load_multi_exec_entries.Increment(multi_count);

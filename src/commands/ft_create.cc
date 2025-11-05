@@ -32,6 +32,7 @@
 #include "src/commands/commands.h"
 #include "src/commands/ft_create_parser.h"
 #include "src/schema_manager.h"
+#include "src/valkey_search.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -39,6 +40,11 @@ namespace valkey_search {
 
 absl::Status FTCreateCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
                          int argc) {
+  if (ValkeySearch::Instance().IsCluster() &&
+      RedisModule_GetSelectedDb(ctx) != 0) {
+    return absl::UnimplementedError(
+        "FT.CREATE is not supported in cluster mode for multiple databases.");
+  }
   VMSDK_ASSIGN_OR_RETURN(auto index_schema_proto,
                          ParseFTCreateArgs(ctx, argv + 1, argc - 1));
   index_schema_proto.set_db_num(RedisModule_GetSelectedDb(ctx));

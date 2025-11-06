@@ -16,7 +16,7 @@ ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(
     uint32_t db_num, const std::string& index_name, unsigned timeout_ms)
     : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
                                   coordinator::InfoIndexPartitionResponse,
-                                  fanout::FanoutTargetMode::kAll>(),
+                                  vmsdk::cluster_map::FanoutTargetMode::kAll>(),
       db_num_(db_num),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
@@ -25,12 +25,18 @@ ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(
       backfill_complete_percent_min_(0.0f),
       backfill_in_progress_(false) {}
 
+std::vector<vmsdk::cluster_map::NodeInfo>
+ClusterInfoFanoutOperation::GetTargets() const {
+  return ValkeySearch::Instance().GetClusterMap()->GetAllTargets();
+}
+
 unsigned ClusterInfoFanoutOperation::GetTimeoutMs() const {
   return timeout_ms_;
 }
 
 coordinator::InfoIndexPartitionRequest
-ClusterInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&) {
+ClusterInfoFanoutOperation::GenerateRequest(
+    const vmsdk::cluster_map::NodeInfo&) {
   coordinator::InfoIndexPartitionRequest req;
   req.set_db_num(db_num_);
   req.set_index_name(index_name_);
@@ -39,7 +45,7 @@ ClusterInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&) {
 
 void ClusterInfoFanoutOperation::OnResponse(
     const coordinator::InfoIndexPartitionResponse& resp,
-    [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
+    [[maybe_unused]] const vmsdk::cluster_map::NodeInfo& target) {
   if (!resp.error().empty()) {
     grpc::Status status =
         grpc::Status(grpc::StatusCode::INTERNAL, resp.error());
@@ -111,7 +117,7 @@ void ClusterInfoFanoutOperation::OnResponse(
 std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
 ClusterInfoFanoutOperation::GetLocalResponse(
     const coordinator::InfoIndexPartitionRequest& request,
-    [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
+    [[maybe_unused]] const vmsdk::cluster_map::NodeInfo& target) {
   return coordinator::Service::GenerateInfoResponse(request);
 }
 

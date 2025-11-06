@@ -167,7 +167,7 @@ export ROOT_DIR
 function configure() {
     printf "${BOLD_PINK}Running cmake...${RESET}\n"
     mkdir -p "${BUILD_DIR}"
-    cd "$_"
+    cd "${BUILD_DIR}"
     local BUILD_TYPE=$(capitalize_string ${BUILD_CONFIG})
     rm -f CMakeCache.txt
     printf "Running: cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -GNinja ${CMAKE_EXTRA_ARGS}\n"
@@ -285,9 +285,10 @@ function is_configure_required() {
         return
     fi
     local build_file_lastmodified=$(get_file_last_modified "${ninja_build_file}")
+    local IFS=$'\n'
     local cmake_files=$(find "${ROOT_DIR}" -name "CMakeLists.txt" -o -name "*.cmake" | grep -v ".build-release" | grep -v ".build-debug")
-    for cmake_file in ${cmake_files}; do
-        local cmake_file_modified=$(date -r "${cmake_file}" +%s)
+    for cmake_file in $cmake_files; do
+        local cmake_file_modified=$(get_file_last_modified "${cmake_file}")
         if [ "${cmake_file_modified}" -gt "${build_file_lastmodified}" ]; then
             echo "yes"
             return
@@ -347,8 +348,7 @@ fi
 
 if [[ "${RUN_TEST}" == "all" ]]; then
     rm -f "${TEST_OUTPUT_FILE}"
-    TESTS=$(ls "${TESTS_DIR}"/*_test)
-    for test in $TESTS; do
+    find "${TESTS_DIR}" -name "*_test" -type f | while read -r test; do
         echo "==> Running executable: ${test}" >> "${TEST_OUTPUT_FILE}"
         echo "" >> "${TEST_OUTPUT_FILE}"
         print_test_prefix "${test}"

@@ -450,7 +450,12 @@ std::unique_ptr<query::Predicate> WrapPredicate(
 
 static const uint32_t FUZZY_MAX_DISTANCE = 3;
 
-// Handle backslashes inside text content.
+// Handles backslash escaping for both quoted and unquoted text
+// Escape Syntax:
+// \\ -> \
+// \<punctuation> -> <punctuation>
+// \<non-punctuation> -> (break to new token)<non-punctuation>...
+// \<EOL> -> Return error
 absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
     const indexes::text::Lexer& lexer, std::string& processed_content) {
   if (!Match('\\', false)) {
@@ -478,6 +483,12 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
   }
 }
 
+// Returns a token within an exact phrase parsing it until reaching the
+// token boundary while handling escape chars.
+// Quoted Text Syntax:
+// word1 word2" word3 -> word1
+// word2" word3 -> word2
+// Token boundaries (separated by space): " <punctuation> \<non-punctuation>
 absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     FieldMaskPredicate field_mask, std::optional<uint32_t> min_stem_size) {
@@ -506,6 +517,18 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
       false};
 }
 
+// Returns a token after parsing it until the token boundary while handling
+// escape chars.
+// Unquoted Text Syntax:
+//   Term:    word
+//   Prefix:  word*
+//   Suffix:  *word
+//   Infix:   *word*
+//   Fuzzy:   %word% | %%word%% | %%%word%%%
+// Token boundaries:
+//   <punctuation> ( ) | @ " - { } [ ] : ; $
+// Reserved chars:
+//   { } [ ] : ; $ -> error
 absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     FieldMaskPredicate field_mask, std::optional<uint32_t> min_stem_size) {
@@ -668,12 +691,14 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
 }
 
 // This function is called when the characters detected are potentially those of
-// a text predicate. It can parse an exact phrase, or simply multiple text
-// tokens (without field specifiers) and will return the grouped result of those
-// predicates. Currently, this is Proximity and will be changed to the
-// ComposedAND.
-// When non text query syntax is detected (not escaped), it breaks out and
-// returns back to the caller site with the parsed predicate.
+// a text predicate.
+// Text Parsing Syntax:
+//   Quoted: "word1 word2" -> ProximityPredicate(exact, slop=0, inorder=true)
+//   Unquoted: word1 word2 -> TermPredicate(word1) - stops at first token
+// Token boundaries for unquoted text: <punctuation> ( ) | @ " - { } [ ] : ; $
+// Quoted phrases (Exact Phrase) parse all tokens within quotes, unquoted
+// parsing stops after first token.
+// TODO: Update ProximityPredicate to ComposedAND.
 absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     const std::optional<std::string>& field_or_default) {
   auto text_index_schema = index_schema_.GetTextIndexSchema();
@@ -709,6 +734,10 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
                                      min_stem_size));
     if (result.predicate) {
       terms.push_back(std::move(result.predicate));
+      // TODO: Uncomment this once we have ComposedAND evaluation functional for
+      // handling proximity checks. Until the, we handle unquoted text tokens
+      // by building a proximity predicate containing them.
+      // if (!exact_phrase) break;
     }
     if (result.break_on_query_syntax) {
       break;

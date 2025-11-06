@@ -113,6 +113,9 @@ class ClusterMapTest : public vmsdk::ValkeyTest {
     if (config.primary.has_value()) {
       range.push_back(
           CreateValkeyModuleCallReply(CreateNodeArray(config.primary.value())));
+    } else {
+      range.push_back(CreateValkeyModuleCallReply(
+          CreateNodeArray(CreateInvalidNodeConfig())));
     }
 
     for (const auto& replica : config.replicas) {
@@ -246,6 +249,9 @@ class ClusterMapTest : public vmsdk::ValkeyTest {
     if (config.primary.has_value()) {
       range.push_back(CreateValkeyModuleCallReply(
           CreateNodeArrayWithMap(config.primary.value())));
+    } else {
+      range.push_back(CreateValkeyModuleCallReply(
+          CreateNodeArrayWithMap(CreateInvalidNodeConfigWithMap())));
     }
 
     for (const auto& replica : config.replicas) {
@@ -293,6 +299,15 @@ class ClusterMapTest : public vmsdk::ValkeyTest {
     MockGetMyClusterID(local_node_id);
     MockClusterSlotsCallWithMap(ranges);
     return ClusterMap::CreateNewClusterMap(&fake_ctx);
+  }
+
+  // Helper: Create an invalid node config
+  NodeConfig CreateInvalidNodeConfig() {
+    return NodeConfig{"?", 30001, primary_ids.at(0), {}};
+  }
+
+  NodeConfigWithMap CreateInvalidNodeConfigWithMap() {
+    return NodeConfigWithMap{"?", 30001, primary_ids.at(0), {}};
   }
 
   // Helper: Create standard 3-shard configuration

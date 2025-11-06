@@ -272,7 +272,7 @@ function check_tools() {
 
 # If any of the CMake files is newer than our "build.ninja" file, force "cmake" before building
 function is_configure_required() {
-    local ninja_build_file="${BUILD_DIR}/build.ninja"
+    local ninja_build_file=${BUILD_DIR}/build.ninja
     if [[ "${RUN_CMAKE}" == "yes" ]]; then
         # User asked for configure
         echo "yes"
@@ -309,19 +309,19 @@ if [[ "${FORMAT}" == "yes" ]]; then
     format
 fi
 
-BUILD_DIR="${ROOT_DIR}/.build-${BUILD_CONFIG}"
+BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
 if [[ "${SAN_BUILD}" != "no" ]]; then
     printf "${BOLD_PINK}${SAN_BUILD} sanitizer build is enabled${RESET}\n"
     if [[ "${SAN_BUILD}" == "address" ]]; then
-        BUILD_DIR="${BUILD_DIR}-asan"
+        BUILD_DIR=${BUILD_DIR}-asan
     else
-        BUILD_DIR="${BUILD_DIR}-tsan"
+        BUILD_DIR=${BUILD_DIR}-tsan
         export TSAN_OPTIONS="suppressions=${ROOT_DIR}/ci/tsan.supp"
     fi
 fi
 
-TESTS_DIR="${BUILD_DIR}/tests"
-TEST_OUTPUT_FILE="${BUILD_DIR}/tests.out"
+TESTS_DIR=${BUILD_DIR}/tests
+TEST_OUTPUT_FILE=${BUILD_DIR}/tests.out
 
 printf "Checking if configure is required..."
 FORCE_CMAKE=$(is_configure_required)
@@ -385,7 +385,7 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
         if [[ "${SAN_BUILD}" == "thread" ]]; then
             params="${params} --tsan"
         fi
-        ./run.sh "${params}"
+        ./run.sh ${params}
         popd >/dev/null
     fi
 

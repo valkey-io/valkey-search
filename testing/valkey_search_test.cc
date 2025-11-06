@@ -240,6 +240,37 @@ TEST_P(LoadTest, load) {
         .Times(1);
   }
   if (test_case.use_coordinator) {
+    // Mock GetMyClusterID for all coordinator tests
+    ON_CALL(*kMockValkeyModule, GetMyClusterID())
+        .WillByDefault(
+            testing::Return("a415b9df6ce0c3c757ad4270242ae432147cacbb"));
+
+    // Create an empty CLUSTER SLOTS response
+    auto* empty_slots_reply = new ValkeyModuleCallReply();
+    empty_slots_reply->type = VALKEYMODULE_REPLY_ARRAY;
+    empty_slots_reply->val = CallReplyArray{};
+
+    EXPECT_CALL(*kMockValkeyModule,
+                Call(testing::_, testing::StrEq("CLUSTER"), testing::StrEq("c"),
+                     testing::StrEq("SLOTS")))
+        .WillRepeatedly(testing::Return(empty_slots_reply));
+
+    EXPECT_CALL(*kMockValkeyModule, CallReplyType(empty_slots_reply))
+        .WillRepeatedly(testing::Return(VALKEYMODULE_REPLY_ARRAY));
+
+    EXPECT_CALL(*kMockValkeyModule, CallReplyLength(empty_slots_reply))
+        .WillRepeatedly(testing::Return(0));
+
+    // Allow FreeCallReply to be called on any pointer, but only delete our
+    // heap-allocated one
+    EXPECT_CALL(*kMockValkeyModule, FreeCallReply(testing::_))
+        .WillRepeatedly([empty_slots_reply](ValkeyModuleCallReply* r) {
+          if (r == empty_slots_reply) {
+            delete r;
+          }
+          // Do nothing for other pointers (they're managed elsewhere)
+        });
+
     if (test_case.use_valkey_port) {
       ValkeyModuleCallReply tls_array_reply;
       ValkeyModuleCallReply tls_string_reply;

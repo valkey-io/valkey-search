@@ -57,24 +57,27 @@ const ShardInfo* ClusterMap::GetShardBySlot(uint16_t slot) const {
   return nullptr;
 }
 
+const NodeInfo& ClusterMap::GetRandomNodeFromShard(
+    const ShardInfo& shard) const {
+  absl::BitGen gen;
+  size_t node_count = shard.replicas.size();
+  if (shard.primary.has_value()) {
+    node_count++;
+  }
+  CHECK(node_count > 0);
+  size_t index = absl::Uniform(gen, 0u, node_count);
+  if (index == 0 && shard.primary.has_value()) {
+    return shard.primary.value();
+  }
+  size_t replica_index = shard.primary.has_value() ? index - 1 : index;
+  return shard.replicas[replica_index];
+}
+
 std::vector<NodeInfo> ClusterMap::GetRandomTargets() const {
   std::vector<NodeInfo> random_targets;
   random_targets.reserve(shards_.size());
-  absl::BitGen gen;
   for (const auto& [shard_id, shard_info] : shards_) {
-    // Count total nodes in this shard
-    size_t node_count = shard_info.replicas.size();
-    if (shard_info.primary.has_value()) {
-      node_count++;
-    }
-    CHECK(node_count > 0);
-    size_t index = absl::Uniform(gen, 0u, node_count);
-    if (shard_info.primary.has_value() && index == 0) {
-      random_targets.push_back(shard_info.primary.value());
-    } else {
-      size_t replica_index = shard_info.primary.has_value() ? index - 1 : index;
-      random_targets.push_back(shard_info.replicas[replica_index]);
-    }
+    random_targets.push_back(GetRandomNodeFromShard(shard_info));
   }
   return random_targets;
 }

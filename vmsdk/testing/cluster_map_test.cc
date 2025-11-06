@@ -22,7 +22,7 @@ namespace cluster_map {
 
 namespace {
 
-// Helper structure to define a node (master or replica)
+// Helper structure to define a node (primary or replica)
 struct NodeConfig {
   std::string primary_endpoint;
   int port;
@@ -41,14 +41,14 @@ struct NodeConfigWithMap {
 struct SlotRangeConfig {
   int start_slot;
   int end_slot;
-  std::optional<NodeConfig> master;
+  std::optional<NodeConfig> primary;
   std::vector<NodeConfig> replicas;
 };
 
 struct SlotRangeConfigWithMap {
   int start_slot;
   int end_slot;
-  std::optional<NodeConfigWithMap> master;
+  std::optional<NodeConfigWithMap> primary;
   std::vector<NodeConfigWithMap> replicas;
 };
 
@@ -101,7 +101,7 @@ class ClusterMapTest : public vmsdk::ValkeyTest {
     return node_array;
   }
 
-  // Helper: Create a slot range array [start, end, master, replica1, replica2,
+  // Helper: Create a slot range array [start, end, primary, replica1, replica2,
   // ...]
   CallReplyArray CreateSlotRangeArray(const SlotRangeConfig& config) {
     CallReplyArray range;
@@ -110,9 +110,9 @@ class ClusterMapTest : public vmsdk::ValkeyTest {
     range.push_back(
         CreateValkeyModuleCallReply(CallReplyInteger(config.end_slot)));
 
-    if (config.master.has_value()) {
+    if (config.primary.has_value()) {
       range.push_back(
-          CreateValkeyModuleCallReply(CreateNodeArray(config.master.value())));
+          CreateValkeyModuleCallReply(CreateNodeArray(config.primary.value())));
     }
 
     for (const auto& replica : config.replicas) {
@@ -243,9 +243,9 @@ class ClusterMapTest : public vmsdk::ValkeyTest {
     range.push_back(
         CreateValkeyModuleCallReply(CallReplyInteger(config.end_slot)));
 
-    if (config.master.has_value()) {
+    if (config.primary.has_value()) {
       range.push_back(CreateValkeyModuleCallReply(
-          CreateNodeArrayWithMap(config.master.value())));
+          CreateNodeArrayWithMap(config.primary.value())));
     }
 
     for (const auto& replica : config.replicas) {
@@ -300,15 +300,15 @@ class ClusterMapTest : public vmsdk::ValkeyTest {
     return {
         {.start_slot = 0,
          .end_slot = 5460,
-         .master = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+         .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
          .replicas = {NodeConfig{"127.0.0.1", 30004, replica_ids.at(0), {}}}},
         {.start_slot = 5461,
          .end_slot = 10922,
-         .master = NodeConfig{"127.0.0.1", 30002, primary_ids.at(1), {}},
+         .primary = NodeConfig{"127.0.0.1", 30002, primary_ids.at(1), {}},
          .replicas = {NodeConfig{"127.0.0.1", 30005, replica_ids.at(1), {}}}},
         {.start_slot = 10923,
          .end_slot = 16383,
-         .master = NodeConfig{"127.0.0.1", 30003, primary_ids.at(2), {}},
+         .primary = NodeConfig{"127.0.0.1", 30003, primary_ids.at(2), {}},
          .replicas = {NodeConfig{"127.0.0.1", 30006, replica_ids.at(2), {}}}}};
   }
 
@@ -344,7 +344,7 @@ TEST_F(ClusterMapTest, SingleShardFullCoverage) {
   SlotRangeConfig full_range{
       .start_slot = 0,
       .end_slot = 16383,
-      .master = NodeConfig{"127.0.0.1", 6379, primary_ids.at(0), {}},
+      .primary = NodeConfig{"127.0.0.1", 6379, primary_ids.at(0), {}},
       .replicas = {}};
 
   auto cluster_map =
@@ -362,15 +362,15 @@ TEST_F(ClusterMapTest, MultipleShards) {
   std::vector<SlotRangeConfig> ranges = {
       {.start_slot = 0,
        .end_slot = 5460,
-       .master = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+       .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
        .replicas = {NodeConfig{"127.0.0.1", 30004, replica_ids.at(0), {}}}},
       {.start_slot = 5461,
        .end_slot = 10922,
-       .master = NodeConfig{"127.0.0.1", 30002, primary_ids.at(1), {}},
+       .primary = NodeConfig{"127.0.0.1", 30002, primary_ids.at(1), {}},
        .replicas = {NodeConfig{"127.0.0.1", 30005, replica_ids.at(1), {}}}},
       {.start_slot = 10923,
        .end_slot = 16383,
-       .master = NodeConfig{"127.0.0.1", 30003, primary_ids.at(2), {}},
+       .primary = NodeConfig{"127.0.0.1", 30003, primary_ids.at(2), {}},
        .replicas = {}}};
 
   auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
@@ -387,11 +387,11 @@ TEST_F(ClusterMapTest, PartialCoverage) {
   std::vector<SlotRangeConfig> ranges = {
       {.start_slot = 0,
        .end_slot = 5000,
-       .master = NodeConfig{"127.0.0.1", 6379, primary_ids.at(0), {}},
+       .primary = NodeConfig{"127.0.0.1", 6379, primary_ids.at(0), {}},
        .replicas = {}},
       {.start_slot = 10000,  // Gap from 5001-9999
        .end_slot = 16383,
-       .master = NodeConfig{"127.0.0.1", 6380, primary_ids.at(1), {}},
+       .primary = NodeConfig{"127.0.0.1", 6380, primary_ids.at(1), {}},
        .replicas = {}}};
 
   auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
@@ -417,7 +417,7 @@ TEST_F(ClusterMapTest, AdditionalNetworkMetadata) {
   SlotRangeConfig full_range{
       .start_slot = 0,
       .end_slot = 16383,
-      .master = NodeConfig{"127.0.0.1",
+      .primary = NodeConfig{"127.0.0.1",
                            6379,
                            primary_ids.at(0),
                            {"hostname", "test.valkey.io"}},
@@ -441,7 +441,7 @@ TEST_F(ClusterMapTest, AdditionalNetworkMetadataWithMap) {
   SlotRangeConfigWithMap full_range{
       .start_slot = 0,
       .end_slot = 16383,
-      .master =
+      .primary =
           NodeConfigWithMap{"127.0.0.1", 6379, primary_ids.at(0), metadata1},
       .replicas = {}};
 
@@ -477,11 +477,11 @@ TEST_F(ClusterMapTest, GetShardByIdTest) {
   std::vector<SlotRangeConfig> ranges = {
       {.start_slot = 0,
        .end_slot = 5460,
-       .master = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+       .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
        .replicas = {NodeConfig{"127.0.0.1", 30004, replica_ids.at(0), {}}}},
       {.start_slot = 5461,
        .end_slot = 10922,
-       .master = NodeConfig{"127.0.0.1", 30002, primary_ids.at(1), {}},
+       .primary = NodeConfig{"127.0.0.1", 30002, primary_ids.at(1), {}},
        .replicas = {}}};
 
   auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
@@ -506,11 +506,11 @@ TEST_F(ClusterMapTest, SlotInGapTest) {
   std::vector<SlotRangeConfig> ranges = {
       {.start_slot = 0,
        .end_slot = 5000,
-       .master = NodeConfig{"127.0.0.1", 6379, primary_ids.at(0), {}},
+       .primary = NodeConfig{"127.0.0.1", 6379, primary_ids.at(0), {}},
        .replicas = {}},
       {.start_slot = 10000,  // Gap from 5001-9999
        .end_slot = 16383,
-       .master = NodeConfig{"127.0.0.1", 6380, primary_ids.at(1), {}},
+       .primary = NodeConfig{"127.0.0.1", 6380, primary_ids.at(1), {}},
        .replicas = {}}};
 
   auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
@@ -538,11 +538,11 @@ TEST_F(ClusterMapTest, SlotBoundaryTest) {
   std::vector<SlotRangeConfig> ranges = {
       {.start_slot = 0,
        .end_slot = 8191,
-       .master = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+       .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
        .replicas = {}},
       {.start_slot = 8192,
        .end_slot = 16383,
-       .master = NodeConfig{"127.0.0.1", 30002, primary_ids.at(1), {}},
+       .primary = NodeConfig{"127.0.0.1", 30002, primary_ids.at(1), {}},
        .replicas = {}}};
 
   auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
@@ -567,7 +567,7 @@ TEST_F(ClusterMapTest, SingleSlotRangeTest) {
   SlotRangeConfig single_slot{
       .start_slot = 100,
       .end_slot = 100,  // Single slot
-      .master = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+      .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
       .replicas = {}};
 
   auto cluster_map =
@@ -589,15 +589,15 @@ TEST_F(ClusterMapTest, DiscreteSlotRangeTest) {
   std::vector<SlotRangeConfig> ranges = {
       {.start_slot = 0,
        .end_slot = 5460,
-       .master = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+       .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
        .replicas = {NodeConfig{"127.0.0.1", 30004, replica_ids.at(0), {}}}},
       {.start_slot = 5461,
        .end_slot = 10922,
-       .master = NodeConfig{"127.0.0.1", 30002, primary_ids.at(1), {}},
+       .primary = NodeConfig{"127.0.0.1", 30002, primary_ids.at(1), {}},
        .replicas = {NodeConfig{"127.0.0.1", 30005, replica_ids.at(1), {}}}},
       {.start_slot = 10923,
        .end_slot = 16383,
-       .master = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+       .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
        .replicas = {NodeConfig{"127.0.0.1", 30004, replica_ids.at(0), {}}}}};
 
   auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
@@ -620,15 +620,15 @@ TEST_F(ClusterMapTest, InvalidPrimaryEndpoint) {
   std::vector<SlotRangeConfig> ranges = {
       {.start_slot = 0,
        .end_slot = 5460,
-       .master = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+       .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
        .replicas = {NodeConfig{"127.0.0.1", 30004, replica_ids.at(0), {}}}},
       {.start_slot = 5461,
        .end_slot = 10922,
-       .master = NodeConfig{"", 30002, primary_ids.at(1), {}},
+       .primary = NodeConfig{"", 30002, primary_ids.at(1), {}},
        .replicas = {NodeConfig{"127.0.0.1", 30005, replica_ids.at(1), {}}}},
       {.start_slot = 10923,
        .end_slot = 16383,
-       .master = NodeConfig{"?", 30003, primary_ids.at(2), {}},
+       .primary = NodeConfig{"?", 30003, primary_ids.at(2), {}},
        .replicas = {NodeConfig{"127.0.0.1", 30006, replica_ids.at(2), {}}}}};
 
   auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
@@ -650,11 +650,11 @@ TEST_F(ClusterMapTest, LocalNodeIsReplicaTest) {
   std::vector<SlotRangeConfig> ranges = {
       {.start_slot = 0,
        .end_slot = 8191,
-       .master = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+       .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
        .replicas = {NodeConfig{"127.0.0.1", 30004, replica_ids.at(0), {}}}},
       {.start_slot = 8192,
        .end_slot = 16383,
-       .master = NodeConfig{"127.0.0.1", 30002, primary_ids.at(1), {}},
+       .primary = NodeConfig{"127.0.0.1", 30002, primary_ids.at(1), {}},
        .replicas = {NodeConfig{"127.0.0.1", 30005, replica_ids.at(1), {}}}}};
 
   auto cluster_map = CreateClusterMapWithConfig(ranges, replica_ids.at(0));
@@ -686,7 +686,7 @@ TEST_F(ClusterMapTest, MultipleReplicasPerShardTest) {
   SlotRangeConfig full_range{
       .start_slot = 0,
       .end_slot = 16383,
-      .master = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+      .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
       .replicas = {NodeConfig{"127.0.0.1", 30004, replica_ids.at(0), {}},
                    NodeConfig{"127.0.0.1", 30005, replica_ids.at(1), {}},
                    NodeConfig{"127.0.0.1", 30006, replica_ids.at(2), {}}}};
@@ -734,11 +734,11 @@ TEST_F(ClusterMapTest, TargetListConsistencyTest) {
   std::vector<SlotRangeConfig> ranges = {
       {.start_slot = 0,
        .end_slot = 8191,
-       .master = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+       .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
        .replicas = {NodeConfig{"127.0.0.1", 30004, replica_ids.at(0), {}}}},
       {.start_slot = 8192,
        .end_slot = 16383,
-       .master = NodeConfig{"127.0.0.1", 30002, primary_ids.at(1), {}},
+       .primary = NodeConfig{"127.0.0.1", 30002, primary_ids.at(1), {}},
        .replicas = {NodeConfig{"127.0.0.1", 30005, replica_ids.at(1), {}}}}};
 
   auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
@@ -755,7 +755,7 @@ TEST_F(ClusterMapTest, FingerprintConsistencyTest) {
   SlotRangeConfig range{
       .start_slot = 0,
       .end_slot = 5460,
-      .master = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+      .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
       .replicas = {}};
 
   auto cluster_map1 = CreateClusterMapWithConfig({range}, primary_ids.at(0));
@@ -769,7 +769,7 @@ TEST_F(ClusterMapTest, FingerprintConsistencyTest) {
   SlotRangeConfig different_range{
       .start_slot = 0,
       .end_slot = 8000,  // Different end slot
-      .master = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+      .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
       .replicas = {}};
 
   auto cluster_map3 =
@@ -784,7 +784,7 @@ TEST_F(ClusterMapTest, ExpirationTimeTest) {
   SlotRangeConfig full_range{
       .start_slot = 0,
       .end_slot = 16383,
-      .master = NodeConfig{"127.0.0.1", 6379, primary_ids.at(0), {}},
+      .primary = NodeConfig{"127.0.0.1", 6379, primary_ids.at(0), {}},
       .replicas = {}};
 
   auto before = std::chrono::steady_clock::now();

@@ -98,26 +98,13 @@ class ValkeySearch {
   // of the program.
   ValkeyModuleCtx *GetBackgroundCtx() const { return ctx_; }
 
-  // Get current cluster map (thread-safe)
+  // Get or create a new cluster map
+  std::shared_ptr<vmsdk::cluster_map::ClusterMap> GetOrRefreshClusterMap(
+      ValkeyModuleCtx *ctx);
+
+  // Get current cluster map without refresh (thread-safe)
   std::shared_ptr<vmsdk::cluster_map::ClusterMap> GetClusterMap() const {
     return std::atomic_load(&cluster_map_);
-  }
-
-  // Update cluster map with a new one (thread-safe atomic swap)
-  void UpdateClusterMap(
-      std::shared_ptr<vmsdk::cluster_map::ClusterMap> new_map) {
-    std::atomic_store(&cluster_map_, new_map);
-  }
-
-  // Refresh cluster map by creating a new one from current cluster state
-  void RefreshClusterMap(ValkeyModuleCtx *ctx) {
-    VMSDK_LOG(NOTICE, ctx) << "RefreshClusterMap called";
-    auto new_map = vmsdk::cluster_map::ClusterMap::CreateNewClusterMap(ctx);
-    if (new_map) {
-      UpdateClusterMap(new_map);
-    } else {
-      VMSDK_LOG(WARNING, ctx) << "CreateNewClusterMap returned nullptr";
-    }
   }
 
  protected:

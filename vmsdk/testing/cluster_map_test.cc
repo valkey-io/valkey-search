@@ -418,9 +418,9 @@ TEST_F(ClusterMapTest, AdditionalNetworkMetadata) {
       .start_slot = 0,
       .end_slot = 16383,
       .primary = NodeConfig{"127.0.0.1",
-                           6379,
-                           primary_ids.at(0),
-                           {"hostname", "test.valkey.io"}},
+                            6379,
+                            primary_ids.at(0),
+                            {"hostname", "test.valkey.io"}},
       .replicas = {}};
 
   auto cluster_map =

@@ -120,7 +120,7 @@ function(build_submodule MODULE_NAME MODULE_CMAKE_ARGS HINT_FILE)
     set(ENV{LDFLAGS} ${LD_FLAGS})
     execute_process(
       COMMAND sh -c "${CMAKE_COMMAND} .. ${MODULE_CMAKE_ARGS}"
-      WORKING_DIRECTORY ${MODULES_DIR}/${MODULE_NAME}/build-release
+      WORKING_DIRECTORY "${MODULES_DIR}/${MODULE_NAME}/build-release"
       RESULT_VARIABLE _PROC_RES)
     if(NOT _PROC_RES EQUAL 0)
       message(FATAL_ERROR "CMake configure error")
@@ -129,7 +129,7 @@ function(build_submodule MODULE_NAME MODULE_CMAKE_ARGS HINT_FILE)
       COMMAND
         sh -c
         "${CMAKE_COMMAND} --build . -j ${PROCESSOR_COUNT} --target install"
-      WORKING_DIRECTORY ${MODULES_DIR}/${MODULE_NAME}/build-release
+      WORKING_DIRECTORY "${MODULES_DIR}/${MODULE_NAME}/build-release"
       RESULT_VARIABLE _PROC_RES)
     if(NOT _PROC_RES EQUAL 0)
       message(FATAL_ERROR "Install error")

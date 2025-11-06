@@ -592,6 +592,13 @@ INSTANTIATE_TEST_SUITE_P(
             .evaluate_success = true,
         },
         {
+            .test_name = "default_field_with_escape_query_syntax",
+            .filter =
+                "Hello, how are you\\]\\[\\$\\}\\{\\;\\:\\)\\(\\| \\-doing",
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
             .test_name = "default_field_with_all_operations",
             .filter = "%Hllo%, how are *ou do* *oda*",
             .create_success = false,
@@ -672,11 +679,9 @@ INSTANTIATE_TEST_SUITE_P(
         {
             .test_name = "bad_filter_3",
             .filter = "@num_field_2.0 : [23 25] | num_field_2.0:[0 2.5] ",
-            .create_success = true,
-            .evaluate_success = true,
-            // .create_success = false,
-            // .create_expected_error_message =
-            //     "Unexpected character at position 28: `n`, expecting `@`",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unexpected character at position 41: `:`",
         },
         {
             .test_name = "bad_filter_4",
@@ -689,7 +694,8 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "bad_filter_5",
             .filter = "@num_field_2.0 : [23 25] $  @num_field_2.0:[0 2.5] ",
             .create_success = false,
-            .create_expected_error_message = "Invalid Query Syntax",
+            .create_expected_error_message =
+                "Unexpected character at position 26: `$`",
         },
         {
             .test_name = "bad_filter_6",
@@ -738,6 +744,55 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@num_field_2.0 : [23 25]   @tag_field_1:{tag1] ",
             .create_success = false,
             .create_expected_error_message = "Missing closing TAG bracket, '}'",
+        },
+        {
+            .test_name = "bad_filter_13",
+            .filter = "hello{world",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unexpected character at position 6: `{`",
+        },
+        {
+            .test_name = "bad_filter_14",
+            .filter = "hello}world",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unexpected character at position 6: `}`",
+        },
+        {
+            .test_name = "bad_filter_15",
+            .filter = "hello$world",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unexpected character at position 6: `$`",
+        },
+        {
+            .test_name = "bad_filter_16",
+            .filter = "hello[world",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unexpected character at position 6: `[`",
+        },
+        {
+            .test_name = "bad_filter_17",
+            .filter = "hello]world",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unexpected character at position 6: `]`",
+        },
+        {
+            .test_name = "bad_filter_18",
+            .filter = "hello:world",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unexpected character at position 6: `:`",
+        },
+        {
+            .test_name = "bad_filter_19",
+            .filter = "hello;world",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unexpected character at position 6: `;`",
         },
     }),
     [](const TestParamInfo<FilterTestCase> &info) {

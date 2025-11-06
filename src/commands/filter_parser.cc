@@ -528,6 +528,13 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
       break_on_query_syntax = true;
       break;
     }
+    // Reject reserved characters in unquoted text
+    if (ch == '{' || ch == '}' || ch == '[' || ch == ']' || ch == ':' ||
+        ch == ';' || ch == '$') {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Unexpected character at position ", pos_ + 1, ": `",
+                       expression_.substr(pos_, 1), "`"));
+    }
     // - characters in the middle of text tokens are not negate. If they are in
     // the beginning, break.
     if (ch == '-' && processed_content.empty()) {

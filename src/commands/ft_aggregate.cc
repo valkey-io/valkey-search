@@ -252,7 +252,7 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
         std::make_unique<Record>(parameters.record_indexes_by_alias_.size());
     DBG << "Neighbor: " << n << " Empty Record:" << *rec << "\n";
     if (parameters.load_key) {
-      rec->fields_.at(key_index) = expr::Value(n.external_id.get()->Str());
+      rec->fields_.at(key_index) = expr::Value(n.external_id->Str());
     }
     if (/* todo: parameters.addscores_ */ true) {
       rec->fields_.at(scores_index) = expr::Value(n.distance);

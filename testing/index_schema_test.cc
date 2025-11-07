@@ -929,11 +929,13 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
                 return VALKEYMODULE_OK;
               });
           EXPECT_CALL(*mock_index,
-                      IsTracked(testing::Pointee(testing::StrEq(key_str))))
+                      IsTracked(testing::Property(&InternedStringPtr::operator*,
+                                                  testing::StrEq(key_str))))
               .WillRepeatedly(testing::Return(false));
-          EXPECT_CALL(
-              *mock_index,
-              AddRecord(testing::Pointee(testing::StrEq(key_str)), testing::_))
+          EXPECT_CALL(*mock_index,
+                      AddRecord(testing::Property(&InternedStringPtr::operator*,
+                                                  testing::StrEq(key_str)),
+                                testing::_))
               .WillOnce(testing::Return(true));
           if (use_thread_pool) {
             EXPECT_CALL(thread_pool,
@@ -1462,15 +1464,18 @@ TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
         .WillRepeatedly(Return(1));
 
     EXPECT_CALL(*mock_index,
-                RemoveRecord(testing::Pointee(testing::StrEq("key1")),
+                RemoveRecord(testing::Property(&InternedStringPtr::operator*,
+                                               testing::StrEq("key1")),
                              indexes::DeletionType::kRecord))
         .WillOnce(Return(true));
     EXPECT_CALL(*mock_index,
-                RemoveRecord(testing::Pointee(testing::StrEq("key2")),
+                RemoveRecord(testing::Property(&InternedStringPtr::operator*,
+                                               testing::StrEq("key2")),
                              indexes::DeletionType::kRecord))
         .WillOnce(Return(true));
     EXPECT_CALL(*mock_index,
-                RemoveRecord(testing::Pointee(testing::StrEq("key3")),
+                RemoveRecord(testing::Property(&InternedStringPtr::operator*,
+                                               testing::StrEq("key3")),
                              indexes::DeletionType::kRecord))
         .Times(0);
     index_schema->OnLoadingEnded(&fake_ctx_);

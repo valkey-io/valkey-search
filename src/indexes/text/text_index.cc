@@ -35,7 +35,7 @@ std::optional<std::shared_ptr<Postings>> AddKeyToPostings(
     current_schema_->GetMetadata().num_unique_terms++;
     postings = std::make_shared<Postings>();
   }
-  
+
   // Track metadata before inserting
   auto& metadata = current_schema_->GetMetadata();
   metadata.total_positions += pos_map.size();
@@ -44,7 +44,7 @@ std::optional<std::shared_ptr<Postings>> AddKeyToPostings(
     num_terms += field_mask->CountSetFields();
   }
   metadata.total_term_frequency += num_terms;
-  
+
   postings->InsertKey(key, std::move(pos_map));
   return postings;
 }
@@ -54,14 +54,14 @@ std::optional<std::shared_ptr<Postings>> RemoveKeyFromPostings(
     const InternedStringPtr& key) {
   CHECK(existing.has_value()) << "Per-key tree became unaligned";
   auto postings = existing.value();
-  
+
   // Get the position map before removal to track metadata
   auto key_iter = postings->GetKeyIterator();
   if (key_iter.SkipForwardKey(key) && key_iter.IsValid()) {
     auto pos_iter = key_iter.GetPositionIterator();
     size_t position_count = 0;
     size_t term_frequency = 0;
-    
+
     while (pos_iter.IsValid()) {
       position_count++;
       // Count fields set at this position
@@ -69,13 +69,13 @@ std::optional<std::shared_ptr<Postings>> RemoveKeyFromPostings(
       term_frequency += __builtin_popcountll(field_mask_val);
       pos_iter.NextPosition();
     }
-    
+
     // Update metadata
     auto& metadata = current_schema_->GetMetadata();
     metadata.total_positions -= position_count;
     metadata.total_term_frequency -= term_frequency;
   }
-  
+
   postings->RemoveKey(key);
 
   if (!postings->IsEmpty()) {

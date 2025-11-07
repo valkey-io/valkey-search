@@ -103,18 +103,6 @@ size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
   return 0;
 }
 
-std::unique_ptr<Text::EntriesFetcher> Text::Search(
-    const query::TextPredicate& predicate, bool negate) const {
-  auto fetcher = std::make_unique<EntriesFetcher>(
-      CalculateSize(predicate), text_index_schema_->GetTextIndex(),
-      negate ? &untracked_keys_ : nullptr);
-  fetcher->predicate_ = &predicate;
-  // TODO : Update for the default search case (all fields).
-  // The TextPredicate needs to support a GetFieldMask API to indicate this.
-  fetcher->field_mask_ = 1ULL << text_field_number_;
-  return fetcher;
-}
-
 size_t Text::EntriesFetcher::Size() const { return size_; }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
@@ -126,6 +114,14 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
 
 // Implement the TextPredicate BuildTextIterator virtual method
 namespace valkey_search::query {
+
+void* TextPredicate::Search(bool negate) const {
+  // TODO: Add logic to calculate the size based on number of keys estimated.
+  auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
+      0, GetTextIndexSchema()->GetTextIndex(), nullptr, GetFieldMask());
+  fetcher->predicate_ = this;
+  return fetcher.release();
+}
 
 std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
     const void* fetcher_ptr) const {

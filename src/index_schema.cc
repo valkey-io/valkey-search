@@ -267,6 +267,42 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexSchema::GetIndex(
   return itr->second.GetIndex();
 }
 
+// Returns a vector of all the text (field) identifiers within the text
+// index schema. This is intended to be used by queries where there
+// is no field specification, and we want to include results from all
+// text fields.
+std::vector<std::string> IndexSchema::GetAllTextIdentifiers() const {
+  std::vector<std::string> identifiers;
+  for (const auto &[alias, attribute] : attributes_) {
+    auto index = attribute.GetIndex();
+    if (index->GetIndexerType() == indexes::IndexerType::kText) {
+      identifiers.push_back(attribute.GetIdentifier());
+    }
+  }
+  return identifiers;
+}
+
+// Find the min stem size across all text fields in the text index schema.
+// If stemming is disabled across all text field indexes, return `nullopt`.
+std::optional<uint32_t> IndexSchema::MinStemSizeAcrossTextIndexes() const {
+  uint32_t min_stem_size = kDefaultMinStemSize;
+  bool is_stemming_enabled = false;
+  for (const auto &[alias, attribute] : attributes_) {
+    auto index = attribute.GetIndex();
+    if (index->GetIndexerType() == indexes::IndexerType::kText) {
+      auto *text_index = dynamic_cast<const indexes::Text *>(index.get());
+      min_stem_size = std::min(min_stem_size, text_index->GetMinStemSize());
+      if (text_index->IsStemmingEnabled()) {
+        is_stemming_enabled = true;
+      }
+    }
+  }
+  if (!is_stemming_enabled) {
+    return std::nullopt;
+  }
+  return min_stem_size;
+}
+
 absl::StatusOr<std::string> IndexSchema::GetIdentifier(
     absl::string_view attribute_alias) const {
   auto itr = attributes_.find(std::string{attribute_alias});

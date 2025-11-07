@@ -82,6 +82,7 @@ class TextIndexSchema {
 
   uint8_t GetNumTextFields() const { return num_text_fields_; }
   std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
+  Lexer GetLexer() const { return lexer_; }
 
   // Access to metadata for memory pool usage
   TextIndexMetadata& GetMetadata() { return metadata_; }

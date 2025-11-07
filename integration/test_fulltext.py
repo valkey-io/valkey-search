@@ -29,10 +29,10 @@ hash_docs = [
 ]
 text_query_term = ["FT.SEARCH", "products", '@desc:"wonder"']
 text_query_term_nomatch = ["FT.SEARCH", "products", '@desc:"nomatch"']
-text_query_prefix = ["FT.SEARCH", "products", '@desc:"wond*"']
-text_query_prefix2 = ["FT.SEARCH", "products", '@desc:"wond*"']
-text_query_prefix_nomatch = ["FT.SEARCH", "products", '@desc:"nomatch*"']
-text_query_prefix_multimatch = ["FT.SEARCH", "products", '@desc:"grea*"']
+text_query_prefix = ["FT.SEARCH", "products", '@desc:wond*']
+text_query_prefix2 = ["FT.SEARCH", "products", '@desc:wond*']
+text_query_prefix_nomatch = ["FT.SEARCH", "products", '@desc:nomatch*']
+text_query_prefix_multimatch = ["FT.SEARCH", "products", '@desc:grea*']
 text_query_exact_phrase1 = ["FT.SEARCH", "products", '@desc:"word wonder"']
 text_query_exact_phrase2 = ["FT.SEARCH", "products", '@desc:"random word wonder"']
 
@@ -56,9 +56,9 @@ hash_docs_with_desc2 = [
 
 # Search queries for specific fields
 text_query_desc_field = ["FT.SEARCH", "products2", '@desc:"wonder"']
-text_query_desc_prefix = ["FT.SEARCH", "products2", '@desc:"wonde*"']
+text_query_desc_prefix = ["FT.SEARCH", "products2", '@desc:wonde*']
 text_query_desc2_field = ["FT.SEARCH", "products2", '@desc2:"wonder"']
-text_query_desc2_prefix = ["FT.SEARCH", "products2", '@desc2:"wonde*"']
+text_query_desc2_prefix = ["FT.SEARCH", "products2", '@desc2:wonde*']
 
 # Expected results for desc field search
 expected_desc_hash_key = b'product:4'
@@ -125,18 +125,18 @@ class TestFullText(ValkeySearchTestCaseBase):
         result3 = client.execute_command("FT.SEARCH", "products", '@desc:xpe*')
         assert result1[0] == 1 and result2[0] == 1 and result3[0] == 0
         assert result1[1] == b"product:3" and result2[1] == b"product:3"
-        # TODO: Update these queries to non stemmed versions after queries are stemmed.
+        # TODO: Update these queries to non stemmed versions once the stem tree is supported and ingestion is updated.
         # Perform an exact phrase search operation on a unique phrase (exists in one doc).
         result1 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl"')
         result2 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl grey acorn grow"')
         assert result1[0] == 1 and result2[0] == 1
         assert result1[1] == b"product:1" and result2[1] == b"product:1"
-        result3 = client.execute_command("FT.SEARCH", "products", '@desc:great @desc:oa* @desc:from @desc:lit* @desc:gr* @desc:acorn @desc:gr*')
+        result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn gr*')
         assert result3[0] == 1
         assert result3[1] == b"product:1"
-        result3 = client.execute_command("FT.SEARCH", "products", '@desc:great @desc:oa* @desc:from @desc:lit* @desc:gr* @desc:acorn @desc:grea*')
+        result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn grea*')
         assert result3[0] == 0
-        result3 = client.execute_command("FT.SEARCH", "products", '@desc:great @desc:oa* @desc:from @desc:lit* @desc:gr* @desc:acorn @desc:great')
+        result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn great')
         assert result3[0] == 0
         # Perform an exact phrase search operation on a phrase existing in 2 documents.
         result = client.execute_command("FT.SEARCH", "products", '@desc:"interest desc"')
@@ -174,7 +174,6 @@ class TestFullText(ValkeySearchTestCaseBase):
         result = client.execute_command("FT.SEARCH", "products", '@desc:"1 2 3 4 5 6 7 8 9 0"')
         assert result[0] == 1
         assert result[1] == b"product:1"
-
         # TODO: We can test this once the queries are tokenized with punctuation applied.
         # result = client.execute_command("FT.SEARCH", "products", '@desc:"inspector\'s palm"')
         # TODO: We can test this once the queries are tokenized with punctuation and stopword removal applied.
@@ -365,21 +364,22 @@ class TestFullText(ValkeySearchTestCaseBase):
         client: Valkey = self.server.get_new_client()
         client.execute_command("FT.CREATE idx ON HASH SCHEMA content TEXT")
         client.execute_command("HSET", "doc:1", "content", "The quick-running searches are finding EFFECTIVE results!")
-        
-        # List of queries with pass/fail expectations
+        client.execute_command("HSET", "doc:2", "content", "But slow searches aren't working...")
+        # List of queries with match / no match expectations        
         test_cases = [
             ("quick*", True, "Punctuation tokenization - hyphen creates word boundaries"),
             ("effect*", True, "Case insensitivity - lowercase matches uppercase"),
-            ("the", False, "Stop word filtering - common words filtered out"),
+            ("\"The quick-running searches are finding EFFECTIVE results!\"", False, "Stop word cannot be used in exact phrase searches"),
+            # TODO: Change to True once the stem tree is supported and ingestion is updated.
+            ("\"quick-running searches finding EFFECTIVE results!\"", False, "Exact phrase without stopwords"),
+            ("\"quick-run search find EFFECT result!\"", True, "Exact Phrase Query without stopwords and using stemmed words"),
             ("find*", True, "Prefix wildcard - matches 'finding'"),
             ("nonexistent", False, "Non-existent terms return no results")
         ]
-        
         expected_key = b'doc:1'
         expected_fields = [b'content', b"The quick-running searches are finding EFFECTIVE results!"]
-        
         for query_term, should_match, description in test_cases:
-            result = client.execute_command("FT.SEARCH", "idx", f'@content:"{query_term}"')
+            result = client.execute_command("FT.SEARCH", "idx", f'@content:{query_term}')
             if should_match:
                 assert result[0] == 1 and result[1] == expected_key and result[2] == expected_fields, f"Failed: {description}"
             else:
@@ -413,16 +413,44 @@ class TestFullText(ValkeySearchTestCaseBase):
         client: Valkey = self.server.get_new_client()
         client.execute_command("FT.CREATE idx ON HASH STOPWORDS 2 the and SCHEMA content TEXT")
         client.execute_command("HSET", "doc:1", "content", "the cat and dog are good")
+        # non stop words should be findable
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"cat dog are good"')
+        assert result[0] == 1  # Regular word indexed
+        assert result[1] == b'doc:1'
+        assert result[2] == [b'content', b"the cat and dog are good"]
         
         # Stop words should not be findable
         result = client.execute_command("FT.SEARCH", "idx", '@content:"and"')
         assert result[0] == 0  # Stop word "and" filtered out
-        
         # non stop words should be findable
         result = client.execute_command("FT.SEARCH", "idx", '@content:"are"')
         assert result[0] == 1  # Regular word indexed
         assert result[1] == b'doc:1'
         assert result[2] == [b'content', b"the cat and dog are good"]
+        # Stop words should not be findable
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"and"')
+        assert result[0] == 0  # Stop word "and" filtered out
+
+    def test_nostem(self):
+        """
+        End-to-end test: FT.CREATE NOSTEM config actually affects stemming in search
+        """
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE idx ON HASH NOSTEM SCHEMA content TEXT")
+        client.execute_command("HSET", "doc:1", "content", "running quickly")
+        # With NOSTEM, exact tokens should be findable with exact phrase
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"running"')
+        assert result[0] == 1  # Exact form "running" found
+        assert result[1] == b'doc:1'
+        assert result[2] == [b'content', b"running quickly"]
+        # With NOSTEM, exact tokens should be findable with non exact phrase
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"running"')
+        assert result[0] == 1  # Exact form "running" found
+        assert result[1] == b'doc:1'
+        assert result[2] == [b'content', b"running quickly"]
+        # With NOSTEM, stemmed tokens should not be findable
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"run"')
+        assert result[0] == 0
 
     def test_custom_punctuation(self):
         """
@@ -431,16 +459,18 @@ class TestFullText(ValkeySearchTestCaseBase):
         client: Valkey = self.server.get_new_client()
         client.execute_command("FT.CREATE idx ON HASH PUNCTUATION . SCHEMA content TEXT")
         client.execute_command("HSET", "doc:1", "content", "hello.world test@email")
-        
         # Dot configured as separator - should find split words
         result = client.execute_command("FT.SEARCH", "idx", '@content:"hello"')
         assert result[0] == 1  # Found "hello" as separate token
         assert result[1] == b'doc:1'
         assert result[2] == [b'content', b"hello.world test@email"]
-        
         # @ NOT configured as separator - should not be able with split words
         result = client.execute_command("FT.SEARCH", "idx", '@content:"test"')
         assert result[0] == 0
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"test@email"')
+        assert result[0] == 1  # Found "hello" as separate token
+        assert result[1] == b'doc:1'
+        assert result[2] == [b'content', b"hello.world test@email"]
 
     def test_add_update_delete_documents_single_client(self):
         """
@@ -638,8 +668,29 @@ class TestFullText(ValkeySearchTestCaseBase):
         perform_concurrent_searches(clients, num_clients, delete_searches, "DELETE")
 
     def test_suffix_search(self):
-        # TODO
-        pass
+        """Test suffix search functionality using *suffix pattern"""
+        # Create index
+        self.client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "content", "TEXT", "WITHSUFFIXTRIE", "NOSTEM")
+        # Add test documents
+        self.client.execute_command("HSET", "doc:1", "content", "running jumping walking")
+        self.client.execute_command("HSET", "doc:2", "content", "testing debugging coding")
+        self.client.execute_command("HSET", "doc:3", "content", "reading writing speaking")
+        self.client.execute_command("HSET", "doc:4", "content", "swimming diving surfing")
+        # Test suffix search with *ing
+        result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ing")
+        assert result[0] == 4  # All documents contain words ending with 'ing'
+        # Test suffix search with *ing (should match running, jumping, walking, etc.)
+        result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ning")
+        assert result[0] == 1  # Only doc:1 has "running"
+        # Test suffix search with *ing
+        result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ping")
+        assert result[0] == 1  # Only doc:1 has "jumping"
+        # Test suffix search with *ing
+        result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ding")
+        assert result[0] == 2  # doc:2 has "coding", doc:3 has "reading"
+        # Test non-matching suffix
+        result = self.client.execute_command("FT.SEARCH", "idx", "@content:*xyz")
+        assert result[0] == 0  # No matches
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """

@@ -26,7 +26,8 @@ class Tag;
 
 namespace valkey_search::indexes::text {
 class TextIterator;
-}
+class TextIndexSchema;
+}  // namespace valkey_search::indexes::text
 
 namespace valkey_search::query {
 
@@ -136,128 +137,114 @@ class TagPredicate : public Predicate {
   absl::flat_hash_set<std::string> tags_;
 };
 
+using FieldMaskPredicate = uint64_t;
+
 class TextPredicate : public Predicate {
  public:
   TextPredicate() : Predicate(PredicateType::kText) {}
   virtual ~TextPredicate() = default;
   virtual bool Evaluate(Evaluator& evaluator) const = 0;
   virtual bool Evaluate(const std::string_view& text) const = 0;
-  virtual const indexes::Text* GetIndex() const = 0;
+  virtual std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
+      const = 0;
+  virtual const FieldMaskPredicate GetFieldMask() const = 0;
+  virtual void* Search(bool negate) const;
   virtual std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const = 0;
 };
 
 class TermPredicate : public TextPredicate {
  public:
-  TermPredicate(const indexes::Text* index, absl::string_view identifier,
-                absl::string_view alias, std::string term);
-  const indexes::Text* GetIndex() const { return index_; }
-  absl::string_view GetAlias() const { return alias_; }
-  absl::string_view GetIdentifier() const {
-    return vmsdk::ToStringView(identifier_.get());
-  }
-  vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
-    return vmsdk::RetainUniqueValkeyString(identifier_.get());
+  TermPredicate(
+      std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
+      FieldMaskPredicate field_mask, std::string term, bool exact);
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+    return text_index_schema_;
   }
   absl::string_view GetTextString() const { return term_; }
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const std::string_view& text) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
+  const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
 
  private:
-  const indexes::Text* index_;
-  vmsdk::UniqueValkeyString identifier_;
-  absl::string_view alias_;
+  std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
+  FieldMaskPredicate field_mask_;
   std::string term_;
+  bool exact_;
 };
 
 class PrefixPredicate : public TextPredicate {
  public:
-  PrefixPredicate(const indexes::Text* index, absl::string_view identifier,
-                  absl::string_view alias, std::string term);
-  const indexes::Text* GetIndex() const { return index_; }
-  absl::string_view GetAlias() const { return alias_; }
-  absl::string_view GetIdentifier() const {
-    return vmsdk::ToStringView(identifier_.get());
-  }
-  vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
-    return vmsdk::RetainUniqueValkeyString(identifier_.get());
+  PrefixPredicate(
+      std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
+      FieldMaskPredicate field_mask, std::string term);
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+    return text_index_schema_;
   }
   absl::string_view GetTextString() const { return term_; }
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const std::string_view& text) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
+  const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
 
  private:
-  const indexes::Text* index_;
-  vmsdk::UniqueValkeyString identifier_;
-  absl::string_view alias_;
+  std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
+  FieldMaskPredicate field_mask_;
   std::string term_;
 };
 
 class SuffixPredicate : public TextPredicate {
  public:
-  SuffixPredicate(const indexes::Text* index, absl::string_view identifier,
-                  absl::string_view alias, std::string term);
-  const indexes::Text* GetIndex() const { return index_; }
-  absl::string_view GetAlias() const { return alias_; }
-  absl::string_view GetIdentifier() const {
-    return vmsdk::ToStringView(identifier_.get());
-  }
-  vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
-    return vmsdk::RetainUniqueValkeyString(identifier_.get());
+  SuffixPredicate(
+      std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
+      FieldMaskPredicate field_mask, std::string term);
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+    return text_index_schema_;
   }
   absl::string_view GetTextString() const { return term_; }
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const std::string_view& text) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
+  const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
 
  private:
-  const indexes::Text* index_;
-  vmsdk::UniqueValkeyString identifier_;
-  absl::string_view alias_;
+  std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
+  FieldMaskPredicate field_mask_;
   std::string term_;
 };
 
 class InfixPredicate : public TextPredicate {
  public:
-  InfixPredicate(const indexes::Text* index, absl::string_view identifier,
-                 absl::string_view alias, std::string term);
-  const indexes::Text* GetIndex() const { return index_; }
-  absl::string_view GetAlias() const { return alias_; }
-  absl::string_view GetIdentifier() const {
-    return vmsdk::ToStringView(identifier_.get());
-  }
-  vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
-    return vmsdk::RetainUniqueValkeyString(identifier_.get());
+  InfixPredicate(
+      std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
+      FieldMaskPredicate field_mask, std::string term);
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+    return text_index_schema_;
   }
   absl::string_view GetTextString() const { return term_; }
   bool Evaluate(Evaluator& evaluator) const override;
   bool Evaluate(const std::string_view& text) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
+  const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
 
  private:
-  const indexes::Text* index_;
-  vmsdk::UniqueValkeyString identifier_;
-  absl::string_view alias_;
+  std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
+  FieldMaskPredicate field_mask_;
   std::string term_;
 };
 
 class FuzzyPredicate : public TextPredicate {
  public:
-  FuzzyPredicate(const indexes::Text* index, absl::string_view identifier,
-                 absl::string_view alias, std::string term, uint32_t distance);
-  const indexes::Text* GetIndex() const { return index_; }
-  absl::string_view GetAlias() const { return alias_; }
-  absl::string_view GetIdentifier() const {
-    return vmsdk::ToStringView(identifier_.get());
-  }
-  vmsdk::UniqueValkeyString GetRetainedIdentifier() const {
-    return vmsdk::RetainUniqueValkeyString(identifier_.get());
+  FuzzyPredicate(
+      std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
+      FieldMaskPredicate field_mask, std::string term, uint32_t distance);
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+    return text_index_schema_;
   }
   absl::string_view GetTextString() const { return term_; }
   uint32_t GetDistance() const { return distance_; }
@@ -265,11 +252,11 @@ class FuzzyPredicate : public TextPredicate {
   bool Evaluate(const std::string_view& text) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
+  const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
 
  private:
-  const indexes::Text* index_;
-  vmsdk::UniqueValkeyString identifier_;
-  absl::string_view alias_;
+  std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
+  FieldMaskPredicate field_mask_;
   std::string term_;
   uint32_t distance_;
 };
@@ -284,8 +271,11 @@ class ProximityPredicate : public TextPredicate {
   bool Evaluate(const std::string_view& text) const override { return false; }
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
-  const indexes::Text* GetIndex() const override {
-    return terms_[0]->GetIndex();
+  std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
+    return terms_[0]->GetTextIndexSchema();
+  }
+  const FieldMaskPredicate GetFieldMask() const override {
+    return terms_[0]->GetFieldMask();
   }
   const std::vector<std::unique_ptr<TextPredicate>>& Terms() const {
     return terms_;

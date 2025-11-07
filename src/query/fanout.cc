@@ -104,7 +104,7 @@ struct SearchPartitionResultsTracker {
                                                  attribute_content.content())));
       }
       indexes::Neighbor neighbor{
-          StringInternStore::InternTemp(neighbor_entry->key()),
+          StringInternStore::Intern(neighbor_entry->key()),
           neighbor_entry->score(), std::move(attribute_contents)};
       AddResult(neighbor);
     }

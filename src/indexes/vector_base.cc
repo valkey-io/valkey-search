@@ -142,7 +142,7 @@ void VectorBase::Init(int dimensions,
 InternedStringPtr VectorBase::InternVector(absl::string_view record,
                                            std::optional<float> &magnitude) {
   if (!IsValidSizeVector(record)) {
-    return nullptr;
+    return {};
   }
   if (normalize_) {
     magnitude = kDefaultMagnitude;

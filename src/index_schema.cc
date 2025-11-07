@@ -1200,7 +1200,7 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
                          << " stale entries for {Index: " << name_ << "}";
 
   for (auto &[key, attributes] : deletion_attributes) {
-    auto interned_key = std::make_shared<InternedString>(key);
+    auto interned_key = StringInternStore::Intern(key);
     ProcessMutation(ctx, attributes, interned_key, true);
   }
   VMSDK_LOG(NOTICE, ctx) << "Scanned index schema " << name_

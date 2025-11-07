@@ -11,14 +11,11 @@
 #include <memory>
 #include <string>
 
-#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/utils/allocator.h"
 #include "src/utils/intrusive_ref_count.h"
 #include "vmsdk/src/memory_allocation.h"
-#include "vmsdk/src/memory_allocation_overrides.h"
 #include "vmsdk/src/memory_tracker.h"
-#include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search {
@@ -69,7 +66,7 @@ TEST_F(StringInterningTest, BasicTest) {
     auto interned_key_1 = StringInternStore::Intern("key1");
     auto interned_key_2 = StringInternStore::Intern("key2");
     auto interned_key_2_1 = StringInternStore::Intern("key2");
-    auto interned_key_3 = std::make_shared<InternedString>("key3");
+    auto interned_key_3 = StringInternStore::InternTemp("key3");
 
     EXPECT_EQ(std::string(*interned_key_1), "key1");
     EXPECT_EQ(std::string(*interned_key_2), "key2");
@@ -112,7 +109,7 @@ TEST_P(StringInterningTest, WithAllocator) {
 
 TEST_F(StringInterningTest, StringInternStoreTracksMemoryInternally) {
   MemoryPool caller_pool{0};
-  std::shared_ptr<InternedString> interned_str;
+  InternedStringPtr interned_str;
   auto allocator = std::make_unique<MockAllocator>();
 
   {

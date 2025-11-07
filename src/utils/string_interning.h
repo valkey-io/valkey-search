@@ -24,17 +24,21 @@
 namespace valkey_search {
 
 class InternedString;
-
+using InternedStringPtr = std::shared_ptr<InternedString>;
 class StringInternStore {
  public:
-  friend class InternedString;
   friend class InternedString;
   static StringInternStore &Instance() {
     static StringInternStore *instance = new StringInternStore();
     return *instance;
   }
-  static std::shared_ptr<InternedString> Intern(absl::string_view str,
-                                                Allocator *allocator = nullptr);
+  static InternedStringPtr Intern(absl::string_view str,
+                                  Allocator *allocator = nullptr);
+  // Make a non-interned StringIntern instance. This is an optimization
+  // for APIs that require a StringInternPtr but where the interning is
+  // unnecessary or inefficient. For example, this applies when fetching
+  // data from remote nodes.
+  static InternedStringPtr InternTemp(absl::string_view str);
 
   static int64_t GetMemoryUsage();
 
@@ -47,8 +51,7 @@ class StringInternStore {
   static MemoryPool memory_pool_;
 
   StringInternStore() = default;
-  std::shared_ptr<InternedString> InternImpl(absl::string_view str,
-                                             Allocator *allocator);
+  InternedStringPtr InternImpl(absl::string_view str, Allocator *allocator);
   void Release(InternedString *str);
   absl::flat_hash_map<absl::string_view, std::weak_ptr<InternedString>>
       str_to_interned_ ABSL_GUARDED_BY(mutex_);
@@ -75,7 +78,6 @@ class InternedString {
   // It is intended for cases where an API requires a `StringIntern` object
   // but interning is unnecessary or inefficient. For example, this applies
   // when fetching data from remote nodes.
-  InternedString(absl::string_view str) : InternedString(str, false){};
 
   ~InternedString();
 
@@ -84,6 +86,7 @@ class InternedString {
   absl::string_view operator*() const { return Str(); }
 
  private:
+  friend class TempInternedString;
   InternedString(absl::string_view str, bool shared);
   InternedString(char *data, size_t length);
 
@@ -92,8 +95,6 @@ class InternedString {
   bool is_shared_;
   bool is_data_owner_;
 };
-
-using InternedStringPtr = std::shared_ptr<InternedString>;
 
 struct InternedStringPtrHash {
   template <typename T>

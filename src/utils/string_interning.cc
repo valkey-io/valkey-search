@@ -13,7 +13,6 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/utils/allocator.h"
-#include "vmsdk/src/memory_allocation_overrides.h"
 #include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search {
@@ -45,6 +44,17 @@ InternedString::~InternedString() {
   }
 }
 
+// Hack to enable make_shared with a private constructor.
+class TempInternedString : public InternedString {
+ public:
+  explicit TempInternedString(absl::string_view str)
+      : InternedString(str, false) {}
+};
+
+InternedStringPtr StringInternStore::InternTemp(absl::string_view str) {
+  return std::make_shared<TempInternedString>(str);
+}
+
 void StringInternStore::Release(InternedString* str) {
   absl::MutexLock lock(&mutex_);
   auto it = str_to_interned_.find(*str);
@@ -60,13 +70,13 @@ void StringInternStore::Release(InternedString* str) {
   }
 }
 
-std::shared_ptr<InternedString> StringInternStore::Intern(
-    absl::string_view str, Allocator* allocator) {
+InternedStringPtr StringInternStore::Intern(absl::string_view str,
+                                            Allocator* allocator) {
   return Instance().InternImpl(str, allocator);
 }
 
-std::shared_ptr<InternedString> StringInternStore::InternImpl(
-    absl::string_view str, Allocator* allocator) {
+InternedStringPtr StringInternStore::InternImpl(absl::string_view str,
+                                                Allocator* allocator) {
   IsolatedMemoryScope scope{memory_pool_};
 
   absl::MutexLock lock(&mutex_);
@@ -77,16 +87,14 @@ std::shared_ptr<InternedString> StringInternStore::InternImpl(
     }
   }
 
-  std::shared_ptr<InternedString> interned_string;
+  InternedStringPtr interned_string;
   if (allocator) {
     auto buffer = allocator->Allocate(str.size() + 1);
     memcpy(buffer, str.data(), str.size());
     buffer[str.size()] = '\0';
-    interned_string =
-        std::shared_ptr<InternedString>(new InternedString(buffer, str.size()));
+    interned_string = InternedStringPtr(new InternedString(buffer, str.size()));
   } else {
-    interned_string =
-        std::shared_ptr<InternedString>(new InternedString(str, true));
+    interned_string = InternedStringPtr(new InternedString(str, true));
   }
   str_to_interned_.insert({*interned_string, interned_string});
   return interned_string;

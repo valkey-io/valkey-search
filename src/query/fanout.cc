@@ -9,7 +9,6 @@
 
 #include <netinet/in.h>
 
-#include <cstddef>
 #include <cstring>
 #include <deque>
 #include <memory>
@@ -20,18 +19,14 @@
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
-#include "absl/container/flat_hash_map.h"
-#include "absl/random/random.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "absl/strings/str_cat.h"
 #include "absl/synchronization/mutex.h"
 #include "grpcpp/support/status.h"
 #include "src/attribute_data_type.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/search_converter.h"
-#include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/fanout_template.h"
 #include "src/query/search.h"
@@ -109,7 +104,7 @@ struct SearchPartitionResultsTracker {
                                                  attribute_content.content())));
       }
       indexes::Neighbor neighbor{
-          std::make_shared<InternedString>(neighbor_entry->key()),
+          StringInternStore::InternTemp(neighbor_entry->key()),
           neighbor_entry->score(), std::move(attribute_contents)};
       AddResult(neighbor);
     }

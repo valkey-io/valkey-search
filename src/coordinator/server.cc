@@ -139,7 +139,7 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
           return;
         }
         if (parameters->cancellation_token->IsCancelled() &&
-            !valkey_search::options::GetEnablePartialResults().GetValue()) {
+            !parameters->enable_partial_results) {
           reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
                            "Search operation cancelled due to timeout"});
           RecordSearchMetrics(true, std::move(latency_sample));

@@ -173,9 +173,11 @@ static auto log_level =
         .WithValidationCallback(ValidateLogLevel)
         .Build();
 
-/// Should timeouts return partial results OR generate a TIMEOUT error?
-constexpr absl::string_view kEnablePartialResults{"enable-partial-results"};
-static config::Boolean enable_partial_results(kEnablePartialResults, true);
+/// Enable partial results by default of not
+/// If set to true, search will use SOMESHARDS if user does not explicitly
+/// provide an option in the command
+constexpr absl::string_view kPreferPartialResults{"prefer-partial-results"};
+static config::Boolean prefer_partial_results(kPreferPartialResults, true);
 
 /// Configure the weight for high priority tasks in thread pools (0-100)
 /// Low priority weight = 100 - high_priority_weight
@@ -303,8 +305,8 @@ absl::Status Reset() {
   return absl::OkStatus();
 }
 
-const vmsdk::config::Boolean& GetEnablePartialResults() {
-  return static_cast<vmsdk::config::Boolean&>(enable_partial_results);
+const vmsdk::config::Boolean& GetPreferPartialResults() {
+  return static_cast<vmsdk::config::Boolean&>(prefer_partial_results);
 }
 
 vmsdk::config::Number& GetHighPriorityWeight() {

@@ -77,7 +77,7 @@ struct SearchPartitionResultsTracker {
                       const std::string &address, const grpc::Status &status) {
     if (!status.ok()) {
       bool should_cancel = status.error_code() == grpc::RESOURCE_EXHAUSTED ||
-                           !options::GetEnablePartialResults().GetValue();
+                           !parameters->enable_partial_results;
       if (status.error_code() == grpc::RESOURCE_EXHAUSTED) {
         reached_oom.store(true);
       }

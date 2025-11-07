@@ -28,6 +28,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
 #include "src/utils/cancel.h"
+#include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/thread_pool.h"
@@ -75,6 +76,7 @@ struct SearchParameters {
   std::string query;
   uint32_t dialect{kDialect};
   bool local_only{false};
+  bool enable_partial_results{options::GetPreferPartialResults().GetValue()};
   int k{0};
   std::optional<unsigned> ef;
   LimitParameter limit;

@@ -15,6 +15,7 @@
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
 #include "valkey_search_options.h"
+#include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/debug.h"
 
 namespace valkey_search {
@@ -36,6 +37,15 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   auto *res =
       static_cast<Result *>(ValkeyModule_GetBlockedClientPrivateData(ctx));
   CHECK(res != nullptr);
+
+  // Check if operation was cancelled and partial results are disabled
+  if (!options::GetEnablePartialResults().GetValue() &&
+      res->parameters->cancellation_token->IsCancelled()) {
+    ++Metrics::GetStats().query_failed_requests_cnt;
+    return ValkeyModule_ReplyWithError(
+        ctx, "Search operation cancelled due to timeout");
+  }
+
   if (!res->neighbors.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
     return ValkeyModule_ReplyWithError(
@@ -121,7 +131,12 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
           ForceReplicasOnly.GetValue()
               ? query::fanout::FanoutTargetMode::kReplicasOnly
               : query::fanout::FanoutTargetMode::kRandom;
-      auto search_targets = query::fanout::GetSearchTargetsForFanout(ctx, mode);
+      // refresh cluster map if needed
+      ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
+      auto search_targets =
+          ForceReplicasOnly.GetValue()
+              ? ValkeySearch::Instance().GetClusterMap()->GetReplicaTargets()
+              : ValkeySearch::Instance().GetClusterMap()->GetRandomTargets();
       return query::fanout::PerformSearchFanoutAsync(
           ctx, search_targets,
           ValkeySearch::Instance().GetCoordinatorClientPool(),

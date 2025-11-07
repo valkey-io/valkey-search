@@ -177,10 +177,6 @@ unsigned int count_num_terms(const PositionMap& pos_map) {
 }
 
 void Postings::InsertKey(const Key& key, PositionMap&& pos_map) {
-  auto& metadata = GetTextIndexSchema()->GetMetadata();
-  metadata.total_positions += pos_map.size();
-  metadata.total_term_frequency += count_num_terms(pos_map);
-
   // TODO: Compress the positions map.
   key_to_positions_[key] = std::move(pos_map);
 }
@@ -189,11 +185,6 @@ void Postings::InsertKey(const Key& key, PositionMap&& pos_map) {
 void Postings::RemoveKey(const Key& key) {
   auto node = key_to_positions_.extract(key);
   if (node.empty()) return;
-  PositionMap& pos_map = node.mapped();
-
-  auto& metadata = GetTextIndexSchema()->GetMetadata();
-  metadata.total_positions -= pos_map.size();
-  metadata.total_term_frequency -= count_num_terms(pos_map);
 }
 
 // Get total number of document keys

@@ -16,7 +16,7 @@ def canceller(client, client_id):
     client.execute_command("client kill id ", client_id)
 
 
-def search_command(index: str, filter: Union[int, None]) -> list[str]:
+def search_command(index: str, filter: Union[int, None], enable_partial_results: bool = True) -> list[str]:
     predicate = "*" if filter is None else f"(@n:[0 {filter}])"
     return [
         "FT.SEARCH",
@@ -27,7 +27,8 @@ def search_command(index: str, filter: Union[int, None]) -> list[str]:
         "BLOB",
         float_to_bytes([10.0, 10.0, 10.0]),
         "TIMEOUT",
-        "10"
+        "10",
+        "SOMESHARDS" if enable_partial_results else "ALLSHARDS"
     ]
 
 
@@ -37,14 +38,15 @@ def search(
     index: str,
     timeout: bool,
     filter: Union[int, None] = None,
+    enable_partial_results: bool = True,
     
 ) -> list[tuple[str, float]]:
-    print("Search command: ", search_command(index, filter))
+    print("Search command: ", search_command(index, filter, enable_partial_results))
     if not timeout:
-        return client.execute_command(*search_command(index, filter))
+        return client.execute_command(*search_command(index, filter, enable_partial_results))
     else:
         try:
-            x = client.execute_command(*search_command(index, filter))
+            x = client.execute_command(*search_command(index, filter, enable_partial_results))
             assert False, "Expected timeout, but got result: " + str(x)
         except ResponseError as e:
             assert str(e) == "Search operation cancelled due to timeout"
@@ -101,34 +103,20 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         #
         # Enable timeout path, no error but message result
         #
-        assert (
-            client.execute_command(
-                "CONFIG SET search.enable-partial-results no"
-            )
-            == b"OK"
-        )
-
-        hnsw_result = search(client, "hnsw", True)
+        hnsw_result = search(client, "hnsw", True, None, False)
         assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 1
 
-        flat_result = search(client, "flat", True)
+        flat_result = search(client, "flat", True, None, False)
         assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 2
 
         #
         # Enable partial results
         #
-        assert (
-            client.execute_command(
-                "CONFIG SET search.enable-partial-results yes"
-            )
-            == b"OK"
-        )
-
-        hnsw_result = search(client, "hnsw", False)
+        hnsw_result = search(client, "hnsw", False, None, True)
         assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 3
         assert hnsw_result != nominal_hnsw_result
 
-        flat_result = search(client, "flat", False)
+        flat_result = search(client, "flat", False, None, True)
         assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 4
         assert flat_result != nominal_flat_result
 
@@ -138,7 +126,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         assert (
             client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 0
         )
-        hnsw_result = search(client, "hnsw", False, 2)
+        hnsw_result = search(client, "hnsw", False, 2, True)
         assert hnsw_result[0] == 2
         assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 5
         assert (
@@ -149,15 +137,9 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         # Disable partial results, and force timeout with pre-filtering
         #
         assert (
-            client.execute_command(
-                "CONFIG SET search.enable-partial-results no"
-            )
-            == b"OK"
-        )
-        assert (
             client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 1
         )
-        hnsw_result = search(client, "hnsw", True, 2)
+        hnsw_result = search(client, "hnsw", True, 2, False)
         assert client.info("SEARCH")["search_test-counter-ForceCancels"] == 6
         assert (
             client.info("SEARCH")["search_query_prefiltering_requests_cnt"] == 2
@@ -177,7 +159,7 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
         )
         assert(client.execute_command("FT._DEBUG PAUSEPOINT LIST") == [b"Cancel", []])
 
-        hnsw_result = search(client, "hnsw", True, 2)
+        hnsw_result = search(client, "hnsw", True, 2, False)
         waiters.wait_for_true(lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST Cancel") > 0)
         w = client.execute_command("FT._DEBUG PAUSEPOINT LIST")
         assert(w[0] == b'Cancel')
@@ -272,14 +254,9 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         self.control_set("TimeoutPollFrequency", "1")
 
         #
-        # Enable timeout path, no error but message result
-        #
-        self.config_set("search.enable-partial-results", "no")
-
-        #
         # Normal HNSW path
         #
-        hnsw_result = search(client, "hnsw", True)
+        hnsw_result = search(client, "hnsw", True, None, False)
 
         self.check_info_sum("search_test-counter-ForceCancels", 3)
 
@@ -287,13 +264,13 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         # Pre-filtering HNSW path
         #
         self.check_info("search_query_prefiltering_requests_cnt", 0)
-        hnsw_result = search(client, "hnsw", True, 10)
+        hnsw_result = search(client, "hnsw", True, 10, False)
         self.check_info("search_query_prefiltering_requests_cnt", 1)
         self.check_info_sum("search_test-counter-ForceCancels", 6)
 
         #
         # Flat path
         #
-        flat_result = search(client, "flat", True)
+        flat_result = search(client, "flat", True, None, False)
         self.check_info_sum("search_test-counter-ForceCancels", 9)
         self.check_info("search_query_prefiltering_requests_cnt", 1)

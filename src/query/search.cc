@@ -78,7 +78,8 @@ absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
     auto latency_sample = SAMPLE_EVERY_N(100);
     auto res = vector_hnsw->Search(parameters.query, parameters.k,
                                    parameters.cancellation_token,
-                                   std::move(inline_filter), parameters.ef);
+                                   std::move(inline_filter), parameters.ef,
+                                   parameters.enable_partial_results);
     Metrics::GetStats().hnsw_vector_index_search_latency.SubmitSample(
         std::move(latency_sample));
     return res;

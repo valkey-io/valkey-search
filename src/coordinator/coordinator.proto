@@ -93,6 +93,7 @@ message SearchIndexPartitionRequest {
   bool no_content = 11;
   optional Predicate root_filter_predicate = 12;
   repeated ReturnParameter return_parameters = 13;
+  bool enable_partial_results = 14;
 }
 
 message NeighborEntry {

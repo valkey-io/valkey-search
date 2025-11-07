@@ -137,6 +137,15 @@ class TextIndexSchema {
   uint64_t GetRadixTreeMemoryUsage() const;
   uint64_t GetPositionMemoryUsage() const;
   uint64_t GetTotalTextIndexMemoryUsage() const;
+  
+  // Thread-safe accessor for per-key text indexes. Executes the provided
+  // function while holding the mutex lock, ensuring safe concurrent access.
+  template <typename Func>
+  auto WithPerKeyTextIndexes(Func&& func)
+      -> decltype(func(per_key_text_indexes_)) {
+    std::lock_guard<std::mutex> guard(per_key_text_indexes_mutex_);
+    return func(per_key_text_indexes_);
+  }
 };
 
 }  // namespace valkey_search::indexes::text

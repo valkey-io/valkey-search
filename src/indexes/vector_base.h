@@ -256,9 +256,12 @@ class PrefilterEvaluator : public query::Evaluator {
                 const InternedStringPtr& key);
 
  private:
-  bool EvaluateTags(const query::TagPredicate& predicate) override;
-  bool EvaluateNumeric(const query::NumericPredicate& predicate) override;
-  bool EvaluateText(const query::TextPredicate& predicate) override;
+  query::EvaluationResult EvaluateTags(
+      const query::TagPredicate& predicate) override;
+  query::EvaluationResult EvaluateNumeric(
+      const query::NumericPredicate& predicate) override;
+  query::EvaluationResult EvaluateText(
+      const query::TextPredicate& predicate) override;
   const InternedStringPtr* key_{nullptr};
 };
 

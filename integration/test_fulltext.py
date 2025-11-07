@@ -727,6 +727,49 @@ class TestFullText(ValkeySearchTestCaseBase):
         assert result[0] == 1  # Only doc:1 is matched for "running"
         assert result[1] == b'doc:1'
 
+    def test_mixed_predicates(self):
+        """
+        Test queries with mixed text, numeric, and tag predicates.
+        Tests there is no regression with predicate evaluator changes for text.
+        """
+        client: Valkey = self.server.get_new_client()
+        
+        # Index with text, numeric, and tag fields
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "content", "TEXT", "NOSTEM","title", "TEXT", "NOSTEM", "Addr", "TEXT", "NOSTEM",
+                            "salary", "NUMERIC", 
+                            "skills", "TAG", "SEPARATOR", "|")
+        
+        # Test documents
+        client.execute_command("HSET", "doc:1", "content", "software engineer developer", "title", "Title:1", "Addr", "12 Apt ABC", "salary", "100000", "skills", "python|java")
+        client.execute_command("HSET", "doc:2", "content", "software development manager", "title", "Title:2", "Addr", "12 Apt EFG", "salary", "120000", "skills", "python|ml|leadership")
+        client.execute_command("HSET", "doc:3", "content", "product manager", "title", "Title:2", "Addr", "12 Apt EFG", "salary", "90000", "skills", "strategy|leadership")
+        
+        # Test 1: Text + Numeric (AND)
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"manager" @salary:[90000 110000]')
+        assert result[0] == 1  # Should find doc:1
+
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"manager" @salary:[90000 130000]')
+        assert result[0] == 2  # Should find doc:2, doc:3
+        
+        # Test 1.1: Text prefix + Numeric (AND)
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"develop*" @salary:[90000 110000]')
+        assert result[0] == 1  # Should find doc:1
+
+        # Test 2: Text + Tag (OR) 
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"product" | @skills:{java}')
+        assert result[0] == 2  # Should find doc:1 (java) and doc:2 (scientist)
+        
+        # Test 3: All three types (complex OR)
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"manager" | @salary:[115000 125000] | @skills:{python}')
+        assert result[0] == 3  # Should find all docs
+        
+        # Test 4: All three types (complex AND) 
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"engineer" @salary:[90000 110000] @skills:{python}')
+        assert result[0] == 1  # Should find doc:1 only
+        
+        # Test 5: Negation with mixed types
+        result = client.execute_command("FT.SEARCH", "idx", '-@content:"manager" @skills:{python}')
+        assert result[0] == 1  # Should find doc:1 only
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """
     Tests that require debug mode enabled for memory statistics validation.

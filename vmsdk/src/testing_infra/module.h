@@ -255,6 +255,7 @@ class MockValkeyModule {
   MOCK_METHOD(void, FreeClusterNodesList, (char **ids));
   MOCK_METHOD(int, CallReplyType, (ValkeyModuleCallReply * reply));
   MOCK_METHOD(size_t, CallReplyLength, (ValkeyModuleCallReply * reply));
+  MOCK_METHOD(long long, CallReplyInteger, (ValkeyModuleCallReply * reply));
   MOCK_METHOD(ValkeyModuleString *, CreateStringFromCallReply,
               (ValkeyModuleCallReply * reply));
   MOCK_METHOD(int, WrongArity, (ValkeyModuleCtx * ctx));
@@ -1420,6 +1421,20 @@ inline int TestValkeyModule_CallReplyTypeImpl(ValkeyModuleCallReply *reply) {
   return reply->type;
 }
 
+inline long long TestValkeyModule_CallReplyInteger(
+    ValkeyModuleCallReply *reply) {
+  return kMockValkeyModule->CallReplyInteger(reply);
+}
+
+inline long long TestValkeyModule_CallReplyIntegerImpl(
+    ValkeyModuleCallReply *reply) {
+  if (reply == nullptr || reply->type != VALKEYMODULE_REPLY_INTEGER) {
+    return 0;
+  }
+  CHECK(std::holds_alternative<CallReplyInteger>(reply->val));
+  return std::get<CallReplyInteger>(reply->val);
+}
+
 inline ValkeyModuleString *TestValkeyModule_CreateStringFromCallReply(
     ValkeyModuleCallReply *reply) {
   return kMockValkeyModule->CreateStringFromCallReply(reply);
@@ -1569,6 +1584,7 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_FreeClusterNodesList = &TestValkeyModule_FreeClusterNodesList;
   ValkeyModule_CallReplyType = &TestValkeyModule_CallReplyType;
   ValkeyModule_CallReplyLength = &TestValkeyModule_CallReplyLength;
+  ValkeyModule_CallReplyInteger = &TestValkeyModule_CallReplyInteger;
   ValkeyModule_CreateStringFromCallReply =
       &TestValkeyModule_CreateStringFromCallReply;
   ValkeyModule_WrongArity = &TestValkeyModule_WrongArity;
@@ -1623,6 +1639,8 @@ inline void TestValkeyModule_Init() {
   ON_CALL(*kMockValkeyModule,
           CallReplyMapElement(testing::_, testing::_, testing::_, testing::_))
       .WillByDefault(TestValkeyModule_CallReplyMapElementImpl);
+  ON_CALL(*kMockValkeyModule, CallReplyInteger(testing::_))
+      .WillByDefault(TestValkeyModule_CallReplyIntegerImpl);
   ON_CALL(*kMockValkeyModule, Milliseconds()).WillByDefault([]() -> long long {
     static long long fake_time = 0;
     return ++fake_time;

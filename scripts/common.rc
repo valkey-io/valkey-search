@@ -262,5 +262,5 @@ function check_for_san_errors() {
 }
 
 function get_file_last_modified() {
-  echo $(date -r ${1} +%s)
+    echo $(date -r "${1}" +%s)
 }

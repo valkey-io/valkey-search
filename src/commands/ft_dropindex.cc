@@ -24,7 +24,7 @@ class DropConsistencyCheckFanoutOperation
     : public query::fanout::FanoutOperationBase<
           coordinator::InfoIndexPartitionRequest,
           coordinator::InfoIndexPartitionResponse,
-          query::fanout::FanoutTargetMode::kAll> {
+          vmsdk::cluster_map::FanoutTargetMode::kAll> {
  public:
   DropConsistencyCheckFanoutOperation(uint32_t db_num,
                                       const std::string& index_name,
@@ -32,24 +32,28 @@ class DropConsistencyCheckFanoutOperation
       : query::fanout::FanoutOperationBase<
             coordinator::InfoIndexPartitionRequest,
             coordinator::InfoIndexPartitionResponse,
-            query::fanout::FanoutTargetMode::kAll>(),
+            vmsdk::cluster_map::FanoutTargetMode::kAll>(),
         db_num_(db_num),
         index_name_(index_name),
         timeout_ms_(timeout_ms){};
 
+  std::vector<vmsdk::cluster_map::NodeInfo> GetTargets() const {
+    return ValkeySearch::Instance().GetClusterMap()->GetAllTargets();
+  }
+
   unsigned GetTimeoutMs() const override { return timeout_ms_; }
 
   coordinator::InfoIndexPartitionRequest GenerateRequest(
-      const query::fanout::FanoutSearchTarget&) override {
+      const vmsdk::cluster_map::NodeInfo&) override {
     coordinator::InfoIndexPartitionRequest req;
     req.set_db_num(db_num_);
     req.set_index_name(index_name_);
     return req;
   }
 
-  void OnResponse(const coordinator::InfoIndexPartitionResponse& resp,
-                  [[maybe_unused]] const query::fanout::FanoutSearchTarget&
-                      target) override {
+  void OnResponse(
+      const coordinator::InfoIndexPartitionResponse& resp,
+      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo& target) override {
     // if the index exist on some node and returns a valid response, treat it as
     // inconsistent error
     absl::MutexLock lock(&mutex_);
@@ -59,7 +63,7 @@ class DropConsistencyCheckFanoutOperation
   std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
   GetLocalResponse(
       const coordinator::InfoIndexPartitionRequest& request,
-      [[maybe_unused]] const query::fanout::FanoutSearchTarget&) override {
+      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo&) override {
     return coordinator::Service::GenerateInfoResponse(request);
   }
 

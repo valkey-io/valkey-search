@@ -8,13 +8,10 @@
 #ifndef VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_
 #define VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_
 
-#include <cstddef>
 #include <cstdint>
-#include <memory>
 
-#include "absl/status/statusor.h"
+#include "src/commands/commands.h"
 #include "src/query/search.h"
-#include "src/schema_manager.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
@@ -30,9 +27,14 @@ struct LimitParameter {
 absl::Status PreParseQueryString(query::SearchParameters &parameters);
 absl::Status PostParseQueryString(query::SearchParameters &parameters);
 
-absl::StatusOr<std::unique_ptr<query::SearchParameters>>
-ParseVectorSearchParameters(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
-                            int argc, const SchemaManager &schema_manager);
+//
+// Data Unique to the FT.SEARCH command
+//
+struct SearchCommand : public QueryCommand {
+  absl::Status ParseCommand(vmsdk::ArgsIterator &itr) override;
+  void SendReply(ValkeyModuleCtx *ctx,
+                 std::deque<indexes::Neighbor> &neighbors) override;
+};
 
 }  // namespace valkey_search
 #endif  // VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_

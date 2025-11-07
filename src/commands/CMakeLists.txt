@@ -12,6 +12,7 @@ set(SRCS_COMMANDS
     ${CMAKE_CURRENT_LIST_DIR}/ft_list.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_search.cc
     ${CMAKE_CURRENT_LIST_DIR}/commands.h
+    ${CMAKE_CURRENT_LIST_DIR}/commands.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_search.h)
 
 valkey_search_add_static_library(commands "${SRCS_COMMANDS}")

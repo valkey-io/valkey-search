@@ -29,6 +29,8 @@ set(SRCS_UTILS
                ${CMAKE_CURRENT_LIST_DIR}/info.cc
                ${CMAKE_CURRENT_LIST_DIR}/utils.cc
                ${CMAKE_CURRENT_LIST_DIR}/utils.h
+               ${CMAKE_CURRENT_LIST_DIR}/cluster_map.cc
+               ${CMAKE_CURRENT_LIST_DIR}/cluster_map.h
                )
 
 valkey_search_add_static_library(utils "${SRCS_UTILS}")

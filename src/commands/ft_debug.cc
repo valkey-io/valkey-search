@@ -9,7 +9,7 @@
 #include <absl/strings/ascii.h>
 
 #include "module_config.h"
-#include "src/commands/commands.h"
+#include "src/utils/string_interning.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
@@ -132,6 +132,80 @@ absl::Status ControlledCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   return absl::OkStatus();
 }
 
+void DumpBucket(ValkeyModuleCtx *ctx,
+                const StringInternStore::Stats::BucketStats &bucket) {
+  ValkeyModule_ReplyWithArray(ctx, 6);
+  ValkeyModule_ReplyWithCString(ctx, "Count");
+  ValkeyModule_ReplyWithLongLong(ctx, bucket.count_);
+  ValkeyModule_ReplyWithCString(ctx, "Bytes");
+  ValkeyModule_ReplyWithLongLong(ctx, bucket.bytes_);
+  ValkeyModule_ReplyWithCString(ctx, "AvgSize");
+  if (bucket.count_ == 0) {
+    ValkeyModule_ReplyWithDouble(ctx, 0);
+  } else {
+    ValkeyModule_ReplyWithDouble(ctx, bucket.bytes_ / double(bucket.count_));
+  }
+}
+
+std::ostream &operator<<(std::ostream &os,
+                         const StringInternStore::Stats::BucketStats &bucket) {
+  return os << "Count: " << bucket.count_ << " Bytes: " << bucket.bytes_
+            << " AvgSize: "
+            << (bucket.count_ == 0 ? 0 : bucket.bytes_ / double(bucket.count_));
+}
+
+absl::Status StringPoolStats(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
+  VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+  auto stats = StringInternStore::Instance().GetStats();
+  ValkeyModule_ReplyWithArray(ctx, 4);
+  // Reply[0] -> GlobalStats
+  DumpBucket(ctx, stats.inline_total_stats_);
+  DumpBucket(ctx, stats.out_of_line_total_stats_);
+  // Reply[1] -> ByRefcount
+  ValkeyModule_ReplyWithArray(ctx, stats.by_ref_stats_.size());
+  for (auto &hist : stats.by_ref_stats_) {
+    ValkeyModule_ReplyWithArray(ctx, 2);
+    ValkeyModule_ReplyWithLongLong(ctx, hist.first);
+    DumpBucket(ctx, hist.second);
+  }
+  ValkeyModule_ReplyWithArray(ctx, stats.by_size_stats_.size());
+  for (auto &hist : stats.by_size_stats_) {
+    ValkeyModule_ReplyWithArray(ctx, 2);
+    ValkeyModule_ReplyWithLongLong(ctx, hist.first);
+    DumpBucket(ctx, hist.second);
+  }
+  //
+  // Put the stats into the log
+  //
+  VMSDK_LOG(NOTICE, ctx) << "<<<< Start InternStringPool Stats >>>>>";
+  VMSDK_LOG(NOTICE, ctx) << "Inline Total: " << stats.inline_total_stats_;
+  VMSDK_LOG(NOTICE, ctx) << "OutOfLine Total: "
+                         << stats.out_of_line_total_stats_;
+  VMSDK_LOG(NOTICE, ctx) << "ByRefCount Buckets: "
+                         << stats.by_ref_stats_.size();
+  for (auto &hist : stats.by_ref_stats_) {
+    if (hist.first > 0) {
+      VMSDK_LOG(NOTICE, ctx)
+          << "InlineRef: " << hist.first << " " << hist.second;
+    } else {
+      VMSDK_LOG(NOTICE, ctx)
+          << "OutOfLineRef: " << -hist.first << " " << hist.second;
+    }
+  }
+  VMSDK_LOG(NOTICE, ctx) << "BySize Buckets: " << stats.by_size_stats_.size();
+  for (auto &hist : stats.by_size_stats_) {
+    if (hist.first > 0) {
+      VMSDK_LOG(NOTICE, ctx)
+          << "InlineSize: " << hist.first << " " << hist.second;
+    } else {
+      VMSDK_LOG(NOTICE, ctx)
+          << "OutOfLineSize: " << -hist.first << " " << hist.second;
+    }
+  }
+  VMSDK_LOG(NOTICE, ctx) << "<<<< End InternStringPool Stats >>>>>";
+  return absl::OkStatus();
+}
+
 absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
   static std::vector<std::pair<std::string, std::string>> help_text{
@@ -144,6 +218,7 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
        "list all controlled variables and their values"},
       {"FT._DEBUG PAUSEPOINT [ SET | RESET | TEST | LIST] <pausepoint>",
        "control pause points"},
+      {"FT._DEBUG STRINGPOOLSTATS", "Show InternStringPool Stats"},
   };
   ValkeyModule_ReplySetArrayLength(ctx, 2 * help_text.size());
   for (auto &pair : help_text) {
@@ -185,6 +260,8 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return PausePointControlCmd(ctx, itr);
   } else if (keyword == "CONTROLLED_VARIABLE") {
     return ControlledCmd(ctx, itr);
+  } else if (keyword == "STRINGPOOLSTATS") {
+    return StringPoolStats(ctx, itr);
   } else if (keyword == "HELP") {
     return HelpCmd(ctx, itr);
   } else {

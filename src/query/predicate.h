@@ -165,7 +165,9 @@ class TextPredicate : public Predicate {
   virtual EvaluationResult Evaluate(Evaluator& evaluator) const = 0;
   // Evaluate against per-key TextIndex
   virtual EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index) const = 0;
+      const valkey_search::indexes::text::TextIndex& text_index,
+      const std::shared_ptr<valkey_search::InternedString>& target_key)
+      const = 0;
   virtual std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
       const = 0;
   virtual const FieldMaskPredicate GetFieldMask() const = 0;
@@ -186,7 +188,9 @@ class TermPredicate : public TextPredicate {
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index) const override;
+      const valkey_search::indexes::text::TextIndex& text_index,
+      const std::shared_ptr<valkey_search::InternedString>& target_key)
+      const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -211,7 +215,9 @@ class PrefixPredicate : public TextPredicate {
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index) const override;
+      const valkey_search::indexes::text::TextIndex& text_index,
+      const std::shared_ptr<valkey_search::InternedString>& target_key)
+      const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -234,7 +240,9 @@ class SuffixPredicate : public TextPredicate {
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index) const override;
+      const valkey_search::indexes::text::TextIndex& text_index,
+      const std::shared_ptr<valkey_search::InternedString>& target_key)
+      const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -257,7 +265,9 @@ class InfixPredicate : public TextPredicate {
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index) const override;
+      const valkey_search::indexes::text::TextIndex& text_index,
+      const std::shared_ptr<valkey_search::InternedString>& target_key)
+      const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -281,7 +291,9 @@ class FuzzyPredicate : public TextPredicate {
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index) const override;
+      const valkey_search::indexes::text::TextIndex& text_index,
+      const std::shared_ptr<valkey_search::InternedString>& target_key)
+      const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -302,7 +314,9 @@ class ProximityPredicate : public TextPredicate {
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
-      const valkey_search::indexes::text::TextIndex& text_index) const override;
+      const valkey_search::indexes::text::TextIndex& text_index,
+      const std::shared_ptr<valkey_search::InternedString>& target_key)
+      const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {

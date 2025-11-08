@@ -45,9 +45,9 @@ EvaluationResult TermPredicate::Evaluate(Evaluator& evaluator) const {
 }
 
 EvaluationResult TermPredicate::Evaluate(
-    const valkey_search::indexes::text::TextIndex& text_index) const {
-  size_t field_number = index_->GetTextFieldNumber();
-  uint64_t field_mask = 1ULL << field_number;
+    const valkey_search::indexes::text::TextIndex& text_index,
+    const std::shared_ptr<valkey_search::InternedString>& target_key) const {
+  uint64_t field_mask = field_mask_;
 
   auto word_iter = text_index.prefix_.GetWordIterator(term_);
   if (word_iter.Done()) {
@@ -60,6 +60,10 @@ EvaluationResult TermPredicate::Evaluate(
   }
 
   auto key_iter = postings->GetKeyIterator();
+  // Skip to the target key in the shared Postings object
+  if (!key_iter.SkipForwardKey(target_key)) {
+    return EvaluationResult(false);  // Key not found
+  }
   if (!(key_iter.IsValid() && key_iter.ContainsFields(field_mask))) {
     return EvaluationResult(false);
   }
@@ -68,7 +72,7 @@ EvaluationResult TermPredicate::Evaluate(
   key_iterators.emplace_back(std::move(key_iter));
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr);
-  // If iterator doesn't have any positions return false
+
   if (iterator->DonePositions()) {
     return EvaluationResult(false);
   }
@@ -88,9 +92,9 @@ EvaluationResult PrefixPredicate::Evaluate(Evaluator& evaluator) const {
 }
 
 EvaluationResult PrefixPredicate::Evaluate(
-    const valkey_search::indexes::text::TextIndex& text_index) const {
-  size_t field_number = index_->GetTextFieldNumber();
-  uint64_t field_mask = 1ULL << field_number;
+    const valkey_search::indexes::text::TextIndex& text_index,
+    const std::shared_ptr<valkey_search::InternedString>& target_key) const {
+  uint64_t field_mask = field_mask_;
 
   auto word_iter = text_index.prefix_.GetWordIterator(term_);
   std::vector<indexes::text::Postings::KeyIterator> key_iterators;
@@ -102,7 +106,10 @@ EvaluationResult PrefixPredicate::Evaluate(
     auto postings = word_iter.GetTarget();
     if (postings) {
       auto key_iter = postings->GetKeyIterator();
-      if (key_iter.IsValid() && key_iter.ContainsFields(field_mask)) {
+      bool skip_result = key_iter.SkipForwardKey(target_key);
+      bool contains = skip_result && key_iter.ContainsFields(field_mask);
+
+      if (contains) {
         key_iterators.emplace_back(std::move(key_iter));
       }
     }
@@ -115,7 +122,7 @@ EvaluationResult PrefixPredicate::Evaluate(
 
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr);
-  // If iterator doesn't have any positions return false
+
   if (iterator->DonePositions()) {
     return EvaluationResult(false);
   }
@@ -136,9 +143,44 @@ EvaluationResult SuffixPredicate::Evaluate(Evaluator& evaluator) const {
 }
 
 EvaluationResult SuffixPredicate::Evaluate(
-    const valkey_search::indexes::text::TextIndex& text_index) const {
-  // TODO: Implement suffix evaluation
-  return EvaluationResult(false);
+    const valkey_search::indexes::text::TextIndex& text_index,
+    const std::shared_ptr<valkey_search::InternedString>& target_key) const {
+  uint64_t field_mask = field_mask_;
+
+  if (!text_index.suffix_.has_value()) {
+    return EvaluationResult(false);
+  }
+
+  std::string reversed_term(term_.rbegin(), term_.rend());
+  auto word_iter = text_index.suffix_->GetWordIterator(reversed_term);
+  std::vector<indexes::text::Postings::KeyIterator> key_iterators;
+
+  while (!word_iter.Done()) {
+    std::string_view word = word_iter.GetWord();
+    if (!word.starts_with(reversed_term)) break;
+
+    auto postings = word_iter.GetTarget();
+    if (postings) {
+      auto key_iter = postings->GetKeyIterator();
+      if (key_iter.SkipForwardKey(target_key) &&
+          key_iter.ContainsFields(field_mask)) {
+        key_iterators.emplace_back(std::move(key_iter));
+      }
+    }
+    word_iter.Next();
+  }
+
+  if (key_iterators.empty()) {
+    return EvaluationResult(false);
+  }
+
+  auto iterator = std::make_unique<indexes::text::TermIterator>(
+      std::move(key_iterators), field_mask, nullptr);
+  if (iterator->DonePositions()) {
+    return EvaluationResult(false);
+  }
+
+  return EvaluationResult(true, std::move(iterator));
 }
 
 InfixPredicate::InfixPredicate(
@@ -154,7 +196,8 @@ EvaluationResult InfixPredicate::Evaluate(Evaluator& evaluator) const {
 }
 
 EvaluationResult InfixPredicate::Evaluate(
-    const valkey_search::indexes::text::TextIndex& text_index) const {
+    const valkey_search::indexes::text::TextIndex& text_index,
+    const std::shared_ptr<valkey_search::InternedString>& target_key) const {
   // TODO: Implement infix evaluation
   return EvaluationResult(false);
 }
@@ -173,7 +216,8 @@ EvaluationResult FuzzyPredicate::Evaluate(Evaluator& evaluator) const {
 }
 
 EvaluationResult FuzzyPredicate::Evaluate(
-    const valkey_search::indexes::text::TextIndex& text_index) const {
+    const valkey_search::indexes::text::TextIndex& text_index,
+    const std::shared_ptr<valkey_search::InternedString>& target_key) const {
   // TODO: Implement fuzzy evaluation
   return EvaluationResult(false);
 }
@@ -192,7 +236,8 @@ EvaluationResult ProximityPredicate::Evaluate(Evaluator& evaluator) const {
 }
 
 EvaluationResult ProximityPredicate::Evaluate(
-    const valkey_search::indexes::text::TextIndex& text_index) const {
+    const valkey_search::indexes::text::TextIndex& text_index,
+    const std::shared_ptr<valkey_search::InternedString>& target_key) const {
   // Temporarily make this pass through for tests.
   return EvaluationResult(true);
 }

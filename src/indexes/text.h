@@ -72,8 +72,6 @@ class Text : public IndexBase {
   InternedStringPtr GetRawValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
-  size_t GetTextFieldNumber() const { return text_field_number_; }
-
  public:
   // Common EntriesFetcher impl for all Text operations.
   class EntriesFetcher : public EntriesFetcherBase {

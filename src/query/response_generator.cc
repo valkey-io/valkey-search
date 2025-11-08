@@ -151,7 +151,7 @@ class PredicateEvaluator : public query::Evaluator {
     }
 
     // Just pass the text_index, predicate computes its own field_mask
-    return predicate.Evaluate(it->second);
+    return predicate.Evaluate(it->second, target_key_);
   }
 };
 

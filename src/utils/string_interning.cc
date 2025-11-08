@@ -169,4 +169,28 @@ InternedStringPtr StringInternStore::InternImpl(absl::string_view str,
 
 int64_t StringInternStore::GetMemoryUsage() { return memory_pool_.GetUsage(); }
 
+StringInternStore::Stats StringInternStore::GetStats() const {
+  Stats stats;
+  absl::MutexLock lock(&mutex_);
+  for (const auto& str : str_to_interned_) {
+    auto size = str->Str().size();
+    if (str->IsInline()) {
+      stats.inline_total_stats_.count_++;
+      stats.inline_total_stats_.bytes_ += size;
+      stats.by_ref_stats_[str.RefCount()].count_++;
+      stats.by_ref_stats_[str.RefCount()].bytes_ += size;
+      stats.by_size_stats_[size].count_++;
+      stats.by_size_stats_[size].bytes_ += size;
+    } else {
+      stats.out_of_line_total_stats_.count_++;
+      stats.out_of_line_total_stats_.bytes_ += size;
+      stats.by_ref_stats_[-str.RefCount()].count_++;
+      stats.by_ref_stats_[-str.RefCount()].bytes_ += size;
+      stats.by_size_stats_[-size].count_++;
+      stats.by_size_stats_[-size].bytes_ += size;
+    }
+  }
+  return stats;
+}
+
 }  // namespace valkey_search

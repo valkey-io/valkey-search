@@ -8,6 +8,8 @@
 #ifndef VALKEYSEARCH_SRC_UTILS_STRING_INTERNING_H_
 #define VALKEYSEARCH_SRC_UTILS_STRING_INTERNING_H_
 
+#include <absl/container/btree_map.h>
+
 #include <cstddef>
 
 #include "absl/base/thread_annotations.h"
@@ -60,6 +62,8 @@ class InternedString {
       Destructor();
     }
   }
+
+  bool IsInline() const { return is_inline_; }
   //
   // Data layout. there's an 8 byte header followed by either the inline
   // string data or a pointer to externally allocated string data.
@@ -193,6 +197,18 @@ class StringInternStore {
     absl::MutexLock lock(&mutex_);
     return str_to_interned_.size();
   }
+
+  struct Stats {
+    struct BucketStats {
+      size_t count_{0};
+      size_t bytes_{0};
+    };
+    absl::btree_map<int, BucketStats> by_ref_stats_;
+    absl::btree_map<int, BucketStats> by_size_stats_;
+    BucketStats inline_total_stats_;
+    BucketStats out_of_line_total_stats_;
+  };
+  Stats GetStats() const;
 
  private:
   static MemoryPool memory_pool_;

@@ -43,9 +43,6 @@
 #include "third_party/hnswlib/hnswlib.h"  // IWYU pragma: keep
 #include "third_party/hnswlib/space_ip.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/memory_allocation.h"
-#include "vmsdk/src/memory_allocation_overrides.h"
-#include "vmsdk/src/memory_tracker.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/thread_pool.h"

@@ -109,7 +109,9 @@ class TextIndexSchema {
   // This object must also ensure that updates of this object are multi-thread
   // safe.
   //
-  absl::node_hash_map<Key, TextIndex> per_key_text_indexes_;
+  absl::node_hash_map<Key, TextIndex, InternedStringPtrHash,
+                      InternedStringPtrEqual>
+      per_key_text_indexes_;
 
   // Prevent concurrent mutations to per-key text index map
   std::mutex per_key_text_indexes_mutex_;
@@ -120,7 +122,9 @@ class TextIndexSchema {
   // indexing operates at the schema-level, any new text data to insert for a
   // key is accumulated across all attributes here and committed into the text
   // index structures at the end for efficiency.
-  absl::node_hash_map<Key, TokenPositions> in_progress_key_updates_;
+  absl::node_hash_map<Key, TokenPositions, InternedStringPtrHash,
+                      InternedStringPtrEqual>
+      in_progress_key_updates_;
 
   // Prevent concurrent mutations to in-progress key updates map
   std::mutex in_progress_key_updates_mutex_;

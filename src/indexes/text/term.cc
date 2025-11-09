@@ -14,7 +14,6 @@ TermIterator::TermIterator(std::vector<Postings::KeyIterator>&& key_iterators,
                            const InternedStringSet* untracked_keys)
     : field_mask_(field_mask),
       key_iterators_(std::move(key_iterators)),
-      current_key_(nullptr),
       current_position_(std::nullopt),
       untracked_keys_(untracked_keys) {
   // Prime the first key and position if they exist.
@@ -33,12 +32,12 @@ bool TermIterator::DoneKeys() const {
 }
 
 const InternedStringPtr& TermIterator::CurrentKey() const {
-  CHECK(current_key_ != nullptr);
+  CHECK(current_key_);
   return current_key_;
 }
 
 bool TermIterator::FindMinimumValidKey() {
-  current_key_ = nullptr;
+  current_key_ = InternedStringPtr();
   current_position_ = std::nullopt;
   for (auto& key_iter : key_iterators_) {
     while (key_iter.IsValid() && !key_iter.ContainsFields(field_mask_)) {

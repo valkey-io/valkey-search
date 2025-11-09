@@ -11,14 +11,10 @@
 #include <memory>
 #include <string>
 
-#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/utils/allocator.h"
 #include "src/utils/intrusive_ref_count.h"
 #include "vmsdk/src/memory_allocation.h"
-#include "vmsdk/src/memory_allocation_overrides.h"
-#include "vmsdk/src/memory_tracker.h"
-#include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search {

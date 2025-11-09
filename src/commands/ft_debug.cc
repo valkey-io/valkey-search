@@ -134,7 +134,7 @@ absl::Status ControlledCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
 
 void DumpBucket(ValkeyModuleCtx *ctx,
                 const StringInternStore::Stats::BucketStats &bucket) {
-  ValkeyModule_ReplyWithArray(ctx, 6);
+  ValkeyModule_ReplyWithArray(ctx, 10);
   ValkeyModule_ReplyWithCString(ctx, "Count");
   ValkeyModule_ReplyWithLongLong(ctx, bucket.count_);
   ValkeyModule_ReplyWithCString(ctx, "Bytes");
@@ -145,13 +145,25 @@ void DumpBucket(ValkeyModuleCtx *ctx,
   } else {
     ValkeyModule_ReplyWithDouble(ctx, bucket.bytes_ / double(bucket.count_));
   }
+  ValkeyModule_ReplyWithCString(ctx, "Allocated");
+  ValkeyModule_ReplyWithLongLong(ctx, bucket.allocated_);
+  ValkeyModule_ReplyWithCString(ctx, "AvgAllocated");
+  if (bucket.count_ == 0) {
+    ValkeyModule_ReplyWithDouble(ctx, 0);
+  } else {
+    ValkeyModule_ReplyWithDouble(ctx,
+                                 bucket.allocated_ / double(bucket.count_));
+  }
 }
 
 std::ostream &operator<<(std::ostream &os,
                          const StringInternStore::Stats::BucketStats &bucket) {
   return os << "Count: " << bucket.count_ << " Bytes: " << bucket.bytes_
             << " AvgSize: "
-            << (bucket.count_ == 0 ? 0 : bucket.bytes_ / double(bucket.count_));
+            << (bucket.count_ == 0 ? 0 : bucket.bytes_ / double(bucket.count_))
+            << " Allocated: " << bucket.allocated_ << " AvgAllocated: "
+            << (bucket.count_ == 0 ? 0
+                                   : bucket.allocated_ / double(bucket.count_));
 }
 
 absl::Status StringPoolStats(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {

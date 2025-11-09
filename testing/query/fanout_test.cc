@@ -33,6 +33,7 @@
 #include "src/valkey_search.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
+#include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -45,7 +46,7 @@ using ::testing::Invoke;
 using ::testing::Return;
 
 struct FanoutTestTarget {
-  fanout::FanoutSearchTarget target;
+  vmsdk::cluster_map::NodeInfo target;
   absl::StatusOr<std::vector<NeighborTest>> neighbors;
 };
 
@@ -63,11 +64,12 @@ FanoutTestParams GenerateMultiTargetTestParams(std::string test_name,
   FanoutTestParams result;
   for (int i = 1; i <= target_count; ++i) {
     result.targets.push_back(FanoutTestTarget{
-        .target =
-            {
-                .type = fanout::FanoutSearchTarget::Type::kRemote,
-                .address = absl::StrCat("127.0.0.1:", i + 1234),
-            },
+        .target = {.is_local = false,
+                   .socket_address =
+                       {
+                           .primary_endpoint = "127.0.0.1",
+                           .port = static_cast<unsigned short>(i + 1234),
+                       }},
         .neighbors = {{
             {
                 .external_id = std::to_string(i),
@@ -129,11 +131,12 @@ FanoutTestParams GenerateMultiTargetTestParamsWithLimit(
       });
     }
     result.targets.push_back(FanoutTestTarget{
-        .target =
-            {
-                .type = fanout::FanoutSearchTarget::Type::kRemote,
-                .address = absl::StrCat("127.0.0.1:", i + 1234),
-            },
+        .target = {.is_local = false,
+                   .socket_address =
+                       {
+                           .primary_endpoint = "127.0.0.1",
+                           .port = static_cast<unsigned short>(i + 1234),
+                       }},
         .neighbors = std::move(neighbors),
     });
   }
@@ -193,12 +196,13 @@ INSTANTIATE_TEST_SUITE_P(
             .targets =
                 {
                     {
-                        .target =
-                            {
-                                .type =
-                                    fanout::FanoutSearchTarget::Type::kRemote,
-                                .address = "127.0.0.1:1234",
-                            },
+                        .target = {.is_local = false,
+                                   .socket_address =
+                                       {
+                                           .primary_endpoint = "127.0.0.1",
+                                           .port = static_cast<unsigned short>(
+                                               1234),
+                                       }},
                         .neighbors = {{
                             {
                                 .external_id = "1",
@@ -235,12 +239,13 @@ INSTANTIATE_TEST_SUITE_P(
             .targets =
                 {
                     {
-                        .target =
-                            {
-                                .type =
-                                    fanout::FanoutSearchTarget::Type::kRemote,
-                                .address = "127.0.0.1:1234",
-                            },
+                        .target = {.is_local = false,
+                                   .socket_address =
+                                       {
+                                           .primary_endpoint = "127.0.0.1",
+                                           .port = static_cast<unsigned short>(
+                                               1234),
+                                       }},
                         .neighbors = {{{
                             .external_id = "1",
                             .distance = 0.1,
@@ -250,8 +255,7 @@ INSTANTIATE_TEST_SUITE_P(
                     {
                         .target =
                             {
-                                .type =
-                                    fanout::FanoutSearchTarget::Type::kLocal,
+                                .is_local = true,
                             },
                         .neighbors = {{
                             {
@@ -284,12 +288,13 @@ INSTANTIATE_TEST_SUITE_P(
             .targets =
                 {
                     {
-                        .target =
-                            {
-                                .type =
-                                    fanout::FanoutSearchTarget::Type::kRemote,
-                                .address = "127.0.0.1:1234",
-                            },
+                        .target = {.is_local = false,
+                                   .socket_address =
+                                       {
+                                           .primary_endpoint = "127.0.0.1",
+                                           .port = static_cast<unsigned short>(
+                                               1234),
+                                       }},
                         .neighbors = {{{
                             .external_id = "1",
                             .distance = 0.1,
@@ -370,7 +375,7 @@ TEST_P(FanoutTest, TestFanout) {
   coordinator::SearchIndexPartitionRequest search_parameters;
   ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
       params.parameters_pbtxt, &search_parameters));
-  std::vector<fanout::FanoutSearchTarget> targets;
+  std::vector<vmsdk::cluster_map::NodeInfo> targets;
   targets.reserve(params.targets.size());
   for (const auto &target : params.targets) {
     targets.push_back(target.target);
@@ -400,10 +405,12 @@ TEST_P(FanoutTest, TestFanout) {
 
   for (const auto &target : params.targets) {
     auto mock_client = std::make_shared<coordinator::MockClient>();
-    mock_coordinator_clients[target.target.address] = mock_client;
-    if (target.target.type == fanout::FanoutSearchTarget::Type::kRemote) {
-      EXPECT_CALL(*mock_coordinator_client_pool,
-                  GetClient(target.target.address))
+    auto target_address = absl::StrCat(
+        target.target.socket_address.primary_endpoint, ":",
+        coordinator::GetCoordinatorPort(target.target.socket_address.port));
+    mock_coordinator_clients[target_address] = mock_client;
+    if (!target.target.is_local) {
+      EXPECT_CALL(*mock_coordinator_client_pool, GetClient(target_address))
           .WillOnce(Return(mock_client));
       EXPECT_CALL(*mock_client, SearchIndexPartition(testing::_, testing::_))
           .WillOnce(
@@ -477,7 +484,7 @@ struct GetTargetsTestNode {
 struct GetTargetsTestParam {
   std::string test_name;
   std::vector<GetTargetsTestNode> nodes;
-  std::vector<std::vector<fanout::FanoutSearchTarget>>
+  std::vector<std::vector<vmsdk::cluster_map::NodeInfo>>
       possible_expected_targets;
 };
 
@@ -505,7 +512,7 @@ INSTANTIATE_TEST_SUITE_P(
                 },
             .possible_expected_targets = {{
                 {
-                    .type = fanout::FanoutSearchTarget::Type::kLocal,
+                    .is_local = true,
                 },
             }},
         },
@@ -534,13 +541,16 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         {
-                            .type = fanout::FanoutSearchTarget::Type::kLocal,
+                            .is_local = true,
                         },
                         {
-                            .type = fanout::FanoutSearchTarget::Type::kRemote,
-                            .address = absl::StrCat(
-                                "127.0.0.1:",
-                                coordinator::GetCoordinatorPort(1235)),
+                            .is_local = false,
+                            .socket_address =
+                                {
+                                    .primary_endpoint = "127.0.0.1",
+                                    .port = static_cast<unsigned short>(
+                                        coordinator::GetCoordinatorPort(1235)),
+                                },
                         },
                     },
                 },
@@ -602,41 +612,56 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         {
-                            .type = fanout::FanoutSearchTarget::Type::kLocal,
+                            .is_local = true,
                         },
                         {
-                            .type = fanout::FanoutSearchTarget::Type::kRemote,
-                            .address = absl::StrCat(
-                                "127.0.0.1:",
-                                coordinator::GetCoordinatorPort(1235)),
-                        },
-                    },
-                    {
-                        {
-                            .type = fanout::FanoutSearchTarget::Type::kRemote,
-                            .address = absl::StrCat(
-                                "127.0.0.1:",
-                                coordinator::GetCoordinatorPort(1236)),
-                        },
-                        {
-                            .type = fanout::FanoutSearchTarget::Type::kRemote,
-                            .address = absl::StrCat(
-                                "127.0.0.1:",
-                                coordinator::GetCoordinatorPort(1237)),
+                            .is_local = false,
+                            .socket_address =
+                                {
+                                    .primary_endpoint = "127.0.0.1",
+                                    .port = static_cast<unsigned short>(
+                                        coordinator::GetCoordinatorPort(1235)),
+                                },
                         },
                     },
                     {
                         {
-                            .type = fanout::FanoutSearchTarget::Type::kRemote,
-                            .address = absl::StrCat(
-                                "127.0.0.1:",
-                                coordinator::GetCoordinatorPort(1238)),
+                            .is_local = false,
+                            .socket_address =
+                                {
+                                    .primary_endpoint = "127.0.0.1",
+                                    .port = static_cast<unsigned short>(
+                                        coordinator::GetCoordinatorPort(1236)),
+                                },
                         },
                         {
-                            .type = fanout::FanoutSearchTarget::Type::kRemote,
-                            .address = absl::StrCat(
-                                "127.0.0.1:",
-                                coordinator::GetCoordinatorPort(1239)),
+                            .is_local = false,
+                            .socket_address =
+                                {
+                                    .primary_endpoint = "127.0.0.1",
+                                    .port = static_cast<unsigned short>(
+                                        coordinator::GetCoordinatorPort(1237)),
+                                },
+                        },
+                    },
+                    {
+                        {
+                            .is_local = false,
+                            .socket_address =
+                                {
+                                    .primary_endpoint = "127.0.0.1",
+                                    .port = static_cast<unsigned short>(
+                                        coordinator::GetCoordinatorPort(1238)),
+                                },
+                        },
+                        {
+                            .is_local = false,
+                            .socket_address =
+                                {
+                                    .primary_endpoint = "127.0.0.1",
+                                    .port = static_cast<unsigned short>(
+                                        coordinator::GetCoordinatorPort(1239)),
+                                },
                         },
                     },
                 },
@@ -666,10 +691,13 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         {
-                            .type = fanout::FanoutSearchTarget::Type::kRemote,
-                            .address = absl::StrCat(
-                                "127.0.0.1:",
-                                coordinator::GetCoordinatorPort(1235)),
+                            .is_local = false,
+                            .socket_address =
+                                {
+                                    .primary_endpoint = "127.0.0.1",
+                                    .port = static_cast<unsigned short>(
+                                        coordinator::GetCoordinatorPort(1235)),
+                                },
                         },
                     },
                 },
@@ -715,13 +743,16 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         {
-                            .type = fanout::FanoutSearchTarget::Type::kLocal,
+                            .is_local = true,
                         },
                         {
-                            .type = fanout::FanoutSearchTarget::Type::kRemote,
-                            .address = absl::StrCat(
-                                "127.0.0.1:",
-                                coordinator::GetCoordinatorPort(1235)),
+                            .is_local = false,
+                            .socket_address =
+                                {
+                                    .primary_endpoint = "127.0.0.1",
+                                    .port = static_cast<unsigned short>(
+                                        coordinator::GetCoordinatorPort(1235)),
+                                },
                         },
                     },
                 },
@@ -791,10 +822,13 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         {
-                            .type = fanout::FanoutSearchTarget::Type::kRemote,
-                            .address = absl::StrCat(
-                                "127.0.0.1:",
-                                coordinator::GetCoordinatorPort(1235)),
+                            .is_local = false,
+                            .socket_address =
+                                {
+                                    .primary_endpoint = "127.0.0.1",
+                                    .port = static_cast<unsigned short>(
+                                        coordinator::GetCoordinatorPort(1235)),
+                                },
                         },
                     },
                 },
@@ -870,17 +904,34 @@ TEST_P(GetTargetsTest, TestGetTargets) {
         });
   }
 
+  // Call FanoutTemplate::GetTargets with NodeInfo type
+  auto targets =
+      fanout::FanoutTemplate::GetTargets<vmsdk::cluster_map::NodeInfo>(
+          &fake_ctx_,
+          []() { return vmsdk::cluster_map::NodeInfo{.is_local = true}; },
+          [](const std::string &address) {
+            // Parse address to extract IP and port
+            size_t colon_pos = address.find_last_of(':');
+            std::string ip = address.substr(0, colon_pos);
+            unsigned short port = static_cast<unsigned short>(
+                std::stoi(address.substr(colon_pos + 1)));
+            return vmsdk::cluster_map::NodeInfo{.is_local = false,
+                                                .socket_address = {
+                                                    .primary_endpoint = ip,
+                                                    .port = port,
+                                                }};
+          },
+          fanout::FanoutTargetMode::kRandom);
+
   // Each element must match at least one of the possible expected targets
   // lists.
-  std::vector<testing::Matcher<const fanout::FanoutSearchTarget &>>
+  std::vector<testing::Matcher<const vmsdk::cluster_map::NodeInfo &>>
       target_matchers;
   target_matchers.reserve(params.possible_expected_targets.size());
   for (const auto &possible_target_list : params.possible_expected_targets) {
     target_matchers.push_back(testing::AnyOfArray(possible_target_list));
   }
-  EXPECT_THAT(fanout::GetSearchTargetsForFanout(
-                  &fake_ctx_, fanout::FanoutTargetMode::kRandom),
-              UnorderedElementsAreArray(target_matchers));
+  EXPECT_THAT(targets, UnorderedElementsAreArray(target_matchers));
 }
 }  // namespace query
 }  // namespace valkey_search

@@ -1114,7 +1114,7 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
   rdb_load_multi_exec_entries.Increment(multi_count);
   VMSDK_LOG(DEBUG, ctx) << "Loading Multi/Exec Entries, entries = "
                         << multi_count;
-  for (size_t i = 0; i < count; ++i) {
+  for (size_t i = 0; i < multi_count; ++i) {
     VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
     if (tracked_mutated_records_.find(StringInternStore::Intern(keyname_str)) ==
         tracked_mutated_records_.end()) {

@@ -226,10 +226,10 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         for t in client_threads:
             t.join()
 
-        verify_data(self.client)
+        verify_data(self.client, index)
         os.environ["SKIPLOGCLEAN"] = "1"
         self.server.restart(remove_rdb=False)
-        verify_data(self.client)
+        verify_data(self.client, index)
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         i = self.client.info("search")
         print("Info: ", i)
@@ -258,10 +258,10 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
 
         self.client.execute_command("ft._debug pausepoint reset block_mutation_queue")
 
-        verify_data(self.client)
+        verify_data(self.client, index)
         os.environ["SKIPLOGCLEAN"] = "1"
         self.server.restart(remove_rdb=False)
-        verify_data(self.client)
+        verify_data(self.client, index)
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         i = self.client.info("search")
         print("Info: ", i)
@@ -281,7 +281,7 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
 
         os.environ["SKIPLOGCLEAN"] = "1"
         self.server.restart(remove_rdb=False)
-        verify_data(self.client)
+        verify_data(self.client, index)
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         i = self.client.info("search")
         print("Info: ", i)

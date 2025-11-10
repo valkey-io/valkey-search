@@ -47,7 +47,8 @@ void FreeFlatPositionMap(FlatPositionMap flat_map);
 // Get position count from FlatPositionMap (reads from header)
 uint32_t CountPositions(FlatPositionMap flat_map);
 
-// Get total term frequency from FlatPositionMap (iterates and counts set fields)
+// Get total term frequency from FlatPositionMap (iterates and counts set
+// fields)
 size_t CountTermFrequency(FlatPositionMap flat_map);
 
 // Iterator for FlatPositionMap - minimal state, just pointer

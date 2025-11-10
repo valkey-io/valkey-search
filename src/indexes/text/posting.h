@@ -83,9 +83,10 @@ struct Postings {
   bool IsEmpty() const;
 
   // Insert the key with its position map
-  void InsertKey(const Key& key, PositionMap&& pos_map, TextIndexMetadata* metadata, size_t num_text_fields);
+  void InsertKey(const Key& key, PositionMap&& pos_map,
+                 TextIndexMetadata* metadata, size_t num_text_fields);
 
-  // Remove a key and all positions for it  
+  // Remove a key and all positions for it
   void RemoveKey(const Key& key, TextIndexMetadata* metadata);
 
   // Total number of keys

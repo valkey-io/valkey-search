@@ -59,8 +59,7 @@ TEST_F(FlatPositionMapTest, SimpleEncodingCumulativePosition) {
   // Create a simple position map (single field, small deltas)
   auto position_map = CreatePositionMap({{5, 1}, {10, 1}, {15, 1}, {20, 1}}, 1);
 
-  FlatPositionMap flat_map =
-      TrackMap(SerializePositionMap(position_map, 1));
+  FlatPositionMap flat_map = TrackMap(SerializePositionMap(position_map, 1));
   ASSERT_NE(flat_map, nullptr);
 
   FlatPositionMapIterator iter(flat_map);
@@ -91,8 +90,7 @@ TEST_F(FlatPositionMapTest, ExpandableEncodingCumulativePosition) {
   auto position_map =
       CreatePositionMap({{10, 1}, {50, 2}, {150, 4}, {500, 7}}, 3);
 
-  FlatPositionMap flat_map =
-      TrackMap(SerializePositionMap(position_map, 3));
+  FlatPositionMap flat_map = TrackMap(SerializePositionMap(position_map, 3));
   ASSERT_NE(flat_map, nullptr);
 
   FlatPositionMapIterator iter(flat_map);
@@ -130,8 +128,7 @@ TEST_F(FlatPositionMapTest, BinarySearchEncodingCumulativePosition) {
   }
   auto position_map = CreatePositionMap(positions, 5);
 
-  FlatPositionMap flat_map =
-      TrackMap(SerializePositionMap(position_map, 5));
+  FlatPositionMap flat_map = TrackMap(SerializePositionMap(position_map, 5));
   ASSERT_NE(flat_map, nullptr);
 
   FlatPositionMapIterator iter(flat_map);
@@ -152,8 +149,7 @@ TEST_F(FlatPositionMapTest, SkipForwardWithCumulativePosition) {
   auto position_map =
       CreatePositionMap({{10, 1}, {20, 2}, {30, 4}, {40, 8}, {50, 16}}, 5);
 
-  FlatPositionMap flat_map =
-      TrackMap(SerializePositionMap(position_map, 5));
+  FlatPositionMap flat_map = TrackMap(SerializePositionMap(position_map, 5));
   ASSERT_NE(flat_map, nullptr);
 
   FlatPositionMapIterator iter(flat_map);
@@ -174,8 +170,7 @@ TEST_F(FlatPositionMapTest, SkipForwardWithCumulativePosition) {
 TEST_F(FlatPositionMapTest, SkipForwardNonExistentPosition) {
   auto position_map = CreatePositionMap({{10, 1}, {30, 2}, {50, 4}}, 3);
 
-  FlatPositionMap flat_map =
-      TrackMap(SerializePositionMap(position_map, 3));
+  FlatPositionMap flat_map = TrackMap(SerializePositionMap(position_map, 3));
   ASSERT_NE(flat_map, nullptr);
 
   FlatPositionMapIterator iter(flat_map);
@@ -190,8 +185,7 @@ TEST_F(FlatPositionMapTest, SkipForwardNonExistentPosition) {
 TEST_F(FlatPositionMapTest, MultipleIterations) {
   auto position_map = CreatePositionMap({{5, 1}, {10, 2}, {15, 4}}, 3);
 
-  FlatPositionMap flat_map =
-      TrackMap(SerializePositionMap(position_map, 3));
+  FlatPositionMap flat_map = TrackMap(SerializePositionMap(position_map, 3));
   ASSERT_NE(flat_map, nullptr);
 
   // First iteration
@@ -215,11 +209,10 @@ TEST_F(FlatPositionMapTest, MultipleIterations) {
 // Test large deltas in EXPANDABLE encoding
 TEST_F(FlatPositionMapTest, LargeDeltasExpandableEncoding) {
   // Test with deltas that require multiple bytes in variable-length encoding
-  auto position_map = CreatePositionMap(
-      {{100, 1}, {1000, 2}, {10000, 4}, {100000, 8}}, 4);
+  auto position_map =
+      CreatePositionMap({{100, 1}, {1000, 2}, {10000, 4}, {100000, 8}}, 4);
 
-  FlatPositionMap flat_map =
-      TrackMap(SerializePositionMap(position_map, 4));
+  FlatPositionMap flat_map = TrackMap(SerializePositionMap(position_map, 4));
   ASSERT_NE(flat_map, nullptr);
 
   FlatPositionMapIterator iter(flat_map);
@@ -237,8 +230,7 @@ TEST_F(FlatPositionMapTest, LargeDeltasExpandableEncoding) {
 TEST_F(FlatPositionMapTest, SinglePosition) {
   auto position_map = CreatePositionMap({{42, 1}}, 1);
 
-  FlatPositionMap flat_map =
-      TrackMap(SerializePositionMap(position_map, 1));
+  FlatPositionMap flat_map = TrackMap(SerializePositionMap(position_map, 1));
   ASSERT_NE(flat_map, nullptr);
 
   FlatPositionMapIterator iter(flat_map);
@@ -267,8 +259,7 @@ TEST_F(FlatPositionMapTest, ConsecutivePositions) {
   auto position_map =
       CreatePositionMap({{1, 1}, {2, 1}, {3, 1}, {4, 1}, {5, 1}}, 1);
 
-  FlatPositionMap flat_map =
-      TrackMap(SerializePositionMap(position_map, 1));
+  FlatPositionMap flat_map = TrackMap(SerializePositionMap(position_map, 1));
   ASSERT_NE(flat_map, nullptr);
 
   FlatPositionMapIterator iter(flat_map);
@@ -287,8 +278,7 @@ TEST_F(FlatPositionMapTest, MultipleFieldsSamePosition) {
   // Field mask with multiple bits set (fields 0, 2, 4)
   auto position_map = CreatePositionMap({{10, 0b10101}}, 5);
 
-  FlatPositionMap flat_map =
-      TrackMap(SerializePositionMap(position_map, 5));
+  FlatPositionMap flat_map = TrackMap(SerializePositionMap(position_map, 5));
   ASSERT_NE(flat_map, nullptr);
 
   FlatPositionMapIterator iter(flat_map);
@@ -304,8 +294,7 @@ TEST_F(FlatPositionMapTest, CumulativePositionAccuracy) {
   auto position_map = CreatePositionMap(
       {{7, 1}, {15, 2}, {28, 4}, {50, 8}, {100, 16}, {200, 32}}, 6);
 
-  FlatPositionMap flat_map =
-      TrackMap(SerializePositionMap(position_map, 6));
+  FlatPositionMap flat_map = TrackMap(SerializePositionMap(position_map, 6));
   ASSERT_NE(flat_map, nullptr);
 
   FlatPositionMapIterator iter(flat_map);
@@ -326,8 +315,7 @@ TEST_F(FlatPositionMapTest, CumulativePositionAccuracy) {
 TEST_F(FlatPositionMapTest, SkipForwardBeyondEnd) {
   auto position_map = CreatePositionMap({{10, 1}, {20, 2}, {30, 4}}, 3);
 
-  FlatPositionMap flat_map =
-      TrackMap(SerializePositionMap(position_map, 3));
+  FlatPositionMap flat_map = TrackMap(SerializePositionMap(position_map, 3));
   ASSERT_NE(flat_map, nullptr);
 
   FlatPositionMapIterator iter(flat_map);
@@ -343,8 +331,7 @@ TEST_F(FlatPositionMapTest, MaximumFieldCount) {
   uint64_t all_fields_mask = ~0ULL;  // All 64 bits set
   auto position_map = CreatePositionMap({{10, all_fields_mask}}, 64);
 
-  FlatPositionMap flat_map =
-      TrackMap(SerializePositionMap(position_map, 64));
+  FlatPositionMap flat_map = TrackMap(SerializePositionMap(position_map, 64));
   ASSERT_NE(flat_map, nullptr);
 
   FlatPositionMapIterator iter(flat_map);
@@ -365,8 +352,7 @@ TEST_F(FlatPositionMapTest, StressTestCumulativePosition) {
   }
 
   auto position_map = CreatePositionMap(positions, 8);
-  FlatPositionMap flat_map =
-      TrackMap(SerializePositionMap(position_map, 8));
+  FlatPositionMap flat_map = TrackMap(SerializePositionMap(position_map, 8));
   ASSERT_NE(flat_map, nullptr);
 
   FlatPositionMapIterator iter(flat_map);

@@ -43,6 +43,7 @@
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/blocked_client.h"
@@ -1051,7 +1052,7 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
         index->GetTrackedKeyCount() + index->GetUnTrackedKeyCount();
     VMSDK_RETURN_IF_ERROR(out.SaveObject(key_count));
     rdb_save_keys.Increment(key_count);
-    VMSDK_LOG(DEBUG, nullptr)
+    VMSDK_LOG(NOTICE, nullptr)
         << "Writing Index Extension, keys = " << key_count;
 
     auto write_a_key = [&](const InternedStringPtr &key) {
@@ -1065,8 +1066,8 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   //
   // Write out the mutation queue entries
   //
-  VMSDK_LOG(DEBUG, nullptr) << "Writing Mutation Queue, records = "
-                            << tracked_mutated_records_.size();
+  VMSDK_LOG(NOTICE, nullptr) << "Writing Mutation Queue, records = "
+                             << tracked_mutated_records_.size();
   VMSDK_RETURN_IF_ERROR(out.SaveObject(tracked_mutated_records_.size()));
   rdb_save_mutation_entries.Increment(tracked_mutated_records_.size());
   for (const auto &[key, value] : tracked_mutated_records_) {
@@ -1080,8 +1081,8 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   VMSDK_RETURN_IF_ERROR(
       out.SaveObject<size_t>(multi_mutations_.Get().keys.size()));
   rdb_save_multi_exec_entries.Increment(multi_mutations_.Get().keys.size());
-  VMSDK_LOG(DEBUG, nullptr) << "Writing Multi/Exec Queue, records = "
-                            << multi_mutations_.Get().keys.size();
+  VMSDK_LOG(NOTICE, nullptr) << "Writing Multi/Exec Queue, records = "
+                             << multi_mutations_.Get().keys.size();
   for (const auto &key : multi_mutations_.Get().keys) {
     CHECK(tracked_mutated_records_.find(key) != tracked_mutated_records_.end());
     VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
@@ -1093,42 +1094,44 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
                                              RDBChunkInputStream input) {
   VMSDK_ASSIGN_OR_RETURN(size_t key_count, input.LoadObject<size_t>());
   rdb_load_keys.Increment(key_count);
-  VMSDK_LOG(DEBUG, ctx) << "Loading Index Extension, keys = " << key_count;
+  VMSDK_LOG(NOTICE, ctx) << "Loading Index Extension, keys = " << key_count;
   for (size_t i = 0; i < key_count; ++i) {
     VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
     auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
     ProcessKeyspaceNotification(ctx, keyname.get(), false);
   }
-  VMSDK_ASSIGN_OR_RETURN(size_t count, input.LoadObject<size_t>());
-  VMSDK_LOG(DEBUG, ctx) << "Loading Mutation Entries, entries = " << count;
-  rdb_load_mutation_entries.Increment(count);
-  for (size_t i = 0; i < count; ++i) {
-    VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
-    VMSDK_ASSIGN_OR_RETURN(auto from_backfill, input.LoadObject<bool>());
-    VMSDK_ASSIGN_OR_RETURN(auto from_multi, input.LoadObject<bool>());
+  // Need to suspend workers so that MultiMutation and Regular Mutation queues
+  // are synced
+  VMSDK_RETURN_IF_ERROR(
+      ValkeySearch::Instance().GetWriterThreadPool()->SuspendWorkers());
+  auto reload_queues = [&]() -> absl::Status {
+    VMSDK_ASSIGN_OR_RETURN(size_t count, input.LoadObject<size_t>());
+    VMSDK_LOG(NOTICE, ctx) << "Loading Mutation Entries, entries = " << count;
+    rdb_load_mutation_entries.Increment(count);
+    for (size_t i = 0; i < count; ++i) {
+      VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
+      VMSDK_ASSIGN_OR_RETURN(auto from_backfill, input.LoadObject<bool>());
+      VMSDK_ASSIGN_OR_RETURN(auto from_multi, input.LoadObject<bool>());
 
-    auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
-    ProcessKeyspaceNotification(ctx, keyname.get(), from_backfill);
-  }
-  VMSDK_ASSIGN_OR_RETURN(size_t multi_count, input.LoadObject<size_t>());
-  rdb_load_multi_exec_entries.Increment(multi_count);
-  VMSDK_LOG(DEBUG, ctx) << "Loading Multi/Exec Entries, entries = "
-                        << multi_count;
-  for (size_t i = 0; i < multi_count; ++i) {
-    VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
-    if (tracked_mutated_records_.find(StringInternStore::Intern(keyname_str)) ==
-        tracked_mutated_records_.end()) {
-      VMSDK_LOG(WARNING, ctx)
-          << "Multi/Exec key not found in mutation tracked records: "
-          << keyname_str;
-      return absl::InternalError(
-          "Multi/Exec key not found in mutation tracked records");
+      auto keyname = vmsdk::MakeUniqueValkeyString(keyname_str);
+      ProcessKeyspaceNotification(ctx, keyname.get(), from_backfill);
     }
-    auto keyname = StringInternStore::Intern(keyname_str);
-    EnqueueMultiMutation(keyname);
-  }
-  loaded_v2_ = true;
-  return absl::OkStatus();
+    VMSDK_ASSIGN_OR_RETURN(size_t multi_count, input.LoadObject<size_t>());
+    rdb_load_multi_exec_entries.Increment(multi_count);
+    VMSDK_LOG(NOTICE, ctx) << "Loading Multi/Exec Entries, entries = "
+                           << multi_count;
+    for (size_t i = 0; i < multi_count; ++i) {
+      VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
+      auto keyname = StringInternStore::Intern(keyname_str);
+      EnqueueMultiMutation(keyname);
+    }
+    loaded_v2_ = true;
+    return absl::OkStatus();
+  };
+  auto status = reload_queues();
+  VMSDK_RETURN_IF_ERROR(
+      ValkeySearch::Instance().GetWriterThreadPool()->ResumeWorkers());
+  return status;
 }
 
 // We need to iterate over the chunks to consume them

@@ -80,6 +80,11 @@ message ReturnParameter {
   string alias = 2;
 }
 
+message IndexFingerprintVersion {
+  uint64 fingerprint = 1;
+  uint32 version = 2;
+}
+
 message SearchIndexPartitionRequest {
   string index_schema_name = 2;
   string attribute_alias = 3;
@@ -94,6 +99,8 @@ message SearchIndexPartitionRequest {
   optional Predicate root_filter_predicate = 12;
   repeated ReturnParameter return_parameters = 13;
   bool enable_partial_results = 14;
+  optional IndexFingerprintVersion index_fingerprint_version = 15;
+  optional uint64 slot_fingerprint = 16;
 }
 
 message NeighborEntry {
@@ -149,11 +156,6 @@ enum FanoutErrorType {
   INDEX_NAME_ERROR = 1;
   INCONSISTENT_STATE_ERROR = 2;
   COMMUNICATION_ERROR = 3;
-}
-
-message IndexFingerprintVersion {
-  uint64 fingerprint = 1;
-  uint32 version = 2;
 }
 
 message InfoIndexPartitionResponse {

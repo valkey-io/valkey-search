@@ -47,7 +47,8 @@ uint32_t CalculateNumPartitions(uint32_t num_positions) {
 // Calculate bytes needed for field mask based on num_text_fields
 // Each byte stores 7 bits (bit 7 is used as encoding flag)
 // Returns 0 for single field (SIMPLE encoding uses no field bytes)
-// EXPANDABLE/BINARY_SEARCH will add 1 terminator byte explicitly when this returns 0
+// EXPANDABLE/BINARY_SEARCH will add 1 terminator byte explicitly when this
+// returns 0
 uint8_t GetFieldMaskBytes(size_t num_text_fields) {
   if (num_text_fields <= 1) return 0;
   // Each byte can store 7 bits of field mask (bit 7 is the flag bit)
@@ -55,45 +56,46 @@ uint8_t GetFieldMaskBytes(size_t num_text_fields) {
 }
 
 // Infer field_bytes from the flat_map itself by examining the first position
-// Returns 0 for SIMPLE encoding, otherwise counts field mask bytes in first entry
+// Returns 0 for SIMPLE encoding, otherwise counts field mask bytes in first
+// entry
 uint8_t GetFieldMaskBytes(FlatPositionMap flat_map) {
   if (flat_map == nullptr) return 0;
-  
+
   uint32_t header = ReadUint32(flat_map);
   uint32_t num_positions = (header >> 3);
   EncodingScheme scheme = static_cast<EncodingScheme>((header >> 1) & 0x3);
-  
+
   // SIMPLE encoding has no field mask bytes
   if (scheme == EncodingScheme::SIMPLE) {
     return 0;
   }
-  
+
   // Empty map
   if (num_positions == 0) {
     return 0;
   }
-  
+
   // Skip header
   const char* ptr = flat_map + 4;
-  
+
   // Skip partition map if binary search encoding
   if (scheme == EncodingScheme::BINARY_SEARCH) {
     uint32_t num_partitions = CalculateNumPartitions(num_positions);
     ptr += num_partitions * 8;
   }
-  
+
   // Skip position bytes (first bit = 0) to reach field bytes
   while ((*ptr & 0x80) == 0) {
     ptr++;
   }
-  
+
   // Count field mask bytes (first bit = 1)
   uint8_t count = 0;
   while ((*ptr & 0x80) != 0) {
     count++;
     ptr++;
   }
-  
+
   return count;
 }
 
@@ -106,7 +108,7 @@ EncodingScheme DetermineEncodingScheme(
   }
 
   uint32_t num_positions = position_map.size();
-  
+
   // For large position lists, use binary search encoding
   if (num_positions > 128) {
     return EncodingScheme::BINARY_SEARCH;
@@ -131,7 +133,7 @@ EncodingScheme DetermineEncodingScheme(
 FlatPositionMap SerializeSimple(
     const std::map<Position, std::unique_ptr<FieldMask>>& position_map) {
   uint32_t num_positions = position_map.size();
-  
+
   // Header (4 bytes) + position data (1 byte per position)
   size_t total_size = 4 + num_positions;
   char* flat_map = static_cast<char*>(malloc(total_size));
@@ -165,8 +167,10 @@ FlatPositionMap SerializeExpandable(
   uint8_t field_bytes = GetFieldMaskBytes(num_text_fields);
 
   // Estimate size (conservative upper bound)
-  // Each entry: up to 4 bytes for position + at least 1 byte for field mask/terminator
-  size_t estimated_size = 4 + (num_positions * (4 + (field_bytes > 0 ? field_bytes : 1)));
+  // Each entry: up to 4 bytes for position + at least 1 byte for field
+  // mask/terminator
+  size_t estimated_size =
+      4 + (num_positions * (4 + (field_bytes > 0 ? field_bytes : 1)));
   char* flat_map = static_cast<char*>(malloc(estimated_size));
   CHECK(flat_map != nullptr) << "Failed to allocate FlatPositionMap";
   vmsdk::ReportAllocMemorySize(estimated_size);
@@ -229,18 +233,21 @@ FlatPositionMap SerializeBinarySearch(
   uint8_t field_bytes = GetFieldMaskBytes(num_text_fields);
 
   // Estimate size
-  // Data: up to 4 bytes per position + at least 1 byte for field mask/terminator
-  size_t estimated_size = 4 +                              // Header
-                          (num_partitions * 8) +           // Partition map
-                          (num_positions * (4 + (field_bytes > 0 ? field_bytes : 1)));  // Data
+  // Data: up to 4 bytes per position + at least 1 byte for field
+  // mask/terminator
+  size_t estimated_size =
+      4 +                     // Header
+      (num_partitions * 8) +  // Partition map
+      (num_positions * (4 + (field_bytes > 0 ? field_bytes : 1)));  // Data
   char* flat_map = static_cast<char*>(malloc(estimated_size));
   CHECK(flat_map != nullptr) << "Failed to allocate FlatPositionMap";
   vmsdk::ReportAllocMemorySize(estimated_size);
 
   // Write header
-  uint32_t header = (0 << 0) |  // Standard header
-                    (static_cast<uint32_t>(EncodingScheme::BINARY_SEARCH) << 1) |
-                    (num_positions << 3);
+  uint32_t header =
+      (0 << 0) |  // Standard header
+      (static_cast<uint32_t>(EncodingScheme::BINARY_SEARCH) << 1) |
+      (num_positions << 3);
   WriteUint32(flat_map, header);
 
   char* partition_ptr = flat_map + 4;
@@ -250,7 +257,7 @@ FlatPositionMap SerializeBinarySearch(
   // Build partition map and write data
   std::vector<uint32_t> partition_offsets;
   std::vector<uint32_t> partition_deltas;
-  
+
   Position prev_pos = 0;
   Position cumulative_delta = 0;
   uint32_t positions_per_partition = num_positions / num_partitions;
@@ -322,7 +329,8 @@ FlatPositionMap SerializePositionMap(
     return flat_map;
   }
 
-  EncodingScheme scheme = DetermineEncodingScheme(position_map, num_text_fields);
+  EncodingScheme scheme =
+      DetermineEncodingScheme(position_map, num_text_fields);
 
   switch (scheme) {
     case EncodingScheme::SIMPLE:
@@ -347,8 +355,12 @@ void FreeFlatPositionMap(FlatPositionMap flat_map) {
 
 // Iterator implementation
 FlatPositionMapIterator::FlatPositionMapIterator(FlatPositionMap flat_map)
-    : flat_map_(flat_map), current_ptr_(nullptr), cumulative_position_(0),
-      positions_read_(0), total_positions_(0), field_bytes_(0) {
+    : flat_map_(flat_map),
+      current_ptr_(nullptr),
+      cumulative_position_(0),
+      positions_read_(0),
+      total_positions_(0),
+      field_bytes_(0) {
   if (flat_map_ != nullptr) {
     uint32_t header = ReadUint32(flat_map_);
     total_positions_ = (header >> 3);
@@ -477,7 +489,7 @@ uint64_t FlatPositionMapIterator::GetFieldMask() const {
     // Single field: read terminator byte (should be 0x81 = bit7=1, value=1)
     return (*ptr & 0x7F);
   }
-  
+
   // Multiple fields: decode full mask
   uint64_t mask = 0;
   for (uint8_t i = 0; i < field_bytes_; ++i) {
@@ -493,26 +505,27 @@ uint32_t CountPositions(FlatPositionMap flat_map) {
   if (flat_map == nullptr) {
     return 0;
   }
-  
+
   uint32_t header = ReadUint32(flat_map);
   return (header >> 3);
 }
 
-// Get total term frequency from FlatPositionMap (iterates and counts set fields)
+// Get total term frequency from FlatPositionMap (iterates and counts set
+// fields)
 size_t CountTermFrequency(FlatPositionMap flat_map) {
   if (flat_map == nullptr) {
     return 0;
   }
-  
+
   size_t total_frequency = 0;
   FlatPositionMapIterator iter(flat_map);
-  
+
   while (iter.IsValid()) {
     uint64_t field_mask = iter.GetFieldMask();
     total_frequency += __builtin_popcountll(field_mask);
     iter.NextPosition();
   }
-  
+
   return total_frequency;
 }
 
@@ -527,7 +540,7 @@ void PrintFlatPositionMapBits(FlatPositionMap flat_map) {
   std::memcpy(&header, flat_map, sizeof(uint32_t));
   uint32_t num_positions = (header >> 3);
   EncodingScheme scheme = static_cast<EncodingScheme>((header >> 1) & 0x3);
-  
+
   // Calculate actual size based on encoding scheme
   size_t bytes_to_print;
   if (scheme == EncodingScheme::SIMPLE) {
@@ -537,30 +550,30 @@ void PrintFlatPositionMapBits(FlatPositionMap flat_map) {
     // For other encodings, estimate (this is conservative)
     bytes_to_print = 4 + std::min(num_positions * 4, 256u);
   }
-  
+
   std::ostringstream oss;
   oss << "FlatPositionMap bits (" << bytes_to_print << " bytes, "
-      << "scheme=" << static_cast<int>(scheme) 
+      << "scheme=" << static_cast<int>(scheme)
       << ", positions=" << num_positions << "):\n";
-  
+
   const unsigned char* data = reinterpret_cast<const unsigned char*>(flat_map);
   for (size_t i = 0; i < bytes_to_print; ++i) {
     unsigned char byte = data[i];
-    
+
     // Print each bit from MSB to LSB
     for (int bit = 7; bit >= 0; --bit) {
       oss << ((byte >> bit) & 1);
     }
-    
+
     // Add space after every 8 bits (every byte)
     oss << " ";
-    
+
     // Add newline every 8 bytes for readability
     if ((i + 1) % 8 == 0) {
       oss << "\n";
     }
   }
-  
+
   VMSDK_LOG(WARNING, nullptr) << oss.str();
 }
 

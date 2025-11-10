@@ -162,7 +162,8 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
             // we start creating a serialized version instead then it will be
             // tracked. At that point stop moving the pos_map and just pass a
             // reference so that it doesn't get cleaned up in the memory scope.
-            return AddKeyToPostings(existing, key, std::move(pos_map), &metadata_, num_text_fields_);
+            return AddKeyToPostings(existing, key, std::move(pos_map),
+                                    &metadata_, num_text_fields_);
           });
       if (suffix) {
         text_index_->GetSuffix().value().get().SetTarget(*reverse_token,

@@ -34,9 +34,6 @@ using TokenPositions =
 
 class TextIndexSchema;
 
-// Function to get current TextIndexSchema for accessing metadata
-TextIndexSchema* GetTextIndexSchema();
-
 // FT.INFO counters for text info fields and memory pools
 struct TextIndexMetadata {
   std::atomic<uint64_t> total_positions{0};

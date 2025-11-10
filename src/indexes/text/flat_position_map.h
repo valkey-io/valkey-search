@@ -13,9 +13,11 @@
 #include <map>
 #include <memory>
 
-#include "src/indexes/text/posting.h"
-
 namespace valkey_search::indexes::text {
+
+// Forward declarations to avoid circular dependency
+using Position = uint32_t;
+class FieldMask;
 
 // FlatPositionMap is a compact byte array representation
 // Layout: [Header: 4 bytes][Optional Partition Map][Position/Field Data]
@@ -42,16 +44,22 @@ FlatPositionMap SerializePositionMap(
 // Free FlatPositionMap
 void FreeFlatPositionMap(FlatPositionMap flat_map);
 
+// Get position count from FlatPositionMap (reads from header)
+uint32_t CountPositions(FlatPositionMap flat_map);
+
+// Get total term frequency from FlatPositionMap (iterates and counts set fields)
+size_t CountTermFrequency(FlatPositionMap flat_map);
+
 // Iterator for FlatPositionMap - minimal state, just pointer
 class FlatPositionMapIterator {
  public:
   FlatPositionMapIterator(FlatPositionMap flat_map);
 
-  bool IsValid(size_t num_text_fields) const;
-  void Next(size_t num_text_fields);
-  bool SkipForward(Position target, size_t num_text_fields);
-  Position GetPosition(size_t num_text_fields) const;
-  uint64_t GetFieldMask(size_t num_text_fields) const;
+  bool IsValid() const;
+  void NextPosition();
+  bool SkipForward(Position target);
+  Position GetPosition() const;
+  uint64_t GetFieldMask() const;
 
  private:
   FlatPositionMap flat_map_;
@@ -59,6 +67,7 @@ class FlatPositionMapIterator {
   Position cumulative_position_;
   uint32_t positions_read_;
   uint32_t total_positions_;
+  uint8_t field_bytes_;  // Inferred from flat_map data
 };
 
 }  // namespace valkey_search::indexes::text

@@ -620,7 +620,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
   } else if (starts_with_star) {
     if (token.empty())
       return absl::InvalidArgumentError("Invalid wildcard '*' markers");
-    if (!text_index_schema->GetTextIndex()->suffix_.has_value()) {
+    if (!text_index_schema->GetTextIndex()->GetSuffix().has_value()) {
       return absl::InvalidArgumentError("Index created without Suffix Trie");
     }
     if (ends_with_star) {

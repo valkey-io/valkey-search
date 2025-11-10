@@ -9,9 +9,15 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <sstream>
 #include <vector>
 
 #include "absl/log/check.h"
+#include "src/indexes/text/posting.h"
+#include "src/indexes/text/text_index.h"
+#include "vmsdk/src/log.h"
+#include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes::text {
 
@@ -29,12 +35,66 @@ void WriteUint32(char* ptr, uint32_t value) {
   std::memcpy(ptr, &value, sizeof(uint32_t));
 }
 
+// Calculate number of partitions for binary search
+uint32_t CalculateNumPartitions(uint32_t num_positions) {
+  if (num_positions <= 128) return 0;
+  if (num_positions <= 512) return 4;
+  if (num_positions <= 2048) return 16;
+  if (num_positions <= 8192) return 64;
+  return 256;
+}
+
 // Calculate bytes needed for field mask based on num_text_fields
 // Each byte stores 7 bits (bit 7 is used as encoding flag)
+// Returns 0 for single field (SIMPLE encoding uses no field bytes)
+// EXPANDABLE/BINARY_SEARCH will add 1 terminator byte explicitly when this returns 0
 uint8_t GetFieldMaskBytes(size_t num_text_fields) {
   if (num_text_fields <= 1) return 0;
   // Each byte can store 7 bits of field mask (bit 7 is the flag bit)
   return (num_text_fields + 6) / 7;  // Ceiling division
+}
+
+// Infer field_bytes from the flat_map itself by examining the first position
+// Returns 0 for SIMPLE encoding, otherwise counts field mask bytes in first entry
+uint8_t GetFieldMaskBytes(FlatPositionMap flat_map) {
+  if (flat_map == nullptr) return 0;
+  
+  uint32_t header = ReadUint32(flat_map);
+  uint32_t num_positions = (header >> 3);
+  EncodingScheme scheme = static_cast<EncodingScheme>((header >> 1) & 0x3);
+  
+  // SIMPLE encoding has no field mask bytes
+  if (scheme == EncodingScheme::SIMPLE) {
+    return 0;
+  }
+  
+  // Empty map
+  if (num_positions == 0) {
+    return 0;
+  }
+  
+  // Skip header
+  const char* ptr = flat_map + 4;
+  
+  // Skip partition map if binary search encoding
+  if (scheme == EncodingScheme::BINARY_SEARCH) {
+    uint32_t num_partitions = CalculateNumPartitions(num_positions);
+    ptr += num_partitions * 8;
+  }
+  
+  // Skip position bytes (first bit = 0) to reach field bytes
+  while ((*ptr & 0x80) == 0) {
+    ptr++;
+  }
+  
+  // Count field mask bytes (first bit = 1)
+  uint8_t count = 0;
+  while ((*ptr & 0x80) != 0) {
+    count++;
+    ptr++;
+  }
+  
+  return count;
 }
 
 // Determine encoding scheme based on position map characteristics
@@ -65,15 +125,6 @@ EncodingScheme DetermineEncodingScheme(
   return EncodingScheme::EXPANDABLE;
 }
 
-// Calculate number of partitions for binary search
-uint32_t CalculateNumPartitions(uint32_t num_positions) {
-  if (num_positions <= 128) return 0;
-  if (num_positions <= 512) return 4;
-  if (num_positions <= 2048) return 16;
-  if (num_positions <= 8192) return 64;
-  return 256;
-}
-
 }  // namespace
 
 // Serialize using SIMPLE encoding
@@ -83,8 +134,9 @@ FlatPositionMap SerializeSimple(
   
   // Header (4 bytes) + position data (1 byte per position)
   size_t total_size = 4 + num_positions;
-  char* flat_map = static_cast<char*>(std::malloc(total_size));
+  char* flat_map = static_cast<char*>(malloc(total_size));
   CHECK(flat_map != nullptr) << "Failed to allocate FlatPositionMap";
+  vmsdk::ReportAllocMemorySize(total_size);
 
   // Write header
   uint32_t header = (0 << 0) |  // Standard header
@@ -113,10 +165,11 @@ FlatPositionMap SerializeExpandable(
   uint8_t field_bytes = GetFieldMaskBytes(num_text_fields);
 
   // Estimate size (conservative upper bound)
-  // Each entry: up to 4 bytes for position + field_bytes for field mask
-  size_t estimated_size = 4 + (num_positions * (4 + field_bytes));
-  char* flat_map = static_cast<char*>(std::malloc(estimated_size));
+  // Each entry: up to 4 bytes for position + at least 1 byte for field mask/terminator
+  size_t estimated_size = 4 + (num_positions * (4 + (field_bytes > 0 ? field_bytes : 1)));
+  char* flat_map = static_cast<char*>(malloc(estimated_size));
   CHECK(flat_map != nullptr) << "Failed to allocate FlatPositionMap";
+  vmsdk::ReportAllocMemorySize(estimated_size);
 
   // Write header (will update later with actual size)
   uint32_t header = (0 << 0) |  // Standard header
@@ -142,10 +195,14 @@ FlatPositionMap SerializeExpandable(
 
     // Encode field mask
     if (field_bytes > 0) {
+      // Multiple fields: encode the mask
       uint64_t mask = field_mask->AsUint64();
       for (uint8_t i = 0; i < field_bytes; ++i) {
         *data_ptr++ = static_cast<char>(0x80 | ((mask >> (i * 7)) & 0x7F));
       }
+    } else {
+      // Single field: write terminator byte (bit 7=1, value=1 for field 0)
+      *data_ptr++ = static_cast<char>(0x80 | 0x01);
     }
 
     prev_pos = pos;
@@ -153,8 +210,10 @@ FlatPositionMap SerializeExpandable(
 
   // Reallocate to actual size
   size_t actual_size = data_ptr - flat_map;
-  char* resized = static_cast<char*>(std::realloc(flat_map, actual_size));
+  vmsdk::ReportFreeMemorySize(estimated_size);
+  char* resized = static_cast<char*>(realloc(flat_map, actual_size));
   if (resized != nullptr) {
+    vmsdk::ReportAllocMemorySize(actual_size);
     flat_map = resized;
   }
 
@@ -170,11 +229,13 @@ FlatPositionMap SerializeBinarySearch(
   uint8_t field_bytes = GetFieldMaskBytes(num_text_fields);
 
   // Estimate size
+  // Data: up to 4 bytes per position + at least 1 byte for field mask/terminator
   size_t estimated_size = 4 +                              // Header
                           (num_partitions * 8) +           // Partition map
-                          (num_positions * (4 + field_bytes));  // Data
-  char* flat_map = static_cast<char*>(std::malloc(estimated_size));
+                          (num_positions * (4 + (field_bytes > 0 ? field_bytes : 1)));  // Data
+  char* flat_map = static_cast<char*>(malloc(estimated_size));
   CHECK(flat_map != nullptr) << "Failed to allocate FlatPositionMap";
+  vmsdk::ReportAllocMemorySize(estimated_size);
 
   // Write header
   uint32_t header = (0 << 0) |  // Standard header
@@ -215,10 +276,14 @@ FlatPositionMap SerializeBinarySearch(
 
     // Encode field mask
     if (field_bytes > 0) {
+      // Multiple fields: encode the mask
       uint64_t mask = field_mask->AsUint64();
       for (uint8_t i = 0; i < field_bytes; ++i) {
         *data_ptr++ = static_cast<char>(0x80 | ((mask >> (i * 7)) & 0x7F));
       }
+    } else {
+      // Single field: write terminator byte (bit 7=1, value=1 for field 0)
+      *data_ptr++ = static_cast<char>(0x80 | 0x01);
     }
 
     prev_pos = pos;
@@ -235,8 +300,10 @@ FlatPositionMap SerializeBinarySearch(
 
   // Reallocate to actual size
   size_t actual_size = data_ptr - flat_map;
-  char* resized = static_cast<char*>(std::realloc(flat_map, actual_size));
+  vmsdk::ReportFreeMemorySize(estimated_size);
+  char* resized = static_cast<char*>(realloc(flat_map, actual_size));
   if (resized != nullptr) {
+    vmsdk::ReportAllocMemorySize(actual_size);
     flat_map = resized;
   }
 
@@ -248,8 +315,9 @@ FlatPositionMap SerializePositionMap(
     size_t num_text_fields) {
   if (position_map.empty()) {
     // Empty map: just header with 0 positions
-    char* flat_map = static_cast<char*>(std::malloc(4));
+    char* flat_map = static_cast<char*>(malloc(4));
     CHECK(flat_map != nullptr) << "Failed to allocate FlatPositionMap";
+    vmsdk::ReportAllocMemorySize(4);
     WriteUint32(flat_map, 0);
     return flat_map;
   }
@@ -271,18 +339,23 @@ FlatPositionMap SerializePositionMap(
 
 void FreeFlatPositionMap(FlatPositionMap flat_map) {
   if (flat_map != nullptr) {
-    std::free(flat_map);
+    // Note: We don't know the exact size here, would need to parse header
+    // For now, freeing without reporting size decrease
+    free(flat_map);
   }
 }
 
 // Iterator implementation
 FlatPositionMapIterator::FlatPositionMapIterator(FlatPositionMap flat_map)
     : flat_map_(flat_map), current_ptr_(nullptr), cumulative_position_(0),
-      positions_read_(0), total_positions_(0) {
+      positions_read_(0), total_positions_(0), field_bytes_(0) {
   if (flat_map_ != nullptr) {
     uint32_t header = ReadUint32(flat_map_);
     total_positions_ = (header >> 3);
     EncodingScheme scheme = static_cast<EncodingScheme>((header >> 1) & 0x3);
+
+    // Infer field_bytes from the flat_map data itself
+    field_bytes_ = GetFieldMaskBytes(flat_map_);
 
     if (total_positions_ > 0) {
       // Skip header
@@ -297,16 +370,15 @@ FlatPositionMapIterator::FlatPositionMapIterator(FlatPositionMap flat_map)
   }
 }
 
-bool FlatPositionMapIterator::IsValid(size_t num_text_fields) const {
+bool FlatPositionMapIterator::IsValid() const {
   return current_ptr_ != nullptr && positions_read_ < total_positions_;
 }
 
-void FlatPositionMapIterator::Next(size_t num_text_fields) {
-  if (!IsValid(num_text_fields)) return;
+void FlatPositionMapIterator::NextPosition() {
+  if (!IsValid()) return;
 
   uint32_t header = ReadUint32(flat_map_);
   EncodingScheme scheme = static_cast<EncodingScheme>((header >> 1) & 0x3);
-  uint8_t field_bytes = GetFieldMaskBytes(num_text_fields);
 
   // Decode and add current delta to cumulative position before moving
   if (scheme == EncodingScheme::SIMPLE) {
@@ -329,7 +401,9 @@ void FlatPositionMapIterator::Next(size_t num_text_fields) {
       current_ptr_++;
     }
     // Skip field bytes (first bit = 1)
-    for (uint8_t i = 0; i < field_bytes; ++i) {
+    // For single-field: 1 terminator byte, otherwise field_bytes_
+    uint8_t bytes_to_skip = (field_bytes_ > 0) ? field_bytes_ : 1;
+    for (uint8_t i = 0; i < bytes_to_skip; ++i) {
       current_ptr_++;
     }
   }
@@ -343,25 +417,24 @@ void FlatPositionMapIterator::Next(size_t num_text_fields) {
   }
 }
 
-bool FlatPositionMapIterator::SkipForward(Position target,
-                                          size_t num_text_fields) {
+bool FlatPositionMapIterator::SkipForward(Position target) {
   // For now, use linear scan
   // TODO: Implement binary search for BINARY_SEARCH encoding
   Position current_pos = 0;
   Position prev_pos = 0;
 
-  while (IsValid(num_text_fields)) {
-    current_pos = GetPosition(num_text_fields);
+  while (IsValid()) {
+    current_pos = GetPosition();
     if (current_pos >= target) {
       return current_pos == target;
     }
-    Next(num_text_fields);
+    NextPosition();
   }
 
   return false;
 }
 
-Position FlatPositionMapIterator::GetPosition(size_t num_text_fields) const {
+Position FlatPositionMapIterator::GetPosition() const {
   if (current_ptr_ == nullptr) return 0;
 
   uint32_t header = ReadUint32(flat_map_);
@@ -383,14 +456,13 @@ Position FlatPositionMapIterator::GetPosition(size_t num_text_fields) const {
   }
 }
 
-uint64_t FlatPositionMapIterator::GetFieldMask(size_t num_text_fields) const {
+uint64_t FlatPositionMapIterator::GetFieldMask() const {
   if (current_ptr_ == nullptr) return 0;
 
   uint32_t header = ReadUint32(flat_map_);
   EncodingScheme scheme = static_cast<EncodingScheme>((header >> 1) & 0x3);
-  uint8_t field_bytes = GetFieldMaskBytes(num_text_fields);
 
-  if (scheme == EncodingScheme::SIMPLE || field_bytes == 0) {
+  if (scheme == EncodingScheme::SIMPLE) {
     return 1;  // Single field
   }
 
@@ -401,13 +473,95 @@ uint64_t FlatPositionMapIterator::GetFieldMask(size_t num_text_fields) const {
   }
 
   // Decode field mask
+  if (field_bytes_ == 0) {
+    // Single field: read terminator byte (should be 0x81 = bit7=1, value=1)
+    return (*ptr & 0x7F);
+  }
+  
+  // Multiple fields: decode full mask
   uint64_t mask = 0;
-  for (uint8_t i = 0; i < field_bytes; ++i) {
+  for (uint8_t i = 0; i < field_bytes_; ++i) {
     mask |= (static_cast<uint64_t>(*ptr & 0x7F) << (i * 7));
     ptr++;
   }
 
   return mask;
+}
+
+// Get position count from FlatPositionMap (reads from header)
+uint32_t CountPositions(FlatPositionMap flat_map) {
+  if (flat_map == nullptr) {
+    return 0;
+  }
+  
+  uint32_t header = ReadUint32(flat_map);
+  return (header >> 3);
+}
+
+// Get total term frequency from FlatPositionMap (iterates and counts set fields)
+size_t CountTermFrequency(FlatPositionMap flat_map) {
+  if (flat_map == nullptr) {
+    return 0;
+  }
+  
+  size_t total_frequency = 0;
+  FlatPositionMapIterator iter(flat_map);
+  
+  while (iter.IsValid()) {
+    uint64_t field_mask = iter.GetFieldMask();
+    total_frequency += __builtin_popcountll(field_mask);
+    iter.NextPosition();
+  }
+  
+  return total_frequency;
+}
+
+// Helper function to print FlatPositionMap at bit level
+void PrintFlatPositionMapBits(FlatPositionMap flat_map) {
+  if (flat_map == nullptr) {
+    return;
+  }
+
+  // Read the header to determine encoding and size
+  uint32_t header;
+  std::memcpy(&header, flat_map, sizeof(uint32_t));
+  uint32_t num_positions = (header >> 3);
+  EncodingScheme scheme = static_cast<EncodingScheme>((header >> 1) & 0x3);
+  
+  // Calculate actual size based on encoding scheme
+  size_t bytes_to_print;
+  if (scheme == EncodingScheme::SIMPLE) {
+    // SIMPLE: 4 bytes header + 1 byte per position
+    bytes_to_print = 4 + num_positions;
+  } else {
+    // For other encodings, estimate (this is conservative)
+    bytes_to_print = 4 + std::min(num_positions * 4, 256u);
+  }
+  
+  std::ostringstream oss;
+  oss << "FlatPositionMap bits (" << bytes_to_print << " bytes, "
+      << "scheme=" << static_cast<int>(scheme) 
+      << ", positions=" << num_positions << "):\n";
+  
+  const unsigned char* data = reinterpret_cast<const unsigned char*>(flat_map);
+  for (size_t i = 0; i < bytes_to_print; ++i) {
+    unsigned char byte = data[i];
+    
+    // Print each bit from MSB to LSB
+    for (int bit = 7; bit >= 0; --bit) {
+      oss << ((byte >> bit) & 1);
+    }
+    
+    // Add space after every 8 bits (every byte)
+    oss << " ";
+    
+    // Add newline every 8 bytes for readability
+    if ((i + 1) % 8 == 0) {
+      oss << "\n";
+    }
+  }
+  
+  VMSDK_LOG(WARNING, nullptr) << oss.str();
 }
 
 }  // namespace valkey_search::indexes::text

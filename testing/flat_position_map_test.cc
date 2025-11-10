@@ -66,23 +66,23 @@ TEST_F(FlatPositionMapTest, SimpleEncodingCumulativePosition) {
   FlatPositionMapIterator iter(flat_map);
 
   // Test that GetPosition returns correct cumulative positions
-  EXPECT_TRUE(iter.IsValid(1));
-  EXPECT_EQ(iter.GetPosition(1), 5);
+  EXPECT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetPosition(), 5);
 
-  iter.Next(1);
-  EXPECT_TRUE(iter.IsValid(1));
-  EXPECT_EQ(iter.GetPosition(1), 10);
+  iter.NextPosition();
+  EXPECT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetPosition(), 10);
 
-  iter.Next(1);
-  EXPECT_TRUE(iter.IsValid(1));
-  EXPECT_EQ(iter.GetPosition(1), 15);
+  iter.NextPosition();
+  EXPECT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetPosition(), 15);
 
-  iter.Next(1);
-  EXPECT_TRUE(iter.IsValid(1));
-  EXPECT_EQ(iter.GetPosition(1), 20);
+  iter.NextPosition();
+  EXPECT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetPosition(), 20);
 
-  iter.Next(1);
-  EXPECT_FALSE(iter.IsValid(1));
+  iter.NextPosition();
+  EXPECT_FALSE(iter.IsValid());
 }
 
 // Test EXPANDABLE encoding with cumulative position tracking
@@ -98,27 +98,27 @@ TEST_F(FlatPositionMapTest, ExpandableEncodingCumulativePosition) {
   FlatPositionMapIterator iter(flat_map);
 
   // Test cumulative positions with variable-length encoding
-  EXPECT_TRUE(iter.IsValid(3));
-  EXPECT_EQ(iter.GetPosition(3), 10);
-  EXPECT_EQ(iter.GetFieldMask(3), 1ULL);
+  EXPECT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetPosition(), 10);
+  EXPECT_EQ(iter.GetFieldMask(), 1ULL);
 
-  iter.Next(3);
-  EXPECT_TRUE(iter.IsValid(3));
-  EXPECT_EQ(iter.GetPosition(3), 50);
-  EXPECT_EQ(iter.GetFieldMask(3), 2ULL);
+  iter.NextPosition();
+  EXPECT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetPosition(), 50);
+  EXPECT_EQ(iter.GetFieldMask(), 2ULL);
 
-  iter.Next(3);
-  EXPECT_TRUE(iter.IsValid(3));
-  EXPECT_EQ(iter.GetPosition(3), 150);
-  EXPECT_EQ(iter.GetFieldMask(3), 4ULL);
+  iter.NextPosition();
+  EXPECT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetPosition(), 150);
+  EXPECT_EQ(iter.GetFieldMask(), 4ULL);
 
-  iter.Next(3);
-  EXPECT_TRUE(iter.IsValid(3));
-  EXPECT_EQ(iter.GetPosition(3), 500);
-  EXPECT_EQ(iter.GetFieldMask(3), 7ULL);
+  iter.NextPosition();
+  EXPECT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetPosition(), 500);
+  EXPECT_EQ(iter.GetFieldMask(), 7ULL);
 
-  iter.Next(3);
-  EXPECT_FALSE(iter.IsValid(3));
+  iter.NextPosition();
+  EXPECT_FALSE(iter.IsValid());
 }
 
 // Test BINARY_SEARCH encoding with cumulative position tracking
@@ -138,13 +138,13 @@ TEST_F(FlatPositionMapTest, BinarySearchEncodingCumulativePosition) {
 
   // Test cumulative positions throughout the map
   for (int i = 0; i < 150; ++i) {
-    EXPECT_TRUE(iter.IsValid(5));
-    EXPECT_EQ(iter.GetPosition(5), i * 10);
-    EXPECT_EQ(iter.GetFieldMask(5), 1ULL << (i % 5));
-    iter.Next(5);
+    EXPECT_TRUE(iter.IsValid());
+    EXPECT_EQ(iter.GetPosition(), i * 10);
+    EXPECT_EQ(iter.GetFieldMask(), 1ULL << (i % 5));
+    iter.NextPosition();
   }
 
-  EXPECT_FALSE(iter.IsValid(5));
+  EXPECT_FALSE(iter.IsValid());
 }
 
 // Test SkipForward with cumulative position tracking
@@ -159,15 +159,15 @@ TEST_F(FlatPositionMapTest, SkipForwardWithCumulativePosition) {
   FlatPositionMapIterator iter(flat_map);
 
   // Skip to exact position
-  EXPECT_TRUE(iter.SkipForward(30, 5));
-  EXPECT_EQ(iter.GetPosition(5), 30);
-  EXPECT_EQ(iter.GetFieldMask(5), 4ULL);
+  EXPECT_TRUE(iter.SkipForward(30));
+  EXPECT_EQ(iter.GetPosition(), 30);
+  EXPECT_EQ(iter.GetFieldMask(), 4ULL);
 
   // Continue from skipped position
-  iter.Next(5);
-  EXPECT_TRUE(iter.IsValid(5));
-  EXPECT_EQ(iter.GetPosition(5), 40);
-  EXPECT_EQ(iter.GetFieldMask(5), 8ULL);
+  iter.NextPosition();
+  EXPECT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetPosition(), 40);
+  EXPECT_EQ(iter.GetFieldMask(), 8ULL);
 }
 
 // Test SkipForward to non-existent position
@@ -181,9 +181,9 @@ TEST_F(FlatPositionMapTest, SkipForwardNonExistentPosition) {
   FlatPositionMapIterator iter(flat_map);
 
   // Skip to position between existing positions
-  EXPECT_FALSE(iter.SkipForward(25, 3));
-  EXPECT_TRUE(iter.IsValid(3));
-  EXPECT_EQ(iter.GetPosition(3), 30);  // Should land on next position
+  EXPECT_FALSE(iter.SkipForward(25));
+  EXPECT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetPosition(), 30);  // Should land on next position
 }
 
 // Test multiple iterations over the same map
@@ -196,20 +196,20 @@ TEST_F(FlatPositionMapTest, MultipleIterations) {
 
   // First iteration
   FlatPositionMapIterator iter1(flat_map);
-  EXPECT_EQ(iter1.GetPosition(3), 5);
-  iter1.Next(3);
-  EXPECT_EQ(iter1.GetPosition(3), 10);
+  EXPECT_EQ(iter1.GetPosition(), 5);
+  iter1.NextPosition();
+  EXPECT_EQ(iter1.GetPosition(), 10);
 
   // Second iteration (independent)
   FlatPositionMapIterator iter2(flat_map);
-  EXPECT_EQ(iter2.GetPosition(3), 5);
-  iter2.Next(3);
-  EXPECT_EQ(iter2.GetPosition(3), 10);
-  iter2.Next(3);
-  EXPECT_EQ(iter2.GetPosition(3), 15);
+  EXPECT_EQ(iter2.GetPosition(), 5);
+  iter2.NextPosition();
+  EXPECT_EQ(iter2.GetPosition(), 10);
+  iter2.NextPosition();
+  EXPECT_EQ(iter2.GetPosition(), 15);
 
   // First iterator should still be at position 10
-  EXPECT_EQ(iter1.GetPosition(3), 10);
+  EXPECT_EQ(iter1.GetPosition(), 10);
 }
 
 // Test large deltas in EXPANDABLE encoding
@@ -224,13 +224,13 @@ TEST_F(FlatPositionMapTest, LargeDeltasExpandableEncoding) {
 
   FlatPositionMapIterator iter(flat_map);
 
-  EXPECT_EQ(iter.GetPosition(4), 100);
-  iter.Next(4);
-  EXPECT_EQ(iter.GetPosition(4), 1000);
-  iter.Next(4);
-  EXPECT_EQ(iter.GetPosition(4), 10000);
-  iter.Next(4);
-  EXPECT_EQ(iter.GetPosition(4), 100000);
+  EXPECT_EQ(iter.GetPosition(), 100);
+  iter.NextPosition();
+  EXPECT_EQ(iter.GetPosition(), 1000);
+  iter.NextPosition();
+  EXPECT_EQ(iter.GetPosition(), 10000);
+  iter.NextPosition();
+  EXPECT_EQ(iter.GetPosition(), 100000);
 }
 
 // Test edge case: single position
@@ -243,12 +243,12 @@ TEST_F(FlatPositionMapTest, SinglePosition) {
 
   FlatPositionMapIterator iter(flat_map);
 
-  EXPECT_TRUE(iter.IsValid(1));
-  EXPECT_EQ(iter.GetPosition(1), 42);
-  EXPECT_EQ(iter.GetFieldMask(1), 1ULL);
+  EXPECT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetPosition(), 42);
+  EXPECT_EQ(iter.GetFieldMask(), 1ULL);
 
-  iter.Next(1);
-  EXPECT_FALSE(iter.IsValid(1));
+  iter.NextPosition();
+  EXPECT_FALSE(iter.IsValid());
 }
 
 // Test edge case: empty position map
@@ -259,7 +259,7 @@ TEST_F(FlatPositionMapTest, EmptyPositionMap) {
   ASSERT_NE(flat_map, nullptr);
 
   FlatPositionMapIterator iter(flat_map);
-  EXPECT_FALSE(iter.IsValid(1));
+  EXPECT_FALSE(iter.IsValid());
 }
 
 // Test consecutive positions (minimal deltas)
@@ -274,12 +274,12 @@ TEST_F(FlatPositionMapTest, ConsecutivePositions) {
   FlatPositionMapIterator iter(flat_map);
 
   for (Position expected = 1; expected <= 5; ++expected) {
-    EXPECT_TRUE(iter.IsValid(1));
-    EXPECT_EQ(iter.GetPosition(1), expected);
-    iter.Next(1);
+    EXPECT_TRUE(iter.IsValid());
+    EXPECT_EQ(iter.GetPosition(), expected);
+    iter.NextPosition();
   }
 
-  EXPECT_FALSE(iter.IsValid(1));
+  EXPECT_FALSE(iter.IsValid());
 }
 
 // Test multiple fields at same position
@@ -293,9 +293,9 @@ TEST_F(FlatPositionMapTest, MultipleFieldsSamePosition) {
 
   FlatPositionMapIterator iter(flat_map);
 
-  EXPECT_TRUE(iter.IsValid(5));
-  EXPECT_EQ(iter.GetPosition(5), 10);
-  EXPECT_EQ(iter.GetFieldMask(5), 0b10101ULL);
+  EXPECT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetPosition(), 10);
+  EXPECT_EQ(iter.GetFieldMask(), 0b10101ULL);
 }
 
 // Test cumulative position accuracy after multiple Next() calls
@@ -313,13 +313,13 @@ TEST_F(FlatPositionMapTest, CumulativePositionAccuracy) {
   std::vector<Position> expected_positions = {7, 15, 28, 50, 100, 200};
 
   for (size_t i = 0; i < expected_positions.size(); ++i) {
-    EXPECT_TRUE(iter.IsValid(6));
-    EXPECT_EQ(iter.GetPosition(6), expected_positions[i])
+    EXPECT_TRUE(iter.IsValid());
+    EXPECT_EQ(iter.GetPosition(), expected_positions[i])
         << "Failed at index " << i;
-    iter.Next(6);
+    iter.NextPosition();
   }
 
-  EXPECT_FALSE(iter.IsValid(6));
+  EXPECT_FALSE(iter.IsValid());
 }
 
 // Test SkipForward beyond last position
@@ -333,8 +333,8 @@ TEST_F(FlatPositionMapTest, SkipForwardBeyondEnd) {
   FlatPositionMapIterator iter(flat_map);
 
   // Skip beyond all positions
-  EXPECT_FALSE(iter.SkipForward(100, 3));
-  EXPECT_FALSE(iter.IsValid(3));
+  EXPECT_FALSE(iter.SkipForward(100));
+  EXPECT_FALSE(iter.IsValid());
 }
 
 // Test with maximum field count
@@ -349,9 +349,9 @@ TEST_F(FlatPositionMapTest, MaximumFieldCount) {
 
   FlatPositionMapIterator iter(flat_map);
 
-  EXPECT_TRUE(iter.IsValid(64));
-  EXPECT_EQ(iter.GetPosition(64), 10);
-  EXPECT_EQ(iter.GetFieldMask(64), all_fields_mask);
+  EXPECT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetPosition(), 10);
+  EXPECT_EQ(iter.GetFieldMask(), all_fields_mask);
 }
 
 // Stress test: many positions with cumulative tracking
@@ -373,15 +373,15 @@ TEST_F(FlatPositionMapTest, StressTestCumulativePosition) {
 
   // Verify all positions are correct
   for (size_t i = 0; i < positions.size(); ++i) {
-    EXPECT_TRUE(iter.IsValid(8));
-    EXPECT_EQ(iter.GetPosition(8), positions[i].first)
+    EXPECT_TRUE(iter.IsValid());
+    EXPECT_EQ(iter.GetPosition(), positions[i].first)
         << "Failed at index " << i;
-    EXPECT_EQ(iter.GetFieldMask(8), positions[i].second)
+    EXPECT_EQ(iter.GetFieldMask(), positions[i].second)
         << "Failed at index " << i;
-    iter.Next(8);
+    iter.NextPosition();
   }
 
-  EXPECT_FALSE(iter.IsValid(8));
+  EXPECT_FALSE(iter.IsValid());
 }
 
 }  // namespace valkey_search::indexes::text

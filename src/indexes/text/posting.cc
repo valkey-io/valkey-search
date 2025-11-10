@@ -177,16 +177,17 @@ unsigned int count_num_terms(const PositionMap& pos_map) {
   return num_terms;
 }
 
-void Postings::InsertKey(const Key& key, PositionMap&& pos_map, TextIndexMetadata* metadata, size_t num_text_fields) {
+void Postings::InsertKey(const Key& key, PositionMap&& pos_map,
+                         TextIndexMetadata* metadata, size_t num_text_fields) {
   metadata->total_positions += pos_map.size();
   metadata->total_term_frequency += count_num_terms(pos_map);
 
   // Serialize the position map into FlatPositionMap
   FlatPositionMap flat_map = SerializePositionMap(pos_map, num_text_fields);
-  
+
   // Print the flat_map at bit level for debugging
-  //PrintFlatPositionMapBits(flat_map);
-  
+  // PrintFlatPositionMapBits(flat_map);
+
   // Store the serialized flat map
   key_to_positions_[key] = flat_map;
 }
@@ -197,7 +198,7 @@ void Postings::RemoveKey(const Key& key, TextIndexMetadata* metadata) {
   if (it == key_to_positions_.end()) return;
 
   FlatPositionMap flat_map = it->second;
-  
+
   // Use helper functions to get counts
   size_t position_count = CountPositions(flat_map);
   size_t term_frequency = CountTermFrequency(flat_map);
@@ -207,7 +208,7 @@ void Postings::RemoveKey(const Key& key, TextIndexMetadata* metadata) {
 
   // Free the flat map memory with memory tracking
   FreeFlatPositionMap(flat_map);
-  
+
   // Remove from map
   key_to_positions_.erase(it);
 }
@@ -266,7 +267,8 @@ bool Postings::KeyIterator::ContainsFields(uint64_t field_mask) const {
 
   FlatPositionMap flat_map = current_->second;
 
-  // Check all positions for this key to see if any of the requested fields are set
+  // Check all positions for this key to see if any of the requested fields are
+  // set
   FlatPositionMapIterator iter(flat_map);
   while (iter.IsValid()) {
     uint64_t position_mask = iter.GetFieldMask();

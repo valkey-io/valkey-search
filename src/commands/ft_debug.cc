@@ -162,7 +162,7 @@ Utilization: AvgSize / AvgAllocated
 */
 void DumpBucket(ValkeyModuleCtx *ctx,
                 const StringInternStore::Stats::BucketStats &bucket) {
-  ValkeyModule_ReplyWithArray(ctx, 10);
+  ValkeyModule_ReplyWithArray(ctx, 12);
   ValkeyModule_ReplyWithCString(ctx, "Count");
   ValkeyModule_ReplyWithLongLong(ctx, bucket.count_);
   ValkeyModule_ReplyWithCString(ctx, "Bytes");

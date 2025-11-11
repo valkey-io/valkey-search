@@ -21,16 +21,13 @@ import "google/protobuf/any.proto";
 service Coordinator {
   // Get the current schema metadata.
   rpc GetGlobalMetadata(GetGlobalMetadataRequest)
-      returns (GetGlobalMetadataResponse) {
-  }
+      returns (GetGlobalMetadataResponse) {}
   // Search the index partition for documents.
   rpc SearchIndexPartition(SearchIndexPartitionRequest)
-      returns (SearchIndexPartitionResponse) {
-  }
+      returns (SearchIndexPartitionResponse) {}
   // Get index info across cluster
   rpc InfoIndexPartition(InfoIndexPartitionRequest)
-      returns (InfoIndexPartitionResponse) {
-  }
+      returns (InfoIndexPartitionResponse) {}
 }
 
 message LimitParameter {
@@ -38,7 +35,6 @@ message LimitParameter {
   uint64 number = 2;
 }
 
-// Add TextPredicate for CME support.
 message TagPredicate {
   string attribute_alias = 1;
   string raw_tag_string = 2;
@@ -50,6 +46,39 @@ message NumericPredicate {
   bool is_inclusive_start = 3;
   double end = 4;
   bool is_inclusive_end = 5;
+}
+
+message TermPredicate {
+  uint64 field_mask = 1;
+  string content = 2;
+  bool exact = 3;
+}
+
+message PrefixPredicate {
+  uint64 field_mask = 1;
+  string content = 2;
+}
+
+message SuffixPredicate {
+  uint64 field_mask = 1;
+  string content = 2;
+}
+
+message InfixPredicate {
+  uint64 field_mask = 1;
+  string content = 2;
+}
+
+message FuzzyPredicate {
+  uint64 field_mask = 1;
+  string content = 2;
+  uint32 distance = 3;
+}
+
+message ProximityPredicate {
+  repeated Predicate nodes = 1;
+  uint32 slop = 2;
+  bool inorder = 3;
 }
 
 message AndPredicate {
@@ -73,6 +102,12 @@ message Predicate {
     AndPredicate and = 3;
     OrPredicate or = 4;
     NegatePredicate negate = 5;
+    TermPredicate term = 6;
+    PrefixPredicate prefix = 7;
+    SuffixPredicate suffix = 8;
+    InfixPredicate infix = 9;
+    FuzzyPredicate fuzzy = 10;
+    ProximityPredicate proximity = 11;
   }
 }
 

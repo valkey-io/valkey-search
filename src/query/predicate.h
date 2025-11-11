@@ -167,6 +167,7 @@ class TermPredicate : public TextPredicate {
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
+  bool IsExact() const { return exact_; }
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;

@@ -116,6 +116,11 @@ class ClusterMap {
   // shard lookup by slot, return nullptr if shard not found
   const ShardInfo* GetShardBySlot(uint16_t slot) const;
 
+  // Get the shard info for the current node
+  const ShardInfo* GetCurrentNodeShard() const {
+    return current_node_shard_;
+  }
+
   // get cluster level slot fingerprint
   uint64_t GetClusterSlotsFingerprint() const {
     return cluster_slots_fingerprint_;
@@ -140,6 +145,9 @@ class ClusterMap {
   uint64_t cluster_slots_fingerprint_;
 
   bool is_consistent_;
+
+  // Cached pointer to the current node's shard
+  const ShardInfo* current_node_shard_;
 
   // Pre-computed target lists
   std::vector<NodeInfo> primary_targets_;

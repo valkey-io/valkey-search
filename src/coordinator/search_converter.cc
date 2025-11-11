@@ -141,6 +141,7 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
                                             request.limit().number()};
   parameters->no_content = request.no_content();
   parameters->enable_partial_results = request.enable_partial_results();
+  parameters->enable_consistency = request.enable_consistency();
   if (request.has_root_filter_predicate()) {
     VMSDK_ASSIGN_OR_RETURN(
         parameters->filter_parse_results.root_predicate,
@@ -152,6 +153,12 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
     parameters->return_attributes.emplace_back(query::ReturnAttribute(
         vmsdk::MakeUniqueValkeyString(return_parameter.identifier()),
         vmsdk::MakeUniqueValkeyString(return_parameter.alias())));
+  }
+  if (request.has_index_fingerprint_version()) {
+    parameters->index_fingerprint_version = request.index_fingerprint_version();
+  }
+  if (request.has_slot_fingerprint()) {
+    parameters->slot_fingerprint = request.slot_fingerprint();
   }
   return parameters;
 }
@@ -241,6 +248,7 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   request->set_timeout_ms(parameters.timeout_ms);
   request->set_no_content(parameters.no_content);
   request->set_enable_partial_results(parameters.enable_partial_results);
+  request->set_enable_consistency(parameters.enable_consistency);
   if (parameters.filter_parse_results.root_predicate != nullptr) {
     request->set_allocated_root_filter_predicate(
         PredicateToGRPCPredicate(
@@ -255,6 +263,13 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
         vmsdk::ToStringView(return_attribute.identifier.get()));
     return_parameter->set_alias(
         vmsdk::ToStringView(return_attribute.alias.get()));
+  }
+  if (parameters.index_fingerprint_version.has_value()) {
+    *request->mutable_index_fingerprint_version() =
+        parameters.index_fingerprint_version.value();
+  }
+  if (parameters.slot_fingerprint.has_value()) {
+    request->set_slot_fingerprint(parameters.slot_fingerprint.value());
   }
   return request;
 }

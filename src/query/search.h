@@ -45,6 +45,8 @@ constexpr int64_t kTimeoutMS{50000};
 constexpr size_t kMaxTimeoutMs{60000};
 constexpr absl::string_view kOOMMsg{
     "OOM command not allowed when used memory > 'maxmemory'"};
+constexpr absl::string_view kFailedPreconditionMsg{
+    "Index or slot consistency check failed"};
 constexpr uint32_t kDialect{2};
 
 struct LimitParameter {
@@ -77,6 +79,7 @@ struct SearchParameters {
   uint32_t dialect{kDialect};
   bool local_only{false};
   bool enable_partial_results{options::GetPreferPartialResults().GetValue()};
+  bool enable_consistency{false};
   int k{0};
   std::optional<unsigned> ef;
   LimitParameter limit;
@@ -84,6 +87,8 @@ struct SearchParameters {
   bool no_content{false};
   FilterParseResults filter_parse_results;
   std::vector<ReturnAttribute> return_attributes;
+  std::optional<coordinator::IndexFingerprintVersion> index_fingerprint_version;
+  std::optional<uint64_t> slot_fingerprint;
   struct ParseTimeVariables {
     // Members of this struct are only valid during the parsing of
     // VectorSearchParameters on the mainthread. They get cleared

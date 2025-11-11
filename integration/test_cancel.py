@@ -16,7 +16,7 @@ def canceller(client, client_id):
     client.execute_command("client kill id ", client_id)
 
 
-def search_command(index: str, filter: Union[int, None], enable_partial_results: bool = True) -> list[str]:
+def search_command(index: str, filter: Union[int, None], enable_partial_results: bool = True, enable_consistency: bool = False) -> list[str]:
     predicate = "*" if filter is None else f"(@n:[0 {filter}])"
     return [
         "FT.SEARCH",
@@ -28,7 +28,8 @@ def search_command(index: str, filter: Union[int, None], enable_partial_results:
         float_to_bytes([10.0, 10.0, 10.0]),
         "TIMEOUT",
         "10",
-        "SOMESHARDS" if enable_partial_results else "ALLSHARDS"
+        "SOMESHARDS" if enable_partial_results else "ALLSHARDS",
+        "CONSISTENT" if enable_consistency else "INCONSISTENT"
     ]
 
 
@@ -39,14 +40,23 @@ def search(
     timeout: bool,
     filter: Union[int, None] = None,
     enable_partial_results: bool = True,
-    
+    expect_consistency_error = False,
+    enable_consistency: bool = False
 ) -> list[tuple[str, float]]:
-    print("Search command: ", search_command(index, filter, enable_partial_results))
-    if not timeout:
-        return client.execute_command(*search_command(index, filter, enable_partial_results))
+    print("Search command: ", search_command(index, filter, enable_partial_results, enable_consistency))
+    if expect_consistency_error:
+        try:
+            x = client.execute_command(*search_command(index, filter, enable_partial_results, enable_consistency))
+            assert False, "Expected error, but got result: " + str(x)
+        except ResponseError as e:
+            print(e)
+            assert str(e) == "Index or slot consistency check failed"
+        return []
+    elif not timeout:
+        return client.execute_command(*search_command(index, filter, enable_partial_results, enable_consistency))
     else:
         try:
-            x = client.execute_command(*search_command(index, filter, enable_partial_results))
+            x = client.execute_command(*search_command(index, filter, enable_partial_results, enable_consistency))
             assert False, "Expected timeout, but got result: " + str(x)
         except ResponseError as e:
             assert str(e) == "Search operation cancelled due to timeout"

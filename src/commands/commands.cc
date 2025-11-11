@@ -11,6 +11,7 @@
 #include "ft_create_parser.h"
 #include "src/acl.h"
 #include "src/commands/ft_search.h"
+#include "src/coordinator/metadata_manager.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
@@ -38,18 +39,18 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
       static_cast<Result *>(ValkeyModule_GetBlockedClientPrivateData(ctx));
   CHECK(res != nullptr);
 
+  if (!res->neighbors.ok()) {
+    ++Metrics::GetStats().query_failed_requests_cnt;
+    return ValkeyModule_ReplyWithError(
+        ctx, res->neighbors.status().message().data());
+  }
+
   // Check if operation was cancelled and partial results are disabled
   if (!res->parameters->enable_partial_results &&
       res->parameters->cancellation_token->IsCancelled()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
     return ValkeyModule_ReplyWithError(
         ctx, "Search operation cancelled due to timeout");
-  }
-
-  if (!res->neighbors.ok()) {
-    ++Metrics::GetStats().query_failed_requests_cnt;
-    return ValkeyModule_ReplyWithError(
-        ctx, res->neighbors.status().message().data());
   }
 
   res->parameters->SendReply(ctx, res->neighbors.value());
@@ -64,6 +65,7 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 }  // namespace async
 
 CONTROLLED_BOOLEAN(ForceReplicasOnly, false);
+CONTROLLED_BOOLEAN(ForceInvalidIndexFingerprint, false);
 
 //
 // Common Class for FT.SEARCH and FT.AGGREGATE command
@@ -138,6 +140,29 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
           ForceReplicasOnly.GetValue()
               ? ValkeySearch::Instance().GetClusterMap()->GetReplicaTargets()
               : ValkeySearch::Instance().GetClusterMap()->GetRandomTargets();
+
+      // get index fingerprint and version
+      if (ForceInvalidIndexFingerprint.GetValue()) {
+        // test only: simulate invalid index fingerprint and version
+        parameters->index_fingerprint_version.emplace();
+        parameters->index_fingerprint_version->set_fingerprint(404);
+        parameters->index_fingerprint_version->set_version(404);
+      } else {
+        auto global_metadata =
+            coordinator::MetadataManager::Instance().GetGlobalMetadata();
+        CHECK(global_metadata->type_namespace_map().contains(
+            kSchemaManagerMetadataTypeName));
+        const auto &entry_map = global_metadata->type_namespace_map().at(
+            kSchemaManagerMetadataTypeName);
+        CHECK(entry_map.entries().contains(parameters->index_schema_name));
+        const auto &entry =
+            entry_map.entries().at(parameters->index_schema_name);
+        parameters->index_fingerprint_version.emplace();
+        parameters->index_fingerprint_version->set_fingerprint(
+            entry.fingerprint());
+        parameters->index_fingerprint_version->set_version(entry.version());
+      }
+
       return query::fanout::PerformSearchFanoutAsync(
           ctx, search_targets,
           ValkeySearch::Instance().GetCoordinatorClientPool(),

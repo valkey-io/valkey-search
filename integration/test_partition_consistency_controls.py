@@ -85,7 +85,62 @@ class TestPartitionConsistencyControls(ValkeySearchClusterTestCaseDebugMode):
         assert hnsw_result == []
         self.check_info_sum("search_test-counter-ForceCancels", 3)
 
-        # Enable partial results, get partial results
+        # Enable and get partial results
         hnsw_result = search(client, "hnsw", False, None, enable_partial_results=True)
         self.check_info_sum("search_test-counter-ForceCancels", 6)
         assert hnsw_result != nominal_hnsw_result
+
+        self.control_set("ForceTimeout", "no")
+    
+    def test_ft_search_consistency_controls(self):
+        self.execute_primaries(["flushall sync"])
+        self.config_set("search.info-developer-visible", "yes")
+        client: Valkey = self.new_cluster_client()
+        self.check_info("search_cancel-timeouts", 0)
+        hnsw_index = Index("hnsw", [Vector("v", 3, type="HNSW"), Numeric("n")])
+
+        # create index and load data
+        hnsw_index.create(client)
+        hnsw_index.load_data(client, 100)
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 100, timeout=3)
+
+        # Nominal case
+        nominal_hnsw_result = search(client, "hnsw", False)
+        self.check_info_sum("search_test-counter-ForceCancels", 0)
+        assert nominal_hnsw_result[0] == 10
+
+        # make commands to all nodes, force refresh cluster map
+        node1 = self.new_client_for_primary(1)
+        node1.execute_command("FT.INFO hnsw PRIMARY")
+        node2 = self.new_client_for_primary(2)
+        node2.execute_command("FT.INFO hnsw PRIMARY")
+        
+        # enable consistency check, get correct result
+        hnsw_result = search(client, "hnsw", False, expect_consistency_error=False, enable_consistency=True)
+        assert hnsw_result[0] == nominal_hnsw_result[0]
+
+        # force invalid slot fingerprint
+        self.control_set("ForceInvalidSlotFingerprint", "yes")
+
+        # disable consistency check, get valid results
+        hnsw_result = search(client, "hnsw", False, enable_consistency=False)
+        assert hnsw_result[0] == nominal_hnsw_result[0]
+
+        # enable consistency check, get empty result (failure)
+        hnsw_result = search(client, "hnsw", False, expect_consistency_error=True, enable_consistency=True)
+        assert hnsw_result == []
+
+        # do not force invalid slot fingerprint
+        self.control_set("ForceInvalidSlotFingerprint", "no")
+
+        # force invalid index fingerprint
+        self.control_set("ForceInvalidIndexFingerprint", "yes")
+
+        # disable consistency check, get valid results
+        hnsw_result = search(client, "hnsw", False, enable_consistency=False)
+        assert hnsw_result[0] == nominal_hnsw_result[0]
+
+        # enable consistency check, get empty result (failure)
+        hnsw_result = search(client, "hnsw", False, expect_consistency_error=True, enable_consistency=True)
+        assert hnsw_result == []
+

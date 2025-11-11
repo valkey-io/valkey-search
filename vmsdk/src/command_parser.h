@@ -208,7 +208,7 @@ absl::Status ParseEnumParam(
         return absl::OkStatus();                                    \
       })
 
-#define GENERATE_NEGATED_FLAG_PARSER(type, field_name)               \
+#define GENERATE_NEGATED_FLAG_PARSER(type, field_name)              \
   std::make_unique<::vmsdk::ParamParser<type>>(                     \
       [](type &value, ::vmsdk::ArgsIterator &itr) -> absl::Status { \
         value.field_name = false;                                   \

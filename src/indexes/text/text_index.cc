@@ -183,7 +183,8 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
   NestedMemoryScope scope{metadata_.text_index_memory_pool_};
 
   // Extract the per-key index
-  absl::node_hash_map<Key, TextIndex>::node_type node;
+  absl::node_hash_map<Key, TextIndex, InternedStringPtrHash,
+                      InternedStringPtrEqual>::node_type node;
   {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
     node = per_key_text_indexes_.extract(key);

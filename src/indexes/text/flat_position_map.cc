@@ -33,7 +33,8 @@ void WriteUint32(char* ptr, uint32_t value) {
   std::memcpy(ptr, &value, sizeof(uint32_t));
 }
 
-// Calculate number of partitions for binary search. Have limited the number of partitions to avoid bloating the position map 
+// Calculate number of partitions for binary search. Have limited the number of
+// partitions to avoid bloating the position map
 uint32_t CalculateNumPartitions(uint32_t num_positions) {
   if (num_positions <= 128) return 0;
   if (num_positions <= 512) return 4;
@@ -414,33 +415,35 @@ bool FlatPositionMapIterator::SkipForwardPosition(Position target) {
   if (scheme == EncodingScheme::BINARY_SEARCH && total_positions_ > 0) {
     uint32_t num_partitions = CalculateNumPartitions(total_positions_);
     const char* partition_map_ptr = flat_map_ + 4;
-    
+
     // Find partition where target position falls
     size_t target_partition_idx = 0;
     for (uint32_t i = 0; i < num_partitions; ++i) {
       uint32_t partition_delta = ReadUint32(partition_map_ptr + i * 8 + 4);
-      
+
       if (partition_delta >= target) {
         target_partition_idx = i;
         break;
       }
       target_partition_idx = i + 1;
     }
-    
+
     // Skip to the target partition
     if (target_partition_idx > 0 && target_partition_idx < num_partitions) {
-      uint32_t partition_offset = ReadUint32(partition_map_ptr + target_partition_idx * 8);
-      uint32_t partition_delta = ReadUint32(partition_map_ptr + target_partition_idx * 8 + 4);
-      
+      uint32_t partition_offset =
+          ReadUint32(partition_map_ptr + target_partition_idx * 8);
+      uint32_t partition_delta =
+          ReadUint32(partition_map_ptr + target_partition_idx * 8 + 4);
+
       const char* data_start = flat_map_ + 4 + (num_partitions * 8);
       current_ptr_ = data_start + partition_offset;
       cumulative_position_ = partition_delta;
-      
+
       uint32_t positions_per_partition = total_positions_ / num_partitions;
       positions_read_ = target_partition_idx * positions_per_partition;
     }
   }
-  
+
   // Linear search from current position to reach exact target
   while (IsValid()) {
     Position current_pos = GetPosition();

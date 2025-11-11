@@ -6,7 +6,8 @@ from valkey_search_test_case import (
     ValkeySearchClusterTestCaseDebugMode,
 )
 from indexes import *
-from test_cancel import *
+from valkeytestframework.util import waiters
+from test_cancel import search, search_command, Any
 
 class TestPartitionConsistencyControls(ValkeySearchClusterTestCaseDebugMode):
 
@@ -68,8 +69,8 @@ class TestPartitionConsistencyControls(ValkeySearchClusterTestCaseDebugMode):
 
         # create index and load data
         hnsw_index.create(client)
-        hnsw_index.load_data(client, 100)
-        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 100, timeout=3)
+        hnsw_index.load_data(client, 1000)
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 1000, timeout=3)
 
         # Nominal case
         nominal_hnsw_result = search(client, "hnsw", False)
@@ -78,7 +79,7 @@ class TestPartitionConsistencyControls(ValkeySearchClusterTestCaseDebugMode):
 
         # Now, force timeouts quickly
         self.control_set("ForceTimeout", "yes")
-        self.control_set("TimeoutPollFrequency", "1")
+        self.control_set("TimeoutPollFrequency", "0")
 
         # Disable partial results, get empty result due to timeout
         hnsw_result = search(client, "hnsw", True, None, enable_partial_results=False)
@@ -88,7 +89,7 @@ class TestPartitionConsistencyControls(ValkeySearchClusterTestCaseDebugMode):
         # Enable and get partial results
         hnsw_result = search(client, "hnsw", False, None, enable_partial_results=True)
         self.check_info_sum("search_test-counter-ForceCancels", 6)
-        assert hnsw_result != nominal_hnsw_result
+        assert hnsw_result[0] != nominal_hnsw_result[0]
 
         self.control_set("ForceTimeout", "no")
     
@@ -101,8 +102,8 @@ class TestPartitionConsistencyControls(ValkeySearchClusterTestCaseDebugMode):
 
         # create index and load data
         hnsw_index.create(client)
-        hnsw_index.load_data(client, 100)
-        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 100, timeout=3)
+        hnsw_index.load_data(client, 1000)
+        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 1000, timeout=3)
 
         # Nominal case
         nominal_hnsw_result = search(client, "hnsw", False)

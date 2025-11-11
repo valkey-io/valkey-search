@@ -209,18 +209,18 @@ TEST_F(PostingTest, PositionIteratorSkipForward) {
   auto pos_iter = key_iter.GetPositionIterator();
 
   // Skip to exact position match
-  EXPECT_TRUE(pos_iter.SkipForward(30));
+  EXPECT_TRUE(pos_iter.SkipForwardPosition(30));
   EXPECT_TRUE(pos_iter.IsValid());
   EXPECT_EQ(pos_iter.GetPosition(), 30);
   EXPECT_EQ(pos_iter.GetFieldMask(), 2ULL);
 
   // Skip to non-existent position (should land on next greater position)
-  EXPECT_FALSE(pos_iter.SkipForward(40));
+  EXPECT_FALSE(pos_iter.SkipForwardPosition(40));
   EXPECT_TRUE(pos_iter.IsValid());
   EXPECT_EQ(pos_iter.GetPosition(), 50);
 
   // Skip beyond all positions
-  EXPECT_FALSE(pos_iter.SkipForward(100));
+  EXPECT_FALSE(pos_iter.SkipForwardPosition(100));
   EXPECT_FALSE(pos_iter.IsValid());
 }
 

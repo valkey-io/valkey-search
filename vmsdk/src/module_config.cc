@@ -119,7 +119,7 @@ absl::Status ModuleConfigManager::ParseAndLoadArgv(ValkeyModuleCtx *ctx,
                                                    ValkeyModuleString **argv,
                                                    int argc) {
   // reset the debug mode to "false".
-  debug_mode->SetValueOrLog(false, LogLevel::kWarning);
+  debug_mode->SetValueOrLog(true, LogLevel::kWarning);
   vmsdk::ArgsIterator iter{argv, argc};
   while (iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto key, iter.Get());

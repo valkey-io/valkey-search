@@ -40,18 +40,18 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
       static_cast<Result *>(ValkeyModule_GetBlockedClientPrivateData(ctx));
   CHECK(res != nullptr);
 
-  if (!res->neighbors.ok()) {
-    ++Metrics::GetStats().query_failed_requests_cnt;
-    return ValkeyModule_ReplyWithError(
-        ctx, res->neighbors.status().message().data());
-  }
-
   // Check if operation was cancelled and partial results are disabled
   if (!res->parameters->enable_partial_results &&
       res->parameters->cancellation_token->IsCancelled()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
     return ValkeyModule_ReplyWithError(
         ctx, "Search operation cancelled due to timeout");
+  }
+
+  if (!res->neighbors.ok()) {
+    ++Metrics::GetStats().query_failed_requests_cnt;
+    return ValkeyModule_ReplyWithError(
+        ctx, res->neighbors.status().message().data());
   }
 
   res->parameters->SendReply(ctx, res->neighbors.value());

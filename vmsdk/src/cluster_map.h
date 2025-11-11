@@ -117,9 +117,7 @@ class ClusterMap {
   const ShardInfo* GetShardBySlot(uint16_t slot) const;
 
   // Get the shard info for the current node
-  const ShardInfo* GetCurrentNodeShard() const {
-    return current_node_shard_;
-  }
+  const ShardInfo* GetCurrentNodeShard() const { return current_node_shard_; }
 
   // get cluster level slot fingerprint
   uint64_t GetClusterSlotsFingerprint() const {

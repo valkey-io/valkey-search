@@ -2,6 +2,7 @@ import pytest
 from valkey import ResponseError
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase, ValkeySearchTestCaseDebugMode
+from valkey_search_test_case import ValkeySearchClusterTestCase
 from valkeytestframework.conftest import resource_port_tracker
 from ft_info_parser import FTInfoParser
 from valkeytestframework.util import waiters
@@ -82,6 +83,92 @@ expected_desc2_hash_value = {
     b'category': b"electronics"
 }
 
+def validate_fulltext_search(client: Valkey):
+    # Perform the text search query with term and prefix operations that return a match.
+    # text_query_exact_phrase1 is crashing.
+    match = [text_query_term, text_query_prefix, text_query_prefix2, text_query_exact_phrase1, text_query_exact_phrase2]
+    for query in match:
+        result = client.execute_command(*query)
+        assert len(result) == 3
+        assert result[0] == 1  # Number of documents found
+        assert result[1] == expected_hash_key
+        document = result[2]
+        doc_fields = dict(zip(document[::2], document[1::2]))
+        assert doc_fields == expected_hash_value
+    # Perform the text search query with term and prefix operations that return no match.
+    nomatch = [text_query_term_nomatch, text_query_prefix_nomatch]
+    for query in nomatch:
+        result = client.execute_command(*query)
+        assert len(result) == 1
+        assert result[0] == 0  # Number of documents found
+    # Perform a wild card prefix operation with multiple matches
+    result = client.execute_command(*text_query_prefix_multimatch)
+    assert len(result) == 5
+    assert result[0] == 2  # Number of documents found. Both docs below start with Grea* => Great and Greased
+    assert (result[1] == b"product:1" and result[3] == b"product:5") or (
+        result[1] == b"product:5" and result[3] == b"product:1"
+    )
+    # Test Prefix wildcard searches with a single match. Also, check that when the starting of the word
+    # is missing, no matches are found.
+    result1 = client.execute_command("FT.SEARCH", "products", '@desc:experi*')
+    result2 = client.execute_command("FT.SEARCH", "products", '@desc:expe*')
+    result3 = client.execute_command("FT.SEARCH", "products", '@desc:xpe*')
+    assert result1[0] == 1 and result2[0] == 1 and result3[0] == 0
+    assert result1[1] == b"product:3" and result2[1] == b"product:3"
+    # TODO: Update these queries to non stemmed versions once the stem tree is supported and ingestion is updated.
+    # Perform an exact phrase search operation on a unique phrase (exists in one doc).
+    result1 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl"')
+    result2 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl grey acorn grow"')
+    assert result1[0] == 1 and result2[0] == 1
+    assert result1[1] == b"product:1" and result2[1] == b"product:1"
+    result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn gr*')
+    assert result3[0] == 1
+    assert result3[1] == b"product:1"
+    result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn grea*')
+    assert result3[0] == 0
+    result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn great')
+    assert result3[0] == 0
+    # Perform an exact phrase search operation on a phrase existing in 2 documents.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"interest desc"')
+    assert result[0] == 2
+    assert set(result[1::2]) == {b"product:3", b"product:2"}
+    # Perform an exact phrase search operation on a phrase existing in 5 documents.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"random word"')
+    assert result[0] == 5
+    assert set(result[1::2]) == {b"product:1", b"product:2", b"product:3", b"product:4", b"product:5"}
+    # Perform an exact phrase search operation on a phrase existing in 1 document.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"uncommon random word"')
+    assert result[0] == 1
+    assert result[1] == b"product:4"
+    # Test for searches on tokens that have common keys, but in-order does not match.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"opposit order"')
+    assert result[0] == 0
+    # Test for searches on tokens that have common keys, but slop does not match.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"word uniqu"')
+    assert result[0] == 0
+    # Test for searches on tokens that have common keys and inorder matches but slop does not match.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"uniqu word"')
+    assert result[0] == 0
+    # Test for searches on tokens that have common keys and slop matches but inorder does not match.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"uniqu word slop"')
+    assert result[0] == 0
+    # Now, with the inorder, with no slop, it should match.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"uniqu slop word"')
+    assert result[0] == 1
+    assert result[1] == b"product:5"
+    # Validating the inorder and slop checks for a query with multiple tokens.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"1 2 3 4 5 6 7 9 8 0"')
+    assert result[0] == 0
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"1 2 3 4 5 6 7 9"')
+    assert result[0] == 0
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"1 2 3 4 5 6 7 8 9 0"')
+    assert result[0] == 1
+    assert result[1] == b"product:1"
+    # TODO: We can test this once the queries are tokenized with punctuation applied.
+    # result = client.execute_command("FT.SEARCH", "products", '@desc:"inspector\'s palm"')
+    # TODO: We can test this once the queries are tokenized with punctuation and stopword removal applied.
+    # result = client.execute_command("FT.SEARCH", "products", '@desc:"random words, these are not"')
+
 class TestFullText(ValkeySearchTestCaseBase):
 
     def test_text_search(self):
@@ -91,93 +178,11 @@ class TestFullText(ValkeySearchTestCaseBase):
         client: Valkey = self.server.get_new_client()
         # Create the text index on Hash documents
         assert client.execute_command(text_index_on_hash) == b"OK"
-        # Insert documents into the index
+        # Data population:
         for doc in hash_docs:
             assert client.execute_command(*doc) == 5
-        # Perform the text search query with term and prefix operations that return a match.
-        # text_query_exact_phrase1 is crashing.
-        match = [text_query_term, text_query_prefix, text_query_prefix2, text_query_exact_phrase1, text_query_exact_phrase2]
-        for query in match:
-            result = client.execute_command(*query)
-            assert len(result) == 3
-            assert result[0] == 1  # Number of documents found
-            assert result[1] == expected_hash_key
-            document = result[2]
-            doc_fields = dict(zip(document[::2], document[1::2]))
-            assert doc_fields == expected_hash_value
-        # Perform the text search query with term and prefix operations that return no match.
-        nomatch = [text_query_term_nomatch, text_query_prefix_nomatch]
-        for query in nomatch:
-            result = client.execute_command(*query)
-            assert len(result) == 1
-            assert result[0] == 0  # Number of documents found
-        # Perform a wild card prefix operation with multiple matches
-        result = client.execute_command(*text_query_prefix_multimatch)
-        assert len(result) == 5
-        assert result[0] == 2  # Number of documents found. Both docs below start with Grea* => Great and Greased
-        assert (result[1] == b"product:1" and result[3] == b"product:5") or (
-            result[1] == b"product:5" and result[3] == b"product:1"
-        )
-        # Test Prefix wildcard searches with a single match. Also, check that when the starting of the word
-        # is missing, no matches are found.
-        result1 = client.execute_command("FT.SEARCH", "products", '@desc:experi*')
-        result2 = client.execute_command("FT.SEARCH", "products", '@desc:expe*')
-        result3 = client.execute_command("FT.SEARCH", "products", '@desc:xpe*')
-        assert result1[0] == 1 and result2[0] == 1 and result3[0] == 0
-        assert result1[1] == b"product:3" and result2[1] == b"product:3"
-        # TODO: Update these queries to non stemmed versions once the stem tree is supported and ingestion is updated.
-        # Perform an exact phrase search operation on a unique phrase (exists in one doc).
-        result1 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl"')
-        result2 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl grey acorn grow"')
-        assert result1[0] == 1 and result2[0] == 1
-        assert result1[1] == b"product:1" and result2[1] == b"product:1"
-        result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn gr*')
-        assert result3[0] == 1
-        assert result3[1] == b"product:1"
-        result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn grea*')
-        assert result3[0] == 0
-        result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn great')
-        assert result3[0] == 0
-        # Perform an exact phrase search operation on a phrase existing in 2 documents.
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"interest desc"')
-        assert result[0] == 2
-        assert set(result[1::2]) == {b"product:3", b"product:2"}
-        # Perform an exact phrase search operation on a phrase existing in 5 documents.
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"random word"')
-        assert result[0] == 5
-        assert set(result[1::2]) == {b"product:1", b"product:2", b"product:3", b"product:4", b"product:5"}
-        # Perform an exact phrase search operation on a phrase existing in 1 document.
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"uncommon random word"')
-        assert result[0] == 1
-        assert result[1] == b"product:4"
-        # Test for searches on tokens that have common keys, but in-order does not match.
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"opposit order"')
-        assert result[0] == 0
-        # Test for searches on tokens that have common keys, but slop does not match.
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"word uniqu"')
-        assert result[0] == 0
-        # Test for searches on tokens that have common keys and inorder matches but slop does not match.
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"uniqu word"')
-        assert result[0] == 0
-        # Test for searches on tokens that have common keys and slop matches but inorder does not match.
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"uniqu word slop"')
-        assert result[0] == 0
-        # Now, with the inorder, with no slop, it should match.
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"uniqu slop word"')
-        assert result[0] == 1
-        assert result[1] == b"product:5"
-        # Validating the inorder and slop checks for a query with multiple tokens.
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"1 2 3 4 5 6 7 9 8 0"')
-        assert result[0] == 0
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"1 2 3 4 5 6 7 9"')
-        assert result[0] == 0
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"1 2 3 4 5 6 7 8 9 0"')
-        assert result[0] == 1
-        assert result[1] == b"product:1"
-        # TODO: We can test this once the queries are tokenized with punctuation applied.
-        # result = client.execute_command("FT.SEARCH", "products", '@desc:"inspector\'s palm"')
-        # TODO: We can test this once the queries are tokenized with punctuation and stopword removal applied.
-        # result = client.execute_command("FT.SEARCH", "products", '@desc:"random words, these are not"')
+        # Validation of search queries:
+        validate_fulltext_search(client)
 
     def test_ft_create_and_info(self):
         """
@@ -838,3 +843,20 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         
         print("\nCleanup verification passed!")
         # Deletion pending of per_key_index, On deletion only prefix tree cleared
+
+class TestFullTextCluster(ValkeySearchClusterTestCase):
+
+    def test_fulltext_search_cluster(self):
+        """
+            Test a fulltext search queries on Hash docs in Valkey Search CME.
+        """
+        cluster_client: ValkeyCluster = self.new_cluster_client()
+        client: Valkey = self.new_client_for_primary(0)
+        # Create the text index on Hash documents
+        assert client.execute_command(text_index_on_hash) == b"OK"
+        # Data population:
+        for doc in hash_docs:
+            assert cluster_client.execute_command(*doc) == 5
+        # Validation of search queries:
+        time.sleep(1)
+        validate_fulltext_search(client)

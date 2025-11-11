@@ -79,7 +79,7 @@ struct SearchParameters {
   uint32_t dialect{kDialect};
   bool local_only{false};
   bool enable_partial_results{options::GetPreferPartialResults().GetValue()};
-  bool enable_consistency{false};
+  bool enable_consistency{options::GetPreferConsistentResults().GetValue()};
   int k{0};
   std::optional<unsigned> ef;
   LimitParameter limit;

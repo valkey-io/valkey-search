@@ -32,6 +32,7 @@ jobs:
 
     - name: Run Integration Tests
       id: test-run
+      timeout-minutes: 40
       continue-on-error: true
       run: |
         mkdir test-results

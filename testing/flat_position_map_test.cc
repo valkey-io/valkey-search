@@ -155,7 +155,7 @@ TEST_F(FlatPositionMapTest, SkipForwardWithCumulativePosition) {
   FlatPositionMapIterator iter(flat_map);
 
   // Skip to exact position
-  EXPECT_TRUE(iter.SkipForward(30));
+  EXPECT_TRUE(iter.SkipForwardPosition(30));
   EXPECT_EQ(iter.GetPosition(), 30);
   EXPECT_EQ(iter.GetFieldMask(), 4ULL);
 
@@ -176,7 +176,7 @@ TEST_F(FlatPositionMapTest, SkipForwardNonExistentPosition) {
   FlatPositionMapIterator iter(flat_map);
 
   // Skip to position between existing positions
-  EXPECT_FALSE(iter.SkipForward(25));
+  EXPECT_FALSE(iter.SkipForwardPosition(25));
   EXPECT_TRUE(iter.IsValid());
   EXPECT_EQ(iter.GetPosition(), 30);  // Should land on next position
 }
@@ -321,7 +321,7 @@ TEST_F(FlatPositionMapTest, SkipForwardBeyondEnd) {
   FlatPositionMapIterator iter(flat_map);
 
   // Skip beyond all positions
-  EXPECT_FALSE(iter.SkipForward(100));
+  EXPECT_FALSE(iter.SkipForwardPosition(100));
   EXPECT_FALSE(iter.IsValid());
 }
 

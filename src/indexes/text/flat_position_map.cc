@@ -16,12 +16,10 @@
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/text_index.h"
 #include "vmsdk/src/log.h"
-#include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/memory_allocation_overrides.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes::text {
-
-namespace {
 
 // Helper to read uint32_t from byte array
 uint32_t ReadUint32(const char* ptr) {
@@ -35,7 +33,7 @@ void WriteUint32(char* ptr, uint32_t value) {
   std::memcpy(ptr, &value, sizeof(uint32_t));
 }
 
-// Calculate number of partitions for binary search
+// Calculate number of partitions for binary search. Have limited the number of partitions to avoid bloating the position map 
 uint32_t CalculateNumPartitions(uint32_t num_positions) {
   if (num_positions <= 128) return 0;
   if (num_positions <= 512) return 4;
@@ -44,20 +42,16 @@ uint32_t CalculateNumPartitions(uint32_t num_positions) {
   return 256;
 }
 
-// Calculate bytes needed for field mask based on num_text_fields
-// Each byte stores 7 bits (bit 7 is used as encoding flag)
-// Returns 0 for single field (SIMPLE encoding uses no field bytes)
-// EXPANDABLE/BINARY_SEARCH will add 1 terminator byte explicitly when this
-// returns 0
+// Calculate field mask bytes for num_text_fields (7 bits/byte, bit 7 = flag)
+// Returns 0 for single field; EXPANDABLE/BINARY_SEARCH add 1 terminator byte
 uint8_t GetFieldMaskBytes(size_t num_text_fields) {
   if (num_text_fields <= 1) return 0;
   // Each byte can store 7 bits of field mask (bit 7 is the flag bit)
-  return (num_text_fields + 6) / 7;  // Ceiling division
+  return (num_text_fields + 6) / 7;
 }
 
 // Infer field_bytes from the flat_map itself by examining the first position
-// Returns 0 for SIMPLE encoding, otherwise counts field mask bytes in first
-// entry
+// Returns 0 for SIMPLE encoding, else counts field mask bytes in first entry
 uint8_t GetFieldMaskBytes(FlatPositionMap flat_map) {
   if (flat_map == nullptr) return 0;
 
@@ -65,13 +59,8 @@ uint8_t GetFieldMaskBytes(FlatPositionMap flat_map) {
   uint32_t num_positions = (header >> 3);
   EncodingScheme scheme = static_cast<EncodingScheme>((header >> 1) & 0x3);
 
-  // SIMPLE encoding has no field mask bytes
-  if (scheme == EncodingScheme::SIMPLE) {
-    return 0;
-  }
-
-  // Empty map
-  if (num_positions == 0) {
+  // SIMPLE encoding has no field mask bytes, or empty map
+  if (scheme == EncodingScheme::SIMPLE || num_positions == 0) {
     return 0;
   }
 
@@ -127,8 +116,6 @@ EncodingScheme DetermineEncodingScheme(
   return EncodingScheme::EXPANDABLE;
 }
 
-}  // namespace
-
 // Serialize using SIMPLE encoding
 FlatPositionMap SerializeSimple(
     const std::map<Position, std::unique_ptr<FieldMask>>& position_map) {
@@ -138,7 +125,6 @@ FlatPositionMap SerializeSimple(
   size_t total_size = 4 + num_positions;
   char* flat_map = static_cast<char*>(malloc(total_size));
   CHECK(flat_map != nullptr) << "Failed to allocate FlatPositionMap";
-  vmsdk::ReportAllocMemorySize(total_size);
 
   // Write header
   uint32_t header = (0 << 0) |  // Standard header
@@ -173,7 +159,6 @@ FlatPositionMap SerializeExpandable(
       4 + (num_positions * (4 + (field_bytes > 0 ? field_bytes : 1)));
   char* flat_map = static_cast<char*>(malloc(estimated_size));
   CHECK(flat_map != nullptr) << "Failed to allocate FlatPositionMap";
-  vmsdk::ReportAllocMemorySize(estimated_size);
 
   // Write header (will update later with actual size)
   uint32_t header = (0 << 0) |  // Standard header
@@ -214,10 +199,8 @@ FlatPositionMap SerializeExpandable(
 
   // Reallocate to actual size
   size_t actual_size = data_ptr - flat_map;
-  vmsdk::ReportFreeMemorySize(estimated_size);
   char* resized = static_cast<char*>(realloc(flat_map, actual_size));
   if (resized != nullptr) {
-    vmsdk::ReportAllocMemorySize(actual_size);
     flat_map = resized;
   }
 
@@ -241,7 +224,6 @@ FlatPositionMap SerializeBinarySearch(
       (num_positions * (4 + (field_bytes > 0 ? field_bytes : 1)));  // Data
   char* flat_map = static_cast<char*>(malloc(estimated_size));
   CHECK(flat_map != nullptr) << "Failed to allocate FlatPositionMap";
-  vmsdk::ReportAllocMemorySize(estimated_size);
 
   // Write header
   uint32_t header =
@@ -307,10 +289,8 @@ FlatPositionMap SerializeBinarySearch(
 
   // Reallocate to actual size
   size_t actual_size = data_ptr - flat_map;
-  vmsdk::ReportFreeMemorySize(estimated_size);
   char* resized = static_cast<char*>(realloc(flat_map, actual_size));
   if (resized != nullptr) {
-    vmsdk::ReportAllocMemorySize(actual_size);
     flat_map = resized;
   }
 
@@ -324,7 +304,6 @@ FlatPositionMap SerializePositionMap(
     // Empty map: just header with 0 positions
     char* flat_map = static_cast<char*>(malloc(4));
     CHECK(flat_map != nullptr) << "Failed to allocate FlatPositionMap";
-    vmsdk::ReportAllocMemorySize(4);
     WriteUint32(flat_map, 0);
     return flat_map;
   }
@@ -347,8 +326,6 @@ FlatPositionMap SerializePositionMap(
 
 void FreeFlatPositionMap(FlatPositionMap flat_map) {
   if (flat_map != nullptr) {
-    // Note: We don't know the exact size here, would need to parse header
-    // For now, freeing without reporting size decrease
     free(flat_map);
   }
 }
@@ -429,14 +406,44 @@ void FlatPositionMapIterator::NextPosition() {
   }
 }
 
-bool FlatPositionMapIterator::SkipForward(Position target) {
-  // For now, use linear scan
-  // TODO: Implement binary search for BINARY_SEARCH encoding
-  Position current_pos = 0;
-  Position prev_pos = 0;
+bool FlatPositionMapIterator::SkipForwardPosition(Position target) {
+  uint32_t header = ReadUint32(flat_map_);
+  EncodingScheme scheme = static_cast<EncodingScheme>((header >> 1) & 0x3);
 
+  // For BINARY_SEARCH encoding, use partition map to skip ahead
+  if (scheme == EncodingScheme::BINARY_SEARCH && total_positions_ > 0) {
+    uint32_t num_partitions = CalculateNumPartitions(total_positions_);
+    const char* partition_map_ptr = flat_map_ + 4;
+    
+    // Find partition where target position falls
+    size_t target_partition_idx = 0;
+    for (uint32_t i = 0; i < num_partitions; ++i) {
+      uint32_t partition_delta = ReadUint32(partition_map_ptr + i * 8 + 4);
+      
+      if (partition_delta >= target) {
+        target_partition_idx = i;
+        break;
+      }
+      target_partition_idx = i + 1;
+    }
+    
+    // Skip to the target partition
+    if (target_partition_idx > 0 && target_partition_idx < num_partitions) {
+      uint32_t partition_offset = ReadUint32(partition_map_ptr + target_partition_idx * 8);
+      uint32_t partition_delta = ReadUint32(partition_map_ptr + target_partition_idx * 8 + 4);
+      
+      const char* data_start = flat_map_ + 4 + (num_partitions * 8);
+      current_ptr_ = data_start + partition_offset;
+      cumulative_position_ = partition_delta;
+      
+      uint32_t positions_per_partition = total_positions_ / num_partitions;
+      positions_read_ = target_partition_idx * positions_per_partition;
+    }
+  }
+  
+  // Linear search from current position to reach exact target
   while (IsValid()) {
-    current_pos = GetPosition();
+    Position current_pos = GetPosition();
     if (current_pos >= target) {
       return current_pos == target;
     }

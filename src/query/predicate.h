@@ -348,6 +348,8 @@ class ComposedPredicate : public Predicate {
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
   const Predicate* GetLhsPredicate() const { return lhs_predicate_.get(); }
   const Predicate* GetRhsPredicate() const { return rhs_predicate_.get(); }
+  std::optional<uint32_t> GetSlop() const { return slop_; }
+  std::optional<bool> GetInorder() const { return inorder_; }
 
  private:
   std::unique_ptr<Predicate> lhs_predicate_;

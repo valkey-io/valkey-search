@@ -355,6 +355,15 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     // not numeric/tag.
     if (slop_.has_value() && inorder_.has_value() && lhs.filter_iterator &&
         rhs.filter_iterator) {
+        auto lhs_key = lhs.filter_iterator->CurrentKey();
+        auto rhs_key = rhs.filter_iterator->CurrentKey();
+  
+      // If iterators are on different keys, one of them advanced beyond the target
+      // This means the target document doesn't satisfy the proximity constraints
+      if (lhs_key != rhs_key) {
+        return EvaluationResult(false);
+      }
+
       // Get field_mask from lhs iterator
       uint64_t field_mask = lhs.filter_iterator->FieldMask();
 

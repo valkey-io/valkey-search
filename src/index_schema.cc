@@ -271,12 +271,19 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexSchema::GetIndex(
 // index schema. This is intended to be used by queries where there
 // is no field specification, and we want to include results from all
 // text fields.
-std::vector<std::string> IndexSchema::GetAllTextIdentifiers() const {
+// If `with_suffix` is true, we only include the fields that have suffix tree
+// enabled.
+std::vector<std::string> IndexSchema::GetAllTextIdentifiers(
+    bool with_suffix) const {
   std::vector<std::string> identifiers;
   for (const auto &[alias, attribute] : attributes_) {
     auto index = attribute.GetIndex();
     if (index->GetIndexerType() == indexes::IndexerType::kText) {
-      identifiers.push_back(attribute.GetIdentifier());
+      // identifiers.push_back(attribute.GetIdentifier());
+      auto *text_index = dynamic_cast<const indexes::Text *>(index.get());
+      if (!with_suffix || text_index->WithSuffixTrie()) {
+        identifiers.push_back(attribute.GetIdentifier());
+      }
     }
   }
   return identifiers;
@@ -284,16 +291,21 @@ std::vector<std::string> IndexSchema::GetAllTextIdentifiers() const {
 
 // Find the min stem size across all text fields in the text index schema.
 // If stemming is disabled across all text field indexes, return `nullopt`.
-std::optional<uint32_t> IndexSchema::MinStemSizeAcrossTextIndexes() const {
+// If `with_suffix` is true, we only check the fields that have suffix tree
+// enabled.
+std::optional<uint32_t> IndexSchema::MinStemSizeAcrossTextIndexes(
+    bool with_suffix) const {
   uint32_t min_stem_size = kDefaultMinStemSize;
   bool is_stemming_enabled = false;
   for (const auto &[alias, attribute] : attributes_) {
     auto index = attribute.GetIndex();
     if (index->GetIndexerType() == indexes::IndexerType::kText) {
       auto *text_index = dynamic_cast<const indexes::Text *>(index.get());
-      min_stem_size = std::min(min_stem_size, text_index->GetMinStemSize());
-      if (text_index->IsStemmingEnabled()) {
-        is_stemming_enabled = true;
+      if (!with_suffix || text_index->WithSuffixTrie()) {
+        min_stem_size = std::min(min_stem_size, text_index->GetMinStemSize());
+        if (text_index->IsStemmingEnabled()) {
+          is_stemming_enabled = true;
+        }
       }
     }
   }
@@ -301,6 +313,23 @@ std::optional<uint32_t> IndexSchema::MinStemSizeAcrossTextIndexes() const {
     return std::nullopt;
   }
   return min_stem_size;
+}
+
+// Returns the field mask including all the text fields.
+// If `with_suffix` is true, we only include fields that have suffix tree
+// enabled.
+uint64_t IndexSchema::GetAllTextFieldMask(bool with_suffix) const {
+  uint64_t field_mask = 0ULL;
+  for (const auto &[alias, attribute] : attributes_) {
+    auto index = attribute.GetIndex();
+    if (index->GetIndexerType() == indexes::IndexerType::kText) {
+      auto *text_index = dynamic_cast<const indexes::Text *>(index.get());
+      if (!with_suffix || text_index->WithSuffixTrie()) {
+        field_mask |= 1ULL << text_index->GetTextFieldNumber();
+      }
+    }
+  }
+  return field_mask;
 }
 
 absl::StatusOr<std::string> IndexSchema::GetIdentifier(

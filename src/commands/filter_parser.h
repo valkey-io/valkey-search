@@ -57,14 +57,14 @@ class FilterParser {
   };
   absl::StatusOr<TokenResult> ParseQuotedTextToken(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-      FieldMaskPredicate field_mask, std::optional<uint32_t> min_stem_size);
+      const std::optional<std::string>& field_or_default);
 
   absl::StatusOr<TokenResult> ParseUnquotedTextToken(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-      FieldMaskPredicate field_mask, std::optional<uint32_t> min_stem_size);
+      const std::optional<std::string>& field_or_default);
   absl::Status SetupTextFieldConfiguration(
       FieldMaskPredicate& field_mask, std::optional<uint32_t>& min_stem_size,
-      const std::optional<std::string>& field_name = std::nullopt);
+      const std::optional<std::string>& field_name, bool with_suffix = false);
   absl::StatusOr<std::unique_ptr<query::Predicate>> ParseTextTokens(
       const std::optional<std::string>& field_for_default);
   absl::StatusOr<bool> IsMatchAllExpression();

@@ -96,8 +96,9 @@ class IndexSchema : public KeyspaceEventSubscription,
   ~IndexSchema() override;
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
       absl::string_view attribute_alias) const;
-  std::vector<std::string> GetAllTextIdentifiers() const;
-  std::optional<uint32_t> MinStemSizeAcrossTextIndexes() const;
+  std::vector<std::string> GetAllTextIdentifiers(bool with_suffix) const;
+  uint64_t GetAllTextFieldMask(bool with_suffix) const;
+  std::optional<uint32_t> MinStemSizeAcrossTextIndexes(bool with_suffix) const;
   virtual absl::StatusOr<std::string> GetIdentifier(
       absl::string_view attribute_alias) const;
   absl::StatusOr<std::string> GetAlias(absl::string_view identifier) const;

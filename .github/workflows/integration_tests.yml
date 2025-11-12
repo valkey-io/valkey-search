@@ -30,7 +30,7 @@ jobs:
     - name: Build Docker Image
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
-   - name: Run Integration Tests
+    - name: Run Integration Tests
       id: test-run
       timeout-minutes: 40
       continue-on-error: true

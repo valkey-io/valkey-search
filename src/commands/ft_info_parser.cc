@@ -86,17 +86,21 @@ absl::Status InfoCommand::ParseCommand(ValkeyModuleCtx *ctx,
   }
 
   // Validate scope
-  if (scope == InfoScope::kPrimary) {
-    if (!ValkeySearch::Instance().IsCluster() ||
-        !ValkeySearch::Instance().UsingCoordinator()) {
-      return absl::InvalidArgumentError(
-          "ERR PRIMARY option is not valid in this configuration");
-    }
-  } else if (scope == InfoScope::kCluster) {
-    if (!ValkeySearch::Instance().IsCluster() ||
-        !ValkeySearch::Instance().UsingCoordinator()) {
-      return absl::InvalidArgumentError(
-          "ERR CLUSTER option is not valid in this configuration");
+  if (!ValkeySearch::Instance().IsCluster() ||
+      !ValkeySearch::Instance().UsingCoordinator()) {
+    switch (scope) {
+      case InfoScope::kPrimary: {
+        return absl::InvalidArgumentError(
+            "ERR PRIMARY option is not valid in this configuration");
+      }
+      case InfoScope::kCluster: {
+        return absl::InvalidArgumentError(
+            "ERR CLUSTER option is not valid in this configuration");
+      }
+      case InfoScope::kLocal:
+        break;
+      default:
+        CHECK(false);
     }
   }
 

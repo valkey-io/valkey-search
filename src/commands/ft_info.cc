@@ -37,16 +37,9 @@ absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   itr.Next();
 
   InfoCommand cmd;
-  auto status = cmd.ParseCommand(ctx, itr);
-  if (!status.ok()) {
-    ValkeyModule_ReplyWithError(ctx, status.message().data());
-    return absl::OkStatus();
-  }
+  VMSDK_RETURN_IF_ERROR(cmd.ParseCommand(ctx, itr));
+  VMSDK_RETURN_IF_ERROR(cmd.Execute(ctx));
 
-  status = cmd.Execute(ctx);
-  if (!status.ok()) {
-    ValkeyModule_ReplyWithError(ctx, status.message().data());
-  }
   return absl::OkStatus();
 }
 

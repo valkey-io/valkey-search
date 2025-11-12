@@ -63,6 +63,12 @@ class Service final : public Coordinator::CallbackService {
       SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
       std::unique_ptr<vmsdk::StopWatch> latency_sample);
 
+  void EnqueueSearchRequest(
+      std::unique_ptr<query::SearchParameters> vector_search_parameters,
+      vmsdk::ThreadPool* reader_thread_pool, ValkeyModuleCtx* detached_ctx,
+      SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
+      std::unique_ptr<vmsdk::StopWatch> latency_sample);
+
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
   vmsdk::ThreadPool* reader_thread_pool_;
 };

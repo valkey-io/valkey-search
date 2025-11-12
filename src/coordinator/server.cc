@@ -206,6 +206,24 @@ query::SearchResponseCallback Service::MakeSearchCallback(
   };
 }
 
+void Service::EnqueueSearchRequest(
+    std::unique_ptr<query::SearchParameters> vector_search_parameters,
+    vmsdk::ThreadPool* reader_thread_pool, ValkeyModuleCtx* detached_ctx,
+    SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
+    std::unique_ptr<vmsdk::StopWatch> latency_sample) {
+  auto status = query::SearchAsync(
+      std::move(vector_search_parameters), reader_thread_pool,
+      MakeSearchCallback(response, reactor, std::move(latency_sample)),
+      query::SearchMode::kRemote);
+
+  if (!status.ok()) {
+    VMSDK_LOG(WARNING, detached_ctx)
+        << "Failed to enqueue search request: " << status.message();
+    RecordSearchMetrics(true, nullptr);
+    reactor->Finish(ToGrpcStatus(status));
+  }
+}
+
 grpc::ServerUnaryReactor* Service::SearchIndexPartition(
     grpc::CallbackServerContext* context,
     const SearchIndexPartitionRequest* request,
@@ -237,35 +255,19 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
         RecordSearchMetrics(true, std::move(latency_sample));
         return;
       }
-
       // Consistency checks passed, now enqueue the search
-      auto status = query::SearchAsync(
-          std::move(vector_search_parameters), reader_thread_pool,
-          this->MakeSearchCallback(response, reactor,
-                                   std::move(latency_sample)),
-          query::SearchMode::kRemote);
-
-      if (!status.ok()) {
-        VMSDK_LOG(WARNING, detached_ctx)
-            << "Failed to enqueue search request: " << status.message();
-        RecordSearchMetrics(true, nullptr);
-        reactor->Finish(ToGrpcStatus(status));
-      }
+      this->EnqueueSearchRequest(std::move(vector_search_parameters),
+                                 reader_thread_pool, detached_ctx, response,
+                                 reactor, std::move(latency_sample));
     });
     return reactor;
   }
 
   // Non-consistency mode - proceed directly
-  auto status = query::SearchAsync(
-      std::move(*vector_search_parameters), reader_thread_pool_,
-      MakeSearchCallback(response, reactor, std::move(latency_sample)),
-      query::SearchMode::kRemote);
-  if (!status.ok()) {
-    VMSDK_LOG(WARNING, detached_ctx_.get())
-        << "Failed to enqueue search request: " << status.message();
-    RecordSearchMetrics(true, nullptr);
-    reactor->Finish(ToGrpcStatus(status));
-  }
+  EnqueueSearchRequest(std::move(*vector_search_parameters),
+                       reader_thread_pool_, detached_ctx_.get(), response,
+                       reactor, std::move(latency_sample));
+
   return reactor;
 }
 

@@ -144,7 +144,7 @@ mkdir -p ${LOGS_DIR}
 function run_pytest() {
   zap valkey-server
   LOG_INFO "Running: ${PYTHON_PATH} -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/"
-  timeout 30m ${PYTHON_PATH} -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/
+  timeout 10m ${PYTHON_PATH} -m pytest ${FILTER_ARGS} --capture=sys --cache-clear -v ${ROOT_DIR}/integration/
   RUN_SUCCESS=$?
 }
 

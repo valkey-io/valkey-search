@@ -32,10 +32,25 @@ class DropConsistencyCheckFanoutOperation
       : query::fanout::FanoutOperationBase<
             coordinator::InfoIndexPartitionRequest,
             coordinator::InfoIndexPartitionResponse,
-            vmsdk::cluster_map::FanoutTargetMode::kAll>(),
+            vmsdk::cluster_map::FanoutTargetMode::kAll>(false, false),
         db_num_(db_num),
         index_name_(index_name),
-        timeout_ms_(timeout_ms){};
+        timeout_ms_(timeout_ms) {
+    // Get expected fingerprint/version from local metadata
+    auto global_metadata =
+        coordinator::MetadataManager::Instance().GetGlobalMetadata();
+    if (global_metadata->type_namespace_map().contains(
+            kSchemaManagerMetadataTypeName)) {
+      const auto& entry_map = global_metadata->type_namespace_map().at(
+          kSchemaManagerMetadataTypeName);
+      if (entry_map.entries().contains(index_name_)) {
+        const auto& entry = entry_map.entries().at(index_name_);
+        expected_fingerprint_version_.emplace();
+        expected_fingerprint_version_->set_fingerprint(entry.fingerprint());
+        expected_fingerprint_version_->set_version(entry.version());
+      }
+    }
+  };
 
   std::vector<vmsdk::cluster_map::NodeInfo> GetTargets() const override {
     return ValkeySearch::Instance().GetClusterMap()->GetTargets(
@@ -49,6 +64,12 @@ class DropConsistencyCheckFanoutOperation
     coordinator::InfoIndexPartitionRequest req;
     req.set_db_num(db_num_);
     req.set_index_name(index_name_);
+
+    if (expected_fingerprint_version_.has_value()) {
+      *req.mutable_index_fingerprint_version() =
+          expected_fingerprint_version_.value();
+    }
+
     return req;
   }
 
@@ -100,6 +121,8 @@ class DropConsistencyCheckFanoutOperation
   uint32_t db_num_;
   std::string index_name_;
   unsigned timeout_ms_;
+  std::optional<coordinator::IndexFingerprintVersion>
+      expected_fingerprint_version_;
 };
 
 absl::Status FTDropIndexCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,

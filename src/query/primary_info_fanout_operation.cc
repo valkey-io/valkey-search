@@ -14,18 +14,35 @@
 namespace valkey_search::query::primary_info_fanout {
 
 PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
-    uint32_t db_num, const std::string& index_name, unsigned timeout_ms)
+    uint32_t db_num, const std::string& index_name, unsigned timeout_ms,
+    bool enable_partial_results, bool enable_consistency)
     : fanout::FanoutOperationBase<
           coordinator::InfoIndexPartitionRequest,
           coordinator::InfoIndexPartitionResponse,
-          vmsdk::cluster_map::FanoutTargetMode::kPrimary>(),
+          vmsdk::cluster_map::FanoutTargetMode::kPrimary>(
+          enable_partial_results, enable_consistency),
       db_num_(db_num),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
       exists_(false),
       num_docs_(0),
       num_records_(0),
-      hash_indexing_failures_(0) {}
+      hash_indexing_failures_(0) {
+  // Get expected fingerprint/version from local metadata
+  auto global_metadata =
+      coordinator::MetadataManager::Instance().GetGlobalMetadata();
+  if (global_metadata->type_namespace_map().contains(
+          kSchemaManagerMetadataTypeName)) {
+    const auto& entry_map = global_metadata->type_namespace_map().at(
+        kSchemaManagerMetadataTypeName);
+    if (entry_map.entries().contains(index_name_)) {
+      const auto& entry = entry_map.entries().at(index_name_);
+      expected_fingerprint_version_.emplace();
+      expected_fingerprint_version_->set_fingerprint(entry.fingerprint());
+      expected_fingerprint_version_->set_version(entry.version());
+    }
+  }
+}
 
 std::vector<vmsdk::cluster_map::NodeInfo>
 PrimaryInfoFanoutOperation::GetTargets() const {
@@ -43,6 +60,12 @@ PrimaryInfoFanoutOperation::GenerateRequest(
   coordinator::InfoIndexPartitionRequest req;
   req.set_db_num(db_num_);
   req.set_index_name(index_name_);
+
+  if (expected_fingerprint_version_.has_value()) {
+    *req.mutable_index_fingerprint_version() =
+        expected_fingerprint_version_.value();
+  }
+
   return req;
 }
 
@@ -59,40 +82,6 @@ void PrimaryInfoFanoutOperation::OnResponse(
     grpc::Status status =
         grpc::Status(grpc::StatusCode::INTERNAL, "Index does not exists");
     OnError(status, coordinator::FanoutErrorType::INDEX_NAME_ERROR, target);
-    return;
-  }
-
-  // Determine if we need to call OnError, do it outside the lock
-  // prevent double locking issue in OnError
-  bool should_call_error = false;
-  grpc::Status error_status(grpc::StatusCode::OK, "");
-  coordinator::FanoutErrorType error_type;
-
-  {
-    absl::MutexLock lock(&mutex_);
-    const auto& resp_ifv = resp.index_fingerprint_version();
-    if (!index_fingerprint_version_.has_value()) {
-      index_fingerprint_version_ = resp.index_fingerprint_version();
-    } else if (index_fingerprint_version_->fingerprint() !=
-                   resp_ifv.fingerprint() ||
-               index_fingerprint_version_->version() != resp_ifv.version()) {
-      should_call_error = true;
-      error_status =
-          grpc::Status(grpc::StatusCode::INTERNAL,
-                       "Cluster not in a consistent state, please retry.");
-      error_type = coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR;
-    }
-    if (resp.index_name() != index_name_) {
-      should_call_error = true;
-      error_status =
-          grpc::Status(grpc::StatusCode::INTERNAL,
-                       "Cluster not in a consistent state, please retry.");
-      error_type = coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR;
-    }
-  }
-
-  if (should_call_error) {
-    OnError(error_status, error_type, target);
     return;
   }
 
@@ -161,7 +150,6 @@ int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
 
 void PrimaryInfoFanoutOperation::ResetForRetry() {
   exists_ = false;
-  index_fingerprint_version_.reset();
   num_docs_ = 0;
   num_records_ = 0;
   hash_indexing_failures_ = 0;

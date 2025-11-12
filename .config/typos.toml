@@ -28,4 +28,5 @@ updat = "updat" # Used for stem matching
 extend-ignore-re = [
     "baNAna",
     "eXIst",
+    "Hel",
 ]

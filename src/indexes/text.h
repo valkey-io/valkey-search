@@ -39,6 +39,11 @@ class Text : public IndexBase {
   explicit Text(const data_model::TextIndex& text_index_proto,
                 std::shared_ptr<text::TextIndexSchema> text_index_schema);
 
+  std::shared_ptr<text::TextIndexSchema> GetTextIndexSchema() const {
+    return text_index_schema_;
+  }
+  uint32_t GetMinStemSize() const { return min_stem_size_; }
+  bool IsStemmingEnabled() const { return !no_stem_; }
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
@@ -72,8 +77,8 @@ class Text : public IndexBase {
    public:
     EntriesFetcher(size_t size,
                    const std::shared_ptr<text::TextIndex>& text_index,
-                   const InternedStringSet* untracked_keys = nullptr,
-                   text::FieldMaskPredicate field_mask = ~0ULL)
+                   const InternedStringSet* untracked_keys,
+                   text::FieldMaskPredicate field_mask)
         : size_(size),
           text_index_(text_index),
           untracked_keys_(untracked_keys),
@@ -92,17 +97,13 @@ class Text : public IndexBase {
     const InternedStringSet* untracked_keys_;
     std::shared_ptr<text::TextIndex> text_index_;
     const query::TextPredicate* predicate_;
-    absl::string_view data_;
-    bool no_field_{false};
     text::FieldMaskPredicate field_mask_;
   };
 
   // Calculate size based on the predicate.
   size_t CalculateSize(const query::TextPredicate& predicate) const;
 
-  virtual std::unique_ptr<EntriesFetcher> Search(
-      const query::TextPredicate& predicate,
-      bool negate) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  size_t GetTextFieldNumber() const { return text_field_number_; }
 
  private:
   // Each text field index within the schema is assigned a unique number, this
@@ -116,7 +117,7 @@ class Text : public IndexBase {
 
   bool with_suffix_trie_;
   bool no_stem_;
-  int32_t min_stem_size_;
+  uint32_t min_stem_size_;
 
   // TODO: Map to track which keys are indexed and their raw data
 

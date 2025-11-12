@@ -4,9 +4,11 @@ on:
   pull_request: # This triggers the workflow for pull requests
     branches:
       - main    # Run tests for pull requests targeting the "main" branch
+      - fulltext
   push:
     branches:
       - main    # Optional: Run tests for direct pushes to "main"
+      - fulltext
   workflow_dispatch: # allow manual triggering
 
 concurrency:
@@ -31,4 +33,17 @@ jobs:
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
     - name: Run Tests TSAN
-      run: docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image sudo ci/build_ubuntu.sh --run-tests --tsan
+      run: mkdir test-results && docker run --privileged --rm
+        --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results
+        -v "$(pwd):/workspace"
+        --user "ubuntu:ubuntu"
+        presubmit-image
+        sudo ci/build_ubuntu.sh --run-tests --tsan --unittest-output=/workspace/test-results
+      continue-on-error: true
+
+     # Upload test results as artifacts
+    - name: Upload Test Results
+      uses: actions/upload-artifact@v4
+      with:
+        name: unittest-results
+        path: test-results

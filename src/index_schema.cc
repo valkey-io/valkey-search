@@ -50,6 +50,7 @@
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
@@ -266,6 +267,42 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexSchema::GetIndex(
   return itr->second.GetIndex();
 }
 
+// Returns a vector of all the text (field) identifiers within the text
+// index schema. This is intended to be used by queries where there
+// is no field specification, and we want to include results from all
+// text fields.
+std::vector<std::string> IndexSchema::GetAllTextIdentifiers() const {
+  std::vector<std::string> identifiers;
+  for (const auto &[alias, attribute] : attributes_) {
+    auto index = attribute.GetIndex();
+    if (index->GetIndexerType() == indexes::IndexerType::kText) {
+      identifiers.push_back(attribute.GetIdentifier());
+    }
+  }
+  return identifiers;
+}
+
+// Find the min stem size across all text fields in the text index schema.
+// If stemming is disabled across all text field indexes, return `nullopt`.
+std::optional<uint32_t> IndexSchema::MinStemSizeAcrossTextIndexes() const {
+  uint32_t min_stem_size = kDefaultMinStemSize;
+  bool is_stemming_enabled = false;
+  for (const auto &[alias, attribute] : attributes_) {
+    auto index = attribute.GetIndex();
+    if (index->GetIndexerType() == indexes::IndexerType::kText) {
+      auto *text_index = dynamic_cast<const indexes::Text *>(index.get());
+      min_stem_size = std::min(min_stem_size, text_index->GetMinStemSize());
+      if (text_index->IsStemmingEnabled()) {
+        is_stemming_enabled = true;
+      }
+    }
+  }
+  if (!is_stemming_enabled) {
+    return std::nullopt;
+  }
+  return min_stem_size;
+}
+
 absl::StatusOr<std::string> IndexSchema::GetIdentifier(
     absl::string_view attribute_alias) const {
   auto itr = attributes_.find(std::string{attribute_alias});
@@ -450,6 +487,11 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     ProcessAttributeMutation(ctx, itr->second, key,
                              std::move(attribute_data_itr.second.data),
                              attribute_data_itr.second.deletion_type);
+  }
+  if (text_index_schema_) {
+    // Text index structures operate at the schmema-level so we commit the
+    // updates to all Text attributes in one operation for efficiency
+    text_index_schema_->CommitKeyData(key);
   }
 }
 
@@ -758,9 +800,12 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  // Calculate additional array size for text-related fields only if text fields
-  // exist
-  int arrSize = 24;
+  int arrSize = 30;
+  // Debug Text index Memory info fields
+  if (vmsdk::config::IsDebugModeEnabled()) {
+    arrSize += 8;
+  }
+  // Text-attribute info fields
   if (text_index_schema_) {
     arrSize += 6;
   }
@@ -795,6 +840,39 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithLongLong(ctx, stats_.document_cnt);
   ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
   ValkeyModule_ReplyWithLongLong(ctx, CountRecords());
+  // Text Index info fields
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_total_terms");
+  ValkeyModule_ReplyWithLongLong(
+      ctx,
+      text_index_schema_ ? text_index_schema_->GetTotalTermFrequency() : 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_unique_terms");
+  ValkeyModule_ReplyWithLongLong(
+      ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "total_postings");
+  ValkeyModule_ReplyWithLongLong(
+      ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
+
+  // Memory statistics are only shown when debug mode is enabled
+  if (vmsdk::config::IsDebugModeEnabled()) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "posting_sz_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx,
+        text_index_schema_ ? text_index_schema_->GetPostingsMemoryUsage() : 0);
+    ValkeyModule_ReplyWithSimpleString(ctx, "position_sz_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx,
+        text_index_schema_ ? text_index_schema_->GetPositionMemoryUsage() : 0);
+    ValkeyModule_ReplyWithSimpleString(ctx, "radix_sz_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx,
+        text_index_schema_ ? text_index_schema_->GetRadixTreeMemoryUsage() : 0);
+    ValkeyModule_ReplyWithSimpleString(ctx, "total_text_index_sz_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx, text_index_schema_
+                 ? text_index_schema_->GetTotalTextIndexMemoryUsage()
+                 : 0);
+  }
+  // Text Index info fields end
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%lu", stats_.subscription_add.skipped_cnt).c_str());

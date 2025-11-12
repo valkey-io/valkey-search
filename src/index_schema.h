@@ -28,6 +28,7 @@
 #include "gtest/gtest_prod.h"
 #include "src/attribute.h"
 #include "src/attribute_data_type.h"
+#include "src/commands/ft_create_parser.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/text_index.h"
@@ -95,6 +96,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   ~IndexSchema() override;
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
       absl::string_view attribute_alias) const;
+  std::vector<std::string> GetAllTextIdentifiers() const;
+  std::optional<uint32_t> MinStemSizeAcrossTextIndexes() const;
   virtual absl::StatusOr<std::string> GetIdentifier(
       absl::string_view attribute_alias) const;
   absl::StatusOr<std::string> GetAlias(absl::string_view identifier) const;

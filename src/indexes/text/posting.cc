@@ -164,75 +164,36 @@ template class FieldMaskImpl<uint64_t, 64>;
 
 // Basic Postings Object Implementation
 
-// Position map type alias - maps position to optimized FieldMask objects
-using PositionMap = std::map<Position, std::unique_ptr<FieldMask>>;
+// Check if posting list contains any documents
+bool Postings::IsEmpty() const { return key_to_positions_.empty(); }
 
-class Postings::Impl {
- public:
-  bool save_positions_;
-  size_t num_text_fields_;
-  std::map<Key, PositionMap> key_to_positions_;
-
-  Impl(bool save_positions, size_t num_text_fields)
-      : save_positions_(save_positions), num_text_fields_(num_text_fields) {}
-};
-
-Postings::Postings(bool save_positions, size_t num_text_fields)
-    : impl_(std::make_unique<Impl>(save_positions, num_text_fields)) {
-  CHECK(impl_ != nullptr) << "Failed to create Postings implementation";
+// TODO: develop a better strategy to track terms
+unsigned int count_num_terms(const PositionMap& pos_map) {
+  unsigned int num_terms = 0;
+  for (const auto& [_, field_mask] : pos_map) {
+    num_terms += field_mask->CountSetFields();
+  }
+  return num_terms;
 }
 
-// Automatic cleanup via unique_ptr
-Postings::~Postings() = default;
-
-// Check if posting list contains any documents
-bool Postings::IsEmpty() const { return impl_->key_to_positions_.empty(); }
-
-// Insert a posting entry for a key and field
-void Postings::InsertPosting(const Key& key, size_t field_index,
-                             Position position) {
-  CHECK(field_index < impl_->num_text_fields_) << "Field index out of range";
-
-  Position effective_position;
-
-  if (impl_->save_positions_) {
-    // In positional mode, position must be explicitly provided
-    CHECK(position != UINT32_MAX)
-        << "Position must be provided in positional mode";
-    effective_position = position;
-  } else {
-    // For boolean search mode, always use position 0 regardless of input
-    effective_position = 0;
-  }
-
-  auto& pos_map = impl_->key_to_positions_[key];
-
-  // Check if position already exists
-  auto it = pos_map.find(effective_position);
-
-  if (it != pos_map.end()) {
-    // Position exists - add field to existing FieldMask object
-    it->second->SetField(field_index);
-  } else {
-    // New position - create entry with this field
-    auto field_mask = FieldMask::Create(impl_->num_text_fields_);
-    field_mask->SetField(field_index);
-    pos_map[effective_position] = std::move(field_mask);
-  }
+void Postings::InsertKey(const Key& key, PositionMap&& pos_map) {
+  // TODO: Compress the positions map.
+  key_to_positions_[key] = std::move(pos_map);
 }
 
 // Remove a document key and all its positions
 void Postings::RemoveKey(const Key& key) {
-  impl_->key_to_positions_.erase(key);
+  auto node = key_to_positions_.extract(key);
+  if (node.empty()) return;
 }
 
 // Get total number of document keys
-size_t Postings::GetKeyCount() const { return impl_->key_to_positions_.size(); }
+size_t Postings::GetKeyCount() const { return key_to_positions_.size(); }
 
 // Get total number of position entries across all keys
-size_t Postings::GetPostingCount() const {
+size_t Postings::GetPositionCount() const {
   size_t total = 0;
-  for (const auto& [key, positions] : impl_->key_to_positions_) {
+  for (const auto& [key, positions] : key_to_positions_) {
     total += positions.size();
   }
   return total;
@@ -241,7 +202,7 @@ size_t Postings::GetPostingCount() const {
 // Get total term frequency (sum of field occurrences across all positions)
 size_t Postings::GetTotalTermFrequency() const {
   size_t total_frequency = 0;
-  for (const auto& [key, positions] : impl_->key_to_positions_) {
+  for (const auto& [key, positions] : key_to_positions_) {
     for (const auto& [position, field_mask] : positions) {
       // Use efficient bit manipulation to count set fields (much faster!)
       total_frequency += field_mask->CountSetFields();
@@ -258,7 +219,7 @@ Postings* Postings::Defrag() { return this; }
 // Get a Key iterator
 Postings::KeyIterator Postings::GetKeyIterator() const {
   KeyIterator iterator;
-  iterator.key_map_ = &impl_->key_to_positions_;
+  iterator.key_map_ = &key_to_positions_;
   iterator.current_ = iterator.key_map_->begin();
   iterator.end_ = iterator.key_map_->end();
   return iterator;

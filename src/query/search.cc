@@ -228,7 +228,9 @@ size_t EvaluateFilterAsPrimary(
     std::cout << "TEXT" << std::endl;
     std::cout << "Negate flag: " << (negate ? "true" : "false") << std::endl;
 
-    auto fetcher = text_predicate->GetIndex()->Search(*text_predicate, negate);
+    auto fetcher = std::unique_ptr<indexes::EntriesFetcherBase>(
+        static_cast<indexes::EntriesFetcherBase*>(
+            text_predicate->Search(negate)));
     size_t size = fetcher->Size();
     std::cout << "TEXT result size: " << size << std::endl;
     entries_fetchers.push(std::move(fetcher));

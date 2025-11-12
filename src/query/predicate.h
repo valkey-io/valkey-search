@@ -306,13 +306,13 @@ class ComposedPredicate : public Predicate {
                     std::vector<std::unique_ptr<Predicate>> children);
 
   bool Evaluate(Evaluator& evaluator) const override;
-  
+
   // N-ary interface
-  const std::vector<std::unique_ptr<Predicate>>& GetChildren() const { 
-    return children_; 
+  const std::vector<std::unique_ptr<Predicate>>& GetChildren() const {
+    return children_;
   }
   size_t GetChildCount() const { return children_.size(); }
-  
+
   // Add a child predicate (for building N-ary trees)
   void AddChild(std::unique_ptr<Predicate> child);
 

@@ -53,8 +53,8 @@ static auto query_string_depth =
 /// predicate tree.
 constexpr absl::string_view kQueryStringTermsCountConfig{
     "query-string-terms-count"};
-constexpr uint32_t kDefaultQueryTermsCount{16};
-constexpr uint32_t kMaxQueryTermsCount{32};
+constexpr uint32_t kDefaultQueryTermsCount{1000};
+constexpr uint32_t kMaxQueryTermsCount{10000};
 static auto query_terms_count =
     config::NumberBuilder(kQueryStringTermsCountConfig,  // name
                           kDefaultQueryTermsCount,       // default size
@@ -440,16 +440,36 @@ std::unique_ptr<query::Predicate> WrapPredicate(
     std::unique_ptr<query::Predicate> prev_predicate,
     std::unique_ptr<query::Predicate> predicate, bool& negate,
     query::LogicalOperator logical_operator) {
+  auto new_predicate = MayNegatePredicate(std::move(predicate), negate);
+
   if (!prev_predicate) {
-    return MayNegatePredicate(std::move(predicate), negate);
+    return new_predicate;
   }
-  
-  // Create vector of children for N-ary constructor
+
+  // Check if we can extend existing ComposedPredicate of the same type
+  query::PredicateType target_type =
+      (logical_operator == query::LogicalOperator::kAnd)
+          ? query::PredicateType::kComposedAnd
+          : query::PredicateType::kComposedOr;
+
+  if (prev_predicate->GetType() == target_type) {
+    // Flatten: Add to existing n-ary node instead of wrapping
+    auto* composed =
+        dynamic_cast<query::ComposedPredicate*>(prev_predicate.get());
+    if (composed) {
+      composed->AddChild(std::move(new_predicate));
+      return prev_predicate;  // Return extended existing node
+    }
+  }
+
+  // Create new ComposedPredicate only when operators differ or first
+  // composition
   std::vector<std::unique_ptr<query::Predicate>> children;
   children.push_back(std::move(prev_predicate));
-  children.push_back(MayNegatePredicate(std::move(predicate), negate));
-  
-  return std::make_unique<query::ComposedPredicate>(logical_operator, std::move(children));
+  children.push_back(std::move(new_predicate));
+
+  return std::make_unique<query::ComposedPredicate>(logical_operator,
+                                                    std::move(children));
 };
 
 static const uint32_t FUZZY_MAX_DISTANCE = 3;
@@ -691,13 +711,13 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseExpression(
   if (level++ >= options::GetQueryStringDepth().GetValue()) {
     return absl::InvalidArgumentError("Query string is too complex");
   }
-  std::unique_ptr<query::Predicate> prev_predicate;
+  std::vector<std::unique_ptr<query::Predicate>> and_terms;
+  std::vector<std::unique_ptr<query::Predicate>> or_groups;
 
   SkipWhitespace();
   while (!IsEnd()) {
-    if (Peek() == ')') {
-      break;
-    }
+    if (Peek() == ')') break;
+    
     std::unique_ptr<query::Predicate> predicate;
     bool negate = Match('-');
 
@@ -708,42 +728,36 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseExpression(
             absl::StrCat("Expected ')' after expression got '",
                          expression_.substr(pos_, 1), "'. Position: ", pos_));
       }
-      if (prev_predicate) {
-        node_count_++;  // Count the ComposedPredicate Node
-      }
-      prev_predicate =
-          WrapPredicate(std::move(prev_predicate), std::move(predicate), negate,
-                        query::LogicalOperator::kAnd);
+      predicate = MayNegatePredicate(std::move(predicate), negate);
+      and_terms.push_back(std::move(predicate));
     } else if (Match('|')) {
-      if (negate) {
-        return UnexpectedChar(expression_, pos_ - 1);
+      if (negate) return UnexpectedChar(expression_, pos_ - 1);
+      
+      // Flush current AND group to OR groups
+      if (and_terms.size() == 1) {
+        or_groups.push_back(std::move(and_terms[0]));
+      } else if (and_terms.size() > 1) {
+        node_count_++;
+        or_groups.push_back(std::make_unique<query::ComposedPredicate>(
+            query::LogicalOperator::kAnd, std::move(and_terms)));
       }
-      VMSDK_ASSIGN_OR_RETURN(predicate, ParseExpression(level));
-      if (prev_predicate) {
-        node_count_++;  // Count the ComposedPredicate Node
-      }
-      prev_predicate =
-          WrapPredicate(std::move(prev_predicate), std::move(predicate), negate,
-                        query::LogicalOperator::kOr);
+      and_terms.clear();
     } else {
       VMSDK_ASSIGN_OR_RETURN(auto field_name, ParseFieldName());
       if (Match('[')) {
-        node_count_++;  // Count the NumericPredicate Node
+        node_count_++;
         VMSDK_ASSIGN_OR_RETURN(predicate, ParseNumericPredicate(field_name));
       } else if (Match('{')) {
-        node_count_++;  // Count the TagPredicate Node
+        node_count_++;
         VMSDK_ASSIGN_OR_RETURN(predicate, ParseTagPredicate(field_name));
       } else {
-        node_count_++;  // Count the TextPredicate Node
+        node_count_++;
         VMSDK_ASSIGN_OR_RETURN(predicate, ParseTextGroup(field_name));
       }
-      if (prev_predicate) {
-        node_count_++;  // Count the ComposedPredicate Node
-      }
-      prev_predicate =
-          WrapPredicate(std::move(prev_predicate), std::move(predicate), negate,
-                        query::LogicalOperator::kAnd);
+      predicate = MayNegatePredicate(std::move(predicate), negate);
+      and_terms.push_back(std::move(predicate));
     }
+    
     SkipWhitespace();
     auto max_node_count = options::GetQueryStringTermsCount().GetValue();
     VMSDK_RETURN_IF_ERROR(
@@ -751,6 +765,29 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseExpression(
         << "Query string is too complex: max number of terms can't exceed "
         << max_node_count;
   }
-  return prev_predicate;
+  
+  // Final assembly
+  if (or_groups.empty()) {
+    // No OR operators - return AND group
+    if (and_terms.empty()) return absl::InvalidArgumentError("Empty expression");
+    if (and_terms.size() == 1) return std::move(and_terms[0]);
+    node_count_++;
+    return std::make_unique<query::ComposedPredicate>(
+        query::LogicalOperator::kAnd, std::move(and_terms));
+  } else {
+    // Has OR - add final AND group and create OR
+    if (and_terms.size() == 1) {
+      or_groups.push_back(std::move(and_terms[0]));
+    } else if (and_terms.size() > 1) {
+      node_count_++;
+      or_groups.push_back(std::make_unique<query::ComposedPredicate>(
+          query::LogicalOperator::kAnd, std::move(and_terms)));
+    }
+    
+    if (or_groups.size() == 1) return std::move(or_groups[0]);
+    node_count_++;
+    return std::make_unique<query::ComposedPredicate>(
+        query::LogicalOperator::kOr, std::move(or_groups));
+  }
 }
 }  // namespace valkey_search

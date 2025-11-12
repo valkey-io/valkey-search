@@ -24,6 +24,119 @@ namespace valkey_search {
 
 namespace {
 
+// Helper function to print predicate tree structure using DFS
+std::string PrintPredicateTree(const query::Predicate* predicate,
+                               int indent = 0) {
+  std::string result;
+  std::string indent_str(indent * 2, ' ');
+
+  if (!predicate) {
+    return result;
+  }
+
+  switch (predicate->GetType()) {
+    case query::PredicateType::kComposedAnd: {
+      const auto* composed =
+          static_cast<const query::ComposedPredicate*>(predicate);
+      result += indent_str + "AND\n";
+      result += indent_str + "{\n";
+      for (const auto& child : composed->GetChildren()) {
+        result += PrintPredicateTree(child.get(), indent + 1);
+      }
+      result += indent_str + "}\n";
+      break;
+    }
+    case query::PredicateType::kComposedOr: {
+      const auto* composed =
+          static_cast<const query::ComposedPredicate*>(predicate);
+      result += indent_str + "OR\n";
+      result += indent_str + "{\n";
+      for (const auto& child : composed->GetChildren()) {
+        result += PrintPredicateTree(child.get(), indent + 1);
+      }
+      result += indent_str + "}\n";
+      break;
+    }
+    case query::PredicateType::kNegate: {
+      const auto* negate =
+          static_cast<const query::NegatePredicate*>(predicate);
+      result += indent_str + "NOT\n";
+      result += indent_str + "{\n";
+      result += PrintPredicateTree(negate->GetPredicate(), indent + 1);
+      result += indent_str + "}\n";
+      break;
+    }
+    case query::PredicateType::kNumeric: {
+      const auto* numeric =
+          static_cast<const query::NumericPredicate*>(predicate);
+      result +=
+          indent_str + "NUMERIC(" + std::string(numeric->GetAlias()) + ")\n";
+      break;
+    }
+    case query::PredicateType::kTag: {
+      const auto* tag = static_cast<const query::TagPredicate*>(predicate);
+      result += indent_str + "TAG(" + std::string(tag->GetAlias()) + ")\n";
+      break;
+    }
+    case query::PredicateType::kText: {
+      const auto* text = static_cast<const query::TextPredicate*>(predicate);
+      // Try different text predicate types to get the alias
+      std::string alias = "unknown";
+      if (const auto* prox =
+              dynamic_cast<const query::ProximityPredicate*>(text)) {
+        // For proximity predicates, get the field name from the first term
+        const auto& terms = prox->Terms();
+        if (!terms.empty()) {
+          const auto* first_term = terms[0].get();
+          if (const auto* term =
+                  dynamic_cast<const query::TermPredicate*>(first_term)) {
+            alias = std::string(term->GetIdentifier());
+          } else if (const auto* prefix =
+                         dynamic_cast<const query::PrefixPredicate*>(
+                             first_term)) {
+            alias = std::string(prefix->GetIdentifier());
+          } else if (const auto* suffix =
+                         dynamic_cast<const query::SuffixPredicate*>(
+                             first_term)) {
+            alias = std::string(suffix->GetIdentifier());
+          } else if (const auto* infix =
+                         dynamic_cast<const query::InfixPredicate*>(
+                             first_term)) {
+            alias = std::string(infix->GetIdentifier());
+          } else if (const auto* fuzzy =
+                         dynamic_cast<const query::FuzzyPredicate*>(
+                             first_term)) {
+            alias = std::string(fuzzy->GetIdentifier());
+          }
+        }
+      } else if (const auto* term =
+                     dynamic_cast<const query::TermPredicate*>(text)) {
+        // Use identifier instead of alias to avoid string_view lifetime issues
+        alias = std::string(term->GetIdentifier());
+      } else if (const auto* prefix =
+                     dynamic_cast<const query::PrefixPredicate*>(text)) {
+        alias = std::string(prefix->GetIdentifier());
+      } else if (const auto* suffix =
+                     dynamic_cast<const query::SuffixPredicate*>(text)) {
+        alias = std::string(suffix->GetIdentifier());
+      } else if (const auto* infix =
+                     dynamic_cast<const query::InfixPredicate*>(text)) {
+        alias = std::string(infix->GetIdentifier());
+      } else if (const auto* fuzzy =
+                     dynamic_cast<const query::FuzzyPredicate*>(text)) {
+        alias = std::string(fuzzy->GetIdentifier());
+      }
+      result += indent_str + "TEXT(" + alias + ")\n";
+      break;
+    }
+    default:
+      result += indent_str + "UNKNOWN\n";
+      break;
+  }
+
+  return result;
+}
+
 using testing::TestParamInfo;
 using testing::ValuesIn;
 
@@ -34,6 +147,7 @@ struct FilterTestCase {
   std::string create_expected_error_message;
   bool evaluate_success{false};
   std::string key{"key1"};
+  std::string expected_tree_structure;
 };
 
 class FilterTest : public ValkeySearchTestWithParam<FilterTestCase> {
@@ -41,7 +155,7 @@ class FilterTest : public ValkeySearchTestWithParam<FilterTestCase> {
   indexes::PrefilterEvaluator evaluator_;
 };
 
-void InitIndexSchema(MockIndexSchema *index_schema) {
+void InitIndexSchema(MockIndexSchema* index_schema) {
   data_model::NumericIndex numeric_index_proto;
 
   auto numeric_index_1_5 =
@@ -107,7 +221,7 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
 }
 
 TEST_P(FilterTest, ParseParams) {
-  const FilterTestCase &test_case = GetParam();
+  const FilterTestCase& test_case = GetParam();
   auto index_schema = CreateIndexSchema("index_schema_name").value();
   InitIndexSchema(index_schema.get());
   EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
@@ -120,6 +234,24 @@ TEST_P(FilterTest, ParseParams) {
               test_case.create_expected_error_message);
     return;
   }
+
+  // Generate the actual predicate tree structure
+  std::string actual_tree =
+      PrintPredicateTree(parse_results.value().root_predicate.get());
+
+  // Print both expected and actual structures if expected is provided
+  if (!test_case.expected_tree_structure.empty()) {
+    std::cout << "Filter: " << test_case.filter << std::endl;
+    std::cout << "Expected Tree Structure:" << std::endl;
+    std::cout << test_case.expected_tree_structure << std::endl;
+    std::cout << "Actual Tree Structure:" << std::endl;
+    std::cout << actual_tree << std::endl;
+
+    // Compare expected vs actual tree structure
+    EXPECT_EQ(actual_tree, test_case.expected_tree_structure)
+        << "Tree structure mismatch for filter: " << test_case.filter;
+  }
+
   auto interned_key = StringInternStore::Intern(test_case.key);
   EXPECT_EQ(
       test_case.evaluate_success,
@@ -134,12 +266,14 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@num_field_1.5:[1.0 2.0]",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "NUMERIC(num_field_1.5)\n",
         },
         {
             .test_name = "numeric_happy_path_comma_separated",
             .filter = "@num_field_1.5:[1.0,2.0]",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "NUMERIC(num_field_1.5)\n",
         },
         {
             .test_name = "numeric_missing_key_1",
@@ -147,18 +281,29 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
             .evaluate_success = false,
             .key = "missing_key2",
+            .expected_tree_structure = "NUMERIC(num_field_1.5)\n",
         },
         {
             .test_name = "numeric_happy_path_2",
             .filter = "@num_field_2.0:[1.5 2.5] @num_field_1.5:[1.0 2.0]",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "AND\n"
+                                       "{\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_happy_path_inclusive_1",
             .filter = "@num_field_2.0:[2 2.5] @num_field_1.5:[1.0 1.5]",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "AND\n"
+                                       "{\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_invalid_range1",
@@ -189,108 +334,249 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@num_field_2.0:[2.5 2.5] @num_field_1.5:[1.0 1.5]",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "AND\n"
+                                       "{\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_happy_path_inclusive_2",
             .filter = "@num_field_2.0:[1 2] @num_field_1.5:[1.0 1.5]",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "AND\n"
+                                       "{\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_happy_path_exclusive_1",
             .filter = "@num_field_2.0:[(2 2.5] @num_field_1.5:[1.0 1.5]",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "AND\n"
+                                       "{\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_happy_path_exclusive_2",
             .filter = "@num_field_2.0:[1 (2.0] @num_field_1.5:[1.0 1.5]",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "AND\n"
+                                       "{\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_happy_path_inf_1",
             .filter = "@num_field_2.0:[-inf 2.5] @num_field_1.5:[1.0 1.5]",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "AND\n"
+                                       "{\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_happy_path_inf_2",
             .filter = " @num_field_1.5:[1.0 1.5]  @num_field_2.0:[1 +inf] ",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "AND\n"
+                                       "{\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_happy_path_inf_3",
             .filter = " @num_field_1.5:[1.0 1.5]  @num_field_2.0:[1 inf] ",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "AND\n"
+                                       "{\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_negate_1",
             .filter = " -@num_field_1.5:[1.0 1.4]  @num_field_2.0:[1 +inf] ",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "AND\n"
+                                       "{\n"
+                                       "  NOT\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "  }\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_negate_twice_with_and",
             .filter = " -@num_field_1.5:[1.0 1.4]  -@num_field_2.0:[3 +inf] ",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "AND\n"
+                                       "{\n"
+                                       "  NOT\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "  }\n"
+                                       "  NOT\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_negate_twice_with_and_1",
             .filter = " -@num_field_1.5:[1.0 1.5]  -@num_field_2.0:[3 +inf] ",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "AND\n"
+                                       "{\n"
+                                       "  NOT\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "  }\n"
+                                       "  NOT\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_negate_twice_with_and_2",
             .filter = " -@num_field_1.5:[1.0 1.4]  -@num_field_2.0:[2 +inf] ",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "AND\n"
+                                       "{\n"
+                                       "  NOT\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "  }\n"
+                                       "  NOT\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_negate_twice_with_and_3",
             .filter = " -@num_field_1.5:[1.0 1.5]  -@num_field_2.0:[2 +inf] ",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "AND\n"
+                                       "{\n"
+                                       "  NOT\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "  }\n"
+                                       "  NOT\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_negate_twice_with_or_1",
             .filter = " -@num_field_1.5:[1.0 1.4] | -@num_field_2.0:[2 +inf] ",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "OR\n"
+                                       "{\n"
+                                       "  NOT\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "  }\n"
+                                       "  NOT\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_negate_twice_with_or_2",
             .filter = " -@num_field_1.5:[1.0 1.6] | -@num_field_2.0:[3 +inf] ",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "OR\n"
+                                       "{\n"
+                                       "  NOT\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "  }\n"
+                                       "  NOT\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_negate_twice_with_or_3",
             .filter = " -@num_field_1.5:[1.0 1.5] | -@num_field_2.0:[2 +inf] ",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "OR\n"
+                                       "{\n"
+                                       "  NOT\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "  }\n"
+                                       "  NOT\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_negate_2",
             .filter = " @num_field_1.5:[1.0 1.5]  -@num_field_2.0:[5 +inf] ",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "AND\n"
+                                       "{\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "  NOT\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_negate_3",
             .filter = " @num_field_1.5:[1.0 1.4]  @num_field_2.0:[3 +inf] ",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "AND\n"
+                                       "{\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_negate_4",
             .filter = " -(@num_field_1.5:[1.0 1.4]  @num_field_2.0:[3 +inf]) ",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "NOT\n"
+                                       "{\n"
+                                       "  AND\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_negate_5",
@@ -298,36 +584,70 @@ INSTANTIATE_TEST_SUITE_P(
                 " - ( - (@num_field_1.5:[1.0 1.4]  @num_field_2.0:[3 +inf]) )",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "NOT\n"
+                                       "{\n"
+                                       "  NOT\n"
+                                       "  {\n"
+                                       "    AND\n"
+                                       "    {\n"
+                                       "      NUMERIC(num_field_1.5)\n"
+                                       "      NUMERIC(num_field_2.0)\n"
+                                       "    }\n"
+                                       "  }\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_negate_6",
             .filter = " -(@num_field_1.5:[1.0 1.4] | @num_field_2.0:[3 +inf]) ",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "NOT\n"
+                                       "{\n"
+                                       "  OR\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_negate_7",
             .filter = " -(@num_field_1.5:[1.0,2] | @num_field_2.0:[3 +inf]) ",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "NOT\n"
+                                       "{\n"
+                                       "  OR\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_happy_path_or_1",
             .filter = " (@num_field_1.5:[1.0 1.5])",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "NUMERIC(num_field_1.5)\n",
         },
         {
             .test_name = "numeric_happy_path_or_2",
             .filter = " ( (@num_field_1.5:[1.0 1.5])  )",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "NUMERIC(num_field_1.5)\n",
         },
         {
             .test_name = "numeric_happy_path_or_3",
             .filter = "(@num_field_1.5:[5.0 6.5]) | (@num_field_1.5:[1.0 1.5])",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "OR\n"
+                                       "{\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "}\n",
         },
         {
             .test_name = "numeric_happy_path_or_4",
@@ -335,36 +655,46 @@ INSTANTIATE_TEST_SUITE_P(
                       "1.5]) ) ) ",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "OR\n"
+                                       "{\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "}\n",
         },
         {
             .test_name = "tag_happy_path_1",
             .filter = "@tag_field_1:{tag1}",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "TAG(tag_field_1)\n",
         },
         {
             .test_name = "tag_case_sensitive_1",
             .filter = "@tag_field_1:{Tag1}",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "TAG(tag_field_1)\n",
         },
         {
             .test_name = "tag_case_sensitive_2",
             .filter = "@tag_field_case_insensitive:{Tag1}",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "TAG(tag_field_case_insensitive)\n",
         },
         {
             .test_name = "tag_case_sensitive_3",
             .filter = "@tag_field_case_insensitive:{Tag0@Tag1}",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "TAG(tag_field_case_insensitive)\n",
         },
         {
             .test_name = "tag_case_sensitive_4",
             .filter = "@tag_field_case_insensitive:{Tag0@Tag5}",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "TAG(tag_field_case_insensitive)\n",
         },
         {
             .test_name = "tag_missing_key_1",
@@ -372,30 +702,38 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
             .evaluate_success = false,
             .key = "missing_key2",
+            .expected_tree_structure = "TAG(tag_field_1)\n",
         },
         {
             .test_name = "tag_happy_path_2",
             .filter = "@tag_field_1:{tag1 , tag2}",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "TAG(tag_field_1)\n",
         },
         {
             .test_name = "tag_happy_path_4",
             .filter = "@tag_field_with_space:{tag 1 , tag4}",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "TAG(tag_field_with_space)\n",
         },
         {
             .test_name = "tag_not_found_1",
             .filter = "@tag_field_1:{tag3 , tag4}",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "TAG(tag_field_1)\n",
         },
         {
             .test_name = "tag_not_found_2",
             .filter = "-@tag_field_with_space:{tag1 , tag 2}",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "NOT\n"
+                                       "{\n"
+                                       "  TAG(tag_field_with_space)\n"
+                                       "}\n",
         },
         {
             .test_name = "missing_closing_bracket",
@@ -409,6 +747,15 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[-inf 2.5]",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "OR\n"
+                                       "{\n"
+                                       "  AND\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "}\n",
         },
         {
             .test_name = "left_associative_2",
@@ -416,6 +763,15 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[23 25]",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "OR\n"
+                                       "{\n"
+                                       "  AND\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "}\n",
         },
         {
             .test_name = "left_associative_3",
@@ -423,6 +779,15 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[-inf 2.5]",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "OR\n"
+                                       "{\n"
+                                       "  AND\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "}\n",
         },
         {
             .test_name = "left_associative_4",
@@ -430,6 +795,15 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[23 25]",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "OR\n"
+                                       "{\n"
+                                       "  AND\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "}\n",
         },
         {
             .test_name = "or_precedence_1",
@@ -437,6 +811,15 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[0 2.5]",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "OR\n"
+                                       "{\n"
+                                       "  AND\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "}\n",
         },
         {
             .test_name = "or_precedence_2",
@@ -444,6 +827,19 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[0 2.5] @num_field_2.0:[0 2.5]",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "OR\n"
+                                       "{\n"
+                                       "  AND\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "  AND\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "}\n",
         },
         {
             .test_name = "or_precedence_3",
@@ -451,6 +847,19 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[23 25] @num_field_2.0:[0 2.5]",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "OR\n"
+                                       "{\n"
+                                       "  AND\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "  AND\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "}\n",
         },
         {
             .test_name = "or_precedence_4",
@@ -458,6 +867,19 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[0 2.5] @num_field_2.0:[23 25]",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "OR\n"
+                                       "{\n"
+                                       "  AND\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "  AND\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "}\n",
         },
         {
             .test_name = "or_precedence_5",
@@ -465,6 +887,19 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[0 2.5] @num_field_2.0:[23 25]",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "OR\n"
+                                       "{\n"
+                                       "  AND\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "  AND\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "}\n",
         },
         {
             .test_name = "or_precedence_6",
@@ -472,6 +907,19 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[0 2.5] @num_field_2.0:[23 25]",
             .create_success = true,
             .evaluate_success = false,
+            .expected_tree_structure = "OR\n"
+                                       "{\n"
+                                       "  AND\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "  AND\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "}\n",
         },
         {
             .test_name = "or_precedence_7",
@@ -479,18 +927,33 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[0 2.5] @num_field_2.0:[23 25]",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "OR\n"
+                                       "{\n"
+                                       "  AND\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "  AND\n"
+                                       "  {\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "}\n",
         },
         {
             .test_name = "exact_term",
             .filter = "@text_field1:word",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "TEXT(text_field1)\n",
         },
         {
             .test_name = "exact_prefix",
             .filter = "@text_field1:word*",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "TEXT(text_field1)\n",
         },
         {
             .test_name = "exact_suffix",
@@ -527,6 +990,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@text_field1:\"hello my name is\"",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "TEXT(text_field1)\n",
         },
         {
             .test_name = "proximity2",
@@ -534,6 +998,7 @@ INSTANTIATE_TEST_SUITE_P(
                       "@text_field2:is",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "TEXT(text_field1)\n",
         },
         {
             .test_name = "proximity3",
@@ -630,7 +1095,7 @@ INSTANTIATE_TEST_SUITE_P(
             .create_expected_error_message = "Missing closing TAG bracket, '}'",
         },
     }),
-    [](const TestParamInfo<FilterTestCase> &info) {
+    [](const TestParamInfo<FilterTestCase>& info) {
       return info.param.test_name;
     });
 

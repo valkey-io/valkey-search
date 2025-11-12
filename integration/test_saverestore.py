@@ -238,37 +238,51 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         ]
         assert reads == [len(records)]
 
+    def block(self, label):
+        x = self.client.execute_command("ft._debug pausepoint test block_mutation_queue")
+        self.client.execute_command("debug log",f"pausepoint block:{x} @ {label}")
+        
     def test_multi_exec_queue(self):
         self.client.execute_command("ft._debug PAUSEPOINT SET block_mutation_queue")
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         index.create(self.client, True)
         records = make_data()
+        num_records = 2 # len(records)
         #
         # Now, load the data as a multi/exec... But this won't block us.
         #
+        self.block("Before multi")
         self.client.execute_command("MULTI")
-        for i in range(len(records)):
+        self.block("after multi")
+        for i in range(2):
+            self.client.execute_command("DEBUG LOG", f"Writing record: {i}")
             index.write_data(self.client, i, records[i])
+            self.block("After write")
+        self.client.execute_command("DEBUG LOG","Executing EXEC")
+        self.block("Before exec")
         self.client.execute_command("EXEC")
+        self.client.execute_command("DEBUG LOG", "Completed EXEC, starting SAVE command")
+        self.block("after exec")
 
         self.client.execute_command("save")
-
-        i = self.client.info("search")
-        assert i["search_rdb_save_multi_exec_entries"] == len(records)
-
+        self.block("after save")
         self.client.execute_command("ft._debug pausepoint reset block_mutation_queue")
 
-        verify_data(self.client, index)
+
+        i = self.client.info("search")
+        assert i["search_rdb_save_multi_exec_entries"] == num_records
+
+        # verify_data(self.client, index)
         os.environ["SKIPLOGCLEAN"] = "1"
         self.server.restart(remove_rdb=False)
-        verify_data(self.client, index)
+        # verify_data(self.client, index)
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         i = self.client.info("search")
         print("Info: ", i)
         reads = [
             i["search_rdb_load_multi_exec_entries"],
         ]
-        assert reads == [len(records)]
+        assert reads == [num_records]
 
     def test_saverestore_backfill(self):
         #

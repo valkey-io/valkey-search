@@ -253,14 +253,12 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         #
         self.block("Before multi")
         self.client.execute_command("MULTI")
-        self.block("after multi")
         for i in range(2):
-            self.block("before write")
             index.write_data(self.client, i, records[i])
-            self.block("After write")
-        self.block("Before exec")
         self.client.execute_command("EXEC")
         self.block("after exec")
+
+
 
         self.client.execute_command("save")
         self.block("after save")
@@ -272,6 +270,7 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
 
         # verify_data(self.client, index)
         os.environ["SKIPLOGCLEAN"] = "1"
+        self.block("BEFORE RESTART")
         self.server.restart(remove_rdb=False)
         # verify_data(self.client, index)
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")

@@ -32,7 +32,7 @@ jobs:
 
    - name: Run Integration Tests
       id: test-run
-      timeout-minutes: 40
+      timeout-minutes: 30
       continue-on-error: true
       run: |
         mkdir test-results
@@ -41,7 +41,7 @@ jobs:
           -v "$(pwd):/workspace" \
           --user "ubuntu:ubuntu" \
           presubmit-image \
-          sudo timeout 30m ci/build_ubuntu.sh --run-integration-tests --integration-output=/workspace/test-results
+          sudo ci/build_ubuntu.sh --run-integration-tests --integration-output=/workspace/test-results
 
     - name: Update Test Results Permissions
       if: always()

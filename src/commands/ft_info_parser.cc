@@ -56,6 +56,38 @@ vmsdk::KeyValueParser<InfoCommand> CreateInfoParser() {
             return absl::OkStatus();
           }));
 
+  parser.AddParamParser(
+      "ALLSHARDS",
+      std::make_unique<vmsdk::ParamParser<InfoCommand>>(
+          [](InfoCommand &cmd, vmsdk::ArgsIterator &itr) -> absl::Status {
+            cmd.enable_partial_results = false;
+            return absl::OkStatus();
+          }));
+
+  parser.AddParamParser(
+      "SOMESHARDS",
+      std::make_unique<vmsdk::ParamParser<InfoCommand>>(
+          [](InfoCommand &cmd, vmsdk::ArgsIterator &itr) -> absl::Status {
+            cmd.enable_partial_results = true;
+            return absl::OkStatus();
+          }));
+
+  parser.AddParamParser(
+      "CONSISTENT",
+      std::make_unique<vmsdk::ParamParser<InfoCommand>>(
+          [](InfoCommand &cmd, vmsdk::ArgsIterator &itr) -> absl::Status {
+            cmd.enable_consistency = true;
+            return absl::OkStatus();
+          }));
+
+  parser.AddParamParser(
+      "INCONSISTENT",
+      std::make_unique<vmsdk::ParamParser<InfoCommand>>(
+          [](InfoCommand &cmd, vmsdk::ArgsIterator &itr) -> absl::Status {
+            cmd.enable_consistency = false;
+            return absl::OkStatus();
+          }));
+
   return parser;
 }
 

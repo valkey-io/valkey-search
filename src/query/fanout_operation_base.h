@@ -16,6 +16,7 @@
 #include "absl/synchronization/mutex.h"
 #include "cluster_map.h"
 #include "grpcpp/support/status.h"
+#include "src/commands/ft_info_parser.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/util.h"
 #include "src/metrics.h"
@@ -36,6 +37,11 @@ template <typename Request, typename Response,
 class FanoutOperationBase {
  public:
   explicit FanoutOperationBase() = default;
+
+  explicit FanoutOperationBase(bool enable_partial_results,
+                               bool enable_consistency)
+      : enable_partial_results_(enable_partial_results),
+        enable_consistency_(enable_consistency) {}
 
   virtual ~FanoutOperationBase() = default;
 
@@ -143,6 +149,10 @@ class FanoutOperationBase {
               if (status.error_code() == grpc::StatusCode::NOT_FOUND) {
                 resp.set_error_type(
                     coordinator::FanoutErrorType::INDEX_NAME_ERROR);
+              } else if (status.error_code() ==
+                         grpc::StatusCode::FAILED_PRECONDITION) {
+                resp.set_error_type(
+                    coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR);
               } else {
                 resp.set_error_type(
                     coordinator::FanoutErrorType::COMMUNICATION_ERROR);
@@ -310,6 +320,8 @@ class FanoutOperationBase {
   std::vector<vmsdk::cluster_map::NodeInfo> targets_;
   std::chrono::steady_clock::time_point deadline_tp_;
   bool timeout_occurred_ = false;
+  bool enable_partial_results_;
+  bool enable_consistency_;
 };
 
 }  // namespace valkey_search::query::fanout

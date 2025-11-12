@@ -186,7 +186,8 @@ void PerformRemoteSearchRequestAsync(
 }
 
 absl::Status PerformSearchFanoutAsync(
-    ValkeyModuleCtx *ctx, std::vector<FanoutSearchTarget> &search_targets,
+    ValkeyModuleCtx *ctx,
+    std::vector<vmsdk::cluster_map::NodeInfo> &search_targets,
     coordinator::ClientPool *coordinator_client_pool,
     std::unique_ptr<SearchParameters> parameters,
     vmsdk::ThreadPool *thread_pool, query::SearchResponseCallback callback) {
@@ -201,7 +202,7 @@ absl::Status PerformSearchFanoutAsync(
   bool has_local_target = false;
   for (auto &node : search_targets) {
     auto detached_ctx = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);
-    if (node.type == FanoutSearchTarget::Type::kLocal) {
+    if (node.is_local) {
       // Defer the local target enqueue, since it will own the parameters from
       // then on.
       has_local_target = true;
@@ -213,12 +214,15 @@ absl::Status PerformSearchFanoutAsync(
     // At 30 requests, it takes ~600 micros to enqueue all the requests.
     // Putting this into the background thread pool will save us time on
     // machines with multiple cores.
+    std::string target_address =
+        absl::StrCat(node.socket_address.primary_endpoint, ":",
+                     coordinator::GetCoordinatorPort(node.socket_address.port));
     if (search_targets.size() >= 30 && thread_pool->Size() > 1) {
-      PerformRemoteSearchRequestAsync(std::move(request_copy), node.address,
+      PerformRemoteSearchRequestAsync(std::move(request_copy), target_address,
                                       coordinator_client_pool, tracker,
                                       thread_pool);
     } else {
-      PerformRemoteSearchRequest(std::move(request_copy), node.address,
+      PerformRemoteSearchRequest(std::move(request_copy), target_address,
                                  coordinator_client_pool, tracker);
     }
   }
@@ -245,12 +249,6 @@ absl::Status PerformSearchFanoutAsync(
         << "Failed to handle FT.SEARCH locally during fan-out";
   }
   return absl::OkStatus();
-}
-
-// TODO See if caching this improves performance.
-std::vector<fanout::FanoutSearchTarget> GetSearchTargetsForFanout(
-    ValkeyModuleCtx *ctx, FanoutTargetMode mode) {
-  return fanout::FanoutTemplate::GetTargets(ctx, mode);
 }
 
 }  // namespace valkey_search::query::fanout

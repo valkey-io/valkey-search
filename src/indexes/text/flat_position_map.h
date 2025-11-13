@@ -56,13 +56,29 @@ minimal state overhead, maintaining cumulative position for delta decoding.
 
 namespace valkey_search::indexes::text {
 
+// FlatPositionMap format constants
+constexpr size_t kFlatPositionMapHeaderSize = 4;  // Header is 4 bytes (32 bits)
+constexpr uint8_t kPartitionMapEntrySize =
+    8;  // Each partition entry: 8 bytes (4 offset + 4 delta)
+
+// Encoding bit flags (bit 7 indicates position vs field mask bytes)
+constexpr uint8_t kEncodingBitFieldMask =
+    0x80;                                     // Bit 7 = 1 for field mask bytes
+constexpr uint8_t kEncodingValueMask = 0x7F;  // Lower 7 bits for actual value
+
+// Field mask encoding
+constexpr uint8_t kFieldMaskBitsPerByte =
+    7;  // 7 bits per byte (bit 7 is type flag)
+
+// Encoding scheme thresholds
+constexpr uint32_t kSimpleEncodingMaxPosition =
+    256;  // SIMPLE encoding: positions must be < 256
+constexpr uint32_t kBinarySearchThreshold =
+    128;  // Use BINARY_SEARCH when positions > 128
+
 // Forward declarations to avoid circular dependency
 using Position = uint32_t;
 class FieldMask;
-
-// FlatPositionMap is a compact byte array representation
-// Layout: [Header: 4 bytes][Optional Partition Map][Position/Field Data]
-using FlatPositionMap = char*;
 
 // Encoding schemes
 enum class EncodingScheme : uint8_t {
@@ -72,24 +88,47 @@ enum class EncodingScheme : uint8_t {
   RESERVED = 3
 };
 
-// Serialize PositionMap to FlatPositionMap
-FlatPositionMap SerializePositionMap(
-    const std::map<Position, std::unique_ptr<FieldMask>>& position_map,
-    size_t num_text_fields);
+// FlatPositionMap is a compact byte array representation
+// Layout: [Header: 4 bytes][Optional Partition Map][Position/Field Data]
+class FlatPositionMap {
+ public:
+  // Default constructor: empty map
+  FlatPositionMap() : data_(nullptr) {}
 
-// Free FlatPositionMap
-void FreeFlatPositionMap(FlatPositionMap flat_map);
+  // Constructor from raw pointer: takes ownership
+  explicit FlatPositionMap(char* d) : data_(d) {}
 
-// Get position count from FlatPositionMap
-uint32_t CountPositions(FlatPositionMap flat_map);
+  // Destructor: frees the allocated memory
+  ~FlatPositionMap();
 
-// Get total term frequency from FlatPositionMap
-size_t CountTermFrequency(FlatPositionMap flat_map);
+  // Move constructor: transfers ownership, nullifies source
+  FlatPositionMap(FlatPositionMap&& other) noexcept;
+
+  // Move assignment: frees current, transfers ownership, nullifies source
+  FlatPositionMap& operator=(FlatPositionMap&& other) noexcept;
+
+  // Serialize PositionMap to FlatPositionMap
+  static FlatPositionMap SerializePositionMap(
+      const std::map<Position, std::unique_ptr<FieldMask>>& position_map,
+      size_t num_text_fields);
+
+  // Get position count
+  uint32_t CountPositions() const;
+
+  // Get total term frequency
+  size_t CountTermFrequency() const;
+
+  // Access to raw data pointer
+  const char* data() const { return data_; }
+
+ private:
+  char* data_;
+};
 
 // Iterator for FlatPositionMap
 class FlatPositionMapIterator {
  public:
-  FlatPositionMapIterator(FlatPositionMap flat_map);
+  FlatPositionMapIterator(const FlatPositionMap& flat_map);
 
   bool IsValid() const;
   void NextPosition();
@@ -98,7 +137,7 @@ class FlatPositionMapIterator {
   uint64_t GetFieldMask() const;
 
  private:
-  FlatPositionMap flat_map_;
+  const char* flat_map_;
   const char* current_ptr_;
   Position cumulative_position_;
   uint32_t positions_read_;

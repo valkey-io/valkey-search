@@ -703,7 +703,7 @@ class TestFullText(ValkeySearchTestCaseBase):
         assert result[0] == 0  # No matches
         # Validate that the default field search only includes results from the fields enabled with suffix.
         result = self.client.execute_command("FT.SEARCH", "idx", "*unning")
-        assert result[0] == 1  # Only doc:1 has "running"
+        assert result[0] == 1  # Only doc:1 is matched for "running"
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """

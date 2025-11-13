@@ -193,8 +193,15 @@ bool ProximityIterator::NextPosition() {
     }
     // No violations mean that this positional combination is valid.
     if (!FindViolatingIterator().has_value()) {
-      current_position_ =
-          PositionRange(positions_[0].start, positions_[n - 1].end);
+      if (in_order_) {
+        current_position_ =
+            PositionRange(positions_[0].start, positions_[n - 1].end);
+      } else {
+        // Use sorted positions for unordered queries
+        Position min_start = pos_with_idx_[0].first;
+        Position max_end = positions_[pos_with_idx_[n - 1].second].end;
+        current_position_ = PositionRange(min_start, max_end);
+      }
       return true;
     }
     should_advance = true;

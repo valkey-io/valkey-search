@@ -171,7 +171,7 @@ def validate_fulltext_search(client: Valkey):
     assert result[1] == b"product:5"
     # Validate the nuanced behavaior of exact phrase search where:
     # 1. Stopwords are not removed. (`these are not` - in this example)
-    # 2. Stemming is not done on words. (`words` is not stemmed and the ingestion is not )
+    # 2. Stemming is not done on words. (`words` is not stemmed and the ingestion is not)
     # 3. Punctuation is applied (removal of `,` in this example).
     result1 = client.execute_command("FT.SEARCH", "products", '@desc:"random words, these are not correct"')
     result2 = client.execute_command("FT.SEARCH", "products", '@desc:"random word, these are not correct"')

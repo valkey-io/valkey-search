@@ -238,8 +238,14 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         ]
         assert reads == [len(records)]
 
+    def get_pausepoint(self, p):
+        try:
+            return int(self.client.execute_command(f"ft._debug pausepoint test {p}"))
+        except:
+            return 0
+    
     def block(self, label):
-        x = self.client.execute_command("ft._debug pausepoint test block_mutation_queue")
+        x = self.get_pausepoint("block_mutation_queue")
         self.client.execute_command(*["debug", "log",f"pausepoint block:{x} @ {label}"])
         
     def test_multi_exec_queue(self):
@@ -259,6 +265,10 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
 
         self.client.execute_command("save")
         self.client.execute_command("ft._debug pausepoint reset block_mutation_queue")
+
+        while self.get_pausepoint("block_mutation_queue") > 0:
+            self.block("waiting for pausepoint block_mutation_queue to clear")
+            time.sleep(0.1)
 
         i = self.client.info("search")
         assert i["search_rdb_save_multi_exec_entries"] == len(records)

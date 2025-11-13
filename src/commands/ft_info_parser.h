@@ -24,8 +24,8 @@ struct InfoCommand {
   std::shared_ptr<IndexSchema> index_schema;
   std::string index_schema_name;
   InfoScope scope{InfoScope::kLocal};
-  bool enable_partial_results{true};
-  bool enable_consistency{false};
+  bool enable_partial_results{false};
+  bool enable_consistency{true};
   uint32_t timeout_ms{0};
 
   absl::Status ParseCommand(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr);

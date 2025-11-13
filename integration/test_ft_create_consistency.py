@@ -110,6 +110,9 @@ class TestFTCreateConsistency(ValkeySearchClusterTestCaseDebugMode):
         thread0.join()
         thread1.join()
 
+        print(results)
+        print(exceptions)
+
         res = next(iter(results.values()))
         err = next(iter(exceptions.values()))
         assert "OK" in str(res)

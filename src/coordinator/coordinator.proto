@@ -138,10 +138,16 @@ message GetGlobalMetadataResponse {
   GlobalMetadata metadata = 1;
 }
 
+message IndexFingerprintVersion {
+  uint64 fingerprint = 1;
+  uint32 version = 2;
+}
+
 message InfoIndexPartitionRequest {
   uint32 db_num = 1;
   string index_name = 2;
-  optional IndexFingerprintVersion index_fingerprint_version = 3;
+  bool enable_consistency = 3;
+  optional IndexFingerprintVersion index_fingerprint_version = 4;
 }
 
 enum FanoutErrorType {
@@ -149,11 +155,6 @@ enum FanoutErrorType {
   INDEX_NAME_ERROR = 1;
   INCONSISTENT_STATE_ERROR = 2;
   COMMUNICATION_ERROR = 3;
-}
-
-message IndexFingerprintVersion {
-  uint64 fingerprint = 1;
-  uint32 version = 2;
 }
 
 message InfoIndexPartitionResponse {

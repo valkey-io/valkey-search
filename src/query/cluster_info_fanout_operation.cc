@@ -132,9 +132,6 @@ void ClusterInfoFanoutOperation::InvokeRemoteRpc(
 int ClusterInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
                                               ValkeyModuleString** argv,
                                               int argc) {
-  VMSDK_LOG(NOTICE, nullptr)
-      << "In cluster info fanout operation, enable partial results is"
-      << enable_partial_results_;
   if (!index_name_error_nodes.empty() ||
       (!enable_partial_results_ && !communication_error_nodes.empty()) ||
       !inconsistent_state_error_nodes.empty()) {

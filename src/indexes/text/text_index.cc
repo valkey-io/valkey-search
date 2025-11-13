@@ -15,78 +15,62 @@
 
 namespace valkey_search::indexes::text {
 
-// Track current TextIndexSchema for accessing metadata
-thread_local TextIndexSchema* current_schema_ = nullptr;
-
-TextIndexSchema* GetTextIndexSchema() {
-  CHECK(current_schema_ != nullptr) << "No TextIndexSchema context set";
-  return current_schema_;
-}
-
 namespace {
 
 std::optional<std::shared_ptr<Postings>> AddKeyToPostings(
     std::optional<std::shared_ptr<Postings>> existing,
-    const InternedStringPtr& key, PositionMap&& pos_map) {
+    const InternedStringPtr& key, PositionMap&& pos_map,
+    TextIndexMetadata* metadata, size_t num_text_fields) {
   std::shared_ptr<Postings> postings;
   if (existing.has_value()) {
     postings = existing.value();
   } else {
-    current_schema_->GetMetadata().num_unique_terms++;
+    metadata->num_unique_terms++;
     postings = std::make_shared<Postings>();
   }
 
-  // Track metadata before inserting
-  auto& metadata = current_schema_->GetMetadata();
-  metadata.total_positions += pos_map.size();
-  unsigned int num_terms = 0;
-  for (const auto& [_, field_mask] : pos_map) {
-    num_terms += field_mask->CountSetFields();
-  }
-  metadata.total_term_frequency += num_terms;
-
-  postings->InsertKey(key, std::move(pos_map));
+  postings->InsertKey(key, std::move(pos_map), metadata, num_text_fields);
   return postings;
 }
 
 std::optional<std::shared_ptr<Postings>> RemoveKeyFromPostings(
     std::optional<std::shared_ptr<Postings>> existing,
-    const InternedStringPtr& key) {
+    const InternedStringPtr& key, TextIndexMetadata* metadata) {
   CHECK(existing.has_value()) << "Per-key tree became unaligned";
   auto postings = existing.value();
 
-  // Get the position map before removal to track metadata
-  auto key_iter = postings->GetKeyIterator();
-  if (key_iter.SkipForwardKey(key) && key_iter.IsValid()) {
-    auto pos_iter = key_iter.GetPositionIterator();
-    size_t position_count = 0;
-    size_t term_frequency = 0;
-
-    while (pos_iter.IsValid()) {
-      position_count++;
-      // Count fields set at this position
-      uint64_t field_mask_val = pos_iter.GetFieldMask();
-      term_frequency += __builtin_popcountll(field_mask_val);
-      pos_iter.NextPosition();
-    }
-
-    // Update metadata
-    auto& metadata = current_schema_->GetMetadata();
-    metadata.total_positions -= position_count;
-    metadata.total_term_frequency -= term_frequency;
-  }
-
-  postings->RemoveKey(key);
+  postings->RemoveKey(key, metadata);
 
   if (!postings->IsEmpty()) {
     return postings;
   } else {
-    current_schema_->GetMetadata().num_unique_terms--;
+    metadata->num_unique_terms--;
     return std::nullopt;
   }
 }
 
 }  // namespace
+
+/*** TextIndex ***/
+
+TextIndex::TextIndex(bool suffix)
+    : suffix_tree_(
+          suffix ? std::make_unique<RadixTree<std::shared_ptr<Postings>>>()
+                 : nullptr) {}
+
+RadixTree<std::shared_ptr<Postings>>& TextIndex::GetPrefix() {
+  return prefix_tree_;
+}
+
+std::optional<std::reference_wrapper<RadixTree<std::shared_ptr<Postings>>>>
+TextIndex::GetSuffix() {
+  if (!suffix_tree_) {
+    return std::nullopt;
+  }
+  return std::ref(*suffix_tree_);
+}
+
+/*** TextIndexSchema ***/
 
 TextIndexSchema::TextIndexSchema(data_model::Language language,
                                  const std::string& punctuation,
@@ -97,7 +81,6 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     const InternedStringPtr& key, absl::string_view data,
     size_t text_field_number, bool stem, size_t min_stem_size, bool suffix) {
-  current_schema_ = this;
   NestedMemoryScope scope{metadata_.text_index_memory_pool_};
 
   auto tokens = lexer_.Tokenize(data, stem, min_stem_size);
@@ -131,7 +114,6 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
 }
 
 void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
-  current_schema_ = this;
   NestedMemoryScope scope{metadata_.text_index_memory_pool_};
 
   // Retrieve the key's staged data
@@ -146,7 +128,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
     token_positions = std::move(node.mapped());
   }
 
-  TextIndex key_index{};
+  TextIndex key_index{with_suffix_trie_};
 
   // Index the key's tokens
   for (auto& entry : token_positions) {
@@ -165,31 +147,28 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
     {
       std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
       updated_target =
-          text_index_->prefix_.MutateTarget(token, [&](auto existing) {
+          text_index_->GetPrefix().MutateTarget(token, [&](auto existing) {
             NestedMemoryScope scope{metadata_.posting_memory_pool_};
             // Note: Right now this won't include the position map memory since
             // it's already allocated and moved into the postings object. Once
             // we start creating a serialized version instead then it will be
             // tracked. At that point stop moving the pos_map and just pass a
             // reference so that it doesn't get cleaned up in the memory scope.
-            return AddKeyToPostings(existing, key, std::move(pos_map));
+            return AddKeyToPostings(existing, key, std::move(pos_map),
+                                    &metadata_, num_text_fields_);
           });
       if (suffix) {
-        if (!text_index_->suffix_.has_value()) {
-          text_index_->suffix_.emplace();
-        }
-        text_index_->suffix_.value().SetTarget(*reverse_token, updated_target);
+        text_index_->GetSuffix().value().get().SetTarget(*reverse_token,
+                                                         updated_target);
       }
     }
 
     // Put the token in the per-key index pointing to the same shared postings
     // object
-    key_index.prefix_.SetTarget(token, updated_target);
+    key_index.GetPrefix().SetTarget(token, updated_target);
     if (suffix) {
-      if (!key_index.suffix_.has_value()) {
-        key_index.suffix_.emplace();
-      }
-      key_index.suffix_.value().SetTarget(*reverse_token, updated_target);
+      key_index.GetSuffix().value().get().SetTarget(*reverse_token,
+                                                    updated_target);
     }
   }
 
@@ -201,34 +180,36 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
 }
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
-  current_schema_ = this;
   NestedMemoryScope scope{metadata_.text_index_memory_pool_};
 
   // Extract the per-key index
-  TextIndex key_index;
+  absl::node_hash_map<Key, TextIndex, InternedStringPtrHash,
+                      InternedStringPtrEqual>::node_type node;
   {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
-    auto node = per_key_text_indexes_.extract(key);
+    node = per_key_text_indexes_.extract(key);
     if (node.empty()) {
       return;
     }
-    key_index = std::move(node.mapped());
   }
 
-  auto iter = key_index.prefix_.GetWordIterator("");
+  TextIndex& key_index = node.mapped();
+
+  auto iter = key_index.GetPrefix().GetWordIterator("");
 
   // Cleanup schema-level text index
   std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
   while (!iter.Done()) {
     std::string_view word = iter.GetWord();
     std::optional<std::shared_ptr<Postings>> new_target =
-        text_index_->prefix_.MutateTarget(word, [&](auto existing) {
+        text_index_->GetPrefix().MutateTarget(word, [&](auto existing) {
           NestedMemoryScope scope{metadata_.posting_memory_pool_};
-          return RemoveKeyFromPostings(existing, key);
+          return RemoveKeyFromPostings(existing, key, &metadata_);
         });
-    if (text_index_->suffix_.has_value()) {
+    auto suffix_opt = text_index_->GetSuffix();
+    if (suffix_opt.has_value()) {
       std::string reverse_word(word.rbegin(), word.rend());
-      text_index_->suffix_.value().SetTarget(reverse_word, new_target);
+      suffix_opt.value().get().SetTarget(reverse_word, new_target);
     }
     iter.Next();
   }

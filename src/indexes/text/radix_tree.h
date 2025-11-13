@@ -81,7 +81,7 @@ overloaded(Ts...) -> overloaded<Ts...>;
 using Byte = uint8_t;
 using BytePath = std::string;
 
-template <typename Target, bool reverse>
+template <typename Target, bool reverse = false>
 struct RadixTree {
   struct WordIterator;
   struct PathIterator;

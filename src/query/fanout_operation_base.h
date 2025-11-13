@@ -71,9 +71,6 @@ class FanoutOperationBase {
     if (!op) {
       return ValkeyModule_ReplyWithError(ctx, "No reply data");
     }
-    VMSDK_LOG(NOTICE, nullptr)
-        << "In fanout operation base, enable partial results is"
-        << op->enable_partial_results_;
     if (op->timeout_occurred_ && !op->enable_partial_results_) {
       return op->GenerateTimeoutReply(ctx);
     }

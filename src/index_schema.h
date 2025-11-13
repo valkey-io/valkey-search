@@ -96,7 +96,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   ~IndexSchema() override;
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
       absl::string_view attribute_alias) const;
-  std::vector<std::string> GetAllTextIdentifiers(bool with_suffix) const;
+  const absl::flat_hash_set<std::string> &GetAllTextIdentifiers(
+      bool with_suffix) const;
   uint64_t GetAllTextFieldMask(bool with_suffix) const;
   std::optional<uint32_t> MinStemSizeAcrossTextIndexes(bool with_suffix) const;
   void UpdateTextFieldMasksForIndex(const std::string &identifier,
@@ -215,8 +216,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t suffix_text_field_mask_{0ULL};
   std::optional<uint32_t> all_fields_min_stem_size_{std::nullopt};
   std::optional<uint32_t> suffix_fields_min_stem_size_{std::nullopt};
-  std::vector<std::string> all_text_identifiers_;
-  std::vector<std::string> suffix_text_identifiers_;
+  absl::flat_hash_set<std::string> all_text_identifiers_;
+  absl::flat_hash_set<std::string> suffix_text_identifiers_;
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   InternedStringMap<DocumentMutation> tracked_mutated_records_

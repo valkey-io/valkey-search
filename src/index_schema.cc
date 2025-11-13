@@ -277,10 +277,10 @@ void IndexSchema::UpdateTextFieldMasksForIndex(const std::string &identifier,
     uint64_t field_bit = 1ULL << text_index->GetTextFieldNumber();
     // Update field masks and identifiers
     all_text_field_mask_ |= field_bit;
-    all_text_identifiers_.push_back(identifier);
+    all_text_identifiers_.insert(identifier);
     if (text_index->WithSuffixTrie()) {
       suffix_text_field_mask_ |= field_bit;
-      suffix_text_identifiers_.push_back(identifier);
+      suffix_text_identifiers_.insert(identifier);
     }
     // Update min stem sizes
     if (text_index->IsStemmingEnabled()) {
@@ -305,7 +305,7 @@ void IndexSchema::UpdateTextFieldMasksForIndex(const std::string &identifier,
 // text fields.
 // If `with_suffix` is true, we only include the fields that have suffix tree
 // enabled.
-std::vector<std::string> IndexSchema::GetAllTextIdentifiers(
+const absl::flat_hash_set<std::string> &IndexSchema::GetAllTextIdentifiers(
     bool with_suffix) const {
   return with_suffix ? suffix_text_identifiers_ : all_text_identifiers_;
 }

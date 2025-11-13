@@ -690,17 +690,14 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
     }
   } else {
     // Set identifiers to include all text fields in the index schema.
-    auto text_identifiers = index_schema_.GetAllTextIdentifiers(with_suffix);
+    filter_identifiers_ = index_schema_.GetAllTextIdentifiers(with_suffix);
     // Set field mask to include all text fields in the index schema.
     field_mask = index_schema_.GetAllTextFieldMask(with_suffix);
-    if (text_identifiers.size() == 0 || field_mask == 0ULL) {
+    if (filter_identifiers_.size() == 0 || field_mask == 0ULL) {
       if (with_suffix) {
         return absl::InvalidArgumentError("No fields support suffix search");
       }
       return absl::InvalidArgumentError("Index does not have any text field");
-    }
-    for (const auto& identifier : text_identifiers) {
-      filter_identifiers_.insert(identifier);
     }
     // When no field was specified, we use the min stem across all text fields
     // in the index schema. This helps ensure the root of the text token can be

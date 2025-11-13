@@ -247,39 +247,35 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         index.create(self.client, True)
         records = make_data()
-        num_records = 2 # len(records)
         #
         # Now, load the data as a multi/exec... But this won't block us.
         #
         self.block("Before multi")
         self.client.execute_command("MULTI")
-        for i in range(2):
+        for i in range(len(records)):
             index.write_data(self.client, i, records[i])
         self.client.execute_command("EXEC")
         self.block("after exec")
 
-
-
         self.client.execute_command("save")
-        self.block("after save")
         self.client.execute_command("ft._debug pausepoint reset block_mutation_queue")
 
-
         i = self.client.info("search")
-        assert i["search_rdb_save_multi_exec_entries"] == num_records
-
-        # verify_data(self.client, index)
+        assert i["search_rdb_save_multi_exec_entries"] == len(records)
+        self.block("before verify")
+        verify_data(self.client, index)
         os.environ["SKIPLOGCLEAN"] = "1"
         self.block("BEFORE RESTART")
         self.server.restart(remove_rdb=False)
-        # verify_data(self.client, index)
+        self.block("AFTER RESTART")
+        verify_data(self.client, index)
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         i = self.client.info("search")
         print("Info: ", i)
         reads = [
             i["search_rdb_load_multi_exec_entries"],
         ]
-        assert reads == [num_records]
+        assert reads == [len(records)]
 
     def test_saverestore_backfill(self):
         #

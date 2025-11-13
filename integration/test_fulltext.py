@@ -26,7 +26,8 @@ hash_docs = [
     ["HSET", "product:1", "category", "electronics", "name", "Laptop", "price", "999.99", "rating", "4.5", "desc", "1 2 3 4 5 6 7 8 9 0. Great oaks. Random Words. Random Words. Great oaks from little grey acorns grow. Impressive oak."],
     ["HSET", "product:3", "category", "electronics", "name", "Phone", "price", "299.00", "rating", "3.8", "desc", "Random Words. Experience. Random Words. Ok, this document uses some more common words from other docs. Interesting desc, impressive tablet. Random Words."],
     ["HSET", "product:5", "category", "books", "name", "Book2", "price", "19.99", "rating", "1.0", "desc", "Unique slop word. Random Words. Random Words. greased the inspector's palm"],
-    ["HSET", "product:2", "category", "electronics", "name", "Tablet", "price", "499.00", "rating", "4.0", "desc", "Random Words. Random Words. Interesting. Good beginning makes a good ending. Interesting desc"]
+    ["HSET", "product:2", "category", "electronics", "name", "Tablet", "price", "499.00", "rating", "4.0", "desc", "Random Words, These are not correct. Random Words. Interesting. Good beginning makes a good ending. Interesting desc"],
+    ["HSET", "product:6", "category", "books", "name", "BookOnAI", "price", "0.50", "rating", "5.0", "desc", "Poplog is a reflective, incrementally compiled software development environment for the programming languages POP-11, Common Lisp, Prolog, and Standard ML, originally created in the UK for teaching and research in artificial intelligence at the University of Sussex."]
 ]
 text_query_term = ["FT.SEARCH", "products", '@desc:"wonder"']
 text_query_term_nomatch = ["FT.SEARCH", "products", '@desc:"nomatch"']
@@ -164,10 +165,26 @@ def validate_fulltext_search(client: Valkey):
     result = client.execute_command("FT.SEARCH", "products", '@desc:"1 2 3 4 5 6 7 8 9 0"')
     assert result[0] == 1
     assert result[1] == b"product:1"
-    # TODO: We can test this once the queries are tokenized with punctuation applied.
-    # result = client.execute_command("FT.SEARCH", "products", '@desc:"inspector\'s palm"')
-    # TODO: We can test this once the queries are tokenized with punctuation and stopword removal applied.
-    # result = client.execute_command("FT.SEARCH", "products", '@desc:"random words, these are not"')
+    # Validate that queries are tokenized with punctuation applied.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"inspector\'s palm"')
+    assert result[0] == 1
+    assert result[1] == b"product:5"
+    # Validate the nuanced behavaior of exact phrase search where:
+    # 1. Stopwords are not removed. (`these are not` - in this example)
+    # 2. Stemming is not done on words. (`words` is not stemmed and the ingestion is not )
+    # 3. Punctuation is applied (removal of `,` in this example).
+    result1 = client.execute_command("FT.SEARCH", "products", '@desc:"random words, these are not correct"')
+    result2 = client.execute_command("FT.SEARCH", "products", '@desc:"random word, these are not correct"')
+    result3 = client.execute_command("FT.SEARCH", "products", '@desc:"random words, correct"')
+    result4 = client.execute_command("FT.SEARCH", "products", '@desc:"random word, correct"')
+    assert result1[0] == 0 and result2[0] == 0 and result3[0] == 0
+    assert result4[0] == 1
+    assert result4[1] == b"product:2"
+    # Validate that we can handle inorder = false by looking across documents with these terms below in any order.
+    result = client.execute_command("FT.SEARCH", "products", 'artificial intelligence research')
+    assert result[0] == 1
+    assert result[1] == b"product:6"
+
 
 class TestFullText(ValkeySearchTestCaseBase):
 
@@ -721,7 +738,7 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         info_data = parser.parsed_data
         
         # Validate basic document counts
-        assert info_data["num_docs"] == 5, f"Expected 5 documents, got {info_data['num_docs']}"
+        assert info_data["num_docs"] == 6, f"Expected 6 documents, got {info_data['num_docs']}"
         
         # Text index specific fields to validate
         text_index_fields = [

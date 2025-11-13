@@ -679,9 +679,7 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
       return absl::InvalidArgumentError("Index does not have any text field");
     }
     auto* text_index = dynamic_cast<const indexes::Text*>(index.value().get());
-    if (with_suffix && !text_index->GetTextIndexSchema()
-                            ->GetTextIndex()
-                            ->suffix_.has_value()) {
+    if (with_suffix && !text_index->WithSuffixTrie()) {
       return absl::InvalidArgumentError("Field does not support suffix search");
     }
     auto identifier = index_schema_.GetIdentifier(*field_name).value();

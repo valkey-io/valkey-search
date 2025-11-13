@@ -61,5 +61,8 @@ config::Number& GetFTInfoTimeoutMs();
 /// Return the rpc timeout for ft.info fanout command
 config::Number& GetFTInfoRpcTimeoutMs();
 
+/// Return the low utilization threshold for preferring local node in fanout
+config::Number& GetLowUtilizationThreshold();
+
 }  // namespace options
 }  // namespace valkey_search

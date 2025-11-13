@@ -183,13 +183,14 @@ void Postings::InsertKey(const Key& key, PositionMap&& pos_map,
   metadata->total_term_frequency += count_num_terms(pos_map);
 
   // Serialize the position map into FlatPositionMap
-  FlatPositionMap flat_map = SerializePositionMap(pos_map, num_text_fields);
+  FlatPositionMap flat_map =
+      FlatPositionMap::SerializePositionMap(pos_map, num_text_fields);
 
   // Print the flat_map at bit level for debugging
   // PrintFlatPositionMapBits(flat_map);
 
   // Store the serialized flat map
-  key_to_positions_[key] = flat_map;
+  key_to_positions_[key] = std::move(flat_map);
 }
 
 // Remove a document key and all its positions
@@ -197,19 +198,16 @@ void Postings::RemoveKey(const Key& key, TextIndexMetadata* metadata) {
   auto it = key_to_positions_.find(key);
   if (it == key_to_positions_.end()) return;
 
-  FlatPositionMap flat_map = it->second;
+  const FlatPositionMap& flat_map = it->second;
 
-  // Use helper functions to get counts
-  size_t position_count = CountPositions(flat_map);
-  size_t term_frequency = CountTermFrequency(flat_map);
+  // Use member functions to get counts
+  size_t position_count = flat_map.CountPositions();
+  size_t term_frequency = flat_map.CountTermFrequency();
 
   metadata->total_positions -= position_count;
   metadata->total_term_frequency -= term_frequency;
 
-  // Free the flat map memory with memory tracking
-  FreeFlatPositionMap(flat_map);
-
-  // Remove from map
+  // Remove from map (destructor will free memory)
   key_to_positions_.erase(it);
 }
 
@@ -220,7 +218,7 @@ size_t Postings::GetKeyCount() const { return key_to_positions_.size(); }
 size_t Postings::GetPositionCount() const {
   size_t total = 0;
   for (const auto& [key, flat_map] : key_to_positions_) {
-    total += CountPositions(flat_map);
+    total += flat_map.CountPositions();
   }
   return total;
 }
@@ -229,7 +227,7 @@ size_t Postings::GetPositionCount() const {
 size_t Postings::GetTotalTermFrequency() const {
   size_t total_frequency = 0;
   for (const auto& [key, flat_map] : key_to_positions_) {
-    total_frequency += CountTermFrequency(flat_map);
+    total_frequency += flat_map.CountTermFrequency();
   }
   return total_frequency;
 }
@@ -265,7 +263,7 @@ bool Postings::KeyIterator::ContainsFields(uint64_t field_mask) const {
   CHECK(key_map_ != nullptr && current_ != end_)
       << "KeyIterator is invalid or exhausted";
 
-  FlatPositionMap flat_map = current_->second;
+  const FlatPositionMap& flat_map = current_->second;
 
   // Check all positions for this key to see if any of the requested fields are
   // set
@@ -301,7 +299,7 @@ FlatPositionMapIterator Postings::KeyIterator::GetPositionIterator() const {
   CHECK(key_map_ != nullptr && current_ != end_)
       << "KeyIterator is invalid or exhausted";
 
-  FlatPositionMap flat_map = current_->second;
+  const FlatPositionMap& flat_map = current_->second;
   return FlatPositionMapIterator(flat_map);
 }
 

@@ -57,6 +57,38 @@ vmsdk::KeyValueParser<InfoCommand> CreateInfoParser() {
             return absl::OkStatus();
           }));
 
+  parser.AddParamParser(
+      "ALLSHARDS",
+      std::make_unique<vmsdk::ParamParser<InfoCommand>>(
+          [](InfoCommand &cmd, vmsdk::ArgsIterator &itr) -> absl::Status {
+            cmd.enable_partial_results = false;
+            return absl::OkStatus();
+          }));
+
+  parser.AddParamParser(
+      "SOMESHARDS",
+      std::make_unique<vmsdk::ParamParser<InfoCommand>>(
+          [](InfoCommand &cmd, vmsdk::ArgsIterator &itr) -> absl::Status {
+            cmd.enable_partial_results = true;
+            return absl::OkStatus();
+          }));
+
+  parser.AddParamParser(
+      "CONSISTENT",
+      std::make_unique<vmsdk::ParamParser<InfoCommand>>(
+          [](InfoCommand &cmd, vmsdk::ArgsIterator &itr) -> absl::Status {
+            cmd.enable_consistency = true;
+            return absl::OkStatus();
+          }));
+
+  parser.AddParamParser(
+      "INCONSISTENT",
+      std::make_unique<vmsdk::ParamParser<InfoCommand>>(
+          [](InfoCommand &cmd, vmsdk::ArgsIterator &itr) -> absl::Status {
+            cmd.enable_consistency = false;
+            return absl::OkStatus();
+          }));
+
   return parser;
 }
 
@@ -119,13 +151,15 @@ absl::Status InfoCommand::Execute(ValkeyModuleCtx *ctx) {
   switch (scope) {
     case InfoScope::kPrimary: {
       auto op = new query::primary_info_fanout::PrimaryInfoFanoutOperation(
-          ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms);
+          ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms,
+          enable_partial_results, enable_consistency);
       op->StartOperation(ctx);
       break;
     }
     case InfoScope::kCluster: {
       auto op = new query::cluster_info_fanout::ClusterInfoFanoutOperation(
-          ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms);
+          ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms,
+          enable_partial_results, enable_consistency);
       op->StartOperation(ctx);
       break;
     }

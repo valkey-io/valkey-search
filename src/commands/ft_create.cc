@@ -24,8 +24,7 @@ class CreateConsistencyCheckFanoutOperation
   CreateConsistencyCheckFanoutOperation(
       uint32_t db_num, const std::string &index_name, unsigned timeout_ms,
       coordinator::IndexFingerprintVersion new_entry_fingerprint_version)
-      : ClusterInfoFanoutOperation(db_num, index_name, timeout_ms, false,
-                                   false),
+      : ClusterInfoFanoutOperation(db_num, index_name, timeout_ms, false, true),
         new_entry_fingerprint_version_(new_entry_fingerprint_version) {}
 
   coordinator::InfoIndexPartitionRequest GenerateRequest(
@@ -34,10 +33,14 @@ class CreateConsistencyCheckFanoutOperation
     req.set_db_num(db_num_);
     req.set_index_name(index_name_);
 
-    // Use the newly created fingerprint/version
-    auto *expected_ifv = req.mutable_index_fingerprint_version();
-    expected_ifv->set_fingerprint(new_entry_fingerprint_version_.fingerprint());
-    expected_ifv->set_version(new_entry_fingerprint_version_.version());
+    if (enable_consistency_) {
+      req.set_enable_consistency(true);
+      // Use the newly created fingerprint/version
+      auto *expected_ifv = req.mutable_index_fingerprint_version();
+      expected_ifv->set_fingerprint(
+          new_entry_fingerprint_version_.fingerprint());
+      expected_ifv->set_version(new_entry_fingerprint_version_.version());
+    }
 
     return req;
   }

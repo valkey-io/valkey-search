@@ -13,6 +13,8 @@
 
 namespace valkey_search::query::primary_info_fanout {
 
+CONTROLLED_BOOLEAN(ForceInfoInvalidIndexFingerprint, false);
+
 PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
     uint32_t db_num, const std::string& index_name, unsigned timeout_ms,
     bool enable_partial_results, bool enable_consistency)
@@ -28,18 +30,26 @@ PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
       num_docs_(0),
       num_records_(0),
       hash_indexing_failures_(0) {
-  // Get expected fingerprint/version from local metadata
-  auto global_metadata =
-      coordinator::MetadataManager::Instance().GetGlobalMetadata();
-  if (global_metadata->type_namespace_map().contains(
-          kSchemaManagerMetadataTypeName)) {
-    const auto& entry_map = global_metadata->type_namespace_map().at(
-        kSchemaManagerMetadataTypeName);
-    if (entry_map.entries().contains(index_name_)) {
-      const auto& entry = entry_map.entries().at(index_name_);
-      expected_fingerprint_version_.emplace();
-      expected_fingerprint_version_->set_fingerprint(entry.fingerprint());
-      expected_fingerprint_version_->set_version(entry.version());
+  if (enable_consistency_) {
+    expected_fingerprint_version_.emplace();
+    // test only: force invalid index fingerprint and version
+    if (ForceInfoInvalidIndexFingerprint.GetValue()) {
+      expected_fingerprint_version_->set_fingerprint(404);
+      expected_fingerprint_version_->set_version(404);
+    } else {
+      // Get expected fingerprint/version from local metadata
+      auto global_metadata =
+          coordinator::MetadataManager::Instance().GetGlobalMetadata();
+      if (global_metadata->type_namespace_map().contains(
+              kSchemaManagerMetadataTypeName)) {
+        const auto& entry_map = global_metadata->type_namespace_map().at(
+            kSchemaManagerMetadataTypeName);
+        if (entry_map.entries().contains(index_name_)) {
+          const auto& entry = entry_map.entries().at(index_name_);
+          expected_fingerprint_version_->set_fingerprint(entry.fingerprint());
+          expected_fingerprint_version_->set_version(entry.version());
+        }
+      }
     }
   }
 }
@@ -61,9 +71,12 @@ PrimaryInfoFanoutOperation::GenerateRequest(
   req.set_db_num(db_num_);
   req.set_index_name(index_name_);
 
-  if (expected_fingerprint_version_.has_value()) {
-    *req.mutable_index_fingerprint_version() =
-        expected_fingerprint_version_.value();
+  if (enable_consistency_) {
+    req.set_enable_consistency(true);
+    if (expected_fingerprint_version_.has_value()) {
+      *req.mutable_index_fingerprint_version() =
+          expected_fingerprint_version_.value();
+    }
   }
 
   return req;
@@ -113,7 +126,8 @@ void PrimaryInfoFanoutOperation::InvokeRemoteRpc(
 int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
                                               ValkeyModuleString** argv,
                                               int argc) {
-  if (!index_name_error_nodes.empty() || !communication_error_nodes.empty() ||
+  if (!index_name_error_nodes.empty() ||
+      (!enable_partial_results_ && !communication_error_nodes.empty()) ||
       !inconsistent_state_error_nodes.empty()) {
     return FanoutOperationBase::GenerateErrorReply(ctx);
   }

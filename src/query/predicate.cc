@@ -205,8 +205,9 @@ bool TagPredicate::Evaluate(
   return false;
 }
 
-ComposedPredicate::ComposedPredicate(LogicalOperator logical_op,
-                                     std::vector<std::unique_ptr<Predicate>> children)
+ComposedPredicate::ComposedPredicate(
+    LogicalOperator logical_op,
+    std::vector<std::unique_ptr<Predicate>> children)
     : Predicate(logical_op == LogicalOperator::kAnd
                     ? PredicateType::kComposedAnd
                     : PredicateType::kComposedOr),
@@ -218,16 +219,17 @@ void ComposedPredicate::AddChild(std::unique_ptr<Predicate> child) {
 
 bool ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   if (children_.empty()) {
-    return true; // Empty predicate evaluates to true
+    return true;  // Empty predicate evaluates to true
   }
 
   if (GetType() == PredicateType::kComposedAnd) {
     // For AND: all children must be true
     for (const auto& child : children_) {
       bool result = child->Evaluate(evaluator);
-      VMSDK_LOG(DEBUG, nullptr) << "Inline evaluate AND predicate child: " << result;
+      VMSDK_LOG(DEBUG, nullptr)
+          << "Inline evaluate AND predicate child: " << result;
       if (!result) {
-        return false; // Short-circuit on first false
+        return false;  // Short-circuit on first false
       }
     }
     return true;
@@ -235,9 +237,10 @@ bool ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     // For OR: at least one child must be true
     for (const auto& child : children_) {
       bool result = child->Evaluate(evaluator);
-      VMSDK_LOG(DEBUG, nullptr) << "Inline evaluate OR predicate child: " << result;
+      VMSDK_LOG(DEBUG, nullptr)
+          << "Inline evaluate OR predicate child: " << result;
       if (result) {
-        return true; // Short-circuit on first true
+        return true;  // Short-circuit on first true
       }
     }
     return false;

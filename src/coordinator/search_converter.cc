@@ -81,9 +81,8 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       std::vector<std::unique_ptr<query::Predicate>> children;
       for (const auto& child_predicate : predicate.and_().children()) {
         VMSDK_ASSIGN_OR_RETURN(
-            auto child,
-            GRPCPredicateToPredicate(child_predicate, index_schema,
-                                     attribute_identifiers));
+            auto child, GRPCPredicateToPredicate(child_predicate, index_schema,
+                                                 attribute_identifiers));
         children.push_back(std::move(child));
       }
       return std::make_unique<query::ComposedPredicate>(
@@ -93,9 +92,8 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       std::vector<std::unique_ptr<query::Predicate>> children;
       for (const auto& child_predicate : predicate.or_().children()) {
         VMSDK_ASSIGN_OR_RETURN(
-            auto child,
-            GRPCPredicateToPredicate(child_predicate, index_schema,
-                                     attribute_identifiers));
+            auto child, GRPCPredicateToPredicate(child_predicate, index_schema,
+                                                 attribute_identifiers));
         children.push_back(std::move(child));
       }
       return std::make_unique<query::ComposedPredicate>(

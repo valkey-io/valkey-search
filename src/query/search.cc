@@ -124,130 +124,135 @@ size_t EvaluateFilterAsPrimary(
     const Predicate* predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
     bool negate) {
-  std::cout << "=== PREDICATE EVALUATION STEP ===" << std::endl;
-  std::cout << "Predicate type: ";
+  // std::cout << "=== PREDICATE EVALUATION STEP ===" << std::endl;
+  // std::cout << "Predicate type: ";
 
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {
     auto composed_predicate = dynamic_cast<const ComposedPredicate*>(predicate);
-    std::cout << (predicate->GetType() == PredicateType::kComposedAnd ? "AND"
-                                                                      : "OR")
-              << std::endl;
-    std::cout << "Negate flag: " << (negate ? "true" : "false") << std::endl;
+    // std::cout << (predicate->GetType() == PredicateType::kComposedAnd ? "AND"
+    //                                                                   : "OR")
+    //           << std::endl;
+    // std::cout << "Negate flag: " << (negate ? "true" : "false") << std::endl;
 
     auto predicate_type =
         EvaluateAsComposedPredicate(composed_predicate, negate);
 
-    std::cout << "Evaluated as: "
-              << (predicate_type == PredicateType::kComposedAnd ? "AND" : "OR")
-              << std::endl;
-    std::cout << "Number of children: "
-              << composed_predicate->GetChildren().size() << std::endl;
+    // std::cout << "Evaluated as: "
+    //           << (predicate_type == PredicateType::kComposedAnd ? "AND" :
+    //           "OR")
+    //           << std::endl;
+    // std::cout << "Number of children: "
+    //           << composed_predicate->GetChildren().size() << std::endl;
 
     if (predicate_type == PredicateType::kComposedAnd) {
       // For AND: find the smallest result set to optimize performance
-      std::cout << "AND operation: Finding smallest result set" << std::endl;
+      // std::cout << "AND operation: Finding smallest result set" << std::endl;
       size_t min_size = SIZE_MAX;
       std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> best_fetchers;
       size_t child_index = 0;
 
       for (const auto& child : composed_predicate->GetChildren()) {
-        std::cout << "  Evaluating AND child " << child_index << ":"
-                  << std::endl;
+        // std::cout << "  Evaluating AND child " << child_index << ":"
+        //           << std::endl;
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
         size_t child_size =
             EvaluateFilterAsPrimary(child.get(), child_fetchers, negate);
 
-        std::cout << "  Child " << child_index << " result size: " << child_size
-                  << std::endl;
+        // std::cout << "  Child " << child_index << " result size: " <<
+        // child_size
+        //           << std::endl;
         if (child_size < min_size) {
-          std::cout << "  Child " << child_index
-                    << " has smallest size so far, selecting it" << std::endl;
+          // std::cout << "  Child " << child_index
+          //           << " has smallest size so far, selecting it" <<
+          //           std::endl;
           min_size = child_size;
           best_fetchers = std::move(child_fetchers);
         }
         child_index++;
       }
 
-      std::cout << "AND operation result size: " << min_size << std::endl;
+      // std::cout << "AND operation result size: " << min_size << std::endl;
       AppendQueue(entries_fetchers, best_fetchers);
       return min_size;
     } else {
       // For OR: combine all result sets
-      std::cout << "OR operation: Combining all result sets" << std::endl;
+      // std::cout << "OR operation: Combining all result sets" << std::endl;
       size_t total_size = 0;
       size_t child_index = 0;
 
       for (const auto& child : composed_predicate->GetChildren()) {
-        std::cout << "  Evaluating OR child " << child_index << ":"
-                  << std::endl;
+        // std::cout << "  Evaluating OR child " << child_index << ":"
+        //           << std::endl;
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
         size_t child_size =
             EvaluateFilterAsPrimary(child.get(), child_fetchers, negate);
 
-        std::cout << "  Child " << child_index << " result size: " << child_size
-                  << std::endl;
+        // std::cout << "  Child " << child_index << " result size: " <<
+        // child_size
+        //           << std::endl;
         AppendQueue(entries_fetchers, child_fetchers);
         total_size += child_size;
         child_index++;
       }
 
-      std::cout << "OR operation result size: " << total_size << std::endl;
+      // std::cout << "OR operation result size: " << total_size << std::endl;
       return total_size;
     }
   }
   if (predicate->GetType() == PredicateType::kTag) {
     auto tag_predicate = dynamic_cast<const TagPredicate*>(predicate);
-    std::cout << "TAG" << std::endl;
-    std::cout << "Tag alias: " << std::string(tag_predicate->GetAlias())
-              << std::endl;
-    std::cout << "Negate flag: " << (negate ? "true" : "false") << std::endl;
+    // std::cout << "TAG" << std::endl;
+    // std::cout << "Tag alias: " << std::string(tag_predicate->GetAlias())
+    // << std::endl;
+    // std::cout << "Negate flag: " << (negate ? "true" : "false") << std::endl;
 
     auto fetcher = tag_predicate->GetIndex()->Search(*tag_predicate, negate);
     size_t size = fetcher->Size();
-    std::cout << "TAG result size: " << size << std::endl;
+    // std::cout << "TAG result size: " << size << std::endl;
     entries_fetchers.push(std::move(fetcher));
     return size;
   }
   if (predicate->GetType() == PredicateType::kNumeric) {
     auto numeric_predicate = dynamic_cast<const NumericPredicate*>(predicate);
-    std::cout << "NUMERIC" << std::endl;
-    std::cout << "Numeric alias: " << std::string(numeric_predicate->GetAlias())
-              << std::endl;
-    std::cout << "Negate flag: " << (negate ? "true" : "false") << std::endl;
+    // std::cout << "NUMERIC" << std::endl;
+    // std::cout << "Numeric alias: " <<
+    // std::string(numeric_predicate->GetAlias())
+    //           << std::endl;
+    // std::cout << "Negate flag: " << (negate ? "true" : "false") << std::endl;
 
     auto fetcher =
         numeric_predicate->GetIndex()->Search(*numeric_predicate, negate);
     size_t size = fetcher->Size();
-    std::cout << "NUMERIC result size: " << size << std::endl;
+    // std::cout << "NUMERIC result size: " << size << std::endl;
     entries_fetchers.push(std::move(fetcher));
     return size;
   }
   if (predicate->GetType() == PredicateType::kText) {
     auto text_predicate = dynamic_cast<const TextPredicate*>(predicate);
-    std::cout << "TEXT" << std::endl;
-    std::cout << "Negate flag: " << (negate ? "true" : "false") << std::endl;
+    // std::cout << "TEXT" << std::endl;
+    // std::cout << "Negate flag: " << (negate ? "true" : "false") << std::endl;
 
     auto fetcher = std::unique_ptr<indexes::EntriesFetcherBase>(
         static_cast<indexes::EntriesFetcherBase*>(
             text_predicate->Search(negate)));
     size_t size = fetcher->Size();
-    std::cout << "TEXT result size: " << size << std::endl;
+    // std::cout << "TEXT result size: " << size << std::endl;
     entries_fetchers.push(std::move(fetcher));
     return size;
   }
   if (predicate->GetType() == PredicateType::kNegate) {
     auto negate_predicate = dynamic_cast<const NegatePredicate*>(predicate);
-    std::cout << "NEGATE" << std::endl;
-    std::cout << "Current negate flag: " << (negate ? "true" : "false")
-              << std::endl;
-    std::cout << "Flipping negate flag to: " << (!negate ? "true" : "false")
-              << std::endl;
-    std::cout << "Recursively evaluating negated predicate:" << std::endl;
+    // std::cout << "NEGATE" << std::endl;
+    // std::cout << "Current negate flag: " << (negate ? "true" : "false")
+    //           << std::endl;
+    // std::cout << "Flipping negate flag to: " << (!negate ? "true" : "false")
+    //           << std::endl;
+    // std::cout << "Recursively evaluating negated predicate:" << std::endl;
 
     size_t result = EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
                                             entries_fetchers, !negate);
-    std::cout << "NEGATE operation result size: " << result << std::endl;
+    // std::cout << "NEGATE operation result size: " << result << std::endl;
     return result;
   }
   CHECK(false);

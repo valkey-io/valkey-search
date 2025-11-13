@@ -80,53 +80,9 @@ std::string PrintPredicateTree(const query::Predicate* predicate,
     }
     case query::PredicateType::kText: {
       const auto* text = static_cast<const query::TextPredicate*>(predicate);
-      // Try different text predicate types to get the alias
-      std::string alias = "unknown";
-      if (const auto* prox =
-              dynamic_cast<const query::ProximityPredicate*>(text)) {
-        // For proximity predicates, get the field name from the first term
-        const auto& terms = prox->Terms();
-        if (!terms.empty()) {
-          const auto* first_term = terms[0].get();
-          if (const auto* term =
-                  dynamic_cast<const query::TermPredicate*>(first_term)) {
-            alias = std::string(term->GetIdentifier());
-          } else if (const auto* prefix =
-                         dynamic_cast<const query::PrefixPredicate*>(
-                             first_term)) {
-            alias = std::string(prefix->GetIdentifier());
-          } else if (const auto* suffix =
-                         dynamic_cast<const query::SuffixPredicate*>(
-                             first_term)) {
-            alias = std::string(suffix->GetIdentifier());
-          } else if (const auto* infix =
-                         dynamic_cast<const query::InfixPredicate*>(
-                             first_term)) {
-            alias = std::string(infix->GetIdentifier());
-          } else if (const auto* fuzzy =
-                         dynamic_cast<const query::FuzzyPredicate*>(
-                             first_term)) {
-            alias = std::string(fuzzy->GetIdentifier());
-          }
-        }
-      } else if (const auto* term =
-                     dynamic_cast<const query::TermPredicate*>(text)) {
-        // Use identifier instead of alias to avoid string_view lifetime issues
-        alias = std::string(term->GetIdentifier());
-      } else if (const auto* prefix =
-                     dynamic_cast<const query::PrefixPredicate*>(text)) {
-        alias = std::string(prefix->GetIdentifier());
-      } else if (const auto* suffix =
-                     dynamic_cast<const query::SuffixPredicate*>(text)) {
-        alias = std::string(suffix->GetIdentifier());
-      } else if (const auto* infix =
-                     dynamic_cast<const query::InfixPredicate*>(text)) {
-        alias = std::string(infix->GetIdentifier());
-      } else if (const auto* fuzzy =
-                     dynamic_cast<const query::FuzzyPredicate*>(text)) {
-        alias = std::string(fuzzy->GetIdentifier());
-      }
-      result += indent_str + "TEXT(" + alias + ")\n";
+      // Get field_mask from the text predicate
+      std::string field_mask_str = std::to_string(text->GetFieldMask());
+      result += indent_str + "TEXT(" + field_mask_str + ")\n";
       break;
     }
     default:
@@ -239,11 +195,11 @@ TEST_P(FilterTest, ParseParams) {
 
   // Print both expected and actual structures if expected is provided
   if (!test_case.expected_tree_structure.empty()) {
-    std::cout << "Filter: " << test_case.filter << std::endl;
-    std::cout << "Expected Tree Structure:" << std::endl;
-    std::cout << test_case.expected_tree_structure << std::endl;
-    std::cout << "Actual Tree Structure:" << std::endl;
-    std::cout << actual_tree << std::endl;
+    // std::cout << "Filter: " << test_case.filter << std::endl;
+    // std::cout << "Expected Tree Structure:" << std::endl;
+    // std::cout << test_case.expected_tree_structure << std::endl;
+    // std::cout << "Actual Tree Structure:" << std::endl;
+    // std::cout << actual_tree << std::endl;
 
     // Compare expected vs actual tree structure
     EXPECT_EQ(actual_tree, test_case.expected_tree_structure)
@@ -944,14 +900,14 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@text_field1:word",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "TEXT(text_field1)\n",
+            .expected_tree_structure = "TEXT(1)\n",
         },
         {
             .test_name = "exact_prefix",
             .filter = "@text_field1:word*",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "TEXT(text_field1)\n",
+            .expected_tree_structure = "TEXT(1)\n",
         },
         {
             .test_name = "exact_suffix",
@@ -990,7 +946,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@text_field1:\"hello my name is\"",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "TEXT(text_field1)\n",
+            .expected_tree_structure = "TEXT(1)\n",
         },
         {
             .test_name = "proximity2",
@@ -998,7 +954,13 @@ INSTANTIATE_TEST_SUITE_P(
                       "@text_field2:is",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "TEXT(text_field1)\n",
+            .expected_tree_structure = "AND\n"
+                                       "{\n"
+                                       "  TEXT(1)\n"
+                                       "  TEXT(2)\n"
+                                       "  TEXT(1)\n"
+                                       "  TEXT(2)\n"
+                                       "}\n",
         },
         {
             .test_name = "default_field_text",
@@ -1079,9 +1041,7 @@ INSTANTIATE_TEST_SUITE_P(
                 "@tag_field_1:{books} @text_field2:Neural | "
                 "@text_field1:%%%word%%% @text_field2:network",
             .create_success = false,
-            .create_expected_error_message =
-                "Invalid range: Value above maximum; Query string is too "
-                "complex: max number of terms can't exceed 16",
+            .create_expected_error_message = "Unsupported query operation",
         },
         {
             .test_name = "invalid_fuzzy1",

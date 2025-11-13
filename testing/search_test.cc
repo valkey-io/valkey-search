@@ -202,12 +202,15 @@ void InitIndexSchema(MockIndexSchema* index_schema) {
 
   VMSDK_EXPECT_OK(index_schema->AddIndex("tag_index_100_15", "tag_index_100_15",
                                          tag_index_100_15));
-  PatriciaTree<InternedStringPtr, InternedStringPtrHash, InternedStringPtrEqual>
+  // Use static to ensure these variables persist beyond function scope
+  // since they're captured by reference in lambdas that execute later
+  static PatriciaTree<InternedStringPtr, InternedStringPtrHash,
+                      InternedStringPtrEqual>
       tree(false);
-  absl::flat_hash_set<PatriciaNode<InternedStringPtr, InternedStringPtrHash,
-                                   InternedStringPtrEqual>*>
+  static absl::flat_hash_set<PatriciaNode<
+      InternedStringPtr, InternedStringPtrHash, InternedStringPtrEqual>*>
       entries;
-  InternedStringSet untracked_keys;
+  static InternedStringSet untracked_keys;
   EXPECT_CALL(*tag_index_100_15, Search(_, false))
       .WillRepeatedly([&tree, &entries, &untracked_keys]() {
         return std::make_unique<TestedTagEntriesFetcher>(15, tree, entries,
@@ -276,24 +279,9 @@ std::string PrintPredicateTree(const query::Predicate* predicate,
     }
     case query::PredicateType::kText: {
       const auto* text = static_cast<const query::TextPredicate*>(predicate);
-      // Try different text predicate types to get the alias
-      std::string alias = "unknown";
-      if (const auto* term = dynamic_cast<const query::TermPredicate*>(text)) {
-        alias = std::string(term->GetAlias());
-      } else if (const auto* prefix =
-                     dynamic_cast<const query::PrefixPredicate*>(text)) {
-        alias = std::string(prefix->GetAlias());
-      } else if (const auto* suffix =
-                     dynamic_cast<const query::SuffixPredicate*>(text)) {
-        alias = std::string(suffix->GetAlias());
-      } else if (const auto* infix =
-                     dynamic_cast<const query::InfixPredicate*>(text)) {
-        alias = std::string(infix->GetAlias());
-      } else if (const auto* fuzzy =
-                     dynamic_cast<const query::FuzzyPredicate*>(text)) {
-        alias = std::string(fuzzy->GetAlias());
-      }
-      result += indent_str + "TEXT(" + alias + ")\n";
+      // Get field_mask from the text predicate
+      std::string field_mask_str = std::to_string(text->GetFieldMask());
+      result += indent_str + "TEXT(" + field_mask_str + ")\n";
       break;
     }
     default:
@@ -316,11 +304,11 @@ TEST_P(EvaluateFilterAsPrimaryTest, ParseParams) {
       PrintPredicateTree(filter_parse_results.value().root_predicate.get());
 
   // Print both expected and actual structures
-  std::cout << "Filter: " << test_case.filter << std::endl;
-  std::cout << "Expected Tree Structure:" << std::endl;
-  std::cout << test_case.expected_tree_structure << std::endl;
-  std::cout << "Actual Tree Structure:" << std::endl;
-  std::cout << actual_tree << std::endl;
+  // std::cout << "Filter: " << test_case.filter << std::endl;
+  // std::cout << "Expected Tree Structure:" << std::endl;
+  // std::cout << test_case.expected_tree_structure << std::endl;
+  // std::cout << "Actual Tree Structure:" << std::endl;
+  // std::cout << actual_tree << std::endl;
 
   // Compare expected vs actual tree structure
   EXPECT_EQ(actual_tree, test_case.expected_tree_structure)

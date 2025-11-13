@@ -9,6 +9,7 @@
 
 #include "src/coordinator/metadata_manager.h"
 #include "src/schema_manager.h"
+#include "vmsdk/src/debug.h"
 
 namespace valkey_search::query::cluster_info_fanout {
 
@@ -26,18 +27,20 @@ ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(
       backfill_complete_percent_max_(0.0f),
       backfill_complete_percent_min_(0.0f),
       backfill_in_progress_(false) {
-  // Get expected fingerprint/version from local metadata
-  auto global_metadata =
-      coordinator::MetadataManager::Instance().GetGlobalMetadata();
-  if (global_metadata->type_namespace_map().contains(
-          kSchemaManagerMetadataTypeName)) {
-    const auto& entry_map = global_metadata->type_namespace_map().at(
-        kSchemaManagerMetadataTypeName);
-    if (entry_map.entries().contains(index_name_)) {
-      const auto& entry = entry_map.entries().at(index_name_);
-      expected_fingerprint_version_.emplace();
-      expected_fingerprint_version_->set_fingerprint(entry.fingerprint());
-      expected_fingerprint_version_->set_version(entry.version());
+  if (enable_consistency_) {
+    // Get expected fingerprint/version from local metadata
+    auto global_metadata =
+        coordinator::MetadataManager::Instance().GetGlobalMetadata();
+    if (global_metadata->type_namespace_map().contains(
+            kSchemaManagerMetadataTypeName)) {
+      const auto& entry_map = global_metadata->type_namespace_map().at(
+          kSchemaManagerMetadataTypeName);
+      if (entry_map.entries().contains(index_name_)) {
+        const auto& entry = entry_map.entries().at(index_name_);
+        expected_fingerprint_version_.emplace();
+        expected_fingerprint_version_->set_fingerprint(entry.fingerprint());
+        expected_fingerprint_version_->set_version(entry.version());
+      }
     }
   }
 }
@@ -59,9 +62,12 @@ ClusterInfoFanoutOperation::GenerateRequest(
   req.set_db_num(db_num_);
   req.set_index_name(index_name_);
 
-  if (expected_fingerprint_version_.has_value()) {
-    *req.mutable_index_fingerprint_version() =
-        expected_fingerprint_version_.value();
+  if (enable_consistency_) {
+    req.set_enable_consistency(true);
+    if (expected_fingerprint_version_.has_value()) {
+      *req.mutable_index_fingerprint_version() =
+          expected_fingerprint_version_.value();
+    }
   }
 
   return req;
@@ -126,7 +132,11 @@ void ClusterInfoFanoutOperation::InvokeRemoteRpc(
 int ClusterInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
                                               ValkeyModuleString** argv,
                                               int argc) {
-  if (!index_name_error_nodes.empty() || !communication_error_nodes.empty() ||
+  VMSDK_LOG(NOTICE, nullptr)
+      << "In cluster info fanout operation, enable partial results is"
+      << enable_partial_results_;
+  if (!index_name_error_nodes.empty() ||
+      (!enable_partial_results_ && !communication_error_nodes.empty()) ||
       !inconsistent_state_error_nodes.empty()) {
     return FanoutOperationBase::GenerateErrorReply(ctx);
   }

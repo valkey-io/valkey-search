@@ -32,22 +32,24 @@ class DropConsistencyCheckFanoutOperation
       : query::fanout::FanoutOperationBase<
             coordinator::InfoIndexPartitionRequest,
             coordinator::InfoIndexPartitionResponse,
-            vmsdk::cluster_map::FanoutTargetMode::kAll>(false, false),
+            vmsdk::cluster_map::FanoutTargetMode::kAll>(false, true),
         db_num_(db_num),
         index_name_(index_name),
         timeout_ms_(timeout_ms) {
-    // Get expected fingerprint/version from local metadata
-    auto global_metadata =
-        coordinator::MetadataManager::Instance().GetGlobalMetadata();
-    if (global_metadata->type_namespace_map().contains(
-            kSchemaManagerMetadataTypeName)) {
-      const auto& entry_map = global_metadata->type_namespace_map().at(
-          kSchemaManagerMetadataTypeName);
-      if (entry_map.entries().contains(index_name_)) {
-        const auto& entry = entry_map.entries().at(index_name_);
-        expected_fingerprint_version_.emplace();
-        expected_fingerprint_version_->set_fingerprint(entry.fingerprint());
-        expected_fingerprint_version_->set_version(entry.version());
+    if (enable_consistency_) {
+      // Get expected fingerprint/version from local metadata
+      auto global_metadata =
+          coordinator::MetadataManager::Instance().GetGlobalMetadata();
+      if (global_metadata->type_namespace_map().contains(
+              kSchemaManagerMetadataTypeName)) {
+        const auto& entry_map = global_metadata->type_namespace_map().at(
+            kSchemaManagerMetadataTypeName);
+        if (entry_map.entries().contains(index_name_)) {
+          const auto& entry = entry_map.entries().at(index_name_);
+          expected_fingerprint_version_.emplace();
+          expected_fingerprint_version_->set_fingerprint(entry.fingerprint());
+          expected_fingerprint_version_->set_version(entry.version());
+        }
       }
     }
   };
@@ -65,9 +67,12 @@ class DropConsistencyCheckFanoutOperation
     req.set_db_num(db_num_);
     req.set_index_name(index_name_);
 
-    if (expected_fingerprint_version_.has_value()) {
-      *req.mutable_index_fingerprint_version() =
-          expected_fingerprint_version_.value();
+    if (enable_consistency_) {
+      req.set_enable_consistency(true);
+      if (expected_fingerprint_version_.has_value()) {
+        *req.mutable_index_fingerprint_version() =
+            expected_fingerprint_version_.value();
+      }
     }
 
     return req;

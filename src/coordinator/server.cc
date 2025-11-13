@@ -283,47 +283,52 @@ Service::GenerateInfoResponse(
     return std::make_pair(error_status, response);
   }
 
-  // Get local fingerprint/version
-  auto global_metadata =
-      coordinator::MetadataManager::Instance().GetGlobalMetadata();
-  if (!global_metadata->type_namespace_map().contains(
-          kSchemaManagerMetadataTypeName)) {
-    response.set_exists(false);
-    response.set_index_name(index_name);
-    response.set_error(status_or_schema.status().ToString());
-    response.set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
-    grpc::Status error_status(grpc::StatusCode::NOT_FOUND,
-                              status_or_schema.status().ToString());
-    return std::make_pair(error_status, response);
-  }
-  const auto& entry_map =
-      global_metadata->type_namespace_map().at(kSchemaManagerMetadataTypeName);
-  if (!entry_map.entries().contains(index_name)) {
-    response.set_exists(false);
-    response.set_index_name(index_name);
-    response.set_error(status_or_schema.status().ToString());
-    response.set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
-    grpc::Status error_status(grpc::StatusCode::NOT_FOUND,
-                              status_or_schema.status().ToString());
-    return std::make_pair(error_status, response);
-  }
-  const auto& entry = entry_map.entries().at(index_name);
+  if (request.enable_consistency()) {
+    // Get local fingerprint/version
+    auto global_metadata =
+        coordinator::MetadataManager::Instance().GetGlobalMetadata();
 
-  // Compare with expected fingerprint/version if provided
-  if (request.has_index_fingerprint_version()) {
-    const auto& expected = request.index_fingerprint_version();
-    if (expected.fingerprint() != entry.fingerprint() ||
-        expected.version() != entry.version()) {
+    CHECK(global_metadata->type_namespace_map().contains(
+        kSchemaManagerMetadataTypeName));
+
+    const auto& entry_map = global_metadata->type_namespace_map().at(
+        kSchemaManagerMetadataTypeName);
+
+    // Check if index exists in entry map
+    if (!entry_map.entries().contains(index_name)) {
+      response.set_exists(false);
+      response.set_index_name(index_name);
+      response.set_error(status_or_schema.status().ToString());
+      response.set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
+      return std::make_pair(grpc::Status(grpc::StatusCode::NOT_FOUND,
+                                         status_or_schema.status().ToString()),
+                            response);
+    }
+
+    const auto& entry = entry_map.entries().at(index_name);
+
+    auto set_inconsistent_error = [&]() {
       response.set_exists(true);
       response.set_index_name(index_name);
       response.set_error("Index fingerprint/version mismatch");
       response.set_error_type(
           coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR);
-      VMSDK_LOG(NOTICE, nullptr) << "DEBUG: Fingerprint or version mismatch at server.cc";
+      VMSDK_LOG(NOTICE, nullptr)
+          << "DEBUG: Fingerprint or version mismatch at server.cc";
       grpc::Status error_status(
           grpc::StatusCode::FAILED_PRECONDITION,
           "Cluster not in a consistent state, please retry.");
       return std::make_pair(error_status, response);
+    };
+
+    if (!request.has_index_fingerprint_version()) {
+      return set_inconsistent_error();
+    } else {
+      const auto& expected = request.index_fingerprint_version();
+      if (expected.fingerprint() != entry.fingerprint() ||
+          expected.version() != entry.version()) {
+        return set_inconsistent_error();
+      }
     }
   }
 

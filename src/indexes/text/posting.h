@@ -38,6 +38,7 @@ Key.
 #include <string>
 #include <vector>
 
+#include "absl/container/btree_map.h"
 #include "src/indexes/text/flat_position_map.h"
 #include "src/utils/string_interning.h"
 
@@ -121,13 +122,13 @@ struct Postings {
     friend struct Postings;
 
     // Iterator state - pointer to key_to_positions map
-    const std::map<Key, FlatPositionMap>* key_map_;
-    std::map<Key, FlatPositionMap>::const_iterator current_;
-    std::map<Key, FlatPositionMap>::const_iterator end_;
+    const absl::btree_map<Key, FlatPositionMap>* key_map_;
+    absl::btree_map<Key, FlatPositionMap>::const_iterator current_;
+    absl::btree_map<Key, FlatPositionMap>::const_iterator end_;
   };
 
  private:
-  std::map<Key, FlatPositionMap> key_to_positions_;
+  absl::btree_map<Key, FlatPositionMap> key_to_positions_;
 };
 
 }  // namespace valkey_search::indexes::text

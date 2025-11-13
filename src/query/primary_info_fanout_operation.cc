@@ -98,6 +98,7 @@ void PrimaryInfoFanoutOperation::OnResponse(
     return;
   }
 
+  absl::MutexLock lock(&mutex_);
   exists_ = true;
   num_docs_ += resp.num_docs();
   num_records_ += resp.num_records();

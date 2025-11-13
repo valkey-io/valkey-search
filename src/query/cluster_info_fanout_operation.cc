@@ -89,6 +89,7 @@ void ClusterInfoFanoutOperation::OnResponse(
     return;
   }
 
+  absl::MutexLock lock(&mutex_);
   exists_ = true;
   float node_percent = resp.backfill_complete_percent();
   if (backfill_complete_percent_max_ < node_percent) {

@@ -12,7 +12,8 @@ extend-ignore-re = [
     "Grea.*",
     "opposit",
     "uniqu",
-    "worl*"
+    "worl*",
+    "*unning"
 ]
 [default.extend-words]
 Fo = "Fo"

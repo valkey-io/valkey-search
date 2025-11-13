@@ -48,6 +48,8 @@ EvaluationResult TermPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const std::shared_ptr<valkey_search::InternedString>& target_key) const {
   uint64_t field_mask = field_mask_;
+  VMSDK_LOG(WARNING, nullptr)
+        << "In TermPredicate " << term_ << " " << exact_;
 
   auto word_iter = text_index.prefix_.GetWordIterator(term_);
   if (word_iter.Done()) {
@@ -337,8 +339,11 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     EvaluationResult lhs = lhs_predicate_->Evaluate(evaluator);
     VMSDK_LOG(DEBUG, nullptr)
         << "Inline evaluate AND predicate lhs: " << lhs.matches;
+
     // Short-circuit for AND
     if (!lhs.matches) {
+      VMSDK_LOG(WARNING, nullptr)
+        << "Short circuit LHS ";
       return EvaluationResult(false);
     }
 
@@ -347,23 +352,49 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
         << "Inline evaluate AND predicate rhs: " << rhs.matches;
     // Short-circuit for AND
     if (!rhs.matches) {
+     VMSDK_LOG(WARNING, nullptr)
+        << "Short circuit RHS ";
       return EvaluationResult(false);
     }
+
+  // Temp logs: Log iterator types and keys
+  // VMSDK_LOG(WARNING, nullptr)
+  //     << "Begin LHS iterator type: " << typeid(*lhs.filter_iterator).name()
+  //     << " CurrentKey: " << lhs.filter_iterator->CurrentKey()->Str();
+  // VMSDK_LOG(WARNING, nullptr)
+  //     << "Begin RHS iterator type: " << typeid(*rhs.filter_iterator).name()
+  //     << " CurrentKey: " << rhs.filter_iterator->CurrentKey()->Str();
 
     // Proximity check: Only if slop/inorder set and both sides have
     // iterators. This ensures we only check proximity for text predicates,
     // not numeric/tag.
+    VMSDK_LOG(WARNING, nullptr)
+        << "In predicate composed AND predicate slop: " << slop_.has_value() << " inorder_ value:" << inorder_.has_value();
     if (slop_.has_value() && inorder_.has_value() && lhs.filter_iterator &&
         rhs.filter_iterator) {
-      auto lhs_key = lhs.filter_iterator->CurrentKey();
-      auto rhs_key = rhs.filter_iterator->CurrentKey();
+    VMSDK_LOG(WARNING, nullptr)
+                  << "Hits proximity logic in composed AND";
+  
+  // Log iterator types and keys
+  VMSDK_LOG(WARNING, nullptr)
+      << "LHS iterator type: " << typeid(*lhs.filter_iterator).name()
+      << " CurrentKey: " << lhs.filter_iterator->CurrentKey()->Str();
+  VMSDK_LOG(WARNING, nullptr)
+      << "RHS iterator type: " << typeid(*rhs.filter_iterator).name()
+      << " CurrentKey: " << rhs.filter_iterator->CurrentKey()->Str();
 
-      // If iterators are on different keys, one of them advanced beyond the
-      // target This means the target document doesn't satisfy the proximity
-      // constraints
-      if (lhs_key != rhs_key) {
-        return EvaluationResult(false);
-      }
+  //       // Capture the target key from LHS (should be the document being evaluated)
+  // auto lhs_key = lhs.filter_iterator->CurrentKey();
+  // auto rhs_key = rhs.filter_iterator->CurrentKey();
+  
+  // // If iterators are on different keys, one of them advanced beyond the target
+  // // This means the target document doesn't satisfy the proximity constraints
+  // if (lhs_key != rhs_key) {
+  //   VMSDK_LOG(WARNING, nullptr)
+  //       << "Iterators on different keys: LHS=" << lhs_key->Str()
+  //       << " RHS=" << rhs_key->Str() << " - rejecting";
+  //   return EvaluationResult(false);
+  // }
 
       // Get field_mask from lhs iterator
       uint64_t field_mask = lhs.filter_iterator->FieldMask();
@@ -377,11 +408,28 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
       auto proximity_iterator =
           std::make_unique<indexes::text::ProximityIterator>(
               std::move(iterators), *slop_, *inorder_, field_mask, nullptr);
+      
+      // VMSDK_LOG(WARNING, nullptr)
+      //     << "proximity iterator1. current key" << proximity_iterator.get()->CurrentKey()->Str();
 
       // Check if any valid proximity matches exist
       if (proximity_iterator->DonePositions()) {
+            VMSDK_LOG(WARNING, nullptr)
+                  << "Hits proximity logic in compsed AND >>> DonePositions()";
         return EvaluationResult(false);
       }
+      // Validate against original target key from evaluator
+      auto target_key = evaluator.GetTargetKey();
+      if (target_key && proximity_iterator->CurrentKey() != target_key) {
+        VMSDK_LOG(WARNING, nullptr)
+            << "Proximity iterator advanced past our target key";
+        return EvaluationResult(false);
+      }
+
+
+      VMSDK_LOG(WARNING, nullptr)
+          << "proximity iterator. current key" << proximity_iterator.get()->CurrentKey()->Str();
+
 
       // Return the proximity iterator for potential nested use.
       return EvaluationResult(true, std::move(proximity_iterator));

@@ -86,9 +86,20 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           auto rhs_predicate,
           GRPCPredicateToPredicate(predicate.and_().rhs(), index_schema,
                                    attribute_identifiers));
+
+      // Extract slop and inorder if present
+      std::optional<uint32_t> slop = std::nullopt;
+      std::optional<bool> inorder = std::nullopt;
+      if (predicate.and_().has_slop()) {
+        slop = predicate.and_().slop();
+      }
+      if (predicate.and_().has_inorder()) {
+        inorder = predicate.and_().inorder();
+      }
+
       return std::make_unique<query::ComposedPredicate>(
           std::move(lhs_predicate), std::move(rhs_predicate),
-          query::LogicalOperator::kAnd);
+          query::LogicalOperator::kAnd, slop, inorder);
     }
     case Predicate::kOr: {
       VMSDK_ASSIGN_OR_RETURN(
@@ -279,6 +290,17 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
       and_predicate_proto->mutable_and_()->set_allocated_rhs(
           PredicateToGRPCPredicate(*composed_and_predicate->GetRhsPredicate())
               .release());
+
+      // Add slop and inorder if present
+      if (composed_and_predicate->GetSlop().has_value()) {
+        and_predicate_proto->mutable_and_()->set_slop(
+            composed_and_predicate->GetSlop().value());
+      }
+      if (composed_and_predicate->GetInorder().has_value()) {
+        and_predicate_proto->mutable_and_()->set_inorder(
+            composed_and_predicate->GetInorder().value());
+      }
+
       return and_predicate_proto;
     }
     case query::PredicateType::kComposedOr: {

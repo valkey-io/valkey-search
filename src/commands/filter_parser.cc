@@ -107,11 +107,15 @@ void PrintPredicate(const query::Predicate* pred, int depth, bool last,
     case query::PredicateType::kComposedAnd:
     case query::PredicateType::kComposedOr: {
       const auto* comp = dynamic_cast<const query::ComposedPredicate*>(pred);
-      VMSDK_LOG(WARNING, nullptr)
-          << prefix
-          << (pred->GetType() == query::PredicateType::kComposedAnd ? "AND"
-                                                                    : "OR")
-          << "\n";
+
+      std::string log_msg = (pred->GetType() == query::PredicateType::kComposedAnd ? "AND" : "OR");
+      log_msg += " (slop=";
+      log_msg += comp->GetSlop().has_value() ? std::to_string(comp->GetSlop().value()) : "Not_set";
+      log_msg += ", inorder=";
+      log_msg += comp->GetInorder().has_value() ? std::to_string(comp->GetInorder().value()) : "Not_set";
+      log_msg += ")\n";
+      // Log the predicate type along with slop and inorder
+      VMSDK_LOG(WARNING, nullptr) << prefix << log_msg; 
       // Flatten same-type children for better readability
       std::vector<const query::Predicate*> children;
       std::function<void(const query::Predicate*)> collect =
@@ -436,16 +440,23 @@ inline std::unique_ptr<query::Predicate> MayNegatePredicate(
   return predicate;
 }
 
-std::unique_ptr<query::Predicate> WrapPredicate(
+std::unique_ptr<query::Predicate> FilterParser::WrapPredicate(
     std::unique_ptr<query::Predicate> prev_predicate,
     std::unique_ptr<query::Predicate> predicate, bool& negate,
     query::LogicalOperator logical_operator) {
   if (!prev_predicate) {
     return MayNegatePredicate(std::move(predicate), negate);
   }
+  std::optional<uint32_t> slop = options_.slop;
+  std::optional<bool> inorder = options_.inorder;
+  // Temp logging
+  VMSDK_LOG(WARNING, nullptr) << "In FilterParser::WrapPredicate >> Slop is " 
+      << (slop.has_value() ? std::to_string(slop.value()) : "not_set")
+      << " Inorder is "
+      << (inorder.has_value() ? std::to_string(inorder.value()) : "not_set");
   return std::make_unique<query::ComposedPredicate>(
       std::move(prev_predicate),
-      MayNegatePredicate(std::move(predicate), negate), logical_operator);
+      MayNegatePredicate(std::move(predicate), negate), logical_operator, slop, inorder);
 };
 
 static const uint32_t FUZZY_MAX_DISTANCE = 3;
@@ -752,7 +763,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
       // TODO: Uncomment this once we have ComposedAND evaluation functional for
       // handling proximity checks. Until the, we handle unquoted text tokens
       // by building a proximity predicate containing them.
-      // if (!exact_phrase) break;
+      if (!exact_phrase) break;
     }
     if (result.break_on_query_syntax) {
       break;
@@ -765,17 +776,32 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
   }
   std::unique_ptr<query::Predicate> pred;
   if (terms.size() > 1) {
+    VMSDK_LOG(WARNING, nullptr) << "terms.size() > 1";
     uint32_t slop = options_.slop.value_or(0);
     bool inorder = options_.inorder;
+    // std::optional<uint32_t> slop = std::nullopt;
+    // std::optional<bool> inorder = std::nullopt;
     if (exact_phrase) {
       slop = 0;
       inorder = true;
+      VMSDK_LOG(WARNING, nullptr) << "EXACT PHRASE: slop=" << slop << " inorder=" << inorder;
     }
     // TODO: Swap ProximityPredicate with ComposedANDPredicate once it is
     // flattened. Once that happens, we need to add slop and inorder properties
     // to ComposedANDPredicate.
-    pred = std::make_unique<query::ProximityPredicate>(std::move(terms), slop,
-                                                       inorder);
+    VMSDK_LOG(WARNING, nullptr) << "Composed  predicate filter case : slop=" << slop << " inorder=" << inorder;
+    pred = std::move(terms.front());  // term 0
+    for (size_t i = 1; i < terms.size(); ++i) {
+      pred = std::make_unique<query::ComposedPredicate>(
+          std::move(pred),      // lhs: accumulated tree so far
+          std::move(terms[i]),  // rhs: next term
+          query::LogicalOperator::kAnd,
+          /*slop=*/slop,
+          /*inorder=*/inorder);
+    }
+
+    // pred = std::make_unique<query::ProximityPredicate>(std::move(terms),
+    // slop, inorder);
     node_count_ += terms.size();
   } else {
     if (terms.empty()) {

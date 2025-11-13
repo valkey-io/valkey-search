@@ -84,6 +84,8 @@ message ProximityPredicate {
 message AndPredicate {
   Predicate lhs = 1;
   Predicate rhs = 2;
+  optional uint32 slop = 3;
+  optional bool inorder = 4;
 }
 
 message OrPredicate {

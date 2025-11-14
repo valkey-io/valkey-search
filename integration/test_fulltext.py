@@ -125,9 +125,10 @@ def validate_fulltext_search(client: Valkey):
     result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn gr*')
     assert result3[0] == 1
     assert result3[1] == b"product:1"
-    result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn grea*')
+    # Perform composed AND with Slop and inorder specified.
+    result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn grea*', "SLOP", "0", "INORDER")
     assert result3[0] == 0
-    result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn great')
+    result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn great', "SLOP", "0", "INORDER")
     assert result3[0] == 0
     # Perform an exact phrase search operation on a phrase existing in 2 documents.
     result = client.execute_command("FT.SEARCH", "products", '@desc:"interest desc"')
@@ -726,6 +727,110 @@ class TestFullText(ValkeySearchTestCaseBase):
         result = self.client.execute_command("FT.SEARCH", "idx", "*unning")
         assert result[0] == 1  # Only doc:1 is matched for "running"
         assert result[1] == b'doc:1'
+
+    def test_mixed_predicates(self):
+        """
+        Test queries with mixed text, numeric, and tag predicates.
+        Tests there is no regression with predicate evaluator changes for text.
+        """
+        client: Valkey = self.server.get_new_client()
+        
+        # Index with text, numeric, and tag fields
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "content", "TEXT", "NOSTEM","title", "TEXT", "NOSTEM", "Addr", "TEXT", "NOSTEM",
+                            "salary", "NUMERIC", 
+                            "skills", "TAG", "SEPARATOR", "|")
+        
+        # Test documents
+        client.execute_command("HSET", "doc:1", "content", "software engineer developer", "title", "Title:1", "Addr", "12 Apt ABC", "salary", "100000", "skills", "python|java")
+        client.execute_command("HSET", "doc:2", "content", "software development manager", "title", "Title:2", "Addr", "12 Apt EFG", "salary", "120000", "skills", "python|ml|leadership")
+        client.execute_command("HSET", "doc:3", "content", "product manager", "title", "Title:2", "Addr", "12 Apt EFG", "salary", "90000", "skills", "strategy|leadership")
+        
+        # Test 1: Text + Numeric (AND)
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"manager" @salary:[90000 110000]')
+        assert result[0] == 1  # Should find doc:1
+
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"manager" @salary:[90000 130000]')
+        assert result[0] == 2  # Should find doc:2, doc:3
+        
+        # Test 1.1: Text prefix + Numeric (AND)
+        result = client.execute_command("FT.SEARCH", "idx", '@content:develop* @salary:[90000 110000]')
+        assert result[0] == 1  # Should find doc:1
+
+        # Test 2: Text + Tag (OR) 
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"product" | @skills:{java}')
+        assert result[0] == 2  # Should find doc:1 (java) and doc:2 (scientist)
+        
+        # Test 3: All three types (complex OR)
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"manager" | @salary:[115000 125000] | @skills:{python}')
+        assert result[0] == 3  # Should find all docs
+        
+        # Test 4: All three types (complex AND) 
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"engineer" @salary:[90000 110000] @skills:{python}')
+        assert result[0] == 1  # Should find doc:1 only
+        
+        # # Test 5: Negation with mixed types
+        # result = client.execute_command("FT.SEARCH", "idx", '-@content:"manager" @skills:{python}')
+        # assert result[0] == 1  # Should find doc:1 only
+
+    def test_proximity_predicate(self):
+        client: Valkey = self.server.get_new_client()
+        # Create index with text fields
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
+                            "content", "TEXT", "NOSTEM")
+
+        client.execute_command("HSET", "doc:1", "content", "alpha beta gamma delta epsilon")
+        client.execute_command("HSET", "doc:2", "content", "alpha word beta word gamma")
+        client.execute_command("HSET", "doc:3", "content", "gamma beta alpha")
+        client.execute_command("HSET", "doc:4", "content", "alpha word word word beta")
+        client.execute_command("HSET", "doc:5", "content", "alpha word word word beta word word word gamma")
+        client.execute_command("HSET", "doc:7", "content", "gamma delta")
+        client.execute_command("HSET", "doc:8", "content", "gamma word beta word word word alpha")
+
+        # Test Set 1 : Exact phrase (slop=0 and inorder=true are implicit)
+        # Test 1.1: Two-term exact phrase
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"alpha beta"')
+        assert (result[0], result[1]) == (1, b"doc:1") # Only doc:1
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"alpha gamma"')
+        assert result[0] == 0  # No match (gap between words)
+        # Test 1.2: Three-term exact phrase
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"alpha beta gamma"')
+        assert (result[0], result[1]) == (1, b"doc:1") # Only doc:1
+        # Test 1.4: Four-term exact phrase
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"alpha beta gamma delta"')
+        assert (result[0], result[1]) == (1, b"doc:1") # Only doc:1
+
+        # Test Set 2 : Composed AND query
+        # Test 2.1: Two terms With slop 0 and inorder
+        result = client.execute_command("FT.SEARCH", "idx", 'beta alpha', "slop", "0", "inorder")
+        assert (result[0], result[1]) == (1, b"doc:3") # Only doc:3
+        # Test 2.2: Three terms With slop 0 and inorder
+        result = client.execute_command("FT.SEARCH", "idx", 'gamma beta alpha', "slop", "0", "inorder")
+        assert (result[0], result[1]) == (1, b"doc:3") # Only doc:1
+        # Test 2.3: Three terms With slop 0 but no order.
+        result = client.execute_command("FT.SEARCH", "idx", 'gamma beta alpha', "slop", "0")
+        assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:3"})
+
+        # Test 2.4: Three terms With slop 1 and inorder
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "1", "inorder")
+        assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:2"})
+        # Test 2.5: Three terms With slop 3 and inorder
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "3", "inorder")
+        assert (result[0], set(result[1::2])) == (3, {b"doc:1", b"doc:2", b"doc:5"})
+
+        # Test 2.6: Three terms With slop 1 but no order.
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "1", "inorder")
+        assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:2"})
+        # Test 2.7: Three terms With slop 3 but no order.
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "3")
+        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:5", b"doc:8"})
+
+        # Test 2.8: Three terms but user mentions inorder.  This will no effect on order as there is no slop.
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "inorder")
+        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:5", b"doc:8"})
+
+        # Test 2.9: Three terms but no slop, no order
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma')
+        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:5", b"doc:8"})
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """

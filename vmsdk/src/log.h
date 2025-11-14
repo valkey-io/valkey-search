@@ -68,9 +68,12 @@ static thread_local ValkeyIOLogSink io_log_sink;
 
 }  // namespace vmsdk
 
-#define VMSDK_LOG(log_level, ctx)  \
-  vmsdk::log_sink.SetContext(ctx); \
-  VLOG(static_cast<int>(log_level)).ToSinkOnly(&vmsdk::log_sink)
+#define VMSDK_LOG(log_level, ctx) \
+  if (false) VLOG(static_cast<int>(log_level))
+
+// #define VMSDK_LOG(log_level, ctx)  \
+//   vmsdk::log_sink.SetContext(ctx); \
+//   VLOG(static_cast<int>(log_level)).ToSinkOnly(&vmsdk::log_sink)
 
 #define VMSDK_LOG_EVERY_N(log_level, ctx, n) \
   vmsdk::log_sink.SetContext(ctx);           \

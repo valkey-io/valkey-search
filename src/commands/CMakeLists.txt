@@ -37,7 +37,9 @@ target_link_libraries(commands PUBLIC status_macros)
 target_link_libraries(commands PUBLIC valkey_module)
 
 set(SRCS_FT_SEARCH_PARSER ${CMAKE_CURRENT_LIST_DIR}/ft_search_parser.cc
-                          ${CMAKE_CURRENT_LIST_DIR}/ft_search_parser.h)
+                          ${CMAKE_CURRENT_LIST_DIR}/ft_search_parser.h
+                          ${CMAKE_CURRENT_LIST_DIR}/ft_info_parser.cc
+                          ${CMAKE_CURRENT_LIST_DIR}/ft_info_parser.h)
 
 valkey_search_add_static_library(ft_search_parser "${SRCS_FT_SEARCH_PARSER}")
 target_include_directories(ft_search_parser PUBLIC ${CMAKE_CURRENT_LIST_DIR})

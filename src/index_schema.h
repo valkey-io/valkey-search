@@ -49,6 +49,7 @@ bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
 
 using RDBLoadFunc = void *(*)(ValkeyModuleIO *, int);
 using FreeFunc = void (*)(void *);
+using FieldMaskPredicate = uint64_t;
 
 class IndexSchema : public KeyspaceEventSubscription,
                     public std::enable_shared_from_this<IndexSchema> {
@@ -98,10 +99,12 @@ class IndexSchema : public KeyspaceEventSubscription,
       absl::string_view attribute_alias) const;
   const absl::flat_hash_set<std::string> &GetAllTextIdentifiers(
       bool with_suffix) const;
-  uint64_t GetAllTextFieldMask(bool with_suffix) const;
+  FieldMaskPredicate GetAllTextFieldMask(bool with_suffix) const;
   std::optional<uint32_t> MinStemSizeAcrossTextIndexes(bool with_suffix) const;
   void UpdateTextFieldMasksForIndex(const std::string &identifier,
                                     indexes::IndexBase *index);
+  absl::flat_hash_set<std::string> GetTextIdentifiersByFieldMask(
+      FieldMaskPredicate field_mask) const;
   virtual absl::StatusOr<std::string> GetIdentifier(
       absl::string_view attribute_alias) const;
   absl::StatusOr<std::string> GetAlias(absl::string_view identifier) const;

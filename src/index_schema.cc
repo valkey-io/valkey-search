@@ -322,8 +322,28 @@ std::optional<uint32_t> IndexSchema::MinStemSizeAcrossTextIndexes(
 // Returns the field mask including all the text fields.
 // If `with_suffix` is true, we only include fields that have suffix tree
 // enabled.
-uint64_t IndexSchema::GetAllTextFieldMask(bool with_suffix) const {
+FieldMaskPredicate IndexSchema::GetAllTextFieldMask(bool with_suffix) const {
   return with_suffix ? suffix_text_field_mask_ : all_text_field_mask_;
+}
+
+// Helper function to return the text identifiers based on the
+// FieldMaskPredicate.
+absl::flat_hash_set<std::string> IndexSchema::GetTextIdentifiersByFieldMask(
+    FieldMaskPredicate field_mask) const {
+  absl::flat_hash_set<std::string> matches;
+  for (const auto &identifier : all_text_identifiers_) {
+    auto index_result = GetIndex(identifier);
+    if (index_result.ok() &&
+        index_result.value()->GetIndexerType() == indexes::IndexerType::kText) {
+      auto *text_index =
+          dynamic_cast<const indexes::Text *>(index_result.value().get());
+      FieldMaskPredicate field_bit = 1ULL << text_index->GetTextFieldNumber();
+      if (field_mask & field_bit) {
+        matches.insert(identifier);
+      }
+    }
+  }
+  return matches;
 }
 
 absl::StatusOr<std::string> IndexSchema::GetIdentifier(

@@ -203,7 +203,7 @@ InternedStringPtr Tag::GetRawValue(const InternedStringPtr& key) const {
       it != tracked_tags_by_keys_.end()) {
     return it->second.raw_tag_string;
   }
-  return nullptr;
+  return {};
 }
 
 const absl::flat_hash_set<absl::string_view>* Tag::GetValue(

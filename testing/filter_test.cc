@@ -495,14 +495,14 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@text_field1:*word",
             .create_success = false,
             .create_expected_error_message =
-                "Index created without Suffix Trie",
+                "Field does not support suffix search",
         },
         {
             .test_name = "exact_inffix",
             .filter = "@text_field1:*word*",
             .create_success = false,
             .create_expected_error_message =
-                "Index created without Suffix Trie",
+                "Field does not support suffix search",
         },
         {
             .test_name = "exact_fuzzy1",
@@ -602,8 +602,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "default_field_with_all_operations",
             .filter = "%Hllo%, how are *ou do* *oda*",
             .create_success = false,
-            .create_expected_error_message =
-                "Index created without Suffix Trie",
+            .create_expected_error_message = "Unsupported query operation",
         },
         {
             .test_name = "proximity3",
@@ -659,8 +658,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "invalid_wildcard2",
             .filter = "Hello, how are *you** doing",
             .create_success = false,
-            .create_expected_error_message =
-                "Index created without Suffix Trie",
+            .create_expected_error_message = "Invalid wildcard '*' markers",
         },
         {
             .test_name = "bad_filter_1",

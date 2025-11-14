@@ -49,6 +49,7 @@ bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
 
 using RDBLoadFunc = void *(*)(ValkeyModuleIO *, int);
 using FreeFunc = void (*)(void *);
+using FieldMaskPredicate = uint64_t;
 
 class IndexSchema : public KeyspaceEventSubscription,
                     public std::enable_shared_from_this<IndexSchema> {
@@ -96,8 +97,14 @@ class IndexSchema : public KeyspaceEventSubscription,
   ~IndexSchema() override;
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
       absl::string_view attribute_alias) const;
-  std::vector<std::string> GetAllTextIdentifiers() const;
-  std::optional<uint32_t> MinStemSizeAcrossTextIndexes() const;
+  const absl::flat_hash_set<std::string> &GetAllTextIdentifiers(
+      bool with_suffix) const;
+  FieldMaskPredicate GetAllTextFieldMask(bool with_suffix) const;
+  std::optional<uint32_t> MinStemSizeAcrossTextIndexes(bool with_suffix) const;
+  void UpdateTextFieldMasksForIndex(const std::string &identifier,
+                                    indexes::IndexBase *index);
+  absl::flat_hash_set<std::string> GetTextIdentifiersByFieldMask(
+      FieldMaskPredicate field_mask) const;
   virtual absl::StatusOr<std::string> GetIdentifier(
       absl::string_view attribute_alias) const;
   absl::StatusOr<std::string> GetAlias(absl::string_view identifier) const;
@@ -207,6 +214,13 @@ class IndexSchema : public KeyspaceEventSubscription,
   bool with_offsets_{true};
   std::vector<std::string> stop_words_;
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
+  // Precomputed text field information for searches
+  uint64_t all_text_field_mask_{0ULL};
+  uint64_t suffix_text_field_mask_{0ULL};
+  std::optional<uint32_t> all_fields_min_stem_size_{std::nullopt};
+  std::optional<uint32_t> suffix_fields_min_stem_size_{std::nullopt};
+  absl::flat_hash_set<std::string> all_text_identifiers_;
+  absl::flat_hash_set<std::string> suffix_text_identifiers_;
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   InternedStringMap<DocumentMutation> tracked_mutated_records_

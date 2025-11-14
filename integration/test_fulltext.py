@@ -692,27 +692,40 @@ class TestFullText(ValkeySearchTestCaseBase):
     def test_suffix_search(self):
         """Test suffix search functionality using *suffix pattern"""
         # Create index
-        self.client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "content", "TEXT", "WITHSUFFIXTRIE", "NOSTEM")
+        self.client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "content", "TEXT", "WITHSUFFIXTRIE", "NOSTEM", "extracontent", "TEXT", "NOSTEM")
         # Add test documents
-        self.client.execute_command("HSET", "doc:1", "content", "running jumping walking")
-        self.client.execute_command("HSET", "doc:2", "content", "testing debugging coding")
-        self.client.execute_command("HSET", "doc:3", "content", "reading writing speaking")
-        self.client.execute_command("HSET", "doc:4", "content", "swimming diving surfing")
+        self.client.execute_command("HSET", "doc:1", "content", "running jumping walking", "extracontent", "data1")
+        self.client.execute_command("HSET", "doc:2", "content", "testing debugging coding", "extracontent", "running")
+        self.client.execute_command("HSET", "doc:3", "content", "reading writing speaking", "extracontent", "data2")
+        self.client.execute_command("HSET", "doc:4", "content", "swimming diving surfing", "extracontent", "data3")
         # Test suffix search with *ing
         result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ing")
         assert result[0] == 4  # All documents contain words ending with 'ing'
         # Test suffix search with *ing (should match running, jumping, walking, etc.)
         result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ning")
         assert result[0] == 1  # Only doc:1 has "running"
+        assert result[1] == b'doc:1'
         # Test suffix search with *ing
         result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ping")
         assert result[0] == 1  # Only doc:1 has "jumping"
+        assert result[1] == b'doc:1'
         # Test suffix search with *ing
         result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ding")
         assert result[0] == 2  # doc:2 has "coding", doc:3 has "reading"
         # Test non-matching suffix
         result = self.client.execute_command("FT.SEARCH", "idx", "@content:*xyz")
         assert result[0] == 0  # No matches
+        # Validate that suffix search on fields not enabled for suffix search are rejected
+        with pytest.raises(ResponseError) as err:
+            result = self.client.execute_command("FT.SEARCH", "idx", "@extracontent:*ata1")
+        assert "Field does not support suffix search" in str(err.value)
+        # Validate that we do not get results from fields which are not enabled with the suffix tree
+        result = self.client.execute_command("FT.SEARCH", "idx", "*ata1")
+        assert result[0] == 0  # No matches
+        # Validate that the default field search only includes results from the fields enabled with suffix.
+        result = self.client.execute_command("FT.SEARCH", "idx", "*unning")
+        assert result[0] == 1  # Only doc:1 is matched for "running"
+        assert result[1] == b'doc:1'
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """

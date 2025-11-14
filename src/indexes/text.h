@@ -44,6 +44,7 @@ class Text : public IndexBase {
   }
   uint32_t GetMinStemSize() const { return min_stem_size_; }
   bool IsStemmingEnabled() const { return !no_stem_; }
+  bool WithSuffixTrie() const { return with_suffix_trie_; }
   absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
                                  absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);

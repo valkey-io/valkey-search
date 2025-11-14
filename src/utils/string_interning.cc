@@ -145,8 +145,8 @@ StringInternStore& StringInternStore::Instance() {
   return *instance;
 }
 
-std::shared_ptr<InternedString> StringInternStore::InternImpl(
-    absl::string_view str, Allocator* allocator) {
+InternedStringPtr StringInternStore::InternImpl(absl::string_view str,
+                                                Allocator* allocator) {
   IsolatedMemoryScope scope{memory_pool_};
   absl::MutexLock lock(&mutex_);
   //

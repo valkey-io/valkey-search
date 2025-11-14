@@ -119,11 +119,16 @@ class InternedStringPtr {
     return *this;
   }
 
-  bool operator==(const InternedStringPtr &other) const {
-    return impl_ == other.impl_;
+  InternedStringPtr &operator=(void *) noexcept {
+    if (impl_) {
+      impl_->DecrementRefCount();
+    }
+    impl_ = nullptr;
+    return *this;
   }
-  bool operator!=(const InternedStringPtr &other) const {
-    return impl_ != other.impl_;
+
+  auto operator<=>(const InternedStringPtr &other) const {
+    return impl_ <=> other.impl_;
   }
 
   InternedString &operator*() { return *impl_; }

@@ -63,7 +63,19 @@ class InternedString {
     }
   }
 
+  //
+  // For stats.
+  //
   bool IsInline() const { return is_inline_; }
+  size_t Allocated() const {
+    auto bytes =
+        ValkeyModule_MallocUsableSize(const_cast<InternedString *>(this));
+    if (!is_inline_) {
+      // Can't actually do a UsableSize of allocated blobs, so use the size.
+      bytes += length_;
+    }
+    return bytes;
+  }
   //
   // Data layout. there's an 8 byte header followed by either the inline
   // string data or a pointer to externally allocated string data.
@@ -119,7 +131,8 @@ class InternedStringPtr {
     return *this;
   }
 
-  InternedStringPtr &operator=(void *) noexcept {
+  InternedStringPtr &operator=(void *other) noexcept {
+    CHECK(!other);  // Only nullptr is allowed
     if (impl_) {
       impl_->DecrementRefCount();
     }
@@ -212,8 +225,9 @@ class StringInternStore {
 
   struct Stats {
     struct BucketStats {
-      size_t count_{0};
-      size_t bytes_{0};
+      size_t count_{0};      // Number of entries in this bucket
+      size_t bytes_{0};      // Total bytes of string data (no overhead)
+      size_t allocated_{0};  // Total bytes of allocated data
     };
     absl::btree_map<int, BucketStats> by_ref_stats_;
     absl::btree_map<int, BucketStats> by_size_stats_;

@@ -131,8 +131,7 @@ bool StringInternStore::Release(InternedString* str) {
 
 InternedStringPtr StringInternStore::Intern(absl::string_view str,
                                             Allocator* allocator) {
-  auto result = Instance().InternImpl(str, allocator);
-  return result;
+  return Instance().InternImpl(str, allocator);
 }
 
 StringInternStore* StringInternStore::MakeInstance() {
@@ -148,7 +147,6 @@ StringInternStore& StringInternStore::Instance() {
 InternedStringPtr StringInternStore::InternImpl(absl::string_view str,
                                                 Allocator* allocator) {
   IsolatedMemoryScope scope{memory_pool_};
-  absl::MutexLock lock(&mutex_);
   //
   // Construct a fake InternedStringPtr to look up in the map.
   // Doing it carefully to avoid modifying refcounts.
@@ -156,6 +154,8 @@ InternedStringPtr StringInternStore::InternImpl(absl::string_view str,
   OutOfLineInternedString fake(str.data(), str.size());
   void* storage;
   InternedStringPtr* ptr_ptr = MakeShadowInternPtrPtr(&fake, storage);
+
+  absl::MutexLock lock(&mutex_);
   auto it = str_to_interned_.find(*ptr_ptr);
   if (it != str_to_interned_.end()) {
     return *it;  // Should bump the refcount automatically.

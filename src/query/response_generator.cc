@@ -92,9 +92,9 @@ class PredicateEvaluator : public query::Evaluator {
         per_key_indexes_(per_key_indexes),
         target_key_(target_key) {}
 
- const std::shared_ptr<InternedString>& GetTargetKey() const override {
+  const std::shared_ptr<InternedString> &GetTargetKey() const override {
     return target_key_;
-  }     
+  }
 
   EvaluationResult EvaluateTags(const query::TagPredicate &predicate) override {
     auto identifier = predicate.GetRetainedIdentifier();
@@ -148,17 +148,6 @@ class PredicateEvaluator : public query::Evaluator {
   EvaluationResult EvaluateTextUsingIndex(
       const query::TextPredicate &predicate) {
     auto it = per_key_indexes_->find(target_key_);
-
-    // Print all available keys in per_key_indexes
-    VMSDK_LOG(WARNING, nullptr)
-        << "Available keys in per_key_indexes (count=" << per_key_indexes_->size() << "):";
-    for (const auto& [key, text_index] : *per_key_indexes_) {
-      VMSDK_LOG(WARNING, nullptr)
-          << "  Key: " << key->Str() << " (ptr=" << key.get() << ")";
-    }
-    VMSDK_LOG(WARNING, nullptr)
-        << "Target key: " << target_key_->Str() << " (ptr=" << target_key_.get() << ")";
-
     if (it == per_key_indexes_->end()) {
       VMSDK_LOG(WARNING, nullptr)
           << "Target key not found in index for predicate evaluation";
@@ -176,8 +165,6 @@ bool VerifyFilter(const query::Predicate *predicate, const RecordsMap &records,
   if (predicate == nullptr) {
     return true;
   }
-    VMSDK_LOG(WARNING, nullptr)
-      << "In VerifyFilter: " << target_key->Str();
   // For text predicates, evaluate using the text index instead of raw data.
   if (parameters.index_schema &&
       parameters.index_schema->GetTextIndexSchema()) {
@@ -185,9 +172,6 @@ bool VerifyFilter(const query::Predicate *predicate, const RecordsMap &records,
     // acquiring the lock, ensuring we evaluate against the latest index state.
     return parameters.index_schema->GetTextIndexSchema()->WithPerKeyTextIndexes(
         [&](auto &per_key_indexes) {
-          VMSDK_LOG(WARNING, nullptr)
-          << "WithPerKeyTextIndexes lambda called for " << target_key->Str()
-          << " - per_key_indexes size: " << per_key_indexes.size();
           PredicateEvaluator evaluator(records, &per_key_indexes, target_key);
           EvaluationResult result = predicate->Evaluate(evaluator);
           return result.matches;

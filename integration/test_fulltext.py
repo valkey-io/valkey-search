@@ -715,7 +715,7 @@ class TestFullText(ValkeySearchTestCaseBase):
         # Test non-matching suffix
         result = self.client.execute_command("FT.SEARCH", "idx", "@content:*xyz")
         assert result[0] == 0  # No matches
-        # Validate that suffix search on fields not enabled fof suffix search are rejected
+        # Validate that suffix search on fields not enabled for suffix search are rejected
         with pytest.raises(ResponseError) as err:
             result = self.client.execute_command("FT.SEARCH", "idx", "@extracontent:*ata1")
         assert "Field does not support suffix search" in str(err.value)

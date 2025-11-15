@@ -66,7 +66,6 @@ absl::Status PausePointControlCmd(ValkeyModuleCtx *ctx,
   }
   std::string point;
   VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, point));
-  point = absl::AsciiStrToUpper(point);
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
   if (keyword == "TEST") {
     auto result = vmsdk::debug::PausePointWaiters(point);

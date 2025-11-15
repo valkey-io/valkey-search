@@ -216,6 +216,7 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         #
         # Now, wait for the mutation queue to get fully loaded
         #
+        print("Mutation queue", self.mutation_queue_size())
         waiters.wait_for_true(lambda: self.mutation_queue_size() == len(records))
         print("MUTATION QUEUE LOADED")
 
@@ -251,6 +252,7 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
     def test_multi_exec_queue(self):
         self.client.execute_command("ft._debug PAUSEPOINT SET block_mutation_queue")
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
+        self.client.execute_command("config set search.writer-threads 20")
         index.create(self.client, True)
         records = make_data()
         #

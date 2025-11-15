@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -71,6 +72,8 @@ static auto config_rdb_read_v2 =
     vmsdk::config::BooleanBuilder("rdb-read-v2", false).Dev().Build();
 static auto config_rdb_validate_on_write =
     vmsdk::config::BooleanBuilder("rdb-validate-on-write", false).Dev().Build();
+static auto config_drain_mutation_queue =
+    vmsdk::config::BooleanBuilder("drain-mutation-queue", true).Dev().Build();
 
 static bool RDBReadV2() {
   return dynamic_cast<vmsdk::config::Boolean &>(*config_rdb_read_v2).GetValue();
@@ -83,6 +86,11 @@ static bool RDBWriteV2() {
 
 static bool RDBValidateOnWrite() {
   return dynamic_cast<vmsdk::config::Boolean &>(*config_rdb_validate_on_write)
+      .GetValue();
+}
+
+static bool DrainMutationQueue() {
+  return dynamic_cast<vmsdk::config::Boolean &>(*config_drain_mutation_queue)
       .GetValue();
 }
 
@@ -1272,6 +1280,17 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
                            << (backfill_job_.Get().has_value()
                                    ? " Backfill still required."
                                    : " Backfill not needed.");
+    if (DrainMutationQueue()) {
+      VMSDK_LOG(NOTICE, ctx) << "Draining Mutation Queue.";
+      while (std::any_of(
+          tracked_mutated_records_.begin(), tracked_mutated_records_.end(),
+          [](const auto &record) { return !record.second.from_backfill; })) {
+        VMSDK_LOG(NOTICE, ctx)
+            << "Draining Mutation Queue, " << tracked_mutated_records_.size()
+            << " entries remaining.";
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+    }
     return;
   }
   // Clean up any potentially stale index entries that can arise from

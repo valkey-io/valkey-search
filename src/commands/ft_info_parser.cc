@@ -115,18 +115,36 @@ absl::Status InfoCommand::Execute(ValkeyModuleCtx *ctx) {
   VMSDK_RETURN_IF_ERROR(
       AclPrefixCheck(ctx, permissions, index_schema->GetKeyPrefixes()));
 
+  const bool is_loading =
+      ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING;
+  const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);
+
   // Execute based on scope
   switch (scope) {
     case InfoScope::kPrimary: {
-      auto op = new query::primary_info_fanout::PrimaryInfoFanoutOperation(
-          ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms);
-      op->StartOperation(ctx);
+      if (is_loading || inside_multi_exec) {
+        VMSDK_LOG(NOTICE, nullptr) << "The server is loading AOF or inside "
+                                      "multi/exec or lua script, skip "
+                                      "fanout operation";
+        index_schema->RespondWithInfo(ctx);
+      } else {
+        auto op = new query::primary_info_fanout::PrimaryInfoFanoutOperation(
+            ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms);
+        op->StartOperation(ctx);
+      }
       break;
     }
     case InfoScope::kCluster: {
-      auto op = new query::cluster_info_fanout::ClusterInfoFanoutOperation(
-          ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms);
-      op->StartOperation(ctx);
+      if (is_loading || inside_multi_exec) {
+        VMSDK_LOG(NOTICE, nullptr) << "The server is loading AOF or inside "
+                                      "multi/exec or lua script, skip "
+                                      "fanout operation";
+        index_schema->RespondWithInfo(ctx);
+      } else {
+        auto op = new query::cluster_info_fanout::ClusterInfoFanoutOperation(
+            ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms);
+        op->StartOperation(ctx);
+      }
       break;
     }
     case InfoScope::kLocal:

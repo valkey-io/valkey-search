@@ -175,12 +175,12 @@ class TestCancelCMD(ValkeySearchTestCaseDebugMode):
             client.execute_command("FT._DEBUG PAUSEPOINT SET Cancel")
             == b"OK"
         )
-        assert(client.execute_command("FT._DEBUG PAUSEPOINT LIST") == [b"CANCEL", []])
+        assert(client.execute_command("FT._DEBUG PAUSEPOINT LIST") == [b"Cancel", []])
 
         hnsw_result = search(client, "hnsw", True, 2)
         waiters.wait_for_true(lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST Cancel") > 0)
         w = client.execute_command("FT._DEBUG PAUSEPOINT LIST")
-        assert(w[0] == b'CANCEL')
+        assert(w[0] == b'Cancel')
         assert(len(w[1]) > 0)
         assert (
             client.execute_command("FT._DEBUG PAUSEPOINT RESET Cancel")

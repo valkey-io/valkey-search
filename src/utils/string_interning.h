@@ -55,7 +55,7 @@ class InternedString {
                                      Allocator *allocator);
   void Destructor();
   void IncrementRefCount() {
-    auto old_value = ref_count_.fetch_add(1, std::memory_order_relaxed);
+    auto old_value = ref_count_.fetch_add(1, std::memory_order_seq_cst);
   }
   void DecrementRefCount() {
     if (ref_count_.fetch_sub(1, std::memory_order_seq_cst) == 1) {
@@ -153,10 +153,11 @@ class InternedStringPtr {
     if (impl_) {
       impl_->DecrementRefCount();
     }
+    impl_ = nullptr;
   }
 
   size_t RefCount() const {
-    return impl_ ? impl_->ref_count_.load(std::memory_order_relaxed) : 0;
+    return impl_ ? impl_->ref_count_.load(std::memory_order_seq_cst) : 0;
   }
 
  private:

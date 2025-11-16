@@ -98,14 +98,15 @@ function prepare_env() {
 }
 
 function save_integration_output() {
+    echo Saving build artifacts
+    cp ${result_dir}/valkey-json/build/src/libjson.so ${INTEGRATION_OUTPUT}
+    cp ${result_dir}/valkey-server/.build-release/bin/valkey-server ${INTEGRATION_OUTPUT}
+    cp ${result_dir}/libsearch.so ${INTEGRATION_OUTPUT}
     echo Saving integration test output to ${INTEGRATION_OUTPUT}
-    local result_dir=${ROOT_DIR}/.build-release${san_suffix}
+    local result_dir=${ROOT_DIR}/.build-release${san_suffix}/integration/.valkey-test-framework
     echo Results Directory is ${result_dir}
     if [ -d "${result_dir}" ]; then
-        cp ${result_dir}/valkey-json/build/src/libjson.so ${INTEGRATION_OUTPUT}
-        cp ${result_dir}/valkey-server/.build-release/bin/valkey-server ${INTEGRATION_OUTPUT}
-        cp ${result_dir}/libsearch.so ${INTEGRATION_OUTPUT}
-        cp -r -P ${result_dir}/integration/.valkey-test-framework ${INTEGRATION_OUTPUT}
+        cp -r -P ${result_dir} ${INTEGRATION_OUTPUT}
         mv ${INTEGRATION_OUTPUT}/.valkey-test-framework ${INTEGRATION_OUTPUT}/valkey-test-framework
     fi
     # Do the stest outputs too.

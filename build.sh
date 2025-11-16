@@ -159,16 +159,16 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
-  BUILD_TOOL="ninja"
-else
-  BUILD_TOOL="make"
-fi
-
 # Import our functions, needs to be done after parsing the command line arguments
 export SAN_BUILD
 export ROOT_DIR
 . "${ROOT_DIR}/scripts/common.rc"
+
+if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
+  BUILD_TOOL="ninja"
+else
+  BUILD_TOOL="make -j$(num_proc)"
+fi
 
 function configure() {
     printf "${BOLD_PINK}Running cmake...${RESET}\n"

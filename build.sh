@@ -10,13 +10,13 @@ FORMAT="no"
 RUN_TEST=""
 RUN_BUILD="yes"
 DUMP_TEST_ERRORS_STDOUT="no"
-NINJA_TOOL="ninja"
 INTEGRATION_TEST="no"
 SAN_BUILD="no"
 ARGV=$@
 EXIT_CODE=0
 INTEG_RETRIES=1
 JOBS=""
+CMAKE_GENERATOR=${CMAKE_GENERATOR:-"Ninja"}
 
 echo "Root directory: ${ROOT_DIR}"
 
@@ -164,15 +164,22 @@ export SAN_BUILD
 export ROOT_DIR
 . "${ROOT_DIR}/scripts/common.rc"
 
+if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
+  BUILD_TOOL="ninja"
+else
+  BUILD_TOOL="make -j$(num_proc)"
+fi
+
 function configure() {
     printf "${BOLD_PINK}Running cmake...${RESET}\n"
-    mkdir -p "${BUILD_DIR}"
-    cd "${BUILD_DIR}"
+    printf "Generating ${GREEN}${CMAKE_GENERATOR}${RESET} build files\n"
+    mkdir -p ${BUILD_DIR}
+    cd $_
     local BUILD_TYPE=$(capitalize_string ${BUILD_CONFIG})
     rm -f CMakeCache.txt
-    printf "Running: cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -GNinja ${CMAKE_EXTRA_ARGS}\n"
-    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -GNinja ${CMAKE_EXTRA_ARGS}
-    cd "${ROOT_DIR}"
+    printf "Running: cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}\n"
+    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}
+    cd ${ROOT_DIR}
 }
 
 function build() {
@@ -180,9 +187,9 @@ function build() {
     if [ -d "${BUILD_DIR}" ]; then
         cd "${BUILD_DIR}"
         if [ -z "${JOBS}" ]; then
-            ${NINJA_TOOL} ${VERBOSE_ARGS} ${CMAKE_TARGET}
+            ${BUILD_TOOL} ${VERBOSE_ARGS} ${CMAKE_TARGET}
         else
-            ${NINJA_TOOL} -j ${JOBS} ${VERBOSE_ARGS} ${CMAKE_TARGET}
+            ${BUILD_TOOL} -j ${JOBS} ${VERBOSE_ARGS} ${CMAKE_TARGET}
         fi
         cd "${ROOT_DIR}"
 
@@ -254,7 +261,9 @@ function check_tools() {
     done
 
     os_name=$(uname -s)
-    if [[ "${os_name}" == "Darwin" ]]; then
+    if [[ "${BUILD_TOOL}" == "make" ]]; then
+        NINJA_TOOL="make"
+    elif [[ "${os_name}" == "Darwin" ]]; then
         # ninja is can be installed via "brew"
         NINJA_TOOL="ninja"
     else

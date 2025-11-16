@@ -8,7 +8,6 @@
 
 #include <cstdint>
 #include <functional>
-#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -16,7 +15,6 @@
 #include "grpcpp/support/status.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/query/fanout_operation_base.h"
-#include "src/query/fanout_template.h"
 
 namespace valkey_search::query::primary_info_fanout {
 
@@ -29,7 +27,7 @@ class PrimaryInfoFanoutOperation
   PrimaryInfoFanoutOperation(uint32_t db_num, const std::string& index_name,
                              unsigned timeout_ms);
 
-  std::vector<vmsdk::cluster_map::NodeInfo> GetTargets() const;
+  std::vector<vmsdk::cluster_map::NodeInfo> GetTargets() const override;
 
   unsigned GetTimeoutMs() const override;
 

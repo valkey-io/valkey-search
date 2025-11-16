@@ -106,6 +106,11 @@ function save_integration_output() {
     cp ${result_dir}/libsearch.so ${INTEGRATION_OUTPUT}
     cp -r -P ${result_dir}/integration/.valkey-test-framework ${INTEGRATION_OUTPUT}
     mv ${INTEGRATION_OUTPUT}/.valkey-test-framework ${INTEGRATION_OUTPUT}/valkey-test-framework
+    # Do the stest outputs too.
+    local stest_dir=${ROOT_DIR}/testing/integration/.build-release${san_suffix}
+    echo Stest Directory output is ${stest_dir}
+    cp -r -P ${stest_dir}/output ${INTEGRATION_OUTPUT}
+    cp -r -P ${stest_dir}/tmp ${INTEGRATION_OUTPUT}
 }
 
 function save_unittest_output() {

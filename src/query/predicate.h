@@ -346,19 +346,19 @@ class ComposedPredicate : public Predicate {
                     std::unique_ptr<Predicate> rhs_predicate,
                     LogicalOperator logical_op,
                     std::optional<uint32_t> slop = std::nullopt,
-                    std::optional<bool> inorder = std::nullopt);
+                    bool inorder = false);
 
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
   const Predicate* GetLhsPredicate() const { return lhs_predicate_.get(); }
   const Predicate* GetRhsPredicate() const { return rhs_predicate_.get(); }
   std::optional<uint32_t> GetSlop() const { return slop_; }
-  std::optional<bool> GetInorder() const { return inorder_; }
+  bool GetInorder() const { return inorder_; }
 
  private:
   std::unique_ptr<Predicate> lhs_predicate_;
   std::unique_ptr<Predicate> rhs_predicate_;
   std::optional<uint32_t> slop_;
-  std::optional<bool> inorder_;
+  bool inorder_;
 };
 
 }  // namespace valkey_search::query

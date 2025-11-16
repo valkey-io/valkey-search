@@ -116,9 +116,7 @@ void PrintPredicate(const query::Predicate* pred, int depth, bool last,
                      ? std::to_string(comp->GetSlop().value())
                      : "Not_set";
       log_msg += ", inorder=";
-      log_msg += comp->GetInorder().has_value()
-                     ? std::to_string(comp->GetInorder().value())
-                     : "Not_set";
+      log_msg += std::to_string(comp->GetInorder());
       log_msg += ")\n";
       // Log the predicate type along with slop and inorder
       VMSDK_LOG(WARNING, nullptr) << prefix << log_msg;
@@ -293,11 +291,7 @@ FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
         "`", attribute_alias, "` is not indexed as a numeric field"));
   }
   auto identifier = index_schema_.GetIdentifier(attribute_alias).value();
-  VMSDK_LOG(WARNING, nullptr) << "In FilterParser::ParseNumericPredicate";
   filter_identifiers_.insert(identifier);
-  VMSDK_LOG(WARNING, nullptr) << "In FilterParser::ParseNumericPredicate line "
-                                 "292 > filter_identifiers_ size "
-                              << filter_identifiers_.size();
   bool is_inclusive_start = true;
   if (Match('(')) {
     is_inclusive_start = false;
@@ -457,13 +451,8 @@ std::unique_ptr<query::Predicate> FilterParser::WrapPredicate(
     return MayNegatePredicate(std::move(predicate), negate);
   }
   std::optional<uint32_t> slop = options_.slop;
-  std::optional<bool> inorder = options_.inorder;
-  // Temp logging
-  VMSDK_LOG(WARNING, nullptr)
-      << "In FilterParser::WrapPredicate >> Slop is "
-      << (slop.has_value() ? std::to_string(slop.value()) : "not_set")
-      << " Inorder is "
-      << (inorder.has_value() ? std::to_string(inorder.value()) : "not_set");
+  bool inorder = options_.inorder;
+
   return std::make_unique<query::ComposedPredicate>(
       std::move(prev_predicate),
       MayNegatePredicate(std::move(predicate), negate), logical_operator, slop,
@@ -694,11 +683,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
 absl::Status FilterParser::SetupTextFieldConfiguration(
     FieldMaskPredicate& field_mask, std::optional<uint32_t>& min_stem_size,
     const std::optional<std::string>& field_name, bool with_suffix) {
-  VMSDK_LOG(WARNING, nullptr) << "In FilterParser::SetupTextFieldConfiguration";
   if (field_name.has_value()) {
-    VMSDK_LOG(WARNING, nullptr)
-        << "In FilterParser::SetupTextFieldConfiguration line 681 in "
-           "field_name.has_value() true";
     auto index = index_schema_.GetIndex(*field_name);
     if (!index.ok() ||
         index.value()->GetIndexerType() != indexes::IndexerType::kText) {
@@ -714,15 +699,7 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
     if (text_index->IsStemmingEnabled()) {
       min_stem_size = text_index->GetMinStemSize();
     }
-    VMSDK_LOG(WARNING, nullptr)
-        << "In FilterParser::SetupTextFieldConfiguration line 695 >> "
-           "filter_identifiers_ size"
-        << filter_identifiers_.size();
-
   } else {
-    VMSDK_LOG(WARNING, nullptr)
-        << "In FilterParser::SetupTextFieldConfiguration line 696 in else "
-           "block";
     // Set identifiers to include all text fields in the index schema.
     auto text_identifiers = index_schema_.GetAllTextIdentifiers(with_suffix);
     // Set field mask to include all text fields in the index schema.
@@ -736,10 +713,6 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
     for (const auto& identifier : text_identifiers) {
       filter_identifiers_.insert(identifier);
     }
-    VMSDK_LOG(WARNING, nullptr)
-        << "In FilterParser::SetupTextFieldConfiguration line 703 in else "
-           "block >> filter_identifiers_ size"
-        << filter_identifiers_.size();
 
     // When no field was specified, we use the min stem across all text fields
     // in the index schema. This helps ensure the root of the text token can be
@@ -788,9 +761,8 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
             : ParseUnquotedTextToken(text_index_schema, field_or_default));
     if (result.predicate) {
       terms.push_back(std::move(result.predicate));
-      // TODO: Uncomment this once we have ComposedAND evaluation functional for
-      // handling proximity checks. Until the, we handle unquoted text tokens
-      // by building a proximity predicate containing them.
+      // For unquoted text, stop after first token. For exact phrases, continue
+      // parsing all tokens.
       if (!exact_phrase) break;
     }
     if (result.break_on_query_syntax) {
@@ -803,25 +775,13 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     }
   }
   std::unique_ptr<query::Predicate> pred;
+  // Build predicate tree for exact phrase (multiple terms with quotes)
   if (terms.size() > 1) {
-    VMSDK_LOG(WARNING, nullptr) << "terms.size() > 1";
-    uint32_t slop = options_.slop.value_or(0);
-    bool inorder = options_.inorder;
-    // std::optional<uint32_t> slop = std::nullopt;
-    // std::optional<bool> inorder = std::nullopt;
-    if (exact_phrase) {
-      slop = 0;
-      inorder = true;
-      VMSDK_LOG(WARNING, nullptr)
-          << "EXACT PHRASE: slop=" << slop << " inorder=" << inorder;
-    }
-    // TODO: Swap ProximityPredicate with ComposedANDPredicate once it is
-    // flattened. Once that happens, we need to add slop and inorder properties
-    // to ComposedANDPredicate.
-    VMSDK_LOG(WARNING, nullptr)
-        << "Composed  predicate filter case : slop=" << slop
-        << " inorder=" << inorder;
-    pred = std::move(terms.front());  // term 0
+    // Exact phrase requires adjacent terms in order: slop=0, inorder=true
+    uint32_t slop = 0;
+    bool inorder = true;
+
+    pred = std::move(terms.front());  // Start with first term
     for (size_t i = 1; i < terms.size(); ++i) {
       pred = std::make_unique<query::ComposedPredicate>(
           std::move(pred),      // lhs: accumulated tree so far
@@ -831,8 +791,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
           /*inorder=*/inorder);
     }
 
-    // pred = std::make_unique<query::ProximityPredicate>(std::move(terms),
-    // slop, inorder);
     node_count_ += terms.size();
   } else {
     if (terms.empty()) {

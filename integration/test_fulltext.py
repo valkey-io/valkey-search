@@ -85,6 +85,8 @@ expected_desc2_hash_value = {
 }
 
 def validate_fulltext_search(client: Valkey):
+    # Wait for index backfill to complete
+    IndexingTestHelper.wait_for_backfill_complete_on_node(client, "products")
     # Perform the text search query with term and prefix operations that return a match.
     # text_query_exact_phrase1 is crashing.
     match = [text_query_term, text_query_prefix, text_query_prefix2, text_query_exact_phrase1, text_query_exact_phrase2]
@@ -185,7 +187,6 @@ def validate_fulltext_search(client: Valkey):
     result = client.execute_command("FT.SEARCH", "products", 'artificial intelligence research')
     assert result[0] == 1
     assert result[1] == b"product:6"
-
 
 class TestFullText(ValkeySearchTestCaseBase):
 
@@ -343,7 +344,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         # Insert documents into the index - each doc has 6 fields now (including desc2)
         for doc in hash_docs_with_desc2:
             assert client.execute_command(*doc) == 6
-        
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "products2")
         # 1) Perform a term search on desc field for "wonder"
         # 2) Perform a prefix search on desc field for "Wonder*"
         desc_queries = [text_query_desc_field, text_query_desc_prefix]
@@ -388,6 +390,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         client.execute_command("FT.CREATE idx ON HASH SCHEMA content TEXT")
         client.execute_command("HSET", "doc:1", "content", "The quick-running searches are finding EFFECTIVE results!")
         client.execute_command("HSET", "doc:2", "content", "But slow searches aren't working...")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         # List of queries with match / no match expectations        
         test_cases = [
             ("quick*", True, "Punctuation tokenization - hyphen creates word boundaries"),
@@ -418,7 +422,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         client.execute_command("HSET", "doc:1", "title", "running fast", "content", "running quickly")
 
         expected = [1, b'doc:1', [b'content', b'running quickly', b'title', b'running fast']]
-
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         # We can find stems on 'title'
         assert client.execute_command("FT.SEARCH", "idx", '@title:"run"') == expected
 
@@ -436,6 +441,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         client: Valkey = self.server.get_new_client()
         client.execute_command("FT.CREATE idx ON HASH STOPWORDS 2 the and SCHEMA content TEXT")
         client.execute_command("HSET", "doc:1", "content", "the cat and dog are good")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         # non stop words should be findable
         result = client.execute_command("FT.SEARCH", "idx", '@content:"cat dog are good"')
         assert result[0] == 1  # Regular word indexed
@@ -461,6 +468,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         client: Valkey = self.server.get_new_client()
         client.execute_command("FT.CREATE idx ON HASH NOSTEM SCHEMA content TEXT")
         client.execute_command("HSET", "doc:1", "content", "running quickly")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         # With NOSTEM, exact tokens should be findable with exact phrase
         result = client.execute_command("FT.SEARCH", "idx", '@content:"running"')
         assert result[0] == 1  # Exact form "running" found
@@ -482,6 +491,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         client: Valkey = self.server.get_new_client()
         client.execute_command("FT.CREATE idx ON HASH PUNCTUATION . SCHEMA content TEXT")
         client.execute_command("HSET", "doc:1", "content", "hello.world test@email")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         # Dot configured as separator - should find split words
         result = client.execute_command("FT.SEARCH", "idx", '@content:"hello"')
         assert result[0] == 1  # Found "hello" as separate token
@@ -506,12 +517,16 @@ class TestFullText(ValkeySearchTestCaseBase):
         # Add
         for i in range(num_docs):
             client.execute_command("HSET", f"doc:{i}", "content", f"What a cool document{i}")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         result = client.execute_command("FT.SEARCH", "idx", "@content:document*")
         assert result[0] == num_docs
 
         # Update
         for i in range(num_docs):
             client.execute_command("HSET", f"doc:{i}", "content", f"What a cool doc{i}")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         result = client.execute_command("FT.SEARCH", "idx", "@content:document*")
         assert result[0] == 0
         result = client.execute_command("FT.SEARCH", "idx", "@content:doc*")
@@ -520,6 +535,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         # Delete
         for i in range(num_docs):
             client.execute_command("DEL", f"doc:{i}")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         result = client.execute_command("FT.SEARCH", "idx", "@content:doc*")
         assert result[0] == 0
 
@@ -598,6 +615,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         # Validate ADD phase with concurrent searching
         client = clients[0]
         total_docs = num_clients * docs_per_client
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         
         result = client.execute_command("FT.SEARCH", "idx", "@content:document")
         assert result[0] == total_docs, f"ADD: Expected {total_docs} documents with 'document', got {result[0]}"
@@ -636,6 +655,9 @@ class TestFullText(ValkeySearchTestCaseBase):
         
         for thread in threads:
             thread.join()
+
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         
         # Validate UPDATE phase with concurrent searching
         result = client.execute_command("FT.SEARCH", "idx", "@content:origin")  # "original" stems to "origin"
@@ -673,6 +695,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         # Validate DELETE phase with concurrent searching
         remaining_docs = total_docs // 2
         
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         result = client.execute_command("FT.SEARCH", "idx", "@content:updat")  # "updated" stems to "updat"
         assert result[0] == remaining_docs, f"DELETE: Expected {remaining_docs} documents with 'updat', got {result[0]}"
         
@@ -699,6 +723,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         self.client.execute_command("HSET", "doc:2", "content", "testing debugging coding", "extracontent", "running")
         self.client.execute_command("HSET", "doc:3", "content", "reading writing speaking", "extracontent", "data2")
         self.client.execute_command("HSET", "doc:4", "content", "swimming diving surfing", "extracontent", "data3")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(self.client, "idx")
         # Test suffix search with *ing
         result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ing")
         assert result[0] == 4  # All documents contain words ending with 'ing'
@@ -744,7 +770,10 @@ class TestFullText(ValkeySearchTestCaseBase):
         client.execute_command("HSET", "doc:1", "content", "software engineer developer", "title", "Title:1", "Addr", "12 Apt ABC", "salary", "100000", "skills", "python|java")
         client.execute_command("HSET", "doc:2", "content", "software development manager", "title", "Title:2", "Addr", "12 Apt EFG", "salary", "120000", "skills", "python|ml|leadership")
         client.execute_command("HSET", "doc:3", "content", "product manager", "title", "Title:2", "Addr", "12 Apt EFG", "salary", "90000", "skills", "strategy|leadership")
-        
+
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+
         # Test 1: Text + Numeric (AND)
         result = client.execute_command("FT.SEARCH", "idx", '@content:"manager" @salary:[90000 110000]')
         assert result[0] == 1  # Should find doc:1
@@ -767,8 +796,20 @@ class TestFullText(ValkeySearchTestCaseBase):
         # Test 4: All three types (complex AND) 
         result = client.execute_command("FT.SEARCH", "idx", '@content:"engineer" @salary:[90000 110000] @skills:{python}')
         assert result[0] == 1  # Should find doc:1 only
-        
-        # # Test 5: Negation with mixed types
+
+        # Test 5: Exact phrase with numeric filter (nested case)
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"software engineer" @salary:[90000 110000]')
+        assert result[0] == 1  # Should find doc:1 (exact phrase + salary match)
+
+        # Test 6: Exact phrase with tag filter
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"software engineer" @skills:{python}')
+        assert result[0] == 1  # Should find doc:1 (exact phrase + tag match)
+
+        # Test 7: Proximity with numeric - tests iterator propagation
+        result = client.execute_command("FT.SEARCH", "idx", '(@content:software @salary:[90000 110000]) @content:engineer', "SLOP", "1", "INORDER")
+        assert result[0] == 1  # Should find doc:1 (proximity + numeric filter)
+
+        # # Test 8: Negation with mixed types
         # result = client.execute_command("FT.SEARCH", "idx", '-@content:"manager" @skills:{python}')
         # assert result[0] == 1  # Should find doc:1 only
 
@@ -786,6 +827,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         client.execute_command("HSET", "doc:7", "content", "gamma delta")
         client.execute_command("HSET", "doc:8", "content", "gamma word beta word word word alpha")
 
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         # Test Set 1 : Exact phrase (slop=0 and inorder=true are implicit)
         # Test 1.1: Two-term exact phrase
         result = client.execute_command("FT.SEARCH", "idx", '@content:"alpha beta"')
@@ -824,13 +867,56 @@ class TestFullText(ValkeySearchTestCaseBase):
         result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "3")
         assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:5", b"doc:8"})
 
-        # Test 2.8: Three terms but user mentions inorder.  This will no effect on order as there is no slop.
+        # Test 2.8: Three terms but user mentions inorder.
         result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "inorder")
-        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:5", b"doc:8"})
+        assert (result[0], set(result[1::2])) == (3, {b"doc:1", b"doc:2", b"doc:5"})
 
         # Test 2.9: Three terms but no slop, no order
         result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma')
         assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:5", b"doc:8"})
+
+        # Test Set 3: Mixed alphanumeric content (numbers as text tokens)
+        # Add documents with numbers in the text content
+        client.execute_command("HSET", "doc:10", "content", "version 1 beta 2 release")
+        client.execute_command("HSET", "doc:11", "content", "version 1 release 2 beta")
+        client.execute_command("HSET", "doc:12", "content", "version 2 beta 1 release")
+        client.execute_command("HSET", "doc:13", "content", "version word 1 word beta word 2 word release")
+
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        # Test 3.1: Exact phrase
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"version 1 beta"')
+        assert (result[0], result[1]) == (1, b"doc:10")  # Only doc:10 has exact phrase
+
+        # Test 3.2: Exact phrase (different order)
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"beta 2 release"')
+        assert (result[0], result[1]) == (1, b"doc:10")  # Only doc:10
+
+        # Test 3.3: Proximity with number tokens - slop 0, inorder
+        result = client.execute_command("FT.SEARCH", "idx", 'version 1 beta 2', "SLOP", "0", "INORDER")
+        assert (result[0], result[1]) == (1, b"doc:10")  # Only doc:10
+
+        # Test 3.4: Proximity with number tokens - slop 1, inorder (allows one gap)
+        result = client.execute_command("FT.SEARCH", "idx", 'version 1 beta', "SLOP", "1", "INORDER")
+        assert (result[0], set(result[1::2])) == (2, {b"doc:10", b"doc:13"})  # doc:10 (exact) and doc:13 (with gaps)
+
+        # Potential Nary case
+        # Test 3.5: Proximity with number tokens - slop 0, no order
+        # result = client.execute_command("FT.SEARCH", "idx", 'version beta 1', "SLOP", "0")
+        # assert (result[0], set(result[1::2])) == (1, {b"doc:10"})  # Any order, no gaps
+
+        # Test 3.6: number tokens in different positions
+        result = client.execute_command("FT.SEARCH", "idx", '1 beta 2', "SLOP", "0", "INORDER")
+        assert (result[0], result[1]) == (1, b"doc:10")  # Only doc:10 has this sequence
+
+        # Test 3.7: Verify number tokens are treated as regular tokens
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"1"')
+        assert (result[0], set(result[1::2])) == (4, {b"doc:10", b"doc:11", b"doc:12", b"doc:13"})
+
+        # Test 3.8: Complex proximity with number tokens - slop 2, inorder
+        result = client.execute_command("FT.SEARCH", "idx", 'version 1 release', "SLOP", "2", "INORDER")
+        assert (result[0], set(result[1::2])) == (3, {b"doc:10", b"doc:11", b"doc:12"})  # doc:10 (gap=2), doc:11 (gap=1)
+
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """

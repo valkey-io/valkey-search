@@ -255,7 +255,8 @@ class PrefilterEvaluator : public query::Evaluator {
   bool Evaluate(const query::Predicate& predicate,
                 const InternedStringPtr& key);
 
-  // Prefilter evalutor doesn't need a target key
+  // TODO: Implement this in prefilter implementation. For now just return
+  // nullpt.
   const std::shared_ptr<InternedString>& GetTargetKey() const override {
     static const std::shared_ptr<InternedString> null_key = nullptr;
     return null_key;

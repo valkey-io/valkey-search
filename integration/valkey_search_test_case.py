@@ -14,11 +14,42 @@ import random
 import string
 import logging
 import shutil
+import subprocess
 
 LOGS_DIR = "/tmp/valkey-test-framework-files"
 
 if "LOGS_DIR" in os.environ:
     LOGS_DIR = os.environ["LOGS_DIR"]
+
+
+class DebugValkeyServerHandle(ValkeyServerHandle):
+    """ValkeyServerHandle that wraps valkey-server with gdb for crash debugging"""
+
+    def start(self, wait_for_ping=True, connect_client=True):
+        if self.server:
+            raise RuntimeError("Server already started")
+
+        # Build server command
+        server_args = [self.valkey_path]
+        if self.conf_file:
+            server_args.append(self.conf_file)
+        for k, v in self.args.items():
+            server_args.extend([f"--{k.replace('_', '-')}", str(v)])
+
+        # Wrap with gdb if debug-on-crash enabled
+        if os.environ.get("DEBUG_ON_CRASH") == "yes":
+            cmd = ["gdb", "--ex", "run", "--args"] + server_args
+        else:
+            cmd = server_args
+
+        self.server = subprocess.Popen(cmd, cwd=self.cwd)
+        # Standard connection handling
+        if connect_client:
+            self.wait_for_ready_to_accept_connections()
+            if wait_for_ping:
+                self.connect()
+
+        return self.client
 
 
 class Node:
@@ -147,6 +178,12 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         See ValkeySearchTestCaseBase.get_config_file_lines & ValkeySearchClusterTestCase.get_config_file_lines
         for example usage."""
         raise NotImplementedError
+
+    def get_valkey_handle(self):
+        """Return debug-enabled valkey handle when debug-on-crash is enabled"""
+        if os.environ.get("DEBUG_ON_CRASH") == "yes":
+            return DebugValkeyServerHandle
+        return ValkeyServerHandle
 
     def start_server(
         self,

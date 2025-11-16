@@ -100,10 +100,10 @@ absl::StatusOr<size_t> PausePointWaiters(absl::string_view point) {
   absl::MutexLock lock(&pause_point_lock);
   auto it = pause_point_waiters.find(point);
   if (it == pause_point_waiters.end()) {
-    VMSDK_LOG(WARNING, nullptr) << "PAUSEPOINT: " << point << " not found";
+    VMSDK_LOG(DEBUG, nullptr) << "PAUSEPOINT: " << point << " not found";
     return absl::NotFoundError("Pause Point not found");
   } else {
-    VMSDK_LOG(WARNING, nullptr)
+    VMSDK_LOG(DEBUG, nullptr)
         << "PAUSEPOINT: " << it->second.size() << " Waiters";
     return it->second.size();
   }

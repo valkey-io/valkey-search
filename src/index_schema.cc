@@ -585,8 +585,8 @@ void IndexSchema::ProcessMultiQueue() {
 void IndexSchema::EnqueueMultiMutation(const InternedStringPtr &key) {
   auto &multi_mutations = multi_mutations_.Get();
   multi_mutations.keys.push_back(key);
-  VMSDK_LOG(WARNING, nullptr) << "Enqueueing multi mutation for key: " << key
-                              << " Size is now " << multi_mutations.keys.size();
+  VMSDK_LOG(DEBUG, nullptr) << "Enqueueing multi mutation for key: " << key
+                            << " Size is now " << multi_mutations.keys.size();
   if (multi_mutations.keys.size() >= mutations_thread_pool_->Size() &&
       !schedule_multi_exec_processing_.Get()) {
     schedule_multi_exec_processing_.Get() = true;

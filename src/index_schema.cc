@@ -1280,16 +1280,21 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
                            << (backfill_job_.Get().has_value()
                                    ? " Backfill still required."
                                    : " Backfill not needed.");
-    if (DrainMutationQueue()) {
-      VMSDK_LOG(NOTICE, ctx) << "Draining Mutation Queue.";
-      while (std::any_of(
-          tracked_mutated_records_.begin(), tracked_mutated_records_.end(),
-          [](const auto &record) { return !record.second.from_backfill; })) {
-        VMSDK_LOG(NOTICE, ctx)
-            << "Draining Mutation Queue, " << tracked_mutated_records_.size()
-            << " entries remaining.";
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      }
+    while (DrainMutationQueue() &&
+           std::any_of(tracked_mutated_records_.begin(),
+                       tracked_mutated_records_.end(), [](const auto &record) {
+                         return !record.second.from_backfill;
+                       })) {
+      VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 1)
+          << "Draining Mutation Queue for index " << name_ << ", "
+          << tracked_mutated_records_.size() << " entries remaining, "
+          << std::count_if(tracked_mutated_records_.begin(),
+                           tracked_mutated_records_.end(),
+                           [](const auto &record) {
+                             return !record.second.from_backfill;
+                           })
+          << " are not backills.";
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     return;
   }

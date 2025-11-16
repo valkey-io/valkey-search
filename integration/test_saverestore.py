@@ -300,6 +300,7 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
 
         os.environ["SKIPLOGCLEAN"] = "1"
         self.server.restart(remove_rdb=False)
+        index.wait_for_backfill_complete(self.client)
         verify_data(self.client, index)
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         i = self.client.info("search")

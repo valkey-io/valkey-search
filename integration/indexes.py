@@ -161,9 +161,7 @@ class Index:
         print(f"Creating Index: {cmd}")
         client.execute_command(*cmd)
         if wait_for_backfill:
-            waiters.wait_for_true(
-                lambda: not self.info(client).backfill_in_progress
-            )
+            self.wait_for_backfill_complete(client)
 
     def load_data(self, client: valkey.client, rows: int, start_index: int = 0):
         for i in range(start_index, rows):
@@ -203,3 +201,8 @@ class Index:
 
     def has_field(self, name: str) -> bool:
         return any(f.name == name for f in self.fields)
+
+    def wait_for_backfill_complete(self, client: valkey.client):
+        waiters.wait_for_true(
+            lambda: not self.info(client).backfill_in_progress
+            )

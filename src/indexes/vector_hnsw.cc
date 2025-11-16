@@ -326,14 +326,15 @@ template <typename T>
 absl::StatusOr<std::deque<Neighbor>> VectorHNSW<T>::Search(
     absl::string_view query, uint64_t count, cancel::Token &cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
-    std::optional<size_t> ef_runtime) {
+    std::optional<size_t> ef_runtime, bool enable_partial_results) {
   if (!IsValidSizeVector(query)) {
     return absl::InvalidArgumentError(absl::StrCat(
         "Error parsing vector similarity query: query vector blob size (",
         query.size(), ") does not match index's expected size (",
         dimensions_ * GetDataTypeSize(), ")."));
   }
-  auto perform_search = [this, count, &filter, &ef_runtime,
+  auto perform_search = [this, count, &filter, enable_partial_results,
+                         &ef_runtime,
                          &cancellation_token](absl::string_view query)
                             ABSL_NO_THREAD_SAFETY_ANALYSIS
       -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
@@ -341,8 +342,7 @@ absl::StatusOr<std::deque<Neighbor>> VectorHNSW<T>::Search(
       CancelCondition cancel_condition(cancellation_token);
       auto res = algo_->searchKnn((T *)query.data(), count, ef_runtime,
                                   filter.get(), &cancel_condition);
-      if (!valkey_search::options::GetEnablePartialResults().GetValue() &&
-          cancellation_token->IsCancelled()) {
+      if (!enable_partial_results && cancellation_token->IsCancelled()) {
         return absl::CancelledError(
             "Search operation cancelled due to timeout");
       }

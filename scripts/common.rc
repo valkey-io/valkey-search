@@ -166,7 +166,7 @@ function setup_valkey_server() {
   fi
 
   # Clone and build it
-  VALKEY_VERSION="${VALKEY_VERSION:=8.1.1}"
+  VALKEY_VERSION="${VALKEY_VERSION:=9.0.0}"
   export VALKEY_SERVER_HOME_DIR=$(get_third_party_build_dir)/valkey-server
   export VALKEY_SERVER_BUILD_DIR=${VALKEY_SERVER_HOME_DIR}/.build-release
   if [ ! -d ${VALKEY_SERVER_HOME_DIR} ]; then

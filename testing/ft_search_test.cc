@@ -531,7 +531,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
             GetClient(testing::StrEq(absl::StrCat("127.0.0.1:", coord_port))))
             .WillRepeatedly(testing::Return(mock_client));
         EXPECT_CALL(*mock_client, SearchIndexPartition(testing::_, testing::_))
-            .WillRepeatedly(testing::Invoke(
+            .WillRepeatedly(
                 [&](std::unique_ptr<coordinator::SearchIndexPartitionRequest>
                         request,
                     coordinator::SearchIndexPartitionCallback done) {
@@ -539,7 +539,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
                   // nothing.
                   coordinator::SearchIndexPartitionResponse response;
                   done(grpc::Status::OK, response);
-                }));
+                });
       }
     }
   }

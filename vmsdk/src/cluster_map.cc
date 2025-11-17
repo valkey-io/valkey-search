@@ -11,8 +11,6 @@
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/random/random.h"
-#include "absl/status/status.h"
-#include "absl/strings/str_cat.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
@@ -21,7 +19,7 @@
 namespace vmsdk {
 namespace cluster_map {
 
-const std::string VALKEY_MODULE_CALL_ERROR_MSG =
+const std::string kValkeyModuleCallErrorMsg =
     "ValkeyModule_Call returned invalid result";
 
 // configurable variable for cluster map expiration time
@@ -115,10 +113,10 @@ uint64_t ClusterMap::ComputeClusterFingerprint() {
 // Helper function to parse node info from CLUSTER SLOTS reply
 std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
     ValkeyModuleCallReply* node_arr, bool is_local_shard, bool is_primary) {
-  CHECK(node_arr) << VALKEY_MODULE_CALL_ERROR_MSG;
+  CHECK(node_arr) << kValkeyModuleCallErrorMsg;
   // each node array should have exactly 4 elements
   CHECK(ValkeyModule_CallReplyLength(node_arr) == 4)
-      << VALKEY_MODULE_CALL_ERROR_MSG;
+      << kValkeyModuleCallErrorMsg;
 
   // Get primary endpoint
   ValkeyModuleCallReply* primary_endpoint_reply =
@@ -143,20 +141,20 @@ std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
   // Get port
   long long node_port = ValkeyModule_CallReplyInteger(
       ValkeyModule_CallReplyArrayElement(node_arr, 1));
-  CHECK(node_port) << VALKEY_MODULE_CALL_ERROR_MSG;
+  CHECK(node_port) << kValkeyModuleCallErrorMsg;
 
   // Get node ID
   size_t node_id_len;
   const char* node_id_char = ValkeyModule_CallReplyStringPtr(
       ValkeyModule_CallReplyArrayElement(node_arr, 2), &node_id_len);
-  CHECK(node_id_char) << VALKEY_MODULE_CALL_ERROR_MSG;
+  CHECK(node_id_char) << kValkeyModuleCallErrorMsg;
 
   // Get additional network metadata
   // Depending on the client RESP protocol version, the additional network
   // metadata might be a map(RESP3), or a flattened array(RESP2)
   absl::flat_hash_map<std::string, std::string> additional_network_metadata;
   auto reply_metadata = ValkeyModule_CallReplyArrayElement(node_arr, 3);
-  CHECK(reply_metadata) << VALKEY_MODULE_CALL_ERROR_MSG;
+  CHECK(reply_metadata) << kValkeyModuleCallErrorMsg;
 
   auto insert_metadata = [&additional_network_metadata](
                              ValkeyModuleCallReply* key_reply,
@@ -194,7 +192,7 @@ std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
     }
     default:
       // crash if the reply is not map or array type
-      CHECK(false) << VALKEY_MODULE_CALL_ERROR_MSG;
+      CHECK(false) << kValkeyModuleCallErrorMsg;
   }
 
   std::string node_id_str = std::string(node_id_char, node_id_len);
@@ -284,11 +282,11 @@ bool ClusterMap::IsExistingShardConsistent(
 bool ClusterMap::ProcessSlotRange(ValkeyModuleCallReply* slot_range,
                                   const char* my_node_id,
                                   std::vector<SlotRangeInfo>& slot_ranges) {
-  CHECK(slot_range) << VALKEY_MODULE_CALL_ERROR_MSG;
+  CHECK(slot_range) << kValkeyModuleCallErrorMsg;
   CHECK(ValkeyModule_CallReplyType(slot_range) == VALKEYMODULE_REPLY_ARRAY)
-      << VALKEY_MODULE_CALL_ERROR_MSG;
+      << kValkeyModuleCallErrorMsg;
   CHECK(ValkeyModule_CallReplyLength(slot_range) >= 3)
-      << VALKEY_MODULE_CALL_ERROR_MSG;
+      << kValkeyModuleCallErrorMsg;
 
   // Parse start and end slots
   long long start = ValkeyModule_CallReplyInteger(
@@ -330,7 +328,7 @@ bool ClusterMap::ProcessSlotRange(ValkeyModuleCallReply* slot_range,
   // Mark owned slots if local
   if (is_local_shard) {
     for (long long slot = start; slot <= end; slot++) {
-      CHECK(slot >= 0 && slot < k_num_slots) << "Invalid slot number";
+      CHECK(slot >= 0 && slot < kNumSlots) << "Invalid slot number";
       owned_slots_[slot] = true;
     }
   }
@@ -409,7 +407,7 @@ bool ClusterMap::CheckClusterMapFull() {
         << " entries";
     return false;
   }
-  return expected_next == k_num_slots;
+  return expected_next == kNumSlots;
 }
 
 std::shared_ptr<ClusterMap> ClusterMap::CreateNewClusterMap(
@@ -420,13 +418,13 @@ std::shared_ptr<ClusterMap> ClusterMap::CreateNewClusterMap(
   // Call CLUSTER SLOTS
   auto reply = vmsdk::UniquePtrValkeyCallReply(
       ValkeyModule_Call(ctx, "CLUSTER", "c", "SLOTS"));
-  CHECK(reply) << VALKEY_MODULE_CALL_ERROR_MSG;
+  CHECK(reply) << kValkeyModuleCallErrorMsg;
   CHECK(ValkeyModule_CallReplyType(reply.get()) == VALKEYMODULE_REPLY_ARRAY)
-      << VALKEY_MODULE_CALL_ERROR_MSG;
+      << kValkeyModuleCallErrorMsg;
 
   // Get local node ID
   const char* my_node_id = ValkeyModule_GetMyClusterID();
-  CHECK(my_node_id) << VALKEY_MODULE_CALL_ERROR_MSG;
+  CHECK(my_node_id) << kValkeyModuleCallErrorMsg;
 
   // Process each slot range
   std::vector<SlotRangeInfo> slot_ranges;

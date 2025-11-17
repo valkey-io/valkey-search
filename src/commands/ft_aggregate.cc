@@ -86,7 +86,6 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   RealIndexInterface real_index_interface(index_schema);
   parse_vars_.index_interface_ = &real_index_interface;
 
-  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, parse_vars.query_string));
   VMSDK_RETURN_IF_ERROR(PreParseQueryString(*this));
   // Ensure that key is first value if it gets included...
   CHECK(AddRecordAttribute("__key", "__key", indexes::IndexerType::kNone) == 0);

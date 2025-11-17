@@ -153,8 +153,8 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   int GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
   char* TrackVector(uint64_t internal_id, char* vector, size_t len) override;
-  std::shared_ptr<InternedString> InternVector(absl::string_view record,
-                                               std::optional<float>& magnitude);
+  InternedStringPtr InternVector(absl::string_view record,
+                                 std::optional<float>& magnitude);
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,

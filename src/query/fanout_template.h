@@ -2,9 +2,11 @@
 
 #include <netinet/in.h>
 
+#include <algorithm>
 #include <functional>
 #include <ostream>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
@@ -13,6 +15,8 @@
 #include "absl/strings/str_cat.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/util.h"
+#include "src/valkey_search.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -51,6 +55,38 @@ struct FanoutSearchTarget {
 // Template class for fanout operations across cluster nodes
 class FanoutTemplate {
  public:
+  // Helper function to check if system is under low utilization
+  static bool IsSystemUnderLowUtilization() {
+    try {
+      // Get the configured threshold (queue wait time in milliseconds)
+      double threshold = static_cast<double>(
+          valkey_search::options::GetLocalFanoutQueueWaitThreshold()
+              .GetValue());
+
+      auto& valkey_search_instance = valkey_search::ValkeySearch::Instance();
+      auto reader_pool = valkey_search_instance.GetReaderThreadPool();
+
+      if (!reader_pool) {
+        return false;
+      }
+
+      // Get recent queue wait time (not global average)
+      auto queue_wait_result = reader_pool->GetRecentQueueWaitTime();
+      if (!queue_wait_result.ok()) {
+        // If we can't get queue wait time, assume high utilization for safety
+        return false;
+      }
+
+      double queue_wait_time = queue_wait_result.value();
+
+      // System is under low utilization if queue wait time is below threshold
+      return queue_wait_time < threshold;
+    } catch (...) {
+      // If anything goes wrong, assume high utilization for safety
+      return false;
+    }
+  }
+
   // Convenience method for FanoutSearchTarget with default lambdas
   static std::vector<FanoutSearchTarget> GetTargets(
       ValkeyModuleCtx* ctx,
@@ -146,8 +182,8 @@ class FanoutTemplate {
             target_mode == FanoutTargetMode::kReplicasOnly);
       // Original logic: group master and replica into shards and randomly
       // select one, unless confined to replicas only
-      absl::flat_hash_map<std::string, std::vector<size_t>>
-          shard_id_to_node_indices;
+      absl::flat_hash_map<std::string, std::vector<TargetType>>
+          shard_id_to_targets;
 
       for (size_t i = 0; i < num_nodes; ++i) {
         std::string node_id(nodes.get()[i], VALKEYMODULE_NODE_ID_LEN);
@@ -176,35 +212,46 @@ class FanoutTemplate {
           }
         }
 
-        // Store only the node index
-        shard_id_to_node_indices[master_id_str].push_back(i);
+        // Create and store the target directly
+        if (flags & VALKEYMODULE_NODE_MYSELF) {
+          shard_id_to_targets[master_id_str].push_back(create_local_target());
+        } else {
+          shard_id_to_targets[master_id_str].push_back(create_remote_target(
+              absl::StrCat(ip, ":", coordinator::GetCoordinatorPort(port))));
+        }
       }
 
-      // Random selection first, then create only the selected target objects
+      // Select targets for each shard based on system utilization
       absl::BitGen gen;
-      for (const auto& [shard_id, node_indices] : shard_id_to_node_indices) {
-        size_t index = absl::Uniform(gen, 0u, node_indices.size());
-        size_t selected_node_index = node_indices.at(index);
+      bool prefer_local = IsSystemUnderLowUtilization();
 
-        // Re-fetch node info only for the selected node
-        std::string node_id(nodes.get()[selected_node_index],
-                            VALKEYMODULE_NODE_ID_LEN);
-        char ip[INET6_ADDRSTRLEN] = "";
-        char master_id[VALKEYMODULE_NODE_ID_LEN] = "";
-        int port;
-        int flags;
-        if (ValkeyModule_GetClusterNodeInfo(ctx, node_id.c_str(), ip, master_id,
-                                            &port, &flags) != VALKEYMODULE_OK) {
+      for (const auto& [shard_id, shard_targets] : shard_id_to_targets) {
+        if (shard_targets.empty()) {
           continue;
         }
 
-        // Create target object only for the selected node
-        if (flags & VALKEYMODULE_NODE_MYSELF) {
-          selected_targets.push_back(create_local_target());
-        } else {
-          selected_targets.push_back(create_remote_target(
-              absl::StrCat(ip, ":", coordinator::GetCoordinatorPort(port))));
+        // Prefer local target when system utilization is low
+        if (prefer_local && shard_targets.size() > 1) {
+          auto local_it = std::find_if(
+              shard_targets.begin(), shard_targets.end(),
+              [](const TargetType& target) {
+                if constexpr (std::is_same_v<TargetType, FanoutSearchTarget>) {
+                  return target.type == FanoutSearchTarget::Type::kLocal;
+                } else {
+                  // For custom target types, fall back to random selection
+                  return false;
+                }
+              });
+
+          if (local_it != shard_targets.end()) {
+            selected_targets.push_back(*local_it);
+            continue;
+          }
         }
+
+        // Random selection (fallback or when system utilization is high)
+        size_t index = absl::Uniform(gen, 0u, shard_targets.size());
+        selected_targets.push_back(shard_targets[index]);
       }
     }
     return selected_targets;

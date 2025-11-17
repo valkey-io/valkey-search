@@ -7,6 +7,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_split.h"
+#include "src/commands/commands.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -292,6 +293,72 @@ GetAclViewFromCallReply(ValkeyModuleCallReply *reply) {
   return acl_views;
 }
 
+/**
+ * @brief Checks if the current user has the required permissions for the given
+ * key prefixes.
+ *
+ * This function verifies that the current user has access to all specified key
+ * prefixes according to the allowed command categories (`read` or `write`). It
+ * uses Valkey's ACL infrastructure to perform the check. If any prefix lacks
+ * the required permissions, the function returns a `PermissionDeniedError`.
+ *
+ * @param ctx The Valkey module context.
+ * @param module_allowed_cmds A set of command categories (e.g., "@read",
+ * "@write") that define the type of access being checked.
+ * @param module_prefixes A list of key prefixes that must all be accessible to
+ * the user.
+ *
+ * @return absl::Status An OK status if all prefixes are accessible; otherwise,
+ * a status indicating the type of failure (e.g., PermissionDeniedError or
+ * UnimplementedError).
+ *
+ * @returns absl::UnimplementedError If the Valkey version does not support
+ *         `ValkeyModule_ACLCheckKeyPrefixPermissions`.
+ * @returns absl::PermissionDeniedError If the user lacks permission for any of
+ * the prefixes.
+ */
+absl::Status AclValkeyCheckPermissions(
+    ValkeyModuleCtx *ctx,
+    const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
+    const std::vector<std::string> &module_prefixes) {
+  // In a more recent versions of Valkey, we can request Valkey to verify
+  // permissions for the current key prefixes instead of executing
+  // "ValkeyModule_Call" and parsing the response.
+  if (ValkeyModule_ACLCheckKeyPrefixPermissions == nullptr) {
+    return absl::UnimplementedError(
+        "ValkeyModule_ACLCheckKeyPrefixPermissions is not supported for this "
+        "version of Valkey");
+  }
+
+  // Convert "module_allowed_cmds" into `VALKEYMODULE_CMD_KEY*` bits.
+  unsigned int flags{0};
+  for (const auto &s : module_allowed_cmds) {
+    if (absl::EqualsIgnoreCase(kReadCategory, s)) {
+      flags |= VALKEYMODULE_CMD_KEY_ACCESS;
+    } else if (absl::EqualsIgnoreCase(kWriteCategory, s)) {
+      flags |= VALKEYMODULE_CMD_KEY_INSERT;
+    }
+  }
+
+  auto valkey_username =
+      vmsdk::UniqueValkeyString(ValkeyModule_GetCurrentUserName(ctx));
+
+  auto module_user = vmsdk::UniqueValkeyModuleUser(
+      ValkeyModule_GetModuleUserFromUserName(valkey_username.get()));
+
+  // We allow the user to execute command only if the user has permissions for
+  // ALL of the prefixes of the index
+  for (const auto &prefix : module_prefixes) {
+    if (ValkeyModule_ACLCheckKeyPrefixPermissions(
+            module_user.get(), prefix.c_str(), prefix.length(), flags) !=
+        VALKEYMODULE_OK) {
+      return absl::PermissionDeniedError(
+          "The user doesn't have a permission to execute a command");
+    }
+  }
+  return absl::OkStatus();
+}
+
 absl::Status AclPrefixCheck(
     ValkeyModuleCtx *ctx,
     const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
@@ -299,6 +366,19 @@ absl::Status AclPrefixCheck(
   if (!vmsdk::IsRealUserClient(ctx)) {
     return absl::OkStatus();
   }
+
+  // Try the fast path first.
+  auto res =
+      AclValkeyCheckPermissions(ctx, module_allowed_cmds, module_prefixes);
+  if (!absl::IsUnimplemented(res)) {
+    // We got a valid result (i.e. `ValkeyModule_ACLCheckKeyPrefixPermissions`
+    // is supported by this version of Valkey) - return it.
+    return res;
+  }
+
+  // ValkeyModule_ACLCheckKeyPrefixPermissions is not supported in the current
+  // Valkey version. Falling back to the legacy approach: executing a
+  // "Call(ACL,...)" command.
   auto username =
       vmsdk::UniqueValkeyString(ValkeyModule_GetCurrentUserName(ctx));
   auto reply = vmsdk::UniquePtrValkeyCallReply(

@@ -375,11 +375,6 @@ absl::Status SchemaManager::OnMetadataCallback(
     return result;
   }
 
-  VMSDK_LOG(NOTICE, nullptr)
-      << "SchemaManager::OnMetadataCallback: index " << id.data()
-      << " successfully set fingerprint " << proposed_schema->fingerprint()
-      << " and version " << proposed_schema->version();
-
   return absl::OkStatus();
 }
 
@@ -622,11 +617,6 @@ absl::Status SchemaManager::LoadIndex(
                          _ << "Failed to load index schema from RDB!");
   uint32_t db_num = index_schema->GetDBNum();
   const std::string &name = index_schema->GetName();
-
-  VMSDK_LOG(NOTICE, nullptr) << "SchemaManager::LoadIndex: index " << name
-                             << " successfully loaded with fingerprint "
-                             << index_schema->GetFingerprint()
-                             << " and version " << index_schema->GetVersion();
 
   // Select the DB number in the context for subsequent usage.
   if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {

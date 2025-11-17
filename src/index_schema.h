@@ -116,6 +116,14 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline const std::string &GetName() const { return name_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
 
+  inline uint64_t GetFingerprint() const { return fingerprint_; }
+  inline uint32_t GetVersion() const { return version_; }
+
+  inline void SetFingerprint(uint64_t fingerprint) {
+    fingerprint_ = fingerprint;
+  }
+  inline void SetVersion(uint32_t version) { version_ = version; }
+
   void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type, const char *event,
                               ValkeyModuleString *key) override;
 
@@ -195,6 +203,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::string name_;
   uint32_t db_num_{0};
   bool loaded_v2_{false};
+  uint64_t fingerprint_{0};
+  uint32_t version_{0};
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   InternedStringMap<DocumentMutation> tracked_mutated_records_

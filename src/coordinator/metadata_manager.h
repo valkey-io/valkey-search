@@ -33,7 +33,8 @@ namespace valkey_search::coordinator {
 using FingerprintCallback = absl::AnyInvocable<absl::StatusOr<uint64_t>(
     const google::protobuf::Any &metadata)>;
 using MetadataUpdateCallback = absl::AnyInvocable<absl::Status(
-    absl::string_view, const google::protobuf::Any *metadata)>;
+    absl::string_view, const google::protobuf::Any *metadata,
+    uint64_t fingerprint, uint32_t version)>;
 using AuxSaveCallback = void (*)(ValkeyModuleIO *rdb, int when);
 using AuxLoadCallback = int (*)(ValkeyModuleIO *rdb, int encver, int when);
 static constexpr int kEncodingVersion = 0;

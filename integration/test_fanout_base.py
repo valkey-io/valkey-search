@@ -5,6 +5,7 @@ from valkeytestframework.conftest import resource_port_tracker
 from valkeytestframework.util import waiters
 from valkey.exceptions import ResponseError, ConnectionError
 import pytest
+from ft_info_parser import FTInfoParser
 
 MAX_RETRIES = "4294967295"
 
@@ -92,3 +93,86 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
         assert node1.execute_command(
             "FT._DEBUG CONTROLLED_VARIABLE SET ForceRemoteFailCount 0", 
         ) == b"OK"
+
+    def test_fingerprint_version_create(self):
+        cluster: ValkeyCluster = self.new_cluster_client()
+        node0: Valkey = self.new_client_for_primary(0)
+        index_name = "index1"
+
+        assert node0.execute_command(
+            "FT.CREATE", index_name,
+            "ON", "HASH",
+            "PREFIX", "1", "doc:",
+            "SCHEMA", "price", "NUMERIC"
+        ) == b"OK"
+
+        assert node0.execute_command("CONFIG SET search.info-developer-visible yes") == b"OK"
+
+        raw = node0.execute_command("FT.INFO", index_name, "PRIMARY")
+        parser = FTInfoParser([])
+        info = parser._parse_key_value_list(raw)
+        fingerprint = info["index_fingerprint"]
+        assert fingerprint is not None
+        version = int(info["index_version"])
+        assert version == 0
+
+        # drop and create index again
+        assert node0.execute_command("FT.DROPINDEX", index_name) == b"OK"
+
+        assert node0.execute_command(
+            "FT.CREATE", index_name,
+            "ON", "HASH",
+            "PREFIX", "1", "doc:",
+            "SCHEMA", "price", "NUMERIC"
+        ) == b"OK"
+
+        raw = node0.execute_command("FT.INFO", index_name, "PRIMARY")
+        info = parser._parse_key_value_list(raw)
+        assert fingerprint == info["index_fingerprint"]
+        assert version + 2 == int(info["index_version"])
+
+    def test_fingerprint_version_load_rdb(self):
+        cluster: ValkeyCluster = self.new_cluster_client()
+        node0: Valkey = self.new_client_for_primary(0)
+        index_name = "index1"
+
+        assert node0.execute_command(
+            "FT.CREATE", index_name,
+            "ON", "HASH",
+            "PREFIX", "1", "doc:",
+            "SCHEMA", "price", "NUMERIC"
+        ) == b"OK"
+
+        assert node0.execute_command("CONFIG SET search.info-developer-visible yes") == b"OK"
+        # disable AOF and use RDB to persist
+        assert node0.execute_command("CONFIG SET appendonly no") == b"OK"
+
+        raw = node0.execute_command("FT.INFO", index_name, "PRIMARY")
+        parser = FTInfoParser([])
+        info = parser._parse_key_value_list(raw)
+        fingerprint = info["index_fingerprint"]
+        assert fingerprint is not None
+        version = int(info["index_version"])
+        assert version == 0
+
+        # drop and create index again
+        assert node0.execute_command("FT.DROPINDEX", index_name) == b"OK"
+
+        assert node0.execute_command(
+            "FT.CREATE", index_name,
+            "ON", "HASH",
+            "PREFIX", "1", "doc:",
+            "SCHEMA", "price", "NUMERIC"
+        ) == b"OK"
+
+        # save RDB
+        assert node0.execute_command("SAVE")
+
+        # flush the memory and reload from rdb
+        assert node0.execute_command("DEBUG RELOAD") == b"OK"
+
+        # Verify fingerprint and version persisted
+        raw = node0.execute_command("FT.INFO", index_name, "PRIMARY")
+        info = parser._parse_key_value_list(raw)
+        assert fingerprint == info["index_fingerprint"]
+        assert version + 2 == int(info["index_version"])

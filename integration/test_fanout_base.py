@@ -6,6 +6,7 @@ from valkeytestframework.util import waiters
 from valkey.exceptions import ResponseError, ConnectionError
 import pytest
 from indexes import *
+from ft_info_parser import FTInfoParser
 
 MAX_RETRIES = "4294967295"
 
@@ -178,4 +179,3 @@ class TestFanout(ValkeySearchClusterTestCase):
         client.execute_command("CONFIG", "SET", "search.thread-pool-wait-time-samples", "10000")
         result = client.execute_command("CONFIG", "GET", "search.thread-pool-wait-time-samples")
         assert result[1] == b"10000"
-        

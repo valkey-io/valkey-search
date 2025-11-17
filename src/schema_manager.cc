@@ -131,8 +131,10 @@ SchemaManager::SchemaManager(
     coordinator::MetadataManager::Instance().RegisterType(
         kSchemaManagerMetadataTypeName, kMetadataEncodingVersion,
         ComputeFingerprint,
-        [this](absl::string_view id, const google::protobuf::Any *metadata)
-            -> absl::Status { return this->OnMetadataCallback(id, metadata); });
+        [this](absl::string_view id, const google::protobuf::Any *metadata,
+               uint64_t fingerprint, uint32_t version) -> absl::Status {
+          return this->OnMetadataCallback(id, metadata, fingerprint, version);
+        });
   }
 }
 
@@ -347,7 +349,8 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
 }
 
 absl::Status SchemaManager::OnMetadataCallback(
-    absl::string_view id, const google::protobuf::Any *metadata) {
+    absl::string_view id, const google::protobuf::Any *metadata,
+    uint64_t fingerprint, uint32_t version) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   // Note that there is only DB 0 in cluster mode, so we can hardcode this.
   auto status = RemoveIndexSchemaInternal(0, id);
@@ -363,12 +366,19 @@ absl::Status SchemaManager::OnMetadataCallback(
     return absl::InternalError(absl::StrFormat(
         "Unable to unpack metadata for index schema %s", id.data()));
   }
+  proposed_schema->set_fingerprint(fingerprint);
+  proposed_schema->set_version(version);
 
   auto result =
       CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema);
   if (!result.ok()) {
     return result;
   }
+
+  VMSDK_LOG(NOTICE, nullptr)
+      << "SchemaManager::OnMetadataCallback: index " << id.data()
+      << " successfully set fingerprint " << proposed_schema->fingerprint()
+      << " and version " << proposed_schema->version();
 
   return absl::OkStatus();
 }
@@ -591,6 +601,8 @@ absl::Status SchemaManager::RemoveAll() {
 absl::Status SchemaManager::LoadIndex(
     ValkeyModuleCtx *ctx, std::unique_ptr<data_model::RDBSection> section,
     SupplementalContentIter &&supplemental_iter) {
+  VMSDK_LOG(NOTICE, nullptr) << "SchemaManager::LoadIndex is called";
+
   // If not subscribed, we need to subscribe now so that we can get the loading
   // ended callback.
   SubscribeToServerEventsIfNeeded();
@@ -610,6 +622,11 @@ absl::Status SchemaManager::LoadIndex(
                          _ << "Failed to load index schema from RDB!");
   uint32_t db_num = index_schema->GetDBNum();
   const std::string &name = index_schema->GetName();
+
+  VMSDK_LOG(NOTICE, nullptr) << "SchemaManager::LoadIndex: index " << name
+                             << " successfully loaded with fingerprint "
+                             << index_schema->GetFingerprint()
+                             << " and version " << index_schema->GetVersion();
 
   // Select the DB number in the context for subsequent usage.
   if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {

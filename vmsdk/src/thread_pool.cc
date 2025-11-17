@@ -327,20 +327,24 @@ int ThreadPool::GetHighPriorityWeight() const {
 void ThreadPool::AddWaitTimeSample(
     std::chrono::steady_clock::time_point enqueue_time) {
   double wait_time_ms = std::chrono::duration_cast<std::chrono::microseconds>(
-      std::chrono::steady_clock::now() - enqueue_time).count() / 1000.0;
-  
-  double old_sample = (current_sample_count_ >= sample_queue_size_) 
-      ? wait_time_samples_[sample_index_] : 0.0;
-  
+                            std::chrono::steady_clock::now() - enqueue_time)
+                            .count() /
+                        1000.0;
+
+  double old_sample = (current_sample_count_ >= sample_queue_size_)
+                          ? wait_time_samples_[sample_index_]
+                          : 0.0;
+
   wait_time_samples_[sample_index_] = wait_time_ms;
-  
+
   if (current_sample_count_ < sample_queue_size_) current_sample_count_++;
-  
+
   double current_avg = recent_avg_wait_time_.load();
-  double new_avg = current_avg + (wait_time_ms - old_sample) / 
-      std::min(current_sample_count_, sample_queue_size_);
+  double new_avg =
+      current_avg + (wait_time_ms - old_sample) /
+                        std::min(current_sample_count_, sample_queue_size_);
   recent_avg_wait_time_.store(new_avg);
-  
+
   sample_index_ = (sample_index_ + 1) % sample_queue_size_;
 }
 

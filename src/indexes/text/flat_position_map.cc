@@ -264,9 +264,11 @@ static char* SerializeExpandable(
   // Estimate size (conservative upper bound)
   // Each entry: up to 4 bytes for position + at least 1 byte for field
   // mask/terminator
+  // Add 1 extra byte for terminator when num_positions == 1
   size_t estimated_size =
       kFlatPositionMapHeaderSize +
-      (num_positions * (4 + (field_bytes > 0 ? field_bytes : 1)));
+      (num_positions * (4 + (field_bytes > 0 ? field_bytes : 1))) +
+      (num_positions == 1 ? 1 : 0);
   char* flat_map = static_cast<char*>(malloc(estimated_size));
   CHECK(flat_map != nullptr) << "Failed to allocate FlatPositionMap";
 
@@ -281,6 +283,11 @@ static char* SerializeExpandable(
     data_ptr = EncodePositionDelta(data_ptr, delta);
     data_ptr = EncodeFieldMask(data_ptr, field_mask, field_bytes);
     prev_pos = pos;
+  }
+
+  // Add terminator byte for single position case
+  if (num_positions == 1) {
+    *data_ptr++ = 0x00;  // Terminator byte (bit 7 = 0)
   }
 
   return ReallocateToActualSize(flat_map, data_ptr);

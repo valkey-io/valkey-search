@@ -47,7 +47,7 @@ of (slop=2, in_order=true):
 class ProximityIterator : public TextIterator {
  public:
   ProximityIterator(std::vector<std::unique_ptr<TextIterator>>&& iters,
-                    const size_t slop, const bool in_order,
+                    const std::optional<uint32_t> slop, const bool in_order,
                     const FieldMaskPredicate field_mask,
                     const InternedStringSet* untracked_keys = nullptr);
   /* Implementation of TextIterator APIs */
@@ -65,7 +65,7 @@ class ProximityIterator : public TextIterator {
  private:
   // List of all the Text Predicates contained in the Proximity AND.
   std::vector<std::unique_ptr<TextIterator>> iters_;
-  size_t slop_;
+  std::optional<uint32_t> slop_;
   bool in_order_;
   FieldMaskPredicate field_mask_;
   // Current key/position

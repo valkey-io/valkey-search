@@ -776,42 +776,42 @@ class TestFullText(ValkeySearchTestCaseBase):
 
         # Test 1: Text + Numeric (AND)
         result = client.execute_command("FT.SEARCH", "idx", '@content:"manager" @salary:[90000 110000]')
-        assert result[0] == 1  # Should find doc:1
+        assert (result[0], result[1]) == (1, b"doc:3")
 
         result = client.execute_command("FT.SEARCH", "idx", '@content:"manager" @salary:[90000 130000]')
-        assert result[0] == 2  # Should find doc:2, doc:3
-        
+        assert (result[0], set(result[1::2])) == (2, {b"doc:2", b"doc:3"})
+
         # Test 1.1: Text prefix + Numeric (AND)
         result = client.execute_command("FT.SEARCH", "idx", '@content:develop* @salary:[90000 110000]')
-        assert result[0] == 1  # Should find doc:1
+        assert (result[0], result[1]) == (1, b"doc:1")
 
         # Test 2: Text + Tag (OR) 
         result = client.execute_command("FT.SEARCH", "idx", '@content:"product" | @skills:{java}')
-        assert result[0] == 2  # Should find doc:1 (java) and doc:2 (scientist)
+        assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:3"})
         
         # Test 3: All three types (complex OR)
         result = client.execute_command("FT.SEARCH", "idx", '@content:"manager" | @salary:[115000 125000] | @skills:{python}')
-        assert result[0] == 3  # Should find all docs
+        assert (result[0], set(result[1::2])) == (3, {b"doc:1", b"doc:2", b"doc:3"})
         
         # Test 4: All three types (complex AND) 
         result = client.execute_command("FT.SEARCH", "idx", '@content:"engineer" @salary:[90000 110000] @skills:{python}')
-        assert result[0] == 1  # Should find doc:1 only
+        assert (result[0], result[1]) == (1, b"doc:1")
 
         # Test 5: Exact phrase with numeric filter (nested case)
         result = client.execute_command("FT.SEARCH", "idx", '@content:"software engineer" @salary:[90000 110000]')
-        assert result[0] == 1  # Should find doc:1 (exact phrase + salary match)
+        assert (result[0], result[1]) == (1, b"doc:1")
 
         # Test 6: Exact phrase with tag filter
         result = client.execute_command("FT.SEARCH", "idx", '@content:"software engineer" @skills:{python}')
-        assert result[0] == 1  # Should find doc:1 (exact phrase + tag match)
+        assert (result[0], result[1]) == (1, b"doc:1")
 
         # Test 7: Proximity with numeric - tests iterator propagation
         result = client.execute_command("FT.SEARCH", "idx", '(@content:software @salary:[90000 110000]) @content:engineer', "SLOP", "1", "INORDER")
-        assert result[0] == 1  # Should find doc:1 (proximity + numeric filter)
+        assert (result[0], result[1]) == (1, b"doc:1")
 
-        # # Test 8: Negation with mixed types
+        # Test 8: Negation with mixed types
         # result = client.execute_command("FT.SEARCH", "idx", '-@content:"manager" @skills:{python}')
-        # assert result[0] == 1  # Should find doc:1 only
+        # assert (result[0], result[1]) == (1, b"doc:1")
 
     def test_proximity_predicate(self):
         client: Valkey = self.server.get_new_client()
@@ -917,6 +917,14 @@ class TestFullText(ValkeySearchTestCaseBase):
         result = client.execute_command("FT.SEARCH", "idx", 'version 1 release', "SLOP", "2", "INORDER")
         assert (result[0], set(result[1::2])) == (3, {b"doc:10", b"doc:11", b"doc:12"})  # doc:10 (gap=2), doc:11 (gap=1)
 
+        # Enable after proximity OR changes
+        # # Test 4.1: Proximity OR
+        # result = client.execute_command("FT.SEARCH", "idx", 'alpha beta | gamma delta', "SLOP", "0", "INORDER")
+        # assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:7"}) 
+
+        # Test 4.2: Proximity OR
+        # result = client.execute_command("FT.SEARCH", "idx", '(alpha | beta) gamma', "SLOP", "0", "INORDER")
+        # assert (result[0], set(result[1::2])) == (1, {b"doc:1"}) 
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """

@@ -129,16 +129,12 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
         ValkeySearch::Instance().IsCluster() && !parameters->local_only) {
       auto mode = /* !vmsdk::IsReadOnly(ctx) ? query::fanout::kPrimaries ? */
           ForceReplicasOnly.GetValue()
-              ? query::fanout::FanoutTargetMode::kReplicasOnly
-              : query::fanout::FanoutTargetMode::kRandom;
+              ? vmsdk::cluster_map::FanoutTargetMode::kOneReplicaPerShard
+              : vmsdk::cluster_map::FanoutTargetMode::kRandom;
       // refresh cluster map if needed
-      ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
       auto search_targets =
-          ForceReplicasOnly.GetValue()
-              ? ValkeySearch::Instance()
-                    .GetClusterMap()
-                    ->GetRandomReplicaPerShard()
-              : ValkeySearch::Instance().GetClusterMap()->GetRandomTargets();
+          ValkeySearch::Instance().GetOrRefreshClusterMap(ctx)->GetTargets(
+              mode);
       return query::fanout::PerformSearchFanoutAsync(
           ctx, search_targets,
           ValkeySearch::Instance().GetCoordinatorClientPool(),

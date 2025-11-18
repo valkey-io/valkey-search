@@ -38,7 +38,8 @@ class DropConsistencyCheckFanoutOperation
         timeout_ms_(timeout_ms){};
 
   std::vector<vmsdk::cluster_map::NodeInfo> GetTargets() const {
-    return ValkeySearch::Instance().GetClusterMap()->GetAllTargets();
+    return ValkeySearch::Instance().GetClusterMap()->GetTargets(
+        vmsdk::cluster_map::FanoutTargetMode::kAll);
   }
 
   unsigned GetTimeoutMs() const override { return timeout_ms_; }

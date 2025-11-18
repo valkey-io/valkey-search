@@ -37,10 +37,11 @@ static constexpr highwayhash::HHKey kHashKey{
 
 // Enumeration for fanout target modes
 enum class FanoutTargetMode {
-  kRandom,        // Default: randomly select one node per shard
-  kReplicasOnly,  // Select only replicas, one per shard
-  kPrimary,       // Select all primary (master) nodes
-  kAll            // Select all nodes (both primary and replica)
+  kRandom,              // Default: randomly select one node per shard
+  kOneReplicaPerShard,  // Select only replicas, one per shard
+  kPrimary,             // Select all primary nodes
+  kReplicas,            // Select all replica nodes
+  kAll                  // Select all nodes (both primary and replica)
 };
 
 const size_t kNumSlots = 16384;
@@ -95,14 +96,8 @@ class ClusterMap {
   // would replace the existing map once the creation is finished
   static std::shared_ptr<ClusterMap> CreateNewClusterMap(ValkeyModuleCtx* ctx);
 
-  // return pre-generated target vectors
-  const std::vector<NodeInfo>& GetPrimaryTargets() const {
-    return primary_targets_;
-  };
-  const std::vector<NodeInfo>& GetReplicaTargets() const {
-    return replica_targets_;
-  };
-  const std::vector<NodeInfo>& GetAllTargets() const { return all_targets_; };
+  // get a vector of node targets based on the mode
+  std::vector<NodeInfo> GetTargets(FanoutTargetMode mode) const;
 
   std::chrono::steady_clock::time_point GetExpirationTime() const {
     return expiration_tp_;
@@ -110,12 +105,6 @@ class ClusterMap {
 
   // are all the slots assigned to some shard
   bool IsConsistent() const { return is_consistent_; }
-
-  // generate a random targets vector with one node from each shard
-  std::vector<NodeInfo> GetRandomTargets() const;
-
-  // generate one random replica from each shard
-  std::vector<NodeInfo> GetRandomReplicaPerShard() const;
 
   // get a random node from a shard
   const NodeInfo& GetRandomNodeFromShard(const ShardInfo& shard,

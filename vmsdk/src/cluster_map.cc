@@ -77,25 +77,36 @@ const NodeInfo& ClusterMap::GetRandomNodeFromShard(const ShardInfo& shard,
   return shard.replicas[replica_index];
 }
 
-std::vector<NodeInfo> ClusterMap::GetRandomTargets() const {
-  std::vector<NodeInfo> random_targets;
-  random_targets.reserve(shards_.size());
-  for (const auto& [shard_id, shard_info] : shards_) {
-    random_targets.push_back(GetRandomNodeFromShard(shard_info));
-  }
-  return random_targets;
-}
-
-std::vector<NodeInfo> ClusterMap::GetRandomReplicaPerShard() const {
-  std::vector<NodeInfo> random_replicas;
-  random_replicas.reserve(shards_.size());
-  for (const auto& [shard_id, shard_info] : shards_) {
-    if (shard_info.replicas.empty()) {
-      continue;
+std::vector<NodeInfo> ClusterMap::GetTargets(FanoutTargetMode mode) const {
+  switch (mode) {
+    case FanoutTargetMode::kAll:
+      return all_targets_;
+    case FanoutTargetMode::kPrimary:
+      return primary_targets_;
+    case FanoutTargetMode::kReplicas:
+      return replica_targets_;
+    case FanoutTargetMode::kOneReplicaPerShard: {
+      std::vector<NodeInfo> random_replicas;
+      random_replicas.reserve(shards_.size());
+      for (const auto& [shard_id, shard_info] : shards_) {
+        if (shard_info.replicas.empty()) {
+          continue;
+        }
+        random_replicas.push_back(GetRandomNodeFromShard(shard_info, true));
+      }
+      return random_replicas;
     }
-    random_replicas.push_back(GetRandomNodeFromShard(shard_info, true));
+    case FanoutTargetMode::kRandom: {
+      std::vector<NodeInfo> random_targets;
+      random_targets.reserve(shards_.size());
+      for (const auto& [shard_id, shard_info] : shards_) {
+        random_targets.push_back(GetRandomNodeFromShard(shard_info));
+      }
+      return random_targets;
+    }
+    default:
+      CHECK(false);
   }
-  return random_replicas;
 }
 
 // For shard fingerprint - hash the slot ranges

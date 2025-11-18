@@ -14,6 +14,8 @@ ProximityIterator::ProximityIterator(
       current_position_(std::nullopt),
       field_mask_(field_mask) {
   CHECK(!iters_.empty()) << "must have at least one text iterator";
+  CHECK(slop_.has_value() || in_order_)
+      << "ProximityIterator requires either slop or inorder=true";
   // Pre-allocate vectors used for positional checks to avoid reallocation
   positions_.resize(iters_.size());
   pos_with_idx_.resize(iters_.size());

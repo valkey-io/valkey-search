@@ -86,7 +86,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
           auto rhs_predicate,
           GRPCPredicateToPredicate(predicate.and_().rhs(), index_schema,
                                    attribute_identifiers));
-
       // Extract slop and inorder if present
       std::optional<uint32_t> slop = std::nullopt;
       bool inorder = false;
@@ -289,16 +288,13 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
       and_predicate_proto->mutable_and_()->set_allocated_rhs(
           PredicateToGRPCPredicate(*composed_and_predicate->GetRhsPredicate())
               .release());
-
       // Add slop and inorder if present
       if (composed_and_predicate->GetSlop().has_value()) {
         and_predicate_proto->mutable_and_()->set_slop(
             composed_and_predicate->GetSlop().value());
       }
-
       and_predicate_proto->mutable_and_()->set_inorder(
           composed_and_predicate->GetInorder());
-
       return and_predicate_proto;
     }
     case query::PredicateType::kComposedOr: {

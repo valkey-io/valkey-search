@@ -107,7 +107,6 @@ void PrintPredicate(const query::Predicate* pred, int depth, bool last,
     case query::PredicateType::kComposedAnd:
     case query::PredicateType::kComposedOr: {
       const auto* comp = dynamic_cast<const query::ComposedPredicate*>(pred);
-
       std::string log_msg =
           (pred->GetType() == query::PredicateType::kComposedAnd ? "AND"
                                                                  : "OR");
@@ -450,13 +449,10 @@ std::unique_ptr<query::Predicate> FilterParser::WrapPredicate(
   if (!prev_predicate) {
     return MayNegatePredicate(std::move(predicate), negate);
   }
-  std::optional<uint32_t> slop = options_.slop;
-  bool inorder = options_.inorder;
-
   return std::make_unique<query::ComposedPredicate>(
       std::move(prev_predicate),
-      MayNegatePredicate(std::move(predicate), negate), logical_operator, slop,
-      inorder);
+      MayNegatePredicate(std::move(predicate), negate), logical_operator,
+      options_.slop, options_.inorder);
 };
 
 static const uint32_t FUZZY_MAX_DISTANCE = 3;
@@ -713,7 +709,6 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
     for (const auto& identifier : text_identifiers) {
       filter_identifiers_.insert(identifier);
     }
-
     // When no field was specified, we use the min stem across all text fields
     // in the index schema. This helps ensure the root of the text token can be
     // searched for.
@@ -780,7 +775,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     // Exact phrase requires adjacent terms in order: slop=0, inorder=true
     uint32_t slop = 0;
     bool inorder = true;
-
     pred = std::move(terms.front());  // Start with first term
     for (size_t i = 1; i < terms.size(); ++i) {
       pred = std::make_unique<query::ComposedPredicate>(
@@ -790,7 +784,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
           /*slop=*/slop,
           /*inorder=*/inorder);
     }
-
     node_count_ += terms.size();
   } else {
     if (terms.empty()) {

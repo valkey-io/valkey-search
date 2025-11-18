@@ -59,11 +59,9 @@ EvaluationResult TermPredicate::Evaluate(
   }
 
   auto key_iter = postings->GetKeyIterator();
-  // Skip to the target key in the shared Postings object
-  if (!key_iter.SkipForwardKey(target_key)) {
-    return EvaluationResult(false);  // Key not found
-  }
-  if (!(key_iter.IsValid() && key_iter.ContainsFields(field_mask))) {
+  // Skip to target key and verify it contains the required fields
+  if (!key_iter.SkipForwardKey(target_key) ||
+      !key_iter.ContainsFields(field_mask)) {
     return EvaluationResult(false);
   }
 
@@ -105,10 +103,9 @@ EvaluationResult PrefixPredicate::Evaluate(
     auto postings = word_iter.GetTarget();
     if (postings) {
       auto key_iter = postings->GetKeyIterator();
-      bool skip_result = key_iter.SkipForwardKey(target_key);
-      bool contains = skip_result && key_iter.ContainsFields(field_mask);
-
-      if (contains) {
+      // Skip to target key and verify it contains the required fields
+      if (key_iter.SkipForwardKey(target_key) &&
+          key_iter.ContainsFields(field_mask)) {
         key_iterators.emplace_back(std::move(key_iter));
       }
     }
@@ -161,6 +158,7 @@ EvaluationResult SuffixPredicate::Evaluate(
     auto postings = word_iter.GetTarget();
     if (postings) {
       auto key_iter = postings->GetKeyIterator();
+      // Skip to target key and verify it contains the required fields
       if (key_iter.SkipForwardKey(target_key) &&
           key_iter.ContainsFields(field_mask)) {
         key_iterators.emplace_back(std::move(key_iter));
@@ -237,8 +235,7 @@ EvaluationResult ProximityPredicate::Evaluate(Evaluator& evaluator) const {
 EvaluationResult ProximityPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const std::shared_ptr<valkey_search::InternedString>& target_key) const {
-  // Temporarily make this pass through for tests.
-  return EvaluationResult(true);
+  return EvaluationResult(false);
 }
 
 NumericPredicate::NumericPredicate(const indexes::Numeric* index,

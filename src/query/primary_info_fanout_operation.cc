@@ -150,9 +150,8 @@ int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
         SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
     auto schema = std::move(status_or_schema.value());
     ValkeyModule_ReplyWithSimpleString(ctx, "index_fingerprint");
-    std::string fingerprint_str = absl::StrCat(schema->GetFingerprint());
-    ValkeyModule_ReplyWithBigNumber(ctx, fingerprint_str.c_str(),
-                                    fingerprint_str.length());
+    int64_t fingerprint = static_cast<int64_t>(schema->GetFingerprint());
+    ValkeyModule_ReplyWithLongLong(ctx, fingerprint);
     ValkeyModule_ReplyWithSimpleString(ctx, "index_version");
     ValkeyModule_ReplyWithLongLong(ctx, schema->GetVersion());
   }

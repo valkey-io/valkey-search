@@ -114,8 +114,12 @@ class ClusterMap {
   // generate a random targets vector with one node from each shard
   std::vector<NodeInfo> GetRandomTargets() const;
 
+  // generate one random replica from each shard
+  std::vector<NodeInfo> GetRandomReplicaPerShard() const;
+
   // get a random node from a shard
-  const NodeInfo& GetRandomNodeFromShard(const ShardInfo& shard) const;
+  const NodeInfo& GetRandomNodeFromShard(const ShardInfo& shard,
+                                         bool replica_only = false) const;
 
   // do I own this slot
   bool IOwnSlot(uint16_t slot) const { return owned_slots_[slot]; }
@@ -169,7 +173,8 @@ class ClusterMap {
   // Helper functions for CreateNewClusterMap
   // parse and return a single node info, or return empty if node is invalid
   std::optional<NodeInfo> ParseNodeInfo(ValkeyModuleCallReply* node_arr,
-                                        bool is_local_shard, bool is_primary);
+                                        const char* my_node_id,
+                                        bool is_primary);
 
   // check is this a local shard
   bool IsLocalShard(ValkeyModuleCallReply* slot_range, const char* my_node_id);

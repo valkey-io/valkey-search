@@ -684,10 +684,10 @@ TEST_F(ClusterMapTest, LocalNodeIsReplicaTest) {
   EXPECT_FALSE(cluster_map->IOwnSlot(8192));
   EXPECT_FALSE(cluster_map->IOwnSlot(16383));
 
-  // Verify both nodes in first shard are marked as local
+  // Verify only the first replica is local
   const ShardInfo* shard = cluster_map->GetShardById(primary_ids.at(0));
   ASSERT_NE(shard, nullptr);
-  EXPECT_TRUE(shard->primary->is_local);
+  EXPECT_FALSE(shard->primary->is_local);
   EXPECT_TRUE(shard->replicas[0].is_local);
 
   // Second shard should be remote
@@ -760,6 +760,25 @@ TEST_F(ClusterMapTest, TargetListConsistencyTest) {
 
   ASSERT_NE(cluster_map, nullptr);
   VerifyTargetListConsistency(cluster_map.get(), 2, 2);
+}
+
+TEST_F(ClusterMapTest, GetRandomReplicaPerShardTest) {
+  auto ranges = CreateStandard3ShardConfig();
+  auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
+
+  ASSERT_NE(cluster_map, nullptr);
+
+  auto random_targets = cluster_map->GetRandomReplicaPerShard();
+  EXPECT_EQ(random_targets.size(), 3);  // One per shard
+
+  // Verify each target belongs to a different shard
+  std::set<std::string> shard_ids;
+  for (const auto& target : random_targets) {
+    ASSERT_NE(target.shard, nullptr);
+    ASSERT_FALSE(target.is_primary);
+    shard_ids.insert(target.shard->shard_id);
+  }
+  EXPECT_EQ(shard_ids.size(), 3);
 }
 
 // ============================================================================

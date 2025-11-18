@@ -135,7 +135,9 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
       ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
       auto search_targets =
           ForceReplicasOnly.GetValue()
-              ? ValkeySearch::Instance().GetClusterMap()->GetReplicaTargets()
+              ? ValkeySearch::Instance()
+                    .GetClusterMap()
+                    ->GetRandomReplicaPerShard()
               : ValkeySearch::Instance().GetClusterMap()->GetRandomTargets();
       return query::fanout::PerformSearchFanoutAsync(
           ctx, search_targets,

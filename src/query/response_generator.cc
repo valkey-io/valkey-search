@@ -130,20 +130,15 @@ class PredicateEvaluator : public query::Evaluator {
 
   EvaluationResult EvaluateText(
       const query::TextPredicate &predicate) override {
-    // If we have per-key indexes, use them for text evaluation
-    if (per_key_indexes_ && target_key_) {
-      // Find the per_key_text_index for the target key.
-      auto it = per_key_indexes_->find(target_key_);
-      if (it == per_key_indexes_->end()) {
-        VMSDK_LOG(WARNING, nullptr)
-            << "Target key not found in index for predicate evaluation";
-        return EvaluationResult(false);
-      }
-      // Just pass the text_index, predicate computes its own field_mask
-      return predicate.Evaluate(it->second, target_key_);
+    // Find the per_key_text_index for the target key.
+    auto it = per_key_indexes_->find(target_key_);
+    if (it == per_key_indexes_->end()) {
+      VMSDK_LOG(WARNING, nullptr)
+          << "Target key not found in index for predicate evaluation";
+      return EvaluationResult(false);
     }
-    // Fallback: no per-key index available
-    return EvaluationResult(false);
+    // Just pass the text_index, predicate computes its own field_mask
+    return predicate.Evaluate(it->second, target_key_);
   }
 
  private:

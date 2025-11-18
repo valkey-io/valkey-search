@@ -44,6 +44,7 @@ EvaluationResult TermPredicate::Evaluate(Evaluator& evaluator) const {
   return evaluator.EvaluateText(*this);
 }
 
+// TermPredicate: Exact term match in the text index.
 EvaluationResult TermPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const std::shared_ptr<valkey_search::InternedString>& target_key) const {
@@ -88,6 +89,7 @@ EvaluationResult PrefixPredicate::Evaluate(Evaluator& evaluator) const {
   return evaluator.EvaluateText(*this);
 }
 
+// PrefixPredicate: Matches all terms that start with the given prefix.
 EvaluationResult PrefixPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const std::shared_ptr<valkey_search::InternedString>& target_key) const {
@@ -138,6 +140,7 @@ EvaluationResult SuffixPredicate::Evaluate(Evaluator& evaluator) const {
   return evaluator.EvaluateText(*this);
 }
 
+// SuffixPredicate: Matches terms that end with the given suffix
 EvaluationResult SuffixPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const std::shared_ptr<valkey_search::InternedString>& target_key) const {
@@ -327,6 +330,10 @@ ComposedPredicate::ComposedPredicate(std::unique_ptr<Predicate> lhs_predicate,
       slop_(slop),
       inorder_(inorder) {}
 
+// ComposedPredicate: Combines two predicates with AND/OR logic.
+// For text predicates with proximity constraints (slop/inorder), creates
+// ProximityIterator to validate term positions meet distance and order
+// requirements.
 EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   if (GetType() == PredicateType::kComposedAnd) {
     EvaluationResult lhs = lhs_predicate_->Evaluate(evaluator);

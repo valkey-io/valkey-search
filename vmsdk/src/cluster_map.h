@@ -106,10 +106,6 @@ class ClusterMap {
   // are all the slots assigned to some shard
   bool IsConsistent() const { return is_consistent_; }
 
-  // get a random node from a shard
-  const NodeInfo& GetRandomNodeFromShard(const ShardInfo& shard,
-                                         bool replica_only = false) const;
-
   // do I own this slot
   bool IOwnSlot(uint16_t slot) const { return owned_slots_[slot]; }
 
@@ -148,6 +144,10 @@ class ClusterMap {
   std::vector<NodeInfo> primary_targets_;
   std::vector<NodeInfo> replica_targets_;
   std::vector<NodeInfo> all_targets_;
+
+  // get a random node from a shard
+  const NodeInfo& GetRandomNodeFromShard(const ShardInfo& shard,
+                                         bool replica_only = false) const;
 
   // helper function to print out cluster map for debug
   static void PrintClusterMap(std::shared_ptr<ClusterMap> map);

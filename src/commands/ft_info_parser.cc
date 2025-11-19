@@ -10,7 +10,6 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "src/acl.h"
-#include "src/commands/commands.h"
 #include "src/query/cluster_info_fanout_operation.h"
 #include "src/query/primary_info_fanout_operation.h"
 #include "src/schema_manager.h"
@@ -110,10 +109,8 @@ absl::Status InfoCommand::ParseCommand(ValkeyModuleCtx *ctx,
 
 absl::Status InfoCommand::Execute(ValkeyModuleCtx *ctx) {
   // ACL check
-  static const auto permissions =
-      PrefixACLPermissions(kInfoCmdPermissions, kInfoCommand);
-  VMSDK_RETURN_IF_ERROR(
-      AclPrefixCheck(ctx, permissions, index_schema->GetKeyPrefixes()));
+  VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, acl::KeyAccess::kRead,
+                                       index_schema->GetKeyPrefixes()));
 
   const bool is_loading =
       ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING;

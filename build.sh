@@ -338,6 +338,7 @@ TESTS_DIR=${BUILD_DIR}/tests
 TEST_OUTPUT_FILE=${BUILD_DIR}/tests.out
 
 printf "Checking if configure is required..."
+
 FORCE_CMAKE=$(is_configure_required)
 printf "${GREEN}${FORCE_CMAKE}${RESET}\n"
 check_tools

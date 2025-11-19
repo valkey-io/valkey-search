@@ -2,7 +2,6 @@
 
 #include "src/acl.h"
 
-#include "absl/container/flat_hash_set.h"
 #include "absl/log/log.h"
 #include "gtest/gtest.h"
 #include "testing/common.h"
@@ -44,7 +43,7 @@ struct ValkeyAclGetUserOutput {
 
 struct AclPrefixCheckTestCase {
   std::string test_name;
-  absl::flat_hash_set<absl::string_view> module_allowed_commands;
+  absl::string_view access;
   std::vector<std::string> prefixes;
   std::vector<ValkeyAclGetUserOutput> acls;
   absl::Status expected_return;
@@ -105,8 +104,7 @@ TEST_P(AclPrefixCheckTest, AclPrefixCheckTests) {
                          const char *arg1,
                          const char *arg2) { return (reply.get()); });
   EXPECT_EQ(test_case.expected_return,
-            AclPrefixCheck(&fake_ctx_, test_case.module_allowed_commands,
-                           test_case.prefixes));
+            AclPrefixCheck(&fake_ctx_, test_case.access, test_case.prefixes));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -114,7 +112,7 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn<AclPrefixCheckTestCase>({
         {
             .test_name = "all_key",
-            .module_allowed_commands = {"@search"},
+            .access = "@write",
             .prefixes = {},
             .acls =
                 {
@@ -127,7 +125,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "all_key_alias",
-            .module_allowed_commands = {"@search"},
+            .access = "@write",
             .prefixes = {},
             .acls = {{
                 .cmds = "+@all",
@@ -137,18 +135,18 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "all_key_smaller",
-            .module_allowed_commands = {"@search"},
+            .access = "@write",
             .prefixes = {},
             .acls = {{
                 .cmds = "+@all",
                 .keys = "~a*",
             }},
             .expected_return = absl::PermissionDeniedError(
-                "The user doesn't have a permission to execute a command"),
+                "The user does not have permission to access the key prefix"),
         },
         {
             .test_name = "same_key",
-            .module_allowed_commands = {"@search"},
+            .access = "@write",
             .prefixes = {"abc:"},
             .acls = {{
                 .cmds = "+@all",
@@ -158,18 +156,18 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "resetkeys",
-            .module_allowed_commands = {"@search"},
+            .access = "@write",
             .prefixes = {"abc:"},
             .acls = {{
                 .cmds = "+@all",
                 .keys = "~* allkeys ~abc:* resetkeys",
             }},
             .expected_return = absl::PermissionDeniedError(
-                "The user doesn't have a permission to execute a command"),
+                "The user does not have permission to access the key prefix"),
         },
         {
             .test_name = "resetkeys_same",
-            .module_allowed_commands = {"@search"},
+            .access = "@write",
             .prefixes = {"abc:"},
             .acls = {{
                 .cmds = "+@all",
@@ -179,7 +177,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "bigger_key",
-            .module_allowed_commands = {"@search"},
+            .access = "@write",
             .prefixes = {"abc:"},
             .acls = {{
                 .cmds = "+@all",
@@ -189,7 +187,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "bigger_key_question",
-            .module_allowed_commands = {"@search"},
+            .access = "@write",
             .prefixes = {"abc:"},
             .acls = {{
                 .cmds = "+@all",
@@ -199,7 +197,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "bigger_key_oneof",
-            .module_allowed_commands = {"@search"},
+            .access = "@write",
             .prefixes = {"abc:"},
             .acls = {{
                 .cmds = "+@all",
@@ -209,7 +207,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "bigger_key_ranged_oneof",
-            .module_allowed_commands = {"@search"},
+            .access = "@write",
             .prefixes = {"abc:"},
             .acls = {{
                 .cmds = "+@all",
@@ -219,7 +217,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "bigger_key_negative_oneof",
-            .module_allowed_commands = {"@search"},
+            .access = "@write",
             .prefixes = {"abc:"},
             .acls = {{
                 .cmds = "+@all",
@@ -229,7 +227,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "wrongs",
-            .module_allowed_commands = {"@search"},
+            .access = "@write",
             .prefixes = {"abc:"},
             .acls = {{
                 .cmds = "+@all",
@@ -238,22 +236,22 @@ INSTANTIATE_TEST_SUITE_P(
                         "%W~xyz:*",
             }},
             .expected_return = absl::PermissionDeniedError(
-                "The user doesn't have a permission to execute a command"),
+                "The user does not have permission to access the key prefix"),
         },
         {
             .test_name = "union_same_but_fail",
-            .module_allowed_commands = {"@search"},
+            .access = "@write",
             .prefixes = {"abc:"},
             .acls = {{
                 .cmds = "+@all",
                 .keys = "~abc:[ab]* ~abc:[^ab]*",
             }},
             .expected_return = absl::PermissionDeniedError(
-                "The user doesn't have a permission to execute a command"),
+                "The user does not have permission to access the key prefix"),
         },
         {
             .test_name = "readonly_same",
-            .module_allowed_commands = {"@search"},
+            .access = "@write",
             .prefixes = {"abc:"},
             .acls = {{
                 .cmds = "+@all",
@@ -263,7 +261,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "readwrite_same",
-            .module_allowed_commands = {"@search"},
+            .access = "@write",
             .prefixes = {"abc:"},
             .acls = {{
                 .cmds = "+@all",
@@ -273,18 +271,18 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "writeonly_same",
-            .module_allowed_commands = {"@search"},
+            .access = "@write",
             .prefixes = {"abc:"},
             .acls = {{
                 .cmds = "+@all",
                 .keys = "%W~abc:*",
             }},
             .expected_return = absl::PermissionDeniedError(
-                "The user doesn't have a permission to execute a command"),
+                "The user does not have permission to access the key prefix"),
         },
         {
             .test_name = "cmd_allowed",
-            .module_allowed_commands = {"@search"},
+            .access = "@write",
             .prefixes = {"abc:"},
             .acls = {{
                 .cmds = "-@all +@search",
@@ -294,7 +292,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "cmd_allowed_multiple_rules",
-            .module_allowed_commands = {"@search", "@write"},
+            .access = "@write",
             .prefixes = {"abc:"},
             .acls = {{
                          .cmds = "-@all +@search",
@@ -308,7 +306,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "cmd_allowed_one_command",
-            .module_allowed_commands = {"@search", "@write", "FT.CREATE"},
+            .access = "@write",
             .prefixes = {"abc:"},
             .acls = {{
                          .cmds = "-@all +@search",
@@ -326,18 +324,18 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .test_name = "several_prefixes_allowed_only_one",
-            .module_allowed_commands = {"@search"},
+            .access = "@write",
             .prefixes = {"abc:", "xyz:"},
             .acls = {{
                 .cmds = "+@all",
                 .keys = "~abc:*",
             }},
             .expected_return = absl::PermissionDeniedError(
-                "The user doesn't have a permission to execute a command"),
+                "The user does not have permission to access the key prefix"),
         },
         {
             .test_name = "several_prefixes_allowed_all",
-            .module_allowed_commands = {"@search"},
+            .access = "@write",
             .prefixes = {"abc:", "xyz:"},
             .acls = {{
                 .cmds = "+@all",

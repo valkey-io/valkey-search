@@ -86,10 +86,9 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
     parameters->parse_vars.ClearAtEndOfParse();
     parameters->cancellation_token =
         cancel::Make(parameters->timeout_ms, nullptr);
-    static const auto permissions =
-        PrefixACLPermissions(kSearchCmdPermissions, kSearchCommand);
-    VMSDK_RETURN_IF_ERROR(AclPrefixCheck(
-        ctx, permissions, parameters->index_schema->GetKeyPrefixes()));
+    VMSDK_RETURN_IF_ERROR(
+        AclPrefixCheck(ctx, acl::KeyAccess::kRead,
+                       parameters->index_schema->GetKeyPrefixes()));
 
     parameters->index_schema->ProcessMultiQueue();
 

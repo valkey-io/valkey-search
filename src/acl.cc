@@ -188,6 +188,15 @@ absl::string_view CallReplyStringToStringView(ValkeyModuleCallReply *r) {
   return {r_c_str, l};
 }
 
+absl::string_view KeyAccessToStringView(acl::KeyAccess ka) {
+  switch (ka) {
+    case acl::KeyAccess::kWrite:
+      return kWriteCategory;
+    case acl::KeyAccess::kRead:
+      return kReadCategory;
+  }
+}
+
 /*
 The ACL rules provided by the Valkey Server ACL GETUSER command, are a list of
 rules contain commands and key patterns, which describe if the commands can run
@@ -195,7 +204,6 @@ against the key patterns. We only need the key patterns that the corresponding
 commands matches our module commands.
 */
 std::vector<absl::string_view> GetKeysWithAllowedCommands(
-    const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
     const std::vector<acl::ValkeyAclGetUserReplyView> &acl_views) {
   std::vector<absl::string_view> keys;
   for (const auto &acl_view : acl_views) {
@@ -279,6 +287,10 @@ void GetAclViewFromCallReplyImpl(
   }
 }
 
+bool IsKeyPrefixCheckSupported() {
+  return ValkeyModule_ACLCheckKeyPrefixPermissions != nullptr;
+}
+
 }  // namespace
 
 absl::StatusOr<std::vector<acl::ValkeyAclGetUserReplyView>>
@@ -294,52 +306,33 @@ GetAclViewFromCallReply(ValkeyModuleCallReply *reply) {
 }
 
 /**
- * @brief Checks if the current user has the required permissions for the given
- * key prefixes.
+ * @brief Checks if the current user has the required permissions for all
+ * specified key prefixes.
  *
- * This function verifies that the current user has access to all specified key
- * prefixes according to the allowed command categories (`read` or `write`). It
- * uses Valkey's ACL infrastructure to perform the check. If any prefix lacks
- * the required permissions, the function returns a `PermissionDeniedError`.
+ * This function verifies that the current Valkey module user has the specified
+ * access rights (read, write, or both) for every key prefix in the provided
+ * list. It returns an error if any prefix check fails or if key prefix
+ * permissions are not supported.
  *
- * @param ctx The Valkey module context.
- * @param module_allowed_cmds A set of command categories (e.g., "@read",
- * "@write") that define the type of access being checked.
- * @param module_prefixes A list of key prefixes that must all be accessible to
- * the user.
+ * @param ctx Pointer to the Valkey module context.
+ * @param access The type of access to check (read, write, or both).
+ * @param module_prefixes Vector of key prefixes to check permissions for.
  *
- * @return absl::Status An OK status if all prefixes are accessible; otherwise,
- * a status indicating the type of failure (e.g., PermissionDeniedError or
- * UnimplementedError).
- *
- * @returns absl::UnimplementedError If the Valkey version does not support
- *         `ValkeyModule_ACLCheckKeyPrefixPermissions`.
- * @returns absl::PermissionDeniedError If the user lacks permission for any of
- * the prefixes.
+ * @return absl::Status Returns `absl::OkStatus()` if all checks pass. Returns
+ *         `absl::UnimplementedError` if key prefix checks are not supported by
+ * this Valkey version. Returns `absl::PermissionDeniedError` if the user lacks
+ * permissions for any prefix.
  */
 absl::Status AclValkeyCheckPermissions(
-    ValkeyModuleCtx *ctx,
-    const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
+    ValkeyModuleCtx *ctx, acl::KeyAccess access,
     const std::vector<std::string> &module_prefixes) {
-  // In a more recent versions of Valkey, we can request Valkey to verify
-  // permissions for the current key prefixes instead of executing
-  // "ValkeyModule_Call" and parsing the response.
-  if (ValkeyModule_ACLCheckKeyPrefixPermissions == nullptr) {
+  if (!IsKeyPrefixCheckSupported()) {
     return absl::UnimplementedError(
         "ValkeyModule_ACLCheckKeyPrefixPermissions is not supported for this "
         "version of Valkey");
   }
 
-  // Convert "module_allowed_cmds" into `VALKEYMODULE_CMD_KEY*` bits.
-  unsigned int flags{0};
-  for (const auto &s : module_allowed_cmds) {
-    if (absl::EqualsIgnoreCase(kReadCategory, s)) {
-      flags |= VALKEYMODULE_CMD_KEY_ACCESS;
-    } else if (absl::EqualsIgnoreCase(kWriteCategory, s)) {
-      flags |= VALKEYMODULE_CMD_KEY_INSERT;
-    }
-  }
-
+  auto flags = static_cast<unsigned int>(access);
   auto valkey_username =
       vmsdk::UniqueValkeyString(ValkeyModule_GetCurrentUserName(ctx));
 
@@ -353,45 +346,32 @@ absl::Status AclValkeyCheckPermissions(
             module_user.get(), prefix.c_str(), prefix.length(), flags) !=
         VALKEYMODULE_OK) {
       return absl::PermissionDeniedError(
-          "The user doesn't have a permission to execute a command");
+          "The user does not have permission to access the key prefix");
     }
   }
   return absl::OkStatus();
 }
 
-absl::Status AclPrefixCheck(
-    ValkeyModuleCtx *ctx,
-    const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
-    const std::vector<std::string> &module_prefixes) {
+absl::Status AclPrefixCheck(ValkeyModuleCtx *ctx,
+                            [[maybe_unused]] absl::string_view access,
+                            const std::vector<std::string> &module_prefixes) {
   if (!vmsdk::IsRealUserClient(ctx)) {
     return absl::OkStatus();
   }
 
-  // Try the fast path first.
-  auto res =
-      AclValkeyCheckPermissions(ctx, module_allowed_cmds, module_prefixes);
-  if (!absl::IsUnimplemented(res)) {
-    // We got a valid result (i.e. `ValkeyModule_ACLCheckKeyPrefixPermissions`
-    // is supported by this version of Valkey) - return it.
-    return res;
-  }
-
-  // ValkeyModule_ACLCheckKeyPrefixPermissions is not supported in the current
-  // Valkey version. Falling back to the legacy approach: executing a
-  // "Call(ACL,...)" command.
   auto username =
       vmsdk::UniqueValkeyString(ValkeyModule_GetCurrentUserName(ctx));
   auto reply = vmsdk::UniquePtrValkeyCallReply(
       ValkeyModule_Call(ctx, "ACL", "cs3", "GETUSER", username.get()));
   VMSDK_ASSIGN_OR_RETURN(auto acl_views, GetAclViewFromCallReply(reply.get()));
 
-  auto acl_keys = GetKeysWithAllowedCommands(module_allowed_cmds, acl_views);
+  auto acl_keys = GetKeysWithAllowedCommands(acl_views);
 
   // If no index prefixes are given from the module, it should have permission
   // to access ALL keys.
   if (module_prefixes.empty() && !IsPrefixAllowed("", acl_keys)) {
     return absl::PermissionDeniedError(
-        "The user doesn't have a permission to execute a command");
+        "The user does not have permission to access the key prefix");
   }
 
   // We allow the user to execute command only if the user has permissions for
@@ -399,22 +379,27 @@ absl::Status AclPrefixCheck(
   for (const auto &module_prefix : module_prefixes) {
     if (!IsPrefixAllowed(module_prefix, acl_keys)) {
       return absl::PermissionDeniedError(
-          "The user doesn't have a permission to execute a command");
+          "The user does not have permission to access the key prefix");
     }
   }
   return absl::OkStatus();
 }
 
-absl::Status AclPrefixCheck(
-    ValkeyModuleCtx *ctx,
-    const absl::flat_hash_set<absl::string_view> &module_allowed_cmds,
-    const data_model::IndexSchema &index_schema_proto) {
+absl::Status AclPrefixCheck(ValkeyModuleCtx *ctx, acl::KeyAccess access,
+                            const data_model::IndexSchema &index_schema_proto) {
   std::vector<std::string> module_prefixes;
   module_prefixes.reserve(index_schema_proto.subscribed_key_prefixes_size());
   for (const auto &prefix : index_schema_proto.subscribed_key_prefixes()) {
     module_prefixes.emplace_back(prefix);
   }
-  return AclPrefixCheck(ctx, module_allowed_cmds, module_prefixes);
+  return AclPrefixCheck(ctx, KeyAccessToStringView(access), module_prefixes);
 }
 
+absl::Status AclPrefixCheck(ValkeyModuleCtx *ctx, acl::KeyAccess access,
+                            const std::vector<std::string> &module_prefixes) {
+  if (IsKeyPrefixCheckSupported()) {
+    return AclValkeyCheckPermissions(ctx, access, module_prefixes);
+  }
+  return AclPrefixCheck(ctx, KeyAccessToStringView(access), module_prefixes);
+}
 }  // namespace valkey_search

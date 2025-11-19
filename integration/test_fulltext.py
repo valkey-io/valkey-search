@@ -188,7 +188,7 @@ def validate_fulltext_search(client: Valkey):
     assert result[0] == 1
     assert result[1] == b"product:6"
 
-class TestFullText(ValkeySearchTestCaseBase):
+class TestFullText(ValkeySearchTestCaseDebugMode):
 
     def test_text_search(self):
         """
@@ -201,6 +201,7 @@ class TestFullText(ValkeySearchTestCaseBase):
         for doc in hash_docs:
             assert client.execute_command(*doc) == 5
         # Validation of search queries:
+        print(self.client.execute_command("FT._DEBUG TEXTINFO products PREFIX *"))
         validate_fulltext_search(client)
 
     def test_ft_create_and_info(self):
@@ -727,6 +728,7 @@ class TestFullText(ValkeySearchTestCaseBase):
         IndexingTestHelper.wait_for_backfill_complete_on_node(self.client, "idx")
         # Test suffix search with *ing
         result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ing")
+        print(self.client.execute_command("FT._DEBUG TEXTINFO idx SUFFIX *ing"))
         assert result[0] == 4  # All documents contain words ending with 'ing'
         # Test suffix search with *ing (should match running, jumping, walking, etc.)
         result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ning")

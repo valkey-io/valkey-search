@@ -9,6 +9,7 @@
 #include <absl/strings/ascii.h>
 
 #include "module_config.h"
+#include "src/index_schema.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/debug.h"
@@ -261,6 +262,7 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
        "list all controlled variables and their values"},
       {"FT._DEBUG PAUSEPOINT [ SET | RESET | TEST | LIST] <pausepoint>",
        "control pause points"},
+      {"FT._DEBUG TEXTINFO <index> ...", "show info about schema-level text"},
       {"FT._DEBUG STRINGPOOLSTATS", "Show InternStringPool Stats"},
   };
   ValkeyModule_ReplySetArrayLength(ctx, 2 * help_text.size());
@@ -298,13 +300,15 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, keyword));
   keyword = absl::AsciiStrToUpper(keyword);
   if (keyword == "SHOW_INFO") {
-    return vmsdk::info_field::ShowInfo(ctx, itr, options);
+    return vmsdk::info_field::ShowInfo(ctx, itr, ::options);
   } else if (keyword == "PAUSEPOINT") {
     return PausePointControlCmd(ctx, itr);
   } else if (keyword == "CONTROLLED_VARIABLE") {
     return ControlledCmd(ctx, itr);
   } else if (keyword == "STRINGPOOLSTATS") {
     return StringPoolStats(ctx, itr);
+  } else if (keyword == "TEXTINFO") {
+    return IndexSchema::TextInfoCmd(ctx, itr);
   } else if (keyword == "HELP") {
     return HelpCmd(ctx, itr);
   } else {

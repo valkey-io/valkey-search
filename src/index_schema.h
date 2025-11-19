@@ -25,6 +25,7 @@
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
+#include "command_parser.h"
 #include "gtest/gtest_prod.h"
 #include "src/attribute.h"
 #include "src/attribute_data_type.h"
@@ -192,6 +193,9 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t GetBackfillScannedKeyCount() const;
   uint64_t GetBackfillDbSize() const;
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
+
+  static absl::Status TextInfoCmd(ValkeyModuleCtx *ctx,
+                                  vmsdk::ArgsIterator &itr);
 
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,

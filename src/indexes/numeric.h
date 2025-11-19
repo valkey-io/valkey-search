@@ -166,7 +166,7 @@ class Numeric : public IndexBase {
 
  private:
   mutable absl::Mutex index_mutex_;
-  InternedStringMap<double> tracked_keys_ ABSL_GUARDED_BY(index_mutex_);
+  InternedStringHashMap<double> tracked_keys_ ABSL_GUARDED_BY(index_mutex_);
   // untracked keys is needed to support negate filtering
   InternedStringSet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);
   std::unique_ptr<BTreeNumericIndex> index_ ABSL_GUARDED_BY(index_mutex_);

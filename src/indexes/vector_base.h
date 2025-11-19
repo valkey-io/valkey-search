@@ -240,7 +240,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
     float magnitude;
   };
 
-  InternedStringMap<TrackedKeyMetadata> tracked_metadata_by_key_
+  InternedStringHashMap<TrackedKeyMetadata> tracked_metadata_by_key_
       ABSL_GUARDED_BY(key_to_metadata_mutex_);
   uint64_t inc_id_ ABSL_GUARDED_BY(key_to_metadata_mutex_){0};
   mutable absl::Mutex key_to_metadata_mutex_;
@@ -256,9 +256,9 @@ class PrefilterEvaluator : public query::Evaluator {
                 const InternedStringPtr& key);
 
   // TODO: Implement this in prefilter implementation. For now just return
-  // nullpt.
-  const std::shared_ptr<InternedString>& GetTargetKey() const override {
-    static const std::shared_ptr<InternedString> null_key = nullptr;
+  // nullptr.
+  const InternedStringPtr& GetTargetKey() const override {
+    static const InternedStringPtr null_key;
     return null_key;
   }
 

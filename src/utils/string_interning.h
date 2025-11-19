@@ -15,6 +15,7 @@
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/container/node_hash_map.h"
 #include "absl/hash/hash.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
@@ -198,11 +199,16 @@ struct InternedStringPtrLess {
 };
 
 template <typename T>
-using InternedStringMap =
+using InternedStringHashMap =
     absl::flat_hash_map<InternedStringPtr, T, InternedStringPtrHash,
                         InternedStringPtrEqual>;
 using InternedStringSet =
     absl::flat_hash_set<InternedStringPtr, InternedStringPtrHash,
+                        InternedStringPtrEqual>;
+
+template <typename T>
+using InternedStringNodeHashMap =
+    absl::node_hash_map<InternedStringPtr, T, InternedStringPtrHash,
                         InternedStringPtrEqual>;
 
 class StringInternStore {

@@ -223,7 +223,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   absl::flat_hash_set<std::string> suffix_text_identifiers_;
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
-  InternedStringMap<DocumentMutation> tracked_mutated_records_
+  InternedStringHashMap<DocumentMutation> tracked_mutated_records_
       ABSL_GUARDED_BY(mutated_records_mutex_);
   bool is_destructing_ ABSL_GUARDED_BY(mutated_records_mutex_){false};
   mutable absl::Mutex mutated_records_mutex_;

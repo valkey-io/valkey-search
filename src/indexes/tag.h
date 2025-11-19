@@ -130,7 +130,7 @@ class Tag : public IndexBase {
     absl::flat_hash_set<absl::string_view> tags;
   };
   // Map of tracked keys to their tags.
-  InternedStringMap<TagInfo> tracked_tags_by_keys_
+  InternedStringHashMap<TagInfo> tracked_tags_by_keys_
       ABSL_GUARDED_BY(index_mutex_);
   // untracked and tracked_ keys are mutually exclusive.
   InternedStringSet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);

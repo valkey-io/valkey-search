@@ -12,7 +12,6 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/utils/allocator.h"
-#include "vmsdk/src/memory_allocation_overrides.h"
 #include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search {
@@ -108,7 +107,7 @@ InternedStringPtr* MakeShadowInternPtrPtr(InternedString* str, void*& storage) {
 
 bool StringInternStore::Release(InternedString* str) {
   absl::MutexLock lock(&mutex_);
-  if (str->ref_count_.load(std::memory_order_seq_cst) > 1) {
+  if (str->ref_count_.load(std::memory_order_seq_cst) > 0) {
     //
     // It's possible that between the time we checked the ref count and now,
     // another thread has incremented it. In that case, we don't remove it

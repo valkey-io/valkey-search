@@ -3,8 +3,8 @@
 namespace valkey_search::indexes::text {
 
 ProximityIterator::ProximityIterator(
-    std::vector<std::unique_ptr<TextIterator>>&& iters, size_t slop,
-    bool in_order, FieldMaskPredicate field_mask,
+    std::vector<std::unique_ptr<TextIterator>>&& iters,
+    std::optional<uint32_t> slop, bool in_order, FieldMaskPredicate field_mask,
     const InternedStringSet* untracked_keys)
     : iters_(std::move(iters)),
       slop_(slop),
@@ -13,7 +13,8 @@ ProximityIterator::ProximityIterator(
       current_position_(std::nullopt),
       field_mask_(field_mask) {
   CHECK(!iters_.empty()) << "must have at least one text iterator";
-  CHECK(slop_ >= 0) << "slop must be non-negative";
+  CHECK(slop_.has_value() || in_order_)
+      << "ProximityIterator requires either slop or inorder=true";
   // Pre-allocate vectors used for positional checks to avoid reallocation
   positions_.resize(iters_.size());
   pos_with_idx_.resize(iters_.size());
@@ -142,8 +143,8 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
         return i + 1;
       }
       // Check slop violations.
-      if (slop_ >= 0 &&
-          positions_[i + 1].start - positions_[i].end - 1 > slop_) {
+      if (slop_.has_value() &&
+          positions_[i + 1].start - positions_[i].end - 1 > *slop_) {
         return i;
       }
     }
@@ -160,8 +161,8 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
     if (positions_[curr_idx].end >= positions_[next_idx].start) {
       return next_idx;
     }
-    if (slop_ >= 0 &&
-        positions_[next_idx].start - positions_[curr_idx].end - 1 > slop_) {
+    if (slop_.has_value() &&
+        positions_[next_idx].start - positions_[curr_idx].end - 1 > *slop_) {
       return curr_idx;
     }
   }

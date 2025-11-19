@@ -93,11 +93,14 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
 
   index_schema->CreateTextIndexSchema();
   auto text_index_schema = index_schema->GetTextIndexSchema();
-  data_model::TextIndex text_index_proto = CreateTextIndexProto(true, false, 4);
+  data_model::TextIndex text_index_proto1 =
+      CreateTextIndexProto(true, false, 4);
+  data_model::TextIndex text_index_proto2 =
+      CreateTextIndexProto(false, true, 0);
   auto text_index_1 =
-      std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
+      std::make_shared<indexes::Text>(text_index_proto1, text_index_schema);
   auto text_index_2 =
-      std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
+      std::make_shared<indexes::Text>(text_index_proto2, text_index_schema);
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("text_field1", "text_field1", text_index_1));
   VMSDK_EXPECT_OK(
@@ -491,8 +494,14 @@ INSTANTIATE_TEST_SUITE_P(
             .evaluate_success = true,
         },
         {
-            .test_name = "exact_suffix",
+            .test_name = "exact_suffix_supported",
             .filter = "@text_field1:*word",
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "exact_suffix_unsupported",
+            .filter = "@text_field2:*word",
             .create_success = false,
             .create_expected_error_message =
                 "Field does not support suffix search",
@@ -501,8 +510,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "exact_inffix",
             .filter = "@text_field1:*word*",
             .create_success = false,
-            .create_expected_error_message =
-                "Field does not support suffix search",
+            .create_expected_error_message = "Unsupported query operation",
         },
         {
             .test_name = "exact_fuzzy1",

@@ -109,9 +109,7 @@ class Numeric : public IndexBase {
 
   const double* GetValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  using BTreeNumericIndex =
-      BTreeNumeric<InternedStringPtr, InternedStringPtrHash,
-                   InternedStringPtrEqual>;
+  using BTreeNumericIndex = BTreeNumeric<InternedStringPtr>;
   using EntriesRange = std::pair<BTreeNumericIndex::ConstIterator,
                                  BTreeNumericIndex::ConstIterator>;
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {

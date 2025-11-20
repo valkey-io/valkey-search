@@ -64,12 +64,8 @@ class Tag : public IndexBase {
   const absl::flat_hash_set<absl::string_view>* GetValue(
       const InternedStringPtr& key,
       bool& case_sensitive) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  using PatriciaTreeIndex =
-      PatriciaTree<InternedStringPtr, InternedStringPtrHash,
-                   InternedStringPtrEqual>;
-  using PatriciaNodeIndex =
-      PatriciaNode<InternedStringPtr, InternedStringPtrHash,
-                   InternedStringPtrEqual>;
+  using PatriciaTreeIndex = PatriciaTree<InternedStringPtr>;
+  using PatriciaNodeIndex = PatriciaNode<InternedStringPtr>;
 
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
    public:

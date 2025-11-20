@@ -27,8 +27,6 @@ namespace valkey_search {
 
 class InternedStringImpl;
 class InternedStringPtr;
-class InternedStringPtrEqual;
-class InternedStringPtrHash;
 
 //
 // An interned string. This is a reference-counted object of variable size.
@@ -143,6 +141,8 @@ class InternedStringPtr {
 
   auto operator<=>(const InternedStringPtr &other) const = default;
 
+  size_t Hash() const { return absl::HashOf(impl_); }
+
   InternedString &operator*() { return *impl_; }
   InternedString *operator->() { return impl_; }
   operator bool() const { return impl_ != nullptr; }
@@ -163,8 +163,6 @@ class InternedStringPtr {
   InternedStringPtr(InternedString *impl) : impl_(impl) {}
   InternedString *impl_{nullptr};
   friend class StringInternStore;
-  friend class InternedStringPtrHash;
-  friend class InternedStringPtrEqual;
 };
 
 inline std::ostream &operator<<(std::ostream &os,
@@ -172,42 +170,12 @@ inline std::ostream &operator<<(std::ostream &os,
   return str ? os << str->Str() : os << "<null>";
 }
 
-//
-// Helper classes to allow using InternedStringPtr as keys in hash maps and
-// sets.
-//
-struct InternedStringPtrHash {
-  std::size_t operator()(const InternedStringPtr &sp) const {
-    return absl::HashOf(sp.impl_);
-  }
-};
-
-struct InternedStringPtrEqual {
-  bool operator()(const InternedStringPtr &lhs,
-                  const InternedStringPtr &rhs) const {
-    return lhs.impl_ == rhs.impl_;
-  }
-};
-
-struct InternedStringPtrLess {
-  template <typename T, typename U>
-  bool operator()(const T &lhs, const U &rhs) const {
-    return lhs < rhs;
-  }
-};
+template <typename T>
+using InternedStringHashMap = absl::flat_hash_map<InternedStringPtr, T>;
+using InternedStringSet = absl::flat_hash_set<InternedStringPtr>;
 
 template <typename T>
-using InternedStringHashMap =
-    absl::flat_hash_map<InternedStringPtr, T, InternedStringPtrHash,
-                        InternedStringPtrEqual>;
-using InternedStringSet =
-    absl::flat_hash_set<InternedStringPtr, InternedStringPtrHash,
-                        InternedStringPtrEqual>;
-
-template <typename T>
-using InternedStringNodeHashMap =
-    absl::node_hash_map<InternedStringPtr, T, InternedStringPtrHash,
-                        InternedStringPtrEqual>;
+using InternedStringNodeHashMap = absl::node_hash_map<InternedStringPtr, T>;
 
 class StringInternStore {
  public:
@@ -277,5 +245,16 @@ class StringInternStore {
 };
 
 }  // namespace valkey_search
+
+//
+// Helper classes to allow using InternedStringPtr as keys in hash maps and
+// sets.
+//
+template <>
+struct std::hash<valkey_search::InternedStringPtr> {
+  std::size_t operator()(const valkey_search::InternedStringPtr &sp) const {
+    return sp.Hash();
+  }
+};
 
 #endif  // VALKEYSEARCH_SRC_UTILS_STRING_INTERNING_H_

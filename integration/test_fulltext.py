@@ -1,7 +1,7 @@
 import pytest
 from valkey import ResponseError
 from valkey.client import Valkey
-from valkey_search_test_case import ValkeySearchTestCaseBase, ValkeySearchTestCaseDebugMode
+from valkey_search_test_case import ValkeySearchTestCaseBase, ValkeySearchTestCaseDebugMode, ValkeySearchClusterTestCaseDebugMode
 from valkey_search_test_case import ValkeySearchClusterTestCase
 from valkeytestframework.conftest import resource_port_tracker
 from ft_info_parser import FTInfoParser
@@ -1072,7 +1072,7 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         print("\nCleanup verification passed!")
         # Deletion pending of per_key_index, On deletion only prefix tree cleared
 
-class TestFullTextCluster(ValkeySearchClusterTestCase):
+class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
 
     def test_fulltext_search_cluster(self):
         """

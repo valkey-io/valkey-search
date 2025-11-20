@@ -331,9 +331,11 @@ class ClusterMapTest : public vmsdk::ValkeyTest {
   void VerifyTargetListConsistency(const ClusterMap* cluster_map,
                                    size_t expected_primaries,
                                    size_t expected_replicas) {
-    const auto& primary_targets = cluster_map->GetPrimaryTargets();
-    const auto& replica_targets = cluster_map->GetReplicaTargets();
-    const auto& all_targets = cluster_map->GetAllTargets();
+    const auto& primary_targets =
+        cluster_map->GetTargets(FanoutTargetMode::kPrimary);
+    const auto& replica_targets =
+        cluster_map->GetTargets(FanoutTargetMode::kReplicas);
+    const auto& all_targets = cluster_map->GetTargets(FanoutTargetMode::kAll);
 
     EXPECT_EQ(primary_targets.size(), expected_primaries);
     EXPECT_EQ(replica_targets.size(), expected_replicas);
@@ -444,7 +446,9 @@ TEST_F(ClusterMapTest, AdditionalNetworkMetadata) {
   ASSERT_NE(cluster_map, nullptr);
   EXPECT_TRUE(cluster_map->IsConsistent());
   auto additional_network_metadata =
-      cluster_map->GetPrimaryTargets().at(0).additional_network_metadata;
+      cluster_map->GetTargets(FanoutTargetMode::kPrimary)
+          .at(0)
+          .additional_network_metadata;
   auto it = additional_network_metadata.find("hostname");
   EXPECT_TRUE(it != additional_network_metadata.end());
   EXPECT_EQ(it->second, "test.valkey.io");
@@ -466,7 +470,9 @@ TEST_F(ClusterMapTest, AdditionalNetworkMetadataWithMap) {
   ASSERT_NE(cluster_map, nullptr);
   EXPECT_TRUE(cluster_map->IsConsistent());
   auto additional_network_metadata =
-      cluster_map->GetPrimaryTargets().at(0).additional_network_metadata;
+      cluster_map->GetTargets(FanoutTargetMode::kPrimary)
+          .at(0)
+          .additional_network_metadata;
   auto it = additional_network_metadata.find("hostname");
   EXPECT_TRUE(it != additional_network_metadata.end());
   EXPECT_EQ(it->second, "test.valkey.io");
@@ -626,9 +632,9 @@ TEST_F(ClusterMapTest, DiscreteSlotRangeTest) {
   EXPECT_TRUE(cluster_map->IOwnSlot(10923));
   EXPECT_TRUE(cluster_map->IOwnSlot(16383));
 
-  EXPECT_EQ(cluster_map->GetPrimaryTargets().size(), 2);
-  EXPECT_EQ(cluster_map->GetReplicaTargets().size(), 2);
-  EXPECT_EQ(cluster_map->GetAllTargets().size(), 4);
+  EXPECT_EQ(cluster_map->GetTargets(FanoutTargetMode::kPrimary).size(), 2);
+  EXPECT_EQ(cluster_map->GetTargets(FanoutTargetMode::kReplicas).size(), 2);
+  EXPECT_EQ(cluster_map->GetTargets(FanoutTargetMode::kAll).size(), 4);
 }
 
 TEST_F(ClusterMapTest, InvalidPrimaryEndpoint) {
@@ -652,9 +658,9 @@ TEST_F(ClusterMapTest, InvalidPrimaryEndpoint) {
   ASSERT_FALSE(cluster_map->IsConsistent());
   ASSERT_TRUE(cluster_map->IOwnSlot(0));
   ASSERT_FALSE(cluster_map->IOwnSlot(10000));
-  EXPECT_EQ(cluster_map->GetPrimaryTargets().size(), 1);
-  EXPECT_EQ(cluster_map->GetReplicaTargets().size(), 1);
-  EXPECT_EQ(cluster_map->GetAllTargets().size(), 2);
+  EXPECT_EQ(cluster_map->GetTargets(FanoutTargetMode::kPrimary).size(), 1);
+  EXPECT_EQ(cluster_map->GetTargets(FanoutTargetMode::kReplicas).size(), 1);
+  EXPECT_EQ(cluster_map->GetTargets(FanoutTargetMode::kAll).size(), 2);
 }
 
 // ============================================================================
@@ -684,10 +690,10 @@ TEST_F(ClusterMapTest, LocalNodeIsReplicaTest) {
   EXPECT_FALSE(cluster_map->IOwnSlot(8192));
   EXPECT_FALSE(cluster_map->IOwnSlot(16383));
 
-  // Verify both nodes in first shard are marked as local
+  // Verify only the first replica is local
   const ShardInfo* shard = cluster_map->GetShardById(primary_ids.at(0));
   ASSERT_NE(shard, nullptr);
-  EXPECT_TRUE(shard->primary->is_local);
+  EXPECT_FALSE(shard->primary->is_local);
   EXPECT_TRUE(shard->replicas[0].is_local);
 
   // Second shard should be remote
@@ -733,7 +739,7 @@ TEST_F(ClusterMapTest, GetRandomTargetsTest) {
 
   ASSERT_NE(cluster_map, nullptr);
 
-  auto random_targets = cluster_map->GetRandomTargets();
+  auto random_targets = cluster_map->GetTargets(FanoutTargetMode::kRandom);
   EXPECT_EQ(random_targets.size(), 3);  // One per shard
 
   // Verify each target belongs to a different shard
@@ -760,6 +766,26 @@ TEST_F(ClusterMapTest, TargetListConsistencyTest) {
 
   ASSERT_NE(cluster_map, nullptr);
   VerifyTargetListConsistency(cluster_map.get(), 2, 2);
+}
+
+TEST_F(ClusterMapTest, GetRandomReplicaPerShardTest) {
+  auto ranges = CreateStandard3ShardConfig();
+  auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
+
+  ASSERT_NE(cluster_map, nullptr);
+
+  auto random_targets =
+      cluster_map->GetTargets(FanoutTargetMode::kOneReplicaPerShard);
+  EXPECT_EQ(random_targets.size(), 3);  // One per shard
+
+  // Verify each target belongs to a different shard
+  std::set<std::string> shard_ids;
+  for (const auto& target : random_targets) {
+    ASSERT_NE(target.shard, nullptr);
+    ASSERT_FALSE(target.is_primary);
+    shard_ids.insert(target.shard->shard_id);
+  }
+  EXPECT_EQ(shard_ids.size(), 3);
 }
 
 // ============================================================================

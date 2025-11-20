@@ -28,7 +28,8 @@ PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
 
 std::vector<vmsdk::cluster_map::NodeInfo>
 PrimaryInfoFanoutOperation::GetTargets() const {
-  return ValkeySearch::Instance().GetClusterMap()->GetPrimaryTargets();
+  return ValkeySearch::Instance().GetClusterMap()->GetTargets(
+      vmsdk::cluster_map::FanoutTargetMode::kPrimary);
 }
 
 unsigned PrimaryInfoFanoutOperation::GetTimeoutMs() const {

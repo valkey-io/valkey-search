@@ -825,7 +825,7 @@ class TestFullText(ValkeySearchTestCaseBase):
         client.execute_command("HSET", "doc:4", "content", "alpha word word word beta")
         client.execute_command("HSET", "doc:5", "content", "alpha word word word beta word word word gamma")
         client.execute_command("HSET", "doc:7", "content", "gamma delta")
-        client.execute_command("HSET", "doc:8", "content", "gamma word beta word word word alpha")
+        client.execute_command("HSET", "doc:8", "content", "gamma word beta word word word alpha", "title", "some title")
 
         # Wait for index backfill to complete
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")

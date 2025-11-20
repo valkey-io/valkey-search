@@ -8,7 +8,6 @@
 
 #include <cstdint>
 #include <functional>
-#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -16,29 +15,33 @@
 #include "grpcpp/support/status.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/query/fanout_operation_base.h"
-#include "src/query/fanout_template.h"
 
 namespace valkey_search::query::primary_info_fanout {
 
-class PrimaryInfoFanoutOperation : public fanout::FanoutOperationBase<
-                                       coordinator::InfoIndexPartitionRequest,
-                                       coordinator::InfoIndexPartitionResponse,
-                                       fanout::FanoutTargetMode::kPrimary> {
+class PrimaryInfoFanoutOperation
+    : public fanout::FanoutOperationBase<
+          coordinator::InfoIndexPartitionRequest,
+          coordinator::InfoIndexPartitionResponse,
+          vmsdk::cluster_map::FanoutTargetMode::kPrimary> {
  public:
   PrimaryInfoFanoutOperation(uint32_t db_num, const std::string& index_name,
                              unsigned timeout_ms);
 
+  std::vector<vmsdk::cluster_map::NodeInfo> GetTargets() const override;
+
   unsigned GetTimeoutMs() const override;
 
   coordinator::InfoIndexPartitionRequest GenerateRequest(
-      const fanout::FanoutSearchTarget&) override;
+      const vmsdk::cluster_map::NodeInfo&) override;
 
-  void OnResponse(const coordinator::InfoIndexPartitionResponse& resp,
-                  [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
+  void OnResponse(
+      const coordinator::InfoIndexPartitionResponse& resp,
+      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo&) override;
 
   std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
-  GetLocalResponse(const coordinator::InfoIndexPartitionRequest& request,
-                   [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
+  GetLocalResponse(
+      const coordinator::InfoIndexPartitionRequest& request,
+      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo&) override;
 
   void InvokeRemoteRpc(
       coordinator::Client* client,

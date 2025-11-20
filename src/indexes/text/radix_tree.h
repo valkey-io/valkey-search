@@ -128,20 +128,22 @@ class InvasivePtr {
 
     T data_;
     uint32_t refcount_ = 1;  // No thread safety needed right now
-  }
+  };
 
-  void
-  release() {
-    ptr_->refcount_--;
-    if (ptr_->refcount_ == 0) {
+  void release() {
+    if (ptr_ && --ptr_->refcount_ == 0) {
       delete ptr_;
     }
   }
 
-  void acquire() { ptr_->refcount_++; }
+  void acquire() { 
+    if (ptr_) {
+      ptr_->refcount_++; 
+    }
+  }
 
-  RefCountWrapper<T>* ptr_;
-}
+  RefCountWrapper* ptr_;
+};
 
 // Needed for std::visit
 template <class... Ts>

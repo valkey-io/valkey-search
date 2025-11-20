@@ -1,0 +1,126 @@
+/*
+ * Copyright (c) 2025, valkey-search contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ *
+ */
+
+#include "src/index_schema.h"
+#include "src/schema_manager.h"
+
+namespace valkey_search {
+
+static absl::Status DumpKey(ValkeyModuleCtx* ctx, auto& ki,
+                            bool with_positions) {
+  if (with_positions) {
+    auto pi = ki.GetPositionIterator();
+    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+    ValkeyModule_ReplyWithStringBuffer(ctx, ki.GetKey()->Str().data(),
+                                       ki.GetKey()->Str().size());
+    size_t count = 1;
+    while (pi.IsValid()) {
+      ValkeyModule_ReplyWithLongLong(ctx, pi.GetPosition());
+      ValkeyModule_ReplyWithLongLong(ctx, pi.GetFieldMask());
+      pi.NextPosition();
+      count += 2;
+    }
+    ValkeyModule_ReplySetArrayLength(ctx, count);
+  } else {
+    ValkeyModule_ReplyWithStringBuffer(ctx, ki.GetKey()->Str().data(),
+                                       ki.GetKey()->Str().size());
+  }
+  return absl::OkStatus();
+}
+
+static absl::Status DumpWord(ValkeyModuleCtx* ctx, auto& wi, bool with_keys,
+                             bool with_positions) {
+  if (with_keys) {
+    auto ki = wi.GetTarget()->GetKeyIterator();
+    auto key_count = wi.GetTarget()->GetKeyCount();
+    ValkeyModule_ReplyWithArray(ctx, 1 + key_count);
+    ValkeyModule_ReplyWithStringBuffer(ctx, wi.GetWord().data(),
+                                       wi.GetWord().size());
+    size_t count = 0;
+    while (ki.IsValid()) {
+      VMSDK_RETURN_IF_ERROR(DumpKey(ctx, ki, with_positions));
+      ki.NextKey();
+      count++;
+    }
+    if (count != key_count) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Key count mismatch for word: ", wi.GetWord(), " Counted:", count,
+          " Expected: ", wi.GetTarget()->GetKeyCount()));
+    }
+  } else {
+    ValkeyModule_ReplyWithStringBuffer(ctx, wi.GetWord().data(),
+                                       wi.GetWord().size());
+  }
+  return absl::OkStatus();
+}
+
+static absl::Status DumpWordIterator(ValkeyModuleCtx* ctx, auto& wi,
+                                     bool with_keys, bool with_positions) {
+  ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+  size_t count = 0;
+  while (!wi.Done()) {
+    count++;
+    VMSDK_RETURN_IF_ERROR(DumpWord(ctx, wi, with_keys, with_positions));
+    wi.Next();
+  }
+  ValkeyModule_ReplySetArrayLength(ctx, count);
+  return absl::OkStatus();
+}
+
+/*
+FT._DEBUG TEXTINFO <index_name> PREFIX <word> [WITHKEYS [WITHPOSITIONS]]
+FT._DEBUG TEXTINFO <index_name> SUFFIX <word> [WITHKEYS [WITHPOSITIONS]]
+FT._DEBUG TEXTINFO <index_name> LEXER <string> [<stemsize>]
+
+*/
+absl::Status IndexSchema::TextInfoCmd(ValkeyModuleCtx* ctx,
+                                      vmsdk::ArgsIterator& itr) {
+  std::string index_name;
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, index_name));
+  VMSDK_ASSIGN_OR_RETURN(auto index_schema,
+                         SchemaManager::Instance().GetIndexSchema(
+                             ValkeyModule_GetSelectedDb(ctx), index_name));
+  std::string subcommand;
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, subcommand));
+  vmsdk::ReaderMutexLock lock(&index_schema->time_sliced_mutex_);
+  subcommand = absl::AsciiStrToUpper(subcommand);
+  if (subcommand == "PREFIX") {
+    std::string word;
+    VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, word));
+    auto wi = index_schema->GetTextIndexSchema()
+                  ->GetTextIndex()
+                  ->prefix_.GetWordIterator(word);
+    bool with_keys = itr.PopIfNextIgnoreCase("WITHKEYS");
+    bool with_positions = itr.PopIfNextIgnoreCase("WITHPOSITIONS");
+    return DumpWordIterator(ctx, wi, with_keys, with_positions);
+  } else if (subcommand == "SUFFIX") {
+    std::string word;
+    VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, word));
+    auto& suffix = index_schema->GetTextIndexSchema()->GetTextIndex()->suffix_;
+    if (!suffix) {
+      return absl::InvalidArgumentError("Suffix is not enabled");
+    }
+    auto wi = suffix->GetWordIterator(word);
+    bool with_keys = itr.PopIfNextIgnoreCase("WITHKEYS");
+    bool with_positions = itr.PopIfNextIgnoreCase("WITHPOSITIONS");
+    return DumpWordIterator(ctx, wi, with_keys, with_positions);
+  } else if (subcommand == "LEXER") {
+    std::string text;
+    VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, text));
+    auto lexer = index_schema->GetTextIndexSchema()->GetLexer();
+    VMSDK_ASSIGN_OR_RETURN(auto result, lexer.Tokenize(text, false, 0));
+    ValkeyModule_ReplyWithArray(ctx, result.size());
+    for (auto& token : result) {
+      ValkeyModule_ReplyWithStringBuffer(ctx, token.data(), token.size());
+    }
+  } else {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unknown subcommand ", subcommand));
+  }
+  return absl::OkStatus();
+}
+}  // namespace valkey_search

@@ -105,7 +105,10 @@ def validate_fulltext_search(client: Valkey):
         assert len(result) == 1
         assert result[0] == 0  # Number of documents found
     # Perform a wild card prefix operation with multiple matches
+    print(client.execute_command("FT._DEBUG textinfo products prefix ", "grea", "withkeys"))
     result = client.execute_command(*text_query_prefix_multimatch)
+    print("Query: ", text_query_prefix_multimatch)
+    print("Result: ", result)
     assert len(result) == 5
     assert result[0] == 2  # Number of documents found. Both docs below start with Grea* => Great and Greased
     assert (result[1] == b"product:1" and result[3] == b"product:5") or (
@@ -200,8 +203,10 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # Data population:
         for doc in hash_docs:
             assert client.execute_command(*doc) == 5
+            print("After: ", doc)
+            print("Result: ", client.execute_command("FT._DEBUG TEXTINFO products PREFIX", "", "WITHKEYS", "WITHPOSITIONS"))
+            print("")
         # Validation of search queries:
-        print(self.client.execute_command("FT._DEBUG TEXTINFO products PREFIX *"))
         validate_fulltext_search(client)
 
     def test_ft_create_and_info(self):
@@ -728,7 +733,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         IndexingTestHelper.wait_for_backfill_complete_on_node(self.client, "idx")
         # Test suffix search with *ing
         result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ing")
-        print(self.client.execute_command("FT._DEBUG TEXTINFO idx SUFFIX *ing"))
+        print(self.client.execute_command("FT._DEBUG TEXTINFO idx SUFFIX ing"))
         assert result[0] == 4  # All documents contain words ending with 'ing'
         # Test suffix search with *ing (should match running, jumping, walking, etc.)
         result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ning")

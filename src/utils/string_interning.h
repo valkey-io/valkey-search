@@ -141,9 +141,7 @@ class InternedStringPtr {
     return *this;
   }
 
-  auto operator<=>(const InternedStringPtr &other) const {
-    return impl_ <=> other.impl_;
-  }
+  auto operator<=>(const InternedStringPtr &other) const = default;
 
   InternedString &operator*() { return *impl_; }
   InternedString *operator->() { return impl_; }

@@ -43,7 +43,7 @@ enum class FanoutTargetMode {
   kAll            // Select all nodes (both primary and replica)
 };
 
-const size_t k_num_slots = 16384;
+const size_t kNumSlots = 16384;
 
 // forward declaration to solve circular dependency
 struct ShardInfo;
@@ -138,7 +138,7 @@ class ClusterMap {
   absl::flat_hash_map<SocketAddress, std::string> socket_addr_to_node_map;
 
   // 1: slot is owned by this cluster, 0: slot is not owned by this cluster
-  std::bitset<k_num_slots> owned_slots_;
+  std::bitset<kNumSlots> owned_slots_;
 
   absl::btree_map<std::string, ShardInfo> shards_;
 

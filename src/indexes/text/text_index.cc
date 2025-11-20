@@ -99,8 +99,21 @@ RadixTree<std::shared_ptr<Postings>>& TextIndex::GetPrefix() {
   return prefix_tree_;
 }
 
+const RadixTree<std::shared_ptr<Postings>>& TextIndex::GetPrefix() const {
+  return prefix_tree_;
+}
+
 std::optional<std::reference_wrapper<RadixTree<std::shared_ptr<Postings>>>>
 TextIndex::GetSuffix() {
+  if (!suffix_tree_) {
+    return std::nullopt;
+  }
+  return std::ref(*suffix_tree_);
+}
+
+std::optional<
+    std::reference_wrapper<const RadixTree<std::shared_ptr<Postings>>>>
+TextIndex::GetSuffix() const {
   if (!suffix_tree_) {
     return std::nullopt;
   }

@@ -65,8 +65,12 @@ class TextIndex {
  public:
   explicit TextIndex(bool suffix);
   RadixTree<std::shared_ptr<Postings>>& GetPrefix();
+  const RadixTree<std::shared_ptr<Postings>>& GetPrefix() const;
   std::optional<std::reference_wrapper<RadixTree<std::shared_ptr<Postings>>>>
   GetSuffix();
+  std::optional<
+      std::reference_wrapper<const RadixTree<std::shared_ptr<Postings>>>>
+  GetSuffix() const;
 
  private:
   RadixTree<std::shared_ptr<Postings>> prefix_tree_;

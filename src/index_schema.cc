@@ -383,7 +383,7 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     // Otherwise, it will be processed as a delete
     if (!record && !attribute.GetIndex()->IsTracked(interned_key) &&
         !InTrackedMutationRecords(interned_key, attribute.GetIdentifier())) {
-      return;
+      continue;
     }
     if (!is_module_owned) {
       // A record which are owned by the module were not modified and are

@@ -24,22 +24,16 @@ CrEaTe = "CrEaTe"
 LiSt = "LiSt"
 DeBuG = "DeBuG"
 DrOpInDeX = "DrOpInDeX"
-<<<<<<< HEAD
 updat = "updat" # Used for stem matching
-=======
 Clangd = "Clangd"
->>>>>>> main
 
 [type.cpp]
 extend-ignore-re = [
     "baNAna",
     "eXIst",
-<<<<<<< HEAD
     "Hel",
-=======
     "DIALEC",
     "nghi",
     "bubu",
     "Teser"
->>>>>>> main
 ]

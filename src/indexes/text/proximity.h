@@ -61,6 +61,7 @@ class ProximityIterator : public TextIterator {
   bool DonePositions() const override;
   const PositionRange& CurrentPosition() const override;
   bool NextPosition() override;
+  FieldMaskPredicate CurrentFieldMask() const override;
 
  private:
   // List of all the Text Predicates contained in the Proximity AND.
@@ -68,9 +69,10 @@ class ProximityIterator : public TextIterator {
   std::optional<uint32_t> slop_;
   bool in_order_;
   FieldMaskPredicate field_mask_;
-  // Current key/position
+  // Current key/position/field
   Key current_key_;
   std::optional<PositionRange> current_position_;
+  FieldMaskPredicate current_field_mask_;
   // Vectors used for positional checks
   std::vector<PositionRange> positions_;
   std::vector<std::pair<Position, size_t>> pos_with_idx_;

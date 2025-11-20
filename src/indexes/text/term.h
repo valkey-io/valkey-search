@@ -52,6 +52,7 @@ class TermIterator : public TextIterator {
   bool DonePositions() const override;
   const PositionRange& CurrentPosition() const override;
   bool NextPosition() override;
+  FieldMaskPredicate CurrentFieldMask() const override;
   /* Implementation of APIs unique to TermIterator */
   // It is possible to implement a `CurrentKeyIterVecIdx` API that returns the
   // index of the vector of the posting iterator (provided on init) that matches
@@ -63,6 +64,7 @@ class TermIterator : public TextIterator {
   std::vector<Postings::PositionIterator> pos_iterators_;
   Key current_key_;
   std::optional<PositionRange> current_position_;
+  FieldMaskPredicate current_field_mask_;
   const InternedStringSet* untracked_keys_;
   bool FindMinimumValidKey();
 };

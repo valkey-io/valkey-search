@@ -16,6 +16,7 @@ TermIterator::TermIterator(std::vector<Postings::KeyIterator>&& key_iterators,
       key_iterators_(std::move(key_iterators)),
       current_key_(nullptr),
       current_position_(std::nullopt),
+      current_field_mask_(0ULL),
       untracked_keys_(untracked_keys) {
   // Prime the first key and position if they exist.
   if (!key_iterators_.empty()) {
@@ -40,6 +41,7 @@ const InternedStringPtr& TermIterator::CurrentKey() const {
 bool TermIterator::FindMinimumValidKey() {
   current_key_ = nullptr;
   current_position_ = std::nullopt;
+  current_field_mask_ = 0ULL;
   for (auto& key_iter : key_iterators_) {
     while (key_iter.IsValid() && !key_iter.ContainsFields(field_mask_)) {
       key_iter.NextKey();
@@ -110,6 +112,7 @@ bool TermIterator::NextPosition() {
   }
   uint32_t min_position = UINT32_MAX;
   bool found = false;
+  FieldMaskPredicate field;
   for (auto& pos_iter : pos_iterators_) {
     while (pos_iter.IsValid() && !(pos_iter.GetFieldMask() & field_mask_)) {
       pos_iter.NextPosition();
@@ -118,16 +121,24 @@ bool TermIterator::NextPosition() {
       uint32_t position = pos_iter.GetPosition();
       if (position < min_position) {
         min_position = position;
+        field = pos_iterators_[0].GetFieldMask();
         found = true;
       }
     }
   }
   if (!found) {
     current_position_ = std::nullopt;
+    current_field_mask_ = 0ULL;
     return false;
   }
   current_position_ = PositionRange{min_position, min_position};
+  current_field_mask_ = field;
   return true;
+}
+
+FieldMaskPredicate TermIterator::CurrentFieldMask() const {
+  CHECK(current_field_mask_ != 0ULL);
+  return current_field_mask_;
 }
 
 }  // namespace valkey_search::indexes::text

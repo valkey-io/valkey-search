@@ -91,6 +91,8 @@ class TextIterator {
   // Otherwise, returns false if we have exhausted all positions.
   // ASSERT: !DonePositions()
   virtual bool NextPosition() = 0;
+
+  virtual FieldMaskPredicate CurrentFieldMask() const = 0;
 };
 
 }  // namespace valkey_search::indexes::text

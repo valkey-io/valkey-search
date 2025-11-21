@@ -33,8 +33,8 @@ class CreateConsistencyCheckFanoutOperation
     req.set_db_num(db_num_);
     req.set_index_name(index_name_);
 
-    if (enable_consistency_) {
-      req.set_enable_consistency(true);
+    if (require_consistency_) {
+      req.set_require_consistency(true);
       // Use the newly created fingerprint/version
       auto *expected_ifv = req.mutable_index_fingerprint_version();
       expected_ifv->set_fingerprint(

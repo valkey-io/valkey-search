@@ -246,26 +246,30 @@ TEST_P(LoadTest, load) {
             testing::Return("a415b9df6ce0c3c757ad4270242ae432147cacbb"));
 
     // Create an empty CLUSTER SLOTS response
-    auto* empty_slots_reply = new ValkeyModuleCallReply();
+    auto empty_slots_reply = std::make_unique<ValkeyModuleCallReply>();
     empty_slots_reply->type = VALKEYMODULE_REPLY_ARRAY;
     empty_slots_reply->val = CallReplyArray{};
+
+    ValkeyModuleCallReply* empty_slots_reply_ptr = empty_slots_reply.get();
 
     EXPECT_CALL(*kMockValkeyModule,
                 Call(testing::_, testing::StrEq("CLUSTER"), testing::StrEq("c"),
                      testing::StrEq("SLOTS")))
-        .WillRepeatedly(testing::Return(empty_slots_reply));
+        .WillRepeatedly(testing::Return(empty_slots_reply_ptr));
 
-    EXPECT_CALL(*kMockValkeyModule, CallReplyType(empty_slots_reply))
+    EXPECT_CALL(*kMockValkeyModule, CallReplyType(empty_slots_reply_ptr))
         .WillRepeatedly(testing::Return(VALKEYMODULE_REPLY_ARRAY));
 
-    EXPECT_CALL(*kMockValkeyModule, CallReplyLength(empty_slots_reply))
+    EXPECT_CALL(*kMockValkeyModule, CallReplyLength(empty_slots_reply_ptr))
         .WillRepeatedly(testing::Return(0));
 
     // Allow FreeCallReply to be called on any pointer, but only delete our
     // heap-allocated one
     EXPECT_CALL(*kMockValkeyModule, FreeCallReply(testing::_))
-        .WillRepeatedly([empty_slots_reply](ValkeyModuleCallReply* r) {
-          if (r == empty_slots_reply) {
+        .WillRepeatedly([empty_slots_reply_ptr,
+                         &empty_slots_reply](ValkeyModuleCallReply* r) {
+          if (r == empty_slots_reply_ptr) {
+            empty_slots_reply.release();
             delete r;
           }
           // Do nothing for other pointers (they're managed elsewhere)

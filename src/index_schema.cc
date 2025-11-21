@@ -103,6 +103,8 @@ DEV_INTEGER_COUNTER(rdb_stats, rdb_save_multi_exec_entries);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_load_multi_exec_entries);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_save_mutation_entries);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_load_mutation_entries);
+DEV_INTEGER_COUNTER(rdb_stats, rdb_save_backfilling_indexes);
+DEV_INTEGER_COUNTER(rdb_stats, rdb_load_backfilling_indexes);
 
 IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
                                       absl::string_view name, int db_num)
@@ -950,6 +952,7 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
     VMSDK_RETURN_IF_ERROR(SaveSupplementalSection(
         rdb, data_model::SUPPLEMENTAL_CONTENT_INDEX_EXTENSION,
         [&](auto &header) {
+          rdb_save_backfilling_indexes.Increment(int(IsBackfillInProgress()));
           header.mutable_mutation_queue_header()->set_backfilling(
               IsBackfillInProgress());
           VMSDK_LOG(NOTICE, nullptr)
@@ -968,7 +971,7 @@ absl::Status IndexSchema::ValidateIndex() const {
   // Find a non-vector index as the oracle
   // If all indexes are vector indexes, no validation is needed
   //
-  std::shared_ptr<indexes::IndexBase> oracle_index = nullptr;
+  std::shared_ptr<indexes::IndexBase> oracle_index;
   std::string oracle_name;
 
   for (const auto &attribute : attributes_) {
@@ -1074,17 +1077,32 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
     CHECK(key_count == 0) << "Key count mismatch for index " << GetName();
   }
   //
-  // Write out the mutation queue entries
+  // Write out the mutation queue entries. As an optimization we only write out
+  // non-backfill entries. But this requires that the index itself be marked as
+  // not backfilling, in other words if the index thinks it's done then we need
+  // to save restore even the entries marked as backfilling.
   //
-  VMSDK_LOG(NOTICE, nullptr) << "Writing Mutation Queue, records = "
-                             << tracked_mutated_records_.size();
-  VMSDK_RETURN_IF_ERROR(out.SaveObject(tracked_mutated_records_.size()));
-  rdb_save_mutation_entries.Increment(tracked_mutated_records_.size());
+  auto count = !IsBackfillInProgress()
+                   ? tracked_mutated_records_.size()
+                   : std::ranges::count_if(tracked_mutated_records_,
+                                           [](const auto &entry) {
+                                             return !entry.second.from_backfill;
+                                           });
+  VMSDK_LOG(NOTICE, nullptr)
+      << "Writing mutation queue records = " << count
+      << " Total queue:" << tracked_mutated_records_.size();
+  VMSDK_RETURN_IF_ERROR(out.SaveObject(count));
+  rdb_save_mutation_entries.Increment(count);
   for (const auto &[key, value] : tracked_mutated_records_) {
+    if (IsBackfillInProgress() && value.from_backfill) {
+      continue;
+    }
     VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
     VMSDK_RETURN_IF_ERROR(out.SaveObject(value.from_backfill));
     VMSDK_RETURN_IF_ERROR(out.SaveObject(value.from_multi));
+    count--;
   }
+  CHECK(count == 0);
   //
   // Write out the multi/exec queued keys
   //
@@ -1102,6 +1120,7 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
 
 absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
                                              RDBChunkInputStream input) {
+  CHECK(RDBReadV2());
   VMSDK_ASSIGN_OR_RETURN(size_t key_count, input.LoadObject<size_t>());
   rdb_load_keys.Increment(key_count);
   VMSDK_LOG(NOTICE, ctx) << "Loading Index Extension, keys = " << key_count;
@@ -1230,6 +1249,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
                        .backfilling()) {
                 VMSDK_LOG(DEBUG, ctx) << "Backfill suppressed.";
                 index_schema->backfill_job_.Get() = std::nullopt;
+              } else {
+                rdb_load_backfilling_indexes.Increment();
               }
             } else {
               return absl::InternalError(
@@ -1274,26 +1295,17 @@ void IndexSchema::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
 
 void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
   if (loaded_v2_) {
+    loaded_v2_ = false;
     VMSDK_LOG(NOTICE, ctx) << "RDB load completed, "
                            << " Mutation Queue contains "
                            << tracked_mutated_records_.size() << " entries."
                            << (backfill_job_.Get().has_value()
                                    ? " Backfill still required."
                                    : " Backfill not needed.");
-    while (DrainMutationQueue() &&
-           std::any_of(tracked_mutated_records_.begin(),
-                       tracked_mutated_records_.end(), [](const auto &record) {
-                         return !record.second.from_backfill;
-                       })) {
+    while (DrainMutationQueue() && !tracked_mutated_records_.empty()) {
       VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 1)
-          << "Draining Mutation Queue for index " << name_ << ", "
-          << tracked_mutated_records_.size() << " entries remaining, "
-          << std::count_if(tracked_mutated_records_.begin(),
-                           tracked_mutated_records_.end(),
-                           [](const auto &record) {
-                             return !record.second.from_backfill;
-                           })
-          << " are not backills.";
+          << "Draining Mutation Queue for index " << name_
+          << ", entries remaining: " << tracked_mutated_records_.size();
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     return;

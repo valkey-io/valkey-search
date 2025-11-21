@@ -110,7 +110,6 @@ def do_save_restore_test(test, index: Index, expected_writes: List[int], expecte
         assert writes == [4, 0, 0]
     '''
     test.server.restart(remove_rdb=False)
-    time.sleep(5)
     print(test.client.ping())
     verify_data(test.client, index)
     test.client.execute_command("CONFIG SET search.info-developer-visible yes")
@@ -241,14 +240,12 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
 
     def get_pausepoint(self, p):
         try:
-            return int(self.client.execute_command(f"ft._debug pausepoint test {p}"))
-        except:
+            result = self.client.execute_command(f"ft._debug pausepoint test {p}")
+            return int(result)
+        except ResponseError:
+            assert "not found" in result
             return 0
     
-    def block(self, label):
-        x = self.get_pausepoint("block_mutation_queue")
-        self.client.execute_command(*["debug", "log",f"pausepoint block:{x} @ {label}"])
-        
     def test_multi_exec_queue(self):
         self.client.execute_command("ft._debug PAUSEPOINT SET block_mutation_queue")
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
@@ -258,28 +255,22 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         #
         # Now, load the data as a multi/exec... But this won't block us.
         #
-        self.block("Before multi")
         self.client.execute_command("MULTI")
         for i in range(len(records)):
             index.write_data(self.client, i, records[i])
         self.client.execute_command("EXEC")
-        self.block("after exec")
 
         self.client.execute_command("save")
         self.client.execute_command("ft._debug pausepoint reset block_mutation_queue")
 
         while self.get_pausepoint("block_mutation_queue") > 0:
-            self.block("waiting for pausepoint block_mutation_queue to clear")
             time.sleep(0.1)
 
         i = self.client.info("search")
         assert i["search_rdb_save_multi_exec_entries"] == len(records)
-        self.block("before verify")
         verify_data(self.client, index)
         os.environ["SKIPLOGCLEAN"] = "1"
-        self.block("BEFORE RESTART")
         self.server.restart(remove_rdb=False)
-        self.block("AFTER RESTART")
         verify_data(self.client, index)
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         i = self.client.info("search")
@@ -309,3 +300,74 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
             i["search_backfill_hash_keys"],
         ]
         assert reads == [len(make_data())]
+
+    def test_saverestore_backfill_only(self):
+        #
+        # Fill the mutation queue with only backfills on an index that's not done backfilling and assert that no keys get saved.
+        #
+        self.client.execute_command("CONFIG SET search.info-developer-visible yes")
+        self.client.execute_command("ft._debug PAUSEPOINT SET block_mutation_queue")
+        load_data(self.client)
+        index.create(self.client, False)
+        self.client.execute_command("save")
+
+        i = self.client.info("search")
+        assert i["search_rdb_save_keys"] == 0
+        assert i["search_rdb_save_mutation_entries"] == 0
+        assert i["search_rdb_save_backfilling_indexes"] == 1
+        os.environ["SKIPLOGCLEAN"] = "1"
+        self.client.execute_command("ft._debug pausepoint reset block_mutation_queue")
+        self.server.restart(remove_rdb=False)
+        self.client.execute_command("CONFIG SET search.info-developer-visible yes")
+        i = self.client.info("search")
+        assert i["search_rdb_load_keys"] == 0
+        assert i["search_rdb_load_mutation_entries"] == 0
+        assert i["search_rdb_load_backfilling_indexes"] == 1
+
+    def test_saverestore_backfill_rewrite(self):
+        #
+        # test that overwrites of keys that are marked as backfilling properly get converted to non-backfills
+        #
+        self.client.execute_command("config set search.writer-threads 20")
+        self.client.execute_command("CONFIG SET search.info-developer-visible yes")
+        self.client.execute_command("ft._debug PAUSEPOINT SET block_mutation_queue")
+        load_data(self.client)
+        index.create(self.client, False)
+        records = make_data()
+
+        waiters.wait_for_true(lambda: self.mutation_queue_size() == len(records))
+
+        self.client.execute_command("save")
+
+        i = self.client.info("search")
+        assert i["search_rdb_save_keys"] == 0
+        assert i["search_rdb_save_mutation_entries"] == 0
+        assert i["search_rdb_save_backfilling_indexes"] == 1
+
+        #
+        # Now overwrite them -- remember this will block
+        #
+        client_threads = []
+        for i in range(len(records)):
+            new_client = self.server.get_new_client()
+            t = threading.Thread(target = index.write_data, args=(new_client, i, records[i]) )
+            t.start()
+            client_threads += [t]
+        
+        #
+        # we need to wait for the mutation queue to get fully loaded
+        #
+        # Oddly, the queue size reported doesn't account for re-writes of the same key
+        #
+        waiters.wait_for_true(lambda: self.mutation_queue_size() == 2 * len(records))
+        
+        self.client.execute_command("save")
+
+        i = self.client.info("search")
+        assert i["search_rdb_save_keys"] == 0
+        assert i["search_rdb_save_mutation_entries"] == len(records)
+        assert i["search_rdb_save_backfilling_indexes"] == 2
+
+        self.client.execute_command("ft._debug PAUSEPOINT RESET block_mutation_queue")
+
+        waiters.wait_for_true(lambda: self.mutation_queue_size() == 0)

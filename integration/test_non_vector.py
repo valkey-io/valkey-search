@@ -125,6 +125,26 @@ class TestNonVector(ValkeySearchTestCaseBase):
         # Validation of numeric and tag queries.
         validate_non_vector_queries(client)
 
+    def test_uningested_multi_field(self):
+        """
+            Test out the case where some index fields are not ingested. But other numeric and tag fields are.
+        """
+        client: Valkey = self.server.get_new_client()
+        # Create multi-field index with TEXT, NUMERIC, and TAG fields
+        multi_field_index = "FT.CREATE multifield_products ON HASH PREFIX 1 multifield_product: SCHEMA price NUMERIC rating NUMERIC new_field1 NUMERIC category TAG new_field2 TAG"
+        assert client.execute_command(multi_field_index) == b"OK"
+        # Data population with multifield_ prefix
+        for doc in hash_docs:
+            assert client.execute_command(*["HSET", "multifield_" + doc[1]] + doc[2:]) == 5
+        # Test numeric query
+        result = client.execute_command("FT.SEARCH", "multifield_products", "@price:[300 1000] @rating:[4.4 +inf]")
+        assert result[0] == 1
+        assert result[1] == b'multifield_product:1'
+        # Test tag + numeric query
+        result = client.execute_command("FT.SEARCH", "multifield_products", "@category:{books} @price:[10 30] @rating:[4.7 +inf]")
+        assert result[0] == 1
+        assert result[1] == b'multifield_product:4'
+
 class TestNonVectorCluster(ValkeySearchClusterTestCase):
 
     def test_non_vector_cluster(self):

@@ -817,15 +817,15 @@ class TestFullText(ValkeySearchTestCaseBase):
         client: Valkey = self.server.get_new_client()
         # Create index with text fields
         client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
-                            "content", "TEXT", "NOSTEM")
+                            "content", "TEXT", "NOSTEM", "title", "TEXT", "NOSTEM")
 
         client.execute_command("HSET", "doc:1", "content", "alpha beta gamma delta epsilon")
         client.execute_command("HSET", "doc:2", "content", "alpha word beta word gamma")
         client.execute_command("HSET", "doc:3", "content", "gamma beta alpha")
         client.execute_command("HSET", "doc:4", "content", "alpha word word word beta")
         client.execute_command("HSET", "doc:5", "content", "alpha word word word beta word word word gamma")
-        client.execute_command("HSET", "doc:7", "content", "gamma delta")
-        client.execute_command("HSET", "doc:8", "content", "gamma word beta word word word alpha", "title", "some title")
+        client.execute_command("HSET", "doc:7", "content", "word10 word11 word12 gamma delta", "title", "word10 word11 word12 blah")
+        client.execute_command("HSET", "doc:8", "content", "word1 gamma word beta word word word alpha", "title", "blah word2 word3")
 
         # Wait for index backfill to complete
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
@@ -916,6 +916,22 @@ class TestFullText(ValkeySearchTestCaseBase):
         # Test 3.8: Complex proximity with number tokens - slop 2, inorder
         result = client.execute_command("FT.SEARCH", "idx", 'version 1 release', "SLOP", "2", "INORDER")
         assert (result[0], set(result[1::2])) == (3, {b"doc:10", b"doc:11", b"doc:12"})  # doc:10 (gap=2), doc:11 (gap=1)
+
+        # Test 3.9: Testing with terms in the same doc, in order, but in different fields. So, no match expected.
+        # Without checks in proximity to ensure there is an common field between all terms, this would have matched doc:8.
+        result = client.execute_command("FT.SEARCH", "idx", 'word1 word2 word3', "INORDER")
+        assert result[0] == 0  # No matches
+        # When looking at just the terms from one field, we get a match.
+        result = client.execute_command("FT.SEARCH", "idx", 'word2 word3', "INORDER")
+        assert (result[0], result[1]) == (1, b"doc:8")  # Only doc:8 has this sequence
+
+        # TODO: Test default + specific field query for match
+        # TODO: Test only specific field query for match
+        # TODO: Test only default field query for match
+        # TODO: Test default and specific field query for no match
+        # TODO: Test only specific field query for no match
+        # TODO: Test default and specific field query for no match due to default being a suffix query. It should match otherwise.
+        # Add another case to be same as above, but non suffix query, and then it should match. 
 
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):

@@ -14,6 +14,7 @@ TermIterator::TermIterator(std::vector<Postings::KeyIterator>&& key_iterators,
                            const InternedStringSet* untracked_keys)
     : field_mask_(field_mask),
       key_iterators_(std::move(key_iterators)),
+      pos_iterators_(),
       current_key_(nullptr),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),

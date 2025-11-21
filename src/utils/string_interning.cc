@@ -175,13 +175,15 @@ StringInternStore::Stats StringInternStore::GetStats() const {
   for (const auto& str : str_to_interned_) {
     auto size = str->Str().size();
     auto allocated = str->Allocated();
+    auto refcount =
+        str.RefCount();  // This is volatile even while holding the lock
     if (str->IsInline()) {
       stats.inline_total_stats_.count_++;
       stats.inline_total_stats_.bytes_ += size;
       stats.inline_total_stats_.allocated_ += allocated;
-      stats.by_ref_stats_[str.RefCount()].count_++;
-      stats.by_ref_stats_[str.RefCount()].bytes_ += size;
-      stats.by_ref_stats_[str.RefCount()].allocated_ += allocated;
+      stats.by_ref_stats_[refcount].count_++;
+      stats.by_ref_stats_[refcount].bytes_ += size;
+      stats.by_ref_stats_[refcount].allocated_ += allocated;
       stats.by_size_stats_[size].count_++;
       stats.by_size_stats_[size].bytes_ += size;
       stats.by_size_stats_[size].allocated_ += allocated;
@@ -189,9 +191,9 @@ StringInternStore::Stats StringInternStore::GetStats() const {
       stats.out_of_line_total_stats_.count_++;
       stats.out_of_line_total_stats_.bytes_ += size;
       stats.out_of_line_total_stats_.allocated_ += allocated;
-      stats.by_ref_stats_[-str.RefCount()].count_++;
-      stats.by_ref_stats_[-str.RefCount()].bytes_ += size;
-      stats.by_ref_stats_[-str.RefCount()].allocated_ += allocated;
+      stats.by_ref_stats_[-refcount].count_++;
+      stats.by_ref_stats_[-refcount].bytes_ += size;
+      stats.by_ref_stats_[-refcount].allocated_ += allocated;
       stats.by_size_stats_[-size].count_++;
       stats.by_size_stats_[-size].bytes_ += size;
       stats.by_size_stats_[-size].allocated_ += allocated;

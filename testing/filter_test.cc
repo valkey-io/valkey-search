@@ -621,9 +621,7 @@ INSTANTIATE_TEST_SUITE_P(
                 "@tag_field_1:{books} @text_field2:Neural | "
                 "@text_field1:%%%word%%% @text_field2:network",
             .create_success = false,
-            .create_expected_error_message =
-                "Invalid range: Value above maximum; Query string is too "
-                "complex: max number of terms can't exceed 16",
+            .create_expected_error_message = "Unsupported query operation",
         },
         {
             .test_name = "invalid_fuzzy1",

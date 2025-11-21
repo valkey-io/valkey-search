@@ -67,8 +67,11 @@ class InternedString {
   //
   bool IsInline() const { return is_inline_; }
   size_t Allocated() const {
-    auto bytes =
-        ValkeyModule_MallocUsableSize(const_cast<InternedString *>(this));
+    size_t bytes = 0;
+#ifndef SAN_BUILD
+    // Crashes with sanitizer builds.
+    bytes += ValkeyModule_MallocUsableSize(const_cast<InternedString *>(this));
+#endif
     if (!is_inline_) {
       // Can't actually do a UsableSize of allocated blobs, so use the size.
       bytes += length_;

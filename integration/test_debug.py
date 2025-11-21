@@ -7,7 +7,7 @@ from valkey_search_test_case import (
 from valkeytestframework.util import waiters
 from indexes import *
 from valkeytestframework.conftest import resource_port_tracker
-import logging
+import logging, os, pytest
 from pprint import pprint
 from ft_info_parser import FTInfoParser
 from utils import IndexingTestHelper
@@ -26,7 +26,7 @@ def GetStringPollStatus(client):
     
 
 class TestFtDebugCommand(ValkeySearchTestCaseDebugMode):
-
+    @pytest.mark.skipif(os.environ.get('SAN_BUILD', 'no') != 'no', reason = "SAN ENABLED")
     def test_StringPoolStats(self):
         """
         Test CMD timeout logic

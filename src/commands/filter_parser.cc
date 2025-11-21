@@ -53,8 +53,8 @@ static auto query_string_depth =
 /// predicate tree.
 constexpr absl::string_view kQueryStringTermsCountConfig{
     "query-string-terms-count"};
-constexpr uint32_t kDefaultQueryTermsCount{16};
-constexpr uint32_t kMaxQueryTermsCount{32};
+constexpr uint32_t kDefaultQueryTermsCount{1000};
+constexpr uint32_t kMaxQueryTermsCount{1000};
 static auto query_terms_count =
     config::NumberBuilder(kQueryStringTermsCountConfig,  // name
                           kDefaultQueryTermsCount,       // default size

@@ -1127,4 +1127,20 @@ void ValkeySearch::OnUnload(ValkeyModuleCtx *ctx) {
   reader_thread_pool_ = nullptr;
 }
 
+std::shared_ptr<vmsdk::cluster_map::ClusterMap>
+ValkeySearch::GetOrRefreshClusterMap(ValkeyModuleCtx *ctx) {
+  auto current_map = std::atomic_load(&cluster_map_);
+  // Check if we need to refresh
+  bool needs_refresh =
+      !current_map || !current_map->IsConsistent() ||
+      std::chrono::steady_clock::now() > current_map->GetExpirationTime();
+  if (needs_refresh) {
+    VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1) << "Creating a new cluster map";
+    auto new_map = vmsdk::cluster_map::ClusterMap::CreateNewClusterMap(ctx);
+    std::atomic_store(&cluster_map_, new_map);
+    return new_map;
+  }
+  return current_map;
+}
+
 }  // namespace valkey_search

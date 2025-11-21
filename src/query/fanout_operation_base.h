@@ -39,9 +39,9 @@ class FanoutOperationBase {
   explicit FanoutOperationBase() = default;
 
   explicit FanoutOperationBase(bool enable_partial_results,
-                               bool enable_consistency)
+                               bool require_consistency)
       : enable_partial_results_(enable_partial_results),
-        enable_consistency_(enable_consistency) {}
+        require_consistency_(require_consistency) {}
 
   virtual ~FanoutOperationBase() = default;
 
@@ -146,16 +146,20 @@ class FanoutOperationBase {
                   << ", error message: " << status.error_message();
               // if grpc failed, the response is invalid, so we need to manually
               // set the error type
-              if (status.error_code() == grpc::StatusCode::NOT_FOUND) {
-                resp.set_error_type(
-                    coordinator::FanoutErrorType::INDEX_NAME_ERROR);
-              } else if (status.error_code() ==
-                         grpc::StatusCode::FAILED_PRECONDITION) {
-                resp.set_error_type(
-                    coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR);
-              } else {
-                resp.set_error_type(
-                    coordinator::FanoutErrorType::COMMUNICATION_ERROR);
+              switch (status.error_code()) {
+                case grpc::StatusCode::NOT_FOUND: {
+                  resp.set_error_type(
+                      coordinator::FanoutErrorType::INDEX_NAME_ERROR);
+                  break;
+                }
+                case grpc::StatusCode::FAILED_PRECONDITION: {
+                  resp.set_error_type(
+                      coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR);
+                  break;
+                }
+                default:
+                  resp.set_error_type(
+                      coordinator::FanoutErrorType::COMMUNICATION_ERROR);
               }
               this->OnError(status, resp.error_type(), target);
             }
@@ -321,7 +325,7 @@ class FanoutOperationBase {
   std::chrono::steady_clock::time_point deadline_tp_;
   bool timeout_occurred_ = false;
   bool enable_partial_results_;
-  bool enable_consistency_;
+  bool require_consistency_;
 };
 
 }  // namespace valkey_search::query::fanout

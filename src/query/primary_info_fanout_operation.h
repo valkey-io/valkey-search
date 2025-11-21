@@ -28,7 +28,7 @@ class PrimaryInfoFanoutOperation
  public:
   PrimaryInfoFanoutOperation(uint32_t db_num, const std::string& index_name,
                              unsigned timeout_ms, bool enable_partial_results,
-                             bool enable_consistency);
+                             bool require_consistency);
 
   std::vector<vmsdk::cluster_map::NodeInfo> GetTargets() const;
 
@@ -71,8 +71,7 @@ class PrimaryInfoFanoutOperation
   uint64_t num_docs_;
   uint64_t num_records_;
   uint64_t hash_indexing_failures_;
-  std::optional<coordinator::IndexFingerprintVersion>
-      expected_fingerprint_version_;
+  coordinator::IndexFingerprintVersion expected_fingerprint_version_;
 };
 
 }  // namespace valkey_search::query::primary_info_fanout

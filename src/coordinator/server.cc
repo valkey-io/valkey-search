@@ -283,7 +283,7 @@ Service::GenerateInfoResponse(
     return std::make_pair(error_status, response);
   }
 
-  if (request.enable_consistency()) {
+  if (request.require_consistency()) {
     // Get local fingerprint/version
     auto global_metadata =
         coordinator::MetadataManager::Instance().GetGlobalMetadata();

@@ -60,7 +60,7 @@ class TestFTInfoPartitionConsistencyControls(ValkeySearchClusterTestCaseDebugMod
     def sum_docs(self, index: Index) -> int:
         return sum([index.info(self.client_for_primary(i)).num_docs for i in range(len(self.replication_groups))])
 
-    def run_info_command(self, client, index_name, enable_partial_results=False, enable_consistency=False, expect_error=False):
+    def run_info_command(self, client, index_name, enable_partial_results=False, require_consistency=False, expect_error=False):
         if expect_error:
             try:
                 x = client.execute_command(
@@ -68,7 +68,7 @@ class TestFTInfoPartitionConsistencyControls(ValkeySearchClusterTestCaseDebugMod
                     index_name,
                     "PRIMARY",
                     "SOMESHARDS" if enable_partial_results else "ALLSHARDS",
-                    "CONSISTENT" if enable_consistency else "INCONSISTENT"
+                    "CONSISTENT" if require_consistency else "INCONSISTENT"
                 )
                 assert False, "Expected error, but got result: " + str(x)
             except ResponseError as e:
@@ -80,7 +80,7 @@ class TestFTInfoPartitionConsistencyControls(ValkeySearchClusterTestCaseDebugMod
                 index_name,
                 "PRIMARY",
                 "SOMESHARDS" if enable_partial_results else "ALLSHARDS",
-                "CONSISTENT" if enable_consistency else "INCONSISTENT"
+                "CONSISTENT" if require_consistency else "INCONSISTENT"
             )
 
     def test_ft_info_consistency_controls(self):
@@ -95,21 +95,21 @@ class TestFTInfoPartitionConsistencyControls(ValkeySearchClusterTestCaseDebugMod
         waiters.wait_for_equal(lambda: self.sum_docs(index), 1000, timeout=3)
 
         # normal result without consistency check
-        normal_result = self.run_info_command(client, index_name, enable_consistency=False)
+        normal_result = self.run_info_command(client, index_name, require_consistency=False)
 
         # normal result with consistency check
-        cur_result = self.run_info_command(client, index_name, enable_consistency=True)
+        cur_result = self.run_info_command(client, index_name, require_consistency=True)
         assert cur_result == normal_result
         
         # force invalid invalid index fingerprint and version
         self.control_set("ForceInfoInvalidIndexFingerprint", "yes")
 
         # enable consistency check, get error result
-        cur_result = self.run_info_command(client, index_name, enable_consistency=True, expect_error=True)
+        cur_result = self.run_info_command(client, index_name, require_consistency=True, expect_error=True)
         assert cur_result == []
 
         # disable consistency check, get normal result
-        cur_result = self.run_info_command(client, index_name, enable_consistency=False, expect_error=False)
+        cur_result = self.run_info_command(client, index_name, require_consistency=False, expect_error=False)
         assert cur_result == normal_result
 
         self.control_set("ForceInfoInvalidIndexFingerprint", "no")

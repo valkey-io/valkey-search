@@ -27,7 +27,7 @@ class ClusterInfoFanoutOperation
  public:
   ClusterInfoFanoutOperation(uint32_t db_num, const std::string& index_name,
                              unsigned timeout_ms, bool enable_partial_results,
-                             bool enable_consistency);
+                             bool require_consistency);
 
   std::vector<vmsdk::cluster_map::NodeInfo> GetTargets() const override;
 
@@ -71,8 +71,7 @@ class ClusterInfoFanoutOperation
   float backfill_complete_percent_min_;
   bool backfill_in_progress_;
   std::string state_;
-  std::optional<coordinator::IndexFingerprintVersion>
-      expected_fingerprint_version_;
+  coordinator::IndexFingerprintVersion expected_fingerprint_version_;
 };
 
 }  // namespace valkey_search::query::cluster_info_fanout

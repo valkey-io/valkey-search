@@ -17,12 +17,12 @@ CONTROLLED_BOOLEAN(ForceInfoInvalidIndexFingerprint, false);
 
 PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
     uint32_t db_num, const std::string& index_name, unsigned timeout_ms,
-    bool enable_partial_results, bool enable_consistency)
+    bool enable_partial_results, bool require_consistency)
     : fanout::FanoutOperationBase<
           coordinator::InfoIndexPartitionRequest,
           coordinator::InfoIndexPartitionResponse,
           vmsdk::cluster_map::FanoutTargetMode::kPrimary>(
-          enable_partial_results, enable_consistency),
+          enable_partial_results, require_consistency),
       db_num_(db_num),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
@@ -30,12 +30,11 @@ PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
       num_docs_(0),
       num_records_(0),
       hash_indexing_failures_(0) {
-  if (enable_consistency_) {
-    expected_fingerprint_version_.emplace();
+  if (require_consistency_) {
     // test only: force invalid index fingerprint and version
     if (ForceInfoInvalidIndexFingerprint.GetValue()) {
-      expected_fingerprint_version_->set_fingerprint(404);
-      expected_fingerprint_version_->set_version(404);
+      expected_fingerprint_version_.set_fingerprint(404);
+      expected_fingerprint_version_.set_version(404);
     } else {
       // Get expected fingerprint/version from local metadata
       auto global_metadata =
@@ -46,8 +45,8 @@ PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
             kSchemaManagerMetadataTypeName);
         if (entry_map.entries().contains(index_name_)) {
           const auto& entry = entry_map.entries().at(index_name_);
-          expected_fingerprint_version_->set_fingerprint(entry.fingerprint());
-          expected_fingerprint_version_->set_version(entry.version());
+          expected_fingerprint_version_.set_fingerprint(entry.fingerprint());
+          expected_fingerprint_version_.set_version(entry.version());
         }
       }
     }
@@ -71,12 +70,9 @@ PrimaryInfoFanoutOperation::GenerateRequest(
   req.set_db_num(db_num_);
   req.set_index_name(index_name_);
 
-  if (enable_consistency_) {
-    req.set_enable_consistency(true);
-    if (expected_fingerprint_version_.has_value()) {
-      *req.mutable_index_fingerprint_version() =
-          expected_fingerprint_version_.value();
-    }
+  if (require_consistency_) {
+    req.set_require_consistency(true);
+    *req.mutable_index_fingerprint_version() = expected_fingerprint_version_;
   }
 
   return req;

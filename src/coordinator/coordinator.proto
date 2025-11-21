@@ -156,8 +156,8 @@ message IndexFingerprintVersion {
 message InfoIndexPartitionRequest {
   uint32 db_num = 1;
   string index_name = 2;
-  bool enable_consistency = 3;
-  optional IndexFingerprintVersion index_fingerprint_version = 4;
+  bool require_consistency = 3;
+  IndexFingerprintVersion index_fingerprint_version = 4;
 }
 
 enum FanoutErrorType {

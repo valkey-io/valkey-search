@@ -239,11 +239,11 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         assert reads == [len(records)]
 
     def get_pausepoint(self, p):
+        result = self.client.execute_command(f"ft._debug pausepoint test {p}")
         try:
-            result = self.client.execute_command(f"ft._debug pausepoint test {p}")
             return int(result)
-        except ResponseError:
-            assert "not found" in result
+        except ValueError:
+            assert b"not found" in result
             return 0
     
     def test_multi_exec_queue(self):

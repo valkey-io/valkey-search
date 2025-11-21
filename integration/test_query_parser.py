@@ -100,8 +100,9 @@ class TestQueryParser(ValkeySearchTestCaseBase):
             Test the query string terms count limit in Valkey Search using Vector based queries.
         """
         client: Valkey = self.server.get_new_client()
-        # Test that the default query string terms count limit is 16
-        assert client.execute_command("CONFIG GET search.query-string-terms-count") == [b"search.query-string-terms-count", b"16"]
+        default_limit = b"1000"
+        # Test that the default query string terms count limit is expected default_limit
+        assert client.execute_command("CONFIG GET search.query-string-terms-count") == [b"search.query-string-terms-count", default_limit]
         # Create an index for testing
         assert client.execute_command("FT.CREATE my_index ON HASH PREFIX 1 doc: SCHEMA price NUMERIC category TAG SEPARATOR | doc_embedding VECTOR FLAT 6 TYPE FLOAT32 DIM 128 DISTANCE_METRIC COSINE") == b"OK"
         
@@ -145,14 +146,14 @@ class TestQueryParser(ValkeySearchTestCaseBase):
             "RETURN", 1, "doc_embedding"
         ) == [0]
         
-        # Test that the config ranges from 1 to 32
+        # Test that the config ranges from 1 to default_limit
         try:
             client.execute_command("CONFIG SET search.query-string-terms-count 0")
             assert False
         except ResponseError as e:
-            assert "argument must be between 1 and 32 inclusive" in str(e)
+            assert f"argument must be between 1 and {default_limit.decode()} inclusive" in str(e)
         try:
-            client.execute_command("CONFIG SET search.query-string-terms-count 33")
+            client.execute_command(f"CONFIG SET search.query-string-terms-count {int(default_limit)+1}")
             assert False
         except ResponseError as e:
-            assert "argument must be between 1 and 32 inclusive" in str(e)
+            assert f"argument must be between 1 and {default_limit.decode()} inclusive" in str(e)

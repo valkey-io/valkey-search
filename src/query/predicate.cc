@@ -373,7 +373,8 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
               std::move(iterators), slop_, inorder_, field_mask, nullptr);
 
       // Check if any valid proximity matches exist
-      if (proximity_iterator->DonePositions()) {
+      if (proximity_iterator->DoneKeys() ||
+          proximity_iterator->DonePositions()) {
         return EvaluationResult(false);
       }
       // Validate against original target key from evaluator

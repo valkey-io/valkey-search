@@ -27,7 +27,8 @@ ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(
 
 std::vector<vmsdk::cluster_map::NodeInfo>
 ClusterInfoFanoutOperation::GetTargets() const {
-  return ValkeySearch::Instance().GetClusterMap()->GetAllTargets();
+  return ValkeySearch::Instance().GetClusterMap()->GetTargets(
+      vmsdk::cluster_map::FanoutTargetMode::kAll);
 }
 
 unsigned ClusterInfoFanoutOperation::GetTimeoutMs() const {

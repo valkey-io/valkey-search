@@ -16,7 +16,6 @@
 #include "grpcpp/support/status.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/query/fanout_operation_base.h"
-#include "src/query/fanout_template.h"
 
 namespace valkey_search::query::cluster_info_fanout {
 

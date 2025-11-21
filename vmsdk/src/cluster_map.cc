@@ -55,9 +55,15 @@ const ShardInfo* ClusterMap::GetShardBySlot(uint16_t slot) const {
   return nullptr;
 }
 
-const NodeInfo& ClusterMap::GetRandomNodeFromShard(
-    const ShardInfo& shard) const {
+const NodeInfo& ClusterMap::GetRandomNodeFromShard(const ShardInfo& shard,
+                                                   bool replica_only) const {
   absl::BitGen gen;
+
+  if (replica_only) {
+    size_t replica_index = absl::Uniform(gen, 0u, shard.replicas.size());
+    return shard.replicas[replica_index];
+  }
+
   size_t node_count = shard.replicas.size();
   if (shard.primary.has_value()) {
     node_count++;
@@ -71,13 +77,36 @@ const NodeInfo& ClusterMap::GetRandomNodeFromShard(
   return shard.replicas[replica_index];
 }
 
-std::vector<NodeInfo> ClusterMap::GetRandomTargets() const {
-  std::vector<NodeInfo> random_targets;
-  random_targets.reserve(shards_.size());
-  for (const auto& [shard_id, shard_info] : shards_) {
-    random_targets.push_back(GetRandomNodeFromShard(shard_info));
+std::vector<NodeInfo> ClusterMap::GetTargets(FanoutTargetMode mode) const {
+  switch (mode) {
+    case FanoutTargetMode::kAll:
+      return all_targets_;
+    case FanoutTargetMode::kPrimary:
+      return primary_targets_;
+    case FanoutTargetMode::kReplicas:
+      return replica_targets_;
+    case FanoutTargetMode::kOneReplicaPerShard: {
+      std::vector<NodeInfo> random_replicas;
+      random_replicas.reserve(shards_.size());
+      for (const auto& [shard_id, shard_info] : shards_) {
+        if (shard_info.replicas.empty()) {
+          continue;
+        }
+        random_replicas.push_back(GetRandomNodeFromShard(shard_info, true));
+      }
+      return random_replicas;
+    }
+    case FanoutTargetMode::kRandom: {
+      std::vector<NodeInfo> random_targets;
+      random_targets.reserve(shards_.size());
+      for (const auto& [shard_id, shard_info] : shards_) {
+        random_targets.push_back(GetRandomNodeFromShard(shard_info));
+      }
+      return random_targets;
+    }
+    default:
+      CHECK(false);
   }
-  return random_targets;
 }
 
 // For shard fingerprint - hash the slot ranges
@@ -112,7 +141,7 @@ uint64_t ClusterMap::ComputeClusterFingerprint() {
 
 // Helper function to parse node info from CLUSTER SLOTS reply
 std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
-    ValkeyModuleCallReply* node_arr, bool is_local_shard, bool is_primary) {
+    ValkeyModuleCallReply* node_arr, const char* my_node_id, bool is_primary) {
   CHECK(node_arr) << kValkeyModuleCallErrorMsg;
   // each node array should have exactly 4 elements
   CHECK(ValkeyModule_CallReplyLength(node_arr) == 4)
@@ -148,6 +177,10 @@ std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
   const char* node_id_char = ValkeyModule_CallReplyStringPtr(
       ValkeyModule_CallReplyArrayElement(node_arr, 2), &node_id_len);
   CHECK(node_id_char) << kValkeyModuleCallErrorMsg;
+
+  bool is_local_node =
+      (node_id_len == VALKEYMODULE_NODE_ID_LEN &&
+       memcmp(node_id_char, my_node_id, VALKEYMODULE_NODE_ID_LEN) == 0);
 
   // Get additional network metadata
   // Depending on the client RESP protocol version, the additional network
@@ -217,7 +250,7 @@ std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
 
   return NodeInfo{.node_id = node_id_str,
                   .is_primary = is_primary,
-                  .is_local = is_local_shard,
+                  .is_local = is_local_node,
                   .socket_address = addr,
                   .additional_network_metadata = additional_network_metadata,
                   .shard = nullptr};
@@ -300,7 +333,7 @@ bool ClusterMap::ProcessSlotRange(ValkeyModuleCallReply* slot_range,
   // Parse primary node
   ValkeyModuleCallReply* primary_node_arr =
       ValkeyModule_CallReplyArrayElement(slot_range, 2);
-  auto primary_node_opt = ParseNodeInfo(primary_node_arr, is_local_shard, true);
+  auto primary_node_opt = ParseNodeInfo(primary_node_arr, my_node_id, true);
   if (!primary_node_opt.has_value()) {
     VMSDK_LOG(WARNING, nullptr) << "Dropping slot range [" << start << "-"
                                 << end << "] due to invalid primary node";
@@ -315,7 +348,7 @@ bool ClusterMap::ProcessSlotRange(ValkeyModuleCallReply* slot_range,
   for (size_t j = 3; j < slot_len; j++) {
     ValkeyModuleCallReply* replica_node_arr =
         ValkeyModule_CallReplyArrayElement(slot_range, j);
-    auto replica_opt = ParseNodeInfo(replica_node_arr, is_local_shard, false);
+    auto replica_opt = ParseNodeInfo(replica_node_arr, my_node_id, false);
     if (!replica_opt.has_value()) {
       VMSDK_LOG(WARNING, nullptr) << "Skipping invalid replica in slot range ["
                                   << start << "-" << end << "]";

@@ -33,7 +33,6 @@
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
-#include "src/query/fanout_template.h"
 #include "src/query/search.h"
 #include "src/utils/string_interning.h"
 #include "valkey_search_options.h"

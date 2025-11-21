@@ -17,7 +17,6 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/index_schema.h"
-#include "src/query/fanout_template.h"
 #include "src/query/search.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/thread_pool.h"

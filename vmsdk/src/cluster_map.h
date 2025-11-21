@@ -37,10 +37,11 @@ static constexpr highwayhash::HHKey kHashKey{
 
 // Enumeration for fanout target modes
 enum class FanoutTargetMode {
-  kRandom,        // Default: randomly select one node per shard
-  kReplicasOnly,  // Select only replicas, one per shard
-  kPrimary,       // Select all primary (master) nodes
-  kAll            // Select all nodes (both primary and replica)
+  kRandom,              // Default: randomly select one node per shard
+  kOneReplicaPerShard,  // Select only replicas, one per shard
+  kPrimary,             // Select all primary nodes
+  kReplicas,            // Select all replica nodes
+  kAll                  // Select all nodes (both primary and replica)
 };
 
 const size_t kNumSlots = 16384;
@@ -95,14 +96,8 @@ class ClusterMap {
   // would replace the existing map once the creation is finished
   static std::shared_ptr<ClusterMap> CreateNewClusterMap(ValkeyModuleCtx* ctx);
 
-  // return pre-generated target vectors
-  const std::vector<NodeInfo>& GetPrimaryTargets() const {
-    return primary_targets_;
-  };
-  const std::vector<NodeInfo>& GetReplicaTargets() const {
-    return replica_targets_;
-  };
-  const std::vector<NodeInfo>& GetAllTargets() const { return all_targets_; };
+  // get a vector of node targets based on the mode
+  std::vector<NodeInfo> GetTargets(FanoutTargetMode mode) const;
 
   std::chrono::steady_clock::time_point GetExpirationTime() const {
     return expiration_tp_;
@@ -110,12 +105,6 @@ class ClusterMap {
 
   // are all the slots assigned to some shard
   bool IsConsistent() const { return is_consistent_; }
-
-  // generate a random targets vector with one node from each shard
-  std::vector<NodeInfo> GetRandomTargets() const;
-
-  // get a random node from a shard
-  const NodeInfo& GetRandomNodeFromShard(const ShardInfo& shard) const;
 
   // do I own this slot
   bool IOwnSlot(uint16_t slot) const { return owned_slots_[slot]; }
@@ -156,6 +145,10 @@ class ClusterMap {
   std::vector<NodeInfo> replica_targets_;
   std::vector<NodeInfo> all_targets_;
 
+  // get a random node from a shard
+  const NodeInfo& GetRandomNodeFromShard(const ShardInfo& shard,
+                                         bool replica_only = false) const;
+
   // helper function to print out cluster map for debug
   static void PrintClusterMap(std::shared_ptr<ClusterMap> map);
 
@@ -169,7 +162,8 @@ class ClusterMap {
   // Helper functions for CreateNewClusterMap
   // parse and return a single node info, or return empty if node is invalid
   std::optional<NodeInfo> ParseNodeInfo(ValkeyModuleCallReply* node_arr,
-                                        bool is_local_shard, bool is_primary);
+                                        const char* my_node_id,
+                                        bool is_primary);
 
   // check is this a local shard
   bool IsLocalShard(ValkeyModuleCallReply* slot_range, const char* my_node_id);

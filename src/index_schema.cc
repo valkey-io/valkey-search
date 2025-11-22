@@ -267,6 +267,12 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
   if (reload) {
     stats_.document_cnt = index_schema_proto.stats().documents_count();
   }
+  if (index_schema_proto.has_fingerprint()) {
+    fingerprint_ = index_schema_proto.fingerprint();
+  }
+  if (index_schema_proto.has_version()) {
+    version_ = index_schema_proto.version();
+  }
 }
 
 absl::Status IndexSchema::Init(ValkeyModuleCtx *ctx) {
@@ -871,6 +877,8 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   index_schema_proto->set_attribute_data_type(attribute_data_type_->ToProto());
   auto stats = index_schema_proto->mutable_stats();
   stats->set_documents_count(stats_.document_cnt);
+  index_schema_proto->set_fingerprint(fingerprint_);
+  index_schema_proto->set_version(version_);
   std::transform(
       attributes_.begin(), attributes_.end(),
       google::protobuf::RepeatedPtrFieldBackInserter(

@@ -9,6 +9,7 @@
 
 #include "src/coordinator/metadata_manager.h"
 #include "src/schema_manager.h"
+#include "vmsdk/src/info.h"
 
 namespace valkey_search::query::primary_info_fanout {
 
@@ -127,7 +128,11 @@ int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
       !inconsistent_state_error_nodes.empty()) {
     return FanoutOperationBase::GenerateErrorReply(ctx);
   }
-  ValkeyModule_ReplyWithArray(ctx, 10);
+  size_t reply_size = 10;
+  if (vmsdk::info_field::GetShowDeveloper()) {
+    reply_size += 4;
+  }
+  ValkeyModule_ReplyWithArray(ctx, reply_size);
   ValkeyModule_ReplyWithSimpleString(ctx, "mode");
   ValkeyModule_ReplyWithSimpleString(ctx, "primary");
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
@@ -139,6 +144,18 @@ int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
       ctx, std::to_string(hash_indexing_failures_).c_str());
+
+  if (vmsdk::info_field::GetShowDeveloper()) {
+    auto status_or_schema =
+        SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+    auto schema = std::move(status_or_schema.value());
+    ValkeyModule_ReplyWithSimpleString(ctx, "index_fingerprint");
+    int64_t fingerprint = static_cast<int64_t>(schema->GetFingerprint());
+    ValkeyModule_ReplyWithLongLong(ctx, fingerprint);
+    ValkeyModule_ReplyWithSimpleString(ctx, "index_version");
+    ValkeyModule_ReplyWithLongLong(ctx, schema->GetVersion());
+  }
+
   return VALKEYMODULE_OK;
 }
 

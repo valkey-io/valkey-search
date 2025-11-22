@@ -71,7 +71,7 @@ class Evaluator {
       const NumericPredicate& predicate) = 0;
 
   // Access target key for proximity validation (only for Text)
-  virtual const std::shared_ptr<InternedString>& GetTargetKey() const = 0;
+  virtual const InternedStringPtr& GetTargetKey() const = 0;
 };
 
 class Predicate;
@@ -169,8 +169,7 @@ class TextPredicate : public Predicate {
   // Evaluate against per-key TextIndex
   virtual EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key)
-      const = 0;
+      const InternedStringPtr& target_key) const = 0;
   virtual std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
       const = 0;
   virtual const FieldMaskPredicate GetFieldMask() const = 0;
@@ -192,8 +191,7 @@ class TermPredicate : public TextPredicate {
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key)
-      const override;
+      const InternedStringPtr& target_key) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -219,8 +217,7 @@ class PrefixPredicate : public TextPredicate {
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key)
-      const override;
+      const InternedStringPtr& target_key) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -244,8 +241,7 @@ class SuffixPredicate : public TextPredicate {
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key)
-      const override;
+      const InternedStringPtr& target_key) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -269,8 +265,7 @@ class InfixPredicate : public TextPredicate {
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key)
-      const override;
+      const InternedStringPtr& target_key) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -295,8 +290,7 @@ class FuzzyPredicate : public TextPredicate {
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key)
-      const override;
+      const InternedStringPtr& target_key) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -318,8 +312,7 @@ class ProximityPredicate : public TextPredicate {
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key)
-      const override;
+      const InternedStringPtr& target_key) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {

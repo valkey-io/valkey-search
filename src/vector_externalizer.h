@@ -98,10 +98,10 @@ class VectorExternalizer {
  private:
   VectorExternalizer();
 
-  vmsdk::MainThreadAccessGuard<InternedStringMap<
+  vmsdk::MainThreadAccessGuard<InternedStringHashMap<
       absl::flat_hash_map<std::string, VectorExternalizerEntry>>>
       shared_vectors_;
-  vmsdk::MainThreadAccessGuard<InternedStringMap<
+  vmsdk::MainThreadAccessGuard<InternedStringHashMap<
       absl::flat_hash_map<std::string, VectorExternalizerEntry>>>
       deferred_shared_vectors_;
   vmsdk::MainThreadAccessGuard<std::unique_ptr<LRU<LRUCacheEntry>>> lru_cache_;

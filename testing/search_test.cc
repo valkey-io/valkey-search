@@ -134,11 +134,8 @@ class MockTag : public indexes::Tag {
 class TestedTagEntriesFetcher : public indexes::Tag::EntriesFetcher {
  public:
   TestedTagEntriesFetcher(
-      size_t size,
-      PatriciaTree<InternedStringPtr, InternedStringPtrHash,
-                   InternedStringPtrEqual> &tree,
-      absl::flat_hash_set<PatriciaNode<InternedStringPtr, InternedStringPtrHash,
-                                       InternedStringPtrEqual> *> &entries,
+      size_t size, PatriciaTree<InternedStringPtr> &tree,
+      absl::flat_hash_set<PatriciaNode<InternedStringPtr> *> &entries,
       bool negate, InternedStringSet &untracked_keys)
       : indexes::Tag::EntriesFetcher(tree, entries, size, negate,
                                      untracked_keys),
@@ -197,11 +194,8 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
 
   VMSDK_EXPECT_OK(index_schema->AddIndex("tag_index_100_15", "tag_index_100_15",
                                          tag_index_100_15));
-  PatriciaTree<InternedStringPtr, InternedStringPtrHash, InternedStringPtrEqual>
-      tree(false);
-  absl::flat_hash_set<PatriciaNode<InternedStringPtr, InternedStringPtrHash,
-                                   InternedStringPtrEqual> *>
-      entries;
+  PatriciaTree<InternedStringPtr> tree(false);
+  absl::flat_hash_set<PatriciaNode<InternedStringPtr> *> entries;
   InternedStringSet untracked_keys;
   EXPECT_CALL(*tag_index_100_15, Search(_, false))
       .WillRepeatedly(Return(ByMove(std::make_unique<TestedTagEntriesFetcher>(

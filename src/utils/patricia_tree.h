@@ -28,7 +28,8 @@
 
 namespace valkey_search {
 
-template <typename T, typename Hasher, typename Equaler>
+template <typename T, typename Hasher = absl::Hash<T>,
+          typename Equaler = std::equal_to<T>>
 class PatriciaNode {
  public:
   PatriciaNode() = default;

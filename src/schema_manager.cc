@@ -596,7 +596,6 @@ absl::Status SchemaManager::RemoveAll() {
 absl::Status SchemaManager::LoadIndex(
     ValkeyModuleCtx *ctx, std::unique_ptr<data_model::RDBSection> section,
     SupplementalContentIter &&supplemental_iter) {
-
   // If not subscribed, we need to subscribe now so that we can get the loading
   // ended callback.
   SubscribeToServerEventsIfNeeded();

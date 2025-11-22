@@ -119,7 +119,6 @@ class TestFanout(ValkeySearchClusterTestCase):
     )
     @pytest.mark.parametrize("threshold", [0, 100])
     def test_fanout_low_utilization_fanout(self, threshold):
-
         number_of_searches_to_run = 10
         rg = self.get_replication_group(0)
         primary = rg.get_primary_connection()
@@ -179,3 +178,93 @@ class TestFanout(ValkeySearchClusterTestCase):
         client.execute_command("CONFIG", "SET", "search.thread-pool-wait-time-samples", "10000")
         result = client.execute_command("CONFIG", "GET", "search.thread-pool-wait-time-samples")
         assert result[1] == b"10000"
+
+def load_fingerprint_version_from_rdb(test):
+    client = test.new_client_for_primary(0)
+    index_name = "index1"
+
+    assert client.execute_command("CONFIG SET search.info-developer-visible yes") == b"OK"
+
+    assert client.execute_command(
+        "FT.CREATE", index_name,
+        "ON", "HASH",
+        "PREFIX", "1", "doc:",
+        "SCHEMA", "price", "NUMERIC"
+    ) == b"OK"
+
+    raw = client.execute_command("FT.INFO", index_name, "PRIMARY")
+    parser = FTInfoParser([])
+    info = parser._parse_key_value_list(raw)
+    fingerprint = int(info["index_fingerprint"])
+    assert fingerprint is not None
+    version = int(info["index_version"])
+    assert version == 0
+
+    # drop and create index again
+    assert client.execute_command("FT.DROPINDEX", index_name) == b"OK"
+
+    assert client.execute_command(
+        "FT.CREATE", index_name,
+        "ON", "HASH",
+        "PREFIX", "1", "doc:",
+        "SCHEMA", "price", "NUMERIC"
+    ) == b"OK"
+
+    # Save RDB on all nodes
+    for rg in test.replication_groups:
+        rg.primary.client.execute_command("SAVE")
+        
+    # Restart all nodes in the cluster
+    for rg in test.replication_groups:
+        rg.primary.server.restart(remove_rdb=False)
+
+    # Wait for all nodes to be ready
+    def are_all_nodes_ready():
+        try:
+            for i in range(len(test.replication_groups)):
+                client = test.new_client_for_primary(i)
+                client.ping()
+            return True
+        except (ConnectionError, Exception):
+            return False
+
+    waiters.wait_for_true(are_all_nodes_ready, timeout=10)
+    client = test.new_client_for_primary(0)
+    client.execute_command("CONFIG SET search.info-developer-visible yes")
+
+    raw = client.execute_command("FT.INFO", index_name, "PRIMARY")
+    info = parser._parse_key_value_list(raw)
+    assert fingerprint == int(info["index_fingerprint"])
+    assert version < int(info["index_version"])
+        
+class TestLoadFingerprintVersionFromRDB_v1_v1(ValkeySearchClusterTestCaseDebugMode):
+    def append_startup_args(self, args):
+        args["search.rdb_write_v2"] = "no"
+        args["search.rdb_read_v2"] = "no"
+        return args
+    def test_load_fingerprint_version_from_rdb_v1_v1(self):
+        load_fingerprint_version_from_rdb(self)
+
+class TestLoadFingerprintVersionFromRDB_v1_v2(ValkeySearchClusterTestCaseDebugMode):
+    def append_startup_args(self, args):
+        args["search.rdb_write_v2"] = "no"
+        args["search.rdb_read_v2"] = "yes"
+        return args
+    def test_load_fingerprint_version_from_rdb_v1_v2(self):
+        load_fingerprint_version_from_rdb(self)
+
+class TestLoadFingerprintVersionFromRDB_v2_v1(ValkeySearchClusterTestCaseDebugMode):
+    def append_startup_args(self, args):
+        args["search.rdb_write_v2"] = "yes"
+        args["search.rdb_read_v2"] = "no"
+        return args
+    def test_load_fingerprint_version_from_rdb_v2_v1(self):
+        load_fingerprint_version_from_rdb(self)
+
+class TestLoadFingerprintVersionFromRDB_v2_v2(ValkeySearchClusterTestCaseDebugMode):
+    def append_startup_args(self, args):
+        args["search.rdb_write_v2"] = "yes"
+        args["search.rdb_read_v2"] = "yes"
+        return args
+    def test_load_fingerprint_version_from_rdb_v2_v2(self):
+        load_fingerprint_version_from_rdb(self)

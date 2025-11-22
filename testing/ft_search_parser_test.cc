@@ -67,7 +67,7 @@ struct FTSearchParserTestCase {
   std::unordered_map<std::string, std::string> return_attributes;
   bool no_content{false};
   std::string search_parameters_str;
-  uint64_t timeout_ms{kTimeoutMS};
+  uint64_t timeout_ms{query::kTimeoutMS};
   bool vector_query{true};
 };
 
@@ -161,7 +161,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
     auto timeout_str = std::to_string(timeout_ms.value());
     args.push_back(ValkeyModule_CreateString(nullptr, timeout_str.data(),
                                              timeout_str.size()));
-    if (timeout_ms.value() >= kMaxTimeoutMs + 1) {
+    if (timeout_ms.value() >= query::kMaxTimeoutMs + 1) {
       timeout_expected_success = false;
     }
   }
@@ -197,12 +197,30 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
 
   std::cerr << "Executing cmd: ";
   for (auto &a : args) {
-    std::cerr << vmsdk::ToStringView(a) << " ";
+    std::cerr << "'" << vmsdk::ToStringView(a) << "' ";
   }
   std::cerr << "\n";
 
-  auto search_params = ParseVectorSearchParameters(&fake_ctx, &args[0],
-                                                   args.size(), schema_manager);
+  // Repro semantics of command startup
+  vmsdk::ArgsIterator itr{&args[0], int(args.size())};
+  absl::StatusOr<std::unique_ptr<SearchCommand>> search_params(
+      std::make_unique<SearchCommand>());
+  (*search_params)->timeout_ms = 50000;
+  (*search_params)->index_schema_name = vmsdk::ToStringView(*itr.PopNext());
+  (*search_params)->parse_vars.query_string =
+      vmsdk::ToStringView(*itr.PopNext());
+  auto this_index_schema =
+      schema_manager.GetIndexSchema(0, (*search_params)->index_schema_name);
+  if (!this_index_schema.ok()) {
+    search_params = this_index_schema.status();
+  } else {
+    (*search_params)->index_schema = *this_index_schema;
+    auto sts = (*search_params)->ParseCommand(itr);
+    if (!sts.ok()) {
+      search_params = sts;
+    }
+  }
+
   bool expected_success = dialect_expected_success && limit_expected_success &&
                           test_case.success && !add_end_unexpected_param &&
                           timeout_expected_success;
@@ -272,6 +290,8 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
             "`DIALEC"));
       } else {
         EXPECT_TRUE(add_end_unexpected_param || !test_case.success);
+        std::cerr << "Status Message: " << search_params.status().message()
+                  << "\n";
         EXPECT_TRUE(search_params.status().message().starts_with(
             "Error parsing vector similarity parameters"));
       }
@@ -303,7 +323,7 @@ TEST_P(FTSearchParserTest, Parse) {
                                    std::nullopt);
           DoVectorSearchParserTest(test_case, dialect_itr, limit_itr,
                                    add_end_unexpected_param, no_content,
-                                   kMaxTimeoutMs + 1);
+                                   query::kMaxTimeoutMs + 1);
         }
       }
     }
@@ -513,7 +533,7 @@ INSTANTIATE_TEST_SUITE_P(
             .params_str = " PARAMS 2",
             .filter_str = "* =>[KNN 5 @vec1 $BLOB]",
             .k = 5,
-            .expected_error_message = "Index field `vec1` does not exists",
+            .expected_error_message = "Index field `vec1` does not exist",
         },
         {
             .test_name = "missing_index_field_w_score_as",
@@ -522,7 +542,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter_str = "* =>[KNN 5 @vec1 $BLOB]",
             .k = 5,
             .score_as = "as_test_1",
-            .expected_error_message = "Index field `vec1` does not exists",
+            .expected_error_message = "Index field `vec1` does not exist",
         },
         {
             .test_name = "missing_return_1",

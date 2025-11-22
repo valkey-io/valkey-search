@@ -28,7 +28,6 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/coordinator/server.h"
 #include "src/coordinator/util.h"
-#include "src/index_schema.h"
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
@@ -143,6 +142,12 @@ static vmsdk::info_field::Integer ingest_hash_keys(
       return Metrics::GetStats().ingest_hash_keys;
     }));
 
+static vmsdk::info_field::Integer backfill_hash_keys(
+    "global_ingestion", "backfill_hash_keys",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().backfill_hash_keys;
+    }));
+
 static vmsdk::info_field::Integer ingest_hash_blocked(
     "global_ingestion", "ingest_hash_blocked",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
@@ -154,6 +159,12 @@ static vmsdk::info_field::Integer ingest_json_keys(
     "global_ingestion", "ingest_json_keys",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_json_keys;
+    }));
+
+static vmsdk::info_field::Integer backfill_json_keys(
+    "global_ingestion", "backfill_json_keys",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().backfill_json_keys;
     }));
 
 static vmsdk::info_field::Integer ingest_json_blocked(
@@ -570,6 +581,23 @@ static vmsdk::info_field::Integer coordinator_last_time_since_healthy_metadata(
           return ValkeySearch::Instance().UsingCoordinator();
         }));
 
+static vmsdk::info_field::Integer
+    coordinator_metadata_reconciliation_completed_count(
+        "coordinator", "coordinator_metadata_reconciliation_completed_count",
+        vmsdk::info_field::IntegerBuilder()
+            .App()
+            .Computed([]() -> int64_t {
+              // prevent failure in unit tests
+              if (!coordinator::MetadataManager::IsInitialized()) {
+                return 0;
+              }
+              return coordinator::MetadataManager::Instance()
+                  .GetMetadataReconciliationCompletedCount();
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator();
+            }));
+
 static vmsdk::info_field::String
     coordinator_client_get_global_metadata_success_latency_usec(
         "coordinator",
@@ -747,6 +775,24 @@ static vmsdk::info_field::String flat_vector_index_search_latency_usec(
           return Metrics::GetStats()
               .flat_vector_index_search_latency.HasSamples();
         }));
+
+static vmsdk::info_field::Integer info_fanout_retry_count(
+    "fanout", "info_fanout_retry_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().info_fanout_retry_cnt;
+    }));
+
+static vmsdk::info_field::Integer info_fanout_fail_count(
+    "fanout", "info_fanout_fail_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().info_fanout_fail_cnt;
+    }));
+
+static vmsdk::info_field::Integer pause_handle_cluster_message_round_cnt(
+    "fanout", "pause_handle_cluster_message_round_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().pause_handle_cluster_message_round_cnt;
+    }));
 
 #ifdef DEBUG_INFO
 // Helper function to create subscription info fields with maximum deduplication
@@ -1091,6 +1137,22 @@ bool ValkeySearch::IsChildProcess() {
 void ValkeySearch::OnUnload(ValkeyModuleCtx *ctx) {
   ValkeyModule_FreeThreadSafeContext(ctx_);
   reader_thread_pool_ = nullptr;
+}
+
+std::shared_ptr<vmsdk::cluster_map::ClusterMap>
+ValkeySearch::GetOrRefreshClusterMap(ValkeyModuleCtx *ctx) {
+  auto current_map = std::atomic_load(&cluster_map_);
+  // Check if we need to refresh
+  bool needs_refresh =
+      !current_map || !current_map->IsConsistent() ||
+      std::chrono::steady_clock::now() > current_map->GetExpirationTime();
+  if (needs_refresh) {
+    VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1) << "Creating a new cluster map";
+    auto new_map = vmsdk::cluster_map::ClusterMap::CreateNewClusterMap(ctx);
+    std::atomic_store(&cluster_map_, new_map);
+    return new_map;
+  }
+  return current_map;
 }
 
 }  // namespace valkey_search

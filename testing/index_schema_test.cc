@@ -144,9 +144,12 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
                       key, absl::string_view(test_case.expected_vector_buffer)))
           .WillOnce(Return(test_case.expect_index_modify_w_result.value()));
     } else if (test_case.expect_index_remove_w_result.has_value()) {
-      EXPECT_CALL(*mock_index,
-                  RemoveRecord(key, test_case.expected_deletion_type))
-          .WillOnce(Return(test_case.expect_index_remove_w_result.value()));
+      if (test_case.expect_index_remove_w_result.value().ok() &&
+          test_case.expect_index_remove_w_result.value().value() == true) {
+        EXPECT_CALL(*mock_index,
+                    RemoveRecord(key, test_case.expected_deletion_type))
+            .WillOnce(Return(test_case.expect_index_remove_w_result.value()));
+      }
     }
     if (test_case.open_key_fail) {
       // Keep the default behavior still for other keys (e.g. IndexSchema key).
@@ -237,9 +240,13 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
       EXPECT_EQ(
           std::get<1>(tuple)->skipped_cnt - std::get<0>(tuple).skipped_cnt,
           std::get<2>(tuple)->skipped_cnt);
-      EXPECT_EQ(
-          std::get<1>(tuple)->failure_cnt - std::get<0>(tuple).failure_cnt,
-          std::get<2>(tuple)->failure_cnt);
+      if (!test_case.expect_index_remove_w_result.has_value() ||
+          !test_case.expect_index_remove_w_result.value().ok() ||
+          test_case.expect_index_remove_w_result.value().value() == true) {
+        EXPECT_EQ(
+            std::get<1>(tuple)->failure_cnt - std::get<0>(tuple).failure_cnt,
+            std::get<2>(tuple)->failure_cnt);
+      }
     }
     EXPECT_EQ(index_schema->GetStats().document_cnt - document_cnt,
               test_case.expected_document_cnt_delta);
@@ -379,7 +386,7 @@ INSTANTIATE_TEST_SUITE_P(
             .expect_index_remove_w_result = false,
             .expected_remove_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
-                    .skipped_cnt = 1,
+                    .skipped_cnt = 0,
                 },
         },
         {
@@ -392,7 +399,7 @@ INSTANTIATE_TEST_SUITE_P(
             .expect_index_remove_w_result = false,
             .expected_remove_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
-                    .skipped_cnt = 1,
+                    .skipped_cnt = 0,
                 },
             .expected_deletion_type = indexes::DeletionType::kRecord,
         },
@@ -578,7 +585,7 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_vector_buffer = "vector_buffer",
             .expected_remove_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
-                    .skipped_cnt = 1,
+                    .skipped_cnt = 0,
                 },
         },
     }),
@@ -1274,13 +1281,16 @@ TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
     absl::flat_hash_map<std::string, uint64_t> keys_in_index = {
         {"key1", 1}, {"key2", 2}, {"key3", 3}};
     EXPECT_CALL(*mock_index, ForEachTrackedKey(testing::_))
-        .WillOnce([&keys_in_index](
-                      absl::AnyInvocable<void(const InternedStringPtr &)> fn) {
-          for (const auto &[key, internal_id] : keys_in_index) {
-            InternedStringPtr interned_key = StringInternStore::Intern(key);
-            fn(interned_key);
-          }
-        });
+        .WillOnce(
+            [&keys_in_index](
+                absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn)
+                -> absl::Status {
+              for (const auto &[key, internal_id] : keys_in_index) {
+                InternedStringPtr interned_key = StringInternStore::Intern(key);
+                VMSDK_RETURN_IF_ERROR(fn(interned_key));
+              }
+              return absl::OkStatus();
+            });
 
     std::vector<absl::string_view> key_prefixes = {"prefix1", "prefix2"};
     std::string index_schema_name_str("index_schema_name");
@@ -1383,23 +1393,23 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributesSanity) {
   auto mutated_attributes_1 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_TRUE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_1), true, false));
+      nullptr, key, std::move(mutated_attributes_1), true, false, false));
   // Verify that adding a track attribute with backfill off after on return true
   auto mutated_attributes_2 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_TRUE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_2), false, false));
+      nullptr, key, std::move(mutated_attributes_2), false, false, false));
   auto mutated_attributes_3 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_FALSE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_3), false, false));
+      nullptr, key, std::move(mutated_attributes_3), false, false, false));
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1);
   auto consumed_data = index_schema->ConsumeTrackedMutatedAttribute(key, true);
   EXPECT_TRUE(consumed_data.has_value());
   auto mutated_attributes_4 =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_FALSE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes_4), false, false));
+      nullptr, key, std::move(mutated_attributes_4), false, false, false));
   consumed_data = index_schema->ConsumeTrackedMutatedAttribute(key, true);
   EXPECT_FALSE(consumed_data.has_value());
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1);
@@ -1421,7 +1431,7 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
           CreateMutatedAttributes(attribute_identifier, data_ptr);
       EXPECT_EQ(index_schema->attributes_.size(), 1);
       EXPECT_TRUE(index_schema->TrackMutatedRecord(
-          nullptr, key, std::move(mutated_attributes), false, false));
+          nullptr, key, std::move(mutated_attributes), false, false, false));
     }
     if (!track_before_consumption_data_ptr.empty()) {
       VLOG(1) << "track_before_consumption_data_ptr is not empty";
@@ -1429,7 +1439,7 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
       auto mutated_attributes = CreateMutatedAttributes(
           attribute_identifier, track_before_consumption_data_ptr);
       EXPECT_FALSE(index_schema->TrackMutatedRecord(
-          nullptr, key, std::move(mutated_attributes), false, false));
+          nullptr, key, std::move(mutated_attributes), false, false, false));
       data_ptr = track_before_consumption_data_ptr;
     }
     EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1);
@@ -1458,10 +1468,10 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
         EXPECT_EQ(index_schema->attributes_.size(), 1);
         auto mutated_attributes = CreateMutatedAttributes(
             attribute_identifier, track_after_consumption_data_ptr);
-        EXPECT_EQ(
-            index_schema->TrackMutatedRecord(
-                nullptr, key, std::move(mutated_attributes), false, false),
-            !track_before_consumption_data_ptr.empty());
+        EXPECT_EQ(index_schema->TrackMutatedRecord(
+                      nullptr, key, std::move(mutated_attributes), false, false,
+                      false),
+                  !track_before_consumption_data_ptr.empty());
       }
       auto consumed_data =
           index_schema->ConsumeTrackedMutatedAttribute(key, false);
@@ -1667,7 +1677,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
                                              indexes::DeletionType::kNone);
     }
 
-    EXPECT_EQ(hnsw_index->GetRecordCount(), num_vectors);
+    EXPECT_EQ(hnsw_index->GetTrackedKeyCount(), num_vectors);
     VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream_step1));
     LOG(INFO) << "✓ Step 1 completed - saved " << num_vectors
               << " vectors to RDB";
@@ -1702,7 +1712,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     EXPECT_EQ(normal_schema->GetStats().document_cnt, num_vectors);
     auto vec_index = normal_schema->GetIndex("embedding");
     VMSDK_EXPECT_OK_STATUSOR(vec_index);
-    EXPECT_EQ(vec_index.value()->GetRecordCount(), num_vectors);
+    EXPECT_EQ(vec_index.value()->GetTrackedKeyCount(), num_vectors);
     LOG(INFO) << "✓ Normal load verified - " << num_vectors
               << " vectors loaded";
   }
@@ -1766,7 +1776,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     EXPECT_EQ(skip_schema->GetStats().document_cnt, num_vectors);
     auto vec_index = skip_schema->GetIndex("embedding");
     VMSDK_EXPECT_OK_STATUSOR(vec_index);
-    EXPECT_EQ(vec_index.value()->GetRecordCount(), 0);
+    EXPECT_EQ(vec_index.value()->GetTrackedKeyCount(), 0);
     EXPECT_TRUE(skip_schema->IsBackfillInProgress());
     LOG(INFO) << "✓ Skip load verified - index empty, backfill ready";
   }
@@ -1849,7 +1859,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
                                              indexes::DeletionType::kNone);
     }
 
-    EXPECT_EQ(hnsw_index->GetRecordCount(), num_vectors);
+    EXPECT_EQ(hnsw_index->GetTrackedKeyCount(), num_vectors);
     VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream_step4));
     LOG(INFO) << "✓ Step 4 completed - saved mixed index with " << num_vectors
               << " records";
@@ -1891,7 +1901,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     VMSDK_EXPECT_OK_STATUSOR(num_index);
     VMSDK_EXPECT_OK_STATUSOR(tag_index);
 
-    EXPECT_EQ(vec_index.value()->GetRecordCount(), num_vectors);
+    EXPECT_EQ(vec_index.value()->GetTrackedKeyCount(), num_vectors);
     LOG(INFO) << "✓ Mixed index normal load verified";
   }
 
@@ -1962,7 +1972,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     VMSDK_EXPECT_OK_STATUSOR(num_index);
     VMSDK_EXPECT_OK_STATUSOR(tag_index);
 
-    EXPECT_EQ(vec_index.value()->GetRecordCount(), 0);
+    EXPECT_EQ(vec_index.value()->GetTrackedKeyCount(), 0);
     EXPECT_TRUE(mixed_skip_schema->IsBackfillInProgress());
     LOG(INFO) << "✓ Mixed index skip load verified";
   }
@@ -2058,9 +2068,9 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
                                              indexes::DeletionType::kNone);
     }
 
-    EXPECT_EQ(hnsw_index1->GetRecordCount(), additional_index_vectors);
-    EXPECT_EQ(hnsw_index2->GetRecordCount(), additional_index_vectors);
-    EXPECT_EQ(flat_index->GetRecordCount(), additional_index_vectors);
+    EXPECT_EQ(hnsw_index1->GetTrackedKeyCount(), additional_index_vectors);
+    EXPECT_EQ(hnsw_index2->GetTrackedKeyCount(), additional_index_vectors);
+    EXPECT_EQ(flat_index->GetTrackedKeyCount(), additional_index_vectors);
 
     VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream_multi));
     LOG(INFO) << "✓ Steps 6-7 completed - saved 3 indexes with "

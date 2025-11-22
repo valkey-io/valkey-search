@@ -7,26 +7,37 @@ from typing import Tuple, Union
 # from pyparsing import abstractmethod
 import valkey
 from ft_info_parser import FTInfoParser
+import logging, json
 import struct
+from enum import Enum
+from util import waiters
 
+class KeyDataType(Enum):
+    HASH = 1
+    JSON = 2
 
 def float_to_bytes(flt: list[float]) -> bytes:
     return struct.pack(f"<{len(flt)}f", *flt)
 
 
 class Field:
+    name: str
+    alias: Union[str, None]
     def __init__(self, name: str, alias: Union[str, None]):
         self.name = name
         self.alias = alias if alias else name
 
-    def create(self) -> list[str]:
+    def create(self, data_type: KeyDataType) -> list[str]:
+        if data_type == KeyDataType.JSON:
+            if not self.name.startswith("$."):
+                self.name = "$." + self.name
         if self.alias:
             return [self.name, "AS", self.alias]
         else:
             return [self.name]
 
     # @abstractmethod
-    def make_value(self, row: int, column: int) -> Union[str, bytes]:
+    def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
         pass
 
 
@@ -52,7 +63,7 @@ class Vector(Field):
         self.efc = efc
         self.initialcap = initialcap
 
-    def create(self):
+    def create(self, data_type: KeyDataType):
         extra: list[str] = []
         if self.type == "HNSW":
             if self.m:
@@ -64,7 +75,7 @@ class Vector(Field):
             if self.initialcap:
                 extra += ["INITIAL_CAP", str(self.initialcap)]
         return (
-            super().create()
+            super().create(data_type)
             + [
                 "VECTOR",
                 self.type,
@@ -79,20 +90,25 @@ class Vector(Field):
             + extra
         )
 
-    def make_value(self, row: int, column: int) -> Union[str, bytes]:
+    def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
         data = [float(i + row + column) for i in range(self.dim)]
-        return float_to_bytes(data)
-
+        if type == KeyDataType.HASH:
+            return float_to_bytes(data)
+        else:
+            return data
 
 class Numeric(Field):
     def __init__(self, name: str, alias: Union[str, None] = None):
         super().__init__(name, alias)
 
-    def create(self):
-        return super().create() + ["NUMERIC"]
+    def create(self, data_type: KeyDataType):
+        return super().create(data_type) + ["NUMERIC"]
 
-    def make_value(self, row: int, column: int) -> Union[str, bytes]:
-        return str(row + column)
+    def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
+        if type == KeyDataType.HASH:
+            return str(row + column)
+        else:
+            return row + column
 
 
 class Tag(Field):
@@ -105,16 +121,14 @@ class Tag(Field):
         super().__init__(name, alias)
         self.separator = separator
 
-    def create(self):
-        return (
-            super().create() + ["SEPARATOR", self.separator]
-            if self.separator
-            else []
-        )
+    def create(self, data_type: KeyDataType):
+        result = super().create(data_type) + ["TAG"]
+        if self.separator:
+            result += ["SEPARATOR", self.separator]
+        return result
 
-    def make_value(self, row: int, column: int) -> Union[str, bytes]:
+    def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
         return f"Tag:{row}:{column}"
-
 
 class Index:
     def __init__(
@@ -122,20 +136,20 @@ class Index:
         name: str,
         fields: list[Field],
         prefixes: list[str] = [],
-        type: str = "HASH",
+        type: KeyDataType = KeyDataType.HASH,
     ):
         self.name = name
         self.fields = fields
         self.prefixes = prefixes
         self.type = type
 
-    def create(self, client: valkey.client):
+    def create(self, client: valkey.client, wait_for_backfill = False):
         cmd = (
             [
                 "FT.CREATE",
                 self.name,
                 "ON",
-                self.type,
+                self.type.name,
                 "PREFIX",
                 str(len(self.prefixes)),
             ]
@@ -143,28 +157,52 @@ class Index:
             + ["SCHEMA"]
         )
         for f in self.fields:
-            cmd += f.create()
+            cmd += f.create(self.type)
         print(f"Creating Index: {cmd}")
         client.execute_command(*cmd)
+        if wait_for_backfill:
+            self.wait_for_backfill_complete(client)
 
-    def load_data(self, client: valkey.client, rows: int):
-        for i in range(0, rows):
+    def load_data(self, client: valkey.client, rows: int, start_index: int = 0):
+        for i in range(start_index, rows):
             data = self.make_data(i)
+            self.write_data(client, i, data)
+
+    def write_data(self, client: valkey.client, i:int, data: dict[str, str | bytes]):
+        if self.type == KeyDataType.HASH:
             client.hset(self.keyname(i), mapping=data)
+        else:
+            client.execute_command("JSON.SET", self.keyname(i), "$", json.dumps(data))
+
+    def load_data_with_ttl(self, client: valkey.client, rows: int, ttl_ms: int, start_index: int = 0):
+        for i in range(start_index, rows):
+            data = self.make_data(i)
+            self.write_data(client, i, data)
+            client.pexpire(self.keyname(i), ttl_ms)
 
     def keyname(self, row: int) -> str:
-        prefix = (
-            self.prefixes[row % len(self.prefixes)] if self.prefixes else ""
-        )
-        return f"{prefix}:{row:08d}"
+        prefix = self.prefixes[row % len(self.prefixes)] if self.prefixes else ""
+        return f"{prefix}:{self.name}:{row:08d}"
 
     def make_data(self, row: int) -> dict[str, Union[str, bytes]]:
         """Make data for a particular row"""
-        d: dict[str, Union[str, bytes]] = {}
+        d: dict[str, Union[str, bytes, list[float]]] = {}
         for col, f in enumerate(self.fields):
-            d[f.name] = f.make_value(row, col)
+            d[f.name] = f.make_value(row, col, self.type)
         return d
 
     def info(self, client: valkey.client) -> FTInfoParser:
         res = client.execute_command("FT.INFO", self.name)
         return FTInfoParser(res)
+    
+    def backfill_complete(self, client: valkey.client) -> bool:
+        res = self.info(client)
+        return res.backfill_in_progress == 0
+
+    def has_field(self, name: str) -> bool:
+        return any(f.name == name for f in self.fields)
+
+    def wait_for_backfill_complete(self, client: valkey.client):
+        waiters.wait_for_true(
+            lambda: not self.info(client).backfill_in_progress
+            )

@@ -176,8 +176,8 @@ void SendReplyTest::DoSendReplyTest(
   for (const auto &neighbor : input.neighbors) {
     neighbors.push_back(ToIndexesNeighbor(neighbor));
   }
-  auto parameters =
-      std::make_unique<query::VectorSearchParameters>(10000, nullptr);
+  auto parameters = std::make_unique<SearchCommand>();
+  parameters->timeout_ms = 10000;
   parameters->index_schema = test_index_schema;
   parameters->attribute_alias = attribute_alias;
   parameters->score_as = vmsdk::MakeUniqueValkeyString(score_as);
@@ -188,7 +188,7 @@ void SendReplyTest::DoSendReplyTest(
     parameters->return_attributes.push_back(
         ToReturnAttribute(return_attribute));
   }
-  SendReply(&fake_ctx, neighbors, *parameters);
+  parameters->SendReply(&fake_ctx, neighbors);
 
   EXPECT_EQ(ParseRespReply(fake_ctx.reply_capture.GetReply()), expected_output);
 }
@@ -531,7 +531,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
             GetClient(testing::StrEq(absl::StrCat("127.0.0.1:", coord_port))))
             .WillRepeatedly(testing::Return(mock_client));
         EXPECT_CALL(*mock_client, SearchIndexPartition(testing::_, testing::_))
-            .WillRepeatedly(testing::Invoke(
+            .WillRepeatedly(
                 [&](std::unique_ptr<coordinator::SearchIndexPartitionRequest>
                         request,
                     coordinator::SearchIndexPartitionCallback done) {
@@ -539,7 +539,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
                   // nothing.
                   coordinator::SearchIndexPartitionResponse response;
                   done(grpc::Status::OK, response);
-                }));
+                });
       }
     }
   }
@@ -759,7 +759,7 @@ INSTANTIATE_TEST_SUITE_P(
                             "params", "2", "query_vector", "$embedding",
                             "DIALECT", "2"},
             .expected_error_message =
-                "$112\r\nInvalid range: Value above maximum; KNN parameter "
+                "-Invalid range: Value above maximum; KNN parameter "
                 "must be a positive integer greater than 0 and cannot exceed "
                 "5.\r\n",
         },
@@ -778,7 +778,7 @@ INSTANTIATE_TEST_SUITE_P(
                  "*=>[KNN 3 @vector $query_vector EF_RUNTIME 6 AS score]",
                  "params", "2", "query_vector", "$embedding", "DIALECT", "2"},
             .expected_error_message =
-                "$111\r\nInvalid range: Value above maximum; `EF_RUNTIME` must "
+                "-Invalid range: Value above maximum; `EF_RUNTIME` must "
                 "be a positive integer greater than 0 and cannot exceed 5.\r\n",
         },
     }),

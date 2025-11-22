@@ -33,7 +33,6 @@
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
-#include "src/query/fanout_template.h"
 #include "src/query/search.h"
 #include "src/utils/string_interning.h"
 #include "valkey_search_options.h"
@@ -63,12 +62,12 @@ struct SearchPartitionResultsTracker {
       results ABSL_GUARDED_BY(mutex);
   int outstanding_requests ABSL_GUARDED_BY(mutex);
   query::SearchResponseCallback callback;
-  std::unique_ptr<VectorSearchParameters> parameters ABSL_GUARDED_BY(mutex);
+  std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
   std::atomic_bool reached_oom{false};
 
-  SearchPartitionResultsTracker(
-      int outstanding_requests, int k, query::SearchResponseCallback callback,
-      std::unique_ptr<VectorSearchParameters> parameters)
+  SearchPartitionResultsTracker(int outstanding_requests, int k,
+                                query::SearchResponseCallback callback,
+                                std::unique_ptr<SearchParameters> parameters)
       : outstanding_requests(outstanding_requests),
         callback(std::move(callback)),
         parameters(std::move(parameters)) {}
@@ -186,9 +185,10 @@ void PerformRemoteSearchRequestAsync(
 }
 
 absl::Status PerformSearchFanoutAsync(
-    ValkeyModuleCtx *ctx, std::vector<FanoutSearchTarget> &search_targets,
+    ValkeyModuleCtx *ctx,
+    std::vector<vmsdk::cluster_map::NodeInfo> &search_targets,
     coordinator::ClientPool *coordinator_client_pool,
-    std::unique_ptr<VectorSearchParameters> parameters,
+    std::unique_ptr<SearchParameters> parameters,
     vmsdk::ThreadPool *thread_pool, query::SearchResponseCallback callback) {
   auto request = coordinator::ParametersToGRPCSearchRequest(*parameters);
   // There should be no limit for the fanout search, so put some safe values,
@@ -201,7 +201,7 @@ absl::Status PerformSearchFanoutAsync(
   bool has_local_target = false;
   for (auto &node : search_targets) {
     auto detached_ctx = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);
-    if (node.type == FanoutSearchTarget::Type::kLocal) {
+    if (node.is_local) {
       // Defer the local target enqueue, since it will own the parameters from
       // then on.
       has_local_target = true;
@@ -213,12 +213,15 @@ absl::Status PerformSearchFanoutAsync(
     // At 30 requests, it takes ~600 micros to enqueue all the requests.
     // Putting this into the background thread pool will save us time on
     // machines with multiple cores.
+    std::string target_address =
+        absl::StrCat(node.socket_address.primary_endpoint, ":",
+                     coordinator::GetCoordinatorPort(node.socket_address.port));
     if (search_targets.size() >= 30 && thread_pool->Size() > 1) {
-      PerformRemoteSearchRequestAsync(std::move(request_copy), node.address,
+      PerformRemoteSearchRequestAsync(std::move(request_copy), target_address,
                                       coordinator_client_pool, tracker,
                                       thread_pool);
     } else {
-      PerformRemoteSearchRequest(std::move(request_copy), node.address,
+      PerformRemoteSearchRequest(std::move(request_copy), target_address,
                                  coordinator_client_pool, tracker);
     }
   }
@@ -229,7 +232,7 @@ absl::Status PerformSearchFanoutAsync(
     VMSDK_RETURN_IF_ERROR(query::SearchAsync(
         std::move(local_parameters), thread_pool,
         [tracker](absl::StatusOr<std::deque<indexes::Neighbor>> &neighbors,
-                  std::unique_ptr<VectorSearchParameters> parameters) {
+                  std::unique_ptr<SearchParameters> parameters) {
           if (neighbors.ok()) {
             tracker->AddResults(*neighbors);
           } else {
@@ -241,17 +244,10 @@ absl::Status PerformSearchFanoutAsync(
                 << neighbors.status().message();
           }
         },
-        true))
+        SearchMode::kLocal))
         << "Failed to handle FT.SEARCH locally during fan-out";
   }
   return absl::OkStatus();
-}
-
-// TODO See if caching this improves performance.
-std::vector<fanout::FanoutSearchTarget> GetSearchTargetsForFanout(
-    ValkeyModuleCtx *ctx) {
-  return fanout::FanoutTemplate::GetTargets(ctx,
-                                            fanout::FanoutTargetMode::kRandom);
 }
 
 }  // namespace valkey_search::query::fanout

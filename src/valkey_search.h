@@ -21,6 +21,7 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/server.h"
 #include "src/index_schema.h"
+#include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -97,6 +98,15 @@ class ValkeySearch {
   // of the program.
   ValkeyModuleCtx *GetBackgroundCtx() const { return ctx_; }
 
+  // Get or create a new cluster map
+  std::shared_ptr<vmsdk::cluster_map::ClusterMap> GetOrRefreshClusterMap(
+      ValkeyModuleCtx *ctx);
+
+  // Get current cluster map without refresh (thread-safe)
+  std::shared_ptr<vmsdk::cluster_map::ClusterMap> GetClusterMap() const {
+    return std::atomic_load(&cluster_map_);
+  }
+
  protected:
   std::unique_ptr<vmsdk::ThreadPool> reader_thread_pool_;
   std::unique_ptr<vmsdk::ThreadPool> writer_thread_pool_;
@@ -120,10 +130,11 @@ class ValkeySearch {
 
   std::unique_ptr<coordinator::Server> coordinator_;
   std::unique_ptr<coordinator::ClientPool> client_pool_;
+  std::shared_ptr<vmsdk::cluster_map::ClusterMap> cluster_map_;
 };
 void ModuleInfo(ValkeyModuleInfoCtx *ctx, int for_crash_report);
 }  // namespace valkey_search
 
 int (*JSON_GetValue)(ValkeyModuleKey *key, const char *path,
-                     ValkeyModuleString **result);
+                     ValkeyModuleString **result) VALKEYMODULE_ATTR;
 #endif  // VALKEYSEARCH_SRC_VALKEY_SEARCH_H_

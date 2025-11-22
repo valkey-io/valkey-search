@@ -6,16 +6,17 @@ ROOT_DIR=$(readlink -f $(dirname $0))
 VERBOSE_ARGS=""
 CMAKE_TARGET=""
 CMAKE_EXTRA_ARGS=""
+FORMAT="no"
 RUN_TEST=""
 RUN_BUILD="yes"
 DUMP_TEST_ERRORS_STDOUT="no"
-NINJA_TOOL="ninja"
 INTEGRATION_TEST="no"
 SAN_BUILD="no"
 ARGV=$@
 EXIT_CODE=0
 INTEG_RETRIES=1
 JOBS=""
+CMAKE_GENERATOR=${CMAKE_GENERATOR:-"Ninja"}
 
 echo "Root directory: ${ROOT_DIR}"
 
@@ -28,6 +29,7 @@ Usage: build.sh [options...]
     --verbose | -v                    Run verbose build.
     --debug                           Build for debug version.
     --clean                           Clean the current build configuration (debug or release).
+    --format                          Applies clang-format. (Run in dev container environment to ensure correct clang-format version)
     --run-tests                       Run all tests. Optionally, pass a test name to run: "--run-tests=<test-name>".
     --no-build                        By default, build.sh always triggers a build. This option disables this behavior.
     --test-errors-stdout              When a test fails, dump the captured tests output to stdout.
@@ -73,6 +75,10 @@ while [ $# -gt 0 ]; do
         RUN_BUILD="no"
         echo "Running build: no"
         ;;
+    --format)
+        FORMAT="yes"
+        shift || true
+        ;;
     --run-tests)
         RUN_TEST="all"
         shift || true
@@ -83,10 +89,22 @@ while [ $# -gt 0 ]; do
         shift || true
         echo "Running test ${RUN_TEST}"
         ;;
+    --unittest-output=*)
+        UNITTEST_OUTPUT="${arg#*=}"
+        shift || true
+        # echo "Unit Test Output Directory: ${UNITTEST_OUTPUT} ** not yet implemented **"
+        # Not currently implemented in build.sh, but used by upstream build_ubuntu.sh
+        ;;
     --run-integration-tests)
         INTEGRATION_TEST="yes"
         shift || true
         echo "Running integration tests (all)"
+        ;;
+    --integration-output=*)
+        INTEGRATION_OUTPUT="${arg#*=}"
+        shift || true
+        # echo "Integration Test Output Directory: ${INTEGRATION_OUTPUT} ** not yet implemented **"
+        # Not currently implemented in build.sh, but used by upstream build_ubuntu.sh
         ;;
     --run-integration-tests=*)
         INTEGRATION_TEST="yes"
@@ -134,6 +152,7 @@ while [ $# -gt 0 ]; do
         exit 0
         ;;
     *)
+        echo "Unknown argument: ${arg}"
         print_usage
         exit 1
         ;;
@@ -142,29 +161,37 @@ done
 
 # Import our functions, needs to be done after parsing the command line arguments
 export SAN_BUILD
-. ${ROOT_DIR}/scripts/common.rc
+export ROOT_DIR
+. "${ROOT_DIR}/scripts/common.rc"
+
+if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
+  BUILD_TOOL="ninja"
+else
+  BUILD_TOOL="make -j$(num_proc)"
+fi
 
 function configure() {
     printf "${BOLD_PINK}Running cmake...${RESET}\n"
+    printf "Generating ${GREEN}${CMAKE_GENERATOR}${RESET} build files\n"
     mkdir -p ${BUILD_DIR}
     cd $_
     local BUILD_TYPE=$(capitalize_string ${BUILD_CONFIG})
     rm -f CMakeCache.txt
-    printf "Running: cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -GNinja ${CMAKE_EXTRA_ARGS}\n"
-    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -GNinja ${CMAKE_EXTRA_ARGS}
+    printf "Running: cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}\n"
+    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}
     cd ${ROOT_DIR}
 }
 
 function build() {
     printf "${BOLD_PINK}Building${RESET}\n"
-    if [ -d ${BUILD_DIR} ]; then
-        cd ${BUILD_DIR}
+    if [ -d "${BUILD_DIR}" ]; then
+        cd "${BUILD_DIR}"
         if [ -z "${JOBS}" ]; then
-            ${NINJA_TOOL} ${VERBOSE_ARGS} ${CMAKE_TARGET}
+            ${BUILD_TOOL} ${VERBOSE_ARGS} ${CMAKE_TARGET}
         else
-            ${NINJA_TOOL} -j ${JOBS} ${VERBOSE_ARGS} ${CMAKE_TARGET}
+            ${BUILD_TOOL} -j ${JOBS} ${VERBOSE_ARGS} ${CMAKE_TARGET}
         fi
-        cd ${ROOT_DIR}
+        cd "${ROOT_DIR}"
 
         printf "\n${GREEN}Build Successful!${RESET}\n\n"
         printf "${BOLD_PINK}Module path:${RESET} ${BUILD_DIR}/libsearch.${MODULE_EXT}\n\n"
@@ -177,6 +204,13 @@ function build() {
         printf "To load the module, execute the following command:\n"
         printf "    valkey-server --loadmodule ${BUILD_DIR}/libsearch.${MODULE_EXT}\n\n"
     fi
+}
+
+function format() {
+    cd "${ROOT_DIR}"
+    printf "Formatting...\n"
+    find src testing vmsdk/src vmsdk/testing -name "*.h" -o -name "*.cc" | xargs clang-format -i
+    printf "Applied clang-format\n"
 }
 
 function print_test_prefix() {
@@ -194,10 +228,10 @@ function print_test_summary() {
 function print_test_error_and_exit() {
     printf " ... ${RED}failed${RESET}\n"
     if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
-        cat ${TEST_OUTPUT_FILE}
+        cat "${TEST_OUTPUT_FILE}"
         # To avoid dumping the content over and over again,
         # clear the file
-        cp /dev/null ${TEST_OUTPUT_FILE}
+        cp /dev/null "${TEST_OUTPUT_FILE}"
     fi
 
     # When running tests with sanitizer enabled, do not terminate the execution after the first failure continue
@@ -215,7 +249,7 @@ function check_tool() {
     local tool_name=$1
     local message=$2
     printf "Checking for ${tool_name}..."
-    command -v ${tool_name} >/dev/null ||
+    command -v "${tool_name}" >/dev/null ||
         (printf "${RED}failed${RESET}.\n${RED}ERROR${RESET} - could not locate tool '${tool_name}'. ${message}\n" && exit 1)
     printf "${GREEN}ok${RESET}\n"
 }
@@ -227,41 +261,49 @@ function check_tools() {
     done
 
     os_name=$(uname -s)
-    if [[ "${os_name}" == "Darwin" ]]; then
+    if [[ "${BUILD_TOOL}" =~ make ]]; then
+        BUILDER_TOOL="make"
+    elif [[ "${os_name}" == "Darwin" ]]; then
         # ninja is can be installed via "brew"
-        NINJA_TOOL="ninja"
+        BUILDER_TOOL="ninja"
     else
         # Check for ninja. On RedHat based Linux, it is called ninja-build, while on Debian based Linux, it is simply ninja
         # Ubuntu / Mint et al will report "ID_LIKE=debian"
         local debian_output=$(cat /etc/*-release | grep -i debian | wc -l)
         if [ ${debian_output} -gt 0 ]; then
-            NINJA_TOOL="ninja"
+            BUILDER_TOOL="ninja"
         else
-            NINJA_TOOL="ninja-build"
+            BUILDER_TOOL="ninja-build"
         fi
     fi
-    check_tool ${NINJA_TOOL}
+    check_tool ${BUILD_TOOL}
 }
 
 # If any of the CMake files is newer than our "build.ninja" file, force "cmake" before building
 function is_configure_required() {
-    local ninja_build_file=${BUILD_DIR}/build.ninja
+    if [[ "${BUILD_TOOL}" == "ninja" ]]; then
+      local top_level_build_file=${BUILD_DIR}/build.ninja
+    else
+      local top_level_build_file=${BUILD_DIR}/Makefile
+    fi
+
     if [[ "${RUN_CMAKE}" == "yes" ]]; then
         # User asked for configure
         echo "yes"
         return
     fi
 
-    if [ ! -f ${ninja_build_file} ] || [ ! -f ${BUILD_DIR}/CMakeCache.txt ]; then
-        # No ninja build file
+    if [ ! -f "${top_level_build_file}" ] || [ ! -f "${BUILD_DIR}/CMakeCache.txt" ]; then
         echo "yes"
         return
     fi
-    local build_file_lastmodified=$(get_file_last_modified ${ninja_build_file})
-    local cmake_files=$(find ${ROOT_DIR} -name "CMakeLists.txt" -o -name "*.cmake" | grep -v ".build-release" | grep -v ".build-debug")
-    for cmake_file in ${cmake_files}; do
-        local cmake_file_modified=$(date -r ${cmake_file} +%s)
-        if [ ${cmake_file_modified} -gt ${build_file_lastmodified} ]; then
+
+    local build_file_lastmodified=$(get_file_last_modified "${top_level_build_file}")
+    local IFS=$'\n'
+    local cmake_files=$(find "${ROOT_DIR}" -name "CMakeLists.txt" -o -name "*.cmake" | grep -v ".build-release" | grep -v ".build-debug")
+    for cmake_file in $cmake_files; do
+        local cmake_file_modified=$(get_file_last_modified "${cmake_file}")
+        if [ "${cmake_file_modified}" -gt "${build_file_lastmodified}" ]; then
             echo "yes"
             return
         fi
@@ -270,12 +312,16 @@ function is_configure_required() {
 }
 
 cleanup() {
-    cd ${ROOT_DIR}
+    cd "${ROOT_DIR}"
 }
 
 # Ensure cleanup runs on exit
 trap cleanup EXIT
 export CMAKE_POLICY_VERSION_MINIMUM=3.5
+
+if [[ "${FORMAT}" == "yes" ]]; then
+    format
+fi
 
 BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
 if [[ "${SAN_BUILD}" != "no" ]]; then
@@ -292,9 +338,16 @@ TESTS_DIR=${BUILD_DIR}/tests
 TEST_OUTPUT_FILE=${BUILD_DIR}/tests.out
 
 printf "Checking if configure is required..."
+
 FORCE_CMAKE=$(is_configure_required)
 printf "${GREEN}${FORCE_CMAKE}${RESET}\n"
 check_tools
+
+if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
+  BUILD_TOOL="${NINJA_TOOL}"
+else
+  BUILD_TOOL="make -j$(num_proc)"
+fi
 
 START_TIME=$(date +%s)
 if [[ "${RUN_CMAKE}" == "yes" ]] || [[ "${FORCE_CMAKE}" == "yes" ]]; then
@@ -315,21 +368,20 @@ if [[ "${SAN_BUILD}" != "no" ]]; then
 fi
 
 if [[ "${RUN_TEST}" == "all" ]]; then
-    rm -f ${TEST_OUTPUT_FILE}
-    TESTS=$(ls ${TESTS_DIR}/*_test)
-    for test in $TESTS; do
-        echo "==> Running executable: ${test}" >>${TEST_OUTPUT_FILE}
-        echo "" >>${TEST_OUTPUT_FILE}
+    rm -f "${TEST_OUTPUT_FILE}"
+    find "${TESTS_DIR}" -name "*_test" -type f | while read -r test; do
+        echo "==> Running executable: ${test}" >> "${TEST_OUTPUT_FILE}"
+        echo "" >> "${TEST_OUTPUT_FILE}"
         print_test_prefix "${test}"
-        (${test} >>${TEST_OUTPUT_FILE} 2>&1 && print_test_ok) || print_test_error_and_exit
+        ("${test}" >> "${TEST_OUTPUT_FILE}" 2>&1 && print_test_ok) || print_test_error_and_exit
     done
     print_test_summary
 elif [ ! -z "${RUN_TEST}" ]; then
-    rm -f ${TEST_OUTPUT_FILE}
-    echo "==> Running executable: ${TESTS_DIR}/${RUN_TEST}" >>${TEST_OUTPUT_FILE}
-    echo "" >>${TEST_OUTPUT_FILE}
+    rm -f "${TEST_OUTPUT_FILE}"
+    echo "==> Running executable: ${TESTS_DIR}/${RUN_TEST}" >> "${TEST_OUTPUT_FILE}"
+    echo "" >> "${TEST_OUTPUT_FILE}"
     print_test_prefix "${TESTS_DIR}/${RUN_TEST}"
-    (${TESTS_DIR}/${RUN_TEST} && print_test_ok) || print_test_error_and_exit
+    ("${TESTS_DIR}/${RUN_TEST}" && print_test_ok) || print_test_error_and_exit
     print_test_summary
 elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     if [ ! -z "${TEST_PATTERN}" ]; then

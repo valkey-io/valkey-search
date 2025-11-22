@@ -96,6 +96,7 @@ class IndexSchema : public KeyspaceEventSubscription,
       absl::string_view attribute_alias) const;
   virtual absl::StatusOr<std::string> GetIdentifier(
       absl::string_view attribute_alias) const;
+  absl::StatusOr<std::string> GetAlias(absl::string_view identifier) const;
   absl::StatusOr<vmsdk::UniqueValkeyString> DefaultReplyScoreAs(
       absl::string_view attribute_alias) const;
   absl::Status AddIndex(absl::string_view attribute_alias,
@@ -133,6 +134,10 @@ class IndexSchema : public KeyspaceEventSubscription,
   int GetAttributeCount() const { return attributes_.size(); }
 
   virtual absl::Status RDBSave(SafeRDB *rdb) const;
+  absl::Status SaveIndexExtension(RDBChunkOutputStream output) const;
+  absl::Status LoadIndexExtension(ValkeyModuleCtx *ctx,
+                                  RDBChunkInputStream input);
+  absl::Status ValidateIndex() const;
 
   static absl::StatusOr<std::shared_ptr<IndexSchema>> LoadFromRDB(
       ValkeyModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,
@@ -158,6 +163,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     std::vector<vmsdk::BlockedClient> blocked_clients;
     bool consume_in_progress{false};
     bool from_backfill{false};
+    bool from_multi{false};
   };
   using MutatedAttributes =
       absl::flat_hash_map<std::string, DocumentMutation::AttributeData>;
@@ -182,11 +188,13 @@ class IndexSchema : public KeyspaceEventSubscription,
  private:
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
   absl::flat_hash_map<std::string, Attribute> attributes_;
+  absl::flat_hash_map<std::string, std::string> identifier_to_alias_;
   KeyspaceEventManager *keyspace_event_manager_;
   std::vector<std::string> subscribed_key_prefixes_;
   std::unique_ptr<AttributeDataType> attribute_data_type_;
   std::string name_;
   uint32_t db_num_{0};
+  bool loaded_v2_{false};
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   InternedStringMap<DocumentMutation> tracked_mutated_records_
@@ -246,9 +254,12 @@ class IndexSchema : public KeyspaceEventSubscription,
   bool DeleteIfNotInValkeyDict(ValkeyModuleCtx *ctx, ValkeyModuleString *key,
                                const Attribute &attribute);
   vmsdk::BlockedClientCategory GetBlockedCategoryFromProto() const;
+  bool InTrackedMutationRecords(const InternedStringPtr &key,
+                                const std::string &identifier) const;
   bool TrackMutatedRecord(ValkeyModuleCtx *ctx, const InternedStringPtr &key,
                           MutatedAttributes &&mutated_attributes,
-                          bool from_backfill, bool block_client)
+                          bool from_backfill, bool block_client,
+                          bool from_multi)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(
       const InternedStringPtr &key, bool first_time)
@@ -259,7 +270,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   mutable vmsdk::TimeSlicedMRMWMutex time_sliced_mutex_;
   struct MultiMutations {
     std::unique_ptr<absl::BlockingCounter> blocking_counter;
-    std::queue<InternedStringPtr> keys;
+    std::deque<InternedStringPtr> keys;
   };
   vmsdk::MainThreadAccessGuard<MultiMutations> multi_mutations_;
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};

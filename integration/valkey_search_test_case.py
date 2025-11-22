@@ -147,6 +147,9 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         See ValkeySearchTestCaseBase.get_config_file_lines & ValkeySearchClusterTestCase.get_config_file_lines
         for example usage."""
         raise NotImplementedError
+    
+    def append_startup_args(self, args: dict[str, str]) -> dict[str, str]:
+        return args
 
     def start_server(
         self,
@@ -177,7 +180,7 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         server, client = self.create_server(
             testdir=testdir,
             server_path=server_path,
-            args={"logfile": logfile},
+            args=self.append_startup_args({"logfile": logfile}),
             port=port,
             conf_file=conf_file,
         )
@@ -214,6 +217,9 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
         self.rg.setup_replications_cmd()
         self.server = self.rg.primary.server
         self.client = self.rg.primary.client
+
+        self.nodes: List[Node] = [self.rg.primary]
+        self.nodes += self.rg.replicas
 
         yield
 
@@ -388,6 +394,11 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
             rg = ReplicationGroup(primary=primary_node, replicas=replicas)
             self.replication_groups.append(rg)
 
+        self.nodes: List[Node] = list()
+        for rg in self.replication_groups:
+            self.nodes.append(rg.primary)
+            self.nodes += rg.replicas
+
         # Split the slots
         ranges = self._split_range_pairs(0, 16384, self.CLUSTER_SIZE)
         node_idx = 0
@@ -450,6 +461,9 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
 
     def client_for_primary(self, index) -> Valkey:
         return self.replication_groups[index].primary.client
+    
+    def get_all_primary_clients(self) -> List[Valkey]:
+        return [rg.primary.client for rg in self.replication_groups]
 
     def get_replication_group(self, index) -> ReplicationGroup:
         return self.replication_groups[index]

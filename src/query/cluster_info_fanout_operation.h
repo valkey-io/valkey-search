@@ -16,29 +16,33 @@
 #include "grpcpp/support/status.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/query/fanout_operation_base.h"
-#include "src/query/fanout_template.h"
 
 namespace valkey_search::query::cluster_info_fanout {
 
-class ClusterInfoFanoutOperation : public fanout::FanoutOperationBase<
-                                       coordinator::InfoIndexPartitionRequest,
-                                       coordinator::InfoIndexPartitionResponse,
-                                       fanout::FanoutTargetMode::kAll> {
+class ClusterInfoFanoutOperation
+    : public fanout::FanoutOperationBase<
+          coordinator::InfoIndexPartitionRequest,
+          coordinator::InfoIndexPartitionResponse,
+          vmsdk::cluster_map::FanoutTargetMode::kAll> {
  public:
-  ClusterInfoFanoutOperation(std::string index_name, unsigned timeout_ms);
+  ClusterInfoFanoutOperation(uint32_t db_num, const std::string& index_name,
+                             unsigned timeout_ms);
+
+  std::vector<vmsdk::cluster_map::NodeInfo> GetTargets() const override;
 
   unsigned GetTimeoutMs() const override;
 
   coordinator::InfoIndexPartitionRequest GenerateRequest(
-      const fanout::FanoutSearchTarget&, unsigned timeout_ms) override;
+      const vmsdk::cluster_map::NodeInfo&) override;
 
-  void OnResponse(const coordinator::InfoIndexPartitionResponse& resp,
-                  [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
+  void OnResponse(
+      const coordinator::InfoIndexPartitionResponse& resp,
+      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo&) override;
 
-  coordinator::InfoIndexPartitionResponse GetLocalResponse(
-      ValkeyModuleCtx* ctx,
+  std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
+  GetLocalResponse(
       const coordinator::InfoIndexPartitionRequest& request,
-      [[maybe_unused]] const fanout::FanoutSearchTarget&) override;
+      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo&) override;
 
   void InvokeRemoteRpc(
       coordinator::Client* client,
@@ -51,12 +55,19 @@ class ClusterInfoFanoutOperation : public fanout::FanoutOperationBase<
   int GenerateReply(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,
                     int argc) override;
 
- private:
+  // reset and clean the fields for new round of retry
+  void ResetForRetry() override;
+
+  // decide which condition to run retry
+  bool ShouldRetry() override;
+
+ protected:
   bool exists_;
-  std::optional<uint64_t> schema_fingerprint_;
-  std::optional<uint32_t> version_;
+  std::optional<coordinator::IndexFingerprintVersion>
+      index_fingerprint_version_;
+  uint32_t db_num_;
   std::string index_name_;
-  std::optional<unsigned> timeout_ms_;
+  unsigned timeout_ms_;
   float backfill_complete_percent_max_;
   float backfill_complete_percent_min_;
   bool backfill_in_progress_;

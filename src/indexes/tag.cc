@@ -167,26 +167,19 @@ absl::StatusOr<bool> Tag::RemoveRecord(const InternedStringPtr& key,
 }
 
 int Tag::RespondWithInfo(ValkeyModuleCtx* ctx) const {
-  auto num_replies = 6;
+  auto num_replies = 8;
   ValkeyModule_ReplyWithSimpleString(ctx, "type");
   ValkeyModule_ReplyWithSimpleString(ctx, "TAG");
   ValkeyModule_ReplyWithSimpleString(ctx, "SEPARATOR");
   ValkeyModule_ReplyWithSimpleString(
       ctx, std::string(&separator_, sizeof(char)).c_str());
-  if (case_sensitive_) {
-    num_replies++;
-    ValkeyModule_ReplyWithSimpleString(ctx, "CASESENSITIVE");
-  }
+  ValkeyModule_ReplyWithSimpleString(ctx, "CASESENSITIVE");
+  ValkeyModule_ReplyWithSimpleString(ctx, case_sensitive_ ? "1" : "0");
   ValkeyModule_ReplyWithSimpleString(ctx, "size");
   absl::MutexLock lock(&index_mutex_);
   ValkeyModule_ReplyWithCString(
       ctx, std::to_string(tracked_tags_by_keys_.size()).c_str());
   return num_replies;
-}
-
-bool Tag::IsTracked(const InternedStringPtr& key) const {
-  absl::MutexLock lock(&index_mutex_);
-  return tracked_tags_by_keys_.contains(key);
 }
 
 std::unique_ptr<data_model::Index> Tag::ToProto() const {
@@ -342,9 +335,42 @@ std::unique_ptr<EntriesFetcherIteratorBase> Tag::EntriesFetcher::Begin() {
 
 size_t Tag::EntriesFetcher::Size() const { return size_; }
 
-uint64_t Tag::GetRecordCount() const {
+size_t Tag::GetTrackedKeyCount() const {
   absl::MutexLock lock(&index_mutex_);
   return tracked_tags_by_keys_.size();
+}
+
+size_t Tag::GetUnTrackedKeyCount() const {
+  absl::MutexLock lock(&index_mutex_);
+  return untracked_keys_.size();
+}
+
+bool Tag::IsTracked(const InternedStringPtr& key) const {
+  absl::MutexLock lock(&index_mutex_);
+  return tracked_tags_by_keys_.contains(key);
+}
+
+bool Tag::IsUnTracked(const InternedStringPtr& key) const {
+  absl::MutexLock lock(&index_mutex_);
+  return untracked_keys_.contains(key);
+}
+
+absl::Status Tag::ForEachTrackedKey(
+    absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const {
+  absl::MutexLock lock(&index_mutex_);
+  for (const auto& [key, _] : tracked_tags_by_keys_) {
+    VMSDK_RETURN_IF_ERROR(fn(key));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status Tag::ForEachUnTrackedKey(
+    absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const {
+  absl::MutexLock lock(&index_mutex_);
+  for (const auto& key : untracked_keys_) {
+    VMSDK_RETURN_IF_ERROR(fn(key));
+  }
+  return absl::OkStatus();
 }
 
 }  // namespace valkey_search::indexes

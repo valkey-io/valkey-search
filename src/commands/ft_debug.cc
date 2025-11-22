@@ -9,7 +9,6 @@
 #include <absl/strings/ascii.h>
 
 #include "module_config.h"
-#include "src/commands/commands.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
@@ -19,8 +18,16 @@
 extern vmsdk::module::Options options;  // Declared in module_loader.cc
 namespace valkey_search {
 
+absl::Status CheckEndOfArgs(vmsdk::ArgsIterator &itr) {
+  if (itr.HasNext()) {
+    return absl::InvalidArgumentError("Extra arguments found on command line");
+  } else {
+    return absl::OkStatus();
+  }
+}
+
 //
-// FT.DEBUG PAUSEPOINT [ SET | RESET | TEST | LIST] <pausepoint>
+// FT._DEBUG PAUSEPOINT [ SET | RESET | TEST | LIST] <pausepoint>
 //
 // Connects to the vmsdk::debug mechanism
 // A pausepoint is a mechanism to pause a thread at a specific location for
@@ -59,6 +66,7 @@ absl::Status PausePointControlCmd(ValkeyModuleCtx *ctx,
   }
   std::string point;
   VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, point));
+  VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
   if (keyword == "TEST") {
     auto result = vmsdk::debug::PausePointWaiters(point);
     if (result.ok()) {
@@ -76,25 +84,95 @@ absl::Status PausePointControlCmd(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
-absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
-                        int argc) {
-  if (!vmsdk::config::IsDebugModeEnabled()) {
-    // Pretend like we don't exist
-    std::ostringstream msg;
-    msg << "ERR unknown command '" << vmsdk::ToStringView(argv[0])
-        << "', with args beginning with:";
-    for (int i = 1; i < argc; ++i) {
-      msg << " '" << vmsdk::ToStringView(argv[i]) << "'";
+//
+// FT._DEBUG CONTROLLED_VARIABLE SET <test_control> <value>
+// FT._DEBUG CONTROLLED_VARIABLE GET <test_control>
+// FT._DEBUG CONTROLLED_VARIABLE LIST
+//
+// Connects to the vmsdk::debug CONTROLLED_VARIABLE mechanism.
+//
+// Note, one quirk of this command is that GET and LIST return values as
+// strings, not numbers.
+//
+// Controlled Variables are NOT replicated
+//
+absl::Status ControlledCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
+  std::string keyword;
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, keyword));
+  keyword = absl::AsciiStrToUpper(keyword);
+  if (keyword == "LIST") {
+    VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+    auto results = vmsdk::debug::ControlledGetValues();
+    ValkeyModule_ReplyWithArray(ctx, 2 * results.size());
+    for (auto &r : results) {
+      ValkeyModule_ReplyWithCString(ctx, r.first.data());
+      ValkeyModule_ReplyWithCString(ctx, r.second.data());
     }
-    ValkeyModule_ReplyWithError(ctx, msg.str().data());
     return absl::OkStatus();
   }
+  std::string test_control_name;
+  std::string value;
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, test_control_name));
+  if (keyword == "GET") {
+    VMSDK_ASSIGN_OR_RETURN(value,
+                           vmsdk::debug::ControlledGet(test_control_name));
+    VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+    ValkeyModule_ReplyWithCString(ctx, value.data());
+  } else if (keyword == "SET") {
+    VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, value));
+    VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+    VMSDK_RETURN_IF_ERROR(
+        vmsdk::debug::ControlledSet(test_control_name, value));
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+  } else {
+    ValkeyModule_ReplyWithError(
+        ctx, absl::StrCat("Unknown keyword", keyword).data());
+  }
+  return absl::OkStatus();
+}
+
+absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
+  VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+  static std::vector<std::pair<std::string, std::string>> help_text{
+      {"FT._DEBUG SHOW_INFO", "Show Info Variable Information"},
+      {"FT._DEBUG CONTROLLED_VARIABLE SET <variable> <value>",
+       "Set a controlled variable"},
+      {"FT._DEBUG CONTROLLED_VARIABLE GET <variable>",
+       "Get a controlled variable"},
+      {"FT._DEBUG CONTROLLED_VARIABLE LIST",
+       "list all controlled variables and their values"},
+      {"FT._DEBUG PAUSEPOINT [ SET | RESET | TEST | LIST] <pausepoint>",
+       "control pause points"},
+  };
+  ValkeyModule_ReplySetArrayLength(ctx, 2 * help_text.size());
+  for (auto &pair : help_text) {
+    ValkeyModule_ReplyWithCString(ctx, pair.first.data());
+    ValkeyModule_ReplyWithCString(ctx, pair.second.data());
+  }
+  return absl::OkStatus();
+}
+
+absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                        int argc) {
   std::string msg;
+  if (!vmsdk::config::IsDebugModeEnabled()) {
+    // Pretend like we don't exist
+    msg = "ERR unknown command '";
+    msg += vmsdk::ToStringView(argv[0]);
+    msg += "', with args beginning with:";
+    for (int i = 1; i < argc; ++i) {
+      msg += " '";
+      msg += vmsdk::ToStringView(argv[i]);
+      msg += "'";
+    }
+    ValkeyModule_ReplyWithError(ctx, msg.data());
+    return absl::OkStatus();
+  }
   for (int i = 1; i < argc; ++i) {
     msg += " ";
-    msg += std::string(vmsdk::ToStringView(argv[i]));
+    msg += vmsdk::ToStringView(argv[i]);
   }
-  VMSDK_LOG(WARNING, ctx) << "FT._DEBUG" << msg;
+  VMSDK_LOG(WARNING, ctx) << "FT._DEBUG: " << msg;
   vmsdk::ArgsIterator itr{argv, argc};
   itr.Next();  // Skip the command name
   std::string keyword;
@@ -104,9 +182,13 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return vmsdk::info_field::ShowInfo(ctx, itr, options);
   } else if (keyword == "PAUSEPOINT") {
     return PausePointControlCmd(ctx, itr);
+  } else if (keyword == "CONTROLLED_VARIABLE") {
+    return ControlledCmd(ctx, itr);
+  } else if (keyword == "HELP") {
+    return HelpCmd(ctx, itr);
   } else {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Unknown subcommand: ", *itr.GetStringView()));
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Unknown subcommand: ", *itr.GetStringView(), " try HELP subcommand"));
   }
 }
 

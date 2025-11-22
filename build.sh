@@ -409,6 +409,12 @@ FORCE_CMAKE=$(is_configure_required)
 printf "${GREEN}${FORCE_CMAKE}${RESET}\n"
 check_tools
 
+if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
+  BUILD_TOOL="${NINJA_TOOL}"
+else
+  BUILD_TOOL="make -j$(num_proc)"
+fi
+
 START_TIME=$(date +%s)
 
 # Build ICU dependencies before configuring cmake

@@ -51,9 +51,8 @@ absl::Status FTCreateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   VMSDK_ASSIGN_OR_RETURN(auto index_schema_proto,
                          ParseFTCreateArgs(ctx, argv + 1, argc - 1));
   index_schema_proto.set_db_num(ValkeyModule_GetSelectedDb(ctx));
-  static const auto permissions =
-      PrefixACLPermissions(kCreateCmdPermissions, kCreateCommand);
-  VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, permissions, index_schema_proto));
+  VMSDK_RETURN_IF_ERROR(
+      AclPrefixCheck(ctx, acl::KeyAccess::kWrite, index_schema_proto));
   VMSDK_ASSIGN_OR_RETURN(
       auto new_entry_fingerprint_version,
       SchemaManager::Instance().CreateIndexSchema(ctx, index_schema_proto));

@@ -28,7 +28,7 @@ class ClusterInfoFanoutOperation
   ClusterInfoFanoutOperation(uint32_t db_num, const std::string& index_name,
                              unsigned timeout_ms);
 
-  std::vector<vmsdk::cluster_map::NodeInfo> GetTargets() const;
+  std::vector<vmsdk::cluster_map::NodeInfo> GetTargets() const override;
 
   unsigned GetTimeoutMs() const override;
 

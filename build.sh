@@ -261,39 +261,44 @@ function check_tools() {
     done
 
     os_name=$(uname -s)
-    if [[ "${BUILD_TOOL}" == "make" ]]; then
-        NINJA_TOOL="make"
+    if [[ "${BUILD_TOOL}" =~ make ]]; then
+        BUILDER_TOOL="make"
     elif [[ "${os_name}" == "Darwin" ]]; then
         # ninja is can be installed via "brew"
-        NINJA_TOOL="ninja"
+        BUILDER_TOOL="ninja"
     else
         # Check for ninja. On RedHat based Linux, it is called ninja-build, while on Debian based Linux, it is simply ninja
         # Ubuntu / Mint et al will report "ID_LIKE=debian"
         local debian_output=$(cat /etc/*-release | grep -i debian | wc -l)
         if [ ${debian_output} -gt 0 ]; then
-            NINJA_TOOL="ninja"
+            BUILDER_TOOL="ninja"
         else
-            NINJA_TOOL="ninja-build"
+            BUILDER_TOOL="ninja-build"
         fi
     fi
-    check_tool ${NINJA_TOOL}
+    check_tool ${BUILD_TOOL}
 }
 
 # If any of the CMake files is newer than our "build.ninja" file, force "cmake" before building
 function is_configure_required() {
-    local ninja_build_file=${BUILD_DIR}/build.ninja
+    if [[ "${BUILD_TOOL}" == "ninja" ]]; then
+      local top_level_build_file=${BUILD_DIR}/build.ninja
+    else
+      local top_level_build_file=${BUILD_DIR}/Makefile
+    fi
+
     if [[ "${RUN_CMAKE}" == "yes" ]]; then
         # User asked for configure
         echo "yes"
         return
     fi
 
-    if [ ! -f "${ninja_build_file}" ] || [ ! -f "${BUILD_DIR}/CMakeCache.txt" ]; then
-        # No ninja build file
+    if [ ! -f "${top_level_build_file}" ] || [ ! -f "${BUILD_DIR}/CMakeCache.txt" ]; then
         echo "yes"
         return
     fi
-    local build_file_lastmodified=$(get_file_last_modified "${ninja_build_file}")
+
+    local build_file_lastmodified=$(get_file_last_modified "${top_level_build_file}")
     local IFS=$'\n'
     local cmake_files=$(find "${ROOT_DIR}" -name "CMakeLists.txt" -o -name "*.cmake" | grep -v ".build-release" | grep -v ".build-debug")
     for cmake_file in $cmake_files; do
@@ -333,6 +338,7 @@ TESTS_DIR=${BUILD_DIR}/tests
 TEST_OUTPUT_FILE=${BUILD_DIR}/tests.out
 
 printf "Checking if configure is required..."
+
 FORCE_CMAKE=$(is_configure_required)
 printf "${GREEN}${FORCE_CMAKE}${RESET}\n"
 check_tools

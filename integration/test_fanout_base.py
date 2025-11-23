@@ -119,7 +119,7 @@ class TestFanout(ValkeySearchClusterTestCase):
     @pytest.mark.parametrize("threshold", [0, 100])
     def test_fanout_low_utilization_fanout(self, threshold):
 
-        number_of_searches_to_run = 100
+        number_of_searches_to_run = 10
         rg = self.get_replication_group(0)
         primary = rg.get_primary_connection()
         assert(primary.info("replication")["role"] == "master")

@@ -349,8 +349,7 @@ void ThreadPool::AddWaitTimeSample(
     // Replacing an old sample - use rolling average formula
     new_avg = current_avg + (wait_time_ms - old_sample) / sample_queue_size_;
   }
-  VMSDK_LOG(WARNING, nullptr) << "wait_time_ms " << wait_time_ms
-                              << " recent_avg_wait_time_ " << new_avg;
+
   recent_avg_wait_time_.store(new_avg);
 
   sample_index_ = (sample_index_ + 1) % sample_queue_size_;

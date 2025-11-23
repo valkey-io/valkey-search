@@ -264,3 +264,45 @@ function check_for_san_errors() {
 function get_file_last_modified() {
     echo $(date -r "${1}" +%s)
 }
+
+function run_with_timeout() {
+    local timeout=$1
+    shift  # Remove the first argument (timeout), rest is the command
+    
+    # Validate timeout is a number
+    if ! [[ "$timeout" =~ ^[0-9]+$ ]]; then
+        echo "Error: Timeout must be a positive integer" >&2
+        return 1
+    fi
+    
+    # Start the command in background
+    "$@" &
+    local pid=$!
+    
+    # Start a timer in background
+    (
+        sleep "$timeout"
+        # Check if process is still running
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "Process $pid exceeded timeout of ${timeout}s, terminating..." >&2
+            kill -TERM "$pid" 2>/dev/null
+            sleep 2
+            # Force kill if still running
+            if kill -0 "$pid" 2>/dev/null; then
+                echo "Process $pid did not respond to TERM, sending KILL..." >&2
+                kill -KILL "$pid" 2>/dev/null
+            fi
+        fi
+    ) &
+    local timer_pid=$!
+    
+    # Wait for the command to complete
+    wait "$pid" 2>/dev/null
+    local exit_code=$?
+    
+    # Kill the timer if command finished
+    kill "$timer_pid" 2>/dev/null
+    wait "$timer_pid" 2>/dev/null
+    
+    return $exit_code
+}

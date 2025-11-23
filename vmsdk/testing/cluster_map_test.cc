@@ -848,6 +848,174 @@ TEST_F(ClusterMapTest, ExpirationTimeTest) {
   EXPECT_LE(expiration, max_expiration);
 }
 
+// ============================================================================
+// GetRandomNodeFromShard and GetLocalNodeFromShard Tests
+// ============================================================================
+
+TEST_F(ClusterMapTest, GetLocalNodeFromShardTest) {
+  // Create a shard with both local and remote nodes
+  std::vector<SlotRangeConfig> ranges = {
+      {.start_slot = 0,
+       .end_slot = 5460,
+       .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+       .replicas = {NodeConfig{"127.0.0.1", 30004, replica_ids.at(0), {}},
+                    NodeConfig{"127.0.0.1", 30005, replica_ids.at(1), {}}}}};
+
+  // Test when local node is primary
+  auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
+  ASSERT_NE(cluster_map, nullptr);
+
+  const ShardInfo* shard = cluster_map->GetShardById(primary_ids.at(0));
+  ASSERT_NE(shard, nullptr);
+
+  // Test GetLocalNodeFromShard without replica_only (should return primary)
+  auto targets_with_local = cluster_map->GetTargets(FanoutTargetMode::kRandom, true);
+  EXPECT_EQ(targets_with_local.size(), 1);
+  EXPECT_TRUE(targets_with_local[0].is_local);
+  EXPECT_TRUE(targets_with_local[0].is_primary);
+
+  // Test when local node is replica
+  auto cluster_map2 = CreateClusterMapWithConfig(ranges, replica_ids.at(0));
+  ASSERT_NE(cluster_map2, nullptr);
+
+  const ShardInfo* shard2 = cluster_map2->GetShardById(primary_ids.at(0));
+  ASSERT_NE(shard2, nullptr);
+
+  auto targets_with_local2 = cluster_map2->GetTargets(FanoutTargetMode::kRandom, true);
+  EXPECT_EQ(targets_with_local2.size(), 1);
+  EXPECT_TRUE(targets_with_local2[0].is_local);
+  EXPECT_FALSE(targets_with_local2[0].is_primary);
+
+  // Test when no local nodes exist
+  auto cluster_map3 = CreateClusterMapWithConfig(ranges, "nonexistent_node_id");
+  ASSERT_NE(cluster_map3, nullptr);
+
+  auto targets_with_local3 = cluster_map3->GetTargets(FanoutTargetMode::kRandom, true);
+  EXPECT_EQ(targets_with_local3.size(), 1);
+  EXPECT_FALSE(targets_with_local3[0].is_local);
+}
+
+TEST_F(ClusterMapTest, GetRandomNodeFromShardTest) {
+  // Create a shard with multiple nodes
+  std::vector<SlotRangeConfig> ranges = {
+      {.start_slot = 0,
+       .end_slot = 5460,
+       .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+       .replicas = {NodeConfig{"127.0.0.1", 30004, replica_ids.at(0), {}},
+                    NodeConfig{"127.0.0.1", 30005, replica_ids.at(1), {}},
+                    NodeConfig{"127.0.0.1", 30006, replica_ids.at(2), {}}}}};
+
+  auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
+  ASSERT_NE(cluster_map, nullptr);
+
+  // Test random selection without preference
+  std::set<std::string> selected_nodes;
+  for (int i = 0; i < 20; ++i) {
+    auto targets = cluster_map->GetTargets(FanoutTargetMode::kRandom, false);
+    EXPECT_EQ(targets.size(), 1);
+    selected_nodes.insert(targets[0].node_id);
+  }
+  
+  // Should have selected different nodes (randomness test)
+  EXPECT_GT(selected_nodes.size(), 1);
+
+  // Test replica-only selection
+  auto replica_targets = cluster_map->GetTargets(FanoutTargetMode::kOneReplicaPerShard, false);
+  EXPECT_EQ(replica_targets.size(), 1);
+  EXPECT_FALSE(replica_targets[0].is_primary);
+}
+
+TEST_F(ClusterMapTest, GetRandomNodeFromShardReplicaOnlyTest) {
+  // Create a shard with primary and replicas
+  std::vector<SlotRangeConfig> ranges = {
+      {.start_slot = 0,
+       .end_slot = 5460,
+       .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+       .replicas = {NodeConfig{"127.0.0.1", 30004, replica_ids.at(0), {}},
+                    NodeConfig{"127.0.0.1", 30005, replica_ids.at(1), {}}}}};
+
+  auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
+  ASSERT_NE(cluster_map, nullptr);
+
+  // Test replica-only selection multiple times
+  std::set<std::string> selected_replicas;
+  for (int i = 0; i < 10; ++i) {
+    auto targets = cluster_map->GetTargets(FanoutTargetMode::kOneReplicaPerShard, false);
+    EXPECT_EQ(targets.size(), 1);
+    EXPECT_FALSE(targets[0].is_primary);
+    selected_replicas.insert(targets[0].node_id);
+  }
+
+  // Should only select from replicas
+  for (const auto& node_id : selected_replicas) {
+    EXPECT_TRUE(node_id == replica_ids.at(0) || node_id == replica_ids.at(1));
+  }
+}
+
+TEST_F(ClusterMapTest, GetLocalNodeFromShardWithReplicaOnlyTest) {
+  // Create a shard where local node is primary
+  std::vector<SlotRangeConfig> ranges = {
+      {.start_slot = 0,
+       .end_slot = 5460,
+       .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+       .replicas = {NodeConfig{"127.0.0.1", 30004, replica_ids.at(0), {}}}}};
+
+  auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
+  ASSERT_NE(cluster_map, nullptr);
+
+  // Test replica-only with prefer_local when local is primary
+  // Should fall back to random replica since local primary is excluded
+  auto targets = cluster_map->GetTargets(FanoutTargetMode::kOneReplicaPerShard, true);
+  EXPECT_EQ(targets.size(), 1);
+  EXPECT_FALSE(targets[0].is_primary);
+  EXPECT_FALSE(targets[0].is_local); // Local primary excluded, so remote replica selected
+
+  // Test when local node is replica
+  auto cluster_map2 = CreateClusterMapWithConfig(ranges, replica_ids.at(0));
+  ASSERT_NE(cluster_map2, nullptr);
+
+  auto targets2 = cluster_map2->GetTargets(FanoutTargetMode::kOneReplicaPerShard, true);
+  EXPECT_EQ(targets2.size(), 1);
+  EXPECT_FALSE(targets2[0].is_primary);
+  EXPECT_TRUE(targets2[0].is_local); // Local replica should be selected
+}
+
+TEST_F(ClusterMapTest, GetTargetsWithPreferLocalTest) {
+  // Create multiple shards with mixed local/remote nodes
+  std::vector<SlotRangeConfig> ranges = {
+      {.start_slot = 0,
+       .end_slot = 5460,
+       .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+       .replicas = {NodeConfig{"127.0.0.1", 30004, replica_ids.at(0), {}}}},
+      {.start_slot = 5461,
+       .end_slot = 10922,
+       .primary = NodeConfig{"127.0.0.1", 30002, primary_ids.at(1), {}},
+       .replicas = {NodeConfig{"127.0.0.1", 30005, replica_ids.at(1), {}}}}};
+
+  // Local node is first primary
+  auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
+  ASSERT_NE(cluster_map, nullptr);
+
+  // Test prefer_local = true
+  auto targets_prefer_local = cluster_map->GetTargets(FanoutTargetMode::kRandom, true);
+  EXPECT_EQ(targets_prefer_local.size(), 2);
+  
+  // First shard should select local primary
+  bool found_local_primary = false;
+  for (const auto& target : targets_prefer_local) {
+    if (target.node_id == primary_ids.at(0)) {
+      EXPECT_TRUE(target.is_local);
+      EXPECT_TRUE(target.is_primary);
+      found_local_primary = true;
+    }
+  }
+  EXPECT_TRUE(found_local_primary);
+
+  // Test prefer_local = false (default behavior)
+  auto targets_no_preference = cluster_map->GetTargets(FanoutTargetMode::kRandom, false);
+  EXPECT_EQ(targets_no_preference.size(), 2);
+}
+
 }  // namespace
 
 }  // namespace cluster_map

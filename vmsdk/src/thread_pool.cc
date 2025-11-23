@@ -337,12 +337,20 @@ void ThreadPool::AddWaitTimeSample(
 
   wait_time_samples_[sample_index_] = wait_time_ms;
 
-  if (current_sample_count_ < sample_queue_size_) current_sample_count_++;
-
   double current_avg = recent_avg_wait_time_.load();
-  double new_avg =
-      current_avg + (wait_time_ms - old_sample) /
-                        std::min(current_sample_count_, sample_queue_size_);
+  double new_avg;
+
+  if (current_sample_count_ < sample_queue_size_) {
+    current_sample_count_++;
+    // Adding a new sample - use cumulative average formula
+    size_t safe_count = std::max(current_sample_count_, size_t{1});
+    new_avg = (current_avg * (safe_count - 1) + wait_time_ms) / safe_count;
+  } else {
+    // Replacing an old sample - use rolling average formula
+    new_avg = current_avg + (wait_time_ms - old_sample) / sample_queue_size_;
+  }
+  VMSDK_LOG(WARNING, nullptr) << "wait_time_ms " << wait_time_ms
+                              << " recent_avg_wait_time_ " << new_avg;
   recent_avg_wait_time_.store(new_avg);
 
   sample_index_ = (sample_index_ + 1) % sample_queue_size_;
@@ -386,6 +394,7 @@ std::optional<absl::AnyInvocable<void()>> ThreadPool::TryGetNextTask() {
   bool low_has_tasks = !GetPriorityTasksQueue(Priority::kLow).empty();
 
   if (!high_has_tasks && !low_has_tasks) {
+    ClearWaitTimeSamples();
     return std::nullopt;  // No tasks available
   }
 

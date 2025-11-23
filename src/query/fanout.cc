@@ -204,9 +204,14 @@ absl::Status PerformSearchFanoutAsync(
     if (node.is_local) {
       // Defer the local target enqueue, since it will own the parameters from
       // then on.
+      VMSDK_LOG(WARNING, nullptr) << "PerformSearchFanoutAsync for local node "
+                                  << node.socket_address.port;
       has_local_target = true;
       continue;
     }
+    VMSDK_LOG(WARNING, nullptr)
+        << "PerformSearchFanoutAsync not for local node "
+        << node.socket_address.port;
     auto request_copy =
         std::make_unique<coordinator::SearchIndexPartitionRequest>();
     request_copy->CopyFrom(*request);

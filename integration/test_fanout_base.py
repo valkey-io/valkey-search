@@ -119,7 +119,7 @@ class TestFanout(ValkeySearchClusterTestCase):
     @pytest.mark.parametrize("threshold", [0, 100])
     def test_fanout_low_utilization_fanout(self, threshold):
 
-        number_of_searches_to_run = 10
+        number_of_searches_to_run = 100
         rg = self.get_replication_group(0)
         primary = rg.get_primary_connection()
         assert(primary.info("replication")["role"] == "master")
@@ -149,11 +149,11 @@ class TestFanout(ValkeySearchClusterTestCase):
         
         if threshold:
             # threshold == 100 means we are always under utilize and prefer to do local search on the shard
-            # Assert replicas of the primary run some of the search queries 
+            # Assert replicas of the primary didn't run any search queries
             assert(sum_of_remote_searches(rg.replicas) == 0)
         else:
             # threshold == 0 means we are always "too busy"
-            # Assert replicas of the primary didn't run any search queries
+            # Assert replicas of the primary run some of the search queries 
             assert(sum_of_remote_searches(rg.replicas) > 0)
 
     def test_sample_queue_size_config(self):

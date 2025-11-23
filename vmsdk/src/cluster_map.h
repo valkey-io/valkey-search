@@ -186,6 +186,9 @@ class ClusterMap {
   bool CheckClusterMapFull();
 };
 
+// Utility function to check if system is under low utilization
+bool IsSystemUnderLowUtilization();
+
 }  // namespace cluster_map
 }  // namespace vmsdk
 

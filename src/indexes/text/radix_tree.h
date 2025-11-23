@@ -72,6 +72,7 @@ namespace valkey_search::indexes::text {
 
 template <typename T>
 class InvasivePtr {
+ public:
   InvasivePtr() = default;
 
   // Factory constructor
@@ -119,6 +120,12 @@ class InvasivePtr {
 
   // Comparison operators
   auto operator<=>(const InvasivePtr&) const = default;
+
+  // Resets to the default nullptr state
+  void Clear() {
+    Release();
+    ptr_ = nullptr;
+  }
 
  private:
   struct RefCountWrapper {
@@ -182,7 +189,7 @@ struct RadixTree {
   //
   // Applies the mutation function to the current target of the word to generate
   // a new target. If the word doesn't already exist, a path for it will be
-  // first added to the tree and the target will be std::nullopt. The new target
+  // first added to the tree with a default-constructed target. The new target
   // is returned to the caller.
   //
   // The input parameter to the mutate function will be nullopt if there is no
@@ -281,6 +288,10 @@ struct RadixTree {
     // std::optional<Target> target;
     Target target;
     NodeChildren children;
+
+    Node() = default;
+    explicit Node(NodeChildren c)
+        : sub_tree_count(0), target{}, children(std::move(c)) {}
   };
 
   Node root_;
@@ -342,7 +353,7 @@ struct RadixTree {
 
     // Access the current location, asserts if !IsValid()
     absl::string_view GetWord() const;
-    const Target GetTarget() const;
+    const Target& GetTarget() const;
 
    private:
     friend struct RadixTree;
@@ -389,7 +400,7 @@ struct RadixTree {
     absl::string_view GetPath();
 
     // Get the target for this word, will assert if !IsWord()
-    const Target GetTarget() const;
+    const Target& GetTarget() const;
 
     // Defrag the current Node and then defrag the Postings if this points to
     // one.
@@ -397,9 +408,8 @@ struct RadixTree {
   };
 };
 
-template <typename Target, bool reverse>
-void RadixTree<Target, reverse>::SetTarget(absl::string_view word,
-                                           Target new_target) {
+template <typename Target>
+void RadixTree<Target>::SetTarget(absl::string_view word, Target new_target) {
   CHECK(!word.empty()) << "Can't add the target for an empty word";
   std::deque<Node*> node_path = GetOrCreateWordPath(word);
   Node* n = node_path.back();
@@ -412,8 +422,8 @@ void RadixTree<Target, reverse>::SetTarget(absl::string_view word,
   }
 }
 
-template <typename Target, bool reverse>
-Target RadixTree<Target, reverse>::MutateTarget(
+template <typename Target>
+Target RadixTree<Target>::MutateTarget(
     absl::string_view word, absl::FunctionRef<Target(Target)> mutate) {
   CHECK(!word.empty()) << "Can't mutate the target for an empty word";
   std::deque<Node*> node_path = GetOrCreateWordPath(word);
@@ -426,15 +436,14 @@ Target RadixTree<Target, reverse>::MutateTarget(
     n->target = new_target;
   } else {
     // Delete the word from the tree
-    n->target = std::nullopt;
     PostDeleteTreeCleanup(word, node_path);
   }
   return new_target;
 }
 
-template <typename Target, bool reverse>
-std::deque<typename RadixTree<Target, reverse>::Node*>
-RadixTree<Target, reverse>::GetOrCreateWordPath(absl::string_view word) {
+template <typename Target>
+std::deque<typename RadixTree<Target>::Node*>
+RadixTree<Target>::GetOrCreateWordPath(absl::string_view word) {
   Node* n = &root_;
   absl::string_view remaining = word;
   std::deque<Node*> node_path{n};
@@ -445,8 +454,7 @@ RadixTree<Target, reverse>::GetOrCreateWordPath(absl::string_view word) {
             [&](std::monostate&) {
               // Leaf case - we're at a leaf and still have more of the word
               // remaining. Create a compressed path to a new leaf node.
-              std::unique_ptr<Node> new_leaf =
-                  std::make_unique<Node>(0, std::nullopt, std::monostate{});
+              std::unique_ptr<Node> new_leaf = std::make_unique<Node>();
               next = new_leaf.get();
               n->children = std::pair{BytePath(remaining), std::move(new_leaf)};
               remaining.remove_prefix(remaining.length());
@@ -458,8 +466,7 @@ RadixTree<Target, reverse>::GetOrCreateWordPath(absl::string_view word) {
                 next = it->second.get();
               } else {
                 // No match - create an edge to a new empty leaf node
-                std::unique_ptr<Node> new_leaf = std::make_unique<Node>(
-                    Node{0, std::nullopt, std::monostate{}});
+                std::unique_ptr<Node> new_leaf = std::make_unique<Node>();
                 next = new_leaf.get();
                 children[remaining[0]] = std::move(new_leaf);
               }
@@ -489,7 +496,7 @@ RadixTree<Target, reverse>::GetOrCreateWordPath(absl::string_view word) {
                 } else {
                   // Create an intermediate compressed node to the leaf
                   new_branches[path[0]] = std::make_unique<Node>(
-                      0, std::nullopt,
+                      // 0, Target{},
                       std::pair{path.substr(1), std::move(child.second)});
                 }
                 n->children = std::move(new_branches);
@@ -499,7 +506,7 @@ RadixTree<Target, reverse>::GetOrCreateWordPath(absl::string_view word) {
                 // Partial match - split the compressed node into two at the
                 // branching point
                 std::unique_ptr<Node> new_node = std::make_unique<Node>(
-                    0, std::nullopt,
+                    // 0, Target{},
                     std::pair{path.substr(match), std::move(child.second)});
                 child.first = path.substr(0, match);
                 child.second = std::move(new_node);
@@ -518,9 +525,9 @@ RadixTree<Target, reverse>::GetOrCreateWordPath(absl::string_view word) {
   return node_path;
 }
 
-template <typename Target, bool reverse>
-void RadixTree<Target, reverse>::PostDeleteTreeCleanup(
-    absl::string_view word, std::deque<Node*>& node_path) {
+template <typename Target>
+void RadixTree<Target>::PostDeleteTreeCleanup(absl::string_view word,
+                                              std::deque<Node*>& node_path) {
   // Get the target node
   Node* n = node_path.back();
   node_path.pop_back();
@@ -554,9 +561,9 @@ void RadixTree<Target, reverse>::PostDeleteTreeCleanup(
              n->children);
 }
 
-template <typename Target, bool reverse>
-void RadixTree<Target, reverse>::TrimBranchFromTree(
-    absl::string_view word, std::deque<Node*>& node_path) {
+template <typename Target>
+void RadixTree<Target>::TrimBranchFromTree(absl::string_view word,
+                                           std::deque<Node*>& node_path) {
   absl::string_view remaining = word;
   bool done = false;
   while (!node_path.empty() && !done) {
@@ -589,7 +596,7 @@ void RadixTree<Target, reverse>::TrimBranchFromTree(
                 // (In reality we should only go up at most one level)
                 Node* parent = n;
                 Node* next_parent;
-                while (parent->target == std::nullopt && !node_path.empty()) {
+                while (!parent->target && !node_path.empty()) {
                   next_parent = node_path.back();
                   node_path.pop_back();
                   if (!std::holds_alternative<
@@ -614,7 +621,7 @@ void RadixTree<Target, reverse>::TrimBranchFromTree(
                         n->children);
                 new_edge += children.first;
                 Node* child = children.second.get();
-                while (child->target == std::nullopt &&
+                while (!child->target &&
                        std::holds_alternative<
                            std::pair<BytePath, std::unique_ptr<Node>>>(
                            child->children)) {
@@ -641,7 +648,7 @@ void RadixTree<Target, reverse>::TrimBranchFromTree(
               done = true;
             },
             [&](const std::pair<BytePath, std::unique_ptr<Node>>& child) {
-              if (n->target != std::nullopt || n == &root_) {
+              if (n->target || n == &root_) {
                 // A compressed node with a target or the root becomes a leaf
                 n->children = std::monostate{};
                 done = true;
@@ -655,22 +662,21 @@ void RadixTree<Target, reverse>::TrimBranchFromTree(
   }
 }
 
-template <typename Target, bool reverse>
-size_t RadixTree<Target, reverse>::GetWordCount(
-    absl::string_view prefix) const {
+template <typename Target>
+size_t RadixTree<Target>::GetWordCount(absl::string_view prefix) const {
   // TODO: Implement word counting
   return 0;
 }
 
-template <typename Target, bool reverse>
-size_t RadixTree<Target, reverse>::GetLongestWord() const {
+template <typename Target>
+size_t RadixTree<Target>::GetLongestWord() const {
   // TODO: Implement longest word calculation
   return 0;
 }
 
-template <typename Target, bool reverse>
-typename RadixTree<Target, reverse>::WordIterator
-RadixTree<Target, reverse>::GetWordIterator(absl::string_view prefix) const {
+template <typename Target>
+typename RadixTree<Target>::WordIterator RadixTree<Target>::GetWordIterator(
+    absl::string_view prefix) const {
   const Node* n = &root_;
   absl::string_view remaining = prefix;
   bool no_match = false;
@@ -719,22 +725,22 @@ RadixTree<Target, reverse>::GetWordIterator(absl::string_view prefix) const {
   return WordIterator(n, actual_prefix);
 }
 
-template <typename Target, bool reverse>
-RadixTree<Target, reverse>::WordIterator::WordIterator(const Node* node,
-                                                       absl::string_view prefix)
+template <typename Target>
+RadixTree<Target>::WordIterator::WordIterator(const Node* node,
+                                              absl::string_view prefix)
     : curr_(node), word_(prefix) {
-  if (curr_ && !curr_->target.has_value()) {
+  if (curr_ && !curr_->target) {
     Next();
   }
 }
 
-template <typename Target, bool reverse>
-bool RadixTree<Target, reverse>::WordIterator::Done() const {
+template <typename Target>
+bool RadixTree<Target>::WordIterator::Done() const {
   return curr_ == nullptr;
 }
 
-template <typename Target, bool reverse>
-void RadixTree<Target, reverse>::WordIterator::Next() {
+template <typename Target>
+void RadixTree<Target>::WordIterator::Next() {
   do {
     std::visit(
         overloaded{
@@ -774,75 +780,74 @@ void RadixTree<Target, reverse>::WordIterator::Next() {
               }
             }},
         curr_->children);
-  } while (curr_ && !curr_->target.has_value());
+  } while (curr_ && !curr_->target);
 }
 
-template <typename Target, bool reverse>
-bool RadixTree<Target, reverse>::WordIterator::SeekForward(
-    absl::string_view word) {
+template <typename Target>
+bool RadixTree<Target>::WordIterator::SeekForward(absl::string_view word) {
   throw std::logic_error("TODO");
 }
 
-template <typename Target, bool reverse>
-absl::string_view RadixTree<Target, reverse>::WordIterator::GetWord() const {
+template <typename Target>
+absl::string_view RadixTree<Target>::WordIterator::GetWord() const {
   return word_;
 }
 
-template <typename Target, bool reverse>
-const Target& RadixTree<Target, reverse>::WordIterator::GetTarget() const {
-  return curr_->target.value();
+template <typename Target>
+const Target& RadixTree<Target>::WordIterator::GetTarget() const {
+  return curr_->target;
 }
 
 /*** PathIterator ***/
 
-template <typename Target, bool reverse>
-bool RadixTree<Target, reverse>::PathIterator::Done() const {
+template <typename Target>
+bool RadixTree<Target>::PathIterator::Done() const {
   throw std::logic_error("TODO");
 }
 
-template <typename Target, bool reverse>
-bool RadixTree<Target, reverse>::PathIterator::IsWord() const {
+template <typename Target>
+bool RadixTree<Target>::PathIterator::IsWord() const {
   throw std::logic_error("TODO");
 }
 
-template <typename Target, bool reverse>
-void RadixTree<Target, reverse>::PathIterator::Next() {
+template <typename Target>
+void RadixTree<Target>::PathIterator::Next() {
   throw std::logic_error("TODO");
 }
 
-template <typename Target, bool reverse>
-bool RadixTree<Target, reverse>::PathIterator::SeekForward(char target) {
+template <typename Target>
+bool RadixTree<Target>::PathIterator::SeekForward(char target) {
   throw std::logic_error("TODO");
 }
 
-template <typename Target, bool reverse>
-bool RadixTree<Target, reverse>::PathIterator::CanDescend() const {
+template <typename Target>
+bool RadixTree<Target>::PathIterator::CanDescend() const {
   throw std::logic_error("TODO");
 }
 
-template <typename Target, bool reverse>
-typename RadixTree<Target, reverse>::PathIterator
-RadixTree<Target, reverse>::PathIterator::DescendNew() const {
+template <typename Target>
+typename RadixTree<Target>::PathIterator
+RadixTree<Target>::PathIterator::DescendNew() const {
   throw std::logic_error("TODO");
 }
 
-template <typename Target, bool reverse>
-absl::string_view RadixTree<Target, reverse>::PathIterator::GetPath() {
+template <typename Target>
+absl::string_view RadixTree<Target>::PathIterator::GetPath() {
   throw std::logic_error("TODO");
 }
 
-template <typename Target, bool reverse>
-const Target& RadixTree<Target, reverse>::PathIterator::GetTarget() const {
+template <typename Target>
+const Target& RadixTree<Target>::PathIterator::GetTarget() const {
   throw std::logic_error("TODO");
 }
 
-template <typename Target, bool reverse>
-void RadixTree<Target, reverse>::PathIterator::Defrag() {
+template <typename Target>
+void RadixTree<Target>::PathIterator::Defrag() {
   throw std::logic_error("TODO");
 }
 
-template <typename Target, bool reverse>
-std::vector<std::string> RadixTree<Target, reverse>::DebugGetTreeString(
+template <typename Target>
+std::vector<std::string> RadixTree<Target>::DebugGetTreeString(
     const Node* node, const std::string& path, int depth, bool is_last,
     const std::string& prefix) const {
   std::vector<std::string> result;
@@ -855,12 +860,12 @@ std::vector<std::string> RadixTree<Target, reverse>::DebugGetTreeString(
   std::visit(
       overloaded{[&](const std::monostate&) {
                    line += " LEAF";
-                   if (node->target.has_value()) line += " [T]";
+                   if (node->target) line += " [T]";
                    result.push_back(line);
                  },
                  [&](const std::map<Byte, std::unique_ptr<Node>>& children) {
                    line += " BRANCH(" + std::to_string(children.size()) + ")";
-                   if (node->target.has_value()) line += " [T]";
+                   if (node->target) line += " [T]";
                    result.push_back(line);
                    // Prepare prefix for children: spaces for last, │ for
                    // continuing
@@ -877,7 +882,7 @@ std::vector<std::string> RadixTree<Target, reverse>::DebugGetTreeString(
                  },
                  [&](const std::pair<BytePath, std::unique_ptr<Node>>& child) {
                    line += " COMPRESSED";
-                   if (node->target.has_value()) line += " [T]";
+                   if (node->target) line += " [T]";
                    result.push_back(line);
                    std::string child_prefix =
                        depth == 0 ? "" : prefix + (is_last ? "    " : "│   ");
@@ -893,15 +898,13 @@ std::vector<std::string> RadixTree<Target, reverse>::DebugGetTreeString(
   return result;
 }
 
-template <typename Target, bool reverse>
-std::vector<std::string> RadixTree<Target, reverse>::DebugGetTreeStrings()
-    const {
+template <typename Target>
+std::vector<std::string> RadixTree<Target>::DebugGetTreeStrings() const {
   return DebugGetTreeString(&root_, "", 0, true, "");
 }
 
-template <typename Target, bool reverse>
-void RadixTree<Target, reverse>::DebugPrintTree(
-    const std::string& label) const {
+template <typename Target>
+void RadixTree<Target>::DebugPrintTree(const std::string& label) const {
   std::cout << "\n=== Tree Structure" << (label.empty() ? "" : (" - " + label))
             << " ===" << std::endl;
 

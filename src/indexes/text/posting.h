@@ -63,15 +63,6 @@ class FieldMask {
 
 using PositionMap = std::map<Position, std::unique_ptr<FieldMask>>;
 
-//
-// this is the logical view of a posting.
-//
-struct Posting {
-  const Key& GetKey() const;
-  uint64_t GetFieldMask() const;
-  uint32_t GetPosition() const;
-};
-
 struct Postings {
   struct KeyIterator;
   struct PositionIterator;

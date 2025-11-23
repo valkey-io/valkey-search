@@ -28,9 +28,6 @@
 
 namespace valkey_search::indexes {
 
-using WordIterator =
-    text::RadixTree<std::shared_ptr<text::Postings>, false>::WordIterator;
-
 /**
  * Text per-field index implementation for full-text search functionality.
  */

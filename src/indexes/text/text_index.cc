@@ -25,15 +25,15 @@ TextIndexSchema* GetTextIndexSchema() {
 
 namespace {
 
-std::optional<std::shared_ptr<Postings>> AddKeyToPostings(
-    std::optional<std::shared_ptr<Postings>> existing,
-    const InternedStringPtr& key, PositionMap&& pos_map) {
-  std::shared_ptr<Postings> postings;
-  if (existing.has_value()) {
-    postings = existing.value();
+InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
+                                       const InternedStringPtr& key,
+                                       PositionMap&& pos_map) {
+  InvasivePtr<Postings> postings;
+  if (existing_postings) {
+    postings = existing_postings;
   } else {
     current_schema_->GetMetadata().num_unique_terms++;
-    postings = std::make_shared<Postings>();
+    postings = InvasivePtr<Postings>::Make();
   }
 
   // Track metadata before inserting
@@ -49,14 +49,12 @@ std::optional<std::shared_ptr<Postings>> AddKeyToPostings(
   return postings;
 }
 
-std::optional<std::shared_ptr<Postings>> RemoveKeyFromPostings(
-    std::optional<std::shared_ptr<Postings>> existing,
-    const InternedStringPtr& key) {
-  CHECK(existing.has_value()) << "Per-key tree became unaligned";
-  auto postings = existing.value();
+InvasivePtr<Postings> RemoveKeyFromPostings(
+    InvasivePtr<Postings> existing_postings, const InternedStringPtr& key) {
+  CHECK(existing_postings) << "Per-key tree became unaligned";
 
   // Get the position map before removal to track metadata
-  auto key_iter = postings->GetKeyIterator();
+  auto key_iter = existing_postings->GetKeyIterator();
   if (key_iter.SkipForwardKey(key) && key_iter.IsValid()) {
     auto pos_iter = key_iter.GetPositionIterator();
     size_t position_count = 0;
@@ -76,14 +74,12 @@ std::optional<std::shared_ptr<Postings>> RemoveKeyFromPostings(
     metadata.total_term_frequency -= term_frequency;
   }
 
-  postings->RemoveKey(key);
+  existing_postings->RemoveKey(key);
 
-  if (!postings->IsEmpty()) {
-    return postings;
-  } else {
-    current_schema_->GetMetadata().num_unique_terms--;
-    return std::nullopt;
+  if (existing_postings->IsEmpty()) {
+    existing_postings.Clear();
   }
+  return existing_postings;
 }
 
 }  // namespace
@@ -92,18 +88,18 @@ std::optional<std::shared_ptr<Postings>> RemoveKeyFromPostings(
 
 TextIndex::TextIndex(bool suffix)
     : suffix_tree_(
-          suffix ? std::make_unique<RadixTree<std::shared_ptr<Postings>>>()
+          suffix ? std::make_unique<RadixTree<InvasivePtr<Postings>>>()
                  : nullptr) {}
 
-RadixTree<std::shared_ptr<Postings>>& TextIndex::GetPrefix() {
+RadixTree<InvasivePtr<Postings>>& TextIndex::GetPrefix() {
   return prefix_tree_;
 }
 
-const RadixTree<std::shared_ptr<Postings>>& TextIndex::GetPrefix() const {
+const RadixTree<InvasivePtr<Postings>>& TextIndex::GetPrefix() const {
   return prefix_tree_;
 }
 
-std::optional<std::reference_wrapper<RadixTree<std::shared_ptr<Postings>>>>
+std::optional<std::reference_wrapper<RadixTree<InvasivePtr<Postings>>>>
 TextIndex::GetSuffix() {
   if (!suffix_tree_) {
     return std::nullopt;
@@ -112,7 +108,7 @@ TextIndex::GetSuffix() {
 }
 
 std::optional<
-    std::reference_wrapper<const RadixTree<std::shared_ptr<Postings>>>>
+    std::reference_wrapper<const RadixTree<InvasivePtr<Postings>>>>
 TextIndex::GetSuffix() const {
   if (!suffix_tree_) {
     return std::nullopt;
@@ -192,7 +188,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
                      std::string(token.rbegin(), token.rend()))
                : std::nullopt;
 
-    std::optional<std::shared_ptr<Postings>> updated_target;
+    InvasivePtr<Postings> updated_target;
 
     // Update the postings object for the token in the schema-level index with
     // the key and position map
@@ -252,7 +248,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
   std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
   while (!iter.Done()) {
     std::string_view word = iter.GetWord();
-    std::optional<std::shared_ptr<Postings>> new_target =
+    InvasivePtr<Postings> new_target =
         text_index_->GetPrefix().MutateTarget(word, [&](auto existing) {
           NestedMemoryScope scope{metadata_.posting_memory_pool_};
           return RemoveKeyFromPostings(existing, key);

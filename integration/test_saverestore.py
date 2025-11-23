@@ -111,6 +111,7 @@ def do_save_restore_test(test, index: Index, expected_writes: List[int], expecte
     '''
     test.server.restart(remove_rdb=False)
     print(test.client.ping())
+    waiters.wait_for_true(lambda: index.backfill_complete(test.client))
     verify_data(test.client, index)
     test.client.execute_command("CONFIG SET search.info-developer-visible yes")
 

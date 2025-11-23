@@ -249,6 +249,7 @@ function check_tool() {
 }
 
 function determine_ninja() {
+    local os_name=$(uname -s)
     if [[ "${os_name}" == "Darwin" ]]; then
         # ninja is can be installed via "brew"
         echo "ninja"

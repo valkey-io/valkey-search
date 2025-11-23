@@ -9,8 +9,10 @@
 
 #include <cerrno>
 #include <cstddef>
+#include <fstream>
 #include <optional>
 #include <string>
+#include <unordered_map>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
@@ -127,6 +129,32 @@ absl::Status InitLogging(ValkeyModuleCtx* ctx,
         absl::StrCat("Unknown severity `", log_level_str.value(), "`"));
   }
   absl::SetGlobalVLogLevel(static_cast<int>(itr->second));
+  //
+  // Improve life by dumping the process mapping tables, this allows addr2line
+  // on loaded modules to work.
+  //
+  std::ifstream maps("/proc/self/maps");
+  std::string line;
+  std::unordered_map<std::string, std::string> seen_bases;
+  while (std::getline(maps, line)) {
+    if (line.find(".so") != std::string::npos) {
+      size_t dash = line.find('-');
+      size_t path_start = line.find('/');
+      if (dash != std::string::npos && path_start != std::string::npos) {
+        std::string base_addr = line.substr(0, dash);
+        std::string module = line.substr(path_start);
+        if (module.find("/lib") != 0 && module.find("/usr") != 0) {
+          auto it = seen_bases.find(base_addr);
+          if (it == seen_bases.end() &&
+              line.find(" r-x") != std::string::npos) {
+            seen_bases[base_addr] = module;
+            VMSDK_LOG(NOTICE, ctx)
+                << ">>> Loaded Module: " << module << " Base: 0x" << base_addr;
+          }
+        }
+      }
+    }
+  }
 
   return absl::OkStatus();
 }

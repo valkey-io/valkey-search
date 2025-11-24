@@ -70,95 +70,6 @@ into the codebase efficiently enough to be deployed in production code.
 
 namespace valkey_search::indexes::text {
 
-template <typename T>
-class InvasivePtr {
- public:
-  InvasivePtr() = default;
-
-  InvasivePtr(std::nullptr_t) noexcept : ptr_(nullptr) {}
-
-  // Factory constructor
-  template <typename... Args>
-  static InvasivePtr Make(Args&&... args) {
-    InvasivePtr result;
-    result.ptr_ = new RefCountWrapper(std::forward<Args>(args)...);
-    return result;
-  }
-
-  ~InvasivePtr() { Release(); }
-
-  // Copy semantics
-  InvasivePtr(const InvasivePtr& other) : ptr_(other.ptr_) { Acquire(); }
-
-  InvasivePtr& operator=(const InvasivePtr& other) {
-    if (this != &other) {
-      Release();
-      ptr_ = other.ptr_;
-      Acquire();
-    }
-    return *this;
-  }
-
-  InvasivePtr& operator=(std::nullptr_t) noexcept {
-    Clear();
-    return *this;
-  }
-
-  // Move semantics
-  InvasivePtr(InvasivePtr&& other) noexcept : ptr_(other.ptr_) {
-    other.ptr_ = nullptr;
-  }
-
-  InvasivePtr& operator=(InvasivePtr&& other) noexcept {
-    if (this != &other) {
-      Release();
-      ptr_ = other.ptr_;
-      other.ptr_ = nullptr;
-    }
-    return *this;
-  }
-
-  // Access operators
-  T& operator*() const { return ptr_->data_; }
-  T* operator->() const { return &ptr_->data_; }
-
-  // Boolean conversion
-  explicit operator bool() const { return ptr_ != nullptr; }
-
-  // Comparison operators
-  auto operator<=>(const InvasivePtr&) const = default;
-
-  // Resets to the default nullptr state
-  void Clear() {
-    Release();
-    ptr_ = nullptr;
-  }
-
- private:
-  struct RefCountWrapper {
-    template <typename... Args>
-    explicit RefCountWrapper(Args&&... args)
-        : data_(std::forward<Args>(args)...) {}
-
-    T data_;
-    uint32_t refcount_ = 1;  // No thread safety needed right now
-  };
-
-  void Release() {
-    if (ptr_ && --ptr_->refcount_ == 0) {
-      delete ptr_;
-    }
-  }
-
-  void Acquire() {
-    if (ptr_) {
-      ptr_->refcount_++;
-    }
-  }
-
-  RefCountWrapper* ptr_ = nullptr;
-};
-
 // Needed for std::visit
 template <class... Ts>
 struct overloaded : Ts... {
@@ -170,6 +81,27 @@ overloaded(Ts...) -> overloaded<Ts...>;
 using Byte = uint8_t;
 using BytePath = std::string;
 
+/**
+ * @warning Target Type Constraint
+ *
+ * RadixTree determines entry existence using the target's boolean conversion.
+ * When a target converts to false, the corresponding word is removed from the
+ * tree.
+ *
+ * Safe target types (false represents empty/null):
+ * - InvasivePtr<T>, std::unique_ptr<T>, std::optional<T>
+ *
+ * Potentially unsafe target types (false could represent valid data):
+ * - int (0)
+ * - std::string ("")
+ * - bool (false)
+ *
+ * Example:
+ * @code
+ *   RadixTree<int> tree;
+ *   tree.SetTarget("zero", 0);  // This removes "zero" from the tree!
+ * @endcode
+ */
 template <typename Target>
 struct RadixTree {
   struct WordIterator;
@@ -292,7 +224,6 @@ struct RadixTree {
                    >;
   struct Node {
     uint32_t sub_tree_count;
-    // std::optional<Target> target;
     Target target;
     NodeChildren children;
 

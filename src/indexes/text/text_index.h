@@ -20,6 +20,7 @@
 #include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/text/invasive_ptr.h"
 #include "src/indexes/text/lexer.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/radix_tree.h"

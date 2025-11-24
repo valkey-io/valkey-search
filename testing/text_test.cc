@@ -16,6 +16,7 @@
 #include "absl/status/statusor.h"
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/text/invasive_ptr.h"
 #include "src/indexes/text/text_index.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"

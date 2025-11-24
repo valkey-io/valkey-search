@@ -49,7 +49,7 @@ EvaluationResult TermPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const std::shared_ptr<valkey_search::InternedString>& target_key) const {
   uint64_t field_mask = field_mask_;
-  auto word_iter = text_index.prefix_.GetWordIterator(term_);
+  auto word_iter = text_index.GetPrefix().GetWordIterator(term_);
   if (word_iter.Done()) {
     return EvaluationResult(false);
   }
@@ -90,7 +90,8 @@ EvaluationResult PrefixPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const std::shared_ptr<valkey_search::InternedString>& target_key) const {
   uint64_t field_mask = field_mask_;
-  auto word_iter = text_index.prefix_.GetWordIterator(term_);
+
+  auto word_iter = text_index.GetPrefix().GetWordIterator(term_);
   std::vector<indexes::text::Postings::KeyIterator> key_iterators;
   while (!word_iter.Done()) {
     std::string_view word = word_iter.GetWord();
@@ -134,11 +135,13 @@ EvaluationResult SuffixPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const std::shared_ptr<valkey_search::InternedString>& target_key) const {
   uint64_t field_mask = field_mask_;
-  if (!text_index.suffix_.has_value()) {
+
+  auto suffix_opt = text_index.GetSuffix();
+  if (!suffix_opt.has_value()) {
     return EvaluationResult(false);
   }
   std::string reversed_term(term_.rbegin(), term_.rend());
-  auto word_iter = text_index.suffix_->GetWordIterator(reversed_term);
+  auto word_iter = suffix_opt.value().get().GetWordIterator(reversed_term);
   std::vector<indexes::text::Postings::KeyIterator> key_iterators;
   while (!word_iter.Done()) {
     std::string_view word = word_iter.GetWord();

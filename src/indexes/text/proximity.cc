@@ -198,10 +198,14 @@ bool ProximityIterator::NextPosition() {
   const size_t n = iters_.size();
   bool should_advance = current_position_.has_value();
   while (!DonePositions()) {
+    for (size_t i = 0; i < n; ++i) {
+      positions_[i] = iters_[i]->CurrentPosition();
+    }
+    auto violating_iter = FindViolatingIterator();
     if (should_advance) {
       should_advance = false;
-      if (auto iter_to_advance = FindViolatingIterator()) {
-        iters_[*iter_to_advance]->NextPosition();
+      if (violating_iter) {
+        iters_[*violating_iter]->NextPosition();
       } else {
         // No violations, advance first non-done iterator
         for (size_t i = 0; i < n; ++i) {
@@ -213,11 +217,7 @@ bool ProximityIterator::NextPosition() {
       }
       continue;
     }
-    for (size_t i = 0; i < n; ++i) {
-      positions_[i] = iters_[i]->CurrentPosition();
-    }
-    // No violations mean that this positional combination is valid.
-    if (!FindViolatingIterator().has_value()) {
+    if (!violating_iter.has_value()) {
       // Set the current field based on field mask intersection.
       current_field_mask_ = iters_[0]->CurrentFieldMask();
       for (size_t i = 1; i < n; ++i) {

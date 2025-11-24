@@ -176,6 +176,14 @@ void InitIndexSchema(MockIndexSchema* index_schema) {
       "numeric_index_100_10", "numeric_index_100_10", numeric_index_100_10));
   VMSDK_EXPECT_OK(index_schema->AddIndex(
       "numeric_index_100_30", "numeric_index_100_30", numeric_index_100_30));
+  auto numeric_index_100_20 =
+      std::make_shared<MockNumeric>(numeric_index_proto);
+  auto numeric_index_100_40 =
+      std::make_shared<MockNumeric>(numeric_index_proto);
+  VMSDK_EXPECT_OK(index_schema->AddIndex(
+      "numeric_index_100_20", "numeric_index_100_20", numeric_index_100_20));
+  VMSDK_EXPECT_OK(index_schema->AddIndex(
+      "numeric_index_100_40", "numeric_index_100_40", numeric_index_100_40));
   indexes::Numeric::EntriesRange entries_range;
 
   EXPECT_CALL(*numeric_index_100_10, Search(_, false))
@@ -193,6 +201,22 @@ void InitIndexSchema(MockIndexSchema* index_schema) {
   EXPECT_CALL(*numeric_index_100_30, Search(_, true))
       .WillRepeatedly([&entries_range]() {
         return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 70);
+      });
+  EXPECT_CALL(*numeric_index_100_20, Search(_, false))
+      .WillRepeatedly([&entries_range]() {
+        return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 20);
+      });
+  EXPECT_CALL(*numeric_index_100_20, Search(_, true))
+      .WillRepeatedly([&entries_range]() {
+        return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 80);
+      });
+  EXPECT_CALL(*numeric_index_100_40, Search(_, false))
+      .WillRepeatedly([&entries_range]() {
+        return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 40);
+      });
+  EXPECT_CALL(*numeric_index_100_40, Search(_, true))
+      .WillRepeatedly([&entries_range]() {
+        return std::make_unique<TestedNumericEntriesFetcher>(entries_range, 60);
       });
 
   data_model::TagIndex tag_index_proto;
@@ -223,75 +247,6 @@ void InitIndexSchema(MockIndexSchema* index_schema) {
       });
 }
 
-// Helper function to print predicate tree structure using DFS
-std::string PrintPredicateTree(const query::Predicate* predicate,
-                               int indent = 0) {
-  std::string result;
-  std::string indent_str(indent * 2, ' ');
-
-  if (!predicate) {
-    return result;
-  }
-
-  switch (predicate->GetType()) {
-    case query::PredicateType::kComposedAnd: {
-      const auto* composed =
-          static_cast<const query::ComposedPredicate*>(predicate);
-      result += indent_str + "AND\n";
-      result += indent_str + "{\n";
-      for (const auto& child : composed->GetChildren()) {
-        result += PrintPredicateTree(child.get(), indent + 1);
-      }
-      result += indent_str + "}\n";
-      break;
-    }
-    case query::PredicateType::kComposedOr: {
-      const auto* composed =
-          static_cast<const query::ComposedPredicate*>(predicate);
-      result += indent_str + "OR\n";
-      result += indent_str + "{\n";
-      for (const auto& child : composed->GetChildren()) {
-        result += PrintPredicateTree(child.get(), indent + 1);
-      }
-      result += indent_str + "}\n";
-      break;
-    }
-    case query::PredicateType::kNegate: {
-      const auto* negate =
-          static_cast<const query::NegatePredicate*>(predicate);
-      result += indent_str + "NOT\n";
-      result += indent_str + "{\n";
-      result += PrintPredicateTree(negate->GetPredicate(), indent + 1);
-      result += indent_str + "}\n";
-      break;
-    }
-    case query::PredicateType::kNumeric: {
-      const auto* numeric =
-          static_cast<const query::NumericPredicate*>(predicate);
-      result +=
-          indent_str + "NUMERIC(" + std::string(numeric->GetAlias()) + ")\n";
-      break;
-    }
-    case query::PredicateType::kTag: {
-      const auto* tag = static_cast<const query::TagPredicate*>(predicate);
-      result += indent_str + "TAG(" + std::string(tag->GetAlias()) + ")\n";
-      break;
-    }
-    case query::PredicateType::kText: {
-      const auto* text = static_cast<const query::TextPredicate*>(predicate);
-      // Get field_mask from the text predicate
-      std::string field_mask_str = std::to_string(text->GetFieldMask());
-      result += indent_str + "TEXT(" + field_mask_str + ")\n";
-      break;
-    }
-    default:
-      result += indent_str + "UNKNOWN\n";
-      break;
-  }
-
-  return result;
-}
-
 TEST_P(EvaluateFilterAsPrimaryTest, ParseParams) {
   const EvaluateFilterAsPrimaryTestCase& test_case = GetParam();
   auto index_schema = CreateIndexSchema(kIndexSchemaName).value();
@@ -304,11 +259,11 @@ TEST_P(EvaluateFilterAsPrimaryTest, ParseParams) {
       PrintPredicateTree(filter_parse_results.value().root_predicate.get());
 
   // Print both expected and actual structures
-  // std::cout << "Filter: " << test_case.filter << std::endl;
-  // std::cout << "Expected Tree Structure:" << std::endl;
-  // std::cout << test_case.expected_tree_structure << std::endl;
-  // std::cout << "Actual Tree Structure:" << std::endl;
-  // std::cout << actual_tree << std::endl;
+  std::cout << "Filter: " << test_case.filter << std::endl;
+  std::cout << "Expected Tree Structure:" << std::endl;
+  std::cout << test_case.expected_tree_structure << std::endl;
+  std::cout << "Actual Tree Structure:" << std::endl;
+  std::cout << actual_tree << std::endl;
 
   // Compare expected vs actual tree structure
   EXPECT_EQ(actual_tree, test_case.expected_tree_structure)
@@ -368,8 +323,8 @@ INSTANTIATE_TEST_SUITE_P(
                       "@numeric_index_100_10:[3.0 4.0]",
             .evaluate_size = 10,
             .fetcher_ids = {10},
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
+            .expected_tree_structure = "AND{\n"
+
                                        "  NUMERIC(numeric_index_100_30)\n"
                                        "  NUMERIC(numeric_index_100_10)\n"
                                        "}\n",
@@ -380,8 +335,7 @@ INSTANTIATE_TEST_SUITE_P(
                       "@numeric_index_100_10:[3.0 4.0]",
             .evaluate_size = 40,
             .fetcher_ids = {10, 30},
-            .expected_tree_structure = "OR\n"
-                                       "{\n"
+            .expected_tree_structure = "OR{\n"
                                        "  NUMERIC(numeric_index_100_30)\n"
                                        "  NUMERIC(numeric_index_100_10)\n"
                                        "}\n",
@@ -391,8 +345,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "-@numeric_index_100_10:[1.0 2.0]",
             .evaluate_size = 90,
             .fetcher_ids = {90},
-            .expected_tree_structure = "NOT\n"
-                                       "{\n"
+            .expected_tree_structure = "NOT{\n"
                                        "  NUMERIC(numeric_index_100_10)\n"
                                        "}\n",
         },
@@ -401,8 +354,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "-@numeric_index_100_30:[1.0 2.0]",
             .evaluate_size = 70,
             .fetcher_ids = {70},
-            .expected_tree_structure = "NOT\n"
-                                       "{\n"
+            .expected_tree_structure = "NOT{\n"
                                        "  NUMERIC(numeric_index_100_30)\n"
                                        "}\n",
         },
@@ -412,10 +364,8 @@ INSTANTIATE_TEST_SUITE_P(
                       "@numeric_index_100_10:[3.0 4.0])",
             .evaluate_size = 70,
             .fetcher_ids = {70},
-            .expected_tree_structure = "NOT\n"
-                                       "{\n"
-                                       "  OR\n"
-                                       "  {\n"
+            .expected_tree_structure = "NOT{\n"
+                                       "  OR{\n"
                                        "    NUMERIC(numeric_index_100_30)\n"
                                        "    NUMERIC(numeric_index_100_10)\n"
                                        "  }\n"
@@ -427,10 +377,8 @@ INSTANTIATE_TEST_SUITE_P(
                       "@numeric_index_100_10:[3.0 4.0])",
             .evaluate_size = 160,
             .fetcher_ids = {70, 90},
-            .expected_tree_structure = "NOT\n"
-                                       "{\n"
-                                       "  AND\n"
-                                       "  {\n"
+            .expected_tree_structure = "NOT{\n"
+                                       "  AND{\n"
                                        "    NUMERIC(numeric_index_100_30)\n"
                                        "    NUMERIC(numeric_index_100_10)\n"
                                        "  }\n"
@@ -442,12 +390,9 @@ INSTANTIATE_TEST_SUITE_P(
                       "@numeric_index_100_10:[3.0 4.0]))",
             .evaluate_size = 40,
             .fetcher_ids = {10, 30},
-            .expected_tree_structure = "NOT\n"
-                                       "{\n"
-                                       "  NOT\n"
-                                       "  {\n"
-                                       "    OR\n"
-                                       "    {\n"
+            .expected_tree_structure = "NOT{\n"
+                                       "  NOT{\n"
+                                       "    OR{\n"
                                        "      NUMERIC(numeric_index_100_30)\n"
                                        "      NUMERIC(numeric_index_100_10)\n"
                                        "    }\n"
@@ -459,15 +404,15 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@tag_index_100_15:{tag1} @tag_index_100_15:{tag2} "
                       "(@numeric_index_100_10:[1.0 2.0] | "
                       "@tag_index_100_15:{tag3} | "
-                      "@numeric_index_100_30:[3.0 4.0])",
+                      "@numeric_index_100_30:[3.0 4.0] | "
+                      "@numeric_index_100_20:[3.0 4.0] | "
+                      "@numeric_index_100_40:[3.0 4.0] )",
             .evaluate_size = 15,
             .fetcher_ids = {15},
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
+            .expected_tree_structure = "AND{\n"
                                        "  TAG(tag_index_100_15)\n"
                                        "  TAG(tag_index_100_15)\n"
-                                       "  OR\n"
-                                       "  {\n"
+                                       "  OR{\n"
                                        "    NUMERIC(numeric_index_100_10)\n"
                                        "    TAG(tag_index_100_15)\n"
                                        "    NUMERIC(numeric_index_100_30)\n"
@@ -482,16 +427,12 @@ INSTANTIATE_TEST_SUITE_P(
                       "@tag_index_100_15:{tag2})))",
             .evaluate_size = 30,
             .fetcher_ids = {30},
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
+            .expected_tree_structure = "AND{\n"
                                        "  NUMERIC(numeric_index_100_30)\n"
-                                       "  NOT\n"
-                                       "  {\n"
-                                       "    OR\n"
-                                       "    {\n"
+                                       "  NOT{\n"
+                                       "    OR{\n"
                                        "      TAG(tag_index_100_15)\n"
-                                       "      AND\n"
-                                       "      {\n"
+                                       "      AND{\n"
                                        "        NUMERIC(numeric_index_100_10)\n"
                                        "        TAG(tag_index_100_15)\n"
                                        "      }\n"
@@ -507,14 +448,11 @@ INSTANTIATE_TEST_SUITE_P(
                       "@numeric_index_100_10:[5.0 6.0])))",
             .evaluate_size = 40,
             .fetcher_ids = {15, 15, 10},
-            .expected_tree_structure = "OR\n"
-                                       "{\n"
+            .expected_tree_structure = "OR{\n"
                                        "  TAG(tag_index_100_15)\n"
-                                       "  AND\n"
-                                       "  {\n"
+                                       "  AND{\n"
                                        "    NUMERIC(numeric_index_100_30)\n"
-                                       "    OR\n"
-                                       "    {\n"
+                                       "    OR{\n"
                                        "      TAG(tag_index_100_15)\n"
                                        "      NUMERIC(numeric_index_100_10)\n"
                                        "    }\n"
@@ -530,17 +468,12 @@ INSTANTIATE_TEST_SUITE_P(
             .evaluate_size = 125,
             .fetcher_ids = {10, 30, 85},
             .expected_tree_structure =
-                "NOT\n"
-                "{\n"
-                "  AND\n"
-                "  {\n"
+                "NOT{\n"
+                "  AND{\n"
                 "    TAG(tag_index_100_15)\n"
-                "    OR\n"
-                "    {\n"
-                "      NOT\n"
-                "      {\n"
-                "        OR\n"
-                "        {\n"
+                "    OR{\n"
+                "      NOT{\n"
+                "        OR{\n"
                 "          NUMERIC(numeric_index_100_30)\n"
                 "          NUMERIC(numeric_index_100_10)\n"
                 "        }\n"

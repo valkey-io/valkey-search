@@ -87,9 +87,8 @@ InvasivePtr<Postings> RemoveKeyFromPostings(
 /*** TextIndex ***/
 
 TextIndex::TextIndex(bool suffix)
-    : suffix_tree_(
-          suffix ? std::make_unique<RadixTree<InvasivePtr<Postings>>>()
-                 : nullptr) {}
+    : suffix_tree_(suffix ? std::make_unique<RadixTree<InvasivePtr<Postings>>>()
+                          : nullptr) {}
 
 RadixTree<InvasivePtr<Postings>>& TextIndex::GetPrefix() {
   return prefix_tree_;
@@ -107,8 +106,7 @@ TextIndex::GetSuffix() {
   return std::ref(*suffix_tree_);
 }
 
-std::optional<
-    std::reference_wrapper<const RadixTree<InvasivePtr<Postings>>>>
+std::optional<std::reference_wrapper<const RadixTree<InvasivePtr<Postings>>>>
 TextIndex::GetSuffix() const {
   if (!suffix_tree_) {
     return std::nullopt;

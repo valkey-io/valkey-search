@@ -68,8 +68,7 @@ class TextIndex {
   const RadixTree<InvasivePtr<Postings>>& GetPrefix() const;
   std::optional<std::reference_wrapper<RadixTree<InvasivePtr<Postings>>>>
   GetSuffix();
-  std::optional<
-      std::reference_wrapper<const RadixTree<InvasivePtr<Postings>>>>
+  std::optional<std::reference_wrapper<const RadixTree<InvasivePtr<Postings>>>>
   GetSuffix() const;
 
  private:

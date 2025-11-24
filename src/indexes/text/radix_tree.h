@@ -156,7 +156,7 @@ class InvasivePtr {
     }
   }
 
-  RefCountWrapper* ptr_;
+  RefCountWrapper* ptr_ = nullptr;
 };
 
 // Needed for std::visit
@@ -420,11 +420,9 @@ void RadixTree<Target>::SetTarget(absl::string_view word, Target new_target) {
   CHECK(!word.empty()) << "Can't add the target for an empty word";
   std::deque<Node*> node_path = GetOrCreateWordPath(word);
   Node* n = node_path.back();
-  if (new_target) {
-    n->target = new_target;
-  } else {
-    // Delete the word from the tree
-    n->target = Target{};
+  n->target = new_target;
+  // If the new target evaluates to false, delete the word from the tree
+  if (!new_target) {
     PostDeleteTreeCleanup(word, node_path);
   }
 }
@@ -438,11 +436,8 @@ Target RadixTree<Target>::MutateTarget(
 
   // Apply mutating function
   Target new_target = mutate(n->target);
-
-  if (new_target) {
-    n->target = new_target;
-  } else {
-    // Delete the word from the tree
+  n->target = new_target;
+  if (!new_target) {
     PostDeleteTreeCleanup(word, node_path);
   }
   return new_target;

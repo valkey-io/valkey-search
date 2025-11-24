@@ -188,7 +188,7 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
     // No common fields, advance this iterator which is lagging behind the
     // previous one.
     if (field_mask == 0) {
-      return i;  // No common fields, advance this iterator
+      return i;
     }
   }
   return std::nullopt;
@@ -198,10 +198,6 @@ bool ProximityIterator::NextPosition() {
   const size_t n = iters_.size();
   bool should_advance = current_position_.has_value();
   while (!DonePositions()) {
-    // TODO: Move after the `if (should_advance)` block.
-    for (size_t i = 0; i < n; ++i) {
-      positions_[i] = iters_[i]->CurrentPosition();
-    }
     if (should_advance) {
       should_advance = false;
       if (auto iter_to_advance = FindViolatingIterator()) {
@@ -216,6 +212,9 @@ bool ProximityIterator::NextPosition() {
         }
       }
       continue;
+    }
+    for (size_t i = 0; i < n; ++i) {
+      positions_[i] = iters_[i]->CurrentPosition();
     }
     // No violations mean that this positional combination is valid.
     if (!FindViolatingIterator().has_value()) {

@@ -91,7 +91,8 @@ class TextIterator {
   // Otherwise, returns false if we have exhausted all positions.
   // ASSERT: !DonePositions()
   virtual bool NextPosition() = 0;
-
+  // Returns the field mask for the current position.
+  // ASSERT: !DonePositions()
   virtual FieldMaskPredicate CurrentFieldMask() const = 0;
 };
 

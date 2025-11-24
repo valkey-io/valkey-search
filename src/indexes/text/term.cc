@@ -125,7 +125,7 @@ bool TermIterator::NextPosition() {
       uint32_t position = pos_iter.GetPosition();
       if (position < min_position) {
         min_position = position;
-        field = pos_iterators_[0].GetFieldMask();
+        field = pos_iter.GetFieldMask();
         found = true;
       }
     }

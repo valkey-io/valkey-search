@@ -360,11 +360,6 @@ class ComposedPredicate : public Predicate {
   std::optional<uint32_t> slop_;
   bool inorder_;
 };
-// content: world10   world11   blah
-// title:   blah      blah      world12
-
-// content:world10   content:world11   title:blah
-// default:world10   default:world11   title:blah
 
 }  // namespace valkey_search::query
 

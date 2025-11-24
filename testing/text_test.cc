@@ -83,7 +83,7 @@ class TextTest : public ::testing::Test {
   }
 
   // Helper to get postings for a token
-  std::shared_ptr<text::Postings> GetPostingsForToken(
+  text::InvasivePtr<text::Postings> GetPostingsForToken(
       const std::string& token,
       std::shared_ptr<text::TextIndexSchema> schema = nullptr) {
     auto active_schema = schema ? schema : text_index_schema_;

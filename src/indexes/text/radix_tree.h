@@ -75,6 +75,8 @@ class InvasivePtr {
  public:
   InvasivePtr() = default;
 
+  InvasivePtr(std::nullptr_t) noexcept : ptr_(nullptr) {}
+
   // Factory constructor
   template <typename... Args>
   static InvasivePtr Make(Args&&... args) {
@@ -94,6 +96,11 @@ class InvasivePtr {
       ptr_ = other.ptr_;
       Acquire();
     }
+    return *this;
+  }
+
+  InvasivePtr& operator=(std::nullptr_t) noexcept {
+    Clear();
     return *this;
   }
 
@@ -495,9 +502,8 @@ RadixTree<Target>::GetOrCreateWordPath(absl::string_view word) {
                   new_branches[path[0]] = std::move(child.second);
                 } else {
                   // Create an intermediate compressed node to the leaf
-                  new_branches[path[0]] = std::make_unique<Node>(
-                      // 0, Target{},
-                      std::pair{path.substr(1), std::move(child.second)});
+                  new_branches[path[0]] = std::make_unique<Node>(NodeChildren{
+                      std::pair{path.substr(1), std::move(child.second)}});
                 }
                 n->children = std::move(new_branches);
                 // Next iteration will hit the branching path for the same node
@@ -505,9 +511,9 @@ RadixTree<Target>::GetOrCreateWordPath(absl::string_view word) {
               } else {
                 // Partial match - split the compressed node into two at the
                 // branching point
-                std::unique_ptr<Node> new_node = std::make_unique<Node>(
-                    // 0, Target{},
-                    std::pair{path.substr(match), std::move(child.second)});
+                std::unique_ptr<Node> new_node =
+                    std::make_unique<Node>(NodeChildren{std::pair{
+                        path.substr(match), std::move(child.second)}});
                 child.first = path.substr(0, match);
                 child.second = std::move(new_node);
 

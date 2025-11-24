@@ -97,7 +97,8 @@ class ClusterMap {
   static std::shared_ptr<ClusterMap> CreateNewClusterMap(ValkeyModuleCtx* ctx);
 
   // get a vector of node targets based on the mode
-  std::vector<NodeInfo> GetTargets(FanoutTargetMode mode, bool prefer_local = false) const;
+  std::vector<NodeInfo> GetTargets(FanoutTargetMode mode,
+                                   bool prefer_local = false) const;
 
   std::chrono::steady_clock::time_point GetExpirationTime() const {
     return expiration_tp_;
@@ -146,8 +147,8 @@ class ClusterMap {
   std::vector<NodeInfo> all_targets_;
 
   // get a local node from a shard (prefers local nodes)
-  std::optional<NodeInfo> GetLocalNodeFromShard(const ShardInfo& shard,
-                                                 bool replica_only = false) const;
+  std::optional<NodeInfo> GetLocalNodeFromShard(
+      const ShardInfo& shard, bool replica_only = false) const;
 
   // get a random node from a shard
   NodeInfo GetRandomNodeFromShard(const ShardInfo& shard,

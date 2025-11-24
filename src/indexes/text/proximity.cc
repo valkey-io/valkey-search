@@ -217,6 +217,7 @@ bool ProximityIterator::NextPosition() {
       }
       continue;
     }
+    // No violations - so this positional combination is valid.
     if (!violating_iter.has_value()) {
       // Set the current field based on field mask intersection.
       current_field_mask_ = iters_[0]->CurrentFieldMask();

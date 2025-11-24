@@ -71,7 +71,7 @@ EvaluationResult TermPredicate::Evaluate(
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr);
 
-  if (iterator->DonePositions()) {
+  if (!iterator->HasCurrentPosition()) {
     return EvaluationResult(false);
   }
   return EvaluationResult(true, std::move(iterator));
@@ -121,7 +121,7 @@ EvaluationResult PrefixPredicate::Evaluate(
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr);
 
-  if (iterator->DonePositions()) {
+  if (!iterator->HasCurrentPosition()) {
     return EvaluationResult(false);
   }
 
@@ -176,7 +176,7 @@ EvaluationResult SuffixPredicate::Evaluate(
 
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr);
-  if (iterator->DonePositions()) {
+  if (!iterator->HasCurrentPosition()) {
     return EvaluationResult(false);
   }
 
@@ -351,6 +351,12 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     // Short-circuit for AND
     if (!rhs.matches) {
       return EvaluationResult(false);
+    }
+    // Prefilter mode: boolean-only evaluation, no iterators needed
+    if (evaluator.IsPrefilterMode()) {
+      VMSDK_LOG(WARNING, nullptr)
+          << "Composed and Prefilter mode evaluation. Skip proximity";
+      return EvaluationResult(true);
     }
 
     // Proximity check: Only if slop/inorder set and both sides have

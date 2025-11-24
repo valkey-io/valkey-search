@@ -116,9 +116,44 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
 namespace valkey_search::query {
 
 void* TextPredicate::Search(bool negate) const {
-  // TODO: Add logic to calculate the size based on number of keys estimated.
-  auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
+  //
+  size_t estimated_size = 0;
+  auto temp_fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
       0, GetTextIndexSchema()->GetTextIndex(), nullptr, GetFieldMask());
+  temp_fetcher->predicate_ = this;
+
+  auto iterator = BuildTextIterator(&temp_fetcher);
+  while (!iterator->DoneKeys()) {
+    estimated_size++;
+    iterator->NextKey();
+  }
+
+  // Log with predicate type detection
+  const char* predicate_type = "Unknown";
+  std::string predicate_value;
+
+  // Remove this temporary logging
+  if (auto* term = dynamic_cast<const TermPredicate*>(this)) {
+    predicate_type = "Term";
+    predicate_value = std::string(term->GetTextString());
+  } else if (auto* prefix = dynamic_cast<const PrefixPredicate*>(this)) {
+    predicate_type = "Prefix";
+    predicate_value = std::string(prefix->GetTextString());
+  } else if (auto* suffix = dynamic_cast<const SuffixPredicate*>(this)) {
+    predicate_type = "Suffix";
+    predicate_value = std::string(suffix->GetTextString());
+  }
+
+  VMSDK_LOG(WARNING, nullptr)
+      << "TextPredicate::Search - " << predicate_type << "Predicate"
+      << (predicate_value.empty() ? "" : " for '") << predicate_value
+      << (predicate_value.empty() ? "" : "'")
+      << " has estimated_size: " << estimated_size;
+
+  // For all other predicates (Prefix, Suffix, Proximity, etc.), size remains 0
+  auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
+      estimated_size, GetTextIndexSchema()->GetTextIndex(), nullptr,
+      GetFieldMask());
   fetcher->predicate_ = this;
   return fetcher.release();
 }

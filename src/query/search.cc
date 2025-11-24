@@ -124,8 +124,14 @@ size_t EvaluateFilterAsPrimary(
     const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     bool negate) {
+  VMSDK_LOG(WARNING, nullptr)
+      << "EvaluateFilterAsPrimary : Evaluating filter as primary: ";
+
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {
+    VMSDK_LOG(WARNING, nullptr)
+        << "EvaluateFilterAsPrimary: In kComposedAnd or composedOR "
+        << entries_fetchers.size();
     auto composed_predicate =
         dynamic_cast<const ComposedPredicate *>(predicate);
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>
@@ -156,6 +162,8 @@ size_t EvaluateFilterAsPrimary(
     auto tag_predicate = dynamic_cast<const TagPredicate *>(predicate);
     auto fetcher = tag_predicate->GetIndex()->Search(*tag_predicate, negate);
     size_t size = fetcher->Size();
+    VMSDK_LOG(WARNING, nullptr)
+        << "EvaluateFilterAsPrimary: Adding TAG fetcher, size is  " << size;
     entries_fetchers.push(std::move(fetcher));
     return size;
   }
@@ -164,6 +172,8 @@ size_t EvaluateFilterAsPrimary(
     auto fetcher =
         numeric_predicate->GetIndex()->Search(*numeric_predicate, negate);
     size_t size = fetcher->Size();
+    VMSDK_LOG(WARNING, nullptr)
+        << "EvaluateFilterAsPrimary: Adding NUMERIC fetcher. size is  " << size;
     entries_fetchers.push(std::move(fetcher));
     return size;
   }
@@ -173,11 +183,15 @@ size_t EvaluateFilterAsPrimary(
         static_cast<indexes::EntriesFetcherBase *>(
             text_predicate->Search(negate)));
     size_t size = fetcher->Size();
+    VMSDK_LOG(WARNING, nullptr)
+        << "EvaluateFilterAsPrimary: Adding TEXT fetcher,. size is  " << size;
     entries_fetchers.push(std::move(fetcher));
     return size;
   }
   if (predicate->GetType() == PredicateType::kNegate) {
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
+    VMSDK_LOG(WARNING, nullptr)
+        << "EvaluateFilterAsPrimary: Adding Negate fetcher,.";
     return EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
                                    entries_fetchers, !negate);
   }
@@ -195,22 +209,35 @@ void EvaluatePrefilteredKeys(
     absl::AnyInvocable<bool(const InternedStringPtr &,
                             absl::flat_hash_set<const char *> &)>
         appender) {
+  VMSDK_LOG(WARNING, nullptr) << "In EvaluatePrefilteredKeys with "
+                              << entries_fetchers.size() << " fetchers";
   absl::flat_hash_set<const char *> result_keys;
   auto predicate = parameters.filter_parse_results.root_predicate.get();
   indexes::PrefilterEvaluator evaluator;
   while (!entries_fetchers.empty()) {
     auto fetcher = std::move(entries_fetchers.front());
     entries_fetchers.pop();
+
+    std::string fetcher_type =
+        typeid(*fetcher).name();  // Gets mangled type name
+    VMSDK_LOG(WARNING, nullptr) << "Processing fetcher type: " << fetcher_type
+                                << ", size: " << fetcher->Size();
     auto iterator = fetcher->Begin();
     while (!iterator->Done()) {
       const auto &key = **iterator;
       // TODO: add a bloom filter to ensure distinct keys are evaluated
       // only once.
+      VMSDK_LOG(WARNING, nullptr) << "  Candidate key: " << key->Str();
       if (!result_keys.contains(key->Str().data()) &&
           evaluator.Evaluate(*predicate, key)) {
+        VMSDK_LOG(WARNING, nullptr) << "    -> PASSED, adding to results";
         if (appender(key, result_keys)) {
           result_keys.insert(key->Str().data());
-        }
+        }  //}
+      } else if (result_keys.contains(key->Str().data())) {
+        VMSDK_LOG(WARNING, nullptr) << "    -> SKIPPED (duplicate)";
+      } else {
+        VMSDK_LOG(WARNING, nullptr) << "    -> FAILED evaluation";
       }
       iterator->Next();
       if (parameters.cancellation_token->IsCancelled()) {
@@ -218,6 +245,8 @@ void EvaluatePrefilteredKeys(
       }
     }
   }
+  VMSDK_LOG(WARNING, nullptr)
+      << "EvaluatePrefilteredKeys complete. Total keys: " << result_keys.size();
 }
 
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
@@ -369,6 +398,8 @@ absl::StatusOr<std::deque<indexes::Neighbor>> SearchNonVectorQuery(
       [&neighbors, &parameters](
           const InternedStringPtr &key,
           absl::flat_hash_set<const char *> &top_keys) -> bool {
+    VMSDK_LOG(WARNING, nullptr)
+        << "Adding key to neighbors: " << key->Str();  // remove
     neighbors.push_back(indexes::Neighbor{key, 0.0f});
     return true;
   };
@@ -376,6 +407,9 @@ absl::StatusOr<std::deque<indexes::Neighbor>> SearchNonVectorQuery(
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
                           std::move(results_appender));
 
+  VMSDK_LOG(WARNING, nullptr)
+      << "neighbors size after EvaluatePrefilteredKeys: "
+      << neighbors.size();  // msremove
   return neighbors;
 }
 

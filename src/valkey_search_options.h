@@ -43,6 +43,9 @@ const config::Boolean& GetSkipIndexLoad();
 /// Return a mutable reference for testing
 config::Boolean& GetSkipIndexLoadMutable();
 
+/// Enables the pre-filter evaluation in Prefilter
+config::Boolean& GetEnableTextPrefilter();
+
 /// Return the log level
 config::Enum& GetLogLevel();
 

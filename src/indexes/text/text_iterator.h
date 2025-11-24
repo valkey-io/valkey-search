@@ -43,7 +43,7 @@ class TextIterator {
   virtual ~TextIterator() = default;
 
   // The field which the iterator was initialized to search for.
-  virtual FieldMaskPredicate FieldMask() const = 0;
+  virtual FieldMaskPredicate QueryFieldMask() const = 0;
 
   // Key-level iteration
   // Returns true if there is a match (i.e. `CurrentKey()` is valid) provided

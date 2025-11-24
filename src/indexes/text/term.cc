@@ -10,9 +10,9 @@
 namespace valkey_search::indexes::text {
 
 TermIterator::TermIterator(std::vector<Postings::KeyIterator>&& key_iterators,
-                           const FieldMaskPredicate field_mask,
+                           const FieldMaskPredicate query_field_mask,
                            const InternedStringSet* untracked_keys)
-    : field_mask_(field_mask),
+    : query_field_mask_(query_field_mask),
       key_iterators_(std::move(key_iterators)),
       pos_iterators_(),
       current_key_(nullptr),
@@ -25,7 +25,9 @@ TermIterator::TermIterator(std::vector<Postings::KeyIterator>&& key_iterators,
   }
 }
 
-FieldMaskPredicate TermIterator::FieldMask() const { return field_mask_; }
+FieldMaskPredicate TermIterator::QueryFieldMask() const {
+  return query_field_mask_;
+}
 
 bool TermIterator::DoneKeys() const {
   for (const auto& key_iter : key_iterators_) {
@@ -44,7 +46,7 @@ bool TermIterator::FindMinimumValidKey() {
   current_position_ = std::nullopt;
   current_field_mask_ = 0ULL;
   for (auto& key_iter : key_iterators_) {
-    while (key_iter.IsValid() && !key_iter.ContainsFields(field_mask_)) {
+    while (key_iter.IsValid() && !key_iter.ContainsFields(query_field_mask_)) {
       key_iter.NextKey();
     }
     if (key_iter.IsValid()) {
@@ -115,7 +117,8 @@ bool TermIterator::NextPosition() {
   bool found = false;
   FieldMaskPredicate field;
   for (auto& pos_iter : pos_iterators_) {
-    while (pos_iter.IsValid() && !(pos_iter.GetFieldMask() & field_mask_)) {
+    while (pos_iter.IsValid() &&
+           !(pos_iter.GetFieldMask() & query_field_mask_)) {
       pos_iter.NextPosition();
     }
     if (pos_iter.IsValid()) {

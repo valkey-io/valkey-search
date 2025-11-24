@@ -337,8 +337,12 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     // not numeric/tag.
     if ((slop_.has_value() || inorder_) && lhs.filter_iterator &&
         rhs.filter_iterator) {
-      // Get field_mask from lhs iterator
-      uint64_t field_mask = lhs.filter_iterator->FieldMask();
+      // Get field_mask from lhs and rhs iterators
+      uint64_t query_field_mask = lhs.filter_iterator->QueryFieldMask() &
+                                  rhs.filter_iterator->QueryFieldMask();
+      if (query_field_mask == 0) {
+        return EvaluationResult(false);
+      }
       // Create vector of iterators for ProximityIterator
       std::vector<std::unique_ptr<indexes::text::TextIterator>> iterators;
       iterators.push_back(std::move(lhs.filter_iterator));
@@ -346,7 +350,7 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
       // Create ProximityIterator to check proximity
       auto proximity_iterator =
           std::make_unique<indexes::text::ProximityIterator>(
-              std::move(iterators), slop_, inorder_, field_mask, nullptr);
+              std::move(iterators), slop_, inorder_, query_field_mask, nullptr);
       // Check if any valid proximity matches exist
       if (proximity_iterator->DoneKeys() ||
           proximity_iterator->DonePositions()) {

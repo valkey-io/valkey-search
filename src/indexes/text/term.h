@@ -42,7 +42,7 @@ class TermIterator : public TextIterator {
                const FieldMaskPredicate field_mask,
                const InternedStringSet* untracked_keys = nullptr);
   /* Implementation of TextIterator APIs */
-  FieldMaskPredicate FieldMask() const override;
+  FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
   bool DoneKeys() const override;
   const Key& CurrentKey() const override;
@@ -59,7 +59,7 @@ class TermIterator : public TextIterator {
   // the current position
 
  private:
-  const FieldMaskPredicate field_mask_;
+  const FieldMaskPredicate query_field_mask_;
   std::vector<Postings::KeyIterator> key_iterators_;
   std::vector<Postings::PositionIterator> pos_iterators_;
   Key current_key_;

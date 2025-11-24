@@ -4,7 +4,8 @@ namespace valkey_search::indexes::text {
 
 ProximityIterator::ProximityIterator(
     std::vector<std::unique_ptr<TextIterator>>&& iters,
-    std::optional<uint32_t> slop, bool in_order, FieldMaskPredicate field_mask,
+    std::optional<uint32_t> slop, bool in_order,
+    FieldMaskPredicate query_field_mask,
     const InternedStringSet* untracked_keys)
     : iters_(std::move(iters)),
       slop_(slop),
@@ -13,7 +14,7 @@ ProximityIterator::ProximityIterator(
       current_key_(nullptr),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
-      field_mask_(field_mask) {
+      query_field_mask_(query_field_mask) {
   CHECK(!iters_.empty()) << "must have at least one text iterator";
   CHECK(slop_.has_value() || in_order_)
       << "ProximityIterator requires either slop or inorder=true";
@@ -24,7 +25,9 @@ ProximityIterator::ProximityIterator(
   NextKey();
 }
 
-FieldMaskPredicate ProximityIterator::FieldMask() const { return field_mask_; }
+FieldMaskPredicate ProximityIterator::QueryFieldMask() const {
+  return query_field_mask_;
+}
 
 bool ProximityIterator::DoneKeys() const {
   for (auto& iter : iters_) {
@@ -153,8 +156,8 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
       }
     }
     // Check for field mask intersection (terms exist in the same field)
-    FieldMaskPredicate field_mask = iters_[0]->CurrentFieldMask();
-    for (size_t i = 1; i < n; ++i) {
+    FieldMaskPredicate field_mask = query_field_mask_;
+    for (size_t i = 0; i < n; ++i) {
       field_mask &= iters_[i]->CurrentFieldMask();
       // No common fields, advance this iterator which is lagging behind the
       // previous one.
@@ -169,7 +172,7 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
     pos_with_idx_[i] = {positions_[i].start, i};
   }
   std::sort(pos_with_idx_.begin(), pos_with_idx_.end());
-  FieldMaskPredicate field_mask = iters_[0]->CurrentFieldMask();
+  FieldMaskPredicate field_mask = query_field_mask_;
   for (size_t i = 0; i < n - 1; ++i) {
     size_t curr_idx = pos_with_idx_[i].second;
     size_t next_idx = pos_with_idx_[i + 1].second;

@@ -9,6 +9,7 @@ This file contains large-scale tests for full text search indexing performance.
 These tests create large volumes of documents to test indexing scalability.
 """
 
+@pytest.mark.skip(reason="Only used for manual testing currently")
 class TestFullTextSpacePerformance(ValkeySearchTestCaseBase):
     # Class variables to store memory usage across tests
     test1_memory_bytes = None

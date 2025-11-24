@@ -52,6 +52,7 @@ InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
 InvasivePtr<Postings> RemoveKeyFromPostings(
     InvasivePtr<Postings> existing_postings, const InternedStringPtr& key) {
   CHECK(existing_postings) << "Per-key tree became unaligned";
+  auto& metadata = current_schema_->GetMetadata();
 
   // Get the position map before removal to track metadata
   auto key_iter = existing_postings->GetKeyIterator();
@@ -69,7 +70,6 @@ InvasivePtr<Postings> RemoveKeyFromPostings(
     }
 
     // Update metadata
-    auto& metadata = current_schema_->GetMetadata();
     metadata.total_positions -= position_count;
     metadata.total_term_frequency -= term_frequency;
   }
@@ -77,6 +77,7 @@ InvasivePtr<Postings> RemoveKeyFromPostings(
   existing_postings->RemoveKey(key);
 
   if (existing_postings->IsEmpty()) {
+    metadata.num_unique_terms--;
     existing_postings.Clear();
   }
   return existing_postings;

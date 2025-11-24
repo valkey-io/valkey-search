@@ -930,7 +930,7 @@ class TestFullText(ValkeySearchTestCaseBase):
         result = client.execute_command("FT.SEARCH", "idx", 'word10 word11 word12', "INORDER")
         assert (result[0], result[1]) == (1, b"doc:7")
         # Validate the usage of default / specific field identifier combinations for no matches.
-        # For this to pass, it is not just sufficient for there to be field allignment in the search
+        # For this to pass, it is not just sufficient for there to be field alignment in the search
         # (based on documents), but it also requires that the searches use the field from the query.        
         result = client.execute_command("FT.SEARCH", "idx", 'word10 @content:word11 @title:word12', "INORDER")
         assert result[0] == 0

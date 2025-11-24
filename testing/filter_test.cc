@@ -24,75 +24,6 @@ namespace valkey_search {
 
 namespace {
 
-// Helper function to print predicate tree structure using DFS
-std::string PrintPredicateTree(const query::Predicate* predicate,
-                               int indent = 0) {
-  std::string result;
-  std::string indent_str(indent * 2, ' ');
-
-  if (!predicate) {
-    return result;
-  }
-
-  switch (predicate->GetType()) {
-    case query::PredicateType::kComposedAnd: {
-      const auto* composed =
-          static_cast<const query::ComposedPredicate*>(predicate);
-      result += indent_str + "AND\n";
-      result += indent_str + "{\n";
-      for (const auto& child : composed->GetChildren()) {
-        result += PrintPredicateTree(child.get(), indent + 1);
-      }
-      result += indent_str + "}\n";
-      break;
-    }
-    case query::PredicateType::kComposedOr: {
-      const auto* composed =
-          static_cast<const query::ComposedPredicate*>(predicate);
-      result += indent_str + "OR\n";
-      result += indent_str + "{\n";
-      for (const auto& child : composed->GetChildren()) {
-        result += PrintPredicateTree(child.get(), indent + 1);
-      }
-      result += indent_str + "}\n";
-      break;
-    }
-    case query::PredicateType::kNegate: {
-      const auto* negate =
-          static_cast<const query::NegatePredicate*>(predicate);
-      result += indent_str + "NOT\n";
-      result += indent_str + "{\n";
-      result += PrintPredicateTree(negate->GetPredicate(), indent + 1);
-      result += indent_str + "}\n";
-      break;
-    }
-    case query::PredicateType::kNumeric: {
-      const auto* numeric =
-          static_cast<const query::NumericPredicate*>(predicate);
-      result +=
-          indent_str + "NUMERIC(" + std::string(numeric->GetAlias()) + ")\n";
-      break;
-    }
-    case query::PredicateType::kTag: {
-      const auto* tag = static_cast<const query::TagPredicate*>(predicate);
-      result += indent_str + "TAG(" + std::string(tag->GetAlias()) + ")\n";
-      break;
-    }
-    case query::PredicateType::kText: {
-      const auto* text = static_cast<const query::TextPredicate*>(predicate);
-      // Get field_mask from the text predicate
-      std::string field_mask_str = std::to_string(text->GetFieldMask());
-      result += indent_str + "TEXT(" + field_mask_str + ")\n";
-      break;
-    }
-    default:
-      result += indent_str + "UNKNOWN\n";
-      break;
-  }
-
-  return result;
-}
-
 using testing::TestParamInfo;
 using testing::ValuesIn;
 
@@ -195,11 +126,11 @@ TEST_P(FilterTest, ParseParams) {
 
   // Print both expected and actual structures if expected is provided
   if (!test_case.expected_tree_structure.empty()) {
-    // std::cout << "Filter: " << test_case.filter << std::endl;
-    // std::cout << "Expected Tree Structure:" << std::endl;
-    // std::cout << test_case.expected_tree_structure << std::endl;
-    // std::cout << "Actual Tree Structure:" << std::endl;
-    // std::cout << actual_tree << std::endl;
+    std::cout << "Filter: " << test_case.filter << std::endl;
+    std::cout << "Expected Tree Structure:" << std::endl;
+    std::cout << test_case.expected_tree_structure << std::endl;
+    std::cout << "Actual Tree Structure:" << std::endl;
+    std::cout << actual_tree << std::endl;
 
     // Compare expected vs actual tree structure
     EXPECT_EQ(actual_tree, test_case.expected_tree_structure)
@@ -242,8 +173,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@num_field_2.0:[1.5 2.5] @num_field_1.5:[1.0 2.0]",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
+            .expected_tree_structure = "AND{\n"
                                        "  NUMERIC(num_field_2.0)\n"
                                        "  NUMERIC(num_field_1.5)\n"
                                        "}\n",
@@ -253,8 +183,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@num_field_2.0:[2 2.5] @num_field_1.5:[1.0 1.5]",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
+            .expected_tree_structure = "AND{\n"
                                        "  NUMERIC(num_field_2.0)\n"
                                        "  NUMERIC(num_field_1.5)\n"
                                        "}\n",
@@ -288,8 +217,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@num_field_2.0:[2.5 2.5] @num_field_1.5:[1.0 1.5]",
             .create_success = true,
             .evaluate_success = false,
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
+            .expected_tree_structure = "AND{\n"
                                        "  NUMERIC(num_field_2.0)\n"
                                        "  NUMERIC(num_field_1.5)\n"
                                        "}\n",
@@ -299,8 +227,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@num_field_2.0:[1 2] @num_field_1.5:[1.0 1.5]",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
+            .expected_tree_structure = "AND{\n"
                                        "  NUMERIC(num_field_2.0)\n"
                                        "  NUMERIC(num_field_1.5)\n"
                                        "}\n",
@@ -310,8 +237,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@num_field_2.0:[(2 2.5] @num_field_1.5:[1.0 1.5]",
             .create_success = true,
             .evaluate_success = false,
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
+            .expected_tree_structure = "AND{\n"
                                        "  NUMERIC(num_field_2.0)\n"
                                        "  NUMERIC(num_field_1.5)\n"
                                        "}\n",
@@ -321,8 +247,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@num_field_2.0:[1 (2.0] @num_field_1.5:[1.0 1.5]",
             .create_success = true,
             .evaluate_success = false,
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
+            .expected_tree_structure = "AND{\n"
                                        "  NUMERIC(num_field_2.0)\n"
                                        "  NUMERIC(num_field_1.5)\n"
                                        "}\n",
@@ -332,8 +257,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@num_field_2.0:[-inf 2.5] @num_field_1.5:[1.0 1.5]",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
+            .expected_tree_structure = "AND{\n"
                                        "  NUMERIC(num_field_2.0)\n"
                                        "  NUMERIC(num_field_1.5)\n"
                                        "}\n",
@@ -343,8 +267,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = " @num_field_1.5:[1.0 1.5]  @num_field_2.0:[1 +inf] ",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
+            .expected_tree_structure = "AND{\n"
                                        "  NUMERIC(num_field_1.5)\n"
                                        "  NUMERIC(num_field_2.0)\n"
                                        "}\n",
@@ -354,8 +277,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = " @num_field_1.5:[1.0 1.5]  @num_field_2.0:[1 inf] ",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
+            .expected_tree_structure = "AND{\n"
                                        "  NUMERIC(num_field_1.5)\n"
                                        "  NUMERIC(num_field_2.0)\n"
                                        "}\n",
@@ -365,10 +287,8 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = " -@num_field_1.5:[1.0 1.4]  @num_field_2.0:[1 +inf] ",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
-                                       "  NOT\n"
-                                       "  {\n"
+            .expected_tree_structure = "AND{\n"
+                                       "  NOT{\n"
                                        "    NUMERIC(num_field_1.5)\n"
                                        "  }\n"
                                        "  NUMERIC(num_field_2.0)\n"
@@ -379,14 +299,11 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = " -@num_field_1.5:[1.0 1.4]  -@num_field_2.0:[3 +inf] ",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
-                                       "  NOT\n"
-                                       "  {\n"
+            .expected_tree_structure = "AND{\n"
+                                       "  NOT{\n"
                                        "    NUMERIC(num_field_1.5)\n"
                                        "  }\n"
-                                       "  NOT\n"
-                                       "  {\n"
+                                       "  NOT{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
                                        "}\n",
@@ -396,14 +313,11 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = " -@num_field_1.5:[1.0 1.5]  -@num_field_2.0:[3 +inf] ",
             .create_success = true,
             .evaluate_success = false,
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
-                                       "  NOT\n"
-                                       "  {\n"
+            .expected_tree_structure = "AND{\n"
+                                       "  NOT{\n"
                                        "    NUMERIC(num_field_1.5)\n"
                                        "  }\n"
-                                       "  NOT\n"
-                                       "  {\n"
+                                       "  NOT{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
                                        "}\n",
@@ -413,14 +327,11 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = " -@num_field_1.5:[1.0 1.4]  -@num_field_2.0:[2 +inf] ",
             .create_success = true,
             .evaluate_success = false,
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
-                                       "  NOT\n"
-                                       "  {\n"
+            .expected_tree_structure = "AND{\n"
+                                       "  NOT{\n"
                                        "    NUMERIC(num_field_1.5)\n"
                                        "  }\n"
-                                       "  NOT\n"
-                                       "  {\n"
+                                       "  NOT{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
                                        "}\n",
@@ -430,14 +341,11 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = " -@num_field_1.5:[1.0 1.5]  -@num_field_2.0:[2 +inf] ",
             .create_success = true,
             .evaluate_success = false,
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
-                                       "  NOT\n"
-                                       "  {\n"
+            .expected_tree_structure = "AND{\n"
+                                       "  NOT{\n"
                                        "    NUMERIC(num_field_1.5)\n"
                                        "  }\n"
-                                       "  NOT\n"
-                                       "  {\n"
+                                       "  NOT{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
                                        "}\n",
@@ -447,14 +355,11 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = " -@num_field_1.5:[1.0 1.4] | -@num_field_2.0:[2 +inf] ",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "OR\n"
-                                       "{\n"
-                                       "  NOT\n"
-                                       "  {\n"
+            .expected_tree_structure = "OR{\n"
+                                       "  NOT{\n"
                                        "    NUMERIC(num_field_1.5)\n"
                                        "  }\n"
-                                       "  NOT\n"
-                                       "  {\n"
+                                       "  NOT{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
                                        "}\n",
@@ -464,14 +369,11 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = " -@num_field_1.5:[1.0 1.6] | -@num_field_2.0:[3 +inf] ",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "OR\n"
-                                       "{\n"
-                                       "  NOT\n"
-                                       "  {\n"
+            .expected_tree_structure = "OR{\n"
+                                       "  NOT{\n"
                                        "    NUMERIC(num_field_1.5)\n"
                                        "  }\n"
-                                       "  NOT\n"
-                                       "  {\n"
+                                       "  NOT{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
                                        "}\n",
@@ -481,14 +383,11 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = " -@num_field_1.5:[1.0 1.5] | -@num_field_2.0:[2 +inf] ",
             .create_success = true,
             .evaluate_success = false,
-            .expected_tree_structure = "OR\n"
-                                       "{\n"
-                                       "  NOT\n"
-                                       "  {\n"
+            .expected_tree_structure = "OR{\n"
+                                       "  NOT{\n"
                                        "    NUMERIC(num_field_1.5)\n"
                                        "  }\n"
-                                       "  NOT\n"
-                                       "  {\n"
+                                       "  NOT{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
                                        "}\n",
@@ -498,11 +397,9 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = " @num_field_1.5:[1.0 1.5]  -@num_field_2.0:[5 +inf] ",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
+            .expected_tree_structure = "AND{\n"
                                        "  NUMERIC(num_field_1.5)\n"
-                                       "  NOT\n"
-                                       "  {\n"
+                                       "  NOT{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
                                        "}\n",
@@ -512,8 +409,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = " @num_field_1.5:[1.0 1.4]  @num_field_2.0:[3 +inf] ",
             .create_success = true,
             .evaluate_success = false,
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
+            .expected_tree_structure = "AND{\n"
                                        "  NUMERIC(num_field_1.5)\n"
                                        "  NUMERIC(num_field_2.0)\n"
                                        "}\n",
@@ -523,10 +419,8 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = " -(@num_field_1.5:[1.0 1.4]  @num_field_2.0:[3 +inf]) ",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "NOT\n"
-                                       "{\n"
-                                       "  AND\n"
-                                       "  {\n"
+            .expected_tree_structure = "NOT{\n"
+                                       "  AND{\n"
                                        "    NUMERIC(num_field_1.5)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
@@ -538,12 +432,9 @@ INSTANTIATE_TEST_SUITE_P(
                 " - ( - (@num_field_1.5:[1.0 1.4]  @num_field_2.0:[3 +inf]) )",
             .create_success = true,
             .evaluate_success = false,
-            .expected_tree_structure = "NOT\n"
-                                       "{\n"
-                                       "  NOT\n"
-                                       "  {\n"
-                                       "    AND\n"
-                                       "    {\n"
+            .expected_tree_structure = "NOT{\n"
+                                       "  NOT{\n"
+                                       "    AND{\n"
                                        "      NUMERIC(num_field_1.5)\n"
                                        "      NUMERIC(num_field_2.0)\n"
                                        "    }\n"
@@ -555,10 +446,8 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = " -(@num_field_1.5:[1.0 1.4] | @num_field_2.0:[3 +inf]) ",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "NOT\n"
-                                       "{\n"
-                                       "  OR\n"
-                                       "  {\n"
+            .expected_tree_structure = "NOT{\n"
+                                       "  OR{\n"
                                        "    NUMERIC(num_field_1.5)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
@@ -569,10 +458,8 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = " -(@num_field_1.5:[1.0,2] | @num_field_2.0:[3 +inf]) ",
             .create_success = true,
             .evaluate_success = false,
-            .expected_tree_structure = "NOT\n"
-                                       "{\n"
-                                       "  OR\n"
-                                       "  {\n"
+            .expected_tree_structure = "NOT{\n"
+                                       "  OR{\n"
                                        "    NUMERIC(num_field_1.5)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
@@ -597,8 +484,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "(@num_field_1.5:[5.0 6.5]) | (@num_field_1.5:[1.0 1.5])",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "OR\n"
-                                       "{\n"
+            .expected_tree_structure = "OR{\n"
                                        "  NUMERIC(num_field_1.5)\n"
                                        "  NUMERIC(num_field_1.5)\n"
                                        "}\n",
@@ -609,8 +495,7 @@ INSTANTIATE_TEST_SUITE_P(
                       "1.5]) ) ) ",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "OR\n"
-                                       "{\n"
+            .expected_tree_structure = "OR{\n"
                                        "  NUMERIC(num_field_1.5)\n"
                                        "  NUMERIC(num_field_1.5)\n"
                                        "}\n",
@@ -684,8 +569,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "-@tag_field_with_space:{tag1 , tag 2}",
             .create_success = true,
             .evaluate_success = false,
-            .expected_tree_structure = "NOT\n"
-                                       "{\n"
+            .expected_tree_structure = "NOT{\n"
                                        "  TAG(tag_field_with_space)\n"
                                        "}\n",
         },
@@ -701,10 +585,8 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[-inf 2.5]",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "OR\n"
-                                       "{\n"
-                                       "  AND\n"
-                                       "  {\n"
+            .expected_tree_structure = "OR{\n"
+                                       "  AND{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
@@ -717,10 +599,8 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[23 25]",
             .create_success = true,
             .evaluate_success = false,
-            .expected_tree_structure = "OR\n"
-                                       "{\n"
-                                       "  AND\n"
-                                       "  {\n"
+            .expected_tree_structure = "OR{\n"
+                                       "  AND{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
@@ -733,10 +613,8 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[-inf 2.5]",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "OR\n"
-                                       "{\n"
-                                       "  AND\n"
-                                       "  {\n"
+            .expected_tree_structure = "OR{\n"
+                                       "  AND{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
@@ -749,10 +627,8 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[23 25]",
             .create_success = true,
             .evaluate_success = false,
-            .expected_tree_structure = "OR\n"
-                                       "{\n"
-                                       "  AND\n"
-                                       "  {\n"
+            .expected_tree_structure = "OR{\n"
+                                       "  AND{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
@@ -765,10 +641,8 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[0 2.5]",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "OR\n"
-                                       "{\n"
-                                       "  AND\n"
-                                       "  {\n"
+            .expected_tree_structure = "OR{\n"
+                                       "  AND{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
@@ -781,15 +655,12 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[0 2.5] @num_field_2.0:[0 2.5]",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "OR\n"
-                                       "{\n"
-                                       "  AND\n"
-                                       "  {\n"
+            .expected_tree_structure = "OR{\n"
+                                       "  AND{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
-                                       "  AND\n"
-                                       "  {\n"
+                                       "  AND{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
@@ -801,15 +672,12 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[23 25] @num_field_2.0:[0 2.5]",
             .create_success = true,
             .evaluate_success = false,
-            .expected_tree_structure = "OR\n"
-                                       "{\n"
-                                       "  AND\n"
-                                       "  {\n"
+            .expected_tree_structure = "OR{\n"
+                                       "  AND{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
-                                       "  AND\n"
-                                       "  {\n"
+                                       "  AND{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
@@ -821,15 +689,12 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[0 2.5] @num_field_2.0:[23 25]",
             .create_success = true,
             .evaluate_success = false,
-            .expected_tree_structure = "OR\n"
-                                       "{\n"
-                                       "  AND\n"
-                                       "  {\n"
+            .expected_tree_structure = "OR{\n"
+                                       "  AND{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
-                                       "  AND\n"
-                                       "  {\n"
+                                       "  AND{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
@@ -841,15 +706,12 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[0 2.5] @num_field_2.0:[23 25]",
             .create_success = true,
             .evaluate_success = false,
-            .expected_tree_structure = "OR\n"
-                                       "{\n"
-                                       "  AND\n"
-                                       "  {\n"
+            .expected_tree_structure = "OR{\n"
+                                       "  AND{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
-                                       "  AND\n"
-                                       "  {\n"
+                                       "  AND{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
@@ -861,15 +723,12 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[0 2.5] @num_field_2.0:[23 25]",
             .create_success = true,
             .evaluate_success = false,
-            .expected_tree_structure = "OR\n"
-                                       "{\n"
-                                       "  AND\n"
-                                       "  {\n"
+            .expected_tree_structure = "OR{\n"
+                                       "  AND{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
-                                       "  AND\n"
-                                       "  {\n"
+                                       "  AND{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
@@ -881,15 +740,12 @@ INSTANTIATE_TEST_SUITE_P(
                       "@num_field_2.0:[0 2.5] @num_field_2.0:[23 25]",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "OR\n"
-                                       "{\n"
-                                       "  AND\n"
-                                       "  {\n"
+            .expected_tree_structure = "OR{\n"
+                                       "  AND{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
-                                       "  AND\n"
-                                       "  {\n"
+                                       "  AND{\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "    NUMERIC(num_field_2.0)\n"
                                        "  }\n"
@@ -900,14 +756,14 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@text_field1:word",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "TEXT(1)\n",
+            .expected_tree_structure = "TEXT-TERM(\"word\", field_mask=1)\n",
         },
         {
             .test_name = "exact_prefix",
             .filter = "@text_field1:word*",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "TEXT(1)\n",
+            .expected_tree_structure = "TEXT-PREFIX(\"word\", field_mask=1)\n",
         },
         {
             .test_name = "exact_suffix",
@@ -926,27 +782,39 @@ INSTANTIATE_TEST_SUITE_P(
         {
             .test_name = "exact_fuzzy1",
             .filter = "@text_field1:%word%",
-            .create_success = false,
-            .create_expected_error_message = "Unsupported query operation",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure =
+                "TEXT-FUZZY(\"word\", distance=1, field_mask=1)\n",
         },
         {
             .test_name = "exact_fuzzy2",
             .filter = "@text_field1:%%word%%",
-            .create_success = false,
-            .create_expected_error_message = "Unsupported query operation",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure =
+                "TEXT-FUZZY(\"word\", distance=2, field_mask=1)\n",
         },
         {
             .test_name = "exact_fuzzy3",
             .filter = "@text_field1:%%%word%%%",
-            .create_success = false,
-            .create_expected_error_message = "Unsupported query operation",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure =
+                "TEXT-FUZZY(\"word\", distance=3, field_mask=1)\n",
         },
         {
             .test_name = "proximity1",
             .filter = "@text_field1:\"hello my name is\"",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "TEXT(1)\n",
+            .expected_tree_structure =
+                "TEXT-PROXIMITY(field_mask=1, slop=0, inorder=true){\n"
+                "  TEXT-TERM(\"hello\", field_mask=1)\n"
+                "  TEXT-TERM(\"my\", field_mask=1)\n"
+                "  TEXT-TERM(\"name\", field_mask=1)\n"
+                "  TEXT-TERM(\"is\", field_mask=1)\n"
+                "}\n",
         },
         {
             .test_name = "proximity2",
@@ -954,12 +822,11 @@ INSTANTIATE_TEST_SUITE_P(
                       "@text_field2:is",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure = "AND\n"
-                                       "{\n"
-                                       "  TEXT(1)\n"
-                                       "  TEXT(2)\n"
-                                       "  TEXT(1)\n"
-                                       "  TEXT(2)\n"
+            .expected_tree_structure = "AND{\n"
+                                       "  TEXT-TERM(\"hello\", field_mask=1)\n"
+                                       "  TEXT-TERM(\"my\", field_mask=2)\n"
+                                       "  TEXT-TERM(\"name\", field_mask=1)\n"
+                                       "  TEXT-TERM(\"is\", field_mask=2)\n"
                                        "}\n",
         },
         {
@@ -1040,8 +907,8 @@ INSTANTIATE_TEST_SUITE_P(
                 "@num_field_2.0:[10 100] @text_field1:hello | "
                 "@tag_field_1:{books} @text_field2:Neural | "
                 "@text_field1:%%%word%%% @text_field2:network",
-            .create_success = false,
-            .create_expected_error_message = "Unsupported query operation",
+            .create_success = true,
+            .evaluate_success = true,
         },
         {
             .test_name = "invalid_fuzzy1",

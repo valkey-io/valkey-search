@@ -93,6 +93,10 @@ class FilterParser {
       absl::string_view tag_string, indexes::Tag* tag_index) const;
 };
 
+// Helper function to print predicate tree structure using DFS
+std::string PrintPredicateTree(const query::Predicate* predicate,
+                               int indent = 0);
+
 namespace options {
 
 /// Return the value of the Query String Depth configuration

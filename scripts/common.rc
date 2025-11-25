@@ -276,6 +276,7 @@ function run_with_timeout() {
     fi
     
     # Start the command in background
+    echo "Starting test in run_with_timeout"
     "$@" &
     local pid=$!
     
@@ -299,7 +300,7 @@ function run_with_timeout() {
     # Wait for the command to complete
     wait "$pid" 2>/dev/null
     local exit_code=$?
-    
+    echo "Finish test in run_with_timeout ${exit_code}"
     # Kill the timer if command finished
     kill "$timer_pid" 2>/dev/null
     wait "$timer_pid" 2>/dev/null

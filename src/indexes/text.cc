@@ -122,7 +122,7 @@ void* TextPredicate::Search(bool negate) const {
       0, GetTextIndexSchema()->GetTextIndex(), nullptr, GetFieldMask());
   temp_fetcher->predicate_ = this;
 
-  auto iterator = BuildTextIterator(&temp_fetcher);
+  auto iterator = BuildTextIterator(temp_fetcher.get());
   while (!iterator->DoneKeys()) {
     estimated_size++;
     iterator->NextKey();

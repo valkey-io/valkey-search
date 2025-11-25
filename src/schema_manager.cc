@@ -688,16 +688,13 @@ void SchemaManager::OnServerCronCallback(ValkeyModuleCtx *ctx,
 }
 
 void SchemaManager::PopulateFingerprintVersionFromMetadata(
-    const google::protobuf::Map<std::string, coordinator::GlobalMetadataEntry>
-        &entries) {
+    uint32_t db_num, absl::string_view name, uint64_t fingerprint,
+    uint32_t version) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
-    for (const auto &[name, schema] : inner_map) {
-      if (entries.contains(name)) {
-        schema->SetFingerprint(entries.at(name).fingerprint());
-        schema->SetVersion(entries.at(name).version());
-      }
-    }
+  auto existing_entry = LookupInternal(db_num, name);
+  if (existing_entry.ok()) {
+    existing_entry.value()->SetFingerprint(fingerprint);
+    existing_entry.value()->SetVersion(version);
   }
 }
 

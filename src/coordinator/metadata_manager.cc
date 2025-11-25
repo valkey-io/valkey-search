@@ -659,7 +659,14 @@ void MetadataManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     const auto &entries = global_metadata->type_namespace_map()
                               .at(kSchemaManagerMetadataTypeName)
                               .entries();
-    SchemaManager::Instance().PopulateFingerprintVersionFromMetadata(entries);
+    for (const auto &[name, entry] : entries) {
+      // In cluster mode, only support DB 0 for now
+      uint32_t db_num = 0;
+      uint64_t fingerprint = entry.fingerprint();
+      uint32_t version = entry.version();
+      SchemaManager::Instance().PopulateFingerprintVersionFromMetadata(
+          db_num, name, fingerprint, version);
+    }
   }
 }
 

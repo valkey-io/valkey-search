@@ -117,19 +117,20 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
         version = int(info["index_version"])
         assert version == 0
 
-        # drop and create index again
+        # drop and create the index again with different definiton
         assert node0.execute_command("FT.DROPINDEX", index_name) == b"OK"
 
         assert node0.execute_command(
             "FT.CREATE", index_name,
-            "ON", "HASH",
-            "PREFIX", "1", "doc:",
-            "SCHEMA", "price", "NUMERIC"
+            "ON", "HASH", 
+            "PREFIX", "1", "text:",
+            "SCHEMA", "count", "NUMERIC"
         ) == b"OK"
 
+        # fingerprint should mismatch and version should be higher
         raw = node0.execute_command("FT.INFO", index_name, "PRIMARY")
         info = parser._parse_key_value_list(raw)
-        assert fingerprint == int(info["index_fingerprint"])
+        assert fingerprint != int(info["index_fingerprint"])
         assert version < int(info["index_version"])
 
 def search_command(index: str) -> list[str]:
@@ -237,16 +238,6 @@ def load_fingerprint_version_from_rdb(test):
     version = int(info["index_version"])
     assert version == 0
 
-    # drop and create index again
-    assert client.execute_command("FT.DROPINDEX", index_name) == b"OK"
-
-    assert client.execute_command(
-        "FT.CREATE", index_name,
-        "ON", "HASH",
-        "PREFIX", "1", "doc:",
-        "SCHEMA", "price", "NUMERIC"
-    ) == b"OK"
-
     # Save RDB on all nodes
     for rg in test.replication_groups:
         rg.primary.client.execute_command("SAVE")
@@ -266,13 +257,27 @@ def load_fingerprint_version_from_rdb(test):
             return False
 
     waiters.wait_for_true(are_all_nodes_ready, timeout=10)
-    client = test.new_client_for_primary(0)
-    client.execute_command("CONFIG SET search.info-developer-visible yes")
 
-    raw = client.execute_command("FT.INFO", index_name, "PRIMARY")
-    info = parser._parse_key_value_list(raw)
-    assert fingerprint == int(info["index_fingerprint"])
-    assert version < int(info["index_version"])
+    # validate all nodes
+    for rg in test.replication_groups:
+        # validate primary node
+        pc = rg.primary.client
+        pc.execute_command("CONFIG SET search.info-developer-visible yes")
+        info = parser._parse_key_value_list(
+            pc.execute_command("FT.INFO", index_name, "PRIMARY")
+        )
+        assert fingerprint == int(info["index_fingerprint"])
+        assert version == int(info["index_version"])
+
+        # validate all replica nodes
+        for rep in rg.replicas:
+            rc = rep.client
+            rc.execute_command("CONFIG SET search.info-developer-visible yes")
+            info = parser._parse_key_value_list(
+                rc.execute_command("FT.INFO", index_name, "PRIMARY")
+            )
+            assert fingerprint == int(info["index_fingerprint"])
+            assert version == int(info["index_version"])
         
 class TestLoadFingerprintVersionFromRDB_v1_v1(ValkeySearchClusterTestCaseDebugMode):
     def append_startup_args(self, args):

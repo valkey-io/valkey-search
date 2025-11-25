@@ -1,6 +1,26 @@
 #include "proximity.h"
 
-#include "vmsdk/src/log.h"
+#include "vmsdk/src/log.h"  // TODO: remove
+#include "vmsdk/src/module_config.h"
+
+namespace valkey_search::options {
+
+constexpr absl::string_view kProximityInorderCompModeConfig{
+    "proximity-inorder-compat-mode"};
+
+/// Register the "--proximity-inorder-compat-mode" flag. Controls proximity
+/// iterator's inorder/overlap violation check logic. When enabled, the iterator
+/// uses compatibility mode logic for inorder/overlap. When disabled (default
+/// behavior), the iterator uses a stricter and more natural logic for
+/// inorder/overlap checks.
+static auto proximity_inorder_comp_mode =
+    vmsdk::config::BooleanBuilder(kProximityInorderCompModeConfig,  // name
+                                  false)  // default value
+        .Build();
+bool GetProximityInorderCompatMode() {
+  return proximity_inorder_comp_mode->GetValue();
+}
+}  // namespace valkey_search::options
 
 namespace valkey_search::indexes::text {
 
@@ -137,12 +157,29 @@ const PositionRange& ProximityIterator::CurrentPosition() const {
   return current_position_.value();
 }
 
+// Check if there is an INORDER violation between two iterators.
+bool ProximityIterator::HasOrderingViolation(size_t first_idx,
+                                             size_t second_idx) const {
+  if (valkey_search::options::GetProximityInorderCompatMode()) {
+    // Compatibility mode: relaxed check for order using only start positions
+    // only. There is no overlap check in compatibility mode.
+    return positions_[first_idx].start > positions_[second_idx].start;
+  } else {
+    // Default mode: stricter check using range for order AND overlap check
+    return positions_[first_idx].end >= positions_[second_idx].start;
+  }
+}
+
+// In case of violations, the returned iterator is the one that should be
+// advanced to try and find a valid sequence.
+// In case of no violations, std::nullopt is returned and we have found a valid
+// position combination.
 std::optional<size_t> ProximityIterator::FindViolatingIterator() {
   const size_t n = positions_.size();
   if (in_order_) {
     // Check ordering / overlap violations.
     for (size_t i = 0; i < n - 1; ++i) {
-      if (positions_[i].end >= positions_[i + 1].start) {
+      if (HasOrderingViolation(i, i + 1)) {
         return i + 1;
       }
     }
@@ -174,7 +211,7 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
     size_t curr_idx = pos_with_idx_[i].second;
     size_t next_idx = pos_with_idx_[i + 1].second;
     // Check ordering / overlap violations.
-    if (positions_[curr_idx].end >= positions_[next_idx].start) {
+    if (HasOrderingViolation(curr_idx, next_idx)) {
       return next_idx;
     }
   }

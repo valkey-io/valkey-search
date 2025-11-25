@@ -11,6 +11,7 @@
 #include "ft_create_parser.h"
 #include "src/acl.h"
 #include "src/commands/ft_search.h"
+#include "src/query/fanout.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
@@ -133,7 +134,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
       // refresh cluster map if needed
       auto search_targets =
           ValkeySearch::Instance().GetOrRefreshClusterMap(ctx)->GetTargets(
-              mode);
+              mode, query::fanout::IsSystemUnderLowUtilization());
       return query::fanout::PerformSearchFanoutAsync(
           ctx, search_targets,
           ValkeySearch::Instance().GetCoordinatorClientPool(),

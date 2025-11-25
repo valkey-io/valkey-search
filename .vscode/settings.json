@@ -5,7 +5,7 @@
     "clangd.path": "/usr/bin/clangd",
     "C_Cpp.codeAnalysis.runAutomatically": true,
     "editor.formatOnSave": true,
-    "C_Cpp.intelliSenseEngine": "disabled",
+    "C_Cpp.intelliSenseEngine": "default",
     "C_Cpp.codeAnalysis.clangTidy.enabled": true,
     "C_Cpp.codeAnalysis.clangTidy.useBuildPath": true,
     "clangd.arguments": [

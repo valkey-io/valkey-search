@@ -32,6 +32,7 @@
 #include "src/coordinator/util.h"
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
+#include "src/schema_manager.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
@@ -650,6 +651,16 @@ void MetadataManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     staging_metadata_due_to_repl_load_ = false;
   }
   is_loading_ = false;
+
+  // populate fingerprint and version to IndexSchema at the end of loading RDB
+  auto global_metadata = GetGlobalMetadata();
+  if (global_metadata->type_namespace_map().contains(
+          kSchemaManagerMetadataTypeName)) {
+    const auto &entries = global_metadata->type_namespace_map()
+                              .at(kSchemaManagerMetadataTypeName)
+                              .entries();
+    SchemaManager::Instance().PopulateFingerprintVersionFromMetadata(entries);
+  }
 }
 
 void MetadataManager::OnReplicationLoadStart(ValkeyModuleCtx *ctx) {

@@ -366,14 +366,16 @@ absl::Status SchemaManager::OnMetadataCallback(
     return absl::InternalError(absl::StrFormat(
         "Unable to unpack metadata for index schema %s", id.data()));
   }
-  proposed_schema->set_fingerprint(fingerprint);
-  proposed_schema->set_version(version);
 
   auto result =
       CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema);
   if (!result.ok()) {
     return result;
   }
+
+  auto created_schema = LookupInternal(0, id).value();
+  created_schema->SetFingerprint(fingerprint);
+  created_schema->SetVersion(version);
 
   return absl::OkStatus();
 }
@@ -683,6 +685,20 @@ void SchemaManager::OnServerCronCallback(ValkeyModuleCtx *ctx,
                                          [[maybe_unused]] void *data) {
   SchemaManager::Instance().PerformBackfill(
       ctx, options::GetBackfillBatchSize().GetValue());
+}
+
+void SchemaManager::PopulateFingerprintVersionFromMetadata(
+    const google::protobuf::Map<std::string, coordinator::GlobalMetadataEntry>
+        &entries) {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : inner_map) {
+      if (entries.contains(name)) {
+        schema->SetFingerprint(entries.at(name).fingerprint());
+        schema->SetVersion(entries.at(name).version());
+      }
+    }
+  }
 }
 
 static vmsdk::info_field::Integer number_of_indexes(

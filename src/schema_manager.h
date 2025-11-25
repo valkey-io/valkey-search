@@ -95,6 +95,10 @@ class SchemaManager {
   void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                             uint64_t subevent, void *data);
 
+  void PopulateFingerprintVersionFromMetadata(
+      const google::protobuf::Map<std::string, coordinator::GlobalMetadataEntry>
+          &entries);
+
   static void InitInstance(std::unique_ptr<SchemaManager> instance);
   static SchemaManager &Instance();
 

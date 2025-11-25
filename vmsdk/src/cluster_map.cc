@@ -55,8 +55,35 @@ const ShardInfo* ClusterMap::GetShardBySlot(uint16_t slot) const {
   return nullptr;
 }
 
-const NodeInfo& ClusterMap::GetRandomNodeFromShard(const ShardInfo& shard,
-                                                   bool replica_only) const {
+std::optional<NodeInfo> ClusterMap::GetLocalNodeFromShard(
+    const ShardInfo& shard, bool replica_only) const {
+  // Try to find a local node first
+  if (!replica_only && shard.primary.has_value() && shard.primary->is_local) {
+    return shard.primary.value();
+  }
+
+  // Look for local replicas
+  for (const auto& replica : shard.replicas) {
+    if (replica.is_local) {
+      return replica;
+    }
+  }
+
+  // Return null if no local nodes found
+  return std::nullopt;
+}
+
+NodeInfo ClusterMap::GetRandomNodeFromShard(const ShardInfo& shard,
+                                            bool replica_only,
+                                            bool prefer_local) const {
+  if (prefer_local) {
+    auto local_node = GetLocalNodeFromShard(shard, replica_only);
+    if (local_node.has_value()) {
+      return local_node.value();
+    }
+    // Fall through to random selection if no local node found
+  }
+
   absl::BitGen gen;
 
   if (replica_only) {
@@ -77,7 +104,8 @@ const NodeInfo& ClusterMap::GetRandomNodeFromShard(const ShardInfo& shard,
   return shard.replicas[replica_index];
 }
 
-std::vector<NodeInfo> ClusterMap::GetTargets(FanoutTargetMode mode) const {
+std::vector<NodeInfo> ClusterMap::GetTargets(FanoutTargetMode mode,
+                                             bool prefer_local) const {
   switch (mode) {
     case FanoutTargetMode::kAll:
       return all_targets_;
@@ -92,7 +120,8 @@ std::vector<NodeInfo> ClusterMap::GetTargets(FanoutTargetMode mode) const {
         if (shard_info.replicas.empty()) {
           continue;
         }
-        random_replicas.push_back(GetRandomNodeFromShard(shard_info, true));
+        random_replicas.push_back(
+            GetRandomNodeFromShard(shard_info, true, prefer_local));
       }
       return random_replicas;
     }
@@ -100,7 +129,8 @@ std::vector<NodeInfo> ClusterMap::GetTargets(FanoutTargetMode mode) const {
       std::vector<NodeInfo> random_targets;
       random_targets.reserve(shards_.size());
       for (const auto& [shard_id, shard_info] : shards_) {
-        random_targets.push_back(GetRandomNodeFromShard(shard_info));
+        random_targets.push_back(
+            GetRandomNodeFromShard(shard_info, false, prefer_local));
       }
       return random_targets;
     }

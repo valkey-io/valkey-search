@@ -117,7 +117,7 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
         version = int(info["index_version"])
         assert version == 0
 
-        # drop and create the index again with different definiton
+        # drop and create the index again with different definition
         assert node0.execute_command("FT.DROPINDEX", index_name) == b"OK"
 
         assert node0.execute_command(

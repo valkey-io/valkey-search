@@ -741,14 +741,14 @@ class TestFullText(ValkeySearchTestCaseBase):
         assert result[0] == 2  # doc:2 has "coding", doc:3 has "reading"
         # Test non-matching suffix
         result = self.client.execute_command("FT.SEARCH", "idx", "@content:*xyz")
-        assert result[0] == 0  # No matches
+        assert result[0] == 0
         # Validate that suffix search on fields not enabled for suffix search are rejected
         with pytest.raises(ResponseError) as err:
             result = self.client.execute_command("FT.SEARCH", "idx", "@extracontent:*ata1")
         assert "Field does not support suffix search" in str(err.value)
         # Validate that we do not get results from fields which are not enabled with the suffix tree
         result = self.client.execute_command("FT.SEARCH", "idx", "*ata1")
-        assert result[0] == 0  # No matches
+        assert result[0] == 0
         # Validate that the default field search only includes results from the fields enabled with suffix.
         result = self.client.execute_command("FT.SEARCH", "idx", "*unning")
         assert result[0] == 1  # Only doc:1 is matched for "running"
@@ -817,15 +817,15 @@ class TestFullText(ValkeySearchTestCaseBase):
         client: Valkey = self.server.get_new_client()
         # Create index with text fields
         client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
-                            "content", "TEXT", "NOSTEM")
+                            "content", "TEXT", "NOSTEM", "title", "TEXT", "NOSTEM", "WITHSUFFIXTRIE")
 
         client.execute_command("HSET", "doc:1", "content", "alpha beta gamma delta epsilon")
         client.execute_command("HSET", "doc:2", "content", "alpha word beta word gamma")
         client.execute_command("HSET", "doc:3", "content", "gamma beta alpha")
-        client.execute_command("HSET", "doc:4", "content", "alpha word word word beta")
+        client.execute_command("HSET", "doc:4", "content", "word4 word5 blah alpha word word word beta", "title", "blah blah word6")
         client.execute_command("HSET", "doc:5", "content", "alpha word word word beta word word word gamma")
-        client.execute_command("HSET", "doc:7", "content", "gamma delta")
-        client.execute_command("HSET", "doc:8", "content", "gamma word beta word word word alpha", "title", "some title")
+        client.execute_command("HSET", "doc:7", "content", "word10 word11 word12 gamma delta", "title", "word10 word11 word12 blah")
+        client.execute_command("HSET", "doc:8", "content", "word1 gamma word beta word word word alpha", "title", "blah word2 word3")
 
         # Wait for index backfill to complete
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
@@ -867,7 +867,7 @@ class TestFullText(ValkeySearchTestCaseBase):
         result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "3")
         assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:5", b"doc:8"})
 
-        # Test 2.8: Three terms but user mentions inorder.
+        # Test 2.8: Three terms but inorder.
         result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "inorder")
         assert (result[0], set(result[1::2])) == (3, {b"doc:1", b"doc:2", b"doc:5"})
 
@@ -907,16 +907,64 @@ class TestFullText(ValkeySearchTestCaseBase):
 
         # Test 3.6: number tokens in different positions
         result = client.execute_command("FT.SEARCH", "idx", '1 beta 2', "SLOP", "0", "INORDER")
-        assert (result[0], result[1]) == (1, b"doc:10")  # Only doc:10 has this sequence
+        assert (result[0], result[1]) == (1, b"doc:10")
 
         # Test 3.7: Verify number tokens are treated as regular tokens
         result = client.execute_command("FT.SEARCH", "idx", '@content:"1"')
         assert (result[0], set(result[1::2])) == (4, {b"doc:10", b"doc:11", b"doc:12", b"doc:13"})
 
-        # Test 3.8: Complex proximity with number tokens - slop 2, inorder
+        # Test 3.8: Proximity with number tokens - slop 2, inorder
         result = client.execute_command("FT.SEARCH", "idx", 'version 1 release', "SLOP", "2", "INORDER")
-        assert (result[0], set(result[1::2])) == (3, {b"doc:10", b"doc:11", b"doc:12"})  # doc:10 (gap=2), doc:11 (gap=1)
+        assert (result[0], set(result[1::2])) == (3, {b"doc:10", b"doc:11", b"doc:12"})
 
+        # Test 3.9: Includes test cases for field alignment:
+        # Validate the usage of default + specific field identifiers for matches
+        result = client.execute_command("FT.SEARCH", "idx", '@content:word1 gamma word')
+        assert (result[0], result[1]) == (1, b"doc:8")
+        # Validate the usage of only specific field identifiers for matches
+        result = client.execute_command("FT.SEARCH", "idx", '@content:word1 @content:gamma @content:word')
+        assert (result[0], result[1]) == (1, b"doc:8")
+        # Validate the usage of only default field identifiers for matches
+        result = client.execute_command("FT.SEARCH", "idx", 'word1 gamma word')
+        assert (result[0], result[1]) == (1, b"doc:8")
+        result = client.execute_command("FT.SEARCH", "idx", 'word10 word11 word12', "INORDER")
+        assert (result[0], result[1]) == (1, b"doc:7")
+        # Validate the usage of default / specific field identifier combinations for no matches.
+        # For this to pass, it is not just sufficient for there to be field alignment in the search
+        # (based on documents), but it also requires that the searches use the field from the query.        
+        result = client.execute_command("FT.SEARCH", "idx", 'word10 @content:word11 @title:word12', "INORDER")
+        assert result[0] == 0
+        result = client.execute_command("FT.SEARCH", "idx", 'word10 @title:word11 word12', "INORDER")
+        assert (result[0], result[1]) == (1, b"doc:7")
+        result = client.execute_command("FT.SEARCH", "idx", 'word10 @content:word11 word12', "INORDER")
+        assert (result[0], result[1]) == (1, b"doc:7")
+        result = client.execute_command("FT.SEARCH", "idx", 'word10 word11 word3', "INORDER")
+        assert result[0] == 0
+        result = client.execute_command("FT.SEARCH", "idx", '@content:word4 @content:word5 @title:word6', "INORDER")
+        assert result[0] == 0
+        result = client.execute_command("FT.SEARCH", "idx", 'word4 word5 word6', "INORDER")
+        assert result[0] == 0
+        # Testing with terms in the same doc, in order, but these terms exist in different fields. So, no match expected.
+        # Without checks in proximity to ensure there is an common field between all terms, this would have matched doc:8.
+        result = client.execute_command("FT.SEARCH", "idx", 'word1 word2 word3', "INORDER")
+        assert result[0] == 0
+        # When looking at just the terms from one field, we get a match.
+        result = client.execute_command("FT.SEARCH", "idx", 'word2 word3', "INORDER")
+        assert (result[0], result[1]) == (1, b"doc:8")
+        # Test only specific field query for no match
+        result = client.execute_command("FT.SEARCH", "idx", '@content:word10 @title:word11 @content:word12', "INORDER")
+        assert result[0] == 0
+        # Test default and specific field identifier for no match due to the default term being a suffix query. 
+        # Because the default term is a suffix query, it only searches fields with suffix enabled (`title``).
+        # Therefore, if word11 OR word12 are not in `title`, there is no match.
+        result = client.execute_command("FT.SEARCH", "idx", '*word10 @title:word11 word12', "INORDER")
+        assert (result[0], result[1]) == (1, b"doc:7")
+        result = client.execute_command("FT.SEARCH", "idx", '*word10 @content:word11 word12', "INORDER")
+        assert result[0] == 0
+        # Following up on the case above, when we don't use a suffix operation, and then it should match with
+        # content / default field.
+        result = client.execute_command("FT.SEARCH", "idx", 'word10 @content:word11 word12', "INORDER")
+        assert (result[0], result[1]) == (1, b"doc:7")
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """

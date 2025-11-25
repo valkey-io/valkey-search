@@ -43,7 +43,7 @@ class TextIterator {
   virtual ~TextIterator() = default;
 
   // The field which the iterator was initialized to search for.
-  virtual FieldMaskPredicate FieldMask() const = 0;
+  virtual FieldMaskPredicate QueryFieldMask() const = 0;
 
   // Key-level iteration
   // Returns true if there is a match (i.e. `CurrentKey()` is valid) provided
@@ -91,6 +91,9 @@ class TextIterator {
   // Otherwise, returns false if we have exhausted all positions.
   // ASSERT: !DonePositions()
   virtual bool NextPosition() = 0;
+  // Returns the field mask for the current position.
+  // ASSERT: !DonePositions()
+  virtual FieldMaskPredicate CurrentFieldMask() const = 0;
 };
 
 }  // namespace valkey_search::indexes::text

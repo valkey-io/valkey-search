@@ -487,8 +487,6 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
     return;
   }
 
-  CHECK(!coordinator_enabled_ || selected_db == 0)
-      << "In cluster mode, we only support DB 0";
   auto to_delete = GetIndexSchemasInDBInternal(selected_db);
   for (const auto &name : to_delete) {
     VMSDK_LOG(NOTICE, ctx) << "Deleting index schema " << name

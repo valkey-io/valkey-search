@@ -26,7 +26,8 @@ namespace valkey_search::indexes::text {
 
 ProximityIterator::ProximityIterator(
     std::vector<std::unique_ptr<TextIterator>>&& iters,
-    std::optional<uint32_t> slop, bool in_order, FieldMaskPredicate field_mask,
+    std::optional<uint32_t> slop, bool in_order,
+    FieldMaskPredicate query_field_mask,
     const InternedStringSet* untracked_keys)
     : iters_(std::move(iters)),
       slop_(slop),
@@ -34,7 +35,8 @@ ProximityIterator::ProximityIterator(
       untracked_keys_(untracked_keys),
       current_key_(nullptr),
       current_position_(std::nullopt),
-      field_mask_(field_mask) {
+      current_field_mask_(0ULL),
+      query_field_mask_(query_field_mask) {
   CHECK(!iters_.empty()) << "must have at least one text iterator";
   CHECK(slop_.has_value() || in_order_)
       << "ProximityIterator requires either slop or inorder=true";
@@ -45,7 +47,9 @@ ProximityIterator::ProximityIterator(
   NextKey();
 }
 
-FieldMaskPredicate ProximityIterator::FieldMask() const { return field_mask_; }
+FieldMaskPredicate ProximityIterator::QueryFieldMask() const {
+  return query_field_mask_;
+}
 
 bool ProximityIterator::DoneKeys() const {
   for (auto& iter : iters_) {
@@ -78,6 +82,7 @@ bool ProximityIterator::NextKey() {
     // 1) Move to the next common key amongst all text iterators.
     if (FindCommonKey()) {
       current_position_ = std::nullopt;
+      current_field_mask_ = 0ULL;
       // 2) Move to the next valid position combination across all text
       // iterators.
       // Exit, if no key with a valid position combination is found.
@@ -128,6 +133,7 @@ bool ProximityIterator::SeekForwardKey(const Key& target_key) {
   while (!DoneKeys()) {
     if (FindCommonKey()) {
       current_position_ = std::nullopt;
+      current_field_mask_ = 0ULL;
       if (NextPosition()) {
         return true;
       }
@@ -200,6 +206,16 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
           << ", end: " << positions_[n - 1].end << ", n: " << n;
       return 0;
     }
+    // Check for field mask intersection (terms exist in the same field)
+    FieldMaskPredicate field_mask = query_field_mask_;
+    for (size_t i = 0; i < n; ++i) {
+      field_mask &= iters_[i]->CurrentFieldMask();
+      // No common fields, advance this iterator which is lagging behind the
+      // previous one.
+      if (field_mask == 0) {
+        return i;
+      }
+    }
     return std::nullopt;
   }
   // For unordered, use an index mapping to help validate constraints.
@@ -227,6 +243,16 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
       return pos_with_idx_[0].second;
     }
   }
+  // Check for field mask intersection (terms exist in the same field)
+  FieldMaskPredicate field_mask = query_field_mask_;
+  for (size_t i = 0; i < n; ++i) {
+    field_mask &= iters_[i]->CurrentFieldMask();
+    // No common fields, advance this iterator which is lagging behind the
+    // previous one.
+    if (field_mask == 0) {
+      return i;
+    }
+  }
   return std::nullopt;
 }
 
@@ -237,10 +263,11 @@ bool ProximityIterator::NextPosition() {
     for (size_t i = 0; i < n; ++i) {
       positions_[i] = iters_[i]->CurrentPosition();
     }
+    auto violating_iter = FindViolatingIterator();
     if (should_advance) {
       should_advance = false;
-      if (auto iter_to_advance = FindViolatingIterator()) {
-        iters_[*iter_to_advance]->NextPosition();
+      if (violating_iter) {
+        iters_[*violating_iter]->NextPosition();
       } else {
         // No violations, advance first non-done iterator
         for (size_t i = 0; i < n; ++i) {
@@ -252,8 +279,14 @@ bool ProximityIterator::NextPosition() {
       }
       continue;
     }
-    // No violations mean that this positional combination is valid.
-    if (!FindViolatingIterator().has_value()) {
+    // No violations - so this positional combination is valid.
+    if (!violating_iter.has_value()) {
+      // Set the current field based on field mask intersection.
+      current_field_mask_ = iters_[0]->CurrentFieldMask();
+      for (size_t i = 1; i < n; ++i) {
+        current_field_mask_ &= iters_[i]->CurrentFieldMask();
+      }
+      // Set the current position range.
       if (in_order_) {
         current_position_ =
             PositionRange(positions_[0].start, positions_[n - 1].end);
@@ -268,7 +301,13 @@ bool ProximityIterator::NextPosition() {
     should_advance = true;
   }
   current_position_ = std::nullopt;
+  current_field_mask_ = 0ULL;
   return false;
+}
+
+FieldMaskPredicate ProximityIterator::CurrentFieldMask() const {
+  CHECK(current_field_mask_ != 0ULL);
+  return current_field_mask_;
 }
 
 }  // namespace valkey_search::indexes::text

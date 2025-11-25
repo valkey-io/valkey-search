@@ -48,10 +48,10 @@ class ProximityIterator : public TextIterator {
  public:
   ProximityIterator(std::vector<std::unique_ptr<TextIterator>>&& iters,
                     const std::optional<uint32_t> slop, const bool in_order,
-                    const FieldMaskPredicate field_mask,
+                    const FieldMaskPredicate query_field_mask,
                     const InternedStringSet* untracked_keys = nullptr);
   /* Implementation of TextIterator APIs */
-  FieldMaskPredicate FieldMask() const override;
+  FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
   bool DoneKeys() const override;
   const Key& CurrentKey() const override;
@@ -61,16 +61,18 @@ class ProximityIterator : public TextIterator {
   bool DonePositions() const override;
   const PositionRange& CurrentPosition() const override;
   bool NextPosition() override;
+  FieldMaskPredicate CurrentFieldMask() const override;
 
  private:
   // List of all the Text Predicates contained in the Proximity AND.
   std::vector<std::unique_ptr<TextIterator>> iters_;
   std::optional<uint32_t> slop_;
   bool in_order_;
-  FieldMaskPredicate field_mask_;
-  // Current key/position
+  FieldMaskPredicate query_field_mask_;
+  // Current key/position/field
   Key current_key_;
   std::optional<PositionRange> current_position_;
+  FieldMaskPredicate current_field_mask_;
   // Vectors used for positional checks
   std::vector<PositionRange> positions_;
   std::vector<std::pair<Position, size_t>> pos_with_idx_;

@@ -53,25 +53,21 @@ EvaluationResult TermPredicate::Evaluate(
   if (word_iter.Done()) {
     return EvaluationResult(false);
   }
-
   auto postings = word_iter.GetTarget();
   if (!postings) {
     return EvaluationResult(false);
   }
-
   auto key_iter = postings->GetKeyIterator();
   // Skip to target key and verify it contains the required fields
   if (!key_iter.SkipForwardKey(target_key) ||
       !key_iter.ContainsFields(field_mask)) {
     return EvaluationResult(false);
   }
-
   std::vector<indexes::text::Postings::KeyIterator> key_iterators;
   key_iterators.emplace_back(std::move(key_iter));
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr);
-
-  if (iterator->DonePositions()) {
+  if (iterator->DoneKeys() || iterator->DonePositions()) {
     return EvaluationResult(false);
   }
   return EvaluationResult(true, std::move(iterator));
@@ -97,11 +93,9 @@ EvaluationResult PrefixPredicate::Evaluate(
 
   auto word_iter = text_index.GetPrefix().GetWordIterator(term_);
   std::vector<indexes::text::Postings::KeyIterator> key_iterators;
-
   while (!word_iter.Done()) {
     std::string_view word = word_iter.GetWord();
     if (!word.starts_with(term_)) break;
-
     auto postings = word_iter.GetTarget();
     if (postings) {
       auto key_iter = postings->GetKeyIterator();
@@ -113,18 +107,14 @@ EvaluationResult PrefixPredicate::Evaluate(
     }
     word_iter.Next();
   }
-
   if (key_iterators.empty()) {
     return EvaluationResult(false);
   }
-
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr);
-
   if (iterator->DonePositions()) {
     return EvaluationResult(false);
   }
-
   return EvaluationResult(true, std::move(iterator));
 }
 
@@ -150,15 +140,12 @@ EvaluationResult SuffixPredicate::Evaluate(
   if (!suffix_opt.has_value()) {
     return EvaluationResult(false);
   }
-
   std::string reversed_term(term_.rbegin(), term_.rend());
   auto word_iter = suffix_opt.value().get().GetWordIterator(reversed_term);
   std::vector<indexes::text::Postings::KeyIterator> key_iterators;
-
   while (!word_iter.Done()) {
     std::string_view word = word_iter.GetWord();
     if (!word.starts_with(reversed_term)) break;
-
     auto postings = word_iter.GetTarget();
     if (postings) {
       auto key_iter = postings->GetKeyIterator();
@@ -170,17 +157,14 @@ EvaluationResult SuffixPredicate::Evaluate(
     }
     word_iter.Next();
   }
-
   if (key_iterators.empty()) {
     return EvaluationResult(false);
   }
-
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr);
   if (iterator->DonePositions()) {
     return EvaluationResult(false);
   }
-
   return EvaluationResult(true, std::move(iterator));
 }
 
@@ -340,12 +324,10 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     EvaluationResult lhs = lhs_predicate_->Evaluate(evaluator);
     VMSDK_LOG(DEBUG, nullptr)
         << "Inline evaluate AND predicate lhs: " << lhs.matches;
-
     // Short-circuit for AND
     if (!lhs.matches) {
       return EvaluationResult(false);
     }
-
     EvaluationResult rhs = rhs_predicate_->Evaluate(evaluator);
     VMSDK_LOG(DEBUG, nullptr)
         << "Inline evaluate AND predicate rhs: " << rhs.matches;
@@ -353,25 +335,25 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     if (!rhs.matches) {
       return EvaluationResult(false);
     }
-
     // Proximity check: Only if slop/inorder set and both sides have
     // iterators. This ensures we only check proximity for text predicates,
     // not numeric/tag.
     if ((slop_.has_value() || inorder_) && lhs.filter_iterator &&
         rhs.filter_iterator) {
-      // Get field_mask from lhs iterator
-      uint64_t field_mask = lhs.filter_iterator->FieldMask();
-
+      // Get field_mask from lhs and rhs iterators
+      uint64_t query_field_mask = lhs.filter_iterator->QueryFieldMask() &
+                                  rhs.filter_iterator->QueryFieldMask();
+      if (query_field_mask == 0) {
+        return EvaluationResult(false);
+      }
       // Create vector of iterators for ProximityIterator
       std::vector<std::unique_ptr<indexes::text::TextIterator>> iterators;
       iterators.push_back(std::move(lhs.filter_iterator));
       iterators.push_back(std::move(rhs.filter_iterator));
-
       // Create ProximityIterator to check proximity
       auto proximity_iterator =
           std::make_unique<indexes::text::ProximityIterator>(
-              std::move(iterators), slop_, inorder_, field_mask, nullptr);
-
+              std::move(iterators), slop_, inorder_, query_field_mask, nullptr);
       // Check if any valid proximity matches exist
       if (proximity_iterator->DoneKeys() ||
           proximity_iterator->DonePositions()) {
@@ -382,11 +364,9 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
       if (target_key && proximity_iterator->CurrentKey() != target_key) {
         return EvaluationResult(false);
       }
-
       // Return the proximity iterator for potential nested use.
       return EvaluationResult(true, std::move(proximity_iterator));
     }
-
     // Propagate the filter iterator from the LHS if it exists
     if (lhs.filter_iterator) {
       return EvaluationResult(true, std::move(lhs.filter_iterator));
@@ -398,7 +378,6 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     // Both matched, non-proximity case
     return EvaluationResult(true);
   }
-
   // OR logic
   EvaluationResult lhs = lhs_predicate_->Evaluate(evaluator);
   VMSDK_LOG(DEBUG, nullptr)
@@ -406,7 +385,6 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   EvaluationResult rhs = rhs_predicate_->Evaluate(evaluator);
   VMSDK_LOG(DEBUG, nullptr)
       << "Inline evaluate OR predicate rhs: " << rhs.matches;
-
   // TODO: Implement position-aware OR logic for nested proximity queries.
   return EvaluationResult(lhs.matches || rhs.matches);
 }

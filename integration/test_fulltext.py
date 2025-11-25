@@ -917,6 +917,58 @@ class TestFullText(ValkeySearchTestCaseBase):
         result = client.execute_command("FT.SEARCH", "idx", 'version 1 release', "SLOP", "2", "INORDER")
         assert (result[0], set(result[1::2])) == (3, {b"doc:10", b"doc:11", b"doc:12"})  # doc:10 (gap=2), doc:11 (gap=1)
 
+    def test_proximity_slop_violation_advancement(self):
+        """
+            Test that proximity slop violation advancement works as expected.
+            5 documents are created with varying term frequencies to test advancement logic.
+            We run searches with decreasing slop values to validate that only documents
+            that can satisfy the proximity constraints are returned.
+        """
+        client: Valkey = self.server.get_new_client()
+        # Create index with text fields
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
+                            "content", "TEXT", "NOSTEM")
+        client.execute_command("HSET", "doc:1", "content", "term1 term1 term1 term2 x x term3 x x term4")
+        client.execute_command("HSET", "doc:2", "content", "term1 term1 term1 term2 x x term3 x x term4 term1 term1 term1 term2 x x term3 x x term4 term1 term1 term1 term2 x x term3 x x term4 term1 term2 x term3 x x term4")
+        client.execute_command("HSET", "doc:3", "content", "term1 term1 term1 term2 x x term3 x x term4 term1 term1 term1 term2 x x term3 x x term4 term1 term1 term1 term2 x x term3 x x term4 term1 term2 x term3 x x term4 term1 term2 x term3 x term4")
+        client.execute_command("HSET", "doc:4", "content", "term1 term1 term1 term2 x x term3 x x term4 term1 term1 term1 term2 x x term3 x x term4 term1 term1 term1 term2 x x term3 x x term4 term1 term2 x term3 x x term4 term1 term2 x term3 x term4 term1 term2 x term3 term4")
+        client.execute_command("HSET", "doc:5", "content", "term1 term1 term1 term2 x x term3 x x term4 term1 term1 term1 term2 x x term3 x x term4 term1 term1 term1 term2 x x term3 x x term4 term1 term2 x term3 x x term4 term1 term2 x term3 x term4 term1 term2 x term3 term4 term1 term2 term3 term4")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        ## INORDER=true tests
+        # No advancement needed, all starting terms within slop.
+        result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "6", "INORDER")
+        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+        # Starting from below, we check that advancement is properly done to find next possible match.
+        result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "5", "INORDER")
+        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+        result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "4", "INORDER")
+        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+        result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "3", "INORDER")
+        assert (result[0], set(result[1::2])) == (4, {b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+        result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "2", "INORDER")
+        assert (result[0], set(result[1::2])) == (3, {b"doc:3", b"doc:4", b"doc:5"})
+        result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "1", "INORDER")
+        assert (result[0], set(result[1::2])) == (2, {b"doc:4", b"doc:5"})
+        result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "0", "INORDER")
+        assert (result[0], set(result[1::2])) == (1, {b"doc:5"})
+        ## INORDER=false tests
+        # No advancement needed, all starting terms within slop.
+        result = client.execute_command("FT.SEARCH", "idx", 'term3 term1 term2 term4', "SLOP", "6")
+        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+        # Starting from below, we check that advancement is properly done to find next possible match.
+        result = client.execute_command("FT.SEARCH", "idx", 'term2 term1 term3 term4', "SLOP", "5")
+        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+        result = client.execute_command("FT.SEARCH", "idx", 'term1 term3 term2 term4', "SLOP", "4")
+        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+        result = client.execute_command("FT.SEARCH", "idx", 'term4 term1 term2 term3', "SLOP", "3")
+        assert (result[0], set(result[1::2])) == (4, {b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+        result = client.execute_command("FT.SEARCH", "idx", 'term1 term3 term4 term2', "SLOP", "2")
+        assert (result[0], set(result[1::2])) == (3, {b"doc:3", b"doc:4", b"doc:5"})
+        result = client.execute_command("FT.SEARCH", "idx", 'term4 term3 term1 term2', "SLOP", "1")
+        assert (result[0], set(result[1::2])) == (2, {b"doc:4", b"doc:5"})
+        result = client.execute_command("FT.SEARCH", "idx", 'term4 term1 term3 term2', "SLOP", "0")
+        assert (result[0], set(result[1::2])) == (1, {b"doc:5"})
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """

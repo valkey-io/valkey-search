@@ -1,5 +1,7 @@
 #include "proximity.h"
 
+#include "vmsdk/src/log.h"
+
 namespace valkey_search::indexes::text {
 
 ProximityIterator::ProximityIterator(
@@ -138,16 +140,28 @@ const PositionRange& ProximityIterator::CurrentPosition() const {
 std::optional<size_t> ProximityIterator::FindViolatingIterator() {
   const size_t n = positions_.size();
   if (in_order_) {
+    // Check ordering / overlap violations.
     for (size_t i = 0; i < n - 1; ++i) {
-      // Check overlap / ordering violations.
       if (positions_[i].end >= positions_[i + 1].start) {
         return i + 1;
       }
-      // Check slop violations.
-      if (slop_.has_value() &&
-          positions_[i + 1].start - positions_[i].end - 1 > *slop_) {
-        return i;
-      }
+    }
+    // Check slop violations.
+    auto current_slop =
+        ((positions_[n - 1].start - positions_[0].start) - 1) - (n - 2);
+    if (slop_.has_value() && current_slop > *slop_) {
+      // The ordering / overlap check above gives us a text group with start and
+      // end. Once we have a valid ordered, non-overlapping text sequence, any
+      // rearrangement of the middle elements doesn't change the slop. Slop
+      // violations are computed by using the boundary positions, so we advance
+      // the first iterator to try and reduce slop in the next text sequence
+      // tested.
+      VMSDK_LOG(WARNING, nullptr)
+          << "Slop violation detected: current_slop=" << current_slop
+          << ", allowed_slop=" << *slop_ << ", advancing iterator 0"
+          << ", current position start: " << positions_[0].start
+          << ", end: " << positions_[n - 1].end << ", n: " << n;
+      return 0;
     }
     return std::nullopt;
   }
@@ -159,12 +173,21 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
   for (size_t i = 0; i < n - 1; ++i) {
     size_t curr_idx = pos_with_idx_[i].second;
     size_t next_idx = pos_with_idx_[i + 1].second;
+    // Check ordering / overlap violations.
     if (positions_[curr_idx].end >= positions_[next_idx].start) {
       return next_idx;
     }
-    if (slop_.has_value() &&
-        positions_[next_idx].start - positions_[curr_idx].end - 1 > *slop_) {
-      return curr_idx;
+  }
+  // Check slop violations.
+  if (slop_.has_value()) {
+    // Slop violations are computed by using the boundary positions, so we
+    // advance the first iterator to try and reduce slop in the next text
+    // sequence tested.
+    size_t min_pos = pos_with_idx_[0].first;
+    size_t max_pos = pos_with_idx_[n - 1].first;
+    auto current_slop = ((max_pos - min_pos) - 1) - (n - 2);
+    if (current_slop > *slop_) {
+      return pos_with_idx_[0].second;
     }
   }
   return std::nullopt;

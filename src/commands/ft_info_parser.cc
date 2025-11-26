@@ -150,7 +150,8 @@ absl::Status InfoCommand::Execute(ValkeyModuleCtx *ctx) {
         index_schema->RespondWithInfo(ctx);
       } else {
         auto op = new query::primary_info_fanout::PrimaryInfoFanoutOperation(
-            ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms);
+            ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms,
+            enable_partial_results, require_consistency);
         op->StartOperation(ctx);
       }
       break;
@@ -163,7 +164,8 @@ absl::Status InfoCommand::Execute(ValkeyModuleCtx *ctx) {
         index_schema->RespondWithInfo(ctx);
       } else {
         auto op = new query::cluster_info_fanout::ClusterInfoFanoutOperation(
-            ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms);
+            ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms,
+            enable_partial_results, require_consistency);
         op->StartOperation(ctx);
       }
       break;

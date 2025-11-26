@@ -42,7 +42,7 @@ class TermIterator : public TextIterator {
                const FieldMaskPredicate field_mask,
                const InternedStringSet* untracked_keys = nullptr);
   /* Implementation of TextIterator APIs */
-  FieldMaskPredicate FieldMask() const override;
+  FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
   bool DoneKeys() const override;
   const Key& CurrentKey() const override;
@@ -52,6 +52,7 @@ class TermIterator : public TextIterator {
   bool DonePositions() const override;
   const PositionRange& CurrentPosition() const override;
   bool NextPosition() override;
+  FieldMaskPredicate CurrentFieldMask() const override;
   /* Implementation of APIs unique to TermIterator */
   // Returns true if iterator is positioned at a valid position (not done).
   bool HasCurrentPosition() const { return current_position_.has_value(); }
@@ -60,11 +61,12 @@ class TermIterator : public TextIterator {
   // the current position
 
  private:
-  const FieldMaskPredicate field_mask_;
+  const FieldMaskPredicate query_field_mask_;
   std::vector<Postings::KeyIterator> key_iterators_;
   std::vector<Postings::PositionIterator> pos_iterators_;
   Key current_key_;
   std::optional<PositionRange> current_position_;
+  FieldMaskPredicate current_field_mask_;
   const InternedStringSet* untracked_keys_;
   bool FindMinimumValidKey();
 };

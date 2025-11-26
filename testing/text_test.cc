@@ -77,7 +77,8 @@ class TextTest : public ::testing::Test {
   bool TokenExists(const std::string& token,
                    std::shared_ptr<text::TextIndexSchema> schema = nullptr) {
     auto active_schema = schema ? schema : text_index_schema_;
-    auto iter = active_schema->GetTextIndex()->prefix_.GetWordIterator(token);
+    auto iter =
+        active_schema->GetTextIndex()->GetPrefix().GetWordIterator(token);
     return !iter.Done();
   }
 
@@ -86,7 +87,8 @@ class TextTest : public ::testing::Test {
       const std::string& token,
       std::shared_ptr<text::TextIndexSchema> schema = nullptr) {
     auto active_schema = schema ? schema : text_index_schema_;
-    auto iter = active_schema->GetTextIndex()->prefix_.GetWordIterator(token);
+    auto iter =
+        active_schema->GetTextIndex()->GetPrefix().GetWordIterator(token);
     if (iter.Done()) {
       return nullptr;
     }
@@ -379,7 +381,7 @@ TEST_F(TextTest, StemmingBehavior) {
 
   // Stemming behavior depends on the stemmer implementation
   // This test ensures stemming doesn't break the indexing pipeline
-  auto& prefix_tree = stemming_schema->GetTextIndex()->prefix_;
+  auto& prefix_tree = stemming_schema->GetTextIndex()->GetPrefix();
 
   // Should create some tokens (exact form depends on stemmer)
   bool has_tokens = false;
@@ -449,12 +451,11 @@ TEST_F(TextTest, FetcherSizeEstimation) {
     AddRecordAndCommitKey(suffix_text_index.get(), key3, "another document",
                           suffix_schema);
     // Perform query and validate
-    query_term = "ment" query::SuffixPredicate suffix_pred(
-        suffix_schema, field_mask, query_term);
+    query::SuffixPredicate suffix_pred(
+        suffix_schema, field_mask, "ment");
     auto fetcher_ptr = suffix_pred.Search(false);
     auto* fetcher = static_cast<Text::EntriesFetcher*>(fetcher_ptr);
-    EXPECT_EQ(fetcher->Size(), 3) << "SuffixPredicate for '" << query_term
-                                  << "' should estimate 3 documents";
+    EXPECT_EQ(fetcher->Size(), 3) << "SuffixPredicate for 'ment' should estimate 3 documents";
     delete fetcher;
   }
   // Test 4: Non-existent term

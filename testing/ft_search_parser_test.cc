@@ -69,6 +69,9 @@ struct FTSearchParserTestCase {
   std::string search_parameters_str;
   uint64_t timeout_ms{query::kTimeoutMS};
   bool vector_query{true};
+  bool verbatim{false};
+  bool inorder{false};
+  std::optional<unsigned> slop{};
 };
 
 class FTSearchParserTest
@@ -178,10 +181,15 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
   if (test_case.vector_query) {
     auto floats_vec = FloatToValkeyStringVector(floats);
     args.insert(args.end(), floats_vec.begin(), floats_vec.end());
+  }
+  // Add search parameters for both vector and non-vector queries
+  if (!test_case.search_parameters_str.empty()) {
     auto search_parameters_vec =
         vmsdk::ToValkeyStringVector(test_case.search_parameters_str);
     args.insert(args.end(), search_parameters_vec.begin(),
                 search_parameters_vec.end());
+  }
+  if (test_case.vector_query) {
     if (!kDialectOptions[dialect_itr].second.empty()) {
       auto dialect_vec =
           vmsdk::ToValkeyStringVector(kDialectOptions[dialect_itr].second);
@@ -197,12 +205,30 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
 
   std::cerr << "Executing cmd: ";
   for (auto &a : args) {
-    std::cerr << vmsdk::ToStringView(a) << " ";
+    std::cerr << "'" << vmsdk::ToStringView(a) << "' ";
   }
   std::cerr << "\n";
 
-  auto search_params = ParseVectorSearchParameters(&fake_ctx, &args[0],
-                                                   args.size(), schema_manager);
+  // Repro semantics of command startup
+  vmsdk::ArgsIterator itr{&args[0], int(args.size())};
+  absl::StatusOr<std::unique_ptr<SearchCommand>> search_params(
+      std::make_unique<SearchCommand>());
+  (*search_params)->timeout_ms = 50000;
+  (*search_params)->index_schema_name = vmsdk::ToStringView(*itr.PopNext());
+  (*search_params)->parse_vars.query_string =
+      vmsdk::ToStringView(*itr.PopNext());
+  auto this_index_schema =
+      schema_manager.GetIndexSchema(0, (*search_params)->index_schema_name);
+  if (!this_index_schema.ok()) {
+    search_params = this_index_schema.status();
+  } else {
+    (*search_params)->index_schema = *this_index_schema;
+    auto sts = (*search_params)->ParseCommand(itr);
+    if (!sts.ok()) {
+      search_params = sts;
+    }
+  }
+
   bool expected_success = dialect_expected_success && limit_expected_success &&
                           test_case.success && !add_end_unexpected_param &&
                           timeout_expected_success;
@@ -250,6 +276,11 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
     } else {
       EXPECT_EQ(search_params.value()->timeout_ms, test_case.timeout_ms);
     }
+
+    // Validate all search parameters
+    EXPECT_EQ(search_params.value()->verbatim, test_case.verbatim);
+    EXPECT_EQ(search_params.value()->inorder, test_case.inorder);
+    EXPECT_EQ(search_params.value()->slop, test_case.slop);
   } else {
     std::cerr << "Failed to parse command: `" << vmsdk::ToStringView(args[0])
               << "` Because: " << search_params.status().message() << "\n";
@@ -706,6 +737,171 @@ INSTANTIATE_TEST_SUITE_P(
                 "Error parsing vector similarity parameters: `[KNN 10 @vec1 "
                 "]`. Blob attribute "
                 "argument is missing",
+        },
+        // VERBATIM parameter tests
+        {
+            .test_name = "verbatim_vector_query",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "VERBATIM",
+            .verbatim = true,
+        },
+        {
+            .test_name = "verbatim_non_vector_query",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "VERBATIM",
+            .vector_query = false,
+            .verbatim = true,
+        },
+        // INORDER parameter tests
+        {
+            .test_name = "inorder_vector_query",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "INORDER",
+            .inorder = true,
+        },
+        {
+            .test_name = "inorder_non_vector_query",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "INORDER",
+            .vector_query = false,
+            .inorder = true,
+        },
+        // SLOP parameter tests
+        {
+            .test_name = "slop_vector_query",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "SLOP 3",
+            .slop = 3,
+        },
+        {
+            .test_name = "slop_non_vector_query",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "SLOP 5",
+            .vector_query = false,
+            .slop = 5,
+        },
+        {
+            .test_name = "slop_zero_value",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "SLOP 0",
+            .slop = 0,
+        },
+        // Combined parameter tests
+        {
+            .test_name = "multiple_parameters_vector_query",
+            .success = true,
+            .params_str = " PARAMS 4 EF 150",
+            .filter_str = "* =>[KNN 10 @vec $BLOB EF_RUNTIME $EF]",
+            .k = 10,
+            .ef = 150,
+            .search_parameters_str = "VERBATIM INORDER SLOP 2",
+            .verbatim = true,
+            .inorder = true,
+            .slop = 2,
+        },
+        {
+            .test_name = "multiple_parameters_non_vector_query",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "VERBATIM SLOP 1",
+            .vector_query = false,
+            .verbatim = true,
+            .slop = 1,
+        },
+        {
+            .test_name = "all_parameters_combined",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 8 @vec $BLOB]",
+            .k = 8,
+            .search_parameters_str = "VERBATIM "
+                                     "INORDER SLOP 4 TIMEOUT 300",
+            .timeout_ms = 300,
+            .verbatim = true,
+            .inorder = true,
+            .slop = 4,
+        },
+        // Mixed with existing parameters
+        {
+            .test_name = "search_params_with_return_and_timeout",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 7 @vec $BLOB]",
+            .k = 7,
+            .return_str = "",
+            .return_attributes = {{"field1", "field1"}, {"field2", "field2"}},
+            .search_parameters_str = "RETURN 2 field1 field2 TIMEOUT 400",
+            .timeout_ms = 400,
+        },
+        // Negative SLOP parameter tests
+        {
+            .test_name = "negative_slop_vector_query",
+            .success = false,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .expected_error_message =
+                "Error parsing value for the parameter `SLOP`",
+            .search_parameters_str = "SLOP -1",
+        },
+        {
+            .test_name = "negative_slop_non_vector_query",
+            .success = false,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .expected_error_message =
+                "Error parsing value for the parameter `SLOP`",
+            .search_parameters_str = "SLOP -5",
+            .vector_query = false,
+        },
+        {
+            .test_name = "negative_slop_large_negative_value",
+            .success = false,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 3 @vec $BLOB]",
+            .k = 3,
+            .expected_error_message =
+                "Error parsing value for the parameter `SLOP`",
+            .search_parameters_str = "SLOP -100",
         },
     }),
     [](const TestParamInfo<FTSearchParserTestCase> &info) {

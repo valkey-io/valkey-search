@@ -61,13 +61,13 @@ jobs:
         id: build-comp-db
         run: |
           echo "Building CompDB"
-          docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image bash -c "sudo su ubuntu && export USERNAME='ubuntu' && sudo chown -R ubuntu:ubuntu /workspace && export HOME='/home/ubuntu'  && export USERNAME='ubuntu' && ci/refresh_comp_db.sh "
+          docker run --rm --privileged -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image bash -c "sudo su ubuntu && export USERNAME='ubuntu' && sudo chown -R ubuntu:ubuntu /workspace && export HOME='/home/ubuntu'  && export USERNAME='ubuntu' && ci/refresh_comp_db.sh "
 
       - name: Find and process modified files
         run: |
           set -euo pipefail
           echo "Finding modified or added .cc and .h files..."
-          MODIFIED_FILES=$(git diff --name-only --diff-filter=AM $BASE_BRANCH | grep -E '\.(cc|h)$' || echo "")
+          MODIFIED_FILES=$(git diff --name-only --diff-filter=AM $BASE_BRANCH | grep -E '\.(cc|h)$' | grep -v '^third_party/' || echo "")
 
           if [[ -z "$MODIFIED_FILES" ]]; then
             echo "No .cc or .h files modified."
@@ -79,7 +79,7 @@ jobs:
 
           for FILE in $MODIFIED_FILES; do
             echo "Running clang-format check on $FILE"
-            docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image \
+            docker run --rm --privileged -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image \
             bash -c "ci/check_clang_format.sh \"$FILE\""
             
             # TODO: Enable clang tidy after the existing code is tidied

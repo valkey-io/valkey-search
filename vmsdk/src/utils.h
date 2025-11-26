@@ -47,6 +47,7 @@ int StopTimerFromBackgroundThread(
     ValkeyModuleCtx *ctx, ValkeyModuleTimerID timer_id,
     absl::AnyInvocable<void(void *)> user_data_deleter);
 
+bool verifyLoadedOnlyOnce();
 void TrackCurrentAsMainThread();
 bool IsMainThread();
 inline void VerifyMainThread() { CHECK(IsMainThread()); }
@@ -133,5 +134,25 @@ struct JsonQuotedStringView {
   VMSDK_NON_COPYABLE(ClassName);                  \
   VMSDK_NON_MOVABLE(ClassName)
 
+struct SocketAddress {
+  std::string primary_endpoint;
+  uint16_t port;
+
+  auto operator<=>(const SocketAddress &) const = default;
+};
+
 }  // namespace vmsdk
+
+// Hash specialization for SocketAddress
+namespace std {
+template <>
+struct hash<vmsdk::SocketAddress> {
+  size_t operator()(const vmsdk::SocketAddress &addr) const {
+    size_t h1 = std::hash<std::string>{}(addr.primary_endpoint);
+    size_t h2 = std::hash<uint16_t>{}(addr.port);
+    return h1 ^ (h2 << 1);
+  }
+};
+}  // namespace std
+
 #endif  // VMSDK_SRC_UTILS_H_

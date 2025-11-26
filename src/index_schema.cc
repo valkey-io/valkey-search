@@ -50,6 +50,7 @@
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
@@ -266,6 +267,85 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexSchema::GetIndex(
   return itr->second.GetIndex();
 }
 
+// Helper function called on Text index creation to precompute various text
+// schema level information that will be used for default field searches where
+// there is no field specifier.
+void IndexSchema::UpdateTextFieldMasksForIndex(const std::string &identifier,
+                                               indexes::IndexBase *index) {
+  if (index->GetIndexerType() == indexes::IndexerType::kText) {
+    auto *text_index = dynamic_cast<const indexes::Text *>(index);
+    uint64_t field_bit = 1ULL << text_index->GetTextFieldNumber();
+    // Update field masks and identifiers
+    all_text_field_mask_ |= field_bit;
+    all_text_identifiers_.insert(identifier);
+    if (text_index->WithSuffixTrie()) {
+      suffix_text_field_mask_ |= field_bit;
+      suffix_text_identifiers_.insert(identifier);
+    }
+    // Update min stem sizes
+    if (text_index->IsStemmingEnabled()) {
+      uint32_t stem_size = text_index->GetMinStemSize();
+      all_fields_min_stem_size_ =
+          all_fields_min_stem_size_.has_value()
+              ? std::min(*all_fields_min_stem_size_, stem_size)
+              : stem_size;
+      if (text_index->WithSuffixTrie()) {
+        suffix_fields_min_stem_size_ =
+            suffix_fields_min_stem_size_.has_value()
+                ? std::min(*suffix_fields_min_stem_size_, stem_size)
+                : stem_size;
+      }
+    }
+  }
+}
+
+// Returns a vector of all the text (field) identifiers within the text
+// index schema. This is intended to be used by queries where there
+// is no field specification, and we want to include results from all
+// text fields.
+// If `with_suffix` is true, we only include the fields that have suffix tree
+// enabled.
+const absl::flat_hash_set<std::string> &IndexSchema::GetAllTextIdentifiers(
+    bool with_suffix) const {
+  return with_suffix ? suffix_text_identifiers_ : all_text_identifiers_;
+}
+
+// Find the min stem size across all text fields in the text index schema.
+// If stemming is disabled across all text field indexes, return `nullopt`.
+// If `with_suffix` is true, we only check the fields that have suffix tree
+// enabled.
+std::optional<uint32_t> IndexSchema::MinStemSizeAcrossTextIndexes(
+    bool with_suffix) const {
+  return with_suffix ? suffix_fields_min_stem_size_ : all_fields_min_stem_size_;
+}
+
+// Returns the field mask including all the text fields.
+// If `with_suffix` is true, we only include fields that have suffix tree
+// enabled.
+FieldMaskPredicate IndexSchema::GetAllTextFieldMask(bool with_suffix) const {
+  return with_suffix ? suffix_text_field_mask_ : all_text_field_mask_;
+}
+
+// Helper function to return the text identifiers based on the
+// FieldMaskPredicate.
+absl::flat_hash_set<std::string> IndexSchema::GetTextIdentifiersByFieldMask(
+    FieldMaskPredicate field_mask) const {
+  absl::flat_hash_set<std::string> matches;
+  for (const auto &identifier : all_text_identifiers_) {
+    auto index_result = GetIndex(identifier);
+    if (index_result.ok() &&
+        index_result.value()->GetIndexerType() == indexes::IndexerType::kText) {
+      auto *text_index =
+          dynamic_cast<const indexes::Text *>(index_result.value().get());
+      FieldMaskPredicate field_bit = 1ULL << text_index->GetTextFieldNumber();
+      if (field_mask & field_bit) {
+        matches.insert(identifier);
+      }
+    }
+  }
+  return matches;
+}
+
 absl::StatusOr<std::string> IndexSchema::GetIdentifier(
     absl::string_view attribute_alias) const {
   auto itr = attributes_.find(std::string{attribute_alias});
@@ -308,6 +388,9 @@ absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
   }
   identifier_to_alias_.insert(
       {std::string(identifier), std::string(attribute_alias)});
+  // Update schema level Text information for default field searches
+  // without any field specifier.
+  UpdateTextFieldMasksForIndex(std::string(identifier), index.get());
   return absl::OkStatus();
 }
 
@@ -399,7 +482,7 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     // Otherwise, it will be processed as a delete
     if (!record && !attribute.GetIndex()->IsTracked(interned_key) &&
         !InTrackedMutationRecords(interned_key, attribute.GetIdentifier())) {
-      return;
+      continue;
     }
     if (!is_module_owned) {
       // A record which are owned by the module were not modified and are
@@ -450,6 +533,11 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     ProcessAttributeMutation(ctx, itr->second, key,
                              std::move(attribute_data_itr.second.data),
                              attribute_data_itr.second.deletion_type);
+  }
+  if (text_index_schema_) {
+    // Text index structures operate at the schmema-level so we commit the
+    // updates to all Text attributes in one operation for efficiency
+    text_index_schema_->CommitKeyData(key);
   }
 }
 
@@ -758,9 +846,12 @@ uint64_t IndexSchema::CountRecords() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  // Calculate additional array size for text-related fields only if text fields
-  // exist
-  int arrSize = 24;
+  int arrSize = 30;
+  // Debug Text index Memory info fields
+  if (vmsdk::config::IsDebugModeEnabled()) {
+    arrSize += 8;
+  }
+  // Text-attribute info fields
   if (text_index_schema_) {
     arrSize += 6;
   }
@@ -795,6 +886,39 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithLongLong(ctx, stats_.document_cnt);
   ValkeyModule_ReplyWithSimpleString(ctx, "num_records");
   ValkeyModule_ReplyWithLongLong(ctx, CountRecords());
+  // Text Index info fields
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_total_terms");
+  ValkeyModule_ReplyWithLongLong(
+      ctx,
+      text_index_schema_ ? text_index_schema_->GetTotalTermFrequency() : 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "num_unique_terms");
+  ValkeyModule_ReplyWithLongLong(
+      ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
+  ValkeyModule_ReplyWithSimpleString(ctx, "total_postings");
+  ValkeyModule_ReplyWithLongLong(
+      ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
+
+  // Memory statistics are only shown when debug mode is enabled
+  if (vmsdk::config::IsDebugModeEnabled()) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "posting_sz_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx,
+        text_index_schema_ ? text_index_schema_->GetPostingsMemoryUsage() : 0);
+    ValkeyModule_ReplyWithSimpleString(ctx, "position_sz_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx,
+        text_index_schema_ ? text_index_schema_->GetPositionMemoryUsage() : 0);
+    ValkeyModule_ReplyWithSimpleString(ctx, "radix_sz_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx,
+        text_index_schema_ ? text_index_schema_->GetRadixTreeMemoryUsage() : 0);
+    ValkeyModule_ReplyWithSimpleString(ctx, "total_text_index_sz_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx, text_index_schema_
+                 ? text_index_schema_->GetTotalTextIndexMemoryUsage()
+                 : 0);
+  }
+  // Text Index info fields end
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%lu", stats_.subscription_add.skipped_cnt).c_str());

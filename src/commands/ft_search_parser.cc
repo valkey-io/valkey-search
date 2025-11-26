@@ -29,14 +29,12 @@
 #include "src/indexes/index_base.h"
 #include "src/metrics.h"
 #include "src/query/search.h"
-#include "src/schema_manager.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
 
@@ -72,6 +70,9 @@ constexpr absl::string_view kTimeoutParam{"TIMEOUT"};
 constexpr absl::string_view kAsParam{"AS"};
 constexpr absl::string_view kLocalOnly{"LOCALONLY"};
 constexpr absl::string_view kVectorFilterDelimiter = "=>";
+constexpr absl::string_view kSlop{"SLOP"};
+constexpr absl::string_view kInorder{"INORDER"};
+constexpr absl::string_view kVerbatim{"VERBATIM"};
 
 absl::StatusOr<absl::string_view> SubstituteParam(
     query::SearchParameters &parameters, absl::string_view source) {
@@ -174,8 +175,12 @@ absl::StatusOr<size_t> FindCloseSquareBracket(absl::string_view input) {
 }
 
 absl::StatusOr<FilterParseResults> ParsePreFilter(
-    const IndexSchema &index_schema, absl::string_view pre_filter) {
-  FilterParser parser(index_schema, pre_filter);
+    const IndexSchema &index_schema, absl::string_view pre_filter,
+    const query::SearchParameters &search_params) {
+  TextParsingOptions options{.verbatim = search_params.verbatim,
+                             .inorder = search_params.inorder,
+                             .slop = search_params.slop};
+  FilterParser parser(index_schema, pre_filter, options);
   return parser.Parse();
 }
 
@@ -338,6 +343,12 @@ vmsdk::KeyValueParser<query::SearchParameters> CreateSearchParser() {
       GENERATE_FLAG_PARSER(query::SearchParameters, no_content));
   parser.AddParamParser(kReturnParam, ConstructReturnParser());
   parser.AddParamParser(kParamsParam, ConstructParamsParser());
+  parser.AddParamParser(kInorder,
+                        GENERATE_FLAG_PARSER(query::SearchParameters, inorder));
+  parser.AddParamParser(
+      kVerbatim, GENERATE_FLAG_PARSER(query::SearchParameters, verbatim));
+  parser.AddParamParser(kSlop,
+                        GENERATE_VALUE_PARSER(query::SearchParameters, slop));
   return parser;
 }
 
@@ -376,7 +387,7 @@ absl::Status PreParseQueryString(query::SearchParameters &parameters) {
   }
   VMSDK_ASSIGN_OR_RETURN(
       parameters.filter_parse_results,
-      ParsePreFilter(*parameters.index_schema, pre_filter),
+      ParsePreFilter(*parameters.index_schema, pre_filter, parameters),
       _.SetPrepend() << "Invalid filter expression: `" << pre_filter << "`. ");
   if (!parameters.filter_parse_results.root_predicate &&
       vector_filter.empty()) {
@@ -446,30 +457,17 @@ absl::Status PostParseQueryString(query::SearchParameters &parameters) {
   return absl::OkStatus();
 }
 
-absl::StatusOr<std::unique_ptr<query::SearchParameters>>
-ParseVectorSearchParameters(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
-                            int argc, const SchemaManager &schema_manager) {
-  vmsdk::ArgsIterator itr{argv, argc};
-  auto parameters = std::make_unique<query::SearchParameters>(
-      options::GetDefaultTimeoutMs().GetValue(), nullptr);
-  VMSDK_RETURN_IF_ERROR(
-      vmsdk::ParseParamValue(itr, parameters->index_schema_name));
-  VMSDK_ASSIGN_OR_RETURN(
-      parameters->index_schema,
-      SchemaManager::Instance().GetIndexSchema(ValkeyModule_GetSelectedDb(ctx),
-                                               parameters->index_schema_name));
-  VMSDK_RETURN_IF_ERROR(
-      vmsdk::ParseParamValue(itr, parameters->parse_vars.query_string));
-  VMSDK_RETURN_IF_ERROR(SearchParser.Parse(*parameters, itr));
+absl::Status SearchCommand::ParseCommand(vmsdk::ArgsIterator &itr) {
+  VMSDK_RETURN_IF_ERROR(SearchParser.Parse(*this, itr));
   if (itr.DistanceEnd() > 0) {
     return absl::InvalidArgumentError(
         absl::StrCat("Unexpected parameter at position ", (itr.Position() + 1),
                      ":", vmsdk::ToStringView(itr.Get().value())));
   }
-  VMSDK_RETURN_IF_ERROR(PreParseQueryString(*parameters));
-  VMSDK_RETURN_IF_ERROR(PostParseQueryString(*parameters));
-  VMSDK_RETURN_IF_ERROR(Verify(*parameters));
-  parameters->parse_vars.ClearAtEndOfParse();
-  return parameters;
+  VMSDK_RETURN_IF_ERROR(PreParseQueryString(*this));
+  VMSDK_RETURN_IF_ERROR(PostParseQueryString(*this));
+  VMSDK_RETURN_IF_ERROR(Verify(*this));
+  return absl::OkStatus();
 }
+
 }  // namespace valkey_search

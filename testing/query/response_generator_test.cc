@@ -41,7 +41,7 @@ using testing::ValuesIn;
 class MockPredicate : public query::Predicate {
  public:
   explicit MockPredicate(query::PredicateType type) : query::Predicate(type) {}
-  MOCK_METHOD(bool, Evaluate, (query::Evaluator & evaluator),
+  MOCK_METHOD(query::EvaluationResult, Evaluate, (query::Evaluator & evaluator),
               (override, const));
 };
 
@@ -104,10 +104,11 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
       .WillRepeatedly([&params, &filter_evaluate_cnt](
                           [[maybe_unused]] query::Evaluator &evaluator) {
         if (params.filter_evaluate_not_match_index == -1) {
-          return true;
+          return query::EvaluationResult(true);
         }
         ++filter_evaluate_cnt;
-        return (filter_evaluate_cnt != params.filter_evaluate_not_match_index);
+        return query::EvaluationResult(filter_evaluate_cnt !=
+                                       params.filter_evaluate_not_match_index);
       });
 
   parameters.filter_parse_results.root_predicate = std::move(predicate);

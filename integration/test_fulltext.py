@@ -1,12 +1,14 @@
 import pytest
 from valkey import ResponseError
 from valkey.client import Valkey
-from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkey_search_test_case import ValkeySearchTestCaseBase, ValkeySearchTestCaseDebugMode
+from valkey_search_test_case import ValkeySearchClusterTestCase
 from valkeytestframework.conftest import resource_port_tracker
 from ft_info_parser import FTInfoParser
 from valkeytestframework.util import waiters
 import threading
 import time
+import os
 from utils import IndexingTestHelper
 
 """
@@ -24,14 +26,15 @@ hash_docs = [
     ["HSET", "product:1", "category", "electronics", "name", "Laptop", "price", "999.99", "rating", "4.5", "desc", "1 2 3 4 5 6 7 8 9 0. Great oaks. Random Words. Random Words. Great oaks from little grey acorns grow. Impressive oak."],
     ["HSET", "product:3", "category", "electronics", "name", "Phone", "price", "299.00", "rating", "3.8", "desc", "Random Words. Experience. Random Words. Ok, this document uses some more common words from other docs. Interesting desc, impressive tablet. Random Words."],
     ["HSET", "product:5", "category", "books", "name", "Book2", "price", "19.99", "rating", "1.0", "desc", "Unique slop word. Random Words. Random Words. greased the inspector's palm"],
-    ["HSET", "product:2", "category", "electronics", "name", "Tablet", "price", "499.00", "rating", "4.0", "desc", "Random Words. Random Words. Interesting. Good beginning makes a good ending. Interesting desc"]
+    ["HSET", "product:2", "category", "electronics", "name", "Tablet", "price", "499.00", "rating", "4.0", "desc", "Random Words, These are not correct. Random Words. Interesting. Good beginning makes a good ending. Interesting desc"],
+    ["HSET", "product:6", "category", "books", "name", "BookOnAI", "price", "0.50", "rating", "5.0", "desc", "Poplog is a reflective, incrementally compiled software development environment for the programming languages POP-11, Common Lisp, Prolog, and Standard ML, originally created in the UK for teaching and research in artificial intelligence at the University of Sussex."]
 ]
 text_query_term = ["FT.SEARCH", "products", '@desc:"wonder"']
 text_query_term_nomatch = ["FT.SEARCH", "products", '@desc:"nomatch"']
-text_query_prefix = ["FT.SEARCH", "products", '@desc:"wond*"']
-text_query_prefix2 = ["FT.SEARCH", "products", '@desc:"wond*"']
-text_query_prefix_nomatch = ["FT.SEARCH", "products", '@desc:"nomatch*"']
-text_query_prefix_multimatch = ["FT.SEARCH", "products", '@desc:"grea*"']
+text_query_prefix = ["FT.SEARCH", "products", '@desc:wond*']
+text_query_prefix2 = ["FT.SEARCH", "products", '@desc:wond*']
+text_query_prefix_nomatch = ["FT.SEARCH", "products", '@desc:nomatch*']
+text_query_prefix_multimatch = ["FT.SEARCH", "products", '@desc:grea*']
 text_query_exact_phrase1 = ["FT.SEARCH", "products", '@desc:"word wonder"']
 text_query_exact_phrase2 = ["FT.SEARCH", "products", '@desc:"random word wonder"']
 
@@ -55,9 +58,9 @@ hash_docs_with_desc2 = [
 
 # Search queries for specific fields
 text_query_desc_field = ["FT.SEARCH", "products2", '@desc:"wonder"']
-text_query_desc_prefix = ["FT.SEARCH", "products2", '@desc:"wonde*"']
+text_query_desc_prefix = ["FT.SEARCH", "products2", '@desc:wonde*']
 text_query_desc2_field = ["FT.SEARCH", "products2", '@desc2:"wonder"']
-text_query_desc2_prefix = ["FT.SEARCH", "products2", '@desc2:"wonde*"']
+text_query_desc2_prefix = ["FT.SEARCH", "products2", '@desc2:wonde*']
 
 # Expected results for desc field search
 expected_desc_hash_key = b'product:4'
@@ -81,6 +84,110 @@ expected_desc2_hash_value = {
     b'category': b"electronics"
 }
 
+def validate_fulltext_search(client: Valkey):
+    # Wait for index backfill to complete
+    IndexingTestHelper.wait_for_backfill_complete_on_node(client, "products")
+    # Perform the text search query with term and prefix operations that return a match.
+    # text_query_exact_phrase1 is crashing.
+    match = [text_query_term, text_query_prefix, text_query_prefix2, text_query_exact_phrase1, text_query_exact_phrase2]
+    for query in match:
+        result = client.execute_command(*query)
+        assert len(result) == 3
+        assert result[0] == 1  # Number of documents found
+        assert result[1] == expected_hash_key
+        document = result[2]
+        doc_fields = dict(zip(document[::2], document[1::2]))
+        assert doc_fields == expected_hash_value
+    # Perform the text search query with term and prefix operations that return no match.
+    nomatch = [text_query_term_nomatch, text_query_prefix_nomatch]
+    for query in nomatch:
+        result = client.execute_command(*query)
+        assert len(result) == 1
+        assert result[0] == 0  # Number of documents found
+    # Perform a wild card prefix operation with multiple matches
+    result = client.execute_command(*text_query_prefix_multimatch)
+    assert len(result) == 5
+    assert result[0] == 2  # Number of documents found. Both docs below start with Grea* => Great and Greased
+    assert (result[1] == b"product:1" and result[3] == b"product:5") or (
+        result[1] == b"product:5" and result[3] == b"product:1"
+    )
+    # Test Prefix wildcard searches with a single match. Also, check that when the starting of the word
+    # is missing, no matches are found.
+    result1 = client.execute_command("FT.SEARCH", "products", '@desc:experi*')
+    result2 = client.execute_command("FT.SEARCH", "products", '@desc:expe*')
+    result3 = client.execute_command("FT.SEARCH", "products", '@desc:xpe*')
+    assert result1[0] == 1 and result2[0] == 1 and result3[0] == 0
+    assert result1[1] == b"product:3" and result2[1] == b"product:3"
+    # TODO: Update these queries to non stemmed versions once the stem tree is supported and ingestion is updated.
+    # Perform an exact phrase search operation on a unique phrase (exists in one doc).
+    result1 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl"')
+    result2 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl grey acorn grow"')
+    assert result1[0] == 1 and result2[0] == 1
+    assert result1[1] == b"product:1" and result2[1] == b"product:1"
+    result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn gr*')
+    assert result3[0] == 1
+    assert result3[1] == b"product:1"
+    # Perform composed AND with Slop and inorder specified.
+    result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn grea*', "SLOP", "0", "INORDER")
+    assert result3[0] == 0
+    result3 = client.execute_command("FT.SEARCH", "products", 'great oa* from lit* gr* acorn great', "SLOP", "0", "INORDER")
+    assert result3[0] == 0
+    # Perform an exact phrase search operation on a phrase existing in 2 documents.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"interest desc"')
+    assert result[0] == 2
+    assert set(result[1::2]) == {b"product:3", b"product:2"}
+    # Perform an exact phrase search operation on a phrase existing in 5 documents.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"random word"')
+    assert result[0] == 5
+    assert set(result[1::2]) == {b"product:1", b"product:2", b"product:3", b"product:4", b"product:5"}
+    # Perform an exact phrase search operation on a phrase existing in 1 document.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"uncommon random word"')
+    assert result[0] == 1
+    assert result[1] == b"product:4"
+    # Test for searches on tokens that have common keys, but in-order does not match.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"opposit order"')
+    assert result[0] == 0
+    # Test for searches on tokens that have common keys, but slop does not match.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"word uniqu"')
+    assert result[0] == 0
+    # Test for searches on tokens that have common keys and inorder matches but slop does not match.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"uniqu word"')
+    assert result[0] == 0
+    # Test for searches on tokens that have common keys and slop matches but inorder does not match.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"uniqu word slop"')
+    assert result[0] == 0
+    # Now, with the inorder, with no slop, it should match.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"uniqu slop word"')
+    assert result[0] == 1
+    assert result[1] == b"product:5"
+    # Validating the inorder and slop checks for a query with multiple tokens.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"1 2 3 4 5 6 7 9 8 0"')
+    assert result[0] == 0
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"1 2 3 4 5 6 7 9"')
+    assert result[0] == 0
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"1 2 3 4 5 6 7 8 9 0"')
+    assert result[0] == 1
+    assert result[1] == b"product:1"
+    # Validate that queries are tokenized with punctuation applied.
+    result = client.execute_command("FT.SEARCH", "products", '@desc:"inspector\'s palm"')
+    assert result[0] == 1
+    assert result[1] == b"product:5"
+    # Validate the nuanced behavaior of exact phrase search where:
+    # 1. Stopwords are not removed. (`these are not` - in this example)
+    # 2. Stemming is not done on words. (`words` is not stemmed and the ingestion is not)
+    # 3. Punctuation is applied (removal of `,` in this example).
+    result1 = client.execute_command("FT.SEARCH", "products", '@desc:"random words, these are not correct"')
+    result2 = client.execute_command("FT.SEARCH", "products", '@desc:"random word, these are not correct"')
+    result3 = client.execute_command("FT.SEARCH", "products", '@desc:"random words, correct"')
+    result4 = client.execute_command("FT.SEARCH", "products", '@desc:"random word, correct"')
+    assert result1[0] == 0 and result2[0] == 0 and result3[0] == 0
+    assert result4[0] == 1
+    assert result4[1] == b"product:2"
+    # Validate that we can handle inorder = false by looking across documents with these terms below in any order.
+    result = client.execute_command("FT.SEARCH", "products", 'artificial intelligence research')
+    assert result[0] == 1
+    assert result[1] == b"product:6"
+
 class TestFullText(ValkeySearchTestCaseBase):
 
     def test_text_search(self):
@@ -90,94 +197,11 @@ class TestFullText(ValkeySearchTestCaseBase):
         client: Valkey = self.server.get_new_client()
         # Create the text index on Hash documents
         assert client.execute_command(text_index_on_hash) == b"OK"
-        # Insert documents into the index
+        # Data population:
         for doc in hash_docs:
             assert client.execute_command(*doc) == 5
-        # Perform the text search query with term and prefix operations that return a match.
-        # text_query_exact_phrase1 is crashing.
-        match = [text_query_term, text_query_prefix, text_query_prefix2, text_query_exact_phrase1, text_query_exact_phrase2]
-        for query in match:
-            result = client.execute_command(*query)
-            assert len(result) == 3
-            assert result[0] == 1  # Number of documents found
-            assert result[1] == expected_hash_key
-            document = result[2]
-            doc_fields = dict(zip(document[::2], document[1::2]))
-            assert doc_fields == expected_hash_value
-        # Perform the text search query with term and prefix operations that return no match.
-        nomatch = [text_query_term_nomatch, text_query_prefix_nomatch]
-        for query in nomatch:
-            result = client.execute_command(*query)
-            assert len(result) == 1
-            assert result[0] == 0  # Number of documents found
-        # Perform a wild card prefix operation with multiple matches
-        result = client.execute_command(*text_query_prefix_multimatch)
-        assert len(result) == 5
-        assert result[0] == 2  # Number of documents found. Both docs below start with Grea* => Great and Greased
-        assert (result[1] == b"product:1" and result[3] == b"product:5") or (
-            result[1] == b"product:5" and result[3] == b"product:1"
-        )
-        # Test Prefix wildcard searches with a single match. Also, check that when the starting of the word
-        # is missing, no matches are found.
-        result1 = client.execute_command("FT.SEARCH", "products", '@desc:experi*')
-        result2 = client.execute_command("FT.SEARCH", "products", '@desc:expe*')
-        result3 = client.execute_command("FT.SEARCH", "products", '@desc:xpe*')
-        assert result1[0] == 1 and result2[0] == 1 and result3[0] == 0
-        assert result1[1] == b"product:3" and result2[1] == b"product:3"
-        # TODO: Update these queries to non stemmed versions after queries are stemmed.
-        # Perform an exact phrase search operation on a unique phrase (exists in one doc).
-        result1 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl"')
-        result2 = client.execute_command("FT.SEARCH", "products", '@desc:"great oak from littl grey acorn grow"')
-        assert result1[0] == 1 and result2[0] == 1
-        assert result1[1] == b"product:1" and result2[1] == b"product:1"
-        result3 = client.execute_command("FT.SEARCH", "products", '@desc:great @desc:oa* @desc:from @desc:lit* @desc:gr* @desc:acorn @desc:gr*')
-        assert result3[0] == 1
-        assert result3[1] == b"product:1"
-        result3 = client.execute_command("FT.SEARCH", "products", '@desc:great @desc:oa* @desc:from @desc:lit* @desc:gr* @desc:acorn @desc:grea*')
-        assert result3[0] == 0
-        result3 = client.execute_command("FT.SEARCH", "products", '@desc:great @desc:oa* @desc:from @desc:lit* @desc:gr* @desc:acorn @desc:great')
-        assert result3[0] == 0
-        # Perform an exact phrase search operation on a phrase existing in 2 documents.
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"interest desc"')
-        assert result[0] == 2
-        assert set(result[1::2]) == {b"product:3", b"product:2"}
-        # Perform an exact phrase search operation on a phrase existing in 5 documents.
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"random word"')
-        assert result[0] == 5
-        assert set(result[1::2]) == {b"product:1", b"product:2", b"product:3", b"product:4", b"product:5"}
-        # Perform an exact phrase search operation on a phrase existing in 1 document.
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"uncommon random word"')
-        assert result[0] == 1
-        assert result[1] == b"product:4"
-        # Test for searches on tokens that have common keys, but in-order does not match.
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"opposit order"')
-        assert result[0] == 0
-        # Test for searches on tokens that have common keys, but slop does not match.
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"word uniqu"')
-        assert result[0] == 0
-        # Test for searches on tokens that have common keys and inorder matches but slop does not match.
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"uniqu word"')
-        assert result[0] == 0
-        # Test for searches on tokens that have common keys and slop matches but inorder does not match.
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"uniqu word slop"')
-        assert result[0] == 0
-        # Now, with the inorder, with no slop, it should match.
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"uniqu slop word"')
-        assert result[0] == 1
-        assert result[1] == b"product:5"
-        # Validating the inorder and slop checks for a query with multiple tokens.
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"1 2 3 4 5 6 7 9 8 0"')
-        assert result[0] == 0
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"1 2 3 4 5 6 7 9"')
-        assert result[0] == 0
-        result = client.execute_command("FT.SEARCH", "products", '@desc:"1 2 3 4 5 6 7 8 9 0"')
-        assert result[0] == 1
-        assert result[1] == b"product:1"
-
-        # TODO: We can test this once the queries are tokenized with punctuation applied.
-        # result = client.execute_command("FT.SEARCH", "products", '@desc:"inspector\'s palm"')
-        # TODO: We can test this once the queries are tokenized with punctuation and stopword removal applied.
-        # result = client.execute_command("FT.SEARCH", "products", '@desc:"random words, these are not"')
+        # Validation of search queries:
+        validate_fulltext_search(client)
 
     def test_ft_create_and_info(self):
         """
@@ -320,7 +344,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         # Insert documents into the index - each doc has 6 fields now (including desc2)
         for doc in hash_docs_with_desc2:
             assert client.execute_command(*doc) == 6
-        
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "products2")
         # 1) Perform a term search on desc field for "wonder"
         # 2) Perform a prefix search on desc field for "Wonder*"
         desc_queries = [text_query_desc_field, text_query_desc_prefix]
@@ -364,21 +389,24 @@ class TestFullText(ValkeySearchTestCaseBase):
         client: Valkey = self.server.get_new_client()
         client.execute_command("FT.CREATE idx ON HASH SCHEMA content TEXT")
         client.execute_command("HSET", "doc:1", "content", "The quick-running searches are finding EFFECTIVE results!")
-        
-        # List of queries with pass/fail expectations
+        client.execute_command("HSET", "doc:2", "content", "But slow searches aren't working...")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        # List of queries with match / no match expectations        
         test_cases = [
             ("quick*", True, "Punctuation tokenization - hyphen creates word boundaries"),
             ("effect*", True, "Case insensitivity - lowercase matches uppercase"),
-            ("the", False, "Stop word filtering - common words filtered out"),
+            ("\"The quick-running searches are finding EFFECTIVE results!\"", False, "Stop word cannot be used in exact phrase searches"),
+            # TODO: Change to True once the stem tree is supported and ingestion is updated.
+            ("\"quick-running searches finding EFFECTIVE results!\"", False, "Exact phrase without stopwords"),
+            ("\"quick-run search find EFFECT result!\"", True, "Exact Phrase Query without stopwords and using stemmed words"),
             ("find*", True, "Prefix wildcard - matches 'finding'"),
             ("nonexistent", False, "Non-existent terms return no results")
         ]
-        
         expected_key = b'doc:1'
         expected_fields = [b'content', b"The quick-running searches are finding EFFECTIVE results!"]
-        
         for query_term, should_match, description in test_cases:
-            result = client.execute_command("FT.SEARCH", "idx", f'@content:"{query_term}"')
+            result = client.execute_command("FT.SEARCH", "idx", f'@content:{query_term}')
             if should_match:
                 assert result[0] == 1 and result[1] == expected_key and result[2] == expected_fields, f"Failed: {description}"
             else:
@@ -394,7 +422,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         client.execute_command("HSET", "doc:1", "title", "running fast", "content", "running quickly")
 
         expected = [1, b'doc:1', [b'content', b'running quickly', b'title', b'running fast']]
-
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         # We can find stems on 'title'
         assert client.execute_command("FT.SEARCH", "idx", '@title:"run"') == expected
 
@@ -412,16 +441,48 @@ class TestFullText(ValkeySearchTestCaseBase):
         client: Valkey = self.server.get_new_client()
         client.execute_command("FT.CREATE idx ON HASH STOPWORDS 2 the and SCHEMA content TEXT")
         client.execute_command("HSET", "doc:1", "content", "the cat and dog are good")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        # non stop words should be findable
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"cat dog are good"')
+        assert result[0] == 1  # Regular word indexed
+        assert result[1] == b'doc:1'
+        assert result[2] == [b'content', b"the cat and dog are good"]
         
         # Stop words should not be findable
         result = client.execute_command("FT.SEARCH", "idx", '@content:"and"')
         assert result[0] == 0  # Stop word "and" filtered out
-        
         # non stop words should be findable
         result = client.execute_command("FT.SEARCH", "idx", '@content:"are"')
         assert result[0] == 1  # Regular word indexed
         assert result[1] == b'doc:1'
         assert result[2] == [b'content', b"the cat and dog are good"]
+        # Stop words should not be findable
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"and"')
+        assert result[0] == 0  # Stop word "and" filtered out
+
+    def test_nostem(self):
+        """
+        End-to-end test: FT.CREATE NOSTEM config actually affects stemming in search
+        """
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE idx ON HASH NOSTEM SCHEMA content TEXT")
+        client.execute_command("HSET", "doc:1", "content", "running quickly")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        # With NOSTEM, exact tokens should be findable with exact phrase
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"running"')
+        assert result[0] == 1  # Exact form "running" found
+        assert result[1] == b'doc:1'
+        assert result[2] == [b'content', b"running quickly"]
+        # With NOSTEM, exact tokens should be findable with non exact phrase
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"running"')
+        assert result[0] == 1  # Exact form "running" found
+        assert result[1] == b'doc:1'
+        assert result[2] == [b'content', b"running quickly"]
+        # With NOSTEM, stemmed tokens should not be findable
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"run"')
+        assert result[0] == 0
 
     def test_custom_punctuation(self):
         """
@@ -430,16 +491,20 @@ class TestFullText(ValkeySearchTestCaseBase):
         client: Valkey = self.server.get_new_client()
         client.execute_command("FT.CREATE idx ON HASH PUNCTUATION . SCHEMA content TEXT")
         client.execute_command("HSET", "doc:1", "content", "hello.world test@email")
-        
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         # Dot configured as separator - should find split words
         result = client.execute_command("FT.SEARCH", "idx", '@content:"hello"')
         assert result[0] == 1  # Found "hello" as separate token
         assert result[1] == b'doc:1'
         assert result[2] == [b'content', b"hello.world test@email"]
-        
         # @ NOT configured as separator - should not be able with split words
         result = client.execute_command("FT.SEARCH", "idx", '@content:"test"')
         assert result[0] == 0
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"test@email"')
+        assert result[0] == 1  # Found "hello" as separate token
+        assert result[1] == b'doc:1'
+        assert result[2] == [b'content', b"hello.world test@email"]
 
     def test_add_update_delete_documents_single_client(self):
         """
@@ -452,12 +517,16 @@ class TestFullText(ValkeySearchTestCaseBase):
         # Add
         for i in range(num_docs):
             client.execute_command("HSET", f"doc:{i}", "content", f"What a cool document{i}")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         result = client.execute_command("FT.SEARCH", "idx", "@content:document*")
         assert result[0] == num_docs
 
         # Update
         for i in range(num_docs):
             client.execute_command("HSET", f"doc:{i}", "content", f"What a cool doc{i}")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         result = client.execute_command("FT.SEARCH", "idx", "@content:document*")
         assert result[0] == 0
         result = client.execute_command("FT.SEARCH", "idx", "@content:doc*")
@@ -466,6 +535,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         # Delete
         for i in range(num_docs):
             client.execute_command("DEL", f"doc:{i}")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         result = client.execute_command("FT.SEARCH", "idx", "@content:doc*")
         assert result[0] == 0
 
@@ -544,6 +615,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         # Validate ADD phase with concurrent searching
         client = clients[0]
         total_docs = num_clients * docs_per_client
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         
         result = client.execute_command("FT.SEARCH", "idx", "@content:document")
         assert result[0] == total_docs, f"ADD: Expected {total_docs} documents with 'document', got {result[0]}"
@@ -582,6 +655,9 @@ class TestFullText(ValkeySearchTestCaseBase):
         
         for thread in threads:
             thread.join()
+
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         
         # Validate UPDATE phase with concurrent searching
         result = client.execute_command("FT.SEARCH", "idx", "@content:origin")  # "original" stems to "origin"
@@ -619,6 +695,8 @@ class TestFullText(ValkeySearchTestCaseBase):
         # Validate DELETE phase with concurrent searching
         remaining_docs = total_docs // 2
         
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         result = client.execute_command("FT.SEARCH", "idx", "@content:updat")  # "updated" stems to "updat"
         assert result[0] == remaining_docs, f"DELETE: Expected {remaining_docs} documents with 'updat', got {result[0]}"
         
@@ -637,5 +715,417 @@ class TestFullText(ValkeySearchTestCaseBase):
         perform_concurrent_searches(clients, num_clients, delete_searches, "DELETE")
 
     def test_suffix_search(self):
-        # TODO
-        pass
+        """Test suffix search functionality using *suffix pattern"""
+        # Create index
+        self.client.execute_command("FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "content", "TEXT", "WITHSUFFIXTRIE", "NOSTEM", "extracontent", "TEXT", "NOSTEM")
+        # Add test documents
+        self.client.execute_command("HSET", "doc:1", "content", "running jumping walking", "extracontent", "data1")
+        self.client.execute_command("HSET", "doc:2", "content", "testing debugging coding", "extracontent", "running")
+        self.client.execute_command("HSET", "doc:3", "content", "reading writing speaking", "extracontent", "data2")
+        self.client.execute_command("HSET", "doc:4", "content", "swimming diving surfing", "extracontent", "data3")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(self.client, "idx")
+        # Test suffix search with *ing
+        result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ing")
+        assert result[0] == 4  # All documents contain words ending with 'ing'
+        # Test suffix search with *ing (should match running, jumping, walking, etc.)
+        result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ning")
+        assert result[0] == 1  # Only doc:1 has "running"
+        assert result[1] == b'doc:1'
+        # Test suffix search with *ing
+        result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ping")
+        assert result[0] == 1  # Only doc:1 has "jumping"
+        assert result[1] == b'doc:1'
+        # Test suffix search with *ing
+        result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ding")
+        assert result[0] == 2  # doc:2 has "coding", doc:3 has "reading"
+        # Test non-matching suffix
+        result = self.client.execute_command("FT.SEARCH", "idx", "@content:*xyz")
+        assert result[0] == 0
+        # Validate that suffix search on fields not enabled for suffix search are rejected
+        with pytest.raises(ResponseError) as err:
+            result = self.client.execute_command("FT.SEARCH", "idx", "@extracontent:*ata1")
+        assert "Field does not support suffix search" in str(err.value)
+        # Validate that we do not get results from fields which are not enabled with the suffix tree
+        result = self.client.execute_command("FT.SEARCH", "idx", "*ata1")
+        assert result[0] == 0
+        # Validate that the default field search only includes results from the fields enabled with suffix.
+        result = self.client.execute_command("FT.SEARCH", "idx", "*unning")
+        assert result[0] == 1  # Only doc:1 is matched for "running"
+        assert result[1] == b'doc:1'
+
+    def test_mixed_predicates(self):
+        """
+        Test queries with mixed text, numeric, and tag predicates.
+        Tests there is no regression with predicate evaluator changes for text.
+        """
+        client: Valkey = self.server.get_new_client()
+        
+        # Index with text, numeric, and tag fields
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "content", "TEXT", "NOSTEM","title", "TEXT", "NOSTEM", "Addr", "TEXT", "NOSTEM",
+                            "salary", "NUMERIC", 
+                            "skills", "TAG", "SEPARATOR", "|")
+        
+        # Test documents
+        client.execute_command("HSET", "doc:1", "content", "software engineer developer", "title", "Title:1", "Addr", "12 Apt ABC", "salary", "100000", "skills", "python|java")
+        client.execute_command("HSET", "doc:2", "content", "software development manager", "title", "Title:2", "Addr", "12 Apt EFG", "salary", "120000", "skills", "python|ml|leadership")
+        client.execute_command("HSET", "doc:3", "content", "product manager", "title", "Title:2", "Addr", "12 Apt EFG", "salary", "90000", "skills", "strategy|leadership")
+
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+
+        # Test 1: Text + Numeric (AND)
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"manager" @salary:[90000 110000]')
+        assert result[0] == 1  # Should find doc:1
+
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"manager" @salary:[90000 130000]')
+        assert result[0] == 2  # Should find doc:2, doc:3
+        
+        # Test 1.1: Text prefix + Numeric (AND)
+        result = client.execute_command("FT.SEARCH", "idx", '@content:develop* @salary:[90000 110000]')
+        assert result[0] == 1  # Should find doc:1
+
+        # Test 2: Text + Tag (OR) 
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"product" | @skills:{java}')
+        assert result[0] == 2  # Should find doc:1 (java) and doc:2 (scientist)
+        
+        # Test 3: All three types (complex OR)
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"manager" | @salary:[115000 125000] | @skills:{python}')
+        assert result[0] == 3  # Should find all docs
+        
+        # Test 4: All three types (complex AND) 
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"engineer" @salary:[90000 110000] @skills:{python}')
+        assert result[0] == 1  # Should find doc:1 only
+
+        # Test 5: Exact phrase with numeric filter (nested case)
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"software engineer" @salary:[90000 110000]')
+        assert result[0] == 1  # Should find doc:1 (exact phrase + salary match)
+
+        # Test 6: Exact phrase with tag filter
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"software engineer" @skills:{python}')
+        assert result[0] == 1  # Should find doc:1 (exact phrase + tag match)
+
+        # Test 7: Proximity with numeric - tests iterator propagation
+        result = client.execute_command("FT.SEARCH", "idx", '(@content:software @salary:[90000 110000]) @content:engineer', "SLOP", "1", "INORDER")
+        assert result[0] == 1  # Should find doc:1 (proximity + numeric filter)
+
+        # # Test 8: Negation with mixed types
+        # result = client.execute_command("FT.SEARCH", "idx", '-@content:"manager" @skills:{python}')
+        # assert result[0] == 1  # Should find doc:1 only
+
+    def test_proximity_predicate(self):
+        client: Valkey = self.server.get_new_client()
+        # Create index with text fields
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
+                            "content", "TEXT", "NOSTEM", "title", "TEXT", "NOSTEM", "WITHSUFFIXTRIE")
+
+        client.execute_command("HSET", "doc:1", "content", "alpha beta gamma delta epsilon")
+        client.execute_command("HSET", "doc:2", "content", "alpha word beta word gamma")
+        client.execute_command("HSET", "doc:3", "content", "gamma beta alpha")
+        client.execute_command("HSET", "doc:4", "content", "word4 word5 blah alpha word word word beta", "title", "blah blah word6")
+        client.execute_command("HSET", "doc:5", "content", "alpha word word word beta word word word gamma")
+        client.execute_command("HSET", "doc:7", "content", "word10 word11 word12 gamma delta", "title", "word10 word11 word12 blah")
+        client.execute_command("HSET", "doc:8", "content", "word1 gamma word beta word word word alpha", "title", "blah word2 word3")
+
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        # Test Set 1 : Exact phrase (slop=0 and inorder=true are implicit)
+        # Test 1.1: Two-term exact phrase
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"alpha beta"')
+        assert (result[0], result[1]) == (1, b"doc:1") # Only doc:1
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"alpha gamma"')
+        assert result[0] == 0  # No match (gap between words)
+        # Test 1.2: Three-term exact phrase
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"alpha beta gamma"')
+        assert (result[0], result[1]) == (1, b"doc:1") # Only doc:1
+        # Test 1.4: Four-term exact phrase
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"alpha beta gamma delta"')
+        assert (result[0], result[1]) == (1, b"doc:1") # Only doc:1
+
+        # Test Set 2 : Composed AND query
+        # Test 2.1: Two terms With slop 0 and inorder
+        result = client.execute_command("FT.SEARCH", "idx", 'beta alpha', "slop", "0", "inorder")
+        assert (result[0], result[1]) == (1, b"doc:3") # Only doc:3
+        # Test 2.2: Three terms With slop 0 and inorder
+        result = client.execute_command("FT.SEARCH", "idx", 'gamma beta alpha', "slop", "0", "inorder")
+        assert (result[0], result[1]) == (1, b"doc:3") # Only doc:1
+        # Test 2.3: Three terms With slop 0 but no order.
+        result = client.execute_command("FT.SEARCH", "idx", 'gamma beta alpha', "slop", "0")
+        assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:3"})
+
+        # Test 2.4: Three terms With slop 1 and inorder
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "1", "inorder")
+        assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:2"})
+        # Test 2.5: Three terms With slop 3 and inorder
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "3", "inorder")
+        assert (result[0], set(result[1::2])) == (3, {b"doc:1", b"doc:2", b"doc:5"})
+
+        # Test 2.6: Three terms With slop 1 but no order.
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "1", "inorder")
+        assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:2"})
+        # Test 2.7: Three terms With slop 3 but no order.
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "3")
+        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:5", b"doc:8"})
+
+        # Test 2.8: Three terms but inorder.
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "inorder")
+        assert (result[0], set(result[1::2])) == (3, {b"doc:1", b"doc:2", b"doc:5"})
+
+        # Test 2.9: Three terms but no slop, no order
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma')
+        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:5", b"doc:8"})
+
+        # Test Set 3: Mixed alphanumeric content (numbers as text tokens)
+        # Add documents with numbers in the text content
+        client.execute_command("HSET", "doc:10", "content", "version 1 beta 2 release")
+        client.execute_command("HSET", "doc:11", "content", "version 1 release 2 beta")
+        client.execute_command("HSET", "doc:12", "content", "version 2 beta 1 release")
+        client.execute_command("HSET", "doc:13", "content", "version word 1 word beta word 2 word release")
+
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        # Test 3.1: Exact phrase
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"version 1 beta"')
+        assert (result[0], result[1]) == (1, b"doc:10")  # Only doc:10 has exact phrase
+
+        # Test 3.2: Exact phrase (different order)
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"beta 2 release"')
+        assert (result[0], result[1]) == (1, b"doc:10")  # Only doc:10
+
+        # Test 3.3: Proximity with number tokens - slop 0, inorder
+        result = client.execute_command("FT.SEARCH", "idx", 'version 1 beta 2', "SLOP", "0", "INORDER")
+        assert (result[0], result[1]) == (1, b"doc:10")  # Only doc:10
+
+        # Test 3.4: Proximity with number tokens - slop 1, inorder (allows one gap)
+        result = client.execute_command("FT.SEARCH", "idx", 'version 1 beta', "SLOP", "1", "INORDER")
+        assert (result[0], set(result[1::2])) == (2, {b"doc:10", b"doc:13"})  # doc:10 (exact) and doc:13 (with gaps)
+
+        # Potential Nary case
+        # Test 3.5: Proximity with number tokens - slop 0, no order
+        # result = client.execute_command("FT.SEARCH", "idx", 'version beta 1', "SLOP", "0")
+        # assert (result[0], set(result[1::2])) == (1, {b"doc:10"})  # Any order, no gaps
+
+        # Test 3.6: number tokens in different positions
+        result = client.execute_command("FT.SEARCH", "idx", '1 beta 2', "SLOP", "0", "INORDER")
+        assert (result[0], result[1]) == (1, b"doc:10")
+
+        # Test 3.7: Verify number tokens are treated as regular tokens
+        result = client.execute_command("FT.SEARCH", "idx", '@content:"1"')
+        assert (result[0], set(result[1::2])) == (4, {b"doc:10", b"doc:11", b"doc:12", b"doc:13"})
+
+        # Test 3.8: Proximity with number tokens - slop 2, inorder
+        result = client.execute_command("FT.SEARCH", "idx", 'version 1 release', "SLOP", "2", "INORDER")
+        assert (result[0], set(result[1::2])) == (3, {b"doc:10", b"doc:11", b"doc:12"})
+
+        # Test 3.9: Includes test cases for field alignment:
+        # Validate the usage of default + specific field identifiers for matches
+        result = client.execute_command("FT.SEARCH", "idx", '@content:word1 gamma word')
+        assert (result[0], result[1]) == (1, b"doc:8")
+        # Validate the usage of only specific field identifiers for matches
+        result = client.execute_command("FT.SEARCH", "idx", '@content:word1 @content:gamma @content:word')
+        assert (result[0], result[1]) == (1, b"doc:8")
+        # Validate the usage of only default field identifiers for matches
+        result = client.execute_command("FT.SEARCH", "idx", 'word1 gamma word')
+        assert (result[0], result[1]) == (1, b"doc:8")
+        result = client.execute_command("FT.SEARCH", "idx", 'word10 word11 word12', "INORDER")
+        assert (result[0], result[1]) == (1, b"doc:7")
+        # Validate the usage of default / specific field identifier combinations for no matches.
+        # For this to pass, it is not just sufficient for there to be field alignment in the search
+        # (based on documents), but it also requires that the searches use the field from the query.        
+        result = client.execute_command("FT.SEARCH", "idx", 'word10 @content:word11 @title:word12', "INORDER")
+        assert result[0] == 0
+        result = client.execute_command("FT.SEARCH", "idx", 'word10 @title:word11 word12', "INORDER")
+        assert (result[0], result[1]) == (1, b"doc:7")
+        result = client.execute_command("FT.SEARCH", "idx", 'word10 @content:word11 word12', "INORDER")
+        assert (result[0], result[1]) == (1, b"doc:7")
+        result = client.execute_command("FT.SEARCH", "idx", 'word10 word11 word3', "INORDER")
+        assert result[0] == 0
+        result = client.execute_command("FT.SEARCH", "idx", '@content:word4 @content:word5 @title:word6', "INORDER")
+        assert result[0] == 0
+        result = client.execute_command("FT.SEARCH", "idx", 'word4 word5 word6', "INORDER")
+        assert result[0] == 0
+        # Testing with terms in the same doc, in order, but these terms exist in different fields. So, no match expected.
+        # Without checks in proximity to ensure there is an common field between all terms, this would have matched doc:8.
+        result = client.execute_command("FT.SEARCH", "idx", 'word1 word2 word3', "INORDER")
+        assert result[0] == 0
+        # When looking at just the terms from one field, we get a match.
+        result = client.execute_command("FT.SEARCH", "idx", 'word2 word3', "INORDER")
+        assert (result[0], result[1]) == (1, b"doc:8")
+        # Test only specific field query for no match
+        result = client.execute_command("FT.SEARCH", "idx", '@content:word10 @title:word11 @content:word12', "INORDER")
+        assert result[0] == 0
+        # Test default and specific field identifier for no match due to the default term being a suffix query. 
+        # Because the default term is a suffix query, it only searches fields with suffix enabled (`title``).
+        # Therefore, if word11 OR word12 are not in `title`, there is no match.
+        result = client.execute_command("FT.SEARCH", "idx", '*word10 @title:word11 word12', "INORDER")
+        assert (result[0], result[1]) == (1, b"doc:7")
+        result = client.execute_command("FT.SEARCH", "idx", '*word10 @content:word11 word12', "INORDER")
+        assert result[0] == 0
+        # Following up on the case above, when we don't use a suffix operation, and then it should match with
+        # content / default field.
+        result = client.execute_command("FT.SEARCH", "idx", 'word10 @content:word11 word12', "INORDER")
+        assert (result[0], result[1]) == (1, b"doc:7")
+
+class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
+    """
+    Tests that require debug mode enabled for memory statistics validation.
+    """
+
+    def test_ft_info_text_index_fields(self):
+        """
+        Test FT.INFO text index specific fields after inserting documents.
+        Validates text index memory usage and statistics fields.
+        """
+        client: Valkey = self.server.get_new_client()
+        
+        # Create the text index using existing pattern
+        assert client.execute_command(text_index_on_hash) == b"OK"
+        
+        # Insert documents using existing hash_docs
+        for doc in hash_docs:
+            assert client.execute_command(*doc) == 5
+        
+        # Get FT.INFO and parse the response
+        parser = IndexingTestHelper.get_ft_info(client, "products")
+        info_data = parser.parsed_data
+        
+        # Validate basic document counts
+        assert info_data["num_docs"] == 6, f"Expected 6 documents, got {info_data['num_docs']}"
+        
+        # Text index specific fields to validate
+        text_index_fields = [
+            "num_unique_terms",          # Total number of unique terms in the text index
+            "num_total_terms",           # Total frequency of all terms across all documents  
+            "posting_sz_bytes",          # Memory used by posting lists (inverted index data) in bytes
+            "position_sz_bytes",         # Memory used by position information for phrase queries in bytes
+            "total_postings",            # Total number of posting lists (equals unique terms)
+            "radix_sz_bytes",            # Memory used by the radix tree (term dictionary) in bytes
+            "total_text_index_sz_bytes"  # Total memory used by all text index components in bytes
+        ]
+        
+        # Validate that all text index fields are present and have reasonable values
+        for field in text_index_fields:
+            assert field in info_data, f"Missing text index field: {field}"
+            value = info_data[field]
+            
+            if field == "num_unique_terms":
+                assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
+                assert value >= 10, f"Expected at least 10 unique terms, got {value}"
+                
+            elif field == "num_total_terms":
+                assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
+                assert value >= info_data["num_unique_terms"], f"Total terms {value} should be >= unique terms {info_data['num_unique_terms']}"
+                
+            elif field in ["posting_sz_bytes", "position_sz_bytes", "radix_sz_bytes", "total_text_index_sz_bytes"]:
+                assert (isinstance(value, int) and value > 0) or \
+                       (os.environ.get('SAN_BUILD', 'no') != 'no' and value == 0), \
+                       f"{field} should be positive integer, got {value}"
+                    
+            elif field == "total_postings":
+                assert isinstance(value, (int, float)) and value > 0, f"{field} should be positive number, got {value}"
+                assert value == info_data["num_unique_terms"], f"Total postings {value} should equal unique terms {info_data['num_unique_terms']}"
+        
+        # Validate memory relationships
+        total_memory = info_data["total_text_index_sz_bytes"]
+        posting_memory = info_data["posting_sz_bytes"]
+        position_memory = info_data["position_sz_bytes"]
+        radix_memory = info_data["radix_sz_bytes"]
+        
+        # Total memory should be at least the sum of components
+        component_sum = posting_memory + radix_memory
+        assert total_memory >= component_sum, f"Total memory {total_memory} should equal component sum {component_sum}"
+        
+        print(f"Text Index Statistics Validation Passed:")
+        print(f"  Documents: {info_data['num_docs']}")
+        print(f"  Unique Terms: {info_data['num_unique_terms']}")
+        print(f"  Total Terms: {info_data['num_total_terms']}")
+        print(f"  Total Postings: {info_data['total_postings']}")
+        print(f"  Total Memory: {info_data['total_text_index_sz_bytes']} bytes")
+        print(f"  Posting Memory: {info_data['posting_sz_bytes']} bytes")
+        print(f"  Position Memory: {info_data['position_sz_bytes']} bytes")
+        print(f"  Radix Memory: {info_data['radix_sz_bytes']} bytes")
+
+        # Test cleanup after document deletion
+        print("\nTesting cleanup after document deletion...")
+        
+        # Store initial memory values
+        initial_posting_memory = info_data['posting_sz_bytes']
+        initial_radix_memory = info_data['radix_sz_bytes']
+        initial_position_memory = info_data['position_sz_bytes']
+        initial_total_memory = info_data['total_text_index_sz_bytes']
+        initial_unique_terms = info_data['num_unique_terms']
+        initial_total_terms = info_data['num_total_terms']
+        
+        # Delete all documents
+        for doc in hash_docs:
+            key = doc[1]  # Extract key from HSET command
+            client.execute_command("DEL", key)
+        
+        # Get FT.INFO after deletion
+        parser_after_delete = IndexingTestHelper.get_ft_info(client, "products")
+        info_after_delete = parser_after_delete.parsed_data
+        
+        # Verify document count is zero
+        assert info_after_delete["num_docs"] == 0, f"Expected 0 documents after deletion, got {info_after_delete['num_docs']}"
+        
+        # Verify complete cleanup for schema-level metrics
+        # TODO: this won't be zero until serialized position map is added
+        # assert info_after_delete['posting_sz_bytes'] == 0, \
+        #     f"Posting memory should be zero after deletion: got {info_after_delete['posting_sz_bytes']}"
+        
+        # Note: Postings are currently stored in per-key indexes. When we implement shared
+        # Posting objects across schema and key indexes, these metrics will reach zero on deletion.
+        
+        # Always validate term count decreases
+        assert info_after_delete['num_unique_terms'] < initial_unique_terms, \
+            f"Unique terms should decrease after deletion: {info_after_delete['num_unique_terms']} >= {initial_unique_terms}"
+        assert info_after_delete['num_total_terms'] < initial_total_terms, \
+            f"Total terms should decrease after deletion: {info_after_delete['num_total_terms']} >= {initial_total_terms}"
+        
+        # Skip memory size checks when running with sanitizers (SAN_BUILD)
+        # as memory tracking may not be accurate in sanitizer builds
+        is_san_build = os.environ.get('SAN_BUILD', 'no') != 'no'
+        
+        if not is_san_build:
+            assert info_after_delete['position_sz_bytes'] < initial_position_memory, \
+                f"Position memory should decrease after deletion: {info_after_delete['position_sz_bytes']} >= {initial_position_memory}"
+            assert info_after_delete['total_text_index_sz_bytes'] < initial_total_memory, \
+                f"Total memory should decrease after deletion: {info_after_delete['total_text_index_sz_bytes']} >= {initial_total_memory}"
+        else:
+            print("  Skipping memory size checks (SAN_BUILD mode)")
+
+        # Note: radix_sz_bytes validation skipped - will be fixed in radix tree memory tracking cleanup task
+        
+        print(f"  After deletion - Documents: {info_after_delete['num_docs']}")
+        print(f"  After deletion - Unique Terms: {info_after_delete['num_unique_terms']}")
+        print(f"  After deletion - Total Terms: {info_after_delete['num_total_terms']}")
+        print(f"  After deletion - Posting Memory: {info_after_delete['posting_sz_bytes']} bytes")
+        print(f"  After deletion - Radix Memory: {info_after_delete['radix_sz_bytes']} bytes")
+        print(f"  After deletion - Total Memory: {info_after_delete['total_text_index_sz_bytes']} bytes")
+        
+        # Now delete the index and verify complete cleanup
+        client.execute_command("FT.DROPINDEX", "products")
+        
+        # Verify index no longer exists
+        indices = client.execute_command("FT._LIST")
+        assert b"products" not in indices, "Index should not exist after FT.DROPINDEX"
+        
+        print("\nCleanup verification passed!")
+        # Deletion pending of per_key_index, On deletion only prefix tree cleared
+
+class TestFullTextCluster(ValkeySearchClusterTestCase):
+
+    def test_fulltext_search_cluster(self):
+        """
+            Test a fulltext search queries on Hash docs in Valkey Search CME.
+        """
+        cluster_client: ValkeyCluster = self.new_cluster_client()
+        client: Valkey = self.new_client_for_primary(0)
+        # Create the text index on Hash documents
+        assert client.execute_command(text_index_on_hash) == b"OK"
+        # Data population:
+        for doc in hash_docs:
+            assert cluster_client.execute_command(*doc) == 5
+        # Validation of search queries:
+        time.sleep(1)
+        validate_fulltext_search(client)

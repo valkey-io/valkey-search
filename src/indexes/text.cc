@@ -23,13 +23,19 @@ Text::Text(const data_model::TextIndex& text_index_proto,
       text_field_number_(text_index_schema->AllocateTextFieldNumber()),
       with_suffix_trie_(text_index_proto.with_suffix_trie()),
       no_stem_(text_index_proto.no_stem()),
-      min_stem_size_(text_index_proto.min_stem_size()) {}
+      min_stem_size_(text_index_proto.min_stem_size()) {
+  // The schema level wants to know if suffix search is enabled for at least one
+  // attribute to determine how it initializes its data structures.
+  if (with_suffix_trie_) {
+    text_index_schema_->EnableSuffix();
+  }
+}
 
 absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr& key,
                                      absl::string_view data) {
   // TODO: Key Tracking
 
-  return text_index_schema_->IndexAttributeData(key, data, text_field_number_,
+  return text_index_schema_->StageAttributeData(key, data, text_field_number_,
                                                 !no_stem_, min_stem_size_,
                                                 with_suffix_trie_);
 }
@@ -52,7 +58,7 @@ absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr& key,
   // The old key value has already been removed from the index by a call to
   // TextIndexSchema::DeleteKey() at this point, so we simply add the new key
   // data
-  return text_index_schema_->IndexAttributeData(key, data, text_field_number_,
+  return text_index_schema_->StageAttributeData(key, data, text_field_number_,
                                                 !no_stem_, min_stem_size_,
                                                 with_suffix_trie_);
 }
@@ -103,18 +109,6 @@ size_t Text::CalculateSize(const query::TextPredicate& predicate) const {
   return 0;
 }
 
-std::unique_ptr<Text::EntriesFetcher> Text::Search(
-    const query::TextPredicate& predicate, bool negate) const {
-  auto fetcher = std::make_unique<EntriesFetcher>(
-      CalculateSize(predicate), text_index_schema_->GetTextIndex(),
-      negate ? &untracked_keys_ : nullptr);
-  fetcher->predicate_ = &predicate;
-  // TODO : Update for the default search case (all fields).
-  // The TextPredicate needs to support a GetFieldMask API to indicate this.
-  fetcher->field_mask_ = 1ULL << text_field_number_;
-  return fetcher;
-}
-
 size_t Text::EntriesFetcher::Size() const { return size_; }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
@@ -127,12 +121,20 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
 // Implement the TextPredicate BuildTextIterator virtual method
 namespace valkey_search::query {
 
+void* TextPredicate::Search(bool negate) const {
+  // TODO: Add logic to calculate the size based on number of keys estimated.
+  auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
+      0, GetTextIndexSchema()->GetTextIndex(), nullptr, GetFieldMask());
+  fetcher->predicate_ = this;
+  return fetcher.release();
+}
+
 std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
     const void* fetcher_ptr) const {
   const auto* fetcher =
       static_cast<const indexes::Text::EntriesFetcher*>(fetcher_ptr);
   auto word_iter =
-      fetcher->text_index_->prefix_.GetWordIterator(GetTextString());
+      fetcher->text_index_->GetPrefix().GetWordIterator(GetTextString());
   std::vector<indexes::text::Postings::KeyIterator> key_iterators;
   while (!word_iter.Done()) {
     if (word_iter.GetWord() == GetTextString()) {
@@ -149,7 +151,7 @@ std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
   const auto* fetcher =
       static_cast<const indexes::Text::EntriesFetcher*>(fetcher_ptr);
   auto word_iter =
-      fetcher->text_index_->prefix_.GetWordIterator(GetTextString());
+      fetcher->text_index_->GetPrefix().GetWordIterator(GetTextString());
   std::vector<indexes::text::Postings::KeyIterator> key_iterators;
   while (!word_iter.Done()) {
     key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
@@ -163,11 +165,12 @@ std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
     const void* fetcher_ptr) const {
   const auto* fetcher =
       static_cast<const indexes::Text::EntriesFetcher*>(fetcher_ptr);
-  CHECK(fetcher->text_index_->suffix_.has_value())
+  CHECK(fetcher->text_index_->GetSuffix().has_value())
       << "Text index does not have suffix trie enabled.";
   std::string reversed_word(GetTextString().rbegin(), GetTextString().rend());
   auto word_iter =
-      fetcher->text_index_->suffix_->GetWordIterator(reversed_word);
+      fetcher->text_index_->GetSuffix().value().get().GetWordIterator(
+          reversed_word);
   std::vector<indexes::text::Postings::KeyIterator> key_iterators;
   while (!word_iter.Done()) {
     key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());

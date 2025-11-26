@@ -593,7 +593,7 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   PerIndexTextParams schema_text_defaults;
   // Initialize with defaults for each parse call
   schema_text_defaults.punctuation = kDefaultPunctuation;
-  schema_text_defaults.min_stem_size = 4;
+  schema_text_defaults.min_stem_size = kDefaultMinStemSize;
   schema_text_defaults.with_offsets = true;
   schema_text_defaults.no_stem = false;
   schema_text_defaults.language = data_model::LANGUAGE_ENGLISH;

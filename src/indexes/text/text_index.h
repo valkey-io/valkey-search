@@ -8,6 +8,7 @@
 #ifndef VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 #define VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 
+#include <atomic>
 #include <bitset>
 #include <cctype>
 #include <memory>
@@ -27,9 +28,28 @@ struct sb_stemmer;
 
 namespace valkey_search::indexes::text {
 
-struct TextIndex {
-  TextIndex() = default;
-  ~TextIndex() = default;
+// token -> (PositionMap, suffix support)
+using TokenPositions =
+    absl::flat_hash_map<std::string, std::pair<PositionMap, bool>>;
+
+class TextIndexSchema;
+
+// Function to get current TextIndexSchema for accessing metadata
+TextIndexSchema* GetTextIndexSchema();
+
+// FT.INFO counters for text info fields and memory pools
+struct TextIndexMetadata {
+  std::atomic<uint64_t> total_positions{0};
+  std::atomic<uint64_t> num_unique_terms{0};
+  std::atomic<uint64_t> total_term_frequency{0};
+
+  // Memory pools for text index components
+  MemoryPool posting_memory_pool_{0};
+  MemoryPool radix_memory_pool_{0};
+  MemoryPool text_index_memory_pool_{0};
+};
+
+class TextIndex {
   //
   // The main query data structure maps Words into Postings objects. This
   // is always done with a prefix tree. Optionally, a suffix tree can also be
@@ -41,11 +61,20 @@ struct TextIndex {
   // becomes responsible for cross-tree locking issues. Multiple locking
   // strategies are possible. TBD (a shared-ed word lock table should work well)
   //
-  RadixTree<std::shared_ptr<Postings>, false> prefix_;
-  std::optional<RadixTree<std::shared_ptr<Postings>, true>> suffix_;
 
-  // TODO: develop a proper TextIndex locking scheme
-  std::mutex mutex_;
+ public:
+  explicit TextIndex(bool suffix);
+  RadixTree<std::shared_ptr<Postings>>& GetPrefix();
+  const RadixTree<std::shared_ptr<Postings>>& GetPrefix() const;
+  std::optional<std::reference_wrapper<RadixTree<std::shared_ptr<Postings>>>>
+  GetSuffix();
+  std::optional<
+      std::reference_wrapper<const RadixTree<std::shared_ptr<Postings>>>>
+  GetSuffix() const;
+
+ private:
+  RadixTree<std::shared_ptr<Postings>> prefix_tree_;
+  std::unique_ptr<RadixTree<std::shared_ptr<Postings>>> suffix_tree_;
 };
 
 class TextIndexSchema {
@@ -54,24 +83,42 @@ class TextIndexSchema {
                   bool with_offsets,
                   const std::vector<std::string>& stop_words);
 
-  absl::StatusOr<bool> IndexAttributeData(const InternedStringPtr& key,
+  absl::StatusOr<bool> StageAttributeData(const InternedStringPtr& key,
                                           absl::string_view data,
                                           size_t text_field_number, bool stem,
                                           size_t min_stem_size, bool suffix);
+  void CommitKeyData(const InternedStringPtr& key);
   void DeleteKeyData(const InternedStringPtr& key);
 
   uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }
 
   uint8_t GetNumTextFields() const { return num_text_fields_; }
   std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
+  Lexer GetLexer() const { return lexer_; }
+
+  // Access to metadata for memory pool usage
+  TextIndexMetadata& GetMetadata() { return metadata_; }
+
+  // Enable suffix trie.
+  void EnableSuffix() {
+    with_suffix_trie_ = true;
+    text_index_ = std::make_shared<TextIndex>(true);
+  }
 
  private:
   uint8_t num_text_fields_ = 0;
 
+  // Each schema instance has its own metadata with memory pools
+  TextIndexMetadata metadata_;
+
   //
   // This is the main index of all Text fields in this index schema
   //
-  std::shared_ptr<TextIndex> text_index_ = std::make_shared<TextIndex>();
+  std::shared_ptr<TextIndex> text_index_ = std::make_shared<TextIndex>(false);
+
+  // Prevent concurrent mutations to schema-level text index
+  // TODO: develop a finer-grained TextIndex locking scheme
+  std::mutex text_index_mutex_;
 
   //
   // To support the Delete record and the post-filtering case, there is a
@@ -82,13 +129,44 @@ class TextIndexSchema {
   //
   absl::node_hash_map<Key, TextIndex> per_key_text_indexes_;
 
+  // Prevent concurrent mutations to per-key text index map
+  std::mutex per_key_text_indexes_mutex_;
+
   Lexer lexer_;
 
-  // Prevent concurrent mutations to per_key_text_indexes_
-  std::mutex per_key_text_indexes_mutex_;
+  // Key updates are fanned out to each attribute's IndexBase object. Since text
+  // indexing operates at the schema-level, any new text data to insert for a
+  // key is accumulated across all attributes here and committed into the text
+  // index structures at the end for efficiency.
+  absl::node_hash_map<Key, TokenPositions> in_progress_key_updates_;
+
+  // Prevent concurrent mutations to in-progress key updates map
+  std::mutex in_progress_key_updates_mutex_;
 
   // Whether to store position offsets for phrase queries
   bool with_offsets_ = false;
+
+  // True if any text attributes of the schema have suffix search enabled.
+  bool with_suffix_trie_ = false;
+
+ public:
+  // FT.INFO memory stats for text index
+  uint64_t GetTotalPositions() const;
+  uint64_t GetNumUniqueTerms() const;
+  uint64_t GetTotalTermFrequency() const;
+  uint64_t GetPostingsMemoryUsage() const;
+  uint64_t GetRadixTreeMemoryUsage() const;
+  uint64_t GetPositionMemoryUsage() const;
+  uint64_t GetTotalTextIndexMemoryUsage() const;
+
+  // Thread-safe accessor for per-key text indexes. Executes the provided
+  // function while holding the mutex lock, ensuring safe concurrent access.
+  template <typename Func>
+  auto WithPerKeyTextIndexes(Func&& func)
+      -> decltype(func(per_key_text_indexes_)) {
+    std::lock_guard<std::mutex> guard(per_key_text_indexes_mutex_);
+    return func(per_key_text_indexes_);
+  }
 };
 
 }  // namespace valkey_search::indexes::text

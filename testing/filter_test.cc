@@ -91,15 +91,16 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
                                          "tag_field_case_insensitive",
                                          tag_field_case_insensitive));
 
-  data_model::TextIndex text_index_proto;
-  auto text_index_schema =
-      std::make_shared<valkey_search::indexes::text::TextIndexSchema>(
-          data_model::LANGUAGE_ENGLISH, std::string(kDefaultPunctuation), true,
-          kDefaultStopWords);
+  index_schema->CreateTextIndexSchema();
+  auto text_index_schema = index_schema->GetTextIndexSchema();
+  data_model::TextIndex text_index_proto1 =
+      CreateTextIndexProto(true, false, 4);
+  data_model::TextIndex text_index_proto2 =
+      CreateTextIndexProto(false, true, 0);
   auto text_index_1 =
-      std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
+      std::make_shared<indexes::Text>(text_index_proto1, text_index_schema);
   auto text_index_2 =
-      std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
+      std::make_shared<indexes::Text>(text_index_proto2, text_index_schema);
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("text_field1", "text_field1", text_index_1));
   VMSDK_EXPECT_OK(
@@ -112,7 +113,7 @@ TEST_P(FilterTest, ParseParams) {
   InitIndexSchema(index_schema.get());
   EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
       .Times(::testing::AnyNumber());
-  FilterParser parser(*index_schema, test_case.filter);
+  FilterParser parser(*index_schema, test_case.filter, {});
   auto parse_results = parser.Parse();
   EXPECT_EQ(test_case.create_success, parse_results.ok());
   if (!test_case.create_success) {
@@ -493,10 +494,17 @@ INSTANTIATE_TEST_SUITE_P(
             .evaluate_success = true,
         },
         {
-            .test_name = "exact_suffix",
+            .test_name = "exact_suffix_supported",
             .filter = "@text_field1:*word",
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "exact_suffix_unsupported",
+            .filter = "@text_field2:*word",
             .create_success = false,
-            .create_expected_error_message = "Unsupported query operation",
+            .create_expected_error_message =
+                "Field does not support suffix search",
         },
         {
             .test_name = "exact_inffix",
@@ -536,6 +544,75 @@ INSTANTIATE_TEST_SUITE_P(
             .evaluate_success = true,
         },
         {
+            .test_name = "default_field_text",
+            .filter = "Hello, how are you doing?",
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "default_field_exact_phrase",
+            .filter = "\"Hello, how are you doing?\"",
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "default_field_exact_phrase_with_punct",
+            .filter = "\"Hello, h(ow a)re yo#u doi_n$g?\"",
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "default_field_with_escape1",
+            .filter =
+                "\"\\\\\\\\\\Hello, \\how \\\\are \\\\\\you \\\\\\\\doing?\"",
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "default_field_with_escape2",
+            .filter = "\\\\\\\\\\Hello, \\how \\\\are \\\\\\you \\\\\\\\doing?",
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "default_field_with_escape3",
+            .filter = "Hel\\(lo, ho\\$w a\\*re yo\\{u do\\|ing?",
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "default_field_with_escape4",
+            .filter = "\\\\\\\\\\(Hello, \\$how \\\\\\*are \\\\\\-you "
+                      "\\\\\\\\\\%doing?",
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "default_field_with_escape5",
+            .filter = "Hello, how are you\\% doing",
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "default_field_with_escape6",
+            .filter = "Hello, how are you\\\\\\\\\\% doing",
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "default_field_with_escape_query_syntax",
+            .filter =
+                "Hello, how are you\\]\\[\\$\\}\\{\\;\\:\\)\\(\\| \\-doing",
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "default_field_with_all_operations",
+            .filter = "%Hllo%, how are *ou do* *oda*",
+            .create_success = false,
+            .create_expected_error_message = "Unsupported query operation",
+        },
+        {
             .test_name = "proximity3",
             .filter =
                 "@text_field1:\"Advanced Neural Networking in plants\" | "
@@ -545,6 +622,49 @@ INSTANTIATE_TEST_SUITE_P(
                 "@text_field1:%%%word%%% @text_field2:network",
             .create_success = false,
             .create_expected_error_message = "Unsupported query operation",
+        },
+        {
+            .test_name = "invalid_fuzzy1",
+            .filter = "Hello, how are you% doing",
+            .create_success = false,
+            .create_expected_error_message = "Invalid fuzzy '%' markers",
+        },
+        {
+            .test_name = "invalid_fuzzy2",
+            .filter = "Hello, how are %you%% doing",
+            .create_success = false,
+            .create_expected_error_message = "Invalid fuzzy '%' markers",
+        },
+        {
+            .test_name = "invalid_fuzzy3",
+            .filter = "Hello, how are %%you% doing",
+            .create_success = false,
+            .create_expected_error_message = "Invalid fuzzy '%' markers",
+        },
+        {
+            .test_name = "invalid_fuzzy4",
+            .filter = "Hello, how are %%%you%%%doing%%%",
+            .create_success = false,
+            .create_expected_error_message = "Invalid fuzzy '%' markers",
+        },
+        {
+            .test_name = "invalid_escape1",
+            .filter =
+                "\\\\\\\\\\(Hello, \\$how \\\\*are \\\\\\-you \\\\\\\\%doing?",
+            .create_success = false,
+            .create_expected_error_message = "Invalid fuzzy '%' markers",
+        },
+        {
+            .test_name = "invalid_wildcard1",
+            .filter = "Hello, how are **you* doing",
+            .create_success = false,
+            .create_expected_error_message = "Invalid wildcard '*' markers",
+        },
+        {
+            .test_name = "invalid_wildcard2",
+            .filter = "Hello, how are *you** doing",
+            .create_success = false,
+            .create_expected_error_message = "Invalid wildcard '*' markers",
         },
         {
             .test_name = "bad_filter_1",
@@ -565,7 +685,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@num_field_2.0 : [23 25] | num_field_2.0:[0 2.5] ",
             .create_success = false,
             .create_expected_error_message =
-                "Unexpected character at position 28: `n`, expecting `@`",
+                "Unexpected character at position 41: `:`",
         },
         {
             .test_name = "bad_filter_4",
@@ -579,7 +699,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@num_field_2.0 : [23 25] $  @num_field_2.0:[0 2.5] ",
             .create_success = false,
             .create_expected_error_message =
-                "Unexpected character at position 26: `$`, expecting `@`",
+                "Unexpected character at position 26: `$`",
         },
         {
             .test_name = "bad_filter_6",
@@ -628,6 +748,55 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@num_field_2.0 : [23 25]   @tag_field_1:{tag1] ",
             .create_success = false,
             .create_expected_error_message = "Missing closing TAG bracket, '}'",
+        },
+        {
+            .test_name = "bad_filter_13",
+            .filter = "hello{world",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unexpected character at position 6: `{`",
+        },
+        {
+            .test_name = "bad_filter_14",
+            .filter = "hello}world",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unexpected character at position 6: `}`",
+        },
+        {
+            .test_name = "bad_filter_15",
+            .filter = "hello$world",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unexpected character at position 6: `$`",
+        },
+        {
+            .test_name = "bad_filter_16",
+            .filter = "hello[world",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unexpected character at position 6: `[`",
+        },
+        {
+            .test_name = "bad_filter_17",
+            .filter = "hello]world",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unexpected character at position 6: `]`",
+        },
+        {
+            .test_name = "bad_filter_18",
+            .filter = "hello:world",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unexpected character at position 6: `:`",
+        },
+        {
+            .test_name = "bad_filter_19",
+            .filter = "hello;world",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unexpected character at position 6: `;`",
         },
     }),
     [](const TestParamInfo<FilterTestCase> &info) {

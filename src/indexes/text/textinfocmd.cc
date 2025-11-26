@@ -93,18 +93,20 @@ absl::Status IndexSchema::TextInfoCmd(ValkeyModuleCtx* ctx,
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, word));
     auto wi = index_schema->GetTextIndexSchema()
                   ->GetTextIndex()
-                  ->prefix_.GetWordIterator(word);
+                  ->GetPrefix()
+                  .GetWordIterator(word);
     bool with_keys = itr.PopIfNextIgnoreCase("WITHKEYS");
     bool with_positions = itr.PopIfNextIgnoreCase("WITHPOSITIONS");
     return DumpWordIterator(ctx, wi, with_keys, with_positions);
   } else if (subcommand == "SUFFIX") {
     std::string word;
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, word));
-    auto& suffix = index_schema->GetTextIndexSchema()->GetTextIndex()->suffix_;
+    auto suffix =
+        index_schema->GetTextIndexSchema()->GetTextIndex()->GetSuffix();
     if (!suffix) {
       return absl::InvalidArgumentError("Suffix is not enabled");
     }
-    auto wi = suffix->GetWordIterator(word);
+    auto wi = suffix->get().GetWordIterator(word);
     bool with_keys = itr.PopIfNextIgnoreCase("WITHKEYS");
     bool with_positions = itr.PopIfNextIgnoreCase("WITHPOSITIONS");
     return DumpWordIterator(ctx, wi, with_keys, with_positions);

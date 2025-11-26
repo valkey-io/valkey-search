@@ -416,6 +416,8 @@ INSTANTIATE_TEST_SUITE_P(
                                        "    NUMERIC(numeric_index_100_10)\n"
                                        "    TAG(tag_index_100_15)\n"
                                        "    NUMERIC(numeric_index_100_30)\n"
+                                       "    NUMERIC(numeric_index_100_20)\n"
+                                       "    NUMERIC(numeric_index_100_40)\n"
                                        "  }\n"
                                        "}\n",
         },

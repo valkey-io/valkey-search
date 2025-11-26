@@ -306,6 +306,11 @@ class ComposedPredicate : public Predicate {
 
   // Add a child predicate (for building N-ary trees)
   void AddChild(std::unique_ptr<Predicate> child);
+  
+  // Release children (transfer ownership)
+  std::vector<std::unique_ptr<Predicate>> ReleaseChildren() {
+    return std::move(children_);
+  }
 
  private:
   std::vector<std::unique_ptr<Predicate>> children_;

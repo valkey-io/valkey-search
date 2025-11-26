@@ -25,6 +25,15 @@
 
 namespace valkey_search::query {
 
+static bool IsIteratorValid(
+    const std::unique_ptr<indexes::text::TermIterator>& iterator,
+    FieldMaskPredicate query_field_mask) {
+  if (iterator->DoneKeys() || !iterator->HasCurrentPosition()) {
+    return false;
+  }
+  return true;
+}
+
 EvaluationResult NegatePredicate::Evaluate(Evaluator& evaluator) const {
   EvaluationResult result = predicate_->Evaluate(evaluator);
   return EvaluationResult(!result.matches);
@@ -67,7 +76,8 @@ EvaluationResult TermPredicate::Evaluate(
   key_iterators.emplace_back(std::move(key_iter));
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr);
-  if (iterator->DoneKeys() || iterator->DonePositions()) {
+
+  if (!IsIteratorValid(iterator, field_mask)) {
     return EvaluationResult(false);
   }
   return EvaluationResult(true, std::move(iterator));
@@ -112,7 +122,8 @@ EvaluationResult PrefixPredicate::Evaluate(
   }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr);
-  if (iterator->DonePositions()) {
+
+  if (!IsIteratorValid(iterator, field_mask)) {
     return EvaluationResult(false);
   }
   return EvaluationResult(true, std::move(iterator));
@@ -162,7 +173,7 @@ EvaluationResult SuffixPredicate::Evaluate(
   }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr);
-  if (iterator->DonePositions()) {
+  if (!IsIteratorValid(iterator, field_mask)) {
     return EvaluationResult(false);
   }
   return EvaluationResult(true, std::move(iterator));
@@ -335,6 +346,13 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     if (!rhs.matches) {
       return EvaluationResult(false);
     }
+    // Prefilter mode: boolean-only evaluation, no iterators needed
+    if (evaluator.IsPrefilterMode()) {
+      VMSDK_LOG(WARNING, nullptr)
+          << "Composed and Prefilter mode evaluation. Skip proximity";
+      return EvaluationResult(true);
+    }
+
     // Proximity check: Only if slop/inorder set and both sides have
     // iterators. This ensures we only check proximity for text predicates,
     // not numeric/tag.

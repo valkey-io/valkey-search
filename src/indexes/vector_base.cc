@@ -44,6 +44,7 @@
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "third_party/hnswlib/space_ip.h"
@@ -103,10 +104,28 @@ query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
 
 query::EvaluationResult PrefilterEvaluator::EvaluateText(
     const query::TextPredicate &predicate) {
-  // CHECK(key_);
-  // auto text = predicate.GetIndex()->GetRawValue(*key_);
-  // return predicate.Evaluate(*text);
-  return query::EvaluationResult(true);
+  CHECK(key_);
+  // Check configuration flag
+  if (!options::GetEnableTextPrefilter().GetValue()) {
+    // No-op path (default) - skip evaluation
+    return query::EvaluationResult(true);
+  }
+  VMSDK_LOG(WARNING, nullptr) << "In pre-filter evaluation - Text";
+  // Evaluate using per-key text index
+  // This acquires the lock and looks up the key in per_key_text_indexes
+  auto text_index_schema = predicate.GetTextIndexSchema();
+  return text_index_schema->WithPerKeyTextIndexes(
+      [&](auto &per_key_indexes) -> query::EvaluationResult {
+        auto it = per_key_indexes.find(*key_);
+        if (it == per_key_indexes.end()) {
+          VMSDK_LOG(WARNING, nullptr)
+              << "Target key not found in index for pre-filter evaluation";
+          return query::EvaluationResult(false);
+        }
+        // Evaluate predicate against this key's text index
+        // This handles Term, Prefix, Suffix, and Proximity predicates
+        return predicate.Evaluate(it->second, *key_);
+      });
 }
 
 template <typename T>

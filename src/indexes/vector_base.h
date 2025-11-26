@@ -258,9 +258,11 @@ class PrefilterEvaluator : public query::Evaluator {
   // TODO: Implement this in prefilter implementation. For now just return
   // nullpt.
   const std::shared_ptr<InternedString>& GetTargetKey() const override {
-    static const std::shared_ptr<InternedString> null_key = nullptr;
-    return null_key;
+    CHECK(key_);
+    return *key_;
   }
+  // Override to True: This is pre-filter mode.
+  bool IsPrefilterMode() const override { return true; }
 
  private:
   query::EvaluationResult EvaluateTags(

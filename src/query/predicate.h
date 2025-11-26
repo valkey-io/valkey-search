@@ -72,6 +72,8 @@ class Evaluator {
 
   // Access target key for proximity validation (only for Text)
   virtual const std::shared_ptr<InternedString>& GetTargetKey() const = 0;
+  // To indicate prefilter evaluation. Default is false.
+  virtual bool IsPrefilterMode() const { return false; }
 };
 
 class Predicate;

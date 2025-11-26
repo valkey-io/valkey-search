@@ -218,6 +218,17 @@ static auto ft_info_rpc_timeout_ms =
         kMaximumFTInfoRpcTimeoutMs)  // max timeout (5 minutes)
         .Build();
 
+/// Enable TEXT predicate evaluation in prefilter stage
+/// When enabled, TEXT predicates are evaluated per-key using the per-key text
+/// index When disabled (default), TEXT evaluation is a no-op in prefilter
+constexpr absl::string_view kEnableTextPrefilter{"enable-text-prefilter"};
+static auto enable_text_prefilter =
+    config::BooleanBuilder(kEnableTextPrefilter, false).Build();
+
+vmsdk::config::Boolean& GetEnableTextPrefilter() {
+  return dynamic_cast<vmsdk::config::Boolean&>(*enable_text_prefilter);
+}
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {

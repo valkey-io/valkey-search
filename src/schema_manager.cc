@@ -130,10 +130,13 @@ SchemaManager::SchemaManager(
     coordinator::MetadataManager::Instance().RegisterType(
         kSchemaManagerMetadataTypeName, kCurrentSemanticVersion,
         ComputeFingerprint,
-        [this](absl::string_view id, const google::protobuf::Any *metadata,
-               uint64_t fingerprint, uint32_t version) -> absl::Status {
-          return this->OnMetadataCallback(id, metadata, fingerprint, version);
-        });
+        [this](uint32_t db_num, absl::string_view id,
+               const google::protobuf::Any *metadata, uint64_t fingerprint,
+               uint32_t version) -> absl::Status {
+          return this->OnMetadataCallback(db_num, id, metadata, fingerprint,
+                                          version);
+        },
+        ComputeSemanticVersion);
   }
 }
 
@@ -376,13 +379,9 @@ absl::StatusOr<vmsdk::SemanticVersion> SchemaManager::ComputeSemanticVersion(
 }
 
 absl::Status SchemaManager::OnMetadataCallback(
-<<<<<<< HEAD
     uint32_t db_num, absl::string_view id,
-    const google::protobuf::Any *metadata) {
-=======
-    absl::string_view id, const google::protobuf::Any *metadata,
-    uint64_t fingerprint, uint32_t version) {
->>>>>>> main
+    const google::protobuf::Any *metadata, uint64_t fingerprint,
+    uint32_t version) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   // Note that there is only DB 0 in cluster mode, so we can hardcode this.
   auto status = RemoveIndexSchemaInternal(db_num, id);

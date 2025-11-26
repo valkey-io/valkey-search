@@ -343,17 +343,20 @@ std::string PrintableBytes(absl::string_view sv) {
           break;
       }
     }
-    std::string StringToHex(std::string_view s) {
-      std::string result;
-      static char hex[] = "0123456789ABCDEF";
-      for (auto &c : s) {
-        if (&c != s.begin()) {
-          result += ' ';
-        }
-        result += hex[(c >> 4) & 0xF];
-        result += hex[c & 0xF];
-      }
-      return result;
-    }
+  }
+  return result;
+}
 
-  }  // namespace vmsdk
+std::string StringToHex(std::string_view s) {
+  std::string result;
+  for (auto &c : s) {
+    if (&c != s.begin()) {
+      result += ' ';
+    }
+    result += hex_chars[(c >> 4) & 0xF];
+    result += hex_chars[c & 0xF];
+  }
+  return result;
+}
+
+}  // namespace vmsdk

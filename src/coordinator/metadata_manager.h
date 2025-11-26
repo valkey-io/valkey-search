@@ -37,7 +37,7 @@ using FingerprintCallback =
 using EncodingVersionCallback = absl::AnyInvocable<absl::StatusOr<uint32_t>(
     const google::protobuf::Any &metadata)>;
 using MetadataUpdateCallback = absl::AnyInvocable<absl::Status(
-    absl::string_view, const google::protobuf::Any *metadata,
+    uint32_t db_num, absl::string_view, const google::protobuf::Any *metadata,
     uint64_t fingerprint, uint32_t version)>;
 using AuxSaveCallback = void (*)(ValkeyModuleIO *rdb, int when);
 using AuxLoadCallback = int (*)(ValkeyModuleIO *rdb, int encver, int when);

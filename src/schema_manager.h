@@ -109,6 +109,7 @@ class SchemaManager {
       const google::protobuf::Any &metadata);
   static absl::StatusOr<vmsdk::SemanticVersion> ComputeSemanticVersion(
       const google::protobuf::Any &metadata);
+  vmsdk::SemanticVersion ComputeSemanticVersionOfIndexes() const;
 
  private:
   absl::Status RemoveAll()
@@ -118,7 +119,7 @@ class SchemaManager {
   vmsdk::ThreadPool *mutations_thread_pool_;
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
 
-  absl::Status OnMetadataCallback(absl::string_view id,
+  absl::Status OnMetadataCallback(uint32_t db_num, absl::string_view id,
                                   const google::protobuf::Any *metadata,
                                   uint64_t fingerprint, uint32_t version)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);

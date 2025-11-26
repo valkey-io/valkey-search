@@ -163,7 +163,7 @@ absl::Status MetadataManager::TriggerCallbacks(
   auto it = registered_types.find(type_name);
   if (it != registered_types.end()) {
     return registered_types.at(type_name).update_callback(
-        id, entry.has_content() ? &entry.content() : nullptr,
+        db_num, id, entry.has_content() ? &entry.content() : nullptr,
         entry.fingerprint(), entry.version());
   }
   VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 10)

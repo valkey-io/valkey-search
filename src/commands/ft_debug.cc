@@ -8,11 +8,12 @@
 #include <absl/base/no_destructor.h>
 #include <absl/strings/ascii.h>
 
-#include "module_config.h"
+#include "src/coordinator/metadata_manager.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 
 extern vmsdk::module::Options options;  // Declared in module_loader.cc

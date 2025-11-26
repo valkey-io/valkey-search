@@ -115,13 +115,9 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
         [&](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
           return type_to_register.fingerprint_to_return;
         },
-<<<<<<< HEAD
         [&](uint32_t db_num, absl::string_view id,
-            const google::protobuf::Any* metadata) {
-=======
-        [&](absl::string_view id, const google::protobuf::Any* metadata,
-            uint64_t fingerprint, uint32_t version) {
->>>>>>> main
+            const google::protobuf::Any* metadata, uint64_t fingerprint,
+            uint32_t version) {
           CallbackResult callback_result{
               .type_name = type_to_register.type_name,
               .db_num = db_num,
@@ -544,13 +540,9 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
         [&](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
           return type_to_register.fingerprint_to_return;
         },
-<<<<<<< HEAD
         [&](uint32_t db_num, absl::string_view id,
-            const google::protobuf::Any* metadata) {
-=======
-        [&](absl::string_view id, const google::protobuf::Any* metadata,
-            uint64_t fingerprint, uint32_t version) {
->>>>>>> main
+            const google::protobuf::Any* metadata, uint64_t fingerprint,
+            uint32_t version) {
           callbacks_tracker.push_back(CallbackResult{
               .type_name = type_to_register.type_name,
               .db_num = db_num,
@@ -2026,9 +2018,10 @@ TEST_F(MetadataManagerTimestampTest,
       [](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
         return 1234;
       },
-      [](absl::string_view id, const google::protobuf::Any* metadata,
-         uint64_t fingerprint,
-         uint32_t version) { return absl::InternalError("Callback failed"); });
+      [](uint32_t db_num, absl::string_view id,
+         const google::protobuf::Any* metadata, uint64_t fingerprint,
+         uint32_t version) { return absl::InternalError("Callback failed"); },
+      [](auto) { return 1; });
 
   // Reconciliation should fail due to callback failure
   auto status =

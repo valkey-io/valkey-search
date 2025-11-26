@@ -442,18 +442,24 @@ inline std::unique_ptr<query::Predicate> MayNegatePredicate(
   return predicate;
 }
 
-std::unique_ptr<query::Predicate> FilterParser::WrapPredicate(
+absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
     std::unique_ptr<query::Predicate> prev_predicate,
     std::unique_ptr<query::Predicate> predicate, bool& negate,
     query::LogicalOperator logical_operator) {
   if (!prev_predicate) {
     return MayNegatePredicate(std::move(predicate), negate);
   }
+  // If INORDER OR SLOP, but the index schema does not support offsets, we
+  // reject the query.
+  if ((options_.inorder || options_.slop.has_value()) &&
+      !index_schema_.HasTextOffsets()) {
+    return absl::InvalidArgumentError("Index does not support offsets");
+  }
   return std::make_unique<query::ComposedPredicate>(
       std::move(prev_predicate),
       MayNegatePredicate(std::move(predicate), negate), logical_operator,
       options_.slop, options_.inorder);
-};
+}
 
 static const uint32_t FUZZY_MAX_DISTANCE = 3;
 
@@ -500,6 +506,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     const std::optional<std::string>& field_or_default) {
   const auto& lexer = text_index_schema->GetLexer();
+  bool with_suffix = false;
   std::string processed_content;
   while (!IsEnd()) {
     VMSDK_ASSIGN_OR_RETURN(bool should_continue,
@@ -520,8 +527,8 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
   std::string token = absl::AsciiStrToLower(processed_content);
   FieldMaskPredicate field_mask;
   std::optional<uint32_t> min_stem_size = std::nullopt;
-  VMSDK_RETURN_IF_ERROR(
-      SetupTextFieldConfiguration(field_mask, min_stem_size, field_or_default));
+  VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(
+      field_mask, min_stem_size, field_or_default, with_suffix));
   return FilterParser::TokenResult{
       std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
                                              std::move(token), true),
@@ -623,7 +630,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
         leading_percent_count <= FUZZY_MAX_DISTANCE) {
       if (token.empty()) return absl::InvalidArgumentError("Empty fuzzy token");
       VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(
-          field_mask, min_stem_size, field_or_default));
+          field_mask, min_stem_size, field_or_default, false));
       return FilterParser::TokenResult{
           std::make_unique<query::FuzzyPredicate>(text_index_schema, field_mask,
                                                   std::move(token),
@@ -652,7 +659,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     if (token.empty())
       return absl::InvalidArgumentError("Invalid wildcard '*' markers");
     VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(field_mask, min_stem_size,
-                                                      field_or_default));
+                                                      field_or_default, false));
     return FilterParser::TokenResult{
         std::make_unique<query::PrefixPredicate>(text_index_schema, field_mask,
                                                  std::move(token)),
@@ -665,7 +672,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
       return FilterParser::TokenResult{nullptr, break_on_query_syntax};
     }
     VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(field_mask, min_stem_size,
-                                                      field_or_default));
+                                                      field_or_default, false));
     if (!exact && min_stem_size.has_value()) {
       token = lexer.StemWord(token, true, *min_stem_size, lexer.GetStemmer());
     }
@@ -775,6 +782,11 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     // Exact phrase requires adjacent terms in order: slop=0, inorder=true
     uint32_t slop = 0;
     bool inorder = true;
+    // If index schema does not support offsets, we cannot support exact phrase,
+    // so reject the query.
+    if (!index_schema_.HasTextOffsets()) {
+      return absl::InvalidArgumentError("Index does not support offsets");
+    }
     pred = std::move(terms.front());  // Start with first term
     for (size_t i = 1; i < terms.size(); ++i) {
       pred = std::make_unique<query::ComposedPredicate>(
@@ -837,9 +849,10 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseExpression(
       if (prev_predicate) {
         node_count_++;  // Count the ComposedPredicate Node
       }
-      prev_predicate =
+      VMSDK_ASSIGN_OR_RETURN(
+          prev_predicate,
           WrapPredicate(std::move(prev_predicate), std::move(predicate), negate,
-                        query::LogicalOperator::kAnd);
+                        query::LogicalOperator::kAnd));
     } else if (Match('|')) {
       if (negate) {
         return UnexpectedChar(expression_, pos_ - 1);
@@ -848,9 +861,10 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseExpression(
       if (prev_predicate) {
         node_count_++;  // Count the ComposedPredicate Node
       }
-      prev_predicate =
+      VMSDK_ASSIGN_OR_RETURN(
+          prev_predicate,
           WrapPredicate(std::move(prev_predicate), std::move(predicate), negate,
-                        query::LogicalOperator::kOr);
+                        query::LogicalOperator::kOr));
     } else {
       std::optional<std::string> field_name;
       bool non_text = false;
@@ -875,9 +889,10 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseExpression(
       if (prev_predicate) {
         node_count_++;  // Count the ComposedPredicate Node
       }
-      prev_predicate =
+      VMSDK_ASSIGN_OR_RETURN(
+          prev_predicate,
           WrapPredicate(std::move(prev_predicate), std::move(predicate), negate,
-                        query::LogicalOperator::kAnd);
+                        query::LogicalOperator::kAnd));
     }
     SkipWhitespace();
     auto max_node_count = options::GetQueryStringTermsCount().GetValue();

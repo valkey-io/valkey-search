@@ -30,6 +30,23 @@ EvaluationResult NegatePredicate::Evaluate(Evaluator& evaluator) const {
   return EvaluationResult(!result.matches);
 }
 
+// Helper function to build EvaluationResult for text predicates.
+EvaluationResult BuildTextEvaluationResult(
+    std::unique_ptr<indexes::text::TextIterator> iterator,
+    bool require_positions) {
+  if (require_positions) {
+    if (iterator->DoneKeys() || iterator->DonePositions()) {
+      return EvaluationResult(false);
+    }
+    return EvaluationResult(true, std::move(iterator));
+  } else {
+    if (iterator->DoneKeys()) {
+      return EvaluationResult(false);
+    }
+    return EvaluationResult(true);
+  }
+}
+
 TermPredicate::TermPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     FieldMaskPredicate field_mask, std::string term, bool exact_)
@@ -65,12 +82,10 @@ EvaluationResult TermPredicate::Evaluate(
   }
   std::vector<indexes::text::Postings::KeyIterator> key_iterators;
   key_iterators.emplace_back(std::move(key_iter));
+  bool require_positions = text_index_schema_->HasTextOffsets();
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, nullptr);
-  if (iterator->DoneKeys() || iterator->DonePositions()) {
-    return EvaluationResult(false);
-  }
-  return EvaluationResult(true, std::move(iterator));
+      std::move(key_iterators), field_mask, nullptr, require_positions);
+  return BuildTextEvaluationResult(std::move(iterator), require_positions);
 }
 
 PrefixPredicate::PrefixPredicate(
@@ -90,7 +105,6 @@ EvaluationResult PrefixPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const std::shared_ptr<valkey_search::InternedString>& target_key) const {
   uint64_t field_mask = field_mask_;
-
   auto word_iter = text_index.GetPrefix().GetWordIterator(term_);
   std::vector<indexes::text::Postings::KeyIterator> key_iterators;
   while (!word_iter.Done()) {
@@ -110,12 +124,10 @@ EvaluationResult PrefixPredicate::Evaluate(
   if (key_iterators.empty()) {
     return EvaluationResult(false);
   }
+  bool require_positions = text_index_schema_->HasTextOffsets();
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, nullptr);
-  if (iterator->DonePositions()) {
-    return EvaluationResult(false);
-  }
-  return EvaluationResult(true, std::move(iterator));
+      std::move(key_iterators), field_mask, nullptr, require_positions);
+  return BuildTextEvaluationResult(std::move(iterator), require_positions);
 }
 
 SuffixPredicate::SuffixPredicate(
@@ -135,7 +147,6 @@ EvaluationResult SuffixPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const std::shared_ptr<valkey_search::InternedString>& target_key) const {
   uint64_t field_mask = field_mask_;
-
   auto suffix_opt = text_index.GetSuffix();
   if (!suffix_opt.has_value()) {
     return EvaluationResult(false);
@@ -160,12 +171,10 @@ EvaluationResult SuffixPredicate::Evaluate(
   if (key_iterators.empty()) {
     return EvaluationResult(false);
   }
+  bool require_positions = text_index_schema_->HasTextOffsets();
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, nullptr);
-  if (iterator->DonePositions()) {
-    return EvaluationResult(false);
-  }
-  return EvaluationResult(true, std::move(iterator));
+      std::move(key_iterators), field_mask, nullptr, require_positions);
+  return BuildTextEvaluationResult(std::move(iterator), require_positions);
 }
 
 InfixPredicate::InfixPredicate(
@@ -338,8 +347,8 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     // Proximity check: Only if slop/inorder set and both sides have
     // iterators. This ensures we only check proximity for text predicates,
     // not numeric/tag.
-    if ((slop_.has_value() || inorder_) && lhs.filter_iterator &&
-        rhs.filter_iterator) {
+    bool require_positions = slop_.has_value() || inorder_;
+    if (require_positions && lhs.filter_iterator && rhs.filter_iterator) {
       // Get field_mask from lhs and rhs iterators
       uint64_t query_field_mask = lhs.filter_iterator->QueryFieldMask() &
                                   rhs.filter_iterator->QueryFieldMask();

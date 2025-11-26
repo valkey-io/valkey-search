@@ -813,6 +813,35 @@ class TestFullText(ValkeySearchTestCaseBase):
         # result = client.execute_command("FT.SEARCH", "idx", '-@content:"manager" @skills:{python}')
         # assert result[0] == 1  # Should find doc:1 only
 
+    def test_nooffsets_option(self):
+        """
+        Test FT.CREATE NOOFFSETS option disables offsets storage
+        """
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE idx ON HASH NOOFFSETS SCHEMA content TEXT")
+        client.execute_command("HSET", "doc:1", "content", "term1 term2 term3 term4 term5 term6 term7 term8 term9 term10")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        # Non Exact Phrase Text Searches should still work no offsets
+        result = client.execute_command("FT.SEARCH", "idx", '@content:term1 term2 term3 term4 term5 term6 term7 term8 term9 term10')
+        assert (result[0], result[1]) == (1, b"doc:1")
+        result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4 term5 term6 term7 term8 term9 term10')
+        assert (result[0], result[1]) == (1, b"doc:1")
+        # Exact Phrase Text Searches should fail without offsets
+        with pytest.raises(ResponseError) as err:
+            client.execute_command("FT.SEARCH", "idx", '@content:"term1 term2 term3 term4 term5 term6 term7 term8 term9 term10"')
+        assert "Index does not support offsets" in str(err.value)
+        # Text searches with INORDER / SLOP should fail without offsets
+        with pytest.raises(ResponseError) as err:
+            client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4 term5 term6 term7 term8 term9 term10', "SLOP", "2")
+        assert "Index does not support offsets" in str(err.value)
+        with pytest.raises(ResponseError) as err:
+            client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4 term5 term6 term7 term8 term9 term10', "INORDER")
+        assert "Index does not support offsets" in str(err.value)
+        with pytest.raises(ResponseError) as err:
+            client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4 term5 term6 term7 term8 term9 term10', "SLOP", "2", "INORDER")
+        assert "Index does not support offsets" in str(err.value)
+
     def test_proximity_predicate(self):
         client: Valkey = self.server.get_new_client()
         # Create index with text fields

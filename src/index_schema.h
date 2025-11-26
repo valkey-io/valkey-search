@@ -97,6 +97,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   ~IndexSchema() override;
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
       absl::string_view attribute_alias) const;
+  inline bool HasTextOffsets() const { return with_offsets_; }
   const absl::flat_hash_set<std::string> &GetAllTextIdentifiers(
       bool with_suffix) const;
   FieldMaskPredicate GetAllTextFieldMask(bool with_suffix) const;

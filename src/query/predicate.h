@@ -60,6 +60,11 @@ struct EvaluationResult {
       bool result,
       std::unique_ptr<valkey_search::indexes::text::TextIterator> iterator)
       : matches(result), filter_iterator(std::move(iterator)) {}
+
+  // Helper function to build EvaluationResult for text predicates
+  EvaluationResult BuildTextEvaluationResult(
+      const std::unique_ptr<indexes::text::TextIterator>& iterator,
+      bool requires_position);
 };
 
 class Evaluator {
@@ -349,6 +354,7 @@ class ComposedPredicate : public Predicate {
                     bool inorder = false);
 
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
+
   const Predicate* GetLhsPredicate() const { return lhs_predicate_.get(); }
   const Predicate* GetRhsPredicate() const { return rhs_predicate_.get(); }
   std::optional<uint32_t> GetSlop() const { return slop_; }

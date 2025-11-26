@@ -77,7 +77,8 @@ class TextTest : public ::testing::Test {
   bool TokenExists(const std::string& token,
                    std::shared_ptr<text::TextIndexSchema> schema = nullptr) {
     auto active_schema = schema ? schema : text_index_schema_;
-    auto iter = active_schema->GetTextIndex()->prefix_.GetWordIterator(token);
+    auto iter =
+        active_schema->GetTextIndex()->GetPrefix().GetWordIterator(token);
     return !iter.Done();
   }
 
@@ -86,7 +87,8 @@ class TextTest : public ::testing::Test {
       const std::string& token,
       std::shared_ptr<text::TextIndexSchema> schema = nullptr) {
     auto active_schema = schema ? schema : text_index_schema_;
-    auto iter = active_schema->GetTextIndex()->prefix_.GetWordIterator(token);
+    auto iter =
+        active_schema->GetTextIndex()->GetPrefix().GetWordIterator(token);
     if (iter.Done()) {
       return nullptr;
     }
@@ -379,7 +381,7 @@ TEST_F(TextTest, StemmingBehavior) {
 
   // Stemming behavior depends on the stemmer implementation
   // This test ensures stemming doesn't break the indexing pipeline
-  auto& prefix_tree = stemming_schema->GetTextIndex()->prefix_;
+  auto& prefix_tree = stemming_schema->GetTextIndex()->GetPrefix();
 
   // Should create some tokens (exact form depends on stemmer)
   bool has_tokens = false;

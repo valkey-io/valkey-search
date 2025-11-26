@@ -25,6 +25,15 @@
 
 namespace valkey_search::query {
 
+static bool IsIteratorValid(
+    const std::unique_ptr<indexes::text::TermIterator>& iterator,
+    FieldMaskPredicate query_field_mask) {
+  if (iterator->DoneKeys() || !iterator->HasCurrentPosition()) {
+    return false;
+  }
+  return true;
+}
+
 EvaluationResult NegatePredicate::Evaluate(Evaluator& evaluator) const {
   EvaluationResult result = predicate_->Evaluate(evaluator);
   return EvaluationResult(!result.matches);
@@ -68,7 +77,7 @@ EvaluationResult TermPredicate::Evaluate(
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr);
 
-  if (iterator->DoneKeys() || !iterator->HasCurrentPosition()) {
+  if (!IsIteratorValid(iterator, field_mask)) {
     return EvaluationResult(false);
   }
   return EvaluationResult(true, std::move(iterator));
@@ -114,7 +123,7 @@ EvaluationResult PrefixPredicate::Evaluate(
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr);
 
-  if (!iterator->HasCurrentPosition()) {
+  if (!IsIteratorValid(iterator, field_mask)) {
     return EvaluationResult(false);
   }
   return EvaluationResult(true, std::move(iterator));
@@ -164,7 +173,7 @@ EvaluationResult SuffixPredicate::Evaluate(
   }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr);
-  if (!iterator->HasCurrentPosition()) {
+  if (!IsIteratorValid(iterator, field_mask)) {
     return EvaluationResult(false);
   }
   return EvaluationResult(true, std::move(iterator));

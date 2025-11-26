@@ -451,11 +451,11 @@ TEST_F(TextTest, FetcherSizeEstimation) {
     AddRecordAndCommitKey(suffix_text_index.get(), key3, "another document",
                           suffix_schema);
     // Perform query and validate
-    query::SuffixPredicate suffix_pred(
-        suffix_schema, field_mask, "ment");
+    query::SuffixPredicate suffix_pred(suffix_schema, field_mask, "ment");
     auto fetcher_ptr = suffix_pred.Search(false);
     auto* fetcher = static_cast<Text::EntriesFetcher*>(fetcher_ptr);
-    EXPECT_EQ(fetcher->Size(), 3) << "SuffixPredicate for 'ment' should estimate 3 documents";
+    EXPECT_EQ(fetcher->Size(), 3)
+        << "SuffixPredicate for 'ment' should estimate 3 documents";
     delete fetcher;
   }
   // Test 4: Non-existent term

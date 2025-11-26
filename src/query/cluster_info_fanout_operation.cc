@@ -28,19 +28,13 @@ ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(
       backfill_complete_percent_min_(0.0f),
       backfill_in_progress_(false) {
   if (require_consistency_) {
-    // Get expected fingerprint/version from local metadata
-    auto global_metadata =
-        coordinator::MetadataManager::Instance().GetGlobalMetadata();
-    if (global_metadata->type_namespace_map().contains(
-            kSchemaManagerMetadataTypeName)) {
-      const auto& entry_map = global_metadata->type_namespace_map().at(
-          kSchemaManagerMetadataTypeName);
-      if (entry_map.entries().contains(index_name_)) {
-        const auto& entry = entry_map.entries().at(index_name_);
-        expected_fingerprint_version_.set_fingerprint(entry.fingerprint());
-        expected_fingerprint_version_.set_version(entry.version());
-      }
-    }
+    // Get expected fingerprint/version from IndexSchema
+    auto status_or_schema =
+        SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+    CHECK(status_or_schema.ok());
+    auto schema = status_or_schema.value();
+    expected_fingerprint_version_.set_fingerprint(schema->GetFingerprint());
+    expected_fingerprint_version_.set_version(schema->GetVersion());
   }
 }
 

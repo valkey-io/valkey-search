@@ -47,7 +47,7 @@ EvaluationResult TermPredicate::Evaluate(Evaluator& evaluator) const {
 // TermPredicate: Exact term match in the text index.
 EvaluationResult TermPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
-    const std::shared_ptr<valkey_search::InternedString>& target_key) const {
+    const InternedStringPtr& target_key) const {
   uint64_t field_mask = field_mask_;
   auto word_iter = text_index.GetPrefix().GetWordIterator(term_);
   if (word_iter.Done()) {
@@ -88,7 +88,7 @@ EvaluationResult PrefixPredicate::Evaluate(Evaluator& evaluator) const {
 // PrefixPredicate: Matches all terms that start with the given prefix.
 EvaluationResult PrefixPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
-    const std::shared_ptr<valkey_search::InternedString>& target_key) const {
+    const InternedStringPtr& target_key) const {
   uint64_t field_mask = field_mask_;
 
   auto word_iter = text_index.GetPrefix().GetWordIterator(term_);
@@ -133,7 +133,7 @@ EvaluationResult SuffixPredicate::Evaluate(Evaluator& evaluator) const {
 // SuffixPredicate: Matches terms that end with the given suffix
 EvaluationResult SuffixPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
-    const std::shared_ptr<valkey_search::InternedString>& target_key) const {
+    const InternedStringPtr& target_key) const {
   uint64_t field_mask = field_mask_;
 
   auto suffix_opt = text_index.GetSuffix();
@@ -182,7 +182,7 @@ EvaluationResult InfixPredicate::Evaluate(Evaluator& evaluator) const {
 
 EvaluationResult InfixPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
-    const std::shared_ptr<valkey_search::InternedString>& target_key) const {
+    const InternedStringPtr& target_key) const {
   // TODO: Implement infix evaluation
   return EvaluationResult(false);
 }
@@ -202,7 +202,7 @@ EvaluationResult FuzzyPredicate::Evaluate(Evaluator& evaluator) const {
 
 EvaluationResult FuzzyPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
-    const std::shared_ptr<valkey_search::InternedString>& target_key) const {
+    const InternedStringPtr& target_key) const {
   // TODO: Implement fuzzy evaluation
   return EvaluationResult(false);
 }
@@ -222,7 +222,7 @@ EvaluationResult ProximityPredicate::Evaluate(Evaluator& evaluator) const {
 
 EvaluationResult ProximityPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
-    const std::shared_ptr<valkey_search::InternedString>& target_key) const {
+    const InternedStringPtr& target_key) const {
   return EvaluationResult(false);
 }
 

@@ -559,7 +559,7 @@ class VectorSearchIntegrationTest(VSSTestCase):
             )
 
         self.assertEqual(
-            "Index test_index already exists.",
+            "Index test_index in database 0 already exists.",
             e.exception.args[0],
         )
 

@@ -282,31 +282,9 @@ Service::GenerateInfoResponse(
                               status_or_schema.status().ToString());
     return std::make_pair(error_status, response);
   }
+  auto schema = std::move(status_or_schema.value());
 
   if (request.require_consistency()) {
-    // Get local fingerprint/version
-    auto global_metadata =
-        coordinator::MetadataManager::Instance().GetGlobalMetadata();
-
-    CHECK(global_metadata->type_namespace_map().contains(
-        kSchemaManagerMetadataTypeName));
-
-    const auto& entry_map = global_metadata->type_namespace_map().at(
-        kSchemaManagerMetadataTypeName);
-
-    // Check if index exists in entry map
-    if (!entry_map.entries().contains(index_name)) {
-      response.set_exists(false);
-      response.set_index_name(index_name);
-      response.set_error(status_or_schema.status().ToString());
-      response.set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
-      return std::make_pair(grpc::Status(grpc::StatusCode::NOT_FOUND,
-                                         status_or_schema.status().ToString()),
-                            response);
-    }
-
-    const auto& entry = entry_map.entries().at(index_name);
-
     auto set_inconsistent_error = [&]() {
       response.set_exists(true);
       response.set_index_name(index_name);
@@ -325,14 +303,13 @@ Service::GenerateInfoResponse(
       return set_inconsistent_error();
     } else {
       const auto& expected = request.index_fingerprint_version();
-      if (expected.fingerprint() != entry.fingerprint() ||
-          expected.version() != entry.version()) {
+      if (expected.fingerprint() != schema->GetFingerprint() ||
+          expected.version() != schema->GetVersion()) {
         return set_inconsistent_error();
       }
     }
   }
 
-  auto schema = std::move(status_or_schema.value());
   IndexSchema::InfoIndexPartitionData data =
       schema->GetInfoIndexPartitionData();
 

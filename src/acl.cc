@@ -194,6 +194,8 @@ absl::string_view KeyAccessToStringView(acl::KeyAccess ka) {
       return kWriteCategory;
     case acl::KeyAccess::kRead:
       return kReadCategory;
+    default:
+      CHECK(false);
   }
 }
 

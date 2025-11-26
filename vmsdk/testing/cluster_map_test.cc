@@ -149,32 +149,28 @@ class ClusterMapTest : public vmsdk::ValkeyTest {
 
     EXPECT_CALL(*kMockValkeyModule,
                 CallReplyArrayElement(testing::_, testing::_))
-        .WillRepeatedly(
-            testing::Invoke(&TestValkeyModule_CallReplyArrayElementImpl));
+        .WillRepeatedly(&TestValkeyModule_CallReplyArrayElementImpl);
 
     EXPECT_CALL(*kMockValkeyModule, CallReplyType(testing::Ne(reply)))
-        .WillRepeatedly(testing::Invoke(&TestValkeyModule_CallReplyTypeImpl));
+        .WillRepeatedly(&TestValkeyModule_CallReplyTypeImpl);
 
     EXPECT_CALL(*kMockValkeyModule, CallReplyLength(testing::Ne(reply)))
-        .WillRepeatedly(testing::Invoke([](ValkeyModuleCallReply* r) -> size_t {
+        .WillRepeatedly([](ValkeyModuleCallReply* r) -> size_t {
           if (r && r->type == VALKEYMODULE_REPLY_ARRAY) {
             return std::get<CallReplyArray>(r->val).size();
           }
           return 0;
-        }));
+        });
 
     EXPECT_CALL(*kMockValkeyModule, CallReplyInteger(testing::_))
-        .WillRepeatedly(
-            testing::Invoke(&TestValkeyModule_CallReplyIntegerImpl));
+        .WillRepeatedly(&TestValkeyModule_CallReplyIntegerImpl);
 
     EXPECT_CALL(*kMockValkeyModule, CallReplyStringPtr(testing::_, testing::_))
-        .WillRepeatedly(
-            testing::Invoke(&TestValkeyModule_CallReplyStringPtrImpl));
+        .WillRepeatedly(&TestValkeyModule_CallReplyStringPtrImpl);
 
     EXPECT_CALL(*kMockValkeyModule, CallReplyMapElement(testing::_, testing::_,
                                                         testing::_, testing::_))
-        .WillRepeatedly(
-            testing::Invoke(&TestValkeyModule_CallReplyMapElementImpl));
+        .WillRepeatedly(&TestValkeyModule_CallReplyMapElementImpl);
   }
 
   // Helper: Mock CLUSTER SLOTS command

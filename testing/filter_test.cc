@@ -123,7 +123,6 @@ TEST_P(FilterTest, ParseParams) {
   // Generate the actual predicate tree structure
   std::string actual_tree =
       PrintPredicateTree(parse_results.value().root_predicate.get());
-
   // Compare expected vs actual tree structure
   if (!test_case.expected_tree_structure.empty()) {
     EXPECT_EQ(actual_tree, test_case.expected_tree_structure)

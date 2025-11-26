@@ -859,6 +859,8 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
         return UnexpectedChar(expression_, pos_ - 1);
       }
 
+      // OR at the same level should not increase depth - pass level-1 so after
+      // the increment in ParseExpression it returns to the same level
       VMSDK_ASSIGN_OR_RETURN(auto sub_result, ParseExpression(level));
       predicate = std::move(sub_result.prev_predicate);
       if (result.prev_predicate) {

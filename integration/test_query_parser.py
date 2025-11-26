@@ -47,6 +47,8 @@ class TestQueryParser(ValkeySearchTestCaseBase):
             "PARAMS", 2, "BLOB", "<your_vector_blob>",
             "RETURN", 1, "doc_embedding"
         ) == [0]
+
+        assert client.execute_command("CONFIG SET search.query-string-depth 2") == b"OK"
         # Validate another success case at depth 1 (OR at same level, no nesting).
         # With n-ary structure, OR operations at the same level don't increase depth.
         assert client.execute_command(

@@ -68,9 +68,8 @@ absl::Status RegisterCommands(ValkeyModuleCtx *ctx,
     if (command.command_info != nullptr) {
       if (ValkeyModule_SetCommandInfo(cmd, command.command_info) ==
           VALKEYMODULE_ERR) {
-        return absl::InternalError(
-            absl::StrCat("Failed to set command info for: ",
-                         command.cmd_name.data()));
+        return absl::InternalError(absl::StrCat(
+            "Failed to set command info for: ", command.cmd_name.data()));
       }
     }
   }

@@ -98,8 +98,8 @@ ValkeyModuleCommandArg ftCreateVectorTypeOptions[] = {
         .flags = VALKEYMODULE_CMD_ARG_NONE,
         .deprecated_since = nullptr,
         .subargs = nullptr,
-        },
-    {nullptr} // Sentinel
+    },
+    {nullptr}  // Sentinel
 };
 
 // Distance metric options for vector algorithms
@@ -213,7 +213,8 @@ ValkeyModuleCommandArg ftCreateHnswSubargs[] = {
         .type = VALKEYMODULE_ARG_TYPE_INTEGER,
         .key_spec_index = -1,
         .token = "EF_CONSTRUCTION",
-        .summary = "Vectors examined during index creation (default 200, max 4096)",
+        .summary =
+            "Vectors examined during index creation (default 200, max 4096)",
         .since = "1.0.0",
         .flags = VALKEYMODULE_CMD_ARG_OPTIONAL,
         .deprecated_since = nullptr,
@@ -459,7 +460,8 @@ ValkeyModuleCommandArg ftCreateArgs[] = {
 
 const ValkeyModuleCommandInfo ftCreateInfo = {
     .version = VALKEYMODULE_COMMAND_INFO_VERSION,
-    .summary = "Creates an empty search index and initiates the backfill process",
+    .summary =
+        "Creates an empty search index and initiates the backfill process",
     .complexity = "O(N log N), where N is the number of indexed items",
     .since = "1.0.0",
     .history = nullptr,

@@ -258,13 +258,6 @@ TEST_P(EvaluateFilterAsPrimaryTest, ParseParams) {
   std::string actual_tree =
       PrintPredicateTree(filter_parse_results.value().root_predicate.get());
 
-  // Print both expected and actual structures
-  std::cout << "Filter: " << test_case.filter << std::endl;
-  std::cout << "Expected Tree Structure:" << std::endl;
-  std::cout << test_case.expected_tree_structure << std::endl;
-  std::cout << "Actual Tree Structure:" << std::endl;
-  std::cout << actual_tree << std::endl;
-
   // Compare expected vs actual tree structure
   EXPECT_EQ(actual_tree, test_case.expected_tree_structure)
       << "Tree structure mismatch for filter: " << test_case.filter;
@@ -416,6 +409,8 @@ INSTANTIATE_TEST_SUITE_P(
                                        "    NUMERIC(numeric_index_100_10)\n"
                                        "    TAG(tag_index_100_15)\n"
                                        "    NUMERIC(numeric_index_100_30)\n"
+                                       "    NUMERIC(numeric_index_100_20)\n"
+                                       "    NUMERIC(numeric_index_100_40)\n"
                                        "  }\n"
                                        "}\n",
         },

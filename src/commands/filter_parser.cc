@@ -86,13 +86,6 @@ constexpr double kNegativeInf = -std::numeric_limits<double>::infinity();
 #endif
 }  // namespace
 
-// inline std::string indent_prefix(int depth, bool last) {
-//   std::string s;
-//   for (int i = 0; i < depth - 1; ++i) s += "│   ";
-//   if (depth > 0) s += (last ? "└── " : "├── ");
-//   return s;
-// }
-
 // Helper function to print predicate tree structure using DFS
 std::string PrintPredicateTree(const query::Predicate* predicate, int indent) {
   std::string result;
@@ -193,7 +186,6 @@ std::string PrintPredicateTree(const query::Predicate* predicate, int indent) {
       result += indent_str + "UNKNOWN\n";
       break;
   }
-
   return result;
 }
 
@@ -409,11 +401,11 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   }
   filter_identifiers_.clear();
   pos_ = 0;
-  VMSDK_ASSIGN_OR_RETURN(auto predicate, ParseExpression(0));
+  VMSDK_ASSIGN_OR_RETURN(auto parse_result, ParseExpression(0));
   if (!IsEnd()) {
     return UnexpectedChar(expression_, pos_);
   }
-  results.root_predicate = std::move(predicate);
+  results.root_predicate = std::move(parse_result.prev_predicate);
   results.filter_identifiers.swap(filter_identifiers_);
   // Log the built query syntax tree.
   VMSDK_LOG(WARNING, nullptr)
@@ -434,7 +426,7 @@ inline std::unique_ptr<query::Predicate> MayNegatePredicate(
 std::unique_ptr<query::Predicate> WrapPredicate(
     std::unique_ptr<query::Predicate> prev_predicate,
     std::unique_ptr<query::Predicate> predicate, bool& negate,
-    query::LogicalOperator logical_operator, bool prev_grp) {
+    query::LogicalOperator logical_operator, bool prev_grp, bool first_joined) {
   auto new_predicate = MayNegatePredicate(std::move(predicate), negate);
 
   if (!prev_predicate) {
@@ -442,13 +434,9 @@ std::unique_ptr<query::Predicate> WrapPredicate(
   }
 
   // Check if we can extend existing ComposedPredicate of the same type
-  query::PredicateType target_type =
-      (logical_operator == query::LogicalOperator::kAnd)
-          ? query::PredicateType::kComposedAnd
-          : query::PredicateType::kComposedOr;
-
-  if (prev_predicate->GetType() == target_type && !prev_grp) {
-    // Flatten: Add to existing n-ary node instead of wrapping
+  // Only extend AND nodes when we're adding with AND operator
+  if (prev_predicate->GetType() == query::PredicateType::kComposedAnd &&
+      logical_operator == query::LogicalOperator::kAnd && !prev_grp) {
     auto* composed =
         dynamic_cast<query::ComposedPredicate*>(prev_predicate.get());
     if (composed) {
@@ -457,14 +445,28 @@ std::unique_ptr<query::Predicate> WrapPredicate(
     }
   }
 
-  // if (new_predicate->GetType() == target_type){
-  //     auto* new_composed =
-  //         dynamic_cast<query::ComposedPredicate*>(new_predicate.get());
-  //     auto* prev_composed =
-  //         dynamic_cast<query::ComposedPredicate*>(prev_predicate.get());
-  //     new_composed->AddChildren(std::move(prev_composed->ReleaseChildren()));
-  //     return prev_predicate;  // Return extended existing node
-  //   }
+  // Flatten OR nodes when first_joined is true at the same bracket level
+  if (logical_operator == query::LogicalOperator::kOr && first_joined) {
+    std::vector<std::unique_ptr<query::Predicate>> new_children;
+
+    if (prev_predicate) {
+      new_children.push_back(std::move(prev_predicate));
+    }
+
+    if (new_predicate->GetType() == query::PredicateType::kComposedOr) {
+      auto* new_composed =
+          dynamic_cast<query::ComposedPredicate*>(new_predicate.get());
+      auto children = new_composed->ReleaseChildren();
+      for (auto& child : children) {
+        new_children.push_back(std::move(child));
+      }
+    } else {
+      new_children.push_back(std::move(new_predicate));
+    }
+
+    return std::make_unique<query::ComposedPredicate>(logical_operator,
+                                                      std::move(new_children));
+  }
 
   // Create new ComposedPredicate only when operators differ or first
   // composition
@@ -802,7 +804,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
 // Parsing rules:
 // 1. Predicate evaluation is done with left-associative grouping while the OR
 // operator has higher precedence than the AND operator. precedence. For
-// example: a & ( b | c ) & d is evaluated as (a & b) | (c & d).
+// example: a & b | c  & d is evaluated as (a & b) | (c & d).
 // 2. Field name is always preceded by '@' and followed by ':'.
 // 3. A numeric field has the following pattern: @field_name:[Start,End]. Both
 // space and comma are valid separators between Start and End.
@@ -817,196 +819,14 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
 // than 100 is expressed as [(100 inf].
 // 10. Numeric filters are inclusive. Exclusive min or max are expressed with (
 // prepended to the number, for example, [(100 (200].
-// absl::StatusOr<std::unique_ptr<query::Predicate>>
-// FilterParser::ParseExpression(
-//     uint32_t level) {
-//   if (level++ >= options::GetQueryStringDepth().GetValue()) {
-//     return absl::InvalidArgumentError("Query string is too complex");
-//   }
-//   std::vector<std::unique_ptr<query::Predicate>> and_terms;
-//   std::vector<std::unique_ptr<query::Predicate>> or_groups;
-
-//   SkipWhitespace();
-//   while (!IsEnd()) {
-//     if (Peek() == ')') break;
-
-//     std::unique_ptr<query::Predicate> predicate;
-//     bool negate = Match('-');
-
-//     if (Match('(')) {
-//       VMSDK_ASSIGN_OR_RETURN(predicate, ParseExpression(level));
-//       if (!Match(')')) {
-//         return absl::InvalidArgumentError(
-//             absl::StrCat("Expected ')' after expression got '",
-//                          expression_.substr(pos_, 1), "'. Position: ",
-//                          pos_));
-//       }
-//       predicate = MayNegatePredicate(std::move(predicate), negate);
-//       and_terms.push_back(std::move(predicate));
-//     } else if (Match('|')) {
-//       if (negate) return UnexpectedChar(expression_, pos_ - 1);
-
-//       // Flush current AND group to OR groups
-//       if (and_terms.size() == 1) {
-//         or_groups.push_back(std::move(and_terms[0]));
-//       } else if (and_terms.size() > 1) {
-//         node_count_++;
-//         or_groups.push_back(std::make_unique<query::ComposedPredicate>(
-//             query::LogicalOperator::kAnd, std::move(and_terms)));
-//       }
-//       and_terms.clear();
-//     } else {
-//       std::optional<std::string> field_name;
-//       bool non_text = false;
-//       if (Peek() == '@') {
-//         std::string parsed_field;
-//         VMSDK_ASSIGN_OR_RETURN(parsed_field, ParseFieldName());
-//         field_name = parsed_field;
-//         if (Match('[')) {
-//           node_count_++;
-//           VMSDK_ASSIGN_OR_RETURN(predicate,
-//           ParseNumericPredicate(*field_name)); non_text = true;
-//         } else if (Match('{')) {
-//           node_count_++;
-//           VMSDK_ASSIGN_OR_RETURN(predicate, ParseTagPredicate(*field_name));
-//           non_text = true;
-//         }
-//       }
-//       if (!non_text) {
-//         node_count_++;
-//         VMSDK_ASSIGN_OR_RETURN(predicate, ParseTextTokens(field_name));
-//       }
-//       predicate = MayNegatePredicate(std::move(predicate), negate);
-//       and_terms.push_back(std::move(predicate));
-//     }
-
-//     SkipWhitespace();
-//     auto max_node_count = options::GetQueryStringTermsCount().GetValue();
-//     VMSDK_RETURN_IF_ERROR(
-//         vmsdk::VerifyRange(node_count_, std::nullopt, max_node_count))
-//         << "Query string is too complex: max number of terms can't exceed "
-//         << max_node_count;
-//   }
-
-//   // Final assembly
-//   if (or_groups.empty()) {
-//     // No OR operators - return AND group
-//     if (and_terms.empty())
-//       return absl::InvalidArgumentError("Empty expression");
-//     if (and_terms.size() == 1) return std::move(and_terms[0]);
-//     node_count_++;
-//     return std::make_unique<query::ComposedPredicate>(
-//         query::LogicalOperator::kAnd, std::move(and_terms));
-//   } else {
-//     // Has OR - add final AND group and create OR
-//     if (and_terms.size() == 1) {
-//       or_groups.push_back(std::move(and_terms[0]));
-//     } else if (and_terms.size() > 1) {
-//       node_count_++;
-//       or_groups.push_back(std::make_unique<query::ComposedPredicate>(
-//           query::LogicalOperator::kAnd, std::move(and_terms)));
-//     }
-
-//     if (or_groups.size() == 1) return std::move(or_groups[0]);
-//     node_count_++;
-//     return std::make_unique<query::ComposedPredicate>(
-//         query::LogicalOperator::kOr, std::move(or_groups));
-//   }
-// }
-// absl::StatusOr<std::unique_ptr<query::Predicate>>
-// FilterParser::ParseExpression(
-//     uint32_t level) {
-//   if (level++ >= options::GetQueryStringDepth().GetValue()) {
-//     return absl::InvalidArgumentError("Query string is too complex");
-//   }
-//   std::unique_ptr<query::Predicate> prev_predicate;
-//   query::LogicalOperator pending_operator = query::LogicalOperator::kAnd;
-//   bool has_pending_or = false;
-
-//   SkipWhitespace();
-//   while (!IsEnd()) {
-//     if (Peek() == ')') {
-//       break;
-//     }
-//     std::unique_ptr<query::Predicate> predicate;
-//     bool negate = Match('-');
-
-//     if (Match('(')) {
-//       VMSDK_ASSIGN_OR_RETURN(predicate, ParseExpression(level));
-//       if (!Match(')')) {
-//         return absl::InvalidArgumentError(
-//             absl::StrCat("Expected ')' after expression got '",
-//                          expression_.substr(pos_, 1), "'. Position: ",
-//                          pos_));
-//       }
-//       if (prev_predicate) {
-//         node_count_++;  // Count the ComposedPredicate Node
-//       }
-//       prev_predicate =
-//           WrapPredicate(std::move(prev_predicate), std::move(predicate),
-//           negate,
-//                         pending_operator);
-//     } else if (Match('|')) {
-//       if (negate) {
-//         return UnexpectedChar(expression_, pos_ - 1);
-//       }
-//       // Set pending OR operator for next iteration
-//       pending_operator = query::LogicalOperator::kOr;
-//       has_pending_or = true;
-//       SkipWhitespace();
-//       continue;  // Continue to parse next predicate with OR operator
-//     } else {
-//       std::optional<std::string> field_name;
-//       bool non_text = false;
-//       if (Peek() == '@') {
-//         std::string parsed_field;
-//         VMSDK_ASSIGN_OR_RETURN(parsed_field, ParseFieldName());
-//         field_name = parsed_field;
-//         if (Match('[')) {
-//           node_count_++;
-//           VMSDK_ASSIGN_OR_RETURN(predicate,
-//           ParseNumericPredicate(*field_name)); non_text = true;
-//         } else if (Match('{')) {
-//           node_count_++;
-//           VMSDK_ASSIGN_OR_RETURN(predicate, ParseTagPredicate(*field_name));
-//           non_text = true;
-//         }
-//       }
-//       if (!non_text) {
-//         node_count_++;
-//         VMSDK_ASSIGN_OR_RETURN(predicate, ParseTextTokens(field_name));
-//       }
-//       if (prev_predicate) {
-//         node_count_++;  // Count the ComposedPredicate Node
-//       }
-//       prev_predicate =
-//           WrapPredicate(std::move(prev_predicate), std::move(predicate),
-//           negate,
-//                         pending_operator);
-//     }
-
-//     // Reset to AND for next iteration unless we have a pending OR
-//     if (!has_pending_or) {
-//       pending_operator = query::LogicalOperator::kAnd;
-//     } else {
-//       has_pending_or = false;
-//     }
-
-//     SkipWhitespace();
-//     auto max_node_count = options::GetQueryStringTermsCount().GetValue();
-//     VMSDK_RETURN_IF_ERROR(
-//         vmsdk::VerifyRange(node_count_, std::nullopt, max_node_count))
-//         << "Query string is too complex: max number of terms can't exceed "
-//         << max_node_count;
-//   }
-//   return prev_predicate;
-// }
-absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseExpression(
+absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
     uint32_t level) {
   if (level++ >= options::GetQueryStringDepth().GetValue()) {
     return absl::InvalidArgumentError("Query string is too complex");
   }
-  std::unique_ptr<query::Predicate> prev_predicate;
+
+  ParseResult result;
+  result.first_joined = true;
   bool prev_grp = false;
 
   SkipWhitespace();
@@ -1018,31 +838,37 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseExpression(
     bool negate = Match('-');
 
     if (Match('(')) {
-      VMSDK_ASSIGN_OR_RETURN(predicate, ParseExpression(level));
+      VMSDK_ASSIGN_OR_RETURN(auto sub_result, ParseExpression(level));
       if (!Match(')')) {
         return absl::InvalidArgumentError(
             absl::StrCat("Expected ')' after expression got '",
                          expression_.substr(pos_, 1), "'. Position: ", pos_));
       }
-      if (prev_predicate) {
-        node_count_++;  // Count the ComposedPredicate Node
+      predicate = std::move(sub_result.prev_predicate);
+
+      if (result.prev_predicate) {
+        node_count_++;
       }
-      prev_grp = (!prev_predicate) ? true : false;
-      prev_predicate =
-          WrapPredicate(std::move(prev_predicate), std::move(predicate), negate,
-                        query::LogicalOperator::kAnd, prev_grp);
+      prev_grp = (!result.prev_predicate) ? true : false;
+      result.prev_predicate = WrapPredicate(
+          std::move(result.prev_predicate), std::move(predicate), negate,
+          query::LogicalOperator::kAnd, prev_grp, result.first_joined);
+      result.first_joined = false;
     } else if (Match('|')) {
       if (negate) {
         return UnexpectedChar(expression_, pos_ - 1);
       }
-      VMSDK_ASSIGN_OR_RETURN(predicate, ParseExpression(level));
-      if (prev_predicate) {
-        node_count_++;  // Count the ComposedPredicate Node
+
+      VMSDK_ASSIGN_OR_RETURN(auto sub_result, ParseExpression(level));
+      predicate = std::move(sub_result.prev_predicate);
+      if (result.prev_predicate) {
+        node_count_++;
       }
-      prev_predicate =
-          WrapPredicate(std::move(prev_predicate), std::move(predicate), negate,
-                        query::LogicalOperator::kOr, prev_grp);
+      result.prev_predicate = WrapPredicate(
+          std::move(result.prev_predicate), std::move(predicate), negate,
+          query::LogicalOperator::kOr, prev_grp, sub_result.first_joined);
       prev_grp = false;
+      result.first_joined = true;
     } else {
       std::optional<std::string> field_name;
       bool non_text = false;
@@ -1064,12 +890,12 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseExpression(
         node_count_++;
         VMSDK_ASSIGN_OR_RETURN(predicate, ParseTextTokens(field_name));
       }
-      if (prev_predicate) {
-        node_count_++;  // Count the ComposedPredicate Node
+      if (result.prev_predicate) {
+        node_count_++;
       }
-      prev_predicate =
-          WrapPredicate(std::move(prev_predicate), std::move(predicate), negate,
-                        query::LogicalOperator::kAnd, prev_grp);
+      result.prev_predicate = WrapPredicate(
+          std::move(result.prev_predicate), std::move(predicate), negate,
+          query::LogicalOperator::kAnd, prev_grp, result.first_joined);
       prev_grp = false;
     }
     SkipWhitespace();
@@ -1079,6 +905,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseExpression(
         << "Query string is too complex: max number of terms can't exceed "
         << max_node_count;
   }
-  return prev_predicate;
+  return result;
 }
 }  // namespace valkey_search

@@ -124,15 +124,8 @@ TEST_P(FilterTest, ParseParams) {
   std::string actual_tree =
       PrintPredicateTree(parse_results.value().root_predicate.get());
 
-  // Print both expected and actual structures if expected is provided
+  // Compare expected vs actual tree structure
   if (!test_case.expected_tree_structure.empty()) {
-    std::cout << "Filter: " << test_case.filter << std::endl;
-    std::cout << "Expected Tree Structure:" << std::endl;
-    std::cout << test_case.expected_tree_structure << std::endl;
-    std::cout << "Actual Tree Structure:" << std::endl;
-    std::cout << actual_tree << std::endl;
-
-    // Compare expected vs actual tree structure
     EXPECT_EQ(actual_tree, test_case.expected_tree_structure)
         << "Tree structure mismatch for filter: " << test_case.filter;
   }
@@ -1085,6 +1078,233 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = false,
             .create_expected_error_message =
                 "Unexpected character at position 6: `;`",
+        },
+        // Nested brackets test cases for AND operations
+        {
+            .test_name = "nested_brackets_and_1",
+            .filter = "(@num_field_1.5:[1.0 2.0] @num_field_2.0:[1.0 3.0]) "
+                      "@tag_field_1:{tag1}",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "AND{\n"
+                                       "  AND{\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "  TAG(tag_field_1)\n"
+                                       "}\n",
+        },
+        {
+            .test_name = "nested_brackets_and_2",
+            .filter = "(@num_field_1.5:[1.0 2.0] (@num_field_2.0:[1.0 3.0] "
+                      "(@tag_field_1:{tag1} (@tag_field_1_2:{tag1,tag2} "
+                      "(@num_field_1.5:[1.0 2.0] @num_field_2.0:[1.0 3.0]) "
+                      "@tag_field_1:{tag1}))))",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "AND{\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "  AND{\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    AND{\n"
+                                       "      TAG(tag_field_1)\n"
+                                       "      AND{\n"
+                                       "        TAG(tag_field_1_2)\n"
+                                       "        AND{\n"
+                                       "          NUMERIC(num_field_1.5)\n"
+                                       "          NUMERIC(num_field_2.0)\n"
+                                       "        }\n"
+                                       "        TAG(tag_field_1)\n"
+                                       "      }\n"
+                                       "    }\n"
+                                       "  }\n"
+                                       "}\n",
+        },
+        {
+            .test_name = "nested_brackets_and_3",
+            .filter = "@num_field_1.5:[1.0 2.0] (@num_field_2.0:[1.0 3.0] "
+                      "(@tag_field_1:{tag1} (@tag_field_1_2:{tag1,tag2} "
+                      "(@num_field_1.5:[1.0 2.0] @num_field_2.0:[1.0 3.0]))))",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "AND{\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "  AND{\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    AND{\n"
+                                       "      TAG(tag_field_1)\n"
+                                       "      AND{\n"
+                                       "        TAG(tag_field_1_2)\n"
+                                       "        AND{\n"
+                                       "          NUMERIC(num_field_1.5)\n"
+                                       "          NUMERIC(num_field_2.0)\n"
+                                       "        }\n"
+                                       "      }\n"
+                                       "    }\n"
+                                       "  }\n"
+                                       "}\n",
+        },
+        // Nested brackets test cases for OR operations
+        {
+            .test_name = "nested_brackets_or_1",
+            .filter = "(@num_field_1.5:[5.0 6.0] | (@num_field_2.0:[5.0 6.0] | "
+                      "(@tag_field_1:{tag2} | (@tag_field_1_2:{tag3} | "
+                      "(@num_field_1.5:[1.0 2.0] | @num_field_2.0:[1.0 3.0]) | "
+                      "@tag_field_1:{tag1}))))",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "OR{\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "  OR{\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    OR{\n"
+                                       "      TAG(tag_field_1)\n"
+                                       "      OR{\n"
+                                       "        TAG(tag_field_1_2)\n"
+                                       "        OR{\n"
+                                       "          NUMERIC(num_field_1.5)\n"
+                                       "          NUMERIC(num_field_2.0)\n"
+                                       "        }\n"
+                                       "        TAG(tag_field_1)\n"
+                                       "      }\n"
+                                       "    }\n"
+                                       "  }\n"
+                                       "}\n",
+        },
+        {
+            .test_name = "nested_brackets_or_2",
+            .filter = "(@num_field_1.5:[5.0 6.0] | @num_field_2.0:[5.0 6.0]) | "
+                      "(@tag_field_1:{tag2} | @tag_field_1_2:{tag3}) | "
+                      "(@num_field_1.5:[1.0 2.0] | @num_field_2.0:[1.0 3.0])",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "OR{\n"
+                                       "  OR{\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "  OR{\n"
+                                       "    TAG(tag_field_1)\n"
+                                       "    TAG(tag_field_1_2)\n"
+                                       "  }\n"
+                                       "  OR{\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "}\n",
+        },
+        // Mixed AND/OR with brackets
+        {
+            .test_name = "mixed_and_or_1",
+            .filter = "@num_field_1.5:[1.0 2.0] @num_field_2.0:[1.0 3.0] "
+                      "(@tag_field_1:{tag1} @tag_field_1_2:{tag1,tag2}) "
+                      "@num_field_1.5:[1.0 2.0] | (@num_field_2.0:[1.0 3.0] | "
+                      "@tag_field_1:{tag1})",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "OR{\n"
+                                       "  AND{\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    AND{\n"
+                                       "      TAG(tag_field_1)\n"
+                                       "      TAG(tag_field_1_2)\n"
+                                       "    }\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "  }\n"
+                                       "  OR{\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "    TAG(tag_field_1)\n"
+                                       "  }\n"
+                                       "}\n",
+        },
+        {
+            .test_name = "mixed_and_or_2",
+            .filter =
+                "( @num_field_1.5:[5.0 6.0] (@num_field_2.0:[5.0 6.0] "
+                "(@tag_field_1:{tag2} (@tag_field_1_2:{tag3} "
+                "@num_field_1.5:[5.0 6.0]))) | ( @num_field_1.5:[1.0 2.0] "
+                "(@num_field_2.0:[1.0 3.0] (@tag_field_1:{tag1} "
+                "(@tag_field_1_2:{tag1,tag2} | @num_field_1.5:[1.0 2.0])))))",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "OR{\n"
+                                       "  AND{\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "    AND{\n"
+                                       "      NUMERIC(num_field_2.0)\n"
+                                       "      AND{\n"
+                                       "        TAG(tag_field_1)\n"
+                                       "        AND{\n"
+                                       "          TAG(tag_field_1_2)\n"
+                                       "          NUMERIC(num_field_1.5)\n"
+                                       "        }\n"
+                                       "      }\n"
+                                       "    }\n"
+                                       "  }\n"
+                                       "  AND{\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "    AND{\n"
+                                       "      NUMERIC(num_field_2.0)\n"
+                                       "      AND{\n"
+                                       "        TAG(tag_field_1)\n"
+                                       "        OR{\n"
+                                       "          TAG(tag_field_1_2)\n"
+                                       "          NUMERIC(num_field_1.5)\n"
+                                       "        }\n"
+                                       "      }\n"
+                                       "    }\n"
+                                       "  }\n"
+                                       "}\n",
+        },
+        // Edge case: Complex nested OR with multiple levels
+        {
+            .test_name = "complex_nested_or",
+            .filter = "@num_field_1.5:[5.0 6.0] | @num_field_2.0:[5.0 6.0] | "
+                      "@tag_field_1:{tag2} | @tag_field_1_2:{tag3} | "
+                      "@num_field_1.5:[1.0 2.0]",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "OR{\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "  TAG(tag_field_1)\n"
+                                       "  TAG(tag_field_1_2)\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "}\n",
+        },
+        // Edge case: Deeply nested AND with single element brackets
+        {
+            .test_name = "deeply_nested_single_brackets",
+            .filter = "(@num_field_1.5:[1.0 2.0]) (@num_field_2.0:[1.0 3.0]) "
+                      "(@tag_field_1:{tag1})",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "AND{\n"
+                                       "  NUMERIC(num_field_1.5)\n"
+                                       "  NUMERIC(num_field_2.0)\n"
+                                       "  TAG(tag_field_1)\n"
+                                       "}\n",
+        },
+        // Edge case: Mixed brackets with negation
+        {
+            .test_name = "mixed_brackets_with_negation",
+            .filter = "-(@num_field_1.5:[5.0 6.0] @num_field_2.0:[5.0 6.0]) | "
+                      "(@tag_field_1:{tag1} @tag_field_1_2:{tag1,tag2})",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "OR{\n"
+                                       "  NOT{\n"
+                                       "    AND{\n"
+                                       "      NUMERIC(num_field_1.5)\n"
+                                       "      NUMERIC(num_field_2.0)\n"
+                                       "    }\n"
+                                       "  }\n"
+                                       "  AND{\n"
+                                       "    TAG(tag_field_1)\n"
+                                       "    TAG(tag_field_1_2)\n"
+                                       "  }\n"
+                                       "}\n",
         },
     }),
     [](const TestParamInfo<FilterTestCase>& info) {

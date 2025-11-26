@@ -15,7 +15,10 @@ import string
 import logging
 import shutil
 
-CLUSTER_LOGS_DIR = "/tmp/valkey-test-framework-files"
+LOGS_DIR = "/tmp/valkey-test-framework-files"
+
+if "LOGS_DIR" in os.environ:
+    LOGS_DIR = os.environ["LOGS_DIR"]
 
 
 class Node:
@@ -106,6 +109,18 @@ class ReplicationGroup:
                 return False
         return True
 
+    def _replication_lag(self, index) -> int:
+        primary_offset = self.primary.client.info("REPLICATION")['master_repl_offset']
+        replica_offset = self.replicas[index].client.info("REPLICATION")['slave_repl_offset']
+        assert primary_offset >= replica_offset
+        return primary_offset - replica_offset
+
+    def replication_lag(self) -> int:
+        '''
+        The maximum replication lag
+        '''
+        return max([self._replication_lag(r) for r in range(len(self.replicas))])
+
     def get_replica_connection(self, index) -> Valkey:
         return self.replicas[index].client
 
@@ -144,6 +159,9 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         See ValkeySearchTestCaseBase.get_config_file_lines & ValkeySearchClusterTestCase.get_config_file_lines
         for example usage."""
         raise NotImplementedError
+    
+    def append_startup_args(self, args: dict[str, str]) -> dict[str, str]:
+        return args
 
     def start_server(
         self,
@@ -155,7 +173,7 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         """Launch server node and return a tuple of the server handle, a client to the server
         and the log file path"""
         server_path = os.getenv("VALKEY_SERVER_PATH")
-        testdir = f"{CLUSTER_LOGS_DIR}/{test_name}"
+        testdir = f"{LOGS_DIR}/{test_name}"
 
         os.makedirs(testdir, exist_ok=True)
         curdir = os.getcwd()
@@ -174,7 +192,7 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         server, client = self.create_server(
             testdir=testdir,
             server_path=server_path,
-            args={"logfile": logfile},
+            args=self.append_startup_args({"logfile": logfile}),
             port=port,
             conf_file=conf_file,
         )
@@ -188,6 +206,15 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         role = info.get("role", "")
         master_link_status = info.get("master_link_status", "")
         assert role == "slave" and master_link_status == "up"
+
+    def get_nodes(self) -> List[Node]:
+        return self.nodes
+
+    def get_primaries(self) -> List[Node]:
+        return self.primaries
+
+    def get_replicas(self) -> List[Node]:
+        return self.replicas
 
 
 class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
@@ -211,6 +238,9 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
         self.rg.setup_replications_cmd()
         self.server = self.rg.primary.server
         self.client = self.rg.primary.client
+
+        self.nodes: List[Node] = [self.rg.primary]
+        self.nodes += self.rg.replicas
 
         yield
 
@@ -273,6 +303,17 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
     def get_primary_connection(self) -> Valkey:
         return self.rg.get_primary_connection()
 
+def EnableDebugMode(config: List[str]):
+    # turn "loadmodule xx.so" into "loadmodule xx.so --debug-mode yes"
+    load_module = f"loadmodule {os.getenv('MODULE_PATH')}"
+    return [x.replace(load_module, load_module + " --debug-mode yes") for x in config]
+
+class ValkeySearchTestCaseDebugMode(ValkeySearchTestCaseBase):
+    '''
+    Same as ValkeySearchTestCaseBase, except that "debug-mode" is enabled.
+    '''
+    def get_config_file_lines(self, testdir, port) -> List[str]:
+        return EnableDebugMode(super(ValkeySearchTestCaseDebugMode, self).get_config_file_lines(testdir, port))
 
 class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
     # Default cluster size
@@ -331,7 +372,7 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
                 ports.append(self.get_bind_port())
 
         test_name = self.normalize_dir_name(request.node.name)
-        testdir_base = f"{CLUSTER_LOGS_DIR}/{test_name}"
+        testdir_base = f"{LOGS_DIR}/{test_name}"
 
         if os.path.exists(testdir_base):
             shutil.rmtree(testdir_base)
@@ -373,6 +414,11 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
             )
             rg = ReplicationGroup(primary=primary_node, replicas=replicas)
             self.replication_groups.append(rg)
+
+        self.nodes: List[Node] = list()
+        for rg in self.replication_groups:
+            self.nodes.append(rg.primary)
+            self.nodes += rg.replicas
 
         # Split the slots
         ranges = self._split_range_pairs(0, 16384, self.CLUSTER_SIZE)
@@ -436,6 +482,9 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
 
     def client_for_primary(self, index) -> Valkey:
         return self.replication_groups[index].primary.client
+    
+    def get_all_primary_clients(self) -> List[Valkey]:
+        return [rg.primary.client for rg in self.replication_groups]
 
     def get_replication_group(self, index) -> ReplicationGroup:
         return self.replication_groups[index]
@@ -461,3 +510,14 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
         )
         valkey_conn.ping()
         return valkey_conn
+    
+    def replication_lag(self) -> int:
+        return max([rg.replication_lag() for rg in self.replication_groups])
+
+class ValkeySearchClusterTestCaseDebugMode(ValkeySearchClusterTestCase):
+    '''
+    Same as ValkeySearchClusterTestCase, except that "debug-mode" is enabled.
+    '''
+    def get_config_file_lines(self, testdir, port) -> List[str]:
+        return EnableDebugMode(super(ValkeySearchClusterTestCaseDebugMode, self).get_config_file_lines(testdir, port))
+

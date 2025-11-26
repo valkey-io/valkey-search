@@ -145,7 +145,7 @@ static auto max_dimensions =
 static auto max_m =
     vmsdk::config::NumberBuilder(kMaxMConfig,  // name
                                  kMaxM,        // default size
-                                 1,            // min size
+                                 2,            // min size
                                  kMaxM)        // max size
         .WithValidationCallback(CHECK_RANGE(1, kMaxM, kMaxMConfig))
         .Build();
@@ -176,9 +176,9 @@ static auto max_ef_runtime =
 /// in milliseconds for FT.SEARCH.
 static auto default_timeout_ms =
     vmsdk::config::NumberBuilder(kDefaultTimeoutMs,  // name
-                                 kTimeoutMs,            // default timeout
-                                 kMinTimeoutMs,         // min timeout
-                                 kMaxTimeoutMs)         // max timeout
+                                 kTimeoutMs,         // default timeout
+                                 kMinTimeoutMs,      // min timeout
+                                 kMaxTimeoutMs)      // max timeout
         .Build();
 
 const absl::NoDestructor<
@@ -437,7 +437,7 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   VMSDK_ASSIGN_OR_RETURN(auto res, ParseParam(kOnParam, false, itr,
                                               on_data_type, *kOnDataTypeByStr));
   if (on_data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON &&
-      !IsJsonModuleLoaded(ctx)) {
+      !IsJsonModuleSupported(ctx)) {
     return absl::InvalidArgumentError("JSON module is not loaded.");
   }
   index_schema_proto.set_attribute_data_type(on_data_type);
@@ -533,9 +533,9 @@ std::unique_ptr<data_model::VectorIndex> HNSWParameters::ToProto() const {
 absl::Status HNSWParameters::Verify() const {
   VMSDK_RETURN_IF_ERROR(FTCreateVectorParameters::Verify());
   const auto max_m_value = options::GetMaxM().GetValue();
-  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(m, 1, max_m_value))
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(m, 2, max_m_value))
       << kMParam
-      << " must be a positive integer greater than 0 and cannot exceed "
+      << " must be a positive integer greater than 2 and cannot exceed "
       << max_m_value << ".";
 
   const auto max_ef_construction_value =

@@ -189,7 +189,7 @@ INSTANTIATE_TEST_SUITE_P(
              .command_str = " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
                             "ENGLISh SCORE 1.0 SChema hash_field1 as "
                             "hash_field11 vector hnsw 14 TYPE  FLOAT32 DIM 3  "
-                            "DISTANCE_METRIC IP M 1 EF_CONSTRUCTION 5 "
+                            "DISTANCE_METRIC IP M 2 EF_CONSTRUCTION 5 "
                             " INITIAL_CAP 15000 EF_RUNTIME 25 ",
              .hnsw_parameters = {{
                  {
@@ -198,7 +198,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
                      .initial_cap = 15000,
                  },
-                 /* .m =*/1,
+                 /* .m =*/2,
                  /* .ef_construction =*/5,
                  /* .ef_runtime =*/25,
              }},
@@ -244,7 +244,7 @@ INSTANTIATE_TEST_SUITE_P(
                             "ENGLISh SCORE 1.0 SChema hash_field10 as "
                             "hash_field10 numeric hash_field1 as "
                             "hash_field11 vector hnsw 14 TYPE  FLOAT32 DIM 3  "
-                            "DISTANCE_METRIC IP M 1 EF_CONSTRUCTION 5 "
+                            "DISTANCE_METRIC IP M 2 EF_CONSTRUCTION 5 "
                             " INITIAL_CAP 15000 EF_RUNTIME 25 ",
              .hnsw_parameters = {{
                  {
@@ -253,7 +253,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
                      .initial_cap = 15000,
                  },
-                 /* .m =*/1,
+                 /* .m =*/2,
                  /* .ef_construction =*/5,
                  /* .ef_runtime =*/25,
              }},
@@ -283,7 +283,7 @@ INSTANTIATE_TEST_SUITE_P(
                  "ENGLISh SCORE 1.0 SChema hash_field10 as "
                  "hash_field10 tag SEPARATOR '|' CASESENSITIVE hash_field1 as "
                  "hash_field11 vector hnsw 14 TYPE  FLOAT32 DIM 3  "
-                 "DISTANCE_METRIC IP M 1 EF_CONSTRUCTION 5 "
+                 "DISTANCE_METRIC IP M 2 EF_CONSTRUCTION 5 "
                  " INITIAL_CAP 15000 EF_RUNTIME 25 ",
              .hnsw_parameters = {{
                  {
@@ -292,7 +292,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
                      .initial_cap = 15000,
                  },
-                 /* .m =*/1,
+                 /* .m =*/2,
                  /* .ef_construction =*/5,
                  /* .ef_runtime =*/25,
              }},
@@ -328,7 +328,7 @@ INSTANTIATE_TEST_SUITE_P(
                  "hash_field21 tag SEPARATOR $ hash_field22 as "
                  "hash_field22 tag  hash_field1 as "
                  "hash_field11 vector hnsw 14 TYPE  FLOAT32 DIM 3  "
-                 "DISTANCE_METRIC IP M 1 EF_CONSTRUCTION 5 "
+                 "DISTANCE_METRIC IP M 2 EF_CONSTRUCTION 5 "
                  " INITIAL_CAP 15000 EF_RUNTIME 25 ",
              .hnsw_parameters = {{
                  {
@@ -337,7 +337,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
                      .initial_cap = 15000,
                  },
-                 /* .m =*/1,
+                 /* .m =*/2,
                  /* .ef_construction =*/5,
                  /* .ef_runtime =*/25,
              }},
@@ -556,29 +556,29 @@ INSTANTIATE_TEST_SUITE_P(
              .command_str = "idx1 on HASH SChema hash_field1 as "
                             "hash_field11 numeric ",
              .expected = {.index_schema_name = "idx1",
-                        .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
-                        .attributes = {{
-                            .identifier = "hash_field1",
-                            .attribute_alias = "hash_field11",
-                            .indexer_type = indexes::IndexerType::kNumeric,
-                        }}},
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field11",
+                              .indexer_type = indexes::IndexerType::kNumeric,
+                          }}},
          },
-        {
+         {
              .test_name = "happy_path_tag_index_on_hash",
              .success = true,
              .command_str = "idx1 on HASH SCHEMA hash_field1 as "
                             "hash_field11 tag ",
-            .tag_parameters = {{
+             .tag_parameters = {{
                  .separator = ",",
                  .case_sensitive = false,
              }},
              .expected = {.index_schema_name = "idx1",
-                        .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
-                        .attributes = {{
-                            .identifier = "hash_field1",
-                            .attribute_alias = "hash_field11",
-                            .indexer_type = indexes::IndexerType::kTag,
-                        }}},
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field11",
+                              .indexer_type = indexes::IndexerType::kTag,
+                          }}},
          },
          {
              .test_name = "invalid_separator",
@@ -588,7 +588,7 @@ INSTANTIATE_TEST_SUITE_P(
                  "ENGLISh SCORE 1.0 SChema hash_field10 as "
                  "hash_field10 tag SEPARATOR @@ CASESENSITIVE hash_field1 as "
                  "hash_field11 vector hnsw 14 TYPE  FLOAT32 DIM 3  "
-                 "DISTANCE_METRIC IP M 1 EF_CONSTRUCTION 5 "
+                 "DISTANCE_METRIC IP M 2 EF_CONSTRUCTION 5 "
                  " INITIAL_CAP 15000 EF_RUNTIME 25 ",
              .tag_parameters = {{
                  .separator = "@@",
@@ -615,7 +615,7 @@ INSTANTIATE_TEST_SUITE_P(
                  " idx1 on HASH PREFIx 3 abc def ghi LANGUAGe "
                  "ENGLISh SCORE 1.0 SChema hash_field1 as "
                  "hash_field11 vector hnsw 14 TYPE  FLOAT32 DIM 3  "
-                 "DISTANCE_METRIC IP M 1 EF_CONSTRUCTION 5 "
+                 "DISTANCE_METRIC IP M 2 EF_CONSTRUCTION 5 "
                  " INITIAL_CAP 15000 EF_RUNTIME 25 random_token_at_the_end",
              .expected_error_message =
                  "Invalid field type for field `random_token_at_the_end`: "
@@ -653,7 +653,7 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message =
                  "Invalid field type for field `hash_field1`: Invalid range: "
                  "Value below minimum; M must be a positive integer greater "
-                 "than 0 and cannot exceed 2000000.",
+                 "than 2 and cannot exceed 2000000.",
          },
          {
              .test_name = "invalid_m_too_big",
@@ -664,7 +664,18 @@ INSTANTIATE_TEST_SUITE_P(
              .expected_error_message =
                  "Invalid field type for field `hash_field1`: Invalid range: "
                  "Value above maximum; M must be a positive integer greater "
-                 "than 0 and cannot exceed 2000000.",
+                 "than 2 and cannot exceed 2000000.",
+         },
+         {
+             .test_name = "invalid_m_too_small",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 as "
+                            "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
+                            "DISTANCE_METRIC IP M 1",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Invalid range: "
+                 "Value below minimum; M must be a positive integer greater "
+                 "than 2 and cannot exceed 2000000.",
          },
          {
              .test_name = "invalid_ef_construction_zero",

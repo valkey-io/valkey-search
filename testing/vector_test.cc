@@ -56,7 +56,7 @@ const absl::flat_hash_map<data_model::DistanceMetric, std::string>
 };
 
 static cancel::Token& CancelNever() {
-  static cancel::Token cancel_never = cancel::Make(100000, nullptr);
+  static cancel::Token cancel_never = cancel::Make(1000000, nullptr);
   return cancel_never;
 }
 
@@ -368,7 +368,8 @@ float CalcRecall(VectorFlat<float>* flat_index, VectorHNSW<float>* hnsw_index,
   int cnt = 0;
   for (const auto& search_vector : search_vectors) {
     absl::string_view vector = VectorToStr(search_vector);
-    auto res_hnsw = hnsw_index->Search(vector, k, CancelNever(), nullptr, ef_runtime);
+    auto res_hnsw =
+        hnsw_index->Search(vector, k, CancelNever(), nullptr, ef_runtime);
     auto res_flat = flat_index->Search(vector, k, CancelNever());
     for (auto& label : *res_hnsw) {
       for (auto& real_label : *res_flat) {

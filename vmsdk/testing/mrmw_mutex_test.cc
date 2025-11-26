@@ -250,7 +250,7 @@ TEST_F(MRMWMutexTest, VerifyMayProlong) {
         write_tasks_completed_notification.Notify();
       },
       ThreadPool::Priority::kHigh);
-  may_prolong_notification.WaitForNotification();  
+  may_prolong_notification.WaitForNotification();
   EXPECT_TRUE(in_prolong_read);
   std::atomic<int> count = 0;
 
@@ -384,10 +384,11 @@ TEST_F(MRMWMutexTest, MultipleLockMetrics) {
   EXPECT_EQ(stats.write_periods, initial_write_periods + 2);
   EXPECT_GT(stats.read_time_microseconds, initial_read_time);
   EXPECT_GT(stats.write_time_microseconds, initial_write_time);
-  
+
   // Verify accumulated timing
   EXPECT_GE(stats.read_time_microseconds - initial_read_time, 140);  // ~3 * 50
-  EXPECT_GE(stats.write_time_microseconds - initial_write_time, 140); // ~2 * 75
+  EXPECT_GE(stats.write_time_microseconds - initial_write_time,
+            140);  // ~2 * 75
 }
 
 TEST_F(MRMWMutexTest, ConcurrentMetrics) {
@@ -411,20 +412,24 @@ TEST_F(MRMWMutexTest, ConcurrentMetrics) {
 
   // Schedule read tasks
   for (int i = 0; i < num_read_tasks; ++i) {
-    thread_pool.Schedule([&mrmw_mutex, &counter]() {
-      ReaderMutexLock lock(&mrmw_mutex);
-      absl::SleepFor(absl::Microseconds(10));
-      counter.DecrementCount();
-    }, ThreadPool::Priority::kHigh);
+    thread_pool.Schedule(
+        [&mrmw_mutex, &counter]() {
+          ReaderMutexLock lock(&mrmw_mutex);
+          absl::SleepFor(absl::Microseconds(10));
+          counter.DecrementCount();
+        },
+        ThreadPool::Priority::kHigh);
   }
 
   // Schedule write tasks
   for (int i = 0; i < num_write_tasks; ++i) {
-    thread_pool.Schedule([&mrmw_mutex, &counter]() {
-      WriterMutexLock lock(&mrmw_mutex);
-      absl::SleepFor(absl::Microseconds(20));
-      counter.DecrementCount();
-    }, ThreadPool::Priority::kHigh);
+    thread_pool.Schedule(
+        [&mrmw_mutex, &counter]() {
+          WriterMutexLock lock(&mrmw_mutex);
+          absl::SleepFor(absl::Microseconds(20));
+          counter.DecrementCount();
+        },
+        ThreadPool::Priority::kHigh);
   }
 
   counter.Wait();
@@ -439,7 +444,7 @@ TEST_F(MRMWMutexTest, GlobalStatisticsVerification) {
   options.read_switch_grace_period = absl::Microseconds(100);
   options.write_quota_duration = absl::Microseconds(500);
   options.write_switch_grace_period = absl::Microseconds(50);
-  
+
   TimeSlicedMRMWMutex mutex1(options);
   TimeSlicedMRMWMutex mutex2(options);
 
@@ -452,7 +457,7 @@ TEST_F(MRMWMutexTest, GlobalStatisticsVerification) {
     ReaderMutexLock lock1(&mutex1);
     absl::SleepFor(absl::Microseconds(50));
   }
-  
+
   {
     WriterMutexLock lock2(&mutex2);
     absl::SleepFor(absl::Microseconds(50));
@@ -475,22 +480,22 @@ TEST_F(MRMWMutexTest, TimingAccuracy) {
   TimeSlicedMRMWMutex mrmw_mutex(options);
 
   auto& stats = GetGlobalTimeSlicedMRMWStats();
-  
+
   // Test different sleep durations
   const std::vector<int> sleep_durations = {100, 200, 500};
-  
+
   for (int sleep_micros : sleep_durations) {
     uint64_t initial_read_time = stats.read_time_microseconds;
-    
+
     StopWatch timer;
     {
       ReaderMutexLock lock(&mrmw_mutex);
       absl::SleepFor(absl::Microseconds(sleep_micros));
     }
     auto actual_duration = absl::ToInt64Microseconds(timer.Duration());
-    
+
     uint64_t measured_time = stats.read_time_microseconds - initial_read_time;
-    
+
     // Allow for some timing variance (±50 microseconds)
     EXPECT_GE(measured_time, sleep_micros - 50);
     EXPECT_LE(measured_time, actual_duration + 50);

@@ -28,7 +28,6 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/coordinator/server.h"
 #include "src/coordinator/util.h"
-#include "src/index_schema.h"
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
@@ -51,12 +50,6 @@ namespace valkey_search {
 using vmsdk::config::ModuleConfigManager;
 
 static absl::NoDestructor<std::unique_ptr<ValkeySearch>> valkey_search_instance;
-
-constexpr size_t kMaxWorkerThreadPoolSuspensionSec{60};
-
-size_t ValkeySearch::GetMaxWorkerThreadPoolSuspensionSec() const {
-  return kMaxWorkerThreadPoolSuspensionSec;
-}
 
 ValkeySearch &ValkeySearch::Instance() { return **valkey_search_instance; };
 
@@ -149,6 +142,12 @@ static vmsdk::info_field::Integer ingest_hash_keys(
       return Metrics::GetStats().ingest_hash_keys;
     }));
 
+static vmsdk::info_field::Integer backfill_hash_keys(
+    "global_ingestion", "backfill_hash_keys",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().backfill_hash_keys;
+    }));
+
 static vmsdk::info_field::Integer ingest_hash_blocked(
     "global_ingestion", "ingest_hash_blocked",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
@@ -160,6 +159,12 @@ static vmsdk::info_field::Integer ingest_json_keys(
     "global_ingestion", "ingest_json_keys",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_json_keys;
+    }));
+
+static vmsdk::info_field::Integer backfill_json_keys(
+    "global_ingestion", "backfill_json_keys",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().backfill_json_keys;
     }));
 
 static vmsdk::info_field::Integer ingest_json_blocked(
@@ -576,6 +581,23 @@ static vmsdk::info_field::Integer coordinator_last_time_since_healthy_metadata(
           return ValkeySearch::Instance().UsingCoordinator();
         }));
 
+static vmsdk::info_field::Integer
+    coordinator_metadata_reconciliation_completed_count(
+        "coordinator", "coordinator_metadata_reconciliation_completed_count",
+        vmsdk::info_field::IntegerBuilder()
+            .App()
+            .Computed([]() -> int64_t {
+              // prevent failure in unit tests
+              if (!coordinator::MetadataManager::IsInitialized()) {
+                return 0;
+              }
+              return coordinator::MetadataManager::Instance()
+                  .GetMetadataReconciliationCompletedCount();
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator();
+            }));
+
 static vmsdk::info_field::String
     coordinator_client_get_global_metadata_success_latency_usec(
         "coordinator",
@@ -754,6 +776,24 @@ static vmsdk::info_field::String flat_vector_index_search_latency_usec(
               .flat_vector_index_search_latency.HasSamples();
         }));
 
+static vmsdk::info_field::Integer info_fanout_retry_count(
+    "fanout", "info_fanout_retry_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().info_fanout_retry_cnt;
+    }));
+
+static vmsdk::info_field::Integer info_fanout_fail_count(
+    "fanout", "info_fanout_fail_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().info_fanout_fail_cnt;
+    }));
+
+static vmsdk::info_field::Integer pause_handle_cluster_message_round_cnt(
+    "fanout", "pause_handle_cluster_message_round_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().pause_handle_cluster_message_round_cnt;
+    }));
+
 #ifdef DEBUG_INFO
 // Helper function to create subscription info fields with maximum deduplication
 template <typename StatsSelector>
@@ -823,6 +863,22 @@ static vmsdk::info_field::Integer &remove_subscription_skipped_count =
     remove_subscription_fields[2];
 
 #endif
+
+static vmsdk::info_field::Integer string_interning_memory_bytes(
+    "string_interning", "string_interning_memory_bytes",
+    vmsdk::info_field::IntegerBuilder()
+        .App()
+        .Computed(StringInternStore::GetMemoryUsage)
+        .CrashSafe());
+
+static vmsdk::info_field::Integer string_interning_memory_human(
+    "string_interning", "string_interning_memory_human",
+    vmsdk::info_field::IntegerBuilder()
+        .SIBytes()
+        .App()
+        .Computed(StringInternStore::GetMemoryUsage)
+        .CrashSafe());
+
 void ValkeySearch::Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const {
   vmsdk::info_field::DoSections(ctx, for_crash_report);
 }
@@ -890,8 +946,9 @@ void ValkeySearch::OnServerCronCallback(ValkeyModuleCtx *ctx,
   // Resume worker thread pool if suspension time exceeds the max allowed
   // duration
   if (writer_thread_pool_suspend_watch_.has_value() &&
+      options::GetMaxWorkerSuspensionSecs().GetValue() > 0 &&
       writer_thread_pool_suspend_watch_.value().Duration() >
-          absl::Seconds(GetMaxWorkerThreadPoolSuspensionSec())) {
+          absl::Seconds(options::GetMaxWorkerSuspensionSecs().GetValue())) {
     ResumeWriterThreadPool(ctx, /*is_expired=*/true);
   }
 }
@@ -900,7 +957,18 @@ void ValkeySearch::OnForkChildCallback(ValkeyModuleCtx *ctx,
                                        [[maybe_unused]] ValkeyModuleEvent eid,
                                        uint64_t subevent,
                                        [[maybe_unused]] void *data) {
-  if (subevent & VALKEYMODULE_SUBEVENT_FORK_CHILD_DIED) {
+  // if max-worker-suspension-secs config > 0, we resume the workers either when
+  // fork dies or when time expires (the second condition is checked on cron
+  // callback).
+  if (options::GetMaxWorkerSuspensionSecs().GetValue() > 0) {
+    if (subevent & VALKEYMODULE_SUBEVENT_FORK_CHILD_DIED) {
+      ResumeWriterThreadPool(ctx, /*is_expired=*/false);
+    }
+  } else {
+    // max-worker-suspension-secs <= 0 - we resume the workers on a 'fork born'
+    // event. We don't check if it's a 'fork born' event - in case the config
+    // was modified in the middle of the fork, we want to resume the workers
+    // also after 'fork died' event in case it wasn't already.
     ResumeWriterThreadPool(ctx, /*is_expired=*/false);
   }
 }
@@ -950,10 +1018,12 @@ absl::StatusOr<int> GetValkeyLocalPort(ValkeyModuleCtx *ctx) {
 
 absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
   reader_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
-      "read-worker-", options::GetReaderThreadCount().GetValue());
+      "read-worker-", options::GetReaderThreadCount().GetValue(),
+      options::GetThreadPoolWaitTimeSamples().GetValue());
   reader_thread_pool_->StartWorkers();
   writer_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
-      "write-worker-", options::GetWriterThreadCount().GetValue());
+      "write-worker-", options::GetWriterThreadCount().GetValue(),
+      options::GetThreadPoolWaitTimeSamples().GetValue());
   writer_thread_pool_->StartWorkers();
 
   VMSDK_LOG(NOTICE, ctx) << "use_coordinator: "
@@ -994,7 +1064,7 @@ void ValkeySearch::ResumeWriterThreadPool(ValkeyModuleCtx *ctx,
       is_expired
           ? absl::StrFormat(
                 "Worker thread pool suspension took more than %lu seconds",
-                GetMaxWorkerThreadPoolSuspensionSec())
+                options::GetMaxWorkerSuspensionSecs().GetValue())
           : "Fork child died notification received";
   if (is_expired) {
     Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt++;
@@ -1033,9 +1103,9 @@ absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
       ctx, VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS |
                VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD |
                VALKEYMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED);
-  VMSDK_LOG(NOTICE, ctx) << "Json module is "
-                         << (IsJsonModuleLoaded(ctx) ? "" : "not ")
-                         << "loaded!";
+  VMSDK_LOG(NOTICE, ctx) << "Json "
+                         << (IsJsonModuleSupported(ctx) ? "" : "not ")
+                         << "supported!";
   VectorExternalizer::Instance().Init(ctx_);
   ValkeyModule_Assert(vmsdk::info_field::Validate(ctx));
   VMSDK_LOG(DEBUG, ctx) << "Search module completed initialization!";
@@ -1069,6 +1139,22 @@ bool ValkeySearch::IsChildProcess() {
 void ValkeySearch::OnUnload(ValkeyModuleCtx *ctx) {
   ValkeyModule_FreeThreadSafeContext(ctx_);
   reader_thread_pool_ = nullptr;
+}
+
+std::shared_ptr<vmsdk::cluster_map::ClusterMap>
+ValkeySearch::GetOrRefreshClusterMap(ValkeyModuleCtx *ctx) {
+  auto current_map = std::atomic_load(&cluster_map_);
+  // Check if we need to refresh
+  bool needs_refresh =
+      !current_map || !current_map->IsConsistent() ||
+      std::chrono::steady_clock::now() > current_map->GetExpirationTime();
+  if (needs_refresh) {
+    VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1) << "Creating a new cluster map";
+    auto new_map = vmsdk::cluster_map::ClusterMap::CreateNewClusterMap(ctx);
+    std::atomic_store(&cluster_map_, new_map);
+    return new_map;
+  }
+  return current_map;
 }
 
 }  // namespace valkey_search

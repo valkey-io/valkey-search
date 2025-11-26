@@ -34,6 +34,7 @@
 #include "src/index_schema.pb.h"
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
+#include "src/valkey_search.h"
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
@@ -130,8 +131,10 @@ SchemaManager::SchemaManager(
     coordinator::MetadataManager::Instance().RegisterType(
         kSchemaManagerMetadataTypeName, kMetadataEncodingVersion,
         ComputeFingerprint,
-        [this](absl::string_view id, const google::protobuf::Any *metadata)
-            -> absl::Status { return this->OnMetadataCallback(id, metadata); });
+        [this](absl::string_view id, const google::protobuf::Any *metadata,
+               uint64_t fingerprint, uint32_t version) -> absl::Status {
+          return this->OnMetadataCallback(id, metadata, fingerprint, version);
+        });
   }
 }
 
@@ -195,7 +198,8 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
 
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,
-      IndexSchema::Create(ctx, index_schema_proto, mutations_thread_pool_, false, false));
+      IndexSchema::Create(ctx, index_schema_proto, mutations_thread_pool_,
+                          false, false));
 
   db_to_index_schemas_[db_num][name] = std::move(index_schema);
 
@@ -206,7 +210,8 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
   return absl::OkStatus();
 }
 
-absl::Status SchemaManager::CreateIndexSchema(
+absl::StatusOr<coordinator::IndexFingerprintVersion>
+SchemaManager::CreateIndexSchema(
     ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto) {
   const auto max_indexes = options::GetMaxIndexes().GetValue();
 
@@ -235,7 +240,12 @@ absl::Status SchemaManager::CreateIndexSchema(
 
   // In non-coordinated mode, apply the update inline.
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  return CreateIndexSchemaInternal(ctx, index_schema_proto);
+  VMSDK_RETURN_IF_ERROR(CreateIndexSchemaInternal(ctx, index_schema_proto));
+  // return dummy value in non-cluster mode
+  coordinator::IndexFingerprintVersion index_fingerprint_version;
+  index_fingerprint_version.set_fingerprint(0);
+  index_fingerprint_version.set_version(0);
+  return index_fingerprint_version;
 }
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::GetIndexSchema(
@@ -339,7 +349,8 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
 }
 
 absl::Status SchemaManager::OnMetadataCallback(
-    absl::string_view id, const google::protobuf::Any *metadata) {
+    absl::string_view id, const google::protobuf::Any *metadata,
+    uint64_t fingerprint, uint32_t version) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   // Note that there is only DB 0 in cluster mode, so we can hardcode this.
   auto status = RemoveIndexSchemaInternal(0, id);
@@ -361,6 +372,10 @@ absl::Status SchemaManager::OnMetadataCallback(
   if (!result.ok()) {
     return result;
   }
+
+  auto created_schema = LookupInternal(0, id).value();
+  created_schema->SetFingerprint(fingerprint);
+  created_schema->SetVersion(version);
 
   return absl::OkStatus();
 }
@@ -668,7 +683,19 @@ void SchemaManager::OnServerCronCallback(ValkeyModuleCtx *ctx,
                                          [[maybe_unused]] ValkeyModuleEvent eid,
                                          [[maybe_unused]] uint64_t subevent,
                                          [[maybe_unused]] void *data) {
-  SchemaManager::Instance().PerformBackfill(ctx, options::GetBackfillBatchSize().GetValue());
+  SchemaManager::Instance().PerformBackfill(
+      ctx, options::GetBackfillBatchSize().GetValue());
+}
+
+void SchemaManager::PopulateFingerprintVersionFromMetadata(
+    uint32_t db_num, absl::string_view name, uint64_t fingerprint,
+    uint32_t version) {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  auto existing_entry = LookupInternal(db_num, name);
+  if (existing_entry.ok()) {
+    existing_entry.value()->SetFingerprint(fingerprint);
+    existing_entry.value()->SetVersion(version);
+  }
 }
 
 static vmsdk::info_field::Integer number_of_indexes(
@@ -685,6 +712,39 @@ static vmsdk::info_field::Integer total_indexed_documents(
     "index_stats", "total_indexed_documents",
     vmsdk::info_field::IntegerBuilder().App().Computed([] {
       return SchemaManager::Instance().GetTotalIndexedDocuments();
+    }));
+static vmsdk::info_field::Integer active_indexes(
+    "index_stats", "number_of_active_indexes",
+    vmsdk::info_field::IntegerBuilder().App().Computed([] {
+      return SchemaManager::Instance().GetNumberOfIndexSchemas();
+    }));
+static vmsdk::info_field::Integer active_indexes_running_queries(
+    "index_stats", "number_of_active_indexes_running_queries",
+    vmsdk::info_field::IntegerBuilder().App().Computed([] {
+      // TODO: need to implement active query tracking
+      return 0;
+    }));
+static vmsdk::info_field::Integer active_indexes_indexing(
+    "index_stats", "number_of_active_indexes_indexing",
+    vmsdk::info_field::IntegerBuilder().App().Computed([] {
+      return SchemaManager::Instance().IsIndexingInProgress() ? 1 : 0;
+    }));
+static vmsdk::info_field::Integer total_active_write_threads(
+    "index_stats", "total_active_write_threads",
+    vmsdk::info_field::IntegerBuilder().App().Computed([] {
+      auto &valkey_search = valkey_search::ValkeySearch::Instance();
+      auto writer_thread_pool = valkey_search.GetWriterThreadPool();
+      if (writer_thread_pool) {
+        return writer_thread_pool->IsSuspended() ? 0
+                                                 : writer_thread_pool->Size();
+      }
+      return (unsigned long)0;
+    }));
+static vmsdk::info_field::Integer total_indexing_time(
+    "index_stats", "total_indexing_time",
+    vmsdk::info_field::IntegerBuilder().App().Computed([] {
+      // TODO: need to implement indexing time tracking
+      return 0;
     }));
 
 }  // namespace valkey_search

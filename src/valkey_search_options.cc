@@ -16,6 +16,12 @@ namespace options {
 
 constexpr uint32_t kHNSWDefaultBlockSize{10240};
 constexpr uint32_t kHNSWMinimumBlockSize{0};
+constexpr uint32_t kDefaultFTInfoTimeoutMs{5000};
+constexpr uint32_t kMinimumFTInfoTimeoutMs{100};
+constexpr uint32_t kMaximumFTInfoTimeoutMs{300000};
+constexpr uint32_t kDefaultFTInfoRpcTimeoutMs{2500};
+constexpr uint32_t kMinimumFTInfoRpcTimeoutMs{100};
+constexpr uint32_t kMaximumFTInfoRpcTimeoutMs{300000};
 
 namespace {
 
@@ -90,7 +96,7 @@ static auto reader_threads_count =
             })
         .Build();
 
-/// Register the "--reader-threads" flag. Controls the writer thread pool
+/// Register the "--writer-threads" flag. Controls the writer thread pool
 constexpr absl::string_view kWriterThreadsConfig{"writer-threads"};
 static auto writer_threads_count =
     config::NumberBuilder(kWriterThreadsConfig,  // name
@@ -104,13 +110,25 @@ static auto writer_threads_count =
             })
         .Build();
 
+/// Register the "--max-worker-suspension-secs" flag.
+/// Controls the resumption of the worker thread pool:
+///   - If max-worker-suspension-secs > 0, resume the workers either when the
+///     fork is died or after max-worker-suspension-secs seconds passed.
+///   - If max-worker-suspension-secs <= 0, resume the workers when the fork
+///     is born.
+constexpr absl::string_view kMaxWorkerSuspensionSecs{
+    "max-worker-suspension-secs"};
+static auto max_worker_suspension_secs =
+    config::Number(kMaxWorkerSuspensionSecs,  // name
+                   60,                        // default value
+                   0,                         // min value
+                   3600);                     // max value
+
 /// Should this instance use coordinator?
 constexpr absl::string_view kUseCoordinator{"use-coordinator"};
-static auto use_coordinator =
-    config::BooleanBuilder(kUseCoordinator, false)
-        .WithFlags(VALKEYMODULE_CONFIG_IMMUTABLE)  // can only be set during
-                                                   // start-up
-        .Build();
+static auto use_coordinator = config::BooleanBuilder(kUseCoordinator, false)
+                                  .Hidden()  // can only be set during start-up
+                                  .Build();
 
 // Register an enumerator for the log level
 static const std::vector<std::string_view> kLogLevelNames = {
@@ -159,6 +177,92 @@ static auto log_level =
 constexpr absl::string_view kEnablePartialResults{"enable-partial-results"};
 static config::Boolean enable_partial_results(kEnablePartialResults, true);
 
+/// Configure the weight for high priority tasks in thread pools (0-100)
+/// Low priority weight = 100 - high_priority_weight
+constexpr absl::string_view kHighPriorityWeight{"high-priority-weight"};
+static auto high_priority_weight =
+    config::NumberBuilder(kHighPriorityWeight, 100, 0,
+                          100)  // Default 100%, range 0-100
+        .WithModifyCallback([](auto new_value) {
+          // Update both reader and writer thread pools
+          auto reader_pool = ValkeySearch::Instance().GetReaderThreadPool();
+          auto writer_pool = ValkeySearch::Instance().GetWriterThreadPool();
+          if (reader_pool) {
+            reader_pool->SetHighPriorityWeight(new_value);
+          }
+          if (writer_pool) {
+            writer_pool->SetHighPriorityWeight(new_value);
+          }
+        })
+        .Build();
+
+/// Register the "--ft-info-timeout-ms" flag. Controls the timeout for FT.INFO
+/// operations
+constexpr absl::string_view kFTInfoTimeoutMsConfig{"ft-info-timeout-ms"};
+static auto ft_info_timeout_ms =
+    vmsdk::config::NumberBuilder(
+        kFTInfoTimeoutMsConfig,   // name
+        kDefaultFTInfoTimeoutMs,  // default timeout (5 seconds)
+        kMinimumFTInfoTimeoutMs,  // min timeout (100ms)
+        kMaximumFTInfoTimeoutMs)  // max timeout (5 minutes)
+        .Build();
+
+/// Register the "--ft-info-rpc-timeout-ms" flag. Controls the timeout for
+/// FT.INFO operations
+constexpr absl::string_view kFTInfoRpcTimeoutMsConfig{"ft-info-rpc-timeout-ms"};
+static auto ft_info_rpc_timeout_ms =
+    vmsdk::config::NumberBuilder(
+        kFTInfoRpcTimeoutMsConfig,   // name
+        kDefaultFTInfoRpcTimeoutMs,  // default timeout (2.5 seconds)
+        kMinimumFTInfoRpcTimeoutMs,  // min timeout (100ms)
+        kMaximumFTInfoRpcTimeoutMs)  // max timeout (5 minutes)
+        .Build();
+
+/// Register the "--local-fanout-queue-wait-threshold" flag. Controls the queue
+/// wait time threshold (in milliseconds) below which local node is preferred in
+/// fanout operations
+constexpr absl::string_view kLocalFanoutQueueWaitThresholdConfig{
+    "local-fanout-queue-wait-threshold"};
+constexpr uint32_t kDefaultLocalFanoutQueueWaitThreshold{
+    50};  // 50ms queue wait time
+constexpr uint32_t kMinimumLocalFanoutQueueWaitThreshold{
+    0};  // 0ms queue wait time
+constexpr uint32_t kMaximumLocalFanoutQueueWaitThreshold{
+    10000};  // 10 seconds queue wait time
+static auto local_fanout_queue_wait_threshold =
+    vmsdk::config::NumberBuilder(
+        kLocalFanoutQueueWaitThresholdConfig,   // name
+        kDefaultLocalFanoutQueueWaitThreshold,  // default threshold (50ms)
+        kMinimumLocalFanoutQueueWaitThreshold,  // min threshold (0ms)
+        kMaximumLocalFanoutQueueWaitThreshold)  // max threshold (10s)
+        .Build();
+
+/// Register the "--thread-pool-wait-time-samples" flag. Controls the size of
+/// the circular buffer for tracking queue wait times in thread pools
+constexpr absl::string_view kThreadPoolWaitTimeSamplesConfig{
+    "thread-pool-wait-time-samples"};
+constexpr uint32_t kDefaultThreadPoolWaitTimeSamples{100};  // 100 samples
+constexpr uint32_t kMinimumThreadPoolWaitTimeSamples{10};  // 10 samples minimum
+constexpr uint32_t kMaximumThreadPoolWaitTimeSamples{
+    10000};  // 10k samples maximum
+static auto thread_pool_wait_time_samples =
+    vmsdk::config::NumberBuilder(
+        kThreadPoolWaitTimeSamplesConfig,   // name
+        kDefaultThreadPoolWaitTimeSamples,  // default size (100)
+        kMinimumThreadPoolWaitTimeSamples,  // min size (10)
+        kMaximumThreadPoolWaitTimeSamples)  // max size (10k)
+        .WithModifyCallback([](uint32_t new_size) {
+          // Update thread pools when sample queue size changes
+          auto& instance = ValkeySearch::Instance();
+          if (auto reader_pool = instance.GetReaderThreadPool()) {
+            reader_pool->ResizeSampleQueue(new_size);
+          }
+          if (auto writer_pool = instance.GetWriterThreadPool()) {
+            writer_pool->ResizeSampleQueue(new_size);
+          }
+        })
+        .Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -171,6 +275,10 @@ vmsdk::config::Number& GetReaderThreadCount() {
 
 vmsdk::config::Number& GetWriterThreadCount() {
   return dynamic_cast<vmsdk::config::Number&>(*writer_threads_count);
+}
+
+vmsdk::config::Number& GetMaxWorkerSuspensionSecs() {
+  return max_worker_suspension_secs;
 }
 
 const vmsdk::config::Boolean& GetUseCoordinator() {
@@ -197,6 +305,27 @@ absl::Status Reset() {
 
 const vmsdk::config::Boolean& GetEnablePartialResults() {
   return static_cast<vmsdk::config::Boolean&>(enable_partial_results);
+}
+
+vmsdk::config::Number& GetHighPriorityWeight() {
+  return dynamic_cast<vmsdk::config::Number&>(*high_priority_weight);
+}
+
+vmsdk::config::Number& GetFTInfoTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number&>(*ft_info_timeout_ms);
+}
+
+vmsdk::config::Number& GetFTInfoRpcTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number&>(*ft_info_rpc_timeout_ms);
+}
+
+vmsdk::config::Number& GetLocalFanoutQueueWaitThreshold() {
+  return dynamic_cast<vmsdk::config::Number&>(
+      *local_fanout_queue_wait_threshold);
+}
+
+vmsdk::config::Number& GetThreadPoolWaitTimeSamples() {
+  return dynamic_cast<vmsdk::config::Number&>(*thread_pool_wait_time_samples);
 }
 
 }  // namespace options

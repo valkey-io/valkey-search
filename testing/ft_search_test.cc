@@ -176,7 +176,8 @@ void SendReplyTest::DoSendReplyTest(
   for (const auto &neighbor : input.neighbors) {
     neighbors.push_back(ToIndexesNeighbor(neighbor));
   }
-  auto parameters = std::make_unique<query::VectorSearchParameters>(10000, nullptr);
+  auto parameters = std::make_unique<SearchCommand>();
+  parameters->timeout_ms = 10000;
   parameters->index_schema = test_index_schema;
   parameters->attribute_alias = attribute_alias;
   parameters->score_as = vmsdk::MakeUniqueValkeyString(score_as);
@@ -187,7 +188,7 @@ void SendReplyTest::DoSendReplyTest(
     parameters->return_attributes.push_back(
         ToReturnAttribute(return_attribute));
   }
-  SendReply(&fake_ctx, neighbors, *parameters);
+  parameters->SendReply(&fake_ctx, neighbors);
 
   EXPECT_EQ(ParseRespReply(fake_ctx.reply_capture.GetReply()), expected_output);
 }
@@ -505,7 +506,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
           delete[] ids;
         });
     for (size_t i = 0; i < node_ids.size(); ++i) {
-      const auto& node_id = node_ids[i];
+      const auto &node_id = node_ids[i];
       EXPECT_CALL(
           *kMockValkeyModule,
           GetClusterNodeInfo(testing::_, testing::StrEq(node_id), testing::_,
@@ -530,7 +531,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
             GetClient(testing::StrEq(absl::StrCat("127.0.0.1:", coord_port))))
             .WillRepeatedly(testing::Return(mock_client));
         EXPECT_CALL(*mock_client, SearchIndexPartition(testing::_, testing::_))
-            .WillRepeatedly(testing::Invoke(
+            .WillRepeatedly(
                 [&](std::unique_ptr<coordinator::SearchIndexPartitionRequest>
                         request,
                     coordinator::SearchIndexPartitionCallback done) {
@@ -538,7 +539,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
                   // nothing.
                   coordinator::SearchIndexPartitionResponse response;
                   done(grpc::Status::OK, response);
-                }));
+                });
       }
     }
   }
@@ -565,14 +566,14 @@ TEST_P(FTSearchTest, FTSearchTests) {
       .Times(::testing::AnyNumber());
   auto vectors = DeterministicallyGenerateVectors(100, dimensions, 10.0);
   AddVectors(vectors);
-  
+
   // Capture initial metrics before starting searches
-  auto& stats = Metrics::GetStats();
-  auto& mrmw_stats = vmsdk::GetGlobalTimeSlicedMRMWStats();
+  auto &stats = Metrics::GetStats();
+  auto &mrmw_stats = vmsdk::GetGlobalTimeSlicedMRMWStats();
   uint64_t initial_queries = stats.time_slice_queries;
   uint64_t initial_read_periods = mrmw_stats.read_periods;
   uint64_t initial_read_time = mrmw_stats.read_time_microseconds;
-  
+
   RE2 reply_regex(R"(\*3\r\n:1\r\n\+\d+\r\n\*2\r\n\+score\r\n\+.*\r\n)");
   uint64_t i = 0;
   for (auto &vector : vectors) {
@@ -626,7 +627,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
       TestValkeyModule_FreeString(&fake_ctx_, cmd_arg);
     }
   }
-  
+
   // Verify that metrics were incremented correctly
   EXPECT_EQ(stats.time_slice_queries, initial_queries + vectors.size());
   EXPECT_GT(mrmw_stats.read_periods, initial_read_periods);
@@ -673,7 +674,8 @@ struct MaxLimitTestCase {
   std::string expected_error_message;
 };
 
-class FTSearchMaxLimitTest : public ValkeySearchTestWithParam<MaxLimitTestCase> {
+class FTSearchMaxLimitTest
+    : public ValkeySearchTestWithParam<MaxLimitTestCase> {
  public:
   void AddVectors(const std::vector<std::vector<float>> &vectors) {
     auto index_schema =
@@ -757,7 +759,7 @@ INSTANTIATE_TEST_SUITE_P(
                             "params", "2", "query_vector", "$embedding",
                             "DIALECT", "2"},
             .expected_error_message =
-                "$112\r\nInvalid range: Value above maximum; KNN parameter "
+                "-Invalid range: Value above maximum; KNN parameter "
                 "must be a positive integer greater than 0 and cannot exceed "
                 "5.\r\n",
         },
@@ -776,7 +778,7 @@ INSTANTIATE_TEST_SUITE_P(
                  "*=>[KNN 3 @vector $query_vector EF_RUNTIME 6 AS score]",
                  "params", "2", "query_vector", "$embedding", "DIALECT", "2"},
             .expected_error_message =
-                "$111\r\nInvalid range: Value above maximum; `EF_RUNTIME` must "
+                "-Invalid range: Value above maximum; `EF_RUNTIME` must "
                 "be a positive integer greater than 0 and cannot exceed 5.\r\n",
         },
     }),

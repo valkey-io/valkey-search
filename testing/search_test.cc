@@ -164,7 +164,8 @@ class EvaluateFilterAsPrimaryTest
 void InitIndexSchema(MockIndexSchema *index_schema) {
   data_model::NumericIndex numeric_index_proto;
 
-  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_)).Times(::testing::AnyNumber());
+  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
 
   auto numeric_index_100_10 =
       std::make_shared<MockNumeric>(numeric_index_proto);
@@ -309,17 +310,11 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
-struct PerformVectorSearchTestCase {
-  std::string test_name;
-  int k;  // The number of neighbors to return.
-  std::string filter;
-  size_t expected_neighbors_size;
-};
-
 std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
     const IndexerType vector_indexer_type = indexes::IndexerType::kHNSW) {
   auto index_schema = CreateIndexSchema(kIndexSchemaName).value();
-  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_)).Times(::testing::AnyNumber());
+  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
 
   // Add vector index
   std::shared_ptr<indexes::IndexBase> vector_index;
@@ -357,9 +352,9 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
 
   // Add records
   size_t num_records = 10000;
-  #ifdef SAN_BUILD
+#ifdef SAN_BUILD
   num_records = 100;
-  #endif
+#endif
   auto vectors =
       DeterministicallyGenerateVectors(num_records, kVectorDimensions, 10.0);
   for (size_t i = 0; i < num_records; ++i) {
@@ -390,15 +385,25 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
   return index_schema;
 }
 
-class PerformVectorSearchTest
-    : public ValkeySearchTestWithParam<PerformVectorSearchTestCase> {};
+struct LocalSearchTestCase {
+  std::string test_name;
+  int k;  // The number of neighbors to return.
+  std::string filter;
+  size_t expected_neighbors_size;
+  bool is_vector_search_query = true;
+};
 
-TEST_P(PerformVectorSearchTest, PerformVectorSearchTest) {
+class LocalSearchTest : public ValkeySearchTestWithParam<LocalSearchTestCase> {
+};
+
+TEST_P(LocalSearchTest, LocalSearchTest) {
   auto index_schema = CreateIndexSchemaWithMultipleAttributes();
-  const PerformVectorSearchTestCase &test_case = GetParam();
-  query::VectorSearchParameters params(100000, nullptr);
+  const LocalSearchTestCase &test_case = GetParam();
+  query::SearchParameters params(100000, nullptr);
   params.index_schema_name = kIndexSchemaName;
-  params.attribute_alias = kVectorAttributeAlias;
+  if (test_case.is_vector_search_query) {
+    params.attribute_alias = kVectorAttributeAlias;
+  }
   params.score_as = vmsdk::MakeUniqueValkeyString(kScoreAs);
   params.dialect = kDialect;
   params.k = test_case.k;
@@ -407,16 +412,18 @@ TEST_P(PerformVectorSearchTest, PerformVectorSearchTest) {
   params.query = VectorToStr(query_vector);
   FilterParser parser(*index_schema, test_case.filter);
   params.filter_parse_results = std::move(parser.Parse().value());
-  auto vector_index = dynamic_cast<indexes::VectorBase *>(
-      index_schema->GetIndex(kVectorAttributeAlias)->get());
-  auto neighbors = PerformVectorSearch(vector_index, params);
+  params.index_schema = index_schema;
+  auto time_slice_queries = Metrics::GetStats().time_slice_queries.load();
+  auto neighbors = Search(params, valkey_search::query::SearchMode::kLocal);
+  EXPECT_EQ(time_slice_queries + 1,
+            Metrics::GetStats().time_slice_queries.load());
   VMSDK_EXPECT_OK(neighbors);
   EXPECT_EQ(neighbors.value().size(), test_case.expected_neighbors_size);
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    PerformVectorSearchTests, PerformVectorSearchTest,
-    testing::ValuesIn<PerformVectorSearchTestCase>({
+    LocalSearchTests, LocalSearchTest,
+    testing::ValuesIn<LocalSearchTestCase>({
         {
             .test_name = "numeric_filter_k_eligible_candidates",
             .k = 10,
@@ -459,8 +466,26 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@tag:{random}",
             .expected_neighbors_size = 0,
         },
+        {
+            .test_name = "non_vector_numeric_filter_eligible_candidates",
+            .filter = "@numeric:[1 10]",
+            .expected_neighbors_size = 10,
+            .is_vector_search_query = false,
+        },
+        {
+            .test_name = "non_vector_numeric_and_tag_filter",
+            .filter = "@numeric:[1 10] @tag:{LT5}",
+            .expected_neighbors_size = 4,
+            .is_vector_search_query = false,
+        },
+        {
+            .test_name = "non_vector_numeric_or_numeric_filter",
+            .filter = "@numeric:[1 10] | @numeric:[21 25]",
+            .expected_neighbors_size = 15,
+            .is_vector_search_query = false,
+        },
     }),
-    [](const testing::TestParamInfo<PerformVectorSearchTestCase> &info) {
+    [](const testing::TestParamInfo<LocalSearchTestCase> &info) {
       return info.param.test_name;
     });
 
@@ -479,7 +504,7 @@ TEST_P(FetchFilteredKeysTest, ParseParams) {
   auto vector_index = dynamic_cast<indexes::VectorBase *>(
       index_schema->GetIndex(kVectorAttributeAlias)->get());
   const FetchFilteredKeysTestCase &test_case = GetParam();
-  query::VectorSearchParameters params(100000, nullptr);
+  query::SearchParameters params(100000, nullptr);
   FilterParser parser(*index_schema, test_case.filter);
   params.filter_parse_results = std::move(parser.Parse().value());
   params.k = 100;
@@ -557,7 +582,7 @@ TEST_P(SearchTest, ParseParams) {
   const auto &param = GetParam();
   IndexerType indexer_type = std::get<0>(param);
   SearchTestCase test_case = std::get<1>(param);
-  query::VectorSearchParameters params(100000, nullptr);
+  query::SearchParameters params(100000, nullptr);
   params.index_schema = CreateIndexSchemaWithMultipleAttributes(indexer_type);
   params.index_schema_name = kIndexSchemaName;
   params.attribute_alias = kVectorAttributeAlias;
@@ -571,7 +596,7 @@ TEST_P(SearchTest, ParseParams) {
     FilterParser parser(*params.index_schema, test_case.filter);
     params.filter_parse_results = std::move(parser.Parse().value());
   }
-  auto neighbors = Search(params, true);
+  auto neighbors = Search(params, query::SearchMode::kLocal);
   VMSDK_EXPECT_OK(neighbors);
 #ifndef SAN_BUILD
   EXPECT_EQ(neighbors->size(), test_case.expected_keys.size());
@@ -834,7 +859,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
     }
   }
 
-  auto parameters = query::VectorSearchParameters(100000, nullptr);
+  auto parameters = query::SearchParameters(100000, nullptr);
   parameters.index_schema = index_schema;
   for (auto &attribute : test_case.return_attributes) {
     auto identifier = vmsdk::MakeUniqueValkeyString(attribute.identifier);

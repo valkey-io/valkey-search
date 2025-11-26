@@ -72,12 +72,12 @@ class Metrics {
         0};
     std::atomic<uint64_t> coordinator_bytes_out{0};
     std::atomic<uint64_t> coordinator_bytes_in{0};
-    
+
     // Global ingestion stats (counts across all indexes)
     std::atomic<uint64_t> ingest_hash_keys{0};
-    std::atomic<uint64_t> ingest_hash_blocked{0};
+    std::atomic<uint64_t> backfill_hash_keys{0};
     std::atomic<uint64_t> ingest_json_keys{0};
-    std::atomic<uint64_t> ingest_json_blocked{0};
+    std::atomic<uint64_t> backfill_json_keys{0};
     std::atomic<uint64_t> ingest_field_vector{0};
     std::atomic<uint64_t> ingest_field_numeric{0};
     std::atomic<uint64_t> ingest_field_tag{0};
@@ -118,12 +118,16 @@ class Metrics {
             absl::ToInt64Nanoseconds(absl::Seconds(1)), LATENCY_PRECISION};
     // Time Slice Mutex metrics
     std::atomic<uint64_t> time_slice_read_periods{0};
-    std::atomic<uint64_t> time_slice_read_time{0};      // microseconds, cumulative
+    std::atomic<uint64_t> time_slice_read_time{0};  // microseconds, cumulative
     std::atomic<uint64_t> time_slice_queries{0};
     std::atomic<uint64_t> time_slice_write_periods{0};
-    std::atomic<uint64_t> time_slice_write_time{0};     // microseconds, cumulative
+    std::atomic<uint64_t> time_slice_write_time{0};  // microseconds, cumulative
     std::atomic<uint64_t> time_slice_upserts{0};
     std::atomic<uint64_t> time_slice_deletes{0};
+
+    std::atomic<uint64_t> info_fanout_retry_cnt{0};
+    std::atomic<uint64_t> info_fanout_fail_cnt{0};
+    std::atomic<uint64_t> pause_handle_cluster_message_round_cnt{0};
   };
   static Stats& GetStats() { return GetInstance().stats_; }
 

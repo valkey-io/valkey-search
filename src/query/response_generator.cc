@@ -19,7 +19,6 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
-#include "src/coordinator/coordinator.pb.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
@@ -124,7 +123,7 @@ bool VerifyFilter(const query::Predicate *predicate,
 
 absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
-    const query::VectorSearchParameters &parameters, absl::string_view key,
+    const query::SearchParameters &parameters, absl::string_view key,
     const std::string &vector_identifier) {
   absl::flat_hash_set<absl::string_view> identifiers;
   identifiers.insert(kJsonRootElementQuery);
@@ -132,9 +131,12 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
        parameters.filter_parse_results.filter_identifiers) {
     identifiers.insert(filter_identifier);
   }
-  VMSDK_ASSIGN_OR_RETURN(
-      auto content, attribute_data_type.FetchAllRecords(ctx, vector_identifier,
-                                                        key, identifiers));
+  auto key_str = vmsdk::MakeUniqueValkeyString(key);
+  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+  VMSDK_ASSIGN_OR_RETURN(auto content, attribute_data_type.FetchAllRecords(
+                                           ctx, vector_identifier,
+                                           key_obj.get(), key, identifiers));
   if (parameters.filter_parse_results.filter_identifiers.empty()) {
     return content;
   }
@@ -155,7 +157,7 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
 
 absl::StatusOr<RecordsMap> GetContent(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
-    const query::VectorSearchParameters &parameters, absl::string_view key,
+    const query::SearchParameters &parameters, absl::string_view key,
     const std::string &vector_identifier) {
   if (attribute_data_type.ToProto() ==
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON &&
@@ -173,9 +175,12 @@ absl::StatusOr<RecordsMap> GetContent(
       identifiers.insert(filter_identifier);
     }
   }
-  VMSDK_ASSIGN_OR_RETURN(
-      auto content, attribute_data_type.FetchAllRecords(ctx, vector_identifier,
-                                                        key, identifiers));
+  auto key_str = vmsdk::MakeUniqueValkeyString(key);
+  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+  VMSDK_ASSIGN_OR_RETURN(auto content, attribute_data_type.FetchAllRecords(
+                                           ctx, vector_identifier,
+                                           key_obj.get(), key, identifiers));
   if (parameters.filter_parse_results.filter_identifiers.empty()) {
     return content;
   }
@@ -204,11 +209,11 @@ absl::StatusOr<RecordsMap> GetContent(
 
 // Adds all local content for neighbors to the list of neighbors.
 // This function is meant to be used for non-vector queries.
-void ProcessNonVectorNeighborsForReply(ValkeyModuleCtx *ctx,
-                                      const AttributeDataType &attribute_data_type,
-                                      std::deque<indexes::Neighbor> &neighbors,
-                                      const query::VectorSearchParameters &parameters) {
-    ProcessNeighborsForReply(ctx, attribute_data_type, neighbors, parameters, "");
+void ProcessNonVectorNeighborsForReply(
+    ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
+    std::deque<indexes::Neighbor> &neighbors,
+    const query::SearchParameters &parameters) {
+  ProcessNeighborsForReply(ctx, attribute_data_type, neighbors, parameters, "");
 }
 
 // Adds all local content for neighbors to the list of neighbors.
@@ -218,7 +223,7 @@ void ProcessNonVectorNeighborsForReply(ValkeyModuleCtx *ctx,
 void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
                               const AttributeDataType &attribute_data_type,
                               std::deque<indexes::Neighbor> &neighbors,
-                              const query::VectorSearchParameters &parameters,
+                              const query::SearchParameters &parameters,
                               const std::string &identifier) {
   const auto max_content_size =
       options::GetMaxSearchResultRecordSize().GetValue();

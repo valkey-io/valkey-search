@@ -34,10 +34,17 @@
 
 namespace valkey_search::query {
 
+enum class SearchMode {
+  kLocal,  // Search executed on local node/instance
+  kRemote  // Search executed as part of distributed operation (from
+           // coordinator)
+};
+
 constexpr int64_t kTimeoutMS{50000};
-const size_t kMaxTimeoutMs{60000};
+constexpr size_t kMaxTimeoutMs{60000};
 constexpr absl::string_view kOOMMsg{
     "OOM command not allowed when used memory > 'maxmemory'"};
+constexpr uint32_t kDialect{2};
 
 struct LimitParameter {
   uint64_t first_index{0};
@@ -50,14 +57,23 @@ struct ReturnAttribute {
   vmsdk::UniqueValkeyString alias;
 };
 
-struct VectorSearchParameters {
+inline std::ostream& operator<<(std::ostream& os, const ReturnAttribute& r) {
+  os << vmsdk::ToStringView(r.identifier.get());
+  if (r.alias) {
+    os << "[alias: " << vmsdk::ToStringView(r.alias.get()) << ']';
+  }
+  return os;
+}
+
+struct SearchParameters {
   mutable cancel::Token cancellation_token;
+  virtual ~SearchParameters() = default;
   std::shared_ptr<IndexSchema> index_schema;
   std::string index_schema_name;
   std::string attribute_alias;
   vmsdk::UniqueValkeyString score_as;
   std::string query;
-  uint32_t dialect{2};
+  uint32_t dialect{kDialect};
   bool local_only{false};
   int k{0};
   std::optional<unsigned> ef;
@@ -72,36 +88,49 @@ struct VectorSearchParameters {
     // at the end of the parse to ensure no dangling pointers.
     absl::string_view query_string;
     absl::string_view score_as_string;
-    absl::flat_hash_map<absl::string_view, std::pair<int, absl::string_view>>
+    absl::string_view query_vector_string;
+    absl::string_view k_string;
+    absl::string_view ef_string;
+    //
+    // A Map of param names to values. The target of the map is a pair
+    // that is the string of the value AND a reference count so that we can
+    // detect unused parameters.
+    // Marked mutable so that const parsing functions can bump the ref-count
+    mutable absl::flat_hash_map<absl::string_view,
+                                std::pair<int, absl::string_view>>
         params;
     void ClearAtEndOfParse() {
       query_string = absl::string_view();
       score_as_string = absl::string_view();
-      assert(params.empty());
+      query_vector_string = absl::string_view();
+      k_string = absl::string_view();
+      ef_string = absl::string_view();
+      params.clear();
     }
   } parse_vars;
-  bool IsNonVectorQuery() const {
-    return attribute_alias.empty();
-  }
-  VectorSearchParameters(uint64_t timeout, grpc::CallbackServerContext *context)
-      : timeout_ms(timeout), cancellation_token(cancel::Make(timeout, context)) {}
+  bool IsNonVectorQuery() const { return attribute_alias.empty(); }
+  bool IsVectorQuery() const { return !IsNonVectorQuery(); }
+  SearchParameters(uint64_t timeout, grpc::CallbackServerContext* context)
+      : timeout_ms(timeout),
+        cancellation_token(cancel::Make(timeout, context)) {}
 };
 
 // Callback to be called when the search is done.
 using SearchResponseCallback =
     absl::AnyInvocable<void(absl::StatusOr<std::deque<indexes::Neighbor>>&,
-                            std::unique_ptr<VectorSearchParameters>)>;
+                            std::unique_ptr<SearchParameters>)>;
 
 absl::StatusOr<std::deque<indexes::Neighbor>> Search(
-    const VectorSearchParameters& parameters, bool is_local_search);
+    const SearchParameters& parameters, SearchMode search_mode);
 
-absl::Status SearchAsync(std::unique_ptr<VectorSearchParameters> parameters,
+absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool* thread_pool,
-                         SearchResponseCallback callback, bool is_local_search);
+                         SearchResponseCallback callback,
+                         SearchMode search_mode);
 
 absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
     absl::StatusOr<std::deque<indexes::Neighbor>> results,
-    const VectorSearchParameters& parameters);
+    const SearchParameters& parameters);
 
 class Predicate;
 // Defined in the header to support testing
@@ -112,12 +141,11 @@ size_t EvaluateFilterAsPrimary(
 
 // Defined in the header to support testing
 absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
-    indexes::VectorBase* vector_index,
-    const VectorSearchParameters& parameters);
+    indexes::VectorBase* vector_index, const SearchParameters& parameters);
 
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
-    const VectorSearchParameters& parameters,
+    const SearchParameters& parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
     indexes::VectorBase* vector_index);
 

@@ -5,12 +5,43 @@ GREEN='\e[32;1m'
 RED='\e[31;1m'
 BLUE='\e[34;1m'
 YELLOW='\e[33;1m'
+UNAME_S=$(uname -s)
 
-if [[ "$(uname -s)" == "Darwin" ]]; then
+function LOG_INFO() {
+  printf "${GREEN}$1${RESET}\n"
+}
+
+function LOG_ERROR() {
+  printf "${RED}$1${RESET}\n"
+}
+
+function LOG_NOTICE() {
+  printf "${BOLD_PINK}$1${RESET}\n"
+}
+
+function LOG_WARNING() {
+  printf "${YELLOW}$1${RESET}\n"
+}
+
+function print_environment_var() {
+  local varname=$1
+  local value=$2
+  printf "${BLUE}${varname}${RESET} => ${GREEN}${value}${RESET}\n"
+}
+
+if [[ "${UNAME_S}" == "Darwin" ]]; then
   export MODULE_EXT="dylib"
 else
   export MODULE_EXT="so"
 fi
+
+function num_proc() {
+  if [[ "${UNAME_S}" == "Darwin" ]]; then
+    echo $(sysctl -n hw.ncpu)
+  else
+    echo $(nproc)
+  fi
+}
 
 function findup() {
   # Check if a filename was provided
@@ -38,7 +69,24 @@ function findup() {
 # Determine pip command
 PYTHON_PATH="${PYTHON_PATH:=}"
 _WORKSPACE_HOME=$(findup QUICK_START.md)
+export MODULE_ROOT=${_WORKSPACE_HOME}
 _THIRD_PARTY_COMPONENTS_BUILD_DIR=${_WORKSPACE_HOME}/.build-release
+
+if [[ "${SAN_BUILD}" != "no" ]]; then
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    # detect_leaks is not support on macOS
+    export ASAN_OPTIONS="detect_odr_violation=0:halt_on_error=1"
+  else
+    export ASAN_OPTIONS="detect_odr_violation=0:detect_leaks=1:halt_on_error=1"
+  fi
+  if [[ "${SAN_BUILD}" == "address" ]]; then
+    export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/asan.supp"
+  else
+    export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/tsan.supp"
+  fi
+  print_environment_var "LSAN_OPTIONS" "${LSAN_OPTIONS}"
+  print_environment_var "ASAN_OPTIONS" "${ASAN_OPTIONS}"
+fi
 
 function get_third_party_build_dir() {
   if [ -z "${SAN_BUILD}" ] || [[ "${SAN_BUILD}" == "no" ]]; then
@@ -58,20 +106,17 @@ function capitalize_string() {
   echo ${first_char}${remainder}
 }
 
-function LOG_INFO() {
-  printf "${GREEN}$1${RESET}\n"
-}
-
-function LOG_ERROR() {
-  printf "${RED}$1${RESET}\n"
-}
-
-function LOG_NOTICE() {
-  printf "${BOLD_PINK}$1${RESET}\n"
-}
-
-function LOG_WARNING() {
-  printf "${YELLOW}$1${RESET}\n"
+function pip_check_if_module_installed() {
+  local module_name=$1
+  set +e
+  ${PIP_PATH} show ${module_name} >/dev/null 2>&1
+  RESULT=$?
+  set -e
+  if [ ${RESULT} -eq 0 ]; then
+    echo "yes"
+  else
+    echo "no"
+  fi
 }
 
 function install_test_framework() {
@@ -88,15 +133,22 @@ function install_test_framework() {
     rm -fr ${test_framework_path}
     LOG_INFO "Cloning valkey-test-framework into ${test_framework_path}"
     git clone "${test_framework_url}" ${test_framework_path}
-    pushd ${test_framework_path} >/dev/null
+  fi
+
+  pushd ${test_framework_path} >/dev/null
+  valkey_module_installed=$(pip_check_if_module_installed valkey)
+  if [[ "${valkey_module_installed}" == "no" ]]; then
+    LOG_INFO "Installing dependencies"
     local requirements_txt=${test_framework_path}/requirements.txt
     if [ -f ${requirements_txt} ]; then
       LOG_INFO "Installing requirements file"
       ${PIP_PATH} install -r ${requirements_txt}
       ${PIP_PATH} install --upgrade pytest
+    else
+      LOG_ERROR "Missing ${requirements_txt} file. Broken installation?"
     fi
-    popd >/dev/null
   fi
+  popd >/dev/null
 
   # Remove valkey-test-framework tests
   rm -fr ${_WORKSPACE_HOME}/integration/valkeytestframework.git/tests
@@ -114,11 +166,11 @@ function setup_valkey_server() {
   fi
 
   # Clone and build it
-  VALKEY_VERSION="8.1.1"
+  VALKEY_VERSION="${VALKEY_VERSION:=9.0.0}"
   export VALKEY_SERVER_HOME_DIR=$(get_third_party_build_dir)/valkey-server
   export VALKEY_SERVER_BUILD_DIR=${VALKEY_SERVER_HOME_DIR}/.build-release
   if [ ! -d ${VALKEY_SERVER_HOME_DIR} ]; then
-    LOG_INFO "Cloning valkey-server into ${VALKEY_SERVER_HOME_DIR}"
+    LOG_INFO "Cloning valkey-server@${VALKEY_VERSION} into ${VALKEY_SERVER_HOME_DIR}"
     git clone --branch ${VALKEY_VERSION} --single-branch https://github.com/valkey-io/valkey.git ${VALKEY_SERVER_HOME_DIR}
   fi
 
@@ -141,7 +193,7 @@ function setup_valkey_server() {
   LOG_INFO "Working directory: ${VALKEY_SERVER_BUILD_DIR}"
   LOG_INFO "Building valkey-server: cmake -DCMAKE_BUILD_TYPE=Release .. ${VALKEY_CMAKE_EXTRA_ARGS}"
   cmake -DCMAKE_BUILD_TYPE=Release .. ${VALKEY_CMAKE_EXTRA_ARGS}
-  make -j$(nproc)
+  make -j$(num_proc)
   popd >/dev/null
   export VALKEY_SERVER_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-server
   export VALKEY_CLI_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-cli
@@ -157,8 +209,7 @@ function setup_json_module() {
   fi
 
   # Clone and build it
-  export VALKEY_JSON_COMMIT_HASH="5b2f3db24c0135a8d8b8e5cf434c7a3d42bd91f0"
-  export VALKEY_JSON_VERSION="unstable"
+  VALKEY_JSON_VERSION="${VALKEY_JSON_VERSION:=unstable}"
   export VALKEY_JSON_HOME=$(get_third_party_build_dir)/valkey-json
   export VALKEY_JSON_BUILD_DIR=${VALKEY_JSON_HOME}/.build-release
 
@@ -170,8 +221,8 @@ function setup_json_module() {
   fi
 
   rm -fr "${VALKEY_JSON_HOME}"
-  LOG_INFO "Cloning valkey-json into ${VALKEY_JSON_HOME}"
-  git clone https://github.com/valkey-io/valkey-json.git ${VALKEY_JSON_HOME}
+  LOG_INFO "Cloning valkey-json@${VALKEY_JSON_VERSION} into ${VALKEY_JSON_HOME}"
+  git clone --branch ${VALKEY_JSON_VERSION} --single-branch https://github.com/valkey-io/valkey-json.git ${VALKEY_JSON_HOME}
 
   pushd ${VALKEY_JSON_HOME} >/dev/null
   LOG_INFO "Working directory: ${VALKEY_JSON_HOME}"
@@ -181,12 +232,6 @@ function setup_json_module() {
 
   export VALKEY_JSON_PATH=${json_module_path}
   LOG_INFO "VALKEY_JSON_PATH => ${VALKEY_JSON_PATH}"
-}
-
-function print_environment_var() {
-  local varname=$1
-  local value=$2
-  printf "${GRAY}${varname}${RESET} => ${GREEN}${value}${RESET}\n"
 }
 
 # Loop over Valkey log files and search for sanitization errors
@@ -217,5 +262,48 @@ function check_for_san_errors() {
 }
 
 function get_file_last_modified() {
-  echo $(date -r ${1} +%s)
+    echo $(date -r "${1}" +%s)
+}
+
+function run_with_timeout() {
+    local timeout=$1
+    shift  # Remove the first argument (timeout), rest is the command
+    
+    # Validate timeout is a number
+    if ! [[ "$timeout" =~ ^[0-9]+$ ]]; then
+        echo "Error: Timeout must be a positive integer" >&2
+        return 1
+    fi
+    
+    # Start the command in background
+    echo "Starting test in run_with_timeout"
+    "$@" &
+    local pid=$!
+    
+    # Start a timer in background
+    (
+        sleep "$timeout"
+        # Check if process is still running
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "Process $pid exceeded timeout of ${timeout}s, terminating..." >&2
+            kill -TERM "$pid" 2>/dev/null
+            sleep 2
+            # Force kill if still running
+            if kill -0 "$pid" 2>/dev/null; then
+                echo "Process $pid did not respond to TERM, sending KILL..." >&2
+                kill -KILL "$pid" 2>/dev/null
+            fi
+        fi
+    ) &
+    local timer_pid=$!
+    
+    # Wait for the command to complete
+    wait "$pid" 2>/dev/null
+    local exit_code=$?
+    echo "Finish test in run_with_timeout ${exit_code}"
+    # Kill the timer if command finished
+    kill "$timer_pid" 2>/dev/null
+    wait "$timer_pid" 2>/dev/null
+    
+    return $exit_code
 }

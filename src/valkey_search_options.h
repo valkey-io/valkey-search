@@ -30,6 +30,10 @@ config::Number& GetReaderThreadCount();
 /// number of writer threads
 config::Number& GetWriterThreadCount();
 
+/// Return the max time in seconds that the worker thread pool is
+/// suspended after fork started
+config::Number& GetMaxWorkerSuspensionSecs();
+
 /// Return an immutable reference to the "use-coordinator" flag
 const config::Boolean& GetUseCoordinator();
 
@@ -47,6 +51,22 @@ absl::Status Reset();
 
 /// Allow delivery of partial results when timeout occurs
 const config::Boolean& GetEnablePartialResults();
+
+/// Return the configuration entry for high priority weight in thread pools
+config::Number& GetHighPriorityWeight();
+
+/// Return the timeout for ft.info fanout command
+config::Number& GetFTInfoTimeoutMs();
+
+/// Return the rpc timeout for ft.info fanout command
+config::Number& GetFTInfoRpcTimeoutMs();
+
+/// Return the queue wait threshold for preferring local node in fanout
+/// (milliseconds)
+config::Number& GetLocalFanoutQueueWaitThreshold();
+
+/// Return the sample queue size for thread pool wait time tracking
+config::Number& GetThreadPoolWaitTimeSamples();
 
 }  // namespace options
 }  // namespace valkey_search

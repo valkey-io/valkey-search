@@ -112,7 +112,8 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
         [&](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
           return type_to_register.fingerprint_to_return;
         },
-        [&](absl::string_view id, const google::protobuf::Any* metadata) {
+        [&](absl::string_view id, const google::protobuf::Any* metadata,
+            uint64_t fingerprint, uint32_t version) {
           CallbackResult callback_result{
               .type_name = type_to_register.type_name,
               .id = std::string(id),
@@ -145,11 +146,9 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
       content = std::make_unique<google::protobuf::Any>();
       content->set_type_url("type.googleapis.com/FakeType");
       content->set_value(operation.content);
-      EXPECT_EQ(test_metadata_manager_
-                    ->CreateEntry(operation.type_name, operation.id,
-                                  std::move(content))
-                    .code(),
-                test_case.expected_status_code);
+      auto result = test_metadata_manager_->CreateEntry(
+          operation.type_name, operation.id, std::move(content));
+      EXPECT_EQ(result.status().code(), test_case.expected_status_code);
     } else if (operation.operation_type ==
                EntryOperationTestParam::EntryOperation::kDelete) {
       EXPECT_EQ(
@@ -533,7 +532,8 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
         [&](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
           return type_to_register.fingerprint_to_return;
         },
-        [&](absl::string_view id, const google::protobuf::Any* metadata) {
+        [&](absl::string_view id, const google::protobuf::Any* metadata,
+            uint64_t fingerprint, uint32_t version) {
           callbacks_tracker.push_back(CallbackResult{
               .type_name = type_to_register.type_name,
               .id = std::string(id),
@@ -1919,9 +1919,9 @@ TEST_F(MetadataManagerTimestampTest,
       [](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
         return 1234;
       },
-      [](absl::string_view id, const google::protobuf::Any* metadata) {
-        return absl::InternalError("Callback failed");
-      });
+      [](absl::string_view id, const google::protobuf::Any* metadata,
+         uint64_t fingerprint,
+         uint32_t version) { return absl::InternalError("Callback failed"); });
 
   // Reconciliation should fail due to callback failure
   auto status = test_metadata_manager_->ReconcileMetadata(proposed_metadata);

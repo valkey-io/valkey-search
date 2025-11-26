@@ -12,8 +12,8 @@ Top level iterator for a phrase.
 A Phrase is defined as a sequence of words that can be separated by up to 'slop'
 words. Optionally, the order of the words can be required or not.
 
-This is implemented as a merge operation on the various Word Iterators passed in.
-The code below is conceptual and is written like a Python generator
+This is implemented as a merge operation on the various Word Iterators passed
+in. The code below is conceptual and is written like a Python generator
 
 for (word0 : all words in word[0]) {
   for (word1 : all words in word[1]) {
@@ -40,21 +40,20 @@ void process_one_key(KeyIterators[*]) {
     if (PositionIterators[*] satisfy the Slop and In-order requirements) {
       Yield word;
     }
-    Find smallest PositionIterator and advance it to the next Smallest Position Iterator.
+    Find smallest PositionIterator and advance it to the next Smallest Position
+Iterator.
 
   }
 }
 */
 }
 struct PhraseIterator : public indexes::EntriesFetcherIteratorBase {
-  PhraseIterator(std::vector<WordIterator *> words, size_t slop, bool in_order);
+  PhraseIterator(std::vector<WordIterator*> words, size_t slop, bool in_order);
 
   virtual bool Done() const override;
   virtual void Next() = override;
   virtual const Key& operator*() const override;
-
 };
-
 
 }
 }

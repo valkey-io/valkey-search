@@ -9,14 +9,17 @@
 
 #include "src/coordinator/metadata_manager.h"
 #include "src/schema_manager.h"
+#include "vmsdk/src/info.h"
 
 namespace valkey_search::query::primary_info_fanout {
 
-PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(std::string index_name,
-                                                       unsigned timeout_ms)
-    : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
-                                  coordinator::InfoIndexPartitionResponse,
-                                  fanout::FanoutTargetMode::kPrimary>(),
+PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
+    uint32_t db_num, const std::string& index_name, unsigned timeout_ms)
+    : fanout::FanoutOperationBase<
+          coordinator::InfoIndexPartitionRequest,
+          coordinator::InfoIndexPartitionResponse,
+          vmsdk::cluster_map::FanoutTargetMode::kPrimary>(),
+      db_num_(db_num),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
       exists_(false),
@@ -24,23 +27,28 @@ PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(std::string index_name,
       num_records_(0),
       hash_indexing_failures_(0) {}
 
+std::vector<vmsdk::cluster_map::NodeInfo>
+PrimaryInfoFanoutOperation::GetTargets() const {
+  return ValkeySearch::Instance().GetClusterMap()->GetTargets(
+      vmsdk::cluster_map::FanoutTargetMode::kPrimary);
+}
+
 unsigned PrimaryInfoFanoutOperation::GetTimeoutMs() const {
-  return timeout_ms_.value_or(5000);
+  return timeout_ms_;
 }
 
 coordinator::InfoIndexPartitionRequest
-PrimaryInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&,
-                                            unsigned timeout_ms) {
+PrimaryInfoFanoutOperation::GenerateRequest(
+    const vmsdk::cluster_map::NodeInfo&) {
   coordinator::InfoIndexPartitionRequest req;
+  req.set_db_num(db_num_);
   req.set_index_name(index_name_);
-  req.set_timeout_ms(timeout_ms);
   return req;
 }
 
 void PrimaryInfoFanoutOperation::OnResponse(
     const coordinator::InfoIndexPartitionResponse& resp,
-    [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
-  absl::MutexLock lock(&mutex_);
+    [[maybe_unused]] const vmsdk::cluster_map::NodeInfo& target) {
   if (!resp.error().empty()) {
     grpc::Status status =
         grpc::Status(grpc::StatusCode::INTERNAL, resp.error());
@@ -53,90 +61,52 @@ void PrimaryInfoFanoutOperation::OnResponse(
     OnError(status, coordinator::FanoutErrorType::INDEX_NAME_ERROR, target);
     return;
   }
-  if (!schema_fingerprint_.has_value()) {
-    schema_fingerprint_ = resp.schema_fingerprint();
-  } else if (schema_fingerprint_.value() != resp.schema_fingerprint()) {
-    grpc::Status status =
-        grpc::Status(grpc::StatusCode::INTERNAL,
-                     "Cluster not in a consistent state, please retry.");
-    OnError(status, coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR,
-            target);
+
+  // Determine if we need to call OnError, do it outside the lock
+  // prevent double locking issue in OnError
+  bool should_call_error = false;
+  grpc::Status error_status(grpc::StatusCode::OK, "");
+  coordinator::FanoutErrorType error_type;
+
+  {
+    absl::MutexLock lock(&mutex_);
+    const auto& resp_ifv = resp.index_fingerprint_version();
+    if (!index_fingerprint_version_.has_value()) {
+      index_fingerprint_version_ = resp.index_fingerprint_version();
+    } else if (index_fingerprint_version_->fingerprint() !=
+                   resp_ifv.fingerprint() ||
+               index_fingerprint_version_->version() != resp_ifv.version()) {
+      should_call_error = true;
+      error_status =
+          grpc::Status(grpc::StatusCode::INTERNAL,
+                       "Cluster not in a consistent state, please retry.");
+      error_type = coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR;
+    }
+    if (resp.index_name() != index_name_) {
+      should_call_error = true;
+      error_status =
+          grpc::Status(grpc::StatusCode::INTERNAL,
+                       "Cluster not in a consistent state, please retry.");
+      error_type = coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR;
+    }
+  }
+
+  if (should_call_error) {
+    OnError(error_status, error_type, target);
     return;
   }
-  if (!encoding_version_.has_value()) {
-    encoding_version_ = resp.encoding_version();
-  } else if (encoding_version_.value() != resp.encoding_version()) {
-    grpc::Status status =
-        grpc::Status(grpc::StatusCode::INTERNAL,
-                     "Cluster not in a consistent state, please retry.");
-    OnError(status, coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR,
-            target);
-    return;
-  }
-  if (resp.index_name() != index_name_) {
-    grpc::Status status =
-        grpc::Status(grpc::StatusCode::INTERNAL,
-                     "Cluster not in a consistent state, please retry.");
-    OnError(status, coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR, target);
-    return;
-  }
+
   exists_ = true;
   num_docs_ += resp.num_docs();
   num_records_ += resp.num_records();
   hash_indexing_failures_ += resp.hash_indexing_failures();
 }
 
-coordinator::InfoIndexPartitionResponse
+std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
 PrimaryInfoFanoutOperation::GetLocalResponse(
-    ValkeyModuleCtx* ctx, const coordinator::InfoIndexPartitionRequest& request,
-    [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
-  auto index_schema_result = SchemaManager::Instance().GetIndexSchema(
-      ValkeyModule_GetSelectedDb(ctx), request.index_name());
-
-  coordinator::InfoIndexPartitionResponse resp;
-
-  if (!index_schema_result.ok()) {
-    resp.set_exists(false);
-    resp.set_index_name(request.index_name());
-    resp.set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
-    return resp;
-  }
-
-  auto index_schema = index_schema_result.value();
-  IndexSchema::InfoIndexPartitionData data =
-      index_schema->GetInfoIndexPartitionData();
-
-  std::optional<uint64_t> fingerprint;
-  std::optional<uint32_t> encoding_version;
-
-  auto global_metadata =
-      coordinator::MetadataManager::Instance().GetGlobalMetadata();
-  if (global_metadata->type_namespace_map().contains(
-          kSchemaManagerMetadataTypeName)) {
-    const auto& entry_map = global_metadata->type_namespace_map().at(
-        kSchemaManagerMetadataTypeName);
-    if (entry_map.entries().contains(request.index_name())) {
-      const auto& entry = entry_map.entries().at(request.index_name());
-      fingerprint = entry.fingerprint();
-      encoding_version = entry.encoding_version();
-    }
-  }
-
-  if (!fingerprint.has_value() || !encoding_version.has_value()) {
-    resp.set_exists(false);
-    resp.set_index_name(request.index_name());
-    resp.set_error_type(coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR);
-    return resp;
-  }
-  resp.set_exists(true);
-  resp.set_index_name(request.index_name());
-  resp.set_num_docs(data.num_docs);
-  resp.set_num_records(data.num_records);
-  resp.set_hash_indexing_failures(data.hash_indexing_failures);
-  resp.set_schema_fingerprint(fingerprint.value());
-  resp.set_encoding_version(encoding_version.value());
-  resp.set_error("");
-  return resp;
+    const coordinator::InfoIndexPartitionRequest& request,
+    [[maybe_unused]] const vmsdk::cluster_map::NodeInfo& target) {
+  return coordinator::Service::GenerateInfoResponse(request);
 }
 
 void PrimaryInfoFanoutOperation::InvokeRemoteRpc(
@@ -158,7 +128,11 @@ int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
       !inconsistent_state_error_nodes.empty()) {
     return FanoutOperationBase::GenerateErrorReply(ctx);
   }
-  ValkeyModule_ReplyWithArray(ctx, 10);
+  size_t reply_size = 10;
+  if (vmsdk::info_field::GetShowDeveloper()) {
+    reply_size += 4;
+  }
+  ValkeyModule_ReplyWithArray(ctx, reply_size);
   ValkeyModule_ReplyWithSimpleString(ctx, "mode");
   ValkeyModule_ReplyWithSimpleString(ctx, "primary");
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
@@ -170,7 +144,33 @@ int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
       ctx, std::to_string(hash_indexing_failures_).c_str());
+
+  if (vmsdk::info_field::GetShowDeveloper()) {
+    auto status_or_schema =
+        SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+    auto schema = std::move(status_or_schema.value());
+    ValkeyModule_ReplyWithSimpleString(ctx, "index_fingerprint");
+    int64_t fingerprint = static_cast<int64_t>(schema->GetFingerprint());
+    ValkeyModule_ReplyWithLongLong(ctx, fingerprint);
+    ValkeyModule_ReplyWithSimpleString(ctx, "index_version");
+    ValkeyModule_ReplyWithLongLong(ctx, schema->GetVersion());
+  }
+
   return VALKEYMODULE_OK;
+}
+
+void PrimaryInfoFanoutOperation::ResetForRetry() {
+  exists_ = false;
+  index_fingerprint_version_.reset();
+  num_docs_ = 0;
+  num_records_ = 0;
+  hash_indexing_failures_ = 0;
+}
+
+// retry condition: (1) inconsistent state (2) network error
+bool PrimaryInfoFanoutOperation::ShouldRetry() {
+  return !inconsistent_state_error_nodes.empty() ||
+         !communication_error_nodes.empty() || !index_name_error_nodes.empty();
 }
 
 }  // namespace valkey_search::query::primary_info_fanout

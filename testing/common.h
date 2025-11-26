@@ -40,11 +40,8 @@
 #include "src/server_events.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
-#include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
-#include "third_party/hnswlib/iostream.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -92,17 +89,25 @@ class MockIndex : public indexes::IndexBase {
   MOCK_METHOD(absl::StatusOr<bool>, ModifyRecord,
               (const InternedStringPtr& key, absl::string_view data),
               (override));
-  MOCK_METHOD(bool, IsTracked, (const InternedStringPtr& key),
-              (const, override));
   MOCK_METHOD(std::unique_ptr<data_model::Index>, ToProto, (),
               (const, override));
   MOCK_METHOD(int, RespondWithInfo, (ValkeyModuleCtx * ctx), (const, override));
   MOCK_METHOD(absl::Status, SaveIndex, (RDBChunkOutputStream chunked_out),
               (const, override));
-  MOCK_METHOD((void), ForEachTrackedKey,
-              (absl::AnyInvocable<void(const InternedStringPtr& key)> fn),
+  MOCK_METHOD((size_t), GetTrackedKeyCount, (), (const, override));
+  MOCK_METHOD((size_t), GetUnTrackedKeyCount, (), (const, override));
+  MOCK_METHOD(bool, IsTracked, (const InternedStringPtr& key),
               (const, override));
-  MOCK_METHOD((uint64_t), GetRecordCount, (), (const, override));
+  MOCK_METHOD(bool, IsUnTracked, (const InternedStringPtr& key),
+              (const, override));
+  MOCK_METHOD(
+      (absl::Status), ForEachTrackedKey,
+      (absl::AnyInvocable<absl::Status(const InternedStringPtr& key)> fn),
+      (const, override));
+  MOCK_METHOD(
+      (absl::Status), ForEachUnTrackedKey,
+      (absl::AnyInvocable<absl::Status(const InternedStringPtr& key)> fn),
+      (const, override));
 };
 
 class MockKeyspaceEventSubscription : public KeyspaceEventSubscription {
@@ -125,7 +130,7 @@ class MockAttributeDataType : public AttributeDataType {
   MOCK_METHOD(int, GetValkeyEventTypes, (), (override, const));
   MOCK_METHOD((absl::StatusOr<RecordsMap>), FetchAllRecords,
               (ValkeyModuleCtx * ctx, const std::string& query_attribute_name,
-               absl::string_view key,
+               ValkeyModuleKey* open_key, absl::string_view key,
                const absl::flat_hash_set<absl::string_view>& identifiers),
               (override, const));
   MOCK_METHOD((data_model::AttributeDataType), ToProto, (), (override, const));
@@ -237,21 +242,20 @@ class MockIndexSchema : public IndexSchema {
       : IndexSchema(ctx, index_schema_proto, std::move(attribute_data_type),
                     mutations_thread_pool, reload) {
     ON_CALL(*this, OnLoadingEnded(testing::_))
-        .WillByDefault(testing::Invoke([this](ValkeyModuleCtx* ctx) {
+        .WillByDefault([this](ValkeyModuleCtx* ctx) {
           return IndexSchema::OnLoadingEnded(ctx);
-        }));
+        });
     ON_CALL(*this, OnSwapDB(testing::_))
-        .WillByDefault(
-            testing::Invoke([this](ValkeyModuleSwapDbInfo* swap_db_info) {
-              return IndexSchema::OnSwapDB(swap_db_info);
-            }));
-    ON_CALL(*this, RDBSave(testing::_))
-        .WillByDefault(testing::Invoke(
-            [this](SafeRDB* rdb) { return IndexSchema::RDBSave(rdb); }));
+        .WillByDefault([this](ValkeyModuleSwapDbInfo* swap_db_info) {
+          return IndexSchema::OnSwapDB(swap_db_info);
+        });
+    ON_CALL(*this, RDBSave(testing::_)).WillByDefault([this](SafeRDB* rdb) {
+      return IndexSchema::RDBSave(rdb);
+    });
     ON_CALL(*this, GetIdentifier(testing::_))
-        .WillByDefault(testing::Invoke([](absl::string_view attribute_name) {
+        .WillByDefault([](absl::string_view attribute_name) {
           return std::string(attribute_name);
-        }));
+        });
   }
   MOCK_METHOD(void, OnLoadingEnded, (ValkeyModuleCtx * ctx), (override));
   MOCK_METHOD(void, OnSwapDB, (ValkeyModuleSwapDbInfo * swap_db_info),
@@ -274,7 +278,6 @@ class TestableValkeySearch : public ValkeySearch {
   vmsdk::ThreadPool* GetReaderThreadPool() const {
     return reader_thread_pool_.get();
   }
-  size_t GetMaxWorkerThreadPoolSuspensionSec() const override { return 1; }
 };
 
 class TestableSchemaManager : public SchemaManager {
@@ -324,10 +327,10 @@ class MockThreadPool : public vmsdk::ThreadPool {
   MockThreadPool(const std::string& name, size_t num_threads)
       : vmsdk::ThreadPool(name, num_threads) {
     ON_CALL(*this, Schedule(testing::_, testing::_))
-        .WillByDefault(testing::Invoke(
+        .WillByDefault(
             [this](absl::AnyInvocable<void()> task, Priority priority) {
               return ThreadPool::Schedule(std::move(task), priority);
-            }));
+            });
   }
   MOCK_METHOD(bool, Schedule,
               (absl::AnyInvocable<void()> task, Priority priority), (override));

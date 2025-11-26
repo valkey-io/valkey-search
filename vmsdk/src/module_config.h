@@ -15,6 +15,7 @@
 #include "absl/status/status.h"
 #include "absl/synchronization/mutex.h"
 #include "gtest/gtest_prod.h"
+#include "managed_pointers.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -33,6 +34,10 @@ enum Flags {
   kMemory = VALKEYMODULE_CONFIG_MEMORY,
   kBitFlags = VALKEYMODULE_CONFIG_BITFLAGS,
 };
+
+/// Return true if debug mode is enabled. "search.debug-mode == yes"
+constexpr absl::string_view kDebugMode{"debug-mode"};
+bool IsDebugModeEnabled();
 
 /// Support Valkey configuration entries in a one-liner.
 ///
@@ -71,7 +76,6 @@ enum Flags {
 /// CONFIG SET search.config-name <value>
 /// CONFIG GET search.config-name
 /// ```
-
 class Registerable;
 class ModuleConfigManager {
  public:
@@ -120,10 +124,15 @@ class Registerable {
   // bitwise OR'ed flags of `Flags`
   inline void SetFlags(size_t flags) { flags_ = flags; }
   inline bool IsHidden() const { return flags_ & VALKEYMODULE_CONFIG_HIDDEN; }
+  inline void EnableFlag(size_t flag) { flags_ |= flag; }
+
+  inline void SetDeveloperConfig(bool b) { this->developer_config_ = b; }
+  inline bool IsDeveloperConfig() const { return developer_config_; }
 
  protected:
   std::string name_;
   size_t flags_{kDefault};
+  bool developer_config_{false};
 };
 
 template <typename T>
@@ -178,6 +187,11 @@ class ConfigBase : public Registerable {
   }
 
   absl::Status Validate(T val) const {
+    if (IsDeveloperConfig() && !IsDebugModeEnabled()) {
+      return absl::PermissionDeniedError(
+          absl::StrFormat("Modification of '%s' requires '%s' to be enabled.",
+                          GetName(), kDebugMode));
+    }
     if (validate_callback_) {
       return validate_callback_(val);
     }
@@ -281,6 +295,12 @@ class String : public ConfigBase<std::string> {
   ~String() override = default;
   absl::Status FromString(std::string_view value) override;
   const std::string &GetString() const { return value_; }
+  ValkeyModuleString *GetCachedValkeyString() const {
+    if (!cached_string_) {
+      cached_string_ = vmsdk::MakeUniqueValkeyString(value_);
+    }
+    return cached_string_.get();
+  }
 
  protected:
   // Implementation specific
@@ -294,10 +314,12 @@ class String : public ConfigBase<std::string> {
   void SetValueImpl(std::string val) override ABSL_LOCKS_EXCLUDED(mutex_) {
     absl::MutexLock lock{&mutex_};
     value_ = val;
+    cached_string_.reset();
   }
 
   mutable absl::Mutex mutex_;
   std::string value_;
+  mutable UniqueValkeyString cached_string_;
   FRIEND_TEST(Builder, ConfigBuilder);
 };
 
@@ -324,6 +346,36 @@ class ConfigBuilder {
 
   auto &WithFlags(size_t flags) {
     config_->SetFlags(flags);
+    return *this;
+  }
+
+  auto &Immutable() {
+    config_->EnableFlag(VALKEYMODULE_CONFIG_IMMUTABLE);
+    return *this;
+  }
+
+  auto &Hidden() {
+    config_->EnableFlag(VALKEYMODULE_CONFIG_HIDDEN);
+    return *this;
+  }
+
+  auto &Sensitive() {
+    config_->EnableFlag(VALKEYMODULE_CONFIG_SENSITIVE);
+    return *this;
+  }
+
+  auto &Protected() {
+    config_->EnableFlag(VALKEYMODULE_CONFIG_PROTECTED);
+    return *this;
+  }
+
+  /// This configuration setting is restricted to developer use only. It can be
+  /// modified exclusively when `search.debug-mode` is set to `yes` (the default
+  /// setting is `no`). When a configuration entry is marked as `Dev()`, it
+  /// becomes both `Hidden` and `Immutable` if `search.debug-mode` is set to
+  /// `no`, preventing any runtime modifications.
+  auto &Dev() {
+    config_->SetDeveloperConfig(true);
     return *this;
   }
 

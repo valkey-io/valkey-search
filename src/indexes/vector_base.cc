@@ -78,21 +78,21 @@ std::unique_ptr<hnswlib::SpaceInterface<T>> CreateSpace(
 }  // namespace
 
 namespace indexes {
-bool InlineVectorEvaluator::Evaluate(const query::Predicate &predicate,
-                                     const InternedStringPtr &key) {
+bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
+                                  const InternedStringPtr &key) {
   key_ = &key;
   auto res = predicate.Evaluate(*this);
   key_ = nullptr;
   return res;
 }
 
-bool InlineVectorEvaluator::EvaluateTags(const query::TagPredicate &predicate) {
+bool PrefilterEvaluator::EvaluateTags(const query::TagPredicate &predicate) {
   bool case_sensitive = true;
   auto tags = predicate.GetIndex()->GetValue(*key_, case_sensitive);
   return predicate.Evaluate(tags, case_sensitive);
 }
 
-bool InlineVectorEvaluator::EvaluateNumeric(
+bool PrefilterEvaluator::EvaluateNumeric(
     const query::NumericPredicate &predicate) {
   CHECK(key_);
   auto value = predicate.GetIndex()->GetValue(*key_);
@@ -277,12 +277,6 @@ absl::StatusOr<std::vector<char>> VectorBase::GetValue(
   return result;
 }
 
-bool VectorBase::IsTracked(const InternedStringPtr &key) const {
-  absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
-  auto it = tracked_metadata_by_key_.find(key);
-  return (it != tracked_metadata_by_key_.end());
-}
-
 absl::StatusOr<bool> VectorBase::RemoveRecord(
     const InternedStringPtr &key,
     [[maybe_unused]] indexes::DeletionType deletion_type) {
@@ -373,27 +367,17 @@ absl::StatusOr<bool> VectorBase::UpdateMetadata(
 int VectorBase::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "type");
   ValkeyModule_ReplyWithSimpleString(ctx, "VECTOR");
-  ValkeyModule_ReplyWithSimpleString(ctx, "index");
-
-  ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
+  int array_len = 2;
+  array_len += RespondWithInfoImpl(ctx);
   ValkeyModule_ReplyWithSimpleString(ctx, "capacity");
   ValkeyModule_ReplyWithLongLong(ctx, GetCapacity());
-  ValkeyModule_ReplyWithSimpleString(ctx, "dimensions");
-  ValkeyModule_ReplyWithLongLong(ctx, dimensions_);
-  ValkeyModule_ReplyWithSimpleString(ctx, "distance_metric");
-  ValkeyModule_ReplyWithSimpleString(
-      ctx, LookupKeyByValue(*kDistanceMetricByStr, distance_metric_).data());
   ValkeyModule_ReplyWithSimpleString(ctx, "size");
   {
     absl::MutexLock lock(&key_to_metadata_mutex_);
     ValkeyModule_ReplyWithCString(
         ctx, std::to_string(key_by_internal_id_.size()).c_str());
   }
-  int array_len = 8;
-  array_len += RespondWithInfoImpl(ctx);
-  ValkeyModule_ReplySetArrayLength(ctx, array_len);
-
-  return 4;
+  return array_len + 4;
 }
 
 absl::Status VectorBase::SaveIndex(RDBChunkOutputStream chunked_out) const {
@@ -490,24 +474,27 @@ VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
   return ComputeDistanceFromRecordImpl(internal_id, query);
 }
 
-void VectorBase::AddPrefilteredKey(
+bool VectorBase::AddPrefilteredKey(
     absl::string_view query, uint64_t count, const InternedStringPtr &key,
     std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
-    absl::flat_hash_set<hnswlib::labeltype> &top_keys) const {
+    absl::flat_hash_set<const char *> &top_keys) const {
   auto result = ComputeDistanceFromRecord(key, query);
-  if (!result.ok() || top_keys.contains(result.value().second)) {
-    return;
+  if (!result.ok()) {
+    return false;
   }
   if (results.size() < count) {
     results.emplace(result.value());
-    top_keys.insert(result.value().second);
-  } else if (result.value().first < results.top().first) {
+    return true;
+  }
+  if (result.value().first < results.top().first) {
     auto top = results.top();
-    top_keys.erase(top.second);
+    auto vector_key = GetKeyDuringSearch(top.second);
+    top_keys.erase(vector_key.value()->Str().data());
     results.pop();
     results.emplace(result.value());
-    top_keys.insert(result.value().second);
+    return true;
   }
+  return false;
 }
 
 vmsdk::UniqueValkeyString VectorBase::NormalizeStringRecord(
@@ -531,9 +518,35 @@ vmsdk::UniqueValkeyString VectorBase::NormalizeStringRecord(
   return vmsdk::MakeUniqueValkeyString(binary_string);
 }
 
-uint64_t VectorBase::GetRecordCount() const {
+size_t VectorBase::GetTrackedKeyCount() const {
   absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
   return key_by_internal_id_.size();
+}
+
+size_t VectorBase::GetUnTrackedKeyCount() const { return 0; }
+
+bool VectorBase::IsTracked(const InternedStringPtr &key) const {
+  absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
+  auto it = tracked_metadata_by_key_.find(key);
+  return (it != tracked_metadata_by_key_.end());
+}
+
+bool VectorBase::IsUnTracked(const InternedStringPtr &key) const {
+  return false;
+}
+
+absl::Status VectorBase::ForEachTrackedKey(
+    absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
+  absl::MutexLock lock(&key_to_metadata_mutex_);
+  for (const auto &[key, _] : tracked_metadata_by_key_) {
+    VMSDK_RETURN_IF_ERROR(fn(key));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status VectorBase::ForEachUnTrackedKey(
+    absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
+  return absl::OkStatus();
 }
 
 template void VectorBase::Init<float>(

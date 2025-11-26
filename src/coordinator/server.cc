@@ -37,6 +37,7 @@
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -46,6 +47,9 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::coordinator {
+
+CONTROLLED_SIZE_T(ForceRemoteFailCount, 0);
+CONTROLLED_SIZE_T(ForceIndexNotFoundError, 0);
 
 grpc::ServerUnaryReactor* Service::GetGlobalMetadata(
     grpc::CallbackServerContext* context,
@@ -128,7 +132,7 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
       std::move(*vector_search_parameters), reader_thread_pool_,
       [response, reactor, latency_sample = std::move(latency_sample)](
           auto& neighbors,
-          std::unique_ptr<query::VectorSearchParameters> parameters) mutable {
+          std::unique_ptr<query::SearchParameters> parameters) mutable {
         if (!neighbors.ok()) {
           reactor->Finish(ToGrpcStatus(neighbors.status()));
           RecordSearchMetrics(true, std::move(latency_sample));
@@ -171,7 +175,7 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
           });
         }
       },
-      false);
+      query::SearchMode::kRemote);
   if (!status.ok()) {
     VMSDK_LOG(WARNING, detached_ctx_.get())
         << "Failed to enqueue search request: " << status.message();
@@ -182,6 +186,73 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
   return reactor;
 }
 
+std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
+Service::GenerateInfoResponse(
+    const coordinator::InfoIndexPartitionRequest& request) {
+  uint32_t db_num = request.db_num();
+  std::string index_name = request.index_name();
+  coordinator::InfoIndexPartitionResponse response;
+  // test path: simulate index not found error
+  if (ForceIndexNotFoundError.GetValue() > 0) {
+    ForceIndexNotFoundError.Decrement();
+    std::string test_error_str =
+        "Test Error: Index " + index_name + " not found";
+    response.set_exists(false);
+    response.set_index_name(index_name);
+    response.set_error(test_error_str);
+    response.set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
+    grpc::Status error_status(grpc::StatusCode::NOT_FOUND, test_error_str);
+    return std::make_pair(error_status, response);
+  }
+  auto status_or_schema =
+      SchemaManager::Instance().GetIndexSchema(db_num, index_name);
+  if (!status_or_schema.ok()) {
+    response.set_exists(false);
+    response.set_index_name(index_name);
+    response.set_error(status_or_schema.status().ToString());
+    response.set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
+    grpc::Status error_status(grpc::StatusCode::NOT_FOUND,
+                              status_or_schema.status().ToString());
+    return std::make_pair(error_status, response);
+  }
+  auto schema = std::move(status_or_schema.value());
+  IndexSchema::InfoIndexPartitionData data =
+      schema->GetInfoIndexPartitionData();
+
+  std::optional<coordinator::IndexFingerprintVersion> index_fingerprint_version;
+
+  auto global_metadata =
+      coordinator::MetadataManager::Instance().GetGlobalMetadata();
+  CHECK(global_metadata->type_namespace_map().contains(
+      kSchemaManagerMetadataTypeName));
+  const auto& entry_map =
+      global_metadata->type_namespace_map().at(kSchemaManagerMetadataTypeName);
+  CHECK(entry_map.entries().contains(index_name));
+  const auto& entry = entry_map.entries().at(index_name);
+  index_fingerprint_version.emplace();
+  index_fingerprint_version->set_fingerprint(entry.fingerprint());
+  index_fingerprint_version->set_version(entry.version());
+
+  response.set_exists(true);
+  response.set_index_name(index_name);
+  response.set_num_docs(data.num_docs);
+  response.set_num_records(data.num_records);
+  response.set_hash_indexing_failures(data.hash_indexing_failures);
+  response.set_backfill_scanned_count(data.backfill_scanned_count);
+  response.set_backfill_db_size(data.backfill_db_size);
+  response.set_backfill_inqueue_tasks(data.backfill_inqueue_tasks);
+  response.set_backfill_complete_percent(data.backfill_complete_percent);
+  response.set_backfill_in_progress(data.backfill_in_progress);
+  response.set_mutation_queue_size(data.mutation_queue_size);
+  response.set_recent_mutations_queue_delay(data.recent_mutations_queue_delay);
+  response.set_state(data.state);
+  if (index_fingerprint_version.has_value()) {
+    *response.mutable_index_fingerprint_version() =
+        std::move(index_fingerprint_version.value());
+  }
+  return std::make_pair(grpc::Status::OK, response);
+}
+
 grpc::ServerUnaryReactor* Service::InfoIndexPartition(
     grpc::CallbackServerContext* context,
     const InfoIndexPartitionRequest* request,
@@ -189,61 +260,16 @@ grpc::ServerUnaryReactor* Service::InfoIndexPartition(
   GRPCSuspensionGuard guard(GRPCSuspender::Instance());
   auto latency_sample = SAMPLE_EVERY_N(100);
   grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
-
-  vmsdk::RunByMain([reactor, response, idx = request->index_name(),
+  // simulate grpc timeout for testing only
+  if (ForceRemoteFailCount.GetValue() > 0) {
+    ForceRemoteFailCount.Decrement();
+    return reactor;
+  }
+  vmsdk::RunByMain([reactor, response, request,
                     latency_sample = std::move(latency_sample)]() mutable {
-    auto status_or_schema =
-        SchemaManager::Instance().GetIndexSchema(/*db=*/0, idx);
-    if (!status_or_schema.ok()) {
-      response->set_exists(false);
-      response->set_index_name(idx);
-      response->set_error(status_or_schema.status().ToString());
-      response->set_error_type(coordinator::FanoutErrorType::INDEX_NAME_ERROR);
-      reactor->Finish(ToGrpcStatus(status_or_schema.status()));
-      return;
-    }
-    auto schema = std::move(status_or_schema.value());
-    IndexSchema::InfoIndexPartitionData data =
-        schema->GetInfoIndexPartitionData();
-
-    std::optional<uint64_t> fingerprint;
-    std::optional<uint32_t> encoding_version;
-
-    // Get the full metadata to access both fingerprint and encoding_version
-    auto global_metadata =
-        coordinator::MetadataManager::Instance().GetGlobalMetadata();
-    if (global_metadata->type_namespace_map().contains(
-            kSchemaManagerMetadataTypeName)) {
-      const auto& entry_map = global_metadata->type_namespace_map().at(
-          kSchemaManagerMetadataTypeName);
-      if (entry_map.entries().contains(idx)) {
-        const auto& entry = entry_map.entries().at(idx);
-        fingerprint = entry.fingerprint();
-        encoding_version = entry.encoding_version();
-      }
-    }
-
-    response->set_exists(true);
-    response->set_index_name(idx);
-    response->set_num_docs(data.num_docs);
-    response->set_num_records(data.num_records);
-    response->set_hash_indexing_failures(data.hash_indexing_failures);
-    response->set_backfill_scanned_count(data.backfill_scanned_count);
-    response->set_backfill_db_size(data.backfill_db_size);
-    response->set_backfill_inqueue_tasks(data.backfill_inqueue_tasks);
-    response->set_backfill_complete_percent(data.backfill_complete_percent);
-    response->set_backfill_in_progress(data.backfill_in_progress);
-    response->set_mutation_queue_size(data.mutation_queue_size);
-    response->set_recent_mutations_queue_delay(
-        data.recent_mutations_queue_delay);
-    response->set_state(data.state);
-    if (fingerprint.has_value()) {
-      response->set_schema_fingerprint(fingerprint.value());
-    }
-    if (encoding_version.has_value()) {
-      response->set_encoding_version(encoding_version.value());
-    }
-    reactor->Finish(grpc::Status::OK);
+    auto [status, info_response] = Service::GenerateInfoResponse(*request);
+    *response = std::move(info_response);
+    reactor->Finish(status);
   });
   return reactor;
 }

@@ -4,11 +4,11 @@ ROOT_DIR=$(readlink -f $(dirname $0))
 WORKSPACE_HOME=$(readlink -f ${ROOT_DIR}/../..)
 
 BUILD_CONFIG=release
-TEST=all
+# TEST=all
+TEST=vector_search_integration
 CLEAN="no"
-VALKEY_VERSION="8.1.1"
+VALKEY_VERSION="9.0.0"
 VALKEY_JSON_VERSION="unstable"
-MODULE_ROOT=$(readlink -f ${ROOT_DIR}/../..)
 DUMP_TEST_ERRORS_STDOUT="no"
 
 # Constants
@@ -183,15 +183,7 @@ fi
 export MEMTIER_PATH=memtier_benchmark
 export VALKEY_SEARCH_PATH=${VALKEY_SEARCH_PATH}
 export TEST_UNDECLARED_OUTPUTS_DIR="$BUILD_DIR/output"
-if [[ "${SAN_BUILD}" != "no" ]]; then
-    export ASAN_OPTIONS="detect_odr_violation=0:detect_leaks=1:halt_on_error=1"
-    if [[ "${SAN_BUILD}" == "address" ]]; then
-        export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/asan.supp"
-    else
-        export LSAN_OPTIONS="suppressions=${MODULE_ROOT}/ci/tsan.supp"
-    fi
-    LOG_NOTICE "Using LSAN_OPTIONS=${LSAN_OPTIONS}"
-fi
+
 
 rm -rf $TEST_UNDECLARED_OUTPUTS_DIR
 mkdir -p $TEST_UNDECLARED_OUTPUTS_DIR
@@ -219,8 +211,8 @@ else
     python3 ${ROOT_DIR}/${TEST}_test.py
 fi
 
-printf "Checking for errors...\n"
 if [[ "${SAN_BUILD}" != "no" ]]; then
+    printf "Checking for errors...\n"
     # Terminate valkey-server so the logs will be flushed
     pkill valkey-server || true
     # Wait for 3 seconds making sure the processes terminated

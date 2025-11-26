@@ -30,7 +30,11 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/util.h"
+#include "src/metrics.h"
 #include "src/rdb_serialization.h"
+#include "src/schema_manager.h"
+#include "src/valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -43,6 +47,20 @@ constexpr mstime_t kMetadataBroadcastIntervalMs = 30000;
 constexpr float kMetadataBroadcastJitterRatio = 0.5;
 
 }  // namespace
+
+CONTROLLED_BOOLEAN(PauseHandleClusterMessage, false);
+
+void DelayedClusterMessageTimerCallback(ValkeyModuleCtx *ctx, void *data) {
+  auto *params = static_cast<
+      std::tuple<std::string, std::unique_ptr<GlobalMetadataVersionHeader>> *>(
+      data);
+  auto &[sender_id, header] = *params;
+
+  MetadataManager::Instance().DelayHandleClusterMessage(ctx, sender_id.c_str(),
+                                                        std::move(header));
+
+  delete params;
+}
 
 static absl::NoDestructor<std::unique_ptr<MetadataManager>>
     metadata_manager_instance;
@@ -122,7 +140,8 @@ absl::Status MetadataManager::TriggerCallbacks(
   auto it = registered_types.find(type_name);
   if (it != registered_types.end()) {
     return registered_types.at(type_name).update_callback(
-        id, entry.has_content() ? &entry.content() : nullptr);
+        id, entry.has_content() ? &entry.content() : nullptr,
+        entry.fingerprint(), entry.version());
   }
   VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 10)
       << "No type registered for: " << type_name << ", skipping callback";
@@ -145,7 +164,7 @@ absl::StatusOr<google::protobuf::Any> MetadataManager::GetEntry(
   return metadata.type_namespace_map().at(type_name).entries().at(id).content();
 }
 
-absl::Status MetadataManager::CreateEntry(
+absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(
     absl::string_view type_name, absl::string_view id,
     std::unique_ptr<google::protobuf::Any> contents) {
   auto &registered_types = registered_types_.Get();
@@ -187,7 +206,10 @@ absl::Status MetadataManager::CreateEntry(
   metadata.mutable_version_header()->set_top_level_fingerprint(
       ComputeTopLevelFingerprint(metadata.type_namespace_map()));
   BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
-  return absl::OkStatus();
+  IndexFingerprintVersion index_fingerprint_version;
+  index_fingerprint_version.set_fingerprint(fingerprint);
+  index_fingerprint_version.set_version(version);
+  return index_fingerprint_version;
 }
 
 absl::Status MetadataManager::DeleteEntry(absl::string_view type_name,
@@ -268,6 +290,27 @@ void MetadataManager::BroadcastMetadata(
                                   payload.c_str(), payload.size());
 }
 
+void MetadataManager::DelayHandleClusterMessage(
+    ValkeyModuleCtx *ctx, const char *sender_id,
+    std::unique_ptr<GlobalMetadataVersionHeader> header) {
+  if (PauseHandleClusterMessage.GetValue()) {
+    Metrics::GetStats().pause_handle_cluster_message_round_cnt++;
+    VMSDK_LOG_EVERY_N_SEC(NOTICE, nullptr, 2)
+        << "DEBUG: Paused round is "
+        << Metrics::GetStats().pause_handle_cluster_message_round_cnt;
+    std::string sender_id_str(sender_id, VALKEYMODULE_NODE_ID_LEN);
+    // Use a timer with a small delay (e.g., 100ms) to poll without blocking
+    auto *params = new std::tuple<std::string,
+                                  std::unique_ptr<GlobalMetadataVersionHeader>>(
+        std::move(sender_id_str), std::move(header));
+
+    ValkeyModule_CreateTimer(ctx, 100, DelayedClusterMessageTimerCallback,
+                             params);
+  } else {
+    HandleBroadcastedMetadata(ctx, sender_id, std::move(header));
+  }
+}
+
 void MetadataManager::HandleClusterMessage(ValkeyModuleCtx *ctx,
                                            const char *sender_id, uint8_t type,
                                            const unsigned char *payload,
@@ -276,7 +319,8 @@ void MetadataManager::HandleClusterMessage(ValkeyModuleCtx *ctx,
     auto header = std::make_unique<GlobalMetadataVersionHeader>();
     header->ParseFromString(
         absl::string_view(reinterpret_cast<const char *>(payload), len));
-    HandleBroadcastedMetadata(ctx, sender_id, std::move(header));
+    std::string sender_id_str(sender_id, VALKEYMODULE_NODE_ID_LEN);
+    DelayHandleClusterMessage(ctx, sender_id_str.c_str(), std::move(header));
   } else {
     VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 10)
         << "Unsupported message type: " << type;
@@ -474,6 +518,10 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
   last_healthy_metadata_millis_.store(ValkeyModule_Milliseconds(),
                                       std::memory_order_relaxed);
 
+  // Increment the completion counter
+  metadata_reconciliation_completed_count_.fetch_add(1,
+                                                     std::memory_order_relaxed);
+
   return absl::OkStatus();
 }
 
@@ -603,6 +651,23 @@ void MetadataManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     staging_metadata_due_to_repl_load_ = false;
   }
   is_loading_ = false;
+
+  // populate fingerprint and version to IndexSchema at the end of loading RDB
+  auto global_metadata = GetGlobalMetadata();
+  if (global_metadata->type_namespace_map().contains(
+          kSchemaManagerMetadataTypeName)) {
+    const auto &entries = global_metadata->type_namespace_map()
+                              .at(kSchemaManagerMetadataTypeName)
+                              .entries();
+    for (const auto &[name, entry] : entries) {
+      // In cluster mode, only support DB 0 for now
+      uint32_t db_num = 0;
+      uint64_t fingerprint = entry.fingerprint();
+      uint32_t version = entry.version();
+      SchemaManager::Instance().PopulateFingerprintVersionFromMetadata(
+          db_num, name, fingerprint, version);
+    }
+  }
 }
 
 void MetadataManager::OnReplicationLoadStart(ValkeyModuleCtx *ctx) {
@@ -645,6 +710,11 @@ int64_t MetadataManager::GetMilliSecondsSinceLastHealthyMetadata() const {
 
   int64_t current_millis = ValkeyModule_Milliseconds();
   return current_millis - last_millis;
+}
+
+int64_t MetadataManager::GetMetadataReconciliationCompletedCount() const {
+  return metadata_reconciliation_completed_count_.load(
+      std::memory_order_relaxed);
 }
 
 void MetadataManager::RegisterForClusterMessages(ValkeyModuleCtx *ctx) {

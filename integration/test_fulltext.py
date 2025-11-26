@@ -190,10 +190,17 @@ def validate_fulltext_search(client: Valkey):
 
 class TestFullText(ValkeySearchTestCaseBase):
 
-    def test_text_search(self):
+    @pytest.mark.parametrize("prefilter_enabled", [False, True])
+    def test_text_search(self, prefilter_enabled):
         """
         Test FT.SEARCH command with a text index.
+        Tests with both prefilter disabled and enabled.
         """
+        # Override config for this test
+        if prefilter_enabled:
+            self.server.get_new_client().execute_command(
+                "CONFIG", "SET", "search.enable-text-prefilter", "yes"
+            )
         client: Valkey = self.server.get_new_client()
         # Create the text index on Hash documents
         assert client.execute_command(text_index_on_hash) == b"OK"
@@ -1115,12 +1122,19 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
 
 class TestFullTextCluster(ValkeySearchClusterTestCase):
 
-    def test_fulltext_search_cluster(self):
+    @pytest.mark.parametrize("prefilter_enabled", [False, True])
+    def test_fulltext_search_cluster(self, prefilter_enabled):
         """
             Test a fulltext search queries on Hash docs in Valkey Search CME.
         """
         cluster_client: ValkeyCluster = self.new_cluster_client()
         client: Valkey = self.new_client_for_primary(0)
+
+        if prefilter_enabled:
+            # Set config on all primary nodes
+            for primary_client in self.get_all_primary_clients():
+                primary_client.execute_command("CONFIG", "SET", "search.enable-text-prefilter", "yes")
+
         # Create the text index on Hash documents
         assert client.execute_command(text_index_on_hash) == b"OK"
         # Data population:

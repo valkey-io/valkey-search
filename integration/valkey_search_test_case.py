@@ -109,6 +109,18 @@ class ReplicationGroup:
                 return False
         return True
 
+    def _replication_lag(self, index) -> int:
+        primary_offset = self.primary.client.info("REPLICATION")['master_repl_offset']
+        replica_offset = self.replicas[index].client.info("REPLICATION")['slave_repl_offset']
+        assert primary_offset >= replica_offset
+        return primary_offset - replica_offset
+
+    def replication_lag(self) -> int:
+        '''
+        The maximum replication lag
+        '''
+        return max([self._replication_lag(r) for r in range(len(self.replicas))])
+
     def get_replica_connection(self, index) -> Valkey:
         return self.replicas[index].client
 
@@ -147,6 +159,9 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         See ValkeySearchTestCaseBase.get_config_file_lines & ValkeySearchClusterTestCase.get_config_file_lines
         for example usage."""
         raise NotImplementedError
+    
+    def append_startup_args(self, args: dict[str, str]) -> dict[str, str]:
+        return args
 
     def start_server(
         self,
@@ -177,7 +192,7 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         server, client = self.create_server(
             testdir=testdir,
             server_path=server_path,
-            args={"logfile": logfile},
+            args=self.append_startup_args({"logfile": logfile}),
             port=port,
             conf_file=conf_file,
         )
@@ -191,6 +206,15 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         role = info.get("role", "")
         master_link_status = info.get("master_link_status", "")
         assert role == "slave" and master_link_status == "up"
+
+    def get_nodes(self) -> List[Node]:
+        return self.nodes
+
+    def get_primaries(self) -> List[Node]:
+        return self.primaries
+
+    def get_replicas(self) -> List[Node]:
+        return self.replicas
 
 
 class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
@@ -488,6 +512,8 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
         valkey_conn.ping()
         return valkey_conn
     
+    def replication_lag(self) -> int:
+        return max([rg.replication_lag() for rg in self.replication_groups])
 
 class ValkeySearchClusterTestCaseDebugMode(ValkeySearchClusterTestCase):
     '''

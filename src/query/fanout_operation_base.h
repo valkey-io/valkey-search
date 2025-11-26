@@ -14,10 +14,11 @@
 #include <thread>
 
 #include "absl/synchronization/mutex.h"
+#include "cluster_map.h"
 #include "grpcpp/support/status.h"
 #include "src/coordinator/client_pool.h"
+#include "src/coordinator/util.h"
 #include "src/metrics.h"
-#include "src/query/fanout_template.h"
 #include "src/utils/cancel.h"
 #include "src/valkey_search.h"
 #include "vmsdk/src/blocked_client.h"
@@ -30,7 +31,8 @@ namespace valkey_search::query::fanout {
 
 constexpr unsigned kNoValkeyTimeout = 86400000;
 
-template <typename Request, typename Response, FanoutTargetMode kTargetMode>
+template <typename Request, typename Response,
+          vmsdk::cluster_map::FanoutTargetMode kTargetMode>
 class FanoutOperationBase {
  public:
   explicit FanoutOperationBase() = default;
@@ -43,7 +45,9 @@ class FanoutOperationBase {
     blocked_client_->MeasureTimeStart();
     deadline_tp_ = std::chrono::steady_clock::now() +
                    std::chrono::milliseconds(GetTimeoutMs());
-    targets_ = GetTargets(ctx);
+    // Ensure cluster map is fresh
+    ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
+    targets_ = GetTargets();
     StartFanoutRound();
   }
 
@@ -85,16 +89,14 @@ class FanoutOperationBase {
     }
   }
 
-  std::vector<FanoutSearchTarget> GetTargets(ValkeyModuleCtx* ctx) const {
-    return query::fanout::FanoutTemplate::GetTargets(ctx, kTargetMode);
-  }
+  virtual std::vector<vmsdk::cluster_map::NodeInfo> GetTargets() const = 0;
 
-  void IssueRpc(const FanoutSearchTarget& target, const Request& request,
-                unsigned timeout_ms) {
+  void IssueRpc(const vmsdk::cluster_map::NodeInfo& target,
+                const Request& request, unsigned timeout_ms) {
     coordinator::ClientPool* client_pool_ =
         ValkeySearch::Instance().GetCoordinatorClientPool();
 
-    if (target.type == FanoutSearchTarget::Type::kLocal) {
+    if (target.is_local) {
       vmsdk::RunByMain([this, target, request]() {
         auto [status, resp] = this->GetLocalResponse(request, target);
         if (status.ok()) {
@@ -110,12 +112,15 @@ class FanoutOperationBase {
         this->RpcDone();
       });
     } else {
-      auto client = client_pool_->GetClient(target.address);
+      std::string client_address = absl::StrCat(
+          target.socket_address.primary_endpoint, ":",
+          coordinator::GetCoordinatorPort(target.socket_address.port));
+      auto client = client_pool_->GetClient(client_address);
       if (!client) {
         ++Metrics::GetStats().info_fanout_fail_cnt;
         VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
             << "FANOUT_DEBUG: Found invalid client on target "
-            << target.address;
+            << client_address;
         this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
                       coordinator::FanoutErrorType::COMMUNICATION_ERROR,
                       target);
@@ -124,14 +129,14 @@ class FanoutOperationBase {
       }
       this->InvokeRemoteRpc(
           client.get(), request,
-          [this, target](grpc::Status status, Response& resp) {
+          [this, target, client_address](grpc::Status status, Response& resp) {
             if (status.ok()) {
               this->OnResponse(resp, target);
             } else {
               ++Metrics::GetStats().info_fanout_fail_cnt;
               VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
                   << "FANOUT_DEBUG: InvokeRemoteRpc error on target "
-                  << target.address << ", status code: " << status.error_code()
+                  << client_address << ", status code: " << status.error_code()
                   << ", error message: " << status.error_message();
               // if grpc failed, the response is invalid, so we need to manually
               // set the error type
@@ -151,7 +156,7 @@ class FanoutOperationBase {
   }
 
   virtual std::pair<grpc::Status, Response> GetLocalResponse(
-      const Request&, [[maybe_unused]] const FanoutSearchTarget&) = 0;
+      const Request&, [[maybe_unused]] const vmsdk::cluster_map::NodeInfo&) = 0;
 
   virtual void InvokeRemoteRpc(coordinator::Client*, const Request&,
                                std::function<void(grpc::Status, Response&)>,
@@ -160,14 +165,15 @@ class FanoutOperationBase {
   virtual unsigned GetTimeoutMs() const = 0;
 
   virtual Request GenerateRequest(
-      [[maybe_unused]] const FanoutSearchTarget&) = 0;
+      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo&) = 0;
 
-  virtual void OnResponse(const Response&,
-                          [[maybe_unused]] const FanoutSearchTarget&) = 0;
+  virtual void OnResponse(
+      const Response&,
+      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo&) = 0;
 
   virtual void OnError(grpc::Status status,
                        coordinator::FanoutErrorType error_type,
-                       const FanoutSearchTarget& target) {
+                       const vmsdk::cluster_map::NodeInfo& target) {
     absl::MutexLock lock(&mutex_);
     if (error_type == coordinator::FanoutErrorType::INDEX_NAME_ERROR) {
       index_name_error_nodes.push_back(target);
@@ -205,39 +211,51 @@ class FanoutOperationBase {
     // Log index name errors
     if (!index_name_error_nodes.empty()) {
       error_message = "Index name not found.";
-      for (const FanoutSearchTarget& target : index_name_error_nodes) {
-        if (target.type == FanoutSearchTarget::Type::kLocal) {
+      for (const vmsdk::cluster_map::NodeInfo& target :
+           index_name_error_nodes) {
+        if (target.is_local) {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << INDEX_NAME_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
-              << INDEX_NAME_ERROR_LOG_PREFIX << target.address;
+              << INDEX_NAME_ERROR_LOG_PREFIX
+              << absl::StrCat(target.socket_address.primary_endpoint, ":",
+                              coordinator::GetCoordinatorPort(
+                                  target.socket_address.port));
         }
       }
     }
     // Log communication errors
     if (!communication_error_nodes.empty()) {
       error_message = "Communication error between nodes found.";
-      for (const FanoutSearchTarget& target : communication_error_nodes) {
-        if (target.type == FanoutSearchTarget::Type::kLocal) {
+      for (const vmsdk::cluster_map::NodeInfo& target :
+           communication_error_nodes) {
+        if (target.is_local) {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << COMMUNICATION_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
-              << COMMUNICATION_ERROR_LOG_PREFIX << target.address;
+              << COMMUNICATION_ERROR_LOG_PREFIX
+              << absl::StrCat(target.socket_address.primary_endpoint, ":",
+                              coordinator::GetCoordinatorPort(
+                                  target.socket_address.port));
         }
       }
     }
     // Log inconsistent state errors
     if (!inconsistent_state_error_nodes.empty()) {
       error_message = "Inconsistent index state error found.";
-      for (const FanoutSearchTarget& target : inconsistent_state_error_nodes) {
-        if (target.type == FanoutSearchTarget::Type::kLocal) {
+      for (const vmsdk::cluster_map::NodeInfo& target :
+           inconsistent_state_error_nodes) {
+        if (target.is_local) {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << INCONSISTENT_STATE_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
-              << INCONSISTENT_STATE_ERROR_LOG_PREFIX << target.address;
+              << INCONSISTENT_STATE_ERROR_LOG_PREFIX
+              << absl::StrCat(target.socket_address.primary_endpoint, ":",
+                              coordinator::GetCoordinatorPort(
+                                  target.socket_address.port));
         }
       }
     }
@@ -287,10 +305,10 @@ class FanoutOperationBase {
   unsigned outstanding_{0};
   absl::Mutex mutex_;
   std::unique_ptr<vmsdk::BlockedClient> blocked_client_;
-  std::vector<FanoutSearchTarget> index_name_error_nodes;
-  std::vector<FanoutSearchTarget> inconsistent_state_error_nodes;
-  std::vector<FanoutSearchTarget> communication_error_nodes;
-  std::vector<FanoutSearchTarget> targets_;
+  std::vector<vmsdk::cluster_map::NodeInfo> index_name_error_nodes;
+  std::vector<vmsdk::cluster_map::NodeInfo> inconsistent_state_error_nodes;
+  std::vector<vmsdk::cluster_map::NodeInfo> communication_error_nodes;
+  std::vector<vmsdk::cluster_map::NodeInfo> targets_;
   std::chrono::steady_clock::time_point deadline_tp_;
   bool timeout_occurred_ = false;
 };

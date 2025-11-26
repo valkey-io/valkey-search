@@ -111,11 +111,6 @@ int Numeric::RespondWithInfo(ValkeyModuleCtx* ctx) const {
   return 4;
 }
 
-bool Numeric::IsTracked(const InternedStringPtr& key) const {
-  absl::MutexLock lock(&index_mutex_);
-  return tracked_keys_.contains(key);
-}
-
 std::unique_ptr<data_model::Index> Numeric::ToProto() const {
   auto index_proto = std::make_unique<data_model::Index>();
   auto numeric_index = std::make_unique<data_model::NumericIndex>();
@@ -254,9 +249,42 @@ std::unique_ptr<EntriesFetcherIteratorBase> Numeric::EntriesFetcher::Begin() {
   return itr;
 }
 
-uint64_t Numeric::GetRecordCount() const {
+size_t Numeric::GetTrackedKeyCount() const {
   absl::MutexLock lock(&index_mutex_);
   return tracked_keys_.size();
+}
+
+size_t Numeric::GetUnTrackedKeyCount() const {
+  absl::MutexLock lock(&index_mutex_);
+  return untracked_keys_.size();
+}
+
+bool Numeric::IsTracked(const InternedStringPtr& key) const {
+  absl::MutexLock lock(&index_mutex_);
+  return tracked_keys_.contains(key);
+}
+
+bool Numeric::IsUnTracked(const InternedStringPtr& key) const {
+  absl::MutexLock lock(&index_mutex_);
+  return untracked_keys_.contains(key);
+}
+
+absl::Status Numeric::ForEachTrackedKey(
+    absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const {
+  absl::MutexLock lock(&index_mutex_);
+  for (const auto& [key, _] : tracked_keys_) {
+    VMSDK_RETURN_IF_ERROR(fn(key));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status Numeric::ForEachUnTrackedKey(
+    absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const {
+  absl::MutexLock lock(&index_mutex_);
+  for (const auto& key : untracked_keys_) {
+    VMSDK_RETURN_IF_ERROR(fn(key));
+  }
+  return absl::OkStatus();
 }
 
 }  // namespace valkey_search::indexes

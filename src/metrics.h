@@ -75,9 +75,9 @@ class Metrics {
 
     // Global ingestion stats (counts across all indexes)
     std::atomic<uint64_t> ingest_hash_keys{0};
-    std::atomic<uint64_t> ingest_hash_blocked{0};
+    std::atomic<uint64_t> backfill_hash_keys{0};
     std::atomic<uint64_t> ingest_json_keys{0};
-    std::atomic<uint64_t> ingest_json_blocked{0};
+    std::atomic<uint64_t> backfill_json_keys{0};
     std::atomic<uint64_t> ingest_field_vector{0};
     std::atomic<uint64_t> ingest_field_numeric{0};
     std::atomic<uint64_t> ingest_field_tag{0};

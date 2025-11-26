@@ -33,9 +33,9 @@
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
-#include "src/query/fanout_template.h"
 #include "src/query/search.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search.h"
 #include "valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -186,7 +186,8 @@ void PerformRemoteSearchRequestAsync(
 }
 
 absl::Status PerformSearchFanoutAsync(
-    ValkeyModuleCtx *ctx, std::vector<FanoutSearchTarget> &search_targets,
+    ValkeyModuleCtx *ctx,
+    std::vector<vmsdk::cluster_map::NodeInfo> &search_targets,
     coordinator::ClientPool *coordinator_client_pool,
     std::unique_ptr<SearchParameters> parameters,
     vmsdk::ThreadPool *thread_pool, query::SearchResponseCallback callback) {
@@ -201,7 +202,7 @@ absl::Status PerformSearchFanoutAsync(
   bool has_local_target = false;
   for (auto &node : search_targets) {
     auto detached_ctx = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);
-    if (node.type == FanoutSearchTarget::Type::kLocal) {
+    if (node.is_local) {
       // Defer the local target enqueue, since it will own the parameters from
       // then on.
       has_local_target = true;
@@ -213,12 +214,15 @@ absl::Status PerformSearchFanoutAsync(
     // At 30 requests, it takes ~600 micros to enqueue all the requests.
     // Putting this into the background thread pool will save us time on
     // machines with multiple cores.
+    std::string target_address =
+        absl::StrCat(node.socket_address.primary_endpoint, ":",
+                     coordinator::GetCoordinatorPort(node.socket_address.port));
     if (search_targets.size() >= 30 && thread_pool->Size() > 1) {
-      PerformRemoteSearchRequestAsync(std::move(request_copy), node.address,
+      PerformRemoteSearchRequestAsync(std::move(request_copy), target_address,
                                       coordinator_client_pool, tracker,
                                       thread_pool);
     } else {
-      PerformRemoteSearchRequest(std::move(request_copy), node.address,
+      PerformRemoteSearchRequest(std::move(request_copy), target_address,
                                  coordinator_client_pool, tracker);
     }
   }
@@ -247,10 +251,28 @@ absl::Status PerformSearchFanoutAsync(
   return absl::OkStatus();
 }
 
-// TODO See if caching this improves performance.
-std::vector<fanout::FanoutSearchTarget> GetSearchTargetsForFanout(
-    ValkeyModuleCtx *ctx, FanoutTargetMode mode) {
-  return fanout::FanoutTemplate::GetTargets(ctx, mode);
+bool IsSystemUnderLowUtilization() {
+  // Get the configured threshold (queue wait time in milliseconds)
+  double threshold = static_cast<double>(
+      valkey_search::options::GetLocalFanoutQueueWaitThreshold().GetValue());
+
+  auto &valkey_search_instance = ValkeySearch::Instance();
+  auto reader_pool = valkey_search_instance.GetReaderThreadPool();
+
+  if (!reader_pool) {
+    return false;
+  }
+
+  // Get recent queue wait time (not global average)
+  auto queue_wait_result = reader_pool->GetRecentQueueWaitTime();
+  if (!queue_wait_result.ok()) {
+    // If we can't get queue wait time, assume high utilization for safety
+    return false;
+  }
+
+  double queue_wait_time = queue_wait_result.value();
+  // System is under low utilization if queue wait time is below threshold
+  return queue_wait_time < threshold;
 }
 
 }  // namespace valkey_search::query::fanout

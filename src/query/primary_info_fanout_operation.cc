@@ -9,14 +9,16 @@
 
 #include "src/coordinator/metadata_manager.h"
 #include "src/schema_manager.h"
+#include "vmsdk/src/info.h"
 
 namespace valkey_search::query::primary_info_fanout {
 
 PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
     uint32_t db_num, const std::string& index_name, unsigned timeout_ms)
-    : fanout::FanoutOperationBase<coordinator::InfoIndexPartitionRequest,
-                                  coordinator::InfoIndexPartitionResponse,
-                                  fanout::FanoutTargetMode::kPrimary>(),
+    : fanout::FanoutOperationBase<
+          coordinator::InfoIndexPartitionRequest,
+          coordinator::InfoIndexPartitionResponse,
+          vmsdk::cluster_map::FanoutTargetMode::kPrimary>(),
       db_num_(db_num),
       index_name_(index_name),
       timeout_ms_(timeout_ms),
@@ -25,12 +27,19 @@ PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
       num_records_(0),
       hash_indexing_failures_(0) {}
 
+std::vector<vmsdk::cluster_map::NodeInfo>
+PrimaryInfoFanoutOperation::GetTargets() const {
+  return ValkeySearch::Instance().GetClusterMap()->GetTargets(
+      vmsdk::cluster_map::FanoutTargetMode::kPrimary);
+}
+
 unsigned PrimaryInfoFanoutOperation::GetTimeoutMs() const {
   return timeout_ms_;
 }
 
 coordinator::InfoIndexPartitionRequest
-PrimaryInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&) {
+PrimaryInfoFanoutOperation::GenerateRequest(
+    const vmsdk::cluster_map::NodeInfo&) {
   coordinator::InfoIndexPartitionRequest req;
   req.set_db_num(db_num_);
   req.set_index_name(index_name_);
@@ -39,7 +48,7 @@ PrimaryInfoFanoutOperation::GenerateRequest(const fanout::FanoutSearchTarget&) {
 
 void PrimaryInfoFanoutOperation::OnResponse(
     const coordinator::InfoIndexPartitionResponse& resp,
-    [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
+    [[maybe_unused]] const vmsdk::cluster_map::NodeInfo& target) {
   if (!resp.error().empty()) {
     grpc::Status status =
         grpc::Status(grpc::StatusCode::INTERNAL, resp.error());
@@ -96,7 +105,7 @@ void PrimaryInfoFanoutOperation::OnResponse(
 std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
 PrimaryInfoFanoutOperation::GetLocalResponse(
     const coordinator::InfoIndexPartitionRequest& request,
-    [[maybe_unused]] const fanout::FanoutSearchTarget& target) {
+    [[maybe_unused]] const vmsdk::cluster_map::NodeInfo& target) {
   return coordinator::Service::GenerateInfoResponse(request);
 }
 
@@ -119,7 +128,11 @@ int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
       !inconsistent_state_error_nodes.empty()) {
     return FanoutOperationBase::GenerateErrorReply(ctx);
   }
-  ValkeyModule_ReplyWithArray(ctx, 10);
+  size_t reply_size = 10;
+  if (vmsdk::info_field::GetShowDeveloper()) {
+    reply_size += 4;
+  }
+  ValkeyModule_ReplyWithArray(ctx, reply_size);
   ValkeyModule_ReplyWithSimpleString(ctx, "mode");
   ValkeyModule_ReplyWithSimpleString(ctx, "primary");
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
@@ -131,6 +144,18 @@ int PrimaryInfoFanoutOperation::GenerateReply(ValkeyModuleCtx* ctx,
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
       ctx, std::to_string(hash_indexing_failures_).c_str());
+
+  if (vmsdk::info_field::GetShowDeveloper()) {
+    auto status_or_schema =
+        SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+    auto schema = std::move(status_or_schema.value());
+    ValkeyModule_ReplyWithSimpleString(ctx, "index_fingerprint");
+    int64_t fingerprint = static_cast<int64_t>(schema->GetFingerprint());
+    ValkeyModule_ReplyWithLongLong(ctx, fingerprint);
+    ValkeyModule_ReplyWithSimpleString(ctx, "index_version");
+    ValkeyModule_ReplyWithLongLong(ctx, schema->GetVersion());
+  }
+
   return VALKEYMODULE_OK;
 }
 

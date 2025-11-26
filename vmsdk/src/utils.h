@@ -110,6 +110,7 @@ inline int MakeValkeyVersion(int major, int minor, int patch) {
   return (major << 16) | (minor << 8) | patch;
 }
 std::string PrintableBytes(absl::string_view sv);
+std::string StringToHex(std::string_view s);
 
 // Checks if a numeric value falls within an optional inclusive range [min,
 // max]. The range is inclusive: a value is considered valid if min <= value <=
@@ -165,5 +166,25 @@ struct JsonQuotedStringView {
   VMSDK_NON_COPYABLE(ClassName);                  \
   VMSDK_NON_MOVABLE(ClassName)
 
+struct SocketAddress {
+  std::string primary_endpoint;
+  uint16_t port;
+
+  auto operator<=>(const SocketAddress &) const = default;
+};
+
 }  // namespace vmsdk
+
+// Hash specialization for SocketAddress
+namespace std {
+template <>
+struct hash<vmsdk::SocketAddress> {
+  size_t operator()(const vmsdk::SocketAddress &addr) const {
+    size_t h1 = std::hash<std::string>{}(addr.primary_endpoint);
+    size_t h2 = std::hash<uint16_t>{}(addr.port);
+    return h1 ^ (h2 << 1);
+  }
+};
+}  // namespace std
+
 #endif  // VMSDK_SRC_UTILS_H_

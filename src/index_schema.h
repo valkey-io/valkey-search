@@ -116,6 +116,14 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline const std::string &GetName() const { return name_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
 
+  inline uint64_t GetFingerprint() const { return fingerprint_; }
+  inline uint32_t GetVersion() const { return version_; }
+
+  inline void SetFingerprint(uint64_t fingerprint) {
+    fingerprint_ = fingerprint;
+  }
+  inline void SetVersion(uint32_t version) { version_ = version; }
+
   void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type, const char *event,
                               ValkeyModuleString *key) override;
 
@@ -134,6 +142,10 @@ class IndexSchema : public KeyspaceEventSubscription,
   int GetAttributeCount() const { return attributes_.size(); }
 
   virtual absl::Status RDBSave(SafeRDB *rdb) const;
+  absl::Status SaveIndexExtension(RDBChunkOutputStream output) const;
+  absl::Status LoadIndexExtension(ValkeyModuleCtx *ctx,
+                                  RDBChunkInputStream input);
+  absl::Status ValidateIndex() const;
 
   static absl::StatusOr<std::shared_ptr<IndexSchema>> LoadFromRDB(
       ValkeyModuleCtx *ctx, vmsdk::ThreadPool *mutations_thread_pool,
@@ -190,6 +202,9 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::unique_ptr<AttributeDataType> attribute_data_type_;
   std::string name_;
   uint32_t db_num_{0};
+  bool loaded_v2_{false};
+  uint64_t fingerprint_{0};
+  uint32_t version_{0};
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   InternedStringMap<DocumentMutation> tracked_mutated_records_
@@ -265,7 +280,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   mutable vmsdk::TimeSlicedMRMWMutex time_sliced_mutex_;
   struct MultiMutations {
     std::unique_ptr<absl::BlockingCounter> blocking_counter;
-    std::queue<InternedStringPtr> keys;
+    std::deque<InternedStringPtr> keys;
   };
   vmsdk::MainThreadAccessGuard<MultiMutations> multi_mutations_;
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};

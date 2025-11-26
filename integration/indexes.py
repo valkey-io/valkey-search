@@ -10,18 +10,19 @@ from ft_info_parser import FTInfoParser
 import logging, json
 import struct
 from enum import Enum
+from util import waiters
 
 class KeyDataType(Enum):
     HASH = 1
     JSON = 2
-
-
 
 def float_to_bytes(flt: list[float]) -> bytes:
     return struct.pack(f"<{len(flt)}f", *flt)
 
 
 class Field:
+    name: str
+    alias: Union[str, None]
     def __init__(self, name: str, alias: Union[str, None]):
         self.name = name
         self.alias = alias if alias else name
@@ -142,7 +143,7 @@ class Index:
         self.prefixes = prefixes
         self.type = type
 
-    def create(self, client: valkey.client):
+    def create(self, client: valkey.client, wait_for_backfill = False):
         cmd = (
             [
                 "FT.CREATE",
@@ -160,6 +161,8 @@ class Index:
         print(f"Creating Index: {cmd}")
         client.execute_command("DEBUG LOG", f"Creating index {self.name}")        
         client.execute_command(*cmd)
+        if wait_for_backfill:
+            self.wait_for_backfill_complete(client)
 
     def drop(self, client: valkey.client):
         cmd = ["FT.DROPINDEX", self.name]
@@ -168,20 +171,21 @@ class Index:
         client.execute_command("DEBUG LOG", f"Deleting index {self.name}")
 
     def load_data(self, client: valkey.client, rows: int, start_index: int = 0):
-        print("Loading data to ", client)
         for i in range(start_index, rows):
             data = self.make_data(i)
-            if self.type == KeyDataType.HASH:
-                client.hset(self.keyname(i), mapping=data)
-            else:
-                client.execute_command("JSON.SET", self.keyname(i), "$", json.dumps(data))
+            self.write_data(client, i, data)
+
+    def write_data(self, client: valkey.client, i:int, data: dict[str, str | bytes]):
+        if self.type == KeyDataType.HASH:
+            client.hset(self.keyname(i), mapping=data)
+        else:
+            client.execute_command("JSON.SET", self.keyname(i), "$", json.dumps(data))
 
     def load_data_with_ttl(self, client: valkey.client, rows: int, ttl_ms: int, start_index: int = 0):
         for i in range(start_index, rows):
             data = self.make_data(i)
-            key = self.keyname(i)
-            client.hset(key, mapping=data)
-            client.pexpire(key, ttl_ms)
+            self.write_data(client, i, data)
+            client.pexpire(self.keyname(i), ttl_ms)
 
     def keyname(self, row: int) -> str:
         prefix = self.prefixes[row % len(self.prefixes)] if self.prefixes else ""
@@ -218,3 +222,11 @@ class Index:
             dict_result[key] = {fields[i]:values[i] for i in range(len(fields))}
         print("Final result", dict_result)
         return dict_result
+
+    def has_field(self, name: str) -> bool:
+        return any(f.name == name for f in self.fields)
+
+    def wait_for_backfill_complete(self, client: valkey.client):
+        waiters.wait_for_true(
+            lambda: not self.info(client).backfill_in_progress
+            )

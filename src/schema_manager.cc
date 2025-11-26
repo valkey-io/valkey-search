@@ -130,11 +130,10 @@ SchemaManager::SchemaManager(
     coordinator::MetadataManager::Instance().RegisterType(
         kSchemaManagerMetadataTypeName, kCurrentSemanticVersion,
         ComputeFingerprint,
-        [this](uint32_t db_num, absl::string_view id,
-               const google::protobuf::Any *metadata) -> absl::Status {
-          return this->OnMetadataCallback(db_num, id, metadata);
-        },
-        ComputeSemanticVersion);
+        [this](absl::string_view id, const google::protobuf::Any *metadata,
+               uint64_t fingerprint, uint32_t version) -> absl::Status {
+          return this->OnMetadataCallback(id, metadata, fingerprint, version);
+        });
   }
 }
 
@@ -377,8 +376,13 @@ absl::StatusOr<vmsdk::SemanticVersion> SchemaManager::ComputeSemanticVersion(
 }
 
 absl::Status SchemaManager::OnMetadataCallback(
+<<<<<<< HEAD
     uint32_t db_num, absl::string_view id,
     const google::protobuf::Any *metadata) {
+=======
+    absl::string_view id, const google::protobuf::Any *metadata,
+    uint64_t fingerprint, uint32_t version) {
+>>>>>>> main
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   // Note that there is only DB 0 in cluster mode, so we can hardcode this.
   auto status = RemoveIndexSchemaInternal(db_num, id);
@@ -400,6 +404,10 @@ absl::Status SchemaManager::OnMetadataCallback(
   if (!result.ok()) {
     return result;
   }
+
+  auto created_schema = LookupInternal(0, id).value();
+  created_schema->SetFingerprint(fingerprint);
+  created_schema->SetVersion(version);
 
   return absl::OkStatus();
 }
@@ -726,6 +734,17 @@ void SchemaManager::OnServerCronCallback(ValkeyModuleCtx *ctx,
                                          [[maybe_unused]] void *data) {
   SchemaManager::Instance().PerformBackfill(
       ctx, options::GetBackfillBatchSize().GetValue());
+}
+
+void SchemaManager::PopulateFingerprintVersionFromMetadata(
+    uint32_t db_num, absl::string_view name, uint64_t fingerprint,
+    uint32_t version) {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  auto existing_entry = LookupInternal(db_num, name);
+  if (existing_entry.ok()) {
+    existing_entry.value()->SetFingerprint(fingerprint);
+    existing_entry.value()->SetVersion(version);
+  }
 }
 
 static vmsdk::info_field::Integer number_of_indexes(

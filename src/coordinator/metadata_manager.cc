@@ -35,6 +35,8 @@
 #include "src/coordinator/util.h"
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
+#include "src/schema_manager.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -161,7 +163,8 @@ absl::Status MetadataManager::TriggerCallbacks(
   auto it = registered_types.find(type_name);
   if (it != registered_types.end()) {
     return registered_types.at(type_name).update_callback(
-        db_num, id, entry.has_content() ? &entry.content() : nullptr);
+        id, entry.has_content() ? &entry.content() : nullptr,
+        entry.fingerprint(), entry.version());
   }
   VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 10)
       << "No type registered for: " << type_name << ", skipping callback";
@@ -725,6 +728,23 @@ void MetadataManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     staging_metadata_due_to_repl_load_ = false;
   }
   is_loading_ = false;
+
+  // populate fingerprint and version to IndexSchema at the end of loading RDB
+  auto global_metadata = GetGlobalMetadata();
+  if (global_metadata->type_namespace_map().contains(
+          kSchemaManagerMetadataTypeName)) {
+    const auto &entries = global_metadata->type_namespace_map()
+                              .at(kSchemaManagerMetadataTypeName)
+                              .entries();
+    for (const auto &[name, entry] : entries) {
+      // In cluster mode, only support DB 0 for now
+      uint32_t db_num = 0;
+      uint64_t fingerprint = entry.fingerprint();
+      uint32_t version = entry.version();
+      SchemaManager::Instance().PopulateFingerprintVersionFromMetadata(
+          db_num, name, fingerprint, version);
+    }
+  }
 }
 
 void MetadataManager::OnReplicationLoadStart(ValkeyModuleCtx *ctx) {

@@ -9,8 +9,6 @@
 #include <absl/strings/ascii.h>
 
 #include "module_config.h"
-#include "src/commands/commands.h"
-#include "src/coordinator/metadata_manager.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"

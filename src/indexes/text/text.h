@@ -36,10 +36,11 @@ struct TextFieldIndex : public indexes::IndexBase {
   virtual absl::Status SaveIndex(RDBOutputStream& rdb_stream) const override;
 
   virtual std::unique_ptr<data_model::Index> ToProto() const override;
-  virtual void ForEachTrackedKey(
-      absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override;
+  virtual absl::Status ForEachTrackedKey(
+      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      const override;
 
-  virtual uint64_t GetRecordCount() const override;
+  virtual uint64_t GetTrackedKeyCount() const override;
 
  private:
   // Each text field is assigned a unique number within the containing index,

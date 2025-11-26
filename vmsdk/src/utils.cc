@@ -343,8 +343,17 @@ std::string PrintableBytes(absl::string_view sv) {
           break;
       }
     }
-  }
-  return result;
-}
+    std::string StringToHex(std::string_view s) {
+      std::string result;
+      static char hex[] = "0123456789ABCDEF";
+      for (auto &c : s) {
+        if (&c != s.begin()) {
+          result += ' ';
+        }
+        result += hex[(c >> 4) & 0xF];
+        result += hex[c & 0xF];
+      }
+      return result;
+    }
 
-}  // namespace vmsdk
+  }  // namespace vmsdk

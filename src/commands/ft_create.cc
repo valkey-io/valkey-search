@@ -51,17 +51,20 @@ absl::Status FTCreateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   VMSDK_ASSIGN_OR_RETURN(auto index_schema_proto,
                          ParseFTCreateArgs(ctx, argv + 1, argc - 1));
   index_schema_proto.set_db_num(ValkeyModule_GetSelectedDb(ctx));
-  static const auto permissions =
-      PrefixACLPermissions(kCreateCmdPermissions, kCreateCommand);
-  VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, permissions, index_schema_proto));
+  VMSDK_RETURN_IF_ERROR(
+      AclPrefixCheck(ctx, acl::KeyAccess::kWrite, index_schema_proto));
   VMSDK_ASSIGN_OR_RETURN(
       auto new_entry_fingerprint_version,
       SchemaManager::Instance().CreateIndexSchema(ctx, index_schema_proto));
 
   // directly handle reply in standalone mode
   // let fanout operation handle reply in cluster mode
+  const bool is_loading =
+      ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING;
+  const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);
   if (ValkeySearch::Instance().IsCluster() &&
-      ValkeySearch::Instance().UsingCoordinator()) {
+      ValkeySearch::Instance().UsingCoordinator() && !is_loading &&
+      !inside_multi_exec) {
     // ft.create consistency check
     unsigned timeout_ms = options::GetFTInfoTimeoutMs().GetValue();
     auto op = new CreateConsistencyCheckFanoutOperation(
@@ -69,6 +72,11 @@ absl::Status FTCreateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
         new_entry_fingerprint_version);
     op->StartOperation(ctx);
   } else {
+    if (is_loading || inside_multi_exec) {
+      VMSDK_LOG(NOTICE, nullptr) << "The server is loading AOF or inside "
+                                    "multi/exec or lua script, skip "
+                                    "fanout operation";
+    }
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");
   }
   ValkeyModule_ReplicateVerbatim(ctx);

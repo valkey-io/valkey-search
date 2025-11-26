@@ -93,6 +93,11 @@ class SchemaManager {
   void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                             uint64_t subevent, void *data);
 
+  void PopulateFingerprintVersionFromMetadata(uint32_t db_num,
+                                              absl::string_view name,
+                                              uint64_t fingerprint,
+                                              uint32_t version);
+
   static void InitInstance(std::unique_ptr<SchemaManager> instance);
   static SchemaManager &Instance();
 
@@ -113,10 +118,9 @@ class SchemaManager {
   vmsdk::ThreadPool *mutations_thread_pool_;
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
 
-  vmsdk::SemanticVersion ComputeSemanticVersionOfIndexes() const;
-
-  absl::Status OnMetadataCallback(uint32_t db_num, absl::string_view id,
-                                  const google::protobuf::Any *metadata)
+  absl::Status OnMetadataCallback(absl::string_view id,
+                                  const google::protobuf::Any *metadata,
+                                  uint64_t fingerprint, uint32_t version)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
 
   absl::Status CreateIndexSchemaInternal(

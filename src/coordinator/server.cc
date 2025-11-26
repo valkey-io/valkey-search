@@ -124,19 +124,16 @@ grpc::Status Service::PerformConsistencyChecks(
             "Slot fingerprint required when consistency is enabled"};
   }
   // compare fingerprint and version
-  auto global_metadata =
-      coordinator::MetadataManager::Instance().GetGlobalMetadata();
-  CHECK(global_metadata->type_namespace_map().contains(
-      kSchemaManagerMetadataTypeName));
-  const auto& entry_map =
-      global_metadata->type_namespace_map().at(kSchemaManagerMetadataTypeName);
-  CHECK(entry_map.entries().contains(parameters.index_schema_name));
-  const auto& entry = entry_map.entries().at(parameters.index_schema_name);
+  auto schema =
+      SchemaManager::Instance()
+          .GetIndexSchema(parameters.db_num, parameters.index_schema_name)
+          .value();
+
   const auto& request_fingerprint_version =
       request->index_fingerprint_version();
 
-  if (entry.fingerprint() != request_fingerprint_version.fingerprint() ||
-      entry.version() != request_fingerprint_version.version()) {
+  if (schema->GetFingerprint() != request_fingerprint_version.fingerprint() ||
+      schema->GetVersion() != request_fingerprint_version.version()) {
     return {grpc::StatusCode::FAILED_PRECONDITION,
             "Index fingerprint or version mismatch"};
   }
@@ -242,24 +239,17 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
   // check consistency if in CONSISTENT mode
   if (request->enable_consistency()) {
     // Perform consistency checks on main thread, then enqueue search
-    vmsdk::RunByMain([this, reactor, response, request,
-                      vector_search_parameters =
-                          std::move(vector_search_parameters).value(),
-                      latency_sample = std::move(latency_sample),
-                      reader_thread_pool = reader_thread_pool_,
-                      detached_ctx = detached_ctx_.get()]() mutable {
-      auto consistency_status =
-          this->PerformConsistencyChecks(request, *vector_search_parameters);
-      if (!consistency_status.ok()) {
-        reactor->Finish(consistency_status);
-        RecordSearchMetrics(true, std::move(latency_sample));
-        return;
-      }
-      // Consistency checks passed, now enqueue the search
-      this->EnqueueSearchRequest(std::move(vector_search_parameters),
-                                 reader_thread_pool, detached_ctx, response,
-                                 reactor, std::move(latency_sample));
-    });
+    auto consistency_status =
+        this->PerformConsistencyChecks(request, **vector_search_parameters);
+    if (!consistency_status.ok()) {
+      reactor->Finish(consistency_status);
+      RecordSearchMetrics(true, std::move(latency_sample));
+      return reactor;
+    }
+    // Consistency checks passed, now enqueue the search
+    EnqueueSearchRequest(std::move(*vector_search_parameters),
+                         reader_thread_pool_, detached_ctx_.get(), response,
+                         reactor, std::move(latency_sample));
     return reactor;
   }
 

@@ -86,6 +86,7 @@ message IndexFingerprintVersion {
 }
 
 message SearchIndexPartitionRequest {
+  uint32 db_num = 1;
   string index_schema_name = 2;
   string attribute_alias = 3;
   optional string score_as = 4;

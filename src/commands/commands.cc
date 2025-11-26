@@ -11,8 +11,8 @@
 #include "ft_create_parser.h"
 #include "src/acl.h"
 #include "src/commands/ft_search.h"
-#include "src/query/fanout.h"
 #include "src/coordinator/metadata_manager.h"
+#include "src/query/fanout.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
@@ -80,10 +80,13 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
     parameters->timeout_ms = options::GetDefaultTimeoutMs().GetValue();
     VMSDK_RETURN_IF_ERROR(
         vmsdk::ParseParamValue(itr, parameters->index_schema_name));
-    VMSDK_ASSIGN_OR_RETURN(
-        parameters->index_schema,
-        SchemaManager::Instance().GetIndexSchema(
-            ValkeyModule_GetSelectedDb(ctx), parameters->index_schema_name));
+
+    uint32_t db_num = ValkeyModule_GetSelectedDb(ctx);
+    parameters->db_num = db_num;
+
+    VMSDK_ASSIGN_OR_RETURN(parameters->index_schema,
+                           SchemaManager::Instance().GetIndexSchema(
+                               db_num, parameters->index_schema_name));
     VMSDK_RETURN_IF_ERROR(
         vmsdk::ParseParamValue(itr, parameters->parse_vars.query_string));
     VMSDK_RETURN_IF_ERROR(parameters->ParseCommand(itr));
@@ -146,19 +149,12 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
         parameters->index_fingerprint_version->set_fingerprint(404);
         parameters->index_fingerprint_version->set_version(404);
       } else {
-        auto global_metadata =
-            coordinator::MetadataManager::Instance().GetGlobalMetadata();
-        CHECK(global_metadata->type_namespace_map().contains(
-            kSchemaManagerMetadataTypeName));
-        const auto &entry_map = global_metadata->type_namespace_map().at(
-            kSchemaManagerMetadataTypeName);
-        CHECK(entry_map.entries().contains(parameters->index_schema_name));
-        const auto &entry =
-            entry_map.entries().at(parameters->index_schema_name);
+        // get fingerprint/version from IndexSchema
         parameters->index_fingerprint_version.emplace();
         parameters->index_fingerprint_version->set_fingerprint(
-            entry.fingerprint());
-        parameters->index_fingerprint_version->set_version(entry.version());
+            parameters->index_schema->GetFingerprint());
+        parameters->index_fingerprint_version->set_version(
+            parameters->index_schema->GetVersion());
       }
 
       return query::fanout::PerformSearchFanoutAsync(

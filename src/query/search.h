@@ -71,6 +71,7 @@ inline std::ostream& operator<<(std::ostream& os, const ReturnAttribute& r) {
 struct SearchParameters {
   mutable cancel::Token cancellation_token;
   virtual ~SearchParameters() = default;
+  uint32_t db_num{0};
   std::shared_ptr<IndexSchema> index_schema;
   std::string index_schema_name;
   std::string attribute_alias;

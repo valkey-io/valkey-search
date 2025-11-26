@@ -121,6 +121,7 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
                               grpc::CallbackServerContext* context) {
   auto parameters =
       std::make_unique<query::SearchParameters>(request.timeout_ms(), context);
+  parameters->db_num = request.db_num();
   parameters->index_schema_name = request.index_schema_name();
   parameters->attribute_alias = request.attribute_alias();
   VMSDK_ASSIGN_OR_RETURN(
@@ -234,6 +235,7 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
 std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
     const query::SearchParameters& parameters) {
   auto request = std::make_unique<SearchIndexPartitionRequest>();
+  request->set_db_num(parameters.db_num);
   request->set_index_schema_name(parameters.index_schema_name);
   request->set_attribute_alias(parameters.attribute_alias);
   request->set_score_as(vmsdk::ToStringView(parameters.score_as.get()));

@@ -39,18 +39,21 @@ const InternedStringPtr& TermIterator::CurrentKey() const {
   return current_key_;
 }
 
+void TermIterator::InsertValidKeyIterator(size_t idx) {
+  auto& key_iter = key_iterators_[idx];
+  while (key_iter.IsValid() && !key_iter.ContainsFields(query_field_mask_)) {
+    key_iter.NextKey();
+  }
+  if (key_iter.IsValid()) {
+    key_heap_.emplace(key_iter.GetKey(), idx);
+  }
+}
+
 bool TermIterator::FindMinimumValidKey() {
-  // Build heap only if empty or invalid
+  // Build heap only if empty
   if (key_heap_.empty()) {
     for (size_t i = 0; i < key_iterators_.size(); ++i) {
-      auto& key_iter = key_iterators_[i];
-      while (key_iter.IsValid() &&
-             !key_iter.ContainsFields(query_field_mask_)) {
-        key_iter.NextKey();
-      }
-      if (key_iter.IsValid()) {
-        key_heap_.emplace(key_iter.GetKey(), i);
-      }
+      InsertValidKeyIterator(i);
     }
   }
   if (key_heap_.empty()) {
@@ -62,19 +65,15 @@ bool TermIterator::FindMinimumValidKey() {
   // Get minimum key
   current_key_ = key_heap_.top().first;
   pos_iterators_.clear();
-  // Collect all iterators with minimum key
   current_key_indices_.clear();
+  // Collect all iterators with minimum key
   while (!key_heap_.empty() && key_heap_.top().first == current_key_) {
     size_t idx = key_heap_.top().second;
+    key_heap_.pop();
     current_key_indices_.push_back(idx);
     pos_iterators_.emplace_back(key_iterators_[idx].GetPositionIterator());
-    key_heap_.pop();
-  }
-  if (!current_key_) {
-    return false;
   }
   // Clear position state for new key
-  pos_heap_ = {};
   current_position_ = std::nullopt;
   TermIterator::NextPosition();
   return true;
@@ -84,6 +83,7 @@ bool TermIterator::NextKey() {
   if (current_key_) {
     for (size_t idx : current_key_indices_) {
       key_iterators_[idx].NextKey();
+      InsertValidKeyIterator(idx);
     }
   }
   return FindMinimumValidKey();
@@ -114,47 +114,38 @@ const PositionRange& TermIterator::CurrentPosition() const {
 }
 
 bool TermIterator::NextPosition() {
-  // Initialize heap if empty (new key)
-  if (pos_heap_.empty()) {
-    for (size_t i = 0; i < pos_iterators_.size(); ++i) {
-      auto& pos_iter = pos_iterators_[i];
-      while (pos_iter.IsValid() &&
-             !(pos_iter.GetFieldMask() & query_field_mask_)) {
+  if (current_position_.has_value()) {
+    for (auto& pos_iter : pos_iterators_) {
+      if (pos_iter.IsValid() &&
+          pos_iter.GetPosition() == current_position_.value().start) {
         pos_iter.NextPosition();
-      }
-      if (pos_iter.IsValid()) {
-        pos_heap_.emplace(pos_iter.GetPosition(), i);
-      }
-    }
-  } else if (current_position_.has_value()) {
-    uint32_t current_pos = current_position_.value().start;
-    // Advance all iterators at current position and update heap
-    std::vector<size_t> to_update;
-    while (!pos_heap_.empty() && pos_heap_.top().first == current_pos) {
-      to_update.push_back(pos_heap_.top().second);
-      pos_heap_.pop();
-    }
-    for (size_t idx : to_update) {
-      auto& pos_iter = pos_iterators_[idx];
-      pos_iter.NextPosition();
-      while (pos_iter.IsValid() &&
-             !(pos_iter.GetFieldMask() & query_field_mask_)) {
-        pos_iter.NextPosition();
-      }
-      if (pos_iter.IsValid()) {
-        pos_heap_.emplace(pos_iter.GetPosition(), idx);
       }
     }
   }
-  if (pos_heap_.empty()) {
+  uint32_t min_position = UINT32_MAX;
+  bool found = false;
+  FieldMaskPredicate field;
+  for (auto& pos_iter : pos_iterators_) {
+    while (pos_iter.IsValid() &&
+           !(pos_iter.GetFieldMask() & query_field_mask_)) {
+      pos_iter.NextPosition();
+    }
+    if (pos_iter.IsValid()) {
+      uint32_t position = pos_iter.GetPosition();
+      if (position < min_position) {
+        min_position = position;
+        field = pos_iter.GetFieldMask();
+        found = true;
+      }
+    }
+  }
+  if (!found) {
     current_position_ = std::nullopt;
     current_field_mask_ = 0ULL;
     return false;
   }
-  uint32_t min_position = pos_heap_.top().first;
-  size_t idx = pos_heap_.top().second;
   current_position_ = PositionRange{min_position, min_position};
-  current_field_mask_ = pos_iterators_[idx].GetFieldMask();
+  current_field_mask_ = field;
   return true;
 }
 

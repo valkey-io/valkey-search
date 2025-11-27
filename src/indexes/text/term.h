@@ -41,8 +41,7 @@ class TermIterator : public TextIterator {
  public:
   TermIterator(std::vector<Postings::KeyIterator>&& key_iterators,
                const FieldMaskPredicate field_mask,
-               const InternedStringSet* untracked_keys = nullptr,
-               const bool require_positions = true);
+               const InternedStringSet* untracked_keys = nullptr);
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -68,7 +67,6 @@ class TermIterator : public TextIterator {
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
   const InternedStringSet* untracked_keys_;
-  bool require_positions_;
   
   // Heaps for efficient min-finding
   std::priority_queue<std::pair<Key, size_t>, std::vector<std::pair<Key, size_t>>, std::greater<>> key_heap_;

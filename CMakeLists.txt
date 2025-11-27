@@ -18,15 +18,21 @@ endif()
 option(BUILD_TESTS "Build valkey-search tests" ON)
 option(WITH_SUBMODULES_SYSTEM "Use system submodules" OFF)
 
-set(SAN_BUILD "" CACHE STRING "Sanitizer to enable: 'address' or 'thread'")
+set(SAN_BUILD
+    ""
+    CACHE STRING "Sanitizer to enable: 'address' or 'thread'")
+
+if(APPLE)
+  add_compile_options(-Wno-defaulted-function-deleted)
+endif()
 
 # Initialise submodules (gRPC, Protobuf, GTest & Abseil)
 add_subdirectory(submodules)
 
 if(SAN_BUILD STREQUAL "address" OR SAN_BUILD STREQUAL "thread")
-    message(STATUS "${SAN_BUILD} sanitizer is enabled")
+  message(STATUS "${SAN_BUILD} sanitizer is enabled")
 elseif(SAN_BUILD)
-    message(FATAL_ERROR "Supported sanitizers are 'address' or 'thread'")
+  message(FATAL_ERROR "Supported sanitizers are 'address' or 'thread'")
 endif()
 
 message(STATUS "GRPC_CPP_PLUGIN_PATH is set to ${GRPC_CPP_PLUGIN_PATH}")

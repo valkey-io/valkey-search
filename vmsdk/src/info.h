@@ -362,6 +362,8 @@ absl::Status ShowInfo(ValkeyModuleCtx* ctx, vmsdk::ArgsIterator& itr,
   static vmsdk::info_field::Integer name(  \
       #section, #name, vmsdk::info_field::IntegerBuilder().Dev())
 
+bool GetShowDeveloper();
+
 }  // namespace info_field
 }  // namespace vmsdk
 

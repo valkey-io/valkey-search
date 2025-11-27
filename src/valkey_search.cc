@@ -1018,10 +1018,12 @@ absl::StatusOr<int> GetValkeyLocalPort(ValkeyModuleCtx *ctx) {
 
 absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
   reader_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
-      "read-worker-", options::GetReaderThreadCount().GetValue());
+      "read-worker-", options::GetReaderThreadCount().GetValue(),
+      options::GetThreadPoolWaitTimeSamples().GetValue());
   reader_thread_pool_->StartWorkers();
   writer_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
-      "write-worker-", options::GetWriterThreadCount().GetValue());
+      "write-worker-", options::GetWriterThreadCount().GetValue(),
+      options::GetThreadPoolWaitTimeSamples().GetValue());
   writer_thread_pool_->StartWorkers();
 
   VMSDK_LOG(NOTICE, ctx) << "use_coordinator: "

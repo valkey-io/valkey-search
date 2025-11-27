@@ -218,6 +218,51 @@ static auto ft_info_rpc_timeout_ms =
         kMaximumFTInfoRpcTimeoutMs)  // max timeout (5 minutes)
         .Build();
 
+/// Register the "--local-fanout-queue-wait-threshold" flag. Controls the queue
+/// wait time threshold (in milliseconds) below which local node is preferred in
+/// fanout operations
+constexpr absl::string_view kLocalFanoutQueueWaitThresholdConfig{
+    "local-fanout-queue-wait-threshold"};
+constexpr uint32_t kDefaultLocalFanoutQueueWaitThreshold{
+    50};  // 50ms queue wait time
+constexpr uint32_t kMinimumLocalFanoutQueueWaitThreshold{
+    0};  // 0ms queue wait time
+constexpr uint32_t kMaximumLocalFanoutQueueWaitThreshold{
+    10000};  // 10 seconds queue wait time
+static auto local_fanout_queue_wait_threshold =
+    vmsdk::config::NumberBuilder(
+        kLocalFanoutQueueWaitThresholdConfig,   // name
+        kDefaultLocalFanoutQueueWaitThreshold,  // default threshold (50ms)
+        kMinimumLocalFanoutQueueWaitThreshold,  // min threshold (0ms)
+        kMaximumLocalFanoutQueueWaitThreshold)  // max threshold (10s)
+        .Build();
+
+/// Register the "--thread-pool-wait-time-samples" flag. Controls the size of
+/// the circular buffer for tracking queue wait times in thread pools
+constexpr absl::string_view kThreadPoolWaitTimeSamplesConfig{
+    "thread-pool-wait-time-samples"};
+constexpr uint32_t kDefaultThreadPoolWaitTimeSamples{100};  // 100 samples
+constexpr uint32_t kMinimumThreadPoolWaitTimeSamples{10};  // 10 samples minimum
+constexpr uint32_t kMaximumThreadPoolWaitTimeSamples{
+    10000};  // 10k samples maximum
+static auto thread_pool_wait_time_samples =
+    vmsdk::config::NumberBuilder(
+        kThreadPoolWaitTimeSamplesConfig,   // name
+        kDefaultThreadPoolWaitTimeSamples,  // default size (100)
+        kMinimumThreadPoolWaitTimeSamples,  // min size (10)
+        kMaximumThreadPoolWaitTimeSamples)  // max size (10k)
+        .WithModifyCallback([](uint32_t new_size) {
+          // Update thread pools when sample queue size changes
+          auto& instance = ValkeySearch::Instance();
+          if (auto reader_pool = instance.GetReaderThreadPool()) {
+            reader_pool->ResizeSampleQueue(new_size);
+          }
+          if (auto writer_pool = instance.GetWriterThreadPool()) {
+            writer_pool->ResizeSampleQueue(new_size);
+          }
+        })
+        .Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -272,6 +317,15 @@ vmsdk::config::Number& GetFTInfoTimeoutMs() {
 
 vmsdk::config::Number& GetFTInfoRpcTimeoutMs() {
   return dynamic_cast<vmsdk::config::Number&>(*ft_info_rpc_timeout_ms);
+}
+
+vmsdk::config::Number& GetLocalFanoutQueueWaitThreshold() {
+  return dynamic_cast<vmsdk::config::Number&>(
+      *local_fanout_queue_wait_threshold);
+}
+
+vmsdk::config::Number& GetThreadPoolWaitTimeSamples() {
+  return dynamic_cast<vmsdk::config::Number&>(*thread_pool_wait_time_samples);
 }
 
 }  // namespace options

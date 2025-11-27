@@ -8,6 +8,7 @@
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 
+#include <queue>
 #include <vector>
 
 #include "src/indexes/text/text_iterator.h"
@@ -66,7 +67,22 @@ class TermIterator : public TextIterator {
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
   const InternedStringSet* untracked_keys_;
+
+  // Heap for efficient min-finding
+  std::priority_queue<std::pair<Key, size_t>,
+                      std::vector<std::pair<Key, size_t>>, std::greater<>>
+      key_heap_;
+  std::priority_queue<std::pair<uint32_t, size_t>,
+                      std::vector<std::pair<uint32_t, size_t>>, std::greater<>>
+      pos_heap_;
+
+  // Track which iterators have current key/position
+  std::vector<size_t> current_key_indices_;
+  std::vector<size_t> current_pos_indices_;
+
   bool FindMinimumValidKey();
+  void InsertValidKeyIterator(size_t idx);
+  void InsertValidPositionIterator(size_t idx);
 };
 
 }  // namespace valkey_search::indexes::text

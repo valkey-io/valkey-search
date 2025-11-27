@@ -99,7 +99,7 @@ inline std::string indent_prefix(int depth, bool last) {
 void PrintPredicate(const query::Predicate* pred, int depth, bool last,
                     bool& valid) {
   if (!pred) {
-    VMSDK_LOG(WARNING, nullptr) << indent_prefix(depth, last) << "NULL\n";
+    VMSDK_LOG(DEBUG, nullptr) << indent_prefix(depth, last) << "NULL\n";
     return;
   }
   std::string prefix = indent_prefix(depth, last);
@@ -140,40 +140,35 @@ void PrintPredicate(const query::Predicate* pred, int depth, bool last,
     }
     case query::PredicateType::kNegate: {
       const auto* neg = dynamic_cast<const query::NegatePredicate*>(pred);
-      VMSDK_LOG(WARNING, nullptr) << prefix << "NOT\n";
+      VMSDK_LOG(DEBUG, nullptr) << prefix << "NOT\n";
       PrintPredicate(neg->GetPredicate(), depth + 1, true, valid);
       break;
     }
     case query::PredicateType::kText: {
       if (auto prox = dynamic_cast<const query::ProximityPredicate*>(pred)) {
-        VMSDK_LOG(WARNING, nullptr)
-            << prefix << "PROXIMITY(slop=" << prox->Slop()
-            << ", inorder=" << prox->InOrder() << ")\n";
+        VMSDK_LOG(DEBUG, nullptr) << prefix << "PROXIMITY(slop=" << prox->Slop()
+                                  << ", inorder=" << prox->InOrder() << ")\n";
         const auto& terms = prox->Terms();
         for (size_t i = 0; i < terms.size(); ++i)
           PrintPredicate(terms[i].get(), depth + 1, i == terms.size() - 1,
                          valid);
       } else if (auto term = dynamic_cast<const query::TermPredicate*>(pred)) {
-        VMSDK_LOG(WARNING, nullptr)
-            << prefix << "TERM(" << term->GetTextString() << ")_"
-            << term->GetFieldMask() << "\n";
+        VMSDK_LOG(DEBUG, nullptr) << prefix << "TERM(" << term->GetTextString()
+                                  << ")_" << term->GetFieldMask() << "\n";
       } else if (auto pre = dynamic_cast<const query::PrefixPredicate*>(pred)) {
-        VMSDK_LOG(WARNING, nullptr)
-            << prefix << "PREFIX(" << pre->GetTextString() << ")_"
-            << pre->GetFieldMask() << "\n";
+        VMSDK_LOG(DEBUG, nullptr) << prefix << "PREFIX(" << pre->GetTextString()
+                                  << ")_" << pre->GetFieldMask() << "\n";
       } else if (auto pre = dynamic_cast<const query::SuffixPredicate*>(pred)) {
-        VMSDK_LOG(WARNING, nullptr)
-            << prefix << "Suffix(" << pre->GetTextString() << ")_"
-            << pre->GetFieldMask() << "\n";
+        VMSDK_LOG(DEBUG, nullptr) << prefix << "Suffix(" << pre->GetTextString()
+                                  << ")_" << pre->GetFieldMask() << "\n";
       } else if (auto pre = dynamic_cast<const query::InfixPredicate*>(pred)) {
         valid = false;
-        VMSDK_LOG(WARNING, nullptr)
-            << prefix << "Infix(" << pre->GetTextString() << ")_"
-            << pre->GetFieldMask() << "\n";
+        VMSDK_LOG(DEBUG, nullptr) << prefix << "Infix(" << pre->GetTextString()
+                                  << ")_" << pre->GetFieldMask() << "\n";
       } else if (auto fuzzy =
                      dynamic_cast<const query::FuzzyPredicate*>(pred)) {
         valid = false;
-        VMSDK_LOG(WARNING, nullptr)
+        VMSDK_LOG(DEBUG, nullptr)
             << prefix << "FUZZY(" << fuzzy->GetTextString()
             << ", distance=" << fuzzy->GetDistance() << ")_"
             << fuzzy->GetFieldMask() << "\n";
@@ -185,7 +180,7 @@ void PrintPredicate(const query::Predicate* pred, int depth, bool last,
     }
     case query::PredicateType::kNumeric: {
       const auto* np = dynamic_cast<const query::NumericPredicate*>(pred);
-      VMSDK_LOG(WARNING, nullptr)
+      VMSDK_LOG(DEBUG, nullptr)
           << prefix << "NUMERIC(" << np->GetStart()
           << (np->IsStartInclusive() ? "≤" : "<") << " .. " << np->GetEnd()
           << (np->IsEndInclusive() ? "≤" : "<") << ")_" << np->GetIdentifier()
@@ -194,8 +189,8 @@ void PrintPredicate(const query::Predicate* pred, int depth, bool last,
     }
     case query::PredicateType::kTag: {
       const auto* tp = dynamic_cast<const query::TagPredicate*>(pred);
-      VMSDK_LOG(WARNING, nullptr) << prefix << "TAG(" << tp->GetTagString()
-                                  << ")_" << tp->GetIdentifier() << "\n";
+      VMSDK_LOG(DEBUG, nullptr) << prefix << "TAG(" << tp->GetTagString()
+                                << ")_" << tp->GetIdentifier() << "\n";
       break;
     }
     default:
@@ -423,7 +418,7 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   results.root_predicate = std::move(predicate);
   results.filter_identifiers.swap(filter_identifiers_);
   // Log the built query syntax tree.
-  VMSDK_LOG(WARNING, nullptr) << "Parsed QuerySyntaxTree:";
+  VMSDK_LOG(DEBUG, nullptr) << "Parsed QuerySyntaxTree:";
   bool valid = true;
   PrintPredicate(results.root_predicate.get(), 0, true, valid);
   // Temporary validation until we support all the new predicates

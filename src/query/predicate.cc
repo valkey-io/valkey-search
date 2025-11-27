@@ -189,6 +189,7 @@ EvaluationResult InfixPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const InternedStringPtr& target_key, bool require_positions) const {
   // TODO: Implement infix evaluation
+  CHECK(false) << "Infix Search - Not implemented";
   return EvaluationResult(false);
 }
 
@@ -209,6 +210,7 @@ EvaluationResult FuzzyPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const InternedStringPtr& target_key, bool require_positions) const {
   // TODO: Implement fuzzy evaluation
+  CHECK(false) << "Fuzzy Search - Not implemented";
   return EvaluationResult(false);
 }
 
@@ -228,6 +230,7 @@ EvaluationResult ProximityPredicate::Evaluate(Evaluator& evaluator) const {
 EvaluationResult ProximityPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const InternedStringPtr& target_key, bool require_positions) const {
+  CHECK(false) << "Proximity Predicate - To be deleted";
   return EvaluationResult(false);
 }
 

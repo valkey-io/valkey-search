@@ -9,6 +9,7 @@
 #define _VALKEY_SEARCH_INDEXES_TEXT_TERM_H_
 
 #include <vector>
+#include <queue>
 
 #include "src/indexes/text/text_iterator.h"
 
@@ -40,7 +41,8 @@ class TermIterator : public TextIterator {
  public:
   TermIterator(std::vector<Postings::KeyIterator>&& key_iterators,
                const FieldMaskPredicate field_mask,
-               const InternedStringSet* untracked_keys = nullptr);
+               const InternedStringSet* untracked_keys = nullptr,
+               const bool require_positions = true);
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -66,6 +68,15 @@ class TermIterator : public TextIterator {
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
   const InternedStringSet* untracked_keys_;
+  bool require_positions_;
+  
+  // Heaps for efficient min-finding
+  std::priority_queue<std::pair<Key, size_t>, std::vector<std::pair<Key, size_t>>, std::greater<>> key_heap_;
+  std::priority_queue<std::pair<uint32_t, size_t>, std::vector<std::pair<uint32_t, size_t>>, std::greater<>> pos_heap_;
+  
+  // Track which iterators have current key
+  std::vector<size_t> current_key_indices_;
+  
   bool FindMinimumValidKey();
 };
 

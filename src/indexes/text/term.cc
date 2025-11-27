@@ -11,12 +11,14 @@ namespace valkey_search::indexes::text {
 
 TermIterator::TermIterator(std::vector<Postings::KeyIterator>&& key_iterators,
                            const FieldMaskPredicate query_field_mask,
-                           const InternedStringSet* untracked_keys)
+                           const InternedStringSet* untracked_keys,
+                           const bool require_positions)
     : query_field_mask_(query_field_mask),
       key_iterators_(std::move(key_iterators)),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
-      untracked_keys_(untracked_keys) {
+      untracked_keys_(untracked_keys),
+      require_positions_(require_positions) {
   // Prime the first key and position if they exist.
   if (!key_iterators_.empty()) {
     TermIterator::NextKey();
@@ -40,23 +42,34 @@ const InternedStringPtr& TermIterator::CurrentKey() const {
 }
 
 bool TermIterator::FindMinimumValidKey() {
-  current_key_ = nullptr;
-  current_position_ = std::nullopt;
-  current_field_mask_ = 0ULL;
-  for (auto& key_iter : key_iterators_) {
-    while (key_iter.IsValid() && !key_iter.ContainsFields(query_field_mask_)) {
-      key_iter.NextKey();
-    }
-    if (key_iter.IsValid()) {
-      const auto& key = key_iter.GetKey();
-      if (!current_key_ || key < current_key_) {
-        pos_iterators_.clear();
-        pos_iterators_.emplace_back(key_iter.GetPositionIterator());
-        current_key_ = key;
-      } else if (key == current_key_) {
-        pos_iterators_.emplace_back(key_iter.GetPositionIterator());
+  // Build heap only if empty or invalid
+  if (key_heap_.empty()) {
+    for (size_t i = 0; i < key_iterators_.size(); ++i) {
+      auto& key_iter = key_iterators_[i];
+      while (key_iter.IsValid() && !key_iter.ContainsFields(query_field_mask_)) {
+        key_iter.NextKey();
+      }
+      if (key_iter.IsValid()) {
+        key_heap_.emplace(key_iter.GetKey(), i);
       }
     }
+  }
+  if (key_heap_.empty()) {
+    current_key_ = nullptr;
+    current_position_ = std::nullopt;
+    current_field_mask_ = 0ULL;
+    return false;
+  }
+  // Get minimum key
+  current_key_ = key_heap_.top().first;
+  pos_iterators_.clear();
+  // Collect all iterators with minimum key
+  current_key_indices_.clear();
+  while (!key_heap_.empty() && key_heap_.top().first == current_key_) {
+    size_t idx = key_heap_.top().second;
+    current_key_indices_.push_back(idx);
+    pos_iterators_.emplace_back(key_iterators_[idx].GetPositionIterator());
+    key_heap_.pop();
   }
   if (!current_key_) {
     return false;
@@ -69,10 +82,8 @@ bool TermIterator::FindMinimumValidKey() {
 
 bool TermIterator::NextKey() {
   if (current_key_) {
-    for (auto& key_iter : key_iterators_) {
-      if (key_iter.IsValid() && key_iter.GetKey() == current_key_) {
-        key_iter.NextKey();
-      }
+    for (size_t idx : current_key_indices_) {
+      key_iterators_[idx].NextKey();
     }
   }
   return FindMinimumValidKey();

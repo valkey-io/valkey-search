@@ -44,7 +44,8 @@ bool TermIterator::FindMinimumValidKey() {
   if (key_heap_.empty()) {
     for (size_t i = 0; i < key_iterators_.size(); ++i) {
       auto& key_iter = key_iterators_[i];
-      while (key_iter.IsValid() && !key_iter.ContainsFields(query_field_mask_)) {
+      while (key_iter.IsValid() &&
+             !key_iter.ContainsFields(query_field_mask_)) {
         key_iter.NextKey();
       }
       if (key_iter.IsValid()) {
@@ -117,7 +118,8 @@ bool TermIterator::NextPosition() {
   if (pos_heap_.empty()) {
     for (size_t i = 0; i < pos_iterators_.size(); ++i) {
       auto& pos_iter = pos_iterators_[i];
-      while (pos_iter.IsValid() && !(pos_iter.GetFieldMask() & query_field_mask_)) {
+      while (pos_iter.IsValid() &&
+             !(pos_iter.GetFieldMask() & query_field_mask_)) {
         pos_iter.NextPosition();
       }
       if (pos_iter.IsValid()) {
@@ -135,7 +137,8 @@ bool TermIterator::NextPosition() {
     for (size_t idx : to_update) {
       auto& pos_iter = pos_iterators_[idx];
       pos_iter.NextPosition();
-      while (pos_iter.IsValid() && !(pos_iter.GetFieldMask() & query_field_mask_)) {
+      while (pos_iter.IsValid() &&
+             !(pos_iter.GetFieldMask() & query_field_mask_)) {
         pos_iter.NextPosition();
       }
       if (pos_iter.IsValid()) {

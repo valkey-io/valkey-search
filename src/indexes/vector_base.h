@@ -268,7 +268,7 @@ class PrefilterEvaluator : public query::Evaluator {
   query::EvaluationResult EvaluateNumeric(
       const query::NumericPredicate& predicate) override;
   query::EvaluationResult EvaluateText(
-      const query::TextPredicate& predicate) override;
+      const query::TextPredicate& predicate, bool require_positions) override;
   const InternedStringPtr* key_{nullptr};
 };
 

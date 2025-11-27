@@ -506,7 +506,6 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     const std::optional<std::string>& field_or_default) {
   const auto& lexer = text_index_schema->GetLexer();
-  bool with_suffix = false;
   std::string processed_content;
   while (!IsEnd()) {
     VMSDK_ASSIGN_OR_RETURN(bool should_continue,
@@ -528,7 +527,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
   FieldMaskPredicate field_mask;
   std::optional<uint32_t> min_stem_size = std::nullopt;
   VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(
-      field_mask, min_stem_size, field_or_default, with_suffix));
+      field_mask, min_stem_size, field_or_default));
   return FilterParser::TokenResult{
       std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
                                              std::move(token), true),

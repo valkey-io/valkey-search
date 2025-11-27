@@ -92,10 +92,6 @@ class FilterParser {
   absl::StatusOr<absl::flat_hash_set<absl::string_view>> ParseTags(
       absl::string_view tag_string, indexes::Tag* tag_index) const;
 
-  //   std::unique_ptr<query::Predicate> WrapPredicate(
-  //       std::unique_ptr<query::Predicate> prev_predicate,
-  //       std::unique_ptr<query::Predicate> predicate, bool& negate,
-  //       query::LogicalOperator logical_operator);
   absl::StatusOr<std::unique_ptr<query::Predicate>> WrapPredicate(
       std::unique_ptr<query::Predicate> prev_predicate,
       std::unique_ptr<query::Predicate> predicate, bool& negate,

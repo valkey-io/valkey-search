@@ -825,18 +825,36 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         Test FT.CREATE NOOFFSETS option disables offsets storage
         """
         client: Valkey = self.server.get_new_client()
-        client.execute_command("FT.CREATE idx ON HASH NOOFFSETS SCHEMA content TEXT")
-        client.execute_command("HSET", "doc:1", "content", "term1 term2 term3 term4 term5 term6 term7 term8 term9 term10")
+        client.execute_command("FT.CREATE idx ON HASH NOOFFSETS SCHEMA content1 TEXT content2 TEXT")
+        client.execute_command("HSET", "doc:1", "content1", "term1 term2 term3 term4 term5 term6 term7 term8 term9 term10", "content2", "term11 term12 term14 term15")
+        client.execute_command("HSET", "doc:2", "content2", "term1 term2 term3 term4 term5 term6 term7 term8 term9 term10", "content1", "term11 term12 term14 term15")
         # Wait for index backfill to complete
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
-        # Non Exact Phrase Text Searches should still work no offsets
-        result = client.execute_command("FT.SEARCH", "idx", '@content:term1 term2 term3 term4 term5 term6 term7 term8 term9 term10')
+        # Non Exact Phrase Text Searches should still work no offsets.
+        # We should still be able to distinguish between which field within a document exists in, even with with NOOFFSETS.
+        result = client.execute_command("FT.SEARCH", "idx", '@content1:term1 term2 term3 term4 term5 term6 term7 term8 term9 term10')
         assert (result[0], result[1]) == (1, b"doc:1")
+        result = client.execute_command("FT.SEARCH", "idx", '@content2:term11 term12 term14 term15')
+        assert (result[0], result[1]) == (1, b"doc:1")
+        result = client.execute_command("FT.SEARCH", "idx", '@content2:term1 term2 term3 term4 term5 term6 term7 term8 term9 term10')
+        assert (result[0], result[1]) == (1, b"doc:2")
+        result = client.execute_command("FT.SEARCH", "idx", '@content1:term11 term12 term14 term15')
+        assert (result[0], result[1]) == (1, b"doc:2")
+        result = client.execute_command("FT.SEARCH", "idx", '@content1:term1')
+        assert (result[0], result[1]) == (1, b"doc:1")
+        result = client.execute_command("FT.SEARCH", "idx", '@content2:term11')
+        assert (result[0], result[1]) == (1, b"doc:1")
+        result = client.execute_command("FT.SEARCH", "idx", '@content2:term1')
+        assert (result[0], result[1]) == (1, b"doc:2")
+        result = client.execute_command("FT.SEARCH", "idx", '@content1:term11')
+        assert (result[0], result[1]) == (1, b"doc:2")
         result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4 term5 term6 term7 term8 term9 term10')
-        assert (result[0], result[1]) == (1, b"doc:1")
+        assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:2"})
+        result = client.execute_command("FT.SEARCH", "idx", 'term11 term12 term14 term15')
+        assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:2"})
         # Exact Phrase Text Searches should fail without offsets
         with pytest.raises(ResponseError) as err:
-            client.execute_command("FT.SEARCH", "idx", '@content:"term1 term2 term3 term4 term5 term6 term7 term8 term9 term10"')
+            client.execute_command("FT.SEARCH", "idx", '@content1:"term1 term2 term3 term4 term5 term6 term7 term8 term9 term10"')
         assert "Index does not support offsets" in str(err.value)
         # Text searches with INORDER / SLOP should fail without offsets
         with pytest.raises(ResponseError) as err:

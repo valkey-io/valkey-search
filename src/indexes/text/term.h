@@ -82,6 +82,7 @@ class TermIterator : public TextIterator {
 
   bool FindMinimumValidKey();
   void InsertValidKeyIterator(size_t idx);
+  void InsertValidPositionIterator(size_t idx);
 };
 
 }  // namespace valkey_search::indexes::text

@@ -31,6 +31,9 @@ absl::Status PerformSearchFanoutAsync(
     std::unique_ptr<query::SearchParameters> parameters,
     vmsdk::ThreadPool* thread_pool, query::SearchResponseCallback callback);
 
+// Utility function to check if system is under low utilization
+bool IsSystemUnderLowUtilization();
+
 }  // namespace valkey_search::query::fanout
 
 #endif  // VALKEYSEARCH_SRC_QUERY_FANOUT_H_

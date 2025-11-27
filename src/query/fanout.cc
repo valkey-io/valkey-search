@@ -35,6 +35,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/query/search.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search.h"
 #include "valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -248,6 +249,30 @@ absl::Status PerformSearchFanoutAsync(
         << "Failed to handle FT.SEARCH locally during fan-out";
   }
   return absl::OkStatus();
+}
+
+bool IsSystemUnderLowUtilization() {
+  // Get the configured threshold (queue wait time in milliseconds)
+  double threshold = static_cast<double>(
+      valkey_search::options::GetLocalFanoutQueueWaitThreshold().GetValue());
+
+  auto &valkey_search_instance = ValkeySearch::Instance();
+  auto reader_pool = valkey_search_instance.GetReaderThreadPool();
+
+  if (!reader_pool) {
+    return false;
+  }
+
+  // Get recent queue wait time (not global average)
+  auto queue_wait_result = reader_pool->GetRecentQueueWaitTime();
+  if (!queue_wait_result.ok()) {
+    // If we can't get queue wait time, assume high utilization for safety
+    return false;
+  }
+
+  double queue_wait_time = queue_wait_result.value();
+  // System is under low utilization if queue wait time is below threshold
+  return queue_wait_time < threshold;
 }
 
 }  // namespace valkey_search::query::fanout

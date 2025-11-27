@@ -24,7 +24,7 @@ class DropConsistencyCheckFanoutOperation
     : public query::fanout::FanoutOperationBase<
           coordinator::InfoIndexPartitionRequest,
           coordinator::InfoIndexPartitionResponse,
-          query::fanout::FanoutTargetMode::kAll> {
+          vmsdk::cluster_map::FanoutTargetMode::kAll> {
  public:
   DropConsistencyCheckFanoutOperation(uint32_t db_num,
                                       const std::string& index_name,
@@ -32,24 +32,29 @@ class DropConsistencyCheckFanoutOperation
       : query::fanout::FanoutOperationBase<
             coordinator::InfoIndexPartitionRequest,
             coordinator::InfoIndexPartitionResponse,
-            query::fanout::FanoutTargetMode::kAll>(),
+            vmsdk::cluster_map::FanoutTargetMode::kAll>(),
         db_num_(db_num),
         index_name_(index_name),
         timeout_ms_(timeout_ms){};
 
+  std::vector<vmsdk::cluster_map::NodeInfo> GetTargets() const {
+    return ValkeySearch::Instance().GetClusterMap()->GetTargets(
+        vmsdk::cluster_map::FanoutTargetMode::kAll);
+  }
+
   unsigned GetTimeoutMs() const override { return timeout_ms_; }
 
   coordinator::InfoIndexPartitionRequest GenerateRequest(
-      const query::fanout::FanoutSearchTarget&) override {
+      const vmsdk::cluster_map::NodeInfo&) override {
     coordinator::InfoIndexPartitionRequest req;
     req.set_db_num(db_num_);
     req.set_index_name(index_name_);
     return req;
   }
 
-  void OnResponse(const coordinator::InfoIndexPartitionResponse& resp,
-                  [[maybe_unused]] const query::fanout::FanoutSearchTarget&
-                      target) override {
+  void OnResponse(
+      const coordinator::InfoIndexPartitionResponse& resp,
+      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo& target) override {
     // if the index exist on some node and returns a valid response, treat it as
     // inconsistent error
     absl::MutexLock lock(&mutex_);
@@ -59,7 +64,7 @@ class DropConsistencyCheckFanoutOperation
   std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
   GetLocalResponse(
       const coordinator::InfoIndexPartitionRequest& request,
-      [[maybe_unused]] const query::fanout::FanoutSearchTarget&) override {
+      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo&) override {
     return coordinator::Service::GenerateInfoResponse(request);
   }
 
@@ -118,14 +123,23 @@ absl::Status FTDropIndexCmd(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,
 
   // directly handle reply in standalone mode
   // let fanout operation handle reply in cluster mode
+  const bool is_loading =
+      ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING;
+  const bool inside_multi_exec = vmsdk::MultiOrLua(ctx);
   if (ValkeySearch::Instance().IsCluster() &&
-      ValkeySearch::Instance().UsingCoordinator()) {
+      ValkeySearch::Instance().UsingCoordinator() && !is_loading &&
+      !inside_multi_exec) {
     unsigned timeout_ms = options::GetFTInfoTimeoutMs().GetValue();
     auto op = new DropConsistencyCheckFanoutOperation(
         ValkeyModule_GetSelectedDb(ctx), std::string(index_schema_name),
         timeout_ms);
     op->StartOperation(ctx);
   } else {
+    if (is_loading || inside_multi_exec) {
+      VMSDK_LOG(NOTICE, nullptr) << "The server is loading AOF or inside "
+                                    "multi/exec or lua script, skip "
+                                    "fanout operation";
+    }
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");
   }
   ValkeyModule_ReplicateVerbatim(ctx);

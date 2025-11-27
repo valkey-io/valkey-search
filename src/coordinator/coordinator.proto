@@ -83,6 +83,8 @@ message ProximityPredicate {
 
 message AndPredicate {
   repeated Predicate children = 1;
+  optional uint32 slop = 2;
+  bool inorder = 3;
 }
 
 message OrPredicate {

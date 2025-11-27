@@ -99,7 +99,13 @@ std::string PrintPredicateTree(const query::Predicate* predicate, int indent) {
     case query::PredicateType::kComposedAnd: {
       const auto* composed =
           static_cast<const query::ComposedPredicate*>(predicate);
-      result += indent_str + "AND{\n";
+      if (composed->GetInorder() == false && composed->GetSlop() == NULL) {
+        result += indent_str + "AND{\n";
+      } else {
+        result +=
+            indent_str + "AND(slop=" + std::to_string(composed->GetSlop()) +
+            ", inorder=" + (composed->GetInorder() ? "true" : "false") + "){\n";
+      }
       for (const auto& child : composed->GetChildren()) {
         result += PrintPredicateTree(child.get(), indent + 1);
       }
@@ -274,7 +280,6 @@ FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
         "`", attribute_alias, "` is not indexed as a numeric field"));
   }
   auto identifier = index_schema_.GetIdentifier(attribute_alias).value();
-
   filter_identifiers_.insert(identifier);
   bool is_inclusive_start = true;
   if (Match('(')) {
@@ -423,7 +428,7 @@ inline std::unique_ptr<query::Predicate> MayNegatePredicate(
   return predicate;
 }
 
-std::unique_ptr<query::Predicate> WrapPredicate(
+std::unique_ptr<query::Predicate> FilterParser::WrapPredicate(
     std::unique_ptr<query::Predicate> prev_predicate,
     std::unique_ptr<query::Predicate> predicate, bool& negate,
     query::LogicalOperator logical_operator, bool prev_grp, bool first_joined) {
@@ -448,11 +453,9 @@ std::unique_ptr<query::Predicate> WrapPredicate(
   // Flatten OR nodes when first_joined is true at the same bracket level
   if (logical_operator == query::LogicalOperator::kOr && first_joined) {
     std::vector<std::unique_ptr<query::Predicate>> new_children;
-
     if (prev_predicate) {
       new_children.push_back(std::move(prev_predicate));
     }
-
     if (new_predicate->GetType() == query::PredicateType::kComposedOr) {
       auto* new_composed =
           dynamic_cast<query::ComposedPredicate*>(new_predicate.get());
@@ -463,19 +466,18 @@ std::unique_ptr<query::Predicate> WrapPredicate(
     } else {
       new_children.push_back(std::move(new_predicate));
     }
-
-    return std::make_unique<query::ComposedPredicate>(logical_operator,
-                                                      std::move(new_children));
+    return std::make_unique<query::ComposedPredicate>(
+        logical_operator, std::move(new_children), options_.slop,
+        options_.inorder);
   }
-
   // Create new ComposedPredicate only when operators differ or first
   // composition
   std::vector<std::unique_ptr<query::Predicate>> children;
   children.push_back(std::move(prev_predicate));
   children.push_back(std::move(new_predicate));
 
-  return std::make_unique<query::ComposedPredicate>(logical_operator,
-                                                    std::move(children));
+  return std::make_unique<query::ComposedPredicate>(
+      logical_operator, std::move(children), options_.slop, options_.inorder);
 };
 
 static const uint32_t FUZZY_MAX_DISTANCE = 3;
@@ -764,10 +766,9 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
                                      min_stem_size));
     if (result.predicate) {
       terms.push_back(std::move(result.predicate));
-      // TODO: Uncomment this once we have ComposedAND evaluation functional for
-      // handling proximity checks. Until the, we handle unquoted text tokens
-      // by building a proximity predicate containing them.
-      // if (!exact_phrase) break;
+      // For unquoted text, stop after first token. For exact phrases, continue
+      // parsing all tokens.
+      if (!exact_phrase) break;
     }
     if (result.break_on_query_syntax) {
       break;
@@ -780,17 +781,18 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
   }
   std::unique_ptr<query::Predicate> pred;
   if (terms.size() > 1) {
-    uint32_t slop = options_.slop.value_or(0);
-    bool inorder = options_.inorder;
-    if (exact_phrase) {
-      slop = 0;
-      inorder = true;
+    // Exact phrase requires adjacent terms in order: slop=0, inorder=true
+    uint32_t slop = 0;
+    bool inorder = true;
+    pred = std::move(terms.front());  // Start with first term
+    for (size_t i = 1; i < terms.size(); ++i) {
+      pred = std::make_unique<query::ComposedPredicate>(
+          std::move(pred),      // lhs: accumulated tree so far
+          std::move(terms[i]),  // rhs: next term
+          query::LogicalOperator::kAnd,
+          /*slop=*/slop,
+          /*inorder=*/inorder);
     }
-    // TODO: Swap ProximityPredicate with ComposedANDPredicate once it is
-    // flattened. Once that happens, we need to add slop and inorder properties
-    // to ComposedANDPredicate.
-    pred = std::make_unique<query::ProximityPredicate>(std::move(terms), slop,
-                                                       inorder);
     node_count_ += terms.size();
   } else {
     if (terms.empty()) {
@@ -858,9 +860,6 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       if (negate) {
         return UnexpectedChar(expression_, pos_ - 1);
       }
-
-      // OR at the same level should not increase depth - pass level-1 so after
-      // the increment in ParseExpression it returns to the same level
       VMSDK_ASSIGN_OR_RETURN(auto sub_result, ParseExpression(level));
       predicate = std::move(sub_result.prev_predicate);
       if (result.prev_predicate) {

@@ -255,10 +255,20 @@ class PrefilterEvaluator : public query::Evaluator {
   bool Evaluate(const query::Predicate& predicate,
                 const InternedStringPtr& key);
 
+  // TODO: Implement this in prefilter implementation. For now just return
+  // nullpt.
+  const std::shared_ptr<InternedString>& GetTargetKey() const override {
+    static const std::shared_ptr<InternedString> null_key = nullptr;
+    return null_key;
+  }
+
  private:
-  bool EvaluateTags(const query::TagPredicate& predicate) override;
-  bool EvaluateNumeric(const query::NumericPredicate& predicate) override;
-  bool EvaluateText(const query::TextPredicate& predicate) override;
+  query::EvaluationResult EvaluateTags(
+      const query::TagPredicate& predicate) override;
+  query::EvaluationResult EvaluateNumeric(
+      const query::NumericPredicate& predicate) override;
+  query::EvaluationResult EvaluateText(
+      const query::TextPredicate& predicate) override;
   const InternedStringPtr* key_{nullptr};
 };
 

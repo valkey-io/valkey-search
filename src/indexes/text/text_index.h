@@ -49,7 +49,7 @@ struct TextIndexMetadata {
   MemoryPool text_index_memory_pool_{0};
 };
 
-struct TextIndex {
+class TextIndex {
   //
   // The main query data structure maps Words into Postings objects. This
   // is always done with a prefix tree. Optionally, a suffix tree can also be
@@ -61,8 +61,20 @@ struct TextIndex {
   // becomes responsible for cross-tree locking issues. Multiple locking
   // strategies are possible. TBD (a shared-ed word lock table should work well)
   //
-  RadixTree<std::shared_ptr<Postings>, false> prefix_;
-  std::optional<RadixTree<std::shared_ptr<Postings>, true>> suffix_;
+
+ public:
+  explicit TextIndex(bool suffix);
+  RadixTree<std::shared_ptr<Postings>>& GetPrefix();
+  const RadixTree<std::shared_ptr<Postings>>& GetPrefix() const;
+  std::optional<std::reference_wrapper<RadixTree<std::shared_ptr<Postings>>>>
+  GetSuffix();
+  std::optional<
+      std::reference_wrapper<const RadixTree<std::shared_ptr<Postings>>>>
+  GetSuffix() const;
+
+ private:
+  RadixTree<std::shared_ptr<Postings>> prefix_tree_;
+  std::unique_ptr<RadixTree<std::shared_ptr<Postings>>> suffix_tree_;
 };
 
 class TextIndexSchema {
@@ -87,6 +99,12 @@ class TextIndexSchema {
   // Access to metadata for memory pool usage
   TextIndexMetadata& GetMetadata() { return metadata_; }
 
+  // Enable suffix trie.
+  void EnableSuffix() {
+    with_suffix_trie_ = true;
+    text_index_ = std::make_shared<TextIndex>(true);
+  }
+
  private:
   uint8_t num_text_fields_ = 0;
 
@@ -96,7 +114,7 @@ class TextIndexSchema {
   //
   // This is the main index of all Text fields in this index schema
   //
-  std::shared_ptr<TextIndex> text_index_ = std::make_shared<TextIndex>();
+  std::shared_ptr<TextIndex> text_index_ = std::make_shared<TextIndex>(false);
 
   // Prevent concurrent mutations to schema-level text index
   // TODO: develop a finer-grained TextIndex locking scheme
@@ -128,6 +146,9 @@ class TextIndexSchema {
   // Whether to store position offsets for phrase queries
   bool with_offsets_ = false;
 
+  // True if any text attributes of the schema have suffix search enabled.
+  bool with_suffix_trie_ = false;
+
  public:
   // FT.INFO memory stats for text index
   uint64_t GetTotalPositions() const;
@@ -137,6 +158,15 @@ class TextIndexSchema {
   uint64_t GetRadixTreeMemoryUsage() const;
   uint64_t GetPositionMemoryUsage() const;
   uint64_t GetTotalTextIndexMemoryUsage() const;
+
+  // Thread-safe accessor for per-key text indexes. Executes the provided
+  // function while holding the mutex lock, ensuring safe concurrent access.
+  template <typename Func>
+  auto WithPerKeyTextIndexes(Func&& func)
+      -> decltype(func(per_key_text_indexes_)) {
+    std::lock_guard<std::mutex> guard(per_key_text_indexes_mutex_);
+    return func(per_key_text_indexes_);
+  }
 };
 
 }  // namespace valkey_search::indexes::text

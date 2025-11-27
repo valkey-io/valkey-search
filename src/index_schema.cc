@@ -267,40 +267,83 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexSchema::GetIndex(
   return itr->second.GetIndex();
 }
 
+// Helper function called on Text index creation to precompute various text
+// schema level information that will be used for default field searches where
+// there is no field specifier.
+void IndexSchema::UpdateTextFieldMasksForIndex(const std::string &identifier,
+                                               indexes::IndexBase *index) {
+  if (index->GetIndexerType() == indexes::IndexerType::kText) {
+    auto *text_index = dynamic_cast<const indexes::Text *>(index);
+    uint64_t field_bit = 1ULL << text_index->GetTextFieldNumber();
+    // Update field masks and identifiers
+    all_text_field_mask_ |= field_bit;
+    all_text_identifiers_.insert(identifier);
+    if (text_index->WithSuffixTrie()) {
+      suffix_text_field_mask_ |= field_bit;
+      suffix_text_identifiers_.insert(identifier);
+    }
+    // Update min stem sizes
+    if (text_index->IsStemmingEnabled()) {
+      uint32_t stem_size = text_index->GetMinStemSize();
+      all_fields_min_stem_size_ =
+          all_fields_min_stem_size_.has_value()
+              ? std::min(*all_fields_min_stem_size_, stem_size)
+              : stem_size;
+      if (text_index->WithSuffixTrie()) {
+        suffix_fields_min_stem_size_ =
+            suffix_fields_min_stem_size_.has_value()
+                ? std::min(*suffix_fields_min_stem_size_, stem_size)
+                : stem_size;
+      }
+    }
+  }
+}
+
 // Returns a vector of all the text (field) identifiers within the text
 // index schema. This is intended to be used by queries where there
 // is no field specification, and we want to include results from all
 // text fields.
-std::vector<std::string> IndexSchema::GetAllTextIdentifiers() const {
-  std::vector<std::string> identifiers;
-  for (const auto &[alias, attribute] : attributes_) {
-    auto index = attribute.GetIndex();
-    if (index->GetIndexerType() == indexes::IndexerType::kText) {
-      identifiers.push_back(attribute.GetIdentifier());
-    }
-  }
-  return identifiers;
+// If `with_suffix` is true, we only include the fields that have suffix tree
+// enabled.
+const absl::flat_hash_set<std::string> &IndexSchema::GetAllTextIdentifiers(
+    bool with_suffix) const {
+  return with_suffix ? suffix_text_identifiers_ : all_text_identifiers_;
 }
 
 // Find the min stem size across all text fields in the text index schema.
 // If stemming is disabled across all text field indexes, return `nullopt`.
-std::optional<uint32_t> IndexSchema::MinStemSizeAcrossTextIndexes() const {
-  uint32_t min_stem_size = kDefaultMinStemSize;
-  bool is_stemming_enabled = false;
-  for (const auto &[alias, attribute] : attributes_) {
-    auto index = attribute.GetIndex();
-    if (index->GetIndexerType() == indexes::IndexerType::kText) {
-      auto *text_index = dynamic_cast<const indexes::Text *>(index.get());
-      min_stem_size = std::min(min_stem_size, text_index->GetMinStemSize());
-      if (text_index->IsStemmingEnabled()) {
-        is_stemming_enabled = true;
+// If `with_suffix` is true, we only check the fields that have suffix tree
+// enabled.
+std::optional<uint32_t> IndexSchema::MinStemSizeAcrossTextIndexes(
+    bool with_suffix) const {
+  return with_suffix ? suffix_fields_min_stem_size_ : all_fields_min_stem_size_;
+}
+
+// Returns the field mask including all the text fields.
+// If `with_suffix` is true, we only include fields that have suffix tree
+// enabled.
+FieldMaskPredicate IndexSchema::GetAllTextFieldMask(bool with_suffix) const {
+  return with_suffix ? suffix_text_field_mask_ : all_text_field_mask_;
+}
+
+// Helper function to return the text identifiers based on the
+// FieldMaskPredicate.
+absl::flat_hash_set<std::string> IndexSchema::GetTextIdentifiersByFieldMask(
+    FieldMaskPredicate field_mask) const {
+  absl::flat_hash_set<std::string> matches;
+  for (const auto &identifier : all_text_identifiers_) {
+    auto index_result = GetIndex(identifier);
+    if (index_result.ok() &&
+        index_result.value()->GetIndexerType() == indexes::IndexerType::kText) {
+      auto *text_index =
+          dynamic_cast<const indexes::Text *>(index_result.value().get());
+      FieldMaskPredicate field_bit = 1ULL << text_index->GetTextFieldNumber();
+      if (field_mask & field_bit) {
+        matches.insert(identifier);
       }
     }
   }
-  if (!is_stemming_enabled) {
-    return std::nullopt;
-  }
-  return min_stem_size;
+  return matches;
 }
 
 absl::StatusOr<std::string> IndexSchema::GetIdentifier(
@@ -345,6 +388,9 @@ absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
   }
   identifier_to_alias_.insert(
       {std::string(identifier), std::string(attribute_alias)});
+  // Update schema level Text information for default field searches
+  // without any field specifier.
+  UpdateTextFieldMasksForIndex(std::string(identifier), index.get());
   return absl::OkStatus();
 }
 
@@ -436,7 +482,7 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     // Otherwise, it will be processed as a delete
     if (!record && !attribute.GetIndex()->IsTracked(interned_key) &&
         !InTrackedMutationRecords(interned_key, attribute.GetIdentifier())) {
-      return;
+      continue;
     }
     if (!is_module_owned) {
       // A record which are owned by the module were not modified and are

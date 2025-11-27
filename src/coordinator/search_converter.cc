@@ -87,6 +87,17 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       }
       return std::make_unique<query::ComposedPredicate>(
           query::LogicalOperator::kAnd, std::move(children));
+      // Extract slop and inorder if present
+      std::optional<uint32_t> slop = std::nullopt;
+      bool inorder = false;
+      if (predicate.and_().has_slop()) {
+        slop = predicate.and_().slop();
+      }
+      inorder = predicate.and_().inorder();
+
+      return std::make_unique<query::ComposedPredicate>(
+          std::move(lhs_predicate), std::move(rhs_predicate),
+          query::LogicalOperator::kAnd, slop, inorder);
     }
     case Predicate::kOr: {
       std::vector<std::unique_ptr<query::Predicate>> children;
@@ -111,6 +122,9 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       if (!text_index_schema) {
         return absl::InvalidArgumentError("Index does not have any text field");
       }
+      auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
+          predicate.term().field_mask());
+      attribute_identifiers.insert(identifiers.begin(), identifiers.end());
       return std::make_unique<query::TermPredicate>(
           text_index_schema, predicate.term().field_mask(),
           predicate.term().content(), predicate.term().exact());
@@ -120,6 +134,9 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       if (!text_index_schema) {
         return absl::InvalidArgumentError("Index does not have any text field");
       }
+      auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
+          predicate.term().field_mask());
+      attribute_identifiers.insert(identifiers.begin(), identifiers.end());
       return std::make_unique<query::PrefixPredicate>(
           text_index_schema, predicate.prefix().field_mask(),
           predicate.prefix().content());
@@ -129,6 +146,9 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       if (!text_index_schema) {
         return absl::InvalidArgumentError("Index does not have any text field");
       }
+      auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
+          predicate.term().field_mask());
+      attribute_identifiers.insert(identifiers.begin(), identifiers.end());
       return std::make_unique<query::SuffixPredicate>(
           text_index_schema, predicate.suffix().field_mask(),
           predicate.suffix().content());
@@ -138,6 +158,9 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       if (!text_index_schema) {
         return absl::InvalidArgumentError("Index does not have any text field");
       }
+      auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
+          predicate.term().field_mask());
+      attribute_identifiers.insert(identifiers.begin(), identifiers.end());
       return std::make_unique<query::InfixPredicate>(
           text_index_schema, predicate.infix().field_mask(),
           predicate.infix().content());
@@ -147,6 +170,9 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       if (!text_index_schema) {
         return absl::InvalidArgumentError("Index does not have any text field");
       }
+      auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
+          predicate.term().field_mask());
+      attribute_identifiers.insert(identifiers.begin(), identifiers.end());
       return std::make_unique<query::FuzzyPredicate>(
           text_index_schema, predicate.fuzzy().field_mask(),
           predicate.fuzzy().content(), predicate.fuzzy().distance());
@@ -156,6 +182,9 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       if (!text_index_schema) {
         return absl::InvalidArgumentError("Index does not have any text field");
       }
+      auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
+          predicate.term().field_mask());
+      attribute_identifiers.insert(identifiers.begin(), identifiers.end());
       std::vector<std::unique_ptr<query::TextPredicate>> nodes;
       for (const auto& node : predicate.proximity().nodes()) {
         VMSDK_ASSIGN_OR_RETURN(auto predicate_node,
@@ -203,6 +232,7 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
   parameters->limit = query::LimitParameter{request.limit().first_index(),
                                             request.limit().number()};
   parameters->no_content = request.no_content();
+
   if (request.has_root_filter_predicate()) {
     VMSDK_ASSIGN_OR_RETURN(
         parameters->filter_parse_results.root_predicate,
@@ -256,6 +286,13 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
         and_predicate_proto->mutable_and_()->mutable_children()->AddAllocated(
             child_proto.release());
       }
+      // Add slop and inorder if present
+      if (composed_and_predicate->GetSlop().has_value()) {
+        and_predicate_proto->mutable_and_()->set_slop(
+            composed_and_predicate->GetSlop().value());
+      }
+      and_predicate_proto->mutable_and_()->set_inorder(
+          composed_and_predicate->GetInorder());
       return and_predicate_proto;
     }
     case query::PredicateType::kComposedOr: {

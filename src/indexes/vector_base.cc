@@ -84,27 +84,29 @@ bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
   key_ = &key;
   auto res = predicate.Evaluate(*this);
   key_ = nullptr;
-  return res;
+  return res.matches;
 }
 
-bool PrefilterEvaluator::EvaluateTags(const query::TagPredicate &predicate) {
+query::EvaluationResult PrefilterEvaluator::EvaluateTags(
+    const query::TagPredicate &predicate) {
   bool case_sensitive = true;
   auto tags = predicate.GetIndex()->GetValue(*key_, case_sensitive);
   return predicate.Evaluate(tags, case_sensitive);
 }
 
-bool PrefilterEvaluator::EvaluateNumeric(
+query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
     const query::NumericPredicate &predicate) {
   CHECK(key_);
   auto value = predicate.GetIndex()->GetValue(*key_);
   return predicate.Evaluate(value);
 }
 
-bool PrefilterEvaluator::EvaluateText(const query::TextPredicate &predicate) {
+query::EvaluationResult PrefilterEvaluator::EvaluateText(
+    const query::TextPredicate &predicate) {
   // CHECK(key_);
   // auto text = predicate.GetIndex()->GetRawValue(*key_);
   // return predicate.Evaluate(*text);
-  return true;
+  return query::EvaluationResult(true);
 }
 
 template <typename T>

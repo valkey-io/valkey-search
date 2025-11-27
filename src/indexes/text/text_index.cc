@@ -88,6 +88,40 @@ std::optional<std::shared_ptr<Postings>> RemoveKeyFromPostings(
 
 }  // namespace
 
+/*** TextIndex ***/
+
+TextIndex::TextIndex(bool suffix)
+    : suffix_tree_(
+          suffix ? std::make_unique<RadixTree<std::shared_ptr<Postings>>>()
+                 : nullptr) {}
+
+RadixTree<std::shared_ptr<Postings>>& TextIndex::GetPrefix() {
+  return prefix_tree_;
+}
+
+const RadixTree<std::shared_ptr<Postings>>& TextIndex::GetPrefix() const {
+  return prefix_tree_;
+}
+
+std::optional<std::reference_wrapper<RadixTree<std::shared_ptr<Postings>>>>
+TextIndex::GetSuffix() {
+  if (!suffix_tree_) {
+    return std::nullopt;
+  }
+  return std::ref(*suffix_tree_);
+}
+
+std::optional<
+    std::reference_wrapper<const RadixTree<std::shared_ptr<Postings>>>>
+TextIndex::GetSuffix() const {
+  if (!suffix_tree_) {
+    return std::nullopt;
+  }
+  return std::ref(*suffix_tree_);
+}
+
+/*** TextIndexSchema ***/
+
 TextIndexSchema::TextIndexSchema(data_model::Language language,
                                  const std::string& punctuation,
                                  bool with_offsets,
@@ -146,7 +180,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
     token_positions = std::move(node.mapped());
   }
 
-  TextIndex key_index{};
+  TextIndex key_index{with_suffix_trie_};
 
   // Index the key's tokens
   for (auto& entry : token_positions) {
@@ -165,7 +199,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
     {
       std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
       updated_target =
-          text_index_->prefix_.MutateTarget(token, [&](auto existing) {
+          text_index_->GetPrefix().MutateTarget(token, [&](auto existing) {
             NestedMemoryScope scope{metadata_.posting_memory_pool_};
             // Note: Right now this won't include the position map memory since
             // it's already allocated and moved into the postings object. Once
@@ -175,21 +209,17 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr& key) {
             return AddKeyToPostings(existing, key, std::move(pos_map));
           });
       if (suffix) {
-        if (!text_index_->suffix_.has_value()) {
-          text_index_->suffix_.emplace();
-        }
-        text_index_->suffix_.value().SetTarget(*reverse_token, updated_target);
+        text_index_->GetSuffix().value().get().SetTarget(*reverse_token,
+                                                         updated_target);
       }
     }
 
     // Put the token in the per-key index pointing to the same shared postings
     // object
-    key_index.prefix_.SetTarget(token, updated_target);
+    key_index.GetPrefix().SetTarget(token, updated_target);
     if (suffix) {
-      if (!key_index.suffix_.has_value()) {
-        key_index.suffix_.emplace();
-      }
-      key_index.suffix_.value().SetTarget(*reverse_token, updated_target);
+      key_index.GetSuffix().value().get().SetTarget(*reverse_token,
+                                                    updated_target);
     }
   }
 
@@ -205,30 +235,32 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr& key) {
   NestedMemoryScope scope{metadata_.text_index_memory_pool_};
 
   // Extract the per-key index
-  TextIndex key_index;
+  absl::node_hash_map<Key, TextIndex>::node_type node;
   {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
-    auto node = per_key_text_indexes_.extract(key);
+    node = per_key_text_indexes_.extract(key);
     if (node.empty()) {
       return;
     }
-    key_index = std::move(node.mapped());
   }
 
-  auto iter = key_index.prefix_.GetWordIterator("");
+  TextIndex& key_index = node.mapped();
+
+  auto iter = key_index.GetPrefix().GetWordIterator("");
 
   // Cleanup schema-level text index
   std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
   while (!iter.Done()) {
     std::string_view word = iter.GetWord();
     std::optional<std::shared_ptr<Postings>> new_target =
-        text_index_->prefix_.MutateTarget(word, [&](auto existing) {
+        text_index_->GetPrefix().MutateTarget(word, [&](auto existing) {
           NestedMemoryScope scope{metadata_.posting_memory_pool_};
           return RemoveKeyFromPostings(existing, key);
         });
-    if (text_index_->suffix_.has_value()) {
+    auto suffix_opt = text_index_->GetSuffix();
+    if (suffix_opt.has_value()) {
       std::string reverse_word(word.rbegin(), word.rend());
-      text_index_->suffix_.value().SetTarget(reverse_word, new_target);
+      suffix_opt.value().get().SetTarget(reverse_word, new_target);
     }
     iter.Next();
   }

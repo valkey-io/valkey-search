@@ -94,11 +94,14 @@ void InitIndexSchema(MockIndexSchema* index_schema) {
 
   index_schema->CreateTextIndexSchema();
   auto text_index_schema = index_schema->GetTextIndexSchema();
-  data_model::TextIndex text_index_proto = CreateTextIndexProto(true, false, 4);
+  data_model::TextIndex text_index_proto1 =
+      CreateTextIndexProto(true, false, 4);
+  data_model::TextIndex text_index_proto2 =
+      CreateTextIndexProto(false, true, 0);
   auto text_index_1 =
-      std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
+      std::make_shared<indexes::Text>(text_index_proto1, text_index_schema);
   auto text_index_2 =
-      std::make_shared<indexes::Text>(text_index_proto, text_index_schema);
+      std::make_shared<indexes::Text>(text_index_proto2, text_index_schema);
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("text_field1", "text_field1", text_index_1));
   VMSDK_EXPECT_OK(
@@ -758,18 +761,23 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_tree_structure = "TEXT-PREFIX(\"word\", field_mask=1)\n",
         },
         {
-            .test_name = "exact_suffix",
+            .test_name = "exact_suffix_supported",
             .filter = "@text_field1:*word",
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "exact_suffix_unsupported",
+            .filter = "@text_field2:*word",
             .create_success = false,
             .create_expected_error_message =
-                "Index created without Suffix Trie",
+                "Field does not support suffix search",
         },
         {
             .test_name = "exact_inffix",
             .filter = "@text_field1:*word*",
             .create_success = false,
-            .create_expected_error_message =
-                "Index created without Suffix Trie",
+            .create_expected_error_message = "Unsupported query operation",
         },
         {
             .test_name = "exact_fuzzy1",
@@ -888,8 +896,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "default_field_with_all_operations",
             .filter = "%Hllo%, how are *ou do* *oda*",
             .create_success = false,
-            .create_expected_error_message =
-                "Index created without Suffix Trie",
+            .create_expected_error_message = "Unsupported query operation",
         },
         {
             .test_name = "proximity3",
@@ -899,8 +906,8 @@ INSTANTIATE_TEST_SUITE_P(
                 "@num_field_2.0:[10 100] @text_field1:hello | "
                 "@tag_field_1:{books} @text_field2:Neural | "
                 "@text_field1:%%%word%%% @text_field2:network",
-            .create_success = true,
-            .evaluate_success = true,
+            .create_success = false,
+            .create_expected_error_message = "Unsupported query operation",
         },
         {
             .test_name = "invalid_fuzzy1",
@@ -943,8 +950,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "invalid_wildcard2",
             .filter = "Hello, how are *you** doing",
             .create_success = false,
-            .create_expected_error_message =
-                "Index created without Suffix Trie",
+            .create_expected_error_message = "Invalid wildcard '*' markers",
         },
         {
             .test_name = "bad_filter_1",

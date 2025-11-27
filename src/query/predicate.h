@@ -70,7 +70,8 @@ struct EvaluationResult {
 class Evaluator {
  public:
   virtual ~Evaluator() = default;
-  virtual EvaluationResult EvaluateText(const TextPredicate& predicate, bool require_positions) = 0;
+  virtual EvaluationResult EvaluateText(const TextPredicate& predicate,
+                                        bool require_positions) = 0;
   virtual EvaluationResult EvaluateTags(const TagPredicate& predicate) = 0;
   virtual EvaluationResult EvaluateNumeric(
       const NumericPredicate& predicate) = 0;
@@ -175,8 +176,7 @@ class TextPredicate : public Predicate {
   virtual EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
       const std::shared_ptr<valkey_search::InternedString>& target_key,
-      bool require_positions = true)
-      const = 0;
+      bool require_positions = true) const = 0;
   virtual std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
       const = 0;
   virtual const FieldMaskPredicate GetFieldMask() const = 0;
@@ -199,8 +199,7 @@ class TermPredicate : public TextPredicate {
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
       const std::shared_ptr<valkey_search::InternedString>& target_key,
-      bool require_positions = true)
-      const override;
+      bool require_positions = true) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -227,8 +226,7 @@ class PrefixPredicate : public TextPredicate {
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
       const std::shared_ptr<valkey_search::InternedString>& target_key,
-      bool require_positions = true)
-      const override;
+      bool require_positions = true) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -253,8 +251,7 @@ class SuffixPredicate : public TextPredicate {
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
       const std::shared_ptr<valkey_search::InternedString>& target_key,
-      bool require_positions = true)
-      const override;
+      bool require_positions = true) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -279,8 +276,7 @@ class InfixPredicate : public TextPredicate {
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
       const std::shared_ptr<valkey_search::InternedString>& target_key,
-      bool require_positions = true)
-      const override;
+      bool require_positions = true) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -306,8 +302,7 @@ class FuzzyPredicate : public TextPredicate {
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
       const std::shared_ptr<valkey_search::InternedString>& target_key,
-      bool require_positions = true)
-      const override;
+      bool require_positions = true) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -330,8 +325,7 @@ class ProximityPredicate : public TextPredicate {
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
       const std::shared_ptr<valkey_search::InternedString>& target_key,
-      bool require_positions = true)
-      const override;
+      bool require_positions = true) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {

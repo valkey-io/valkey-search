@@ -128,8 +128,8 @@ class PredicateEvaluator : public query::Evaluator {
     return predicate.Evaluate(&out_numeric.value());
   }
 
-  EvaluationResult EvaluateText(
-      const query::TextPredicate &predicate, bool require_positions) override {
+  EvaluationResult EvaluateText(const query::TextPredicate &predicate,
+                                bool require_positions) override {
     auto it = per_key_indexes_->find(target_key_);
     if (it == per_key_indexes_->end()) {
       VMSDK_LOG(WARNING, nullptr)

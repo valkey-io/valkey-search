@@ -326,11 +326,13 @@ ComposedPredicate::ComposedPredicate(std::unique_ptr<Predicate> lhs_predicate,
       slop_(slop),
       inorder_(inorder) {}
 
-
 // Helper to evaluate text predicates with conditional position requirements
-EvaluationResult EvaluateTextPredicate(const Predicate* predicate, Evaluator& evaluator, bool require_positions) {
+EvaluationResult EvaluateTextPredicate(const Predicate* predicate,
+                                       Evaluator& evaluator,
+                                       bool require_positions) {
   if (predicate->GetType() == PredicateType::kText) {
-    return evaluator.EvaluateText(*static_cast<const TextPredicate*>(predicate), require_positions);
+    return evaluator.EvaluateText(*static_cast<const TextPredicate*>(predicate),
+                                  require_positions);
   }
   return predicate->Evaluate(evaluator);
 }
@@ -342,10 +344,12 @@ EvaluationResult EvaluateTextPredicate(const Predicate* predicate, Evaluator& ev
 EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   if (GetType() == PredicateType::kComposedAnd) {
     bool require_positions = slop_.has_value() || inorder_;
-    EvaluationResult lhs = EvaluateTextPredicate(lhs_predicate_.get(), evaluator, require_positions);
+    EvaluationResult lhs = EvaluateTextPredicate(lhs_predicate_.get(),
+                                                 evaluator, require_positions);
     // Short-circuit for AND
     if (!lhs.matches) return EvaluationResult(false);
-    EvaluationResult rhs = EvaluateTextPredicate(rhs_predicate_.get(), evaluator, require_positions);
+    EvaluationResult rhs = EvaluateTextPredicate(rhs_predicate_.get(),
+                                                 evaluator, require_positions);
     // Short-circuit for AND
     if (!rhs.matches) return EvaluationResult(false);
     // Proximity check: Only if slop/inorder set and both sides have iterators

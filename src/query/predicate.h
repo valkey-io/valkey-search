@@ -77,7 +77,7 @@ class Evaluator {
       const NumericPredicate& predicate) = 0;
 
   // Access target key for proximity validation (only for Text)
-  virtual const std::shared_ptr<InternedString>& GetTargetKey() const = 0;
+  virtual const InternedStringPtr& GetTargetKey() const = 0;
 };
 
 class Predicate;
@@ -175,7 +175,7 @@ class TextPredicate : public Predicate {
   // Evaluate against per-key TextIndex
   virtual EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key,
+      const InternedStringPtr& target_key,
       bool require_positions = true) const = 0;
   virtual std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
       const = 0;
@@ -198,7 +198,7 @@ class TermPredicate : public TextPredicate {
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key,
+      const InternedStringPtr& target_key,
       bool require_positions = true) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
@@ -225,7 +225,7 @@ class PrefixPredicate : public TextPredicate {
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key,
+      const InternedStringPtr& target_key,
       bool require_positions = true) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
@@ -250,7 +250,7 @@ class SuffixPredicate : public TextPredicate {
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key,
+      const InternedStringPtr& target_key,
       bool require_positions = true) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
@@ -275,7 +275,7 @@ class InfixPredicate : public TextPredicate {
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key,
+      const InternedStringPtr& target_key,
       bool require_positions = true) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
@@ -301,7 +301,7 @@ class FuzzyPredicate : public TextPredicate {
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key,
+      const InternedStringPtr& target_key,
       bool require_positions = true) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
@@ -324,7 +324,7 @@ class ProximityPredicate : public TextPredicate {
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key,
+      const InternedStringPtr& target_key,
       bool require_positions = true) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
@@ -355,7 +355,6 @@ class ComposedPredicate : public Predicate {
                     bool inorder = false);
 
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
-
   const Predicate* GetLhsPredicate() const { return lhs_predicate_.get(); }
   const Predicate* GetRhsPredicate() const { return rhs_predicate_.get(); }
   std::optional<uint32_t> GetSlop() const { return slop_; }

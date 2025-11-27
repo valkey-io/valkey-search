@@ -22,6 +22,14 @@ namespace config {
 /// Valkey to load the configurations first time when the module loaded. Once
 /// this is done, we set it back to false. If the user passes "--debug-mode yes"
 /// we will change it back to "true".
+static GetMaxIndexesCallback g_getMaxIndexes = nullptr;
+static uint32_t g_current_index = 0;
+void SetGetMaxIndexesCallback(GetMaxIndexesCallback cb,
+                              uint32_t *current_index) {
+  g_getMaxIndexes = cb;
+  if (current_index != nullptr) g_current_index = *current_index;
+}
+
 static auto debug_mode = BooleanBuilder(kDebugMode, true).Hidden().Build();
 
 bool IsDebugModeEnabled() { return debug_mode->GetValue(); }
@@ -41,6 +49,21 @@ template <typename T>
 static int OnSetConfig(const char *config_name, T value, void *priv_data,
                        ValkeyModuleString **err) {
   auto entry = static_cast<ConfigBase<T> *>(priv_data);
+  // check if max_indexes operational limit is higher than current set
+  if (std::strcmp(config_name, "max-indexes") == 0) {
+      if (g_getMaxIndexes != nullptr) {
+          if ((g_current_index != 0 && g_current_index <= g_getMaxIndexes().GetValue()) &&
+              static_cast<uint32_t>(value) <= g_current_index) {
+                  ValkeyModule_CreateStringPrintf(
+                  nullptr, "%s - %d",
+            "Command rejected, configured operational limit is lower than the "
+            "configured index schema",
+            static_cast<uint32_t>(value));
+        return VALKEYMODULE_ERR;
+
+      }
+    }
+  }
   CHECK(entry) << "null private data for configuration Number entry.";
   auto res = entry->SetValue(value);  // Calls "Validate" internally
   if (!res.ok()) {
@@ -167,6 +190,14 @@ absl::Status ModuleConfigManager::UpdateConfigFromKeyVal(
   // update the configuration entry
   VMSDK_LOG(NOTICE, ctx) << "Parsed command line argument: " << key << " -> "
                          << value;
+   // load max index passed from command line
+  absl::string_view sv1 = "max-indexes";
+  if (where->first == sv1) {
+    if (!absl::SimpleAtoi(value, &g_updatedmax_index)) {
+      return absl::InvalidArgumentError(
+          absl::StrFormat("Failed to convert '%s' into a number", value));
+    }
+  }
   VMSDK_RETURN_IF_ERROR(where->second->FromString(value));
   return absl::OkStatus();
 }

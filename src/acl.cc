@@ -399,7 +399,7 @@ absl::Status AclPrefixCheck(ValkeyModuleCtx *ctx, acl::KeyAccess access,
 
 absl::Status AclPrefixCheck(ValkeyModuleCtx *ctx, acl::KeyAccess access,
                             const std::vector<std::string> &module_prefixes) {
-  if (IsKeyPrefixCheckSupported()) {
+  if (IsKeyPrefixCheckSupported() && vmsdk::IsRealUserClient(ctx)) {
     return AclValkeyCheckPermissions(ctx, access, module_prefixes);
   }
   return AclPrefixCheck(ctx, KeyAccessToStringView(access), module_prefixes);

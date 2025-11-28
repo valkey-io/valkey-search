@@ -88,6 +88,32 @@ void DelayedClusterMessageTimerCallback(ValkeyModuleCtx *ctx, void *data) {
 static absl::NoDestructor<std::unique_ptr<MetadataManager>>
     metadata_manager_instance;
 
+MetadataManager::MetadataManager(ValkeyModuleCtx *ctx, ClientPool &client_pool)
+    : client_pool_(client_pool),
+      detached_ctx_(vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx)) {
+  RegisterRDBCallback(
+      data_model::RDB_SECTION_GLOBAL_METADATA,
+      RDBSectionCallbacks{
+          .load = [this](ValkeyModuleCtx *ctx,
+                         std::unique_ptr<data_model::RDBSection> section,
+                         SupplementalContentIter &&iter) -> absl::Status {
+            return LoadMetadata(ctx, std::move(section), std::move(iter));
+          },
+
+          .save = [this](ValkeyModuleCtx *ctx, SafeRDB *rdb, int when)
+              -> absl::Status { return SaveMetadata(ctx, rdb, when); },
+
+          .section_count = [this](ValkeyModuleCtx *ctx, int when) -> int {
+            return GetSectionsCount();
+          },
+          .minimum_semantic_version = [](ValkeyModuleCtx *ctx,
+                                         int when) -> int {
+            auto version = Instance().ComputeMinVersion();
+            CHECK(version.ok());
+            return *version;
+          }});
+}
+
 bool MetadataManager::IsInitialized() {
   return *metadata_manager_instance != nullptr;
 }
@@ -214,13 +240,11 @@ absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(
   VMSDK_ASSIGN_OR_RETURN(
       auto fingerprint,
       ComputeFingerprint(type_name, *contents, registered_types));
-  VMSDK_ASSIGN_OR_RETURN(auto encoding_version,
-                         rt_it->second.encoding_version_callback(*contents));
 
   GlobalMetadataEntry new_entry;
   new_entry.set_version(version);
   new_entry.set_fingerprint(fingerprint);
-  new_entry.set_encoding_version(encoding_version);
+  new_entry.set_encoding_version(rt_it->second.encoding_version);
   new_entry.set_allocated_content(contents.release());
 
   auto callback_status = TriggerCallbacks(type_name, db_num, id, new_entry);
@@ -244,8 +268,8 @@ absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(
 }
 
 absl::Status MetadataManager::DeleteEntry(absl::string_view type_name,
-                                          uint32_t db_num,
-                                          absl::string_view id) {
+                                          absl::string_view id,
+                                          uint32_t db_num) {
   auto encoded_id = EncodeDbNum(db_num, id);
   auto &metadata = metadata_.Get();
   auto it = metadata.type_namespace_map().find(type_name);
@@ -289,42 +313,21 @@ std::unique_ptr<GlobalMetadata> MetadataManager::GetGlobalMetadata() {
   return result;
 }
 
-absl::StatusOr<IndexFingerprintVersion>
-MetadataManager::GetFingerprintAndVersion(absl::string_view type_name,
-                                          uint32_t db_num,
-                                          absl::string_view id) {
-  IndexFingerprintVersion result;
-  auto encoded_id = EncodeDbNum(db_num, id);
-  auto &metadata = metadata_.Get();
-  if (metadata.type_namespace_map().contains(type_name) &&
-      metadata.type_namespace_map().at(type_name).entries().contains(
-          encoded_id)) {
-    const auto &entry =
-        metadata.type_namespace_map().at(type_name).entries().at(encoded_id);
-    IndexFingerprintVersion index_fingerprint_version;
-    index_fingerprint_version.set_fingerprint(entry.fingerprint());
-    index_fingerprint_version.set_version(entry.version());
-    return index_fingerprint_version;
-  }
-  return absl::NotFoundError(
-      absl::StrCat("Entry not found: ", type_name, " ", db_num, " ", id));
-}
-
-void MetadataManager::RegisterType(
-    absl::string_view type_name, uint32_t max_encoding_version,
-    FingerprintCallback fingerprint_callback, MetadataUpdateCallback callback,
-    EncodingVersionCallback encoding_version_callback) {
+void MetadataManager::RegisterType(absl::string_view type_name,
+                                   vmsdk::ValkeyVersion encoding_version,
+                                   FingerprintCallback fingerprint_callback,
+                                   MetadataUpdateCallback callback,
+                                   MinVersionCallback min_version_callback) {
   auto insert_result =
       registered_types_.Get().insert(std::pair<std::string, RegisteredType>{
           type_name,
           RegisteredType{
-              .max_encoding_version = max_encoding_version,
-              .encoding_version_callback = std::move(encoding_version_callback),
+              .encoding_version = encoding_version,
               .fingerprint_callback = std::move(fingerprint_callback),
-              .update_callback = std::move(callback)}});
-  VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 10)
-      << "Type already registered for: " << type_name;
-  DCHECK(insert_result.second);
+              .update_callback = std::move(callback),
+              .min_version_callback = std::move(min_version_callback)}});
+  VMSDK_LOG(DEBUG, nullptr) << "Registering type: " << type_name;
+  CHECK(insert_result.second);
 }
 
 void MetadataManager::BroadcastMetadata(ValkeyModuleCtx *ctx) {
@@ -482,21 +485,7 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
     auto insert_result = result.mutable_type_namespace_map()->insert(
         {type_name, GlobalMetadataEntryMap()});
     auto &existing_inner_map = insert_result.first->second;
-    auto &registered_types = registered_types_.Get();
-    auto rt_it = registered_types.find(type_name);
     for (const auto &[id, proposed_entry] : proposed_inner_map.entries()) {
-      if (rt_it != registered_types.end() &&
-          rt_it->second.max_encoding_version <
-              proposed_entry.encoding_version()) {
-        VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 10)
-            << "Invalid/Unknown encoding version ("
-            << proposed_entry.encoding_version() << ") for: " << type_name
-            << ", for entry " << id << " from " << source
-            << ", Cluster converge is prohibited.";
-        return absl::InvalidArgumentError(absl::StrCat(
-            "Invalid encoding version (", proposed_entry.encoding_version(),
-            ") for: ", type_name, ", entry ", id, " from ", source));
-      }
       auto it = existing_inner_map.entries().find(id);
       if (it != existing_inner_map.entries().end() && !prefer_incoming) {
         auto &existing_entry = it->second;
@@ -524,10 +513,12 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
 
       auto mutable_entries = existing_inner_map.mutable_entries();
       (*mutable_entries)[id] = proposed_entry;
+      auto &registered_types = registered_types_.Get();
+      auto rt_it = registered_types.find(type_name);
       if (rt_it != registered_types.end() && proposed_entry.has_content() &&
           proposed_entry.encoding_version() <
-              rt_it->second.max_encoding_version) {
-        // If the encoding version is less than the current max version, we need
+              rt_it->second.encoding_version.ToInt()) {
+        // If the encoding version is less than the current version, we need
         // to re-fingerprint the entry. New fields being added may result in
         // unstable fingerprinting.
         //
@@ -537,11 +528,9 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
             auto fingerprint,
             ComputeFingerprint(type_name, proposed_entry.content(),
                                registered_types));
-        VMSDK_ASSIGN_OR_RETURN(
-            auto encoding_version,
-            rt_it->second.encoding_version_callback(proposed_entry.content()));
         (*mutable_entries)[id].set_fingerprint(fingerprint);
-        (*mutable_entries)[id].set_encoding_version(encoding_version);
+        (*mutable_entries)[id].set_encoding_version(
+            rt_it->second.encoding_version);
       }
 
       if (trigger_callbacks) {
@@ -566,8 +555,8 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
       ComputeTopLevelFingerprint(result.type_namespace_map());
   result.mutable_version_header()->set_top_level_fingerprint(new_fingerprint);
 
-  // The new version is the max of the old version and the proposed version.
-  // We also bump the version if the fingerprint changed, as this indicates a
+  // The new version is the max of the old version and the proposed version. We
+  // also bump the version if the fingerprint changed, as this indicates a
   // distinct version.
   auto old_version = metadata.version_header().top_level_version();
   auto new_version =
@@ -694,11 +683,10 @@ void MetadataManager::OnServerCronCallback(
     [[maybe_unused]] uint64_t subevent, [[maybe_unused]] void *data) {
   static bool timer_started = false;
   if (!timer_started) {
-    // The first server cron tick after the FT.CREATE is run needs to kick
-    // start the timer. This can't be done during normal server event
-    // subscription because timers cannot be safely created in background
-    // threads (the GIL does not protect event loop code which uses the
-    // timers).
+    // The first server cron tick after the FT.CREATE is run needs to kick start
+    // the timer. This can't be done during normal server event subscription
+    // because timers cannot be safely created in background threads (the GIL
+    // does not protect event loop code which uses the timers).
     timer_started = true;
     ValkeyModule_CreateTimer(
         ctx,
@@ -812,17 +800,18 @@ absl::Status MetadataManager::ShowMetadata(
   return absl::OkStatus();
 }
 
-vmsdk::SemanticVersion MetadataManager::ComputeRDBVersion() const {
-  vmsdk::SemanticVersion max_encoding_version = 0;
+absl::StatusOr<vmsdk::ValkeyVersion> MetadataManager::ComputeMinVersion()
+    const {
+  vmsdk::ValkeyVersion max_encoding_version(0);
   for (auto &[type_name, inner_map] : metadata_.Get().type_namespace_map()) {
     auto it = registered_types_.Get().find(type_name);
     if (it == registered_types_.Get().end()) {
       continue;
     }
     for (auto &[id, entry] : inner_map.entries()) {
-      max_encoding_version =
-          std::max(vmsdk::SemanticVersion(entry.encoding_version()),
-                   max_encoding_version);
+      VMSDK_ASSIGN_OR_RETURN(auto min_version,
+                             it->second.min_version_callback(entry.content()));
+      max_encoding_version = std::max(min_version, max_encoding_version);
     }
   }
   return max_encoding_version;

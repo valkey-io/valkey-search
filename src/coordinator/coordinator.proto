@@ -114,6 +114,7 @@ message AttributeContentEntry {
 message GlobalMetadataVersionHeader {
   uint64 top_level_fingerprint = 1;
   uint32 top_level_version = 2;
+  uint32 top_level_min_api_version = 3;
 }
 
 message GlobalMetadata {
@@ -132,6 +133,7 @@ message GlobalMetadataEntry {
   uint64 fingerprint = 2;
   uint32 encoding_version = 3;
   optional google.protobuf.Any content = 4;
+  uint32 min_api_version = 5;
 }
 
 message GetGlobalMetadataRequest {}

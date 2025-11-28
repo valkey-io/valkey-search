@@ -40,11 +40,10 @@ using ::testing::ValuesIn;
 
 struct TypeToRegister {
   std::string type_name;
-  uint64_t max_encoding_version{1};
+  vmsdk::ValkeyVersion encoding_version{0, 0, 1};
   absl::Status status_to_return;
   absl::StatusOr<uint64_t> fingerprint_to_return{
       absl::UnimplementedError("Fingerprint not set")};
-  absl::StatusOr<uint32_t> encoding_version_to_return{1};
 };
 
 struct CallbackResult {
@@ -111,7 +110,7 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
   std::vector<CallbackResult> callbacks_tracker;
   for (auto& type_to_register : test_case.types_to_register) {
     test_metadata_manager_->RegisterType(
-        type_to_register.type_name, type_to_register.max_encoding_version,
+        type_to_register.type_name, type_to_register.encoding_version,
         [&](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
           return type_to_register.fingerprint_to_return;
         },
@@ -127,7 +126,7 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
           callbacks_tracker.push_back(std::move(callback_result));
           return type_to_register.status_to_return;
         },
-        [&](auto) { return type_to_register.encoding_version_to_return; });
+        [](auto) { return kModuleVersion; });
   }
   if (test_case.expect_num_broadcasts > 0) {
     EXPECT_CALL(*kMockValkeyModule,
@@ -160,7 +159,7 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
                EntryOperationTestParam::EntryOperation::kDelete) {
       EXPECT_EQ(
           test_metadata_manager_
-              ->DeleteEntry(operation.type_name, operation.db_num, operation.id)
+              ->DeleteEntry(operation.type_name, operation.id, operation.db_num)
               .code(),
           test_case.expected_status_code);
     }
@@ -536,7 +535,7 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
   std::vector<CallbackResult> callbacks_tracker;
   for (const auto& type_to_register : test_case.types_to_register) {
     test_metadata_manager_->RegisterType(
-        type_to_register.type_name, type_to_register.max_encoding_version,
+        type_to_register.type_name, type_to_register.encoding_version,
         [&](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
           return type_to_register.fingerprint_to_return;
         },
@@ -551,7 +550,7 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
           });
           return type_to_register.status_to_return;
         },
-        [&](auto) { return type_to_register.encoding_version_to_return; });
+        [](auto) { return kModuleVersion; });
   }
 
   if (test_case.expect_broadcast) {
@@ -847,10 +846,9 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .max_encoding_version = 2,
+                        .encoding_version = 2,
                         .status_to_return = absl::OkStatus(),
                         .fingerprint_to_return = 5678,
-                        .encoding_version_to_return = 2,
                     },
                 },
             .get_global_metadata_status = absl::OkStatus(),
@@ -896,7 +894,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .max_encoding_version = 2,
+                        .encoding_version = 2,
                         .status_to_return = absl::OkStatus(),
                         .fingerprint_to_return = absl::InternalError("Failed"),
                     },
@@ -956,7 +954,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .max_encoding_version = 1,
+                        .encoding_version = 1,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
@@ -1057,7 +1055,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .max_encoding_version = 1,
+                        .encoding_version = 1,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
@@ -1145,7 +1143,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .max_encoding_version = 1,
+                        .encoding_version = 1,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
@@ -1225,7 +1223,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .max_encoding_version = 2,
+                        .encoding_version = 1,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
@@ -1313,7 +1311,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .max_encoding_version = 2,
+                        .encoding_version = 2,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
@@ -1333,86 +1331,6 @@ INSTANTIATE_TEST_SUITE_P(
                         version: 1
                         fingerprint: 1111
                         encoding_version: 2
-                        content {
-                          type_url: "type.googleapis.com/FakeType"
-                          value: "serialized_content_1"
-                        }
-                      }
-                    }
-                  }
-                }
-              )",
-        },
-        {
-            .test_name = "EncodingVersionTooLarge",
-            .existing_metadata_pbtxt = R"(
-                version_header {
-                  top_level_version: 1
-                }
-                type_namespace_map {
-                  key: "my_type"
-                  value {
-                    entries {
-                      key: "my_id"
-                      value {
-                        version: 1
-                        fingerprint: 1111
-                        encoding_version: 1
-                        content {
-                          type_url: "type.googleapis.com/FakeType"
-                          value: "serialized_content_1"
-                        }
-                      }
-                    }
-                  }
-                }
-              )",
-            .proposed_metadata_pbtxt = R"(
-                version_header {
-                  top_level_version: 1
-                }
-                type_namespace_map {
-                  key: "my_type"
-                  value {
-                    entries {
-                      key: "my_id"
-                      value {
-                        version: 2
-                        fingerprint: 9999
-                        encoding_version: 2
-                        content {
-                          type_url: "type.googleapis.com/FakeType"
-                          value: "serialized_content_2"
-                        }
-                      }
-                    }
-                  }
-                }
-              )",
-            .types_to_register =
-                {
-                    {
-                        .type_name = "my_type",
-                        .max_encoding_version = 1,
-                        .status_to_return = absl::OkStatus(),
-                    },
-                },
-            .get_global_metadata_status = absl::OkStatus(),
-            .expect_get_cluster_node_info = true,
-            .expect_reconcile = true,
-            .expected_metadata_pbtxt = R"(
-                version_header {
-                  top_level_version: 1
-                }
-                type_namespace_map {
-                  key: "my_type"
-                  value {
-                    entries {
-                      key: "my_id"
-                      value {
-                        version: 1
-                        fingerprint: 1111
-                        encoding_version: 1
                         content {
                           type_url: "type.googleapis.com/FakeType"
                           value: "serialized_content_1"
@@ -1469,7 +1387,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .max_encoding_version = 1,
+                        .encoding_version = 1,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
@@ -1596,7 +1514,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {
                         .type_name = "my_type",
-                        .max_encoding_version = 2,
+                        .encoding_version = 2,
                         .status_to_return = absl::OkStatus(),
                     },
                 },
@@ -2014,14 +1932,14 @@ TEST_F(MetadataManagerTimestampTest,
 
   // Register a type with a failing callback
   test_metadata_manager_->RegisterType(
-      "my_type", 1,
+      "my_type", {0, 0, 1},
       [](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
         return 1234;
       },
       [](uint32_t db_num, absl::string_view id,
          const google::protobuf::Any* metadata, uint64_t fingerprint,
          uint32_t version) { return absl::InternalError("Callback failed"); },
-      [](auto) { return 1; });
+      [](auto) { return kModuleVersion; });
 
   // Reconciliation should fail due to callback failure
   auto status =

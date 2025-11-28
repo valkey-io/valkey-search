@@ -24,6 +24,7 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
+#include "version.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/thread_pool.h"
@@ -107,9 +108,8 @@ class SchemaManager {
   absl::Status SaveIndexes(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when);
   static absl::StatusOr<uint64_t> ComputeFingerprint(
       const google::protobuf::Any &metadata);
-  static absl::StatusOr<vmsdk::SemanticVersion> ComputeSemanticVersion(
+  static absl::StatusOr<vmsdk::ValkeyVersion> ComputeMinVersion(
       const google::protobuf::Any &metadata);
-  vmsdk::SemanticVersion ComputeSemanticVersionOfIndexes() const;
 
  private:
   absl::Status RemoveAll()

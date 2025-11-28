@@ -103,12 +103,6 @@ bool MultiOrLua(ValkeyModuleCtx *ctx);
 
 size_t DisplayAsSIBytes(size_t value, char *buffer, size_t buffer_size);
 
-std::string DisplayValkeyVersion(int version_word);
-
-inline int MakeValkeyVersion(int major, int minor, int patch) {
-  CHECK(major < 256 && minor < 256 && patch < 256);
-  return (major << 16) | (minor << 8) | patch;
-}
 std::string PrintableBytes(absl::string_view sv);
 std::string StringToHex(std::string_view s);
 
@@ -121,30 +115,36 @@ absl::Status VerifyRange(long long num_value, std::optional<long long> min,
 std::optional<std::string> JsonUnquote(absl::string_view sv);
 
 //
-// Class for Semantic Version
+// Class for Valkey Version
 //
-class SemanticVersion {
+class ValkeyVersion {
  public:
-  constexpr SemanticVersion(uint8_t major, uint8_t minor, uint8_t patch)
+  constexpr ValkeyVersion(uint16_t major, uint8_t minor, uint8_t patch)
       : version_((static_cast<unsigned>(major) << 16) |
                  (static_cast<unsigned>(minor) << 8) |
                  static_cast<unsigned>(patch)) {}
-  constexpr SemanticVersion(unsigned version) : version_(version) {}
-  unsigned Major() const { return (version_ >> 16) & 0xFF; }
+  constexpr ValkeyVersion(int version) : version_(version) {}
+  unsigned Major() const { return (version_ >> 16) & 0xFFFF; }
   unsigned Minor() const { return (version_ >> 8) & 0xFF; }
   unsigned Patch() const { return (version_) & 0xFF; }
   operator unsigned() const { return version_; }
   std::string ToString() const {
     return absl::StrFormat("%d.%d.%d", Major(), Minor(), Patch());
   }
+  int ToInt() const { return version_; }
 
-  auto operator<=>(const SemanticVersion &other) const = default;
+  auto operator<=>(const ValkeyVersion &other) const = default;
+
+  template <typename Sink>
+  friend void AbslStringify(Sink &sink, const ValkeyVersion &sv) {
+    absl::Format(&sink, "%d.%d.%d", sv.Major(), sv.Minor(), sv.Patch());
+  }
 
  private:
   unsigned version_;
 };
 
-inline std::ostream &operator<<(std::ostream &os, const SemanticVersion &sv) {
+inline std::ostream &operator<<(std::ostream &os, const ValkeyVersion &sv) {
   return os << sv.ToString();
 }
 

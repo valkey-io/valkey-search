@@ -26,38 +26,6 @@
 namespace valkey_search {
 
 constexpr uint32_t kCurrentEncVer = 1;
-//
-// Semantic Versioning
-//
-// RDB contents are written with a semantic version tag. This tag
-// indicates the minimum version of ValkeySearch required to read the RDB
-// contents.
-//
-// Before an RDB is written, each metadata object is queried for
-// its minimum required semantic version (aka encoding_version). The maximum of
-// these versions is written as the semantic version of the RDB. This
-// enables forward compatibility, i.e., newer ValkeySearch versions can write
-// RDBs that older versions can read, as long no new features are used that
-// require the newer version.
-//
-// The 1.0 code line has this version in the RDB.
-// It is compatible with Valkey 8.
-//
-constexpr vmsdk::SemanticVersion kSemanticVersion10(1, 0, 0);
-//
-// Valkey 9 introduced DB num into the CME metadata, requiring changes to the
-// RDB serialization format. This is represented by semantic version 1.1.0.
-//
-constexpr vmsdk::SemanticVersion kSemanticVersion11(1, 1, 0);
-
-//
-// This is the current semantic version which is also the maximum semantic
-// version that this ValkeySearch version can read. When you introduce
-// incompatible changes to the RDB serialization format, update this version
-// too, or you won't be able to read RDBs written by your own code.
-//
-constexpr vmsdk::SemanticVersion kCurrentSemanticVersion = kSemanticVersion11;
-
 constexpr absl::string_view kValkeySearchModuleTypeName{"Vk-Search"};
 
 class SafeRDB;
@@ -81,7 +49,7 @@ using RDBSectionCountCallback =
     absl::AnyInvocable<int(ValkeyModuleCtx *ctx, int when)>;
 
 using RDBSectionMinSemVerCallback =
-    absl::AnyInvocable<int(ValkeyModuleCtx *ctx, int when)>;
+    absl::AnyInvocable<vmsdk::ValkeyVersion(ValkeyModuleCtx *ctx, int when)>;
 
 using RDBSectionCallbacks = struct RDBSectionCallbacks {
   RDBSectionLoadCallback load;

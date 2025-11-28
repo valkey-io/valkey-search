@@ -88,13 +88,12 @@ int OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
         << "ValkeyModule_GetServerVersion function is not available";
     return VALKEYMODULE_ERR;
   }
-  auto server_version = ValkeyModule_GetServerVersion();
-  if (server_version < options.minimum_valkey_version) {
+  auto server_version = vmsdk::ValkeyVersion(ValkeyModule_GetServerVersion());
+  if (server_version < options.minimum_valkey_server_version) {
     VMSDK_LOG(WARNING, ctx)
         << "Minimum required server version is "
-        << vmsdk::DisplayValkeyVersion(options.minimum_valkey_version)
-        << ", Current version is "
-        << vmsdk::DisplayValkeyVersion(server_version);
+        << vmsdk::ValkeyVersion(options.minimum_valkey_server_version)
+        << ", Current version is " << vmsdk::ValkeyVersion(server_version);
     return VALKEYMODULE_ERR;
   }
   if (auto status = AddACLCategories(ctx, options.acl_categories);

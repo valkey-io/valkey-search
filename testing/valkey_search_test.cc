@@ -334,7 +334,10 @@ TEST_P(LoadTest, load) {
     EXPECT_CALL(*kMockValkeyModule, GetContextFlags(&fake_ctx_))
         .WillRepeatedly(testing::Return(0));
   }
-  vmsdk::module::Options options;
+  vmsdk::module::Options options = {
+      .version = kModuleVersion,
+      .minimum_valkey_server_version = kMinimumServerVersion,
+  };
   auto load_res = vmsdk::module::OnLoadDone(
       ValkeySearch::Instance().OnLoad(&fake_ctx_, args.data(), args.size()),
       &fake_ctx_, options);

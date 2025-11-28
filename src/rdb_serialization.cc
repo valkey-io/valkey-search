@@ -19,6 +19,7 @@
 #include "src/metrics.h"
 #include "src/rdb_section.pb.h"
 #include "src/valkey_search.h"
+#include "src/version.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -146,17 +147,13 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
         encver, kCurrentEncVer));
   }
   VMSDK_ASSIGN_OR_RETURN(
-      auto min_semantic_version_int, rdb->LoadUnsigned(),
+      auto rdb_version_int, rdb->LoadUnsigned(),
       _ << "IO error reading semantic version from RDB. Failing RDB load.");
-  auto min_semantic_version = vmsdk::SemanticVersion(min_semantic_version_int);
-  VMSDK_LOG(DEBUG, ctx) << absl::StrFormat(
-      "RDB contains minimum semantic version %s",
-      min_semantic_version.ToString());
-  if (min_semantic_version > kCurrentSemanticVersion) {
+  auto rdb_version = vmsdk::ValkeyVersion(rdb_version_int);
+  if (rdb_version > kModuleVersion) {
     return absl::InternalError(absl::StrCat(
-        "ValkeySearch RDB contents require minimum version ",
-        min_semantic_version.ToString(), " and we are on ",
-        kCurrentSemanticVersion.ToString(),
+        "ValkeySearch RDB contents require minimum version ", rdb_version,
+        " and we are on ", kModuleVersion,
         ". If you are downgrading, ensure all feature usage on the new "
         "version of ValkeySearch is supported by this version and retry."));
   }
@@ -227,26 +224,14 @@ absl::Status PerformRDBSave(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when) {
   int rdb_section_count = 0;
   int min_semantic_version = 0;  // 0.0.0 by default
   absl::flat_hash_map<data_model::RDBSectionType, int> section_counts;
-  for (auto &registeredRDBSectionCallback : kRegisteredRDBSectionCallbacks) {
-    data_model::RDBSectionType rdb_section_type =
-        registeredRDBSectionCallback.first;
-    section_counts[rdb_section_type] =
-        registeredRDBSectionCallback.second.section_count(ctx, when);
-
-    if (section_counts[rdb_section_type] > 0) {
-      auto this_semantic_version =
-          registeredRDBSectionCallback.second.minimum_semantic_version(ctx,
-                                                                       when);
-      VMSDK_LOG(DEBUG, ctx)
-          << "RDB section type "
-          << data_model::RDBSectionType_Name(rdb_section_type)
-          << " requires minimum semantic version "
-          << vmsdk::SemanticVersion(this_semantic_version).ToString();
-
+  for (auto &[type, callbacks] : kRegisteredRDBSectionCallbacks) {
+    section_counts[type] = callbacks.section_count(ctx, when);
+    if (section_counts[type] > 0) {
       min_semantic_version =
-          std::max(min_semantic_version, this_semantic_version);
+          std::max(min_semantic_version,
+                   callbacks.minimum_semantic_version(ctx, when).ToInt());
     }
-    rdb_section_count += section_counts[rdb_section_type];
+    rdb_section_count += section_counts[type];
   }
 
   // Do nothing to satisfy AuxSave2 if there are no RDBSections.

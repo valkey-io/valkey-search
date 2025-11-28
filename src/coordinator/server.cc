@@ -222,14 +222,17 @@ Service::GenerateInfoResponse(
 
   std::optional<coordinator::IndexFingerprintVersion> index_fingerprint_version;
 
-  auto entry =
-      coordinator::MetadataManager::Instance().GetFingerprintAndVersion(
-          kSchemaManagerMetadataTypeName, db_num, index_name);
-  CHECK(entry.ok());
-
+  auto global_metadata =
+      coordinator::MetadataManager::Instance().GetGlobalMetadata();
+  CHECK(global_metadata->type_namespace_map().contains(
+      kSchemaManagerMetadataTypeName));
+  const auto& entry_map =
+      global_metadata->type_namespace_map().at(kSchemaManagerMetadataTypeName);
+  CHECK(entry_map.entries().contains(index_name));
+  const auto& entry = entry_map.entries().at(index_name);
   index_fingerprint_version.emplace();
-  index_fingerprint_version->set_fingerprint(entry->fingerprint());
-  index_fingerprint_version->set_version(entry->version());
+  index_fingerprint_version->set_fingerprint(entry.fingerprint());
+  index_fingerprint_version->set_version(entry.version());
 
   response.set_exists(true);
   response.set_index_name(index_name);

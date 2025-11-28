@@ -144,14 +144,6 @@ size_t DisplayAsSIBytes(size_t bytes, char *buffer, size_t buffer_size) {
   }
 }
 
-std::string DisplayValkeyVersion(int version_word) {
-  char storage[50];
-  size_t chars =
-      snprintf(storage, sizeof(storage), "%d.%d.%d", version_word >> 16,
-               (version_word) >> 8 & 0xFF, version_word & 0xff);
-  return {storage, chars};
-}
-
 absl::Status VerifyRange(long long num_value, std::optional<long long> min,
                          std::optional<long long> max) {
   if (min.has_value() && num_value < min.value()) {

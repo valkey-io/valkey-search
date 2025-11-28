@@ -64,7 +64,7 @@ class FilterParser {
       const std::optional<std::string>& field_or_default);
   absl::Status SetupTextFieldConfiguration(
       FieldMaskPredicate& field_mask, std::optional<uint32_t>& min_stem_size,
-      const std::optional<std::string>& field_name, bool with_suffix = false);
+      const std::optional<std::string>& field_name, bool with_suffix);
   absl::StatusOr<std::unique_ptr<query::Predicate>> ParseTextTokens(
       const std::optional<std::string>& field_for_default);
   absl::StatusOr<bool> IsMatchAllExpression();
@@ -92,7 +92,7 @@ class FilterParser {
   absl::StatusOr<absl::flat_hash_set<absl::string_view>> ParseTags(
       absl::string_view tag_string, indexes::Tag* tag_index) const;
 
-  std::unique_ptr<query::Predicate> WrapPredicate(
+  absl::StatusOr<std::unique_ptr<query::Predicate>> WrapPredicate(
       std::unique_ptr<query::Predicate> prev_predicate,
       std::unique_ptr<query::Predicate> predicate, bool& negate,
       query::LogicalOperator logical_operator);

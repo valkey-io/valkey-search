@@ -102,7 +102,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateText(
-    const query::TextPredicate &predicate) {
+    const query::TextPredicate &predicate, bool require_positions) {
   // CHECK(key_);
   // auto text = predicate.GetIndex()->GetRawValue(*key_);
   // return predicate.Evaluate(*text);

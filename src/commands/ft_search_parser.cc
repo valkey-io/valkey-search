@@ -385,6 +385,12 @@ absl::Status PreParseQueryString(query::SearchParameters &parameters) {
     vector_filter = absl::StripAsciiWhitespace(
         filter_expression.substr(pos + kVectorFilterDelimiter.size()));
   }
+  // If INORDER OR SLOP, but the index schema does not support offsets, we
+  // reject the query.
+  if ((parameters.inorder || parameters.slop.has_value()) &&
+      !parameters.index_schema->HasTextOffsets()) {
+    return absl::InvalidArgumentError("Index does not support offsets");
+  }
   VMSDK_ASSIGN_OR_RETURN(
       parameters.filter_parse_results,
       ParsePreFilter(*parameters.index_schema, pre_filter, parameters),

@@ -106,7 +106,7 @@ absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateIndexSchema(
       .WillRepeatedly(testing::Return(fake_ctx));
   data_model::Language language = data_model::LANGUAGE_ENGLISH;
   std::string punctuation = ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|";
-  bool with_offsets = false;
+  bool with_offsets = true;
   std::vector<std::string> stop_words = {};
   VMSDK_ASSIGN_OR_RETURN(
       auto test_index_schema,

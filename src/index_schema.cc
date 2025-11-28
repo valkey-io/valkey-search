@@ -1220,6 +1220,11 @@ vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
   }
 }
 
+bool IndexSchema::IsKeyInFlight(const InternedStringPtr &key) const {
+  absl::MutexLock lock(&mutated_records_mutex_);
+  return tracked_mutated_records_.contains(key);
+}
+
 bool IndexSchema::InTrackedMutationRecords(
     const InternedStringPtr &key, const std::string &identifier) const {
   absl::MutexLock lock(&mutated_records_mutex_);

@@ -292,6 +292,8 @@ class IndexSchema : public KeyspaceEventSubscription,
                           bool from_backfill, bool block_client,
                           bool from_multi)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
+  bool IsKeyInFlight(const InternedStringPtr &key) const
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(
       const InternedStringPtr &key, bool first_time)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);

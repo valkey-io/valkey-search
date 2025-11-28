@@ -10,6 +10,7 @@
 
 #include <vector>
 
+#include "src/indexes/text/flat_position_map.h"
 #include "src/indexes/text/text_iterator.h"
 
 namespace valkey_search::indexes::text {
@@ -62,7 +63,7 @@ class TermIterator : public TextIterator {
  private:
   const FieldMaskPredicate query_field_mask_;
   std::vector<Postings::KeyIterator> key_iterators_;
-  std::vector<Postings::PositionIterator> pos_iterators_;
+  std::vector<FlatPositionMapIterator> pos_iterators_;
   Key current_key_;
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;

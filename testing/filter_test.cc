@@ -782,26 +782,20 @@ INSTANTIATE_TEST_SUITE_P(
         {
             .test_name = "exact_fuzzy1",
             .filter = "@text_field1:%word%",
-            .create_success = true,
-            .evaluate_success = true,
-            .expected_tree_structure =
-                "TEXT-FUZZY(\"word\", distance=1, field_mask=1)\n",
+            .create_success = false,
+            .create_expected_error_message = "Unsupported query operation"
         },
         {
             .test_name = "exact_fuzzy2",
             .filter = "@text_field1:%%word%%",
-            .create_success = true,
-            .evaluate_success = true,
-            .expected_tree_structure =
-                "TEXT-FUZZY(\"word\", distance=2, field_mask=1)\n",
+            .create_success = false,
+            .create_expected_error_message = "Unsupported query operation",
         },
         {
             .test_name = "exact_fuzzy3",
             .filter = "@text_field1:%%%word%%%",
-            .create_success = true,
-            .evaluate_success = true,
-            .expected_tree_structure =
-                "TEXT-FUZZY(\"word\", distance=3, field_mask=1)\n",
+            .create_success = false,
+            .create_expected_error_message = "Unsupported query operation"
         },
         {
             .test_name = "proximity1",
@@ -919,7 +913,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "invalid_fuzzy2",
             .filter = "Hello, how are %you%% doing",
             .create_success = false,
-            .create_expected_error_message = "Invalid fuzzy '%' markers",
+            .create_expected_error_message = "Unsupported query operation",
         },
         {
             .test_name = "invalid_fuzzy3",
@@ -931,7 +925,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "invalid_fuzzy4",
             .filter = "Hello, how are %%%you%%%doing%%%",
             .create_success = false,
-            .create_expected_error_message = "Invalid fuzzy '%' markers",
+            .create_expected_error_message = "Unsupported query operation",
         },
         {
             .test_name = "invalid_escape1",
@@ -950,7 +944,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "invalid_wildcard2",
             .filter = "Hello, how are *you** doing",
             .create_success = false,
-            .create_expected_error_message = "Invalid wildcard '*' markers",
+            .create_expected_error_message = "Unsupported query operation",
         },
         {
             .test_name = "bad_filter_1",
@@ -1184,6 +1178,38 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
             .evaluate_success = true,
             .expected_tree_structure = "OR{\n"
+                                       "  OR{\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "  OR{\n"
+                                       "    TAG(tag_field_1)\n"
+                                       "    TAG(tag_field_1_2)\n"
+                                       "  }\n"
+                                       "  OR{\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "}\n",
+        },
+        {
+            .test_name = "nested_brackets_or_3",
+            .filter = "(@num_field_1.5:[5.0 6.0] | @num_field_2.0:[5.0 6.0]) | "
+                      "(@tag_field_1:{tag2} | @tag_field_1_2:{tag3}) | "
+                      "(@num_field_1.5:[1.0 2.0] | @num_field_2.0:[1.0 3.0]) |"
+                      "(@tag_field_1:{tag2} | @tag_field_1_2:{tag3}) | "
+                      "(@num_field_1.5:[1.0 2.0] | @num_field_2.0:[1.0 3.0])",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "OR{\n"
+                                       "  OR{\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "  OR{\n"
+                                       "    TAG(tag_field_1)\n"
+                                       "    TAG(tag_field_1_2)\n"
+                                       "  }\n"
                                        "  OR{\n"
                                        "    NUMERIC(num_field_1.5)\n"
                                        "    NUMERIC(num_field_2.0)\n"

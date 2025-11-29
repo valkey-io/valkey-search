@@ -344,9 +344,9 @@ class ComposedPredicate : public Predicate {
  public:
   // N-ary constructor
   ComposedPredicate(LogicalOperator logical_op,
-                    std::vector<std::unique_ptr<Predicate>> children)
-      std::optional<uint32_t> slop = std::nullopt,
-                              bool inorder = false;
+                    std::vector<std::unique_ptr<Predicate>> children,
+                    std::optional<uint32_t> slop = std::nullopt,
+                    bool inorder = false);
 
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
   std::optional<uint32_t> GetSlop() const { return slop_; }

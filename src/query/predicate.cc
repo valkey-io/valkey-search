@@ -314,6 +314,10 @@ ComposedPredicate::ComposedPredicate(
       slop_(slop),
       inorder_(inorder) {}
 
+void ComposedPredicate::AddChild(std::unique_ptr<Predicate> child) {
+  children_.push_back(std::move(child));
+}
+
 // ComposedPredicate: Combines two predicates with AND/OR logic.
 // For text predicates with proximity constraints (slop/inorder), creates
 // ProximityIterator to validate term positions meet distance and order
@@ -326,13 +330,13 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     std::vector<std::unique_ptr<indexes::text::TextIterator>> iterators;
     for (const auto& child : children_) {
       EvaluationResult result = child->Evaluate(evaluator);
-      if (child.filter_iterator && (slop_.has_value() || inorder_)) {
+      if (result.filter_iterator && (slop_.has_value() || inorder_)) {
         childPositionsCount++;
-        query_field_mask & child.filter_iterator->QueryFieldMask();
-        iterators.push_back(std::move(child.filter_iterator));
+        query_field_mask &= result.filter_iterator->QueryFieldMask();
+        iterators.push_back(std::move(result.filter_iterator));
       }
       VMSDK_LOG(DEBUG, nullptr)
-          << "Inline evaluate AND predicate child: " << result;
+          << "Inline evaluate AND predicate child: " << result.matches;
       if (!result.matches) {
         return EvaluationResult(false);
       }
@@ -374,8 +378,8 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   for (const auto& child : children_) {
     EvaluationResult result = child->Evaluate(evaluator);
     VMSDK_LOG(DEBUG, nullptr)
-        << "Inline evaluate OR predicate child: " << result;
-    if (result) {
+        << "Inline evaluate OR predicate child: " << result.matches;
+    if (result.matches) {
       return EvaluationResult(true);
     }
   }

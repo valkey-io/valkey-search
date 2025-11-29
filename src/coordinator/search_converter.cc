@@ -85,8 +85,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
                                                  attribute_identifiers));
         children.push_back(std::move(child));
       }
-      return std::make_unique<query::ComposedPredicate>(
-          query::LogicalOperator::kAnd, std::move(children));
       // Extract slop and inorder if present
       std::optional<uint32_t> slop = std::nullopt;
       bool inorder = false;
@@ -96,8 +94,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       inorder = predicate.and_().inorder();
 
       return std::make_unique<query::ComposedPredicate>(
-          std::move(lhs_predicate), std::move(rhs_predicate),
-          query::LogicalOperator::kAnd, slop, inorder);
+          query::LogicalOperator::kAnd, std::move(children), slop, inorder);
     }
     case Predicate::kOr: {
       std::vector<std::unique_ptr<query::Predicate>> children;

@@ -99,12 +99,14 @@ std::string PrintPredicateTree(const query::Predicate* predicate, int indent) {
     case query::PredicateType::kComposedAnd: {
       const auto* composed =
           static_cast<const query::ComposedPredicate*>(predicate);
-      if (composed->GetInorder() == false && composed->GetSlop() == NULL) {
+      auto slop = composed->GetSlop();
+      if (composed->GetInorder() == false && !slop.has_value()) {
         result += indent_str + "AND{\n";
       } else {
-        result +=
-            indent_str + "AND(slop=" + std::to_string(composed->GetSlop()) +
-            ", inorder=" + (composed->GetInorder() ? "true" : "false") + "){\n";
+        result += indent_str + "AND(slop=" +
+                  (slop.has_value() ? std::to_string(slop.value()) : "none") +
+                  ", inorder=" + (composed->GetInorder() ? "true" : "false") +
+                  "){\n";
       }
       for (const auto& child : composed->GetChildren()) {
         result += PrintPredicateTree(child.get(), indent + 1);
@@ -523,7 +525,7 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
 // Token boundaries (separated by space): " <punctuation> \<non-punctuation>
 absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    FieldMaskPredicate field_mask, std::optional<uint32_t> min_stem_size) {
+    const std::optional<std::string>& field_or_default) {
   const auto& lexer = text_index_schema->GetLexer();
   std::string processed_content;
   while (!IsEnd()) {
@@ -543,6 +545,10 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     return FilterParser::TokenResult{nullptr, false};
   }
   std::string token = absl::AsciiStrToLower(processed_content);
+  FieldMaskPredicate field_mask;
+  std::optional<uint32_t> min_stem_size;
+  VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(field_mask, min_stem_size,
+                                                    field_or_default, false));
   return FilterParser::TokenResult{
       std::make_unique<query::TermPredicate>(text_index_schema, field_mask,
                                              std::move(token), true),
@@ -563,7 +569,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
 //   { } [ ] : ; $ -> error
 absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    FieldMaskPredicate field_mask, std::optional<uint32_t> min_stem_size) {
+    const std::optional<std::string>& field_or_default) {
   const auto& lexer = text_index_schema->GetLexer();
   std::string processed_content;
   bool starts_with_star = false;
@@ -636,30 +642,35 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     ++pos_;
   }
   std::string token = absl::AsciiStrToLower(processed_content);
+  FieldMaskPredicate field_mask;
+  std::optional<uint32_t> min_stem_size = std::nullopt;
   // Build predicate directly based on detected pattern
   if (leading_percent_count > 0) {
     if (trailing_percent_count == leading_percent_count &&
         leading_percent_count <= FUZZY_MAX_DISTANCE) {
       if (token.empty()) return absl::InvalidArgumentError("Empty fuzzy token");
-      return FilterParser::TokenResult{
+      VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(
+          field_mask, min_stem_size, field_or_default, false));
+      auto fuzzy = FilterParser::TokenResult{
           std::make_unique<query::FuzzyPredicate>(text_index_schema, field_mask,
                                                   std::move(token),
                                                   leading_percent_count),
           break_on_query_syntax};
+      return absl::InvalidArgumentError("Unsupported query operation");
     } else {
       return absl::InvalidArgumentError("Invalid fuzzy '%' markers");
     }
   } else if (starts_with_star) {
     if (token.empty())
       return absl::InvalidArgumentError("Invalid wildcard '*' markers");
-    if (!text_index_schema->GetTextIndex()->suffix_.has_value()) {
-      return absl::InvalidArgumentError("Index created without Suffix Trie");
-    }
+    VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(field_mask, min_stem_size,
+                                                      field_or_default, true));
     if (ends_with_star) {
-      return FilterParser::TokenResult{
+      auto infix = FilterParser::TokenResult{
           std::make_unique<query::InfixPredicate>(text_index_schema, field_mask,
                                                   std::move(token)),
           break_on_query_syntax};
+      return absl::InvalidArgumentError("Unsupported query operation");
     } else {
       return FilterParser::TokenResult{
           std::make_unique<query::SuffixPredicate>(
@@ -667,8 +678,11 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
           break_on_query_syntax};
     }
   } else if (ends_with_star) {
+    // Suffix predicate handling:
     if (token.empty())
       return absl::InvalidArgumentError("Invalid wildcard '*' markers");
+    VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(field_mask, min_stem_size,
+                                                      field_or_default, false));
     return FilterParser::TokenResult{
         std::make_unique<query::PrefixPredicate>(text_index_schema, field_mask,
                                                  std::move(token)),
@@ -680,6 +694,8 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
       // Skip stop words and empty words.
       return FilterParser::TokenResult{nullptr, break_on_query_syntax};
     }
+    VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(field_mask, min_stem_size,
+                                                      field_or_default, false));
     if (!exact && min_stem_size.has_value()) {
       token = lexer.StemWord(token, true, *min_stem_size, lexer.GetStemmer());
     }
@@ -692,7 +708,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
 
 absl::Status FilterParser::SetupTextFieldConfiguration(
     FieldMaskPredicate& field_mask, std::optional<uint32_t>& min_stem_size,
-    const std::optional<std::string>& field_name) {
+    const std::optional<std::string>& field_name, bool with_suffix) {
   if (field_name.has_value()) {
     auto index = index_schema_.GetIndex(*field_name);
     if (!index.ok() ||
@@ -700,6 +716,9 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
       return absl::InvalidArgumentError("Index does not have any text field");
     }
     auto* text_index = dynamic_cast<const indexes::Text*>(index.value().get());
+    if (with_suffix && !text_index->WithSuffixTrie()) {
+      return absl::InvalidArgumentError("Field does not support suffix search");
+    }
     auto identifier = index_schema_.GetIdentifier(*field_name).value();
     filter_identifiers_.insert(identifier);
     field_mask = 1ULL << text_index->GetTextFieldNumber();
@@ -708,16 +727,22 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
     }
   } else {
     // Set identifiers to include all text fields in the index schema.
-    auto text_identifiers = index_schema_.GetAllTextIdentifiers();
+    auto text_identifiers = index_schema_.GetAllTextIdentifiers(with_suffix);
+    // Set field mask to include all text fields in the index schema.
+    field_mask = index_schema_.GetAllTextFieldMask(with_suffix);
+    if (text_identifiers.size() == 0 || field_mask == 0ULL) {
+      if (with_suffix) {
+        return absl::InvalidArgumentError("No fields support suffix search");
+      }
+      return absl::InvalidArgumentError("Index does not have any text field");
+    }
     for (const auto& identifier : text_identifiers) {
       filter_identifiers_.insert(identifier);
     }
-    // Set field mask to include all text fields in the index schema.
-    field_mask = ~0ULL;
     // When no field was specified, we use the min stem across all text fields
     // in the index schema. This helps ensure the root of the text token can be
     // searched for.
-    min_stem_size = index_schema_.MinStemSizeAcrossTextIndexes();
+    min_stem_size = index_schema_.MinStemSizeAcrossTextIndexes(with_suffix);
   }
   return absl::OkStatus();
 }
@@ -738,12 +763,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     return absl::InvalidArgumentError("Index does not have any text field");
   }
   std::vector<std::unique_ptr<query::TextPredicate>> terms;
-  // Handle default / every field (no field specifier) and specific
-  // field query cases.
-  FieldMaskPredicate field_mask;
-  std::optional<uint32_t> min_stem_size = std::nullopt;
-  VMSDK_RETURN_IF_ERROR(
-      SetupTextFieldConfiguration(field_mask, min_stem_size, field_or_default));
   bool in_quotes = false;
   bool exact_phrase = false;
   while (!IsEnd()) {
@@ -761,9 +780,8 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     VMSDK_ASSIGN_OR_RETURN(
         auto result,
         in_quotes
-            ? ParseQuotedTextToken(text_index_schema, field_mask, min_stem_size)
-            : ParseUnquotedTextToken(text_index_schema, field_mask,
-                                     min_stem_size));
+            ? ParseQuotedTextToken(text_index_schema, field_or_default)
+            : ParseUnquotedTextToken(text_index_schema, field_or_default));
     if (result.predicate) {
       terms.push_back(std::move(result.predicate));
       // For unquoted text, stop after first token. For exact phrases, continue
@@ -784,15 +802,21 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     // Exact phrase requires adjacent terms in order: slop=0, inorder=true
     uint32_t slop = 0;
     bool inorder = true;
-    pred = std::move(terms.front());  // Start with first term
-    for (size_t i = 1; i < terms.size(); ++i) {
-      pred = std::make_unique<query::ComposedPredicate>(
-          std::move(pred),      // lhs: accumulated tree so far
-          std::move(terms[i]),  // rhs: next term
-          query::LogicalOperator::kAnd,
-          /*slop=*/slop,
-          /*inorder=*/inorder);
+    // If index schema does not support offsets, we cannot support exact phrase,
+    // so reject the query.
+    if (!index_schema_.HasTextOffsets()) {
+      return absl::InvalidArgumentError("Index does not support offsets");
     }
+    std::vector<std::unique_ptr<query::Predicate>> children;
+    children.push_back(std::move(terms[0]));
+    for (size_t i = 1; i < terms.size(); ++i) {
+      children.push_back(std::move(terms[i]));
+    }
+    pred = std::make_unique<query::ComposedPredicate>(
+        query::LogicalOperator::kAnd,
+        std::move(children),
+        slop,
+        inorder);
     node_count_ += terms.size();
   } else {
     if (terms.empty()) {

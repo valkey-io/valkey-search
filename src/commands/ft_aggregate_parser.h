@@ -37,7 +37,7 @@ struct IndexInterface {
 struct AggregateParameters : public expr::Expression::CompileContext,
                              public QueryCommand {
   ~AggregateParameters() override = default;
-  AggregateParameters() = default;
+  AggregateParameters(int db_num) : QueryCommand(db_num){};
   absl::Status ParseCommand(vmsdk::ArgsIterator& itr) override;
   void SendReply(ValkeyModuleCtx* ctx,
                  std::deque<indexes::Neighbor>& neighbors) override;

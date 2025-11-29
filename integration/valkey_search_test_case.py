@@ -458,6 +458,7 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
     def get_config_file_lines(self, testdir, port) -> List[str]:
         return [
             "enable-debug-command yes",
+            "cluster-databases 16",
             f"loadmodule {os.getenv('JSON_MODULE_PATH')}",
             f"dir {testdir}",
             "cluster-enabled yes",

@@ -79,7 +79,7 @@ class TestFTCreateConsistency(ValkeySearchClusterTestCaseDebugMode):
         res = str(results[0])
         err = str(exceptions[1])
         assert "OK" in res
-        assert "Index index1 already exists" in err
+        assert "Index index1 in database 0 already exists" in err
 
     # create same index name with different schema on two nodes concurrently
     # one command should success and other one should fail

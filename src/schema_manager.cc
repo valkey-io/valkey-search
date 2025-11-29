@@ -26,6 +26,7 @@
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "google/protobuf/util/json_util.h"
 #include "highwayhash/arch_specific.h"
 #include "highwayhash/hh_types.h"
 #include "highwayhash/highwayhash.h"
@@ -725,6 +726,24 @@ void SchemaManager::PopulateFingerprintVersionFromMetadata(
     existing_entry.value()->SetFingerprint(fingerprint);
     existing_entry.value()->SetVersion(version);
   }
+}
+
+absl::Status SchemaManager::ShowIndexSchemas(ValkeyModuleCtx *ctx,
+                                             vmsdk::ArgsIterator &itr) const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  ValkeyModule_ReplyWithArray(ctx, db_to_index_schemas_.size());
+  for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
+    ValkeyModule_ReplyWithArray(ctx, 2);
+    ValkeyModule_ReplyWithLongLong(ctx, db_num);
+    ValkeyModule_ReplyWithArray(ctx, inner_map.size());
+    for (const auto &[name, schema] : inner_map) {
+      auto proto = schema->ToProto()->DebugString();
+      VMSDK_LOG(NOTICE, ctx)
+          << "Index Schema in DB " << db_num << ": " << name << " " << proto;
+      ValkeyModule_ReplyWithStringBuffer(ctx, proto.data(), proto.size());
+    }
+  }
+  return absl::OkStatus();
 }
 
 static vmsdk::info_field::Integer number_of_indexes(

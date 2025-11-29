@@ -21,12 +21,11 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "command_parser.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
-#include "version.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -35,12 +34,6 @@ namespace valkey_search {
 
 constexpr absl::string_view kSchemaManagerMetadataTypeName{"vs_index_schema"};
 
-namespace options {
-
-/// Return the maximum number of indexes allowed to create.
-vmsdk::config::Number &GetMaxIndexes();
-
-}  // namespace options
 class SchemaManager {
  public:
   SchemaManager(ValkeyModuleCtx *ctx,
@@ -110,6 +103,9 @@ class SchemaManager {
       const google::protobuf::Any &metadata);
   static absl::StatusOr<vmsdk::ValkeyVersion> ComputeMinVersion(
       const google::protobuf::Any &metadata);
+
+  absl::Status ShowIndexSchemas(ValkeyModuleCtx *ctx,
+                                vmsdk::ArgsIterator &itr) const;
 
  private:
   absl::Status RemoveAll()

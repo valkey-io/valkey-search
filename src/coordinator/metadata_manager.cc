@@ -25,18 +25,15 @@
 #include "absl/strings/string_view.h"
 #include "command_parser.h"
 #include "google/protobuf/any.pb.h"
-#include "google/protobuf/util/json_util.h"
 #include "grpcpp/support/status.h"
 #include "highwayhash/arch_specific.h"
 #include "highwayhash/highwayhash.h"
-#include "module_config.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/util.h"
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
-#include "src/valkey_search_options.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -197,28 +194,31 @@ absl::Status MetadataManager::TriggerCallbacks(
   return absl::OkStatus();
 }
 
-absl::StatusOr<const GlobalMetadataEntry *> MetadataManager::GetEntryInternal(
+absl::StatusOr<const GlobalMetadataEntry *> MetadataManager::GetExistingEntry(
     absl::string_view type_name, uint32_t db_num, absl::string_view id) const {
   auto encoded_id = EncodeDbNum(db_num, id);
   auto &metadata = metadata_.Get();
-  if (!metadata.type_namespace_map().contains(type_name) ||
-      !metadata.type_namespace_map().at(type_name).entries().contains(
-          encoded_id)) {
-    return absl::NotFoundError(
-        absl::StrCat("Entry not found: ", type_name, " ", db_num, " ", id));
+  auto type_itr = metadata.type_namespace_map().find(type_name);
+  if (type_itr != metadata.type_namespace_map().end()) {
+    auto id_itr = type_itr->second.entries().find(encoded_id);
+    if (id_itr != type_itr->second.entries().end() &&
+        id_itr->second.has_content()) {
+      return &id_itr->second;
+    }
   }
-  return &metadata.type_namespace_map().at(type_name).entries().at(encoded_id);
+  return absl::NotFoundError(
+      absl::StrCat("Entry not found: ", type_name, " ", db_num, " ", id));
 }
 
 absl::StatusOr<google::protobuf::Any> MetadataManager::GetEntry(
     absl::string_view type_name, uint32_t db_num, absl::string_view id) {
-  VMSDK_ASSIGN_OR_RETURN(auto entry, GetEntryInternal(type_name, db_num, id));
+  VMSDK_ASSIGN_OR_RETURN(auto entry, GetExistingEntry(type_name, db_num, id));
   return entry->content();
 }
 
 absl::StatusOr<IndexFingerprintVersion> MetadataManager::GetEntryInfo(
     absl::string_view type_name, uint32_t db_num, absl::string_view id) {
-  VMSDK_ASSIGN_OR_RETURN(auto entry, GetEntryInternal(type_name, db_num, id));
+  VMSDK_ASSIGN_OR_RETURN(auto entry, GetExistingEntry(type_name, db_num, id));
   IndexFingerprintVersion index_fingerprint_version;
   index_fingerprint_version.set_fingerprint(entry->fingerprint());
   index_fingerprint_version.set_version(entry->version());
@@ -562,8 +562,8 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
       ComputeTopLevelFingerprint(result.type_namespace_map());
   result.mutable_version_header()->set_top_level_fingerprint(new_fingerprint);
 
-  // The new version is the max of the old version and the proposed version. We
-  // also bump the version if the fingerprint changed, as this indicates a
+  // The new version is the max of the old version and the proposed version.
+  // We also bump the version if the fingerprint changed, as this indicates a
   // distinct version.
   auto old_version = metadata.version_header().top_level_version();
   auto new_version =
@@ -690,10 +690,11 @@ void MetadataManager::OnServerCronCallback(
     [[maybe_unused]] uint64_t subevent, [[maybe_unused]] void *data) {
   static bool timer_started = false;
   if (!timer_started) {
-    // The first server cron tick after the FT.CREATE is run needs to kick start
-    // the timer. This can't be done during normal server event subscription
-    // because timers cannot be safely created in background threads (the GIL
-    // does not protect event loop code which uses the timers).
+    // The first server cron tick after the FT.CREATE is run needs to kick
+    // start the timer. This can't be done during normal server event
+    // subscription because timers cannot be safely created in background
+    // threads (the GIL does not protect event loop code which uses the
+    // timers).
     timer_started = true;
     ValkeyModule_CreateTimer(
         ctx,
@@ -799,10 +800,6 @@ absl::Status MetadataManager::ShowMetadata(
     ValkeyModuleCtx *ctx, [[maybe_unused]] vmsdk::ArgsIterator &itr) const {
   auto metadata = metadata_.Get().DebugString();
   VMSDK_LOG(WARNING, ctx) << "Metadata: " << metadata;
-  google::protobuf::util::JsonPrintOptions options;
-  options.always_print_fields_with_no_presence = true;
-  [[maybe_unused]] auto status = google::protobuf::util::MessageToJsonString(
-      metadata_.Get(), &metadata, options);
   ValkeyModule_ReplyWithStringBuffer(ctx, metadata.data(), metadata.size());
   return absl::OkStatus();
 }
@@ -825,8 +822,8 @@ absl::StatusOr<vmsdk::ValkeyVersion> MetadataManager::ComputeMinVersion()
 }
 
 /*
-An 8/1.0(Valkey 8, Search 1.0) encoded string won't have a hashtag anywhere and
-is always for db_num == 0 An 9/1.1 encoded string will always have a
+An 8/1.0(Valkey 8, Search 1.0) encoded string won't have a hashtag anywhere
+and is always for db_num == 0 An 9/1.1 encoded string will always have a
 false-hashtag at the START AND may have a real hashtag after that.
 
 Decoded strings that lack a hashtag and are for db_num == 0, are encoded with

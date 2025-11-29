@@ -158,7 +158,7 @@ class MetadataManager {
       absl::string_view type_name, const google::protobuf::Any &contents,
       absl::flat_hash_map<std::string, RegisteredType> &registered_types);
   int GetSectionsCount() const;
-  absl::StatusOr<const GlobalMetadataEntry *> GetEntryInternal(
+  absl::StatusOr<const GlobalMetadataEntry *> GetExistingEntry(
       absl::string_view type_name, uint32_t db_num, absl::string_view id) const;
   vmsdk::MainThreadAccessGuard<GlobalMetadata> metadata_;
   vmsdk::MainThreadAccessGuard<GlobalMetadata> staged_metadata_;

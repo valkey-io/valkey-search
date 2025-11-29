@@ -803,7 +803,7 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
             .evaluate_success = true,
             .expected_tree_structure =
-                "TEXT-PROXIMITY(field_mask=1, slop=0, inorder=true){\n"
+                "AND(slop=0, inorder=true){\n"
                 "  TEXT-TERM(\"hello\", field_mask=1)\n"
                 "  TEXT-TERM(\"my\", field_mask=1)\n"
                 "  TEXT-TERM(\"name\", field_mask=1)\n"

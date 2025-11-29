@@ -366,7 +366,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
         case indexes::IndexerType::kTag: {
           auto tag_index = dynamic_cast<indexes::Tag*>(attribute_info.index);
           auto tag_value_ptr = tag_index->GetRawValue(neighbor.external_id);
-          if (tag_value_ptr != nullptr) {
+          if (tag_value_ptr) {
             attribute_value = vmsdk::MakeUniqueValkeyString(*tag_value_ptr);
           }
           break;

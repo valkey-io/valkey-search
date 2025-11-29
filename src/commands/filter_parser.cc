@@ -430,7 +430,7 @@ inline std::unique_ptr<query::Predicate> MayNegatePredicate(
   return predicate;
 }
 
-std::unique_ptr<query::Predicate> FilterParser::WrapPredicate(
+absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
     std::unique_ptr<query::Predicate> prev_predicate,
     std::unique_ptr<query::Predicate> predicate, bool& negate,
     query::LogicalOperator logical_operator, bool prev_grp, bool first_joined) {
@@ -439,6 +439,13 @@ std::unique_ptr<query::Predicate> FilterParser::WrapPredicate(
   if (!prev_predicate) {
     return new_predicate;
   }
+
+  // // If INORDER OR SLOP, but the index schema does not support offsets, we
+  // // reject the query.
+  // if ((options_.inorder || options_.slop.has_value()) &&
+  //     !index_schema_.HasTextOffsets()) {
+  //   return absl::InvalidArgumentError("Index does not support offsets");
+  // }
 
   // Check if we can extend existing ComposedPredicate of the same type
   // Only extend AND nodes when we're adding with AND operator
@@ -546,7 +553,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
   }
   std::string token = absl::AsciiStrToLower(processed_content);
   FieldMaskPredicate field_mask;
-  std::optional<uint32_t> min_stem_size;
+  std::optional<uint32_t> min_stem_size = std::nullopt;
   VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(field_mask, min_stem_size,
                                                     field_or_default, false));
   return FilterParser::TokenResult{
@@ -876,9 +883,11 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
         node_count_++;
       }
       prev_grp = (!result.prev_predicate) ? true : false;
-      result.prev_predicate = WrapPredicate(
+      VMSDK_ASSIGN_OR_RETURN(
+          result.prev_predicate,
+          WrapPredicate(
           std::move(result.prev_predicate), std::move(predicate), negate,
-          query::LogicalOperator::kAnd, prev_grp, result.first_joined);
+          query::LogicalOperator::kAnd, prev_grp, result.first_joined));
       result.first_joined = false;
     } else if (Match('|')) {
       if (negate) {
@@ -889,9 +898,11 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       if (result.prev_predicate) {
         node_count_++;
       }
-      result.prev_predicate = WrapPredicate(
+      VMSDK_ASSIGN_OR_RETURN(
+          result.prev_predicate,
+          WrapPredicate(
           std::move(result.prev_predicate), std::move(predicate), negate,
-          query::LogicalOperator::kOr, prev_grp, sub_result.first_joined);
+          query::LogicalOperator::kOr, prev_grp, sub_result.first_joined));
       prev_grp = false;
       result.first_joined = true;
     } else {
@@ -918,10 +929,12 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       if (result.prev_predicate) {
         node_count_++;
       }
-      result.prev_predicate = WrapPredicate(
+      VMSDK_ASSIGN_OR_RETURN(
+          result.prev_predicate,
+          WrapPredicate(
           std::move(result.prev_predicate), std::move(predicate), negate,
-          query::LogicalOperator::kAnd, prev_grp, result.first_joined);
-      prev_grp = false;
+          query::LogicalOperator::kAnd, prev_grp, result.first_joined));
+          prev_grp = false;
     }
     SkipWhitespace();
     auto max_node_count = options::GetQueryStringTermsCount().GetValue();

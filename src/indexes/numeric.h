@@ -109,9 +109,7 @@ class Numeric : public IndexBase {
 
   const double* GetValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  using BTreeNumericIndex =
-      BTreeNumeric<InternedStringPtr, InternedStringPtrHash,
-                   InternedStringPtrEqual>;
+  using BTreeNumericIndex = BTreeNumeric<InternedStringPtr>;
   using EntriesRange = std::pair<BTreeNumericIndex::ConstIterator,
                                  BTreeNumericIndex::ConstIterator>;
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
@@ -166,7 +164,7 @@ class Numeric : public IndexBase {
 
  private:
   mutable absl::Mutex index_mutex_;
-  InternedStringMap<double> tracked_keys_ ABSL_GUARDED_BY(index_mutex_);
+  InternedStringHashMap<double> tracked_keys_ ABSL_GUARDED_BY(index_mutex_);
   // untracked keys is needed to support negate filtering
   InternedStringSet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);
   std::unique_ptr<BTreeNumericIndex> index_ ABSL_GUARDED_BY(index_mutex_);

@@ -25,6 +25,7 @@
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
+#include "command_parser.h"
 #include "gtest/gtest_prod.h"
 #include "src/attribute.h"
 #include "src/attribute_data_type.h"
@@ -194,6 +195,9 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t GetBackfillDbSize() const;
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
 
+  static absl::Status TextInfoCmd(ValkeyModuleCtx *ctx,
+                                  vmsdk::ArgsIterator &itr);
+
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,
               const data_model::IndexSchema &index_schema_proto,
@@ -224,7 +228,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   absl::flat_hash_set<std::string> suffix_text_identifiers_;
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
-  InternedStringMap<DocumentMutation> tracked_mutated_records_
+  InternedStringHashMap<DocumentMutation> tracked_mutated_records_
       ABSL_GUARDED_BY(mutated_records_mutex_);
   bool is_destructing_ ABSL_GUARDED_BY(mutated_records_mutex_){false};
   mutable absl::Mutex mutated_records_mutex_;
@@ -287,6 +291,8 @@ class IndexSchema : public KeyspaceEventSubscription,
                           MutatedAttributes &&mutated_attributes,
                           bool from_backfill, bool block_client,
                           bool from_multi)
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
+  bool IsKeyInFlight(const InternedStringPtr &key) const
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(
       const InternedStringPtr &key, bool first_time)

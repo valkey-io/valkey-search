@@ -134,12 +134,9 @@ class MockTag : public indexes::Tag {
 class TestedTagEntriesFetcher : public indexes::Tag::EntriesFetcher {
  public:
   TestedTagEntriesFetcher(
-      size_t size,
-      PatriciaTree<InternedStringPtr, InternedStringPtrHash,
-                   InternedStringPtrEqual>& tree,
-      absl::flat_hash_set<PatriciaNode<InternedStringPtr, InternedStringPtrHash,
-                                       InternedStringPtrEqual>*>& entries,
-      bool negate, InternedStringSet& untracked_keys)
+      size_t size, PatriciaTree<InternedStringPtr> &tree,
+      absl::flat_hash_set<PatriciaNode<InternedStringPtr> *> &entries,
+      bool negate, InternedStringSet &untracked_keys)
       : indexes::Tag::EntriesFetcher(tree, entries, size, negate,
                                      untracked_keys),
         size_(size) {}
@@ -226,15 +223,9 @@ void InitIndexSchema(MockIndexSchema* index_schema) {
 
   VMSDK_EXPECT_OK(index_schema->AddIndex("tag_index_100_15", "tag_index_100_15",
                                          tag_index_100_15));
-  // Use static to ensure these variables persist beyond function scope
-  // since they're captured by reference in lambdas that execute later
-  static PatriciaTree<InternedStringPtr, InternedStringPtrHash,
-                      InternedStringPtrEqual>
-      tree(false);
-  static absl::flat_hash_set<PatriciaNode<
-      InternedStringPtr, InternedStringPtrHash, InternedStringPtrEqual>*>
-      entries;
-  static InternedStringSet untracked_keys;
+  PatriciaTree<InternedStringPtr> tree(false);
+  absl::flat_hash_set<PatriciaNode<InternedStringPtr> *> entries;
+  InternedStringSet untracked_keys;
   EXPECT_CALL(*tag_index_100_15, Search(_, false))
       .WillRepeatedly([&tree, &entries, &untracked_keys]() {
         return std::make_unique<TestedTagEntriesFetcher>(15, tree, entries,

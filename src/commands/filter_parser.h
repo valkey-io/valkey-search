@@ -68,8 +68,19 @@ class FilterParser {
   absl::StatusOr<std::unique_ptr<query::Predicate>> ParseTextTokens(
       const std::optional<std::string>& field_for_default);
   absl::StatusOr<bool> IsMatchAllExpression();
-  absl::StatusOr<std::unique_ptr<query::Predicate>> ParseExpression(
-      uint32_t level);
+
+  // Struct to hold parsing state including predicate, bracket counter, and
+  // first joined flag
+  struct ParseResult {
+    std::unique_ptr<query::Predicate> prev_predicate;
+    bool first_joined;
+
+    ParseResult() : first_joined(false) {}
+    ParseResult(std::unique_ptr<query::Predicate> pred, bool joined)
+        : prev_predicate(std::move(pred)), first_joined(joined) {}
+  };
+
+  absl::StatusOr<ParseResult> ParseExpression(uint32_t level);
   absl::StatusOr<std::unique_ptr<query::NumericPredicate>>
   ParseNumericPredicate(const std::string& attribute_alias);
   absl::StatusOr<std::unique_ptr<query::TagPredicate>> ParseTagPredicate(
@@ -95,8 +106,13 @@ class FilterParser {
   absl::StatusOr<std::unique_ptr<query::Predicate>> WrapPredicate(
       std::unique_ptr<query::Predicate> prev_predicate,
       std::unique_ptr<query::Predicate> predicate, bool& negate,
-      query::LogicalOperator logical_operator);
+      query::LogicalOperator logical_operator, bool prev_grp,
+      bool first_joined);
 };
+
+// Helper function to print predicate tree structure using DFS
+std::string PrintPredicateTree(const query::Predicate* predicate,
+                               int indent = 0);
 
 namespace options {
 

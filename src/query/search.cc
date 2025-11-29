@@ -47,8 +47,8 @@ namespace valkey_search::query {
 
 class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
-  InlineVectorFilter(query::Predicate *filter_predicate,
-                     indexes::VectorBase *vector_index)
+  InlineVectorFilter(query::Predicate* filter_predicate,
+                     indexes::VectorBase* vector_index)
       : filter_predicate_(filter_predicate), vector_index_(vector_index) {}
   ~InlineVectorFilter() override = default;
 
@@ -62,11 +62,11 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
   }
 
  private:
-  query::Predicate *filter_predicate_;
-  indexes::VectorBase *vector_index_;
+  query::Predicate* filter_predicate_;
+  indexes::VectorBase* vector_index_;
 };
 absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
-    indexes::VectorBase *vector_index, const SearchParameters &parameters) {
+    indexes::VectorBase* vector_index, const SearchParameters& parameters) {
   std::unique_ptr<InlineVectorFilter> inline_filter;
   if (parameters.filter_parse_results.root_predicate != nullptr) {
     inline_filter = std::make_unique<InlineVectorFilter>(
@@ -74,7 +74,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
     VMSDK_LOG(DEBUG, nullptr) << "Performing vector search with inline filter";
   }
   if (vector_index->GetIndexerType() == indexes::IndexerType::kHNSW) {
-    auto vector_hnsw = dynamic_cast<indexes::VectorHNSW<float> *>(vector_index);
+    auto vector_hnsw = dynamic_cast<indexes::VectorHNSW<float>*>(vector_index);
 
     auto latency_sample = SAMPLE_EVERY_N(100);
     auto res = vector_hnsw->Search(parameters.query, parameters.k,
@@ -85,7 +85,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
     return res;
   }
   if (vector_index->GetIndexerType() == indexes::IndexerType::kFlat) {
-    auto vector_flat = dynamic_cast<indexes::VectorFlat<float> *>(vector_index);
+    auto vector_flat = dynamic_cast<indexes::VectorFlat<float>*>(vector_index);
     auto latency_sample = SAMPLE_EVERY_N(100);
     auto res = vector_flat->Search(parameters.query, parameters.k,
                                    parameters.cancellation_token,
@@ -99,8 +99,8 @@ absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
 }
 
 void AppendQueue(
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &dest,
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &src) {
+    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& dest,
+    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& src) {
   while (!src.empty()) {
     dest.push(std::move(src.front()));
     src.pop();
@@ -108,7 +108,7 @@ void AppendQueue(
 }
 
 inline PredicateType EvaluateAsComposedPredicate(
-    const Predicate *composed_predicate, bool negate) {
+    const Predicate* composed_predicate, bool negate) {
   auto predicate_type = composed_predicate->GetType();
 
   if (!negate) {
@@ -121,65 +121,139 @@ inline PredicateType EvaluateAsComposedPredicate(
 }
 
 size_t EvaluateFilterAsPrimary(
-    const Predicate *predicate,
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
+    const Predicate* predicate,
+    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
     bool negate) {
+  // std::cout << "=== PREDICATE EVALUATION STEP ===" << std::endl;
+  // std::cout << "Predicate type: ";
+
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {
-    auto composed_predicate =
-        dynamic_cast<const ComposedPredicate *>(predicate);
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>
-        lhs_entries_fetchers;
-    auto lhs_predicate = composed_predicate->GetLhsPredicate();
-    auto lhs =
-        EvaluateFilterAsPrimary(lhs_predicate, lhs_entries_fetchers, negate);
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>
-        rhs_entries_fetchers;
-    auto rhs_predicate = composed_predicate->GetRhsPredicate();
-    auto rhs =
-        EvaluateFilterAsPrimary(rhs_predicate, rhs_entries_fetchers, negate);
+    auto composed_predicate = dynamic_cast<const ComposedPredicate*>(predicate);
+    // std::cout << (predicate->GetType() == PredicateType::kComposedAnd ? "AND"
+    //                                                                   : "OR")
+    //           << std::endl;
+    // std::cout << "Negate flag: " << (negate ? "true" : "false") << std::endl;
+
     auto predicate_type =
         EvaluateAsComposedPredicate(composed_predicate, negate);
+
+    // std::cout << "Evaluated as: "
+    //           << (predicate_type == PredicateType::kComposedAnd ? "AND" :
+    //           "OR")
+    //           << std::endl;
+    // std::cout << "Number of children: "
+    //           << composed_predicate->GetChildren().size() << std::endl;
+
     if (predicate_type == PredicateType::kComposedAnd) {
-      if (lhs < rhs) {
-        AppendQueue(entries_fetchers, lhs_entries_fetchers);
-        return lhs;
+      // For AND: find the smallest result set to optimize performance
+      // std::cout << "AND operation: Finding smallest result set" << std::endl;
+      size_t min_size = SIZE_MAX;
+      std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> best_fetchers;
+      size_t child_index = 0;
+
+      for (const auto& child : composed_predicate->GetChildren()) {
+        // std::cout << "  Evaluating AND child " << child_index << ":"
+        //           << std::endl;
+        std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
+        size_t child_size =
+            EvaluateFilterAsPrimary(child.get(), child_fetchers, negate);
+
+        // std::cout << "  Child " << child_index << " result size: " <<
+        // child_size
+        //           << std::endl;
+        if (child_size < min_size) {
+          // std::cout << "  Child " << child_index
+          //           << " has smallest size so far, selecting it" <<
+          //           std::endl;
+          min_size = child_size;
+          best_fetchers = std::move(child_fetchers);
+        }
+        child_index++;
       }
-      AppendQueue(entries_fetchers, rhs_entries_fetchers);
-      return rhs;
+
+      // std::cout << "AND operation result size: " << min_size << std::endl;
+      AppendQueue(entries_fetchers, best_fetchers);
+      return min_size;
+    } else {
+      // For OR: combine all result sets
+      // std::cout << "OR operation: Combining all result sets" << std::endl;
+      size_t total_size = 0;
+      size_t child_index = 0;
+
+      for (const auto& child : composed_predicate->GetChildren()) {
+        // std::cout << "  Evaluating OR child " << child_index << ":"
+        //           << std::endl;
+        std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
+        size_t child_size =
+            EvaluateFilterAsPrimary(child.get(), child_fetchers, negate);
+
+        // std::cout << "  Child " << child_index << " result size: " <<
+        // child_size
+        //           << std::endl;
+        AppendQueue(entries_fetchers, child_fetchers);
+        total_size += child_size;
+        child_index++;
+      }
+
+      // std::cout << "OR operation result size: " << total_size << std::endl;
+      return total_size;
     }
-    AppendQueue(entries_fetchers, lhs_entries_fetchers);
-    AppendQueue(entries_fetchers, rhs_entries_fetchers);
-    return lhs + rhs;
   }
   if (predicate->GetType() == PredicateType::kTag) {
-    auto tag_predicate = dynamic_cast<const TagPredicate *>(predicate);
+    auto tag_predicate = dynamic_cast<const TagPredicate*>(predicate);
+    // std::cout << "TAG" << std::endl;
+    // std::cout << "Tag alias: " << std::string(tag_predicate->GetAlias())
+    // << std::endl;
+    // std::cout << "Negate flag: " << (negate ? "true" : "false") << std::endl;
+
     auto fetcher = tag_predicate->GetIndex()->Search(*tag_predicate, negate);
     size_t size = fetcher->Size();
+    // std::cout << "TAG result size: " << size << std::endl;
     entries_fetchers.push(std::move(fetcher));
     return size;
   }
   if (predicate->GetType() == PredicateType::kNumeric) {
-    auto numeric_predicate = dynamic_cast<const NumericPredicate *>(predicate);
+    auto numeric_predicate = dynamic_cast<const NumericPredicate*>(predicate);
+    // std::cout << "NUMERIC" << std::endl;
+    // std::cout << "Numeric alias: " <<
+    // std::string(numeric_predicate->GetAlias())
+    //           << std::endl;
+    // std::cout << "Negate flag: " << (negate ? "true" : "false") << std::endl;
+
     auto fetcher =
         numeric_predicate->GetIndex()->Search(*numeric_predicate, negate);
     size_t size = fetcher->Size();
+    // std::cout << "NUMERIC result size: " << size << std::endl;
     entries_fetchers.push(std::move(fetcher));
     return size;
   }
   if (predicate->GetType() == PredicateType::kText) {
-    auto text_predicate = dynamic_cast<const TextPredicate *>(predicate);
+    auto text_predicate = dynamic_cast<const TextPredicate*>(predicate);
+    // std::cout << "TEXT" << std::endl;
+    // std::cout << "Negate flag: " << (negate ? "true" : "false") << std::endl;
+
     auto fetcher = std::unique_ptr<indexes::EntriesFetcherBase>(
-        static_cast<indexes::EntriesFetcherBase *>(
+        static_cast<indexes::EntriesFetcherBase*>(
             text_predicate->Search(negate)));
     size_t size = fetcher->Size();
+    // std::cout << "TEXT result size: " << size << std::endl;
     entries_fetchers.push(std::move(fetcher));
     return size;
   }
   if (predicate->GetType() == PredicateType::kNegate) {
-    auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
-    return EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
-                                   entries_fetchers, !negate);
+    auto negate_predicate = dynamic_cast<const NegatePredicate*>(predicate);
+    // std::cout << "NEGATE" << std::endl;
+    // std::cout << "Current negate flag: " << (negate ? "true" : "false")
+    //           << std::endl;
+    // std::cout << "Flipping negate flag to: " << (!negate ? "true" : "false")
+    //           << std::endl;
+    // std::cout << "Recursively evaluating negated predicate:" << std::endl;
+
+    size_t result = EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
+                                            entries_fetchers, !negate);
+    // std::cout << "NEGATE operation result size: " << result << std::endl;
+    return result;
   }
   CHECK(false);
 }
@@ -190,12 +264,12 @@ struct PrefilteredKey {
 };
 
 void EvaluatePrefilteredKeys(
-    const SearchParameters &parameters,
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    absl::AnyInvocable<bool(const InternedStringPtr &,
-                            absl::flat_hash_set<const char *> &)>
+    const SearchParameters& parameters,
+    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
+    absl::AnyInvocable<bool(const InternedStringPtr&,
+                            absl::flat_hash_set<const char*>&)>
         appender) {
-  absl::flat_hash_set<const char *> result_keys;
+  absl::flat_hash_set<const char*> result_keys;
   auto predicate = parameters.filter_parse_results.root_predicate.get();
   indexes::PrefilterEvaluator evaluator;
   while (!entries_fetchers.empty()) {
@@ -203,7 +277,7 @@ void EvaluatePrefilteredKeys(
     entries_fetchers.pop();
     auto iterator = fetcher->Begin();
     while (!iterator->Done()) {
-      const auto &key = **iterator;
+      const auto& key = **iterator;
       // TODO: add a bloom filter to ensure distinct keys are evaluated
       // only once.
       if (!result_keys.contains(key->Str().data()) &&
@@ -222,14 +296,14 @@ void EvaluatePrefilteredKeys(
 
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
-    const SearchParameters &parameters,
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    indexes::VectorBase *vector_index) {
+    const SearchParameters& parameters,
+    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
+    indexes::VectorBase* vector_index) {
   std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
   auto results_appender =
       [&results, &parameters, vector_index](
-          const InternedStringPtr &key,
-          absl::flat_hash_set<const char *> &top_keys) -> bool {
+          const InternedStringPtr& key,
+          absl::flat_hash_set<const char*>& top_keys) -> bool {
     return vector_index->AddPrefilteredKey(parameters.query, parameters.k, key,
                                            results, top_keys);
   };
@@ -255,7 +329,7 @@ std::string StringFormatVector(std::vector<char> vector) {
 
 absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
     absl::StatusOr<std::deque<indexes::Neighbor>> results,
-    const SearchParameters &parameters) {
+    const SearchParameters& parameters) {
   if (!results.ok()) {
     return results;
   }
@@ -263,11 +337,11 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
     return results;
   }
   struct AttributeInfo {
-    const ReturnAttribute *attribute;
-    indexes::IndexBase *index;
+    const ReturnAttribute* attribute;
+    indexes::IndexBase* index;
   };
   std::vector<AttributeInfo> attributes;
-  for (auto &attribute : parameters.return_attributes) {
+  for (auto& attribute : parameters.return_attributes) {
     if (!attribute.attribute_alias.get()) {
       // Any attribute that is not indexed will result in all attributes being
       // fetched from the main thread for consistency.
@@ -280,17 +354,17 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
     }
     attributes.push_back(AttributeInfo{&attribute, index.value().get()});
   }
-  for (auto &neighbor : *results) {
+  for (auto& neighbor : *results) {
     if (neighbor.attribute_contents.has_value()) {
       continue;
     }
     neighbor.attribute_contents = RecordsMap();
     bool any_value_missing = false;
-    for (auto &attribute_info : attributes) {
+    for (auto& attribute_info : attributes) {
       vmsdk::UniqueValkeyString attribute_value = nullptr;
       switch (attribute_info.index->GetIndexerType()) {
         case indexes::IndexerType::kTag: {
-          auto tag_index = dynamic_cast<indexes::Tag *>(attribute_info.index);
+          auto tag_index = dynamic_cast<indexes::Tag*>(attribute_info.index);
           auto tag_value_ptr = tag_index->GetRawValue(neighbor.external_id);
           if (tag_value_ptr) {
             attribute_value = vmsdk::MakeUniqueValkeyString(*tag_value_ptr);
@@ -299,7 +373,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
         }
         case indexes::IndexerType::kNumeric: {
           auto numeric_index =
-              dynamic_cast<indexes::Numeric *>(attribute_info.index);
+              dynamic_cast<indexes::Numeric*>(attribute_info.index);
           auto numeric = numeric_index->GetValue(neighbor.external_id);
           if (numeric != nullptr) {
             attribute_value =
@@ -311,7 +385,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
         case indexes::IndexerType::kHNSW:
         case indexes::IndexerType::kFlat: {
           auto vector_index =
-              dynamic_cast<indexes::VectorBase *>(attribute_info.index);
+              dynamic_cast<indexes::VectorBase*>(attribute_info.index);
           auto vector = vector_index->GetValue(neighbor.external_id);
           if (vector.ok()) {
             if (parameters.index_schema->GetAttributeDataType().ToProto() ==
@@ -359,7 +433,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
 }
 
 absl::StatusOr<std::deque<indexes::Neighbor>> SearchNonVectorQuery(
-    const SearchParameters &parameters) {
+    const SearchParameters& parameters) {
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = EvaluateFilterAsPrimary(
       parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
@@ -367,8 +441,8 @@ absl::StatusOr<std::deque<indexes::Neighbor>> SearchNonVectorQuery(
   std::deque<indexes::Neighbor> neighbors;
   auto results_appender =
       [&neighbors, &parameters](
-          const InternedStringPtr &key,
-          absl::flat_hash_set<const char *> &top_keys) -> bool {
+          const InternedStringPtr& key,
+          absl::flat_hash_set<const char*>& top_keys) -> bool {
     neighbors.push_back(indexes::Neighbor{key, 0.0f});
     return true;
   };
@@ -380,7 +454,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> SearchNonVectorQuery(
 }
 
 absl::StatusOr<std::deque<indexes::Neighbor>> DoSearch(
-    const SearchParameters &parameters, SearchMode search_mode) {
+    const SearchParameters& parameters, SearchMode search_mode) {
   // Handle OOM for search requests, defends against request
   // coming from the coordinator
   if (search_mode == SearchMode::kRemote) {
@@ -391,7 +465,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> DoSearch(
     }
   }
 
-  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
+  auto& time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
   vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
   ++Metrics::GetStats().time_slice_queries;
   // Handle non vector queries first where attribute_alias is empty.
@@ -400,7 +474,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> DoSearch(
   }
   VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
                                          parameters.attribute_alias));
-  auto vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
+  auto vector_index = dynamic_cast<indexes::VectorBase*>(index.get());
   if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
       index->GetIndexerType() != indexes::IndexerType::kFlat) {
     return absl::InvalidArgumentError(
@@ -434,12 +508,12 @@ absl::StatusOr<std::deque<indexes::Neighbor>> DoSearch(
 }
 
 absl::StatusOr<std::deque<indexes::Neighbor>> Search(
-    const SearchParameters &parameters, SearchMode search_mode) {
+    const SearchParameters& parameters, SearchMode search_mode) {
   return MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters);
 }
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
-                         vmsdk::ThreadPool *thread_pool,
+                         vmsdk::ThreadPool* thread_pool,
                          SearchResponseCallback callback,
                          SearchMode search_mode) {
   thread_pool->Schedule(

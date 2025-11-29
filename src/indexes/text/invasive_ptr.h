@@ -102,19 +102,19 @@ class InvasivePtr {
     explicit RefCountWrapper(Args&&... args)
         : data_(std::forward<Args>(args)...) {}
 
-    T data_;
     std::atomic<uint32_t> refcount_ = 1;
+    T data_;
   };
 
   void Release() {
-    if (ptr_ && --ptr_->refcount_ == 0) {
+    if (ptr_ && ptr_->refcount_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
       delete ptr_;
     }
   }
 
   void Acquire() {
     if (ptr_) {
-      ptr_->refcount_++;
+      ptr_->refcount_.fetch_add(1, std::memory_order_relaxed);
     }
   }
 

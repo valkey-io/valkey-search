@@ -297,23 +297,42 @@ std::unique_ptr<Server> ServerImpl::Create(
   auto server = builder.BuildAndStart();
   if (server == nullptr) {
     VMSDK_LOG(WARNING, ctx)
-        << "Failed to start Coordinator Server on " << server_address;
-
-    std::string lsof_cmd = "lsof -i :" + std::to_string(port) + " 2>/dev/null";
-    FILE* pipe = popen(lsof_cmd.c_str(), "r");
-    if (pipe) {
-      char buffer[256];
-      VMSDK_LOG(WARNING, ctx) << "Port " << port << " usage:";
-      while (fgets(buffer, sizeof(buffer), pipe)) {
-        std::string line(buffer);
-        if (!line.empty() && line.back() == '\n') line.pop_back();
-        VMSDK_LOG(WARNING, ctx) << line;
+        << "Failed to start Coordinator Server on port " << port;
+    for (size_t attempt = 2; attempt <= 10; ++attempt) {
+      std::string lsof_cmd =
+          "lsof -i :" + std::to_string(port) + " 2>/dev/null";
+      FILE* pipe = popen(lsof_cmd.c_str(), "r");
+      if (pipe) {
+        char buffer[256];
+        VMSDK_LOG(WARNING, ctx)
+            << "Diagnosing other usage with this shell command:";
+        VMSDK_LOG(WARNING, ctx) << ">> lsof -i: " << port;
+        while (fgets(buffer, sizeof(buffer), pipe)) {
+          std::string line(buffer);
+          if (!line.empty() && line.back() == '\n') {
+            line.pop_back();
+          }
+          VMSDK_LOG(WARNING, ctx) << ">> " << line;
+        }
+        VMSDK_LOG(WARNING, ctx) << ">> <end of lsof output>";
+        pclose(pipe);
+      } else {
+        VMSDK_LOG(WARNING, ctx) << "Could not check port " << port << " usage";
       }
-      pclose(pipe);
-    } else {
-      VMSDK_LOG(WARNING, ctx) << "Could not check port " << port << " usage";
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(100 * attempt));  // backoff
+      VMSDK_LOG(WARNING, ctx)
+          << "Retrying to start Coordinator Server (attempt " << attempt << ")";
+      server = builder.BuildAndStart();
+      if (server != nullptr) {
+        VMSDK_LOG(NOTICE, ctx)
+            << "Successfully started Coordinator Server on " << server_address
+            << " after " << attempt << " attempts";
+        break;
+      }
     }
-
+    VMSDK_LOG(WARNING, ctx)
+        << "Failed to start Coordinator Server on " << server_address;
     return nullptr;
   }
   VMSDK_LOG(NOTICE, ctx) << "Coordinator Server listening on "

@@ -159,7 +159,6 @@ class Index:
         for f in self.fields:
             cmd += f.create(self.type)
         print(f"Creating Index: {cmd}")
-        client.execute_command("DEBUG LOG", f"Creating index {self.name}")        
         client.execute_command(*cmd)
         if wait_for_backfill:
             self.wait_for_backfill_complete(client)
@@ -168,7 +167,6 @@ class Index:
         cmd = ["FT.DROPINDEX", self.name]
         print("Executing: ", cmd)
         client.execute_command(*cmd)
-        client.execute_command("DEBUG LOG", f"Deleting index {self.name}")
 
     def load_data(self, client: valkey.client, rows: int, start_index: int = 0):
         for i in range(start_index, rows):

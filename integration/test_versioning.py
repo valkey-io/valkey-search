@@ -20,12 +20,13 @@ class TestVersioningCMD(ValkeySearchTestCaseDebugMode):
         hnsw_index.create(client)
         hnsw_index.load_data(client, 1000)
 
-        client.execute_command("ft._debug controlled_variable set override_semantic_version", 10 << 16)
+        client.execute_command("ft._debug controlled_variable set override_min_version", 10 << 16)
 
         client.execute_command("save")
         with pytest.raises(ResponseError) as e:
             client.execute_command("DEBUG RELOAD")
-            assert " Error trying to load the RDB dump" in str(e)
+        print("Error Message:", str(e))
+        assert "Error trying to load the RDB dump" in str(e)
 
 class TestVersioningCME(ValkeySearchClusterTestCaseDebugMode):
     def test_versioningCME(self):
@@ -36,13 +37,14 @@ class TestVersioningCME(ValkeySearchClusterTestCaseDebugMode):
             c.execute_command("CONFIG SET search.info-developer-visible yes")
 
         client: Valkey = self.get_primary(0).get_new_client()
-        client.execute_command("ft._debug controlled_variable set override_semantic_version", 10 << 16)
+        client.execute_command("ft._debug controlled_variable set override_min_version", 10 << 16)
 
         hnsw_index = Index("hnsw", [Vector("v", 3, type="HNSW", m=2, efc=1), Numeric("n")])
         
         with pytest.raises(ResponseError) as e:
             hnsw_index.create(client)
-            assert "Unable to contact all cluster members" in str(e)
+        print("Error Message:", str(e))
+        assert "Unable to contact all cluster members" in str(e)
 
         assert client.execute_command("ft._list") == [hnsw_index.name.encode()]
         assert self.get_primary(1).get_new_client().execute_command("ft._list") == []

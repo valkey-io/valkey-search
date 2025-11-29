@@ -48,14 +48,15 @@ using RDBSectionSaveCallback = absl::AnyInvocable<absl::Status(
 using RDBSectionCountCallback =
     absl::AnyInvocable<int(ValkeyModuleCtx *ctx, int when)>;
 
-using RDBSectionMinSemVerCallback =
-    absl::AnyInvocable<vmsdk::ValkeyVersion(ValkeyModuleCtx *ctx, int when)>;
+using RDBSectionMinVersionCallback =
+    absl::AnyInvocable<absl::StatusOr<vmsdk::ValkeyVersion>(
+        ValkeyModuleCtx *ctx, int when)>;
 
 using RDBSectionCallbacks = struct RDBSectionCallbacks {
   RDBSectionLoadCallback load;
   RDBSectionSaveCallback save;
   RDBSectionCountCallback section_count;
-  RDBSectionMinSemVerCallback minimum_semantic_version;
+  RDBSectionMinVersionCallback minimum_semantic_version;
 };
 
 // Static mapping from section type to callback.

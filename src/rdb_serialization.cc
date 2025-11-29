@@ -162,6 +162,9 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
       auto rdb_section_count, rdb->LoadUnsigned(),
       _ << "IO error reading RDB section count from RDB. Failing RDB load.");
 
+  VMSDK_LOG(NOTICE, ctx) << "Loading RDB from version: " << rdb_version
+                         << " with " << rdb_section_count << " sections.";
+
   // Begin RDBSection iteration
   RDBSectionIter it(rdb, rdb_section_count);
   while (it.HasNext()) {
@@ -222,14 +225,14 @@ int AuxLoadCallback(ValkeyModuleIO *rdb, int encver, int when) {
 absl::Status PerformRDBSave(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when) {
   // Aggregate header information from save callbacks first
   int rdb_section_count = 0;
-  int min_semantic_version = 0;  // 0.0.0 by default
+  vmsdk::ValkeyVersion min_version = 0;  // 0.0.0 by default
   absl::flat_hash_map<data_model::RDBSectionType, int> section_counts;
   for (auto &[type, callbacks] : kRegisteredRDBSectionCallbacks) {
     section_counts[type] = callbacks.section_count(ctx, when);
     if (section_counts[type] > 0) {
-      min_semantic_version =
-          std::max(min_semantic_version,
-                   callbacks.minimum_semantic_version(ctx, when).ToInt());
+      auto this_version = callbacks.minimum_semantic_version(ctx, when);
+      CHECK(this_version.ok());
+      min_version = std::max(min_version, *this_version);
     }
     rdb_section_count += section_counts[type];
   }
@@ -239,8 +242,12 @@ absl::Status PerformRDBSave(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when) {
     return absl::OkStatus();
   }
 
+  VMSDK_LOG(NOTICE, ctx) << "Saving " << rdb_section_count
+                         << " ValkeySearch RDB sections with minimum version "
+                         << vmsdk::ValkeyVersion(min_version).ToString();
+
   // Save the header
-  VMSDK_RETURN_IF_ERROR(rdb->SaveUnsigned(min_semantic_version));
+  VMSDK_RETURN_IF_ERROR(rdb->SaveUnsigned(min_version.ToInt()));
   VMSDK_RETURN_IF_ERROR(rdb->SaveUnsigned(rdb_section_count));
 
   // Now do the save of the contents

@@ -34,6 +34,7 @@
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
+#include "version.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -248,11 +249,15 @@ absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(
       auto fingerprint,
       ComputeFingerprint(type_name, *contents, registered_types));
 
+  VMSDK_ASSIGN_OR_RETURN(auto min_version,
+                         rt_it->second.min_version_callback(*contents));
+
   GlobalMetadataEntry new_entry;
   new_entry.set_version(version);
   new_entry.set_fingerprint(fingerprint);
   new_entry.set_encoding_version(rt_it->second.encoding_version);
   new_entry.set_allocated_content(contents.release());
+  new_entry.set_min_version(min_version);
 
   auto callback_status = TriggerCallbacks(type_name, db_num, id, new_entry);
   if (!callback_status.ok()) {
@@ -267,6 +272,9 @@ absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(
       metadata.version_header().top_level_version() + 1);
   metadata.mutable_version_header()->set_top_level_fingerprint(
       ComputeTopLevelFingerprint(metadata.type_namespace_map()));
+  VMSDK_ASSIGN_OR_RETURN(auto top_level_min_version, ComputeMinVersion());
+  metadata.mutable_version_header()->set_top_level_min_version(
+      top_level_min_version);
   BroadcastMetadata(detached_ctx_.get(), metadata.version_header());
   IndexFingerprintVersion index_fingerprint_version;
   index_fingerprint_version.set_fingerprint(fingerprint);
@@ -401,6 +409,15 @@ void MetadataManager::HandleBroadcastedMetadata(
         << "Ignoring incoming metadata message due to loading...";
     return;
   }
+  if (header->top_level_min_version() > kModuleVersion.ToInt()) {
+    VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 10)
+        << "Ignoring incoming metadata message from "
+        << std::string(sender_id, VALKEYMODULE_NODE_ID_LEN)
+        << " due to minimum version requirement of "
+        << header->top_level_min_version() << ", current version is "
+        << kModuleVersion.ToString();
+    return;
+  }
   auto &metadata = metadata_.Get();
   auto top_level_version = metadata.version_header().top_level_version();
   auto top_level_fingerprint =
@@ -480,6 +497,17 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
                                                 absl::string_view source,
                                                 bool trigger_callbacks,
                                                 bool prefer_incoming) {
+  if (proposed.version_header().top_level_version() > kModuleVersion.ToInt()) {
+    VMSDK_LOG(WARNING, nullptr)
+        << "Proposed GlobalMetadata from " << source
+        << " requires minimum version "
+        << proposed.version_header().top_level_version()
+        << ", current version is " << kModuleVersion.ToString();
+    return absl::InternalError(absl::StrCat(
+        "Proposed GlobalMetadata from ", source, " requires minimum version ",
+        proposed.version_header().top_level_version(), ", current version is ",
+        kModuleVersion.ToString()));
+  }
   // We synthesize the new version in a new variable, so that if we need to
   // fail, the state is unchanged. The new version starts as a copy of the
   // current version.

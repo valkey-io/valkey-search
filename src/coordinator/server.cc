@@ -288,6 +288,8 @@ std::unique_ptr<Server> ServerImpl::Create(
       reader_thread_pool);
   grpc::ServerBuilder builder;
   builder.AddListeningPort(server_address, creds);
+  // Set the SO_REUSEADDR option
+  builder.AddChannelArgument(GRPC_ARG_ALLOW_REUSEPORT, 1);
   builder.RegisterService(coordinator_service.get());
   builder.AddChannelArgument(GRPC_ARG_MINIMAL_STACK, 1);
   builder.AddChannelArgument(GRPC_ARG_OPTIMIZATION_TARGET, "latency");
@@ -296,6 +298,22 @@ std::unique_ptr<Server> ServerImpl::Create(
   if (server == nullptr) {
     VMSDK_LOG(WARNING, ctx)
         << "Failed to start Coordinator Server on " << server_address;
+
+    std::string lsof_cmd = "lsof -i :" + std::to_string(port) + " 2>/dev/null";
+    FILE* pipe = popen(lsof_cmd.c_str(), "r");
+    if (pipe) {
+      char buffer[256];
+      VMSDK_LOG(WARNING, ctx) << "Port " << port << " usage:";
+      while (fgets(buffer, sizeof(buffer), pipe)) {
+        std::string line(buffer);
+        if (!line.empty() && line.back() == '\n') line.pop_back();
+        VMSDK_LOG(WARNING, ctx) << line;
+      }
+      pclose(pipe);
+    } else {
+      VMSDK_LOG(WARNING, ctx) << "Could not check port " << port << " usage";
+    }
+
     return nullptr;
   }
   VMSDK_LOG(NOTICE, ctx) << "Coordinator Server listening on "

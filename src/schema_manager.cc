@@ -26,7 +26,6 @@
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
-#include "google/protobuf/util/json_util.h"
 #include "highwayhash/arch_specific.h"
 #include "highwayhash/hh_types.h"
 #include "highwayhash/highwayhash.h"
@@ -38,7 +37,6 @@
 #include "src/valkey_search.h"
 #include "src/vector_externalizer.h"
 #include "src/version.h"
-#include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -126,10 +124,10 @@ SchemaManager::SchemaManager(
           .section_count = [this](ValkeyModuleCtx *ctx, int when) -> int {
             return this->GetNumberOfIndexSchemas();
           },
-          .minimum_semantic_version = [](ValkeyModuleCtx *ctx,
-                                         int when) -> int {
-            return 0x010000;  // Always use 1.0.0 for now
-          }});
+          .minimum_semantic_version =
+              [this](ValkeyModuleCtx *ctx, int when) {
+                return this->GetMinVersion();
+              }});
   if (coordinator_enabled) {
     coordinator::MetadataManager::Instance().RegisterType(
         kSchemaManagerMetadataTypeName, kModuleVersion, ComputeFingerprint,
@@ -139,7 +137,7 @@ SchemaManager::SchemaManager(
           return this->OnMetadataCallback(db_num, id, metadata, fingerprint,
                                           version);
         },
-        ComputeMinVersion);
+        [this](auto) { return this->GetMinVersion(); });
   }
 }
 
@@ -352,33 +350,6 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
   highwayhash::HighwayHashT(&state, serialized_entry.data(),
                             serialized_entry.size(), &entry_fingerprint);
   return entry_fingerprint;
-}
-
-//
-// Determine the minimum encoding version required to interpret the metadata for
-// this Schema
-//
-CONTROLLED_INT(override_encoding_version, -1);
-
-absl::StatusOr<vmsdk::ValkeyVersion> SchemaManager::ComputeMinVersion(
-    const google::protobuf::Any &metadata) {
-  if (override_encoding_version.GetValue() != -1) {
-    VMSDK_LOG(WARNING, nullptr)
-        << "Overriding index schema semantic version to "
-        << override_encoding_version.GetValue();
-    return vmsdk::ValkeyVersion(override_encoding_version.GetValue());
-  }
-  auto unpacked = std::make_unique<data_model::IndexSchema>();
-  if (!metadata.UnpackTo(unpacked.get())) {
-    return absl::InternalError(
-        "Unable to unpack metadata for index schema fingerprint "
-        "calculation");
-  }
-  if (unpacked->has_db_num() && unpacked->db_num() != 0) {
-    return kRelease11;
-  } else {
-    return kRelease10;
-  }
 }
 
 absl::Status SchemaManager::OnMetadataCallback(
@@ -726,6 +697,23 @@ void SchemaManager::PopulateFingerprintVersionFromMetadata(
     existing_entry.value()->SetFingerprint(fingerprint);
     existing_entry.value()->SetVersion(version);
   }
+}
+
+absl::StatusOr<vmsdk::ValkeyVersion> SchemaManager::GetMinVersion() const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  vmsdk::ValkeyVersion min_version(0);
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      auto any_proto = std::make_unique<google::protobuf::Any>();
+      auto proto = schema->ToProto();
+      any_proto->PackFrom(*proto);
+
+      VMSDK_ASSIGN_OR_RETURN(auto this_version,
+                             IndexSchema::GetMinVersion(*any_proto));
+      min_version = std::max(min_version, this_version);
+    }
+  }
+  return min_version;
 }
 
 absl::Status SchemaManager::ShowIndexSchemas(ValkeyModuleCtx *ctx,

@@ -23,6 +23,7 @@
 #include "src/index_schema.h"
 #include "src/metrics.h"
 #include "src/utils/string_interning.h"
+#include "src/version.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "valkey_search_options.h"

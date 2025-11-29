@@ -81,7 +81,7 @@ absl::Status FTAggregateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 // Common stuff for FT.SEARCH and FT.AGGREGATE command
 //
 struct QueryCommand : public query::SearchParameters {
-  QueryCommand() : query::SearchParameters(0, nullptr, 0) {}
+  QueryCommand(int db_num) : query::SearchParameters(0, nullptr, db_num) {}
   //
   // Start of command.
   //

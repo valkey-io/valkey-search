@@ -35,12 +35,13 @@ class TestDBNum(ValkeySearchClusterTestCaseDebugMode):
         def show(msg):
             for i in range(3):
                 self.clients[i][0].execute_command("DEBUG LOG", f"{i}:{msg}")
-                self.clients[i][0].execute_command("FT._DEBUG SHOW_METADATA")
+                print(self.clients[i][0].execute_command("FT._DEBUG SHOW_METADATA"))
 
         def exec(dbnum, l):
             for i in range(3):
                 l(self.clients[i][dbnum])
 
+        show("Before create index1")
         index1.create(self.client11)
         show("After create index1")
         index0.create(self.client10)

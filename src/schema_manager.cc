@@ -385,7 +385,6 @@ absl::Status SchemaManager::OnMetadataCallback(
     const google::protobuf::Any *metadata, uint64_t fingerprint,
     uint32_t version) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  // Note that there is only DB 0 in cluster mode, so we can hardcode this.
   auto status = RemoveIndexSchemaInternal(db_num, id);
   if (!status.ok() && !absl::IsNotFound(status.status())) {
     return status.status();
@@ -400,13 +399,11 @@ absl::Status SchemaManager::OnMetadataCallback(
         "Unable to unpack metadata for index schema %s", id.data()));
   }
 
-  auto result =
-      CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema);
-  if (!result.ok()) {
-    return result;
-  }
+  VMSDK_RETURN_IF_ERROR(
+      CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema));
 
-  auto created_schema = LookupInternal(0, id).value();
+  auto created_schema = LookupInternal(db_num, id).value();
+  CHECK(created_schema != nullptr);
   created_schema->SetFingerprint(fingerprint);
   created_schema->SetVersion(version);
 

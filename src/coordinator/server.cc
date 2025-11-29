@@ -117,11 +117,18 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
     const SearchIndexPartitionRequest* request,
     SearchIndexPartitionResponse* response) {
   GRPCSuspensionGuard guard(GRPCSuspender::Instance());
+  VMSDK_LOG(WARNING, detached_ctx_.get())
+      << "Received SearchIndexPartition request for index schema: "
+      << request->db_num() << " / " << request->index_schema_name();
   auto latency_sample = SAMPLE_EVERY_N(100);
   grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
   auto vector_search_parameters =
       GRPCSearchRequestToParameters(*request, context);
   if (!vector_search_parameters.ok()) {
+    VMSDK_LOG(WARNING, detached_ctx_.get())
+        << "Failed to convert SearchIndexPartitionRequest to "
+           "SearchParameters: "
+        << vector_search_parameters.status().message();
     reactor->Finish(ToGrpcStatus(vector_search_parameters.status()));
     RecordSearchMetrics(true, std::move(latency_sample));
     return reactor;
@@ -207,7 +214,10 @@ Service::GenerateInfoResponse(
   }
   auto status_or_schema =
       SchemaManager::Instance().GetIndexSchema(db_num, index_name);
-  if (!status_or_schema.ok()) {
+  auto index_fingerprint_version =
+      coordinator::MetadataManager::Instance().GetEntryInfo(
+          kSchemaManagerMetadataTypeName, db_num, index_name);
+  if (!status_or_schema.ok() || !index_fingerprint_version.ok()) {
     response.set_exists(false);
     response.set_index_name(index_name);
     response.set_error(status_or_schema.status().ToString());
@@ -219,20 +229,6 @@ Service::GenerateInfoResponse(
   auto schema = std::move(status_or_schema.value());
   IndexSchema::InfoIndexPartitionData data =
       schema->GetInfoIndexPartitionData();
-
-  std::optional<coordinator::IndexFingerprintVersion> index_fingerprint_version;
-
-  auto global_metadata =
-      coordinator::MetadataManager::Instance().GetGlobalMetadata();
-  CHECK(global_metadata->type_namespace_map().contains(
-      kSchemaManagerMetadataTypeName));
-  const auto& entry_map =
-      global_metadata->type_namespace_map().at(kSchemaManagerMetadataTypeName);
-  CHECK(entry_map.entries().contains(index_name));
-  const auto& entry = entry_map.entries().at(index_name);
-  index_fingerprint_version.emplace();
-  index_fingerprint_version->set_fingerprint(entry.fingerprint());
-  index_fingerprint_version->set_version(entry.version());
 
   response.set_exists(true);
   response.set_index_name(index_name);
@@ -248,10 +244,8 @@ Service::GenerateInfoResponse(
   response.set_mutation_queue_size(data.mutation_queue_size);
   response.set_recent_mutations_queue_delay(data.recent_mutations_queue_delay);
   response.set_state(data.state);
-  if (index_fingerprint_version.has_value()) {
-    *response.mutable_index_fingerprint_version() =
-        std::move(index_fingerprint_version.value());
-  }
+  *response.mutable_index_fingerprint_version() =
+      std::move(*index_fingerprint_version);
   return std::make_pair(grpc::Status::OK, response);
 }
 

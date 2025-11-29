@@ -123,9 +123,13 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
       request.timeout_ms(), context, request.db_num());
   parameters->index_schema_name = request.index_schema_name();
   parameters->attribute_alias = request.attribute_alias();
+  VMSDK_LOG(WARNING, nullptr)
+      << "Remote search for index schema: " << request.db_num() << " / "
+      << request.index_schema_name();
   VMSDK_ASSIGN_OR_RETURN(parameters->index_schema,
                          SchemaManager::Instance().GetIndexSchema(
                              request.db_num(), request.index_schema_name()));
+  VMSDK_LOG(WARNING, nullptr) << "Found index schema";
   if (request.has_score_as()) {
     parameters->score_as = vmsdk::MakeUniqueValkeyString(request.score_as());
   } else {
@@ -152,6 +156,8 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
         vmsdk::MakeUniqueValkeyString(return_parameter.identifier()),
         vmsdk::MakeUniqueValkeyString(return_parameter.alias())));
   }
+  VMSDK_LOG(WARNING, nullptr)
+      << "Converted GRPC SearchIndexPartitionRequest to SearchParameters";
   return parameters;
 }
 
@@ -226,6 +232,9 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
 std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
     const query::SearchParameters& parameters) {
   auto request = std::make_unique<SearchIndexPartitionRequest>();
+  VMSDK_LOG(WARNING, nullptr)
+      << "Converting SearchParameters to GRPC SearchIndexPartitionRequest "
+      << parameters.db_num_ << " / " << parameters.index_schema_name;
   request->set_index_schema_name(parameters.index_schema_name);
   request->set_db_num(parameters.db_num_);
   request->set_attribute_alias(parameters.attribute_alias);

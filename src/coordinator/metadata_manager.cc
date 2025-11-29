@@ -197,25 +197,32 @@ absl::Status MetadataManager::TriggerCallbacks(
   return absl::OkStatus();
 }
 
-absl::StatusOr<google::protobuf::Any> MetadataManager::GetEntry(
-    absl::string_view type_name, uint32_t db_num, absl::string_view id) {
+absl::StatusOr<const GlobalMetadataEntry *> MetadataManager::GetEntryInternal(
+    absl::string_view type_name, uint32_t db_num, absl::string_view id) const {
   auto encoded_id = EncodeDbNum(db_num, id);
   auto &metadata = metadata_.Get();
   if (!metadata.type_namespace_map().contains(type_name) ||
-      !metadata.type_namespace_map().at(type_name).entries().contains(id) ||
-      !metadata.type_namespace_map()
-           .at(type_name)
-           .entries()
-           .at(encoded_id)
-           .has_content()) {
+      !metadata.type_namespace_map().at(type_name).entries().contains(
+          encoded_id)) {
     return absl::NotFoundError(
         absl::StrCat("Entry not found: ", type_name, " ", db_num, " ", id));
   }
-  return metadata.type_namespace_map()
-      .at(type_name)
-      .entries()
-      .at(encoded_id)
-      .content();
+  return &metadata.type_namespace_map().at(type_name).entries().at(encoded_id);
+}
+
+absl::StatusOr<google::protobuf::Any> MetadataManager::GetEntry(
+    absl::string_view type_name, uint32_t db_num, absl::string_view id) {
+  VMSDK_ASSIGN_OR_RETURN(auto entry, GetEntryInternal(type_name, db_num, id));
+  return entry->content();
+}
+
+absl::StatusOr<IndexFingerprintVersion> MetadataManager::GetEntryInfo(
+    absl::string_view type_name, uint32_t db_num, absl::string_view id) {
+  VMSDK_ASSIGN_OR_RETURN(auto entry, GetEntryInternal(type_name, db_num, id));
+  IndexFingerprintVersion index_fingerprint_version;
+  index_fingerprint_version.set_fingerprint(entry->fingerprint());
+  index_fingerprint_version.set_version(entry->version());
+  return index_fingerprint_version;
 }
 
 absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(

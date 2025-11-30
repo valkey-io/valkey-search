@@ -127,7 +127,7 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
           callbacks_tracker.push_back(std::move(callback_result));
           return type_to_register.status_to_return;
         },
-        [](auto) { return kModuleVersion; });
+        [](auto) { return 1; });
   }
   if (test_case.expect_num_broadcasts > 0) {
     EXPECT_CALL(*kMockValkeyModule,
@@ -171,6 +171,11 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
   google::protobuf::TextFormat::Parser parser;
   EXPECT_TRUE(
       parser.ParseFromString(test_case.expected_metadata_pbtxt, &expected));
+  std::cout << "Actual Metadata: "
+            << test_metadata_manager_->GetGlobalMetadata()->DebugString()
+            << std::endl;
+  std::cout << "Expected Metadata: " << test_case.expected_metadata_pbtxt
+            << std::endl;
   EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
       *test_metadata_manager_->GetGlobalMetadata(), expected));
 }
@@ -212,6 +217,7 @@ INSTANTIATE_TEST_SUITE_P(
                 version_header {
                   top_level_version: 1
                   top_level_fingerprint: 17662341151372892129
+                  top_level_min_version: 1
                 }
                 type_namespace_map {
                   key: "my_type"
@@ -226,6 +232,7 @@ INSTANTIATE_TEST_SUITE_P(
                           type_url: "type.googleapis.com/FakeType"
                           value: "serialized_content_1"
                         }
+                        min_version: 1
                       }
                     }
                   }
@@ -350,6 +357,7 @@ INSTANTIATE_TEST_SUITE_P(
                 version_header {
                   top_level_version: 2
                   top_level_fingerprint: 8502063974858136158
+                  top_level_min_version: 1
                 }
                 type_namespace_map {
                   key: "my_type"
@@ -364,6 +372,7 @@ INSTANTIATE_TEST_SUITE_P(
                           type_url: "type.googleapis.com/FakeType"
                           value: "serialized_content_2"
                         }
+                        min_version: 1
                       }
                     }
                   }
@@ -415,6 +424,7 @@ INSTANTIATE_TEST_SUITE_P(
                 version_header {
                   top_level_version: 2
                   top_level_fingerprint: 1130665396559467152
+                  top_level_min_version: 1
                 }
                 type_namespace_map {
                   key: "my_type"

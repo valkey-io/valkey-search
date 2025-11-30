@@ -214,10 +214,7 @@ Service::GenerateInfoResponse(
   }
   auto status_or_schema =
       SchemaManager::Instance().GetIndexSchema(db_num, index_name);
-  auto index_fingerprint_version =
-      coordinator::MetadataManager::Instance().GetEntryInfo(
-          kSchemaManagerMetadataTypeName, db_num, index_name);
-  if (!status_or_schema.ok() || !index_fingerprint_version.ok()) {
+  if (!status_or_schema.ok()) {
     response.set_exists(false);
     response.set_index_name(index_name);
     response.set_error(status_or_schema.status().ToString());
@@ -229,6 +226,9 @@ Service::GenerateInfoResponse(
   auto schema = std::move(status_or_schema.value());
   IndexSchema::InfoIndexPartitionData data =
       schema->GetInfoIndexPartitionData();
+  auto index_fingerprint_version =
+      coordinator::MetadataManager::Instance().GetEntryInfo(
+          kSchemaManagerMetadataTypeName, db_num, index_name);
 
   response.set_exists(true);
   response.set_index_name(index_name);
@@ -244,8 +244,10 @@ Service::GenerateInfoResponse(
   response.set_mutation_queue_size(data.mutation_queue_size);
   response.set_recent_mutations_queue_delay(data.recent_mutations_queue_delay);
   response.set_state(data.state);
-  *response.mutable_index_fingerprint_version() =
-      std::move(*index_fingerprint_version);
+  if (index_fingerprint_version.ok()) {
+    *response.mutable_index_fingerprint_version() =
+        std::move(*index_fingerprint_version);
+  }
   return std::make_pair(grpc::Status::OK, response);
 }
 

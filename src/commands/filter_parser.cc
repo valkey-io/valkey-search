@@ -186,7 +186,7 @@ std::string PrintPredicateTree(const query::Predicate* predicate, int indent) {
                   "\", distance=" + std::to_string(fuzzy->GetDistance()) +
                   ", field_mask=" + field_mask_str + ")\n";
       } else {
-        result += indent_str + "TEXT(field_mask=" + field_mask_str + ")\n";
+        result += indent_str + "UNKNOWN\n";
       }
       break;
     }
@@ -820,10 +820,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
       children.push_back(std::move(terms[i]));
     }
     pred = std::make_unique<query::ComposedPredicate>(
-        query::LogicalOperator::kAnd,
-        std::move(children),
-        slop,
-        inorder);
+        query::LogicalOperator::kAnd, std::move(children), slop, inorder);
     node_count_ += terms.size();
   } else {
     if (terms.empty()) {
@@ -836,21 +833,28 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
 
 // Parsing rules:
 // 1. Predicate evaluation is done with left-associative grouping while the OR
-// operator has higher precedence than the AND operator. precedence. For
-// example: a & b | c  & d is evaluated as (a & b) | (c & d).
-// 2. Field name is always preceded by '@' and followed by ':'.
-// 3. A numeric field has the following pattern: @field_name:[Start,End]. Both
+// operator has lower precedence than the AND operator. precedence. For
+// example: a & b | c & d is evaluated as (a & b) | (c & d).
+// 2. Brackets have the higest Precedence of all the operators -> () > AND > OR.
+// example a & ( b | c ) & d is evaluated as AND (a, OR(b , c), d)
+// 3. If a bracket has atleast 2 terms it will be evaluated as a
+// separate nested structure.
+// 4. If a bracket has no terms it will be evaluted to false.
+// 5. Field name is always preceded by '@' and followed by ':'.
+// 6. A numeric field has the following pattern: @field_name:[Start,End]. Both
 // space and comma are valid separators between Start and End.
-// 4. A tag field has the following pattern: @field_name:{tag1|tag2|tag3}.
-// 5. The tag separator character is configurable with a default value of '|'.
-// 6. A field name can be wrapped with `()` to group multiple predicates.
-// 7. Space between predicates is considered as AND while '|' is considered as
+// 7. A tag field has the following pattern: @field_name:{tag1|tag2|tag3}.
+// 8. A text field has the following pattern : @field_name:phrase. Where phrase
+// can be a combination of different words, *, % for different text field types.
+// 9. The tag separator character is configurable with a default value of '|'.
+// 10. A field name can be wrapped with `()` to group multiple predicates.
+// 11. Space between predicates is considered as AND while '|' is considered as
 // OR.
-// 8. A predicate can be negated by preceding it with '-'. For example:
+// 12. A predicate can be negated by preceding it with '-'. For example:
 // -@field_name:10 => NOT(@field_name:10), -(a | b) => NOT(a | b).
-// 9. -inf, inf and +inf are acceptable numbers in a range. Therefore, greater
+// 13. -inf, inf and +inf are acceptable numbers in a range. Therefore, greater
 // than 100 is expressed as [(100 inf].
-// 10. Numeric filters are inclusive. Exclusive min or max are expressed with (
+// 14. Numeric filters are inclusive. Exclusive min or max are expressed with (
 // prepended to the number, for example, [(100 (200].
 absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
     uint32_t level) {
@@ -885,9 +889,9 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       prev_grp = (!result.prev_predicate) ? true : false;
       VMSDK_ASSIGN_OR_RETURN(
           result.prev_predicate,
-          WrapPredicate(
-          std::move(result.prev_predicate), std::move(predicate), negate,
-          query::LogicalOperator::kAnd, prev_grp, result.first_joined));
+          WrapPredicate(std::move(result.prev_predicate), std::move(predicate),
+                        negate, query::LogicalOperator::kAnd, prev_grp,
+                        result.first_joined));
       result.first_joined = false;
     } else if (Match('|')) {
       if (negate) {
@@ -900,9 +904,9 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       }
       VMSDK_ASSIGN_OR_RETURN(
           result.prev_predicate,
-          WrapPredicate(
-          std::move(result.prev_predicate), std::move(predicate), negate,
-          query::LogicalOperator::kOr, prev_grp, sub_result.first_joined));
+          WrapPredicate(std::move(result.prev_predicate), std::move(predicate),
+                        negate, query::LogicalOperator::kOr, prev_grp,
+                        sub_result.first_joined));
       prev_grp = false;
       result.first_joined = true;
     } else {
@@ -931,9 +935,9 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       }
       VMSDK_ASSIGN_OR_RETURN(
           result.prev_predicate,
-          WrapPredicate(
-          std::move(result.prev_predicate), std::move(predicate), negate,
-          query::LogicalOperator::kAnd, prev_grp, result.first_joined));
+          WrapPredicate(std::move(result.prev_predicate), std::move(predicate),
+                        negate, query::LogicalOperator::kAnd, prev_grp,
+                        result.first_joined));
       prev_grp = false;
     }
     SkipWhitespace();

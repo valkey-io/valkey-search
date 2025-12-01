@@ -779,36 +779,31 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = false,
             .create_expected_error_message = "Unsupported query operation",
         },
-        {
-            .test_name = "exact_fuzzy1",
-            .filter = "@text_field1:%word%",
-            .create_success = false,
-            .create_expected_error_message = "Unsupported query operation"
-        },
+        {.test_name = "exact_fuzzy1",
+         .filter = "@text_field1:%word%",
+         .create_success = false,
+         .create_expected_error_message = "Unsupported query operation"},
         {
             .test_name = "exact_fuzzy2",
             .filter = "@text_field1:%%word%%",
             .create_success = false,
             .create_expected_error_message = "Unsupported query operation",
         },
-        {
-            .test_name = "exact_fuzzy3",
-            .filter = "@text_field1:%%%word%%%",
-            .create_success = false,
-            .create_expected_error_message = "Unsupported query operation"
-        },
+        {.test_name = "exact_fuzzy3",
+         .filter = "@text_field1:%%%word%%%",
+         .create_success = false,
+         .create_expected_error_message = "Unsupported query operation"},
         {
             .test_name = "proximity1",
             .filter = "@text_field1:\"hello my name is\"",
             .create_success = true,
             .evaluate_success = true,
-            .expected_tree_structure =
-                "AND(slop=0, inorder=true){\n"
-                "  TEXT-TERM(\"hello\", field_mask=1)\n"
-                "  TEXT-TERM(\"my\", field_mask=1)\n"
-                "  TEXT-TERM(\"name\", field_mask=1)\n"
-                "  TEXT-TERM(\"is\", field_mask=1)\n"
-                "}\n",
+            .expected_tree_structure = "AND(slop=0, inorder=true){\n"
+                                       "  TEXT-TERM(\"hello\", field_mask=1)\n"
+                                       "  TEXT-TERM(\"my\", field_mask=1)\n"
+                                       "  TEXT-TERM(\"name\", field_mask=1)\n"
+                                       "  TEXT-TERM(\"is\", field_mask=1)\n"
+                                       "}\n",
         },
         {
             .test_name = "proximity2",

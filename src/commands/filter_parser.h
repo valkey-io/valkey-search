@@ -74,7 +74,6 @@ class FilterParser {
   struct ParseResult {
     std::unique_ptr<query::Predicate> prev_predicate;
     bool first_joined;
-
     ParseResult() : first_joined(false) {}
     ParseResult(std::unique_ptr<query::Predicate> pred, bool joined)
         : prev_predicate(std::move(pred)), first_joined(joined) {}

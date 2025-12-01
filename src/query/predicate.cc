@@ -349,7 +349,8 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     // Determine if children need to return positions for proximity checks
     bool require_positions = slop_.has_value() || inorder_;
     for (const auto& child : children_) {
-      EvaluationResult result = EvaluateTextPredicate(child.get(), evaluator, require_positions);
+      EvaluationResult result =
+          EvaluateTextPredicate(child.get(), evaluator, require_positions);
       if (result.filter_iterator && require_positions) {
         childPositionsCount++;
         query_field_mask &= result.filter_iterator->QueryFieldMask();

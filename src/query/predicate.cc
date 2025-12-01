@@ -358,12 +358,6 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
                                                  evaluator, require_positions);
     // Short-circuit for AND
     if (!rhs.matches) return EvaluationResult(false);
-    // Prefilter mode: boolean-only evaluation, no iterators needed
-    if (evaluator.IsPrefilterMode()) {
-      VMSDK_LOG(WARNING, nullptr)
-          << "Composed and Prefilter mode evaluation. Skip proximity";
-      return EvaluationResult(true);
-    }
     // Proximity check: Only if slop/inorder set and both sides have iterators
     if (require_positions && lhs.filter_iterator && rhs.filter_iterator) {
       // Get field_mask from lhs and rhs iterators

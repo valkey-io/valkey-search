@@ -440,12 +440,12 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
     return new_predicate;
   }
 
-  // // If INORDER OR SLOP, but the index schema does not support offsets, we
-  // // reject the query.
-  // if ((options_.inorder || options_.slop.has_value()) &&
-  //     !index_schema_.HasTextOffsets()) {
-  //   return absl::InvalidArgumentError("Index does not support offsets");
-  // }
+  // If INORDER OR SLOP, but the index schema does not support offsets, we
+  // reject the query.
+  if ((options_.inorder || options_.slop.has_value()) &&
+      !index_schema_.HasTextOffsets()) {
+    return absl::InvalidArgumentError("Index does not support offsets");
+  }
 
   // Check if we can extend existing ComposedPredicate of the same type
   // Only extend AND nodes when we're adding with AND operator
@@ -934,7 +934,7 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
           WrapPredicate(
           std::move(result.prev_predicate), std::move(predicate), negate,
           query::LogicalOperator::kAnd, prev_grp, result.first_joined));
-          prev_grp = false;
+      prev_grp = false;
     }
     SkipWhitespace();
     auto max_node_count = options::GetQueryStringTermsCount().GetValue();

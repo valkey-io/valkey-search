@@ -346,9 +346,11 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     uint32_t childPositionsCount = 0;
     uint64_t query_field_mask = ~0ULL;
     std::vector<std::unique_ptr<indexes::text::TextIterator>> iterators;
+    // Determine if children need to return positions for proximity checks
+    bool require_positions = slop_.has_value() || inorder_;
     for (const auto& child : children_) {
-      EvaluationResult result = child->Evaluate(evaluator);
-      if (result.filter_iterator && (slop_.has_value() || inorder_)) {
+      EvaluationResult result = EvaluateTextPredicate(child.get(), evaluator, require_positions);
+      if (result.filter_iterator && require_positions) {
         childPositionsCount++;
         query_field_mask &= result.filter_iterator->QueryFieldMask();
         iterators.push_back(std::move(result.filter_iterator));

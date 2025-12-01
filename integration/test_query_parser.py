@@ -36,6 +36,7 @@ class TestQueryParser(ValkeySearchTestCaseBase):
         """
         client: Valkey = self.server.get_new_client()
         # Test that the default query string limit is 1000
+        default_limit = b"1000"
         assert client.execute_command("CONFIG GET search.query-string-depth") == [b"search.query-string-depth", b"1000"]
         # Test that we can set the query string limit to 1
         assert client.execute_command("CONFIG SET search.query-string-depth 1") == b"OK"
@@ -57,6 +58,8 @@ class TestQueryParser(ValkeySearchTestCaseBase):
             "PARAMS", 2, "BLOB", "<your_vector_blob>",
             "RETURN", 1, "doc_embedding"
         ) == [0]
+        # Set depth limit to 1 to test that depth-2 query fails
+        assert client.execute_command("CONFIG SET search.query-string-depth 1") == b"OK"
         # Validate the failure case with a query of depth 2 (nested parentheses).
         # Parentheses cause a recursive ParseExpression call, increasing depth.
         try:
@@ -112,6 +115,7 @@ class TestQueryParser(ValkeySearchTestCaseBase):
         """
         client: Valkey = self.server.get_new_client()
         default_limit = b"1000"
+        max_limit = b"10000"
         # Test that the default query string terms count limit is expected default_limit
         assert client.execute_command("CONFIG GET search.query-string-terms-count") == [b"search.query-string-terms-count", default_limit]
         # Create an index for testing
@@ -167,14 +171,14 @@ class TestQueryParser(ValkeySearchTestCaseBase):
             "RETURN", 1, "doc_embedding"
         ) == [0]
         
-        # Test that the config ranges from 1 to default_limit
+        # Test that the config ranges from 1 to max_limit
         try:
             client.execute_command("CONFIG SET search.query-string-terms-count 0")
             assert False
         except ResponseError as e:
-            assert f"argument must be between 1 and {default_limit.decode()} inclusive" in str(e)
+            assert f"argument must be between 1 and {max_limit.decode()} inclusive" in str(e)
         try:
-            client.execute_command(f"CONFIG SET search.query-string-terms-count {int(default_limit)+1}")
+            client.execute_command(f"CONFIG SET search.query-string-terms-count {int(max_limit)+1}")
             assert False
         except ResponseError as e:
-            assert f"argument must be between 1 and {default_limit.decode()} inclusive" in str(e)
+            assert f"argument must be between 1 and {max_limit.decode()} inclusive" in str(e)

@@ -1,7 +1,7 @@
 import pytest
 from valkey import ResponseError
 from valkey.client import Valkey
-from valkey_search_test_case import ValkeySearchTestCaseBase, ValkeySearchTestCaseDebugMode
+from valkey_search_test_case import ValkeySearchTestCaseBase, ValkeySearchTestCaseDebugMode, ValkeySearchClusterTestCaseDebugMode
 from valkey_search_test_case import ValkeySearchClusterTestCase
 from valkeytestframework.conftest import resource_port_tracker
 from ft_info_parser import FTInfoParser
@@ -105,7 +105,10 @@ def validate_fulltext_search(client: Valkey):
         assert len(result) == 1
         assert result[0] == 0  # Number of documents found
     # Perform a wild card prefix operation with multiple matches
+    print(client.execute_command("FT._DEBUG textinfo products prefix ", "grea", "withkeys"))
     result = client.execute_command(*text_query_prefix_multimatch)
+    print("Query: ", text_query_prefix_multimatch)
+    print("Result: ", result)
     assert len(result) == 5
     assert result[0] == 2  # Number of documents found. Both docs below start with Grea* => Great and Greased
     assert (result[1] == b"product:1" and result[3] == b"product:5") or (
@@ -188,7 +191,7 @@ def validate_fulltext_search(client: Valkey):
     assert result[0] == 1
     assert result[1] == b"product:6"
 
-class TestFullText(ValkeySearchTestCaseBase):
+class TestFullText(ValkeySearchTestCaseDebugMode):
 
     @pytest.mark.parametrize("prefilter_enabled", [False, True])
     def test_text_search(self, prefilter_enabled):
@@ -207,6 +210,9 @@ class TestFullText(ValkeySearchTestCaseBase):
         # Data population:
         for doc in hash_docs:
             assert client.execute_command(*doc) == 5
+            print("After: ", doc)
+            print("Result: ", client.execute_command("FT._DEBUG TEXTINFO products PREFIX", "", "WITHKEYS", "WITHPOSITIONS"))
+            print("")
         # Validation of search queries:
         validate_fulltext_search(client)
 
@@ -734,6 +740,7 @@ class TestFullText(ValkeySearchTestCaseBase):
         IndexingTestHelper.wait_for_backfill_complete_on_node(self.client, "idx")
         # Test suffix search with *ing
         result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ing")
+        print(self.client.execute_command("FT._DEBUG TEXTINFO idx SUFFIX ing"))
         assert result[0] == 4  # All documents contain words ending with 'ing'
         # Test suffix search with *ing (should match running, jumping, walking, etc.)
         result = self.client.execute_command("FT.SEARCH", "idx", "@content:*ning")
@@ -819,6 +826,53 @@ class TestFullText(ValkeySearchTestCaseBase):
         # Test 8: Negation with mixed types
         # result = client.execute_command("FT.SEARCH", "idx", '-@content:"manager" @skills:{python}')
         # assert (result[0], result[1]) == (1, b"doc:1")
+
+    def test_nooffsets_option(self):
+        """
+        Test FT.CREATE NOOFFSETS option disables offsets storage
+        """
+        client: Valkey = self.server.get_new_client()
+        client.execute_command("FT.CREATE idx ON HASH NOOFFSETS SCHEMA content1 TEXT content2 TEXT")
+        client.execute_command("HSET", "doc:1", "content1", "term1 term2 term3 term4 term5 term6 term7 term8 term9 term10", "content2", "term11 term12 term14 term15")
+        client.execute_command("HSET", "doc:2", "content2", "term1 term2 term3 term4 term5 term6 term7 term8 term9 term10", "content1", "term11 term12 term14 term15")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        # Non Exact Phrase Text Searches should still work no offsets.
+        # We should still be able to distinguish between which field within a document exists in, even with with NOOFFSETS.
+        result = client.execute_command("FT.SEARCH", "idx", '@content1:term1 term2 term3 term4 term5 term6 term7 term8 term9 term10')
+        assert (result[0], result[1]) == (1, b"doc:1")
+        result = client.execute_command("FT.SEARCH", "idx", '@content2:term11 term12 term14 term15')
+        assert (result[0], result[1]) == (1, b"doc:1")
+        result = client.execute_command("FT.SEARCH", "idx", '@content2:term1 term2 term3 term4 term5 term6 term7 term8 term9 term10')
+        assert (result[0], result[1]) == (1, b"doc:2")
+        result = client.execute_command("FT.SEARCH", "idx", '@content1:term11 term12 term14 term15')
+        assert (result[0], result[1]) == (1, b"doc:2")
+        result = client.execute_command("FT.SEARCH", "idx", '@content1:term1')
+        assert (result[0], result[1]) == (1, b"doc:1")
+        result = client.execute_command("FT.SEARCH", "idx", '@content2:term11')
+        assert (result[0], result[1]) == (1, b"doc:1")
+        result = client.execute_command("FT.SEARCH", "idx", '@content2:term1')
+        assert (result[0], result[1]) == (1, b"doc:2")
+        result = client.execute_command("FT.SEARCH", "idx", '@content1:term11')
+        assert (result[0], result[1]) == (1, b"doc:2")
+        result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4 term5 term6 term7 term8 term9 term10')
+        assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:2"})
+        result = client.execute_command("FT.SEARCH", "idx", 'term11 term12 term14 term15')
+        assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:2"})
+        # Exact Phrase Text Searches should fail without offsets
+        with pytest.raises(ResponseError) as err:
+            client.execute_command("FT.SEARCH", "idx", '@content1:"term1 term2 term3 term4 term5 term6 term7 term8 term9 term10"')
+        assert "Index does not support offsets" in str(err.value)
+        # Text searches with INORDER / SLOP should fail without offsets
+        with pytest.raises(ResponseError) as err:
+            client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4 term5 term6 term7 term8 term9 term10', "SLOP", "2")
+        assert "Index does not support offsets" in str(err.value)
+        with pytest.raises(ResponseError) as err:
+            client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4 term5 term6 term7 term8 term9 term10', "INORDER")
+        assert "Index does not support offsets" in str(err.value)
+        with pytest.raises(ResponseError) as err:
+            client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4 term5 term6 term7 term8 term9 term10', "SLOP", "2", "INORDER")
+        assert "Index does not support offsets" in str(err.value)
 
     def test_proximity_predicate(self):
         client: Valkey = self.server.get_new_client()
@@ -1120,7 +1174,7 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         print("\nCleanup verification passed!")
         # Deletion pending of per_key_index, On deletion only prefix tree cleared
 
-class TestFullTextCluster(ValkeySearchClusterTestCase):
+class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
 
     @pytest.mark.parametrize("prefilter_enabled", [False, True])
     def test_fulltext_search_cluster(self, prefilter_enabled):

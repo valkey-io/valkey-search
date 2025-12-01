@@ -40,7 +40,8 @@ class TermIterator : public TextIterator {
  public:
   TermIterator(std::vector<Postings::KeyIterator>&& key_iterators,
                const FieldMaskPredicate field_mask,
-               const InternedStringSet* untracked_keys = nullptr);
+               const InternedStringSet* untracked_keys,
+               const bool require_positions);
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -68,6 +69,7 @@ class TermIterator : public TextIterator {
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
   const InternedStringSet* untracked_keys_;
+  const bool require_positions_;
   bool FindMinimumValidKey();
 };
 

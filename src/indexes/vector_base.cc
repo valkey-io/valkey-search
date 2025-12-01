@@ -103,7 +103,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateText(
-    const query::TextPredicate &predicate) {
+    const query::TextPredicate &predicate, bool require_positions) {
   CHECK(key_);
   // Check configuration flag
   if (!options::GetEnableTextPrefilter().GetValue()) {
@@ -124,7 +124,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateText(
         }
         // Evaluate predicate against this key's text index
         // This handles Term, Prefix, Suffix, and Proximity predicates
-        return predicate.Evaluate(it->second, *key_);
+        return predicate.Evaluate(it->second, *key_, require_positions);
       });
 }
 
@@ -168,10 +168,10 @@ void VectorBase::Init(int dimensions,
   }
 }
 
-std::shared_ptr<InternedString> VectorBase::InternVector(
-    absl::string_view record, std::optional<float> &magnitude) {
+InternedStringPtr VectorBase::InternVector(absl::string_view record,
+                                           std::optional<float> &magnitude) {
   if (!IsValidSizeVector(record)) {
-    return nullptr;
+    return {};
   }
   if (normalize_) {
     magnitude = kDefaultMagnitude;

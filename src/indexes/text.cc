@@ -177,8 +177,11 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
     }
     word_iter.Next();
   }
+  // We do not perform positional checks on the initial background search.
+  bool require_positions = false;
   return std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_);
+      std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
+      require_positions);
 }
 
 std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
@@ -192,8 +195,11 @@ std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
     key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
     word_iter.Next();
   }
+  // We do not perform positional checks on the initial background search.
+  bool require_positions = false;
   return std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_);
+      std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
+      require_positions);
 }
 
 std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
@@ -211,8 +217,11 @@ std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
     key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
     word_iter.Next();
   }
+  // We do not perform positional checks on the initial background search.
+  bool require_positions = false;
   return std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_);
+      std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
+      require_positions);
 }
 
 std::unique_ptr<indexes::text::TextIterator>

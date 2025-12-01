@@ -99,18 +99,24 @@ function prepare_env() {
 
 function save_integration_output() {
     echo Saving integration test output to ${INTEGRATION_OUTPUT}
-    local result_dir=${ROOT_DIR}/.build-release${san_suffix}
+    local artifacts_dir=${ROOT_DIR}/.build-release${san_suffix}
+    echo Saving build artifacts from ${artifacts_dir}
+    cp ${artifacts_dir}/valkey-json/build/src/libjson.so ${INTEGRATION_OUTPUT}
+    cp ${artifacts_dir}/valkey-server/.build-release/bin/valkey-server ${INTEGRATION_OUTPUT}
+    cp ${artifacts_dir}/libsearch.so ${INTEGRATION_OUTPUT}
+    local result_dir=${ROOT_DIR}/.build-release${san_suffix}/integration/.valkey-test-framework
     echo Results Directory is ${result_dir}
-    cp ${result_dir}/valkey-json/build/src/libjson.so ${INTEGRATION_OUTPUT}
-    cp ${result_dir}/valkey-server/.build-release/bin/valkey-server ${INTEGRATION_OUTPUT}
-    cp ${result_dir}/libsearch.so ${INTEGRATION_OUTPUT}
-    cp -r -P ${result_dir}/integration/.valkey-test-framework ${INTEGRATION_OUTPUT}
-    mv ${INTEGRATION_OUTPUT}/.valkey-test-framework ${INTEGRATION_OUTPUT}/valkey-test-framework
+    if [ -d "${result_dir}" ]; then
+        cp -r -P ${result_dir} ${INTEGRATION_OUTPUT}
+        mv ${INTEGRATION_OUTPUT}/.valkey-test-framework ${INTEGRATION_OUTPUT}/valkey-test-framework
+    fi
     # Do the stest outputs too.
     local stest_dir=${ROOT_DIR}/testing/integration/.build-release${san_suffix}
     echo Stest Directory output is ${stest_dir}
-    cp -r -P ${stest_dir}/output ${INTEGRATION_OUTPUT}
-    cp -r -P ${stest_dir}/tmp ${INTEGRATION_OUTPUT}
+    if [ -d "${stest_dir}" ]; then
+        cp -r -P ${stest_dir}/output ${INTEGRATION_OUTPUT}
+        cp -r -P ${stest_dir}/tmp ${INTEGRATION_OUTPUT}
+    fi
 }
 
 function save_unittest_output() {

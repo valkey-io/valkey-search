@@ -11,14 +11,14 @@ namespace valkey_search::indexes::text {
 
 TermIterator::TermIterator(std::vector<Postings::KeyIterator>&& key_iterators,
                            const FieldMaskPredicate query_field_mask,
-                           const InternedStringSet* untracked_keys)
+                           const InternedStringSet* untracked_keys,
+                           const bool require_positions)
     : query_field_mask_(query_field_mask),
       key_iterators_(std::move(key_iterators)),
-      pos_iterators_(),
-      current_key_(nullptr),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
-      untracked_keys_(untracked_keys) {
+      untracked_keys_(untracked_keys),
+      require_positions_(require_positions) {
   // Prime the first key and position if they exist.
   if (!key_iterators_.empty()) {
     TermIterator::NextKey();
@@ -37,7 +37,7 @@ bool TermIterator::DoneKeys() const {
 }
 
 const InternedStringPtr& TermIterator::CurrentKey() const {
-  CHECK(current_key_ != nullptr);
+  CHECK(current_key_);
   return current_key_;
 }
 
@@ -51,21 +51,30 @@ bool TermIterator::FindMinimumValidKey() {
     }
     if (key_iter.IsValid()) {
       const auto& key = key_iter.GetKey();
-      if (!current_key_ || key < current_key_) {
-        pos_iterators_.clear();
-        pos_iterators_.emplace_back(key_iter.GetPositionIterator());
+      // Only populate position iterators if the query requires positions.
+      // For example, an index with NOOFFSETS can still support AND
+      // intersections of term predicates.
+      if (require_positions_) {
+        if (!current_key_ || key < current_key_) {
+          pos_iterators_.clear();
+          pos_iterators_.emplace_back(key_iter.GetPositionIterator());
+          current_key_ = key;
+        } else if (key == current_key_) {
+          pos_iterators_.emplace_back(key_iter.GetPositionIterator());
+        }
+      } else if (!current_key_ || key < current_key_) {
         current_key_ = key;
-      } else if (key == current_key_) {
-        pos_iterators_.emplace_back(key_iter.GetPositionIterator());
       }
     }
   }
   if (!current_key_) {
     return false;
   }
-  // No need to check since we know that at least one position exists based on
-  // ContainsFields.
-  TermIterator::NextPosition();
+  if (require_positions_) {
+    // No need to check the result since we know that at least one position
+    // exists based on ContainsFields.
+    TermIterator::NextPosition();
+  }
   return true;
 }
 

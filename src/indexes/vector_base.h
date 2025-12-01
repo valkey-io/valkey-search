@@ -153,8 +153,8 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   int GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
   char* TrackVector(uint64_t internal_id, char* vector, size_t len) override;
-  std::shared_ptr<InternedString> InternVector(absl::string_view record,
-                                               std::optional<float>& magnitude);
+  InternedStringPtr InternVector(absl::string_view record,
+                                 std::optional<float>& magnitude);
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,
@@ -240,7 +240,7 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
     float magnitude;
   };
 
-  InternedStringMap<TrackedKeyMetadata> tracked_metadata_by_key_
+  InternedStringHashMap<TrackedKeyMetadata> tracked_metadata_by_key_
       ABSL_GUARDED_BY(key_to_metadata_mutex_);
   uint64_t inc_id_ ABSL_GUARDED_BY(key_to_metadata_mutex_){0};
   mutable absl::Mutex key_to_metadata_mutex_;
@@ -257,7 +257,7 @@ class PrefilterEvaluator : public query::Evaluator {
 
   // TODO: Implement this in prefilter implementation. For now just return
   // nullpt.
-  const std::shared_ptr<InternedString>& GetTargetKey() const override {
+  const  InternedStringPtr& GetTargetKey() const override {
     CHECK(key_);
     return *key_;
   }
@@ -269,8 +269,8 @@ class PrefilterEvaluator : public query::Evaluator {
       const query::TagPredicate& predicate) override;
   query::EvaluationResult EvaluateNumeric(
       const query::NumericPredicate& predicate) override;
-  query::EvaluationResult EvaluateText(
-      const query::TextPredicate& predicate) override;
+  query::EvaluationResult EvaluateText(const query::TextPredicate& predicate,
+                                       bool require_positions) override;
   const InternedStringPtr* key_{nullptr};
 };
 

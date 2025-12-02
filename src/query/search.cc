@@ -149,7 +149,6 @@ size_t EvaluateFilterAsPrimary(
     } else {
       size_t total_size = 0;
       size_t child_index = 0;
-
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
         size_t child_size =

@@ -1316,7 +1316,9 @@ IndexSchema::ConsumeTrackedMutatedAttribute(const InternedStringPtr &key,
   itr->second.consume_in_progress = true;
   // Delete this tracked document if no additional mutations were tracked
   if (!itr->second.attributes.has_value()) {
-    tracked_mutated_records_.erase(itr);
+    // Extract the node before erasing to ensure the DocumentMutation destructor
+    // (including BlockedClient destructors) runs after releasing the mutex
+    auto node = tracked_mutated_records_.extract(itr);
     return std::nullopt;
   }
   // Track entry is now first consumed

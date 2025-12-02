@@ -62,27 +62,27 @@ const char kScoreAs[] = "__vector_score";
 const int kVectorDimensions = 100;
 const size_t kEfRuntime = 30;
 
-auto VectorToStr = [](const std::vector<float>& v) {
-  return absl::string_view((char*)v.data(), v.size() * sizeof(float));
+auto VectorToStr = [](const std::vector<float> &v) {
+  return absl::string_view((char *)v.data(), v.size() * sizeof(float));
 };
 
 class MockNumeric : public indexes::Numeric {
  public:
-  MockNumeric(const data_model::NumericIndex& numeric_index_proto)
+  MockNumeric(const data_model::NumericIndex &numeric_index_proto)
       : indexes::Numeric(numeric_index_proto) {}
   MOCK_METHOD(std::unique_ptr<indexes::Numeric::EntriesFetcher>, Search,
-              (const query::NumericPredicate& predicate, bool negate),
+              (const query::NumericPredicate &predicate, bool negate),
               (const, override));
 };
 
 class TestedNumericEntriesFetcherIterator
     : public indexes::EntriesFetcherIteratorBase {
  public:
-  TestedNumericEntriesFetcherIterator(std::vector<InternedStringPtr>& keys)
+  TestedNumericEntriesFetcherIterator(std::vector<InternedStringPtr> &keys)
       : keys_(std::move(keys)), it_(keys_.begin()) {}
   bool Done() const override { return it_ == keys_.end(); }
   void Next() override { ++it_; }
-  const InternedStringPtr& operator*() const override { return *it_; }
+  const InternedStringPtr &operator*() const override { return *it_; }
 
  private:
   std::vector<InternedStringPtr> keys_;
@@ -93,12 +93,12 @@ class TestedNumericEntriesFetcherIterator
 // key_range <1, 3> is provided, it will fetch keys "1", "2", "3".
 class TestedNumericEntriesFetcher : public indexes::Numeric::EntriesFetcher {
  public:
-  TestedNumericEntriesFetcher(indexes::Numeric::EntriesRange& entries_range,
+  TestedNumericEntriesFetcher(indexes::Numeric::EntriesRange &entries_range,
                               std::pair<size_t, size_t> key_range)
       : indexes::Numeric::EntriesFetcher(
             entries_range, key_range.second - key_range.first + 1),
         key_range_(key_range) {}
-  TestedNumericEntriesFetcher(indexes::Numeric::EntriesRange& entries_range,
+  TestedNumericEntriesFetcher(indexes::Numeric::EntriesRange &entries_range,
                               size_t size)
       : indexes::Numeric::EntriesFetcher(entries_range, size) {
     key_range_ = std::make_pair(0, size - 1);
@@ -124,19 +124,19 @@ class TestedNumericEntriesFetcher : public indexes::Numeric::EntriesFetcher {
 
 class MockTag : public indexes::Tag {
  public:
-  MockTag(const data_model::TagIndex& tag_index_proto)
+  MockTag(const data_model::TagIndex &tag_index_proto)
       : indexes::Tag(tag_index_proto) {}
   MOCK_METHOD(std::unique_ptr<indexes::Tag::EntriesFetcher>, Search,
-              (const query::TagPredicate& predicate, bool negate),
+              (const query::TagPredicate &predicate, bool negate),
               (const, override));
 };
 
 class TestedTagEntriesFetcher : public indexes::Tag::EntriesFetcher {
  public:
   TestedTagEntriesFetcher(
-      size_t size, PatriciaTree<InternedStringPtr>& tree,
-      absl::flat_hash_set<PatriciaNode<InternedStringPtr>*>& entries,
-      bool negate, InternedStringSet& untracked_keys)
+      size_t size, PatriciaTree<InternedStringPtr> &tree,
+      absl::flat_hash_set<PatriciaNode<InternedStringPtr> *> &entries,
+      bool negate, InternedStringSet &untracked_keys)
       : indexes::Tag::EntriesFetcher(tree, entries, size, negate,
                                      untracked_keys),
         size_(size) {}
@@ -159,7 +159,7 @@ struct EvaluateFilterAsPrimaryTestCase {
 class EvaluateFilterAsPrimaryTest
     : public ValkeySearchTestWithParam<EvaluateFilterAsPrimaryTestCase> {};
 
-void InitIndexSchema(MockIndexSchema* index_schema) {
+void InitIndexSchema(MockIndexSchema *index_schema) {
   data_model::NumericIndex numeric_index_proto;
 
   EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
@@ -224,7 +224,7 @@ void InitIndexSchema(MockIndexSchema* index_schema) {
   VMSDK_EXPECT_OK(index_schema->AddIndex("tag_index_100_15", "tag_index_100_15",
                                          tag_index_100_15));
   PatriciaTree<InternedStringPtr> tree(false);
-  absl::flat_hash_set<PatriciaNode<InternedStringPtr>*> entries;
+  absl::flat_hash_set<PatriciaNode<InternedStringPtr> *> entries;
   InternedStringSet untracked_keys;
   EXPECT_CALL(*tag_index_100_15, Search(_, false))
       .WillRepeatedly([&tree, &entries, &untracked_keys]() {
@@ -239,7 +239,7 @@ void InitIndexSchema(MockIndexSchema* index_schema) {
 }
 
 TEST_P(EvaluateFilterAsPrimaryTest, ParseParams) {
-  const EvaluateFilterAsPrimaryTestCase& test_case = GetParam();
+  const EvaluateFilterAsPrimaryTestCase &test_case = GetParam();
   auto index_schema = CreateIndexSchema(kIndexSchemaName).value();
   InitIndexSchema(index_schema.get());
   FilterParser parser(*index_schema, test_case.filter, {});
@@ -265,12 +265,12 @@ TEST_P(EvaluateFilterAsPrimaryTest, ParseParams) {
     auto entry_fetcher = std::move(entries_fetchers.front());
     entries_fetchers.pop();
     auto numeric_fetcher =
-        dynamic_cast<const TestedNumericEntriesFetcher*>(entry_fetcher.get());
+        dynamic_cast<const TestedNumericEntriesFetcher *>(entry_fetcher.get());
     if (numeric_fetcher) {
       actual_fetcher_ids.push_back(numeric_fetcher->GetId());
     } else {
       auto tag_fetcher =
-          dynamic_cast<const TestedTagEntriesFetcher*>(entry_fetcher.get());
+          dynamic_cast<const TestedTagEntriesFetcher *>(entry_fetcher.get());
       if (tag_fetcher) {
         actual_fetcher_ids.push_back(tag_fetcher->GetId());
       } else {
@@ -470,7 +470,7 @@ INSTANTIATE_TEST_SUITE_P(
                 "}\n",
         },
     }),
-    [](const TestParamInfo<EvaluateFilterAsPrimaryTestCase>& info) {
+    [](const TestParamInfo<EvaluateFilterAsPrimaryTestCase> &info) {
       return info.param.test_name;
     });
 
@@ -525,7 +525,7 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
     auto key = std::to_string(i);
 
     // Add record to vector index
-    std::string vector = std::string((char*)vectors[i].data(),
+    std::string vector = std::string((char *)vectors[i].data(),
                                      vectors[i].size() * sizeof(float));
     auto interned_key = StringInternStore::Intern(key);
 
@@ -562,7 +562,7 @@ class LocalSearchTest : public ValkeySearchTestWithParam<LocalSearchTestCase> {
 
 TEST_P(LocalSearchTest, LocalSearchTest) {
   auto index_schema = CreateIndexSchemaWithMultipleAttributes();
-  const LocalSearchTestCase& test_case = GetParam();
+  const LocalSearchTestCase &test_case = GetParam();
   query::SearchParameters params(100000, nullptr);
   params.index_schema_name = kIndexSchemaName;
   if (test_case.is_vector_search_query) {
@@ -649,7 +649,7 @@ INSTANTIATE_TEST_SUITE_P(
             .is_vector_search_query = false,
         },
     }),
-    [](const testing::TestParamInfo<LocalSearchTestCase>& info) {
+    [](const testing::TestParamInfo<LocalSearchTestCase> &info) {
       return info.param.test_name;
     });
 
@@ -665,16 +665,16 @@ class FetchFilteredKeysTest
 
 TEST_P(FetchFilteredKeysTest, ParseParams) {
   auto index_schema = CreateIndexSchemaWithMultipleAttributes();
-  auto vector_index = dynamic_cast<indexes::VectorBase*>(
+  auto vector_index = dynamic_cast<indexes::VectorBase *>(
       index_schema->GetIndex(kVectorAttributeAlias)->get());
-  const FetchFilteredKeysTestCase& test_case = GetParam();
+  const FetchFilteredKeysTestCase &test_case = GetParam();
   query::SearchParameters params(100000, nullptr);
   FilterParser parser(*index_schema, test_case.filter, {});
   params.filter_parse_results = std::move(parser.Parse().value());
   params.k = 100;
   auto vectors = DeterministicallyGenerateVectors(1, kVectorDimensions, 10.0);
   params.query =
-      std::string((char*)vectors[0].data(), vectors[0].size() * sizeof(float));
+      std::string((char *)vectors[0].data(), vectors[0].size() * sizeof(float));
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   indexes::Numeric::EntriesRange entries_range;
   for (auto key_range : test_case.fetched_key_ranges) {
@@ -728,7 +728,7 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_keys = {"1", "2", "3", "4"},
         },
     }),
-    [](const TestParamInfo<FetchFilteredKeysTestCase>& info) {
+    [](const TestParamInfo<FetchFilteredKeysTestCase> &info) {
       return info.param.test_name;
     });
 
@@ -743,7 +743,7 @@ class SearchTest : public ValkeySearchTestWithParam<
                        std::tuple<IndexerType, SearchTestCase>> {};
 
 TEST_P(SearchTest, ParseParams) {
-  const auto& param = GetParam();
+  const auto &param = GetParam();
   IndexerType indexer_type = std::get<0>(param);
   SearchTestCase test_case = std::get<1>(param);
   query::SearchParameters params(100000, nullptr);
@@ -766,7 +766,7 @@ TEST_P(SearchTest, ParseParams) {
   EXPECT_EQ(neighbors->size(), test_case.expected_keys.size());
 #endif
 
-  for (auto& neighbor : *neighbors) {
+  for (auto &neighbor : *neighbors) {
     EXPECT_TRUE(
         test_case.expected_keys.contains(std::string(*neighbor.external_id)));
   }
@@ -873,7 +873,7 @@ INSTANTIATE_TEST_SUITE_P(
                  .k = 5,
                  .expected_keys = {"0", "1", "2", "3"},
              }})),
-    [](const TestParamInfo<std::tuple<IndexerType, SearchTestCase>>& info) {
+    [](const TestParamInfo<std::tuple<IndexerType, SearchTestCase>> &info) {
       std::string test_name = std::get<1>(info.param).test_name;
       test_name +=
           (std::get<0>(info.param) == IndexerType::kHNSW) ? "_hnsw" : "_flat";
@@ -901,7 +901,7 @@ struct IndexedContentTestCase {
       auto result = indexes::Neighbor{string_interned_external_id, distance};
       if (attribute_contents.has_value()) {
         result.attribute_contents = RecordsMap();
-        for (auto& attribute : *attribute_contents) {
+        for (auto &attribute : *attribute_contents) {
           result.attribute_contents->emplace(
               attribute.first,
               RecordsMapValue(vmsdk::MakeUniqueValkeyString(attribute.first),
@@ -910,14 +910,14 @@ struct IndexedContentTestCase {
       }
       return result;
     }
-    static TestNeighbor FromIndexesNeighbor(const indexes::Neighbor& neighbor) {
+    static TestNeighbor FromIndexesNeighbor(const indexes::Neighbor &neighbor) {
       TestNeighbor result;
       result.external_id = std::string(*neighbor.external_id);
       result.distance = neighbor.distance;
       if (neighbor.attribute_contents.has_value()) {
         result.attribute_contents =
             absl::flat_hash_map<std::string, std::string>();
-        for (auto& attribute : *neighbor.attribute_contents) {
+        for (auto &attribute : *neighbor.attribute_contents) {
           result.attribute_contents->emplace(
               attribute.first,
               vmsdk::ToStringView(attribute.second.value.get()));
@@ -925,7 +925,7 @@ struct IndexedContentTestCase {
       }
       return result;
     }
-    bool operator==(const TestNeighbor& other) const {
+    bool operator==(const TestNeighbor &other) const {
       if (external_id != other.external_id || distance != other.distance) {
         return false;
       }
@@ -939,7 +939,7 @@ struct IndexedContentTestCase {
       if (attribute_contents->size() != other.attribute_contents->size()) {
         return false;
       }
-      for (auto& attribute : *attribute_contents) {
+      for (auto &attribute : *attribute_contents) {
         auto it = other.attribute_contents->find(attribute.first);
         if (it == other.attribute_contents->end() ||
             it->second != attribute.second) {
@@ -965,7 +965,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
   auto index_schema = CreateIndexSchema("test_schema").value();
   auto distance_metric = std::get<0>(GetParam());
   auto test_case = std::get<1>(GetParam());
-  for (auto& index : test_case.indexes) {
+  for (auto &index : test_case.indexes) {
     std::shared_ptr<indexes::IndexBase> index_base;
     switch (index.indexer_type) {
       case IndexerType::kHNSW: {
@@ -1016,7 +1016,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
       default:
         CHECK(false);
     }
-    for (auto& content : index.contents) {
+    for (auto &content : index.contents) {
       auto key = StringInternStore::Intern(content.first);
       auto value = content.second;
       VMSDK_EXPECT_OK(index_base->AddRecord(key, value));
@@ -1025,7 +1025,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
 
   auto parameters = query::SearchParameters(100000, nullptr);
   parameters.index_schema = index_schema;
-  for (auto& attribute : test_case.return_attributes) {
+  for (auto &attribute : test_case.return_attributes) {
     auto identifier = vmsdk::MakeUniqueValkeyString(attribute.identifier);
     auto alias = vmsdk::MakeUniqueValkeyString(attribute.alias);
     parameters.return_attributes.push_back(query::ReturnAttribute{
@@ -1037,7 +1037,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
   if (test_case.input.ok()) {
     absl::StatusOr<std::deque<indexes::Neighbor>> neighbors =
         std::deque<indexes::Neighbor>();
-    for (auto& neighbor : test_case.input.value()) {
+    for (auto &neighbor : test_case.input.value()) {
       neighbors->push_back(neighbor.ToIndexesNeighbor());
     }
     got = query::MaybeAddIndexedContent(std::move(neighbors), parameters);
@@ -1352,7 +1352,7 @@ INSTANTIATE_TEST_SUITE_P(
                            .attribute_contents = std::nullopt}}},
                 },
             })),
-    [](const TestParamInfo<IndexedContentTest::ParamType>& info) {
+    [](const TestParamInfo<IndexedContentTest::ParamType> &info) {
       std::string distance_metric =
           std::get<0>(info.param) == data_model::DISTANCE_METRIC_L2 ? "L2"
                                                                     : "COSINE";

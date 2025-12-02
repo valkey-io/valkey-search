@@ -433,47 +433,41 @@ inline std::unique_ptr<query::Predicate> MayNegatePredicate(
 absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
     std::unique_ptr<query::Predicate> prev_predicate,
     std::unique_ptr<query::Predicate> predicate, bool& negate,
-    query::LogicalOperator logical_operator, bool prev_grp, bool first_joined) {
+    query::LogicalOperator logical_operator, bool no_prev_grp,
+    bool not_rightmost_bracket) {
   auto new_predicate = MayNegatePredicate(std::move(predicate), negate);
-
   if (!prev_predicate) {
     return new_predicate;
   }
-
   // If INORDER OR SLOP, but the index schema does not support offsets, we
   // reject the query.
   if ((options_.inorder || options_.slop.has_value()) &&
       !index_schema_.HasTextOffsets()) {
     return absl::InvalidArgumentError("Index does not support offsets");
   }
-
   // Check if we can extend existing ComposedPredicate of the same type
   // Only extend AND nodes when we're adding with AND operator
   if (prev_predicate->GetType() == query::PredicateType::kComposedAnd &&
-      logical_operator == query::LogicalOperator::kAnd && !prev_grp) {
+      logical_operator == query::LogicalOperator::kAnd && !no_prev_grp) {
     auto* composed =
         dynamic_cast<query::ComposedPredicate*>(prev_predicate.get());
-    if (composed) {
-      composed->AddChild(std::move(new_predicate));
-      return prev_predicate;  // Return extended existing node
-    }
+    composed->AddChild(std::move(new_predicate));
+    return prev_predicate;
   }
-
-  // Flatten OR nodes when first_joined is true at the same bracket level
-  if (logical_operator == query::LogicalOperator::kOr && first_joined) {
+  // Flatten OR nodes when not_rightmost_bracket is true at the same bracket
+  // level
+  if (logical_operator == query::LogicalOperator::kOr &&
+      not_rightmost_bracket &&
+      new_predicate->GetType() == query::PredicateType::kComposedOr) {
     std::vector<std::unique_ptr<query::Predicate>> new_children;
     if (prev_predicate) {
       new_children.push_back(std::move(prev_predicate));
     }
-    if (new_predicate->GetType() == query::PredicateType::kComposedOr) {
-      auto* new_composed =
-          dynamic_cast<query::ComposedPredicate*>(new_predicate.get());
-      auto children = new_composed->ReleaseChildren();
-      for (auto& child : children) {
-        new_children.push_back(std::move(child));
-      }
-    } else {
-      new_children.push_back(std::move(new_predicate));
+    auto* new_composed =
+        dynamic_cast<query::ComposedPredicate*>(new_predicate.get());
+    auto children = new_composed->ReleaseChildren();
+    for (auto& child : children) {
+      new_children.push_back(std::move(child));
     }
     return std::make_unique<query::ComposedPredicate>(
         logical_operator, std::move(new_children), options_.slop,
@@ -484,7 +478,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
   std::vector<std::unique_ptr<query::Predicate>> children;
   children.push_back(std::move(prev_predicate));
   children.push_back(std::move(new_predicate));
-
   return std::make_unique<query::ComposedPredicate>(
       logical_operator, std::move(children), options_.slop, options_.inorder);
 };
@@ -815,9 +808,9 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
       return absl::InvalidArgumentError("Index does not support offsets");
     }
     std::vector<std::unique_ptr<query::Predicate>> children;
-    children.push_back(std::move(terms[0]));
-    for (size_t i = 1; i < terms.size(); ++i) {
-      children.push_back(std::move(terms[i]));
+    children.reserve(terms.size());
+    for (auto& term : terms) {
+      children.push_back(std::move(term));
     }
     pred = std::make_unique<query::ComposedPredicate>(
         query::LogicalOperator::kAnd, std::move(children), slop, inorder);
@@ -845,7 +838,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
 // space and comma are valid separators between Start and End.
 // 7. A tag field has the following pattern: @field_name:{tag1|tag2|tag3}.
 // 8. A text field has the following pattern : @field_name:phrase. Where phrase
-// can be a combination of different words, *, % for different text field types.
+// can be a combination of different words, *, % for different text operations.
 // 9. The tag separator character is configurable with a default value of '|'.
 // 10. A field name can be wrapped with `()` to group multiple predicates.
 // 11. Space between predicates is considered as AND while '|' is considered as
@@ -861,10 +854,14 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
   if (level++ >= options::GetQueryStringDepth().GetValue()) {
     return absl::InvalidArgumentError("Query string is too complex");
   }
-
   ParseResult result;
-  result.first_joined = true;
-  bool prev_grp = false;
+  // Keeps track of the rightmost bracket of a level. Used to determine the
+  // WrapPredicate fn's OR logic
+  result.not_rightmost_bracket = true;
+  // Keeps track if first token is a bracket. Used to determine the
+  // WrapPredicate fn's AND logic
+  result.prev_predicate = nullptr;
+  bool no_prev_grp = false;
 
   SkipWhitespace();
   while (!IsEnd()) {
@@ -873,7 +870,6 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
     }
     std::unique_ptr<query::Predicate> predicate;
     bool negate = Match('-');
-
     if (Match('(')) {
       VMSDK_ASSIGN_OR_RETURN(auto sub_result, ParseExpression(level));
       if (!Match(')')) {
@@ -882,17 +878,27 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
                          expression_.substr(pos_, 1), "'. Position: ", pos_));
       }
       predicate = std::move(sub_result.prev_predicate);
-
+      if (!predicate) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Empty brackets detected at Position: ", pos_ - 1));
+      }
       if (result.prev_predicate) {
         node_count_++;
       }
-      prev_grp = (!result.prev_predicate) ? true : false;
+      // If there is no Previous Predicate that means there is no term before
+      // it and hence it is the first group which should branch to a separate
+      // sub tree. This will be used when we encounter the next predicate with
+      // AND logical operator.
+      no_prev_grp = (!result.prev_predicate) ? true : false;
       VMSDK_ASSIGN_OR_RETURN(
           result.prev_predicate,
           WrapPredicate(std::move(result.prev_predicate), std::move(predicate),
-                        negate, query::LogicalOperator::kAnd, prev_grp,
-                        result.first_joined));
-      result.first_joined = false;
+                        negate, query::LogicalOperator::kAnd, false,
+                        result.not_rightmost_bracket));
+      // Closing bracket signifies one group is done which could be the
+      // rightmost bracket. We set it to false as a flag for its potential for
+      // the same.
+      result.not_rightmost_bracket = false;
     } else if (Match('|')) {
       if (negate) {
         return UnexpectedChar(expression_, pos_ - 1);
@@ -902,13 +908,17 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       if (result.prev_predicate) {
         node_count_++;
       }
+      // We use sub_result.not_rightmost_bracket since sub_result comes from the
+      // right side so its bracket will be more towards the right than prev Pred
       VMSDK_ASSIGN_OR_RETURN(
           result.prev_predicate,
           WrapPredicate(std::move(result.prev_predicate), std::move(predicate),
-                        negate, query::LogicalOperator::kOr, prev_grp,
-                        sub_result.first_joined));
-      prev_grp = false;
-      result.first_joined = true;
+                        negate, query::LogicalOperator::kOr, no_prev_grp,
+                        sub_result.not_rightmost_bracket));
+      no_prev_grp = false;
+      // Resetting it to true since for that level we have got our rightmost
+      // bracket and we do not want stale results to propagate.
+      result.not_rightmost_bracket = true;
     } else {
       std::optional<std::string> field_name;
       bool non_text = false;
@@ -936,9 +946,12 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       VMSDK_ASSIGN_OR_RETURN(
           result.prev_predicate,
           WrapPredicate(std::move(result.prev_predicate), std::move(predicate),
-                        negate, query::LogicalOperator::kAnd, prev_grp,
-                        result.first_joined));
-      prev_grp = false;
+                        negate, query::LogicalOperator::kAnd, no_prev_grp,
+                        result.not_rightmost_bracket));
+      // After the above wrap predicate there will always be a previous
+      // predicate. Hence we set it to false.
+      result.not_rightmost_bracket = false;
+      no_prev_grp = false;
     }
     SkipWhitespace();
     auto max_node_count = options::GetQueryStringTermsCount().GetValue();

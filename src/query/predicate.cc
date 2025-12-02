@@ -343,7 +343,7 @@ EvaluationResult EvaluateTextPredicate(const Predicate* predicate,
 EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   if (GetType() == PredicateType::kComposedAnd) {
     // Short-circuit on first false
-    uint32_t childPositionsCount = 0;
+    uint32_t childrenWithPositions = 0;
     uint64_t query_field_mask = ~0ULL;
     std::vector<std::unique_ptr<indexes::text::TextIterator>> iterators;
     // Determine if children need to return positions for proximity checks
@@ -351,21 +351,21 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     for (const auto& child : children_) {
       EvaluationResult result =
           EvaluateTextPredicate(child.get(), evaluator, require_positions);
-      if (result.filter_iterator && require_positions) {
-        childPositionsCount++;
+      if (!result.matches) {
+        return EvaluationResult(false);
+      }
+      if (result.filter_iterator) {
+        childrenWithPositions++;
         query_field_mask &= result.filter_iterator->QueryFieldMask();
         iterators.push_back(std::move(result.filter_iterator));
       }
       VMSDK_LOG(DEBUG, nullptr)
           << "Inline evaluate AND predicate child: " << result.matches;
-      if (!result.matches) {
-        return EvaluationResult(false);
-      }
     }
     // Proximity check: Only if slop/inorder set and both sides have
     // iterators. This ensures we only check proximity for text predicates,
     // not numeric/tag.
-    if ((slop_.has_value() || inorder_) && (childPositionsCount >= 2)) {
+    if (require_positions && (childrenWithPositions >= 2)) {
       // Get field_mask from lhs and rhs iterators
       if (query_field_mask == 0) {
         return EvaluationResult(false);
@@ -388,7 +388,7 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
       return EvaluationResult(true, std::move(proximity_iterator));
     }
     // Propagate the filter iterator from the one child exists
-    if (!iterators.empty()) {
+    else if (childrenWithPositions == 1) {
       return EvaluationResult(true, std::move(iterators[0]));
     }
     // All matched, but none have position. non-proximity case

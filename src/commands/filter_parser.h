@@ -73,10 +73,10 @@ class FilterParser {
   // first joined flag
   struct ParseResult {
     std::unique_ptr<query::Predicate> prev_predicate;
-    bool first_joined;
-    ParseResult() : first_joined(false) {}
+    bool not_rightmost_bracket;
+    ParseResult() : not_rightmost_bracket(false) {}
     ParseResult(std::unique_ptr<query::Predicate> pred, bool joined)
-        : prev_predicate(std::move(pred)), first_joined(joined) {}
+        : prev_predicate(std::move(pred)), not_rightmost_bracket(joined) {}
   };
 
   absl::StatusOr<ParseResult> ParseExpression(uint32_t level);
@@ -105,8 +105,8 @@ class FilterParser {
   absl::StatusOr<std::unique_ptr<query::Predicate>> WrapPredicate(
       std::unique_ptr<query::Predicate> prev_predicate,
       std::unique_ptr<query::Predicate> predicate, bool& negate,
-      query::LogicalOperator logical_operator, bool prev_grp,
-      bool first_joined);
+      query::LogicalOperator logical_operator, bool no_prev_grp,
+      bool not_rightmost_bracket);
 };
 
 // Helper function to print predicate tree structure using DFS

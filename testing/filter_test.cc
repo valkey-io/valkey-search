@@ -42,7 +42,7 @@ class FilterTest : public ValkeySearchTestWithParam<FilterTestCase> {
   indexes::PrefilterEvaluator evaluator_;
 };
 
-void InitIndexSchema(MockIndexSchema* index_schema) {
+void InitIndexSchema(MockIndexSchema *index_schema) {
   data_model::NumericIndex numeric_index_proto;
 
   auto numeric_index_1_5 =
@@ -109,7 +109,7 @@ void InitIndexSchema(MockIndexSchema* index_schema) {
 }
 
 TEST_P(FilterTest, ParseParams) {
-  const FilterTestCase& test_case = GetParam();
+  const FilterTestCase &test_case = GetParam();
   auto index_schema = CreateIndexSchema("index_schema_name").value();
   InitIndexSchema(index_schema.get());
   EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
@@ -1333,7 +1333,7 @@ INSTANTIATE_TEST_SUITE_P(
                                        "}\n",
         },
     }),
-    [](const TestParamInfo<FilterTestCase>& info) {
+    [](const TestParamInfo<FilterTestCase> &info) {
       return info.param.test_name;
     });
 

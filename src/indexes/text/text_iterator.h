@@ -94,6 +94,8 @@ class TextIterator {
   // Returns the field mask for the current position.
   // ASSERT: !DonePositions()
   virtual FieldMaskPredicate CurrentFieldMask() const = 0;
+  // Returns true if iterator is at a valid state (has current key, position, and field)
+  virtual bool IsIteratorValid() const = 0;
 };
 
 }  // namespace valkey_search::indexes::text

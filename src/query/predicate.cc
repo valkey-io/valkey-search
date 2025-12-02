@@ -25,15 +25,6 @@
 
 namespace valkey_search::query {
 
-static bool IsIteratorValid(
-    const std::unique_ptr<indexes::text::TermIterator>& iterator,
-    FieldMaskPredicate query_field_mask) {
-  if (iterator->DoneKeys() || !iterator->HasCurrentPosition()) {
-    return false;
-  }
-  return true;
-}
-
 EvaluationResult NegatePredicate::Evaluate(Evaluator& evaluator) const {
   EvaluationResult result = predicate_->Evaluate(evaluator);
   return EvaluationResult(!result.matches);
@@ -44,7 +35,7 @@ EvaluationResult BuildTextEvaluationResult(
     std::unique_ptr<indexes::text::TextIterator> iterator,
     bool require_positions) {
   if (require_positions) {
-    if (iterator->DoneKeys() || iterator->DonePositions()) {
+    if (!iterator->IsIteratorValid()) {
       return EvaluationResult(false);
     }
     return EvaluationResult(true, std::move(iterator));
@@ -375,8 +366,7 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
           std::make_unique<indexes::text::ProximityIterator>(
               std::move(iterators), slop_, inorder_, query_field_mask, nullptr);
       // Check if any valid proximity matches exist
-      if (proximity_iterator->DoneKeys() ||
-          proximity_iterator->DonePositions()) {
+      if (!proximity_iterator->IsIteratorValid()) {
         return EvaluationResult(false);
       }
       // Validate against original target key from evaluator

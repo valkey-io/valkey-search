@@ -66,7 +66,6 @@ struct CommandOptions {
   int first_key{0};
   int last_key{0};
   int key_step{0};
-  const ValkeyModuleCommandInfo *command_info{nullptr};
 };
 
 struct Options {

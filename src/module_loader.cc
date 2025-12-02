@@ -47,7 +47,6 @@ vmsdk::module::Options options = {
                 .flags = {vmsdk::module::kWriteFlag, vmsdk::module::kFastFlag,
                           vmsdk::module::kDenyOOMFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTCreateCmd>,
-                .command_info = &valkey_search::ftCreateInfo,
             },
             {
                 .cmd_name = valkey_search::kDropIndexCommand,

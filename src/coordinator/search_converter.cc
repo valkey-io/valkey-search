@@ -152,8 +152,6 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
         vmsdk::MakeUniqueValkeyString(return_parameter.identifier()),
         vmsdk::MakeUniqueValkeyString(return_parameter.alias())));
   }
-  VMSDK_LOG(WARNING, nullptr)
-      << "Converted GRPC SearchIndexPartitionRequest to SearchParameters";
   return parameters;
 }
 
@@ -228,9 +226,6 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
 std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
     const query::SearchParameters& parameters) {
   auto request = std::make_unique<SearchIndexPartitionRequest>();
-  VMSDK_LOG(WARNING, nullptr)
-      << "Converting SearchParameters to GRPC SearchIndexPartitionRequest "
-      << parameters.db_num_ << " / " << parameters.index_schema_name;
   request->set_index_schema_name(parameters.index_schema_name);
   request->set_db_num(parameters.db_num_);
   request->set_attribute_alias(parameters.attribute_alias);

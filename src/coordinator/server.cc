@@ -117,18 +117,11 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
     const SearchIndexPartitionRequest* request,
     SearchIndexPartitionResponse* response) {
   GRPCSuspensionGuard guard(GRPCSuspender::Instance());
-  VMSDK_LOG(WARNING, detached_ctx_.get())
-      << "Received SearchIndexPartition request for index schema: "
-      << request->db_num() << " / " << request->index_schema_name();
   auto latency_sample = SAMPLE_EVERY_N(100);
   grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
   auto vector_search_parameters =
       GRPCSearchRequestToParameters(*request, context);
   if (!vector_search_parameters.ok()) {
-    VMSDK_LOG(WARNING, detached_ctx_.get())
-        << "Failed to convert SearchIndexPartitionRequest to "
-           "SearchParameters: "
-        << vector_search_parameters.status().message();
     reactor->Finish(ToGrpcStatus(vector_search_parameters.status()));
     RecordSearchMetrics(true, std::move(latency_sample));
     return reactor;

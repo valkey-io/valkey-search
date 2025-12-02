@@ -120,8 +120,6 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
         # drop and create the index again with different definition
         assert node0.execute_command("FT.DROPINDEX", index_name) == b"OK"
 
-        print(node0.execute_command("FT._DEBUG show_metadata", index_name))
-
         assert node0.execute_command(
             "FT.CREATE", index_name,
             "ON", "HASH", 

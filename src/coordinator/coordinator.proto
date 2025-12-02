@@ -101,8 +101,8 @@ message SearchIndexPartitionRequest {
   repeated ReturnParameter return_parameters = 13;
   bool enable_partial_results = 14;
   bool enable_consistency = 15;
-  optional IndexFingerprintVersion index_fingerprint_version = 16;
-  optional uint64 slot_fingerprint = 17;
+  IndexFingerprintVersion index_fingerprint_version = 16;
+  uint64 slot_fingerprint = 17;
 }
 
 message NeighborEntry {

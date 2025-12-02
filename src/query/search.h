@@ -88,8 +88,8 @@ struct SearchParameters {
   bool no_content{false};
   FilterParseResults filter_parse_results;
   std::vector<ReturnAttribute> return_attributes;
-  std::optional<coordinator::IndexFingerprintVersion> index_fingerprint_version;
-  std::optional<uint64_t> slot_fingerprint;
+  coordinator::IndexFingerprintVersion index_fingerprint_version;
+  uint64_t slot_fingerprint;
   struct ParseTimeVariables {
     // Members of this struct are only valid during the parsing of
     // VectorSearchParameters on the mainthread. They get cleared

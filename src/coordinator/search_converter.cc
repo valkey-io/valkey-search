@@ -155,12 +155,8 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
         vmsdk::MakeUniqueValkeyString(return_parameter.identifier()),
         vmsdk::MakeUniqueValkeyString(return_parameter.alias())));
   }
-  if (request.has_index_fingerprint_version()) {
-    parameters->index_fingerprint_version = request.index_fingerprint_version();
-  }
-  if (request.has_slot_fingerprint()) {
-    parameters->slot_fingerprint = request.slot_fingerprint();
-  }
+  parameters->index_fingerprint_version = request.index_fingerprint_version();
+  parameters->slot_fingerprint = request.slot_fingerprint();
   return parameters;
 }
 
@@ -266,13 +262,9 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
     return_parameter->set_alias(
         vmsdk::ToStringView(return_attribute.alias.get()));
   }
-  if (parameters.index_fingerprint_version.has_value()) {
-    *request->mutable_index_fingerprint_version() =
-        parameters.index_fingerprint_version.value();
-  }
-  if (parameters.slot_fingerprint.has_value()) {
-    request->set_slot_fingerprint(parameters.slot_fingerprint.value());
-  }
+  *request->mutable_index_fingerprint_version() =
+      parameters.index_fingerprint_version;
+  request->set_slot_fingerprint(parameters.slot_fingerprint);
   return request;
 }
 

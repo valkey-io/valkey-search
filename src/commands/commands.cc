@@ -145,15 +145,13 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
       // get index fingerprint and version
       if (ForceInvalidIndexFingerprint.GetValue()) {
         // test only: simulate invalid index fingerprint and version
-        parameters->index_fingerprint_version.emplace();
-        parameters->index_fingerprint_version->set_fingerprint(404);
-        parameters->index_fingerprint_version->set_version(404);
+        parameters->index_fingerprint_version.set_fingerprint(404);
+        parameters->index_fingerprint_version.set_version(404);
       } else {
         // get fingerprint/version from IndexSchema
-        parameters->index_fingerprint_version.emplace();
-        parameters->index_fingerprint_version->set_fingerprint(
+        parameters->index_fingerprint_version.set_fingerprint(
             parameters->index_schema->GetFingerprint());
-        parameters->index_fingerprint_version->set_version(
+        parameters->index_fingerprint_version.set_version(
             parameters->index_schema->GetVersion());
       }
 

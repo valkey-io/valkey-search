@@ -115,29 +115,6 @@ void SerializeNeighbors(SearchIndexPartitionResponse* response,
 grpc::Status Service::PerformConsistencyChecks(
     const SearchIndexPartitionRequest* request,
     const query::SearchParameters& parameters) {
-  if (!request->has_index_fingerprint_version()) {
-    return {grpc::StatusCode::FAILED_PRECONDITION,
-            "Index fingerprint version required when consistency is enabled"};
-  }
-  if (!request->has_slot_fingerprint()) {
-    return {grpc::StatusCode::FAILED_PRECONDITION,
-            "Slot fingerprint required when consistency is enabled"};
-  }
-  // compare fingerprint and version
-  auto schema =
-      SchemaManager::Instance()
-          .GetIndexSchema(parameters.db_num, parameters.index_schema_name)
-          .value();
-
-  const auto& request_fingerprint_version =
-      request->index_fingerprint_version();
-
-  if (schema->GetFingerprint() != request_fingerprint_version.fingerprint() ||
-      schema->GetVersion() != request_fingerprint_version.version()) {
-    return {grpc::StatusCode::FAILED_PRECONDITION,
-            "Index fingerprint or version mismatch"};
-  }
-
   // compare slot fingerprint
   // use the cached cluster map for now, refreshing the cluster map would need
   // the client to execute commands at that node, will use new core api in the
@@ -150,7 +127,6 @@ grpc::Status Service::PerformConsistencyChecks(
   if (my_shard_slot_fingerprint != request->slot_fingerprint()) {
     return {grpc::StatusCode::FAILED_PRECONDITION, "Slot fingerprint mismatch"};
   }
-
   return grpc::Status::OK;
 }
 
@@ -232,6 +208,22 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
       GRPCSearchRequestToParameters(*request, context);
   if (!vector_search_parameters.ok()) {
     reactor->Finish(ToGrpcStatus(vector_search_parameters.status()));
+    RecordSearchMetrics(true, std::move(latency_sample));
+    return reactor;
+  }
+
+  // compare fingerprint and version
+  auto schema =
+      SchemaManager::Instance()
+          .GetIndexSchema(vector_search_parameters.value()->db_num,
+                          vector_search_parameters.value()->index_schema_name)
+          .value();
+  const auto& request_fingerprint_version =
+      request->index_fingerprint_version();
+  if (schema->GetFingerprint() != request_fingerprint_version.fingerprint() ||
+      schema->GetVersion() != request_fingerprint_version.version()) {
+    reactor->Finish({grpc::StatusCode::FAILED_PRECONDITION,
+                     "Index fingerprint or version mismatch"});
     RecordSearchMetrics(true, std::move(latency_sample));
     return reactor;
   }

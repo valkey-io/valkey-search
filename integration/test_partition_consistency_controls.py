@@ -134,8 +134,11 @@ class TestPartitionConsistencyControls(ValkeySearchClusterTestCaseDebugMode):
         # do not force invalid slot fingerprint
         self.control_set("ForceInvalidSlotFingerprint", "no")
 
-        # force invalid index fingerprint
-        self.control_set("ForceInvalidIndexFingerprint", "yes")
+        # force invalid index fingerprint on one node only
+        client = self.new_client_for_primary(0)
+        client.execute_command(
+            "ft._debug", "CONTROLLED_VARIABLE", "set", "ForceInvalidIndexFingerprint", "yes"
+        )
 
         # disable consistency check, get valid results
         hnsw_result = search(client, "hnsw", False, enable_consistency=False)

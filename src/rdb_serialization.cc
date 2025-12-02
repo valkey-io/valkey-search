@@ -19,6 +19,7 @@
 #include "src/metrics.h"
 #include "src/rdb_section.pb.h"
 #include "src/valkey_search.h"
+#include "src/version.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -146,13 +147,13 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
         encver, kCurrentEncVer));
   }
   VMSDK_ASSIGN_OR_RETURN(
-      auto min_semantic_version, rdb->LoadUnsigned(),
+      auto rdb_version_int, rdb->LoadUnsigned(),
       _ << "IO error reading semantic version from RDB. Failing RDB load.");
-  if (min_semantic_version > kCurrentSemanticVersion) {
+  auto rdb_version = vmsdk::ValkeyVersion(rdb_version_int);
+  if (rdb_version > kModuleVersion) {
     return absl::InternalError(absl::StrCat(
-        "ValkeySearch RDB contents require minimum version ",
-        HumanReadableSemanticVersion(min_semantic_version), " and we are on ",
-        HumanReadableSemanticVersion(kCurrentSemanticVersion),
+        "ValkeySearch RDB contents require minimum version ", rdb_version,
+        " and we are on ", kModuleVersion,
         ". If you are downgrading, ensure all feature usage on the new "
         "version of ValkeySearch is supported by this version and retry."));
   }
@@ -160,6 +161,9 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
   VMSDK_ASSIGN_OR_RETURN(
       auto rdb_section_count, rdb->LoadUnsigned(),
       _ << "IO error reading RDB section count from RDB. Failing RDB load.");
+
+  VMSDK_LOG(NOTICE, ctx) << "Loading RDB from version: " << rdb_version
+                         << " with " << rdb_section_count << " sections.";
 
   // Begin RDBSection iteration
   RDBSectionIter it(rdb, rdb_section_count);
@@ -221,21 +225,16 @@ int AuxLoadCallback(ValkeyModuleIO *rdb, int encver, int when) {
 absl::Status PerformRDBSave(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when) {
   // Aggregate header information from save callbacks first
   int rdb_section_count = 0;
-  int min_semantic_version = 0;  // 0.0.0 by default
+  vmsdk::ValkeyVersion min_version = 0;  // 0.0.0 by default
   absl::flat_hash_map<data_model::RDBSectionType, int> section_counts;
-  for (auto &registeredRDBSectionCallback : kRegisteredRDBSectionCallbacks) {
-    data_model::RDBSectionType rdb_section_type =
-        registeredRDBSectionCallback.first;
-    section_counts[rdb_section_type] =
-        registeredRDBSectionCallback.second.section_count(ctx, when);
-
-    if (section_counts[rdb_section_type] > 0) {
-      min_semantic_version =
-          std::max(min_semantic_version,
-                   registeredRDBSectionCallback.second.minimum_semantic_version(
-                       ctx, when));
+  for (auto &[type, callbacks] : kRegisteredRDBSectionCallbacks) {
+    section_counts[type] = callbacks.section_count(ctx, when);
+    if (section_counts[type] > 0) {
+      auto this_version = callbacks.minimum_semantic_version(ctx, when);
+      CHECK(this_version.ok());
+      min_version = std::max(min_version, *this_version);
     }
-    rdb_section_count += section_counts[rdb_section_type];
+    rdb_section_count += section_counts[type];
   }
 
   // Do nothing to satisfy AuxSave2 if there are no RDBSections.
@@ -243,8 +242,12 @@ absl::Status PerformRDBSave(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when) {
     return absl::OkStatus();
   }
 
+  VMSDK_LOG(NOTICE, ctx) << "Saving " << rdb_section_count
+                         << " ValkeySearch RDB sections with minimum version "
+                         << vmsdk::ValkeyVersion(min_version).ToString();
+
   // Save the header
-  VMSDK_RETURN_IF_ERROR(rdb->SaveUnsigned(min_semantic_version));
+  VMSDK_RETURN_IF_ERROR(rdb->SaveUnsigned(min_version.ToInt()));
   VMSDK_RETURN_IF_ERROR(rdb->SaveUnsigned(rdb_section_count));
 
   // Now do the save of the contents

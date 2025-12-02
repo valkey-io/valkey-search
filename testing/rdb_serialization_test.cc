@@ -13,8 +13,8 @@
 #include "absl/status/status.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "src/version.h"
 #include "testing/common.h"
-#include "third_party/hnswlib/iostream.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -516,21 +516,21 @@ TEST_F(RDBSerializationTest, PerformRDBLoadInvalidEncVer) {
 
 TEST_F(RDBSerializationTest, PerformRDBLoadNewerSemVer) {
   FakeSafeRDB fake_rdb;
-  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kCurrentSemanticVersion + 0x010000));
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kModuleVersion + 0x010000));
   EXPECT_EQ(PerformRDBLoad(&fake_ctx_, &fake_rdb, kCurrentEncVer).code(),
             absl::StatusCode::kInternal);
 }
 
 TEST_F(RDBSerializationTest, PerformRDBLoadNoRDBSections) {
   FakeSafeRDB fake_rdb;
-  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kCurrentSemanticVersion));
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kModuleVersion));
   VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(0));
   VMSDK_EXPECT_OK(PerformRDBLoad(&fake_ctx_, &fake_rdb, kCurrentEncVer));
 }
 
 TEST_F(RDBSerializationTest, PerformRDBLoadRDBSectionNotRegistered) {
   FakeSafeRDB fake_rdb;
-  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kCurrentSemanticVersion));
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kModuleVersion));
   VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(1));
   data_model::RDBSection section;
   section.set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
@@ -559,7 +559,7 @@ TEST_F(RDBSerializationTest, PerformRDBLoadRDBSectionNotRegistered) {
 
 TEST_F(RDBSerializationTest, PerformRDBLoadRDBSectionRegistered) {
   FakeSafeRDB fake_rdb;
-  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kCurrentSemanticVersion));
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kModuleVersion));
   VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(1));
   data_model::RDBSection section;
   section.set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
@@ -594,7 +594,7 @@ TEST_F(RDBSerializationTest, PerformRDBLoadRDBSectionRegistered) {
 
 TEST_F(RDBSerializationTest, PerformRDBLoadRDBSectionCallbackFailure) {
   FakeSafeRDB fake_rdb;
-  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kCurrentSemanticVersion));
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kModuleVersion));
   VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(1));
   data_model::RDBSection section;
   section.set_type(data_model::RDB_SECTION_INDEX_SCHEMA);

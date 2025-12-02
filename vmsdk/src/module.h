@@ -66,14 +66,13 @@ struct CommandOptions {
   int first_key{0};
   int last_key{0};
   int key_step{0};
-  const ValkeyModuleCommandInfo *command_info{nullptr};
 };
 
 struct Options {
   std::string name;
   std::list<absl::string_view> acl_categories;
-  int version;
-  int minimum_valkey_version;
+  vmsdk::ValkeyVersion version;
+  vmsdk::ValkeyVersion minimum_valkey_server_version;
   ValkeyModuleInfoFunc info{nullptr};
   std::list<CommandOptions> commands;
   using OnLoad = std::optional<absl::AnyInvocable<absl::Status(

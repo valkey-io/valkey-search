@@ -65,13 +65,6 @@ absl::Status RegisterCommands(ValkeyModuleCtx *ctx,
           absl::StrCat("Failed to set ACL categories `", permissions,
                        "` for the command: ", command.cmd_name.data()));
     }
-    if (command.command_info != nullptr) {
-      if (ValkeyModule_SetCommandInfo(cmd, command.command_info) ==
-          VALKEYMODULE_ERR) {
-        return absl::InternalError(absl::StrCat(
-            "Failed to set command info for: ", command.cmd_name.data()));
-      }
-    }
   }
   return absl::OkStatus();
 }
@@ -95,13 +88,12 @@ int OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
         << "ValkeyModule_GetServerVersion function is not available";
     return VALKEYMODULE_ERR;
   }
-  auto server_version = ValkeyModule_GetServerVersion();
-  if (server_version < options.minimum_valkey_version) {
+  auto server_version = vmsdk::ValkeyVersion(ValkeyModule_GetServerVersion());
+  if (server_version < options.minimum_valkey_server_version) {
     VMSDK_LOG(WARNING, ctx)
         << "Minimum required server version is "
-        << vmsdk::DisplayValkeyVersion(options.minimum_valkey_version)
-        << ", Current version is "
-        << vmsdk::DisplayValkeyVersion(server_version);
+        << vmsdk::ValkeyVersion(options.minimum_valkey_server_version)
+        << ", Current version is " << vmsdk::ValkeyVersion(server_version);
     return VALKEYMODULE_ERR;
   }
   if (auto status = AddACLCategories(ctx, options.acl_categories);

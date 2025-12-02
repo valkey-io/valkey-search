@@ -50,7 +50,7 @@ def generate_test_cases():
                 knn=3,
                 score_as="score",
                 returns=None,
-                expected_error="Index with name 'not_a_real_index' not found",
+                expected_error="Index with name 'not_a_real_index' not found in database 0",
                 expected_result=None,
                 no_content=True,
             ),
@@ -84,7 +84,7 @@ def generate_test_cases():
                 knn=3,
                 score_as="score",
                 returns=None,
-                expected_error="Index with name 'not_a_real_index' not found",
+                expected_error="Index with name 'not_a_real_index' not found in database 0",
                 expected_result=None,
                 no_content=False,
             ),
@@ -559,7 +559,7 @@ class VectorSearchIntegrationTest(VSSTestCase):
             )
 
         self.assertEqual(
-            "Index test_index already exists.",
+            "Index test_index in database 0 already exists.",
             e.exception.args[0],
         )
 

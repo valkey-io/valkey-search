@@ -7,7 +7,7 @@ from valkeytestframework.util import waiters
 from concurrent.futures import ThreadPoolExecutor
 import pytest
 
-RETRY_MIN_THRESHOLD=50
+RETRY_MIN_THRESHOLD=5
 
 def do_dropindex(node0, index_name):
     dropindex_result = None

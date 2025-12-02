@@ -189,6 +189,7 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
 std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
 Service::GenerateInfoResponse(
     const coordinator::InfoIndexPartitionRequest& request) {
+  vmsdk::VerifyMainThread();
   uint32_t db_num = request.db_num();
   std::string index_name = request.index_name();
   coordinator::InfoIndexPartitionResponse response;
@@ -218,23 +219,14 @@ Service::GenerateInfoResponse(
   auto schema = std::move(status_or_schema.value());
   IndexSchema::InfoIndexPartitionData data =
       schema->GetInfoIndexPartitionData();
-
-  std::optional<coordinator::IndexFingerprintVersion> index_fingerprint_version;
-
-  auto global_metadata =
-      coordinator::MetadataManager::Instance().GetGlobalMetadata();
-  CHECK(global_metadata->type_namespace_map().contains(
-      kSchemaManagerMetadataTypeName));
-  const auto& entry_map =
-      global_metadata->type_namespace_map().at(kSchemaManagerMetadataTypeName);
-  CHECK(entry_map.entries().contains(index_name));
-  const auto& entry = entry_map.entries().at(index_name);
-  index_fingerprint_version.emplace();
-  index_fingerprint_version->set_fingerprint(entry.fingerprint());
-  index_fingerprint_version->set_version(entry.version());
+  auto index_fingerprint_version =
+      coordinator::MetadataManager::Instance().GetEntryInfo(
+          kSchemaManagerMetadataTypeName,
+          coordinator::ObjName(db_num, index_name));
 
   response.set_exists(true);
   response.set_index_name(index_name);
+  response.set_db_num(db_num);
   response.set_num_docs(data.num_docs);
   response.set_num_records(data.num_records);
   response.set_hash_indexing_failures(data.hash_indexing_failures);
@@ -246,9 +238,9 @@ Service::GenerateInfoResponse(
   response.set_mutation_queue_size(data.mutation_queue_size);
   response.set_recent_mutations_queue_delay(data.recent_mutations_queue_delay);
   response.set_state(data.state);
-  if (index_fingerprint_version.has_value()) {
+  if (index_fingerprint_version.ok()) {
     *response.mutable_index_fingerprint_version() =
-        std::move(index_fingerprint_version.value());
+        std::move(*index_fingerprint_version);
   }
   return std::make_pair(grpc::Status::OK, response);
 }
@@ -292,12 +284,49 @@ std::unique_ptr<Server> ServerImpl::Create(
       reader_thread_pool);
   grpc::ServerBuilder builder;
   builder.AddListeningPort(server_address, creds);
+  // Set the SO_REUSEADDR option
+  builder.AddChannelArgument(GRPC_ARG_ALLOW_REUSEPORT, 1);
   builder.RegisterService(coordinator_service.get());
   builder.AddChannelArgument(GRPC_ARG_MINIMAL_STACK, 1);
   builder.AddChannelArgument(GRPC_ARG_OPTIMIZATION_TARGET, "latency");
   builder.AddChannelArgument(GRPC_ARG_TCP_TX_ZEROCOPY_ENABLED, 1);
   auto server = builder.BuildAndStart();
   if (server == nullptr) {
+    VMSDK_LOG(WARNING, ctx)
+        << "Failed to start Coordinator Server on port " << port;
+    for (size_t attempt = 2; attempt <= 10; ++attempt) {
+      std::string lsof_cmd =
+          "lsof -i :" + std::to_string(port) + " 2>/dev/null";
+      FILE* pipe = popen(lsof_cmd.c_str(), "r");
+      if (pipe) {
+        char buffer[256];
+        VMSDK_LOG(WARNING, ctx)
+            << "Diagnosing other usage with this shell command:";
+        VMSDK_LOG(WARNING, ctx) << ">> lsof -i: " << port;
+        while (fgets(buffer, sizeof(buffer), pipe)) {
+          std::string line(buffer);
+          if (!line.empty() && line.back() == '\n') {
+            line.pop_back();
+          }
+          VMSDK_LOG(WARNING, ctx) << ">> " << line;
+        }
+        VMSDK_LOG(WARNING, ctx) << ">> <end of lsof output>";
+        pclose(pipe);
+      } else {
+        VMSDK_LOG(WARNING, ctx) << "Could not check port " << port << " usage";
+      }
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(100 * attempt));  // backoff
+      VMSDK_LOG(WARNING, ctx)
+          << "Retrying to start Coordinator Server (attempt " << attempt << ")";
+      server = builder.BuildAndStart();
+      if (server != nullptr) {
+        VMSDK_LOG(NOTICE, ctx)
+            << "Successfully started Coordinator Server on " << server_address
+            << " after " << attempt << " attempts";
+        break;
+      }
+    }
     VMSDK_LOG(WARNING, ctx)
         << "Failed to start Coordinator Server on " << server_address;
     return nullptr;

@@ -62,9 +62,11 @@ class ProximityIterator : public TextIterator {
   const PositionRange& CurrentPosition() const override;
   bool NextPosition() override;
   FieldMaskPredicate CurrentFieldMask() const override;
+  // Returns true if iterator is at a valid state with current key, position,
+  // and field.
   bool IsIteratorValid() const override {
     return !DoneKeys() && current_position_.has_value() &&
-           current_field_mask_ != 0;
+           current_field_mask_ != 0ULL;
   }
 
  private:

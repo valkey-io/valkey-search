@@ -107,10 +107,9 @@ query::EvaluationResult PrefilterEvaluator::EvaluateText(
   CHECK(key_);
   // Check configuration flag
   if (!options::GetEnableTextPrefilter().GetValue()) {
-    // No-op path (default) - skip evaluation
+    // No-op path (default) - skip prefilter evaluation
     return query::EvaluationResult(true);
   }
-  VMSDK_LOG(WARNING, nullptr) << "In pre-filter evaluation - Text";
   // Evaluate using per-key text index
   // This acquires the lock and looks up the key in per_key_text_indexes
   auto text_index_schema = predicate.GetTextIndexSchema();
@@ -123,7 +122,6 @@ query::EvaluationResult PrefilterEvaluator::EvaluateText(
           return query::EvaluationResult(false);
         }
         // Evaluate predicate against this key's text index
-        // This handles Term, Prefix, Suffix, and Proximity predicates
         return predicate.Evaluate(it->second, *key_, require_positions);
       });
 }

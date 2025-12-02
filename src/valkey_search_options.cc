@@ -218,9 +218,9 @@ static auto ft_info_rpc_timeout_ms =
         kMaximumFTInfoRpcTimeoutMs)  // max timeout (5 minutes)
         .Build();
 
-/// Enable TEXT predicate evaluation in prefilter stage
-/// When enabled, TEXT predicates are evaluated per-key using the per-key text
-/// index When disabled (default), TEXT evaluation is a no-op in prefilter
+/// Enable TEXT predicate evaluation in prefilter stage.
+/// When enabled, TEXT predicates are evaluated using the per-key text index.
+/// When disabled (default), TEXT evaluation is a no-op in prefilter.
 constexpr absl::string_view kEnableTextPrefilter{"enable-text-prefilter"};
 static auto enable_text_prefilter =
     config::BooleanBuilder(kEnableTextPrefilter, false).Build();

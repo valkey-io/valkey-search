@@ -228,7 +228,8 @@ Service::GenerateInfoResponse(
       schema->GetInfoIndexPartitionData();
   auto index_fingerprint_version =
       coordinator::MetadataManager::Instance().GetEntryInfo(
-          kSchemaManagerMetadataTypeName, db_num, index_name);
+          kSchemaManagerMetadataTypeName,
+          coordinator::ObjName(db_num, index_name));
 
   response.set_exists(true);
   response.set_index_name(index_name);

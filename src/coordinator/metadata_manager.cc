@@ -181,13 +181,13 @@ uint64_t MetadataManager::ComputeTopLevelFingerprint(
 }
 
 absl::Status MetadataManager::TriggerCallbacks(
-    absl::string_view type_name, uint32_t db_num, absl::string_view id,
+    absl::string_view type_name, const ObjName &obj_name,
     const GlobalMetadataEntry &entry) {
   auto &registered_types = registered_types_.Get();
   auto it = registered_types.find(type_name);
   if (it != registered_types.end()) {
     return registered_types.at(type_name).update_callback(
-        db_num, id, entry.has_content() ? &entry.content() : nullptr,
+        obj_name, entry.has_content() ? &entry.content() : nullptr,
         entry.fingerprint(), entry.version());
   }
   VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 10)
@@ -196,8 +196,8 @@ absl::Status MetadataManager::TriggerCallbacks(
 }
 
 absl::StatusOr<const GlobalMetadataEntry *> MetadataManager::GetExistingEntry(
-    absl::string_view type_name, uint32_t db_num, absl::string_view id) const {
-  auto encoded_id = EncodeDbNum(db_num, id);
+    absl::string_view type_name, const ObjName &obj_name) const {
+  auto encoded_id = obj_name.Encode();
   auto &metadata = metadata_.Get();
   auto type_itr = metadata.type_namespace_map().find(type_name);
   if (type_itr != metadata.type_namespace_map().end()) {
@@ -208,18 +208,18 @@ absl::StatusOr<const GlobalMetadataEntry *> MetadataManager::GetExistingEntry(
     }
   }
   return absl::NotFoundError(
-      absl::StrCat("Entry not found: ", type_name, " ", db_num, " ", id));
+      absl::StrCat("Entry not found: ", type_name, " ", obj_name));
 }
 
 absl::StatusOr<google::protobuf::Any> MetadataManager::GetEntry(
-    absl::string_view type_name, uint32_t db_num, absl::string_view id) {
-  VMSDK_ASSIGN_OR_RETURN(auto entry, GetExistingEntry(type_name, db_num, id));
+    absl::string_view type_name, const ObjName &obj_name) {
+  VMSDK_ASSIGN_OR_RETURN(auto entry, GetExistingEntry(type_name, obj_name));
   return entry->content();
 }
 
 absl::StatusOr<IndexFingerprintVersion> MetadataManager::GetEntryInfo(
-    absl::string_view type_name, uint32_t db_num, absl::string_view id) {
-  VMSDK_ASSIGN_OR_RETURN(auto entry, GetExistingEntry(type_name, db_num, id));
+    absl::string_view type_name, const ObjName &obj_name) {
+  VMSDK_ASSIGN_OR_RETURN(auto entry, GetExistingEntry(type_name, obj_name));
   IndexFingerprintVersion index_fingerprint_version;
   index_fingerprint_version.set_fingerprint(entry->fingerprint());
   index_fingerprint_version.set_version(entry->version());
@@ -227,9 +227,9 @@ absl::StatusOr<IndexFingerprintVersion> MetadataManager::GetEntryInfo(
 }
 
 absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(
-    absl::string_view type_name, uint32_t db_num, absl::string_view id,
+    absl::string_view type_name, const ObjName &obj_name,
     std::unique_ptr<google::protobuf::Any> contents) {
-  auto encoded_id = EncodeDbNum(db_num, id);
+  auto encoded_id = obj_name.Encode();
   auto &registered_types = registered_types_.Get();
   auto rt_it = registered_types.find(type_name);
   if (rt_it == registered_types.end()) {
@@ -259,7 +259,7 @@ absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(
   new_entry.set_allocated_content(contents.release());
   new_entry.set_min_version(min_version);
 
-  auto callback_status = TriggerCallbacks(type_name, db_num, id, new_entry);
+  auto callback_status = TriggerCallbacks(type_name, obj_name, new_entry);
   if (!callback_status.ok()) {
     return callback_status;
   }
@@ -283,30 +283,29 @@ absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(
 }
 
 absl::Status MetadataManager::DeleteEntry(absl::string_view type_name,
-                                          absl::string_view id,
-                                          uint32_t db_num) {
-  auto encoded_id = EncodeDbNum(db_num, id);
+                                          const ObjName &obj_name) {
+  auto encoded_id = obj_name.Encode();
   auto &metadata = metadata_.Get();
   auto it = metadata.type_namespace_map().find(type_name);
   if (it == metadata.type_namespace_map().end()) {
     return absl::NotFoundError(
-        absl::StrCat("Entry not found: ", type_name, " ", id));
+        absl::StrCat("Entry not found: ", type_name, " ", obj_name));
   }
   auto inner_it = it->second.entries().find(encoded_id);
   if (inner_it == it->second.entries().end()) {
     return absl::NotFoundError(
-        absl::StrCat("Entry not found: ", type_name, " ", db_num, " ", id));
+        absl::StrCat("Entry not found: ", type_name, " ", obj_name));
   }
   if (!inner_it->second.has_content()) {
     return absl::NotFoundError(
-        absl::StrCat("Entry not found: ", type_name, " ", db_num, " ", id));
+        absl::StrCat("Entry not found: ", type_name, " ", obj_name));
   }
   GlobalMetadataEntry new_entry;
   new_entry.set_version(inner_it->second.version() + 1);
   // Note that fingerprint and encoding version are not set and will default
   // to 0.
 
-  auto callback_status = TriggerCallbacks(type_name, db_num, id, new_entry);
+  auto callback_status = TriggerCallbacks(type_name, obj_name, new_entry);
   if (!callback_status.ok()) {
     return callback_status;
   }
@@ -569,9 +568,8 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
       }
 
       if (trigger_callbacks) {
-        auto decoded = DecodeDbNum(id);
-        auto result = TriggerCallbacks(type_name, decoded.db_num, decoded.id,
-                                       proposed_entry);
+        auto obj_name = ObjName::Decode(id);
+        auto result = TriggerCallbacks(type_name, obj_name, proposed_entry);
         if (!result.ok()) {
           VMSDK_LOG(WARNING, detached_ctx_.get())
               << "Failed during reconciliation callback: %s"
@@ -865,8 +863,7 @@ explicitly ignored -- but preserved -- allowing for potential future
 forward/reverse compatibility.
 
 */
-MetadataManager::DecodedDbNum MetadataManager::DecodeDbNum(
-    absl::string_view encoded) {
+ObjName ObjName::Decode(absl::string_view encoded) {
   auto hash_tag = vmsdk::ParseHashTag(encoded);
   if (hash_tag) {
     std::string_view front_tag = *hash_tag;
@@ -883,25 +880,24 @@ MetadataManager::DecodedDbNum MetadataManager::DecodeDbNum(
       }
       if (!db_num_str.empty()) {
         // Found valid 9/1.1 encoding.
-        return {.db_num = static_cast<uint32_t>(std::stoul(db_num_str)),
-                .id = std::string(encoded.substr(hash_tag->size() + 2))};
+        return {static_cast<uint32_t>(std::stoul(db_num_str)),
+                encoded.substr(hash_tag->size() + 2)};
       }
     }
     VMSDK_LOG_EVERY_N(WARNING, nullptr, 10)
         << "Found invalid encoded index name: " << encoded;
   }
   // Assume 8/1.0 encoding.
-  return {.db_num = 0, .id = std::string(encoded)};
+  return {0, encoded};
 }
 
-std::string MetadataManager::EncodeDbNum(uint32_t db_num,
-                                         absl::string_view id) {
-  if (db_num == 0) {
+std::string ObjName::Encode() const {
+  if (db_num_ == 0) {
     // 8/1.0 encoding.
-    return std::string(id);
+    return name_;
   }
   // 9/1.1 encoding.
-  return absl::StrCat("{", db_num, "}", id);
+  return absl::StrCat("{", db_num_, "}", name_);
 }
 
 }  // namespace valkey_search::coordinator

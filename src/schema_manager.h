@@ -21,16 +21,20 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
-#include "command_parser.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
+#include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
+
+namespace coordinator {
+class ObjName;
+}
 
 constexpr absl::string_view kSchemaManagerMetadataTypeName{"vs_index_schema"};
 
@@ -114,7 +118,7 @@ class SchemaManager {
   vmsdk::ThreadPool *mutations_thread_pool_;
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
 
-  absl::Status OnMetadataCallback(uint32_t db_num, absl::string_view id,
+  absl::Status OnMetadataCallback(const coordinator::ObjName &obj_name,
                                   const google::protobuf::Any *metadata,
                                   uint64_t fingerprint, uint32_t version)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);

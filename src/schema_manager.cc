@@ -131,10 +131,10 @@ SchemaManager::SchemaManager(
   if (coordinator_enabled) {
     coordinator::MetadataManager::Instance().RegisterType(
         kSchemaManagerMetadataTypeName, kModuleVersion, ComputeFingerprint,
-        [this](uint32_t db_num, absl::string_view id,
+        [this](const coordinator::ObjName &obj_name,
                const google::protobuf::Any *metadata, uint64_t fingerprint,
                uint32_t version) -> absl::Status {
-          return this->OnMetadataCallback(db_num, id, metadata, fingerprint,
+          return this->OnMetadataCallback(obj_name, metadata, fingerprint,
                                           version);
         },
         [this](auto) { return this->GetMinVersion(); });
@@ -231,7 +231,8 @@ SchemaManager::CreateIndexSchema(
     // It will callback into us with the update.
     if (coordinator::MetadataManager::Instance()
             .GetEntry(kSchemaManagerMetadataTypeName,
-                      index_schema_proto.db_num(), index_schema_proto.name())
+                      coordinator::ObjName(index_schema_proto.db_num(),
+                                           index_schema_proto.name()))
             .ok()) {
       return GenerateIndexAlreadyExistsError(index_schema_proto.db_num(),
                                              index_schema_proto.name());
@@ -239,8 +240,10 @@ SchemaManager::CreateIndexSchema(
     auto any_proto = std::make_unique<google::protobuf::Any>();
     any_proto->PackFrom(index_schema_proto);
     return coordinator::MetadataManager::Instance().CreateEntry(
-        kSchemaManagerMetadataTypeName, index_schema_proto.db_num(),
-        index_schema_proto.name(), std::move(any_proto));
+        kSchemaManagerMetadataTypeName,
+        coordinator::ObjName(index_schema_proto.db_num(),
+                             index_schema_proto.name()),
+        std::move(any_proto));
   }
 
   // In non-coordinated mode, apply the update inline.
@@ -283,12 +286,12 @@ SchemaManager::RemoveIndexSchemaInternal(uint32_t db_num,
 }
 
 absl::Status SchemaManager::RemoveIndexSchema(uint32_t db_num,
-                                              absl::string_view name) {
+                                              const absl::string_view name) {
   if (coordinator_enabled_) {
     // In coordinated mode, use the metadata_manager as the source of truth.
     // It will callback into us with the update.
     auto status = coordinator::MetadataManager::Instance().DeleteEntry(
-        kSchemaManagerMetadataTypeName, name, db_num);
+        kSchemaManagerMetadataTypeName, coordinator::ObjName(db_num, name));
     if (status.ok()) {
       return status;
     } else if (absl::IsNotFound(status)) {
@@ -353,11 +356,11 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
 }
 
 absl::Status SchemaManager::OnMetadataCallback(
-    uint32_t db_num, absl::string_view id,
-    const google::protobuf::Any *metadata, uint64_t fingerprint,
-    uint32_t version) {
+    const coordinator::ObjName &obj_name, const google::protobuf::Any *metadata,
+    uint64_t fingerprint, uint32_t version) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  auto status = RemoveIndexSchemaInternal(db_num, id);
+  auto status =
+      RemoveIndexSchemaInternal(obj_name.GetDbNum(), obj_name.GetName());
   if (!status.ok() && !absl::IsNotFound(status.status())) {
     return status.status();
   }
@@ -367,14 +370,15 @@ absl::Status SchemaManager::OnMetadataCallback(
   }
   auto proposed_schema = std::make_unique<data_model::IndexSchema>();
   if (!metadata->UnpackTo(proposed_schema.get())) {
-    return absl::InternalError(absl::StrFormat(
-        "Unable to unpack metadata for index schema %s", id.data()));
+    return absl::InternalError(
+        absl::StrCat("Unable to unpack metadata for index schema ", obj_name));
   }
 
   VMSDK_RETURN_IF_ERROR(
       CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema));
 
-  auto created_schema = LookupInternal(db_num, id).value();
+  auto created_schema =
+      LookupInternal(obj_name.GetDbNum(), obj_name.GetName()).value();
   CHECK(created_schema != nullptr);
   created_schema->SetFingerprint(fingerprint);
   created_schema->SetVersion(version);

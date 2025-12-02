@@ -115,13 +115,12 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
         [&](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
           return type_to_register.fingerprint_to_return;
         },
-        [&](uint32_t db_num, absl::string_view id,
-            const google::protobuf::Any* metadata, uint64_t fingerprint,
-            uint32_t version) {
+        [&](const ObjName& obj_name, const google::protobuf::Any* metadata,
+            uint64_t fingerprint, uint32_t version) {
           CallbackResult callback_result{
               .type_name = type_to_register.type_name,
-              .db_num = db_num,
-              .id = std::string(id),
+              .db_num = obj_name.GetDbNum(),
+              .id = obj_name.GetName(),
               .has_content = metadata != nullptr,
           };
           callbacks_tracker.push_back(std::move(callback_result));
@@ -153,16 +152,16 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
       content->set_type_url("type.googleapis.com/FakeType");
       content->set_value(operation.content);
       auto result = test_metadata_manager_->CreateEntry(
-          operation.type_name, operation.db_num, operation.id,
+          operation.type_name, ObjName(operation.db_num, operation.id),
           std::move(content));
       EXPECT_EQ(result.status().code(), test_case.expected_status_code);
     } else if (operation.operation_type ==
                EntryOperationTestParam::EntryOperation::kDelete) {
-      EXPECT_EQ(
-          test_metadata_manager_
-              ->DeleteEntry(operation.type_name, operation.id, operation.db_num)
-              .code(),
-          test_case.expected_status_code);
+      EXPECT_EQ(test_metadata_manager_
+                    ->DeleteEntry(operation.type_name,
+                                  ObjName(operation.db_num, operation.id))
+                    .code(),
+                test_case.expected_status_code);
     }
   }
   EXPECT_THAT(callbacks_tracker,
@@ -550,13 +549,12 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
         [&](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
           return type_to_register.fingerprint_to_return;
         },
-        [&](uint32_t db_num, absl::string_view id,
-            const google::protobuf::Any* metadata, uint64_t fingerprint,
-            uint32_t version) {
+        [&](const ObjName& obj_name, const google::protobuf::Any* metadata,
+            uint64_t fingerprint, uint32_t version) {
           callbacks_tracker.push_back(CallbackResult{
               .type_name = type_to_register.type_name,
-              .db_num = db_num,
-              .id = std::string(id),
+              .db_num = obj_name.GetDbNum(),
+              .id = obj_name.GetName(),
               .has_content = metadata != nullptr,
           });
           return type_to_register.status_to_return;
@@ -1947,8 +1945,8 @@ TEST_F(MetadataManagerTimestampTest,
       [](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
         return 1234;
       },
-      [](uint32_t db_num, absl::string_view id,
-         const google::protobuf::Any* metadata, uint64_t fingerprint,
+      [](const ObjName& obj_name, const google::protobuf::Any* metadata,
+         uint64_t fingerprint,
          uint32_t version) { return absl::InternalError("Callback failed"); },
       [](auto) { return kModuleVersion; });
 
@@ -2059,23 +2057,29 @@ TEST(IndexNameTest, IndexName) {
           // Construct a IndexName
           //
           std::cout << "Doing test: DB:" << db_num << " name:'" << id << "'\n";
-          std::string encoded = MetadataManager::EncodeDbNum(db_num, id);
+          std::string encoded = ObjName(db_num, id).Encode();
           //
           // Now reverse it and compare equality
           //
-          auto decoded = MetadataManager::DecodeDbNum(encoded);
-          EXPECT_EQ(id, decoded.id);
-          EXPECT_EQ(db_num, decoded.db_num);
+          auto decoded = ObjName::Decode(encoded);
+          EXPECT_EQ(id, decoded.GetName());
+          EXPECT_EQ(db_num, decoded.GetDbNum());
           //
           // And re-forward it
           //
           auto re_forward =
-              MetadataManager::EncodeDbNum(decoded.db_num, decoded.id);
+              ObjName(decoded.GetDbNum(), decoded.GetName()).Encode();
           EXPECT_EQ(re_forward, encoded);
         }
       }
     }
   }
+  //
+  // Prove that the new code ignores potential extension to within the hash tag
+  //
+  auto obj_name = ObjName::Decode("{1abc}def");
+  EXPECT_EQ("def", obj_name.GetName());
+  EXPECT_EQ(1, obj_name.GetDbNum());
 }
 
 }  // namespace valkey_search::coordinator

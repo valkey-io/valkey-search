@@ -19,22 +19,40 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
-#include "command_parser.h"
 #include "google/protobuf/any.pb.h"
 #include "highwayhash/hh_types.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/rdb_serialization.h"
+#include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::coordinator {
 
+struct ObjName {
+  ObjName(uint32_t db_num, absl::string_view name)
+      : db_num_(db_num), name_(name) {}
+  static ObjName Decode(absl::string_view encoded_id);
+  std::string Encode() const;
+  uint32_t GetDbNum() const { return db_num_; }
+  const std::string &GetName() const { return name_; }
+
+ private:
+  uint32_t db_num_;
+  std::string name_;
+};
+
+template <typename Sink>
+void AbslStringify(Sink &sink, const ObjName &obj_name) {
+  absl::Format(&sink, "%d/%s", obj_name.GetDbNum(), obj_name.GetName());
+}
+
 using FingerprintCallback = absl::AnyInvocable<absl::StatusOr<uint64_t>(
     const google::protobuf::Any &metadata)>;
 using MetadataUpdateCallback = absl::AnyInvocable<absl::Status(
-    uint32_t db_num, absl::string_view, const google::protobuf::Any *metadata,
+    const ObjName &, const google::protobuf::Any *metadata,
     uint64_t fingerprint, uint32_t version)>;
 using MinVersionCallback = std::function<absl::StatusOr<vmsdk::ValkeyVersion>(
     const google::protobuf::Any &metadata)>;
@@ -57,23 +75,22 @@ class MetadataManager {
 
   absl::StatusOr<vmsdk::ValkeyVersion> ComputeMinVersion() const;
 
-  absl::Status TriggerCallbacks(absl::string_view type_name, uint32_t db_num,
-                                absl::string_view id,
+  absl::Status TriggerCallbacks(absl::string_view type_name,
+                                const ObjName &obj_name,
                                 const GlobalMetadataEntry &entry);
 
   absl::StatusOr<google::protobuf::Any> GetEntry(absl::string_view type_name,
-                                                 uint32_t db_num,
-                                                 absl::string_view id);
+                                                 const ObjName &obj_name);
 
   absl::StatusOr<IndexFingerprintVersion> GetEntryInfo(
-      absl::string_view type_name, uint32_t db_num, absl::string_view id);
+      absl::string_view type_name, const ObjName &obj_name);
 
   absl::StatusOr<IndexFingerprintVersion> CreateEntry(
-      absl::string_view type_name, uint32_t db_num, absl::string_view id,
+      absl::string_view type_name, const ObjName &obj_name,
       std::unique_ptr<google::protobuf::Any> contents);
 
-  absl::Status DeleteEntry(absl::string_view type_name, absl::string_view id,
-                           uint32_t db_num);
+  absl::Status DeleteEntry(absl::string_view type_name,
+                           const ObjName &obj_name);
 
   std::unique_ptr<GlobalMetadata> GetGlobalMetadata();
 
@@ -139,12 +156,6 @@ class MetadataManager {
 
   absl::Status ShowMetadata(ValkeyModuleCtx *ctx,
                             vmsdk::ArgsIterator &iter) const;
-  static std::string EncodeDbNum(uint32_t db_num, absl::string_view id);
-  struct DecodedDbNum {
-    uint32_t db_num;
-    std::string id;
-  };
-  static DecodedDbNum DecodeDbNum(absl::string_view encoded_id);
 
  private:
   struct RegisteredType {
@@ -158,7 +169,7 @@ class MetadataManager {
       absl::flat_hash_map<std::string, RegisteredType> &registered_types);
   int GetSectionsCount() const;
   absl::StatusOr<const GlobalMetadataEntry *> GetExistingEntry(
-      absl::string_view type_name, uint32_t db_num, absl::string_view id) const;
+      absl::string_view type_name, const ObjName &obj_name) const;
   vmsdk::MainThreadAccessGuard<GlobalMetadata> metadata_;
   vmsdk::MainThreadAccessGuard<GlobalMetadata> staged_metadata_;
   vmsdk::MainThreadAccessGuard<bool> staging_metadata_due_to_repl_load_ = false;

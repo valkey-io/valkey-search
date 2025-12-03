@@ -226,16 +226,14 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
   static PatriciaTree<InternedStringPtr> tree(false);
   static absl::flat_hash_set<PatriciaNode<InternedStringPtr> *> entries;
   static InternedStringSet untracked_keys;
-  EXPECT_CALL(*tag_index_100_15, Search(_, false))
-      .WillRepeatedly([]() {
-        return std::make_unique<TestedTagEntriesFetcher>(15, tree, entries,
-                                                         false, untracked_keys);
-      });
-  EXPECT_CALL(*tag_index_100_15, Search(_, true))
-      .WillRepeatedly([]() {
-        return std::make_unique<TestedTagEntriesFetcher>(85, tree, entries,
-                                                         false, untracked_keys);
-      });
+  EXPECT_CALL(*tag_index_100_15, Search(_, false)).WillRepeatedly([]() {
+    return std::make_unique<TestedTagEntriesFetcher>(15, tree, entries, false,
+                                                     untracked_keys);
+  });
+  EXPECT_CALL(*tag_index_100_15, Search(_, true)).WillRepeatedly([]() {
+    return std::make_unique<TestedTagEntriesFetcher>(85, tree, entries, false,
+                                                     untracked_keys);
+  });
 }
 
 TEST_P(EvaluateFilterAsPrimaryTest, ParseParams) {

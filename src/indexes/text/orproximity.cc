@@ -18,6 +18,7 @@ OrProximityIterator::OrProximityIterator(
   NextKey();
 }
 
+// Returns the field mask based on the current active text iterator.
 FieldMaskPredicate OrProximityIterator::QueryFieldMask() const {
   CHECK(!current_pos_indices_.empty());
   return iters_[current_pos_indices_[0]]->QueryFieldMask();
@@ -54,17 +55,14 @@ bool OrProximityIterator::FindMinimumKey() {
     current_field_mask_ = 0ULL;
     return false;
   }
-
   current_key_ = key_set_.begin()->first;
   current_key_indices_.clear();
-
   // Collect all iterators with minimum key
   for (auto it = key_set_.begin();
        it != key_set_.end() && it->first == current_key_;) {
     current_key_indices_.push_back(it->second);
     it = key_set_.erase(it);
   }
-
   pos_set_ = {};
   current_position_ = std::nullopt;
   NextPosition();
@@ -89,7 +87,6 @@ bool OrProximityIterator::SeekForwardKey(const Key& target_key) {
   if (current_key_ && current_key_ >= target_key) {
     return true;
   }
-
   // Remove entries < target_key and seek those iterators
   auto it = key_set_.lower_bound(std::make_pair(target_key, 0));
   for (auto iter = key_set_.begin(); iter != it;) {
@@ -98,7 +95,6 @@ bool OrProximityIterator::SeekForwardKey(const Key& target_key) {
     iters_[idx]->SeekForwardKey(target_key);
     InsertValidKeyIterator(idx);
   }
-
   // Seek any iterators not in set
   for (size_t i = 0; i < iters_.size(); ++i) {
     if (!iters_[i]->DoneKeys() && iters_[i]->CurrentKey() < target_key) {
@@ -106,7 +102,6 @@ bool OrProximityIterator::SeekForwardKey(const Key& target_key) {
       InsertValidKeyIterator(i);
     }
   }
-
   return FindMinimumKey();
 }
 
@@ -144,13 +139,11 @@ bool OrProximityIterator::NextPosition() {
       InsertValidPositionIterator(idx);
     }
   }
-
   if (pos_set_.empty()) {
     current_position_ = std::nullopt;
     current_field_mask_ = 0ULL;
     return false;
   }
-
   Position min_pos = pos_set_.begin()->first;
   current_pos_indices_.clear();
   // Collect all iterators at minimum position
@@ -159,7 +152,6 @@ bool OrProximityIterator::NextPosition() {
     current_pos_indices_.push_back(it->second);
     it = pos_set_.erase(it);
   }
-
   current_position_ = iters_[current_pos_indices_[0]]->CurrentPosition();
   current_field_mask_ = iters_[current_pos_indices_[0]]->CurrentFieldMask();
   return true;

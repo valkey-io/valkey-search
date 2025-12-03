@@ -17,10 +17,10 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/text/text_iterator.h"
-#include "src/indexes/text/orproximity.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 
@@ -84,10 +84,11 @@ EvaluationResult TermPredicate::Evaluate(
   key_iterators.emplace_back(std::move(key_iter));
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr, require_positions);
-  VMSDK_LOG(WARNING, nullptr) << "Built TermIterator for term: " << term_
-                             << " require_positions: " << require_positions
-                              << " DoneKeys: " << iterator->DoneKeys()
-                              << " DonePositions: " << iterator->DonePositions();
+  VMSDK_LOG(WARNING, nullptr)
+      << "Built TermIterator for term: " << term_
+      << " require_positions: " << require_positions
+      << " DoneKeys: " << iterator->DoneKeys()
+      << " DonePositions: " << iterator->DonePositions();
   return BuildTextEvaluationResult(std::move(iterator), require_positions);
 }
 
@@ -332,8 +333,8 @@ void ComposedPredicate::AddChild(std::unique_ptr<Predicate> child) {
 }
 // Helper to evaluate text predicates with conditional position requirements
 EvaluationResult EvaluatePredicate(const Predicate* predicate,
-                                       Evaluator& evaluator,
-                                       bool require_positions) {
+                                   Evaluator& evaluator,
+                                   bool require_positions) {
   if (predicate->GetType() == PredicateType::kText) {
     return evaluator.EvaluateText(*static_cast<const TextPredicate*>(predicate),
                                   require_positions);
@@ -401,13 +402,15 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     return EvaluationResult(true);
   }
   // Handle OR logic
-  auto filter_iterators = std::vector<std::unique_ptr<indexes::text::TextIterator>>();
+  auto filter_iterators =
+      std::vector<std::unique_ptr<indexes::text::TextIterator>>();
   for (const auto& child : children_) {
     EvaluationResult result =
-          EvaluatePredicate(child.get(), evaluator, require_positions);
-    VMSDK_LOG(WARNING, nullptr) << "Result of OR child evaluation: " << result.matches
-    << " iterator: " << (result.filter_iterator ? "yes" : "no")
-    << " require_positions: " << require_positions;
+        EvaluatePredicate(child.get(), evaluator, require_positions);
+    VMSDK_LOG(WARNING, nullptr)
+        << "Result of OR child evaluation: " << result.matches
+        << " iterator: " << (result.filter_iterator ? "yes" : "no")
+        << " require_positions: " << require_positions;
     // Short-circuit if any matches and positions not required.
     if (result.matches && !require_positions) {
       return EvaluationResult(true);

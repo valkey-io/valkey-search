@@ -8,9 +8,9 @@
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_ORPROXIMITY_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_ORPROXIMITY_H_
 
-#include <vector>
-#include <set>
 #include <queue>
+#include <set>
+#include <vector>
 
 #include "src/indexes/text/text_iterator.h"
 
@@ -31,7 +31,7 @@ class OrProximityIterator : public TextIterator {
  public:
   OrProximityIterator(std::vector<std::unique_ptr<TextIterator>>&& iters,
                       const InternedStringSet* untracked_keys = nullptr);
-  
+
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -51,7 +51,7 @@ class OrProximityIterator : public TextIterator {
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
   const InternedStringSet* untracked_keys_;
-  
+
   // Multiset for efficient key management
   std::multiset<std::pair<Key, size_t>> key_set_;
   // Current iterators on same key
@@ -59,7 +59,7 @@ class OrProximityIterator : public TextIterator {
   // Multiset for position optimization (supports future SeekForwardPosition)
   std::multiset<std::pair<Position, size_t>> pos_set_;
   std::vector<size_t> current_pos_indices_;
-  
+
   void InsertValidKeyIterator(size_t idx);
   bool FindMinimumKey();
   void InsertValidPositionIterator(size_t idx);

@@ -30,7 +30,6 @@ Key differences from ProximityIterator:
 class OrProximityIterator : public TextIterator {
  public:
   OrProximityIterator(std::vector<std::unique_ptr<TextIterator>>&& iters,
-                      const FieldMaskPredicate query_field_mask,
                       const InternedStringSet* untracked_keys = nullptr);
   
   /* Implementation of TextIterator APIs */
@@ -48,7 +47,6 @@ class OrProximityIterator : public TextIterator {
 
  private:
   std::vector<std::unique_ptr<TextIterator>> iters_;
-  FieldMaskPredicate query_field_mask_;
   Key current_key_;
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;

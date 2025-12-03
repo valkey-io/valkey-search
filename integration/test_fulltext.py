@@ -1032,10 +1032,10 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
                             "content", "TEXT", "NOSTEM")
         client.execute_command("HSET", "doc:1", "content", "term1 term1 term1 term2 x x term3 x x term4")
-        client.execute_command("HSET", "doc:2", "content", "term1 term1 term1 term2 x x term3 x x term4 term1 term1 term1 term2 x x term3 x x term4 term1 term1 term1 term2 x x term3 x x term4 term1 term2 x term3 x x term4")
-        client.execute_command("HSET", "doc:3", "content", "term1 term1 term1 term2 x x term3 x x term4 term1 term1 term1 term2 x x term3 x x term4 term1 term1 term1 term2 x x term3 x x term4 term1 term2 x term3 x x term4 term1 term2 x term3 x term4")
-        client.execute_command("HSET", "doc:4", "content", "term1 term1 term1 term2 x x term3 x x term4 term1 term1 term1 term2 x x term3 x x term4 term1 term1 term1 term2 x x term3 x x term4 term1 term2 x term3 x x term4 term1 term2 x term3 x term4 term1 term2 x term3 term4")
-        client.execute_command("HSET", "doc:5", "content", "term1 term1 term1 term2 x x term3 x x term4 term1 term1 term1 term2 x x term3 x x term4 term1 term1 term1 term2 x x term3 x x term4 term1 term2 x term3 x x term4 term1 term2 x term3 x term4 term1 term2 x term3 term4 term1 term2 term3 term4")
+        client.execute_command("HSET", "doc:2", "content", "term1 term1 term1 term2 x x term3 x x term4 y y term1 term1 term1 term2 x x term3 x x term4 y y term1 term1 term1 term2 x x term3 x x term4 y y term1 term2 x term3 x x term4")
+        client.execute_command("HSET", "doc:3", "content", "term1 term1 term1 term2 x x term3 x x term4 y y term1 term1 term1 term2 x x term3 x x term4 y y term1 term1 term1 term2 x x term3 x x term4 y y term1 term2 x term3 x x term4 y y term1 term2 x term3 x term4")
+        client.execute_command("HSET", "doc:4", "content", "term1 term1 term1 term2 x x term3 x x term4 y y term1 term1 term1 term2 x x term3 x x term4 y y term1 term1 term1 term2 x x term3 x x term4 y y term1 term2 x term3 x x term4 y y term1 term2 x term3 x term4 term1 term2 x term3 term4")
+        client.execute_command("HSET", "doc:5", "content", "term1 term1 term1 term2 x x term3 x x term4 y y term1 term1 term1 term2 x x term3 x x term4 y y term1 term1 term1 term2 x x term3 x x term4 y y term1 term2 x term3 x x term4 y y term1 term2 x term3 x term4 term1 term2 x term3 term4 y y term1 term2 term3 term4")
         # TODO: Add documents that contain same terms in wrong order (different from query) to validate INORDER behavior.
         # Wait for index backfill to complete
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
@@ -1082,6 +1082,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
             that can satisfy the proximity constraints are returned.
         """
         client: Valkey = self.server.get_new_client()
+        assert client.execute_command("CONFIG SET search.proximity-inorder-compat-mode YES") == b'OK'
         # Create index with text fields
         client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
                             "content", "TEXT", "NOSTEM")
@@ -1103,6 +1104,10 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         result = client.execute_command("FT.SEARCH", "idx", "apple (banana) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
         assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
         # Distance from apple to purple is 6
+        # 7 - 0 - 1 = 6
+        # 6 - (n - 2) = 6 - 1 = 5 
+        result = client.execute_command("FT.SEARCH", "idx", "apple (purple) purple", "DIALECT", "2", "INORDER", "SLOP", "4")
+        assert result[0] == 0
         result = client.execute_command("FT.SEARCH", "idx", "apple (purple) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
         assert result[0] == 0
         result = client.execute_command("FT.SEARCH", "idx", "apple (purple) purple", "DIALECT", "2", "INORDER", "SLOP", "6")
@@ -1120,6 +1125,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert result[0] == 0
         result = client.execute_command("FT.SEARCH", "idx", "apple (banana | yellow) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
         assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+        # assert False
         result = client.execute_command("FT.SEARCH", "idx", "apple (banana | ten) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
         assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
         result = client.execute_command("FT.SEARCH", "idx", "apple (ten | ten) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
@@ -1249,6 +1255,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         """
         # TODO: Set the config mode as proximity compat mode.
         client: Valkey = self.server.get_new_client()
+        assert client.execute_command("CONFIG SET search.proximity-inorder-compat-mode YES") == b'OK'
         # Create index with text fields
         client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
                             "content", "TEXT", "NOSTEM")

@@ -181,6 +181,7 @@ bool ProximityIterator::HasOrderingViolation(size_t first_idx,
 // position combination.
 std::optional<size_t> ProximityIterator::FindViolatingIterator() {
   const size_t n = positions_.size();
+  uint32_t current_slop = 0;
   if (in_order_) {
     // Check ordering / overlap violations.
     for (size_t i = 0; i < n - 1; ++i) {
@@ -189,15 +190,14 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
       }
     }
     // Check slop violations.
-    auto current_slop =
-        ((positions_[n - 1].start - positions_[0].start) - 1) - (n - 2);
+    // The ordering / overlap check above gives us a text group with start and
+    // end. Slop violations are by summing distances between adjacent terms, so we advance
+    // the first iterator to try and reduce slop in the next text sequence tested.
+    for (size_t i = 0; i < n - 1; ++i) {
+      int32_t distance = (positions_[i + 1].start - positions_[i].start) - 1;
+      current_slop += std::max(0, distance);
+    }
     if (slop_.has_value() && current_slop > *slop_) {
-      // The ordering / overlap check above gives us a text group with start and
-      // end. Once we have a valid ordered, non-overlapping text sequence, any
-      // rearrangement of the middle elements doesn't change the slop. Slop
-      // violations are computed by using the boundary positions, so we advance
-      // the first iterator to try and reduce slop in the next text sequence
-      // tested.
       VMSDK_LOG(WARNING, nullptr)
           << "Slop violation detected: current_slop=" << current_slop
           << ", allowed_slop=" << *slop_ << ", advancing iterator 0"
@@ -232,12 +232,15 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
   }
   // Check slop violations.
   if (slop_.has_value()) {
-    // Slop violations are computed by using the boundary positions, so we
+    // Slop violations are computed by summing distances between adjacent terms,
     // advance the first iterator to try and reduce slop in the next text
     // sequence tested.
-    size_t min_pos = pos_with_idx_[0].first;
-    size_t max_pos = pos_with_idx_[n - 1].first;
-    auto current_slop = ((max_pos - min_pos) - 1) - (n - 2);
+    for (size_t i = 0; i < n - 1; ++i) {
+      size_t curr_idx = pos_with_idx_[i].second;
+      size_t next_idx = pos_with_idx_[i + 1].second;
+      int32_t distance = (positions_[next_idx].start - positions_[curr_idx].start) - 1;
+      current_slop += std::max(0, distance);
+    }
     if (current_slop > *slop_) {
       return pos_with_idx_[0].second;
     }

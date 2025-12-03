@@ -20,6 +20,7 @@
 #include "src/indexes/text/proximity.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/text/text_iterator.h"
+#include "src/indexes/text/orproximity.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 
@@ -83,6 +84,10 @@ EvaluationResult TermPredicate::Evaluate(
   key_iterators.emplace_back(std::move(key_iter));
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr, require_positions);
+  VMSDK_LOG(WARNING, nullptr) << "Built TermIterator for term: " << term_
+                             << " require_positions: " << require_positions
+                              << " DoneKeys: " << iterator->DoneKeys()
+                              << " DonePositions: " << iterator->DonePositions();
   return BuildTextEvaluationResult(std::move(iterator), require_positions);
 }
 
@@ -326,7 +331,7 @@ void ComposedPredicate::AddChild(std::unique_ptr<Predicate> child) {
   children_.push_back(std::move(child));
 }
 // Helper to evaluate text predicates with conditional position requirements
-EvaluationResult EvaluateTextPredicate(const Predicate* predicate,
+EvaluationResult EvaluatePredicate(const Predicate* predicate,
                                        Evaluator& evaluator,
                                        bool require_positions) {
   if (predicate->GetType() == PredicateType::kText) {
@@ -341,16 +346,17 @@ EvaluationResult EvaluateTextPredicate(const Predicate* predicate,
 // ProximityIterator to validate term positions meet distance and order
 // requirements.
 EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
+  // Determine if children need to return positions for proximity checks
+  bool require_positions = slop_.has_value() || inorder_;
+  // Handle AND logic
   if (GetType() == PredicateType::kComposedAnd) {
     // Short-circuit on first false
     uint32_t childrenWithPositions = 0;
     uint64_t query_field_mask = ~0ULL;
     std::vector<std::unique_ptr<indexes::text::TextIterator>> iterators;
-    // Determine if children need to return positions for proximity checks
-    bool require_positions = slop_.has_value() || inorder_;
     for (const auto& child : children_) {
       EvaluationResult result =
-          EvaluateTextPredicate(child.get(), evaluator, require_positions);
+          EvaluatePredicate(child.get(), evaluator, require_positions);
       if (!result.matches) {
         return EvaluationResult(false);
       }
@@ -394,17 +400,44 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
     // All matched, but none have position. non-proximity case
     return EvaluationResult(true);
   }
-  // OR logic
-  // Short-circuit on first true
+  // Handle OR logic
+  auto filter_iterators = std::vector<std::unique_ptr<indexes::text::TextIterator>>();
   for (const auto& child : children_) {
-    EvaluationResult result = child->Evaluate(evaluator);
-    VMSDK_LOG(DEBUG, nullptr)
-        << "Inline evaluate OR predicate child: " << result.matches;
-    if (result.matches) {
+    EvaluationResult result =
+          EvaluatePredicate(child.get(), evaluator, require_positions);
+    VMSDK_LOG(WARNING, nullptr) << "Result of OR child evaluation: " << result.matches
+    << " iterator: " << (result.filter_iterator ? "yes" : "no")
+    << " require_positions: " << require_positions;
+    // Short-circuit if any matches and positions not required.
+    if (result.matches && !require_positions) {
       return EvaluationResult(true);
+    } else if (result.matches) {
+      if (result.filter_iterator == nullptr) {
+        return EvaluationResult(true);
+      }
+      filter_iterators.push_back(std::move(result.filter_iterator));
     }
   }
-  return EvaluationResult(false);
+  // No matches found.
+  if (!require_positions) {
+    return EvaluationResult(false);
+  }
+  // In case positional awareness is required, use a OrProximityIterator.
+  auto or_proximity_iterator =
+      std::make_unique<indexes::text::OrProximityIterator>(
+          std::move(filter_iterators), nullptr);
+  // Check if any valid matches exist
+  if (or_proximity_iterator->DoneKeys() ||
+      or_proximity_iterator->DonePositions()) {
+    return EvaluationResult(false);
+  }
+  // Validate against original target key from evaluator
+  auto target_key = evaluator.GetTargetKey();
+  if (target_key && or_proximity_iterator->CurrentKey() != target_key) {
+    return EvaluationResult(false);
+  }
+  // Return the OR proximity iterator for potential nested scenarios.
+  return EvaluationResult(true, std::move(or_proximity_iterator));
 }
 
 }  // namespace valkey_search::query

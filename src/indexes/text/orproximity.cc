@@ -4,10 +4,8 @@ namespace valkey_search::indexes::text {
 
 OrProximityIterator::OrProximityIterator(
     std::vector<std::unique_ptr<TextIterator>>&& iters,
-    FieldMaskPredicate query_field_mask,
     const InternedStringSet* untracked_keys)
     : iters_(std::move(iters)),
-      query_field_mask_(query_field_mask),
       current_key_(),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
@@ -21,7 +19,16 @@ OrProximityIterator::OrProximityIterator(
 }
 
 FieldMaskPredicate OrProximityIterator::QueryFieldMask() const {
-  return query_field_mask_;
+  CHECK (!current_pos_indices_.empty());
+  // // During initialization, return union of all possible field masks
+  // if (current_pos_indices_.empty()) {
+  //   FieldMaskPredicate mask = 0ULL;
+  //   for (const auto& iter : iters_) {
+  //     mask |= iter->QueryFieldMask();
+  //   }
+  //   return mask;
+  // }
+  return iters_[current_pos_indices_[0]]->QueryFieldMask();
 }
 
 bool OrProximityIterator::DoneKeys() const {

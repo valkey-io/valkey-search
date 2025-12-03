@@ -828,8 +828,8 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
 // 1. Predicate evaluation is done with left-associative grouping while the OR
 // operator has lower precedence than the AND operator. precedence. For
 // example: a & b | c & d is evaluated as (a & b) | (c & d).
-// 2. Brackets have the highest Precedence of all the operators -> () > AND > OR.
-// example a & ( b | c ) & d is evaluated as AND (a, OR(b , c), d)
+// 2. Brackets have the highest Precedence of all the operators -> () > AND >
+// OR. example a & ( b | c ) & d is evaluated as AND (a, OR(b , c), d)
 // 3. If a bracket has atleast 2 terms it will be evaluated as a
 // separate nested structure.
 // 4. If a bracket has no terms it will be evaluated to false.

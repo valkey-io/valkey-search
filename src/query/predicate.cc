@@ -311,18 +311,20 @@ EvaluationResult TagPredicate::Evaluate(
   return EvaluationResult(false);
 }
 
-ComposedPredicate::ComposedPredicate(std::unique_ptr<Predicate> lhs_predicate,
-                                     std::unique_ptr<Predicate> rhs_predicate,
-                                     LogicalOperator logical_op,
-                                     std::optional<uint32_t> slop, bool inorder)
+ComposedPredicate::ComposedPredicate(
+    LogicalOperator logical_op,
+    std::vector<std::unique_ptr<Predicate>> children,
+    std::optional<uint32_t> slop, bool inorder)
     : Predicate(logical_op == LogicalOperator::kAnd
                     ? PredicateType::kComposedAnd
                     : PredicateType::kComposedOr),
-      lhs_predicate_(std::move(lhs_predicate)),
-      rhs_predicate_(std::move(rhs_predicate)),
+      children_(std::move(children)),
       slop_(slop),
       inorder_(inorder) {}
 
+void ComposedPredicate::AddChild(std::unique_ptr<Predicate> child) {
+  children_.push_back(std::move(child));
+}
 // Helper to evaluate text predicates with conditional position requirements
 EvaluationResult EvaluateTextPredicate(const Predicate* predicate,
                                        Evaluator& evaluator,
@@ -340,27 +342,34 @@ EvaluationResult EvaluateTextPredicate(const Predicate* predicate,
 // requirements.
 EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   if (GetType() == PredicateType::kComposedAnd) {
+    // Short-circuit on first false
+    uint32_t childrenWithPositions = 0;
+    uint64_t query_field_mask = ~0ULL;
+    std::vector<std::unique_ptr<indexes::text::TextIterator>> iterators;
+    // Determine if children need to return positions for proximity checks
     bool require_positions = slop_.has_value() || inorder_;
-    EvaluationResult lhs = EvaluateTextPredicate(lhs_predicate_.get(),
-                                                 evaluator, require_positions);
-    // Short-circuit for AND
-    if (!lhs.matches) return EvaluationResult(false);
-    EvaluationResult rhs = EvaluateTextPredicate(rhs_predicate_.get(),
-                                                 evaluator, require_positions);
-    // Short-circuit for AND
-    if (!rhs.matches) return EvaluationResult(false);
-    // Proximity check: Only if slop/inorder set and both sides have iterators
-    if (require_positions && lhs.filter_iterator && rhs.filter_iterator) {
+    for (const auto& child : children_) {
+      EvaluationResult result =
+          EvaluateTextPredicate(child.get(), evaluator, require_positions);
+      if (!result.matches) {
+        return EvaluationResult(false);
+      }
+      if (result.filter_iterator) {
+        childrenWithPositions++;
+        query_field_mask &= result.filter_iterator->QueryFieldMask();
+        iterators.push_back(std::move(result.filter_iterator));
+      }
+      VMSDK_LOG(DEBUG, nullptr)
+          << "Inline evaluate AND predicate child: " << result.matches;
+    }
+    // Proximity check: Only if slop/inorder set and both sides have
+    // iterators. This ensures we only check proximity for text predicates,
+    // not numeric/tag.
+    if (require_positions && (childrenWithPositions >= 2)) {
       // Get field_mask from lhs and rhs iterators
-      uint64_t query_field_mask = lhs.filter_iterator->QueryFieldMask() &
-                                  rhs.filter_iterator->QueryFieldMask();
       if (query_field_mask == 0) {
         return EvaluationResult(false);
       }
-      // Create vector of iterators for ProximityIterator
-      std::vector<std::unique_ptr<indexes::text::TextIterator>> iterators;
-      iterators.push_back(std::move(lhs.filter_iterator));
-      iterators.push_back(std::move(rhs.filter_iterator));
       // Create ProximityIterator to check proximity
       auto proximity_iterator =
           std::make_unique<indexes::text::ProximityIterator>(
@@ -377,26 +386,24 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
       // Return the proximity iterator for potential nested use.
       return EvaluationResult(true, std::move(proximity_iterator));
     }
-    // Propagate the filter iterator from the LHS if it exists
-    if (lhs.filter_iterator) {
-      return EvaluationResult(true, std::move(lhs.filter_iterator));
+    // Propagate the filter iterator from the one child exists
+    else if (childrenWithPositions == 1) {
+      return EvaluationResult(true, std::move(iterators[0]));
     }
-    // Propagate the filter iterator from the RHS if it exists
-    if (rhs.filter_iterator) {
-      return EvaluationResult(true, std::move(rhs.filter_iterator));
-    }
-    // Both matched, non-proximity case
+    // All matched, but none have position. non-proximity case
     return EvaluationResult(true);
   }
   // OR logic
-  EvaluationResult lhs = lhs_predicate_->Evaluate(evaluator);
-  VMSDK_LOG(DEBUG, nullptr)
-      << "Inline evaluate OR predicate lhs: " << lhs.matches;
-  EvaluationResult rhs = rhs_predicate_->Evaluate(evaluator);
-  VMSDK_LOG(DEBUG, nullptr)
-      << "Inline evaluate OR predicate rhs: " << rhs.matches;
-  // TODO: Implement position-aware OR logic for nested proximity queries.
-  return EvaluationResult(lhs.matches || rhs.matches);
+  // Short-circuit on first true
+  for (const auto& child : children_) {
+    EvaluationResult result = child->Evaluate(evaluator);
+    VMSDK_LOG(DEBUG, nullptr)
+        << "Inline evaluate OR predicate child: " << result.matches;
+    if (result.matches) {
+      return EvaluationResult(true);
+    }
+  }
+  return EvaluationResult(false);
 }
 
 }  // namespace valkey_search::query

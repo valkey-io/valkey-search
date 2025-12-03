@@ -78,14 +78,13 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       return numeric_predicate;
     }
     case Predicate::kAnd: {
-      VMSDK_ASSIGN_OR_RETURN(
-          auto lhs_predicate,
-          GRPCPredicateToPredicate(predicate.and_().lhs(), index_schema,
-                                   attribute_identifiers));
-      VMSDK_ASSIGN_OR_RETURN(
-          auto rhs_predicate,
-          GRPCPredicateToPredicate(predicate.and_().rhs(), index_schema,
-                                   attribute_identifiers));
+      std::vector<std::unique_ptr<query::Predicate>> children;
+      for (const auto& child_predicate : predicate.and_().children()) {
+        VMSDK_ASSIGN_OR_RETURN(
+            auto child, GRPCPredicateToPredicate(child_predicate, index_schema,
+                                                 attribute_identifiers));
+        children.push_back(std::move(child));
+      }
       // Extract slop and inorder if present
       std::optional<uint32_t> slop = std::nullopt;
       bool inorder = false;
@@ -95,21 +94,18 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
       inorder = predicate.and_().inorder();
 
       return std::make_unique<query::ComposedPredicate>(
-          std::move(lhs_predicate), std::move(rhs_predicate),
-          query::LogicalOperator::kAnd, slop, inorder);
+          query::LogicalOperator::kAnd, std::move(children), slop, inorder);
     }
     case Predicate::kOr: {
-      VMSDK_ASSIGN_OR_RETURN(
-          auto lhs_predicate,
-          GRPCPredicateToPredicate(predicate.or_().lhs(), index_schema,
-                                   attribute_identifiers));
-      VMSDK_ASSIGN_OR_RETURN(
-          auto rhs_predicate,
-          GRPCPredicateToPredicate(predicate.or_().rhs(), index_schema,
-                                   attribute_identifiers));
+      std::vector<std::unique_ptr<query::Predicate>> children;
+      for (const auto& child_predicate : predicate.or_().children()) {
+        VMSDK_ASSIGN_OR_RETURN(
+            auto child, GRPCPredicateToPredicate(child_predicate, index_schema,
+                                                 attribute_identifiers));
+        children.push_back(std::move(child));
+      }
       return std::make_unique<query::ComposedPredicate>(
-          std::move(lhs_predicate), std::move(rhs_predicate),
-          query::LogicalOperator::kOr);
+          query::LogicalOperator::kOr, std::move(children));
     }
     case Predicate::kNegate: {
       VMSDK_ASSIGN_OR_RETURN(
@@ -282,12 +278,11 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
       auto and_predicate_proto = std::make_unique<Predicate>();
       auto composed_and_predicate =
           dynamic_cast<const query::ComposedPredicate*>(&predicate);
-      and_predicate_proto->mutable_and_()->set_allocated_lhs(
-          PredicateToGRPCPredicate(*composed_and_predicate->GetLhsPredicate())
-              .release());
-      and_predicate_proto->mutable_and_()->set_allocated_rhs(
-          PredicateToGRPCPredicate(*composed_and_predicate->GetRhsPredicate())
-              .release());
+      for (const auto& child : composed_and_predicate->GetChildren()) {
+        auto child_proto = PredicateToGRPCPredicate(*child);
+        and_predicate_proto->mutable_and_()->mutable_children()->AddAllocated(
+            child_proto.release());
+      }
       // Add slop and inorder if present
       if (composed_and_predicate->GetSlop().has_value()) {
         and_predicate_proto->mutable_and_()->set_slop(
@@ -301,12 +296,11 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
       auto or_predicate_proto = std::make_unique<Predicate>();
       auto composed_or_predicate =
           dynamic_cast<const query::ComposedPredicate*>(&predicate);
-      or_predicate_proto->mutable_or_()->set_allocated_lhs(
-          PredicateToGRPCPredicate(*composed_or_predicate->GetLhsPredicate())
-              .release());
-      or_predicate_proto->mutable_or_()->set_allocated_rhs(
-          PredicateToGRPCPredicate(*composed_or_predicate->GetRhsPredicate())
-              .release());
+      for (const auto& child : composed_or_predicate->GetChildren()) {
+        auto child_proto = PredicateToGRPCPredicate(*child);
+        or_predicate_proto->mutable_or_()->mutable_children()->AddAllocated(
+            child_proto.release());
+      }
       return or_predicate_proto;
     }
     case query::PredicateType::kNegate: {

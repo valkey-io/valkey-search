@@ -364,7 +364,7 @@ class ComposedPredicate : public Predicate {
   size_t GetChildCount() const { return children_.size(); }
   // Add a child predicate (for building N-ary trees)
   void AddChild(std::unique_ptr<Predicate> child);
-  // Release children (transfer ownership of childeren)
+  // Release children (transfer ownership of children)
   std::vector<std::unique_ptr<Predicate>> ReleaseChildren() {
     return std::move(children_);
   }

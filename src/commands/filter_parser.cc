@@ -678,7 +678,6 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
           break_on_query_syntax};
     }
   } else if (ends_with_star) {
-    // Suffix predicate handling:
     if (token.empty())
       return absl::InvalidArgumentError("Invalid wildcard '*' markers");
     VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(field_mask, min_stem_size,
@@ -814,12 +813,13 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     }
     pred = std::make_unique<query::ComposedPredicate>(
         query::LogicalOperator::kAnd, std::move(children), slop, inorder);
-    node_count_ += terms.size();
+    node_count_ += terms.size() + 1;
   } else {
     if (terms.empty()) {
       return absl::InvalidArgumentError("Invalid Query Syntax");
     }
     pred = std::move(terms[0]);
+    node_count_++;
   }
   return pred;
 }
@@ -828,11 +828,11 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
 // 1. Predicate evaluation is done with left-associative grouping while the OR
 // operator has lower precedence than the AND operator. precedence. For
 // example: a & b | c & d is evaluated as (a & b) | (c & d).
-// 2. Brackets have the higest Precedence of all the operators -> () > AND > OR.
+// 2. Brackets have the highest Precedence of all the operators -> () > AND > OR.
 // example a & ( b | c ) & d is evaluated as AND (a, OR(b , c), d)
 // 3. If a bracket has atleast 2 terms it will be evaluated as a
 // separate nested structure.
-// 4. If a bracket has no terms it will be evaluted to false.
+// 4. If a bracket has no terms it will be evaluated to false.
 // 5. Field name is always preceded by '@' and followed by ':'.
 // 6. A numeric field has the following pattern: @field_name:[Start,End]. Both
 // space and comma are valid separators between Start and End.
@@ -878,6 +878,7 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
                          expression_.substr(pos_, 1), "'. Position: ", pos_));
       }
       predicate = std::move(sub_result.prev_predicate);
+      // When there is no term inside the brackets
       if (!predicate) {
         return absl::InvalidArgumentError(
             absl::StrCat("Empty brackets detected at Position: ", pos_ - 1));
@@ -907,6 +908,8 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       predicate = std::move(sub_result.prev_predicate);
       if (result.prev_predicate) {
         node_count_++;
+      } else {
+        return absl::InvalidArgumentError(("Missing OR term"));
       }
       // We use sub_result.not_rightmost_bracket since sub_result comes from the
       // right side so its bracket will be more towards the right than prev Pred
@@ -937,7 +940,6 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
         }
       }
       if (!non_text) {
-        node_count_++;
         VMSDK_ASSIGN_OR_RETURN(predicate, ParseTextTokens(field_name));
       }
       if (result.prev_predicate) {

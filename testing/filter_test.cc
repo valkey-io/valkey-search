@@ -218,6 +218,50 @@ INSTANTIATE_TEST_SUITE_P(
                                        "}\n",
         },
         {
+            .test_name = "complex_nested_expression",
+            .filter = "@num_field_1.5:[1.0 2.0] @num_field_2.0:[1.5 2.5] | (@tag_field_1:{tag1} @tag_field_1_2:{tag2} | (@num_field_1.5:[1.0 2.0] @num_field_2.0:[1.5 2.5] | @tag_field_1:{tag1} @tag_field_1_2:{tag2} (@num_field_1.5:[1.0 2.0] @num_field_2.0:[1.5 2.5]) ) ) @tag_field_1:{tag1} @tag_field_1_2:{tag2} | @num_field_1.5:[1.0 2.0] @num_field_2.0:[1.5 2.5] | @tag_field_1:{tag1} @tag_field_1_2:{tag2}",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "OR{\n"
+                                       "  AND{\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "  AND{\n"
+                                       "    OR{\n"
+                                       "      AND{\n"
+                                       "        TAG(tag_field_1)\n"
+                                       "        TAG(tag_field_1_2)\n"
+                                       "      }\n"
+                                       "      OR{\n"
+                                       "        AND{\n"
+                                       "          NUMERIC(num_field_1.5)\n"
+                                       "          NUMERIC(num_field_2.0)\n"
+                                       "        }\n"
+                                       "        AND{\n"
+                                       "          TAG(tag_field_1)\n"
+                                       "          TAG(tag_field_1_2)\n"
+                                       "          AND{\n"
+                                       "            NUMERIC(num_field_1.5)\n"
+                                       "            NUMERIC(num_field_2.0)\n"
+                                       "          }\n"
+                                       "        }\n"
+                                       "      }\n"
+                                       "    }\n"
+                                       "    TAG(tag_field_1)\n"
+                                       "    TAG(tag_field_1_2)\n"
+                                       "  }\n"
+                                       "  AND{\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "    NUMERIC(num_field_2.0)\n"
+                                       "  }\n"
+                                       "  AND{\n"
+                                       "    TAG(tag_field_1)\n"
+                                       "    TAG(tag_field_1_2)\n"
+                                       "  }\n"
+                                       "}\n",
+        },
+        {
             .test_name = "numeric_happy_path_inclusive_2",
             .filter = "@num_field_2.0:[1 2] @num_field_1.5:[1.0 1.5]",
             .create_success = true,
@@ -765,6 +809,7 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "@text_field1:*word",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "TEXT-SUFFIX(\"word\", field_mask=1)\n",
         },
         {
             .test_name = "exact_suffix_unsupported",
@@ -823,18 +868,43 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "Hello, how are you doing?",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "AND{\n"
+                                       "  TEXT-TERM(\"hello\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"how\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"are\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"you\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"doing?\", field_mask=3)\n"
+                                       "}\n",
         },
         {
             .test_name = "default_field_exact_phrase",
             .filter = "\"Hello, how are you doing?\"",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "AND(slop=0, inorder=true){\n"
+                                       "  TEXT-TERM(\"hello\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"how\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"are\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"you\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"doing?\", field_mask=3)\n"
+                                       "}\n",
         },
         {
             .test_name = "default_field_exact_phrase_with_punct",
             .filter = "\"Hello, h(ow a)re yo#u doi_n$g?\"",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "AND(slop=0, inorder=true){\n"
+                                       "  TEXT-TERM(\"hello\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"h\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"ow\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"a\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"re\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"yo\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"u\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"doi_n\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"g?\", field_mask=3)\n"
+                                       "}\n",
         },
         {
             .test_name = "default_field_with_escape1",
@@ -842,18 +912,47 @@ INSTANTIATE_TEST_SUITE_P(
                 "\"\\\\\\\\\\Hello, \\how \\\\are \\\\\\you \\\\\\\\doing?\"",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "AND(slop=0, inorder=true){\n"
+                                       "  TEXT-TERM(\"\\\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"\\\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"hello\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"how\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"\\are\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"\\\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"you\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"\\\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"\\doing?\", field_mask=3)\n"
+                                       "}\n",
         },
         {
             .test_name = "default_field_with_escape2",
             .filter = "\\\\\\\\\\Hello, \\how \\\\are \\\\\\you \\\\\\\\doing?",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "AND{\n"
+                                       "  TEXT-TERM(\"\\\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"\\\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"hello\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"how\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"\\are\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"\\\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"you\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"\\\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"\\doing?\", field_mask=3)\n"
+                                       "}\n",
         },
         {
             .test_name = "default_field_with_escape3",
             .filter = "Hel\\(lo, ho\\$w a\\*re yo\\{u do\\|ing?",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "AND{\n"
+                                       "  TEXT-TERM(\"hel(lo\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"ho$w\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"a*r\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"yo{u\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"do|ing?\", field_mask=3)\n"
+                                       "}\n",
         },
         {
             .test_name = "default_field_with_escape4",
@@ -861,18 +960,47 @@ INSTANTIATE_TEST_SUITE_P(
                       "\\\\\\\\\\%doing?",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "AND{\n"
+                                       "  TEXT-TERM(\"\\\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"\\\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"(hello\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"$how\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"\\\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"*are\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"\\\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"-you\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"\\\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"\\\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"%doing?\", field_mask=3)\n"
+                                       "}\n",
         },
         {
             .test_name = "default_field_with_escape5",
             .filter = "Hello, how are you\\% doing",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "AND{\n"
+                                       "  TEXT-TERM(\"hello\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"how\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"are\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"you%\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"do\", field_mask=3)\n"
+                                       "}\n",
         },
         {
             .test_name = "default_field_with_escape6",
             .filter = "Hello, how are you\\\\\\\\\\% doing",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "AND{\n"
+                                       "  TEXT-TERM(\"hello\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"how\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"are\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"you\\\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"\\\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"%\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"do\", field_mask=3)\n"
+                                       "}\n",
         },
         {
             .test_name = "default_field_with_escape_query_syntax",
@@ -880,6 +1008,22 @@ INSTANTIATE_TEST_SUITE_P(
                 "Hello, how are you\\]\\[\\$\\}\\{\\;\\:\\)\\(\\| \\-doing",
             .create_success = true,
             .evaluate_success = true,
+            .expected_tree_structure = "AND{\n"
+                                       "  TEXT-TERM(\"hello\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"how\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"are\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"you]\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"[\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"$\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"}\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"{\", field_mask=3)\n"
+                                       "  TEXT-TERM(\";\", field_mask=3)\n"
+                                       "  TEXT-TERM(\":\", field_mask=3)\n"
+                                       "  TEXT-TERM(\")\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"(\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"|\", field_mask=3)\n"
+                                       "  TEXT-TERM(\"-do\", field_mask=3)\n"
+                                       "}\n",
         },
         {
             .test_name = "default_field_with_all_operations",
@@ -1301,7 +1445,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // Edge case: Deeply nested AND with single element brackets
         {
-            .test_name = "deeply_nested_single_brackets",
+            .test_name = "nested_single_brackets_1",
             .filter = "(@num_field_1.5:[1.0 2.0]) (@num_field_2.0:[1.0 3.0]) "
                       "(@tag_field_1:{tag1})",
             .create_success = true,
@@ -1331,6 +1475,36 @@ INSTANTIATE_TEST_SUITE_P(
                                        "    TAG(tag_field_1_2)\n"
                                        "  }\n"
                                        "}\n",
+        },
+        {
+            .test_name = "empty_brackets_with_content",
+            .filter = "@num_field_1.5:[1.0 2.0] (@num_field_2.0:[1.0 3.0] () @tag_field_1:{tag1})",
+            .create_success = false,
+            .create_expected_error_message = "Empty brackets detected at Position: 52",
+        },
+        {
+            .test_name = "empty_brackets_with_or",
+            .filter = "@num_field_1.5:[1.0 2.0] ( @num_field_2.0:[1.0 3.0] | ())",
+            .create_success = false,
+            .create_expected_error_message = "Empty brackets detected at Position: 55",
+        },
+        {
+            .test_name = "empty_brackets_only",
+            .filter = "()",
+            .create_success = false,
+            .create_expected_error_message = "Unexpected character at position 2: `)`",
+        },
+        {
+            .test_name = "or_with_missing_left_operand",
+            .filter = "@num_field_1.5:[1.0 2.0] ( | @tag_field_1:{tag1})",
+            .create_success = false,
+            .create_expected_error_message = "Missing OR term",
+        },
+        {
+            .test_name = "or_with_missing_both_operands",
+            .filter = "@num_field_1.5:[1.0 2.0] ( | )",
+            .create_success = false,
+            .create_expected_error_message = "Missing OR term",
         },
     }),
     [](const TestParamInfo<FilterTestCase> &info) {

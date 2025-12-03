@@ -20,14 +20,6 @@ OrProximityIterator::OrProximityIterator(
 
 FieldMaskPredicate OrProximityIterator::QueryFieldMask() const {
   CHECK (!current_pos_indices_.empty());
-  // // During initialization, return union of all possible field masks
-  // if (current_pos_indices_.empty()) {
-  //   FieldMaskPredicate mask = 0ULL;
-  //   for (const auto& iter : iters_) {
-  //     mask |= iter->QueryFieldMask();
-  //   }
-  //   return mask;
-  // }
   return iters_[current_pos_indices_[0]]->QueryFieldMask();
 }
 

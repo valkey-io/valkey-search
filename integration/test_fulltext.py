@@ -1039,40 +1039,42 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # TODO: Add documents that contain same terms in wrong order (different from query) to validate INORDER behavior.
         # Wait for index backfill to complete
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
-        ## INORDER=true tests
-        # No advancement needed, all starting terms within slop.
-        result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "6", "INORDER")
-        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
-        # Starting from below, we check that advancement is properly done to find next possible match.
-        result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "5", "INORDER")
-        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
-        result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "4", "INORDER")
-        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
-        result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "3", "INORDER")
-        assert (result[0], set(result[1::2])) == (4, {b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
-        result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "2", "INORDER")
-        assert (result[0], set(result[1::2])) == (3, {b"doc:3", b"doc:4", b"doc:5"})
-        result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "1", "INORDER")
-        assert (result[0], set(result[1::2])) == (2, {b"doc:4", b"doc:5"})
-        result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "0", "INORDER")
-        assert (result[0], set(result[1::2])) == (1, {b"doc:5"})
-        ## INORDER=false tests
-        # No advancement needed, all starting terms within slop.
-        result = client.execute_command("FT.SEARCH", "idx", 'term3 term1 term2 term4', "SLOP", "6")
-        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
-        # Starting from below, we check that advancement is properly done to find next possible match.
-        result = client.execute_command("FT.SEARCH", "idx", 'term2 term1 term3 term4', "SLOP", "5")
-        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
-        result = client.execute_command("FT.SEARCH", "idx", 'term1 term3 term2 term4', "SLOP", "4")
-        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
-        result = client.execute_command("FT.SEARCH", "idx", 'term4 term1 term2 term3', "SLOP", "3")
-        assert (result[0], set(result[1::2])) == (4, {b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
-        result = client.execute_command("FT.SEARCH", "idx", 'term1 term3 term4 term2', "SLOP", "2")
-        assert (result[0], set(result[1::2])) == (3, {b"doc:3", b"doc:4", b"doc:5"})
-        result = client.execute_command("FT.SEARCH", "idx", 'term4 term3 term1 term2', "SLOP", "1")
-        assert (result[0], set(result[1::2])) == (2, {b"doc:4", b"doc:5"})
-        result = client.execute_command("FT.SEARCH", "idx", 'term4 term1 term3 term2', "SLOP", "0")
-        assert (result[0], set(result[1::2])) == (1, {b"doc:5"})
+        for config in ["YES", "NO"]:
+            assert client.execute_command("CONFIG SET search.proximity-inorder-compat-mode", config) == b'OK'
+            ## INORDER=true tests
+            # No advancement needed, all starting terms within slop.
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "6", "INORDER")
+            assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+            # Starting from below, we check that advancement is properly done to find next possible match.
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "5", "INORDER")
+            assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "4", "INORDER")
+            assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "3", "INORDER")
+            assert (result[0], set(result[1::2])) == (4, {b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "2", "INORDER")
+            assert (result[0], set(result[1::2])) == (3, {b"doc:3", b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "1", "INORDER")
+            assert (result[0], set(result[1::2])) == (2, {b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "0", "INORDER")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:5"})
+            ## INORDER=false tests
+            # No advancement needed, all starting terms within slop.
+            result = client.execute_command("FT.SEARCH", "idx", 'term3 term1 term2 term4', "SLOP", "6")
+            assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+            # Starting from below, we check that advancement is properly done to find next possible match.
+            result = client.execute_command("FT.SEARCH", "idx", 'term2 term1 term3 term4', "SLOP", "5")
+            assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term3 term2 term4', "SLOP", "4")
+            assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term4 term1 term2 term3', "SLOP", "3")
+            assert (result[0], set(result[1::2])) == (4, {b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term3 term4 term2', "SLOP", "2")
+            assert (result[0], set(result[1::2])) == (3, {b"doc:3", b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term4 term3 term1 term2', "SLOP", "1")
+            assert (result[0], set(result[1::2])) == (2, {b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term4 term1 term3 term2', "SLOP", "0")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:5"})
 
     def test_proximity_slop_compat(self):
         """
@@ -1125,7 +1127,8 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert result[0] == 0
         result = client.execute_command("FT.SEARCH", "idx", "apple (banana | yellow) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
         assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
-        # assert False
+        result = client.execute_command("FT.SEARCH", "idx", "apple (cherry | pink | violet | one | two | three | four | five | six | banana | yellow) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
+        assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
         result = client.execute_command("FT.SEARCH", "idx", "apple (banana | ten) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
         assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
         result = client.execute_command("FT.SEARCH", "idx", "apple (ten | ten) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
@@ -1156,6 +1159,8 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         result = client.execute_command("FT.SEARCH", "idx", "apple (banana | green grape) purple", "DIALECT", "2", "INORDER", "SLOP", "4")
         assert result[0] == 0
         result = client.execute_command("FT.SEARCH", "idx", "apple (banana | green grape) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
+        assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+        result = client.execute_command("FT.SEARCH", "idx", "apple (orange cherry | pink violet | one two | three four | five six seven eight | green grape) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
         assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
         result = client.execute_command("FT.SEARCH", "idx", "apple (banana | yellow green grape) purple", "DIALECT", "2", "INORDER", "SLOP", "4")
         assert result[0] == 0
@@ -1227,6 +1232,8 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert result[0] == 0
         result = client.execute_command("FT.SEARCH", "idx", "ten purple (yellow blue grape | four five six seven eight nine) apple", "DIALECT", "2", "SLOP", "18")
         assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+        result = client.execute_command("FT.SEARCH", "idx", "ten purple (four one five three | four five six seven eight nine | yellow blue grape) apple", "DIALECT", "2", "SLOP", "18")
+        assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
 
     def test_proximity_inorder_violation_advancement(self):
         """
@@ -1242,9 +1249,11 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         client.execute_command("HSET", "doc:1", "content", "term2 term1 term3 term4 term3 term1 term2 term4 term4 term1 term2 term3 term1 term3 term2 term4 term1 term4 term2 term3 term2 term3 term1 term4 term2 term4 term1 term3 term3 term2 term1 term4 term3 term4 term1 term2 term4 term2 term1 term3 term4 term3 term1 term2 term1 term2 term4 term3 term1 term3 term4 term2 term1 term4 term3 term2 term2 term1 term4 term3 term2 term3 term4 term1 term2 term4 term3 term1 term3 term1 term4 term2 term3 term2 term4 term1 term3 term4 term2 term1 term4 term1 term3 term2 term4 term2 term3 term1 term4 term3 term2 term1 term1 term2 term3 term4")
         # Wait for index backfill to complete
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
-        # Test inorder=true searches
-        result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "INORDER", "slop", "0")
-        assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+        for config in ["YES", "NO"]:
+            assert client.execute_command("CONFIG SET search.proximity-inorder-compat-mode " + config) == b'OK'
+            # Test inorder=true searches
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "INORDER", "slop", "0")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
 
     def test_proximity_inorder_compat(self):
         """
@@ -1253,7 +1262,6 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
             We run searches with inorder=true to validate that only documents
             that can satisfy the inorder constraints are returned.
         """
-        # TODO: Set the config mode as proximity compat mode.
         client: Valkey = self.server.get_new_client()
         assert client.execute_command("CONFIG SET search.proximity-inorder-compat-mode YES") == b'OK'
         # Create index with text fields

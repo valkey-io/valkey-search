@@ -91,7 +91,7 @@ class TextIndexSchema {
   void DeleteKeyData(const InternedStringPtr& key);
 
   uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }
-
+  bool HasTextOffsets() const { return with_offsets_; }
   uint8_t GetNumTextFields() const { return num_text_fields_; }
   std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
   Lexer GetLexer() const { return lexer_; }

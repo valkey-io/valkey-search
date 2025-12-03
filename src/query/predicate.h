@@ -60,18 +60,24 @@ struct EvaluationResult {
       bool result,
       std::unique_ptr<valkey_search::indexes::text::TextIterator> iterator)
       : matches(result), filter_iterator(std::move(iterator)) {}
+
+  // Helper function to build EvaluationResult for text predicates
+  EvaluationResult BuildTextEvaluationResult(
+      const std::unique_ptr<indexes::text::TextIterator>& iterator,
+      bool requires_position);
 };
 
 class Evaluator {
  public:
   virtual ~Evaluator() = default;
-  virtual EvaluationResult EvaluateText(const TextPredicate& predicate) = 0;
+  virtual EvaluationResult EvaluateText(const TextPredicate& predicate,
+                                        bool require_positions) = 0;
   virtual EvaluationResult EvaluateTags(const TagPredicate& predicate) = 0;
   virtual EvaluationResult EvaluateNumeric(
       const NumericPredicate& predicate) = 0;
 
   // Access target key for proximity validation (only for Text)
-  virtual const std::shared_ptr<InternedString>& GetTargetKey() const = 0;
+  virtual const InternedStringPtr& GetTargetKey() const = 0;
 };
 
 class Predicate;
@@ -169,8 +175,7 @@ class TextPredicate : public Predicate {
   // Evaluate against per-key TextIndex
   virtual EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key)
-      const = 0;
+      const InternedStringPtr& target_key, bool require_positions) const = 0;
   virtual std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
       const = 0;
   virtual const FieldMaskPredicate GetFieldMask() const = 0;
@@ -192,8 +197,8 @@ class TermPredicate : public TextPredicate {
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key)
-      const override;
+      const InternedStringPtr& target_key,
+      bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -219,8 +224,8 @@ class PrefixPredicate : public TextPredicate {
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key)
-      const override;
+      const InternedStringPtr& target_key,
+      bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -244,8 +249,8 @@ class SuffixPredicate : public TextPredicate {
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key)
-      const override;
+      const InternedStringPtr& target_key,
+      bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -269,8 +274,8 @@ class InfixPredicate : public TextPredicate {
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key)
-      const override;
+      const InternedStringPtr& target_key,
+      bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -295,8 +300,8 @@ class FuzzyPredicate : public TextPredicate {
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key)
-      const override;
+      const InternedStringPtr& target_key,
+      bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -318,8 +323,8 @@ class ProximityPredicate : public TextPredicate {
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const std::shared_ptr<valkey_search::InternedString>& target_key)
-      const override;
+      const InternedStringPtr& target_key,
+      bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
@@ -339,24 +344,33 @@ class ProximityPredicate : public TextPredicate {
 };
 
 enum class LogicalOperator { kAnd, kOr };
-// Composed Predicate (AND/OR)
+// Composed Predicate (AND/OR) - N-ary structure
 class ComposedPredicate : public Predicate {
  public:
-  ComposedPredicate(std::unique_ptr<Predicate> lhs_predicate,
-                    std::unique_ptr<Predicate> rhs_predicate,
-                    LogicalOperator logical_op,
+  // N-ary constructor
+  ComposedPredicate(LogicalOperator logical_op,
+                    std::vector<std::unique_ptr<Predicate>> children,
                     std::optional<uint32_t> slop = std::nullopt,
                     bool inorder = false);
 
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
-  const Predicate* GetLhsPredicate() const { return lhs_predicate_.get(); }
-  const Predicate* GetRhsPredicate() const { return rhs_predicate_.get(); }
   std::optional<uint32_t> GetSlop() const { return slop_; }
   bool GetInorder() const { return inorder_; }
 
+  // N-ary interface
+  const std::vector<std::unique_ptr<Predicate>>& GetChildren() const {
+    return children_;
+  }
+  size_t GetChildCount() const { return children_.size(); }
+  // Add a child predicate (for building N-ary trees)
+  void AddChild(std::unique_ptr<Predicate> child);
+  // Release children (transfer ownership of children)
+  std::vector<std::unique_ptr<Predicate>> ReleaseChildren() {
+    return std::move(children_);
+  }
+
  private:
-  std::unique_ptr<Predicate> lhs_predicate_;
-  std::unique_ptr<Predicate> rhs_predicate_;
+  std::vector<std::unique_ptr<Predicate>> children_;
   std::optional<uint32_t> slop_;
   bool inorder_;
 };

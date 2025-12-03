@@ -1200,7 +1200,7 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
                          << " stale entries for {Index: " << name_ << "}";
 
   for (auto &[key, attributes] : deletion_attributes) {
-    auto interned_key = std::make_shared<InternedString>(key);
+    auto interned_key = StringInternStore::Intern(key);
     ProcessMutation(ctx, attributes, interned_key, true);
   }
   VMSDK_LOG(NOTICE, ctx) << "Scanned index schema " << name_
@@ -1218,6 +1218,11 @@ vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
     default:
       return vmsdk::BlockedClientCategory::kOther;
   }
+}
+
+bool IndexSchema::IsKeyInFlight(const InternedStringPtr &key) const {
+  absl::MutexLock lock(&mutated_records_mutex_);
+  return tracked_mutated_records_.contains(key);
 }
 
 bool IndexSchema::InTrackedMutationRecords(

@@ -33,7 +33,6 @@ ProximityIterator::ProximityIterator(
       slop_(slop),
       in_order_(in_order),
       untracked_keys_(untracked_keys),
-      current_key_(nullptr),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
       query_field_mask_(query_field_mask) {
@@ -61,7 +60,7 @@ bool ProximityIterator::DoneKeys() const {
 }
 
 const Key& ProximityIterator::CurrentKey() const {
-  CHECK(current_key_ != nullptr);
+  CHECK(current_key_);
   return current_key_;
 }
 
@@ -99,8 +98,8 @@ bool ProximityIterator::NextKey() {
 
 bool ProximityIterator::FindCommonKey() {
   // 1) Validate children and compute min/max among current keys
-  Key min_key = nullptr;
-  Key max_key = nullptr;
+  Key min_key;
+  Key max_key;
   for (auto& iter : iters_) {
     auto k = iter->CurrentKey();
     if (!min_key || k < min_key) min_key = k;

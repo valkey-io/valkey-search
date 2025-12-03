@@ -30,6 +30,23 @@ EvaluationResult NegatePredicate::Evaluate(Evaluator& evaluator) const {
   return EvaluationResult(!result.matches);
 }
 
+// Helper function to build EvaluationResult for text predicates.
+EvaluationResult BuildTextEvaluationResult(
+    std::unique_ptr<indexes::text::TextIterator> iterator,
+    bool require_positions) {
+  if (require_positions) {
+    if (iterator->DoneKeys() || iterator->DonePositions()) {
+      return EvaluationResult(false);
+    }
+    return EvaluationResult(true, std::move(iterator));
+  } else {
+    if (iterator->DoneKeys()) {
+      return EvaluationResult(false);
+    }
+    return EvaluationResult(true);
+  }
+}
+
 TermPredicate::TermPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     FieldMaskPredicate field_mask, std::string term, bool exact_)
@@ -40,14 +57,13 @@ TermPredicate::TermPredicate(
       exact_(exact_) {}
 
 EvaluationResult TermPredicate::Evaluate(Evaluator& evaluator) const {
-  // call dynamic dispatch on the evaluator
-  return evaluator.EvaluateText(*this);
+  return evaluator.EvaluateText(*this, false);
 }
 
 // TermPredicate: Exact term match in the text index.
 EvaluationResult TermPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
-    const std::shared_ptr<valkey_search::InternedString>& target_key) const {
+    const InternedStringPtr& target_key, bool require_positions) const {
   uint64_t field_mask = field_mask_;
   auto word_iter = text_index.GetPrefix().GetWordIterator(term_);
   if (word_iter.Done()) {
@@ -66,11 +82,8 @@ EvaluationResult TermPredicate::Evaluate(
   std::vector<indexes::text::Postings::KeyIterator> key_iterators;
   key_iterators.emplace_back(std::move(key_iter));
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, nullptr);
-  if (iterator->DoneKeys() || iterator->DonePositions()) {
-    return EvaluationResult(false);
-  }
-  return EvaluationResult(true, std::move(iterator));
+      std::move(key_iterators), field_mask, nullptr, require_positions);
+  return BuildTextEvaluationResult(std::move(iterator), require_positions);
 }
 
 PrefixPredicate::PrefixPredicate(
@@ -82,15 +95,14 @@ PrefixPredicate::PrefixPredicate(
       term_(term) {}
 
 EvaluationResult PrefixPredicate::Evaluate(Evaluator& evaluator) const {
-  return evaluator.EvaluateText(*this);
+  return evaluator.EvaluateText(*this, false);
 }
 
 // PrefixPredicate: Matches all terms that start with the given prefix.
 EvaluationResult PrefixPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
-    const std::shared_ptr<valkey_search::InternedString>& target_key) const {
+    const InternedStringPtr& target_key, bool require_positions) const {
   uint64_t field_mask = field_mask_;
-
   auto word_iter = text_index.GetPrefix().GetWordIterator(term_);
   std::vector<indexes::text::Postings::KeyIterator> key_iterators;
   while (!word_iter.Done()) {
@@ -111,11 +123,8 @@ EvaluationResult PrefixPredicate::Evaluate(
     return EvaluationResult(false);
   }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, nullptr);
-  if (iterator->DonePositions()) {
-    return EvaluationResult(false);
-  }
-  return EvaluationResult(true, std::move(iterator));
+      std::move(key_iterators), field_mask, nullptr, require_positions);
+  return BuildTextEvaluationResult(std::move(iterator), require_positions);
 }
 
 SuffixPredicate::SuffixPredicate(
@@ -127,15 +136,14 @@ SuffixPredicate::SuffixPredicate(
       term_(term) {}
 
 EvaluationResult SuffixPredicate::Evaluate(Evaluator& evaluator) const {
-  return evaluator.EvaluateText(*this);
+  return evaluator.EvaluateText(*this, false);
 }
 
 // SuffixPredicate: Matches terms that end with the given suffix
 EvaluationResult SuffixPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
-    const std::shared_ptr<valkey_search::InternedString>& target_key) const {
+    const InternedStringPtr& target_key, bool require_positions) const {
   uint64_t field_mask = field_mask_;
-
   auto suffix_opt = text_index.GetSuffix();
   if (!suffix_opt.has_value()) {
     return EvaluationResult(false);
@@ -161,11 +169,8 @@ EvaluationResult SuffixPredicate::Evaluate(
     return EvaluationResult(false);
   }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, nullptr);
-  if (iterator->DonePositions()) {
-    return EvaluationResult(false);
-  }
-  return EvaluationResult(true, std::move(iterator));
+      std::move(key_iterators), field_mask, nullptr, require_positions);
+  return BuildTextEvaluationResult(std::move(iterator), require_positions);
 }
 
 InfixPredicate::InfixPredicate(
@@ -177,13 +182,14 @@ InfixPredicate::InfixPredicate(
       term_(term) {}
 
 EvaluationResult InfixPredicate::Evaluate(Evaluator& evaluator) const {
-  return evaluator.EvaluateText(*this);
+  return evaluator.EvaluateText(*this, false);
 }
 
 EvaluationResult InfixPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
-    const std::shared_ptr<valkey_search::InternedString>& target_key) const {
+    const InternedStringPtr& target_key, bool require_positions) const {
   // TODO: Implement infix evaluation
+  CHECK(false) << "Infix Search - Not implemented";
   return EvaluationResult(false);
 }
 
@@ -197,13 +203,14 @@ FuzzyPredicate::FuzzyPredicate(
       distance_(distance) {}
 
 EvaluationResult FuzzyPredicate::Evaluate(Evaluator& evaluator) const {
-  return evaluator.EvaluateText(*this);
+  return evaluator.EvaluateText(*this, false);
 }
 
 EvaluationResult FuzzyPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
-    const std::shared_ptr<valkey_search::InternedString>& target_key) const {
+    const InternedStringPtr& target_key, bool require_positions) const {
   // TODO: Implement fuzzy evaluation
+  CHECK(false) << "Fuzzy Search - Not implemented";
   return EvaluationResult(false);
 }
 
@@ -217,12 +224,13 @@ ProximityPredicate::ProximityPredicate(
       slop_(slop) {}
 
 EvaluationResult ProximityPredicate::Evaluate(Evaluator& evaluator) const {
-  return evaluator.EvaluateText(*this);
+  return evaluator.EvaluateText(*this, false);
 }
 
 EvaluationResult ProximityPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
-    const std::shared_ptr<valkey_search::InternedString>& target_key) const {
+    const InternedStringPtr& target_key, bool require_positions) const {
+  CHECK(false) << "Proximity Predicate - To be deleted";
   return EvaluationResult(false);
 }
 
@@ -303,17 +311,30 @@ EvaluationResult TagPredicate::Evaluate(
   return EvaluationResult(false);
 }
 
-ComposedPredicate::ComposedPredicate(std::unique_ptr<Predicate> lhs_predicate,
-                                     std::unique_ptr<Predicate> rhs_predicate,
-                                     LogicalOperator logical_op,
-                                     std::optional<uint32_t> slop, bool inorder)
+ComposedPredicate::ComposedPredicate(
+    LogicalOperator logical_op,
+    std::vector<std::unique_ptr<Predicate>> children,
+    std::optional<uint32_t> slop, bool inorder)
     : Predicate(logical_op == LogicalOperator::kAnd
                     ? PredicateType::kComposedAnd
                     : PredicateType::kComposedOr),
-      lhs_predicate_(std::move(lhs_predicate)),
-      rhs_predicate_(std::move(rhs_predicate)),
+      children_(std::move(children)),
       slop_(slop),
       inorder_(inorder) {}
+
+void ComposedPredicate::AddChild(std::unique_ptr<Predicate> child) {
+  children_.push_back(std::move(child));
+}
+// Helper to evaluate text predicates with conditional position requirements
+EvaluationResult EvaluateTextPredicate(const Predicate* predicate,
+                                       Evaluator& evaluator,
+                                       bool require_positions) {
+  if (predicate->GetType() == PredicateType::kText) {
+    return evaluator.EvaluateText(*static_cast<const TextPredicate*>(predicate),
+                                  require_positions);
+  }
+  return predicate->Evaluate(evaluator);
+}
 
 // ComposedPredicate: Combines two predicates with AND/OR logic.
 // For text predicates with proximity constraints (slop/inorder), creates
@@ -321,35 +342,34 @@ ComposedPredicate::ComposedPredicate(std::unique_ptr<Predicate> lhs_predicate,
 // requirements.
 EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   if (GetType() == PredicateType::kComposedAnd) {
-    EvaluationResult lhs = lhs_predicate_->Evaluate(evaluator);
-    VMSDK_LOG(DEBUG, nullptr)
-        << "Inline evaluate AND predicate lhs: " << lhs.matches;
-    // Short-circuit for AND
-    if (!lhs.matches) {
-      return EvaluationResult(false);
-    }
-    EvaluationResult rhs = rhs_predicate_->Evaluate(evaluator);
-    VMSDK_LOG(DEBUG, nullptr)
-        << "Inline evaluate AND predicate rhs: " << rhs.matches;
-    // Short-circuit for AND
-    if (!rhs.matches) {
-      return EvaluationResult(false);
+    // Short-circuit on first false
+    uint32_t childrenWithPositions = 0;
+    uint64_t query_field_mask = ~0ULL;
+    std::vector<std::unique_ptr<indexes::text::TextIterator>> iterators;
+    // Determine if children need to return positions for proximity checks
+    bool require_positions = slop_.has_value() || inorder_;
+    for (const auto& child : children_) {
+      EvaluationResult result =
+          EvaluateTextPredicate(child.get(), evaluator, require_positions);
+      if (!result.matches) {
+        return EvaluationResult(false);
+      }
+      if (result.filter_iterator) {
+        childrenWithPositions++;
+        query_field_mask &= result.filter_iterator->QueryFieldMask();
+        iterators.push_back(std::move(result.filter_iterator));
+      }
+      VMSDK_LOG(DEBUG, nullptr)
+          << "Inline evaluate AND predicate child: " << result.matches;
     }
     // Proximity check: Only if slop/inorder set and both sides have
     // iterators. This ensures we only check proximity for text predicates,
     // not numeric/tag.
-    if ((slop_.has_value() || inorder_) && lhs.filter_iterator &&
-        rhs.filter_iterator) {
+    if (require_positions && (childrenWithPositions >= 2)) {
       // Get field_mask from lhs and rhs iterators
-      uint64_t query_field_mask = lhs.filter_iterator->QueryFieldMask() &
-                                  rhs.filter_iterator->QueryFieldMask();
       if (query_field_mask == 0) {
         return EvaluationResult(false);
       }
-      // Create vector of iterators for ProximityIterator
-      std::vector<std::unique_ptr<indexes::text::TextIterator>> iterators;
-      iterators.push_back(std::move(lhs.filter_iterator));
-      iterators.push_back(std::move(rhs.filter_iterator));
       // Create ProximityIterator to check proximity
       auto proximity_iterator =
           std::make_unique<indexes::text::ProximityIterator>(
@@ -367,26 +387,24 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
       // Return the proximity iterator for potential nested use.
       return EvaluationResult(true, std::move(proximity_iterator));
     }
-    // Propagate the filter iterator from the LHS if it exists
-    if (lhs.filter_iterator) {
-      return EvaluationResult(true, std::move(lhs.filter_iterator));
+    // Propagate the filter iterator from the one child exists
+    else if (childrenWithPositions == 1) {
+      return EvaluationResult(true, std::move(iterators[0]));
     }
-    // Propagate the filter iterator from the RHS if it exists
-    if (rhs.filter_iterator) {
-      return EvaluationResult(true, std::move(rhs.filter_iterator));
-    }
-    // Both matched, non-proximity case
+    // All matched, but none have position. non-proximity case
     return EvaluationResult(true);
   }
   // OR logic
-  EvaluationResult lhs = lhs_predicate_->Evaluate(evaluator);
-  VMSDK_LOG(DEBUG, nullptr)
-      << "Inline evaluate OR predicate lhs: " << lhs.matches;
-  EvaluationResult rhs = rhs_predicate_->Evaluate(evaluator);
-  VMSDK_LOG(DEBUG, nullptr)
-      << "Inline evaluate OR predicate rhs: " << rhs.matches;
-  // TODO: Implement position-aware OR logic for nested proximity queries.
-  return EvaluationResult(lhs.matches || rhs.matches);
+  // Short-circuit on first true
+  for (const auto& child : children_) {
+    EvaluationResult result = child->Evaluate(evaluator);
+    VMSDK_LOG(DEBUG, nullptr)
+        << "Inline evaluate OR predicate child: " << result.matches;
+    if (result.matches) {
+      return EvaluationResult(true);
+    }
+  }
+  return EvaluationResult(false);
 }
 
 }  // namespace valkey_search::query

@@ -64,12 +64,8 @@ class Tag : public IndexBase {
   const absl::flat_hash_set<absl::string_view>* GetValue(
       const InternedStringPtr& key,
       bool& case_sensitive) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  using PatriciaTreeIndex =
-      PatriciaTree<InternedStringPtr, InternedStringPtrHash,
-                   InternedStringPtrEqual>;
-  using PatriciaNodeIndex =
-      PatriciaNode<InternedStringPtr, InternedStringPtrHash,
-                   InternedStringPtrEqual>;
+  using PatriciaTreeIndex = PatriciaTree<InternedStringPtr>;
+  using PatriciaNodeIndex = PatriciaNode<InternedStringPtr>;
 
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
    public:
@@ -130,7 +126,7 @@ class Tag : public IndexBase {
     absl::flat_hash_set<absl::string_view> tags;
   };
   // Map of tracked keys to their tags.
-  InternedStringMap<TagInfo> tracked_tags_by_keys_
+  InternedStringHashMap<TagInfo> tracked_tags_by_keys_
       ABSL_GUARDED_BY(index_mutex_);
   // untracked and tracked_ keys are mutually exclusive.
   InternedStringSet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);

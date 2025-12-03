@@ -886,40 +886,44 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # Test Set 1 : Exact phrase (slop=0 and inorder=true are implicit)
         # Test 1.1: Two-term exact phrase
         result = client.execute_command("FT.SEARCH", "idx", '@content:"alpha beta"')
-        assert (result[0], result[1]) == (1, b"doc:1") # Only doc:1
+        assert (result[0], result[1]) == (1, b"doc:1")
         result = client.execute_command("FT.SEARCH", "idx", '@content:"alpha gamma"')
         assert result[0] == 0  # No match (gap between words)
         # Test 1.2: Three-term exact phrase
         result = client.execute_command("FT.SEARCH", "idx", '@content:"alpha beta gamma"')
-        assert (result[0], result[1]) == (1, b"doc:1") # Only doc:1
+        assert (result[0], result[1]) == (1, b"doc:1")
         # Test 1.4: Four-term exact phrase
         result = client.execute_command("FT.SEARCH", "idx", '@content:"alpha beta gamma delta"')
-        assert (result[0], result[1]) == (1, b"doc:1") # Only doc:1
+        assert (result[0], result[1]) == (1, b"doc:1")
 
         # Test Set 2 : Composed AND query
         # Test 2.1: Two terms With slop 0 and inorder
         result = client.execute_command("FT.SEARCH", "idx", 'beta alpha', "slop", "0", "inorder")
-        assert (result[0], result[1]) == (1, b"doc:3") # Only doc:3
+        assert (result[0], result[1]) == (1, b"doc:3")
         # Test 2.2: Three terms With slop 0 and inorder
         result = client.execute_command("FT.SEARCH", "idx", 'gamma beta alpha', "slop", "0", "inorder")
-        assert (result[0], result[1]) == (1, b"doc:3") # Only doc:1
+        assert (result[0], result[1]) == (1, b"doc:3")
         # Test 2.3: Three terms With slop 0 but no order.
         result = client.execute_command("FT.SEARCH", "idx", 'gamma beta alpha', "slop", "0")
         assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:3"})
 
         # Test 2.4: Three terms With slop 1 and inorder
         result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "1", "inorder")
+        assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "2", "inorder")
         assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:2"})
         # Test 2.5: Three terms With slop 3 and inorder
-        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "3", "inorder")
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "5", "inorder")
+        assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:2"})
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "6", "inorder")
         assert (result[0], set(result[1::2])) == (3, {b"doc:1", b"doc:2", b"doc:5"})
 
         # Test 2.6: Three terms With slop 1 but no order.
-        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "1", "inorder")
-        assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:2"})
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "1")
+        assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:3"})
         # Test 2.7: Three terms With slop 3 but no order.
         result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "3")
-        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:5", b"doc:8"})
+        assert (result[0], set(result[1::2])) == (3, {b"doc:1", b"doc:2", b"doc:3"})
 
         # Test 2.8: Three terms but inorder.
         result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "inorder")
@@ -940,24 +944,25 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         # Test 3.1: Exact phrase
         result = client.execute_command("FT.SEARCH", "idx", '@content:"version 1 beta"')
-        assert (result[0], result[1]) == (1, b"doc:10")  # Only doc:10 has exact phrase
+        assert (result[0], result[1]) == (1, b"doc:10")
 
         # Test 3.2: Exact phrase (different order)
         result = client.execute_command("FT.SEARCH", "idx", '@content:"beta 2 release"')
-        assert (result[0], result[1]) == (1, b"doc:10")  # Only doc:10
+        assert (result[0], result[1]) == (1, b"doc:10")
 
         # Test 3.3: Proximity with number tokens - slop 0, inorder
         result = client.execute_command("FT.SEARCH", "idx", 'version 1 beta 2', "SLOP", "0", "INORDER")
-        assert (result[0], result[1]) == (1, b"doc:10")  # Only doc:10
+        assert (result[0], result[1]) == (1, b"doc:10")
 
         # Test 3.4: Proximity with number tokens - slop 1, inorder (allows one gap)
         result = client.execute_command("FT.SEARCH", "idx", 'version 1 beta', "SLOP", "1", "INORDER")
-        assert (result[0], set(result[1::2])) == (2, {b"doc:10", b"doc:13"})  # doc:10 (exact) and doc:13 (with gaps)
+        assert (result[0], set(result[1::2])) == (1, {b"doc:10"})
+        result = client.execute_command("FT.SEARCH", "idx", 'version 1 beta', "SLOP", "1")
+        assert (result[0], set(result[1::2])) == (2, {b'doc:10', b'doc:12'})
 
-        # Potential Nary case
         # Test 3.5: Proximity with number tokens - slop 0, no order
-        # result = client.execute_command("FT.SEARCH", "idx", 'version beta 1', "SLOP", "0")
-        # assert (result[0], set(result[1::2])) == (1, {b"doc:10"})  # Any order, no gaps
+        result = client.execute_command("FT.SEARCH", "idx", 'version beta 1', "SLOP", "0")
+        assert (result[0], set(result[1::2])) == (1, {b"doc:10"})
 
         # Test 3.6: number tokens in different positions
         result = client.execute_command("FT.SEARCH", "idx", '1 beta 2', "SLOP", "0", "INORDER")

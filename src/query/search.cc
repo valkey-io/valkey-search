@@ -128,29 +128,37 @@ size_t EvaluateFilterAsPrimary(
       predicate->GetType() == PredicateType::kComposedOr) {
     auto composed_predicate =
         dynamic_cast<const ComposedPredicate *>(predicate);
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>
-        lhs_entries_fetchers;
-    auto lhs_predicate = composed_predicate->GetLhsPredicate();
-    auto lhs =
-        EvaluateFilterAsPrimary(lhs_predicate, lhs_entries_fetchers, negate);
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>
-        rhs_entries_fetchers;
-    auto rhs_predicate = composed_predicate->GetRhsPredicate();
-    auto rhs =
-        EvaluateFilterAsPrimary(rhs_predicate, rhs_entries_fetchers, negate);
     auto predicate_type =
         EvaluateAsComposedPredicate(composed_predicate, negate);
     if (predicate_type == PredicateType::kComposedAnd) {
-      if (lhs < rhs) {
-        AppendQueue(entries_fetchers, lhs_entries_fetchers);
-        return lhs;
+      size_t min_size = SIZE_MAX;
+      std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> best_fetchers;
+      size_t child_index = 0;
+      for (const auto &child : composed_predicate->GetChildren()) {
+        std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
+        size_t child_size =
+            EvaluateFilterAsPrimary(child.get(), child_fetchers, negate);
+        if (child_size < min_size) {
+          min_size = child_size;
+          best_fetchers = std::move(child_fetchers);
+        }
+        child_index++;
       }
-      AppendQueue(entries_fetchers, rhs_entries_fetchers);
-      return rhs;
+      AppendQueue(entries_fetchers, best_fetchers);
+      return min_size;
+    } else {
+      size_t total_size = 0;
+      size_t child_index = 0;
+      for (const auto &child : composed_predicate->GetChildren()) {
+        std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
+        size_t child_size =
+            EvaluateFilterAsPrimary(child.get(), child_fetchers, negate);
+        AppendQueue(entries_fetchers, child_fetchers);
+        total_size += child_size;
+        child_index++;
+      }
+      return total_size;
     }
-    AppendQueue(entries_fetchers, lhs_entries_fetchers);
-    AppendQueue(entries_fetchers, rhs_entries_fetchers);
-    return lhs + rhs;
   }
   if (predicate->GetType() == PredicateType::kTag) {
     auto tag_predicate = dynamic_cast<const TagPredicate *>(predicate);
@@ -178,8 +186,9 @@ size_t EvaluateFilterAsPrimary(
   }
   if (predicate->GetType() == PredicateType::kNegate) {
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
-    return EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
-                                   entries_fetchers, !negate);
+    size_t result = EvaluateFilterAsPrimary(negate_predicate->GetPredicate(),
+                                            entries_fetchers, !negate);
+    return result;
   }
   CHECK(false);
 }

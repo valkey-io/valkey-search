@@ -35,5 +35,6 @@ extend-ignore-re = [
     "DIALEC",
     "nghi",
     "bubu",
-    "Teser"
+    "Teser",
+    "hel"
 ]

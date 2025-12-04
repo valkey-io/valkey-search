@@ -1245,6 +1245,24 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
             assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
             result = client.execute_command("FT.SEARCH", "idx", "ten purple (four one five three | four five six seven eight nine | yellow blue grape) apple", "DIALECT", "2", "SLOP", "18")
             assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            # (5) Complex nested queries
+            result = client.execute_command("FT.SEARCH", "idx", "(red blue (banana yellow) green grape)", "DIALECT", "2", "INORDER", "SLOP", "0")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "(red blue (banana yellow) green grape)", "DIALECT", "2", "INORDER", "SLOP", "1")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            result = client.execute_command("FT.SEARCH", "idx", "(red blue (cherry pink | violet one | two three | banana yellow))", "DIALECT", "2", "INORDER", "SLOP", "0")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            result = client.execute_command("FT.SEARCH", "idx", "(red blue (cherry pink | violet one | two three | banana yellow))", "DIALECT", "2", "INORDER", "SLOP", "1")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            result = client.execute_command("FT.SEARCH", "idx", "(red blue (cherry pink | violet one | two three | banana yellow) green grape)", "DIALECT", "2", "INORDER", "SLOP", "0")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "(red blue (cherry pink | violet one | two three | banana yellow) green grape)", "DIALECT", "2", "INORDER", "SLOP", "1")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            result = client.execute_command("FT.SEARCH", "idx", "apple (orange cherry | pink violet | one two | three four | five six seven eight | (red blue (cherry pink | violet one | two three | banana yellow)) green grape) purple", "DIALECT", "2", "INORDER", "SLOP", "4")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "apple (orange cherry | pink violet | one two | three four | five six seven eight | (red blue (cherry pink | violet one | two three | banana yellow)) green grape) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+
 
     def test_proximity_inorder_violation_advancement(self):
         """

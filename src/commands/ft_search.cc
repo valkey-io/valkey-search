@@ -62,7 +62,8 @@ void SendReplyNoContent(ValkeyModuleCtx *ctx,
                         const std::deque<indexes::Neighbor> &neighbors,
                         const query::SearchParameters &parameters) {
   const size_t start_index = CalcStartIndex(neighbors, parameters);
-  const size_t end_index = start_index + CalcEndIndex(neighbors, parameters);
+  const size_t end_index = std::min(start_index + CalcEndIndex(neighbors, parameters),
+                                    neighbors.size());
   ValkeyModule_ReplyWithArray(ctx, end_index - start_index + 1);
   ReplyAvailNeighbors(ctx, neighbors, parameters);
   for (auto i = start_index; i < end_index; ++i) {
@@ -84,7 +85,8 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
                         const query::SearchParameters &parameters) {
   CHECK_GT(static_cast<size_t>(parameters.k), parameters.limit.first_index);
   const size_t start_index = CalcStartIndex(neighbors, parameters);
-  const size_t end_index = start_index + CalcEndIndex(neighbors, parameters);
+  const size_t end_index = std::min(start_index + CalcEndIndex(neighbors, parameters),
+                                    neighbors.size());
   ValkeyModule_ReplyWithArray(ctx, 2 * (end_index - start_index) + 1);
   ReplyAvailNeighbors(ctx, neighbors, parameters);
 

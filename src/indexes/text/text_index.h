@@ -20,6 +20,7 @@
 #include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/text/invasive_ptr.h"
 #include "src/indexes/text/lexer.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/radix_tree.h"
@@ -64,17 +65,16 @@ class TextIndex {
 
  public:
   explicit TextIndex(bool suffix);
-  RadixTree<std::shared_ptr<Postings>>& GetPrefix();
-  const RadixTree<std::shared_ptr<Postings>>& GetPrefix() const;
-  std::optional<std::reference_wrapper<RadixTree<std::shared_ptr<Postings>>>>
+  RadixTree<InvasivePtr<Postings>>& GetPrefix();
+  const RadixTree<InvasivePtr<Postings>>& GetPrefix() const;
+  std::optional<std::reference_wrapper<RadixTree<InvasivePtr<Postings>>>>
   GetSuffix();
-  std::optional<
-      std::reference_wrapper<const RadixTree<std::shared_ptr<Postings>>>>
+  std::optional<std::reference_wrapper<const RadixTree<InvasivePtr<Postings>>>>
   GetSuffix() const;
 
  private:
-  RadixTree<std::shared_ptr<Postings>> prefix_tree_;
-  std::unique_ptr<RadixTree<std::shared_ptr<Postings>>> suffix_tree_;
+  RadixTree<InvasivePtr<Postings>> prefix_tree_;
+  std::unique_ptr<RadixTree<InvasivePtr<Postings>>> suffix_tree_;
 };
 
 class TextIndexSchema {

@@ -16,6 +16,7 @@
 #include "absl/status/statusor.h"
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/text/invasive_ptr.h"
 #include "src/indexes/text/text_index.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
@@ -83,7 +84,7 @@ class TextTest : public ::testing::Test {
   }
 
   // Helper to get postings for a token
-  std::shared_ptr<text::Postings> GetPostingsForToken(
+  text::InvasivePtr<text::Postings> GetPostingsForToken(
       const std::string& token,
       std::shared_ptr<text::TextIndexSchema> schema = nullptr) {
     auto active_schema = schema ? schema : text_index_schema_;

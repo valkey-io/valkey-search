@@ -9,57 +9,7 @@ from indexes import *
 from valkeytestframework.util import waiters
 from test_cancel import search, search_command, Any
 
-class TestPartitionConsistencyControls(ValkeySearchClusterTestCaseDebugMode):
-
-    def execute_primaries(self, command: Union[str, list[str]]) -> list[Any]:
-        return [
-            self.client_for_primary(i).execute_command(*command)
-            for i in range(len(self.replication_groups))
-        ]
-
-    def config_set(self, config: str, value: str):
-        assert self.execute_primaries(["config set", config, value]) == [True] * len(
-            self.replication_groups
-        )
-
-    def control_set(self, key:str, value:str):
-        assert all(
-            [node.client.execute_command(*["ft._debug", "CONTROLLED_VARIABLE", "set", key, value]) == b"OK" for node in self.nodes]
-        )
-
-    def check_info(self, name: str, value: Union[str, int]):
-        results = self.execute_primaries(["INFO", "SEARCH"])
-        failed = False
-        for ix, r in enumerate(results):
-            if r[name] != value:
-                print(
-                    name,
-                    " Expected:",
-                    value,
-                    " Received:",
-                    r[name],
-                    " on server:",
-                    ix,
-                )
-                failed = True
-        assert not failed
-    
-    def _check_info_sum(self, name: str) -> int:
-        """Sum the values of a given info field across all servers"""
-        results = self.execute_primaries(["INFO", "SEARCH"])
-        return sum([int(r[name]) for r in results if name in r])
-
-    def check_info_sum(self, name: str, sum_value: int):
-        """Sum the values of a given info field across all servers"""
-        waiters.wait_for_equal(
-          lambda: self._check_info_sum(name), 
-          sum_value, 
-          timeout=5
-        )
-    
-    def sum_docs(self, index: Index) -> int:
-        return sum([index.info(self.client_for_primary(i)).num_docs for i in range(len(self.replication_groups))])
-
+class TestFTSearchPartitionConsistencyControls(ClusterTestUtils, ValkeySearchClusterTestCaseDebugMode):
     def test_ft_search_partition_controls(self):
         self.execute_primaries(["flushall sync"])
         self.config_set("search.info-developer-visible", "yes")
@@ -70,7 +20,7 @@ class TestPartitionConsistencyControls(ValkeySearchClusterTestCaseDebugMode):
         # create index and load data
         hnsw_index.create(client)
         hnsw_index.load_data(client, 1000)
-        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 1000, timeout=3)
+        assert self.sum_docs(hnsw_index) == 1000
 
         # Nominal case
         nominal_hnsw_result = search(client, "hnsw", False)
@@ -103,7 +53,7 @@ class TestPartitionConsistencyControls(ValkeySearchClusterTestCaseDebugMode):
         # create index and load data
         hnsw_index.create(client)
         hnsw_index.load_data(client, 1000)
-        waiters.wait_for_equal(lambda: self.sum_docs(hnsw_index), 1000, timeout=3)
+        assert self.sum_docs(hnsw_index) == 1000
 
         # Nominal case
         nominal_hnsw_result = search(client, "hnsw", False)

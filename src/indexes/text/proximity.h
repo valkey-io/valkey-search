@@ -80,6 +80,7 @@ class ProximityIterator : public TextIterator {
   const InternedStringSet* untracked_keys_;
 
   bool FindCommonKey();
+  bool HasOrderingViolation(size_t first_idx, size_t second_idx) const;
   std::optional<size_t> FindViolatingIterator();
 };
 }  // namespace valkey_search::indexes::text

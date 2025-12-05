@@ -97,6 +97,8 @@ set(SRCS_TEXT ${CMAKE_CURRENT_LIST_DIR}/text/text_index.h
               ${CMAKE_CURRENT_LIST_DIR}/text/text_iterator.h
               ${CMAKE_CURRENT_LIST_DIR}/text/proximity.h
               ${CMAKE_CURRENT_LIST_DIR}/text/proximity.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/orproximity.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/orproximity.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/term.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/term.h
               ${CMAKE_CURRENT_LIST_DIR}/text/lexer.cc

@@ -1556,6 +1556,19 @@ bool IndexSchema::IsKeyInFlight(const InternedStringPtr &key) const {
   return tracked_mutated_records_.contains(key);
 }
 
+std::vector<InternedStringPtr> IndexSchema::GetConflictingInFlightKeys(
+    const std::vector<InternedStringPtr> &keys) const {
+  std::vector<InternedStringPtr> conflicting_keys;
+  absl::MutexLock lock(&mutated_records_mutex_);
+
+  for (const auto &key : keys) {
+    if (tracked_mutated_records_.contains(key)) {
+      conflicting_keys.push_back(key);
+    }
+  }
+  return conflicting_keys;
+}
+
 bool IndexSchema::InTrackedMutationRecords(
     const InternedStringPtr &key, const std::string &identifier) const {
   absl::MutexLock lock(&mutated_records_mutex_);

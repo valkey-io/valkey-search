@@ -207,6 +207,11 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t GetBackfillScannedKeyCount() const;
   uint64_t GetBackfillDbSize() const;
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
+  bool IsKeyInFlight(const InternedStringPtr &key) const
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
+  std::vector<InternedStringPtr> GetConflictingInFlightKeys(
+      const std::vector<InternedStringPtr> &keys) const
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   static absl::Status TextInfoCmd(ValkeyModuleCtx *ctx,
                                   vmsdk::ArgsIterator &itr);
@@ -307,8 +312,6 @@ class IndexSchema : public KeyspaceEventSubscription,
                           MutatedAttributes &&mutated_attributes,
                           bool from_backfill, bool block_client,
                           bool from_multi)
-      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
-  bool IsKeyInFlight(const InternedStringPtr &key) const
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(
       const InternedStringPtr &key, bool first_time)

@@ -19,8 +19,9 @@ OrProximityIterator::OrProximityIterator(
 }
 
 // Returns the field mask based on the current active text iterators.
-// When we are at a certain position, multiple iterators may be on that position.
-// We combine their field masks using bitwise OR to get the overall field mask.
+// When we are at a certain position, multiple iterators may be on that
+// position. We combine their field masks using bitwise OR to get the overall
+// field mask.
 FieldMaskPredicate OrProximityIterator::QueryFieldMask() const {
   CHECK(!current_pos_indices_.empty());
   FieldMaskPredicate mask = 0ULL;

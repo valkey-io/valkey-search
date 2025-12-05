@@ -49,8 +49,11 @@ config::Enum& GetLogLevel();
 /// Reset the state of the options (mainly needed for testing)
 absl::Status Reset();
 
-/// Allow delivery of partial results when timeout occurs
-const config::Boolean& GetEnablePartialResults();
+/// Default option of delivering partial results when timeout occurs
+const config::Boolean& GetPreferPartialResults();
+
+/// Default option of delivering consistent results when timeout occurs
+const config::Boolean& GetPreferConsistentResults();
 
 /// Return the configuration entry for high priority weight in thread pools
 config::Number& GetHighPriorityWeight();

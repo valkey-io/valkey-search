@@ -121,6 +121,7 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
                               grpc::CallbackServerContext* context) {
   auto parameters =
       std::make_unique<query::SearchParameters>(request.timeout_ms(), context);
+  parameters->db_num = request.db_num();
   parameters->index_schema_name = request.index_schema_name();
   parameters->attribute_alias = request.attribute_alias();
   VMSDK_ASSIGN_OR_RETURN(
@@ -140,6 +141,8 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
   parameters->limit = query::LimitParameter{request.limit().first_index(),
                                             request.limit().number()};
   parameters->no_content = request.no_content();
+  parameters->enable_partial_results = request.enable_partial_results();
+  parameters->enable_consistency = request.enable_consistency();
   if (request.has_root_filter_predicate()) {
     VMSDK_ASSIGN_OR_RETURN(
         parameters->filter_parse_results.root_predicate,
@@ -152,6 +155,8 @@ GRPCSearchRequestToParameters(const SearchIndexPartitionRequest& request,
         vmsdk::MakeUniqueValkeyString(return_parameter.identifier()),
         vmsdk::MakeUniqueValkeyString(return_parameter.alias())));
   }
+  parameters->index_fingerprint_version = request.index_fingerprint_version();
+  parameters->slot_fingerprint = request.slot_fingerprint();
   return parameters;
 }
 
@@ -226,6 +231,7 @@ std::unique_ptr<Predicate> PredicateToGRPCPredicate(
 std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
     const query::SearchParameters& parameters) {
   auto request = std::make_unique<SearchIndexPartitionRequest>();
+  request->set_db_num(parameters.db_num);
   request->set_index_schema_name(parameters.index_schema_name);
   request->set_attribute_alias(parameters.attribute_alias);
   request->set_score_as(vmsdk::ToStringView(parameters.score_as.get()));
@@ -239,6 +245,8 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   request->mutable_limit()->set_number(parameters.limit.number);
   request->set_timeout_ms(parameters.timeout_ms);
   request->set_no_content(parameters.no_content);
+  request->set_enable_partial_results(parameters.enable_partial_results);
+  request->set_enable_consistency(parameters.enable_consistency);
   if (parameters.filter_parse_results.root_predicate != nullptr) {
     request->set_allocated_root_filter_predicate(
         PredicateToGRPCPredicate(
@@ -254,6 +262,9 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
     return_parameter->set_alias(
         vmsdk::ToStringView(return_attribute.alias.get()));
   }
+  *request->mutable_index_fingerprint_version() =
+      parameters.index_fingerprint_version;
+  request->set_slot_fingerprint(parameters.slot_fingerprint);
   return request;
 }
 

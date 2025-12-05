@@ -47,7 +47,7 @@
 namespace valkey_search {
 
 constexpr absl::string_view kMaxIndexesConfig{"max-indexes"};
-constexpr uint32_t kMaxIndexes{10};
+constexpr uint32_t kMaxIndexes{UINT32_MAX};
 
 constexpr absl::string_view kIndexSchemaBackfillBatchSizeConfig(
     "backfill-batch-size");
@@ -59,7 +59,7 @@ namespace options {
 /// have.
 static auto max_indexes =
     vmsdk::config::NumberBuilder(kMaxIndexesConfig,  // name
-                                 kMaxIndexes,        // default size
+                                 10,                 // default size
                                  1,                  // min size
                                  kMaxIndexes)        // max size
         .WithValidationCallback(CHECK_RANGE(1, kMaxIndexes, kMaxIndexesConfig))

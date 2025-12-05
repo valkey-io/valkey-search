@@ -414,10 +414,16 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   }
   results.root_predicate = std::move(parse_result.prev_predicate);
   results.filter_identifiers.swap(filter_identifiers_);
-  // Log the built query syntax tree.
-  VMSDK_LOG(WARNING, nullptr)
-      << "Parsed QuerySyntaxTree:\n"
-      << PrintPredicateTree(results.root_predicate.get(), 0);
+  // Only generate query syntax tree output if debug logging is enabled.
+  if (valkey_search::options::GetLogLevel().GetValue() == static_cast<int>(LogLevel::kDebug)) {
+    std::string tree_output = PrintPredicateTree(results.root_predicate.get(), 0);
+    size_t chunk_size = 500;
+    for (size_t i = 0; i < tree_output.length(); i += chunk_size) {
+      VMSDK_LOG(DEBUG, nullptr)
+          << "Parsed QuerySyntaxTree (Part " << (i / chunk_size + 1) << "):\n"
+          << tree_output.substr(i, chunk_size);
+    }
+  }
   return results;
 }
 

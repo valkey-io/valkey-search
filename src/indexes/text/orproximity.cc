@@ -18,10 +18,16 @@ OrProximityIterator::OrProximityIterator(
   NextKey();
 }
 
-// Returns the field mask based on the current active text iterator.
+// Returns the field mask based on the current active text iterators.
+// When we are at a certain position, multiple iterators may be on that position.
+// We combine their field masks using bitwise OR to get the overall field mask.
 FieldMaskPredicate OrProximityIterator::QueryFieldMask() const {
   CHECK(!current_pos_indices_.empty());
-  return iters_[current_pos_indices_[0]]->QueryFieldMask();
+  FieldMaskPredicate mask = 0ULL;
+  for (size_t idx : current_pos_indices_) {
+    mask |= iters_[idx]->QueryFieldMask();
+  }
+  return mask;
 }
 
 bool OrProximityIterator::DoneKeys() const {
@@ -50,14 +56,16 @@ bool OrProximityIterator::FindMinimumKey() {
     }
   }
   if (key_set_.empty()) {
-    current_key_ = Key();
+    current_key_ = nullptr;
     current_position_ = std::nullopt;
     current_field_mask_ = 0ULL;
     return false;
   }
   current_key_ = key_set_.begin()->first;
   current_key_indices_.clear();
-  // Collect all iterators with minimum key
+  // Collect all iterators with minimum key.
+  // key_set_ is sorted, so all matching keys are consecutive
+  // and we stop when we find a different key.
   for (auto it = key_set_.begin();
        it != key_set_.end() && it->first == current_key_;) {
     current_key_indices_.push_back(it->second);
@@ -87,21 +95,14 @@ bool OrProximityIterator::SeekForwardKey(const Key& target_key) {
   if (current_key_ && current_key_ >= target_key) {
     return true;
   }
-  // Remove entries < target_key and seek those iterators
-  auto it = key_set_.lower_bound(std::make_pair(target_key, 0));
-  for (auto iter = key_set_.begin(); iter != it;) {
-    size_t idx = iter->second;
-    iter = key_set_.erase(iter);
-    iters_[idx]->SeekForwardKey(target_key);
-    InsertValidKeyIterator(idx);
-  }
-  // Seek any iterators not in set
+  // Clear set and seek all iterators to target_key or beyond.
+  key_set_.clear();
   for (size_t i = 0; i < iters_.size(); ++i) {
     if (!iters_[i]->DoneKeys() && iters_[i]->CurrentKey() < target_key) {
       iters_[i]->SeekForwardKey(target_key);
-      InsertValidKeyIterator(i);
     }
   }
+  // Rebuild key set if needed or returns false if all are exhausted.
   return FindMinimumKey();
 }
 
@@ -146,14 +147,19 @@ bool OrProximityIterator::NextPosition() {
   }
   Position min_pos = pos_set_.begin()->first;
   current_pos_indices_.clear();
-  // Collect all iterators at minimum position
+  // Collect all iterators at minimum position.
+  // pos_set_ is sorted, so all iterators on the position are consecutive
+  // and we stop when we find a different position.
   for (auto it = pos_set_.begin();
        it != pos_set_.end() && it->first == min_pos;) {
     current_pos_indices_.push_back(it->second);
     it = pos_set_.erase(it);
   }
   current_position_ = iters_[current_pos_indices_[0]]->CurrentPosition();
-  current_field_mask_ = iters_[current_pos_indices_[0]]->CurrentFieldMask();
+  current_field_mask_ = 0ULL;
+  for (size_t idx : current_pos_indices_) {
+    current_field_mask_ |= iters_[idx]->CurrentFieldMask();
+  }
   return true;
 }
 

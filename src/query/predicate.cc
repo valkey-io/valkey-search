@@ -84,11 +84,6 @@ EvaluationResult TermPredicate::Evaluate(
   key_iterators.emplace_back(std::move(key_iter));
   auto iterator = std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, nullptr, require_positions);
-  VMSDK_LOG(WARNING, nullptr)
-      << "Built TermIterator for term: " << term_
-      << " require_positions: " << require_positions
-      << " DoneKeys: " << iterator->DoneKeys()
-      << " DonePositions: " << iterator->DonePositions();
   return BuildTextEvaluationResult(std::move(iterator), require_positions);
 }
 
@@ -407,10 +402,6 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   for (const auto& child : children_) {
     EvaluationResult result =
         EvaluatePredicate(child.get(), evaluator, require_positions);
-    VMSDK_LOG(WARNING, nullptr)
-        << "Result of OR child evaluation: " << result.matches
-        << " iterator: " << (result.filter_iterator ? "yes" : "no")
-        << " require_positions: " << require_positions;
     // Short-circuit if any matches and positions not required.
     if (result.matches && !require_positions) {
       return EvaluationResult(true);

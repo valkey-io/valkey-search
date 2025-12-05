@@ -1,6 +1,5 @@
 #include "proximity.h"
 
-#include "vmsdk/src/log.h"  // TODO: remove
 #include "vmsdk/src/module_config.h"
 
 namespace valkey_search::options {
@@ -199,11 +198,6 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
       current_slop += std::max(0, distance);
     }
     if (slop_.has_value() && current_slop > *slop_) {
-      VMSDK_LOG(WARNING, nullptr)
-          << "Slop violation detected: current_slop=" << current_slop
-          << ", allowed_slop=" << *slop_ << ", advancing iterator 0"
-          << ", current position start: " << positions_[0].start
-          << ", end: " << positions_[n - 1].end << ", n: " << n;
       return 0;
     }
     // Check for field mask intersection (terms exist in the same field)

@@ -148,16 +148,12 @@ message GetGlobalMetadataResponse {
   GlobalMetadata metadata = 1;
 }
 
-message IndexFingerprintVersion {
-  uint64 fingerprint = 1;
-  uint32 version = 2;
-}
-
 message InfoIndexPartitionRequest {
   uint32 db_num = 1;
   string index_name = 2;
   bool require_consistency = 3;
   IndexFingerprintVersion index_fingerprint_version = 4;
+  uint64 slot_fingerprint = 5;
 }
 
 enum FanoutErrorType {

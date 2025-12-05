@@ -27,15 +27,13 @@ ClusterInfoFanoutOperation::ClusterInfoFanoutOperation(
       backfill_complete_percent_max_(0.0f),
       backfill_complete_percent_min_(0.0f),
       backfill_in_progress_(false) {
-  if (require_consistency_) {
-    // Get expected fingerprint/version from IndexSchema
-    auto status_or_schema =
-        SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
-    CHECK(status_or_schema.ok());
-    auto schema = status_or_schema.value();
-    expected_fingerprint_version_.set_fingerprint(schema->GetFingerprint());
-    expected_fingerprint_version_.set_version(schema->GetVersion());
-  }
+  // Get expected fingerprint/version from IndexSchema
+  auto status_or_schema =
+      SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+  CHECK(status_or_schema.ok());
+  auto schema = status_or_schema.value();
+  expected_fingerprint_version_.set_fingerprint(schema->GetFingerprint());
+  expected_fingerprint_version_.set_version(schema->GetVersion());
 }
 
 std::vector<vmsdk::cluster_map::NodeInfo>
@@ -50,14 +48,15 @@ unsigned ClusterInfoFanoutOperation::GetTimeoutMs() const {
 
 coordinator::InfoIndexPartitionRequest
 ClusterInfoFanoutOperation::GenerateRequest(
-    const vmsdk::cluster_map::NodeInfo&) {
+    const vmsdk::cluster_map::NodeInfo& node) {
   coordinator::InfoIndexPartitionRequest req;
   req.set_db_num(db_num_);
   req.set_index_name(index_name_);
+  *req.mutable_index_fingerprint_version() = expected_fingerprint_version_;
 
   if (require_consistency_) {
     req.set_require_consistency(true);
-    *req.mutable_index_fingerprint_version() = expected_fingerprint_version_;
+    req.set_slot_fingerprint(node.shard->slots_fingerprint);
   }
 
   return req;

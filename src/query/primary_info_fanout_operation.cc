@@ -13,7 +13,7 @@
 
 namespace valkey_search::query::primary_info_fanout {
 
-CONTROLLED_BOOLEAN(ForceInfoInvalidIndexFingerprint, false);
+CONTROLLED_BOOLEAN(ForceInfoInvalidSlotFingerprint, false);
 
 PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
     uint32_t db_num, const std::string& index_name, unsigned timeout_ms,
@@ -30,21 +30,12 @@ PrimaryInfoFanoutOperation::PrimaryInfoFanoutOperation(
       num_docs_(0),
       num_records_(0),
       hash_indexing_failures_(0) {
-  if (require_consistency_) {
-    // test only: force invalid index fingerprint and version
-    if (ForceInfoInvalidIndexFingerprint.GetValue()) {
-      expected_fingerprint_version_.set_fingerprint(404);
-      expected_fingerprint_version_.set_version(404);
-    } else {
-      // Get expected fingerprint/version from IndexSchema
-      auto status_or_schema =
-          SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
-      CHECK(status_or_schema.ok());
-      auto schema = status_or_schema.value();
-      expected_fingerprint_version_.set_fingerprint(schema->GetFingerprint());
-      expected_fingerprint_version_.set_version(schema->GetVersion());
-    }
-  }
+  auto status_or_schema =
+      SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+  CHECK(status_or_schema.ok());
+  auto schema = status_or_schema.value();
+  expected_fingerprint_version_.set_fingerprint(schema->GetFingerprint());
+  expected_fingerprint_version_.set_version(schema->GetVersion());
 }
 
 std::vector<vmsdk::cluster_map::NodeInfo>
@@ -59,14 +50,20 @@ unsigned PrimaryInfoFanoutOperation::GetTimeoutMs() const {
 
 coordinator::InfoIndexPartitionRequest
 PrimaryInfoFanoutOperation::GenerateRequest(
-    const vmsdk::cluster_map::NodeInfo&) {
+    const vmsdk::cluster_map::NodeInfo& node) {
   coordinator::InfoIndexPartitionRequest req;
   req.set_db_num(db_num_);
   req.set_index_name(index_name_);
+  *req.mutable_index_fingerprint_version() = expected_fingerprint_version_;
 
   if (require_consistency_) {
     req.set_require_consistency(true);
-    *req.mutable_index_fingerprint_version() = expected_fingerprint_version_;
+    // test only: mock an invalid slot fingerprint
+    if (ForceInfoInvalidSlotFingerprint.GetValue()) {
+      req.set_slot_fingerprint(404);
+    } else {
+      req.set_slot_fingerprint(node.shard->slots_fingerprint);
+    }
   }
 
   return req;

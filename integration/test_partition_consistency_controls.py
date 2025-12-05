@@ -147,4 +147,3 @@ class TestPartitionConsistencyControls(ValkeySearchClusterTestCaseDebugMode):
         # enable consistency check, get empty result (failure)
         hnsw_result = search(client, "hnsw", False, expect_consistency_error=True, enable_consistency=True)
         assert hnsw_result == []
-

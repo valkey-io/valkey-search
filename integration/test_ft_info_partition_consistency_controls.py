@@ -97,12 +97,20 @@ class TestFTInfoPartitionConsistencyControls(ValkeySearchClusterTestCaseDebugMod
         # normal result without consistency check
         normal_result = self.run_info_command(client, index_name, require_consistency=False)
 
+        # make commands to all nodes, force refresh cluster map
+        node0 = self.new_client_for_primary(0)
+        node0.execute_command("FT.INFO hnsw PRIMARY")
+        node1 = self.new_client_for_primary(1)
+        node1.execute_command("FT.INFO hnsw PRIMARY")
+        node2 = self.new_client_for_primary(2)
+        node2.execute_command("FT.INFO hnsw PRIMARY")
+
         # normal result with consistency check
         cur_result = self.run_info_command(client, index_name, require_consistency=True)
         assert cur_result == normal_result
         
         # force invalid invalid index fingerprint and version
-        self.control_set("ForceInfoInvalidIndexFingerprint", "yes")
+        self.control_set("ForceInfoInvalidSlotFingerprint", "yes")
 
         # enable consistency check, get error result
         cur_result = self.run_info_command(client, index_name, require_consistency=True, expect_error=True)
@@ -112,7 +120,7 @@ class TestFTInfoPartitionConsistencyControls(ValkeySearchClusterTestCaseDebugMod
         cur_result = self.run_info_command(client, index_name, require_consistency=False, expect_error=False)
         assert cur_result == normal_result
 
-        self.control_set("ForceInfoInvalidIndexFingerprint", "no")
+        self.control_set("ForceInfoInvalidSlotFingerprint", "no")
 
     def test_ft_info_partition_controls(self):
         self.execute_primaries(["flushall sync"])
@@ -158,12 +166,3 @@ class TestFTInfoPartitionConsistencyControls(ValkeySearchClusterTestCaseDebugMod
             "FT._DEBUG CONTROLLED_VARIABLE SET ForceRemoteFailCount ", 
             0
         ) == b"OK"
-
-
-
-
-
-
-
-
-        

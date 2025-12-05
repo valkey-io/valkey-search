@@ -13,6 +13,7 @@
 
 #include "absl/status/status.h"
 #include "src/index_schema.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -24,8 +25,8 @@ struct InfoCommand {
   std::shared_ptr<IndexSchema> index_schema;
   std::string index_schema_name;
   InfoScope scope{InfoScope::kLocal};
-  bool enable_partial_results{false};
-  bool require_consistency{true};
+  bool enable_partial_results{options::GetPreferPartialResults().GetValue()};
+  bool require_consistency{options::GetPreferConsistentResults().GetValue()};
   uint32_t timeout_ms{0};
 
   absl::Status ParseCommand(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr);

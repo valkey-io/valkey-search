@@ -219,11 +219,11 @@ static auto ft_info_rpc_timeout_ms =
         .Build();
 
 /// Enable TEXT predicate evaluation in prefilter stage.
-/// When enabled, TEXT predicates are evaluated using the per-key text index.
-/// When disabled (default), TEXT evaluation is a no-op in prefilter.
+/// When enabled(default), TEXT predicates are evaluated using the per-key text
+/// index. When disabled, TEXT evaluation is a no-op in prefilter.
 constexpr absl::string_view kEnableTextPrefilter{"enable-text-prefilter"};
 static auto enable_text_prefilter =
-    config::BooleanBuilder(kEnableTextPrefilter, false).Build();
+    config::BooleanBuilder(kEnableTextPrefilter, true).Build();
 
 vmsdk::config::Boolean& GetEnableTextPrefilter() {
   return dynamic_cast<vmsdk::config::Boolean&>(*enable_text_prefilter);

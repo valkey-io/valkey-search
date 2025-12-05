@@ -107,7 +107,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateText(
   CHECK(key_);
   // Check configuration flag
   if (!options::GetEnableTextPrefilter().GetValue()) {
-    // No-op path (default) - skip prefilter evaluation
+    // No-op path - skip prefilter evaluation
     return query::EvaluationResult(true);
   }
   // Evaluate using per-key text index

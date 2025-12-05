@@ -34,17 +34,13 @@ EvaluationResult NegatePredicate::Evaluate(Evaluator& evaluator) const {
 EvaluationResult BuildTextEvaluationResult(
     std::unique_ptr<indexes::text::TextIterator> iterator,
     bool require_positions) {
-  if (require_positions) {
-    if (!iterator->IsIteratorValid()) {
-      return EvaluationResult(false);
-    }
-    return EvaluationResult(true, std::move(iterator));
-  } else {
-    if (iterator->DoneKeys()) {
-      return EvaluationResult(false);
-    }
-    return EvaluationResult(true);
+  if (!iterator->IsIteratorValid()) {
+    return EvaluationResult(false);
   }
+  if (require_positions) {
+    return EvaluationResult(true, std::move(iterator));
+  }
+  return EvaluationResult(true);
 }
 
 TermPredicate::TermPredicate(

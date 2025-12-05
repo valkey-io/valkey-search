@@ -18,6 +18,7 @@
 #include "grpcpp/support/status.h"
 #include "src/coordinator/coordinator.grpc.pb.h"
 #include "src/coordinator/coordinator.pb.h"
+#include "src/query/search.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -54,6 +55,20 @@ class Service final : public Coordinator::CallbackService {
       InfoIndexPartitionResponse* response) override;
 
  private:
+  grpc::Status PerformConsistencyChecks(
+      const SearchIndexPartitionRequest* request,
+      const query::SearchParameters& parameters);
+
+  query::SearchResponseCallback MakeSearchCallback(
+      SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
+      std::unique_ptr<vmsdk::StopWatch> latency_sample);
+
+  void EnqueueSearchRequest(
+      std::unique_ptr<query::SearchParameters> vector_search_parameters,
+      vmsdk::ThreadPool* reader_thread_pool, ValkeyModuleCtx* detached_ctx,
+      SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
+      std::unique_ptr<vmsdk::StopWatch> latency_sample);
+
   vmsdk::UniqueValkeyDetachedThreadSafeContext detached_ctx_;
   vmsdk::ThreadPool* reader_thread_pool_;
 };

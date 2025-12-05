@@ -122,9 +122,10 @@ std::unique_ptr<EntriesFetcherIteratorBase> Text::EntriesFetcher::Begin() {
 namespace valkey_search::query {
 
 void* TextPredicate::Search(bool negate) const {
-  // TODO: Add logic to calculate the size based on number of keys estimated.
+  size_t estimated_size = EstimateSize();
   auto fetcher = std::make_unique<indexes::Text::EntriesFetcher>(
-      0, GetTextIndexSchema()->GetTextIndex(), nullptr, GetFieldMask());
+      estimated_size, GetTextIndexSchema()->GetTextIndex(), nullptr,
+      GetFieldMask());
   fetcher->predicate_ = this;
   return fetcher.release();
 }
@@ -213,4 +214,34 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
   CHECK(false) << "Unsupported TextPredicate type";
 }
 
+// Size apis for estimation
+size_t TermPredicate::EstimateSize() const {
+  // TODO: Implementation
+  return 0;
+}
+
+size_t PrefixPredicate::EstimateSize() const {
+  // TODO: Implementation
+  return 0;
+}
+
+size_t SuffixPredicate::EstimateSize() const {
+  // TODO: Implementation
+  return 0;
+}
+
+size_t ProximityPredicate::EstimateSize() const {
+  // TODO: Implementation
+  return 0;
+}
+
+size_t InfixPredicate::EstimateSize() const {
+  // TODO: Implementation
+  return 0;
+}
+
+size_t FuzzyPredicate::EstimateSize() const {
+  // TODO: Implementation
+  return 0;
+}
 }  // namespace valkey_search::query

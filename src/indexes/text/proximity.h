@@ -62,6 +62,12 @@ class ProximityIterator : public TextIterator {
   const PositionRange& CurrentPosition() const override;
   bool NextPosition() override;
   FieldMaskPredicate CurrentFieldMask() const override;
+  // Returns true if iterator is at a valid state with current key, position,
+  // and field.
+  bool IsIteratorValid() const override {
+    return current_key_ && current_position_.has_value() &&
+           current_field_mask_ != 0ULL;
+  }
 
  private:
   // List of all the Text Predicates contained in the Proximity AND.

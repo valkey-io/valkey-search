@@ -54,6 +54,15 @@ class TermIterator : public TextIterator {
   const PositionRange& CurrentPosition() const override;
   bool NextPosition() override;
   FieldMaskPredicate CurrentFieldMask() const override;
+  // Returns true if iterator is at a valid state with current key, position,
+  // and field.
+  bool IsIteratorValid() const override {
+    if (require_positions_) {
+      return current_key_ && current_position_.has_value() &&
+             current_field_mask_ != 0ULL;
+    }
+    return current_key_ ? true : false;
+  }
   /* Implementation of APIs unique to TermIterator */
   // It is possible to implement a `CurrentKeyIterVecIdx` API that returns the
   // index of the vector of the posting iterator (provided on init) that matches

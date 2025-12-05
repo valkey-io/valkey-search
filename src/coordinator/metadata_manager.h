@@ -88,6 +88,12 @@ class MetadataManager {
 
   absl::Status DeleteEntry(absl::string_view type_name, absl::string_view id);
 
+  absl::Status ProcessInternalUpdate(ValkeyModuleCtx *ctx,
+                                     absl::string_view type_name,
+                                     absl::string_view id,
+                                     const coordinator::GlobalMetadataEntry *metadata_entry,
+                                     const coordinator::GlobalMetadataVersionHeader *global_version_header);
+
   std::unique_ptr<GlobalMetadata> GetGlobalMetadata();
 
   // RegisterType is used to register a new metadata type in the metadata

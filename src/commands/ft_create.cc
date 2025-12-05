@@ -79,7 +79,11 @@ absl::Status FTCreateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     }
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");
   }
-  ValkeyModule_ReplicateVerbatim(ctx);
+
+  // Replicate ft.create only for cmd clusters, whereas ft.internal_update will be replicated for CME clusters
+  if (!ValkeySearch::Instance().IsCluster()) {
+    ValkeyModule_ReplicateVerbatim(ctx);
+  }
   return absl::OkStatus();
 }
 }  // namespace valkey_search

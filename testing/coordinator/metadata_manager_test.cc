@@ -124,9 +124,30 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
         });
   }
   if (test_case.expect_num_broadcasts > 0) {
+    EXPECT_CALL(*kMockValkeyModule, GetClusterNodesList(fake_ctx, testing::_))
+        .WillRepeatedly([](ValkeyModuleCtx *ctx, size_t *numnodes) {
+          *numnodes = 1;
+          char **ids = new char *[1];
+          ids[0] = new char[VALKEYMODULE_NODE_ID_LEN];
+          memset(ids[0], 'c', VALKEYMODULE_NODE_ID_LEN);
+          return ids;
+        });
+
+    EXPECT_CALL(*kMockValkeyModule, GetClusterNodeInfo(fake_ctx, testing::_, testing::_, testing::_, testing::_, testing::_))
+        .WillRepeatedly([](ValkeyModuleCtx *ctx, const char *node_id, char *ip, char *master_id, int *port, int *flags) {
+          *flags = VALKEYMODULE_NODE_MASTER;
+          return VALKEYMODULE_OK;
+        });
+
+    EXPECT_CALL(*kMockValkeyModule, FreeClusterNodesList(testing::_))
+        .WillRepeatedly([](char **ids) {
+          delete[] ids[0];
+          delete[] ids;
+        });
+
     EXPECT_CALL(*kMockValkeyModule,
                 SendClusterMessage(
-                    fake_ctx, nullptr,
+                    fake_ctx, testing::_,
                     coordinator::kMetadataBroadcastClusterMessageReceiverId,
                     testing::_, testing::_))
         .Times(test_case.expect_num_broadcasts)
@@ -544,9 +565,30 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
   }
 
   if (test_case.expect_broadcast) {
+    EXPECT_CALL(*kMockValkeyModule, GetClusterNodesList(&fake_ctx_, testing::_))
+        .WillOnce([](ValkeyModuleCtx *ctx, size_t *numnodes) {
+          *numnodes = 1;
+          char **ids = new char *[1];
+          ids[0] = new char[VALKEYMODULE_NODE_ID_LEN];
+          memset(ids[0], 'c', VALKEYMODULE_NODE_ID_LEN);
+          return ids;
+        });
+
+    EXPECT_CALL(*kMockValkeyModule, GetClusterNodeInfo(&fake_ctx_, testing::_, testing::_, testing::_, testing::_, testing::_))
+        .WillOnce([](ValkeyModuleCtx *ctx, const char *node_id, char *ip, char *master_id, int *port, int *flags) {
+          *flags = VALKEYMODULE_NODE_MASTER;
+          return VALKEYMODULE_OK;
+        });
+
+    EXPECT_CALL(*kMockValkeyModule, FreeClusterNodesList(testing::_))
+        .WillOnce([](char **ids) {
+          delete[] ids[0];
+          delete[] ids;
+        });
+
     EXPECT_CALL(*kMockValkeyModule,
                 SendClusterMessage(
-                    &fake_ctx_, nullptr,
+                    &fake_ctx_, testing::_,
                     coordinator::kMetadataBroadcastClusterMessageReceiverId,
                     testing::_, testing::_))
         .WillOnce(testing::Return(VALKEYMODULE_OK));
@@ -604,15 +646,35 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
                    response);
         });
   }
+
+  if (!test_case.expected_callbacks.empty()) {
+    bool expect_failure = false;
+    for (const auto &type_to_register : test_case.types_to_register) {
+      if (!type_to_register.status_to_return.ok()) {
+        expect_failure = true;
+        break;
+      }
+    }
+
+    if (expect_failure) {
+      EXPECT_CALL(*kMockValkeyModule,
+                  Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"), testing::StrEq("!Kcbb"),
+                       testing::_, testing::_, testing::_, testing::_, testing::_))
+          .Times(test_case.expected_callbacks.size())
+          .WillRepeatedly(testing::Return(nullptr));
+    } else {
+      EXPECT_CALL(*kMockValkeyModule,
+                  Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"), testing::StrEq("!Kcbb"),
+                       testing::_, testing::_, testing::_, testing::_, testing::_))
+          .Times(test_case.expected_callbacks.size());
+    }
+  }
+
   std::string payload = proposed_metadata.version_header().SerializeAsString();
   test_metadata_manager_->HandleClusterMessage(
       &fake_ctx_, sender_id.c_str(), kMetadataBroadcastClusterMessageReceiverId,
       reinterpret_cast<const unsigned char*>(payload.c_str()),
       payload.length());
-
-  EXPECT_THAT(callbacks_tracker, testing::UnorderedElementsAreArray(
-                                     test_case.expected_callbacks.begin(),
-                                     test_case.expected_callbacks.end()));
 
   auto actual_metadata = test_metadata_manager_->GetGlobalMetadata();
   EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
@@ -632,6 +694,7 @@ static constexpr absl::string_view kV1Metadata = R"(
             version: 1
             fingerprint: 1234
             encoding_version: 1
+
             content {
               type_url: "type.googleapis.com/FakeType"
               value: "serialized_content_1"
@@ -1598,10 +1661,32 @@ TEST_F(MetadataManagerTest, TestBroadcastMetadata) {
 
   std::string version_header_str =
       existing_metadata.version_header().SerializeAsString();
+
+  EXPECT_CALL(*kMockValkeyModule, GetClusterNodesList(fake_ctx, testing::_))
+      .WillOnce([](ValkeyModuleCtx *ctx, size_t *numnodes) {
+        *numnodes = 1;
+        char **ids = new char *[1];
+        ids[0] = new char[VALKEYMODULE_NODE_ID_LEN];
+        memset(ids[0], 'c', VALKEYMODULE_NODE_ID_LEN);
+        return ids;
+      });
+
+  EXPECT_CALL(*kMockValkeyModule, GetClusterNodeInfo(fake_ctx, testing::_, testing::_, testing::_, testing::_, testing::_))
+      .WillOnce([](ValkeyModuleCtx *ctx, const char *node_id, char *ip, char *master_id, int *port, int *flags) {
+        *flags = VALKEYMODULE_NODE_MASTER;
+        return VALKEYMODULE_OK;
+      });
+
+  EXPECT_CALL(*kMockValkeyModule, FreeClusterNodesList(testing::_))
+      .WillOnce([](char **ids) {
+        delete[] ids[0];
+        delete[] ids;
+      });
+
   EXPECT_CALL(
       *kMockValkeyModule,
       SendClusterMessage(
-          fake_ctx, nullptr,
+          fake_ctx, testing::_,
           coordinator::kMetadataBroadcastClusterMessageReceiverId,
           testing::StrEq(version_header_str), version_header_str.size()))
       .WillOnce(testing::Return(VALKEYMODULE_OK));
@@ -1913,17 +1998,12 @@ TEST_F(MetadataManagerTimestampTest,
   ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
       kV1Metadata, &proposed_metadata));
 
-  // Register a type with a failing callback
-  test_metadata_manager_->RegisterType(
-      "my_type", 1,
-      [](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
-        return 1234;
-      },
-      [](absl::string_view id, const google::protobuf::Any* metadata,
-         uint64_t fingerprint,
-         uint32_t version) { return absl::InternalError("Callback failed"); });
+  EXPECT_CALL(*kMockValkeyModule,
+              Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"), testing::StrEq("!Kcbb"),
+                   testing::_, testing::_, testing::_, testing::_, testing::_))
+      .WillOnce(testing::Return(nullptr));
 
-  // Reconciliation should fail due to callback failure
+  // Reconciliation should fail due to FT.INTERNAL_UPDATE failure
   auto status = test_metadata_manager_->ReconcileMetadata(proposed_metadata);
   EXPECT_FALSE(status.ok());
 

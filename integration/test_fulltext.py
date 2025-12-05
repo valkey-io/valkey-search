@@ -203,7 +203,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # Override config
         if prefilter_enabled:
             client.execute_command(
-                "CONFIG", "SET", "search.enable-text-prefilter", "yes"
+                "CONFIG", "SET", "search.enable-prefilter", "yes"
             )
         # Create the text index on Hash documents
         assert client.execute_command(text_index_on_hash) == b"OK"
@@ -876,7 +876,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # Override config
         if prefilter_enabled:
             client.execute_command(
-                "CONFIG", "SET", "search.enable-text-prefilter", "yes"
+                "CONFIG", "SET", "search.enable-prefilter", "yes"
             )
         # Create index with text fields
         client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
@@ -1188,7 +1188,7 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
         if prefilter_enabled:
             # Set config on all primary nodes
             for primary_client in self.get_all_primary_clients():
-                primary_client.execute_command("CONFIG", "SET", "search.enable-text-prefilter", "yes")
+                primary_client.execute_command("CONFIG", "SET", "search.enable-prefilter", "yes")
         # Create the text index on Hash documents
         assert client.execute_command(text_index_on_hash) == b"OK"
         # Data population:

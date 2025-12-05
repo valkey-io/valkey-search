@@ -105,11 +105,6 @@ query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
 query::EvaluationResult PrefilterEvaluator::EvaluateText(
     const query::TextPredicate &predicate, bool require_positions) {
   CHECK(key_);
-  // Check configuration flag
-  if (!options::GetEnableTextPrefilter().GetValue()) {
-    // No-op path - skip prefilter evaluation
-    return query::EvaluationResult(true);
-  }
   // Evaluate using per-key text index
   // This acquires the lock and looks up the key in per_key_text_indexes
   auto text_index_schema = predicate.GetTextIndexSchema();

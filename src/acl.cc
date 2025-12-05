@@ -328,11 +328,7 @@ GetAclViewFromCallReply(ValkeyModuleCallReply *reply) {
 absl::Status AclValkeyCheckPermissions(
     ValkeyModuleCtx *ctx, acl::KeyAccess access,
     const std::vector<std::string> &module_prefixes) {
-  if (!IsKeyPrefixCheckSupported()) {
-    return absl::UnimplementedError(
-        "ValkeyModule_ACLCheckKeyPrefixPermissions is not supported for this "
-        "version of Valkey");
-  }
+  CHECK(IsKeyPrefixCheckSupported());
 
   auto flags = static_cast<unsigned int>(access);
   auto valkey_username =
@@ -389,6 +385,9 @@ absl::Status AclPrefixCheck(ValkeyModuleCtx *ctx,
 
 absl::Status AclPrefixCheck(ValkeyModuleCtx *ctx, acl::KeyAccess access,
                             const data_model::IndexSchema &index_schema_proto) {
+  if (!vmsdk::IsRealUserClient(ctx)) {
+    return absl::OkStatus();
+  }
   std::vector<std::string> module_prefixes;
   module_prefixes.reserve(index_schema_proto.subscribed_key_prefixes_size());
   for (const auto &prefix : index_schema_proto.subscribed_key_prefixes()) {
@@ -399,7 +398,7 @@ absl::Status AclPrefixCheck(ValkeyModuleCtx *ctx, acl::KeyAccess access,
 
 absl::Status AclPrefixCheck(ValkeyModuleCtx *ctx, acl::KeyAccess access,
                             const std::vector<std::string> &module_prefixes) {
-  if (IsKeyPrefixCheckSupported()) {
+  if (IsKeyPrefixCheckSupported() && vmsdk::IsRealUserClient(ctx)) {
     return AclValkeyCheckPermissions(ctx, access, module_prefixes);
   }
   return AclPrefixCheck(ctx, KeyAccessToStringView(access), module_prefixes);

@@ -38,17 +38,17 @@ namespace {
 void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
                          const std::deque<indexes::Neighbor> &neighbors,
                          const query::SearchParameters &parameters) {
-  ValkeyModule_ReplyWithLongLong(
-      ctx, std::min(neighbors.size(), static_cast<size_t>(parameters.k)));
+  if (parameters.IsNonVectorQuery()) {
+    ValkeyModule_ReplyWithLongLong(ctx, neighbors.size());
+  } else {
+    ValkeyModule_ReplyWithLongLong(ctx, std::min(neighbors.size(), static_cast<size_t>(parameters.k)));
+  }
 }
 
 size_t CalcEndIndex(const std::deque<indexes::Neighbor> &neighbors,
                     const query::SearchParameters &parameters) {
   if (parameters.IsNonVectorQuery()) {
-    const size_t start_index = std::min(
-        static_cast<size_t>(parameters.limit.first_index), neighbors.size());
-    return std::min(start_index + static_cast<size_t>(parameters.limit.number),
-                    neighbors.size());
+    return std::min(static_cast<size_t>(parameters.limit.number), neighbors.size());
   }
   // Vector query
   return std::min(
@@ -71,7 +71,7 @@ void SendReplyNoContent(ValkeyModuleCtx *ctx,
                         const std::deque<indexes::Neighbor> &neighbors,
                         const query::SearchParameters &parameters) {
   const size_t start_index = CalcStartIndex(neighbors, parameters);
-  const size_t end_index = CalcEndIndex(neighbors, parameters);
+  const size_t end_index = start_index + CalcEndIndex(neighbors, parameters);
   ValkeyModule_ReplyWithArray(ctx, end_index - start_index + 1);
   ValkeyModule_ReplyWithLongLong(ctx, neighbors.size());
   for (auto i = start_index; i < end_index; ++i) {
@@ -138,9 +138,8 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
                                  const std::deque<indexes::Neighbor> &neighbors,
                                  const query::SearchParameters &parameters) {
   const size_t start_index = CalcStartIndex(neighbors, parameters);
-  const size_t end_index = CalcEndIndex(neighbors, parameters);
-  const size_t result_count = end_index - start_index;
-  ValkeyModule_ReplyWithArray(ctx, 2 * result_count + 1);
+  const size_t end_index = start_index + CalcEndIndex(neighbors, parameters);
+  ValkeyModule_ReplyWithArray(ctx, 2 * (end_index - start_index) + 1);
   // First element is the count of total available results.
   ValkeyModule_ReplyWithLongLong(ctx, neighbors.size());
   for (size_t i = start_index; i < end_index; ++i) {

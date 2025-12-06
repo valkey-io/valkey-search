@@ -210,3 +210,5 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         time.sleep(1)
         # Validation of numeric and tag queries.
         validate_non_vector_queries(client)
+        # Test LIMIT functionality
+        validate_limit_queries(client)

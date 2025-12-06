@@ -151,6 +151,9 @@ message GetGlobalMetadataResponse {
 message InfoIndexPartitionRequest {
   uint32 db_num = 1;
   string index_name = 2;
+  bool require_consistency = 3;
+  IndexFingerprintVersion index_fingerprint_version = 4;
+  uint64 slot_fingerprint = 5;
 }
 
 enum FanoutErrorType {
@@ -175,6 +178,5 @@ message InfoIndexPartitionResponse {
   uint64 recent_mutations_queue_delay = 12;
   string state = 13;
   string error = 14;
-  optional IndexFingerprintVersion index_fingerprint_version = 15;
-  FanoutErrorType error_type = 16;
+  FanoutErrorType error_type = 15;
 }

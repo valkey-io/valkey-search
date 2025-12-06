@@ -55,9 +55,12 @@ class Service final : public Coordinator::CallbackService {
       InfoIndexPartitionResponse* response) override;
 
  private:
-  grpc::Status PerformConsistencyChecks(
-      const SearchIndexPartitionRequest* request,
-      const query::SearchParameters& parameters);
+  static grpc::Status PerformSlotConsistencyCheck(
+      uint64_t expected_slot_fingerprint);
+
+  static grpc::Status PerformIndexConsistencyCheck(
+      const IndexFingerprintVersion& expected_fingerprint_version,
+      const std::shared_ptr<IndexSchema>& schema);
 
   query::SearchResponseCallback MakeSearchCallback(
       SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,

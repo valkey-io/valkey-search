@@ -41,14 +41,16 @@ void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
   if (parameters.IsNonVectorQuery()) {
     ValkeyModule_ReplyWithLongLong(ctx, neighbors.size());
   } else {
-    ValkeyModule_ReplyWithLongLong(ctx, std::min(neighbors.size(), static_cast<size_t>(parameters.k)));
+    ValkeyModule_ReplyWithLongLong(
+        ctx, std::min(neighbors.size(), static_cast<size_t>(parameters.k)));
   }
 }
 
 size_t CalcEndIndex(const std::deque<indexes::Neighbor> &neighbors,
                     const query::SearchParameters &parameters) {
   if (parameters.IsNonVectorQuery()) {
-    return std::min(static_cast<size_t>(parameters.limit.number), neighbors.size());
+    return std::min(static_cast<size_t>(parameters.limit.number),
+                    neighbors.size());
   }
   // Vector query
   return std::min(

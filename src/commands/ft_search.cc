@@ -73,7 +73,7 @@ void SendReplyNoContent(ValkeyModuleCtx *ctx,
   const size_t start_index = CalcStartIndex(neighbors, parameters);
   const size_t end_index = start_index + CalcEndIndex(neighbors, parameters);
   ValkeyModule_ReplyWithArray(ctx, end_index - start_index + 1);
-  ValkeyModule_ReplyWithLongLong(ctx, neighbors.size());
+  ReplyAvailNeighbors(ctx, neighbors, parameters);
   for (auto i = start_index; i < end_index; ++i) {
     ValkeyModule_ReplyWithString(
         ctx, vmsdk::MakeUniqueValkeyString(*neighbors[i].external_id).get());
@@ -140,8 +140,7 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
   const size_t start_index = CalcStartIndex(neighbors, parameters);
   const size_t end_index = start_index + CalcEndIndex(neighbors, parameters);
   ValkeyModule_ReplyWithArray(ctx, 2 * (end_index - start_index) + 1);
-  // First element is the count of total available results.
-  ValkeyModule_ReplyWithLongLong(ctx, neighbors.size());
+  ReplyAvailNeighbors(ctx, neighbors, parameters);
   for (size_t i = start_index; i < end_index; ++i) {
     // Document ID
     ValkeyModule_ReplyWithString(

@@ -204,11 +204,15 @@ typedef struct ValkeyModuleStreamID {
 #define VALKEYMODULE_CTX_FLAGS_ASYNC_LOADING (1 << 23)
 /* The replica isn't trying to connect to a master and is offline. */
 #define VALKEYMODULE_CTX_FLAGS_REPLICA_IS_OFFLINE (1 << 24)
+/* The current client is the slot import client */
+#define VALKEYMODULE_CTX_FLAGS_SLOT_IMPORT_CLIENT (1 << 25)
+/* The current client is the slot export client */
+#define VALKEYMODULE_CTX_FLAGS_SLOT_EXPORT_CLIENT (1 << 26)
 
 /* Next context flag, must be updated when adding new flags above!
 This flag should not be used directly by the module.
  * Use ValkeyModule_GetContextFlagsAll instead. */
-#define _VALKEYMODULE_CTX_FLAGS_NEXT (1 << 25)
+#define _VALKEYMODULE_CTX_FLAGS_NEXT (1 << 27)
 
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes.
@@ -315,6 +319,11 @@ typedef uint64_t ValkeyModuleTimerID;
 /* Declare that the module can handle diskless async replication with
  * ValkeyModule_SetModuleOptions. */
 #define VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD (1 << 2)
+
+/* Declare that the module can handle atomic slot migration. When not set,
+ * CLUSTER MIGRATESLOTS will return an error, and the CLUSTER SETSLOTS based
+ * slot migration must be used. */
+#define VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION (1 << 5)
 
 /* Declare that the module is an internal module*/
 #define VALKEYMODULE_OPTIONS_G_INTERNAL (1 << 1)

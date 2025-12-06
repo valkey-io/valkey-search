@@ -112,8 +112,11 @@ function zap() {
 # Check for user provided JSON module path
 JSON_MODULE_PATH="${JSON_MODULE_PATH:=}"
 if [ -z "${JSON_MODULE_PATH}" ]; then
-  setup_json_module
-  JSON_MODULE_PATH=${VALKEY_JSON_PATH}
+  # Only setup JSON module if ENABLE_JSON_MODULE is set to "yes"
+  if [ "${ENABLE_JSON_MODULE}" = "yes" ]; then
+    setup_json_module
+    JSON_MODULE_PATH=${VALKEY_JSON_PATH}
+  fi
 fi
 LOG_INFO "JSON_MODULE_PATH => ${JSON_MODULE_PATH}"
 
@@ -123,7 +126,10 @@ install_test_framework
 # Export variables required by the test framework
 export MODULE_PATH=${MODULE_PATH}
 export VALKEY_SERVER_PATH=${VALKEY_SERVER_PATH}
-export JSON_MODULE_PATH=${JSON_MODULE_PATH}
+# Only export JSON_MODULE_PATH if it's actually set
+if [ ! -z "${JSON_MODULE_PATH}" ]; then
+  export JSON_MODULE_PATH=${JSON_MODULE_PATH}
+fi
 export SKIPLOGCLEAN=1
 
 FILTER_ARGS=""

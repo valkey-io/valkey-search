@@ -43,6 +43,7 @@
 #include "src/keyspace_event_manager.h"
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
+#include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
@@ -370,6 +371,10 @@ void TrackResults(
 void IndexSchema::OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
                                          const char *event,
                                          ValkeyModuleString *key) {
+  if (vmsdk::IsAsyncClient(ctx) &&
+      !options::IsAsyncClientThrottlingEnabled().GetValue()) {
+    return;
+  }
   if (ABSL_PREDICT_FALSE(!IsInCurrentDB(ctx))) {
     return;
   }
@@ -664,7 +669,10 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
   }
   const vmsdk::ThreadPool::Priority priority =
       from_backfill ? vmsdk::ThreadPool::Priority::kLow
-                    : vmsdk::ThreadPool::Priority::kHigh;
+      : (vmsdk::IsAsyncClient(ctx) &&
+         options::IsAsyncClientThrottlingEnabled().GetValue())
+          ? options::GetAsyncClientPriorityValue()
+          : vmsdk::ThreadPool::Priority::kHigh;
   ScheduleMutation(from_backfill, interned_key, priority, nullptr);
 }
 
@@ -681,6 +689,11 @@ void IndexSchema::ProcessSingleMutationAsync(ValkeyModuleCtx *ctx,
     }
     SyncProcessMutation(ctx, mutation_record.value(), key);
   } while (true);
+
+  if (options::IsAsyncClientThrottlingEnabled().GetValue()) {
+    UnblockAsyncClientsIfNeeded();
+  }
+
   absl::MutexLock lock(&stats_.mutex_);
   --stats_.mutation_queue_size_;
   if (ABSL_PREDICT_FALSE(from_backfill)) {
@@ -1389,6 +1402,39 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
     itr->second.attributes.value() = std::move(mutated_attributes);
     itr->second.from_backfill = from_backfill;
     itr->second.from_multi = from_multi;
+    itr->second.from_async_client = vmsdk::IsAsyncClient(ctx);
+
+    if (!from_backfill) {
+      IncrementMutationCounters(itr->second.from_async_client);
+    }
+
+    // Only do throttling logic when enabled
+    if (options::IsAsyncClientThrottlingEnabled().GetValue()) {
+      if (ShouldAsyncClientBeThrottled(ctx, from_backfill, true,
+                                       tracked_mutated_records_.size())) {
+        absl::MutexLock lock(&blocked_clients_mutex_);
+
+        // If this is the first client being blocked, start global timing
+        if (blocked_async_clients_.empty()) {
+          // Start global blocking timer if this is the first blocked client
+          // across all indexes
+          SchemaManager::Instance().StartGlobalAsyncClientBlocking();
+        }
+
+        vmsdk::BlockedClient blocked_client(ctx, nullptr, nullptr, nullptr, 0);
+        blocked_client.MeasureTimeStart();
+        blocked_async_clients_.emplace_back(std::move(blocked_client));
+
+        // Increment global counter for blocked client
+        SchemaManager::Instance().IncrementGlobalBlockedAsyncClients();
+
+        VMSDK_LOG(DEBUG, ctx)
+            << "Async client throttling BLOCKED: Client blocked"
+            << " (current_blocked=" << blocked_async_clients_.size()
+            << ", mutations=" << tracked_mutated_records_.size() << ")";
+        return true;  // Schedule the mutation for throttled SM clients
+      }
+    }
     if (ABSL_PREDICT_TRUE(block_client)) {
       vmsdk::BlockedClient blocked_client(ctx, true,
                                           GetBlockedCategoryFromProto());
@@ -1420,6 +1466,7 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
 
   if (ABSL_PREDICT_FALSE(!from_backfill && itr->second.from_backfill)) {
     itr->second.from_backfill = false;
+    IncrementMutationCounters(itr->second.from_async_client);
     return true;
   }
   return false;
@@ -1454,6 +1501,9 @@ IndexSchema::ConsumeTrackedMutatedAttribute(const InternedStringPtr &key,
   // Delete this tracked document if no additional mutations were tracked
   if (!itr->second.attributes.has_value()) {
     tracked_mutated_records_.erase(itr);
+    if (!itr->second.from_backfill) {
+      DecrementMutationCounters(itr->second.from_async_client);
+    }
     return std::nullopt;
   }
   // Track entry is now first consumed
@@ -1530,6 +1580,156 @@ IndexSchema::InfoIndexPartitionData IndexSchema::GetInfoIndexPartitionData()
   data.backfill_in_progress = IsBackfillInProgress();
   data.state = std::string(GetStateForInfo());
   return data;
+}
+
+bool IndexSchema::ShouldThrottleBasedOnRatio(
+    bool from_block, uint32_t hysteresis_percentage) const {
+  // Get atomic values
+  uint64_t async_count = stats_.async_mutation_count_.load();
+  uint64_t sync_count = stats_.sync_mutation_count_.load();
+
+  // Calculate the current ratio of async mutations
+  double current_async_ratio =
+      static_cast<double>(async_count) / (async_count + sync_count);
+
+  // Get the configured weights and calculate the maximum allowed async ratio
+  uint32_t sync_weight = options::GetAsyncClientRatioSyncWeight().GetValue();
+  uint32_t async_weight = options::GetAsyncClientRatioAsyncWeight().GetValue();
+
+  // Calculate maximum allowed async ratio: async_weight / (sync_weight +
+  // async_weight) For example: sync_weight=2, async_weight=1 → max_async_ratio
+  // = 1/(2+1) = 0.33 (33%)
+  double max_async_ratio = static_cast<double>(async_weight) /
+                           static_cast<double>(sync_weight + async_weight);
+
+  // Apply hysteresis to ratio-based throttling
+  // If currently blocked, use a lower threshold to unblock (more permissive)
+  // If not currently blocked, use the normal threshold to block
+  double effective_max_ratio =
+      from_block ? max_async_ratio :  // Normal threshold for blocking
+          max_async_ratio * (hysteresis_percentage /
+                             100.0);  // Lower threshold for unblocking
+
+  return current_async_ratio > effective_max_ratio;
+}
+
+bool IndexSchema::ShouldAsyncClientBeThrottled(ValkeyModuleCtx *ctx,
+                                               bool from_backfill,
+                                               bool from_block,
+                                               size_t total_mutations) const {
+  // Only throttle async client clients (Don't check this during unblock)
+  if (!vmsdk::IsAsyncClient(ctx) && from_block) {
+    return false;
+  }
+
+  // Don't throttle during backfill operations
+  if (from_backfill) {
+    return false;
+  }
+
+  // Hysteresis implementation: use different thresholds for block/unblock
+  // decisions
+  uint32_t block_threshold = options::GetAsyncClientBlockThreshold().GetValue();
+  uint32_t hysteresis_percentage =
+      options::GetAsyncClientThrottlingHysteresisPercentage().GetValue();
+  uint32_t unblock_threshold =
+      static_cast<uint32_t>(block_threshold * hysteresis_percentage / 100.0);
+  uint32_t effective_threshold =
+      from_block ? block_threshold : unblock_threshold;
+
+  // Phase 1: Below effective threshold = no blocking (or unblock if currently
+  // blocked)
+  if (total_mutations <= effective_threshold) {
+    VMSDK_LOG(DEBUG, ctx) << "Async client throttling Phase 1 ["
+                          << (from_block ? "block" : "unblock")
+                          << " eval]: Queue below threshold (queue="
+                          << total_mutations
+                          << ", threshold=" << effective_threshold << ") - "
+                          << (from_block ? "ALLOW" : "UNBLOCK");
+    return false;
+  }
+
+  // Phase 2: Above effective threshold with sync entries = 0 = block async up
+  // to threshold
+  if (stats_.sync_mutation_count_ == 0) {
+    // Allow mutations up to the effective threshold
+    VMSDK_LOG(DEBUG, ctx) << "Async client throttling Phase 2 ["
+                          << (from_block ? "block" : "unblock")
+                          << " eval]: Async-only above threshold (queue="
+                          << total_mutations
+                          << ", threshold=" << effective_threshold
+                          << ") - BLOCK";
+    return true;
+  }
+
+  // Phase 3: Above effective threshold with sync entries > 0 = ratio-based
+  // blocking with hysteresis
+  return ShouldThrottleBasedOnRatio(from_block, hysteresis_percentage);
+}
+
+void IndexSchema::UnblockAsyncClientsInternal() {
+  // Common unblocking logic for both disabled and enabled-but-should-unblock
+  // cases
+  absl::MutexLock lock(&blocked_clients_mutex_);
+  if (blocked_async_clients_.empty()) {
+    return;  // No clients to unblock
+  }
+
+  size_t unblocked_count = blocked_async_clients_.size();
+  blocked_async_clients_.clear();
+
+  // Decrement global counter by the number of unblocked clients
+  SchemaManager::Instance().DecrementGlobalBlockedAsyncClients(
+      unblocked_count);
+
+  VMSDK_LOG(DEBUG, detached_ctx_.get())
+      << "Async client throttling UNBLOCKED: Unblocked " << unblocked_count
+      << " async client clients (queue size: " << GetMutatedRecordsSize()
+      << ")";
+
+  // Stop global blocking timer if no clients are blocked
+  if (SchemaManager::Instance().GetGlobalBlockedAsyncClientsCount() == 0) {
+    SchemaManager::Instance().StopGlobalAsyncClientBlocking();
+  }
+}
+
+void IndexSchema::UnblockAsyncClientsForDisable() {
+  UnblockAsyncClientsInternal();
+}
+
+void IndexSchema::UnblockAsyncClientsIfNeeded() {
+  if (!options::IsAsyncClientThrottlingEnabled().GetValue()) {
+    return;
+  }
+
+  // Early return if no clients are blocked - avoid expensive ratio calculations
+  if (blocked_async_clients_.empty()) {
+    return;
+  }
+
+  bool should_still_throttle = ShouldAsyncClientBeThrottled(
+      detached_ctx_.get(), false, false, GetMutatedRecordsSize());
+  if (should_still_throttle) {
+    return;
+  }
+
+  UnblockAsyncClientsInternal();
+}
+
+void IndexSchema::IncrementMutationCounters(bool from_async_client) {
+  if (from_async_client) {
+    stats_.async_mutation_count_++;
+  } else {
+    stats_.sync_mutation_count_++;
+  }
+}
+
+void IndexSchema::DecrementMutationCounters(bool from_async_client) {
+  if (from_async_client) {
+    stats_.async_mutation_count_--;
+  } else {
+    stats_.sync_mutation_count_--;
+  }
 }
 
 }  // namespace valkey_search

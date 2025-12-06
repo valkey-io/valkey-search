@@ -7,6 +7,7 @@
 #pragma once
 
 #include "vmsdk/src/module_config.h"
+#include "vmsdk/src/thread_pool.h"
 
 namespace valkey_search {
 namespace options {
@@ -36,6 +37,28 @@ config::Number& GetMaxWorkerSuspensionSecs();
 
 /// Return an immutable reference to the "use-coordinator" flag
 const config::Boolean& GetUseCoordinator();
+
+// Return the configuration entry for async client block threshold
+config::Number& GetAsyncClientBlockThreshold();
+
+// Return the configuration entry for async client ratio sync weight
+config::Number& GetAsyncClientRatioSyncWeight();
+
+// Return the configuration entry for async client ratio async weight
+config::Number& GetAsyncClientRatioAsyncWeight();
+
+// Return true if async client throttling is enabled
+vmsdk::config::Boolean& IsAsyncClientThrottlingEnabled();
+
+// Return the configuration entry for async client throttling hysteresis
+// percentage
+config::Number& GetAsyncClientThrottlingHysteresisPercentage();
+
+// Return the configuration entry for async client priority
+config::Enum& GetAsyncClientPriority();
+
+/// Convert config enum value to Priority
+vmsdk::ThreadPool::Priority GetAsyncClientPriorityValue();
 
 /// Return the configuration entry for skipping vector index RDB loading
 const config::Boolean& GetSkipIndexLoad();

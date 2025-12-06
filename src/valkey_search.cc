@@ -794,6 +794,65 @@ static vmsdk::info_field::Integer pause_handle_cluster_message_round_cnt(
       return Metrics::GetStats().pause_handle_cluster_message_round_cnt;
     }));
 
+// Async client throttling global metrics
+static vmsdk::info_field::Integer async_mutation_queue_metric(
+    "async_client_throttling", "async_mutation_queue",
+    vmsdk::info_field::IntegerBuilder()
+        .App()
+        .Computed([]() -> uint64_t {
+          return SchemaManager::Instance().GetTotalAsyncMutationCount();
+        })
+        .VisibleIf([]() -> bool {
+          return options::IsAsyncClientThrottlingEnabled().GetValue();
+        }));
+
+static vmsdk::info_field::Integer sync_mutation_queue_metric(
+    "async_client_throttling", "sync_mutation_queue",
+    vmsdk::info_field::IntegerBuilder()
+        .App()
+        .Computed([]() -> uint64_t {
+          return SchemaManager::Instance().GetTotalSyncMutationCount();
+        })
+        .VisibleIf([]() -> bool {
+          return options::IsAsyncClientThrottlingEnabled().GetValue();
+        }));
+
+static vmsdk::info_field::Integer throttled_clients_count_metric(
+    "async_client_throttling", "throttled_clients_count",
+    vmsdk::info_field::IntegerBuilder()
+        .App()
+        .Computed([]() -> uint64_t {
+          return SchemaManager::Instance().GetGlobalBlockedAsyncClientsCount();
+        })
+        .VisibleIf([]() -> bool {
+          return options::IsAsyncClientThrottlingEnabled().GetValue();
+        }));
+
+static vmsdk::info_field::Integer last_throttled_duration_metric(
+    "async_client_throttling", "last_throttled_duration_us",
+    vmsdk::info_field::IntegerBuilder()
+        .App()
+        .Units(vmsdk::info_field::Units::kMicroSeconds)
+        .Computed([]() -> uint64_t {
+          return SchemaManager::Instance()
+              .GetGlobalAsyncClientLastBlockedDurationUs();
+        })
+        .VisibleIf([]() -> bool {
+          return options::IsAsyncClientThrottlingEnabled().GetValue();
+        }));
+
+static vmsdk::info_field::Integer current_throttled_duration_metric(
+    "async_client_throttling", "current_throttled_duration_us",
+    vmsdk::info_field::IntegerBuilder()
+        .App()
+        .Units(vmsdk::info_field::Units::kMicroSeconds)
+        .Computed([]() -> uint64_t {
+          return SchemaManager::Instance()
+              .GetGlobalAsyncClientCurrentBlockedDurationUs();
+        })
+        .VisibleIf([]() -> bool {
+          return options::IsAsyncClientThrottlingEnabled().GetValue();
+        }));
 #ifdef DEBUG_INFO
 // Helper function to create subscription info fields with maximum deduplication
 template <typename StatsSelector>
@@ -1102,6 +1161,7 @@ absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
   ValkeyModule_SetModuleOptions(
       ctx, VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS |
                VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD |
+               VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION |
                VALKEYMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED);
   VMSDK_LOG(NOTICE, ctx) << "Json "
                          << (IsJsonModuleSupported(ctx) ? "" : "not ")

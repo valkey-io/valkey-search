@@ -218,6 +218,8 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
 
 
 class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
+    # Override in subclass to control JSON module loading
+    LOAD_JSON_MODULE = True
 
     @pytest.fixture(autouse=True)
     def setup_test(self, request):
@@ -248,12 +250,19 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
         ReplicationGroup.cleanup(self.rg)
 
     def get_config_file_lines(self, testdir, port) -> List[str]:
-        return [
+        config_lines = [
             "enable-debug-command yes",
-            f"loadmodule {os.getenv('JSON_MODULE_PATH')}",
+        ]
+        # Only load JSON module if class allows it AND JSON_MODULE_PATH is set
+        if self.LOAD_JSON_MODULE:
+            json_module_path = os.getenv('JSON_MODULE_PATH')
+            if json_module_path and json_module_path.strip():
+                config_lines.append(f"loadmodule {json_module_path}")
+        config_lines.extend([
             f"dir {testdir}",
             f"loadmodule {os.getenv('MODULE_PATH')}",
-        ]
+        ])
+        return config_lines
 
     def verify_error_response(self, client, cmd, expected_err_reply):
         try:
@@ -320,6 +329,8 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
     CLUSTER_SIZE = 3
     # Default value for replication
     REPLICAS_COUNT = 0
+    # Override in subclass to control JSON module loading
+    LOAD_JSON_MODULE = True
 
     def _split_range_pairs(self, start, end, n):
         points = [start + i * (end - start) // n for i in range(n + 1)]
@@ -456,14 +467,21 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
             ReplicationGroup.cleanup(rg)
 
     def get_config_file_lines(self, testdir, port) -> List[str]:
-        return [
+        config_lines = [
             "enable-debug-command yes",
-            f"loadmodule {os.getenv('JSON_MODULE_PATH')}",
+        ]
+        # Only load JSON module if class allows it AND JSON_MODULE_PATH is set
+        if self.LOAD_JSON_MODULE:
+            json_module_path = os.getenv('JSON_MODULE_PATH')
+            if json_module_path and json_module_path.strip():
+                config_lines.append(f"loadmodule {json_module_path}")
+        config_lines.extend([
             f"dir {testdir}",
             "cluster-enabled yes",
             f"cluster-config-file nodes_{port}.conf",
             f"loadmodule {os.getenv('MODULE_PATH')} --use-coordinator",
-        ]
+        ])
+        return config_lines
 
     def _wait_for_meet(self, count: int) -> bool:
         for primary in self.replication_groups:
@@ -520,4 +538,3 @@ class ValkeySearchClusterTestCaseDebugMode(ValkeySearchClusterTestCase):
     '''
     def get_config_file_lines(self, testdir, port) -> List[str]:
         return EnableDebugMode(super(ValkeySearchClusterTestCaseDebugMode, self).get_config_file_lines(testdir, port))
-

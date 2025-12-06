@@ -35,6 +35,7 @@
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
+#include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
@@ -685,6 +686,9 @@ void SchemaManager::OnServerCronCallback(ValkeyModuleCtx *ctx,
                                          [[maybe_unused]] void *data) {
   SchemaManager::Instance().PerformBackfill(
       ctx, options::GetBackfillBatchSize().GetValue());
+  if (options::IsAsyncClientThrottlingEnabled().GetValue()) {
+    SchemaManager::Instance().UnblockAllAsyncClients();
+  }
 }
 
 void SchemaManager::PopulateFingerprintVersionFromMetadata(
@@ -695,6 +699,122 @@ void SchemaManager::PopulateFingerprintVersionFromMetadata(
   if (existing_entry.ok()) {
     existing_entry.value()->SetFingerprint(fingerprint);
     existing_entry.value()->SetVersion(version);
+  }
+}
+
+// Global aggregation functions for async client client throttling metrics
+uint64_t SchemaManager::GetTotalAsyncMutationCount() const {
+  if (!options::IsAsyncClientThrottlingEnabled().GetValue()) {
+    return 0;
+  }
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  uint64_t total = 0;
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      if (schema) {
+        total += schema->GetStats().async_mutation_count_.load();
+      }
+    }
+  }
+  return total;
+}
+
+uint64_t SchemaManager::GetTotalSyncMutationCount() const {
+  if (!options::IsAsyncClientThrottlingEnabled().GetValue()) {
+    return 0;
+  }
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  uint64_t total = 0;
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      if (schema) {
+        total += schema->GetStats().sync_mutation_count_.load();
+      }
+    }
+  }
+  return total;
+}
+
+void SchemaManager::IncrementGlobalBlockedAsyncClients() {
+  global_blocked_sm_clients_count_.fetch_add(1);
+}
+
+void SchemaManager::DecrementGlobalBlockedAsyncClients(size_t count) {
+  global_blocked_sm_clients_count_.fetch_sub(count);
+}
+
+size_t SchemaManager::GetGlobalBlockedAsyncClientsCount() const {
+  return global_blocked_sm_clients_count_.load();
+}
+
+// Global async client duration tracking
+uint64_t SchemaManager::GetGlobalAsyncClientLastBlockedDurationUs() const {
+  if (!options::IsAsyncClientThrottlingEnabled().GetValue()) {
+    return 0;
+  }
+  return global_sm_last_blocked_duration_us_.load();
+}
+
+uint64_t SchemaManager::GetGlobalAsyncClientCurrentBlockedDurationUs() const {
+  if (!options::IsAsyncClientThrottlingEnabled().GetValue()) {
+    return 0;
+  }
+  absl::MutexLock lock(&global_sm_block_mutex_);
+  if (!global_sm_block_stopwatch_) {
+    return 0;
+  }
+  return static_cast<uint64_t>(
+      absl::ToInt64Microseconds(global_sm_block_stopwatch_->Duration()));
+}
+
+void SchemaManager::StartGlobalAsyncClientBlocking() {
+  if (!options::IsAsyncClientThrottlingEnabled().GetValue()) {
+    return;
+  }
+  absl::MutexLock lock(&global_sm_block_mutex_);
+  if (!global_sm_block_stopwatch_) {
+    global_sm_block_stopwatch_ = std::make_unique<vmsdk::StopWatch>();
+  }
+}
+
+void SchemaManager::StopGlobalAsyncClientBlocking() {
+  if (!options::IsAsyncClientThrottlingEnabled().GetValue()) {
+    return;
+  }
+  absl::MutexLock lock(&global_sm_block_mutex_);
+  if (global_sm_block_stopwatch_) {
+    uint64_t duration_us = static_cast<uint64_t>(
+        absl::ToInt64Microseconds(global_sm_block_stopwatch_->Duration()));
+    global_sm_last_blocked_duration_us_.store(duration_us);
+    global_sm_block_stopwatch_.reset();
+  }
+}
+
+bool SchemaManager::IsInitialized() {
+  return *schema_manager_instance != nullptr;
+}
+
+// Unblock async client clients during normal operation.
+// Respects throttling configs - only unblocks when conditions are met.
+void SchemaManager::UnblockAllAsyncClients() {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      schema->UnblockAsyncClientsIfNeeded();
+    }
+  }
+}
+
+// Unblock async client clients when throttling is being disabled.
+// Bypasses config checks to ensure clean enable-to-disable transitions.
+void SchemaManager::UnblockAllAsyncClientsForDisable() {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      schema->UnblockAsyncClientsForDisable();
+    }
   }
 }
 

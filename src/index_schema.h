@@ -19,6 +19,7 @@
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -79,6 +80,8 @@ class IndexSchema : public KeyspaceEventSubscription,
     std::atomic<uint32_t> backfill_inqueue_tasks{0};
     uint64_t mutation_queue_size_ ABSL_GUARDED_BY(mutex_){0};
     absl::Duration mutations_queue_delay_ ABSL_GUARDED_BY(mutex_);
+    std::atomic<uint64_t> async_mutation_count_{0};
+    std::atomic<uint64_t> sync_mutation_count_{0};
     mutable absl::Mutex mutex_;
 
     // Single interface to get all stats data
@@ -172,6 +175,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     bool consume_in_progress{false};
     bool from_backfill{false};
     bool from_multi{false};
+    bool from_async_client{false};
   };
   using MutatedAttributes =
       absl::flat_hash_map<std::string, DocumentMutation::AttributeData>;
@@ -185,6 +189,13 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t GetBackfillScannedKeyCount() const;
   uint64_t GetBackfillDbSize() const;
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
+
+  void UnblockAsyncClientsIfNeeded()
+      ABSL_LOCKS_EXCLUDED(blocked_clients_mutex_);
+  void UnblockAsyncClientsForDisable()
+      ABSL_LOCKS_EXCLUDED(blocked_clients_mutex_);
+  void IncrementMutationCounters(bool from_async_client);
+  void DecrementMutationCounters(bool from_async_client);
 
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,
@@ -277,6 +288,16 @@ class IndexSchema : public KeyspaceEventSubscription,
   size_t GetMutatedRecordsSize() const
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
+  bool ShouldAsyncClientBeThrottled(ValkeyModuleCtx *ctx, bool from_backfill,
+                                    bool from_block,
+                                    size_t total_mutations) const;
+  /* Ratio-based throttling helpers */
+  bool ShouldThrottleBasedOnRatio(bool from_block,
+                                  uint32_t hysteresis_percentage) const
+      ABSL_LOCKS_EXCLUDED(stats_.mutex_);
+  void UnblockAsyncClientsInternal()
+      ABSL_LOCKS_EXCLUDED(blocked_clients_mutex_);
+
   mutable vmsdk::TimeSlicedMRMWMutex time_sliced_mutex_;
   struct MultiMutations {
     std::unique_ptr<absl::BlockingCounter> blocking_counter;
@@ -284,6 +305,10 @@ class IndexSchema : public KeyspaceEventSubscription,
   };
   vmsdk::MainThreadAccessGuard<MultiMutations> multi_mutations_;
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};
+
+  std::vector<vmsdk::BlockedClient> blocked_async_clients_
+      ABSL_GUARDED_BY(blocked_clients_mutex_);
+  mutable absl::Mutex blocked_clients_mutex_;
 
   FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoad);
   FRIEND_TEST(IndexSchemaRDBTest, ComprehensiveSkipLoadTest);

@@ -99,6 +99,21 @@ std::optional<absl::string_view> ParseHashTag(absl::string_view);
 bool IsRealUserClient(ValkeyModuleCtx *ctx);
 bool MultiOrLua(ValkeyModuleCtx *ctx);
 
+/// Check if the current client is an async client
+/// Includes: replication, slot import, AOF, internal commands
+inline bool IsAsyncClient(ValkeyModuleCtx *ctx) {
+  auto flags = ValkeyModule_GetContextFlags(ctx);
+  
+  // Check for slot import explicitly
+  if (flags & VALKEYMODULE_CTX_FLAGS_SLOT_IMPORT_CLIENT) {
+    return true;
+  }
+  
+  // Check other async clients (replication, AOF, internal)
+  // Detailed logging happens in TrackMutatedRecord
+  return !IsRealUserClient(ctx);
+}
+
 size_t DisplayAsSIBytes(size_t value, char *buffer, size_t buffer_size);
 
 std::string DisplayValkeyVersion(int version_word);

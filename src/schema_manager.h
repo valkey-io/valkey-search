@@ -99,6 +99,24 @@ class SchemaManager {
                                               absl::string_view name,
                                               uint64_t fingerprint,
                                               uint32_t version);
+  void UnblockAllAsyncClients();
+  void UnblockAllAsyncClientsForDisable();
+  static bool IsInitialized();
+
+  // Global aggregation functions for async client client throttling metrics
+  uint64_t GetTotalAsyncMutationCount() const;
+  uint64_t GetTotalSyncMutationCount() const;
+
+  // Fast atomic operations for blocked client tracking
+  void IncrementGlobalBlockedAsyncClients();
+  void DecrementGlobalBlockedAsyncClients(size_t count = 1);
+  size_t GetGlobalBlockedAsyncClientsCount() const;
+
+  // Global async client duration tracking
+  uint64_t GetGlobalAsyncClientLastBlockedDurationUs() const;
+  uint64_t GetGlobalAsyncClientCurrentBlockedDurationUs() const;
+  void StartGlobalAsyncClientBlocking();
+  void StopGlobalAsyncClientBlocking();
 
   static void InitInstance(std::unique_ptr<SchemaManager> instance);
   static SchemaManager &Instance();
@@ -155,6 +173,13 @@ class SchemaManager {
   vmsdk::MainThreadAccessGuard<bool> staging_indices_due_to_repl_load_ = false;
 
   bool coordinator_enabled_;
+
+  // Global async client blocking duration tracking
+  std::atomic<uint64_t> global_sm_last_blocked_duration_us_{0};
+  std::unique_ptr<vmsdk::StopWatch> global_sm_block_stopwatch_;
+  mutable absl::Mutex global_sm_block_mutex_;
+  // Global atomic counter for blocked clients
+  std::atomic<size_t> global_blocked_sm_clients_count_{0};
 };
 
 }  // namespace valkey_search

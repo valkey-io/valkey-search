@@ -112,9 +112,8 @@ void SerializeNeighbors(SearchIndexPartitionResponse* response,
   }
 }
 
-grpc::Status Service::PerformConsistencyChecks(
-    const SearchIndexPartitionRequest* request,
-    const query::SearchParameters& parameters) {
+grpc::Status Service::PerformSlotConsistencyCheck(
+    uint64_t expected_slot_fingerprint) {
   // compare slot fingerprint
   // use the cached cluster map for now, refreshing the cluster map would need
   // the client to execute commands at that node, will use new core api in the
@@ -124,7 +123,17 @@ grpc::Status Service::PerformConsistencyChecks(
   auto current_node_shard = cluster_map->GetCurrentNodeShard();
   CHECK(current_node_shard);
   uint64_t my_shard_slot_fingerprint = current_node_shard->slots_fingerprint;
-  if (my_shard_slot_fingerprint != request->slot_fingerprint()) {
+  if (my_shard_slot_fingerprint != expected_slot_fingerprint) {
+    return {grpc::StatusCode::FAILED_PRECONDITION, "Slot fingerprint mismatch"};
+  }
+  return grpc::Status::OK;
+}
+
+grpc::Status Service::PerformIndexConsistencyCheck(
+    const IndexFingerprintVersion& expected_fingerprint_version,
+    const std::shared_ptr<IndexSchema>& schema) {
+  if (schema->GetFingerprint() != expected_fingerprint_version.fingerprint() ||
+      schema->GetVersion() != expected_fingerprint_version.version()) {
     return {grpc::StatusCode::FAILED_PRECONDITION, "Slot fingerprint mismatch"};
   }
   return grpc::Status::OK;
@@ -212,29 +221,27 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
     return reactor;
   }
 
-  // compare fingerprint and version
+  // perform index consistency check (index fingerprint/version), required
   auto schema =
       SchemaManager::Instance()
-          .GetIndexSchema(vector_search_parameters.value()->db_num,
-                          vector_search_parameters.value()->index_schema_name)
+          .GetIndexSchema((*vector_search_parameters)->db_num,
+                          (*vector_search_parameters)->index_schema_name)
           .value();
-  const auto& request_fingerprint_version =
-      request->index_fingerprint_version();
-  if (schema->GetFingerprint() != request_fingerprint_version.fingerprint() ||
-      schema->GetVersion() != request_fingerprint_version.version()) {
-    reactor->Finish({grpc::StatusCode::FAILED_PRECONDITION,
-                     "Index fingerprint or version mismatch"});
+  auto index_consistency_status = PerformIndexConsistencyCheck(
+      request->index_fingerprint_version(), schema);
+  if (!index_consistency_status.ok()) {
+    reactor->Finish(index_consistency_status);
     RecordSearchMetrics(true, std::move(latency_sample));
     return reactor;
   }
 
-  // check consistency if in CONSISTENT mode
+  // perform slot consistency check if in CONSISTENT mode only
   if (request->enable_consistency()) {
     // Perform consistency checks on main thread, then enqueue search
-    auto consistency_status =
-        this->PerformConsistencyChecks(request, **vector_search_parameters);
-    if (!consistency_status.ok()) {
-      reactor->Finish(consistency_status);
+    auto slot_consistency_status =
+        PerformSlotConsistencyCheck(request->slot_fingerprint());
+    if (!slot_consistency_status.ok()) {
+      reactor->Finish(slot_consistency_status);
       RecordSearchMetrics(true, std::move(latency_sample));
       return reactor;
     }
@@ -283,22 +290,44 @@ Service::GenerateInfoResponse(
     return std::make_pair(error_status, response);
   }
   auto schema = std::move(status_or_schema.value());
+
+  auto set_inconsistent_error = [&]() {
+    response.set_exists(true);
+    response.set_index_name(index_name);
+    response.set_error(
+        "Index fingerprint/version or slot fingerprint mismatch");
+    response.set_error_type(
+        coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR);
+    VMSDK_LOG(NOTICE, nullptr) << "DEBUG: Fingerprint, version or slot "
+                                  "fingerprint mismatch at server.cc";
+    grpc::Status error_status(
+        grpc::StatusCode::FAILED_PRECONDITION,
+        "Cluster not in a consistent state, please retry.");
+    return std::make_pair(error_status, response);
+  };
+
+  // perform index consistency check (index fingerprint/version), required
+  if (!request.has_index_fingerprint_version()) {
+    return set_inconsistent_error();
+  } else {
+    auto consistency_status = PerformIndexConsistencyCheck(
+        request.index_fingerprint_version(), schema);
+    if (!consistency_status.ok()) {
+      return set_inconsistent_error();
+    }
+  }
+
+  // perform slot consistency check if in CONSISTENT mode only
+  if (request.require_consistency()) {
+    auto slot_consistency_status =
+        PerformSlotConsistencyCheck(request.slot_fingerprint());
+    if (!slot_consistency_status.ok()) {
+      return set_inconsistent_error();
+    }
+  }
+
   IndexSchema::InfoIndexPartitionData data =
       schema->GetInfoIndexPartitionData();
-
-  std::optional<coordinator::IndexFingerprintVersion> index_fingerprint_version;
-
-  auto global_metadata =
-      coordinator::MetadataManager::Instance().GetGlobalMetadata();
-  CHECK(global_metadata->type_namespace_map().contains(
-      kSchemaManagerMetadataTypeName));
-  const auto& entry_map =
-      global_metadata->type_namespace_map().at(kSchemaManagerMetadataTypeName);
-  CHECK(entry_map.entries().contains(index_name));
-  const auto& entry = entry_map.entries().at(index_name);
-  index_fingerprint_version.emplace();
-  index_fingerprint_version->set_fingerprint(entry.fingerprint());
-  index_fingerprint_version->set_version(entry.version());
 
   response.set_exists(true);
   response.set_index_name(index_name);
@@ -313,10 +342,6 @@ Service::GenerateInfoResponse(
   response.set_mutation_queue_size(data.mutation_queue_size);
   response.set_recent_mutations_queue_delay(data.recent_mutations_queue_delay);
   response.set_state(data.state);
-  if (index_fingerprint_version.has_value()) {
-    *response.mutable_index_fingerprint_version() =
-        std::move(index_fingerprint_version.value());
-  }
   return std::make_pair(grpc::Status::OK, response);
 }
 

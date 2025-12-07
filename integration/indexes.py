@@ -206,3 +206,58 @@ class Index:
         waiters.wait_for_true(
             lambda: not self.info(client).backfill_in_progress
             )
+
+class ClusterTestUtils:
+    def execute_primaries(self, command: Union[str, list[str]]) -> list:
+        """Execute a command on all primary nodes in the cluster"""
+        return [
+            self.client_for_primary(i).execute_command(*command)
+            for i in range(len(self.replication_groups))
+        ]
+
+    def config_set(self, config: str, value: str):
+        """Set a config value on all primary nodes"""
+        assert self.execute_primaries(["config set", config, value]) == [True] * len(
+            self.replication_groups
+        )
+
+    def control_set(self, key: str, value: str):
+        """Set a controlled variable on all nodes using ft._debug"""
+        assert all(
+            [node.client.execute_command(*["ft._debug", "CONTROLLED_VARIABLE", "set", key, value]) == b"OK" for node in self.nodes]
+        )
+
+    def check_info(self, name: str, value: Union[str, int]):
+        """Check that a specific INFO SEARCH field has the expected value on all primaries"""
+        results = self.execute_primaries(["INFO", "SEARCH"])
+        failed = False
+        for ix, r in enumerate(results):
+            if r[name] != value:
+                print(
+                    name,
+                    " Expected:",
+                    value,
+                    " Received:",
+                    r[name],
+                    " on server:",
+                    ix,
+                )
+                failed = True
+        assert not failed
+
+    def _check_info_sum(self, name: str) -> int:
+        """Sum the values of a given info field across all servers"""
+        results = self.execute_primaries(["INFO", "SEARCH"])
+        return sum([int(r[name]) for r in results if name in r])
+
+    def check_info_sum(self, name: str, sum_value: int):
+        """Wait for the sum of a given info field across all servers to reach expected value"""
+        waiters.wait_for_equal(
+            lambda: self._check_info_sum(name), 
+            sum_value, 
+            timeout=5
+        )
+
+    def sum_docs(self, index: Index) -> int:
+        """Sum the document count for an index across all primary nodes"""
+        return sum([index.info(self.client_for_primary(i)).num_docs for i in range(len(self.replication_groups))])

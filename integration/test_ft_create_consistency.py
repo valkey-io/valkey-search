@@ -110,10 +110,13 @@ class TestFTCreateConsistency(ValkeySearchClusterTestCaseDebugMode):
         thread0.join()
         thread1.join()
 
+        print(results)
+        print(exceptions)
+
         res = next(iter(results.values()))
         err = next(iter(exceptions.values()))
         assert "OK" in str(res)
-        assert "Index index1 already exists" in str(err)
+        assert "Unable to contact all cluster members" in str(err)
     
     # simulate a remote node failure, should return error
     def test_create_timeout(self):

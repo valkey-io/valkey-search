@@ -82,9 +82,6 @@ class MetadataManager {
   absl::StatusOr<google::protobuf::Any> GetEntryContent(
       absl::string_view type_name, const ObjName &obj_name);
 
-  absl::StatusOr<IndexFingerprintVersion> GetEntryInfo(
-      absl::string_view type_name, const ObjName &obj_name);
-
   absl::StatusOr<IndexFingerprintVersion> CreateEntry(
       absl::string_view type_name, const ObjName &obj_name,
       std::unique_ptr<google::protobuf::Any> contents);
@@ -168,7 +165,7 @@ class MetadataManager {
       absl::string_view type_name, const google::protobuf::Any &contents,
       absl::flat_hash_map<std::string, RegisteredType> &registered_types);
   int GetSectionsCount() const;
-  absl::StatusOr<const GlobalMetadataEntry *> GetExistingEntry(
+  absl::StatusOr<const GlobalMetadataEntry *> GetEntry(
       absl::string_view type_name, const ObjName &obj_name) const;
   vmsdk::MainThreadAccessGuard<GlobalMetadata> metadata_;
   vmsdk::MainThreadAccessGuard<GlobalMetadata> staged_metadata_;

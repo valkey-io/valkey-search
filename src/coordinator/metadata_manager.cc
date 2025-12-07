@@ -175,7 +175,7 @@ absl::Status MetadataManager::TriggerCallbacks(
   return absl::OkStatus();
 }
 
-absl::StatusOr<const GlobalMetadataEntry *> MetadataManager::GetExistingEntry(
+absl::StatusOr<const GlobalMetadataEntry *> MetadataManager::GetEntry(
     absl::string_view type_name, const ObjName &obj_name) const {
   auto encoded_id = obj_name.Encode();
   auto &metadata = metadata_.Get();
@@ -193,17 +193,8 @@ absl::StatusOr<const GlobalMetadataEntry *> MetadataManager::GetExistingEntry(
 
 absl::StatusOr<google::protobuf::Any> MetadataManager::GetEntryContent(
     absl::string_view type_name, const ObjName &obj_name) {
-  VMSDK_ASSIGN_OR_RETURN(auto entry, GetExistingEntry(type_name, obj_name));
+  VMSDK_ASSIGN_OR_RETURN(auto entry, GetEntry(type_name, obj_name));
   return entry->content();
-}
-
-absl::StatusOr<IndexFingerprintVersion> MetadataManager::GetEntryInfo(
-    absl::string_view type_name, const ObjName &obj_name) {
-  VMSDK_ASSIGN_OR_RETURN(auto entry, GetExistingEntry(type_name, obj_name));
-  IndexFingerprintVersion index_fingerprint_version;
-  index_fingerprint_version.set_fingerprint(entry->fingerprint());
-  index_fingerprint_version.set_version(entry->version());
-  return index_fingerprint_version;
 }
 
 absl::StatusOr<IndexFingerprintVersion> MetadataManager::CreateEntry(

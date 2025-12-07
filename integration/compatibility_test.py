@@ -76,7 +76,9 @@ def parse_field(x, key_type):
 
 def parse_value(x, key_type):
     try:
-        if key_type == "json" and x.startswith(b'['):
+        if key_type == "json" and isinstance(x, int):
+            result = x
+        elif key_type == "json" and x.startswith(b'['):
             assert isinstance(x, bytes), f"Expected bytes for JSON value, got {type(x)}"
             return json_load(x)
         elif isinstance(x, bytes):
@@ -89,7 +91,7 @@ def parse_value(x, key_type):
             print("Unknown type ", type(x))
             assert False
     except Exception as e:
-        print(">>> Got Exception parsing field ",x, " for key_type ", key_type, " Exception was ", e)
+        print(">>> Got Exception parsing field type: ", type(x), " Value: ",x, " for key_type ", key_type, " Exception was ", e)
         raise
     return result
 
@@ -120,7 +122,7 @@ def unpack_agg_result(rs, key_type):
     return rows
 
 def unpack_result(cmd, key_type, rs, sortkeys):
-    if "ft.search" in cmd:
+    if "ft.search" in cmd[0].lower():
         out = unpack_search_result(rs, key_type)
     else:
         out = unpack_agg_result(rs, key_type)

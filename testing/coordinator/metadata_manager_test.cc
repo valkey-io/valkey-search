@@ -111,7 +111,7 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
   std::vector<CallbackResult> callbacks_tracker;
   for (auto& type_to_register : test_case.types_to_register) {
     test_metadata_manager_->RegisterType(
-        type_to_register.type_name, type_to_register.encoding_version,
+        type_to_register.type_name,
         [&](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
           return type_to_register.fingerprint_to_return;
         },
@@ -126,7 +126,7 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
           callbacks_tracker.push_back(std::move(callback_result));
           return type_to_register.status_to_return;
         },
-        [](auto) { return 1; });
+        [](auto) { return 1; }, type_to_register.encoding_version);
   }
   if (test_case.expect_num_broadcasts > 0) {
     EXPECT_CALL(*kMockValkeyModule,
@@ -545,7 +545,7 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
   std::vector<CallbackResult> callbacks_tracker;
   for (const auto& type_to_register : test_case.types_to_register) {
     test_metadata_manager_->RegisterType(
-        type_to_register.type_name, type_to_register.encoding_version,
+        type_to_register.type_name,
         [&](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
           return type_to_register.fingerprint_to_return;
         },
@@ -559,7 +559,7 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
           });
           return type_to_register.status_to_return;
         },
-        [](auto) { return kModuleVersion; });
+        [](auto) { return kModuleVersion; }, type_to_register.encoding_version);
   }
 
   if (test_case.expect_broadcast) {
@@ -1941,14 +1941,14 @@ TEST_F(MetadataManagerTimestampTest,
 
   // Register a type with a failing callback
   test_metadata_manager_->RegisterType(
-      "my_type", {0, 0, 1},
+      "my_type",
       [](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
         return 1234;
       },
       [](const ObjName& obj_name, const google::protobuf::Any* metadata,
          uint64_t fingerprint,
          uint32_t version) { return absl::InternalError("Callback failed"); },
-      [](auto) { return kModuleVersion; });
+      [](auto) { return kModuleVersion; }, {0, 0, 1});
 
   // Reconciliation should fail due to callback failure
   auto status =

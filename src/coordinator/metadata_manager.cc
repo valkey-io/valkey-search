@@ -299,10 +299,10 @@ std::unique_ptr<GlobalMetadata> MetadataManager::GetGlobalMetadata() {
 }
 
 void MetadataManager::RegisterType(absl::string_view type_name,
-                                   vmsdk::ValkeyVersion encoding_version,
                                    FingerprintCallback fingerprint_callback,
                                    MetadataUpdateCallback callback,
-                                   MinVersionCallback min_version_callback) {
+                                   MinVersionCallback min_version_callback,
+                                   vmsdk::ValkeyVersion encoding_version) {
   auto insert_result =
       registered_types_.Get().insert(std::pair<std::string, RegisteredType>{
           type_name,
@@ -312,7 +312,7 @@ void MetadataManager::RegisterType(absl::string_view type_name,
               .update_callback = std::move(callback),
               .min_version_callback = std::move(min_version_callback)}});
   VMSDK_LOG(DEBUG, nullptr) << "Registering type: " << type_name;
-  CHECK(insert_result.second);
+  CHECK(insert_result.second) << "Type already registered: " << type_name;
 }
 
 void MetadataManager::BroadcastMetadata(ValkeyModuleCtx *ctx) {

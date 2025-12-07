@@ -24,6 +24,7 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/rdb_serialization.h"
+#include "version.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/utils.h"
@@ -96,17 +97,16 @@ class MetadataManager {
   // accept updates to that type both locally and over the cluster bus.
   //
   // * type_name should be a unique string identifying the type.
-  // * encoding_version should be bumped any time the underlying metadata format
-  // is changed.
   // * fingerprint_callback should be a function for computing the fingerprint
   // of the metadata for the given encoding version. This function can only
   // change when the encoding version is bumped.
   // * update_callback will be called whenever the metadata is updated.
+  // * encoding_version should only be set in unit tests.
   void RegisterType(absl::string_view type_name,
-                    vmsdk::ValkeyVersion encoding_version,
                     FingerprintCallback fingerprint_callback,
                     MetadataUpdateCallback callback,
-                    MinVersionCallback min_version_callback);
+                    MinVersionCallback min_version_callback,
+                    vmsdk::ValkeyVersion encoding_version = kModuleVersion);
 
   void BroadcastMetadata(ValkeyModuleCtx *ctx);
 

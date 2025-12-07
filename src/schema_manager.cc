@@ -130,7 +130,7 @@ SchemaManager::SchemaManager(
               }});
   if (coordinator_enabled) {
     coordinator::MetadataManager::Instance().RegisterType(
-        kSchemaManagerMetadataTypeName, kModuleVersion, ComputeFingerprint,
+        kSchemaManagerMetadataTypeName, ComputeFingerprint,
         [this](const coordinator::ObjName &obj_name,
                const google::protobuf::Any *metadata, uint64_t fingerprint,
                uint32_t version) -> absl::Status {

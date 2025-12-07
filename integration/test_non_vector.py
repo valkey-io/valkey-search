@@ -83,6 +83,11 @@ def validate_non_vector_queries(client: Valkey):
     document = result[2]
     doc_fields = dict(zip(document[::2], document[1::2]))
     assert doc_fields == expected_hash_value
+    # Test NOCONTENT on Hash documents
+    result = client.execute_command(*(numeric_query + ["NOCONTENT"]))
+    assert len(result) == 2
+    assert result[0] == 1  # Number of documents found
+    assert result[1] == expected_hash_key  # Only key, no content
     # Validate a numeric query on JSON documents.
     result = client.execute_command(*numeric_query_on_json)
     assert len(result) == 3
@@ -95,6 +100,11 @@ def validate_non_vector_queries(client: Valkey):
         assert key in doc, f"Key '{key}' not found in the document"
         assert doc[key] == value, f"Expected {key}={value}, got {key}={doc[key]}"
     assert set(doc.keys()) == set(expected_numeric_json_value.keys()), "Document contains unexpected fields"
+    # Test NOCONTENT on JSON documents
+    result = client.execute_command(*(numeric_query_on_json + ["NOCONTENT"]))
+    assert len(result) == 2
+    assert result[0] == 1  # Number of documents found
+    assert result[1] == expected_numeric_json_key  # Only key, no content
     # Validate that a tag + numeric query on JSON document works.
     result = client.execute_command(*numeric_tag_query_on_json)
     assert len(result) == 3
@@ -107,6 +117,27 @@ def validate_non_vector_queries(client: Valkey):
         assert key in doc, f"Key '{key}' not found in the document"
         assert doc[key] == value, f"Expected {key}={value}, got {key}={doc[key]}"
     assert set(doc.keys()) == set(expected_numeric_tag_json_value.keys()), "Document contains unexpected fields"
+
+def validate_limit_queries(client: Valkey):
+    """
+        Test LIMIT functionality on non-vector queries.
+    """
+    # Test LIMIT 0 2 - get first 2 results
+    result = client.execute_command("FT.SEARCH", "products", "@price:[0 +inf]", "LIMIT", "0", "2")
+    assert result[0] == 4  # Total count
+    assert len(result) == 5  # 1 count + 2 docs (key + content each)
+    # Test LIMIT 1 1 - skip first, get next 1
+    result = client.execute_command("FT.SEARCH", "products", "@price:[0 +inf]", "LIMIT", "1", "1")
+    assert result[0] == 4  # Total count
+    assert len(result) == 3  # 1 count + 1 doc (key + content)
+    # Test LIMIT with NOCONTENT
+    result = client.execute_command("FT.SEARCH", "products", "@price:[0 +inf]", "LIMIT", "0", "2", "NOCONTENT")
+    assert result[0] == 4  # Total count
+    assert len(result) == 3  # 1 count + 2 keys only
+    # Test LIMIT 0 0 - no results
+    result = client.execute_command("FT.SEARCH", "products", "@price:[0 +inf]", "LIMIT", "0", "0")
+    assert result[0] == 4  # Total count only
+    assert len(result) == 1
 
 class TestNonVector(ValkeySearchTestCaseBase):
 
@@ -145,6 +176,22 @@ class TestNonVector(ValkeySearchTestCaseBase):
         assert result[0] == 1
         assert result[1] == b'multifield_product:4'
 
+    def test_limit_and_nocontent(self):
+        """
+            Test LIMIT and NOCONTENT functionality on non-vector queries.
+        """
+        client: Valkey = self.server.get_new_client()
+        create_indexes(client)
+        # Data population:
+        for doc in hash_docs:
+            assert client.execute_command(*doc) == 5
+        for doc in json_docs:
+            assert client.execute_command(*doc) == b"OK"
+        # Test basic functionality first
+        validate_non_vector_queries(client)
+        # Test LIMIT functionality
+        validate_limit_queries(client)
+
 class TestNonVectorCluster(ValkeySearchClusterTestCase):
 
     def test_non_vector_cluster(self):
@@ -163,3 +210,5 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         time.sleep(1)
         # Validation of numeric and tag queries.
         validate_non_vector_queries(client)
+        # Test LIMIT functionality
+        validate_limit_queries(client)

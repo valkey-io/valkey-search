@@ -24,21 +24,24 @@ class CreateConsistencyCheckFanoutOperation
   CreateConsistencyCheckFanoutOperation(
       uint32_t db_num, const std::string &index_name, unsigned timeout_ms,
       coordinator::IndexFingerprintVersion new_entry_fingerprint_version)
-      : ClusterInfoFanoutOperation(db_num, index_name, timeout_ms),
+      : ClusterInfoFanoutOperation(db_num, index_name, timeout_ms, false,
+                                   false),
         new_entry_fingerprint_version_(new_entry_fingerprint_version) {}
+
+  coordinator::InfoIndexPartitionRequest GenerateRequest(
+      const vmsdk::cluster_map::NodeInfo &) override {
+    coordinator::InfoIndexPartitionRequest req;
+    req.set_db_num(db_num_);
+    req.set_index_name(index_name_);
+    // Use the newly created fingerprint/version
+    auto *expected_ifv = req.mutable_index_fingerprint_version();
+    expected_ifv->set_fingerprint(new_entry_fingerprint_version_.fingerprint());
+    expected_ifv->set_version(new_entry_fingerprint_version_.version());
+    return req;
+  }
 
   int GenerateReply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                     int argc) override {
-    // if the received fingerprint is not equal to the exact fingerprint
-    // created in the ft.create command, report an error
-    if (index_fingerprint_version_->fingerprint() !=
-            new_entry_fingerprint_version_.fingerprint() ||
-        index_fingerprint_version_->version() !=
-            new_entry_fingerprint_version_.version()) {
-      return ValkeyModule_ReplyWithError(
-          ctx,
-          absl::StrFormat("Index %s already exists.", index_name_).c_str());
-    }
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
   }
 

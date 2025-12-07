@@ -37,6 +37,7 @@
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -45,6 +46,8 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::query::fanout {
+
+CONTROLLED_BOOLEAN(ForceInvalidSlotFingerprint, false);
 
 struct NeighborComparator {
   bool operator()(indexes::Neighbor &a, indexes::Neighbor &b) const {
@@ -65,6 +68,7 @@ struct SearchPartitionResultsTracker {
   query::SearchResponseCallback callback;
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
   std::atomic_bool reached_oom{false};
+  std::atomic_bool consistency_failed{false};
 
   SearchPartitionResultsTracker(int outstanding_requests, int k,
                                 query::SearchResponseCallback callback,
@@ -76,16 +80,22 @@ struct SearchPartitionResultsTracker {
   void HandleResponse(coordinator::SearchIndexPartitionResponse &response,
                       const std::string &address, const grpc::Status &status) {
     if (!status.ok()) {
+      if (parameters->enable_consistency &&
+          status.error_code() == grpc::FAILED_PRECONDITION) {
+        consistency_failed.store(true);
+      }
       bool should_cancel = status.error_code() == grpc::RESOURCE_EXHAUSTED ||
-                           !options::GetEnablePartialResults().GetValue();
+                           !parameters->enable_partial_results ||
+                           consistency_failed.load();
       if (status.error_code() == grpc::RESOURCE_EXHAUSTED) {
         reached_oom.store(true);
       }
       if (should_cancel) {
         parameters->cancellation_token->Cancel();
       }
-      if (status.error_code() != grpc::DEADLINE_EXCEEDED &&
-          status.error_code() != grpc::RESOURCE_EXHAUSTED) {
+      if (status.error_code() != grpc::DEADLINE_EXCEEDED ||
+          status.error_code() != grpc::RESOURCE_EXHAUSTED ||
+          status.error_code() != grpc::FAILED_PRECONDITION) {
         VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
             << "Error during handling of FT.SEARCH on node " << address << ": "
             << status.error_message();
@@ -141,7 +151,9 @@ struct SearchPartitionResultsTracker {
     absl::MutexLock lock(&mutex);
     absl::StatusOr<std::deque<indexes::Neighbor>> result =
         std::deque<indexes::Neighbor>();
-    if (reached_oom) {
+    if (consistency_failed) {
+      result = absl::FailedPreconditionError(kFailedPreconditionMsg);
+    } else if (reached_oom) {
       result = absl::ResourceExhaustedError(kOOMMsg);
     } else {
       while (!results.empty()) {
@@ -211,6 +223,15 @@ absl::Status PerformSearchFanoutAsync(
     auto request_copy =
         std::make_unique<coordinator::SearchIndexPartitionRequest>();
     request_copy->CopyFrom(*request);
+
+    if (ForceInvalidSlotFingerprint.GetValue()) {
+      // test only: set an invalid slot fingerprint and force failure
+      request_copy->set_slot_fingerprint(0);
+    } else if (node.shard != nullptr) {
+      // avoid accessing node.shard if it is not valid in unit tests
+      request_copy->set_slot_fingerprint(node.shard->slots_fingerprint);
+    }
+
     // At 30 requests, it takes ~600 micros to enqueue all the requests.
     // Putting this into the background thread pool will save us time on
     // machines with multiple cores.

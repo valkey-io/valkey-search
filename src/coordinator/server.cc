@@ -112,6 +112,100 @@ void SerializeNeighbors(SearchIndexPartitionResponse* response,
   }
 }
 
+grpc::Status Service::PerformSlotConsistencyCheck(
+    uint64_t expected_slot_fingerprint) {
+  // compare slot fingerprint
+  // use the cached cluster map for now, refreshing the cluster map would need
+  // the client to execute commands at that node, will use new core api in the
+  // future
+  auto cluster_map = ValkeySearch::Instance().GetClusterMap();
+  CHECK(cluster_map);
+  auto current_node_shard = cluster_map->GetCurrentNodeShard();
+  CHECK(current_node_shard);
+  uint64_t my_shard_slot_fingerprint = current_node_shard->slots_fingerprint;
+  if (my_shard_slot_fingerprint != expected_slot_fingerprint) {
+    return {grpc::StatusCode::FAILED_PRECONDITION, "Slot fingerprint mismatch"};
+  }
+  return grpc::Status::OK;
+}
+
+grpc::Status Service::PerformIndexConsistencyCheck(
+    const IndexFingerprintVersion& expected_fingerprint_version,
+    const std::shared_ptr<IndexSchema>& schema) {
+  if (schema->GetFingerprint() != expected_fingerprint_version.fingerprint() ||
+      schema->GetVersion() != expected_fingerprint_version.version()) {
+    return {grpc::StatusCode::FAILED_PRECONDITION, "Slot fingerprint mismatch"};
+  }
+  return grpc::Status::OK;
+}
+
+query::SearchResponseCallback Service::MakeSearchCallback(
+    SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
+    std::unique_ptr<vmsdk::StopWatch> latency_sample) {
+  return [response, reactor, latency_sample = std::move(latency_sample)](
+             absl::StatusOr<std::deque<indexes::Neighbor>>& neighbors,
+             std::unique_ptr<query::SearchParameters> parameters) mutable {
+    if (!neighbors.ok()) {
+      reactor->Finish(ToGrpcStatus(neighbors.status()));
+      RecordSearchMetrics(true, std::move(latency_sample));
+      return;
+    }
+    if (parameters->cancellation_token->IsCancelled() &&
+        !parameters->enable_partial_results) {
+      reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
+                       "Search operation cancelled due to timeout"});
+      RecordSearchMetrics(true, std::move(latency_sample));
+      return;
+    }
+    if (parameters->no_content) {
+      SerializeNeighbors(response, neighbors.value());
+      reactor->Finish(grpc::Status::OK);
+      RecordSearchMetrics(false, std::move(latency_sample));
+    } else {
+      vmsdk::RunByMain([parameters = std::move(parameters), response, reactor,
+                        latency_sample = std::move(latency_sample),
+                        neighbors = std::move(neighbors.value())]() mutable {
+        const auto& attribute_data_type =
+            parameters->index_schema->GetAttributeDataType();
+        auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
+        if (parameters->attribute_alias.empty()) {
+          query::ProcessNonVectorNeighborsForReply(
+              ctx.get(), attribute_data_type, neighbors, *parameters);
+        } else {
+          auto vector_identifier =
+              parameters->index_schema
+                  ->GetIdentifier(parameters->attribute_alias)
+                  .value();
+          query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
+                                          neighbors, *parameters,
+                                          vector_identifier);
+        }
+        SerializeNeighbors(response, neighbors);
+        reactor->Finish(grpc::Status::OK);
+        RecordSearchMetrics(false, std::move(latency_sample));
+      });
+    }
+  };
+}
+
+void Service::EnqueueSearchRequest(
+    std::unique_ptr<query::SearchParameters> vector_search_parameters,
+    vmsdk::ThreadPool* reader_thread_pool, ValkeyModuleCtx* detached_ctx,
+    SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
+    std::unique_ptr<vmsdk::StopWatch> latency_sample) {
+  auto status = query::SearchAsync(
+      std::move(vector_search_parameters), reader_thread_pool,
+      MakeSearchCallback(response, reactor, std::move(latency_sample)),
+      query::SearchMode::kRemote);
+
+  if (!status.ok()) {
+    VMSDK_LOG(WARNING, detached_ctx)
+        << "Failed to enqueue search request: " << status.message();
+    RecordSearchMetrics(true, nullptr);
+    reactor->Finish(ToGrpcStatus(status));
+  }
+}
+
 grpc::ServerUnaryReactor* Service::SearchIndexPartition(
     grpc::CallbackServerContext* context,
     const SearchIndexPartitionRequest* request,
@@ -127,62 +221,42 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
     return reactor;
   }
 
-  // Enqueue into the thread pool
-  auto status = query::SearchAsync(
-      std::move(*vector_search_parameters), reader_thread_pool_,
-      [response, reactor, latency_sample = std::move(latency_sample)](
-          auto& neighbors,
-          std::unique_ptr<query::SearchParameters> parameters) mutable {
-        if (!neighbors.ok()) {
-          reactor->Finish(ToGrpcStatus(neighbors.status()));
-          RecordSearchMetrics(true, std::move(latency_sample));
-          return;
-        }
-        if (parameters->cancellation_token->IsCancelled() &&
-            !valkey_search::options::GetEnablePartialResults().GetValue()) {
-          reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
-                           "Search operation cancelled due to timeout"});
-          RecordSearchMetrics(true, std::move(latency_sample));
-          return;
-        }
-        if (parameters->no_content) {
-          SerializeNeighbors(response, neighbors.value());
-          reactor->Finish(grpc::Status::OK);
-          RecordSearchMetrics(false, std::move(latency_sample));
-        } else {
-          vmsdk::RunByMain([parameters = std::move(parameters), response,
-                            reactor, latency_sample = std::move(latency_sample),
-                            neighbors =
-                                std::move(neighbors.value())]() mutable {
-            const auto& attribute_data_type =
-                parameters->index_schema->GetAttributeDataType();
-            auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-            if (parameters->attribute_alias.empty()) {
-              query::ProcessNonVectorNeighborsForReply(
-                  ctx.get(), attribute_data_type, neighbors, *parameters);
-            } else {
-              auto vector_identifier =
-                  parameters->index_schema
-                      ->GetIdentifier(parameters->attribute_alias)
-                      .value();
-              query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
-                                              neighbors, *parameters,
-                                              vector_identifier);
-            }
-            SerializeNeighbors(response, neighbors);
-            reactor->Finish(grpc::Status::OK);
-            RecordSearchMetrics(false, std::move(latency_sample));
-          });
-        }
-      },
-      query::SearchMode::kRemote);
-  if (!status.ok()) {
-    VMSDK_LOG(WARNING, detached_ctx_.get())
-        << "Failed to enqueue search request: " << status.message();
-    // We lost our latency sample since it was owned by the callback.
-    RecordSearchMetrics(true, nullptr);
-    reactor->Finish(ToGrpcStatus(status));
+  // perform index consistency check (index fingerprint/version), required
+  auto schema =
+      SchemaManager::Instance()
+          .GetIndexSchema((*vector_search_parameters)->db_num,
+                          (*vector_search_parameters)->index_schema_name)
+          .value();
+  auto index_consistency_status = PerformIndexConsistencyCheck(
+      request->index_fingerprint_version(), schema);
+  if (!index_consistency_status.ok()) {
+    reactor->Finish(index_consistency_status);
+    RecordSearchMetrics(true, std::move(latency_sample));
+    return reactor;
   }
+
+  // perform slot consistency check if in CONSISTENT mode only
+  if (request->enable_consistency()) {
+    // Perform consistency checks on main thread, then enqueue search
+    auto slot_consistency_status =
+        PerformSlotConsistencyCheck(request->slot_fingerprint());
+    if (!slot_consistency_status.ok()) {
+      reactor->Finish(slot_consistency_status);
+      RecordSearchMetrics(true, std::move(latency_sample));
+      return reactor;
+    }
+    // Consistency checks passed, now enqueue the search
+    EnqueueSearchRequest(std::move(*vector_search_parameters),
+                         reader_thread_pool_, detached_ctx_.get(), response,
+                         reactor, std::move(latency_sample));
+    return reactor;
+  }
+
+  // Non-consistency mode - proceed directly
+  EnqueueSearchRequest(std::move(*vector_search_parameters),
+                       reader_thread_pool_, detached_ctx_.get(), response,
+                       reactor, std::move(latency_sample));
+
   return reactor;
 }
 
@@ -217,12 +291,44 @@ Service::GenerateInfoResponse(
     return std::make_pair(error_status, response);
   }
   auto schema = std::move(status_or_schema.value());
+
+  auto set_inconsistent_error = [&]() {
+    response.set_exists(true);
+    response.set_index_name(index_name);
+    response.set_error(
+        "Index fingerprint/version or slot fingerprint mismatch");
+    response.set_error_type(
+        coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR);
+    VMSDK_LOG(NOTICE, nullptr) << "DEBUG: Fingerprint, version or slot "
+                                  "fingerprint mismatch at server.cc";
+    grpc::Status error_status(
+        grpc::StatusCode::FAILED_PRECONDITION,
+        "Cluster not in a consistent state, please retry.");
+    return std::make_pair(error_status, response);
+  };
+
+  // perform index consistency check (index fingerprint/version), required
+  if (!request.has_index_fingerprint_version()) {
+    return set_inconsistent_error();
+  } else {
+    auto consistency_status = PerformIndexConsistencyCheck(
+        request.index_fingerprint_version(), schema);
+    if (!consistency_status.ok()) {
+      return set_inconsistent_error();
+    }
+  }
+
+  // perform slot consistency check if in CONSISTENT mode only
+  if (request.require_consistency()) {
+    auto slot_consistency_status =
+        PerformSlotConsistencyCheck(request.slot_fingerprint());
+    if (!slot_consistency_status.ok()) {
+      return set_inconsistent_error();
+    }
+  }
+
   IndexSchema::InfoIndexPartitionData data =
       schema->GetInfoIndexPartitionData();
-  auto index_fingerprint_version =
-      coordinator::MetadataManager::Instance().GetEntryInfo(
-          kSchemaManagerMetadataTypeName,
-          coordinator::ObjName(db_num, index_name));
 
   response.set_exists(true);
   response.set_index_name(index_name);
@@ -238,10 +344,6 @@ Service::GenerateInfoResponse(
   response.set_mutation_queue_size(data.mutation_queue_size);
   response.set_recent_mutations_queue_delay(data.recent_mutations_queue_delay);
   response.set_state(data.state);
-  if (index_fingerprint_version.ok()) {
-    *response.mutable_index_fingerprint_version() =
-        std::move(*index_fingerprint_version);
-  }
   return std::make_pair(grpc::Status::OK, response);
 }
 

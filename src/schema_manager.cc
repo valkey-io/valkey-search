@@ -230,9 +230,9 @@ SchemaManager::CreateIndexSchema(
     // In coordinated mode, use the metadata_manager as the source of truth.
     // It will callback into us with the update.
     if (coordinator::MetadataManager::Instance()
-            .GetEntry(kSchemaManagerMetadataTypeName,
-                      coordinator::ObjName(index_schema_proto.db_num(),
-                                           index_schema_proto.name()))
+            .GetEntryContent(kSchemaManagerMetadataTypeName,
+                             coordinator::ObjName(index_schema_proto.db_num(),
+                                                  index_schema_proto.name()))
             .ok()) {
       return GenerateIndexAlreadyExistsError(index_schema_proto.db_num(),
                                              index_schema_proto.name());

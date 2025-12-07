@@ -41,26 +41,6 @@
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
-/*
-
-The original metadata manager was designed to provide a 2-level hierarchy:
-<type-name, object-name>. This lead to the wire-format tied to:
-
- Map<string, Map<string,protobuf>>.
-
-With Valkey 9, the introduction of DB num into CME creates a desire for a
-three-level hierarchy: <type-name, db-num, object-name>. This 3-level
-internal namespace is mapped into an external two-level namespace to provide
-backward and some degree of forward compatibility.
-
-The mapping is done by manipulating the object name. It is known that
-pre-Valkey 9 object names cannot contain a valid hash-tag. This provides the
-necessary information to distinguish between an object name and an encoded
-<db_num, object_name> pair. Objects with a db_num of 0 are stored the same
-way as pre-Valkey 9 objects, providing backward compatibility.
-
-*/
-
 namespace valkey_search::coordinator {
 namespace {
 
@@ -211,7 +191,7 @@ absl::StatusOr<const GlobalMetadataEntry *> MetadataManager::GetExistingEntry(
       absl::StrCat("Entry not found: ", type_name, " ", obj_name));
 }
 
-absl::StatusOr<google::protobuf::Any> MetadataManager::GetEntry(
+absl::StatusOr<google::protobuf::Any> MetadataManager::GetEntryContent(
     absl::string_view type_name, const ObjName &obj_name) {
   VMSDK_ASSIGN_OR_RETURN(auto entry, GetExistingEntry(type_name, obj_name));
   return entry->content();
@@ -848,8 +828,20 @@ absl::StatusOr<vmsdk::ValkeyVersion> MetadataManager::ComputeMinVersion()
 }
 
 /*
-An 8/1.0(Valkey 8, Search 1.0) encoded string won't have a hashtag anywhere
-and is always for db_num == 0 An 9/1.1 encoded string will always have a
+
+The original metadata manager was designed to provide a 2-level hierarchy:
+<type-name, object-name>. This lead to the wire-format tied to:
+
+ Map<string, Map<string, protobuf>>.
+
+With Valkey 9, the introduction of DB num into CME creates a desire for a
+three-level hierarchy: <type-name, db-num, object-name>. This 3-level
+internal namespace is mapped into an external two-level namespace to provide
+backward and some degree of forward compatibility. The mapping is done by
+manipulating the object name.
+
+An 8/1.0(Valkey 8, Search 1.0) encoded string won't have a hashtag anywhere and
+is always for db_num == 0 An 9/1.1 encoded string will always have a
 false-hashtag at the START AND may have a real hashtag after that.
 
 Decoded strings that lack a hashtag and are for db_num == 0, are encoded with
@@ -859,10 +851,10 @@ rules.
 A pseudo-hashtag is of the format: {dddd}
 dddd is the database number, i.e., ascii digits 0-9 ONLY.
 Characters after the database number up to the trailing right brace are
-explicitly ignored -- but preserved -- allowing for potential future
-forward/reverse compatibility.
+explicitly ignored allowing for potential future expandability.
 
 */
+
 ObjName ObjName::Decode(absl::string_view encoded) {
   auto hash_tag = vmsdk::ParseHashTag(encoded);
   if (hash_tag) {

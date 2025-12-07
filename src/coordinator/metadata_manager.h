@@ -79,8 +79,8 @@ class MetadataManager {
                                 const ObjName &obj_name,
                                 const GlobalMetadataEntry &entry);
 
-  absl::StatusOr<google::protobuf::Any> GetEntry(absl::string_view type_name,
-                                                 const ObjName &obj_name);
+  absl::StatusOr<google::protobuf::Any> GetEntryContent(
+      absl::string_view type_name, const ObjName &obj_name);
 
   absl::StatusOr<IndexFingerprintVersion> GetEntryInfo(
       absl::string_view type_name, const ObjName &obj_name);

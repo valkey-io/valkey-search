@@ -302,6 +302,7 @@ class FanoutOperationBase {
         ++Metrics::GetStats().info_fanout_retry_cnt;
         ResetBaseForRetry();
         ResetForRetry();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
         StartFanoutRound();
       } else {
         OnCompletion();

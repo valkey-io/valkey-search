@@ -47,6 +47,7 @@
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
+#include "version.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
@@ -1530,6 +1531,33 @@ IndexSchema::InfoIndexPartitionData IndexSchema::GetInfoIndexPartitionData()
   data.backfill_in_progress = IsBackfillInProgress();
   data.state = std::string(GetStateForInfo());
   return data;
+}
+
+//
+// Determine the minimum encoding version required to interpret the metadata for
+// this Schema
+//
+CONTROLLED_INT(override_min_version, -1);
+
+absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
+    const google::protobuf::Any &metadata) {
+  if (override_min_version.GetValue() != -1) {
+    VMSDK_LOG(WARNING, nullptr)
+        << "Overriding index schema semantic version to "
+        << override_min_version.GetValue();
+    return vmsdk::ValkeyVersion(override_min_version.GetValue());
+  }
+  auto unpacked = std::make_unique<data_model::IndexSchema>();
+  if (!metadata.UnpackTo(unpacked.get())) {
+    return absl::InternalError(
+        "Unable to unpack metadata for index schema fingerprint "
+        "calculation");
+  }
+  if (unpacked->has_db_num() && unpacked->db_num() != 0) {
+    return kRelease11;
+  } else {
+    return kRelease10;
+  }
 }
 
 }  // namespace valkey_search

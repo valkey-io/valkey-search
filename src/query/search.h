@@ -78,6 +78,7 @@ struct SearchParameters {
   vmsdk::UniqueValkeyString score_as;
   std::string query;
   uint32_t dialect{kDialect};
+  uint32_t db_num_;
   bool local_only{false};
   bool enable_partial_results{options::GetPreferPartialResults().GetValue()};
   bool enable_consistency{options::GetPreferConsistentResults().GetValue()};
@@ -118,9 +119,11 @@ struct SearchParameters {
   } parse_vars;
   bool IsNonVectorQuery() const { return attribute_alias.empty(); }
   bool IsVectorQuery() const { return !IsNonVectorQuery(); }
-  SearchParameters(uint64_t timeout, grpc::CallbackServerContext* context)
+  SearchParameters(uint64_t timeout, grpc::CallbackServerContext* context,
+                   uint32_t db_num)
       : timeout_ms(timeout),
-        cancellation_token(cancel::Make(timeout, context)) {}
+        cancellation_token(cancel::Make(timeout, context)),
+        db_num_(db_num) {}
 };
 
 // Callback to be called when the search is done.

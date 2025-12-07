@@ -123,6 +123,7 @@ message AttributeContentEntry {
 message GlobalMetadataVersionHeader {
   uint64 top_level_fingerprint = 1;
   uint32 top_level_version = 2;
+  uint32 top_level_min_version = 3;
 }
 
 message GlobalMetadata {
@@ -141,6 +142,7 @@ message GlobalMetadataEntry {
   uint64 fingerprint = 2;
   uint32 encoding_version = 3;
   optional google.protobuf.Any content = 4;
+  uint32 min_version = 5;
 }
 
 message GetGlobalMetadataRequest {}
@@ -179,4 +181,5 @@ message InfoIndexPartitionResponse {
   string state = 13;
   string error = 14;
   FanoutErrorType error_type = 15;
+  uint32 db_num = 16;
 }

@@ -64,7 +64,25 @@ class Text : public IndexBase {
     absl::MutexLock lock(&index_mutex_);
     // TODO: Implement proper key tracking
   }
-  uint64_t GetTrackedKeyCount() const override;
+
+  size_t GetUnTrackedKeyCount() const override {
+    absl::MutexLock lock(&index_mutex_);
+    return untracked_keys_.size();
+  }
+
+  bool IsUnTracked(const InternedStringPtr& key) const override {
+    absl::MutexLock lock(&index_mutex_);
+    return untracked_keys_.contains(key);
+  }
+
+  absl::Status ForEachUnTrackedKey(
+      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      const override {
+    absl::MutexLock lock(&index_mutex_);
+    // TODO
+  }
+
+  size_t GetTrackedKeyCount() const override;
   std::unique_ptr<data_model::Index> ToProto() const override;
 
   InternedStringPtr GetRawValue(const InternedStringPtr& key) const

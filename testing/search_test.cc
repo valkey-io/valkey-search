@@ -667,7 +667,7 @@ TEST_P(FetchFilteredKeysTest, ParseParams) {
       index_schema->GetIndex(kVectorAttributeAlias)->get());
   const FetchFilteredKeysTestCase &test_case = GetParam();
   query::SearchParameters params(100000, nullptr, 0);
-  FilterParser parser(*index_schema, test_case.filter);
+  FilterParser parser(*index_schema, test_case.filter, {});
   params.filter_parse_results = std::move(parser.Parse().value());
   params.k = 100;
   auto vectors = DeterministicallyGenerateVectors(1, kVectorDimensions, 10.0);

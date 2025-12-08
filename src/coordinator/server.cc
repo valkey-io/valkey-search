@@ -12,6 +12,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -33,6 +34,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "src/query/fanout_operation_base.h"
+#include "src/query/predicate.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
@@ -112,6 +114,99 @@ void SerializeNeighbors(SearchIndexPartitionResponse* response,
   }
 }
 
+namespace {
+
+// Context for timer-based retry when waiting for in-flight keys on remote shard
+struct RemoteInFlightRetryContext {
+  SearchIndexPartitionResponse* response;
+  grpc::ServerUnaryReactor* reactor;
+  std::unique_ptr<vmsdk::StopWatch> latency_sample;
+  std::deque<indexes::Neighbor> neighbors;
+  std::unique_ptr<query::SearchParameters> parameters;
+  std::vector<InternedStringPtr> neighbor_keys;  // Cached to avoid O(n) copy on each retry
+
+  RemoteInFlightRetryContext(SearchIndexPartitionResponse* resp,
+                             grpc::ServerUnaryReactor* react,
+                             std::unique_ptr<vmsdk::StopWatch> sample,
+                             std::deque<indexes::Neighbor> nbrs,
+                             std::unique_ptr<query::SearchParameters> params,
+                             std::vector<InternedStringPtr> keys)
+      : response(resp),
+        reactor(react),
+        latency_sample(std::move(sample)),
+        neighbors(std::move(nbrs)),
+        parameters(std::move(params)),
+        neighbor_keys(std::move(keys)) {}
+};
+
+// Forward declaration
+void RemoteInFlightRetryTimerCallback(ValkeyModuleCtx* ctx, void* data);
+
+// Process neighbors and finish the gRPC response (must be called from main thread)
+void FinishRemoteSearchResponse(ValkeyModuleCtx* ctx,
+                                RemoteInFlightRetryContext* retry_ctx) {
+  const auto& attribute_data_type =
+      retry_ctx->parameters->index_schema->GetAttributeDataType();
+  if (retry_ctx->parameters->attribute_alias.empty()) {
+    query::ProcessNonVectorNeighborsForReply(
+        ctx, attribute_data_type, retry_ctx->neighbors, *retry_ctx->parameters);
+  } else {
+    auto vector_identifier =
+        retry_ctx->parameters->index_schema
+            ->GetIdentifier(retry_ctx->parameters->attribute_alias)
+            .value();
+    query::ProcessNeighborsForReply(ctx, attribute_data_type,
+                                    retry_ctx->neighbors,
+                                    *retry_ctx->parameters, vector_identifier);
+  }
+  SerializeNeighbors(retry_ctx->response, retry_ctx->neighbors);
+  retry_ctx->reactor->Finish(grpc::Status::OK);
+  RecordSearchMetrics(false, std::move(retry_ctx->latency_sample));
+  delete retry_ctx;
+}
+
+// Check for in-flight conflicts and either schedule retry or finish response.
+// Must be called from main thread.
+void CheckAndHandleRemoteInFlightConflicts(
+    ValkeyModuleCtx* ctx, RemoteInFlightRetryContext* retry_ctx) {
+  // Check if the query has timed out
+  if (retry_ctx->parameters->cancellation_token->IsCancelled()) {
+    if (!valkey_search::options::GetEnablePartialResults().GetValue()) {
+      retry_ctx->reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
+                                  "Search operation cancelled due to timeout"});
+      RecordSearchMetrics(true, std::move(retry_ctx->latency_sample));
+      delete retry_ctx;
+      return;
+    }
+    // Allow partial results - proceed with what we have
+    FinishRemoteSearchResponse(ctx, retry_ctx);
+    return;
+  }
+
+  // Check for conflicting in-flight keys using cached keys
+  if (retry_ctx->parameters->index_schema->HasAnyConflictingInFlightKeys(
+          retry_ctx->neighbor_keys)) {
+    // Still have conflicts, schedule another retry directly
+    VMSDK_LOG(DEBUG, ctx)
+        << "Remote full-text query has conflicting in-flight keys, "
+           "scheduling retry";
+    ValkeyModule_CreateTimer(ctx, query::kInFlightRetryIntervalMs,
+                             RemoteInFlightRetryTimerCallback, retry_ctx);
+    return;
+  }
+
+  // No conflicts, finish the response
+  FinishRemoteSearchResponse(ctx, retry_ctx);
+}
+
+// Timer callback for retrying in-flight check on remote shard (runs on main thread)
+void RemoteInFlightRetryTimerCallback(ValkeyModuleCtx* ctx, void* data) {
+  auto* retry_ctx = static_cast<RemoteInFlightRetryContext*>(data);
+  CheckAndHandleRemoteInFlightConflicts(ctx, retry_ctx);
+}
+
+}  // namespace
+
 grpc::Status Service::PerformSlotConsistencyCheck(
     uint64_t expected_slot_fingerprint) {
   // compare slot fingerprint
@@ -157,6 +252,33 @@ query::SearchResponseCallback Service::MakeSearchCallback(
       RecordSearchMetrics(true, std::move(latency_sample));
       return;
     }
+        // For pure full-text queries with content, check for in-flight key
+        // conflicts. Skip if no_content since we only return key names without
+        // fetching/evaluating data.
+        if (!parameters->no_content &&
+            query::IsPureFullTextQuery(*parameters)) {
+          auto neighbor_keys = query::CollectNeighborKeys(neighbors.value());
+          if (parameters->index_schema->HasAnyConflictingInFlightKeys(
+                  neighbor_keys)) {
+            // Has conflicts - need to wait for in-flight mutations
+            auto* retry_ctx = new RemoteInFlightRetryContext(
+                response, reactor, std::move(latency_sample),
+                std::move(neighbors.value()), std::move(parameters),
+                std::move(neighbor_keys));
+
+            // Schedule timer on main thread to retry
+            vmsdk::RunByMain(
+                [retry_ctx]() {
+                  auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
+                  ValkeyModule_CreateTimer(
+                      ctx.get(), query::kInFlightRetryIntervalMs,
+                      RemoteInFlightRetryTimerCallback, retry_ctx);
+                },
+                true);
+            return;
+          }
+        }
+
     if (parameters->no_content) {
       SerializeNeighbors(response, neighbors.value());
       reactor->Finish(grpc::Status::OK);

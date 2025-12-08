@@ -56,14 +56,8 @@ vmsdk::KeyValueParser<InfoCommand> CreateInfoParser() {
             return absl::OkStatus();
           }));
 
-  // TODO: GENERATE_NEGATE_FLAG_PARSER in FT.SEARCH PR
-  parser.AddParamParser(
-      "ALLSHARDS",
-      std::make_unique<vmsdk::ParamParser<InfoCommand>>(
-          [](InfoCommand &cmd, vmsdk::ArgsIterator &itr) -> absl::Status {
-            cmd.enable_partial_results = false;
-            return absl::OkStatus();
-          }));
+  parser.AddParamParser("ALLSHARDS", GENERATE_NEGATED_FLAG_PARSER(
+                                         InfoCommand, enable_partial_results));
 
   parser.AddParamParser(
       "SOMESHARDS", GENERATE_FLAG_PARSER(InfoCommand, enable_partial_results));
@@ -71,14 +65,8 @@ vmsdk::KeyValueParser<InfoCommand> CreateInfoParser() {
   parser.AddParamParser("CONSISTENT",
                         GENERATE_FLAG_PARSER(InfoCommand, require_consistency));
 
-  // TODO: GENERATE_NEGATE_FLAG_PARSER in FT.SEARCH PR
-  parser.AddParamParser(
-      "INCONSISTENT",
-      std::make_unique<vmsdk::ParamParser<InfoCommand>>(
-          [](InfoCommand &cmd, vmsdk::ArgsIterator &itr) -> absl::Status {
-            cmd.require_consistency = false;
-            return absl::OkStatus();
-          }));
+  parser.AddParamParser("INCONSISTENT", GENERATE_NEGATED_FLAG_PARSER(
+                                            InfoCommand, require_consistency));
 
   return parser;
 }

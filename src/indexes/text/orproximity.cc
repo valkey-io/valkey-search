@@ -171,7 +171,7 @@ FieldMaskPredicate OrProximityIterator::CurrentFieldMask() const {
 
 bool OrProximityIterator::IsIteratorValid() const {
   return current_key_ && current_position_.has_value() &&
-           current_field_mask_ != 0ULL;
+         current_field_mask_ != 0ULL;
 }
 
 }  // namespace valkey_search::indexes::text

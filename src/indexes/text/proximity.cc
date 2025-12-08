@@ -1,5 +1,26 @@
 #include "proximity.h"
 
+#include "vmsdk/src/module_config.h"
+
+namespace valkey_search::options {
+
+constexpr absl::string_view kProximityInorderCompModeConfig{
+    "proximity-inorder-compat-mode"};
+
+/// Register the "--proximity-inorder-compat-mode" flag. Controls proximity
+/// iterator's inorder/overlap violation check logic. When enabled, the iterator
+/// uses compatibility mode logic for inorder/overlap. When disabled (default
+/// behavior), the iterator uses a stricter and more natural logic for
+/// inorder/overlap checks.
+static auto proximity_inorder_comp_mode =
+    vmsdk::config::BooleanBuilder(kProximityInorderCompModeConfig,  // name
+                                  false)  // default value
+        .Build();
+bool GetProximityInorderCompatMode() {
+  return proximity_inorder_comp_mode->GetValue();
+}
+}  // namespace valkey_search::options
+
 namespace valkey_search::indexes::text {
 
 ProximityIterator::ProximityIterator(
@@ -140,19 +161,44 @@ const PositionRange& ProximityIterator::CurrentPosition() const {
   return current_position_.value();
 }
 
+// Check if there is an INORDER violation between two iterators.
+bool ProximityIterator::HasOrderingViolation(size_t first_idx,
+                                             size_t second_idx) const {
+  if (valkey_search::options::GetProximityInorderCompatMode()) {
+    // Compatibility mode: relaxed check for order using only start positions
+    // only. There is no overlap check in compatibility mode.
+    return positions_[first_idx].start > positions_[second_idx].start;
+  } else {
+    // Default mode: stricter check using range for order AND overlap check
+    return positions_[first_idx].end >= positions_[second_idx].start;
+  }
+}
+
+// In case of violations, the returned iterator is the one that should be
+// advanced to try and find a valid sequence.
+// In case of no violations, std::nullopt is returned and we have found a valid
+// position combination.
 std::optional<size_t> ProximityIterator::FindViolatingIterator() {
   const size_t n = positions_.size();
+  uint32_t current_slop = 0;
   if (in_order_) {
+    // Check ordering / overlap violations.
     for (size_t i = 0; i < n - 1; ++i) {
-      // Check overlap / ordering violations.
-      if (positions_[i].end >= positions_[i + 1].start) {
+      if (HasOrderingViolation(i, i + 1)) {
         return i + 1;
       }
-      // Check slop violations.
-      if (slop_.has_value() &&
-          positions_[i + 1].start - positions_[i].end - 1 > *slop_) {
-        return i;
-      }
+    }
+    // Check slop violations.
+    // The ordering / overlap check above gives us a text group with start and
+    // end. Slop violations are by summing distances between adjacent terms, so
+    // we advance the first iterator to try and reduce slop in the next text
+    // sequence tested.
+    for (size_t i = 0; i < n - 1; ++i) {
+      int32_t distance = (positions_[i + 1].start - positions_[i].start) - 1;
+      current_slop += std::max(0, distance);
+    }
+    if (slop_.has_value() && current_slop > *slop_) {
+      return 0;
     }
     // Check for field mask intersection (terms exist in the same field)
     FieldMaskPredicate field_mask = query_field_mask_;
@@ -171,18 +217,33 @@ std::optional<size_t> ProximityIterator::FindViolatingIterator() {
     pos_with_idx_[i] = {positions_[i].start, i};
   }
   std::sort(pos_with_idx_.begin(), pos_with_idx_.end());
-  FieldMaskPredicate field_mask = query_field_mask_;
   for (size_t i = 0; i < n - 1; ++i) {
     size_t curr_idx = pos_with_idx_[i].second;
     size_t next_idx = pos_with_idx_[i + 1].second;
-    if (positions_[curr_idx].end >= positions_[next_idx].start) {
+    // Check ordering / overlap violations.
+    if (HasOrderingViolation(curr_idx, next_idx)) {
       return next_idx;
     }
-    if (slop_.has_value() &&
-        positions_[next_idx].start - positions_[curr_idx].end - 1 > *slop_) {
-      return curr_idx;
+  }
+  // Check slop violations.
+  if (slop_.has_value()) {
+    // Slop violations are computed by summing distances between adjacent terms,
+    // advance the first iterator to try and reduce slop in the next text
+    // sequence tested.
+    for (size_t i = 0; i < n - 1; ++i) {
+      size_t curr_idx = pos_with_idx_[i].second;
+      size_t next_idx = pos_with_idx_[i + 1].second;
+      int32_t distance =
+          (positions_[next_idx].start - positions_[curr_idx].start) - 1;
+      current_slop += std::max(0, distance);
     }
-    // Check for field mask intersection (terms exist in the same field)
+    if (current_slop > *slop_) {
+      return pos_with_idx_[0].second;
+    }
+  }
+  // Check for field mask intersection (terms exist in the same field)
+  FieldMaskPredicate field_mask = query_field_mask_;
+  for (size_t i = 0; i < n; ++i) {
     field_mask &= iters_[i]->CurrentFieldMask();
     // No common fields, advance this iterator which is lagging behind the
     // previous one.

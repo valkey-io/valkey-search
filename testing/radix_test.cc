@@ -21,39 +21,41 @@ namespace {
 
 struct TestTarget {
   int value;
+  TestTarget() : value(-1) {}
   explicit TestTarget(int v) : value(v) {}
   bool operator==(const TestTarget& other) const {
     return value == other.value;
   }
+
+  explicit operator bool() const { return value != -1; }
 };
 
 class RadixTreeTest : public vmsdk::ValkeyTest {
  protected:
   void SetUp() override {
     vmsdk::ValkeyTest::SetUp();
-    prefix_tree_ = std::make_unique<RadixTree<TestTarget, false>>();
+    prefix_tree_ = RadixTree<TestTarget>{};
   }
 
   void AddWords(const std::vector<std::pair<std::string, int>>& words) {
     for (const auto& [word, value] : words) {
-      prefix_tree_->MutateTarget(word,
-                                 [value](auto) { return TestTarget(value); });
+      prefix_tree_.MutateTarget(word,
+                                [value](auto) { return TestTarget(value); });
     }
   }
 
   void DeleteWords(const std::vector<std::string>& words) {
     for (const auto& word : words) {
-      prefix_tree_->MutateTarget(
-          word, [](auto) -> std::optional<TestTarget> { return std::nullopt; });
+      prefix_tree_.MutateTarget(word, [](auto) { return TestTarget{}; });
     }
   }
 
   void VerifyWords(const std::vector<std::pair<std::string, int>>& expected) {
     for (const auto& [word, value] : expected) {
-      prefix_tree_->MutateTarget(word, [value, word](auto existing) {
-        EXPECT_TRUE(existing.has_value())
+      prefix_tree_.MutateTarget(word, [value, word](auto existing) {
+        EXPECT_TRUE(static_cast<bool>(existing))
             << "Word '" << word << "' should exist";
-        EXPECT_EQ(existing->value, value)
+        EXPECT_EQ(existing.value, value)
             << "Word '" << word << "' has wrong value";
         return existing;
       });
@@ -62,8 +64,8 @@ class RadixTreeTest : public vmsdk::ValkeyTest {
 
   void VerifyWordsDeleted(const std::vector<std::string>& words) {
     for (const auto& word : words) {
-      prefix_tree_->MutateTarget(word, [&word](auto existing) {
-        EXPECT_FALSE(existing.has_value())
+      prefix_tree_.MutateTarget(word, [&word](auto existing) {
+        EXPECT_FALSE(static_cast<bool>(existing))
             << "Word '" << word << "' should be deleted";
         return existing;
       });
@@ -73,7 +75,7 @@ class RadixTreeTest : public vmsdk::ValkeyTest {
   void VerifyIterator(
       const std::string& prefix,
       const std::vector<std::pair<std::string, int>>& expected) {
-    auto iter = prefix_tree_->GetWordIterator(prefix);
+    auto iter = prefix_tree_.GetWordIterator(prefix);
     std::vector<std::pair<std::string, int>> actual;
     while (!iter.Done()) {
       actual.emplace_back(std::string(iter.GetWord()), iter.GetTarget().value);
@@ -84,7 +86,7 @@ class RadixTreeTest : public vmsdk::ValkeyTest {
   }
 
   void VerifyTreeStructure(const std::vector<std::string>& expected_structure) {
-    auto actual_structure = prefix_tree_->DebugGetTreeStrings();
+    auto actual_structure = prefix_tree_.DebugGetTreeStrings();
 
     if (actual_structure.size() != expected_structure.size()) {
       FAIL() << "Tree structure size mismatch.\n"
@@ -108,7 +110,7 @@ class RadixTreeTest : public vmsdk::ValkeyTest {
   }
 
  protected:
-  std::unique_ptr<RadixTree<TestTarget, false>> prefix_tree_;
+  RadixTree<TestTarget> prefix_tree_;
 
  private:
   std::string JoinLines(const std::vector<std::string>& lines) {
@@ -198,7 +200,7 @@ TEST_F(RadixTreeTest, DeleteCompressedNodeWord) {
   // clang-format on
 
   // Case 2: Branching parent - Tree structure doesn't change
-  prefix_tree_ = std::make_unique<RadixTree<TestTarget, false>>();
+  prefix_tree_ = RadixTree<TestTarget>{};
   AddWords({{"cat", 1}, {"car", 2}, {"cards", 3}});
   DeleteWords({"car"});
   VerifyWords({{"cat", 1}, {"cards", 3}});
@@ -222,7 +224,7 @@ TEST_F(RadixTreeTest, DeleteLeafNodeWordSimpleScenarios) {
   VerifyTreeStructure({"\"\" LEAF"});
 
   // Case 2: Parent node with target gets turned into a leaf
-  prefix_tree_ = std::make_unique<RadixTree<TestTarget, false>>();
+  prefix_tree_ = RadixTree<TestTarget>{};
   AddWords({{"test", 1}, {"testing", 2}});
   DeleteWords({"testing"});
   VerifyWords({{"test", 1}});
@@ -235,7 +237,7 @@ TEST_F(RadixTreeTest, DeleteLeafNodeWordSimpleScenarios) {
   // clang-format on
 
   // Case 3: Leaf deletion where parent is branching with children.size() > 1
-  prefix_tree_ = std::make_unique<RadixTree<TestTarget, false>>();
+  prefix_tree_ = RadixTree<TestTarget>{};
   AddWords({{"cat", 1}, {"car", 2}, {"can", 3}});
   DeleteWords({"car"});
   VerifyWords({{"cat", 1}, {"can", 3}});
@@ -294,7 +296,7 @@ TEST_F(RadixTreeTest, DeleteLeafNodeWordComplexScenarios) {
   // clang-format on
 
   // Reset tree
-  prefix_tree_ = std::make_unique<RadixTree<TestTarget, false>>();
+  prefix_tree_ = RadixTree<TestTarget>{};
 
   // ==========================================================================
   // Scenario 2: Connect parent to its grandchild
@@ -335,7 +337,7 @@ TEST_F(RadixTreeTest, DeleteLeafNodeWordComplexScenarios) {
   // clang-format on
 
   // Reset tree
-  prefix_tree_ = std::make_unique<RadixTree<TestTarget, false>>();
+  prefix_tree_ = RadixTree<TestTarget>{};
 
   // =========================================================================
   // Scenario 3: Connect node to its grandchild when parent isn't a compressed
@@ -375,7 +377,7 @@ TEST_F(RadixTreeTest, DeleteLeafNodeWordComplexScenarios) {
   // clang-format on
 
   // Reset tree
-  prefix_tree_ = std::make_unique<RadixTree<TestTarget, false>>();
+  prefix_tree_ = RadixTree<TestTarget>{};
 
   // ==========================================================================
   // Scenario 4: Connect node to its grandchild since node has a target and must
@@ -431,22 +433,22 @@ TEST_F(RadixTreeTest, WordIteratorBasic) {
 
 TEST_F(RadixTreeTest, WordIteratorEmpty) {
   // Test iterator on empty tree
-  auto iter = prefix_tree_->GetWordIterator("test");
+  auto iter = prefix_tree_.GetWordIterator("test");
   EXPECT_TRUE(iter.Done());
 }
 
 TEST_F(RadixTreeTest, WordIteratorNoMatch) {
-  prefix_tree_->MutateTarget("hello", [](auto) { return TestTarget(1); });
+  prefix_tree_.MutateTarget("hello", [](auto) { return TestTarget(1); });
 
   // Test iterator with non-matching prefix
-  auto iter = prefix_tree_->GetWordIterator("world");
+  auto iter = prefix_tree_.GetWordIterator("world");
   EXPECT_TRUE(iter.Done());
 }
 
 TEST_F(RadixTreeTest, WordIteratorSingleWord) {
-  prefix_tree_->MutateTarget("test", [](auto) { return TestTarget(42); });
+  prefix_tree_.MutateTarget("test", [](auto) { return TestTarget(42); });
 
-  auto iter = prefix_tree_->GetWordIterator("test");
+  auto iter = prefix_tree_.GetWordIterator("test");
   EXPECT_FALSE(iter.Done());
   EXPECT_EQ(iter.GetWord(), "test");
   EXPECT_EQ(iter.GetTarget().value, 42);
@@ -561,9 +563,9 @@ TEST_F(RadixTreeTest, WordIteratorLargeScale) {
   for (const auto& w : words) {
     word_counts[w]++;
     // Add word to tree, incrementing count each time
-    prefix_tree_->MutateTarget(w, [](auto existing) {
-      if (existing.has_value()) {
-        return TestTarget(existing->value + 1);
+    prefix_tree_.MutateTarget(w, [](auto existing) {
+      if (existing) {
+        return TestTarget(existing.value + 1);
       } else {
         return TestTarget(1);
       }
@@ -584,7 +586,7 @@ TEST_F(RadixTreeTest, WordIteratorLargeScale) {
       std::default_random_engine{static_cast<unsigned>(std::time(nullptr))});
   std::set<std::string> words_to_delete(words.begin(), words.begin() + 100);
   for (const auto& w : words_to_delete) {
-    prefix_tree_->MutateTarget(w, [](auto) { return std::nullopt; });
+    prefix_tree_.MutateTarget(w, [](auto) { return TestTarget{}; });
     word_counts.erase(w);
   }
   word_pairs = std::vector<std::pair<std::string, int>>(word_counts.begin(),
@@ -593,7 +595,7 @@ TEST_F(RadixTreeTest, WordIteratorLargeScale) {
 
   // Delete all words
   for (const auto& w : words) {
-    prefix_tree_->MutateTarget(w, [](auto) { return std::nullopt; });
+    prefix_tree_.MutateTarget(w, [](auto) { return TestTarget{}; });
   }
   // clang-format off
   VerifyTreeStructure({

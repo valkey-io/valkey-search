@@ -895,40 +895,44 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # Test Set 1 : Exact phrase (slop=0 and inorder=true are implicit)
         # Test 1.1: Two-term exact phrase
         result = client.execute_command("FT.SEARCH", "idx", '@content:"alpha beta"')
-        assert (result[0], result[1]) == (1, b"doc:1") # Only doc:1
+        assert (result[0], result[1]) == (1, b"doc:1")
         result = client.execute_command("FT.SEARCH", "idx", '@content:"alpha gamma"')
         assert result[0] == 0  # No match (gap between words)
         # Test 1.2: Three-term exact phrase
         result = client.execute_command("FT.SEARCH", "idx", '@content:"alpha beta gamma"')
-        assert (result[0], result[1]) == (1, b"doc:1") # Only doc:1
+        assert (result[0], result[1]) == (1, b"doc:1")
         # Test 1.4: Four-term exact phrase
         result = client.execute_command("FT.SEARCH", "idx", '@content:"alpha beta gamma delta"')
-        assert (result[0], result[1]) == (1, b"doc:1") # Only doc:1
+        assert (result[0], result[1]) == (1, b"doc:1")
 
         # Test Set 2 : Composed AND query
         # Test 2.1: Two terms With slop 0 and inorder
         result = client.execute_command("FT.SEARCH", "idx", 'beta alpha', "slop", "0", "inorder")
-        assert (result[0], result[1]) == (1, b"doc:3") # Only doc:3
+        assert (result[0], result[1]) == (1, b"doc:3")
         # Test 2.2: Three terms With slop 0 and inorder
         result = client.execute_command("FT.SEARCH", "idx", 'gamma beta alpha', "slop", "0", "inorder")
-        assert (result[0], result[1]) == (1, b"doc:3") # Only doc:1
+        assert (result[0], result[1]) == (1, b"doc:3")
         # Test 2.3: Three terms With slop 0 but no order.
         result = client.execute_command("FT.SEARCH", "idx", 'gamma beta alpha', "slop", "0")
         assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:3"})
 
         # Test 2.4: Three terms With slop 1 and inorder
         result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "1", "inorder")
+        assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "2", "inorder")
         assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:2"})
         # Test 2.5: Three terms With slop 3 and inorder
-        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "3", "inorder")
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "5", "inorder")
+        assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:2"})
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "6", "inorder")
         assert (result[0], set(result[1::2])) == (3, {b"doc:1", b"doc:2", b"doc:5"})
 
         # Test 2.6: Three terms With slop 1 but no order.
-        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "1", "inorder")
-        assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:2"})
+        result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "1")
+        assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:3"})
         # Test 2.7: Three terms With slop 3 but no order.
         result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "slop", "3")
-        assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:5", b"doc:8"})
+        assert (result[0], set(result[1::2])) == (3, {b"doc:1", b"doc:2", b"doc:3"})
 
         # Test 2.8: Three terms but inorder.
         result = client.execute_command("FT.SEARCH", "idx", 'alpha beta gamma', "inorder")
@@ -949,24 +953,25 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         # Test 3.1: Exact phrase
         result = client.execute_command("FT.SEARCH", "idx", '@content:"version 1 beta"')
-        assert (result[0], result[1]) == (1, b"doc:10")  # Only doc:10 has exact phrase
+        assert (result[0], result[1]) == (1, b"doc:10")
 
         # Test 3.2: Exact phrase (different order)
         result = client.execute_command("FT.SEARCH", "idx", '@content:"beta 2 release"')
-        assert (result[0], result[1]) == (1, b"doc:10")  # Only doc:10
+        assert (result[0], result[1]) == (1, b"doc:10")
 
         # Test 3.3: Proximity with number tokens - slop 0, inorder
         result = client.execute_command("FT.SEARCH", "idx", 'version 1 beta 2', "SLOP", "0", "INORDER")
-        assert (result[0], result[1]) == (1, b"doc:10")  # Only doc:10
+        assert (result[0], result[1]) == (1, b"doc:10")
 
         # Test 3.4: Proximity with number tokens - slop 1, inorder (allows one gap)
         result = client.execute_command("FT.SEARCH", "idx", 'version 1 beta', "SLOP", "1", "INORDER")
-        assert (result[0], set(result[1::2])) == (2, {b"doc:10", b"doc:13"})  # doc:10 (exact) and doc:13 (with gaps)
+        assert (result[0], set(result[1::2])) == (1, {b"doc:10"})
+        result = client.execute_command("FT.SEARCH", "idx", 'version 1 beta', "SLOP", "1")
+        assert (result[0], set(result[1::2])) == (2, {b'doc:10', b'doc:12'})
 
-        # Potential Nary case
         # Test 3.5: Proximity with number tokens - slop 0, no order
-        # result = client.execute_command("FT.SEARCH", "idx", 'version beta 1')
-        # assert (result[0], set(result[1::2])) == (1, {b"doc:10"})  # Any order, no gaps
+        result = client.execute_command("FT.SEARCH", "idx", 'version beta 1', "SLOP", "0")
+        assert (result[0], set(result[1::2])) == (1, {b"doc:10"})
 
         # Test 3.6: number tokens in different positions
         result = client.execute_command("FT.SEARCH", "idx", '1 beta 2', "SLOP", "0", "INORDER")
@@ -1028,6 +1033,370 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # content / default field.
         result = client.execute_command("FT.SEARCH", "idx", 'word10 @content:word11 word12', "INORDER")
         assert (result[0], result[1]) == (1, b"doc:7")
+
+    def test_proximity_slop_violation_advancement(self):
+        """
+            Test that proximity slop violation advancement works as expected.
+            5 documents are created with varying term frequencies to test advancement logic.
+            We run searches with decreasing slop values to validate that only documents
+            that can satisfy the proximity constraints are returned.
+        """
+        client: Valkey = self.server.get_new_client()
+        # Create index with text fields
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
+                            "content", "TEXT", "NOSTEM")
+        client.execute_command("HSET", "doc:1", "content", "term1 term1 term1 term2 x x term3 x x term4")
+        client.execute_command("HSET", "doc:2", "content", "term1 term1 term1 term2 x x term3 x x term4 y y term1 term1 term1 term2 x x term3 x x term4 y y term1 term1 term1 term2 x x term3 x x term4 y y term1 term2 x term3 x x term4")
+        client.execute_command("HSET", "doc:3", "content", "term1 term1 term1 term2 x x term3 x x term4 y y term1 term1 term1 term2 x x term3 x x term4 y y term1 term1 term1 term2 x x term3 x x term4 y y term1 term2 x term3 x x term4 y y term1 term2 x term3 x term4")
+        client.execute_command("HSET", "doc:4", "content", "term1 term1 term1 term2 x x term3 x x term4 y y term1 term1 term1 term2 x x term3 x x term4 y y term1 term1 term1 term2 x x term3 x x term4 y y term1 term2 x term3 x x term4 y y term1 term2 x term3 x term4 term1 term2 x term3 term4")
+        client.execute_command("HSET", "doc:5", "content", "term1 term1 term1 term2 x x term3 x x term4 y y term1 term1 term1 term2 x x term3 x x term4 y y term1 term1 term1 term2 x x term3 x x term4 y y term1 term2 x term3 x x term4 y y term1 term2 x term3 x term4 term1 term2 x term3 term4 y y term1 term2 term3 term4")
+        # TODO: Add documents that contain same terms in wrong order (different from query) to validate INORDER behavior.
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        for config in ["YES", "NO"]:
+            assert client.execute_command("CONFIG SET search.proximity-inorder-compat-mode", config) == b'OK'
+            ## INORDER=true tests
+            # No advancement needed, all starting terms within slop.
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "6", "INORDER")
+            assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+            # Starting from below, we check that advancement is properly done to find next possible match.
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "5", "INORDER")
+            assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "4", "INORDER")
+            assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "3", "INORDER")
+            assert (result[0], set(result[1::2])) == (4, {b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "2", "INORDER")
+            assert (result[0], set(result[1::2])) == (3, {b"doc:3", b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "1", "INORDER")
+            assert (result[0], set(result[1::2])) == (2, {b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "SLOP", "0", "INORDER")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:5"})
+            ## INORDER=false tests
+            # No advancement needed, all starting terms within slop.
+            result = client.execute_command("FT.SEARCH", "idx", 'term3 term1 term2 term4', "SLOP", "6")
+            assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+            # Starting from below, we check that advancement is properly done to find next possible match.
+            result = client.execute_command("FT.SEARCH", "idx", 'term2 term1 term3 term4', "SLOP", "5")
+            assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term3 term2 term4', "SLOP", "4")
+            assert (result[0], set(result[1::2])) == (5, {b"doc:1", b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term4 term1 term2 term3', "SLOP", "3")
+            assert (result[0], set(result[1::2])) == (4, {b"doc:2", b"doc:3", b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term3 term4 term2', "SLOP", "2")
+            assert (result[0], set(result[1::2])) == (3, {b"doc:3", b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term4 term3 term1 term2', "SLOP", "1")
+            assert (result[0], set(result[1::2])) == (2, {b"doc:4", b"doc:5"})
+            result = client.execute_command("FT.SEARCH", "idx", 'term4 term1 term3 term2', "SLOP", "0")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:5"})
+
+    def test_proximity_slop_compat(self):
+        """
+            Test that proximity slop compat mode works as expected.
+            2 documents are created with varying term frequencies to test advancement logic.
+            We run searches with decreasing slop values to validate that only documents
+            that can satisfy the proximity constraints are returned.
+        """
+        client: Valkey = self.server.get_new_client()
+        # Create index with text fields
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
+                            "content", "TEXT", "NOSTEM")
+        client.execute_command("HSET", "doc:1", "content", "apple red blue banana yellow green grape purple orange cherry pink violet one two three four five six seven eight nine ten zero 1 2 3 4 5 6 7 8 9 0")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        for compat_mode in ["YES", "NO"]:
+            assert client.execute_command("CONFIG SET search.proximity-inorder-compat-mode", compat_mode) == b'OK'
+            # Test slop compat searches
+            # (1) Slop=x, Inorder=true in flat/nested queries with single terms
+            # (1a) AND
+            # Distance from apple to purple is 6. Distance from purple to one is 4.
+            # Hence, a slop of 10 is required.
+            result = client.execute_command("FT.SEARCH", "idx", "apple purple one", "DIALECT", "2", "INORDER", "SLOP", "9")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "apple purple one", "DIALECT", "2", "INORDER", "SLOP", "10")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            # Distance from apple to purple is 6 (with banana in between)
+            result = client.execute_command("FT.SEARCH", "idx", "apple (banana) purple", "DIALECT", "2", "INORDER", "SLOP", "4")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "apple (banana) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            # Distance from apple to purple is 6
+            # 7 - 0 - 1 = 6
+            # 6 - (n - 2) = 6 - 1 = 5 
+            result = client.execute_command("FT.SEARCH", "idx", "apple (purple) purple", "DIALECT", "2", "INORDER", "SLOP", "4")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "apple (purple) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "apple (purple) purple", "DIALECT", "2", "INORDER", "SLOP", "6")
+            if compat_mode == "YES":
+                # In compat mode, we allow multiple occurrences of the same term (no overlap check). This does not contribute to slop calculation.
+                assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            else:
+                # When not in compat mode, we do an overlap check and hence terms cannot have same position.
+                assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "apple (banana) purple (cherry) one", "DIALECT", "2", "INORDER", "SLOP", "7")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "apple (banana) purple (cherry) one", "DIALECT", "2", "INORDER", "SLOP", "8")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            result = client.execute_command("FT.SEARCH", "idx", "apple (banana) purple one", "DIALECT", "2", "INORDER", "SLOP", "8")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "apple (banana) purple one", "DIALECT", "2", "INORDER", "SLOP", "9")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            # (1b) OR
+            result = client.execute_command("FT.SEARCH", "idx", "apple (banana | yellow) purple", "DIALECT", "2", "INORDER", "SLOP", "4")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "apple (banana | yellow) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            result = client.execute_command("FT.SEARCH", "idx", "apple (cherry | pink | violet | one | two | three | four | five | six | banana | yellow) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            result = client.execute_command("FT.SEARCH", "idx", "apple (banana | ten) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            result = client.execute_command("FT.SEARCH", "idx", "apple (ten | ten) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
+            assert result[0] == 0
+            # (2) Slop=x, Inorder=true in flat/nested queries with multi terms
+            # (2a) AND
+            result = client.execute_command("FT.SEARCH", "idx", "apple (banana yellow green) purple", "DIALECT", "2", "INORDER", "SLOP", "4")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "apple (banana yellow green) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            result = client.execute_command("FT.SEARCH", "idx", "apple (banana yellow green) purple one", "DIALECT", "2", "INORDER", "SLOP", "8")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "apple (banana yellow green) purple one", "DIALECT", "2", "INORDER", "SLOP", "9")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            # (2b) Exact Phrase
+            # Explanation: Exact phrase has a slop of 0
+            result = client.execute_command("FT.SEARCH", "idx", 'apple ("banana yellow green one") purple', "DIALECT", "2", "INORDER")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", 'apple "banana yellow green one" purple', "DIALECT", "2", "INORDER")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", '"banana yellow green one"', "DIALECT", "2", "INORDER")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", '"banana yellow green one"', "DIALECT", "2")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", '"banana yellow green one"', "DIALECT", "2", "SLOP", "123")
+            assert result[0] == 0
+            # (2c) OR
+            result = client.execute_command("FT.SEARCH", "idx", "apple (banana | green grape) purple", "DIALECT", "2", "INORDER", "SLOP", "4")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "apple (banana | green grape) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            result = client.execute_command("FT.SEARCH", "idx", "apple (orange cherry | pink violet | one two | three four | five six seven eight | green grape) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            result = client.execute_command("FT.SEARCH", "idx", "apple (banana | yellow green grape) purple", "DIALECT", "2", "INORDER", "SLOP", "4")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "apple (banana | yellow green grape) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            # (3) Slop=x, Inorder=false in flat/nested queries with single terms
+            # (3a) AND
+            # Sort by position: apple banana purple -> 2 + 3 = 5
+            result = client.execute_command("FT.SEARCH", "idx", "apple banana purple", "DIALECT", "2", "SLOP", "4")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "apple banana purple", "DIALECT", "2", "SLOP", "5")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            # Sort by position: apple ten purple -> 6 + 13 = 19
+            result = client.execute_command("FT.SEARCH", "idx", "apple ten purple", "DIALECT", "2", "SLOP", "18")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "apple ten purple", "DIALECT", "2", "SLOP", "19")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            result = client.execute_command("FT.SEARCH", "idx", "ten purple apple", "DIALECT", "2", "SLOP", "18")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "ten purple apple", "DIALECT", "2", "SLOP", "19")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            # Sort by position: apple yellow purple ten -> 3 + 2 + 13 = 18
+            result = client.execute_command("FT.SEARCH", "idx", "ten purple (yellow) apple", "DIALECT", "2", "SLOP", "17")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "ten purple (yellow) apple", "DIALECT", "2", "SLOP", "18")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            # (3b) OR
+            # Pick smallest position (yellow): apple yellow purple ten -> 3 + 2 + 13 = 18
+            result = client.execute_command("FT.SEARCH", "idx", "ten purple (yellow | green) apple", "DIALECT", "2", "SLOP", "17")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "ten purple (yellow | green) apple", "DIALECT", "2", "SLOP", "18")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            # Pick smallest position (yellow): apple yellow purple ten -> 3 + 2 + 13 = 18
+            result = client.execute_command("FT.SEARCH", "idx", "ten purple (yellow | zero) apple", "DIALECT", "2", "SLOP", "17")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "ten purple (yellow | zero) apple", "DIALECT", "2", "SLOP", "18")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            # Only zero available: apple purple ten zero -> 6 + 13 + 0 = 19
+            result = client.execute_command("FT.SEARCH", "idx", "ten purple (zero | zero) apple", "DIALECT", "2", "SLOP", "18")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "ten purple (zero | zero) apple", "DIALECT", "2", "SLOP", "19")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            # (4) Slop=x, Inorder=false in flat/nested queries with multi terms
+            # (4a) AND
+            # Inner intersection (yellow blue grape) => leftmost is blue
+            # Sort by position: apple blue purple ten -> 1 + 4 + 13 = 18
+            result = client.execute_command("FT.SEARCH", "idx", "ten purple (yellow blue grape) apple", "DIALECT", "2", "SLOP", "17")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "ten purple (yellow blue grape) apple", "DIALECT", "2", "SLOP", "18")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            # (4b) Exact Phrase
+            # "red banana yellow" is not valid (not consecutive), hence rejected
+            result = client.execute_command("FT.SEARCH", "idx", 'ten purple ("red banana yellow") apple', "DIALECT", "2", "SLOP", "12321")
+            assert result[0] == 0
+            # "blue banana yellow" is valid, uses blue position: apple blue purple ten -> 1 + 4 + 13 = 18
+            result = client.execute_command("FT.SEARCH", "idx", 'ten purple ("blue banana yellow") apple', "DIALECT", "2", "SLOP", "17")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", 'ten purple ("blue banana yellow") apple', "DIALECT", "2", "SLOP", "18")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            # "blue banana yellow" uses blue position: apple blue purple -> 1 + 4 = 5
+            result = client.execute_command("FT.SEARCH", "idx", 'purple ("blue banana yellow") apple', "DIALECT", "2", "SLOP", "4")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", 'purple ("blue banana yellow") apple', "DIALECT", "2", "SLOP", "5")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            # (4c) OR
+            # OR with multi-terms: uses leftmost position from left side (blue from "yellow blue grape")
+            # Sort by position: apple blue purple ten -> 1 + 4 + 13 = 18
+            result = client.execute_command("FT.SEARCH", "idx", "ten purple (yellow blue grape | four five six seven eight nine) apple", "DIALECT", "2", "SLOP", "17")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "ten purple (yellow blue grape | four five six seven eight nine) apple", "DIALECT", "2", "SLOP", "18")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            result = client.execute_command("FT.SEARCH", "idx", "ten purple (four one five three | four five six seven eight nine | yellow blue grape) apple", "DIALECT", "2", "SLOP", "18")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            # (5) Complex nested queries
+            result = client.execute_command("FT.SEARCH", "idx", "(red blue (banana yellow) green grape)", "DIALECT", "2", "INORDER", "SLOP", "0")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "(red blue (banana yellow) green grape)", "DIALECT", "2", "INORDER", "SLOP", "1")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            result = client.execute_command("FT.SEARCH", "idx", "(red blue (cherry pink | violet one | two three | banana yellow))", "DIALECT", "2", "INORDER", "SLOP", "0")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            result = client.execute_command("FT.SEARCH", "idx", "(red blue (cherry pink | violet one | two three | banana yellow))", "DIALECT", "2", "INORDER", "SLOP", "1")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            result = client.execute_command("FT.SEARCH", "idx", "(red blue (cherry pink | violet one | two three | banana yellow) green grape)", "DIALECT", "2", "INORDER", "SLOP", "0")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "(red blue (cherry pink | violet one | two three | banana yellow) green grape)", "DIALECT", "2", "INORDER", "SLOP", "1")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+            result = client.execute_command("FT.SEARCH", "idx", "apple (orange cherry | pink violet | one two | three four | five six seven eight | (red blue (cherry pink | violet one | two three | banana yellow)) green grape) purple", "DIALECT", "2", "INORDER", "SLOP", "4")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "apple (orange cherry | pink violet | one two | three four | five six seven eight | (red blue (cherry pink | violet one | two three | banana yellow)) green grape) purple", "DIALECT", "2", "INORDER", "SLOP", "5")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+
+
+    def test_proximity_inorder_violation_advancement(self):
+        """
+            Test that proximity inorder violation advancement works as expected.
+            documents are created with varying term orders to test advancement logic.
+            We run searches with inorder=true to validate that only documents
+            that can satisfy the inorder constraints are returned.
+        """
+        client: Valkey = self.server.get_new_client()
+        # Create index with text fields
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
+                            "content", "TEXT", "NOSTEM")
+        client.execute_command("HSET", "doc:1", "content", "term2 term1 term3 term4 term3 term1 term2 term4 term4 term1 term2 term3 term1 term3 term2 term4 term1 term4 term2 term3 term2 term3 term1 term4 term2 term4 term1 term3 term3 term2 term1 term4 term3 term4 term1 term2 term4 term2 term1 term3 term4 term3 term1 term2 term1 term2 term4 term3 term1 term3 term4 term2 term1 term4 term3 term2 term2 term1 term4 term3 term2 term3 term4 term1 term2 term4 term3 term1 term3 term1 term4 term2 term3 term2 term4 term1 term3 term4 term2 term1 term4 term1 term3 term2 term4 term2 term3 term1 term4 term3 term2 term1 term1 term2 term3 term4")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        for config in ["YES", "NO"]:
+            assert client.execute_command("CONFIG SET search.proximity-inorder-compat-mode " + config) == b'OK'
+            # Test inorder=true searches
+            result = client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4', "INORDER", "slop", "0")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:1"})
+
+    def test_proximity_inorder_compat(self):
+        """
+            Test that proximity inorder violation advancement works as expected.
+            2 documents are created with varying term orders to test advancement logic.
+            We run searches with inorder=true to validate that only documents
+            that can satisfy the inorder constraints are returned.
+        """
+        client: Valkey = self.server.get_new_client()
+        # Create index with text fields
+        client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
+                            "content", "TEXT", "NOSTEM")
+        client.execute_command("HSET", "doc:2", "content", "apple red blue banana yellow green grape purple orange cherry pink violet one two three four five six seven eight nine ten zero 1 2 3 4 5 6 7 8 0")
+        # Wait for index backfill to complete
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+        for compat_mode in ["YES", "NO"]:
+            assert client.execute_command("CONFIG SET search.proximity-inorder-compat-mode", compat_mode) == b'OK'
+            # TESTS from slop and inorder compat investigation.
+            # (1) Inorder=true in nested queries with single terms
+            # (1a) Nested AND
+            # apple <= yellow <= purple. Valid.
+            result = client.execute_command("FT.SEARCH", "idx", 'apple (yellow) purple', "INORDER")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:2"})
+            # apple <= yellow <= purple <= cherry <= one. Valid.
+            result = client.execute_command("FT.SEARCH", "idx", 'apple (yellow ) purple (cherry) one', "INORDER")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:2"})
+            # orange is not <= purple. Invalid.
+            result = client.execute_command("FT.SEARCH", "idx", 'apple (orange ) purple (cherry) one', "INORDER")
+            assert result[0] == 0
+            result1 = client.execute_command("FT.SEARCH", "idx", 'apple (purple) purple', "INORDER")
+            result2 = client.execute_command("FT.SEARCH", "idx", 'apple purple purple', "INORDER")
+            if compat_mode == "NO":
+                # When compat mode is disabled, we do not allow multiple occurrences of the same term (enforcing overlap check).
+                assert result1[0] == 0 and result2[0] == 0
+            else:
+                # In compat mode, we allow multiple occurrences of the same term (no overlap check).
+                # Terms can have the same position. `apple` <= `purple` <= `purple`. Valid.
+                assert (result1[0], set(result1[1::2])) == (1, {b"doc:2"})
+                assert (result2[0], set(result2[1::2])) == (1, {b"doc:2"})
+            # (1b) Nested OR
+            # In the OR operator, (yellow | grape), the position of yellow is returned as it is the left most.
+            # This is valid in the top level intersection ordering check.
+            result = client.execute_command("FT.SEARCH", "idx", 'apple (yellow | grape) purple (cherry | pink) one', "INORDER")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:2"})
+            # In the OR operator, (orange | orange), the position of orange is returned as it is the left most.
+            # This is NOT valid in the top level intersection ordering check.
+            # Hence, no results are returned.
+            result = client.execute_command("FT.SEARCH", "idx", 'apple (orange | orange) purple (cherry | pink) one', "INORDER")
+            assert result[0] == 0
+            # (2) Inorder=true in nested queries with multi terms
+            # (2a) Nested AND
+            # Inner intersection has (yellow green orange one). This is valid.
+            # Inner intersection reports `yellow` as its position.
+            # Outer intersection evaluates:  'apple (yellow) purple'
+            #                                apple <= yellow <= purple. This is valid.
+            # It does not matter that `one` comes after purple since the nested operator will
+            # report back the left most term's position as its position.
+            result1 = client.execute_command("FT.SEARCH", "idx", 'apple (yellow green orange one) purple', "INORDER")
+            result2 = client.execute_command("FT.SEARCH", "idx", 'apple (yellow green one) purple', "INORDER")
+            result3 = client.execute_command("FT.SEARCH", "idx", 'apple (yellow one) purple', "INORDER")
+            if compat_mode == "NO":
+                # When compat mode is disabled, we do an overlap check.
+                # Here, `one` comes after `purple` in the document. But the query has it before it. Invalid.
+                assert result1[0] == 0 and result2[0] == 0 and result3[0] == 0
+            else:
+                # In compat mode, we allow multiple occurrences of the same term (no overlap check).
+                assert (result1[0], set(result1[1::2])) == (1, {b"doc:2"})
+                assert (result2[0], set(result2[1::2])) == (1, {b"doc:2"})
+                assert (result3[0], set(result3[1::2])) == (1, {b"doc:2"})
+            # This is parsed as an intersection of apple one purple.
+            # `one` is not <= `purple`. Invalid.
+            result = client.execute_command("FT.SEARCH", "idx", 'apple (one) purple', "INORDER")
+            assert result[0] == 0
+            # `one` is not <= `purple`. Invalid.
+            result = client.execute_command("FT.SEARCH", "idx", 'apple (one yellow) purple', "INORDER")
+            assert result[0] == 0
+            # There is no overlap check
+            result1 = client.execute_command("FT.SEARCH", "idx", 'apple (yellow green grape purple orange cherry violet one two three) violet', "INORDER")
+            result2 = client.execute_command("FT.SEARCH", "idx", 'apple "yellow green grape purple orange cherry pink violet one two three" violet', "INORDER")
+            if compat_mode == "NO":
+                # When compat mode is disabled, we do an overlap check.
+                # Here, `violet` (outer) comes before `violet one two three` (inner) in the document. But the query has it after it. Invalid.
+                assert result1[0] == 0 and result2[0] == 0
+            else:
+                # In compat mode, we allow multiple occurrences of the same term (no overlap check).
+                assert (result1[0], set(result1[1::2])) == (1, {b"doc:2"})
+                assert (result2[0], set(result2[1::2])) == (1, {b"doc:2"})
+            # (2b) Nested OR
+            result = client.execute_command("FT.SEARCH", "idx", 'apple (yellow | yellow green orange ) purple', "INORDER")
+            assert (result[0], set(result[1::2])) == (1, {b"doc:2"})
+            result1 = client.execute_command("FT.SEARCH", "idx", 'apple (yellow green orange one | yellow green orange one) purple', "INORDER")
+            result2 = client.execute_command("FT.SEARCH", "idx", 'apple (yellow green orange one | yellow green orange one) purple (cherry | pink) one', "INORDER")
+            result3 = client.execute_command("FT.SEARCH", "idx", 'apple (yellow green orange one | yellow green orange one) purple (cherry pink ten | cherry pink ten) one', "INORDER")
+            if compat_mode == "NO":
+                # When compat mode is disabled, we do an overlap check.
+                # Here, `one` (inner) comes after `purple` (outer) in the document. But the query has it before it. Invalid.
+                assert result1[0] == 0 and result2[0] == 0 and result3[0] == 0
+            else:
+                # In compat mode, we allow multiple occurrences of the same term (no overlap check).
+                assert (result1[0], set(result1[1::2])) == (1, {b"doc:2"})
+                assert (result2[0], set(result2[1::2])) == (1, {b"doc:2"})
+                assert (result3[0], set(result3[1::2])) == (1, {b"doc:2"})
+            # `ten` is NOT <= `one`. Invalid. 
+            result = client.execute_command("FT.SEARCH", "idx", 'apple (yellow green orange one | yellow green orange one) purple (ten | ten) one', "INORDER")
+            assert result[0] == 0
 
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """

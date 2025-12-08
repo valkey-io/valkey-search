@@ -56,6 +56,30 @@ vmsdk::KeyValueParser<InfoCommand> CreateInfoParser() {
             return absl::OkStatus();
           }));
 
+  // TODO: GENERATE_NEGATE_FLAG_PARSER in FT.SEARCH PR
+  parser.AddParamParser(
+      "ALLSHARDS",
+      std::make_unique<vmsdk::ParamParser<InfoCommand>>(
+          [](InfoCommand &cmd, vmsdk::ArgsIterator &itr) -> absl::Status {
+            cmd.enable_partial_results = false;
+            return absl::OkStatus();
+          }));
+
+  parser.AddParamParser(
+      "SOMESHARDS", GENERATE_FLAG_PARSER(InfoCommand, enable_partial_results));
+
+  parser.AddParamParser("CONSISTENT",
+                        GENERATE_FLAG_PARSER(InfoCommand, require_consistency));
+
+  // TODO: GENERATE_NEGATE_FLAG_PARSER in FT.SEARCH PR
+  parser.AddParamParser(
+      "INCONSISTENT",
+      std::make_unique<vmsdk::ParamParser<InfoCommand>>(
+          [](InfoCommand &cmd, vmsdk::ArgsIterator &itr) -> absl::Status {
+            cmd.require_consistency = false;
+            return absl::OkStatus();
+          }));
+
   return parser;
 }
 
@@ -126,7 +150,8 @@ absl::Status InfoCommand::Execute(ValkeyModuleCtx *ctx) {
         index_schema->RespondWithInfo(ctx);
       } else {
         auto op = new query::primary_info_fanout::PrimaryInfoFanoutOperation(
-            ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms);
+            ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms,
+            enable_partial_results, require_consistency);
         op->StartOperation(ctx);
       }
       break;
@@ -139,7 +164,8 @@ absl::Status InfoCommand::Execute(ValkeyModuleCtx *ctx) {
         index_schema->RespondWithInfo(ctx);
       } else {
         auto op = new query::cluster_info_fanout::ClusterInfoFanoutOperation(
-            ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms);
+            ValkeyModule_GetSelectedDb(ctx), index_schema_name, timeout_ms,
+            enable_partial_results, require_consistency);
         op->StartOperation(ctx);
       }
       break;

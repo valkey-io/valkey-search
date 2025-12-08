@@ -28,6 +28,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
 #include "src/utils/cancel.h"
+#include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/thread_pool.h"
@@ -44,6 +45,8 @@ constexpr int64_t kTimeoutMS{50000};
 constexpr size_t kMaxTimeoutMs{60000};
 constexpr absl::string_view kOOMMsg{
     "OOM command not allowed when used memory > 'maxmemory'"};
+constexpr absl::string_view kFailedPreconditionMsg{
+    "Index or slot consistency check failed"};
 constexpr uint32_t kDialect{2};
 
 struct LimitParameter {
@@ -68,13 +71,17 @@ inline std::ostream& operator<<(std::ostream& os, const ReturnAttribute& r) {
 struct SearchParameters {
   mutable cancel::Token cancellation_token;
   virtual ~SearchParameters() = default;
+  uint32_t db_num{0};
   std::shared_ptr<IndexSchema> index_schema;
   std::string index_schema_name;
   std::string attribute_alias;
   vmsdk::UniqueValkeyString score_as;
   std::string query;
   uint32_t dialect{kDialect};
+  uint32_t db_num_;
   bool local_only{false};
+  bool enable_partial_results{options::GetPreferPartialResults().GetValue()};
+  bool enable_consistency{options::GetPreferConsistentResults().GetValue()};
   int k{0};
   std::optional<unsigned> ef;
   LimitParameter limit;
@@ -82,6 +89,8 @@ struct SearchParameters {
   bool no_content{false};
   FilterParseResults filter_parse_results;
   std::vector<ReturnAttribute> return_attributes;
+  coordinator::IndexFingerprintVersion index_fingerprint_version;
+  uint64_t slot_fingerprint;
   struct ParseTimeVariables {
     // Members of this struct are only valid during the parsing of
     // VectorSearchParameters on the mainthread. They get cleared
@@ -110,9 +119,11 @@ struct SearchParameters {
   } parse_vars;
   bool IsNonVectorQuery() const { return attribute_alias.empty(); }
   bool IsVectorQuery() const { return !IsNonVectorQuery(); }
-  SearchParameters(uint64_t timeout, grpc::CallbackServerContext* context)
+  SearchParameters(uint64_t timeout, grpc::CallbackServerContext* context,
+                   uint32_t db_num)
       : timeout_ms(timeout),
-        cancellation_token(cancel::Make(timeout, context)) {}
+        cancellation_token(cancel::Make(timeout, context)),
+        db_num_(db_num) {}
 };
 
 // Callback to be called when the search is done.

@@ -15,7 +15,6 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "src/rdb_section.pb.h"
 #include "third_party/hnswlib/iostream.h"
@@ -27,8 +26,6 @@
 namespace valkey_search {
 
 constexpr uint32_t kCurrentEncVer = 1;
-// Format is 0xMMmmpp (M=major, m=minor, p=patch)
-constexpr uint64_t kCurrentSemanticVersion = 0x010000;
 constexpr absl::string_view kValkeySearchModuleTypeName{"Vk-Search"};
 
 class SafeRDB;
@@ -51,25 +48,20 @@ using RDBSectionSaveCallback = absl::AnyInvocable<absl::Status(
 using RDBSectionCountCallback =
     absl::AnyInvocable<int(ValkeyModuleCtx *ctx, int when)>;
 
-using RDBSectionMinSemVerCallback =
-    absl::AnyInvocable<int(ValkeyModuleCtx *ctx, int when)>;
+using RDBSectionMinVersionCallback =
+    absl::AnyInvocable<absl::StatusOr<vmsdk::ValkeyVersion>(
+        ValkeyModuleCtx *ctx, int when)>;
 
 using RDBSectionCallbacks = struct RDBSectionCallbacks {
   RDBSectionLoadCallback load;
   RDBSectionSaveCallback save;
   RDBSectionCountCallback section_count;
-  RDBSectionMinSemVerCallback minimum_semantic_version;
+  RDBSectionMinVersionCallback minimum_semantic_version;
 };
 
 // Static mapping from section type to callback.
 extern absl::flat_hash_map<data_model::RDBSectionType, RDBSectionCallbacks>
     kRegisteredRDBSectionCallbacks;
-
-inline std::string HumanReadableSemanticVersion(uint64_t semantic_version) {
-  return absl::StrFormat("%d.%d.%d", (semantic_version >> 16) & 0xFF,
-                         (semantic_version >> 8) & 0xFF,
-                         semantic_version & 0xFF);
-}
 
 /* SafeRDB wraps a ValkeyModuleIO object and performs IO error checking,
  * returning absl::StatusOr to force error handling on the caller side. */

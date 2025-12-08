@@ -27,6 +27,7 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/util.h"
+#include "src/version.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -40,7 +41,7 @@ using ::testing::ValuesIn;
 
 struct TypeToRegister {
   std::string type_name;
-  uint64_t encoding_version{1};
+  vmsdk::ValkeyVersion encoding_version{0, 0, 1};
   absl::Status status_to_return;
   absl::StatusOr<uint64_t> fingerprint_to_return{
       absl::UnimplementedError("Fingerprint not set")};
@@ -48,12 +49,13 @@ struct TypeToRegister {
 
 struct CallbackResult {
   std::string type_name;
+  uint32_t db_num;
   std::string id;
   bool has_content;
 
   bool operator==(const CallbackResult& other) const {
     return type_name == other.type_name && id == other.id &&
-           has_content == other.has_content;
+           db_num == other.db_num && has_content == other.has_content;
   }
 };
 
@@ -66,6 +68,7 @@ struct EntryOperationTestParam {
     };
     Operation operation_type;
     std::string type_name;
+    uint32_t db_num{0};
     std::string id;
     std::string content;
   };
@@ -108,20 +111,22 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
   std::vector<CallbackResult> callbacks_tracker;
   for (auto& type_to_register : test_case.types_to_register) {
     test_metadata_manager_->RegisterType(
-        type_to_register.type_name, type_to_register.encoding_version,
+        type_to_register.type_name,
         [&](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
           return type_to_register.fingerprint_to_return;
         },
-        [&](absl::string_view id, const google::protobuf::Any* metadata,
+        [&](const ObjName& obj_name, const google::protobuf::Any* metadata,
             uint64_t fingerprint, uint32_t version) {
           CallbackResult callback_result{
               .type_name = type_to_register.type_name,
-              .id = std::string(id),
+              .db_num = obj_name.GetDbNum(),
+              .id = obj_name.GetName(),
               .has_content = metadata != nullptr,
           };
           callbacks_tracker.push_back(std::move(callback_result));
           return type_to_register.status_to_return;
-        });
+        },
+        [](auto) { return 1; }, type_to_register.encoding_version);
   }
   if (test_case.expect_num_broadcasts > 0) {
     EXPECT_CALL(*kMockValkeyModule,
@@ -147,14 +152,16 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
       content->set_type_url("type.googleapis.com/FakeType");
       content->set_value(operation.content);
       auto result = test_metadata_manager_->CreateEntry(
-          operation.type_name, operation.id, std::move(content));
+          operation.type_name, ObjName(operation.db_num, operation.id),
+          std::move(content));
       EXPECT_EQ(result.status().code(), test_case.expected_status_code);
     } else if (operation.operation_type ==
                EntryOperationTestParam::EntryOperation::kDelete) {
-      EXPECT_EQ(
-          test_metadata_manager_->DeleteEntry(operation.type_name, operation.id)
-              .code(),
-          test_case.expected_status_code);
+      EXPECT_EQ(test_metadata_manager_
+                    ->DeleteEntry(operation.type_name,
+                                  ObjName(operation.db_num, operation.id))
+                    .code(),
+                test_case.expected_status_code);
     }
   }
   EXPECT_THAT(callbacks_tracker,
@@ -163,6 +170,11 @@ TEST_P(EntryOperationTest, TestEntryOperations) {
   google::protobuf::TextFormat::Parser parser;
   EXPECT_TRUE(
       parser.ParseFromString(test_case.expected_metadata_pbtxt, &expected));
+  std::cout << "Actual Metadata: "
+            << test_metadata_manager_->GetGlobalMetadata()->DebugString()
+            << std::endl;
+  std::cout << "Expected Metadata: " << test_case.expected_metadata_pbtxt
+            << std::endl;
   EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
       *test_metadata_manager_->GetGlobalMetadata(), expected));
 }
@@ -204,6 +216,7 @@ INSTANTIATE_TEST_SUITE_P(
                 version_header {
                   top_level_version: 1
                   top_level_fingerprint: 17662341151372892129
+                  top_level_min_version: 1
                 }
                 type_namespace_map {
                   key: "my_type"
@@ -218,6 +231,7 @@ INSTANTIATE_TEST_SUITE_P(
                           type_url: "type.googleapis.com/FakeType"
                           value: "serialized_content_1"
                         }
+                        min_version: 1
                       }
                     }
                   }
@@ -342,6 +356,7 @@ INSTANTIATE_TEST_SUITE_P(
                 version_header {
                   top_level_version: 2
                   top_level_fingerprint: 8502063974858136158
+                  top_level_min_version: 1
                 }
                 type_namespace_map {
                   key: "my_type"
@@ -356,6 +371,7 @@ INSTANTIATE_TEST_SUITE_P(
                           type_url: "type.googleapis.com/FakeType"
                           value: "serialized_content_2"
                         }
+                        min_version: 1
                       }
                     }
                   }
@@ -407,6 +423,7 @@ INSTANTIATE_TEST_SUITE_P(
                 version_header {
                   top_level_version: 2
                   top_level_fingerprint: 1130665396559467152
+                  top_level_min_version: 1
                 }
                 type_namespace_map {
                   key: "my_type"
@@ -528,19 +545,21 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
   std::vector<CallbackResult> callbacks_tracker;
   for (const auto& type_to_register : test_case.types_to_register) {
     test_metadata_manager_->RegisterType(
-        type_to_register.type_name, type_to_register.encoding_version,
+        type_to_register.type_name,
         [&](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
           return type_to_register.fingerprint_to_return;
         },
-        [&](absl::string_view id, const google::protobuf::Any* metadata,
+        [&](const ObjName& obj_name, const google::protobuf::Any* metadata,
             uint64_t fingerprint, uint32_t version) {
           callbacks_tracker.push_back(CallbackResult{
               .type_name = type_to_register.type_name,
-              .id = std::string(id),
+              .db_num = obj_name.GetDbNum(),
+              .id = obj_name.GetName(),
               .has_content = metadata != nullptr,
           });
           return type_to_register.status_to_return;
-        });
+        },
+        [](auto) { return kModuleVersion; }, type_to_register.encoding_version);
   }
 
   if (test_case.expect_broadcast) {
@@ -615,6 +634,10 @@ TEST_P(MetadataManagerReconciliationTest, TestReconciliation) {
                                      test_case.expected_callbacks.end()));
 
   auto actual_metadata = test_metadata_manager_->GetGlobalMetadata();
+  std::cout << "Actual Metadata: " << actual_metadata->DebugString()
+            << std::endl;
+  std::cout << "Expected Metadata: " << expected_metadata.DebugString()
+            << std::endl;
   EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
       *actual_metadata, expected_metadata));
 }
@@ -1827,7 +1850,8 @@ TEST_F(MetadataManagerTimestampTest,
             -1);
 
   // Reconcile metadata successfully
-  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(proposed_metadata));
+  VMSDK_EXPECT_OK(
+      test_metadata_manager_->ReconcileMetadata(proposed_metadata, "test"));
 
   // Now should return 0 (current time - current time = 0)
   EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
@@ -1847,7 +1871,8 @@ TEST_F(MetadataManagerTimestampTest, TestTimestampCalculation) {
       kV1Metadata, &proposed_metadata));
 
   // Reconcile metadata at time 1000000ms
-  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(proposed_metadata));
+  VMSDK_EXPECT_OK(
+      test_metadata_manager_->ReconcileMetadata(proposed_metadata, "test"));
 
   // Test various time differences
   struct TestCase {
@@ -1884,7 +1909,8 @@ TEST_F(MetadataManagerTimestampTest,
       google::protobuf::TextFormat::ParseFromString(kV2Metadata, &metadata2));
 
   // First reconciliation at time 1000000ms
-  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(metadata1));
+  VMSDK_EXPECT_OK(
+      test_metadata_manager_->ReconcileMetadata(metadata1, "test  "));
   EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
             0);
 
@@ -1894,7 +1920,7 @@ TEST_F(MetadataManagerTimestampTest,
             10000);
 
   // Second reconciliation - should update timestamp to current time
-  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(metadata2));
+  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(metadata2, "test"));
   EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
             0);
 
@@ -1915,16 +1941,18 @@ TEST_F(MetadataManagerTimestampTest,
 
   // Register a type with a failing callback
   test_metadata_manager_->RegisterType(
-      "my_type", 1,
+      "my_type",
       [](const google::protobuf::Any& metadata) -> absl::StatusOr<uint64_t> {
         return 1234;
       },
-      [](absl::string_view id, const google::protobuf::Any* metadata,
+      [](const ObjName& obj_name, const google::protobuf::Any* metadata,
          uint64_t fingerprint,
-         uint32_t version) { return absl::InternalError("Callback failed"); });
+         uint32_t version) { return absl::InternalError("Callback failed"); },
+      [](auto) { return kModuleVersion; }, {0, 0, 1});
 
   // Reconciliation should fail due to callback failure
-  auto status = test_metadata_manager_->ReconcileMetadata(proposed_metadata);
+  auto status =
+      test_metadata_manager_->ReconcileMetadata(proposed_metadata, "test");
   EXPECT_FALSE(status.ok());
 
   // But timestamp should not be updated since reconciliation failed
@@ -1940,7 +1968,8 @@ TEST_F(MetadataManagerTimestampTest, TestConcurrentAccess) {
       kV1Metadata, &proposed_metadata));
 
   // First, reconcile some metadata so we have a valid timestamp
-  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(proposed_metadata));
+  VMSDK_EXPECT_OK(
+      test_metadata_manager_->ReconcileMetadata(proposed_metadata, "test"));
 
   constexpr int kNumThreads = 8;
   constexpr int kCallsPerThread = 100;
@@ -1993,7 +2022,8 @@ TEST_F(MetadataManagerTimestampTest, TestTimestampPersistsAcrossLoadMetadata) {
       kV1Metadata, &proposed_metadata));
 
   // First reconciliation
-  VMSDK_EXPECT_OK(test_metadata_manager_->ReconcileMetadata(proposed_metadata));
+  VMSDK_EXPECT_OK(
+      test_metadata_manager_->ReconcileMetadata(proposed_metadata, "test"));
   EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
             0);
 
@@ -2015,6 +2045,41 @@ TEST_F(MetadataManagerTimestampTest, TestTimestampPersistsAcrossLoadMetadata) {
   // Timestamp should be updated to current time
   EXPECT_EQ(test_metadata_manager_->GetMilliSecondsSinceLastHealthyMetadata(),
             0);
+}
+
+TEST(IndexNameTest, IndexName) {
+  for (std::string prefix : {"", "a", "abc", "{", "}"}) {
+    for (std::string hash_tag : {"", "{a}", "{b}", "{}"}) {
+      for (std::string suffix : {"", "x", "xy", "{", "}", "{}"}) {
+        for (uint32_t db_num : {0, 1}) {
+          std::string id = prefix + hash_tag + suffix;
+          //
+          // Construct a IndexName
+          //
+          std::cout << "Doing test: DB:" << db_num << " name:'" << id << "'\n";
+          std::string encoded = ObjName(db_num, id).Encode();
+          //
+          // Now reverse it and compare equality
+          //
+          auto decoded = ObjName::Decode(encoded);
+          EXPECT_EQ(id, decoded.GetName());
+          EXPECT_EQ(db_num, decoded.GetDbNum());
+          //
+          // And re-forward it
+          //
+          auto re_forward =
+              ObjName(decoded.GetDbNum(), decoded.GetName()).Encode();
+          EXPECT_EQ(re_forward, encoded);
+        }
+      }
+    }
+  }
+  //
+  // Prove that the new code ignores potential extension to within the hash tag
+  //
+  auto obj_name = ObjName::Decode("{1abc}def");
+  EXPECT_EQ("def", obj_name.GetName());
+  EXPECT_EQ(1, obj_name.GetDbNum());
 }
 
 }  // namespace valkey_search::coordinator

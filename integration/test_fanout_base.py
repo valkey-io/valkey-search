@@ -64,7 +64,7 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
         waiters.wait_for_true(lambda: is_node_down(node1), timeout=5)
         
         with pytest.raises(ResponseError) as excinfo:
-            node0.execute_command("FT.INFO", index_name, "CLUSTER")
+            node0.execute_command("FT.INFO", index_name, "CLUSTER", "ALLSHARDS")
         
         assert "Unable to contact all cluster members" in str(excinfo.value)
     
@@ -88,7 +88,7 @@ class TestFanoutBase(ValkeySearchClusterTestCaseDebugMode):
         ) == b"OK"
 
         with pytest.raises(ResponseError) as ei:
-            node0.execute_command("FT.INFO", index_name, "PRIMARY")
+            node0.execute_command("FT.INFO", index_name, "PRIMARY", "ALLSHARDS")
         assert "Unable to contact all cluster members" in str(ei.value)
 
         assert node1.execute_command(

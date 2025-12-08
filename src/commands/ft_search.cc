@@ -38,12 +38,21 @@ namespace {
 void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
                          const std::deque<indexes::Neighbor> &neighbors,
                          const query::SearchParameters &parameters) {
-  ValkeyModule_ReplyWithLongLong(
-      ctx, std::min(neighbors.size(), static_cast<size_t>(parameters.k)));
+  if (parameters.IsNonVectorQuery()) {
+    ValkeyModule_ReplyWithLongLong(ctx, neighbors.size());
+  } else {
+    ValkeyModule_ReplyWithLongLong(
+        ctx, std::min(neighbors.size(), static_cast<size_t>(parameters.k)));
+  }
 }
 
 size_t CalcEndIndex(const std::deque<indexes::Neighbor> &neighbors,
                     const query::SearchParameters &parameters) {
+  if (parameters.IsNonVectorQuery()) {
+    return std::min(static_cast<size_t>(parameters.limit.number),
+                    neighbors.size());
+  }
+  // Vector query
   return std::min(
       static_cast<size_t>(parameters.k),
       std::min(static_cast<size_t>(parameters.limit.number), neighbors.size()));
@@ -51,7 +60,9 @@ size_t CalcEndIndex(const std::deque<indexes::Neighbor> &neighbors,
 
 size_t CalcStartIndex(const std::deque<indexes::Neighbor> &neighbors,
                       const query::SearchParameters &parameters) {
-  CHECK_GT(parameters.k, parameters.limit.first_index);
+  if (!parameters.IsNonVectorQuery()) {
+    CHECK_GT(parameters.k, parameters.limit.first_index);
+  }
   if (neighbors.size() <= parameters.limit.first_index) {
     return neighbors.size();
   }
@@ -62,7 +73,8 @@ void SendReplyNoContent(ValkeyModuleCtx *ctx,
                         const std::deque<indexes::Neighbor> &neighbors,
                         const query::SearchParameters &parameters) {
   const size_t start_index = CalcStartIndex(neighbors, parameters);
-  const size_t end_index = start_index + CalcEndIndex(neighbors, parameters);
+  const size_t end_index = std::min(
+      start_index + CalcEndIndex(neighbors, parameters), neighbors.size());
   ValkeyModule_ReplyWithArray(ctx, end_index - start_index + 1);
   ReplyAvailNeighbors(ctx, neighbors, parameters);
   for (auto i = start_index; i < end_index; ++i) {
@@ -84,7 +96,8 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
                         const query::SearchParameters &parameters) {
   CHECK_GT(static_cast<size_t>(parameters.k), parameters.limit.first_index);
   const size_t start_index = CalcStartIndex(neighbors, parameters);
-  const size_t end_index = start_index + CalcEndIndex(neighbors, parameters);
+  const size_t end_index = std::min(
+      start_index + CalcEndIndex(neighbors, parameters), neighbors.size());
   ValkeyModule_ReplyWithArray(ctx, 2 * (end_index - start_index) + 1);
   ReplyAvailNeighbors(ctx, neighbors, parameters);
 
@@ -128,15 +141,16 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
 void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
                                  const std::deque<indexes::Neighbor> &neighbors,
                                  const query::SearchParameters &parameters) {
-  const size_t available_results = neighbors.size();
-  ValkeyModule_ReplyWithArray(ctx, 2 * available_results + 1);
-  // First element is the count of available results.
-  ValkeyModule_ReplyWithLongLong(ctx, available_results);
-  for (const auto &neighbor : neighbors) {
+  const size_t start_index = CalcStartIndex(neighbors, parameters);
+  const size_t end_index = std::min(
+      start_index + CalcEndIndex(neighbors, parameters), neighbors.size());
+  ValkeyModule_ReplyWithArray(ctx, 2 * (end_index - start_index) + 1);
+  ReplyAvailNeighbors(ctx, neighbors, parameters);
+  for (size_t i = start_index; i < end_index; ++i) {
     // Document ID
     ValkeyModule_ReplyWithString(
-        ctx, vmsdk::MakeUniqueValkeyString(*neighbor.external_id).get());
-    const auto &contents = neighbor.attribute_contents.value();
+        ctx, vmsdk::MakeUniqueValkeyString(*neighbors[i].external_id).get());
+    const auto &contents = neighbors[i].attribute_contents.value();
     // Fields and values as a flat array
     ValkeyModule_ReplyWithArray(ctx, 2 * contents.size());
     for (const auto &attribute_content : contents) {
@@ -162,22 +176,25 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
                               std::deque<indexes::Neighbor> &neighbors) {
   // Increment success counter.
   ++Metrics::GetStats().query_successful_requests_cnt;
-
-  // Support non-vector queries: no attribute_alias and k == 0
-  if (IsNonVectorQuery()) {
-    query::ProcessNonVectorNeighborsForReply(
-        ctx, index_schema->GetAttributeDataType(), neighbors, *this);
-    SerializeNonVectorNeighbors(ctx, neighbors, *this);
-    return;
-  }
-
-  if (limit.first_index >= static_cast<uint64_t>(k) || limit.number == 0) {
+  // This handles two cases:
+  // 1. Any query with limit number == 0
+  // 2. Vector queries with limit first_index >= k
+  if ((!IsNonVectorQuery() &&
+       (limit.first_index >= static_cast<uint64_t>(k))) ||
+      limit.number == 0) {
     ValkeyModule_ReplyWithArray(ctx, 1);
     ValkeyModule_ReplyWithLongLong(ctx, neighbors.size());
     return;
   }
   if (no_content) {
     SendReplyNoContent(ctx, neighbors, *this);
+    return;
+  }
+  // Support non-vector queries
+  if (IsNonVectorQuery()) {
+    query::ProcessNonVectorNeighborsForReply(
+        ctx, index_schema->GetAttributeDataType(), neighbors, *this);
+    SerializeNonVectorNeighbors(ctx, neighbors, *this);
     return;
   }
   auto identifier = index_schema->GetIdentifier(attribute_alias);
@@ -194,8 +211,9 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
 
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc) {
-  return QueryCommand::Execute(
-      ctx, argv, argc, std::unique_ptr<QueryCommand>(new SearchCommand));
+  return QueryCommand::Execute(ctx, argv, argc,
+                               std::unique_ptr<QueryCommand>(new SearchCommand(
+                                   ValkeyModule_GetSelectedDb(ctx))));
 }
 
 }  // namespace valkey_search

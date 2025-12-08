@@ -26,6 +26,7 @@
 #include "src/metrics.h"
 #include "src/query/predicate.h"
 #include "src/query/search.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -325,6 +326,16 @@ void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
                        return !neighbor.attribute_contents.has_value();
                      }),
       neighbors.end());
+}
+
+std::vector<InternedStringPtr> CollectNeighborKeys(
+    const std::deque<indexes::Neighbor> &neighbors) {
+  std::vector<InternedStringPtr> keys;
+  keys.reserve(neighbors.size());
+  for (const auto &neighbor : neighbors) {
+    keys.push_back(neighbor.external_id);
+  }
+  return keys;
 }
 
 }  // namespace valkey_search::query

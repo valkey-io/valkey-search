@@ -44,6 +44,9 @@ enum class SearchMode {
 
 constexpr int64_t kTimeoutMS{50000};
 constexpr size_t kMaxTimeoutMs{60000};
+
+// Retry interval for checking in-flight keys (in milliseconds)
+constexpr mstime_t kInFlightRetryIntervalMs = 5;
 constexpr absl::string_view kOOMMsg{
     "OOM command not allowed when used memory > 'maxmemory'"};
 constexpr absl::string_view kFailedPreconditionMsg{
@@ -163,6 +166,9 @@ CalcBestMatchingPrefilteredKeys(
     const SearchParameters& parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
     indexes::VectorBase* vector_index, size_t qualified_entries);
+
+// Check if a query is a pure full-text query (has text predicate, no vector)
+bool IsPureFullTextQuery(const SearchParameters &parameters);
 
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

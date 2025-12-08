@@ -537,4 +537,10 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
   return absl::OkStatus();
 }
 
+bool IsPureFullTextQuery(const SearchParameters &parameters) {
+  return parameters.IsNonVectorQuery() &&
+         parameters.filter_parse_results.root_predicate != nullptr &&
+         HasTextPredicate(parameters.filter_parse_results.root_predicate.get());
+}
+
 }  // namespace valkey_search::query

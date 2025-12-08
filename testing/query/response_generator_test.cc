@@ -88,7 +88,7 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
   for (const auto &expected_content : params.expected_contents) {
     expected_contents.push_back(ToRecordsMap(expected_content));
   }
-  query::SearchParameters parameters(100000, nullptr);
+  query::SearchParameters parameters(100000, nullptr, 0);
   for (const auto &return_attribute : params.return_attributes) {
     parameters.return_attributes.push_back(
         {.identifier =
@@ -176,7 +176,7 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
   neighbors.push_back(indexes::Neighbor(many_fields_id, 0));
 
   // Set up parameters
-  query::SearchParameters parameters(100000, nullptr);
+  query::SearchParameters parameters(100000, nullptr, 0);
   parameters.return_attributes.push_back(
       {.identifier = vmsdk::MakeUniqueValkeyString("content"),
        .alias = vmsdk::MakeUniqueValkeyString("content_alias")});

@@ -166,7 +166,7 @@ function setup_valkey_server() {
   fi
 
   # Clone and build it
-  VALKEY_VERSION="${VALKEY_VERSION:=8.1.1}"
+  VALKEY_VERSION="${VALKEY_VERSION:=9.0.0}"
   export VALKEY_SERVER_HOME_DIR=$(get_third_party_build_dir)/valkey-server
   export VALKEY_SERVER_BUILD_DIR=${VALKEY_SERVER_HOME_DIR}/.build-release
   if [ ! -d ${VALKEY_SERVER_HOME_DIR} ]; then
@@ -263,4 +263,47 @@ function check_for_san_errors() {
 
 function get_file_last_modified() {
     echo $(date -r "${1}" +%s)
+}
+
+function run_with_timeout() {
+    local timeout=$1
+    shift  # Remove the first argument (timeout), rest is the command
+    
+    # Validate timeout is a number
+    if ! [[ "$timeout" =~ ^[0-9]+$ ]]; then
+        echo "Error: Timeout must be a positive integer" >&2
+        return 1
+    fi
+    
+    # Start the command in background
+    echo "Starting test in run_with_timeout"
+    "$@" &
+    local pid=$!
+    
+    # Start a timer in background
+    (
+        sleep "$timeout"
+        # Check if process is still running
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "Process $pid exceeded timeout of ${timeout}s, terminating..." >&2
+            kill -TERM "$pid" 2>/dev/null
+            sleep 2
+            # Force kill if still running
+            if kill -0 "$pid" 2>/dev/null; then
+                echo "Process $pid did not respond to TERM, sending KILL..." >&2
+                kill -KILL "$pid" 2>/dev/null
+            fi
+        fi
+    ) &
+    local timer_pid=$!
+    
+    # Wait for the command to complete
+    wait "$pid" 2>/dev/null
+    local exit_code=$?
+    echo "Finish test in run_with_timeout ${exit_code}"
+    # Kill the timer if command finished
+    kill "$timer_pid" 2>/dev/null
+    wait "$timer_pid" 2>/dev/null
+    
+    return $exit_code
 }

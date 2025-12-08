@@ -152,7 +152,7 @@ function run_pytest() {
   fi
   
   LOG_INFO "Running: ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/"
-  ${PYTHON_PATH} -m pytest ${FILTER_ARGS} --full-trace ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/
+  ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/
   RUN_SUCCESS=$?
 }
 

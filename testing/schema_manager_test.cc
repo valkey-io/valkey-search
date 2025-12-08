@@ -139,8 +139,9 @@ TEST_F(SchemaManagerTest, TestCreateIndexSchemaAlreadyExists) {
                       .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
                       .status();
     EXPECT_EQ(status.code(), absl::StatusCode::kAlreadyExists);
-    EXPECT_EQ(status.message(),
-              absl::StrFormat("Index %s already exists.", index_name_));
+    EXPECT_EQ(
+        status.message(),
+        absl::StrFormat("Index %s in database 0 already exists.", index_name_));
     EXPECT_EQ(callback_triggered, 1);
   }
 }

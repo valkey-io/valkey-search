@@ -58,12 +58,13 @@ class Text : public IndexBase {
     return absl::OkStatus();
   }
 
-  inline void ForEachTrackedKey(
-      absl::AnyInvocable<void(const InternedStringPtr&)> fn) const override {
+  inline absl::Status ForEachTrackedKey(
+      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      const override {
     absl::MutexLock lock(&index_mutex_);
     // TODO: Implement proper key tracking
   }
-  uint64_t GetRecordCount() const override;
+  uint64_t GetTrackedKeyCount() const override;
   std::unique_ptr<data_model::Index> ToProto() const override;
 
   InternedStringPtr GetRawValue(const InternedStringPtr& key) const

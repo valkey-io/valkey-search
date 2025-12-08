@@ -51,8 +51,8 @@ struct ShardInfo;
 
 struct NodeInfo {
   std::string node_id;
-  bool is_primary;
-  bool is_local;
+  bool is_primary = false;
+  bool is_local = false;
   SocketAddress socket_address;
   // a map containing all additional network metadata(the fourth entry of
   // CLUSTER SLOTS response); can be empty
@@ -97,7 +97,8 @@ class ClusterMap {
   static std::shared_ptr<ClusterMap> CreateNewClusterMap(ValkeyModuleCtx* ctx);
 
   // get a vector of node targets based on the mode
-  std::vector<NodeInfo> GetTargets(FanoutTargetMode mode) const;
+  std::vector<NodeInfo> GetTargets(FanoutTargetMode mode,
+                                   bool prefer_local = false) const;
 
   std::chrono::steady_clock::time_point GetExpirationTime() const {
     return expiration_tp_;
@@ -114,6 +115,9 @@ class ClusterMap {
 
   // shard lookup by slot, return nullptr if shard not found
   const ShardInfo* GetShardBySlot(uint16_t slot) const;
+
+  // Get the shard info for the current node
+  const ShardInfo* GetCurrentNodeShard() const { return current_node_shard_; }
 
   // get cluster level slot fingerprint
   uint64_t GetClusterSlotsFingerprint() const {
@@ -140,14 +144,22 @@ class ClusterMap {
 
   bool is_consistent_;
 
+  // Cached pointer to the current node's shard
+  const ShardInfo* current_node_shard_;
+
   // Pre-computed target lists
   std::vector<NodeInfo> primary_targets_;
   std::vector<NodeInfo> replica_targets_;
   std::vector<NodeInfo> all_targets_;
 
+  // get a local node from a shard (prefers local nodes)
+  std::optional<NodeInfo> GetLocalNodeFromShard(
+      const ShardInfo& shard, bool replica_only = false) const;
+
   // get a random node from a shard
-  const NodeInfo& GetRandomNodeFromShard(const ShardInfo& shard,
-                                         bool replica_only = false) const;
+  NodeInfo GetRandomNodeFromShard(const ShardInfo& shard,
+                                  bool replica_only = false,
+                                  bool prefer_local = false) const;
 
   // helper function to print out cluster map for debug
   static void PrintClusterMap(std::shared_ptr<ClusterMap> map);

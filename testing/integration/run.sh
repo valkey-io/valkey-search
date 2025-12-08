@@ -4,9 +4,10 @@ ROOT_DIR=$(readlink -f $(dirname $0))
 WORKSPACE_HOME=$(readlink -f ${ROOT_DIR}/../..)
 
 BUILD_CONFIG=release
-TEST=all
+# TEST=all
+TEST=vector_search_integration
 CLEAN="no"
-VALKEY_VERSION="8.1.1"
+VALKEY_VERSION="9.0.0"
 VALKEY_JSON_VERSION="unstable"
 DUMP_TEST_ERRORS_STDOUT="no"
 

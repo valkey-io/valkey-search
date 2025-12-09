@@ -40,6 +40,14 @@ class TestFTInfoPartitionConsistencyControls(ClusterTestUtils, ValkeySearchClust
         # normal result without consistency check
         normal_result = self.run_info_command(client, index_name, require_consistency=False)
 
+        # make commands to all nodes, force refresh cluster map
+        node0 = self.new_client_for_primary(0)
+        node0.execute_command("FT.INFO hnsw PRIMARY")
+        node1 = self.new_client_for_primary(1)
+        node1.execute_command("FT.INFO hnsw PRIMARY")
+        node2 = self.new_client_for_primary(2)
+        node2.execute_command("FT.INFO hnsw PRIMARY")
+
         # normal result with consistency check
         cur_result = self.run_info_command(client, index_name, require_consistency=True)
         assert cur_result == normal_result

@@ -59,6 +59,12 @@ class TestFTSearchPartitionConsistencyControls(ClusterTestUtils, ValkeySearchClu
         nominal_hnsw_result = search(client, "hnsw", False)
         self.check_info_sum("search_test-counter-ForceCancels", 0)
         assert nominal_hnsw_result[0] == 10
+
+        # make commands to all nodes, force refresh cluster map
+        node1 = self.new_client_for_primary(1)
+        node1.execute_command("FT.INFO hnsw PRIMARY")
+        node2 = self.new_client_for_primary(2)
+        node2.execute_command("FT.INFO hnsw PRIMARY")
         
         # enable consistency check, get correct result
         hnsw_result = search(client, "hnsw", False, expect_consistency_error=False, enable_consistency=True)

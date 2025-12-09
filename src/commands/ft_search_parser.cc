@@ -340,7 +340,7 @@ vmsdk::KeyValueParser<query::SearchParameters> CreateSearchParser() {
       kLocalOnly, GENERATE_FLAG_PARSER(query::SearchParameters, local_only));
   parser.AddParamParser(kAllShards,
                         GENERATE_NEGATIVE_FLAG_PARSER(query::SearchParameters,
-                                                     enable_partial_results));
+                                                      enable_partial_results));
   parser.AddParamParser(
       KSomeShards,
       GENERATE_FLAG_PARSER(query::SearchParameters, enable_partial_results));
@@ -349,7 +349,7 @@ vmsdk::KeyValueParser<query::SearchParameters> CreateSearchParser() {
       GENERATE_FLAG_PARSER(query::SearchParameters, enable_consistency));
   parser.AddParamParser(kInconsistent,
                         GENERATE_NEGATIVE_FLAG_PARSER(query::SearchParameters,
-                                                     enable_consistency));
+                                                      enable_consistency));
   parser.AddParamParser(
       kTimeoutParam,
       GENERATE_VALUE_PARSER(query::SearchParameters, timeout_ms));

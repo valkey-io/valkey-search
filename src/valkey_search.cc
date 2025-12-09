@@ -142,6 +142,12 @@ static vmsdk::info_field::Integer ingest_hash_keys(
       return Metrics::GetStats().ingest_hash_keys;
     }));
 
+static vmsdk::info_field::Integer backfill_hash_keys(
+    "global_ingestion", "backfill_hash_keys",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().backfill_hash_keys;
+    }));
+
 static vmsdk::info_field::Integer ingest_hash_blocked(
     "global_ingestion", "ingest_hash_blocked",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
@@ -153,6 +159,12 @@ static vmsdk::info_field::Integer ingest_json_keys(
     "global_ingestion", "ingest_json_keys",
     vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
       return Metrics::GetStats().ingest_json_keys;
+    }));
+
+static vmsdk::info_field::Integer backfill_json_keys(
+    "global_ingestion", "backfill_json_keys",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return Metrics::GetStats().backfill_json_keys;
     }));
 
 static vmsdk::info_field::Integer ingest_json_blocked(
@@ -1006,10 +1018,12 @@ absl::StatusOr<int> GetValkeyLocalPort(ValkeyModuleCtx *ctx) {
 
 absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
   reader_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
-      "read-worker-", options::GetReaderThreadCount().GetValue());
+      "read-worker-", options::GetReaderThreadCount().GetValue(),
+      options::GetThreadPoolWaitTimeSamples().GetValue());
   reader_thread_pool_->StartWorkers();
   writer_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
-      "write-worker-", options::GetWriterThreadCount().GetValue());
+      "write-worker-", options::GetWriterThreadCount().GetValue(),
+      options::GetThreadPoolWaitTimeSamples().GetValue());
   writer_thread_pool_->StartWorkers();
 
   VMSDK_LOG(NOTICE, ctx) << "use_coordinator: "

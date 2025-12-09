@@ -11,6 +11,8 @@
 #include "ft_create_parser.h"
 #include "src/acl.h"
 #include "src/commands/ft_search.h"
+#include "src/coordinator/metadata_manager.h"
+#include "src/query/fanout.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
@@ -39,7 +41,7 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   CHECK(res != nullptr);
 
   // Check if operation was cancelled and partial results are disabled
-  if (!options::GetEnablePartialResults().GetValue() &&
+  if (!res->parameters->enable_partial_results &&
       res->parameters->cancellation_token->IsCancelled()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
     return ValkeyModule_ReplyWithError(
@@ -51,6 +53,7 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return ValkeyModule_ReplyWithError(
         ctx, res->neighbors.status().message().data());
   }
+
   res->parameters->SendReply(ctx, res->neighbors.value());
   return VALKEYMODULE_OK;
 }
@@ -63,6 +66,7 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 }  // namespace async
 
 CONTROLLED_BOOLEAN(ForceReplicasOnly, false);
+CONTROLLED_BOOLEAN(ForceInvalidIndexFingerprint, false);
 
 //
 // Common Class for FT.SEARCH and FT.AGGREGATE command
@@ -76,20 +80,22 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
     parameters->timeout_ms = options::GetDefaultTimeoutMs().GetValue();
     VMSDK_RETURN_IF_ERROR(
         vmsdk::ParseParamValue(itr, parameters->index_schema_name));
-    VMSDK_ASSIGN_OR_RETURN(
-        parameters->index_schema,
-        SchemaManager::Instance().GetIndexSchema(
-            ValkeyModule_GetSelectedDb(ctx), parameters->index_schema_name));
+
+    uint32_t db_num = ValkeyModule_GetSelectedDb(ctx);
+    parameters->db_num = db_num;
+
+    VMSDK_ASSIGN_OR_RETURN(parameters->index_schema,
+                           SchemaManager::Instance().GetIndexSchema(
+                               db_num, parameters->index_schema_name));
     VMSDK_RETURN_IF_ERROR(
         vmsdk::ParseParamValue(itr, parameters->parse_vars.query_string));
     VMSDK_RETURN_IF_ERROR(parameters->ParseCommand(itr));
     parameters->parse_vars.ClearAtEndOfParse();
     parameters->cancellation_token =
         cancel::Make(parameters->timeout_ms, nullptr);
-    static const auto permissions =
-        PrefixACLPermissions(kSearchCmdPermissions, kSearchCommand);
-    VMSDK_RETURN_IF_ERROR(AclPrefixCheck(
-        ctx, permissions, parameters->index_schema->GetKeyPrefixes()));
+    VMSDK_RETURN_IF_ERROR(
+        AclPrefixCheck(ctx, acl::KeyAccess::kRead,
+                       parameters->index_schema->GetKeyPrefixes()));
 
     parameters->index_schema->ProcessMultiQueue();
 
@@ -99,7 +105,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
       VMSDK_ASSIGN_OR_RETURN(
           auto neighbors,
           query::Search(*parameters, query::SearchMode::kLocal));
-      if (!options::GetEnablePartialResults().GetValue() &&
+      if (!parameters->enable_partial_results &&
           parameters->cancellation_token->IsCancelled()) {
         ValkeyModule_ReplyWithError(
             ctx, "Search operation cancelled due to timeout");
@@ -134,7 +140,21 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
       // refresh cluster map if needed
       auto search_targets =
           ValkeySearch::Instance().GetOrRefreshClusterMap(ctx)->GetTargets(
-              mode);
+              mode, query::fanout::IsSystemUnderLowUtilization());
+
+      // get index fingerprint and version
+      if (ForceInvalidIndexFingerprint.GetValue()) {
+        // test only: simulate invalid index fingerprint and version
+        parameters->index_fingerprint_version.set_fingerprint(404);
+        parameters->index_fingerprint_version.set_version(404);
+      } else {
+        // get fingerprint/version from IndexSchema
+        parameters->index_fingerprint_version.set_fingerprint(
+            parameters->index_schema->GetFingerprint());
+        parameters->index_fingerprint_version.set_version(
+            parameters->index_schema->GetVersion());
+      }
+
       return query::fanout::PerformSearchFanoutAsync(
           ctx, search_targets,
           ValkeySearch::Instance().GetCoordinatorClientPool(),

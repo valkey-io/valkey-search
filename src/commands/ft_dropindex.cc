@@ -27,17 +27,17 @@ class DropConsistencyCheckFanoutOperation
           vmsdk::cluster_map::FanoutTargetMode::kAll> {
  public:
   DropConsistencyCheckFanoutOperation(uint32_t db_num,
-                                      const std::string& index_name,
+                                      const std::string &index_name,
                                       unsigned timeout_ms)
       : query::fanout::FanoutOperationBase<
             coordinator::InfoIndexPartitionRequest,
             coordinator::InfoIndexPartitionResponse,
-            vmsdk::cluster_map::FanoutTargetMode::kAll>(),
+            vmsdk::cluster_map::FanoutTargetMode::kAll>(false, false),
         db_num_(db_num),
         index_name_(index_name),
         timeout_ms_(timeout_ms){};
 
-  std::vector<vmsdk::cluster_map::NodeInfo> GetTargets() const {
+  std::vector<vmsdk::cluster_map::NodeInfo> GetTargets() const override {
     return ValkeySearch::Instance().GetClusterMap()->GetTargets(
         vmsdk::cluster_map::FanoutTargetMode::kAll);
   }
@@ -45,16 +45,17 @@ class DropConsistencyCheckFanoutOperation
   unsigned GetTimeoutMs() const override { return timeout_ms_; }
 
   coordinator::InfoIndexPartitionRequest GenerateRequest(
-      const vmsdk::cluster_map::NodeInfo&) override {
+      const vmsdk::cluster_map::NodeInfo &) override {
     coordinator::InfoIndexPartitionRequest req;
     req.set_db_num(db_num_);
     req.set_index_name(index_name_);
+    *req.mutable_index_fingerprint_version() = expected_fingerprint_version_;
     return req;
   }
 
   void OnResponse(
-      const coordinator::InfoIndexPartitionResponse& resp,
-      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo& target) override {
+      const coordinator::InfoIndexPartitionResponse &resp,
+      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo &target) override {
     // if the index exist on some node and returns a valid response, treat it as
     // inconsistent error
     absl::MutexLock lock(&mutex_);
@@ -63,16 +64,16 @@ class DropConsistencyCheckFanoutOperation
 
   std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
   GetLocalResponse(
-      const coordinator::InfoIndexPartitionRequest& request,
-      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo&) override {
+      const coordinator::InfoIndexPartitionRequest &request,
+      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo &) override {
     return coordinator::Service::GenerateInfoResponse(request);
   }
 
   void InvokeRemoteRpc(
-      coordinator::Client* client,
-      const coordinator::InfoIndexPartitionRequest& request,
+      coordinator::Client *client,
+      const coordinator::InfoIndexPartitionRequest &request,
       std::function<void(grpc::Status,
-                         coordinator::InfoIndexPartitionResponse&)>
+                         coordinator::InfoIndexPartitionResponse &)>
           callback,
       unsigned timeout_ms) override {
     std::unique_ptr<coordinator::InfoIndexPartitionRequest> request_ptr =
@@ -81,7 +82,7 @@ class DropConsistencyCheckFanoutOperation
                                timeout_ms);
   }
 
-  int GenerateReply(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,
+  int GenerateReply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                     int argc) override {
     return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
   }
@@ -100,9 +101,10 @@ class DropConsistencyCheckFanoutOperation
   uint32_t db_num_;
   std::string index_name_;
   unsigned timeout_ms_;
+  coordinator::IndexFingerprintVersion expected_fingerprint_version_;
 };
 
-absl::Status FTDropIndexCmd(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,
+absl::Status FTDropIndexCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc) {
   if (argc != 2) {
     return absl::InvalidArgumentError(vmsdk::WrongArity(kDropIndexCommand));
@@ -113,10 +115,8 @@ absl::Status FTDropIndexCmd(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,
       auto index_schema,
       SchemaManager::Instance().GetIndexSchema(ValkeyModule_GetSelectedDb(ctx),
                                                index_schema_name));
-  static const auto permissions =
-      PrefixACLPermissions(kDropIndexCmdPermissions, kDropIndexCommand);
-  VMSDK_RETURN_IF_ERROR(
-      AclPrefixCheck(ctx, permissions, index_schema->GetKeyPrefixes()));
+  VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, acl::KeyAccess::kWrite,
+                                       index_schema->GetKeyPrefixes()));
 
   VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().RemoveIndexSchema(
       ValkeyModule_GetSelectedDb(ctx), index_schema_name));

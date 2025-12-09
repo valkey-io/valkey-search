@@ -212,7 +212,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
   // Repro semantics of command startup
   vmsdk::ArgsIterator itr{&args[0], int(args.size())};
   absl::StatusOr<std::unique_ptr<SearchCommand>> search_params(
-      std::make_unique<SearchCommand>());
+      std::make_unique<SearchCommand>(0));
   (*search_params)->timeout_ms = 50000;
   (*search_params)->index_schema_name = vmsdk::ToStringView(*itr.PopNext());
   (*search_params)->parse_vars.query_string =

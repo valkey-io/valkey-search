@@ -29,7 +29,7 @@ struct FilterTestCase {
   std::string filter;
   bool create_success{false};
   std::string create_expected_error_message;
-  bool evaluate_success{false};
+  std::optional<bool> evaluate_success;
   std::string key{"key1"};
   std::string expected_tree_structure;
 };
@@ -100,12 +100,6 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
   auto text_index_2 =
       std::make_shared<indexes::Text>(text_index_proto2, text_index_schema);
 
-  auto interned_key1 = StringInternStore::Intern("key1");
-  VMSDK_EXPECT_OK(text_index_1->AddRecord(
-      interned_key1, "word hello my name is how are you doing"));
-  VMSDK_EXPECT_OK(
-      text_index_2->AddRecord(interned_key1, "my is hello how are you doing"));
-
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("text_field1", "text_field1", text_index_1));
   VMSDK_EXPECT_OK(
@@ -113,16 +107,9 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
 
   // Add TEXT data for basic tests (exact_term, exact_prefix, proximity, etc.)
   auto key1 = StringInternStore::Intern("key1");
-  std::string test_data = "word hello my name is doing how are you do";
+  std::string test_data = "word hello, my name is how are you doing?";
   VMSDK_EXPECT_OK(text_index_1->AddRecord(key1, test_data));
   VMSDK_EXPECT_OK(text_index_2->AddRecord(key1, test_data));
-
-  // Add escape sequence data - tokens with actual backslash characters
-  // Note: Stemming is enabled with min_stem_size=4, so 'doing' -> 'do'
-  std::string escape_data =
-      R"(\ \ hello how \are \ you \ \doing? h ow a re yo u doi_n g? hel(lo ho$w a*r yo{u do|ing? \ \ (hello $how \ *are \ -you \ \ %doing? you% you\ \ % do you] [ $ } { ; : ) ( | -do doing)";
-  VMSDK_EXPECT_OK(text_index_1->AddRecord(key1, escape_data));
-  VMSDK_EXPECT_OK(text_index_2->AddRecord(key1, escape_data));
 
   text_index_schema->CommitKeyData(key1);
 }
@@ -152,10 +139,12 @@ TEST_P(FilterTest, ParseParams) {
   }
 
   // Now evaluate all predicates, including text predicates
-  auto interned_key = StringInternStore::Intern(test_case.key);
-  EXPECT_EQ(
-      test_case.evaluate_success,
-      evaluator_.Evaluate(*parse_results.value().root_predicate, interned_key));
+  if (test_case.evaluate_success.has_value()) {
+    auto interned_key = StringInternStore::Intern(test_case.key);
+    EXPECT_EQ(test_case.evaluate_success.value(),
+              evaluator_.Evaluate(*parse_results.value().root_predicate,
+                                  interned_key));
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(

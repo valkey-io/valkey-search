@@ -30,8 +30,6 @@ def do_json_backfill_test(test, client, primary, replica):
     index = Index("test", [Vector("v", 3, type="FLAT")], type=KeyDataType.JSON)
     index.load_data(client, 100)
     replica.readonly()
-    assert(primary.execute_command("DBSIZE") > 0)
-    assert(replica.execute_command("DBSIZE") > 0)
 
     index.create(primary)
     waiters.wait_for_true(lambda: index_on_node(primary, index.name))
@@ -39,6 +37,8 @@ def do_json_backfill_test(test, client, primary, replica):
     waiters.wait_for_true(lambda: index.backfill_complete(primary))
     waiters.wait_for_true(lambda: index.backfill_complete(replica))
     p_result = primary.execute_command(*search_command(index.name))
+    assert(replica.execute_command("DBSIZE") == 100)
+    assert(primary.execute_command("DBSIZE") == 100)
     for n in test.nodes:
         n.client.execute_command("ft._debug CONTROLLED_VARIABLE set ForceReplicasOnly yes")
     r_result = replica.execute_command(*search_command(index.name))

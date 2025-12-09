@@ -42,11 +42,10 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   // Figure out what fields actually need to be returned by the aggregation
   // operation. And modify the common search returns list accordingly
   CHECK(!params.no_content);
+  bool content = false;
   if (params.loadall_) {
     CHECK(params.return_attributes.empty());
-  } else if (params.loads_.empty()) {
-    // Nothing, don't load anything
-    params.no_content = true;
+    return absl::OkStatus();
   } else {
     for (const auto &load : params.loads_) {
       //
@@ -59,6 +58,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       if (load == vmsdk::ToStringView(params.score_as.get())) {
         continue;
       }
+      content = true;
       VMSDK_ASSIGN_OR_RETURN(auto indexer, params.index_schema->GetIndex(load));
       auto indexer_type = indexer->GetIndexerType();
       auto schema_identifier = params.index_schema->GetIdentifier(load);
@@ -77,6 +77,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       }
     }
   }
+  params.no_content = !content;
   return absl::OkStatus();
 }
 
@@ -108,6 +109,7 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
                                                         // 10 from search
 
   VMSDK_RETURN_IF_ERROR(PostParseQueryString(*this));
+  VMSDK_RETURN_IF_ERROR(VerifyQueryString(*this));
   VMSDK_RETURN_IF_ERROR(ManipulateReturnsClause(*this));
 
   return absl::OkStatus();

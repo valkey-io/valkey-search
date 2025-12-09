@@ -26,6 +26,7 @@ struct LimitParameter {
 
 absl::Status PreParseQueryString(query::SearchParameters &parameters);
 absl::Status PostParseQueryString(query::SearchParameters &parameters);
+absl::Status VerifyQueryString(query::SearchParameters &parameters);
 
 //
 // Data Unique to the FT.SEARCH command

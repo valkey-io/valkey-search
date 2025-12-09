@@ -7,7 +7,7 @@ BUILD_CONFIG=release
 # TEST=all
 TEST=vector_search_integration
 CLEAN="no"
-VALKEY_VERSION="9.0.0"
+VALKEY_VERSION="9.0.1"
 VALKEY_JSON_VERSION="unstable"
 DUMP_TEST_ERRORS_STDOUT="no"
 

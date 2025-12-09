@@ -32,6 +32,7 @@ absl::Status VerifyQueryString(query::SearchParameters &parameters);
 // Data Unique to the FT.SEARCH command
 //
 struct SearchCommand : public QueryCommand {
+  SearchCommand(int db_num) : QueryCommand(db_num) {}
   absl::Status ParseCommand(vmsdk::ArgsIterator &itr) override;
   void SendReply(ValkeyModuleCtx *ctx,
                  std::deque<indexes::Neighbor> &neighbors) override;

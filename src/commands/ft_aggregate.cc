@@ -320,7 +320,8 @@ absl::Status FTAggregateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc) {
   return QueryCommand::Execute(
       ctx, argv, argc,
-      std::unique_ptr<QueryCommand>(new aggregate::AggregateParameters));
+      std::unique_ptr<QueryCommand>(
+          new aggregate::AggregateParameters(ValkeyModule_GetSelectedDb(ctx))));
 }
 
 }  // namespace valkey_search

@@ -36,6 +36,7 @@
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
 #include "src/vector_externalizer.h"
+#include "src/version.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -123,29 +124,33 @@ SchemaManager::SchemaManager(
           .section_count = [this](ValkeyModuleCtx *ctx, int when) -> int {
             return this->GetNumberOfIndexSchemas();
           },
-          .minimum_semantic_version = [](ValkeyModuleCtx *ctx,
-                                         int when) -> int {
-            return 0x010000;  // Always use 1.0.0 for now
-          }});
+          .minimum_semantic_version =
+              [this](ValkeyModuleCtx *ctx, int when) {
+                return this->GetMinVersion();
+              }});
   if (coordinator_enabled) {
     coordinator::MetadataManager::Instance().RegisterType(
-        kSchemaManagerMetadataTypeName, kMetadataEncodingVersion,
-        ComputeFingerprint,
-        [this](absl::string_view id, const google::protobuf::Any *metadata,
-               uint64_t fingerprint, uint32_t version) -> absl::Status {
-          return this->OnMetadataCallback(id, metadata, fingerprint, version);
-        });
+        kSchemaManagerMetadataTypeName, ComputeFingerprint,
+        [this](const coordinator::ObjName &obj_name,
+               const google::protobuf::Any *metadata, uint64_t fingerprint,
+               uint32_t version) -> absl::Status {
+          return this->OnMetadataCallback(obj_name, metadata, fingerprint,
+                                          version);
+        },
+        [this](auto) { return this->GetMinVersion(); });
   }
 }
 
-absl::Status GenerateIndexNotFoundError(absl::string_view name) {
-  return absl::NotFoundError(
-      absl::StrFormat("Index with name '%s' not found", name));
+absl::Status GenerateIndexNotFoundError(uint32_t db_num,
+                                        absl::string_view name) {
+  return absl::NotFoundError(absl::StrFormat(
+      "Index with name '%s' not found in database %d", name, db_num));
 }
 
-absl::Status GenerateIndexAlreadyExistsError(absl::string_view name) {
+absl::Status GenerateIndexAlreadyExistsError(uint32_t db_num,
+                                             absl::string_view name) {
   return absl::AlreadyExistsError(
-      absl::StrFormat("Index %s already exists.", name));
+      absl::StrFormat("Index %s in database %d already exists.", name, db_num));
 }
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::LookupInternal(
@@ -176,7 +181,7 @@ absl::Status SchemaManager::ImportIndexSchema(
   const std::string &name = index_schema->GetName();
   auto existing_entry = LookupInternal(db_num, name);
   if (existing_entry.ok()) {
-    return GenerateIndexAlreadyExistsError(name);
+    return GenerateIndexAlreadyExistsError(db_num, name);
   }
 
   db_to_index_schemas_[db_num][name] = std::move(index_schema);
@@ -193,7 +198,7 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
   const std::string &name = index_schema_proto.name();
   auto existing_entry = LookupInternal(db_num, name);
   if (existing_entry.ok()) {
-    return GenerateIndexAlreadyExistsError(index_schema_proto.name());
+    return GenerateIndexAlreadyExistsError(db_num, index_schema_proto.name());
   }
 
   VMSDK_ASSIGN_OR_RETURN(
@@ -222,19 +227,22 @@ SchemaManager::CreateIndexSchema(
       << "). Cannot create additional indexes.";
 
   if (coordinator_enabled_) {
-    CHECK(index_schema_proto.db_num() == 0)
-        << "In cluster mode, we only support DB 0";
     // In coordinated mode, use the metadata_manager as the source of truth.
     // It will callback into us with the update.
     if (coordinator::MetadataManager::Instance()
-            .GetEntry(kSchemaManagerMetadataTypeName, index_schema_proto.name())
+            .GetEntryContent(kSchemaManagerMetadataTypeName,
+                             coordinator::ObjName(index_schema_proto.db_num(),
+                                                  index_schema_proto.name()))
             .ok()) {
-      return GenerateIndexAlreadyExistsError(index_schema_proto.name());
+      return GenerateIndexAlreadyExistsError(index_schema_proto.db_num(),
+                                             index_schema_proto.name());
     }
     auto any_proto = std::make_unique<google::protobuf::Any>();
     any_proto->PackFrom(index_schema_proto);
     return coordinator::MetadataManager::Instance().CreateEntry(
-        kSchemaManagerMetadataTypeName, index_schema_proto.name(),
+        kSchemaManagerMetadataTypeName,
+        coordinator::ObjName(index_schema_proto.db_num(),
+                             index_schema_proto.name()),
         std::move(any_proto));
   }
 
@@ -253,7 +261,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::GetIndexSchema(
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto existing_entry = LookupInternal(db_num, name);
   if (!existing_entry.ok()) {
-    return GenerateIndexNotFoundError(name);
+    return GenerateIndexNotFoundError(db_num, name);
   }
   return existing_entry.value();
 }
@@ -263,7 +271,7 @@ SchemaManager::RemoveIndexSchemaInternal(uint32_t db_num,
                                          absl::string_view name) {
   auto existing_entry = LookupInternal(db_num, name);
   if (!existing_entry.ok()) {
-    return GenerateIndexNotFoundError(name);
+    return GenerateIndexNotFoundError(db_num, name);
   }
   auto result = std::move(db_to_index_schemas_[db_num][name]);
   db_to_index_schemas_[db_num].erase(name);
@@ -278,17 +286,16 @@ SchemaManager::RemoveIndexSchemaInternal(uint32_t db_num,
 }
 
 absl::Status SchemaManager::RemoveIndexSchema(uint32_t db_num,
-                                              absl::string_view name) {
+                                              const absl::string_view name) {
   if (coordinator_enabled_) {
-    CHECK(db_num == 0) << "In cluster mode, we only support DB 0";
     // In coordinated mode, use the metadata_manager as the source of truth.
     // It will callback into us with the update.
     auto status = coordinator::MetadataManager::Instance().DeleteEntry(
-        kSchemaManagerMetadataTypeName, name);
+        kSchemaManagerMetadataTypeName, coordinator::ObjName(db_num, name));
     if (status.ok()) {
       return status;
     } else if (absl::IsNotFound(status)) {
-      return GenerateIndexNotFoundError(name);
+      return GenerateIndexNotFoundError(db_num, name);
     } else {
       return absl::InternalError(status.message());
     }
@@ -349,11 +356,11 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
 }
 
 absl::Status SchemaManager::OnMetadataCallback(
-    absl::string_view id, const google::protobuf::Any *metadata,
+    const coordinator::ObjName &obj_name, const google::protobuf::Any *metadata,
     uint64_t fingerprint, uint32_t version) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  // Note that there is only DB 0 in cluster mode, so we can hardcode this.
-  auto status = RemoveIndexSchemaInternal(0, id);
+  auto status =
+      RemoveIndexSchemaInternal(obj_name.GetDbNum(), obj_name.GetName());
   if (!status.ok() && !absl::IsNotFound(status.status())) {
     return status.status();
   }
@@ -363,17 +370,16 @@ absl::Status SchemaManager::OnMetadataCallback(
   }
   auto proposed_schema = std::make_unique<data_model::IndexSchema>();
   if (!metadata->UnpackTo(proposed_schema.get())) {
-    return absl::InternalError(absl::StrFormat(
-        "Unable to unpack metadata for index schema %s", id.data()));
+    return absl::InternalError(
+        absl::StrCat("Unable to unpack metadata for index schema ", obj_name));
   }
 
-  auto result =
-      CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema);
-  if (!result.ok()) {
-    return result;
-  }
+  VMSDK_RETURN_IF_ERROR(
+      CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema));
 
-  auto created_schema = LookupInternal(0, id).value();
+  auto created_schema =
+      LookupInternal(obj_name.GetDbNum(), obj_name.GetName()).value();
+  CHECK(created_schema != nullptr);
   created_schema->SetFingerprint(fingerprint);
   created_schema->SetVersion(version);
 
@@ -388,6 +394,7 @@ uint64_t SchemaManager::GetNumberOfIndexSchemas() const {
   }
   return num_schemas;
 }
+
 uint64_t SchemaManager::GetNumberOfAttributes() const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto num_attributes = 0;
@@ -444,8 +451,6 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
     return;
   }
 
-  CHECK(!coordinator_enabled_ || selected_db == 0)
-      << "In cluster mode, we only support DB 0";
   auto to_delete = GetIndexSchemasInDBInternal(selected_db);
   for (const auto &name : to_delete) {
     VMSDK_LOG(NOTICE, ctx) << "Deleting index schema " << name
@@ -696,6 +701,41 @@ void SchemaManager::PopulateFingerprintVersionFromMetadata(
     existing_entry.value()->SetFingerprint(fingerprint);
     existing_entry.value()->SetVersion(version);
   }
+}
+
+absl::StatusOr<vmsdk::ValkeyVersion> SchemaManager::GetMinVersion() const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  vmsdk::ValkeyVersion min_version(0);
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      auto any_proto = std::make_unique<google::protobuf::Any>();
+      auto proto = schema->ToProto();
+      any_proto->PackFrom(*proto);
+
+      VMSDK_ASSIGN_OR_RETURN(auto this_version,
+                             IndexSchema::GetMinVersion(*any_proto));
+      min_version = std::max(min_version, this_version);
+    }
+  }
+  return min_version;
+}
+
+absl::Status SchemaManager::ShowIndexSchemas(ValkeyModuleCtx *ctx,
+                                             vmsdk::ArgsIterator &itr) const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  ValkeyModule_ReplyWithArray(ctx, db_to_index_schemas_.size());
+  for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
+    ValkeyModule_ReplyWithArray(ctx, 2);
+    ValkeyModule_ReplyWithLongLong(ctx, db_num);
+    ValkeyModule_ReplyWithArray(ctx, inner_map.size());
+    for (const auto &[name, schema] : inner_map) {
+      auto proto = schema->ToProto()->DebugString();
+      VMSDK_LOG(NOTICE, ctx)
+          << "Index Schema in DB " << db_num << ": " << name << " " << proto;
+      ValkeyModule_ReplyWithStringBuffer(ctx, proto.data(), proto.size());
+    }
+  }
+  return absl::OkStatus();
 }
 
 static vmsdk::info_field::Integer number_of_indexes(

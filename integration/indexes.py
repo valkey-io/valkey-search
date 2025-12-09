@@ -163,6 +163,11 @@ class Index:
         if wait_for_backfill:
             self.wait_for_backfill_complete(client)
 
+    def drop(self, client: valkey.client):
+        cmd = ["FT.DROPINDEX", self.name]
+        print("Executing: ", cmd)
+        client.execute_command(*cmd)
+
     def load_data(self, client: valkey.client, rows: int, start_index: int = 0):
         for i in range(start_index, rows):
             data = self.make_data(i)
@@ -198,6 +203,23 @@ class Index:
     def backfill_complete(self, client: valkey.client) -> bool:
         res = self.info(client)
         return res.backfill_in_progress == 0
+    
+    def query(self, client:valkey.client, query_string: str, *args) -> dict[bytes, dict[bytes, bytes]]:
+        assert self.type == KeyDataType.HASH, "JSON not supported yet"
+        query = ["ft.search", self.name, query_string] + list(args)
+        print("Execute Query Command: ", query)
+        result = client.execute_command(*query)
+        print("Result is ", result)
+        count = result[0]
+        dict_result = {}
+        for row in range(1, len(result)-1, 2):
+            key = result[row]
+            fields = result[row+1][0::2]
+            values = result[row+1][1::2]
+            print("Key", key, "Fields:", fields, " Values:", values)
+            dict_result[key] = {fields[i]:values[i] for i in range(len(fields))}
+        print("Final result", dict_result)
+        return dict_result
 
     def has_field(self, name: str) -> bool:
         return any(f.name == name for f in self.fields)

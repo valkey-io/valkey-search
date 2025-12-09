@@ -211,8 +211,9 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
 
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc) {
-  return QueryCommand::Execute(
-      ctx, argv, argc, std::unique_ptr<QueryCommand>(new SearchCommand));
+  return QueryCommand::Execute(ctx, argv, argc,
+                               std::unique_ptr<QueryCommand>(new SearchCommand(
+                                   ValkeyModule_GetSelectedDb(ctx))));
 }
 
 }  // namespace valkey_search

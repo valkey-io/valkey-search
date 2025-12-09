@@ -145,6 +145,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   absl::Status SaveIndexExtension(RDBChunkOutputStream output) const;
   absl::Status LoadIndexExtension(ValkeyModuleCtx *ctx,
                                   RDBChunkInputStream input);
+  static absl::StatusOr<vmsdk::ValkeyVersion> GetMinVersion(
+      const google::protobuf::Any &metadata);
   absl::Status ValidateIndex() const;
 
   static absl::StatusOr<std::shared_ptr<IndexSchema>> LoadFromRDB(

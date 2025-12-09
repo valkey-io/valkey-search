@@ -339,7 +339,11 @@ EvaluationResult EvaluatePredicate(const Predicate* predicate,
 // requirements.
 EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   // Determine if children need to return positions for proximity checks
-  bool require_positions = slop_.has_value() || inorder_;
+  // Prefilter doesn't needs positions - proximity is validated only on main
+  // thread
+  bool require_positions = evaluator.IsPrefilterEvaluator()
+                               ? false
+                               : (slop_.has_value() || inorder_);
   // Handle AND logic
   if (GetType() == PredicateType::kComposedAnd) {
     // Short-circuit on first false
@@ -416,8 +420,7 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
       std::make_unique<indexes::text::OrProximityIterator>(
           std::move(filter_iterators), nullptr);
   // Check if any valid matches exist
-  if (or_proximity_iterator->DoneKeys() ||
-      or_proximity_iterator->DonePositions()) {
+  if (!or_proximity_iterator->IsIteratorValid()) {
     return EvaluationResult(false);
   }
   // Validate against original target key from evaluator

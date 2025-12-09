@@ -258,6 +258,7 @@ class PrefilterEvaluator : public query::Evaluator {
     CHECK(key_);
     return *key_;
   }
+  bool IsPrefilterEvaluator() const override { return true; }
 
  private:
   query::EvaluationResult EvaluateTags(

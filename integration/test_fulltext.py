@@ -201,9 +201,9 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         """
         client: Valkey = self.server.get_new_client()
         # Override config
-        if prefilter_enabled:
+        if not prefilter_enabled:
             client.execute_command(
-                "CONFIG", "SET", "search.enable-prefilter", "yes"
+                "CONFIG", "SET", "search.enable-prefilter", "no"
             )
         # Create the text index on Hash documents
         assert client.execute_command(text_index_on_hash) == b"OK"
@@ -814,7 +814,6 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # Test 6: Exact phrase with tag filter
         result = client.execute_command("FT.SEARCH", "idx", '@content:"software engineer" @skills:{python}')
         assert (result[0], result[1]) == (1, b"doc:1")
-
         # Test 7: Proximity with numeric - tests iterator propagation
         result = client.execute_command("FT.SEARCH", "idx", '(@content:software @salary:[90000 110000]) @content:engineer', "SLOP", "1", "INORDER")
         assert (result[0], result[1]) == (1, b"doc:1")
@@ -874,9 +873,9 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
     def test_proximity_predicate(self, prefilter_enabled):
         client: Valkey = self.server.get_new_client()
         # Override config
-        if prefilter_enabled:
+        if not prefilter_enabled:
             client.execute_command(
-                "CONFIG", "SET", "search.enable-prefilter", "yes"
+                "CONFIG", "SET", "search.enable-prefilter", "no"
             )
         # Create index with text fields
         client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
@@ -1554,10 +1553,10 @@ class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
         """
         cluster_client: ValkeyCluster = self.new_cluster_client()
         client: Valkey = self.new_client_for_primary(0)
-        if prefilter_enabled:
+        if not prefilter_enabled:
             # Set config on all primary nodes
             for primary_client in self.get_all_primary_clients():
-                primary_client.execute_command("CONFIG", "SET", "search.enable-prefilter", "yes")
+                primary_client.execute_command("CONFIG", "SET", "search.enable-prefilter", "no")
         # Create the text index on Hash documents
         assert client.execute_command(text_index_on_hash) == b"OK"
         # Data population:

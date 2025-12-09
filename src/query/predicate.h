@@ -75,9 +75,9 @@ class Evaluator {
   virtual EvaluationResult EvaluateTags(const TagPredicate& predicate) = 0;
   virtual EvaluationResult EvaluateNumeric(
       const NumericPredicate& predicate) = 0;
-
   // Access target key for proximity validation (only for Text)
   virtual const InternedStringPtr& GetTargetKey() const = 0;
+  virtual bool IsPrefilterEvaluator() const { return false; }
 };
 
 class Predicate;

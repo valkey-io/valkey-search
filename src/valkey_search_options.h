@@ -44,7 +44,10 @@ const config::Boolean& GetSkipIndexLoad();
 config::Boolean& GetSkipIndexLoadMutable();
 
 /// Returns the prefilter evaluation configuration
-config::Boolean& GetEnablePrefilter();
+config::Boolean& GetEnablePrefilterEval();
+
+/// Returns the prefilter proximity evaluation configuration
+config::Boolean& GetEnableProximityPrefilterEval();
 
 /// Return the log level
 config::Enum& GetLogLevel();

@@ -218,14 +218,28 @@ static auto ft_info_rpc_timeout_ms =
         kMaximumFTInfoRpcTimeoutMs)  // max timeout (5 minutes)
         .Build();
 
-/// Enable predicate evaluation in prefilter stage
-/// When disabled, prefilter becomes a pass-through with deduplication only
-constexpr absl::string_view kEnablePrefilter{"enable-prefilter"};
-static auto enable_prefilter =
-    config::BooleanBuilder(kEnablePrefilter, true).Build();
+/// Enable prefilter evaluation
+/// When disabled, prefilter evaluation is skipped and effectively becomes a
+/// pass-through with only deduplication of keys.
+constexpr absl::string_view kEnablePrefilterEval{"enable-prefilter-eval"};
+static auto enable_prefilter_eval =
+    config::BooleanBuilder(kEnablePrefilterEval, true).Build();
 
-vmsdk::config::Boolean& GetEnablePrefilter() {
-  return dynamic_cast<vmsdk::config::Boolean&>(*enable_prefilter);
+vmsdk::config::Boolean& GetEnablePrefilterEval() {
+  return dynamic_cast<vmsdk::config::Boolean&>(*enable_prefilter_eval);
+}
+
+/// Enable proximity evaluation in prefilter evaluation stage
+/// When disabled, proximity evaluation is skipped in background threads and is
+/// performed only on main thread
+constexpr absl::string_view kEnableProximityPrefilterEval{
+    "enable-proximity-prefilter-eval"};
+static auto enable_proximity_prefilter_eval =
+    config::BooleanBuilder(kEnableProximityPrefilterEval, true).Build();
+
+vmsdk::config::Boolean& GetEnableProximityPrefilterEval() {
+  return dynamic_cast<vmsdk::config::Boolean&>(
+      *enable_proximity_prefilter_eval);
 }
 
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }

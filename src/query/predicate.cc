@@ -21,6 +21,7 @@
 #include "src/indexes/text/proximity.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/text/text_iterator.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 
@@ -338,12 +339,14 @@ EvaluationResult EvaluatePredicate(const Predicate* predicate,
 // ProximityIterator to validate term positions meet distance and order
 // requirements.
 EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
-  // Determine if children need to return positions for proximity checks
-  // Prefilter doesn't needs positions - proximity is validated only on main
-  // thread
-  bool require_positions = evaluator.IsPrefilterEvaluator()
-                               ? false
-                               : (slop_.has_value() || inorder_);
+  // Determine if children need to return positions for proximity checks.
+  // Proximity check in Prefilter also depends on the configuration.
+  bool has_proximity_constraint = slop_.has_value() || inorder_;
+  bool require_positions =
+      evaluator.IsPrefilterEvaluator()
+          ? has_proximity_constraint &&
+                options::GetEnableProximityPrefilterEval().GetValue()
+          : has_proximity_constraint;
   // Handle AND logic
   if (GetType() == PredicateType::kComposedAnd) {
     // Short-circuit on first false

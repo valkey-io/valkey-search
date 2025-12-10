@@ -241,7 +241,6 @@ function build_icu_if_needed() {
     fi
 }
 
-
 function configure() {
     printf "${BOLD_PINK}Running cmake...${RESET}\n"
     printf "Generating ${GREEN}${CMAKE_GENERATOR}${RESET} build files\n"

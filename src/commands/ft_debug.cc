@@ -311,10 +311,13 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return PausePointControlCmd(ctx, itr);
   } else if (keyword == "CONTROLLED_VARIABLE") {
     return ControlledCmd(ctx, itr);
+<<<<<<< HEAD
   } else if (keyword == "STRINGPOOLSTATS") {
     return StringPoolStats(ctx, itr);
   } else if (keyword == "TEXTINFO") {
     return IndexSchema::TextInfoCmd(ctx, itr);
+=======
+>>>>>>> upstream/main
   } else if (keyword == "SHOW_METADATA") {
     return valkey_search::coordinator::MetadataManager::Instance().ShowMetadata(
         ctx, itr);

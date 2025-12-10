@@ -126,13 +126,34 @@ struct SearchParameters {
         db_num_(db_num) {}
 };
 
-// Callback to be called when the search is done.
-using SearchResponseCallback =
-    absl::AnyInvocable<void(absl::StatusOr<std::deque<indexes::Neighbor>>&,
-                            std::unique_ptr<SearchParameters>)>;
+// Wrapper for search results that optimizes memory usage based on query type
+struct SearchResult {
+  size_t total_count;
+  std::deque<indexes::Neighbor> neighbors;
+  bool is_limited;  // True if neighbors were limited in background thread
+  // Constructor with automatic trimming based on query requirements
+  SearchResult(size_t total_count, std::deque<indexes::Neighbor> neighbors,
+               const SearchParameters& parameters, bool has_sortby = false,
+               bool is_cme = false);
+  // Constructor for coordinator fanout aggregation - no trimming applied
+  SearchResult(size_t total_count, std::deque<indexes::Neighbor> neighbors)
+      : total_count(total_count),
+        neighbors(std::move(neighbors)),
+        is_limited(false) {}
 
-absl::StatusOr<std::deque<indexes::Neighbor>> Search(
-    const SearchParameters& parameters, SearchMode search_mode);
+ private:
+  static bool NeedsSorting(const SearchParameters& parameters,
+                           bool has_sortby = false, bool is_cme = false);
+  static bool TrimResults(std::deque<indexes::Neighbor>& neighbors,
+                          const SearchParameters& parameters);
+};
+
+// Callback to be called when the search is done.
+using SearchResponseCallback = absl::AnyInvocable<void(
+    absl::StatusOr<SearchResult>&, std::unique_ptr<SearchParameters>)>;
+
+absl::StatusOr<SearchResult> Search(const SearchParameters& parameters,
+                                    SearchMode search_mode);
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool* thread_pool,
@@ -159,6 +180,13 @@ CalcBestMatchingPrefilteredKeys(
     const SearchParameters& parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
     indexes::VectorBase* vector_index);
+
+// Helper functions to calculate start/end index with vector/non-vector
+// awareness
+size_t CalcStartIndex(const std::deque<indexes::Neighbor>& neighbors,
+                      const SearchParameters& parameters);
+size_t CalcEndIndex(const std::deque<indexes::Neighbor>& neighbors,
+                    const SearchParameters& parameters);
 
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

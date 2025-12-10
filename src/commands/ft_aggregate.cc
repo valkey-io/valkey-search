@@ -305,12 +305,12 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
 }
 
 void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,
-                                    std::deque<indexes::Neighbor> &neighbors) {
+                                    query::SearchResult &result) {
   auto identifier = index_schema->GetIdentifier(attribute_alias);
-  auto result = SendReplyInner(ctx, neighbors, *this);
-  if (!result.ok()) {
+  auto status = SendReplyInner(ctx, result.neighbors, *this);
+  if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
-    ValkeyModule_ReplyWithError(ctx, result.message().data());
+    ValkeyModule_ReplyWithError(ctx, status.message().data());
   }
 }
 

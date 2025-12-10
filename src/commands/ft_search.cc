@@ -35,48 +35,29 @@ namespace valkey_search {
 namespace {
 // FT.SEARCH idx "*=>[KNN 10 @vec $BLOB AS score]" PARAMS 2 BLOB
 // "\x12\xa9\xf5\x6c" DIALECT 2
+
 void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
-                         const std::deque<indexes::Neighbor> &neighbors,
+                         const query::SearchResult &search_result,
                          const query::SearchParameters &parameters) {
   if (parameters.IsNonVectorQuery()) {
-    ValkeyModule_ReplyWithLongLong(ctx, neighbors.size());
+    ValkeyModule_ReplyWithLongLong(ctx, search_result.total_count);
   } else {
     ValkeyModule_ReplyWithLongLong(
-        ctx, std::min(neighbors.size(), static_cast<size_t>(parameters.k)));
+        ctx,
+        std::min(search_result.total_count, static_cast<size_t>(parameters.k)));
   }
-}
-
-size_t CalcEndIndex(const std::deque<indexes::Neighbor> &neighbors,
-                    const query::SearchParameters &parameters) {
-  if (parameters.IsNonVectorQuery()) {
-    return std::min(static_cast<size_t>(parameters.limit.number),
-                    neighbors.size());
-  }
-  // Vector query
-  return std::min(
-      static_cast<size_t>(parameters.k),
-      std::min(static_cast<size_t>(parameters.limit.number), neighbors.size()));
-}
-
-size_t CalcStartIndex(const std::deque<indexes::Neighbor> &neighbors,
-                      const query::SearchParameters &parameters) {
-  if (!parameters.IsNonVectorQuery()) {
-    CHECK_GT(parameters.k, parameters.limit.first_index);
-  }
-  if (neighbors.size() <= parameters.limit.first_index) {
-    return neighbors.size();
-  }
-  return parameters.limit.first_index;
 }
 
 void SendReplyNoContent(ValkeyModuleCtx *ctx,
-                        const std::deque<indexes::Neighbor> &neighbors,
+                        const query::SearchResult &search_result,
                         const query::SearchParameters &parameters) {
-  const size_t start_index = CalcStartIndex(neighbors, parameters);
-  const size_t end_index = std::min(
-      start_index + CalcEndIndex(neighbors, parameters), neighbors.size());
+  const auto &neighbors = search_result.neighbors;
+  const size_t start_index = query::CalcStartIndex(neighbors, parameters);
+  const size_t end_index =
+      std::min(start_index + query::CalcEndIndex(neighbors, parameters),
+               neighbors.size());
   ValkeyModule_ReplyWithArray(ctx, end_index - start_index + 1);
-  ReplyAvailNeighbors(ctx, neighbors, parameters);
+  ReplyAvailNeighbors(ctx, search_result, parameters);
   for (auto i = start_index; i < end_index; ++i) {
     ValkeyModule_ReplyWithString(
         ctx, vmsdk::MakeUniqueValkeyString(*neighbors[i].external_id).get());
@@ -92,14 +73,16 @@ void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
 }
 
 void SerializeNeighbors(ValkeyModuleCtx *ctx,
-                        const std::deque<indexes::Neighbor> &neighbors,
+                        const query::SearchResult &search_result,
                         const query::SearchParameters &parameters) {
+  const auto &neighbors = search_result.neighbors;
   CHECK_GT(static_cast<size_t>(parameters.k), parameters.limit.first_index);
-  const size_t start_index = CalcStartIndex(neighbors, parameters);
-  const size_t end_index = std::min(
-      start_index + CalcEndIndex(neighbors, parameters), neighbors.size());
+  const size_t start_index = query::CalcStartIndex(neighbors, parameters);
+  const size_t end_index =
+      std::min(start_index + query::CalcEndIndex(neighbors, parameters),
+               neighbors.size());
   ValkeyModule_ReplyWithArray(ctx, 2 * (end_index - start_index) + 1);
-  ReplyAvailNeighbors(ctx, neighbors, parameters);
+  ReplyAvailNeighbors(ctx, search_result, parameters);
 
   for (auto i = start_index; i < end_index; ++i) {
     ValkeyModule_ReplyWithString(
@@ -136,16 +119,16 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
   }
 }
 
-// Handle non-vector queries by processing the neighbors and replying with the
-// attribute contents.
 void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
-                                 const std::deque<indexes::Neighbor> &neighbors,
+                                 const query::SearchResult &search_result,
                                  const query::SearchParameters &parameters) {
-  const size_t start_index = CalcStartIndex(neighbors, parameters);
-  const size_t end_index = std::min(
-      start_index + CalcEndIndex(neighbors, parameters), neighbors.size());
+  const auto &neighbors = search_result.neighbors;
+  const size_t start_index = query::CalcStartIndex(neighbors, parameters);
+  const size_t end_index =
+      std::min(start_index + query::CalcEndIndex(neighbors, parameters),
+               neighbors.size());
   ValkeyModule_ReplyWithArray(ctx, 2 * (end_index - start_index) + 1);
-  ReplyAvailNeighbors(ctx, neighbors, parameters);
+  ReplyAvailNeighbors(ctx, search_result, parameters);
   for (size_t i = start_index; i < end_index; ++i) {
     // Document ID
     ValkeyModule_ReplyWithString(
@@ -173,9 +156,10 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
 //      4. The vector value
 // SendReply respects the Limit, see https://valkey.io/commands/ft.search/
 void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
-                              std::deque<indexes::Neighbor> &neighbors) {
+                              query::SearchResult &search_result) {
   // Increment success counter.
   ++Metrics::GetStats().query_successful_requests_cnt;
+  auto &neighbors = search_result.neighbors;
   // This handles two cases:
   // 1. Any query with limit number == 0
   // 2. Vector queries with limit first_index >= k
@@ -183,18 +167,20 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
        (limit.first_index >= static_cast<uint64_t>(k))) ||
       limit.number == 0) {
     ValkeyModule_ReplyWithArray(ctx, 1);
-    ValkeyModule_ReplyWithLongLong(ctx, neighbors.size());
+    ValkeyModule_ReplyWithLongLong(ctx, search_result.total_count);
     return;
   }
   if (no_content) {
-    SendReplyNoContent(ctx, neighbors, *this);
+    SendReplyNoContent(ctx, search_result, *this);
     return;
   }
   // Support non-vector queries
   if (IsNonVectorQuery()) {
+    size_t original_size = neighbors.size();
     query::ProcessNonVectorNeighborsForReply(
         ctx, index_schema->GetAttributeDataType(), neighbors, *this);
-    SerializeNonVectorNeighbors(ctx, neighbors, *this);
+    search_result.total_count -= (original_size - neighbors.size());
+    SerializeNonVectorNeighbors(ctx, search_result, *this);
     return;
   }
   auto identifier = index_schema->GetIdentifier(attribute_alias);
@@ -203,10 +189,12 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
     ValkeyModule_ReplyWithError(ctx, identifier.status().message().data());
     return;
   }
+  size_t original_size = neighbors.size();
   query::ProcessNeighborsForReply(ctx, index_schema->GetAttributeDataType(),
                                   neighbors, *this, identifier.value());
+  search_result.total_count -= (original_size - neighbors.size());
 
-  SerializeNeighbors(ctx, neighbors, *this);
+  SerializeNeighbors(ctx, search_result, *this);
 }
 
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,

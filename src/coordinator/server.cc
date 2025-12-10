@@ -143,10 +143,10 @@ query::SearchResponseCallback Service::MakeSearchCallback(
     SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
     std::unique_ptr<vmsdk::StopWatch> latency_sample) {
   return [response, reactor, latency_sample = std::move(latency_sample)](
-             absl::StatusOr<std::deque<indexes::Neighbor>>& neighbors,
+             absl::StatusOr<query::SearchResult>& result,
              std::unique_ptr<query::SearchParameters> parameters) mutable {
-    if (!neighbors.ok()) {
-      reactor->Finish(ToGrpcStatus(neighbors.status()));
+    if (!result.ok()) {
+      reactor->Finish(ToGrpcStatus(result.status()));
       RecordSearchMetrics(true, std::move(latency_sample));
       return;
     }
@@ -158,13 +158,15 @@ query::SearchResponseCallback Service::MakeSearchCallback(
       return;
     }
     if (parameters->no_content) {
-      SerializeNeighbors(response, neighbors.value());
+      SerializeNeighbors(response, result->neighbors);
+      response->set_total_count(result->total_count);
       reactor->Finish(grpc::Status::OK);
       RecordSearchMetrics(false, std::move(latency_sample));
     } else {
       vmsdk::RunByMain([parameters = std::move(parameters), response, reactor,
                         latency_sample = std::move(latency_sample),
-                        neighbors = std::move(neighbors.value())]() mutable {
+                        neighbors = std::move(result->neighbors),
+                        total_count = result->total_count]() mutable {
         const auto& attribute_data_type =
             parameters->index_schema->GetAttributeDataType();
         auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
@@ -181,6 +183,7 @@ query::SearchResponseCallback Service::MakeSearchCallback(
                                           vector_identifier);
         }
         SerializeNeighbors(response, neighbors);
+        response->set_total_count(total_count);
         reactor->Finish(grpc::Status::OK);
         RecordSearchMetrics(false, std::move(latency_sample));
       });

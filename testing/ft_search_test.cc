@@ -188,7 +188,8 @@ void SendReplyTest::DoSendReplyTest(
     parameters->return_attributes.push_back(
         ToReturnAttribute(return_attribute));
   }
-  parameters->SendReply(&fake_ctx, neighbors);
+  query::SearchResult wrapper(neighbors.size(), std::move(neighbors));
+  parameters->SendReply(&fake_ctx, wrapper);
 
   EXPECT_EQ(ParseRespReply(fake_ctx.reply_capture.GetReply()), expected_output);
 }

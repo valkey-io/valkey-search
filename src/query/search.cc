@@ -424,9 +424,83 @@ absl::StatusOr<std::deque<indexes::Neighbor>> DoSearch(
   return PerformVectorSearch(vector_index, parameters);
 }
 
-absl::StatusOr<std::deque<indexes::Neighbor>> Search(
-    const SearchParameters &parameters, SearchMode search_mode) {
-  return MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters);
+// Helper functions to calculate start/end index with vector/non-vector
+// awareness
+size_t CalcStartIndex(const std::deque<indexes::Neighbor> &neighbors,
+                      const SearchParameters &parameters) {
+  if (!parameters.IsNonVectorQuery()) {
+    CHECK_GT(parameters.k, parameters.limit.first_index);
+  }
+  if (neighbors.size() <= parameters.limit.first_index) {
+    return neighbors.size();
+  }
+  return parameters.limit.first_index;
+}
+
+size_t CalcEndIndex(const std::deque<indexes::Neighbor> &neighbors,
+                    const SearchParameters &parameters) {
+  if (parameters.IsNonVectorQuery()) {
+    return std::min(static_cast<size_t>(parameters.limit.number),
+                    neighbors.size());
+  }
+  // Vector query
+  return std::min(
+      static_cast<size_t>(parameters.k),
+      std::min(static_cast<size_t>(parameters.limit.number), neighbors.size()));
+}
+
+SearchResult::SearchResult(size_t total_count,
+                           std::deque<indexes::Neighbor> neighbors,
+                           const SearchParameters &parameters, bool has_sortby,
+                           bool is_cme)
+    : total_count(total_count) {
+  // Check if sorting is needed first. Trim otherwise.
+  if (NeedsSorting(parameters, has_sortby, is_cme)) {
+    this->neighbors = std::move(neighbors);
+    this->is_limited = false;
+  } else {
+    this->neighbors = std::move(neighbors);
+    this->is_limited = TrimResults(this->neighbors, parameters);
+  }
+}
+
+// Determine if we need full results or can optimize with limiting.
+// When SORTBY is present, we need full results to sort correctly.
+bool SearchResult::NeedsSorting(const SearchParameters &parameters,
+                                bool has_sortby, bool is_cme) {
+  // TODO: Check content of SearchParameters.
+  return has_sortby && is_cme;
+}
+
+// Apply limiting in background thread if possible.
+bool SearchResult::TrimResults(std::deque<indexes::Neighbor> &neighbors,
+                               const SearchParameters &parameters) {
+  // Use CalcEndIndex for consistent vector/non-vector handling
+  size_t end_needed = CalcEndIndex(neighbors, parameters);
+  size_t max_needed =
+      static_cast<size_t>((parameters.limit.first_index + end_needed) * 1.5);
+  // If we don't need to limit, return false
+  if (neighbors.size() <= max_needed) {
+    return false;
+  }
+  // Apply limiting
+  neighbors.erase(neighbors.begin() + max_needed, neighbors.end());
+  return true;
+}
+
+absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,
+                                    SearchMode search_mode) {
+  auto result =
+      MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters);
+  if (!result.ok()) {
+    return result.status();
+  }
+  // TODO: determine when SORTBY is implemented
+  bool has_sortby = false;
+  bool is_cme = false;
+  size_t total_count = result.value().size();
+  return SearchResult(total_count, std::move(result.value()), parameters,
+                      has_sortby, is_cme);
 }
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,

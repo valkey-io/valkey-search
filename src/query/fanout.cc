@@ -69,6 +69,7 @@ struct SearchPartitionResultsTracker {
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
   std::atomic_bool reached_oom{false};
   std::atomic_bool consistency_failed{false};
+  size_t accumulated_total_count ABSL_GUARDED_BY(mutex) = 0;
 
   SearchPartitionResultsTracker(int outstanding_requests, int k,
                                 query::SearchResponseCallback callback,
@@ -104,6 +105,7 @@ struct SearchPartitionResultsTracker {
     }
 
     absl::MutexLock lock(&mutex);
+    accumulated_total_count += response.total_count();
     while (response.neighbors_size() > 0) {
       auto neighbor_entry = std::unique_ptr<coordinator::NeighborEntry>(
           response.mutable_neighbors()->ReleaseLast());
@@ -132,6 +134,11 @@ struct SearchPartitionResultsTracker {
     }
   }
 
+  void AddTotalCount(size_t count) {
+    absl::MutexLock lock(&mutex);
+    accumulated_total_count += count;
+  }
+
   void AddResult(indexes::Neighbor &neighbor)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex) {
     // For non-vector queries, we can add the result directly.
@@ -149,18 +156,19 @@ struct SearchPartitionResultsTracker {
 
   ~SearchPartitionResultsTracker() {
     absl::MutexLock lock(&mutex);
-    absl::StatusOr<std::deque<indexes::Neighbor>> result =
-        std::deque<indexes::Neighbor>();
+    absl::StatusOr<SearchResult> result =
+        SearchResult(0, std::deque<indexes::Neighbor>{});
     if (consistency_failed) {
       result = absl::FailedPreconditionError(kFailedPreconditionMsg);
     } else if (reached_oom) {
       result = absl::ResourceExhaustedError(kOOMMsg);
     } else {
       while (!results.empty()) {
-        result->push_back(
+        result->neighbors.push_back(
             std::move(const_cast<indexes::Neighbor &>(results.top())));
         results.pop();
       }
+      result->total_count = accumulated_total_count;
     }
     callback(result, std::move(parameters));
   }
@@ -204,10 +212,17 @@ absl::Status PerformSearchFanoutAsync(
     std::unique_ptr<SearchParameters> parameters,
     vmsdk::ThreadPool *thread_pool, query::SearchResponseCallback callback) {
   auto request = coordinator::ParametersToGRPCSearchRequest(*parameters);
-  // There should be no limit for the fanout search, so put some safe values,
-  // so that the default values are not used during the local search.
-  request->mutable_limit()->set_first_index(0);
-  request->mutable_limit()->set_number(parameters->k);
+  if (parameters->IsNonVectorQuery()) {
+    // For non vector, use the LIMIT based range.
+    request->mutable_limit()->set_first_index(parameters->limit.first_index);
+    request->mutable_limit()->set_number(parameters->limit.number);
+  } else {
+    // Vector searches: Use k as the limit to find top k results. In worst case,
+    // all top k results are from a single shard, so no need to fetch more than
+    // k.
+    request->mutable_limit()->set_first_index(0);
+    request->mutable_limit()->set_number(parameters->k);
+  }
   auto tracker = std::make_shared<SearchPartitionResultsTracker>(
       search_targets.size(), parameters->k, std::move(callback),
       std::move(parameters));
@@ -253,17 +268,18 @@ absl::Status PerformSearchFanoutAsync(
         coordinator::GRPCSearchRequestToParameters(*request, nullptr));
     VMSDK_RETURN_IF_ERROR(query::SearchAsync(
         std::move(local_parameters), thread_pool,
-        [tracker](absl::StatusOr<std::deque<indexes::Neighbor>> &neighbors,
+        [tracker](absl::StatusOr<SearchResult> &result,
                   std::unique_ptr<SearchParameters> parameters) {
-          if (neighbors.ok()) {
-            tracker->AddResults(*neighbors);
+          if (result.ok()) {
+            tracker->AddResults(result->neighbors);
+            tracker->AddTotalCount(result->total_count);
           } else {
-            if (absl::IsResourceExhausted(neighbors.status())) {
+            if (absl::IsResourceExhausted(result.status())) {
               tracker->reached_oom.store(true);
             }
             VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
                 << "Error during local handling of FT.SEARCH: "
-                << neighbors.status().message();
+                << result.status().message();
           }
         },
         SearchMode::kLocal))

@@ -10,21 +10,10 @@
 #include "src/commands/commands.h"
 #include "src/keyspace_event_manager.h"
 #include "src/valkey_search.h"
+#include "src/version.h"
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
-
-#define MODULE_VERSION 10000
-/* The release stage is used in order to provide release status information.
- * In unstable branch the status is always "dev".
- * During release process the status will be set to rc1,rc2...rcN.
- * When the version is released the status will be "ga". */
-#define MODULE_RELEASE_STAGE "rc1"
-
-//
-// Set the minimum acceptable server version
-//
-#define MINIMUM_VALKEY_VERSION vmsdk::MakeValkeyVersion(8, 1, 1)
 
 namespace {
 
@@ -46,8 +35,8 @@ vmsdk::module::Options options = {
     .acl_categories = ACLPermissionFormatter({
         valkey_search::kSearchCategory,
     }),
-    .version = MODULE_VERSION,
-    .minimum_valkey_version = MINIMUM_VALKEY_VERSION,
+    .version = kModuleVersion,
+    .minimum_valkey_server_version = kMinimumServerVersion,
     .info = valkey_search::ModuleInfo,
     .commands =
         {

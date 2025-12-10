@@ -107,7 +107,7 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
 
   // Add TEXT data for basic tests (exact_term, exact_prefix, proximity, etc.)
   auto key1 = StringInternStore::Intern("key1");
-  std::string test_data = "word hello, my name is how are you doing?";
+  std::string test_data = "word hello my name is hello how are you doing?";
   VMSDK_EXPECT_OK(text_index_1->AddRecord(key1, test_data));
   VMSDK_EXPECT_OK(text_index_2->AddRecord(key1, test_data));
 

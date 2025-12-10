@@ -90,6 +90,8 @@ Base::~Base() {
 static auto show_developer =
     vmsdk::config::Boolean("info-developer-visible", false);
 
+bool GetShowDeveloper() { return show_developer.GetValue(); }
+
 //
 // Dump the sections that haven't been already dumped.
 //

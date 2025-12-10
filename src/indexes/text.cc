@@ -88,7 +88,7 @@ bool Text::IsTracked(const InternedStringPtr& key) const {
   return false;
 }
 
-uint64_t Text::GetRecordCount() const {
+size_t Text::GetTrackedKeyCount() const {
   // TODO: keep track of number of keys indexed for this attribute
   return 0;
 }

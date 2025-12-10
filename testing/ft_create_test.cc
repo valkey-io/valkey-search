@@ -23,6 +23,10 @@
 
 namespace valkey_search {
 
+namespace options {
+vmsdk::config::Number& GetMaxIndexes();
+}
+
 namespace {
 
 using ::testing::TestParamInfo;

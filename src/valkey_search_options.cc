@@ -173,9 +173,19 @@ static auto log_level =
         .WithValidationCallback(ValidateLogLevel)
         .Build();
 
-/// Should timeouts return partial results OR generate a TIMEOUT error?
-constexpr absl::string_view kEnablePartialResults{"enable-partial-results"};
-static config::Boolean enable_partial_results(kEnablePartialResults, true);
+/// Prefer partial results by default of not
+/// If set to true, search will use SOMESHARDS if user does not explicitly
+/// provide an option in the command
+constexpr absl::string_view kPreferPartialResults{"prefer-partial-results"};
+static config::Boolean prefer_partial_results(kPreferPartialResults, true);
+
+/// Prefer consistenct results by default of not
+/// If set to true, search will use CONSISTENT if user does not explicitly
+/// provide an option in the command
+constexpr absl::string_view kPreferConsistentResults{
+    "prefer-consistent-results"};
+static config::Boolean prefer_consistent_results(kPreferConsistentResults,
+                                                 false);
 
 /// Configure the weight for high priority tasks in thread pools (0-100)
 /// Low priority weight = 100 - high_priority_weight
@@ -218,6 +228,51 @@ static auto ft_info_rpc_timeout_ms =
         kMaximumFTInfoRpcTimeoutMs)  // max timeout (5 minutes)
         .Build();
 
+/// Register the "--local-fanout-queue-wait-threshold" flag. Controls the queue
+/// wait time threshold (in milliseconds) below which local node is preferred in
+/// fanout operations
+constexpr absl::string_view kLocalFanoutQueueWaitThresholdConfig{
+    "local-fanout-queue-wait-threshold"};
+constexpr uint32_t kDefaultLocalFanoutQueueWaitThreshold{
+    50};  // 50ms queue wait time
+constexpr uint32_t kMinimumLocalFanoutQueueWaitThreshold{
+    0};  // 0ms queue wait time
+constexpr uint32_t kMaximumLocalFanoutQueueWaitThreshold{
+    10000};  // 10 seconds queue wait time
+static auto local_fanout_queue_wait_threshold =
+    vmsdk::config::NumberBuilder(
+        kLocalFanoutQueueWaitThresholdConfig,   // name
+        kDefaultLocalFanoutQueueWaitThreshold,  // default threshold (50ms)
+        kMinimumLocalFanoutQueueWaitThreshold,  // min threshold (0ms)
+        kMaximumLocalFanoutQueueWaitThreshold)  // max threshold (10s)
+        .Build();
+
+/// Register the "--thread-pool-wait-time-samples" flag. Controls the size of
+/// the circular buffer for tracking queue wait times in thread pools
+constexpr absl::string_view kThreadPoolWaitTimeSamplesConfig{
+    "thread-pool-wait-time-samples"};
+constexpr uint32_t kDefaultThreadPoolWaitTimeSamples{100};  // 100 samples
+constexpr uint32_t kMinimumThreadPoolWaitTimeSamples{10};  // 10 samples minimum
+constexpr uint32_t kMaximumThreadPoolWaitTimeSamples{
+    10000};  // 10k samples maximum
+static auto thread_pool_wait_time_samples =
+    vmsdk::config::NumberBuilder(
+        kThreadPoolWaitTimeSamplesConfig,   // name
+        kDefaultThreadPoolWaitTimeSamples,  // default size (100)
+        kMinimumThreadPoolWaitTimeSamples,  // min size (10)
+        kMaximumThreadPoolWaitTimeSamples)  // max size (10k)
+        .WithModifyCallback([](uint32_t new_size) {
+          // Update thread pools when sample queue size changes
+          auto& instance = ValkeySearch::Instance();
+          if (auto reader_pool = instance.GetReaderThreadPool()) {
+            reader_pool->ResizeSampleQueue(new_size);
+          }
+          if (auto writer_pool = instance.GetWriterThreadPool()) {
+            writer_pool->ResizeSampleQueue(new_size);
+          }
+        })
+        .Build();
+
 /// Enable prefilter evaluation
 /// When disabled, prefilter evaluation is skipped and effectively becomes a
 /// pass-through with only deduplication of keys.
@@ -225,22 +280,13 @@ constexpr absl::string_view kEnablePrefilterEval{"enable-prefilter-eval"};
 static auto enable_prefilter_eval =
     config::BooleanBuilder(kEnablePrefilterEval, true).Build();
 
-vmsdk::config::Boolean& GetEnablePrefilterEval() {
-  return dynamic_cast<vmsdk::config::Boolean&>(*enable_prefilter_eval);
-}
-
 /// Enable proximity evaluation in prefilter evaluation stage
 /// When disabled, proximity evaluation is skipped in background threads and is
 /// performed only on main thread
 constexpr absl::string_view kEnableProximityPrefilterEval{
     "enable-proximity-prefilter-eval"};
 static auto enable_proximity_prefilter_eval =
-    config::BooleanBuilder(kEnableProximityPrefilterEval, true).Build();
-
-vmsdk::config::Boolean& GetEnableProximityPrefilterEval() {
-  return dynamic_cast<vmsdk::config::Boolean&>(
-      *enable_proximity_prefilter_eval);
-}
+    config::BooleanBuilder(kEnableProximityPrefilterEval, true).Build();       
 
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
@@ -282,8 +328,12 @@ absl::Status Reset() {
   return absl::OkStatus();
 }
 
-const vmsdk::config::Boolean& GetEnablePartialResults() {
-  return static_cast<vmsdk::config::Boolean&>(enable_partial_results);
+const vmsdk::config::Boolean& GetPreferPartialResults() {
+  return static_cast<vmsdk::config::Boolean&>(prefer_partial_results);
+}
+
+const vmsdk::config::Boolean& GetPreferConsistentResults() {
+  return static_cast<vmsdk::config::Boolean&>(prefer_consistent_results);
 }
 
 vmsdk::config::Number& GetHighPriorityWeight() {
@@ -297,6 +347,24 @@ vmsdk::config::Number& GetFTInfoTimeoutMs() {
 vmsdk::config::Number& GetFTInfoRpcTimeoutMs() {
   return dynamic_cast<vmsdk::config::Number&>(*ft_info_rpc_timeout_ms);
 }
+
+vmsdk::config::Number& GetLocalFanoutQueueWaitThreshold() {
+  return dynamic_cast<vmsdk::config::Number&>(
+      *local_fanout_queue_wait_threshold);
+}
+
+vmsdk::config::Number& GetThreadPoolWaitTimeSamples() {
+  return dynamic_cast<vmsdk::config::Number&>(*thread_pool_wait_time_samples);
+}
+
+vmsdk::config::Boolean& GetEnablePrefilterEval() {
+  return dynamic_cast<vmsdk::config::Boolean&>(*enable_prefilter_eval);
+}
+
+vmsdk::config::Boolean& GetEnableProximityPrefilterEval() {
+  return dynamic_cast<vmsdk::config::Boolean&>(
+      *enable_proximity_prefilter_eval);
+} 
 
 }  // namespace options
 }  // namespace valkey_search

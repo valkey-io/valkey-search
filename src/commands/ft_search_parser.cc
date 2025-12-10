@@ -69,6 +69,10 @@ constexpr absl::string_view kReturnParam{"RETURN"};
 constexpr absl::string_view kTimeoutParam{"TIMEOUT"};
 constexpr absl::string_view kAsParam{"AS"};
 constexpr absl::string_view kLocalOnly{"LOCALONLY"};
+constexpr absl::string_view kAllShards{"ALLSHARDS"};
+constexpr absl::string_view KSomeShards{"SOMESHARDS"};
+constexpr absl::string_view kConsistent{"CONSISTENT"};
+constexpr absl::string_view kInconsistent{"INCONSISTENT"};
 constexpr absl::string_view kVectorFilterDelimiter = "=>";
 constexpr absl::string_view kSlop{"SLOP"};
 constexpr absl::string_view kInorder{"INORDER"};
@@ -334,6 +338,18 @@ vmsdk::KeyValueParser<query::SearchParameters> CreateSearchParser() {
       kDialectParam, GENERATE_VALUE_PARSER(query::SearchParameters, dialect));
   parser.AddParamParser(
       kLocalOnly, GENERATE_FLAG_PARSER(query::SearchParameters, local_only));
+  parser.AddParamParser(kAllShards,
+                        GENERATE_NEGATIVE_FLAG_PARSER(query::SearchParameters,
+                                                      enable_partial_results));
+  parser.AddParamParser(
+      KSomeShards,
+      GENERATE_FLAG_PARSER(query::SearchParameters, enable_partial_results));
+  parser.AddParamParser(
+      kConsistent,
+      GENERATE_FLAG_PARSER(query::SearchParameters, enable_consistency));
+  parser.AddParamParser(kInconsistent,
+                        GENERATE_NEGATIVE_FLAG_PARSER(query::SearchParameters,
+                                                      enable_consistency));
   parser.AddParamParser(
       kTimeoutParam,
       GENERATE_VALUE_PARSER(query::SearchParameters, timeout_ms));

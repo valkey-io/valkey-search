@@ -395,7 +395,7 @@ INSTANTIATE_TEST_SUITE_P(
                         .expect_return_failure = true,
                         .expected_output =
                             "-Index with name 'non_exist_test_name' not "
-                            "found\r\n",
+                            "found in database 0\r\n",
                     },
                 },
         },
@@ -531,7 +531,7 @@ INSTANTIATE_TEST_SUITE_P(
                         .expect_return_failure = true,
                         .expected_output =
                             "-Index with name 'non_exist_test_name' not "
-                            "found\r\n",
+                            "found in database 0\r\n",
                     },
                 },
         },

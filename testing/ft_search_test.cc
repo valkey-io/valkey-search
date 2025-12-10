@@ -176,7 +176,7 @@ void SendReplyTest::DoSendReplyTest(
   for (const auto &neighbor : input.neighbors) {
     neighbors.push_back(ToIndexesNeighbor(neighbor));
   }
-  auto parameters = std::make_unique<SearchCommand>();
+  auto parameters = std::make_unique<SearchCommand>(0);
   parameters->timeout_ms = 10000;
   parameters->index_schema = test_index_schema;
   parameters->attribute_alias = attribute_alias;
@@ -531,7 +531,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
             GetClient(testing::StrEq(absl::StrCat("127.0.0.1:", coord_port))))
             .WillRepeatedly(testing::Return(mock_client));
         EXPECT_CALL(*mock_client, SearchIndexPartition(testing::_, testing::_))
-            .WillRepeatedly(testing::Invoke(
+            .WillRepeatedly(
                 [&](std::unique_ptr<coordinator::SearchIndexPartitionRequest>
                         request,
                     coordinator::SearchIndexPartitionCallback done) {
@@ -539,7 +539,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
                   // nothing.
                   coordinator::SearchIndexPartitionResponse response;
                   done(grpc::Status::OK, response);
-                }));
+                });
       }
     }
   }

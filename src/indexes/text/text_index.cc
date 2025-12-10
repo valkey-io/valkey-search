@@ -20,7 +20,8 @@ namespace {
 InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
                                        const InternedStringPtr& key,
                                        PositionMap&& pos_map,
-    TextIndexMetadata* metadata, size_t num_text_fields) {
+                                       TextIndexMetadata* metadata,
+                                       size_t num_text_fields) {
   InvasivePtr<Postings> postings;
   if (existing_postings) {
     postings = existing_postings;
@@ -34,7 +35,8 @@ InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
 }
 
 InvasivePtr<Postings> RemoveKeyFromPostings(
-    InvasivePtr<Postings> existing_postings, const InternedStringPtr& key, TextIndexMetadata* metadata) {
+    InvasivePtr<Postings> existing_postings, const InternedStringPtr& key,
+    TextIndexMetadata* metadata) {
   CHECK(existing_postings) << "Per-key tree became unaligned";
 
   existing_postings->RemoveKey(key, metadata);

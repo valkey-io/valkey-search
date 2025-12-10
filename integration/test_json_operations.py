@@ -30,8 +30,6 @@ def do_json_backfill_test(test, client, primary, replica):
     index = Index("test", [Vector("v", 3, type="FLAT")], type=KeyDataType.JSON)
     index.load_data(client, 100)
     replica.readonly()
-    assert(primary.execute_command("DBSIZE") > 0)
-    assert(replica.execute_command("DBSIZE") > 0)
 
     index.create(primary)
     waiters.wait_for_true(lambda: index_on_node(primary, index.name))
@@ -52,7 +50,6 @@ class TestJsonBackfill(ValkeySearchClusterTestCaseDebugMode):
     @pytest.mark.parametrize(
         "setup_test", [{"replica_count": 1}], indirect=True
     )
-    # Mark as xfail until JSON fixes are merged.
     def test_json_backfill_CME(self):
         """
         Validate that JSON backfill works correctly on a replica

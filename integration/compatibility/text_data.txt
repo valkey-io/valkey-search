@@ -1,0 +1,111 @@
+# TEXT TEST DATA FOR COMPATIBILITY TESTING
+# Format: [DATA_TYPE]
+# followed by 10 lines of data
+# Empty lines and lines starting with # are ignored
+
+[BASIC_TEXT]
+The quick brown fox jumps over the lazy dog
+Running through the forest at dawn brings peace
+Programming in Python is fun and rewarding for developers
+Database indexing improves search performance significantly
+Machine learning algorithms analyze data patterns effectively
+Searching for information requires efficient indexing methods
+Natural language processing enables text understanding
+Software development involves writing and testing code
+Data structures organize information for fast retrieval
+Algorithms solve problems through systematic approaches
+
+[SUFFIX_CODES]
+Product ABC123 is available in warehouse
+Order number XYZ789 has been shipped today
+Item code DEF456 is currently in stock
+Reference ID GHI012 is pending approval
+Serial number JKL345 has been verified successfully
+Tracking code MNO678 shows delivery status
+Invoice number PQR901 requires payment processing
+Batch ID STU234 completed quality inspection
+License key VWX567 activated for user account
+Transaction ID YZA890 processed without errors
+
+[SUFFIX_DESCRIPTIONS]
+High quality product with extended warranty coverage
+Express shipping available for urgent deliveries
+Premium materials used in manufacturing process
+Customer satisfaction guaranteed with money back policy
+Advanced features designed for professional users
+Eco-friendly packaging reduces environmental impact
+Innovative design combines style and functionality
+Reliable performance tested under extreme conditions
+Comprehensive documentation included with purchase
+Technical support available through multiple channels
+
+[PHRASE_MATCHING]
+to be or not to be that is the question
+all that glitters is not gold in this world
+a stitch in time saves nine stitches later
+actions speak louder than words in every situation
+the early bird catches the worm every morning
+when in Rome do as the Romans do always
+better late than never for important tasks
+practice makes perfect with consistent effort
+time flies when you are having fun together
+the pen is mightier than the sword indeed
+
+[NO_STEM]
+HTTP GET request returns 200 status code
+JSON parsing error occurred during data processing
+SQL SELECT statement executed successfully on database
+API endpoint /users/123 called with authentication
+Docker container started successfully on port 8080
+Redis cache hit rate improved performance metrics
+PostgreSQL query optimizer analyzed execution plan
+REST API response formatted in JSON structure
+Git commit pushed to remote repository branch
+Kubernetes pod deployed to production cluster namespace
+
+[CUSTOM_PUNCTUATION]
+user@example.com sent email to support team
+https://www.example.com/path/to/resource accessed
+file-name-with-dashes.txt uploaded to server
+snake_case_variable_name used in Python code
+kebab-case-identifier common in CSS classes
+admin@company.org manages user permissions daily
+http://api.service.io/v1/endpoint returns data
+config-file-production.yaml contains settings
+user_authentication_token validates session
+multi-word-hyphenated-phrase appears in text
+
+[NO_STOPWORDS]
+to be
+the end
+it is
+and or
+in at on
+a an the
+is are was
+of by for
+at in on
+
+[MIXED_EXACT]
+Product ABC123 available
+Order XYZ789 shipped
+Item DEF456 in stock
+Reference GHI012 pending
+Serial JKL345 verified
+Tracking MNO678 delivered
+Invoice PQR901 paid
+Batch STU234 completed
+License VWX567 active
+Transaction YZA890 processed
+
+[MIXED_SEARCHABLE]
+Running through the forest brings joy and happiness
+Programming requires careful planning and testing
+Searching databases improves information retrieval speed
+Learning new skills develops professional capabilities
+Building software involves designing and coding
+Testing applications ensures quality and reliability
+Optimizing queries reduces database response time
+Analyzing data reveals important patterns and trends
+Developing features requires understanding user needs
+Implementing solutions solves complex business problems

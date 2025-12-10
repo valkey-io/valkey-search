@@ -11,6 +11,8 @@ VECTOR_DIM = 3
 SETS_KEY = lambda key_type: f"{key_type} sets"
 CREATES_KEY = lambda key_type: f"{key_type} creates"
 
+text_data_path = "integration/compatibility/text_data.txt"
+
 def unbytes(b):
     if isinstance(b, bytes):
         return b.decode("utf-8")
@@ -59,7 +61,171 @@ def binary_string_encode(key_type, s):
         return s
     else:
         return '"' + "".join([json_quote(s[i]) for i in range(len(s))]) + '"'       
+
+def load_text_data(filepath=text_data_path):
+    """
+    Load text test data from file.
     
+    Returns:
+        dict: Dictionary mapping data type to list of text samples
+              e.g., {'BASIC_TEXT': [...], 'SUFFIX_CODES': [...], ...}
+    """
+    import os
+    
+    # Handle relative path
+    if not os.path.isabs(filepath):
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        filepath = os.path.join(current_dir, "text_data.txt")
+    
+    text_data = {}
+    current_section = None
+    
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.rstrip('\n')
+            
+            # Skip empty lines and comments
+            if not line or line.startswith('#'):
+                continue
+            
+            # Check for section header
+            if line.startswith('[') and line.endswith(']'):
+                current_section = line[1:-1]
+                text_data[current_section] = []
+            elif current_section:
+                # Add data line to current section
+                text_data[current_section].append(line)
+    return text_data
+
+def add_text_datasets(data, key_type):
+    """
+    Add TEXT field test data sets for compatibility testing.
+    Loads data from text_data.txt file.
+    
+    Args:
+        data: The main data dictionary to populate
+        key_type: Either "hash" or "json"
+    """
+    # Load text samples from file
+    text_samples = load_text_data()
+    
+    # 1. Basic text - default settings
+    schema = "txt1 TEXT txt2 TEXT" if key_type == "hash" else "$.txt1 AS txt1 TEXT $.txt2 AS txt2 TEXT"
+    data["basic text"][CREATES_KEY(key_type)] = [
+        f"FT.CREATE {key_type}_idx1 ON {key_type.upper()} PREFIX 1 {key_type}: SCHEMA {schema}"
+    ]
+    data["basic text"][SETS_KEY(key_type)] = [
+        (
+            f"{key_type}:{i:02d}",
+            {
+                "txt1": text_samples["BASIC_TEXT"][i],
+                "txt2": text_samples["BASIC_TEXT"][-(i+1)],
+                "n1": i,
+            },
+        )
+        for i in range(len(text_samples["BASIC_TEXT"]))
+    ]
+
+    # 2. Text with suffix trie
+    schema = "code TEXT WITHSUFFIXTRIE description TEXT" if key_type == "hash" else \
+             "$.code AS code TEXT WITHSUFFIXTRIE $.description AS description TEXT"
+    data["text with suffix"][CREATES_KEY(key_type)] = [
+        f"FT.CREATE {key_type}_idx1 ON {key_type.upper()} PREFIX 1 {key_type}: SCHEMA {schema}"
+    ]
+    data["text with suffix"][SETS_KEY(key_type)] = [
+        (
+            f"{key_type}:{i:02d}",
+            {
+                "code": text_samples["SUFFIX_CODES"][i],
+                "description": text_samples["SUFFIX_DESCRIPTIONS"][i],
+                "n1": i,
+            },
+        )
+        for i in range(len(text_samples["SUFFIX_CODES"]))
+    ]
+
+    # 3. Text phrase matching (WITHOFFSETS is default)
+    schema = "phrase TEXT" if key_type == "hash" else "$.phrase AS phrase TEXT"
+    data["text phrase matching"][CREATES_KEY(key_type)] = [
+        f"FT.CREATE {key_type}_idx1 ON {key_type.upper()} PREFIX 1 {key_type}: WITHOFFSETS SCHEMA {schema}"
+    ]
+    data["text phrase matching"][SETS_KEY(key_type)] = [
+        (
+            f"{key_type}:{i:02d}",
+            {
+                "phrase": text_samples["PHRASE_MATCHING"][i],
+                "n1": i,
+            },
+        )
+        for i in range(len(text_samples["PHRASE_MATCHING"]))
+    ]
+
+    # 4. Text no stem
+    schema = "technical TEXT NOSTEM" if key_type == "hash" else "$.technical AS technical TEXT NOSTEM"
+    data["text no stem"][CREATES_KEY(key_type)] = [
+        f"FT.CREATE {key_type}_idx1 ON {key_type.upper()} PREFIX 1 {key_type}: NOSTEM SCHEMA {schema}"
+    ]
+    data["text no stem"][SETS_KEY(key_type)] = [
+        (
+            f"{key_type}:{i:02d}",
+            {
+                "technical": text_samples["NO_STEM"][i],
+                "n1": i,
+            },
+        )
+        for i in range(len(text_samples["NO_STEM"]))
+    ]
+
+    # 5. Text custom punctuation
+    schema = "content TEXT" if key_type == "hash" else "$.content AS content TEXT"
+    data["text custom punctuation"][CREATES_KEY(key_type)] = [
+        f'FT.CREATE {key_type}_idx1 ON {key_type.upper()} PREFIX 1 {key_type}: PUNCTUATION " @." SCHEMA {schema}'
+    ]
+    data["text custom punctuation"][SETS_KEY(key_type)] = [
+        (
+            f"{key_type}:{i:02d}",
+            {
+                "content": text_samples["CUSTOM_PUNCTUATION"][i],
+                "n1": i,
+            },
+        )
+        for i in range(len(text_samples["CUSTOM_PUNCTUATION"]))
+    ]
+
+    # 6. Text no stopwords
+    schema = "short_text TEXT" if key_type == "hash" else "$.short_text AS short_text TEXT"
+    data["text no stopwords"][CREATES_KEY(key_type)] = [
+        f"FT.CREATE {key_type}_idx1 ON {key_type.upper()} PREFIX 1 {key_type}: NOSTOPWORDS SCHEMA {schema}"
+    ]
+    data["text no stopwords"][SETS_KEY(key_type)] = [
+        (
+            f"{key_type}:{i:02d}",
+            {
+                "short_text": text_samples["NO_STOPWORDS"][i],
+                "n1": i,
+            },
+        )
+        for i in range(len(text_samples["NO_STOPWORDS"]))
+    ]
+
+    # 7. Text mixed config - per-field options
+    schema = "exact TEXT NOSTEM WITHSUFFIXTRIE searchable TEXT MINSTEMSIZE 2" if key_type == "hash" else \
+             "$.exact AS exact TEXT NOSTEM WITHSUFFIXTRIE $.searchable AS searchable TEXT MINSTEMSIZE 2"
+    data["text mixed config"][CREATES_KEY(key_type)] = [
+        f'FT.CREATE {key_type}_idx1 ON {key_type.upper()} PREFIX 1 {key_type}: PUNCTUATION ".,;" STOPWORDS 3 the and or SCHEMA {schema}'
+    ]
+    data["text mixed config"][SETS_KEY(key_type)] = [
+        (
+            f"{key_type}:{i:02d}",
+            {
+                "exact": text_samples["MIXED_EXACT"][i],
+                "searchable": text_samples["MIXED_SEARCHABLE"][i],
+                "n1": i,
+            },
+        )
+        for i in range(len(text_samples["MIXED_EXACT"]))
+    ]
+
 def compute_data_sets():
     '''Generate all of the possible data sets'''
     data = {}
@@ -68,16 +234,19 @@ def compute_data_sets():
         "hash": "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {}",
         "json": "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA {}",
     }
-    field_type_to_name = {"tag": "t", "numeric": "n", "vector": "v"}
-    field_types_to_count = {"numeric": 3, "tag": 3, "vector" : 1}
+    field_type_to_name = {"tag": "t", "numeric": "n", "vector": "v", "text": "txt"}
+    field_types_to_count = {"numeric": 3, "tag": 3, "vector": 1, "text": 3}
 
-    def make_field_definition(key_type, name, typ, i):
+    def make_field_definition(key_type, name, typ, i, text_options=""):
         if typ == "vector":
             if key_type == "hash":
                 return f"{name}{i} vector HNSW 6 DIM {VECTOR_DIM} TYPE FLOAT32 DISTANCE_METRIC L2"
             else:
                 return f"$.{name}{i} as {name}{i} vector HNSW 6 DIM {VECTOR_DIM} TYPE FLOAT32 DISTANCE_METRIC L2"
             return f"{name}{i} vector HNSW 6 DIM {VECTOR_DIM} TYPE FLOAT32 DISTANCE_METRIC L2"
+        elif typ == "text":
+            base = f"{name}{i} TEXT" if key_type == "hash" else f"$.{name}{i} AS {name}{i} TEXT"
+            return f"{base} {text_options}".strip() 
         else:
             return f"{name}{i} {typ}" if key_type == "hash" else f"$.{name}{i} AS {name}{i} {typ}"
 
@@ -272,6 +441,21 @@ def compute_data_sets():
             )
             for i in range(20)
         ]
+
+    # TEXT data
+    # Initialize TEXT data sets
+    data["basic text"] = {}
+    data["text with suffix"] = {}
+    data["text phrase matching"] = {}
+    data["text no stem"] = {}
+    data["text custom punctuation"] = {}
+    data["text no stopwords"] = {}
+    data["text mixed config"] = {}
+    
+    # Generate TEXT data for both hash and json
+    for key_type in ["hash", "json"]:
+        add_text_datasets(data, key_type)
+
     return data
 
 ### Helper Functions ###

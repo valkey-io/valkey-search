@@ -21,26 +21,28 @@ and the map is destroyed. The FlatPositionMap is read-only thereafter and used
 by search queries.
 
 Structure Layout:
-  [4-byte header] [optional partition map] [position/field data]
+  [Variable header] [optional partition map] [position/field data]
 
-Header layout (4 bytes / 32 bits):
-Bit 0:     Header selection (0=standard, 1=special)
-Bits 1-2:  Encoding scheme (2 bits)
-Bits 3-31: Number of positions (29 bits).
+Header layout (variable length):
+First byte (8 bits):
+  Bit 0:     Header selection (0=standard, 1=special)
+  Bits 1-2:  Encoding scheme (2 bits) - reserved for future use
+  Bits 3-4:  Number of bytes to store position count (0-3 = 1-4 bytes)
+  Bits 5-6:  Number of bytes to store partition count (0-3 = 1-4 bytes)
+  Bit 7:     Reserved
 
-Three encoding schemes are auto-selected:
+After first byte:
+  - N bytes for number of positions (N determined by bits 3-4)
+  - M bytes for number of partitions (M determined by bits 5-6, can be 0)
 
-- SIMPLE: Single-field docs with positions < 256. Uses 1 byte per position
-  delta, no field masks. Most compact.
-
-- EXPANDABLE: General case. Variable-length encoding with bit 7 as type flag
-  (0=position byte, 1=field mask byte). Position deltas expand across multiple
-  bytes when needed (LSB first). Field masks use 7 bits per byte, supporting
-  up to 64 fields.
-
-- BINARY_SEARCH: Large position lists (>128). Adds partition map before data
-  for O(log n) skip-forward. Each partition stores [4-byte offset, 4-byte
-  cumulative delta] enabling binary search to target positions.
+Encoding scheme:
+- Single general case with byte-based partitions
+- Partitions created every 128 bytes (PARTITION_SIZE) of serialized data
+- Each partition stores only the cumulative sum of deltas (offset implicit from byte count)
+- Position bytes have 2-bit prefix: bit 0=1 (position), bit 1=1 (start), bit 1=0 (continuation)
+- Field mask bytes have 2-bit prefix: bit 0=0 (field mask)
+- Field masks optimized: if num_fields=1, no field mask bytes stored
+- Field masks only stored when they change or at partition start (when num_fields > 1)
 
 Delta encoding stores position differences not absolutes.
 
@@ -57,39 +59,24 @@ minimal state overhead, maintaining cumulative position for delta decoding.
 namespace valkey_search::indexes::text {
 
 // FlatPositionMap format constants
-constexpr size_t kFlatPositionMapHeaderSize = 4;  // Header is 4 bytes (32 bits)
-constexpr uint8_t kPartitionMapEntrySize =
-    8;  // Each partition entry: 8 bytes (4 offset + 4 delta)
+constexpr size_t kPartitionSize = 128;  // Partition every 128 bytes
 
-// Encoding bit flags (bit 7 indicates position vs field mask bytes)
-constexpr uint8_t kEncodingBitFieldMask =
-    0x80;                                     // Bit 7 = 1 for field mask bytes
-constexpr uint8_t kEncodingValueMask = 0x7F;  // Lower 7 bits for actual value
+// Encoding bit flags for position/field mask bytes
+constexpr uint8_t kBitPosition = 0x01;      // Bit 0: 1=position, 0=field mask
+constexpr uint8_t kBitStartPosition = 0x02; // Bit 1: 1=start of position, 0=continuation
+constexpr uint8_t kValueMask = 0xFC;        // Bits 2-7 for actual value (6 bits)
+constexpr uint8_t kValueShift = 2;          // Shift amount for value bits
 
-// Field mask encoding
-constexpr uint8_t kFieldMaskBitsPerByte =
-    7;  // 7 bits per byte (bit 7 is type flag)
-
-// Encoding scheme thresholds
-constexpr uint32_t kSimpleEncodingMaxPosition =
-    256;  // SIMPLE encoding: positions must be < 256
-constexpr uint32_t kBinarySearchThreshold =
-    128;  // Use BINARY_SEARCH when positions > 128
+// Field mask encoding (when bit 0 = 0)
+constexpr uint8_t kFieldMaskValueMask = 0xFC; // Bits 2-7 for field mask (6 bits)
+constexpr uint8_t kFieldMaskBitsPerByte = 6;  // 6 bits per byte for field mask
 
 // Forward declarations to avoid circular dependency
 using Position = uint32_t;
 class FieldMask;
 
-// Encoding schemes
-enum class EncodingScheme : uint8_t {
-  SIMPLE = 0,         // 1 byte per position, no field mask (single field)
-  EXPANDABLE = 1,     // Variable bytes with encoding bit
-  BINARY_SEARCH = 2,  // With partition map for skip operations
-  RESERVED = 3
-};
-
 // FlatPositionMap is a compact byte array representation
-// Layout: [Header: 4 bytes][Optional Partition Map][Position/Field Data]
+// Layout: [Variable Header][Optional Partition Map][Position/Field Data]
 class FlatPositionMap {
  public:
   // Default constructor: empty map
@@ -138,11 +125,16 @@ class FlatPositionMapIterator {
 
  private:
   const char* flat_map_;
-  const char* current_ptr_;
+  const char* current_start_ptr_;
+  const char* current_end_ptr_;
+  const char* data_start_;
   Position cumulative_position_;
-  uint32_t positions_read_;
+  Position current_position_;
   uint32_t total_positions_;
-  uint8_t field_bytes_;  // Inferred from flat_map data
+  uint32_t num_partitions_;
+  uint8_t header_size_;
+  uint64_t current_field_mask_;
+  uint8_t field_mask_bytes_;
 };
 
 }  // namespace valkey_search::indexes::text

@@ -286,7 +286,7 @@ static auto enable_prefilter_eval =
 constexpr absl::string_view kEnableProximityPrefilterEval{
     "enable-proximity-prefilter-eval"};
 static auto enable_proximity_prefilter_eval =
-    config::BooleanBuilder(kEnableProximityPrefilterEval, true).Build();       
+    config::BooleanBuilder(kEnableProximityPrefilterEval, true).Build();
 
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
@@ -364,7 +364,7 @@ vmsdk::config::Boolean& GetEnablePrefilterEval() {
 vmsdk::config::Boolean& GetEnableProximityPrefilterEval() {
   return dynamic_cast<vmsdk::config::Boolean&>(
       *enable_proximity_prefilter_eval);
-} 
+}
 
 }  // namespace options
 }  // namespace valkey_search

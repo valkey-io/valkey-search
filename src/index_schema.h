@@ -129,7 +129,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline const std::string &GetName() const { return name_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
 
-<<<<<<< HEAD
   void CreateTextIndexSchema() {
     text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
         language_, punctuation_, with_offsets_, stop_words_);
@@ -137,8 +136,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
     return text_index_schema_;
   }
-=======
->>>>>>> upstream/main
   inline uint64_t GetFingerprint() const { return fingerprint_; }
   inline uint32_t GetVersion() const { return version_; }
 

@@ -21,6 +21,7 @@
 #include "src/indexes/text/proximity.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/text/text_iterator.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 
@@ -35,17 +36,13 @@ EvaluationResult NegatePredicate::Evaluate(Evaluator& evaluator) const {
 EvaluationResult BuildTextEvaluationResult(
     std::unique_ptr<indexes::text::TextIterator> iterator,
     bool require_positions) {
-  if (require_positions) {
-    if (iterator->DoneKeys() || iterator->DonePositions()) {
-      return EvaluationResult(false);
-    }
-    return EvaluationResult(true, std::move(iterator));
-  } else {
-    if (iterator->DoneKeys()) {
-      return EvaluationResult(false);
-    }
-    return EvaluationResult(true);
+  if (!iterator->IsIteratorValid()) {
+    return EvaluationResult(false);
   }
+  if (require_positions) {
+    return EvaluationResult(true, std::move(iterator));
+  }
+  return EvaluationResult(true);
 }
 
 TermPredicate::TermPredicate(
@@ -342,8 +339,14 @@ EvaluationResult EvaluatePredicate(const Predicate* predicate,
 // ProximityIterator to validate term positions meet distance and order
 // requirements.
 EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
-  // Determine if children need to return positions for proximity checks
-  bool require_positions = slop_.has_value() || inorder_;
+  // Determine if children need to return positions for proximity checks.
+  // Proximity check in Prefilter also depends on the configuration.
+  bool has_proximity_constraint = slop_.has_value() || inorder_;
+  bool require_positions =
+      evaluator.IsPrefilterEvaluator()
+          ? has_proximity_constraint &&
+                options::GetEnableProximityPrefilterEval().GetValue()
+          : has_proximity_constraint;
   // Handle AND logic
   if (GetType() == PredicateType::kComposedAnd) {
     // Short-circuit on first false
@@ -377,8 +380,7 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
           std::make_unique<indexes::text::ProximityIterator>(
               std::move(iterators), slop_, inorder_, query_field_mask, nullptr);
       // Check if any valid proximity matches exist
-      if (proximity_iterator->DoneKeys() ||
-          proximity_iterator->DonePositions()) {
+      if (!proximity_iterator->IsIteratorValid()) {
         return EvaluationResult(false);
       }
       // Validate against original target key from evaluator
@@ -421,8 +423,7 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
       std::make_unique<indexes::text::OrProximityIterator>(
           std::move(filter_iterators), nullptr);
   // Check if any valid matches exist
-  if (or_proximity_iterator->DoneKeys() ||
-      or_proximity_iterator->DonePositions()) {
+  if (!or_proximity_iterator->IsIteratorValid()) {
     return EvaluationResult(false);
   }
   // Validate against original target key from evaluator

@@ -43,6 +43,7 @@ class OrProximityIterator : public TextIterator {
   const PositionRange& CurrentPosition() const override;
   bool NextPosition() override;
   FieldMaskPredicate CurrentFieldMask() const override;
+  bool IsIteratorValid() const override;
 
  private:
   std::vector<std::unique_ptr<TextIterator>> iters_;

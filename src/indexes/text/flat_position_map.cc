@@ -74,16 +74,16 @@ static uint8_t ParseHeader(const char* flat_map, uint32_t& num_positions,
   uint8_t first_byte = static_cast<uint8_t>(flat_map[0]);
   uint8_t pos_bytes = ((first_byte >> 3) & 0x3) + 1;
   uint8_t part_bytes = ((first_byte >> 5) & 0x3) + 1;
-  
+
   num_positions = ReadVarUint(flat_map + 1, pos_bytes);
   num_partitions = ReadVarUint(flat_map + 1 + pos_bytes, part_bytes);
-  
+
   return 1 + pos_bytes + part_bytes;
 }
 
 static uint8_t DetectFieldMaskBytes(const char* data_ptr) {
   const char* ptr = data_ptr;
-  
+
   while ((static_cast<uint8_t>(*ptr) & kBitPosition) != 0) {
     ptr++;
     if ((static_cast<uint8_t>(*(ptr - 1)) & kBitStartPosition) != 0) {
@@ -93,19 +93,19 @@ static uint8_t DetectFieldMaskBytes(const char* data_ptr) {
       }
     }
   }
-  
+
   uint8_t byte_count = 0;
-  
+
   while ((static_cast<uint8_t>(*ptr) & 0x03) == 0x02) {
     byte_count++;
     ptr++;
   }
-  
+
   return byte_count;
 }
 
 static void EncodePositionDelta(absl::InlinedVector<char, 128>& buffer,
-                                 uint32_t delta, bool is_start) {
+                                uint32_t delta, bool is_start) {
   bool first = true;
   do {
     uint8_t byte_val = (delta & 0x3F) << kValueShift;
@@ -120,9 +120,9 @@ static void EncodePositionDelta(absl::InlinedVector<char, 128>& buffer,
 }
 
 static void EncodeFieldMask(absl::InlinedVector<char, 128>& buffer,
-                             uint64_t field_mask, size_t num_text_fields) {
+                            uint64_t field_mask, size_t num_text_fields) {
   size_t num_bytes = (num_text_fields + 5) / 6;
-  
+
   for (size_t i = 0; i < num_bytes; ++i) {
     uint8_t byte_val = (field_mask & 0x3F) << kValueShift;
     byte_val |= 0x02;
@@ -146,11 +146,12 @@ static uint32_t DecodePositionDelta(const char*& ptr) {
     shift += 6;
     ptr++;
 
-    // If we're at the start of a position and have read more than one byte, break
+    // If we're at the start of a position and have read more than one byte,
+    // break
     if ((byte_val & kBitStartPosition) != 0 && shift > 6) {
       break;
     }
-    
+
     // Break if next byte is not a position byte or starts a new position
     if ((static_cast<uint8_t>(*ptr) & kBitPosition) == 0 ||
         (static_cast<uint8_t>(*ptr) & kBitStartPosition) != 0) {
@@ -174,11 +175,9 @@ static uint64_t DecodeFieldMask(const char*& ptr) {
   return mask;
 }
 
-
 FlatPositionMap FlatPositionMap::SerializePositionMap(
     const std::map<Position, std::unique_ptr<FieldMask>>& position_map,
     size_t num_text_fields) {
-
   if (position_map.empty()) {
     char* flat_map = static_cast<char*>(malloc(3));
     CHECK(flat_map != nullptr);
@@ -193,7 +192,7 @@ FlatPositionMap FlatPositionMap::SerializePositionMap(
 
   absl::InlinedVector<char, 128> position_data;
   std::vector<uint32_t> partition_deltas;
-  
+
   Position prev_pos = 0;
   Position cumulative_delta = 0;
   uint64_t prev_field_mask = 0;
@@ -205,7 +204,8 @@ FlatPositionMap FlatPositionMap::SerializePositionMap(
     uint32_t delta = pos - prev_pos;
     cumulative_delta += delta;
 
-    if (position_data.size() - partition_start_offset >= kPartitionSize && !first_position) {
+    if (position_data.size() - partition_start_offset >= kPartitionSize &&
+        !first_position) {
       partition_deltas.push_back(cumulative_delta - delta);
       partition_start_offset += kPartitionSize;
       is_first_in_partition = true;
@@ -216,7 +216,8 @@ FlatPositionMap FlatPositionMap::SerializePositionMap(
 
     if (!single_field) {
       uint64_t current_mask = field_mask->AsUint64();
-      if (first_position || current_mask != prev_field_mask || is_first_in_partition) {
+      if (first_position || current_mask != prev_field_mask ||
+          is_first_in_partition) {
         EncodeFieldMask(position_data, current_mask, num_text_fields);
         prev_field_mask = current_mask;
       }
@@ -232,27 +233,28 @@ FlatPositionMap FlatPositionMap::SerializePositionMap(
   uint32_t num_partitions = partition_deltas.size();
   uint8_t pos_bytes = BytesNeeded(num_positions);
   uint8_t part_bytes = BytesNeeded(num_partitions);
-  
+
   uint8_t header_size = 1 + pos_bytes + part_bytes;
-  size_t partition_map_size = (num_partitions > 0) ? (num_partitions + 1) * 4 : 0;
+  size_t partition_map_size =
+      (num_partitions > 0) ? (num_partitions + 1) * 4 : 0;
   size_t total_size = header_size + partition_map_size + position_data.size();
-  
+
   char* flat_map = static_cast<char*>(malloc(total_size));
   CHECK(flat_map != nullptr);
-  
+
   uint8_t first_byte = ((pos_bytes - 1) << 3) | ((part_bytes - 1) << 5);
-  
+
   size_t offset = 0;
   flat_map[offset++] = static_cast<char>(first_byte);
-  
+
   for (uint8_t i = 0; i < pos_bytes; ++i) {
     flat_map[offset++] = static_cast<char>((num_positions >> (i * 8)) & 0xFF);
   }
-  
+
   for (uint8_t i = 0; i < part_bytes; ++i) {
     flat_map[offset++] = static_cast<char>((num_partitions >> (i * 8)) & 0xFF);
   }
-  
+
   if (num_partitions > 0) {
     for (uint32_t delta : partition_deltas) {
       for (uint8_t i = 0; i < 4; ++i) {
@@ -260,12 +262,13 @@ FlatPositionMap FlatPositionMap::SerializePositionMap(
       }
     }
     for (uint8_t i = 0; i < 4; ++i) {
-      flat_map[offset++] = static_cast<char>((cumulative_delta >> (i * 8)) & 0xFF);
+      flat_map[offset++] =
+          static_cast<char>((cumulative_delta >> (i * 8)) & 0xFF);
     }
   }
-  
+
   std::memcpy(flat_map + offset, position_data.data(), position_data.size());
-  
+
   return FlatPositionMap(flat_map);
 }
 
@@ -273,7 +276,8 @@ FlatPositionMap FlatPositionMap::SerializePositionMap(
 // Iterator Implementation
 //=============================================================================
 
-FlatPositionMapIterator::FlatPositionMapIterator(const FlatPositionMap& flat_map)
+FlatPositionMapIterator::FlatPositionMapIterator(
+    const FlatPositionMap& flat_map)
     : flat_map_(flat_map.data()),
       current_start_ptr_(nullptr),
       current_end_ptr_(nullptr),
@@ -285,20 +289,20 @@ FlatPositionMapIterator::FlatPositionMapIterator(const FlatPositionMap& flat_map
       header_size_(0),
       current_field_mask_(1),
       field_mask_bytes_(0) {
-
   if (flat_map_ == nullptr) return;
 
   header_size_ = ParseHeader(flat_map_, total_positions_, num_partitions_);
 
   if (total_positions_ == 0) return;
 
-  size_t partition_map_size = (num_partitions_ > 0) ? (num_partitions_ + 1) * 4 : 0;
+  size_t partition_map_size =
+      (num_partitions_ > 0) ? (num_partitions_ + 1) * 4 : 0;
   data_start_ = flat_map_ + header_size_ + partition_map_size;
   current_start_ptr_ = data_start_;
   current_end_ptr_ = data_start_;
 
   field_mask_bytes_ = DetectFieldMaskBytes(data_start_);
-  
+
   NextPosition();
 }
 
@@ -310,7 +314,7 @@ void FlatPositionMapIterator::NextPosition() {
   if (!IsValid()) return;
 
   current_start_ptr_ = current_end_ptr_;
-  
+
   if (static_cast<uint8_t>(*current_start_ptr_) == 0x00) {
     current_start_ptr_ = nullptr;
     current_end_ptr_ = nullptr;
@@ -330,24 +334,25 @@ void FlatPositionMapIterator::NextPosition() {
 }
 
 // Binary search to find the partition containing the target position
-static uint32_t FindPartitionForTarget(const char* partition_map, 
-                                        uint32_t num_partitions, 
-                                        Position target) {
+static uint32_t FindPartitionForTarget(const char* partition_map,
+                                       uint32_t num_partitions,
+                                       Position target) {
   uint32_t left = 0;
   uint32_t right = num_partitions;
-  
+
   while (left < right) {
     uint32_t mid = left + (right - left) / 2;
     uint32_t partition_delta = ReadVarUint(partition_map + (mid * 4), 4);
-    
+
     if (partition_delta < target) {
       left = mid + 1;
     } else {
       right = mid;
     }
   }
-  
-  // Return the partition index before the target (or 0 if target is in first partition)
+
+  // Return the partition index before the target (or 0 if target is in first
+  // partition)
   return (left > 0) ? left - 1 : 0;
 }
 
@@ -358,24 +363,27 @@ bool FlatPositionMapIterator::SkipForwardPosition(Position target) {
 
   if (num_partitions_ > 0) {
     const char* partition_map = flat_map_ + header_size_;
-    uint32_t partition_idx = FindPartitionForTarget(partition_map, num_partitions_, target);
-    
+    uint32_t partition_idx =
+        FindPartitionForTarget(partition_map, num_partitions_, target);
+
     if (partition_idx > 0) {
-      uint32_t partition_delta = ReadVarUint(partition_map + (partition_idx * 4), 4);
-      const char* partition_ptr = data_start_ + (partition_idx * kPartitionSize);
+      uint32_t partition_delta =
+          ReadVarUint(partition_map + (partition_idx * 4), 4);
+      const char* partition_ptr =
+          data_start_ + (partition_idx * kPartitionSize);
       cumulative_position_ = partition_delta;
-      
+
       while (static_cast<uint8_t>(*partition_ptr) != 0x00 &&
              (static_cast<uint8_t>(*partition_ptr) & 0x03) != 0x03) {
         partition_ptr++;
       }
-      
+
       if (static_cast<uint8_t>(*partition_ptr) == 0x00) {
         current_start_ptr_ = nullptr;
         current_end_ptr_ = nullptr;
         return false;
       }
-      
+
       current_start_ptr_ = partition_ptr;
       current_end_ptr_ = partition_ptr;
     }

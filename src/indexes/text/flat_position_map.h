@@ -38,11 +38,14 @@ After first byte:
 Encoding scheme:
 - Single general case with byte-based partitions
 - Partitions created every 128 bytes (PARTITION_SIZE) of serialized data
-- Each partition stores only the cumulative sum of deltas (offset implicit from byte count)
-- Position bytes have 2-bit prefix: bit 0=1 (position), bit 1=1 (start), bit 1=0 (continuation)
+- Each partition stores only the cumulative sum of deltas (offset implicit from
+byte count)
+- Position bytes have 2-bit prefix: bit 0=1 (position), bit 1=1 (start), bit 1=0
+(continuation)
 - Field mask bytes have 2-bit prefix: bit 0=0 (field mask)
 - Field masks optimized: if num_fields=1, no field mask bytes stored
-- Field masks only stored when they change or at partition start (when num_fields > 1)
+- Field masks only stored when they change or at partition start (when
+num_fields > 1)
 
 Delta encoding stores position differences not absolutes.
 
@@ -62,13 +65,15 @@ namespace valkey_search::indexes::text {
 constexpr size_t kPartitionSize = 128;  // Partition every 128 bytes
 
 // Encoding bit flags for position/field mask bytes
-constexpr uint8_t kBitPosition = 0x01;      // Bit 0: 1=position, 0=field mask
-constexpr uint8_t kBitStartPosition = 0x02; // Bit 1: 1=start of position, 0=continuation
-constexpr uint8_t kValueMask = 0xFC;        // Bits 2-7 for actual value (6 bits)
-constexpr uint8_t kValueShift = 2;          // Shift amount for value bits
+constexpr uint8_t kBitPosition = 0x01;  // Bit 0: 1=position, 0=field mask
+constexpr uint8_t kBitStartPosition =
+    0x02;  // Bit 1: 1=start of position, 0=continuation
+constexpr uint8_t kValueMask = 0xFC;  // Bits 2-7 for actual value (6 bits)
+constexpr uint8_t kValueShift = 2;    // Shift amount for value bits
 
 // Field mask encoding (when bit 0 = 0)
-constexpr uint8_t kFieldMaskValueMask = 0xFC; // Bits 2-7 for field mask (6 bits)
+constexpr uint8_t kFieldMaskValueMask =
+    0xFC;  // Bits 2-7 for field mask (6 bits)
 constexpr uint8_t kFieldMaskBitsPerByte = 6;  // 6 bits per byte for field mask
 
 // Forward declarations to avoid circular dependency

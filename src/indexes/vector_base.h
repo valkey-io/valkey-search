@@ -262,13 +262,11 @@ class PrefilterEvaluator : public query::Evaluator {
  public:
   bool Evaluate(const query::Predicate& predicate,
                 const InternedStringPtr& key);
-
-  // TODO: Implement this in prefilter implementation. For now just return
-  // nullptr.
   const InternedStringPtr& GetTargetKey() const override {
-    static const InternedStringPtr null_key;
-    return null_key;
+    CHECK(key_);
+    return *key_;
   }
+  bool IsPrefilterEvaluator() const override { return true; }
 
  private:
   query::EvaluationResult EvaluateTags(

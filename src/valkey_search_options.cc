@@ -273,6 +273,21 @@ static auto thread_pool_wait_time_samples =
         })
         .Build();
 
+/// Enable prefilter evaluation
+/// When disabled, prefilter evaluation is skipped and effectively becomes a
+/// pass-through with only deduplication of keys.
+constexpr absl::string_view kEnablePrefilterEval{"enable-prefilter-eval"};
+static auto enable_prefilter_eval =
+    config::BooleanBuilder(kEnablePrefilterEval, true).Build();
+
+/// Enable proximity evaluation in prefilter evaluation stage
+/// When disabled, proximity evaluation is skipped in background threads and is
+/// performed only on main thread
+constexpr absl::string_view kEnableProximityPrefilterEval{
+    "enable-proximity-prefilter-eval"};
+static auto enable_proximity_prefilter_eval =
+    config::BooleanBuilder(kEnableProximityPrefilterEval, true).Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -340,6 +355,15 @@ vmsdk::config::Number& GetLocalFanoutQueueWaitThreshold() {
 
 vmsdk::config::Number& GetThreadPoolWaitTimeSamples() {
   return dynamic_cast<vmsdk::config::Number&>(*thread_pool_wait_time_samples);
+}
+
+vmsdk::config::Boolean& GetEnablePrefilterEval() {
+  return dynamic_cast<vmsdk::config::Boolean&>(*enable_prefilter_eval);
+}
+
+vmsdk::config::Boolean& GetEnableProximityPrefilterEval() {
+  return dynamic_cast<vmsdk::config::Boolean&>(
+      *enable_proximity_prefilter_eval);
 }
 
 }  // namespace options

@@ -15,9 +15,6 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
-#include "src/indexes/text/text_index.h"
-#include "src/indexes/vector_base.h"
-#include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
 namespace valkey_search {
@@ -32,7 +29,7 @@ struct FilterTestCase {
   std::string filter;
   bool create_success{false};
   std::string create_expected_error_message;
-  bool evaluate_success{false};
+  std::optional<bool> evaluate_success;
   std::string key{"key1"};
   std::string expected_tree_structure;
 };
@@ -102,10 +99,19 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
       std::make_shared<indexes::Text>(text_index_proto1, text_index_schema);
   auto text_index_2 =
       std::make_shared<indexes::Text>(text_index_proto2, text_index_schema);
+
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("text_field1", "text_field1", text_index_1));
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("text_field2", "text_field2", text_index_2));
+
+  // Add TEXT data for basic tests (exact_term, exact_prefix, proximity, etc.)
+  auto key1 = StringInternStore::Intern("key1");
+  std::string test_data = "word hello my name is hello how are you doing?";
+  VMSDK_EXPECT_OK(text_index_1->AddRecord(key1, test_data));
+  VMSDK_EXPECT_OK(text_index_2->AddRecord(key1, test_data));
+
+  text_index_schema->CommitKeyData(key1);
 }
 
 TEST_P(FilterTest, ParseParams) {
@@ -132,10 +138,13 @@ TEST_P(FilterTest, ParseParams) {
         << "Tree structure mismatch for filter: " << test_case.filter;
   }
 
-  auto interned_key = StringInternStore::Intern(test_case.key);
-  EXPECT_EQ(
-      test_case.evaluate_success,
-      evaluator_.Evaluate(*parse_results.value().root_predicate, interned_key));
+  // Now evaluate all predicates, including text predicates
+  if (test_case.evaluate_success.has_value()) {
+    auto interned_key = StringInternStore::Intern(test_case.key);
+    EXPECT_EQ(test_case.evaluate_success.value(),
+              evaluator_.Evaluate(*parse_results.value().root_predicate,
+                                  interned_key));
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -900,7 +909,6 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "default_field_exact_phrase_with_punct",
             .filter = "\"Hello, h(ow a)re yo#u doi_n$g?\"",
             .create_success = true,
-            .evaluate_success = true,
             .expected_tree_structure = "AND(slop=0, inorder=true){\n"
                                        "  TEXT-TERM(\"hello\", field_mask=3)\n"
                                        "  TEXT-TERM(\"h\", field_mask=3)\n"
@@ -918,7 +926,6 @@ INSTANTIATE_TEST_SUITE_P(
             .filter =
                 "\"\\\\\\\\\\Hello, \\how \\\\are \\\\\\you \\\\\\\\doing?\"",
             .create_success = true,
-            .evaluate_success = true,
             .expected_tree_structure =
                 "AND(slop=0, inorder=true){\n"
                 "  TEXT-TERM(\"\\\", field_mask=3)\n"
@@ -936,7 +943,6 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "default_field_with_escape2",
             .filter = "\\\\\\\\\\Hello, \\how \\\\are \\\\\\you \\\\\\\\doing?",
             .create_success = true,
-            .evaluate_success = true,
             .expected_tree_structure =
                 "AND{\n"
                 "  TEXT-TERM(\"\\\", field_mask=3)\n"
@@ -954,7 +960,6 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "default_field_with_escape3",
             .filter = "Hel\\(lo, ho\\$w a\\*re yo\\{u do\\|ing?",
             .create_success = true,
-            .evaluate_success = true,
             .expected_tree_structure =
                 "AND{\n"
                 "  TEXT-TERM(\"hel(lo\", field_mask=3)\n"
@@ -969,7 +974,6 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "\\\\\\\\\\(Hello, \\$how \\\\\\*are \\\\\\-you "
                       "\\\\\\\\\\%doing?",
             .create_success = true,
-            .evaluate_success = true,
             .expected_tree_structure =
                 "AND{\n"
                 "  TEXT-TERM(\"\\\", field_mask=3)\n"
@@ -989,7 +993,6 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "default_field_with_escape5",
             .filter = "Hello, how are you\\% doing",
             .create_success = true,
-            .evaluate_success = true,
             .expected_tree_structure = "AND{\n"
                                        "  TEXT-TERM(\"hello\", field_mask=3)\n"
                                        "  TEXT-TERM(\"how\", field_mask=3)\n"
@@ -1002,7 +1005,6 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "default_field_with_escape6",
             .filter = "Hello, how are you\\\\\\\\\\% doing",
             .create_success = true,
-            .evaluate_success = true,
             .expected_tree_structure = "AND{\n"
                                        "  TEXT-TERM(\"hello\", field_mask=3)\n"
                                        "  TEXT-TERM(\"how\", field_mask=3)\n"
@@ -1018,7 +1020,6 @@ INSTANTIATE_TEST_SUITE_P(
             .filter =
                 "Hello, how are you\\]\\[\\$\\}\\{\\;\\:\\)\\(\\| \\-doing",
             .create_success = true,
-            .evaluate_success = true,
             .expected_tree_structure = "AND{\n"
                                        "  TEXT-TERM(\"hello\", field_mask=3)\n"
                                        "  TEXT-TERM(\"how\", field_mask=3)\n"

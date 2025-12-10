@@ -12,6 +12,7 @@
 #include <sstream>
 #include <vector>
 
+#include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/text_index.h"
@@ -21,7 +22,9 @@
 
 namespace valkey_search::indexes::text {
 
-// FlatPositionMap member function implementations
+//=============================================================================
+// FlatPositionMap Member Functions
+//=============================================================================
 
 FlatPositionMap::~FlatPositionMap() {
   if (data_ != nullptr) {
@@ -44,573 +47,381 @@ FlatPositionMap& FlatPositionMap::operator=(FlatPositionMap&& other) noexcept {
   }
   return *this;
 }
-// Helper functions
-// Helper to read uint32_t from byte array
-static uint32_t ReadUint32(const char* ptr) {
-  uint32_t value;
-  std::memcpy(&value, ptr, sizeof(uint32_t));
+
+static uint8_t BytesNeeded(uint32_t value) {
+  if (value == 0) return 1;
+  if (value <= 0xFF) return 1;
+  if (value <= 0xFFFF) return 2;
+  if (value <= 0xFFFFFF) return 3;
+  return 4;
+}
+
+static uint32_t ReadVarUint(const char* ptr, uint8_t num_bytes) {
+  uint32_t value = 0;
+  for (uint8_t i = 0; i < num_bytes; ++i) {
+    value |= (static_cast<uint32_t>(static_cast<uint8_t>(ptr[i])) << (i * 8));
+  }
   return value;
 }
 
-// Helper to write uint32_t to byte array
-static void WriteUint32(char* ptr, uint32_t value) {
-  std::memcpy(ptr, &value, sizeof(uint32_t));
-}
-
-// Helper to encode a position delta using variable-length encoding
-// Returns pointer to next write position
-static char* EncodePositionDelta(char* data_ptr, uint32_t delta) {
-  while (delta >= 128) {
-    *data_ptr++ = static_cast<char>(0x00 | (delta & kEncodingValueMask));
-    delta >>= 7;
+static uint8_t ParseHeader(const char* flat_map, uint32_t& num_positions,
+                           uint32_t& num_partitions) {
+  if (flat_map == nullptr) {
+    num_positions = num_partitions = 0;
+    return 0;
   }
-  *data_ptr++ = static_cast<char>(0x00 | delta);
-  return data_ptr;
+
+  uint8_t first_byte = static_cast<uint8_t>(flat_map[0]);
+  uint8_t pos_bytes = ((first_byte >> 3) & 0x3) + 1;
+  uint8_t part_bytes = ((first_byte >> 5) & 0x3) + 1;
+  
+  num_positions = ReadVarUint(flat_map + 1, pos_bytes);
+  num_partitions = ReadVarUint(flat_map + 1 + pos_bytes, part_bytes);
+  
+  return 1 + pos_bytes + part_bytes;
 }
 
-// Helper to encode a field mask
-// Returns pointer to next write position
-static char* EncodeFieldMask(char* data_ptr,
-                             const std::unique_ptr<FieldMask>& field_mask,
-                             uint8_t field_bytes) {
-  if (field_bytes > 0) {
-    // Multiple fields: encode the mask
-    uint64_t mask = field_mask->AsUint64();
-    for (uint8_t i = 0; i < field_bytes; ++i) {
-      *data_ptr++ = static_cast<char>(
-          kEncodingBitFieldMask |
-          ((mask >> (i * kFieldMaskBitsPerByte)) & kEncodingValueMask));
+static uint8_t DetectFieldMaskBytes(const char* data_ptr) {
+  const char* ptr = data_ptr;
+  
+  while ((static_cast<uint8_t>(*ptr) & kBitPosition) != 0) {
+    ptr++;
+    if ((static_cast<uint8_t>(*(ptr - 1)) & kBitStartPosition) != 0) {
+      if ((static_cast<uint8_t>(*ptr) & kBitPosition) == 0 ||
+          (static_cast<uint8_t>(*ptr) & kBitStartPosition) != 0) {
+        break;
+      }
     }
-  } else {
-    // Single field: write terminator byte (bit 7=1, value=1 for field 0)
-    *data_ptr++ = static_cast<char>(kEncodingBitFieldMask | 0x01);
   }
-  return data_ptr;
+  
+  uint8_t byte_count = 0;
+  
+  while ((static_cast<uint8_t>(*ptr) & 0x03) == 0x02) {
+    byte_count++;
+    ptr++;
+  }
+  
+  return byte_count;
 }
 
-// Helper to decode a position delta from variable-length encoding
-// Returns the decoded delta value
-static uint32_t DecodePositionDelta(const char* ptr) {
+static void EncodePositionDelta(absl::InlinedVector<char, 128>& buffer,
+                                 uint32_t delta, bool is_start) {
+  bool first = true;
+  do {
+    uint8_t byte_val = (delta & 0x3F) << kValueShift;
+    byte_val |= kBitPosition;
+    if (first && is_start) {
+      byte_val |= kBitStartPosition;
+      first = false;
+    }
+    buffer.push_back(static_cast<char>(byte_val));
+    delta >>= 6;
+  } while (delta > 0);
+}
+
+static void EncodeFieldMask(absl::InlinedVector<char, 128>& buffer,
+                             uint64_t field_mask, size_t num_text_fields) {
+  size_t num_bytes = (num_text_fields + 5) / 6;
+  
+  for (size_t i = 0; i < num_bytes; ++i) {
+    uint8_t byte_val = (field_mask & 0x3F) << kValueShift;
+    byte_val |= 0x02;
+    buffer.push_back(static_cast<char>(byte_val));
+    field_mask >>= 6;
+  }
+}
+
+static void EncodeTerminator(absl::InlinedVector<char, 128>& buffer) {
+  buffer.push_back(static_cast<char>(0x00));
+}
+
+static uint32_t DecodePositionDelta(const char*& ptr) {
   uint32_t delta = 0;
   uint32_t shift = 0;
-  while ((*ptr & 0x80) == 0) {
-    delta |= ((*ptr & 0x7F) << shift);
-    shift += 7;
+
+  while ((static_cast<uint8_t>(*ptr) & kBitPosition) != 0) {
+    uint8_t byte_val = static_cast<uint8_t>(*ptr);
+    uint8_t value = (byte_val & kValueMask) >> kValueShift;
+    delta |= (static_cast<uint32_t>(value) << shift);
+    shift += 6;
     ptr++;
+
+    // If we're at the start of a position and have read more than one byte, break
+    if ((byte_val & kBitStartPosition) != 0 && shift > 6) {
+      break;
+    }
+    
+    // Break if next byte is not a position byte or starts a new position
+    if ((static_cast<uint8_t>(*ptr) & kBitPosition) == 0 ||
+        (static_cast<uint8_t>(*ptr) & kBitStartPosition) != 0) {
+      break;
+    }
   }
   return delta;
 }
 
-// Helper to create and write a header for serialization
-static void WriteSerializationHeader(char* flat_map, EncodingScheme scheme,
-                                     uint32_t num_positions) {
-  uint32_t header = (0 << 0) |  // Standard header
-                    (static_cast<uint32_t>(scheme) << 1) | (num_positions << 3);
-  WriteUint32(flat_map, header);
-}
-
-// Helper to reallocate flat_map to actual size
-static char* ReallocateToActualSize(char* flat_map, char* data_ptr) {
-  size_t actual_size = data_ptr - flat_map;
-  char* resized = static_cast<char*>(realloc(flat_map, actual_size));
-  return (resized != nullptr) ? resized : flat_map;
-}
-
-// Helper to skip position bytes in encoded data (returns pointer after position
-// bytes)
-static const char* SkipPositionBytes(const char* ptr) {
-  while ((*ptr & 0x80) == 0) {
-    ptr++;
-  }
-  return ptr;
-}
-
-// Helper to decode field mask from encoded data
-static uint64_t DecodeFieldMask(const char* ptr, uint8_t field_bytes) {
-  if (field_bytes == 0) {
-    // Single field: read terminator byte (should be 0x81 = bit7=1, value=1)
-    return (*ptr & 0x7F);
-  }
-
-  // Multiple fields: decode full mask
+static uint64_t DecodeFieldMask(const char*& ptr) {
   uint64_t mask = 0;
-  for (uint8_t i = 0; i < field_bytes; ++i) {
-    mask |= (static_cast<uint64_t>(*ptr & 0x7F) << (i * 7));
+  uint32_t shift = 0;
+
+  while ((static_cast<uint8_t>(*ptr) & 0x03) == 0x02) {
+    uint8_t byte_val = static_cast<uint8_t>(*ptr);
+    uint8_t value = (byte_val & kFieldMaskValueMask) >> kValueShift;
+    mask |= (static_cast<uint64_t>(value) << shift);
+    shift += 6;
     ptr++;
   }
   return mask;
 }
 
-// Calculate number of partitions for binary search. Have limited the number of
-// partitions to avoid bloating the position map
-static uint32_t CalculateNumPartitions(uint32_t num_positions) {
-  if (num_positions <= 128) return 0;
-  if (num_positions <= 512) return 4;
-  if (num_positions <= 2048) return 16;
-  if (num_positions <= 8192) return 64;
-  return 256;
-}
-
-// Calculate field mask bytes for num_text_fields (7 bits/byte, bit 7 = flag)
-// Returns 0 for single field; EXPANDABLE/BINARY_SEARCH add 1 terminator byte
-static uint8_t GetFieldMaskBytes(size_t num_text_fields) {
-  if (num_text_fields <= 1) return 0;
-  // Each byte can store 7 bits of field mask (bit 7 is the flag bit)
-  return (num_text_fields + kFieldMaskBitsPerByte - 1) / kFieldMaskBitsPerByte;
-}
-
-// Infer field_bytes from the flat_map itself by examining the first position
-// Returns 0 for SIMPLE encoding, else counts field mask bytes in first entry
-static uint8_t GetFieldMaskBytes(const char* flat_map) {
-  if (flat_map == nullptr) return 0;
-
-  uint32_t header = ReadUint32(flat_map);
-  uint32_t num_positions = (header >> 3);
-  EncodingScheme scheme = static_cast<EncodingScheme>((header >> 1) & 0x3);
-
-  // SIMPLE encoding has no field mask bytes, or empty map
-  if (scheme == EncodingScheme::SIMPLE || num_positions == 0) {
-    return 0;
-  }
-
-  // Skip header
-  const char* ptr = flat_map + kFlatPositionMapHeaderSize;
-
-  // Skip partition map if binary search encoding
-  if (scheme == EncodingScheme::BINARY_SEARCH) {
-    uint32_t num_partitions = CalculateNumPartitions(num_positions);
-    ptr += num_partitions * kPartitionMapEntrySize;
-  }
-
-  // Skip position bytes (first bit = 0) to reach field bytes
-  while ((*ptr & kEncodingBitFieldMask) == 0) {
-    ptr++;
-  }
-
-  // Count field mask bytes (first bit = 1)
-  uint8_t count = 0;
-  while ((*ptr & kEncodingBitFieldMask) != 0) {
-    count++;
-    ptr++;
-  }
-
-  return count;
-}
-
-// Determine encoding scheme based on position map characteristics
-static EncodingScheme DetermineEncodingScheme(
-    const std::map<Position, std::unique_ptr<FieldMask>>& position_map,
-    size_t num_text_fields) {
-  if (position_map.empty()) {
-    return EncodingScheme::SIMPLE;
-  }
-
-  uint32_t num_positions = position_map.size();
-
-  // For large position lists, use binary search encoding
-  if (num_positions > kBinarySearchThreshold) {
-    return EncodingScheme::BINARY_SEARCH;
-  }
-
-  // Check if simple encoding is sufficient
-  // Simple encoding: single field, all positions fit in 1 byte
-  if (num_text_fields == 1) {
-    Position max_pos = position_map.rbegin()->first;
-    if (max_pos < kSimpleEncodingMaxPosition) {
-      return EncodingScheme::SIMPLE;
-    }
-  }
-
-  // Default to expandable encoding
-  return EncodingScheme::EXPANDABLE;
-}
-
-// Serialize using SIMPLE encoding
-static char* SerializeSimple(
-    const std::map<Position, std::unique_ptr<FieldMask>>& position_map) {
-  uint32_t num_positions = position_map.size();
-
-  // Header (4 bytes) + position data (1 byte per position)
-  size_t total_size = kFlatPositionMapHeaderSize + num_positions;
-  char* flat_map = static_cast<char*>(malloc(total_size));
-  CHECK(flat_map != nullptr) << "Failed to allocate FlatPositionMap";
-
-  // Write header
-  uint32_t header = (0 << 0) |  // Standard header
-                    (static_cast<uint32_t>(EncodingScheme::SIMPLE) << 1) |
-                    (num_positions << 3);
-  WriteUint32(flat_map, header);
-
-  // Write positions (delta encoded)
-  char* data_ptr = flat_map + kFlatPositionMapHeaderSize;
-  Position prev_pos = 0;
-  for (const auto& [pos, field_mask] : position_map) {
-    uint32_t delta = pos - prev_pos;
-    CHECK(delta < 256) << "Delta too large for simple encoding";
-    *data_ptr++ = static_cast<char>(delta);
-    prev_pos = pos;
-  }
-
-  return flat_map;
-}
-
-// Serialize using EXPANDABLE encoding
-static char* SerializeExpandable(
-    const std::map<Position, std::unique_ptr<FieldMask>>& position_map,
-    size_t num_text_fields) {
-  uint32_t num_positions = position_map.size();
-  uint8_t field_bytes = GetFieldMaskBytes(num_text_fields);
-
-  // Estimate size (conservative upper bound)
-  // Each entry: up to 4 bytes for position + at least 1 byte for field
-  // mask/terminator
-  // Add 1 extra byte for terminator when num_positions == 1
-  size_t estimated_size =
-      kFlatPositionMapHeaderSize +
-      (num_positions * (4 + (field_bytes > 0 ? field_bytes : 1))) +
-      (num_positions == 1 ? 1 : 0);
-  char* flat_map = static_cast<char*>(malloc(estimated_size));
-  CHECK(flat_map != nullptr) << "Failed to allocate FlatPositionMap";
-
-  WriteSerializationHeader(flat_map, EncodingScheme::EXPANDABLE, num_positions);
-
-  // Write position and field data
-  char* data_ptr = flat_map + kFlatPositionMapHeaderSize;
-  Position prev_pos = 0;
-
-  for (const auto& [pos, field_mask] : position_map) {
-    uint32_t delta = pos - prev_pos;
-    data_ptr = EncodePositionDelta(data_ptr, delta);
-    data_ptr = EncodeFieldMask(data_ptr, field_mask, field_bytes);
-    prev_pos = pos;
-  }
-
-  // Add terminator byte for single position case
-  if (num_positions == 1) {
-    *data_ptr++ = 0x00;  // Terminator byte (bit 7 = 0)
-  }
-
-  return ReallocateToActualSize(flat_map, data_ptr);
-}
-
-// Serialize using BINARY_SEARCH encoding
-static char* SerializeBinarySearch(
-    const std::map<Position, std::unique_ptr<FieldMask>>& position_map,
-    size_t num_text_fields) {
-  uint32_t num_positions = position_map.size();
-  uint32_t num_partitions = CalculateNumPartitions(num_positions);
-  uint8_t field_bytes = GetFieldMaskBytes(num_text_fields);
-
-  // Estimate size
-  // Data: up to 4 bytes per position + at least 1 byte for field
-  // mask/terminator
-  size_t estimated_size =
-      kFlatPositionMapHeaderSize +                 // Header
-      (num_partitions * kPartitionMapEntrySize) +  // Partition map
-      (num_positions * (4 + (field_bytes > 0 ? field_bytes : 1)));  // Data
-  char* flat_map = static_cast<char*>(malloc(estimated_size));
-  CHECK(flat_map != nullptr) << "Failed to allocate FlatPositionMap";
-
-  WriteSerializationHeader(flat_map, EncodingScheme::BINARY_SEARCH,
-                           num_positions);
-
-  char* partition_ptr = flat_map + kFlatPositionMapHeaderSize;
-  char* data_ptr = partition_ptr + (num_partitions * kPartitionMapEntrySize);
-  char* data_start = data_ptr;
-
-  // Build partition map and write data
-  std::vector<uint32_t> partition_offsets;
-  std::vector<uint32_t> partition_deltas;
-
-  Position prev_pos = 0;
-  Position cumulative_delta = 0;
-  uint32_t positions_per_partition = num_positions / num_partitions;
-  uint32_t current_partition_count = 0;
-
-  for (const auto& [pos, field_mask] : position_map) {
-    // Record partition entry
-    if (current_partition_count % positions_per_partition == 0 &&
-        partition_offsets.size() < num_partitions) {
-      partition_offsets.push_back(data_ptr - data_start);
-      partition_deltas.push_back(cumulative_delta);
-    }
-
-    uint32_t delta = pos - prev_pos;
-    cumulative_delta += delta;
-
-    data_ptr = EncodePositionDelta(data_ptr, delta);
-    data_ptr = EncodeFieldMask(data_ptr, field_mask, field_bytes);
-
-    prev_pos = pos;
-    current_partition_count++;
-  }
-
-  // Write partition map
-  for (size_t i = 0; i < partition_offsets.size(); ++i) {
-    WriteUint32(partition_ptr, partition_offsets[i]);
-    partition_ptr += 4;
-    WriteUint32(partition_ptr, partition_deltas[i]);
-    partition_ptr += 4;
-  }
-
-  return ReallocateToActualSize(flat_map, data_ptr);
-}
 
 FlatPositionMap FlatPositionMap::SerializePositionMap(
     const std::map<Position, std::unique_ptr<FieldMask>>& position_map,
     size_t num_text_fields) {
+
   if (position_map.empty()) {
-    // Empty map: just header with 0 positions
-    char* flat_map = static_cast<char*>(malloc(kFlatPositionMapHeaderSize));
-    CHECK(flat_map != nullptr) << "Failed to allocate FlatPositionMap";
-    WriteUint32(flat_map, 0);
+    char* flat_map = static_cast<char*>(malloc(3));
+    CHECK(flat_map != nullptr);
+    flat_map[0] = 0x00;
+    flat_map[1] = 0x00;
+    flat_map[2] = 0x00;
     return FlatPositionMap(flat_map);
   }
 
-  EncodingScheme scheme =
-      DetermineEncodingScheme(position_map, num_text_fields);
+  uint32_t num_positions = position_map.size();
+  bool single_field = (num_text_fields == 1);
 
-  char* data = nullptr;
-  switch (scheme) {
-    case EncodingScheme::SIMPLE:
-      data = SerializeSimple(position_map);
-      break;
-    case EncodingScheme::EXPANDABLE:
-      data = SerializeExpandable(position_map, num_text_fields);
-      break;
-    case EncodingScheme::BINARY_SEARCH:
-      data = SerializeBinarySearch(position_map, num_text_fields);
-      break;
-    default:
-      CHECK(false) << "Unsupported encoding scheme";
-  }
+  absl::InlinedVector<char, 128> position_data;
+  std::vector<uint32_t> partition_deltas;
+  
+  Position prev_pos = 0;
+  Position cumulative_delta = 0;
+  uint64_t prev_field_mask = 0;
+  bool first_position = true;
+  bool is_first_in_partition = true;
+  size_t partition_start_offset = 0;
 
-  return FlatPositionMap(data);
-}
+  for (const auto& [pos, field_mask] : position_map) {
+    uint32_t delta = pos - prev_pos;
+    cumulative_delta += delta;
 
-// Iterator implementation
-FlatPositionMapIterator::FlatPositionMapIterator(
-    const FlatPositionMap& flat_map)
-    : flat_map_(flat_map.data()),
-      current_ptr_(nullptr),
-      cumulative_position_(0),
-      positions_read_(0),
-      total_positions_(0),
-      field_bytes_(0) {
-  if (flat_map_ != nullptr) {
-    uint32_t header = ReadUint32(flat_map_);
-    total_positions_ = (header >> 3);
-    EncodingScheme scheme = static_cast<EncodingScheme>((header >> 1) & 0x3);
+    if (position_data.size() - partition_start_offset >= kPartitionSize && !first_position) {
+      partition_deltas.push_back(cumulative_delta - delta);
+      partition_start_offset += kPartitionSize;
+      is_first_in_partition = true;
+      if (!single_field) prev_field_mask = 0;
+    }
 
-    // Infer field_bytes from the flat_map data itself
-    field_bytes_ = GetFieldMaskBytes(flat_map_);
+    EncodePositionDelta(position_data, delta, true);
 
-    if (total_positions_ > 0) {
-      // Skip header
-      current_ptr_ = flat_map_ + kFlatPositionMapHeaderSize;
-
-      // Skip partition map if binary search encoding
-      if (scheme == EncodingScheme::BINARY_SEARCH) {
-        uint32_t num_partitions = CalculateNumPartitions(total_positions_);
-        current_ptr_ += num_partitions * kPartitionMapEntrySize;
+    if (!single_field) {
+      uint64_t current_mask = field_mask->AsUint64();
+      if (first_position || current_mask != prev_field_mask || is_first_in_partition) {
+        EncodeFieldMask(position_data, current_mask, num_text_fields);
+        prev_field_mask = current_mask;
       }
     }
+
+    prev_pos = pos;
+    first_position = false;
+    is_first_in_partition = false;
   }
+
+  EncodeTerminator(position_data);
+
+  uint32_t num_partitions = partition_deltas.size();
+  uint8_t pos_bytes = BytesNeeded(num_positions);
+  uint8_t part_bytes = BytesNeeded(num_partitions);
+  
+  uint8_t header_size = 1 + pos_bytes + part_bytes;
+  size_t partition_map_size = (num_partitions > 0) ? (num_partitions + 1) * 4 : 0;
+  size_t total_size = header_size + partition_map_size + position_data.size();
+  
+  char* flat_map = static_cast<char*>(malloc(total_size));
+  CHECK(flat_map != nullptr);
+  
+  uint8_t first_byte = ((pos_bytes - 1) << 3) | ((part_bytes - 1) << 5);
+  
+  size_t offset = 0;
+  flat_map[offset++] = static_cast<char>(first_byte);
+  
+  for (uint8_t i = 0; i < pos_bytes; ++i) {
+    flat_map[offset++] = static_cast<char>((num_positions >> (i * 8)) & 0xFF);
+  }
+  
+  for (uint8_t i = 0; i < part_bytes; ++i) {
+    flat_map[offset++] = static_cast<char>((num_partitions >> (i * 8)) & 0xFF);
+  }
+  
+  if (num_partitions > 0) {
+    for (uint32_t delta : partition_deltas) {
+      for (uint8_t i = 0; i < 4; ++i) {
+        flat_map[offset++] = static_cast<char>((delta >> (i * 8)) & 0xFF);
+      }
+    }
+    for (uint8_t i = 0; i < 4; ++i) {
+      flat_map[offset++] = static_cast<char>((cumulative_delta >> (i * 8)) & 0xFF);
+    }
+  }
+  
+  std::memcpy(flat_map + offset, position_data.data(), position_data.size());
+  
+  return FlatPositionMap(flat_map);
+}
+
+//=============================================================================
+// Iterator Implementation
+//=============================================================================
+
+FlatPositionMapIterator::FlatPositionMapIterator(const FlatPositionMap& flat_map)
+    : flat_map_(flat_map.data()),
+      current_start_ptr_(nullptr),
+      current_end_ptr_(nullptr),
+      data_start_(nullptr),
+      cumulative_position_(0),
+      current_position_(0),
+      total_positions_(0),
+      num_partitions_(0),
+      header_size_(0),
+      current_field_mask_(1),
+      field_mask_bytes_(0) {
+
+  if (flat_map_ == nullptr) return;
+
+  header_size_ = ParseHeader(flat_map_, total_positions_, num_partitions_);
+
+  if (total_positions_ == 0) return;
+
+  size_t partition_map_size = (num_partitions_ > 0) ? (num_partitions_ + 1) * 4 : 0;
+  data_start_ = flat_map_ + header_size_ + partition_map_size;
+  current_start_ptr_ = data_start_;
+  current_end_ptr_ = data_start_;
+
+  field_mask_bytes_ = DetectFieldMaskBytes(data_start_);
+  
+  NextPosition();
 }
 
 bool FlatPositionMapIterator::IsValid() const {
-  return current_ptr_ != nullptr && positions_read_ < total_positions_;
+  return current_start_ptr_ != nullptr;
 }
 
 void FlatPositionMapIterator::NextPosition() {
   if (!IsValid()) return;
 
-  uint32_t header = ReadUint32(flat_map_);
-  EncodingScheme scheme = static_cast<EncodingScheme>((header >> 1) & 0x3);
-
-  // Decode and add current delta to cumulative position before moving
-  if (scheme == EncodingScheme::SIMPLE) {
-    cumulative_position_ += static_cast<uint8_t>(*current_ptr_);
-    current_ptr_++;
-  } else {
-    cumulative_position_ += DecodePositionDelta(current_ptr_);
-
-    // Skip position bytes (first bit = 0)
-    while ((*current_ptr_ & 0x80) == 0) {
-      current_ptr_++;
-    }
-    // Skip field bytes (first bit = 1)
-    // For single-field: 1 terminator byte, otherwise field_bytes_
-    uint8_t bytes_to_skip = (field_bytes_ > 0) ? field_bytes_ : 1;
-    for (uint8_t i = 0; i < bytes_to_skip; ++i) {
-      current_ptr_++;
-    }
+  current_start_ptr_ = current_end_ptr_;
+  
+  if (static_cast<uint8_t>(*current_start_ptr_) == 0x00) {
+    current_start_ptr_ = nullptr;
+    current_end_ptr_ = nullptr;
+    return;
   }
 
-  // Increment positions read counter
-  positions_read_++;
+  const char* ptr = current_start_ptr_;
+  uint32_t delta = DecodePositionDelta(ptr);
+  cumulative_position_ += delta;
+  current_position_ = cumulative_position_;
 
-  // If we've read all positions, invalidate the iterator
-  if (positions_read_ >= total_positions_) {
-    current_ptr_ = nullptr;
+  if (field_mask_bytes_ > 0 && (static_cast<uint8_t>(*ptr) & 0x03) == 0x02) {
+    current_field_mask_ = DecodeFieldMask(ptr);
   }
+
+  current_end_ptr_ = ptr;
+}
+
+// Binary search to find the partition containing the target position
+static uint32_t FindPartitionForTarget(const char* partition_map, 
+                                        uint32_t num_partitions, 
+                                        Position target) {
+  uint32_t left = 0;
+  uint32_t right = num_partitions;
+  
+  while (left < right) {
+    uint32_t mid = left + (right - left) / 2;
+    uint32_t partition_delta = ReadVarUint(partition_map + (mid * 4), 4);
+    
+    if (partition_delta < target) {
+      left = mid + 1;
+    } else {
+      right = mid;
+    }
+  }
+  
+  // Return the partition index before the target (or 0 if target is in first partition)
+  return (left > 0) ? left - 1 : 0;
 }
 
 bool FlatPositionMapIterator::SkipForwardPosition(Position target) {
-  uint32_t header = ReadUint32(flat_map_);
-  EncodingScheme scheme = static_cast<EncodingScheme>((header >> 1) & 0x3);
+  current_start_ptr_ = data_start_;
+  current_end_ptr_ = data_start_;
+  cumulative_position_ = 0;
 
-  // For BINARY_SEARCH encoding, use partition map to skip ahead
-  if (scheme == EncodingScheme::BINARY_SEARCH && total_positions_ > 0) {
-    uint32_t num_partitions = CalculateNumPartitions(total_positions_);
-    const char* partition_map_ptr = flat_map_ + kFlatPositionMapHeaderSize;
-
-    // Find partition where target position falls
-    size_t target_partition_idx = 0;
-    for (uint32_t i = 0; i < num_partitions; ++i) {
-      uint32_t partition_delta = ReadUint32(partition_map_ptr + i * 8 + 4);
-
-      if (partition_delta >= target) {
-        target_partition_idx = i;
-        break;
-      }
-      target_partition_idx = i + 1;
-    }
-
-    // Skip to the target partition
-    if (target_partition_idx > 0 && target_partition_idx < num_partitions) {
-      uint32_t partition_offset =
-          ReadUint32(partition_map_ptr + target_partition_idx * 8);
-      uint32_t partition_delta =
-          ReadUint32(partition_map_ptr + target_partition_idx * 8 + 4);
-
-      const char* data_start = flat_map_ + kFlatPositionMapHeaderSize +
-                               (num_partitions * kPartitionMapEntrySize);
-      current_ptr_ = data_start + partition_offset;
+  if (num_partitions_ > 0) {
+    const char* partition_map = flat_map_ + header_size_;
+    uint32_t partition_idx = FindPartitionForTarget(partition_map, num_partitions_, target);
+    
+    if (partition_idx > 0) {
+      uint32_t partition_delta = ReadVarUint(partition_map + (partition_idx * 4), 4);
+      const char* partition_ptr = data_start_ + (partition_idx * kPartitionSize);
       cumulative_position_ = partition_delta;
-
-      uint32_t positions_per_partition = total_positions_ / num_partitions;
-      positions_read_ = target_partition_idx * positions_per_partition;
+      
+      while (static_cast<uint8_t>(*partition_ptr) != 0x00 &&
+             (static_cast<uint8_t>(*partition_ptr) & 0x03) != 0x03) {
+        partition_ptr++;
+      }
+      
+      if (static_cast<uint8_t>(*partition_ptr) == 0x00) {
+        current_start_ptr_ = nullptr;
+        current_end_ptr_ = nullptr;
+        return false;
+      }
+      
+      current_start_ptr_ = partition_ptr;
+      current_end_ptr_ = partition_ptr;
     }
   }
 
-  // Linear search from current position to reach exact target
+  NextPosition();
+
   while (IsValid()) {
-    Position current_pos = GetPosition();
-    if (current_pos >= target) {
-      return current_pos == target;
+    if (current_position_ >= target) {
+      return current_position_ == target;
     }
     NextPosition();
   }
-
   return false;
 }
 
 Position FlatPositionMapIterator::GetPosition() const {
-  if (current_ptr_ == nullptr) return 0;
-
-  uint32_t header = ReadUint32(flat_map_);
-  EncodingScheme scheme = static_cast<EncodingScheme>((header >> 1) & 0x3);
-
-  // Decode current delta and add to cumulative position
-  if (scheme == EncodingScheme::SIMPLE) {
-    return cumulative_position_ + static_cast<uint8_t>(*current_ptr_);
-  } else {
-    return cumulative_position_ + DecodePositionDelta(current_ptr_);
-  }
+  return current_position_;
 }
 
 uint64_t FlatPositionMapIterator::GetFieldMask() const {
-  if (current_ptr_ == nullptr) return 0;
-
-  uint32_t header = ReadUint32(flat_map_);
-  EncodingScheme scheme = static_cast<EncodingScheme>((header >> 1) & 0x3);
-
-  if (scheme == EncodingScheme::SIMPLE) {
-    return 1;  // Single field
-  }
-
-  const char* ptr = SkipPositionBytes(current_ptr_);
-  return DecodeFieldMask(ptr, field_bytes_);
+  if (field_mask_bytes_ == 0) return 1;
+  return current_field_mask_;
 }
 
-// Get position count from FlatPositionMap (reads from header)
+//=============================================================================
+// Public Query Methods
+//=============================================================================
+
 uint32_t FlatPositionMap::CountPositions() const {
-  if (data_ == nullptr) {
-    return 0;
-  }
-
-  uint32_t header = ReadUint32(data_);
-  return (header >> 3);
+  if (data_ == nullptr) return 0;
+  uint32_t num_positions, num_partitions;
+  ParseHeader(data_, num_positions, num_partitions);
+  return num_positions;
 }
 
-// Get total term frequency from FlatPositionMap (iterates and counts set
-// fields)
 size_t FlatPositionMap::CountTermFrequency() const {
-  if (data_ == nullptr) {
-    return 0;
-  }
+  if (data_ == nullptr) return 0;
 
   size_t total_frequency = 0;
   FlatPositionMapIterator iter(*this);
-
   while (iter.IsValid()) {
-    uint64_t field_mask = iter.GetFieldMask();
-    total_frequency += __builtin_popcountll(field_mask);
+    total_frequency += __builtin_popcountll(iter.GetFieldMask());
     iter.NextPosition();
   }
-
   return total_frequency;
-}
-
-// Helper function to print FlatPositionMap at bit level
-void PrintFlatPositionMapBits(const FlatPositionMap& flat_map) {
-  if (flat_map.data() == nullptr) {
-    return;
-  }
-
-  // Read the header to determine encoding and size
-  uint32_t header;
-  std::memcpy(&header, flat_map.data(), sizeof(uint32_t));
-  uint32_t num_positions = (header >> 3);
-  EncodingScheme scheme = static_cast<EncodingScheme>((header >> 1) & 0x3);
-
-  // Calculate actual size based on encoding scheme
-  size_t bytes_to_print;
-  if (scheme == EncodingScheme::SIMPLE) {
-    // SIMPLE: header + 1 byte per position
-    bytes_to_print = kFlatPositionMapHeaderSize + num_positions;
-  } else {
-    // For other encodings, estimate (this is conservative)
-    bytes_to_print =
-        kFlatPositionMapHeaderSize + std::min(num_positions * 4, 256u);
-  }
-
-  std::ostringstream oss;
-  oss << "FlatPositionMap bits (" << bytes_to_print << " bytes, "
-      << "scheme=" << static_cast<int>(scheme)
-      << ", positions=" << num_positions << "):\n";
-
-  const unsigned char* raw_data =
-      reinterpret_cast<const unsigned char*>(flat_map.data());
-  for (size_t i = 0; i < bytes_to_print; ++i) {
-    unsigned char byte = raw_data[i];
-
-    // Print each bit from MSB to LSB
-    for (int bit = 7; bit >= 0; --bit) {
-      oss << ((byte >> bit) & 1);
-    }
-
-    // Add space after every 8 bits (every byte)
-    oss << " ";
-
-    // Add newline every 8 bytes for readability
-    if ((i + 1) % 8 == 0) {
-      oss << "\n";
-    }
-  }
-
-  VMSDK_LOG(WARNING, nullptr) << oss.str();
 }
 
 }  // namespace valkey_search::indexes::text

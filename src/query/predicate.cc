@@ -69,7 +69,7 @@ EvaluationResult TermPredicate::Evaluate(
   if (word_iter.Done()) {
     return EvaluationResult(false);
   }
-  auto postings = word_iter.GetTarget();
+  auto postings = word_iter.GetPostingsTarget();
   if (!postings) {
     return EvaluationResult(false);
   }
@@ -112,7 +112,7 @@ EvaluationResult PrefixPredicate::Evaluate(
   while (!word_iter.Done()) {
     std::string_view word = word_iter.GetWord();
     if (!word.starts_with(term_)) break;
-    auto postings = word_iter.GetTarget();
+    auto postings = word_iter.GetPostingsTarget();
     if (postings) {
       auto key_iter = postings->GetKeyIterator();
       // Skip to target key and verify it contains the required fields
@@ -160,7 +160,7 @@ EvaluationResult SuffixPredicate::Evaluate(
   while (!word_iter.Done()) {
     std::string_view word = word_iter.GetWord();
     if (!word.starts_with(reversed_term)) break;
-    auto postings = word_iter.GetTarget();
+    auto postings = word_iter.GetPostingsTarget();
     if (postings) {
       auto key_iter = postings->GetKeyIterator();
       // Skip to target key and verify it contains the required fields

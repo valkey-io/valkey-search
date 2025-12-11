@@ -167,7 +167,7 @@ template class FieldMaskImpl<uint64_t, 64>;
 
 // Destructor: clean up all FlatPositionMaps
 Postings::~Postings() {
-  for (auto& [key, flat_map] : key_to_positions_) {
+  for (auto &[key, flat_map] : key_to_positions_) {
     FlatPositionMap::Destroy(flat_map);
   }
 }
@@ -176,30 +176,30 @@ Postings::~Postings() {
 bool Postings::IsEmpty() const { return key_to_positions_.empty(); }
 
 // TODO: develop a better strategy to track terms
-unsigned int count_num_terms(const PositionMap& pos_map) {
+unsigned int count_num_terms(const PositionMap &pos_map) {
   unsigned int num_terms = 0;
-  for (const auto& [_, field_mask] : pos_map) {
+  for (const auto &[_, field_mask] : pos_map) {
     num_terms += field_mask->CountSetFields();
   }
   return num_terms;
 }
 
-void Postings::InsertKey(const Key& key, PositionMap&& pos_map,
-                         TextIndexMetadata* metadata, size_t num_text_fields) {
+void Postings::InsertKey(const Key &key, PositionMap &&pos_map,
+                         TextIndexMetadata *metadata, size_t num_text_fields) {
   metadata->total_positions += pos_map.size();
   metadata->total_term_frequency += count_num_terms(pos_map);
 
   // Create FlatPositionMap and insert pointer into map
-  FlatPositionMap* flat_map = FlatPositionMap::Create(pos_map, num_text_fields);
+  FlatPositionMap *flat_map = FlatPositionMap::Create(pos_map, num_text_fields);
   key_to_positions_.emplace(key, flat_map);
 }
 
 // Remove a document key and all its positions
-void Postings::RemoveKey(const Key& key, TextIndexMetadata* metadata) {
-  auto it = key_to_positions_.find(key);
-  if (it == key_to_positions_.end()) return;
+void Postings::RemoveKey(const Key &key, TextIndexMetadata *metadata) {
+  auto node = key_to_positions_.extract(key);
+  if (node.empty()) return;
 
-  FlatPositionMap* flat_map = it->second;
+  FlatPositionMap *flat_map = node.mapped();
 
   // Use member functions to get counts
   size_t position_count = flat_map->CountPositions();
@@ -210,7 +210,6 @@ void Postings::RemoveKey(const Key& key, TextIndexMetadata* metadata) {
 
   // Destroy and remove from map
   FlatPositionMap::Destroy(flat_map);
-  key_to_positions_.erase(it);
 }
 
 // Get total number of document keys
@@ -219,7 +218,7 @@ size_t Postings::GetKeyCount() const { return key_to_positions_.size(); }
 // Get total number of position entries across all keys
 size_t Postings::GetPositionCount() const {
   size_t total = 0;
-  for (const auto& [key, flat_map] : key_to_positions_) {
+  for (const auto &[key, flat_map] : key_to_positions_) {
     total += flat_map->CountPositions();
   }
   return total;
@@ -228,14 +227,14 @@ size_t Postings::GetPositionCount() const {
 // Get total term frequency (sum of field occurrences across all positions)
 size_t Postings::GetTotalTermFrequency() const {
   size_t total_frequency = 0;
-  for (const auto& [key, flat_map] : key_to_positions_) {
+  for (const auto &[key, flat_map] : key_to_positions_) {
     total_frequency += flat_map->CountTermFrequency();
   }
   return total_frequency;
 }
 
 // Defragment posting list
-Postings* Postings::Defrag() { return this; }
+Postings *Postings::Defrag() { return this; }
 
 // Iterators Implementation
 
@@ -265,7 +264,7 @@ bool Postings::KeyIterator::ContainsFields(uint64_t field_mask) const {
   CHECK(key_map_ != nullptr && current_ != end_)
       << "KeyIterator is invalid or exhausted";
 
-  FlatPositionMap* flat_map = current_->second;
+  FlatPositionMap *flat_map = current_->second;
 
   // Check all positions for this key to see if any of the requested fields are
   // set
@@ -281,7 +280,7 @@ bool Postings::KeyIterator::ContainsFields(uint64_t field_mask) const {
   return false;
 }
 
-bool Postings::KeyIterator::SkipForwardKey(const Key& key) {
+bool Postings::KeyIterator::SkipForwardKey(const Key &key) {
   CHECK(key_map_ != nullptr) << "KeyIterator is invalid";
 
   // Use lower_bound for efficient binary search since map is ordered
@@ -291,7 +290,7 @@ bool Postings::KeyIterator::SkipForwardKey(const Key& key) {
   return (current_ != end_ && current_->first == key);
 }
 
-const Key& Postings::KeyIterator::GetKey() const {
+const Key &Postings::KeyIterator::GetKey() const {
   CHECK(key_map_ != nullptr && current_ != end_)
       << "KeyIterator is invalid or exhausted";
   return current_->first;
@@ -301,7 +300,7 @@ PositionIterator Postings::KeyIterator::GetPositionIterator() const {
   CHECK(key_map_ != nullptr && current_ != end_)
       << "KeyIterator is invalid or exhausted";
 
-  FlatPositionMap* flat_map = current_->second;
+  FlatPositionMap *flat_map = current_->second;
   return PositionIterator(*flat_map);
 }
 

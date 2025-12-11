@@ -1,4 +1,4 @@
-import itertools, valkey, json, struct
+import itertools, valkey, json, struct, random
 
 ### Reusable Data ###
 #
@@ -10,6 +10,21 @@ VECTOR_DIM = 3
 
 SETS_KEY = lambda key_type: f"{key_type} sets"
 CREATES_KEY = lambda key_type: f"{key_type} creates"
+
+# Text data configuration
+TEXT_SCHEMA = {
+    'text': ['title', 'body'],
+    'tag': ['color'],
+    'numeric': ['price']
+}
+
+TEXT_FIELD_VALUES = {
+    'title': ['apple', 'banana', 'orange', 'grape', 'cherry', 'mango'],
+    'body': ['apple', 'banana', 'orange', 'grape', 'cherry', 'mango'],
+    'color': ['red', 'yellow', 'green', 'purple'],
+    'price': (0, 50)
+}
+
 
 def unbytes(b):
     if isinstance(b, bytes):
@@ -302,9 +317,113 @@ def compute_data_sets():
                 ]
     return data
 
+def compute_text_data_sets(schema, field_values, seed=123):
+    """Generate random documents from field value pools.
+    
+    field_values: dict mapping field names to lists of possible values
+        e.g. {'title': ['apple', 'banana', ...], 'color': ['red', 'blue'], 'price': (0, 100)}
+    schema: dict with keys 'text', 'tag', 'numeric'
+    
+    Returns dict matching compute_data_sets() structure
+    """
+    random.seed(seed)
+    
+    data = {}
+    
+    text_fields = schema.get('text', [])
+    tag_fields = schema.get('tag', [])
+    numeric_fields = schema.get('numeric', [])
+    
+    # Build create commands for both hash and json
+    create_cmds = {
+        "hash": "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {}",
+        "json": "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA {}",
+    }
+    
+    # Build schema strings
+    hash_schema_parts = []
+    json_schema_parts = []
+    
+    for field in text_fields:
+        hash_schema_parts.append(f"{field} TEXT WITHSUFFIXTRIE")
+        json_schema_parts.append(f"$.{field} AS {field} TEXT WITHSUFFIXTRIE")
+    
+    for field in tag_fields:
+        hash_schema_parts.append(f"{field} TAG")
+        json_schema_parts.append(f"$.{field} AS {field} TAG")
+    
+    for field in numeric_fields:
+        hash_schema_parts.append(f"{field} NUMERIC")
+        json_schema_parts.append(f"$.{field} AS {field} NUMERIC")
+    
+    hash_schema = " ".join(hash_schema_parts)
+    json_schema = " ".join(json_schema_parts)
+    
+    # Get vocab for text fields
+    vocab = {}
+    for field in text_fields:
+        if field in field_values:
+            vocab[field] = field_values[field]
+
+    # Helper to generate a document
+    def generate_doc(doc_id, num_words_per_text_field):
+        fields = {}
+        # Text fields
+        for field in text_fields:
+            if field in vocab:
+                num_words = num_words_per_text_field
+                words = random.sample(vocab[field], min(num_words, len(vocab[field])))
+                fields[field] = " ".join(words) if num_words > 1 else words[0]
+        # Tag fields
+        for field in tag_fields:
+            if field in field_values:
+                fields[field] = random.choice(field_values[field])
+        # Numeric fields
+        for field in numeric_fields:
+            if field in field_values:
+                min_val, max_val = field_values[field]
+                fields[field] = random.randint(min_val, max_val)
+        return fields
+    
+    # Generate data for each category
+    categories = [
+        ("single words", 1, NUM_KEYS),
+        ("phrase pairs", 2, NUM_KEYS),
+        ("triple phrases", 3, NUM_KEYS),
+        ("mixed content", None, NUM_KEYS),  # None means random 1-3
+    ]
+    
+    for category_name, num_words, count in categories:
+        data[category_name] = {}
+        
+        for key_type in ["hash", "json"]:
+            # Set create commands
+            if key_type == "hash":
+                data[category_name][CREATES_KEY(key_type)] = [create_cmds[key_type].format(hash_schema)]
+            else:
+                data[category_name][CREATES_KEY(key_type)] = [create_cmds[key_type].format(json_schema)]
+            
+            # Generate documents
+            docs = []
+            for i in range(count):
+                doc_id = i
+                words_to_use = num_words if num_words else random.randint(1, 3)
+                fields = generate_doc(doc_id, words_to_use)
+                docs.append((f"{key_type}:{doc_id:02d}", fields))
+            
+            data[category_name][SETS_KEY(key_type)] = docs
+    
+    return data
+
 ### Helper Functions ###
-def load_data(client, data_set, key_type):
-    data = compute_data_sets()
+def load_data(client, data_set, key_type, data_source='vector'):
+    match data_source:
+        case "vector":
+            data = compute_data_sets()
+        case "text":
+            data = compute_text_data_sets(TEXT_SCHEMA, TEXT_FIELD_VALUES)
+        case _:
+            raise ValueError(f"Unknown data source: {data_source}")
     load_list = data[data_set][SETS_KEY(key_type)]
     for create_index_cmd in data[data_set][CREATES_KEY(key_type)]:
         client.execute_command(create_index_cmd)

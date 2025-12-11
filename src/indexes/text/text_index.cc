@@ -12,8 +12,15 @@
 #include "absl/strings/ascii.h"
 #include "libstemmer.h"
 #include "vmsdk/src/memory_allocation.h"
-
 namespace valkey_search::indexes::text {
+
+// InvasivePtrRaw<Postings> deletion
+static void FreePostingsCallback(void *target) {
+  if (target) {
+    auto raw = static_cast<InvasivePtrRaw<Postings>>(target);
+    InvasivePtr<Postings>::AdoptRaw(raw);
+  }
+}
 
 namespace {
 
@@ -48,12 +55,29 @@ InvasivePtr<Postings> RemoveKeyFromPostings(
   return existing_postings;
 }
 
+std::function<void *(void *)> CreateTargetSetFn(
+    InvasivePtr<Postings> &updated_target) {
+  return [&updated_target](void *old_val) -> void * {
+    // Take ownership of the existing postings object reference if there is one.
+    // It will be deconstructed as it falls out of scope.
+    if (old_val) {
+      InvasivePtr<Postings>::AdoptRaw(
+          static_cast<InvasivePtrRaw<Postings>>(old_val));
+    }
+    // Grab a new reference to the new shared postings object and pass ownership
+    // of it to the tree.
+    InvasivePtr<Postings> copy = updated_target;
+    return static_cast<void *>(std::move(copy).ReleaseRaw());
+  };
+}
+
 }  // namespace
 
 /*** TextIndex ***/
 
 TextIndex::TextIndex(bool suffix)
-    : suffix_tree_(suffix ? std::make_unique<RadixTree<InvasivePtr<Postings>>>()
+    : prefix_tree_(FreePostingsCallback),
+      suffix_tree_(suffix ? std::make_unique<Rax>(FreePostingsCallback)
                           : nullptr) {}
 
 RadixTree<InvasivePtr<Postings>> &TextIndex::GetPrefix() {
@@ -64,16 +88,14 @@ const RadixTree<InvasivePtr<Postings>> &TextIndex::GetPrefix() const {
   return prefix_tree_;
 }
 
-std::optional<std::reference_wrapper<RadixTree<InvasivePtr<Postings>>>>
-TextIndex::GetSuffix() {
+std::optional<std::reference_wrapper<Rax>> TextIndex::GetSuffix() {
   if (!suffix_tree_) {
     return std::nullopt;
   }
   return std::ref(*suffix_tree_);
 }
 
-std::optional<std::reference_wrapper<const RadixTree<InvasivePtr<Postings>>>>
-TextIndex::GetSuffix() const {
+std::optional<std::reference_wrapper<const Rax>> TextIndex::GetSuffix() const {
   if (!suffix_tree_) {
     return std::nullopt;
   }
@@ -150,35 +172,56 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
                      std::string(token.rbegin(), token.rend()))
                : std::nullopt;
 
+    // The updated target gets set in target_add_fn and later used in
+    // target_set_fn, so that all trees point to the same postings object
     InvasivePtr<Postings> updated_target;
+
+    auto target_add_fn = [&](void *old_val) {
+      // Note: Right now this won't include the position map memory since
+      // it's already allocated and moved into the postings object. Once
+      // we start creating a serialized version instead then it will be
+      // tracked. At that point stop moving the pos_map and just pass a
+      // reference so that it doesn't get cleaned up in the memory scope.
+      NestedMemoryScope scope{metadata_.posting_memory_pool_};
+
+      // Take ownership of the existing postings object reference if there is
+      // one. It will be deconstructed at the end of this scope.
+      auto existing_postings =
+          old_val ? InvasivePtr<Postings>::AdoptRaw(
+                        static_cast<InvasivePtrRaw<Postings>>(old_val))
+                  : InvasivePtr<Postings>{};
+
+      // Mutate the postings
+      InvasivePtr<Postings> new_postings =
+          AddKeyToPostings(existing_postings, key, std::move(pos_map),
+                           &metadata_, num_text_fields_);
+
+      // Copy the new postings to the outer scope
+      updated_target = new_postings;
+
+      // Pass ownership of the new postings object reference to the tree
+      return static_cast<void *>(std::move(new_postings).ReleaseRaw());
+    };
+
+    auto target_set_fn = CreateTargetSetFn(updated_target);
 
     // Update the postings object for the token in the schema-level index with
     // the key and position map
     {
       std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
-      updated_target =
-          text_index_->GetPrefix().MutateTarget(token, [&](auto existing) {
-            NestedMemoryScope scope{metadata_.posting_memory_pool_};
-            // Note: Right now this won't include the position map memory since
-            // it's already allocated and moved into the postings object. Once
-            // we start creating a serialized version instead then it will be
-            // tracked. At that point stop moving the pos_map and just pass a
-            // reference so that it doesn't get cleaned up in the memory scope.
-            return AddKeyToPostings(existing, key, std::move(pos_map),
-                                    &metadata_, num_text_fields_);
-          });
+      text_index_->GetPrefix().MutateTarget(token, target_add_fn);
       if (suffix) {
-        text_index_->GetSuffix().value().get().SetTarget(*reverse_token,
-                                                         updated_target);
+        text_index_->GetSuffix().value().get().MutateTarget(*reverse_token,
+                                                            target_set_fn);
       }
     }
 
     // Put the token in the per-key index pointing to the same shared postings
     // object
-    key_index.GetPrefix().SetTarget(token, updated_target);
+    key_index.GetPrefix().MutateTarget(token, target_set_fn);
     if (suffix) {
-      key_index.GetSuffix().value().get().SetTarget(*reverse_token,
-                                                    updated_target);
+      key_index.GetSuffix().value().get().MutateTarget(*reverse_token,
+                                                       target_set_fn);
     }
   }
 
@@ -201,24 +244,45 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
       return;
     }
   }
-
   TextIndex &key_index = node.mapped();
 
-  auto iter = key_index.GetPrefix().GetWordIterator("");
+  // The updated target gets set in target_remove_fn and later used in
+  // target_set_fn, so that all trees point to the same postings object
+  InvasivePtr<Postings> updated_target;
+
+  auto target_remove_fn = [&](void *old_val) {
+    NestedMemoryScope scope{metadata_.posting_memory_pool_};
+
+    // Take ownership of the existing postings object reference if there is one.
+    // It will be deconstructed at the end of this scope.
+    auto existing_postings =
+        old_val ? InvasivePtr<Postings>::AdoptRaw(
+                      static_cast<InvasivePtrRaw<Postings>>(old_val))
+                : InvasivePtr<Postings>{};
+
+    // Mutate the postings
+    InvasivePtr<Postings> new_postings =
+        RemoveKeyFromPostings(existing_postings, key, &metadata_);
+
+    // Copy the new postings to the outer scope
+    updated_target = new_postings;
+
+    // Pass ownership of the new postings object reference to the tree
+    return static_cast<void *>(std::move(new_postings).ReleaseRaw());
+  };
 
   // Cleanup schema-level text index
+  auto suffix_opt = text_index_->GetSuffix();
+  auto iter = key_index.GetPrefix().GetWordIterator("");
   std::lock_guard<std::mutex> schema_guard(text_index_mutex_);
   while (!iter.Done()) {
+    // Remove the key from the schema-level trees
     std::string_view word = iter.GetWord();
-    InvasivePtr<Postings> new_target =
-        text_index_->GetPrefix().MutateTarget(word, [&](auto existing) {
-          NestedMemoryScope scope{metadata_.posting_memory_pool_};
-          return RemoveKeyFromPostings(existing, key, &metadata_);
-        });
-    auto suffix_opt = text_index_->GetSuffix();
+    text_index_->GetPrefix().MutateTarget(word, target_remove_fn);
     if (suffix_opt.has_value()) {
       std::string reverse_word(word.rbegin(), word.rend());
-      suffix_opt.value().get().SetTarget(reverse_word, new_target);
+      suffix_opt.value().get().MutateTarget(reverse_word,
+                                            CreateTargetSetFn(updated_target));
     }
     iter.Next();
   }

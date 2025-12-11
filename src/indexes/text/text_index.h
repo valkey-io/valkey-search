@@ -23,7 +23,7 @@
 #include "src/indexes/text/invasive_ptr.h"
 #include "src/indexes/text/lexer.h"
 #include "src/indexes/text/posting.h"
-#include "src/indexes/text/radix_tree.h"
+#include "src/indexes/text/rax_wrapper.h"
 
 struct sb_stemmer;
 
@@ -62,16 +62,14 @@ class TextIndex {
 
  public:
   explicit TextIndex(bool suffix);
-  RadixTree<InvasivePtr<Postings>> &GetPrefix();
-  const RadixTree<InvasivePtr<Postings>> &GetPrefix() const;
-  std::optional<std::reference_wrapper<RadixTree<InvasivePtr<Postings>>>>
-  GetSuffix();
-  std::optional<std::reference_wrapper<const RadixTree<InvasivePtr<Postings>>>>
-  GetSuffix() const;
+  Rax& GetPrefix();
+  const Rax& GetPrefix() const;
+  std::optional<std::reference_wrapper<Rax>> GetSuffix();
+  std::optional<std::reference_wrapper<const Rax>> GetSuffix() const;
 
  private:
-  RadixTree<InvasivePtr<Postings>> prefix_tree_;
-  std::unique_ptr<RadixTree<InvasivePtr<Postings>>> suffix_tree_;
+  Rax prefix_tree_;
+  std::unique_ptr<Rax> suffix_tree_;
 };
 
 class TextIndexSchema {

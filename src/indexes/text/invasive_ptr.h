@@ -14,6 +14,22 @@
 
 namespace valkey_search::indexes::text {
 
+namespace detail {
+  template <typename T>
+  struct InvasivePtrStorage {
+    template <typename... Args>
+    explicit InvasivePtrStorage(Args&&... args)
+        : data_(std::forward<Args>(args)...) {}
+
+    std::atomic<uint32_t> refcount_ = 1;
+    T data_;
+  };
+}
+
+// Raw invasive pointer opaque alias
+template <typename T>
+using InvasivePtrRaw = detail::InvasivePtrStorage<T>*;
+
 /**
  * @brief A memory-efficient shared pointer.
  *
@@ -43,20 +59,20 @@ class InvasivePtr {
   template <typename... Args>
   static InvasivePtr Make(Args&&... args) {
     InvasivePtr result;
-    result.ptr_ = new RefCountWrapper(std::forward<Args>(args)...);
+    result.ptr_ = new detail::InvasivePtrStorage<T>(std::forward<Args>(args)...);
     return result;
   }
 
-  ~InvasivePtr() { Release(); }
+  ~InvasivePtr() { ReleaseRef(); }
 
   // Copy semantics
-  InvasivePtr(const InvasivePtr& other) : ptr_(other.ptr_) { Acquire(); }
+  InvasivePtr(const InvasivePtr& other) : ptr_(other.ptr_) { AddRef(); }
 
   InvasivePtr& operator=(const InvasivePtr& other) {
     if (this != &other) {
-      Release();
+      ReleaseRef();
       ptr_ = other.ptr_;
-      Acquire();
+      AddRef();
     }
     return *this;
   }
@@ -73,11 +89,42 @@ class InvasivePtr {
 
   InvasivePtr& operator=(InvasivePtr&& other) noexcept {
     if (this != &other) {
-      Release();
+      ReleaseRef();
       ptr_ = other.ptr_;
       other.ptr_ = nullptr;
     }
     return *this;
+  }
+
+  // Raw move/copy semantics
+
+  // Transfers ownership to caller without decrementing refcount.
+  // Caller must reconstruct via AdoptRaw() to restore memory management.
+  // Freeing the memory directly is very dangerous - you must be certain there
+  // are no other references.
+  InvasivePtrRaw<T> ReleaseRaw() && {
+    InvasivePtrRaw<T> result = ptr_;
+    ptr_ = nullptr;
+    return result;
+  }
+
+  // Every ReleaseRaw() should be paired with a corresponding AdoptRaw() later to
+  // restore safe memory management.
+  static InvasivePtr AdoptRaw(InvasivePtrRaw<T> raw_ptr) {
+    return InvasivePtr(raw_ptr);
+  }
+
+  // Creates a new shared reference from a raw pointer, incrementing the
+  // reference count. Use this when copying from void* storage (like Rax tree
+  // targets) where you need a new managed reference.
+  static InvasivePtr CopyRaw(InvasivePtrRaw<T> raw_ptr) {
+    if (!raw_ptr) {
+      return InvasivePtr{};
+    }
+    InvasivePtr result;
+    result.ptr_ = raw_ptr;
+    result.AddRef();
+    return result;
   }
 
   // Access operators
@@ -92,33 +139,26 @@ class InvasivePtr {
 
   // Resets to the default nullptr state
   void Clear() {
-    Release();
+    ReleaseRef();
     ptr_ = nullptr;
   }
 
  private:
-  struct RefCountWrapper {
-    template <typename... Args>
-    explicit RefCountWrapper(Args&&... args)
-        : data_(std::forward<Args>(args)...) {}
+  explicit InvasivePtr(InvasivePtrRaw<T> raw) : ptr_(raw) {}
 
-    std::atomic<uint32_t> refcount_ = 1;
-    T data_;
-  };
-
-  void Release() {
+  void ReleaseRef() {
     if (ptr_ && ptr_->refcount_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
       delete ptr_;
     }
   }
 
-  void Acquire() {
+  void AddRef() {
     if (ptr_) {
       ptr_->refcount_.fetch_add(1, std::memory_order_relaxed);
     }
   }
 
-  RefCountWrapper* ptr_ = nullptr;
+  detail::InvasivePtrStorage<T>* ptr_ = nullptr;
 };
 
 }  // namespace valkey_search::indexes::text

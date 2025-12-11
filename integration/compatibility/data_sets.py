@@ -416,7 +416,12 @@ def compute_text_data_sets(schema, field_values, seed=123):
     return data
 
 ### Helper Functions ###
-def load_data(client, data_set, key_type, data_source='vector'):
+def load_data(client, data_set, key_type, data_source=None):
+    # Auto-detect data source based on data_set name
+    if data_source is None:
+        text_datasets = ["single words", "phrase pairs", "triple phrases", "mixed content"]
+        data_source = "text" if data_set in text_datasets else "vector"
+
     match data_source:
         case "vector":
             data = compute_data_sets()

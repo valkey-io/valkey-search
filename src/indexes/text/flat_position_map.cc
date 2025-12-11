@@ -9,21 +9,17 @@
 
 #include <cstdlib>
 #include <cstring>
-#include <sstream>
 #include <vector>
 
 #include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
 #include "src/indexes/text/posting.h"
-#include "src/indexes/text/text_index.h"
-#include "vmsdk/src/log.h"
 #include "vmsdk/src/memory_allocation_overrides.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes::text {
 
 constexpr size_t kPartitionSize = 128;        // Partition every 128 bytes
-constexpr uint8_t kPositionBit = 0x01;        // Bit 0: 1=position, 0=field mask
+constexpr uint8_t kIsPositionBit = 0x01;      // Bit 0: 1=position, 0=field mask
 constexpr uint8_t kStartPositionBit = 0x02;   // Bit 1: 1=start, 0=continuation
 constexpr uint8_t kPositionValueMask = 0xFC;  // Bits 2-7 for position value
 constexpr uint8_t kValueShift = 2;            // Shift to extract 6-bit value
@@ -110,10 +106,10 @@ static uint8_t DetectFieldMaskBytes(const char* data_ptr) {
   const char* ptr = data_ptr;
 
   // Skip to end of first position bytes
-  while ((U8(*ptr) & kPositionBit)) {
+  while ((U8(*ptr) & kIsPositionBit)) {
     ptr++;
     if ((U8(*(ptr - 1)) & kStartPositionBit) &&
-        (!(U8(*ptr) & kPositionBit) || (U8(*ptr) & kStartPositionBit))) {
+        (!(U8(*ptr) & kIsPositionBit) || (U8(*ptr) & kStartPositionBit))) {
       break;
     }
   }
@@ -136,7 +132,7 @@ static void EncodePositionDelta(
   bool first = true;
   do {
     uint8_t byte_val = (delta & kSixBitMask) << kValueShift;
-    byte_val |= kPositionBit;
+    byte_val |= kIsPositionBit;
     if (first && is_start) {
       byte_val |= kStartPositionBit;
       first = false;
@@ -173,7 +169,7 @@ static void EncodeTerminator(
 static uint32_t DecodePositionDelta(const char*& ptr) {
   uint32_t delta = 0, shift = 0;
 
-  while ((U8(*ptr) & kPositionBit)) {
+  while ((U8(*ptr) & kIsPositionBit)) {
     uint8_t byte_val = U8(*ptr);
     uint8_t value = (byte_val & kPositionValueMask) >> kValueShift;
     delta |= (U32(value) << shift);
@@ -183,7 +179,7 @@ static uint32_t DecodePositionDelta(const char*& ptr) {
     // Stop if: multi-byte position complete, or next byte not a position
     // continuation
     if (((byte_val & kStartPositionBit) && shift > kBitsPerValue) ||
-        !(U8(*ptr) & kPositionBit) || (U8(*ptr) & kStartPositionBit)) {
+        !(U8(*ptr) & kIsPositionBit) || (U8(*ptr) & kStartPositionBit)) {
       break;
     }
   }

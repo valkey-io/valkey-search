@@ -48,9 +48,11 @@ class FlatPositionMapTest : public ::testing::Test {
   std::vector<FlatPositionMap> allocated_maps_;
 };
 
-// Test SIMPLE encoding with cumulative position tracking
-TEST_F(FlatPositionMapTest, SimpleEncodingCumulativePosition) {
-  // Create a simple position map (single field, small deltas)
+//=============================================================================
+// Basic Serialization and Iteration Tests
+//=============================================================================
+
+TEST_F(FlatPositionMapTest, BasicSerializationWithSmallDeltas) {
   auto position_map = CreatePositionMap({{5, 1}, {10, 1}, {15, 1}, {20, 1}}, 1);
 
   FlatPositionMap flat_map =
@@ -59,7 +61,6 @@ TEST_F(FlatPositionMapTest, SimpleEncodingCumulativePosition) {
 
   FlatPositionMapIterator iter(flat_map);
 
-  // Test that GetPosition returns correct cumulative positions
   EXPECT_TRUE(iter.IsValid());
   EXPECT_EQ(iter.GetPosition(), 5);
 
@@ -79,9 +80,7 @@ TEST_F(FlatPositionMapTest, SimpleEncodingCumulativePosition) {
   EXPECT_FALSE(iter.IsValid());
 }
 
-// Test EXPANDABLE encoding with cumulative position tracking
-TEST_F(FlatPositionMapTest, ExpandableEncodingCumulativePosition) {
-  // Create position map with multiple fields and larger deltas
+TEST_F(FlatPositionMapTest, MultipleFieldsWithVariableDeltas) {
   auto position_map =
       CreatePositionMap({{10, 1}, {50, 2}, {150, 4}, {500, 7}}, 3);
 
@@ -91,7 +90,6 @@ TEST_F(FlatPositionMapTest, ExpandableEncodingCumulativePosition) {
 
   FlatPositionMapIterator iter(flat_map);
 
-  // Test cumulative positions with variable-length encoding
   EXPECT_TRUE(iter.IsValid());
   EXPECT_EQ(iter.GetPosition(), 10);
   EXPECT_EQ(iter.GetFieldMask(), 1ULL);
@@ -115,9 +113,8 @@ TEST_F(FlatPositionMapTest, ExpandableEncodingCumulativePosition) {
   EXPECT_FALSE(iter.IsValid());
 }
 
-// Test BINARY_SEARCH encoding with cumulative position tracking
-TEST_F(FlatPositionMapTest, BinarySearchEncodingCumulativePosition) {
-  // Create a large position map to trigger binary search encoding
+TEST_F(FlatPositionMapTest, LargePositionMapWithPartitions) {
+  // Create a large position map to trigger partition creation (128+ bytes)
   std::vector<std::pair<Position, uint64_t>> positions;
   for (int i = 0; i < 150; ++i) {
     positions.push_back({i * 10, 1ULL << (i % 5)});
@@ -130,7 +127,7 @@ TEST_F(FlatPositionMapTest, BinarySearchEncodingCumulativePosition) {
 
   FlatPositionMapIterator iter(flat_map);
 
-  // Test cumulative positions throughout the map
+  // Verify all positions are correct
   for (int i = 0; i < 150; ++i) {
     EXPECT_TRUE(iter.IsValid());
     EXPECT_EQ(iter.GetPosition(), i * 10);
@@ -141,8 +138,11 @@ TEST_F(FlatPositionMapTest, BinarySearchEncodingCumulativePosition) {
   EXPECT_FALSE(iter.IsValid());
 }
 
-// Test SkipForward with cumulative position tracking
-TEST_F(FlatPositionMapTest, SkipForwardWithCumulativePosition) {
+//=============================================================================
+// SkipForward Tests
+//=============================================================================
+
+TEST_F(FlatPositionMapTest, SkipForwardToExactPosition) {
   auto position_map =
       CreatePositionMap({{10, 1}, {20, 2}, {30, 4}, {40, 8}, {50, 16}}, 5);
 
@@ -164,8 +164,7 @@ TEST_F(FlatPositionMapTest, SkipForwardWithCumulativePosition) {
   EXPECT_EQ(iter.GetFieldMask(), 8ULL);
 }
 
-// Test SkipForward to non-existent position
-TEST_F(FlatPositionMapTest, SkipForwardNonExistentPosition) {
+TEST_F(FlatPositionMapTest, SkipForwardToNonExistentPosition) {
   auto position_map = CreatePositionMap({{10, 1}, {30, 2}, {50, 4}}, 3);
 
   FlatPositionMap flat_map =
@@ -177,11 +176,221 @@ TEST_F(FlatPositionMapTest, SkipForwardNonExistentPosition) {
   // Skip to position between existing positions
   EXPECT_FALSE(iter.SkipForwardPosition(25));
   EXPECT_TRUE(iter.IsValid());
-  EXPECT_EQ(iter.GetPosition(), 30);  // Should land on next position
+  EXPECT_EQ(iter.GetPosition(), 30);  // Should land on next position >= target
 }
 
-// Test multiple iterations over the same map
-TEST_F(FlatPositionMapTest, MultipleIterations) {
+TEST_F(FlatPositionMapTest, SkipForwardBeyondEnd) {
+  auto position_map = CreatePositionMap({{10, 1}, {20, 2}, {30, 4}}, 3);
+
+  FlatPositionMap flat_map =
+      TrackMap(FlatPositionMap::SerializePositionMap(position_map, 3));
+  ASSERT_NE(flat_map.data(), nullptr);
+
+  FlatPositionMapIterator iter(flat_map);
+
+  // Skip beyond all positions
+  EXPECT_FALSE(iter.SkipForwardPosition(100));
+  EXPECT_FALSE(iter.IsValid());
+}
+
+TEST_F(FlatPositionMapTest, SkipForwardWithPartitionOptimization) {
+  // Create enough positions to have multiple partitions
+  std::vector<std::pair<Position, uint64_t>> positions;
+  for (int i = 0; i < 200; ++i) {
+    positions.push_back({i * 5, 1ULL << (i % 4)});
+  }
+  auto position_map = CreatePositionMap(positions, 4);
+
+  FlatPositionMap flat_map =
+      TrackMap(FlatPositionMap::SerializePositionMap(position_map, 4));
+  ASSERT_NE(flat_map.data(), nullptr);
+
+  FlatPositionMapIterator iter(flat_map);
+
+  // Skip to a position far into the map (should use partition map)
+  EXPECT_TRUE(iter.SkipForwardPosition(500));
+  EXPECT_EQ(iter.GetPosition(), 500);
+  EXPECT_EQ(iter.GetFieldMask(), 1ULL << (100 % 4));
+}
+
+//=============================================================================
+// Edge Cases
+//=============================================================================
+
+TEST_F(FlatPositionMapTest, EmptyPositionMap) {
+  std::map<Position, std::unique_ptr<FieldMask>> empty_map;
+
+  FlatPositionMap flat_map =
+      TrackMap(FlatPositionMap::SerializePositionMap(empty_map, 1));
+  ASSERT_NE(flat_map.data(), nullptr);
+
+  FlatPositionMapIterator iter(flat_map);
+  EXPECT_FALSE(iter.IsValid());
+}
+
+TEST_F(FlatPositionMapTest, SinglePosition) {
+  auto position_map = CreatePositionMap({{42, 1}}, 1);
+
+  FlatPositionMap flat_map =
+      TrackMap(FlatPositionMap::SerializePositionMap(position_map, 1));
+  ASSERT_NE(flat_map.data(), nullptr);
+
+  FlatPositionMapIterator iter(flat_map);
+
+  EXPECT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetPosition(), 42);
+  EXPECT_EQ(iter.GetFieldMask(), 1ULL);
+
+  iter.NextPosition();
+  EXPECT_FALSE(iter.IsValid());
+}
+
+TEST_F(FlatPositionMapTest, ConsecutivePositionsMinimalDeltas) {
+  auto position_map =
+      CreatePositionMap({{1, 1}, {2, 1}, {3, 1}, {4, 1}, {5, 1}}, 1);
+
+  FlatPositionMap flat_map =
+      TrackMap(FlatPositionMap::SerializePositionMap(position_map, 1));
+  ASSERT_NE(flat_map.data(), nullptr);
+
+  FlatPositionMapIterator iter(flat_map);
+
+  for (Position expected = 1; expected <= 5; ++expected) {
+    EXPECT_TRUE(iter.IsValid());
+    EXPECT_EQ(iter.GetPosition(), expected);
+    iter.NextPosition();
+  }
+
+  EXPECT_FALSE(iter.IsValid());
+}
+
+TEST_F(FlatPositionMapTest, LargeDeltasRequiringMultipleBytes) {
+  // Test with deltas that require multiple bytes in variable-length encoding
+  auto position_map =
+      CreatePositionMap({{100, 1}, {1000, 2}, {10000, 4}, {100000, 8}}, 4);
+
+  FlatPositionMap flat_map =
+      TrackMap(FlatPositionMap::SerializePositionMap(position_map, 4));
+  ASSERT_NE(flat_map.data(), nullptr);
+
+  FlatPositionMapIterator iter(flat_map);
+
+  EXPECT_EQ(iter.GetPosition(), 100);
+  iter.NextPosition();
+  EXPECT_EQ(iter.GetPosition(), 1000);
+  iter.NextPosition();
+  EXPECT_EQ(iter.GetPosition(), 10000);
+  iter.NextPosition();
+  EXPECT_EQ(iter.GetPosition(), 100000);
+}
+
+//=============================================================================
+// Multiple Field Tests
+//=============================================================================
+
+TEST_F(FlatPositionMapTest, MultipleFieldsAtSamePosition) {
+  // Field mask with multiple bits set (fields 0, 2, 4)
+  auto position_map = CreatePositionMap({{10, 0b10101}}, 5);
+
+  FlatPositionMap flat_map =
+      TrackMap(FlatPositionMap::SerializePositionMap(position_map, 5));
+  ASSERT_NE(flat_map.data(), nullptr);
+
+  FlatPositionMapIterator iter(flat_map);
+
+  EXPECT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetPosition(), 10);
+  EXPECT_EQ(iter.GetFieldMask(), 0b10101ULL);
+}
+
+TEST_F(FlatPositionMapTest, MaximumFieldCount) {
+  // Test with 64 fields (maximum supported)
+  uint64_t all_fields_mask = ~0ULL;  // All 64 bits set
+  auto position_map = CreatePositionMap({{10, all_fields_mask}}, 64);
+
+  FlatPositionMap flat_map =
+      TrackMap(FlatPositionMap::SerializePositionMap(position_map, 64));
+  ASSERT_NE(flat_map.data(), nullptr);
+
+  FlatPositionMapIterator iter(flat_map);
+
+  EXPECT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetPosition(), 10);
+  EXPECT_EQ(iter.GetFieldMask(), all_fields_mask);
+}
+
+TEST_F(FlatPositionMapTest, FieldMaskOptimizationSingleField) {
+  // When num_fields=1, field masks should not be stored
+  auto position_map =
+      CreatePositionMap({{10, 1}, {20, 1}, {30, 1}, {40, 1}}, 1);
+
+  FlatPositionMap flat_map =
+      TrackMap(FlatPositionMap::SerializePositionMap(position_map, 1));
+  ASSERT_NE(flat_map.data(), nullptr);
+
+  FlatPositionMapIterator iter(flat_map);
+
+  // All positions should return field mask 1 (implicit)
+  for (Position expected : {10, 20, 30, 40}) {
+    EXPECT_TRUE(iter.IsValid());
+    EXPECT_EQ(iter.GetPosition(), expected);
+    EXPECT_EQ(iter.GetFieldMask(), 1ULL);
+    iter.NextPosition();
+  }
+}
+
+TEST_F(FlatPositionMapTest, FieldMaskOptimizationUnchanged) {
+  // Field masks should only be stored when they change
+  // All positions have same mask (field 0)
+  auto position_map =
+      CreatePositionMap({{10, 1}, {20, 1}, {30, 1}, {40, 1}}, 3);
+
+  FlatPositionMap flat_map =
+      TrackMap(FlatPositionMap::SerializePositionMap(position_map, 3));
+  ASSERT_NE(flat_map.data(), nullptr);
+
+  FlatPositionMapIterator iter(flat_map);
+
+  for (Position expected : {10, 20, 30, 40}) {
+    EXPECT_TRUE(iter.IsValid());
+    EXPECT_EQ(iter.GetPosition(), expected);
+    EXPECT_EQ(iter.GetFieldMask(), 1ULL);
+    iter.NextPosition();
+  }
+}
+
+TEST_F(FlatPositionMapTest, FieldMaskChanges) {
+  // Field masks should be stored when they change
+  auto position_map =
+      CreatePositionMap({{10, 1}, {20, 2}, {30, 4}, {40, 2}}, 3);
+
+  FlatPositionMap flat_map =
+      TrackMap(FlatPositionMap::SerializePositionMap(position_map, 3));
+  ASSERT_NE(flat_map.data(), nullptr);
+
+  FlatPositionMapIterator iter(flat_map);
+
+  EXPECT_EQ(iter.GetPosition(), 10);
+  EXPECT_EQ(iter.GetFieldMask(), 1ULL);
+  iter.NextPosition();
+
+  EXPECT_EQ(iter.GetPosition(), 20);
+  EXPECT_EQ(iter.GetFieldMask(), 2ULL);
+  iter.NextPosition();
+
+  EXPECT_EQ(iter.GetPosition(), 30);
+  EXPECT_EQ(iter.GetFieldMask(), 4ULL);
+  iter.NextPosition();
+
+  EXPECT_EQ(iter.GetPosition(), 40);
+  EXPECT_EQ(iter.GetFieldMask(), 2ULL);
+}
+
+//=============================================================================
+// Iterator Tests
+//=============================================================================
+
+TEST_F(FlatPositionMapTest, MultipleIndependentIterators) {
   auto position_map = CreatePositionMap({{5, 1}, {10, 2}, {15, 4}}, 3);
 
   FlatPositionMap flat_map =
@@ -206,94 +415,6 @@ TEST_F(FlatPositionMapTest, MultipleIterations) {
   EXPECT_EQ(iter1.GetPosition(), 10);
 }
 
-// Test large deltas in EXPANDABLE encoding
-TEST_F(FlatPositionMapTest, LargeDeltasExpandableEncoding) {
-  // Test with deltas that require multiple bytes in variable-length encoding
-  auto position_map =
-      CreatePositionMap({{100, 1}, {1000, 2}, {10000, 4}, {100000, 8}}, 4);
-
-  FlatPositionMap flat_map =
-      TrackMap(FlatPositionMap::SerializePositionMap(position_map, 4));
-  ASSERT_NE(flat_map.data(), nullptr);
-
-  FlatPositionMapIterator iter(flat_map);
-
-  EXPECT_EQ(iter.GetPosition(), 100);
-  iter.NextPosition();
-  EXPECT_EQ(iter.GetPosition(), 1000);
-  iter.NextPosition();
-  EXPECT_EQ(iter.GetPosition(), 10000);
-  iter.NextPosition();
-  EXPECT_EQ(iter.GetPosition(), 100000);
-}
-
-// Test edge case: single position
-TEST_F(FlatPositionMapTest, SinglePosition) {
-  auto position_map = CreatePositionMap({{42, 1}}, 1);
-
-  FlatPositionMap flat_map =
-      TrackMap(FlatPositionMap::SerializePositionMap(position_map, 1));
-  ASSERT_NE(flat_map.data(), nullptr);
-
-  FlatPositionMapIterator iter(flat_map);
-
-  EXPECT_TRUE(iter.IsValid());
-  EXPECT_EQ(iter.GetPosition(), 42);
-  EXPECT_EQ(iter.GetFieldMask(), 1ULL);
-
-  iter.NextPosition();
-  EXPECT_FALSE(iter.IsValid());
-}
-
-// Test edge case: empty position map
-TEST_F(FlatPositionMapTest, EmptyPositionMap) {
-  std::map<Position, std::unique_ptr<FieldMask>> empty_map;
-
-  FlatPositionMap flat_map =
-      TrackMap(FlatPositionMap::SerializePositionMap(empty_map, 1));
-  ASSERT_NE(flat_map.data(), nullptr);
-
-  FlatPositionMapIterator iter(flat_map);
-  EXPECT_FALSE(iter.IsValid());
-}
-
-// Test consecutive positions (minimal deltas)
-TEST_F(FlatPositionMapTest, ConsecutivePositions) {
-  auto position_map =
-      CreatePositionMap({{1, 1}, {2, 1}, {3, 1}, {4, 1}, {5, 1}}, 1);
-
-  FlatPositionMap flat_map =
-      TrackMap(FlatPositionMap::SerializePositionMap(position_map, 1));
-  ASSERT_NE(flat_map.data(), nullptr);
-
-  FlatPositionMapIterator iter(flat_map);
-
-  for (Position expected = 1; expected <= 5; ++expected) {
-    EXPECT_TRUE(iter.IsValid());
-    EXPECT_EQ(iter.GetPosition(), expected);
-    iter.NextPosition();
-  }
-
-  EXPECT_FALSE(iter.IsValid());
-}
-
-// Test multiple fields at same position
-TEST_F(FlatPositionMapTest, MultipleFieldsSamePosition) {
-  // Field mask with multiple bits set (fields 0, 2, 4)
-  auto position_map = CreatePositionMap({{10, 0b10101}}, 5);
-
-  FlatPositionMap flat_map =
-      TrackMap(FlatPositionMap::SerializePositionMap(position_map, 5));
-  ASSERT_NE(flat_map.data(), nullptr);
-
-  FlatPositionMapIterator iter(flat_map);
-
-  EXPECT_TRUE(iter.IsValid());
-  EXPECT_EQ(iter.GetPosition(), 10);
-  EXPECT_EQ(iter.GetFieldMask(), 0b10101ULL);
-}
-
-// Test cumulative position accuracy after multiple Next() calls
 TEST_F(FlatPositionMapTest, CumulativePositionAccuracy) {
   // Create a map with varying deltas
   auto position_map = CreatePositionMap(
@@ -317,45 +438,147 @@ TEST_F(FlatPositionMapTest, CumulativePositionAccuracy) {
   EXPECT_FALSE(iter.IsValid());
 }
 
-// Test SkipForward beyond last position
-TEST_F(FlatPositionMapTest, SkipForwardBeyondEnd) {
-  auto position_map = CreatePositionMap({{10, 1}, {20, 2}, {30, 4}}, 3);
+//=============================================================================
+// Public Method Tests
+//=============================================================================
+
+TEST_F(FlatPositionMapTest, CountPositions) {
+  auto position_map =
+      CreatePositionMap({{10, 1}, {20, 2}, {30, 4}, {40, 8}, {50, 16}}, 5);
+
+  FlatPositionMap flat_map =
+      TrackMap(FlatPositionMap::SerializePositionMap(position_map, 5));
+  ASSERT_NE(flat_map.data(), nullptr);
+
+  EXPECT_EQ(flat_map.CountPositions(), 5);
+}
+
+TEST_F(FlatPositionMapTest, CountPositionsEmpty) {
+  std::map<Position, std::unique_ptr<FieldMask>> empty_map;
+
+  FlatPositionMap flat_map =
+      TrackMap(FlatPositionMap::SerializePositionMap(empty_map, 1));
+  ASSERT_NE(flat_map.data(), nullptr);
+
+  EXPECT_EQ(flat_map.CountPositions(), 0);
+}
+
+TEST_F(FlatPositionMapTest, CountTermFrequencySingleField) {
+  // Single field means frequency = position count
+  auto position_map =
+      CreatePositionMap({{10, 1}, {20, 1}, {30, 1}, {40, 1}}, 1);
+
+  FlatPositionMap flat_map =
+      TrackMap(FlatPositionMap::SerializePositionMap(position_map, 1));
+  ASSERT_NE(flat_map.data(), nullptr);
+
+  EXPECT_EQ(flat_map.CountTermFrequency(), 4);
+}
+
+TEST_F(FlatPositionMapTest, CountTermFrequencyMultipleFields) {
+  // Frequency = sum of popcount of all field masks
+  // Position 10: field 0 (1 field)
+  // Position 20: fields 0,1 (2 fields)
+  // Position 30: fields 0,1,2 (3 fields)
+  // Position 40: fields 0,2 (2 fields)
+  // Total: 1+2+3+2 = 8
+  auto position_map = CreatePositionMap(
+      {{10, 0b001}, {20, 0b011}, {30, 0b111}, {40, 0b101}}, 3);
 
   FlatPositionMap flat_map =
       TrackMap(FlatPositionMap::SerializePositionMap(position_map, 3));
   ASSERT_NE(flat_map.data(), nullptr);
 
-  FlatPositionMapIterator iter(flat_map);
-
-  // Skip beyond all positions
-  EXPECT_FALSE(iter.SkipForwardPosition(100));
-  EXPECT_FALSE(iter.IsValid());
+  EXPECT_EQ(flat_map.CountTermFrequency(), 8);
 }
 
-// Test with maximum field count
-TEST_F(FlatPositionMapTest, MaximumFieldCount) {
-  // Test with 64 fields (maximum supported)
-  uint64_t all_fields_mask = ~0ULL;  // All 64 bits set
-  auto position_map = CreatePositionMap({{10, all_fields_mask}}, 64);
+TEST_F(FlatPositionMapTest, CountTermFrequencyEmpty) {
+  std::map<Position, std::unique_ptr<FieldMask>> empty_map;
 
   FlatPositionMap flat_map =
-      TrackMap(FlatPositionMap::SerializePositionMap(position_map, 64));
+      TrackMap(FlatPositionMap::SerializePositionMap(empty_map, 1));
   ASSERT_NE(flat_map.data(), nullptr);
 
-  FlatPositionMapIterator iter(flat_map);
-
-  EXPECT_TRUE(iter.IsValid());
-  EXPECT_EQ(iter.GetPosition(), 10);
-  EXPECT_EQ(iter.GetFieldMask(), all_fields_mask);
+  EXPECT_EQ(flat_map.CountTermFrequency(), 0);
 }
 
-// Stress test: many positions with cumulative tracking
-TEST_F(FlatPositionMapTest, StressTestCumulativePosition) {
-  // Create 1000 positions with varying deltas
+//=============================================================================
+// Move Semantics Tests
+//=============================================================================
+
+TEST_F(FlatPositionMapTest, MoveConstructor) {
+  auto position_map = CreatePositionMap({{10, 1}, {20, 2}, {30, 4}}, 3);
+
+  FlatPositionMap flat_map1 =
+      FlatPositionMap::SerializePositionMap(position_map, 3);
+  const char* original_data = flat_map1.data();
+  ASSERT_NE(original_data, nullptr);
+
+  // Move construct
+  FlatPositionMap flat_map2(std::move(flat_map1));
+
+  // Verify ownership transferred
+  EXPECT_EQ(flat_map2.data(), original_data);
+  EXPECT_EQ(flat_map1.data(), nullptr);
+
+  // Verify data is still valid
+  FlatPositionMapIterator iter(flat_map2);
+  EXPECT_EQ(iter.GetPosition(), 10);
+
+  allocated_maps_.push_back(std::move(flat_map2));
+}
+
+TEST_F(FlatPositionMapTest, MoveAssignment) {
+  auto position_map1 = CreatePositionMap({{10, 1}, {20, 2}}, 2);
+  auto position_map2 = CreatePositionMap({{100, 4}, {200, 8}}, 2);
+
+  FlatPositionMap flat_map1 =
+      FlatPositionMap::SerializePositionMap(position_map1, 2);
+  FlatPositionMap flat_map2 =
+      FlatPositionMap::SerializePositionMap(position_map2, 2);
+
+  const char* map2_data = flat_map2.data();
+  ASSERT_NE(map2_data, nullptr);
+
+  // Move assign
+  flat_map1 = std::move(flat_map2);
+
+  // Verify ownership transferred
+  EXPECT_EQ(flat_map1.data(), map2_data);
+  EXPECT_EQ(flat_map2.data(), nullptr);
+
+  // Verify data is still valid
+  FlatPositionMapIterator iter(flat_map1);
+  EXPECT_EQ(iter.GetPosition(), 100);
+
+  allocated_maps_.push_back(std::move(flat_map1));
+}
+
+TEST_F(FlatPositionMapTest, MoveAssignmentSelfAssignment) {
+  auto position_map = CreatePositionMap({{10, 1}, {20, 2}}, 2);
+
+  FlatPositionMap flat_map =
+      FlatPositionMap::SerializePositionMap(position_map, 2);
+  const char* original_data = flat_map.data();
+
+  // Self-assignment should be a no-op
+  flat_map = std::move(flat_map);
+
+  EXPECT_EQ(flat_map.data(), original_data);
+
+  allocated_maps_.push_back(std::move(flat_map));
+}
+
+//=============================================================================
+// Stress Tests
+//=============================================================================
+
+TEST_F(FlatPositionMapTest, StressTestManyPositions) {
+  // Create 1000 positions with varying deltas and field masks
   std::vector<std::pair<Position, uint64_t>> positions;
   Position current_pos = 0;
   for (int i = 0; i < 1000; ++i) {
-    current_pos += (i % 10) + 1;  // Varying deltas
+    current_pos += (i % 10) + 1;  // Varying deltas 1-10
     positions.push_back({current_pos, 1ULL << (i % 8)});
   }
 
@@ -364,9 +587,11 @@ TEST_F(FlatPositionMapTest, StressTestCumulativePosition) {
       TrackMap(FlatPositionMap::SerializePositionMap(position_map, 8));
   ASSERT_NE(flat_map.data(), nullptr);
 
-  FlatPositionMapIterator iter(flat_map);
+  // Verify count
+  EXPECT_EQ(flat_map.CountPositions(), 1000);
 
   // Verify all positions are correct
+  FlatPositionMapIterator iter(flat_map);
   for (size_t i = 0; i < positions.size(); ++i) {
     EXPECT_TRUE(iter.IsValid());
     EXPECT_EQ(iter.GetPosition(), positions[i].first)
@@ -377,6 +602,31 @@ TEST_F(FlatPositionMapTest, StressTestCumulativePosition) {
   }
 
   EXPECT_FALSE(iter.IsValid());
+}
+
+TEST_F(FlatPositionMapTest, StressTestSkipForwardInLargeMap) {
+  // Create a large map and test skip forward multiple times
+  std::vector<std::pair<Position, uint64_t>> positions;
+  for (int i = 0; i < 500; ++i) {
+    positions.push_back({i * 100, 1ULL << (i % 6)});
+  }
+
+  auto position_map = CreatePositionMap(positions, 6);
+  FlatPositionMap flat_map =
+      TrackMap(FlatPositionMap::SerializePositionMap(position_map, 6));
+  ASSERT_NE(flat_map.data(), nullptr);
+
+  FlatPositionMapIterator iter(flat_map);
+
+  // Skip to various positions
+  EXPECT_TRUE(iter.SkipForwardPosition(10000));
+  EXPECT_EQ(iter.GetPosition(), 10000);
+
+  EXPECT_TRUE(iter.SkipForwardPosition(25000));
+  EXPECT_EQ(iter.GetPosition(), 25000);
+
+  EXPECT_TRUE(iter.SkipForwardPosition(40000));
+  EXPECT_EQ(iter.GetPosition(), 40000);
 }
 
 }  // namespace valkey_search::indexes::text

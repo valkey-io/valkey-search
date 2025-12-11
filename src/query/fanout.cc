@@ -33,6 +33,9 @@
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
+#include "src/metrics.h"
+#include "src/query/inflight_retry.h"
+#include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
@@ -166,6 +169,52 @@ struct SearchPartitionResultsTracker {
   }
 };
 
+struct LocalInFlightRetryContext {
+  std::deque<indexes::Neighbor> neighbors;
+  std::unique_ptr<SearchParameters> parameters;
+  std::vector<InternedStringPtr> neighbor_keys;
+  std::shared_ptr<SearchPartitionResultsTracker> tracker;
+
+  LocalInFlightRetryContext(std::deque<indexes::Neighbor> nbrs,
+                            std::unique_ptr<SearchParameters> params,
+                            std::vector<InternedStringPtr> keys,
+                            std::shared_ptr<SearchPartitionResultsTracker> trk)
+      : neighbors(std::move(nbrs)),
+        parameters(std::move(params)),
+        neighbor_keys(std::move(keys)),
+        tracker(std::move(trk)) {}
+};
+
+void LocalInFlightRetryTimerCallback(ValkeyModuleCtx *ctx, void *data);
+
+void CheckAndHandleLocalInFlightConflicts(
+    ValkeyModuleCtx *ctx, LocalInFlightRetryContext *retry_ctx) {
+  if (retry_ctx->parameters->cancellation_token->IsCancelled()) {
+    if (!options::GetEnablePartialResults().GetValue()) {
+      delete retry_ctx;
+      return;
+    }
+    retry_ctx->tracker->AddResults(retry_ctx->neighbors);
+    delete retry_ctx;
+    return;
+  }
+
+  if (query::CheckInFlightAndScheduleRetry(
+          ctx, retry_ctx, retry_ctx->neighbor_keys,
+          retry_ctx->parameters->index_schema, LocalInFlightRetryTimerCallback,
+          "Local fanout full-text query")) {
+    return;
+  }
+
+  retry_ctx->tracker->AddResults(retry_ctx->neighbors);
+  delete retry_ctx;
+}
+
+void LocalInFlightRetryTimerCallback(ValkeyModuleCtx *ctx, void *data) {
+  auto *retry_ctx = static_cast<LocalInFlightRetryContext *>(data);
+  CheckAndHandleLocalInFlightConflicts(ctx, retry_ctx);
+}
+
 void PerformRemoteSearchRequest(
     std::unique_ptr<coordinator::SearchIndexPartitionRequest> request,
     const std::string &address,
@@ -256,6 +305,24 @@ absl::Status PerformSearchFanoutAsync(
         [tracker](absl::StatusOr<std::vector<indexes::Neighbor>> &neighbors,
                   std::unique_ptr<SearchParameters> parameters) {
           if (neighbors.ok()) {
+            // For pure full-text queries with content, check for in-flight key
+            // conflicts before adding results.
+            if (!parameters->no_content &&
+                query::IsPureFullTextQuery(*parameters)) {
+              auto neighbor_keys =
+                  query::CollectNeighborKeys(neighbors.value());
+              if (parameters->index_schema->HasAnyConflictingInFlightKeys(
+                      neighbor_keys)) {
+                ++Metrics::GetStats().fulltext_query_blocked_cnt;
+                // Schedule blocking/retry on main thread
+                auto *retry_ctx = new LocalInFlightRetryContext(
+                    std::move(neighbors.value()), std::move(parameters),
+                    std::move(neighbor_keys), tracker);
+                query::ScheduleInFlightRetryOnMain(
+                    retry_ctx, LocalInFlightRetryTimerCallback);
+                return;
+              }
+            }
             tracker->AddResults(*neighbors);
           } else {
             if (absl::IsResourceExhausted(neighbors.status())) {

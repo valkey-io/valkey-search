@@ -38,7 +38,6 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
-#include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -785,6 +784,7 @@ void IndexSchema::ProcessSingleMutationAsync(ValkeyModuleCtx *ctx,
                                              bool from_backfill,
                                              const InternedStringPtr &key,
                                              vmsdk::StopWatch *delay_capturer) {
+  PAUSEPOINT("mutation_processing");
   bool first_time = true;
   do {
     auto mutation_record = ConsumeTrackedMutatedAttribute(key, first_time);
@@ -1565,19 +1565,6 @@ bool IndexSchema::HasAnyConflictingInFlightKeys(
     }
   }
   return false;
-}
-
-std::vector<InternedStringPtr> IndexSchema::GetConflictingInFlightKeys(
-    const std::vector<InternedStringPtr> &keys) const {
-  std::vector<InternedStringPtr> conflicting_keys;
-  absl::MutexLock lock(&mutated_records_mutex_);
-
-  for (const auto &key : keys) {
-    if (tracked_mutated_records_.contains(key)) {
-      conflicting_keys.push_back(key);
-    }
-  }
-  return conflicting_keys;
 }
 
 bool IndexSchema::InTrackedMutationRecords(

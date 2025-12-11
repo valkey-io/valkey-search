@@ -13,10 +13,10 @@
 #include <vector>
 
 #include "src/attribute_data_type.h"
-#include "src/utils/string_interning.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/search.h"
+#include "src/utils/string_interning.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -49,7 +49,7 @@ void ProcessNonVectorNeighborsForReply(
     std::vector<indexes::Neighbor> &neighbors,
     const query::SearchParameters &parameters);
 
-// Collect keys from neighbors for conflict checking
+// Collect keys from neighbors for in-flight conflict checking
 std::vector<InternedStringPtr> CollectNeighborKeys(
     const std::deque<indexes::Neighbor> &neighbors);
 

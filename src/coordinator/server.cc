@@ -33,8 +33,7 @@
 #include "src/index_schema.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
-#include "src/query/fanout_operation_base.h"
-#include "src/query/predicate.h"
+#include "src/query/inflight_retry.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
@@ -123,7 +122,7 @@ struct RemoteInFlightRetryContext {
   std::unique_ptr<vmsdk::StopWatch> latency_sample;
   std::deque<indexes::Neighbor> neighbors;
   std::unique_ptr<query::SearchParameters> parameters;
-  std::vector<InternedStringPtr> neighbor_keys;  // Cached to avoid O(n) copy on each retry
+  std::vector<InternedStringPtr> neighbor_keys;
 
   RemoteInFlightRetryContext(SearchIndexPartitionResponse* resp,
                              grpc::ServerUnaryReactor* react,
@@ -139,10 +138,8 @@ struct RemoteInFlightRetryContext {
         neighbor_keys(std::move(keys)) {}
 };
 
-// Forward declaration
 void RemoteInFlightRetryTimerCallback(ValkeyModuleCtx* ctx, void* data);
 
-// Process neighbors and finish the gRPC response (must be called from main thread)
 void FinishRemoteSearchResponse(ValkeyModuleCtx* ctx,
                                 RemoteInFlightRetryContext* retry_ctx) {
   const auto& attribute_data_type =
@@ -165,11 +162,8 @@ void FinishRemoteSearchResponse(ValkeyModuleCtx* ctx,
   delete retry_ctx;
 }
 
-// Check for in-flight conflicts and either schedule retry or finish response.
-// Must be called from main thread.
 void CheckAndHandleRemoteInFlightConflicts(
     ValkeyModuleCtx* ctx, RemoteInFlightRetryContext* retry_ctx) {
-  // Check if the query has timed out
   if (retry_ctx->parameters->cancellation_token->IsCancelled()) {
     if (!valkey_search::options::GetEnablePartialResults().GetValue()) {
       retry_ctx->reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
@@ -178,28 +172,19 @@ void CheckAndHandleRemoteInFlightConflicts(
       delete retry_ctx;
       return;
     }
-    // Allow partial results - proceed with what we have
     FinishRemoteSearchResponse(ctx, retry_ctx);
     return;
   }
 
-  // Check for conflicting in-flight keys using cached keys
-  if (retry_ctx->parameters->index_schema->HasAnyConflictingInFlightKeys(
-          retry_ctx->neighbor_keys)) {
-    // Still have conflicts, schedule another retry directly
-    VMSDK_LOG(DEBUG, ctx)
-        << "Remote full-text query has conflicting in-flight keys, "
-           "scheduling retry";
-    ValkeyModule_CreateTimer(ctx, query::kInFlightRetryIntervalMs,
-                             RemoteInFlightRetryTimerCallback, retry_ctx);
+  if (query::CheckInFlightAndScheduleRetry(
+          ctx, retry_ctx, retry_ctx->neighbor_keys,
+          retry_ctx->parameters->index_schema, RemoteInFlightRetryTimerCallback,
+          "Remote full-text query")) {
     return;
   }
-
-  // No conflicts, finish the response
   FinishRemoteSearchResponse(ctx, retry_ctx);
 }
 
-// Timer callback for retrying in-flight check on remote shard (runs on main thread)
 void RemoteInFlightRetryTimerCallback(ValkeyModuleCtx* ctx, void* data) {
   auto* retry_ctx = static_cast<RemoteInFlightRetryContext*>(data);
   CheckAndHandleRemoteInFlightConflicts(ctx, retry_ctx);
@@ -261,20 +246,14 @@ query::SearchResponseCallback Service::MakeSearchCallback(
           if (parameters->index_schema->HasAnyConflictingInFlightKeys(
                   neighbor_keys)) {
             // Has conflicts - need to wait for in-flight mutations
+            ++Metrics::GetStats().fulltext_query_blocked_cnt;
             auto* retry_ctx = new RemoteInFlightRetryContext(
                 response, reactor, std::move(latency_sample),
                 std::move(neighbors.value()), std::move(parameters),
                 std::move(neighbor_keys));
 
-            // Schedule timer on main thread to retry
-            vmsdk::RunByMain(
-                [retry_ctx]() {
-                  auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-                  ValkeyModule_CreateTimer(
-                      ctx.get(), query::kInFlightRetryIntervalMs,
-                      RemoteInFlightRetryTimerCallback, retry_ctx);
-                },
-                true);
+            query::ScheduleInFlightRetryOnMain(
+                retry_ctx, RemoteInFlightRetryTimerCallback);
             return;
           }
         }

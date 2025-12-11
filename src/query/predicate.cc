@@ -455,7 +455,6 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   return EvaluationResult(true, std::move(or_proximity_iterator));
 }
 
-// Helper function to check if the query contains a text predicate
 bool HasTextPredicate(const Predicate* predicate) {
   if (predicate == nullptr) {
     return false;

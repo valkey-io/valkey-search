@@ -304,6 +304,15 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
+bool AggregateParameters::HasSortBy() const {
+  for (const auto& stage : stages_) {
+    if (dynamic_cast<const SortBy*>(stage.get()) != nullptr) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,
                                     query::SearchResult &result) {
   auto identifier = index_schema->GetIdentifier(attribute_alias);

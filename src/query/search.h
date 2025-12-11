@@ -119,6 +119,7 @@ struct SearchParameters {
   } parse_vars;
   bool IsNonVectorQuery() const { return attribute_alias.empty(); }
   bool IsVectorQuery() const { return !IsNonVectorQuery(); }
+  virtual bool HasSortBy() const { return false; }
   SearchParameters(uint64_t timeout, grpc::CallbackServerContext* context,
                    uint32_t db_num)
       : timeout_ms(timeout),
@@ -133,8 +134,7 @@ struct SearchResult {
   bool is_limited;  // True if neighbors were limited in background thread
   // Constructor with automatic trimming based on query requirements
   SearchResult(size_t total_count, std::deque<indexes::Neighbor> neighbors,
-               const SearchParameters& parameters, bool has_sortby = false,
-               bool is_cme = false);
+               const SearchParameters& parameters);
   // Constructor for coordinator fanout aggregation - no trimming applied
   SearchResult(size_t total_count, std::deque<indexes::Neighbor> neighbors)
       : total_count(total_count),
@@ -142,8 +142,7 @@ struct SearchResult {
         is_limited(false) {}
 
  private:
-  static bool NeedsSorting(const SearchParameters& parameters,
-                           bool has_sortby = false, bool is_cme = false);
+  static bool NeedsSorting(const SearchParameters& parameters);
   static bool TrimResults(std::deque<indexes::Neighbor>& neighbors,
                           const SearchParameters& parameters);
 };

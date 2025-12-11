@@ -28,6 +28,7 @@ class Command;
 class Record;
 class RecordSet;
 class Stage;
+class SortBy;
 
 struct IndexInterface {
   virtual absl::StatusOr<indexes::IndexerType> GetFieldType(
@@ -63,6 +64,8 @@ struct AggregateParameters : public expr::Expression::CompileContext,
       return absl::NotFoundError(absl::StrCat("parameter ", s, " not found."));
     }
   }
+
+  bool HasSortBy() const override;
 
   //
   // Information for each index position in a Record

@@ -451,11 +451,10 @@ size_t CalcEndIndex(const std::deque<indexes::Neighbor> &neighbors,
 
 SearchResult::SearchResult(size_t total_count,
                            std::deque<indexes::Neighbor> neighbors,
-                           const SearchParameters &parameters, bool has_sortby,
-                           bool is_cme)
+                           const SearchParameters &parameters)
     : total_count(total_count) {
   // Check if sorting is needed first. Trim otherwise.
-  if (NeedsSorting(parameters, has_sortby, is_cme)) {
+  if (NeedsSorting(parameters)) {
     this->neighbors = std::move(neighbors);
     this->is_limited = false;
   } else {
@@ -466,10 +465,8 @@ SearchResult::SearchResult(size_t total_count,
 
 // Determine if we need full results or can optimize with limiting.
 // When SORTBY is present, we need full results to sort correctly.
-bool SearchResult::NeedsSorting(const SearchParameters &parameters,
-                                bool has_sortby, bool is_cme) {
-  // TODO: Check content of SearchParameters.
-  return has_sortby && is_cme;
+bool SearchResult::NeedsSorting(const SearchParameters &parameters) {
+  return parameters.HasSortBy();
 }
 
 // Apply limiting in background thread if possible.
@@ -495,12 +492,8 @@ absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,
   if (!result.ok()) {
     return result.status();
   }
-  // TODO: determine when SORTBY is implemented
-  bool has_sortby = false;
-  bool is_cme = false;
   size_t total_count = result.value().size();
-  return SearchResult(total_count, std::move(result.value()), parameters,
-                      has_sortby, is_cme);
+  return SearchResult(total_count, std::move(result.value()), parameters);
 }
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,

@@ -209,14 +209,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
   bool IsKeyInFlight(const InternedStringPtr &key) const
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
-  // Returns true if any of the keys are in-flight (short-circuits on first match)
-  bool HasAnyConflictingInFlightKeys(
-      const std::vector<InternedStringPtr> &keys) const
-      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
-  // Returns all conflicting in-flight keys (for testing/debugging)
-  std::vector<InternedStringPtr> GetConflictingInFlightKeys(
-      const std::vector<InternedStringPtr> &keys) const
-      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
+  bool HasAnyConflictingInFlightKeys(const std::vector<InternedStringPtr> &keys)
+      const ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   static absl::Status TextInfoCmd(ValkeyModuleCtx *ctx,
                                   vmsdk::ArgsIterator &itr);

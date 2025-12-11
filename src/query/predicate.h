@@ -382,7 +382,6 @@ class ComposedPredicate : public Predicate {
   bool inorder_;
 };
 
-// Helper function to recursively check if a predicate contains text predicates
 bool HasTextPredicate(const Predicate* predicate);
 
 }  // namespace valkey_search::query

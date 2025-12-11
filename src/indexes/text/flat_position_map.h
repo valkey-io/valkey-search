@@ -61,21 +61,6 @@ minimal state overhead, maintaining cumulative position for delta decoding.
 
 namespace valkey_search::indexes::text {
 
-// FlatPositionMap format constants
-constexpr size_t kPartitionSize = 128;  // Partition every 128 bytes
-
-// Encoding bit flags for position/field mask bytes
-constexpr uint8_t kBitPosition = 0x01;  // Bit 0: 1=position, 0=field mask
-constexpr uint8_t kBitStartPosition =
-    0x02;  // Bit 1: 1=start of position, 0=continuation
-constexpr uint8_t kValueMask = 0xFC;  // Bits 2-7 for actual value (6 bits)
-constexpr uint8_t kValueShift = 2;    // Shift amount for value bits
-
-// Field mask encoding (when bit 0 = 0)
-constexpr uint8_t kFieldMaskValueMask =
-    0xFC;  // Bits 2-7 for field mask (6 bits)
-constexpr uint8_t kFieldMaskBitsPerByte = 6;  // 6 bits per byte for field mask
-
 // Forward declarations to avoid circular dependency
 using Position = uint32_t;
 class FieldMask;

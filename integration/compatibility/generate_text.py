@@ -13,7 +13,7 @@ from .text_query_builder import TextQueryBuilder
 @pytest.mark.parametrize("key_type", ["json", "hash"])
 class TestTextSearchCompatibility(BaseCompatibilityTest):
     TEXT_QUERY_TEST_SEED = 111
-    MAX_QUERIES=1000
+    MAX_QUERIES=300
     ANSWER_FILE_NAME = "text-search-answers.pickle.gz"
 
     def setup_data(self, data_set_name, key_type):

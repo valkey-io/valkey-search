@@ -16,6 +16,7 @@
 #include "src/indexes/index_base.h"
 #include "src/metrics.h"
 #include "src/query/response_generator.h"
+#include "src/valkey_search.h"
 
 namespace valkey_search {
 namespace aggregate {

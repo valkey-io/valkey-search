@@ -30,6 +30,13 @@ config::Number& GetReaderThreadCount();
 /// number of writer threads
 config::Number& GetWriterThreadCount();
 
+/// Return the configuration entry that allows the caller to control the
+/// number of utility threads
+config::Number& GetUtilityThreadCount();
+
+/// Return the configuration entry for neighbor background cleanup
+const config::Boolean& GetNeighborBackgroundCleanup();
+
 /// Return the max time in seconds that the worker thread pool is
 /// suspended after fork started
 config::Number& GetMaxWorkerSuspensionSecs();

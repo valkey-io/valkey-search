@@ -53,6 +53,7 @@ class ValkeySearch {
   }
 
   // Generic background task scheduling
+  // This is meant for low priority tasks that can be deferred.
   void ScheduleUtilityTask(std::function<void()> task) {
     if (utility_thread_pool_) {
       utility_thread_pool_->Schedule(std::move(task),

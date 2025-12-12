@@ -468,12 +468,13 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
       not_rightmost_bracket &&
       new_predicate->GetType() == query::PredicateType::kComposedOr) {
     std::vector<std::unique_ptr<query::Predicate>> new_children;
-    if (prev_predicate) {
-      new_children.push_back(std::move(prev_predicate));
-    }
     auto* new_composed =
         dynamic_cast<query::ComposedPredicate*>(new_predicate.get());
     auto children = new_composed->ReleaseChildren();
+    new_children.reserve(1 + children.size());
+    if (prev_predicate) {
+      new_children.push_back(std::move(prev_predicate));
+    }
     for (auto& child : children) {
       new_children.push_back(std::move(child));
     }
@@ -743,9 +744,10 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
       }
       return absl::InvalidArgumentError("Index does not have any text field");
     }
-    for (const auto& identifier : text_identifiers) {
-      filter_identifiers_.insert(identifier);
-    }
+    filter_identifiers_.reserve(filter_identifiers_.size() +
+                                text_identifiers.size());
+    filter_identifiers_.insert(text_identifiers.begin(),
+                               text_identifiers.end());
     // When no field was specified, we use the min stem across all text fields
     // in the index schema. This helps ensure the root of the text token can be
     // searched for.

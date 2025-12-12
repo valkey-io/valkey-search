@@ -106,19 +106,15 @@ query::EvaluationResult PrefilterEvaluator::EvaluateText(
     const query::TextPredicate &predicate, bool require_positions) {
   CHECK(key_);
   // Evaluate using per-key text index
-  // This acquires the lock and looks up the key in per_key_text_indexes
   auto text_index_schema = predicate.GetTextIndexSchema();
-  return text_index_schema->WithPerKeyTextIndexes(
-      [&](auto &per_key_indexes) -> query::EvaluationResult {
-        auto it = per_key_indexes.find(*key_);
-        if (it == per_key_indexes.end()) {
-          VMSDK_LOG(WARNING, nullptr)
-              << "Target key not found in index for pre-filter evaluation";
-          return query::EvaluationResult(false);
-        }
-        // Evaluate predicate against this key's text index
-        return predicate.Evaluate(it->second, *key_, require_positions);
-      });
+  auto &per_key_indexes = text_index_schema->GetPerKeyTextIndexes();
+  auto it = per_key_indexes.find(*key_);
+  if (it == per_key_indexes.end()) {
+    VMSDK_LOG(WARNING, nullptr)
+        << "Target key not found in index for pre-filter evaluation";
+    return query::EvaluationResult(false);
+  }
+  return predicate.Evaluate(it->second, *key_, require_positions);
 }
 
 template <typename T>

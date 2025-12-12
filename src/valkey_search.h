@@ -54,7 +54,7 @@ class ValkeySearch {
 
   // Generic background task scheduling
   // This is meant for low priority tasks that can be deferred.
-  void ScheduleUtilityTask(std::function<void()> task) {
+  void ScheduleUtilityTask(absl::AnyInvocable<void()> task) {
     if (utility_thread_pool_) {
       utility_thread_pool_->Schedule(std::move(task),
                                      vmsdk::ThreadPool::Priority::kLow);
@@ -67,10 +67,8 @@ class ValkeySearch {
   // Specific helper for neighbor cleanup
   void ScheduleNeighborCleanup(std::deque<indexes::Neighbor> neighbors) {
     if (options::GetNeighborBackgroundCleanup().GetValue()) {
-      auto shared_neighbors =
-          std::make_shared<std::deque<indexes::Neighbor>>(std::move(neighbors));
-      ScheduleUtilityTask([shared_neighbors]() {
-        // shared_neighbors destructor runs automatically when lambda completes
+      ScheduleUtilityTask([neighbors = std::move(neighbors)]() mutable {
+        // neighbors destructor runs automatically when lambda completes
       });
     }
     // If disabled, neighbors destructor runs synchronously here

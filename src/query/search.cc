@@ -135,7 +135,6 @@ size_t EvaluateFilterAsPrimary(
     if (predicate_type == PredicateType::kComposedAnd) {
       size_t min_size = SIZE_MAX;
       std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> best_fetchers;
-      size_t child_index = 0;
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
         size_t child_size =
@@ -144,20 +143,17 @@ size_t EvaluateFilterAsPrimary(
           min_size = child_size;
           best_fetchers = std::move(child_fetchers);
         }
-        child_index++;
       }
       AppendQueue(entries_fetchers, best_fetchers);
       return min_size;
     } else {
       size_t total_size = 0;
-      size_t child_index = 0;
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
         size_t child_size =
             EvaluateFilterAsPrimary(child.get(), child_fetchers, negate);
         AppendQueue(entries_fetchers, child_fetchers);
         total_size += child_size;
-        child_index++;
       }
       return total_size;
     }

@@ -11,6 +11,7 @@
 #include <deque>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -37,6 +38,7 @@
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
+#include "src/valkey_search.h"
 #include "valkey_search_options.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/latency_sampler.h"
@@ -165,7 +167,7 @@ void FinishRemoteSearchResponse(ValkeyModuleCtx* ctx,
 void CheckAndHandleRemoteInFlightConflicts(
     ValkeyModuleCtx* ctx, RemoteInFlightRetryContext* retry_ctx) {
   if (retry_ctx->parameters->cancellation_token->IsCancelled()) {
-    if (!valkey_search::options::GetEnablePartialResults().GetValue()) {
+    if (!retry_ctx->parameters->enable_partial_results) {
       retry_ctx->reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
                                   "Search operation cancelled due to timeout"});
       RecordSearchMetrics(true, std::move(retry_ctx->latency_sample));
@@ -237,26 +239,25 @@ query::SearchResponseCallback Service::MakeSearchCallback(
       RecordSearchMetrics(true, std::move(latency_sample));
       return;
     }
-        // For pure full-text queries with content, check for in-flight key
-        // conflicts. Skip if no_content since we only return key names without
-        // fetching/evaluating data.
-        if (!parameters->no_content &&
-            query::IsPureFullTextQuery(*parameters)) {
-          auto neighbor_keys = query::CollectNeighborKeys(neighbors.value());
-          if (parameters->index_schema->HasAnyConflictingInFlightKeys(
-                  neighbor_keys)) {
-            // Has conflicts - need to wait for in-flight mutations
-            ++Metrics::GetStats().fulltext_query_blocked_cnt;
-            auto* retry_ctx = new RemoteInFlightRetryContext(
-                response, reactor, std::move(latency_sample),
-                std::move(neighbors.value()), std::move(parameters),
-                std::move(neighbor_keys));
+    // For pure full-text queries with content, check for in-flight key
+    // conflicts. Skip if no_content since we only return key names without
+    // fetching/evaluating data.
+    if (!parameters->no_content && query::IsPureFullTextQuery(*parameters)) {
+      auto neighbor_keys = query::CollectNeighborKeys(neighbors.value());
+      if (parameters->index_schema->HasAnyConflictingInFlightKeys(
+              neighbor_keys)) {
+        // Has conflicts - need to wait for in-flight mutations
+        ++Metrics::GetStats().fulltext_query_blocked_cnt;
+        auto* retry_ctx = new RemoteInFlightRetryContext(
+            response, reactor, std::move(latency_sample),
+            std::move(neighbors.value()), std::move(parameters),
+            std::move(neighbor_keys));
 
-            query::ScheduleInFlightRetryOnMain(
-                retry_ctx, RemoteInFlightRetryTimerCallback);
-            return;
-          }
-        }
+        query::ScheduleInFlightRetryOnMain(retry_ctx,
+                                           RemoteInFlightRetryTimerCallback);
+        return;
+      }
+    }
 
     if (parameters->no_content) {
       SerializeNeighbors(response, neighbors.value());

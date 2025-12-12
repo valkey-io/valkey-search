@@ -31,8 +31,8 @@ config::Number& GetReaderThreadCount();
 config::Number& GetWriterThreadCount();
 
 /// Return the configuration entry that allows the caller to control the
-/// number of cleanup threads
-config::Number& GetCleanupThreadCount();
+/// number of utility threads
+config::Number& GetUtilityThreadCount();
 
 /// Return the configuration entry for neighbor background cleanup
 const config::Boolean& GetNeighborBackgroundCleanup();

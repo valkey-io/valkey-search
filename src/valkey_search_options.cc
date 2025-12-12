@@ -110,17 +110,17 @@ static auto writer_threads_count =
             })
         .Build();
 
-/// Register the "--cleanup-threads" flag. Controls the cleanup thread pool
-constexpr absl::string_view kCleanupThreadsConfig{"cleanup-threads"};
-static auto cleanup_threads_count =
-    config::NumberBuilder(kCleanupThreadsConfig,  // name
+/// Register the "--utility-threads" flag. Controls the utility thread pool
+constexpr absl::string_view kUtilityThreadsConfig{"utility-threads"};
+static auto utility_threads_count =
+    config::NumberBuilder(kUtilityThreadsConfig,  // name
                           1,                      // default size (1 thread)
                           1,                      // min size
                           kMaxThreadsCount)       // max size
         .WithModifyCallback(                      // set an "On-Modify" callback
             [](auto new_value) {
               UpdateThreadPoolCount(
-                  ValkeySearch::Instance().GetCleanupThreadPool(), new_value);
+                  ValkeySearch::Instance().GetUtilityThreadPool(), new_value);
             })
         .Build();
 
@@ -291,8 +291,8 @@ static auto thread_pool_wait_time_samples =
           if (auto writer_pool = instance.GetWriterThreadPool()) {
             writer_pool->ResizeSampleQueue(new_size);
           }
-          if (auto cleanup_pool = instance.GetCleanupThreadPool()) {
-            cleanup_pool->ResizeSampleQueue(new_size);
+          if (auto utility_pool = instance.GetUtilityThreadPool()) {
+            utility_pool->ResizeSampleQueue(new_size);
           }
         })
         .Build();
@@ -311,8 +311,8 @@ vmsdk::config::Number& GetWriterThreadCount() {
   return dynamic_cast<vmsdk::config::Number&>(*writer_threads_count);
 }
 
-vmsdk::config::Number& GetCleanupThreadCount() {
-  return dynamic_cast<vmsdk::config::Number&>(*cleanup_threads_count);
+vmsdk::config::Number& GetUtilityThreadCount() {
+  return dynamic_cast<vmsdk::config::Number&>(*utility_threads_count);
 }
 
 vmsdk::config::Number& GetMaxWorkerSuspensionSecs() {

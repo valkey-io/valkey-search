@@ -113,7 +113,7 @@ class TestFullTextInFlightBlockingCME(ValkeySearchClusterTestCaseDebugMode):
         IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(primary_clients, "idx")
         assert client.execute_command("FT.SEARCH", "idx", "@content:hello")[0] == num_shards
 
-        # Pause mutation processing on all nodes to mimick inflight keys
+        # Pause mutation processing on all nodes to simulate inflight keys
         for nc in primary_clients:
             nc.execute_command("FT._DEBUG PAUSEPOINT SET mutation_processing")
 

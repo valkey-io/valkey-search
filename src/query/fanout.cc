@@ -190,7 +190,7 @@ void LocalInFlightRetryTimerCallback(ValkeyModuleCtx *ctx, void *data);
 void CheckAndHandleLocalInFlightConflicts(
     ValkeyModuleCtx *ctx, LocalInFlightRetryContext *retry_ctx) {
   if (retry_ctx->parameters->cancellation_token->IsCancelled()) {
-    if (!options::GetEnablePartialResults().GetValue()) {
+    if (!retry_ctx->parameters->enable_partial_results) {
       delete retry_ctx;
       return;
     }

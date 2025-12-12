@@ -469,8 +469,12 @@ bool HasTextPredicate(const Predicate* predicate) {
     case PredicateType::kComposedAnd:
     case PredicateType::kComposedOr: {
       const auto* composed = dynamic_cast<const ComposedPredicate*>(predicate);
-      return HasTextPredicate(composed->GetLhsPredicate()) ||
-             HasTextPredicate(composed->GetRhsPredicate());
+      for (const auto& child : composed->GetChildren()) {
+        if (HasTextPredicate(child.get())) {
+          return true;
+        }
+      }
+      return false;
     }
     default:
       return false;

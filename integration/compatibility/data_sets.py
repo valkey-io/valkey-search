@@ -86,6 +86,11 @@ def compute_data_sets():
     data["reverse vector numbers"] = {}
     data["bad numbers"] = {}
     data["hard strings"] = {}
+    vec_algos = ["flat", "hnsw"]
+    metrics = ["cosine", "ip", "l2"]
+    for algo in vec_algos:
+        for metric in metrics:
+            data[f"vector data {metric} {algo}"] = {}
     for key_type in ["hash", "json"]:
         schema = [
             make_field_definition(key_type, field_type_to_name[typ], typ, i + 1)
@@ -272,13 +277,35 @@ def compute_data_sets():
             )
             for i in range(20)
         ]
+        for algo in vec_algos:
+            for metric in metrics:
+                vector_points = [-1.5, 1.5]
+                data[f"vector data {metric} {algo}"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema).replace("L2", metric).replace("HNSW", algo)]
+                data[f"vector data {metric} {algo}"][SETS_KEY(key_type)] = [
+                    (
+                        f"{key_type}:{x:}:{y}:{z}",
+                        {
+                            "n1": x,
+                            "n2": y,
+                            "n3" : z,
+                            "t1": "",
+                            "t2": "",
+                            "t3": "all_the_same_value",
+                            "v1": array_encode(key_type, [x, y, z]),
+                            "e1" : 1,
+                            "e2" : "two",
+                        },
+                    )
+                    for x in vector_points
+                    for y in vector_points
+                    for z in vector_points
+                ]
     return data
 
 ### Helper Functions ###
 def load_data(client, data_set, key_type):
     data = compute_data_sets()
     load_list = data[data_set][SETS_KEY(key_type)]
-    print(f"Start Loading Data, data set has {len(load_list)} records")
     for create_index_cmd in data[data_set][CREATES_KEY(key_type)]:
         client.execute_command(create_index_cmd)
 

@@ -193,11 +193,18 @@ def validate_fulltext_search(client: Valkey):
 
 class TestFullText(ValkeySearchTestCaseDebugMode):
 
-    def test_text_search(self):
+    @pytest.mark.parametrize("prefilter_eval_enabled", [pytest.param(False, id="Prefilter_eval=False"), pytest.param(True, id="Prefilter_eval=True")])
+    def test_text_search(self, prefilter_eval_enabled):
         """
         Test FT.SEARCH command with a text index.
+        Tests with both prefilter disabled and enabled.
         """
         client: Valkey = self.server.get_new_client()
+        # Override config
+        if not prefilter_eval_enabled:
+            client.execute_command(
+                "CONFIG", "SET", "search.enable-prefilter-eval", "no"
+            )
         # Create the text index on Hash documents
         assert client.execute_command(text_index_on_hash) == b"OK"
         # Data population:
@@ -761,64 +768,64 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert result[0] == 1  # Only doc:1 is matched for "running"
         assert result[1] == b'doc:1'
 
-    def test_mixed_predicates(self):
+    @pytest.mark.parametrize("prefilter_eval_enabled", [pytest.param(False, id="Prefilter_eval=False"), pytest.param(True, id="Prefilter_eval=True")])
+    def test_mixed_predicates(self, prefilter_eval_enabled):
         """
         Test queries with mixed text, numeric, and tag predicates.
         Tests there is no regression with predicate evaluator changes for text.
         """
         client: Valkey = self.server.get_new_client()
-        
+        if not prefilter_eval_enabled:
+            client.execute_command(
+                "CONFIG", "SET", "search.enable-prefilter-eval", "no"
+            )
         # Index with text, numeric, and tag fields
         client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "content", "TEXT", "NOSTEM","title", "TEXT", "NOSTEM", "Addr", "TEXT", "NOSTEM",
                             "salary", "NUMERIC", 
                             "skills", "TAG", "SEPARATOR", "|")
-        
         # Test documents
         client.execute_command("HSET", "doc:1", "content", "software engineer developer", "title", "Title:1", "Addr", "12 Apt ABC", "salary", "100000", "skills", "python|java")
         client.execute_command("HSET", "doc:2", "content", "software development manager", "title", "Title:2", "Addr", "12 Apt EFG", "salary", "120000", "skills", "python|ml|leadership")
         client.execute_command("HSET", "doc:3", "content", "product manager", "title", "Title:2", "Addr", "12 Apt EFG", "salary", "90000", "skills", "strategy|leadership")
-
         # Wait for index backfill to complete
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
 
         # Test 1: Text + Numeric (AND)
         result = client.execute_command("FT.SEARCH", "idx", '@content:"manager" @salary:[90000 110000]')
-        assert result[0] == 1  # Should find doc:1
-
+        assert (result[0], result[1]) == (1, b"doc:3")
         result = client.execute_command("FT.SEARCH", "idx", '@content:"manager" @salary:[90000 130000]')
-        assert result[0] == 2  # Should find doc:2, doc:3
-        
+        assert (result[0], set(result[1::2])) == (2, {b"doc:2", b"doc:3"})
+
         # Test 1.1: Text prefix + Numeric (AND)
         result = client.execute_command("FT.SEARCH", "idx", '@content:develop* @salary:[90000 110000]')
-        assert result[0] == 1  # Should find doc:1
+        assert (result[0], result[1]) == (1, b"doc:1")
 
         # Test 2: Text + Tag (OR) 
         result = client.execute_command("FT.SEARCH", "idx", '@content:"product" | @skills:{java}')
-        assert result[0] == 2  # Should find doc:1 (java) and doc:2 (scientist)
+        assert (result[0], set(result[1::2])) == (2, {b"doc:1", b"doc:3"})
         
         # Test 3: All three types (complex OR)
         result = client.execute_command("FT.SEARCH", "idx", '@content:"manager" | @salary:[115000 125000] | @skills:{python}')
-        assert result[0] == 3  # Should find all docs
+        assert (result[0], set(result[1::2])) == (3, {b"doc:1", b"doc:2", b"doc:3"})
         
         # Test 4: All three types (complex AND) 
         result = client.execute_command("FT.SEARCH", "idx", '@content:"engineer" @salary:[90000 110000] @skills:{python}')
-        assert result[0] == 1  # Should find doc:1 only
+        assert (result[0], result[1]) == (1, b"doc:1")
 
         # Test 5: Exact phrase with numeric filter (nested case)
         result = client.execute_command("FT.SEARCH", "idx", '@content:"software engineer" @salary:[90000 110000]')
-        assert result[0] == 1  # Should find doc:1 (exact phrase + salary match)
+        assert (result[0], result[1]) == (1, b"doc:1")
 
         # Test 6: Exact phrase with tag filter
         result = client.execute_command("FT.SEARCH", "idx", '@content:"software engineer" @skills:{python}')
-        assert result[0] == 1  # Should find doc:1 (exact phrase + tag match)
-
+        assert (result[0], result[1]) == (1, b"doc:1")
         # Test 7: Proximity with numeric - tests iterator propagation
         result = client.execute_command("FT.SEARCH", "idx", '(@content:software @salary:[90000 110000]) @content:engineer', "SLOP", "1", "INORDER")
-        assert result[0] == 1  # Should find doc:1 (proximity + numeric filter)
+        assert (result[0], result[1]) == (1, b"doc:1")
 
-        # # Test 8: Negation with mixed types
+        # Test 8: Negation with mixed types
         # result = client.execute_command("FT.SEARCH", "idx", '-@content:"manager" @skills:{python}')
-        # assert result[0] == 1  # Should find doc:1 only
+        # assert (result[0], result[1]) == (1, b"doc:1")
 
     def test_nooffsets_option(self):
         """
@@ -867,8 +874,14 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
             client.execute_command("FT.SEARCH", "idx", 'term1 term2 term3 term4 term5 term6 term7 term8 term9 term10', "SLOP", "2", "INORDER")
         assert "Index does not support offsets" in str(err.value)
 
-    def test_proximity_predicate(self):
+    @pytest.mark.parametrize("prefilter_eval_enabled", [pytest.param(False, id="Prefilter_eval=False"), pytest.param(True, id="Prefilter_eval=True")])
+    def test_proximity_predicate(self, prefilter_eval_enabled):
         client: Valkey = self.server.get_new_client()
+        # Override config
+        if not prefilter_eval_enabled:
+            client.execute_command(
+                "CONFIG", "SET", "search.enable-prefilter-eval", "no"
+            )
         # Create index with text fields
         client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
                             "content", "TEXT", "NOSTEM", "title", "TEXT", "NOSTEM", "WITHSUFFIXTRIE")
@@ -1538,12 +1551,17 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
 
 class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
 
-    def test_fulltext_search_cluster(self):
+    @pytest.mark.parametrize("prefilter_eval_enabled", [pytest.param(False, id="Prefilter_eval=False"), pytest.param(True, id="Prefilter_eval=True")])
+    def test_fulltext_search_cluster(self, prefilter_eval_enabled):
         """
             Test a fulltext search queries on Hash docs in Valkey Search CME.
         """
         cluster_client: ValkeyCluster = self.new_cluster_client()
         client: Valkey = self.new_client_for_primary(0)
+        if not prefilter_eval_enabled:
+            # Set config on all primary nodes
+            for primary_client in self.get_all_primary_clients():
+                primary_client.execute_command("CONFIG", "SET", "search.enable-prefilter-eval", "no")
         # Create the text index on Hash documents
         assert client.execute_command(text_index_on_hash) == b"OK"
         # Data population:

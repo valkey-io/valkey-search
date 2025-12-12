@@ -75,9 +75,9 @@ class Evaluator {
   virtual EvaluationResult EvaluateTags(const TagPredicate& predicate) = 0;
   virtual EvaluationResult EvaluateNumeric(
       const NumericPredicate& predicate) = 0;
-
   // Access target key for proximity validation (only for Text)
   virtual const InternedStringPtr& GetTargetKey() const = 0;
+  virtual bool IsPrefilterEvaluator() const { return false; }
 };
 
 class Predicate;
@@ -182,6 +182,7 @@ class TextPredicate : public Predicate {
   virtual void* Search(bool negate) const;
   virtual std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const = 0;
+  virtual size_t EstimateSize() const = 0;
 };
 
 class TermPredicate : public TextPredicate {
@@ -203,6 +204,7 @@ class TermPredicate : public TextPredicate {
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   bool IsExact() const { return exact_; }
+  size_t EstimateSize() const override;
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
@@ -229,6 +231,7 @@ class PrefixPredicate : public TextPredicate {
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
+  size_t EstimateSize() const override;
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
@@ -254,6 +257,7 @@ class SuffixPredicate : public TextPredicate {
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
+  size_t EstimateSize() const override;
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
@@ -279,6 +283,7 @@ class InfixPredicate : public TextPredicate {
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
+  size_t EstimateSize() const override;
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
@@ -305,6 +310,7 @@ class FuzzyPredicate : public TextPredicate {
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
+  size_t EstimateSize() const override;
 
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
@@ -336,6 +342,7 @@ class ProximityPredicate : public TextPredicate {
   const std::vector<std::unique_ptr<TextPredicate>>& Terms() const {
     return terms_;
   }
+  size_t EstimateSize() const override;
 
  private:
   std::vector<std::unique_ptr<TextPredicate>> terms_;

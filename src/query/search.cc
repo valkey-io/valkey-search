@@ -33,6 +33,7 @@
 #include "src/metrics.h"
 #include "src/query/planner.h"
 #include "src/query/predicate.h"
+#include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
@@ -208,6 +209,8 @@ void EvaluatePrefilteredKeys(
   absl::flat_hash_set<const char *> result_keys;
   auto predicate = parameters.filter_parse_results.root_predicate.get();
   indexes::PrefilterEvaluator evaluator;
+  bool enable_prefilter_evaluation =
+      options::GetEnablePrefilterEval().GetValue();
   while (!entries_fetchers.empty()) {
     auto fetcher = std::move(entries_fetchers.front());
     entries_fetchers.pop();
@@ -216,8 +219,10 @@ void EvaluatePrefilteredKeys(
       const auto &key = **iterator;
       // TODO: add a bloom filter to ensure distinct keys are evaluated
       // only once.
-      if (!result_keys.contains(key->Str().data()) &&
-          evaluator.Evaluate(*predicate, key)) {
+      bool eval_result = enable_prefilter_evaluation
+                             ? evaluator.Evaluate(*predicate, key)
+                             : true;
+      if (!result_keys.contains(key->Str().data()) && eval_result) {
         if (appender(key, result_keys)) {
           result_keys.insert(key->Str().data());
         }

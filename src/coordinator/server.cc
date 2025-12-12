@@ -170,7 +170,7 @@ query::SearchResponseCallback Service::MakeSearchCallback(
         const auto& attribute_data_type =
             parameters->index_schema->GetAttributeDataType();
         auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-        if (parameters->attribute_alias.empty()) {
+        if (parameters->IsNonVectorQuery()) {
           query::ProcessNonVectorNeighborsForReply(
               ctx.get(), attribute_data_type, neighbors, *parameters);
         } else {

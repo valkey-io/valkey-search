@@ -131,7 +131,10 @@ struct SearchParameters {
 struct SearchResult {
   size_t total_count;
   std::deque<indexes::Neighbor> neighbors;
-  bool is_limited;  // True if neighbors were limited in background thread
+  // True if neighbors were limited using LIMIT count with a buffer multiplier.
+  bool is_limited;
+  // True if neighbors were offset using LIMIT first_index.
+  bool is_offsetted;
   // Constructor with automatic trimming based on query requirements
   SearchResult(size_t total_count, std::deque<indexes::Neighbor> neighbors,
                const SearchParameters& parameters);
@@ -139,12 +142,13 @@ struct SearchResult {
   SearchResult(size_t total_count, std::deque<indexes::Neighbor> neighbors)
       : total_count(total_count),
         neighbors(std::move(neighbors)),
-        is_limited(false) {}
+        is_limited(false),
+        is_offsetted(false) {}
 
  private:
-  static bool NeedsSorting(const SearchParameters& parameters);
-  static bool TrimResults(std::deque<indexes::Neighbor>& neighbors,
-                          const SearchParameters& parameters);
+  bool NeedsSorting(const SearchParameters& parameters);
+  void TrimResults(std::deque<indexes::Neighbor>& neighbors,
+                   const SearchParameters& parameters);
 };
 
 // Callback to be called when the search is done.

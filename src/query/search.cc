@@ -32,6 +32,7 @@
 #include "src/metrics.h"
 #include "src/query/planner.h"
 #include "src/query/predicate.h"
+#include "src/valkey_search.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
@@ -452,14 +453,13 @@ size_t CalcEndIndex(const std::deque<indexes::Neighbor> &neighbors,
 SearchResult::SearchResult(size_t total_count,
                            std::deque<indexes::Neighbor> neighbors,
                            const SearchParameters &parameters)
-    : total_count(total_count) {
+    : total_count(total_count), is_limited(false), is_offsetted(false) {
   // Check if sorting is needed first. Trim otherwise.
   if (NeedsSorting(parameters)) {
     this->neighbors = std::move(neighbors);
-    this->is_limited = false;
   } else {
     this->neighbors = std::move(neighbors);
-    this->is_limited = TrimResults(this->neighbors, parameters);
+    TrimResults(this->neighbors, parameters);
   }
 }
 
@@ -470,19 +470,39 @@ bool SearchResult::NeedsSorting(const SearchParameters &parameters) {
 }
 
 // Apply limiting in background thread if possible.
-bool SearchResult::TrimResults(std::deque<indexes::Neighbor> &neighbors,
+void SearchResult::TrimResults(std::deque<indexes::Neighbor> &neighbors,
                                const SearchParameters &parameters) {
   // Use CalcEndIndex for consistent vector/non-vector handling
   size_t end_needed = CalcEndIndex(neighbors, parameters);
   size_t max_needed =
       static_cast<size_t>((parameters.limit.first_index + end_needed) * 1.5);
-  // If we don't need to limit, return false
+  // In standalone mode, we can optimize by trimming from front first.
+  // Note: We cannot trim from the front in a Cluster Mode setting because
+  // each shard X results and we need to trim the OFFSET on the aggregated
+  // results. Thus, we can only trim from the end in searches for individual
+  // nodes. We can optimize this in the future by trimming from the front in the
+  // coordinator after merging.
+  if (!ValkeySearch::Instance().IsCluster()) {
+    this->is_offsetted = true;
+    size_t start_index = CalcStartIndex(neighbors, parameters);
+    // Trim from front (apply offset)
+    if (start_index > 0 && start_index < neighbors.size()) {
+      neighbors.erase(neighbors.begin(), neighbors.begin() + start_index);
+      // Adjust max_needed since we removed from front
+      max_needed = static_cast<size_t>(end_needed * 1.5);
+    } else if (start_index >= neighbors.size()) {
+      neighbors.clear();
+      return;
+    }
+  }
+  // If we don't need to limit, return early.
   if (neighbors.size() <= max_needed) {
-    return false;
+    return;
   }
   // Apply limiting
+  this->is_limited = true;
   neighbors.erase(neighbors.begin() + max_needed, neighbors.end());
-  return true;
+  return;
 }
 
 absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,

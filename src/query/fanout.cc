@@ -51,8 +51,14 @@ CONTROLLED_BOOLEAN(ForceInvalidSlotFingerprint, false);
 
 struct NeighborComparator {
   bool operator()(indexes::Neighbor &a, indexes::Neighbor &b) const {
+    // Primary sort: by distance
     // We use a max heap, to pop off the furthest vector during aggregation.
-    return a.distance < b.distance;
+    if (a.distance != b.distance) {
+      return a.distance < b.distance;
+    }
+    // Secondary sort: by key ptr for stable ordering when distances are equal.
+    // e.g. primarily used in non vector queries without scores.
+    return a.external_id.get() > b.external_id.get();
   }
 };
 
@@ -142,7 +148,7 @@ struct SearchPartitionResultsTracker {
   void AddResult(indexes::Neighbor &neighbor)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex) {
     // For non-vector queries, we can add the result directly.
-    if (parameters->attribute_alias.empty()) {
+    if (parameters->IsNonVectorQuery()) {
       results.emplace(std::move(neighbor));
       return;
     }

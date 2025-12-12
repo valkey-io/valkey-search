@@ -110,6 +110,20 @@ static auto writer_threads_count =
             })
         .Build();
 
+/// Register the "--cleanup-threads" flag. Controls the cleanup thread pool
+constexpr absl::string_view kCleanupThreadsConfig{"cleanup-threads"};
+static auto cleanup_threads_count =
+    config::NumberBuilder(kCleanupThreadsConfig,  // name
+                          1,                      // default size (1 thread)
+                          1,                      // min size
+                          kMaxThreadsCount)       // max size
+        .WithModifyCallback(                      // set an "On-Modify" callback
+            [](auto new_value) {
+              UpdateThreadPoolCount(
+                  ValkeySearch::Instance().GetCleanupThreadPool(), new_value);
+            })
+        .Build();
+
 /// Register the "--max-worker-suspension-secs" flag.
 /// Controls the resumption of the worker thread pool:
 ///   - If max-worker-suspension-secs > 0, resume the workers either when the
@@ -194,14 +208,18 @@ static auto high_priority_weight =
     config::NumberBuilder(kHighPriorityWeight, 100, 0,
                           100)  // Default 100%, range 0-100
         .WithModifyCallback([](auto new_value) {
-          // Update both reader and writer thread pools
+          // Update all thread pools
           auto reader_pool = ValkeySearch::Instance().GetReaderThreadPool();
           auto writer_pool = ValkeySearch::Instance().GetWriterThreadPool();
+          auto cleanup_pool = ValkeySearch::Instance().GetCleanupThreadPool();
           if (reader_pool) {
             reader_pool->SetHighPriorityWeight(new_value);
           }
           if (writer_pool) {
             writer_pool->SetHighPriorityWeight(new_value);
+          }
+          if (cleanup_pool) {
+            cleanup_pool->SetHighPriorityWeight(new_value);
           }
         })
         .Build();
@@ -270,6 +288,9 @@ static auto thread_pool_wait_time_samples =
           if (auto writer_pool = instance.GetWriterThreadPool()) {
             writer_pool->ResizeSampleQueue(new_size);
           }
+          if (auto cleanup_pool = instance.GetCleanupThreadPool()) {
+            cleanup_pool->ResizeSampleQueue(new_size);
+          }
         })
         .Build();
 
@@ -285,6 +306,10 @@ vmsdk::config::Number& GetReaderThreadCount() {
 
 vmsdk::config::Number& GetWriterThreadCount() {
   return dynamic_cast<vmsdk::config::Number&>(*writer_threads_count);
+}
+
+vmsdk::config::Number& GetCleanupThreadCount() {
+  return dynamic_cast<vmsdk::config::Number&>(*cleanup_threads_count);
 }
 
 vmsdk::config::Number& GetMaxWorkerSuspensionSecs() {

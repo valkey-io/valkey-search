@@ -16,6 +16,7 @@
 #include "src/indexes/index_base.h"
 #include "src/metrics.h"
 #include "src/query/response_generator.h"
+#include "src/valkey_search.h"
 
 namespace valkey_search {
 namespace aggregate {
@@ -312,6 +313,7 @@ void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,
     ++Metrics::GetStats().query_failed_requests_cnt;
     ValkeyModule_ReplyWithError(ctx, result.message().data());
   }
+  ValkeySearch::Instance().ScheduleNeighborCleanup(std::move(neighbors));
 }
 
 }  // namespace aggregate

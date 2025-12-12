@@ -47,6 +47,16 @@ class ValkeySearch {
   vmsdk::ThreadPool *GetWriterThreadPool() const {
     return writer_thread_pool_.get();
   }
+  vmsdk::ThreadPool *GetCleanupThreadPool() const {
+    return cleanup_thread_pool_.get();
+  }
+  void ScheduleNeighborCleanup(std::deque<indexes::Neighbor> neighbors) {
+    if (cleanup_thread_pool_) {
+      cleanup_thread_pool_->Schedule(
+          [neighbors = std::move(neighbors)]() mutable { neighbors.clear(); },
+          vmsdk::ThreadPool::Priority::kLow);
+    }
+  }
   void Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const;
 
   IndexSchema::Stats::ResultCnt<uint64_t> AccumulateIndexSchemaResults(
@@ -110,6 +120,7 @@ class ValkeySearch {
  protected:
   std::unique_ptr<vmsdk::ThreadPool> reader_thread_pool_;
   std::unique_ptr<vmsdk::ThreadPool> writer_thread_pool_;
+  std::unique_ptr<vmsdk::ThreadPool> cleanup_thread_pool_;
 
  private:
   absl::Status Startup(ValkeyModuleCtx *ctx);

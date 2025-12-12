@@ -30,6 +30,10 @@ config::Number& GetReaderThreadCount();
 /// number of writer threads
 config::Number& GetWriterThreadCount();
 
+/// Return the configuration entry that allows the caller to control the
+/// number of cleanup threads
+config::Number& GetCleanupThreadCount();
+
 /// Return the max time in seconds that the worker thread pool is
 /// suspended after fork started
 config::Number& GetMaxWorkerSuspensionSecs();

@@ -26,6 +26,7 @@
 #include "src/metrics.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
+#include "src/valkey_search.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -184,10 +185,12 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
       limit.number == 0) {
     ValkeyModule_ReplyWithArray(ctx, 1);
     ValkeyModule_ReplyWithLongLong(ctx, neighbors.size());
+    ValkeySearch::Instance().ScheduleNeighborCleanup(std::move(neighbors));
     return;
   }
   if (no_content) {
     SendReplyNoContent(ctx, neighbors, *this);
+    ValkeySearch::Instance().ScheduleNeighborCleanup(std::move(neighbors));
     return;
   }
   // Support non-vector queries
@@ -195,18 +198,21 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
     query::ProcessNonVectorNeighborsForReply(
         ctx, index_schema->GetAttributeDataType(), neighbors, *this);
     SerializeNonVectorNeighbors(ctx, neighbors, *this);
+    ValkeySearch::Instance().ScheduleNeighborCleanup(std::move(neighbors));
     return;
   }
   auto identifier = index_schema->GetIdentifier(attribute_alias);
   if (!identifier.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
     ValkeyModule_ReplyWithError(ctx, identifier.status().message().data());
+    ValkeySearch::Instance().ScheduleNeighborCleanup(std::move(neighbors));
     return;
   }
   query::ProcessNeighborsForReply(ctx, index_schema->GetAttributeDataType(),
                                   neighbors, *this, identifier.value());
 
   SerializeNeighbors(ctx, neighbors, *this);
+  ValkeySearch::Instance().ScheduleNeighborCleanup(std::move(neighbors));
 }
 
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,

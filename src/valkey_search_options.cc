@@ -215,18 +215,14 @@ static auto high_priority_weight =
     config::NumberBuilder(kHighPriorityWeight, 100, 0,
                           100)  // Default 100%, range 0-100
         .WithModifyCallback([](auto new_value) {
-          // Update all thread pools
+          // Update reader and writer thread pools only
           auto reader_pool = ValkeySearch::Instance().GetReaderThreadPool();
           auto writer_pool = ValkeySearch::Instance().GetWriterThreadPool();
-          auto cleanup_pool = ValkeySearch::Instance().GetCleanupThreadPool();
           if (reader_pool) {
             reader_pool->SetHighPriorityWeight(new_value);
           }
           if (writer_pool) {
             writer_pool->SetHighPriorityWeight(new_value);
-          }
-          if (cleanup_pool) {
-            cleanup_pool->SetHighPriorityWeight(new_value);
           }
         })
         .Build();

@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Set
 import random
 
 
@@ -388,3 +388,203 @@ class TextQueryBuilder:
         for clause in query.expr.clauses:
             for unary in clause.parts:
                 visit_primary(unary.primary)
+
+@dataclass
+class QueryGenerationConfig:
+    """Configuration for controlling query generation features."""
+    
+    # Term types to include
+    allow_exact_match: bool = True      # Regular word terms
+    allow_prefix: bool = True           # word*
+    allow_suffix: bool = True           # *word
+    allow_phrase: bool = True           # "word1 word2"
+    allow_tag: bool = True              # @field:{value}
+    allow_numeric: bool = True          # @field:[min max]
+    
+    # Operators
+    allow_and: bool = True              # Multiple terms in same clause
+    allow_or: bool = True               # Multiple clauses (|)
+    allow_not: bool = False             # -term (negation)
+    allow_optional: bool = False        # ~term (optional)
+    
+    # Field matching
+    allow_field_match: bool = True      # @field:term
+    force_field_match: bool = False     # Always use @field:term
+    
+    # Grouping
+    allow_groups: bool = True           # (...)
+    max_depth: int = 2                  # Max nesting depth
+    
+    # Phrase options
+    max_phrase_words: int = 3
+    allow_phrase_slop: bool = True
+    allow_phrase_inorder: bool = True
+    
+    # Query complexity
+    max_terms: int = 3
+    min_terms: int = 1
+    
+    # Probabilities (0.0 to 1.0)
+    prob_add_and_term: float = 0.5      # Probability of adding another AND term
+    prob_add_or_clause: float = 0.3     # Probability of adding another OR clause
+    prob_use_group: float = 0.3         # Probability of creating a group
+    prob_use_field: float = 0.5         # Probability of specifying field
+
+
+class ControlledTextQueryBuilder(TextQueryBuilder):
+    """Extended query builder with fine-grained control over query features."""
+    
+    def __init__(self, vocab: List[str], text_fields: List[str], 
+                 tag_values: dict, numeric_ranges: dict,
+                 config: Optional[QueryGenerationConfig] = None):
+        super().__init__(vocab, text_fields, tag_values, numeric_ranges)
+        self.config = config or QueryGenerationConfig()
+    
+    def _get_allowed_term_types(self) -> List[str]:
+        """Get list of allowed term types based on config."""
+        types = []
+        if self.config.allow_exact_match:
+            types.append("word")
+        if self.config.allow_prefix:
+            types.append("prefix")
+        if self.config.allow_suffix:
+            types.append("suffix")
+        if self.config.allow_phrase:
+            types.append("phrase")
+        if self.config.allow_tag and self.tag_values:
+            types.append("tag")
+        if self.config.allow_numeric and self.numeric_ranges:
+            types.append("numeric")
+        
+        if not types:
+            raise ValueError("At least one term type must be allowed")
+        
+        return types
+    
+    def _generate_base_term(self, max_phrase_words: int) -> BaseTerm:
+        """Generate a base term respecting config constraints."""
+        allowed_types = self._get_allowed_term_types()
+        kind = random.choice(allowed_types)
+        
+        if kind == "word":
+            return self._generate_word_term()
+        if kind == "prefix":
+            return self._generate_prefix_term()
+        if kind == "suffix":
+            return self._generate_suffix_term()
+        if kind == "tag":
+            return self._generate_tag_term()
+        if kind == "numeric":
+            return self._generate_numeric_term()
+        if kind == "phrase":
+            return self._generate_phrase_term(max_phrase_words)
+        
+        return self._generate_word_term()
+    
+    def _generate_phrase_term(self, max_phrase_words: int) -> PhraseTerm:
+        """Generate phrase term respecting config."""
+        length = random.randint(1, max_phrase_words)
+        if length <= len(self.vocab):
+            words = random.sample(self.vocab, length)
+        else:
+            words = [random.choice(self.vocab) for _ in range(length)]
+        
+        slop = None
+        if self.config.allow_phrase_slop and random.random() < 0.3:
+            slop = random.choice([1, 2])
+        
+        inorder = False
+        if self.config.allow_phrase_inorder and random.random() < 0.3:
+            inorder = True
+        
+        return PhraseTerm(words=words, slop=slop, inorder=inorder)
+    
+    def _generate_term(self, budget: TermBudget, max_phrase_words: int) -> Term:
+        """Generate term respecting field matching config."""
+        if not budget.can_add_term():
+            raise RuntimeError("No term budget left to generate a Term")
+        budget.consume_term()
+        
+        base = self._generate_base_term(max_phrase_words)
+        
+        # Determine if we should use field matching
+        field = None
+        if isinstance(base, (WordTerm, PrefixTerm, SuffixTerm, PhraseTerm)):
+            if self.config.force_field_match:
+                field = random.choice(self.text_fields)
+            elif self.config.allow_field_match and random.random() < self.config.prob_use_field:
+                field = random.choice(self.text_fields)
+        
+        return Term(field=field, base=base)
+    
+    def _generate_unary_clause(self, budget: TermBudget, max_phrase_words: int, max_depth: int) -> UnaryClause:
+        """Generate unary clause with optional NOT/OPTIONAL operators."""
+        primary = self._generate_primary(budget, max_phrase_words, max_depth)
+        
+        # Determine operator
+        op = ""
+        if self.config.allow_not and random.random() < 0.2:
+            op = "-"
+        elif self.config.allow_optional and random.random() < 0.2:
+            op = "~"
+        
+        return UnaryClause(op=op, primary=primary)
+    
+    def _generate_primary(self, budget: TermBudget, max_phrase_words: int, max_depth: int) -> Primary:
+        """Generate primary respecting grouping config."""
+        if not budget.can_add_term():
+            raise RuntimeError("No term budget left to generate a Primary")
+        
+        can_group = (self.config.allow_groups and 
+                     budget.remaining >= 2 and 
+                     max_depth > 0)
+        
+        if can_group and random.random() < self.config.prob_use_group:
+            expr = self._generate_expression(budget, max_phrase_words, max_depth - 1)
+            return Group(expr=expr)
+        else:
+            return self._generate_term(budget, max_phrase_words)
+    
+    def _generate_clause(self, budget: TermBudget, max_phrase_words: int, max_depth: int) -> Clause:
+        """Generate clause respecting AND config."""
+        parts: List[UnaryClause] = []
+        parts.append(self._generate_unary_clause(budget, max_phrase_words, max_depth))
+        
+        if self.config.allow_and:
+            while budget.can_add_term() and random.random() < self.config.prob_add_and_term:
+                parts.append(self._generate_unary_clause(budget, max_phrase_words, max_depth))
+        
+        return Clause(parts=parts)
+    
+    def _generate_expression(self, budget: TermBudget, max_phrase_words: int, max_depth: int) -> Expression:
+        """Generate expression respecting OR config."""
+        clauses: List[Clause] = []
+        clauses.append(self._generate_clause(budget, max_phrase_words, max_depth))
+        
+        if self.config.allow_or:
+            while budget.can_add_term() and random.random() < self.config.prob_add_or_clause:
+                clauses.append(self._generate_clause(budget, max_phrase_words, max_depth))
+        
+        return Expression(clauses=clauses)
+    
+    def generate(self, seed: Optional[int] = None) -> Query:
+        """Generate query using config settings."""
+        if self.config.max_terms <= 0:
+            raise ValueError("max_terms must be >= 1")
+        
+        if seed is not None:
+            random.seed(seed)
+        
+        budget = TermBudget(max_terms=self.config.max_terms)
+        expr = self._generate_expression(
+            budget, 
+            self.config.max_phrase_words, 
+            self.config.max_depth
+        )
+        query = Query(expr=expr)
+        
+        # Sanity checks
+        total_terms = self.count_terms(query)
+        assert self.config.min_terms <= total_terms <= self.config.max_terms
+        
+        return query

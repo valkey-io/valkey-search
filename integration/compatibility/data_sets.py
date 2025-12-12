@@ -345,8 +345,8 @@ def compute_text_data_sets(schema, field_values, seed=123):
     json_schema_parts = []
     
     for field in text_fields:
-        hash_schema_parts.append(f"{field} TEXT WITHSUFFIXTRIE")
-        json_schema_parts.append(f"$.{field} AS {field} TEXT WITHSUFFIXTRIE")
+        hash_schema_parts.append(f"{field} TEXT WITHSUFFIXTRIE NOSTEM")
+        json_schema_parts.append(f"$.{field} AS {field} TEXT WITHSUFFIXTRIE NOSTEM")
     
     for field in tag_fields:
         hash_schema_parts.append(f"{field} TAG")

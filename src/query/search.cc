@@ -450,6 +450,9 @@ size_t CalcEndIndex(const std::deque<indexes::Neighbor> &neighbors,
       std::min(static_cast<size_t>(parameters.limit.number), neighbors.size()));
 }
 
+// Static buffer multiplier for search result trimming
+static constexpr double kSearchResultBufferMultiplier = 1.5;
+
 SearchResult::SearchResult(size_t total_count,
                            std::deque<indexes::Neighbor> neighbors,
                            const SearchParameters &parameters)
@@ -475,7 +478,8 @@ void SearchResult::TrimResults(std::deque<indexes::Neighbor> &neighbors,
   // Use CalcEndIndex for consistent vector/non-vector handling
   size_t end_needed = CalcEndIndex(neighbors, parameters);
   size_t max_needed =
-      static_cast<size_t>((parameters.limit.first_index + end_needed) * 1.5);
+      static_cast<size_t>((parameters.limit.first_index + end_needed) *
+                          kSearchResultBufferMultiplier);
   // In standalone mode, we can optimize by trimming from front first.
   // Note: We cannot trim from the front in a Cluster Mode setting because
   // each shard X results and we need to trim the OFFSET on the aggregated
@@ -489,7 +493,8 @@ void SearchResult::TrimResults(std::deque<indexes::Neighbor> &neighbors,
     if (start_index > 0 && start_index < neighbors.size()) {
       neighbors.erase(neighbors.begin(), neighbors.begin() + start_index);
       // Adjust max_needed since we removed from front
-      max_needed = static_cast<size_t>(end_needed * 1.5);
+      max_needed =
+          static_cast<size_t>(end_needed * kSearchResultBufferMultiplier);
     } else if (start_index >= neighbors.size()) {
       neighbors.clear();
       return;

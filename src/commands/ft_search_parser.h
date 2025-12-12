@@ -36,6 +36,7 @@ struct SearchCommand : public QueryCommand {
   absl::Status ParseCommand(vmsdk::ArgsIterator &itr) override;
   void SendReply(ValkeyModuleCtx *ctx,
                  query::SearchResult &search_result) override;
+  bool HasSortBy() const override { return false; }
 };
 
 }  // namespace valkey_search

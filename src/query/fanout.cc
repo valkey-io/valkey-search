@@ -162,19 +162,21 @@ struct SearchPartitionResultsTracker {
 
   ~SearchPartitionResultsTracker() {
     absl::MutexLock lock(&mutex);
-    absl::StatusOr<SearchResult> result =
-        SearchResult(0, std::deque<indexes::Neighbor>{});
+    absl::StatusOr<SearchResult> result;
     if (consistency_failed) {
       result = absl::FailedPreconditionError(kFailedPreconditionMsg);
     } else if (reached_oom) {
       result = absl::ResourceExhaustedError(kOOMMsg);
     } else {
+      std::deque<indexes::Neighbor> neighbors;
       while (!results.empty()) {
-        result->neighbors.push_back(
+        neighbors.push_back(
             std::move(const_cast<indexes::Neighbor &>(results.top())));
         results.pop();
       }
-      result->total_count = accumulated_total_count;
+      // Use the trimming constructor to automatically handle offset/limit
+      result = SearchResult(accumulated_total_count, std::move(neighbors),
+                            *parameters);
     }
     callback(result, std::move(parameters));
   }

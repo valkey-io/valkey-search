@@ -127,7 +127,7 @@ struct SearchParameters {
         db_num_(db_num) {}
 };
 
-// Wrapper for search results that optimizes memory usage based on query type
+// Wrapper for search results that trims the neighbor deque based on query type
 struct SearchResult {
   size_t total_count;
   std::deque<indexes::Neighbor> neighbors;
@@ -135,15 +135,17 @@ struct SearchResult {
   bool is_limited;
   // True if neighbors were offset using LIMIT first_index.
   bool is_offsetted;
-  // Constructor with automatic trimming based on query requirements
-  SearchResult(size_t total_count, std::deque<indexes::Neighbor> neighbors,
-               const SearchParameters& parameters);
-  // Constructor for coordinator fanout aggregation - no trimming applied
+
+  // Simple constructor for use cases where no trimming is needed.
   SearchResult(size_t total_count, std::deque<indexes::Neighbor> neighbors)
       : total_count(total_count),
         neighbors(std::move(neighbors)),
         is_limited(false),
         is_offsetted(false) {}
+
+  // Constructor with automatic trimming based on query requirements
+  SearchResult(size_t total_count, std::deque<indexes::Neighbor> neighbors,
+               const SearchParameters& parameters);
 
  private:
   bool NeedsSorting(const SearchParameters& parameters);

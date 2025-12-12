@@ -201,6 +201,13 @@ constexpr absl::string_view kPreferConsistentResults{
 static config::Boolean prefer_consistent_results(kPreferConsistentResults,
                                                  false);
 
+/// Enable neighbor background cleanup
+/// If set to true, neighbor cleanup will be scheduled on background thread
+constexpr absl::string_view kNeighborBackgroundCleanup{
+    "neighbor-background-cleanup"};
+static config::Boolean neighbor_background_cleanup(kNeighborBackgroundCleanup,
+                                                   true);
+
 /// Configure the weight for high priority tasks in thread pools (0-100)
 /// Low priority weight = 100 - high_priority_weight
 constexpr absl::string_view kHighPriorityWeight{"high-priority-weight"};
@@ -344,6 +351,10 @@ const vmsdk::config::Boolean& GetPreferPartialResults() {
 
 const vmsdk::config::Boolean& GetPreferConsistentResults() {
   return static_cast<vmsdk::config::Boolean&>(prefer_consistent_results);
+}
+
+const vmsdk::config::Boolean& GetNeighborBackgroundCleanup() {
+  return static_cast<vmsdk::config::Boolean&>(neighbor_background_cleanup);
 }
 
 vmsdk::config::Number& GetHighPriorityWeight() {

@@ -313,7 +313,6 @@ void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,
     ++Metrics::GetStats().query_failed_requests_cnt;
     ValkeyModule_ReplyWithError(ctx, result.message().data());
   }
-  ValkeySearch::Instance().ScheduleNeighborCleanup(std::move(neighbors));
 }
 
 }  // namespace aggregate

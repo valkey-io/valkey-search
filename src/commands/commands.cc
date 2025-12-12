@@ -55,6 +55,8 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   }
 
   res->parameters->SendReply(ctx, res->neighbors.value());
+  ValkeySearch::Instance().ScheduleNeighborCleanup(
+      std::move(res->neighbors.value()));
   return VALKEYMODULE_OK;
 }
 
@@ -113,6 +115,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
         return absl::OkStatus();
       }
       parameters->SendReply(ctx, neighbors);
+      ValkeySearch::Instance().ScheduleNeighborCleanup(std::move(neighbors));
       return absl::OkStatus();
     }
 

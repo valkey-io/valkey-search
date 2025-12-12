@@ -21,6 +21,7 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/server.h"
 #include "src/index_schema.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/utils.h"
@@ -51,7 +52,8 @@ class ValkeySearch {
     return cleanup_thread_pool_.get();
   }
   void ScheduleNeighborCleanup(std::deque<indexes::Neighbor> neighbors) {
-    if (cleanup_thread_pool_) {
+    if (options::GetNeighborBackgroundCleanup().GetValue() &&
+        cleanup_thread_pool_) {
       cleanup_thread_pool_->Schedule(
           [neighbors = std::move(neighbors)]() mutable { neighbors.clear(); },
           vmsdk::ThreadPool::Priority::kLow);

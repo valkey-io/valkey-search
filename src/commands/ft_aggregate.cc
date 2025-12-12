@@ -305,8 +305,8 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
 }
 
 bool AggregateParameters::HasSortBy() const {
-  for (const auto& stage : stages_) {
-    if (dynamic_cast<const SortBy*>(stage.get()) != nullptr) {
+  for (const auto &stage : stages_) {
+    if (dynamic_cast<const SortBy *>(stage.get()) != nullptr) {
       return true;
     }
   }

@@ -7,18 +7,28 @@
 
 #include "src/commands/commands.h"
 
+#include <memory>
+#include <vector>
+
 #include "fanout.h"
 #include "ft_create_parser.h"
 #include "src/acl.h"
 #include "src/commands/ft_search.h"
 #include "src/coordinator/metadata_manager.h"
+#include "src/metrics.h"
 #include "src/query/fanout.h"
+#include "src/query/inflight_retry.h"
+#include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
 #include "valkey_search_options.h"
+#include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/log.h"
+#include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/utils.h"
 
 namespace valkey_search {
 namespace async {
@@ -28,6 +38,48 @@ struct Result {
   absl::StatusOr<std::deque<indexes::Neighbor>> neighbors;
   std::unique_ptr<QueryCommand> parameters;
 };
+
+// Context for timer-based retry when waiting for in-flight keys
+struct InFlightRetryContext {
+  vmsdk::BlockedClient blocked_client;
+  std::unique_ptr<Result> result;
+  std::vector<InternedStringPtr>
+      neighbor_keys;  // Cached to avoid O(n) copy on each retry
+
+  InFlightRetryContext(vmsdk::BlockedClient bc, std::unique_ptr<Result> res,
+                       std::vector<InternedStringPtr> keys)
+      : blocked_client(std::move(bc)),
+        result(std::move(res)),
+        neighbor_keys(std::move(keys)) {}
+};
+
+void InFlightRetryTimerCallback(ValkeyModuleCtx *ctx, void *data);
+
+void CheckAndHandleInFlightConflicts(ValkeyModuleCtx *ctx,
+                                     InFlightRetryContext *retry_ctx) {
+  auto &result = retry_ctx->result;
+
+  if (result->parameters->cancellation_token->IsCancelled()) {
+    retry_ctx->blocked_client.SetReplyPrivateData(result.release());
+    delete retry_ctx;
+    return;
+  }
+
+  if (query::CheckInFlightAndScheduleRetry(
+          ctx, retry_ctx, retry_ctx->neighbor_keys,
+          result->parameters->index_schema, InFlightRetryTimerCallback,
+          "Full-text query")) {
+    return;
+  }
+
+  retry_ctx->blocked_client.SetReplyPrivateData(result.release());
+  delete retry_ctx;
+}
+
+void InFlightRetryTimerCallback(ValkeyModuleCtx *ctx, void *data) {
+  auto *retry_ctx = static_cast<InFlightRetryContext *>(data);
+  CheckAndHandleInFlightConflicts(ctx, retry_ctx);
+}
 
 int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
             [[maybe_unused]] int argc) {
@@ -128,6 +180,27 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
           .neighbors = std::move(neighbors),
           .parameters = std::move(upcast_parameters),
       });
+
+      // For pure full-text queries with content, check for in-flight key
+      // conflicts. Skip if no_content since we only return key names without
+      // fetching/evaluating data.
+      if (!result->parameters->no_content &&
+          query::IsPureFullTextQuery(*result->parameters)) {
+        auto neighbor_keys =
+            query::CollectNeighborKeys(result->neighbors.value());
+        if (result->parameters->index_schema->HasAnyConflictingInFlightKeys(
+                neighbor_keys)) {
+          ++Metrics::GetStats().fulltext_query_blocked_cnt;
+          auto *retry_ctx = new async::InFlightRetryContext(
+              std::move(blocked_client), std::move(result),
+              std::move(neighbor_keys));
+
+          query::ScheduleInFlightRetryOnMain(retry_ctx,
+                                             async::InFlightRetryTimerCallback);
+          return;
+        }
+      }
+
       blocked_client.SetReplyPrivateData(result.release());
     };
 

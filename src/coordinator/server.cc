@@ -11,7 +11,9 @@
 #include <deque>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
+#include <vector>
 
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -32,10 +34,11 @@
 #include "src/index_schema.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
-#include "src/query/fanout_operation_base.h"
+#include "src/query/inflight_retry.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
+#include "src/valkey_search.h"
 #include "valkey_search_options.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/latency_sampler.h"
@@ -112,6 +115,85 @@ void SerializeNeighbors(SearchIndexPartitionResponse* response,
   }
 }
 
+namespace {
+
+// Context for timer-based retry when waiting for in-flight keys on remote shard
+struct RemoteInFlightRetryContext {
+  SearchIndexPartitionResponse* response;
+  grpc::ServerUnaryReactor* reactor;
+  std::unique_ptr<vmsdk::StopWatch> latency_sample;
+  std::deque<indexes::Neighbor> neighbors;
+  std::unique_ptr<query::SearchParameters> parameters;
+  std::vector<InternedStringPtr> neighbor_keys;
+
+  RemoteInFlightRetryContext(SearchIndexPartitionResponse* resp,
+                             grpc::ServerUnaryReactor* react,
+                             std::unique_ptr<vmsdk::StopWatch> sample,
+                             std::deque<indexes::Neighbor> nbrs,
+                             std::unique_ptr<query::SearchParameters> params,
+                             std::vector<InternedStringPtr> keys)
+      : response(resp),
+        reactor(react),
+        latency_sample(std::move(sample)),
+        neighbors(std::move(nbrs)),
+        parameters(std::move(params)),
+        neighbor_keys(std::move(keys)) {}
+};
+
+void RemoteInFlightRetryTimerCallback(ValkeyModuleCtx* ctx, void* data);
+
+void FinishRemoteSearchResponse(ValkeyModuleCtx* ctx,
+                                RemoteInFlightRetryContext* retry_ctx) {
+  const auto& attribute_data_type =
+      retry_ctx->parameters->index_schema->GetAttributeDataType();
+  if (retry_ctx->parameters->attribute_alias.empty()) {
+    query::ProcessNonVectorNeighborsForReply(
+        ctx, attribute_data_type, retry_ctx->neighbors, *retry_ctx->parameters);
+  } else {
+    auto vector_identifier =
+        retry_ctx->parameters->index_schema
+            ->GetIdentifier(retry_ctx->parameters->attribute_alias)
+            .value();
+    query::ProcessNeighborsForReply(ctx, attribute_data_type,
+                                    retry_ctx->neighbors,
+                                    *retry_ctx->parameters, vector_identifier);
+  }
+  SerializeNeighbors(retry_ctx->response, retry_ctx->neighbors);
+  retry_ctx->reactor->Finish(grpc::Status::OK);
+  RecordSearchMetrics(false, std::move(retry_ctx->latency_sample));
+  delete retry_ctx;
+}
+
+void CheckAndHandleRemoteInFlightConflicts(
+    ValkeyModuleCtx* ctx, RemoteInFlightRetryContext* retry_ctx) {
+  if (retry_ctx->parameters->cancellation_token->IsCancelled()) {
+    if (!retry_ctx->parameters->enable_partial_results) {
+      retry_ctx->reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
+                                  "Search operation cancelled due to timeout"});
+      RecordSearchMetrics(true, std::move(retry_ctx->latency_sample));
+      delete retry_ctx;
+      return;
+    }
+    FinishRemoteSearchResponse(ctx, retry_ctx);
+    return;
+  }
+
+  if (query::CheckInFlightAndScheduleRetry(
+          ctx, retry_ctx, retry_ctx->neighbor_keys,
+          retry_ctx->parameters->index_schema, RemoteInFlightRetryTimerCallback,
+          "Remote full-text query")) {
+    return;
+  }
+  FinishRemoteSearchResponse(ctx, retry_ctx);
+}
+
+void RemoteInFlightRetryTimerCallback(ValkeyModuleCtx* ctx, void* data) {
+  auto* retry_ctx = static_cast<RemoteInFlightRetryContext*>(data);
+  CheckAndHandleRemoteInFlightConflicts(ctx, retry_ctx);
+}
+
+}  // namespace
+
 grpc::Status Service::PerformSlotConsistencyCheck(
     uint64_t expected_slot_fingerprint) {
   // compare slot fingerprint
@@ -157,6 +239,26 @@ query::SearchResponseCallback Service::MakeSearchCallback(
       RecordSearchMetrics(true, std::move(latency_sample));
       return;
     }
+    // For pure full-text queries with content, check for in-flight key
+    // conflicts. Skip if no_content since we only return key names without
+    // fetching/evaluating data.
+    if (!parameters->no_content && query::IsPureFullTextQuery(*parameters)) {
+      auto neighbor_keys = query::CollectNeighborKeys(neighbors.value());
+      if (parameters->index_schema->HasAnyConflictingInFlightKeys(
+              neighbor_keys)) {
+        // Has conflicts - need to wait for in-flight mutations
+        ++Metrics::GetStats().fulltext_query_blocked_cnt;
+        auto* retry_ctx = new RemoteInFlightRetryContext(
+            response, reactor, std::move(latency_sample),
+            std::move(neighbors.value()), std::move(parameters),
+            std::move(neighbor_keys));
+
+        query::ScheduleInFlightRetryOnMain(retry_ctx,
+                                           RemoteInFlightRetryTimerCallback);
+        return;
+      }
+    }
+
     if (parameters->no_content) {
       SerializeNeighbors(response, neighbors.value());
       reactor->Finish(grpc::Status::OK);

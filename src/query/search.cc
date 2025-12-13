@@ -486,8 +486,9 @@ void SearchResult::TrimResults(std::deque<indexes::Neighbor> &neighbors,
   // Note: We cannot trim from the front in a Cluster Mode setting because
   // each shard X results and we need to trim the OFFSET on the aggregated
   // results. Thus, we can only trim from the end in searches for individual
-  // nodes. We can optimize this in the future by trimming from the front in the
-  // coordinator after merging.
+  // nodes.
+  // In cluster mode, the offset based trimming is applied after merging all
+  // results from shards at the coordinator level.
   if (!ValkeySearch::Instance().IsCluster()) {
     this->is_offsetted = true;
     size_t start_index = CalcStartIndex(neighbors, parameters);

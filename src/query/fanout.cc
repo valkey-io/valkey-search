@@ -174,7 +174,9 @@ struct SearchPartitionResultsTracker {
             std::move(const_cast<indexes::Neighbor &>(results.top())));
         results.pop();
       }
-      // Use the trimming constructor to automatically handle offset/limit
+      // SearchResult construction automatically applies trimming based on LIMIT
+      // offset count IF the command allows it (ie - it does not require
+      // complete results).
       result = SearchResult(accumulated_total_count, std::move(neighbors),
                             *parameters);
     }

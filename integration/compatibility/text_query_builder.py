@@ -262,8 +262,20 @@ class TextQueryBuilder:
             words = random.sample(self.vocab, length)
         else:
             words = [random.choice(self.vocab) for _ in range(length)]
-        slop = random.choice([None, 1, 2])
-        inorder = random.choice([False, True])
+
+        # Handle slop
+        slop = None
+        if self.config.force_phrase_slop:
+            slop = random.choice([1, 2])
+        elif self.config.allow_phrase_slop and random.random() < 0.3:
+            slop = random.choice([1, 2])
+        
+        # Handle inorder
+        inorder = False
+        if self.config.force_phrase_inorder:
+            inorder = True
+        elif self.config.allow_phrase_inorder and random.random() < 0.3:
+            inorder = True
         return PhraseTerm(words=words, slop=slop, inorder=inorder)
     
     def _generate_base_term(self, max_phrase_words: int) -> BaseTerm:
@@ -419,6 +431,8 @@ class QueryGenerationConfig:
     max_phrase_words: int = 3
     allow_phrase_slop: bool = True
     allow_phrase_inorder: bool = True
+    force_phrase_inorder: bool = False
+    force_phrase_slop: bool = False
     
     # Query complexity
     max_terms: int = 3

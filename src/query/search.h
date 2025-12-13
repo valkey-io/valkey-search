@@ -119,7 +119,11 @@ struct SearchParameters {
   } parse_vars;
   bool IsNonVectorQuery() const { return attribute_alias.empty(); }
   bool IsVectorQuery() const { return !IsNonVectorQuery(); }
-  virtual bool HasSortBy() const { return false; }
+  // Indicates whether the search requires complete results (neighbors/keys) to
+  // be able to return correct results. An example of this is when sorting on a
+  // particular is needed on the results. This should be overridden in derived
+  // classes if needed. The default implementation returns false.
+  virtual bool RequiresCompleteResults() const { return false; }
   SearchParameters(uint64_t timeout, grpc::CallbackServerContext* context,
                    uint32_t db_num)
       : timeout_ms(timeout),
@@ -127,12 +131,19 @@ struct SearchParameters {
         db_num_(db_num) {}
 };
 
+// Indicates the range of neighbors to serialize in a search response.
+struct SerializationRange {
+  size_t start_index;
+  size_t end_index;
+  size_t count() const { return end_index - start_index; }
+};
+
 // Wrapper for search results that trims the neighbor deque based on query type
 struct SearchResult {
   size_t total_count;
   std::deque<indexes::Neighbor> neighbors;
   // True if neighbors were limited using LIMIT count with a buffer multiplier.
-  bool is_limited;
+  bool is_limited_with_buffer;
   // True if neighbors were offset using LIMIT first_index.
   bool is_offsetted;
 
@@ -140,15 +151,18 @@ struct SearchResult {
   SearchResult(size_t total_count, std::deque<indexes::Neighbor> neighbors)
       : total_count(total_count),
         neighbors(std::move(neighbors)),
-        is_limited(false),
+        is_limited_with_buffer(false),
         is_offsetted(false) {}
 
   // Constructor with automatic trimming based on query requirements
   SearchResult(size_t total_count, std::deque<indexes::Neighbor> neighbors,
                const SearchParameters& parameters);
+  // Get the range of neighbors to serialize in response.
+  SerializationRange GetSerializationRange(
+      const SearchParameters& parameters) const;
 
  private:
-  bool NeedsSorting(const SearchParameters& parameters);
+  bool RetainAllNeighbors(const SearchParameters& parameters);
   void TrimResults(std::deque<indexes::Neighbor>& neighbors,
                    const SearchParameters& parameters);
 };

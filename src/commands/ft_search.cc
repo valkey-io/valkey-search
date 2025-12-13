@@ -36,25 +36,6 @@ namespace {
 // FT.SEARCH idx "*=>[KNN 10 @vec $BLOB AS score]" PARAMS 2 BLOB
 // "\x12\xa9\xf5\x6c" DIALECT 2
 
-struct SerializationRange {
-  size_t start_index;
-  size_t end_index;
-  size_t count() const { return end_index - start_index; }
-};
-
-SerializationRange GetSerializationRange(
-    const query::SearchResult &search_result,
-    const query::SearchParameters &parameters) {
-  const auto &neighbors = search_result.neighbors;
-  const size_t start_index = search_result.is_offsetted
-                                 ? 0
-                                 : query::CalcStartIndex(neighbors, parameters);
-  const size_t end_index =
-      std::min(start_index + query::CalcEndIndex(neighbors, parameters),
-               neighbors.size());
-  return {start_index, end_index};
-}
-
 void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
                          const query::SearchResult &search_result,
                          const query::SearchParameters &parameters) {
@@ -71,7 +52,7 @@ void SendReplyNoContent(ValkeyModuleCtx *ctx,
                         const query::SearchResult &search_result,
                         const query::SearchParameters &parameters) {
   const auto &neighbors = search_result.neighbors;
-  auto range = GetSerializationRange(search_result, parameters);
+  auto range = search_result.GetSerializationRange(parameters);
 
   ValkeyModule_ReplyWithArray(ctx, range.count() + 1);
   ReplyAvailNeighbors(ctx, search_result, parameters);
@@ -94,7 +75,7 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
                         const query::SearchParameters &parameters) {
   const auto &neighbors = search_result.neighbors;
   CHECK_GT(static_cast<size_t>(parameters.k), parameters.limit.first_index);
-  auto range = GetSerializationRange(search_result, parameters);
+  auto range = search_result.GetSerializationRange(parameters);
 
   ValkeyModule_ReplyWithArray(ctx, 2 * range.count() + 1);
   ReplyAvailNeighbors(ctx, search_result, parameters);
@@ -138,7 +119,7 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
                                  const query::SearchResult &search_result,
                                  const query::SearchParameters &parameters) {
   const auto &neighbors = search_result.neighbors;
-  auto range = GetSerializationRange(search_result, parameters);
+  auto range = search_result.GetSerializationRange(parameters);
 
   ValkeyModule_ReplyWithArray(ctx, 2 * range.count() + 1);
   ReplyAvailNeighbors(ctx, search_result, parameters);

@@ -36,7 +36,11 @@ struct SearchCommand : public QueryCommand {
   absl::Status ParseCommand(vmsdk::ArgsIterator &itr) override;
   void SendReply(ValkeyModuleCtx *ctx,
                  query::SearchResult &search_result) override;
-  bool HasSortBy() const override { return false; }
+  // By default, FT.SEARCH does not require complete results and can optimized
+  // with LIMIT based trimming.
+  // TODO: When SORTBY or similar clauses are supported, implement the correct
+  // logic here to return true when those clauses are present.
+  bool RequiresCompleteResults() const override { return false; }
 };
 
 }  // namespace valkey_search

@@ -305,8 +305,9 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
 }
 
 // TODO: Implement the correct logic to detect if the FT.AGGREGATE query has a
-// SORTBY requirement.
-bool AggregateParameters::HasSortBy() const {
+// clause (e.g. sorting) that requires all neighbors to be returned for the
+// correct search result.
+bool AggregateParameters::RequiresCompleteResults() const {
   for (const auto &stage : stages_) {
     if (dynamic_cast<const SortBy *>(stage.get()) != nullptr) {
       return true;

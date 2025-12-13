@@ -65,7 +65,9 @@ struct AggregateParameters : public expr::Expression::CompileContext,
     }
   }
 
-  bool HasSortBy() const override;
+  // Determine if we need full results or if we can optimize with trimming via
+  // LIMIT offset & count.
+  bool RequiresCompleteResults() const override;
 
   //
   // Information for each index position in a Record

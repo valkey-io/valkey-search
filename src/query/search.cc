@@ -456,9 +456,11 @@ static constexpr double kSearchResultBufferMultiplier = 1.5;
 SearchResult::SearchResult(size_t total_count,
                            std::deque<indexes::Neighbor> neighbors,
                            const SearchParameters &parameters)
-    : total_count(total_count), is_limited(false), is_offsetted(false) {
-  // Check if sorting is needed first. Trim otherwise.
-  if (NeedsSorting(parameters)) {
+    : total_count(total_count),
+      is_limited_with_buffer(false),
+      is_offsetted(false) {
+  // Check if the command needs all results (e.g. for sorting). Trim otherwise.
+  if (RetainAllNeighbors(parameters)) {
     this->neighbors = std::move(neighbors);
   } else {
     this->neighbors = std::move(neighbors);
@@ -466,10 +468,10 @@ SearchResult::SearchResult(size_t total_count,
   }
 }
 
-// Determine if we need full results or can optimize with limiting.
-// When SORTBY is present, we need full results to sort correctly.
-bool SearchResult::NeedsSorting(const SearchParameters &parameters) {
-  return parameters.HasSortBy();
+// Determine if we need full results or if we can optimize with trimming via
+// LIMIT offset & count.
+bool SearchResult::RetainAllNeighbors(const SearchParameters &parameters) {
+  return parameters.RequiresCompleteResults();
 }
 
 // Apply limiting in background thread if possible.
@@ -504,10 +506,21 @@ void SearchResult::TrimResults(std::deque<indexes::Neighbor> &neighbors,
   if (neighbors.size() <= max_needed) {
     return;
   }
-  // Apply limiting
-  this->is_limited = true;
+  // Apply limiting with buffer
+  this->is_limited_with_buffer = true;
   neighbors.erase(neighbors.begin() + max_needed, neighbors.end());
   return;
+}
+
+// Determine the range of neighbors to serialize in the response.
+SerializationRange SearchResult::GetSerializationRange(
+    const SearchParameters &parameters) const {
+  const size_t start_index =
+      is_offsetted ? 0 : query::CalcStartIndex(neighbors, parameters);
+  const size_t end_index =
+      std::min(start_index + query::CalcEndIndex(neighbors, parameters),
+               neighbors.size());
+  return {start_index, end_index};
 }
 
 absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,

@@ -21,16 +21,13 @@ import "google/protobuf/any.proto";
 service Coordinator {
   // Get the current schema metadata.
   rpc GetGlobalMetadata(GetGlobalMetadataRequest)
-      returns (GetGlobalMetadataResponse) {
-  }
+      returns (GetGlobalMetadataResponse) {}
   // Search the index partition for documents.
   rpc SearchIndexPartition(SearchIndexPartitionRequest)
-      returns (SearchIndexPartitionResponse) {
-  }
+      returns (SearchIndexPartitionResponse) {}
   // Get index info across cluster
   rpc InfoIndexPartition(InfoIndexPartitionRequest)
-      returns (InfoIndexPartitionResponse) {
-  }
+      returns (InfoIndexPartitionResponse) {}
 }
 
 message LimitParameter {
@@ -113,6 +110,7 @@ message NeighborEntry {
 
 message SearchIndexPartitionResponse {
   repeated NeighborEntry neighbors = 1;
+  uint64 total_count = 2;
 }
 
 message AttributeContentEntry {

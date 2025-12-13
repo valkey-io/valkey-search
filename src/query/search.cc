@@ -32,6 +32,7 @@
 #include "src/metrics.h"
 #include "src/query/planner.h"
 #include "src/query/predicate.h"
+#include "src/valkey_search.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
@@ -424,9 +425,100 @@ absl::StatusOr<std::deque<indexes::Neighbor>> DoSearch(
   return PerformVectorSearch(vector_index, parameters);
 }
 
-absl::StatusOr<std::deque<indexes::Neighbor>> Search(
-    const SearchParameters &parameters, SearchMode search_mode) {
-  return MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters);
+// Helper functions to calculate start/end index with vector/non-vector
+// awareness
+size_t CalcStartIndex(const std::deque<indexes::Neighbor> &neighbors,
+                      const SearchParameters &parameters) {
+  if (!parameters.IsNonVectorQuery()) {
+    CHECK_GT(parameters.k, parameters.limit.first_index);
+  }
+  if (neighbors.size() <= parameters.limit.first_index) {
+    return neighbors.size();
+  }
+  return parameters.limit.first_index;
+}
+
+size_t CalcEndIndex(const std::deque<indexes::Neighbor> &neighbors,
+                    const SearchParameters &parameters) {
+  if (parameters.IsNonVectorQuery()) {
+    return std::min(static_cast<size_t>(parameters.limit.number),
+                    neighbors.size());
+  }
+  // Vector query
+  return std::min(
+      static_cast<size_t>(parameters.k),
+      std::min(static_cast<size_t>(parameters.limit.number), neighbors.size()));
+}
+
+// Static buffer multiplier for search result trimming
+static constexpr double kSearchResultBufferMultiplier = 1.5;
+
+SearchResult::SearchResult(size_t total_count,
+                           std::deque<indexes::Neighbor> neighbors,
+                           const SearchParameters &parameters)
+    : total_count(total_count), is_limited(false), is_offsetted(false) {
+  // Check if sorting is needed first. Trim otherwise.
+  if (NeedsSorting(parameters)) {
+    this->neighbors = std::move(neighbors);
+  } else {
+    this->neighbors = std::move(neighbors);
+    TrimResults(this->neighbors, parameters);
+  }
+}
+
+// Determine if we need full results or can optimize with limiting.
+// When SORTBY is present, we need full results to sort correctly.
+bool SearchResult::NeedsSorting(const SearchParameters &parameters) {
+  return parameters.HasSortBy();
+}
+
+// Apply limiting in background thread if possible.
+void SearchResult::TrimResults(std::deque<indexes::Neighbor> &neighbors,
+                               const SearchParameters &parameters) {
+  // Use CalcEndIndex for consistent vector/non-vector handling
+  size_t end_needed = CalcEndIndex(neighbors, parameters);
+  size_t max_needed =
+      static_cast<size_t>((parameters.limit.first_index + end_needed) *
+                          kSearchResultBufferMultiplier);
+  // In standalone mode, we can optimize by trimming from front first.
+  // Note: We cannot trim from the front in a Cluster Mode setting because
+  // each shard X results and we need to trim the OFFSET on the aggregated
+  // results. Thus, we can only trim from the end in searches for individual
+  // nodes. We can optimize this in the future by trimming from the front in the
+  // coordinator after merging.
+  if (!ValkeySearch::Instance().IsCluster()) {
+    this->is_offsetted = true;
+    size_t start_index = CalcStartIndex(neighbors, parameters);
+    // Trim from front (apply offset)
+    if (start_index > 0 && start_index < neighbors.size()) {
+      neighbors.erase(neighbors.begin(), neighbors.begin() + start_index);
+      // Adjust max_needed since we removed from front
+      max_needed =
+          static_cast<size_t>(end_needed * kSearchResultBufferMultiplier);
+    } else if (start_index >= neighbors.size()) {
+      neighbors.clear();
+      return;
+    }
+  }
+  // If we don't need to limit, return early.
+  if (neighbors.size() <= max_needed) {
+    return;
+  }
+  // Apply limiting
+  this->is_limited = true;
+  neighbors.erase(neighbors.begin() + max_needed, neighbors.end());
+  return;
+}
+
+absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,
+                                    SearchMode search_mode) {
+  auto result =
+      MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters);
+  if (!result.ok()) {
+    return result.status();
+  }
+  size_t total_count = result.value().size();
+  return SearchResult(total_count, std::move(result.value()), parameters);
 }
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,

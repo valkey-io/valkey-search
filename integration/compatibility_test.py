@@ -370,7 +370,7 @@ def do_answer(client, expected, data_set):
     return data_set
 
 class TestAnswersCMD(ValkeySearchTestCaseBase):
-    @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz"])
+    @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz", "text-search-answers.pickle.gz"])
     def test_answers(self, answers):
         global client, data_set
         global correct_answers, failed_tests, passed_tests

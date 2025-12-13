@@ -135,29 +135,29 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
             config=config_suffix
         )
     
-    # def test_text_phrase(self, key_type, dialect):
-    #     config_phrase = QueryGenerationConfig(
-    #         allow_exact_match=False,
-    #         allow_prefix=False,
-    #         allow_suffix=True,
-    #         allow_phrase=True,
-    #         allow_tag=False,
-    #         allow_numeric=False,
-    #         allow_and=False,
-    #         allow_or=False,
-    #         allow_field_match=True,
-    #         max_terms=3,
-    #         max_depth=0,
-    #         max_phrase_words=3,
-    #         prob_use_field=1
-    #     )
-    #     self.generate_and_execute_queries(
-    #         data_set_name="mixed content",
-    #         key_type=key_type,
-    #         dialect=dialect,
-    #         max_queries=self.MAX_QUERIES,
-    #         config=config_phrase
-    #     )
+    def test_text_phrase(self, key_type, dialect):
+        config_phrase = QueryGenerationConfig(
+            allow_exact_match=False,
+            allow_prefix=False,
+            allow_suffix=False,
+            allow_phrase=False,
+            allow_tag=False,
+            allow_numeric=False,
+            allow_and=False,
+            allow_or=False,
+            allow_field_match=True,
+            max_terms=3,
+            max_depth=0,
+            max_phrase_words=3,
+            prob_use_field=1,
+        )
+        self.generate_and_execute_queries(
+            data_set_name="mixed content",
+            key_type=key_type,
+            dialect=dialect,
+            max_queries=self.MAX_QUERIES,
+            config=config_phrase
+        )
 
     def test_tag(self, key_type, dialect):
         config_tag = QueryGenerationConfig(

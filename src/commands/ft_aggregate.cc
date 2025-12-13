@@ -304,6 +304,8 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
+// TODO: Implement the correct logic to detect if the FT.AGGREGATE query has a
+// SORTBY requirement.
 bool AggregateParameters::HasSortBy() const {
   for (const auto &stage : stages_) {
     if (dynamic_cast<const SortBy *>(stage.get()) != nullptr) {

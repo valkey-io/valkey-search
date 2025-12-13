@@ -56,9 +56,9 @@ struct NeighborComparator {
     if (a.distance != b.distance) {
       return a.distance < b.distance;
     }
-    // Secondary sort: by key ptr for stable ordering when distances are equal.
-    // e.g. primarily used in non vector queries without scores.
-    return a.external_id.get() > b.external_id.get();
+    // Secondary sort: by key for consistent ordering when distances are equal.
+    // Primarily used in non vector queries without scores (distance = 0).
+    return a.external_id.get()->Str() > b.external_id.get()->Str();
   }
 };
 
@@ -75,7 +75,7 @@ struct SearchPartitionResultsTracker {
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
   std::atomic_bool reached_oom{false};
   std::atomic_bool consistency_failed{false};
-  size_t accumulated_total_count ABSL_GUARDED_BY(mutex) = 0;
+  std::atomic<size_t> accumulated_total_count{0};
 
   SearchPartitionResultsTracker(int outstanding_requests, int k,
                                 query::SearchResponseCallback callback,
@@ -111,7 +111,8 @@ struct SearchPartitionResultsTracker {
     }
 
     absl::MutexLock lock(&mutex);
-    accumulated_total_count += response.total_count();
+    accumulated_total_count.fetch_add(response.total_count(),
+                                      std::memory_order_relaxed);
     while (response.neighbors_size() > 0) {
       auto neighbor_entry = std::unique_ptr<coordinator::NeighborEntry>(
           response.mutable_neighbors()->ReleaseLast());
@@ -141,8 +142,7 @@ struct SearchPartitionResultsTracker {
   }
 
   void AddTotalCount(size_t count) {
-    absl::MutexLock lock(&mutex);
-    accumulated_total_count += count;
+    accumulated_total_count.fetch_add(count, std::memory_order_relaxed);
   }
 
   void AddResult(indexes::Neighbor &neighbor)
@@ -221,9 +221,11 @@ absl::Status PerformSearchFanoutAsync(
     vmsdk::ThreadPool *thread_pool, query::SearchResponseCallback callback) {
   auto request = coordinator::ParametersToGRPCSearchRequest(*parameters);
   if (parameters->IsNonVectorQuery()) {
-    // For non vector, use the LIMIT based range.
-    request->mutable_limit()->set_first_index(parameters->limit.first_index);
-    request->mutable_limit()->set_number(parameters->limit.number);
+    // For non vector, use the LIMIT based range. Ensure we fetch enough
+    // results to cover offset + number.
+    request->mutable_limit()->set_first_index(0);
+    request->mutable_limit()->set_number(parameters->limit.first_index +
+                                         parameters->limit.number);
   } else {
     // Vector searches: Use k as the limit to find top k results. In worst case,
     // all top k results are from a single shard, so no need to fetch more than

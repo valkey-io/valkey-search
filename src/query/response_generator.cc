@@ -24,6 +24,7 @@
 #include "src/metrics.h"
 #include "src/query/predicate.h"
 #include "src/query/search.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -112,6 +113,8 @@ class PredicateEvaluator : public query::Evaluator {
   const RecordsMap &records_;
 };
 
+DEV_INTEGER_COUNTER(query, predicate_revalidation);
+
 bool VerifyFilter(const query::SearchParameters &parameters,
                   const RecordsMap &records, const indexes::Neighbor &n) {
   auto predicate = parameters.filter_parse_results.root_predicate.get();
@@ -123,6 +126,7 @@ bool VerifyFilter(const query::SearchParameters &parameters,
   if (db_seq == n.sequence_number) {
     return true;
   }
+  predicate_revalidation.Increment();
   PredicateEvaluator evaluator(records);
   return predicate->Evaluate(evaluator);
 }

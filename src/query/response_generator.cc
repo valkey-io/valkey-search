@@ -112,9 +112,15 @@ class PredicateEvaluator : public query::Evaluator {
   const RecordsMap &records_;
 };
 
-bool VerifyFilter(const query::Predicate *predicate,
-                  const RecordsMap &records) {
+bool VerifyFilter(const query::SearchParameters &parameters,
+                  const RecordsMap &records, const indexes::Neighbor &n) {
+  auto predicate = parameters.filter_parse_results.root_predicate.get();
   if (predicate == nullptr) {
+    return true;
+  }
+  auto db_seq =
+      parameters.index_schema->GetDbMutationSequenceNumber(n.external_id);
+  if (db_seq == n.sequence_number) {
     return true;
   }
   PredicateEvaluator evaluator(records);
@@ -123,8 +129,9 @@ bool VerifyFilter(const query::Predicate *predicate,
 
 absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
-    const query::SearchParameters &parameters, absl::string_view key,
-    const std::string &vector_identifier) {
+    const query::SearchParameters &parameters,
+    const indexes::Neighbor &neighbor, const std::string &vector_identifier) {
+  auto key = neighbor.external_id->Str();
   absl::flat_hash_set<absl::string_view> identifiers;
   identifiers.insert(kJsonRootElementQuery);
   for (const auto &filter_identifier :
@@ -140,8 +147,7 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
   if (parameters.filter_parse_results.filter_identifiers.empty()) {
     return content;
   }
-  if (!VerifyFilter(parameters.filter_parse_results.root_predicate.get(),
-                    content)) {
+  if (!VerifyFilter(parameters, content, neighbor)) {
     return absl::NotFoundError("Verify filter failed");
   }
   RecordsMap return_content;
@@ -157,13 +163,14 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
 
 absl::StatusOr<RecordsMap> GetContent(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
-    const query::SearchParameters &parameters, absl::string_view key,
-    const std::string &vector_identifier) {
+    const query::SearchParameters &parameters,
+    const indexes::Neighbor &neighbor, const std::string &vector_identifier) {
+  auto key = neighbor.external_id->Str();
   if (attribute_data_type.ToProto() ==
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON &&
       parameters.return_attributes.empty()) {
-    return GetContentNoReturnJson(ctx, attribute_data_type, parameters, key,
-                                  vector_identifier);
+    return GetContentNoReturnJson(ctx, attribute_data_type, parameters,
+                                  neighbor, vector_identifier);
   }
   absl::flat_hash_set<absl::string_view> identifiers;
   for (const auto &return_attribute : parameters.return_attributes) {
@@ -178,14 +185,14 @@ absl::StatusOr<RecordsMap> GetContent(
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
-  VMSDK_ASSIGN_OR_RETURN(auto content, attribute_data_type.FetchAllRecords(
-                                           ctx, vector_identifier,
-                                           key_obj.get(), key, identifiers));
+  VMSDK_ASSIGN_OR_RETURN(auto content,
+                         attribute_data_type.FetchAllRecords(
+                             ctx, vector_identifier, key_obj.get(),
+                             neighbor.external_id->Str(), identifiers));
   if (parameters.filter_parse_results.filter_identifiers.empty()) {
     return content;
   }
-  if (!VerifyFilter(parameters.filter_parse_results.root_predicate.get(),
-                    content)) {
+  if (!VerifyFilter(parameters, content, neighbor)) {
     return absl::NotFoundError("Verify filter failed");
   }
   if (parameters.return_attributes.empty()) {
@@ -235,8 +242,8 @@ void ProcessNeighborsForReply(ValkeyModuleCtx *ctx,
     if (neighbor.attribute_contents.has_value()) {
       continue;
     }
-    auto content = GetContent(ctx, attribute_data_type, parameters,
-                              *neighbor.external_id, identifier);
+    auto content =
+        GetContent(ctx, attribute_data_type, parameters, neighbor, identifier);
     if (!content.ok()) {
       continue;
     }

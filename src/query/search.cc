@@ -426,7 +426,16 @@ absl::StatusOr<std::deque<indexes::Neighbor>> DoSearch(
 
 absl::StatusOr<std::deque<indexes::Neighbor>> Search(
     const SearchParameters &parameters, SearchMode search_mode) {
-  return MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters);
+  auto result =
+      MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters);
+  if (result.ok()) {
+    for (auto &n : *result) {
+      n.sequence_number =
+          parameters.index_schema->GetIndexMutationSequenceNumber(
+              n.external_id);
+    }
+  }
+  return result;
 }
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,

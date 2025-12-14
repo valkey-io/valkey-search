@@ -379,7 +379,7 @@ void IndexSchema::OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
 
 bool AddAttributeData(IndexSchema::MutatedAttributes &mutated_attributes,
                       const Attribute &attribute,
-                      AttributeDataType &attribute_data_type,
+                      const AttributeDataType &attribute_data_type,
                       vmsdk::UniqueValkeyString record) {
   if (record) {
     if (attribute_data_type.RecordsProvidedAsString()) {
@@ -462,11 +462,12 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
       default:
         CHECK(false);
     }
-    ProcessMutation(ctx, mutated_attributes, interned_key, from_backfill);
+    ProcessMutation(ctx, mutated_attributes, interned_key, from_backfill,
+                    key_obj == nullptr);
   }
 }
 
-bool IndexSchema::IsTrackedByAnyIndex(const InternedStringPtr &key) const {
+bool IndexSchema::IsTrackedByAnyIndex(const Key &key) const {
   return std::any_of(attributes_.begin(), attributes_.end(),
                      [&key](const auto &attribute) {
                        return attribute.second.GetIndex()->IsTracked(key);
@@ -475,8 +476,9 @@ bool IndexSchema::IsTrackedByAnyIndex(const InternedStringPtr &key) const {
 
 void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
-                                      const InternedStringPtr &key) {
+                                      const Key &key) {
   vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
+  bool all_deletes = true;
   for (auto &attribute_data_itr : mutated_attributes) {
     const auto itr = attributes_.find(attribute_data_itr.first);
     if (itr == attributes_.end()) {
@@ -485,13 +487,21 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     ProcessAttributeMutation(ctx, itr->second, key,
                              std::move(attribute_data_itr.second.data),
                              attribute_data_itr.second.deletion_type);
+    if (attribute_data_itr.second.deletion_type ==
+        indexes::DeletionType::kNone) {
+      all_deletes = false;
+    }
+  }
+  if (all_deletes) {
+    // If all attributes are deletes, we can remove the key from the tracked
+    // mutation records.
+    index_key_info_.erase(key);
   }
 }
 
 void IndexSchema::ProcessAttributeMutation(
-    ValkeyModuleCtx *ctx, const Attribute &attribute,
-    const InternedStringPtr &key, vmsdk::UniqueValkeyString data,
-    indexes::DeletionType deletion_type) {
+    ValkeyModuleCtx *ctx, const Attribute &attribute, const Key &key,
+    vmsdk::UniqueValkeyString data, indexes::DeletionType deletion_type) {
   auto index = attribute.GetIndex();
   if (data) {
     DCHECK(deletion_type == indexes::DeletionType::kNone);
@@ -585,7 +595,7 @@ void IndexSchema::ProcessMultiQueue() {
   multi_mutations.blocking_counter.reset();
 }
 
-void IndexSchema::EnqueueMultiMutation(const InternedStringPtr &key) {
+void IndexSchema::EnqueueMultiMutation(const Key &key) {
   auto &multi_mutations = multi_mutations_.Get();
   multi_mutations.keys.push_back(key);
   VMSDK_LOG(DEBUG, nullptr) << "Enqueueing multi mutation for key: " << key
@@ -605,8 +615,7 @@ void IndexSchema::EnqueueMultiMutation(const InternedStringPtr &key) {
   }
 }
 
-void IndexSchema::ScheduleMutation(bool from_backfill,
-                                   const InternedStringPtr &key,
+void IndexSchema::ScheduleMutation(bool from_backfill, const Key &key,
                                    vmsdk::ThreadPool::Priority priority,
                                    absl::BlockingCounter *blocking_counter) {
   {
@@ -641,8 +650,19 @@ bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
 
 void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
                                   MutatedAttributes &mutated_attributes,
-                                  const InternedStringPtr &interned_key,
-                                  bool from_backfill) {
+                                  const Key &interned_key, bool from_backfill,
+                                  bool is_delete) {
+  //
+  // Update DbKeyInfo
+  //
+  MutationSequenceNumber this_mutation = ++schema_mutation_sequence_number_;
+  auto &dbkeyinfo = db_key_info_.Get();
+  if (is_delete) {
+    dbkeyinfo.erase(interned_key);
+  } else {
+    dbkeyinfo[interned_key].mutation_sequence_number_ = this_mutation;
+  }
+
   if (ABSL_PREDICT_FALSE(!mutations_thread_pool_ ||
                          mutations_thread_pool_->Size() == 0)) {
     SyncProcessMutation(ctx, mutated_attributes, interned_key);
@@ -656,8 +676,8 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
       ShouldBlockClient(ctx, inside_multi_exec, from_backfill);
 
   if (ABSL_PREDICT_FALSE(!TrackMutatedRecord(
-          ctx, interned_key, std::move(mutated_attributes), from_backfill,
-          block_client, inside_multi_exec)) ||
+          ctx, interned_key, std::move(mutated_attributes), this_mutation,
+          from_backfill, block_client, inside_multi_exec)) ||
       inside_multi_exec) {
     // Skip scheduling if the mutation key has already been tracked or is part
     // of a multi exec command.
@@ -670,8 +690,7 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
 }
 
 void IndexSchema::ProcessSingleMutationAsync(ValkeyModuleCtx *ctx,
-                                             bool from_backfill,
-                                             const InternedStringPtr &key,
+                                             bool from_backfill, const Key &key,
                                              vmsdk::StopWatch *delay_capturer) {
   bool first_time = true;
   do {
@@ -1011,7 +1030,7 @@ absl::Status IndexSchema::ValidateIndex() const {
     auto larger_name = (cnt > oracle_key_count) ? name : oracle_name;
     auto smaller_index = (cnt > oracle_key_count) ? oracle_index : idx;
     auto smaller_name = (cnt > oracle_key_count) ? oracle_name : name;
-    auto key_check = [&](const InternedStringPtr &key) {
+    auto key_check = [&](const Key &key) {
       if (!smaller_index->IsTracked(key) && !smaller_index->IsUnTracked(key)) {
         VMSDK_LOG(WARNING, nullptr)
             << "Key found in " << larger_name << " not found in "
@@ -1069,7 +1088,7 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
     VMSDK_LOG(NOTICE, nullptr)
         << "Writing Index Extension, keys = " << key_count;
 
-    auto write_a_key = [&](const InternedStringPtr &key) {
+    auto write_a_key = [&](const Key &key) {
       key_count--;
       return out.SaveString(key->Str());
     };
@@ -1323,8 +1342,7 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
     uint64_t stale_entries = 0;
     auto status = index->ForEachTrackedKey([ctx, &deletion_attributes,
                                             &key_size, &attribute,
-                                            &stale_entries](
-                                               const InternedStringPtr &key) {
+                                            &stale_entries](const Key &key) {
       auto r_str = vmsdk::MakeUniqueValkeyString(*key);
       if (!ValkeyModule_KeyExists(ctx, r_str.get())) {
         deletion_attributes[std::string(*key)][attribute.second.GetAlias()] = {
@@ -1344,7 +1362,7 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
 
   for (auto &[key, attributes] : deletion_attributes) {
     auto interned_key = std::make_shared<InternedString>(key);
-    ProcessMutation(ctx, attributes, interned_key, true);
+    ProcessMutation(ctx, attributes, interned_key, true, true);
   }
   VMSDK_LOG(NOTICE, ctx) << "Scanned index schema " << name_
                          << " for stale entries in "
@@ -1364,7 +1382,7 @@ vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
 }
 
 bool IndexSchema::InTrackedMutationRecords(
-    const InternedStringPtr &key, const std::string &identifier) const {
+    const Key &key, const std::string &identifier) const {
   absl::MutexLock lock(&mutated_records_mutex_);
   auto itr = tracked_mutated_records_.find(key);
   if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
@@ -1377,9 +1395,9 @@ bool IndexSchema::InTrackedMutationRecords(
   return true;
 }
 // Returns true if the inserted key not exists otherwise false
-bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
-                                     const InternedStringPtr &key,
+bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
                                      MutatedAttributes &&mutated_attributes,
+                                     MutationSequenceNumber sequence_number,
                                      bool from_backfill, bool block_client,
                                      bool from_multi) {
   absl::MutexLock lock(&mutated_records_mutex_);
@@ -1390,6 +1408,7 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
     itr->second.attributes.value() = std::move(mutated_attributes);
     itr->second.from_backfill = from_backfill;
     itr->second.from_multi = from_multi;
+    itr->second.sequence_number = sequence_number;
     if (ABSL_PREDICT_TRUE(block_client)) {
       vmsdk::BlockedClient blocked_client(ctx, true,
                                           GetBlockedCategoryFromProto());
@@ -1398,6 +1417,8 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx,
     }
     return true;
   }
+
+  itr->second.sequence_number = sequence_number;
 
   if (!itr->second.from_multi && from_multi) {
     itr->second.from_multi = from_multi;
@@ -1441,8 +1462,7 @@ void IndexSchema::MarkAsDestructing() {
 }
 
 std::optional<IndexSchema::MutatedAttributes>
-IndexSchema::ConsumeTrackedMutatedAttribute(const InternedStringPtr &key,
-                                            bool first_time) {
+IndexSchema::ConsumeTrackedMutatedAttribute(const Key &key, bool first_time) {
   absl::MutexLock lock(&mutated_records_mutex_);
   auto itr = tracked_mutated_records_.find(key);
   if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
@@ -1457,6 +1477,7 @@ IndexSchema::ConsumeTrackedMutatedAttribute(const InternedStringPtr &key,
     tracked_mutated_records_.erase(itr);
     return std::nullopt;
   }
+  index_key_info_[key].mutation_sequence_number_ = itr->second.sequence_number;
   // Track entry is now first consumed
   auto mutated_attributes = std::move(itr->second.attributes.value());
   itr->second.attributes = std::nullopt;
@@ -1473,7 +1494,7 @@ void IndexSchema::SubscribeToVectorExternalizer(
   vector_externalizer_subscriptions_[attribute_identifier] = vector_index;
 }
 
-void IndexSchema::VectorExternalizer(const InternedStringPtr &key,
+void IndexSchema::VectorExternalizer(const Key &key,
                                      absl::string_view attribute_identifier,
                                      vmsdk::UniqueValkeyString &record) {
   auto it = vector_externalizer_subscriptions_.find(attribute_identifier);
@@ -1483,8 +1504,7 @@ void IndexSchema::VectorExternalizer(const InternedStringPtr &key,
   if (record) {
     std::optional<float> magnitude;
     auto vector_str = vmsdk::ToStringView(record.get());
-    InternedStringPtr interned_vector =
-        it->second->InternVector(vector_str, magnitude);
+    Key interned_vector = it->second->InternVector(vector_str, magnitude);
     if (interned_vector) {
       VectorExternalizer::Instance().Externalize(
           key, attribute_identifier, attribute_data_type_->ToProto(),

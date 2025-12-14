@@ -205,18 +205,21 @@ class IndexSchema : public KeyspaceEventSubscription,
   }
 
   MutationSequenceNumber GetDbMutationSequenceNumber(const Key &key) const {
+    vmsdk::VerifyMainThread();
     auto itr = db_key_info_.Get().find(key);
     CHECK(itr != db_key_info_.Get().end()) << "Key not found: " << key->Str();
     return itr->second.mutation_sequence_number_;
   }
 
+  // Unit test only
   void SetDbMutationSequenceNumber(const Key &key,
                                    MutationSequenceNumber sequence_number) {
     db_key_info_.Get()[key].mutation_sequence_number_ = sequence_number;
   }
-
+  // Unit test only
   void SetIndexMutationSequenceNumber(const Key &key,
                                       MutationSequenceNumber sequence_number) {
+    absl::MutexLock lock(&mutated_records_mutex_);
     index_key_info_[key].mutation_sequence_number_ = sequence_number;
   }
 
@@ -249,8 +252,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   MutationSequenceNumber schema_mutation_sequence_number_{0};
   vmsdk::MainThreadAccessGuard<absl::flat_hash_map<Key, DbKeyInfo>>
       db_key_info_;  // Mainthread.
-  absl::flat_hash_map<Key, IndexKeyInfo>
-      index_key_info_;  // updates are guarded by mutated_records_mutex_
+  absl::flat_hash_map<Key, IndexKeyInfo> index_key_info_ ABSL_GUARDED_BY(
+      mutated_records_mutex_);  // updates are guarded by mutated_records_mutex_
 
   struct BackfillJob {
     BackfillJob() = delete;

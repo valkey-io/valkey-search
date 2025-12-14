@@ -484,17 +484,18 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     if (itr == attributes_.end()) {
       continue;
     }
-    ProcessAttributeMutation(ctx, itr->second, key,
-                             std::move(attribute_data_itr.second.data),
-                             attribute_data_itr.second.deletion_type);
     if (attribute_data_itr.second.deletion_type ==
         indexes::DeletionType::kNone) {
       all_deletes = false;
     }
+    ProcessAttributeMutation(ctx, itr->second, key,
+                             std::move(attribute_data_itr.second.data),
+                             attribute_data_itr.second.deletion_type);
   }
   if (all_deletes) {
     // If all attributes are deletes, we can remove the key from the tracked
     // mutation records.
+    absl::MutexLock lock(&mutated_records_mutex_);
     index_key_info_.erase(key);
   }
 }

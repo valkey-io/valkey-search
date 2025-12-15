@@ -41,7 +41,8 @@ class FlatPositionMapTest : public ::testing::Test {
 
 TEST_F(FlatPositionMapTest, EmptyMap) {
   std::map<Position, std::unique_ptr<FieldMask>> empty_map;
-  EXPECT_DEATH(FlatPositionMap flat_map(empty_map, 1), "Cannot create FlatPositionMap from empty position_map");
+  EXPECT_DEATH(FlatPositionMap flat_map(empty_map, 1),
+               "Cannot create FlatPositionMap from empty position_map");
 }
 
 TEST_F(FlatPositionMapTest, SinglePositionSingleField) {

@@ -182,15 +182,8 @@ void Postings::InsertKey(const Key& key, PositionMap&& pos_map,
   metadata->total_positions += pos_map.size();
   metadata->total_term_frequency += count_num_terms(pos_map);
 
-  // Serialize the position map into FlatPositionMap
-  FlatPositionMap flat_map =
-      FlatPositionMap::SerializePositionMap(pos_map, num_text_fields);
-
-  // Print the flat_map at bit level for debugging
-  // PrintFlatPositionMapBits(flat_map);
-
-  // Store the serialized flat map
-  key_to_positions_[key] = std::move(flat_map);
+  // Construct FlatPositionMap in-place without requiring move
+  key_to_positions_.try_emplace(key, pos_map, num_text_fields);
 }
 
 // Remove a document key and all its positions
@@ -267,7 +260,7 @@ bool Postings::KeyIterator::ContainsFields(uint64_t field_mask) const {
 
   // Check all positions for this key to see if any of the requested fields are
   // set
-  FlatPositionMapIterator iter(flat_map);
+  PositionIterator iter(flat_map);
   while (iter.IsValid()) {
     uint64_t position_mask = iter.GetFieldMask();
     if ((position_mask & field_mask) != 0) {
@@ -295,12 +288,12 @@ const Key& Postings::KeyIterator::GetKey() const {
   return current_->first;
 }
 
-FlatPositionMapIterator Postings::KeyIterator::GetPositionIterator() const {
+PositionIterator Postings::KeyIterator::GetPositionIterator() const {
   CHECK(key_map_ != nullptr && current_ != end_)
       << "KeyIterator is invalid or exhausted";
 
   const FlatPositionMap& flat_map = current_->second;
-  return FlatPositionMapIterator(flat_map);
+  return PositionIterator(flat_map);
 }
 
 }  // namespace valkey_search::indexes::text

@@ -116,7 +116,7 @@ struct Postings {
     bool ContainsFields(uint64_t field_mask) const;
 
     // Get Position Iterator
-    FlatPositionMapIterator GetPositionIterator() const;
+    PositionIterator GetPositionIterator() const;
 
    private:
     friend struct Postings;

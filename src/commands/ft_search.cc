@@ -154,12 +154,8 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   // Increment success counter.
   ++Metrics::GetStats().query_successful_requests_cnt;
   auto &neighbors = search_result.neighbors;
-  // This handles two cases:
-  // 1. Any query with limit number == 0
-  // 2. Vector queries with limit first_index >= k
-  if ((!IsNonVectorQuery() &&
-       (limit.first_index >= static_cast<uint64_t>(k))) ||
-      limit.number == 0) {
+  // Check if no results should be returned based on query parameters.
+  if (query::ShouldReturnNoResults(*this)) {
     ValkeyModule_ReplyWithArray(ctx, 1);
     ValkeyModule_ReplyWithLongLong(ctx, search_result.total_count);
     return;
@@ -186,7 +182,6 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   query::ProcessNeighborsForReply(ctx, index_schema->GetAttributeDataType(),
                                   neighbors, *this, identifier.value());
   search_result.total_count -= (original_size - neighbors.size());
-
   SerializeNeighbors(ctx, search_result, *this);
 }
 

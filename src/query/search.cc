@@ -425,6 +425,17 @@ absl::StatusOr<std::deque<indexes::Neighbor>> DoSearch(
   return PerformVectorSearch(vector_index, parameters);
 }
 
+// Check if no results should be returned based on query parameters.
+// This handles two cases:
+// 1. Any query with limit number == 0
+// 2. Vector queries with limit first_index >= k
+bool ShouldReturnNoResults(const SearchParameters &parameters) {
+  return (parameters.IsVectorQuery() &&
+          parameters.limit.first_index >=
+              static_cast<uint64_t>(parameters.k)) ||
+         parameters.limit.number == 0;
+}
+
 // Helper functions to calculate start/end index with vector/non-vector
 // awareness
 size_t CalcStartIndex(const std::deque<indexes::Neighbor> &neighbors,
@@ -459,6 +470,11 @@ SearchResult::SearchResult(size_t total_count,
     : total_count(total_count),
       is_limited_with_buffer(false),
       is_offsetted(false) {
+  // Clear neighbors if no results should be returned
+  if (ShouldReturnNoResults(parameters)) {
+    this->neighbors.clear();
+    return;
+  }
   // Check if the command needs all results (e.g. for sorting). Trim otherwise.
   if (RetainAllNeighbors(parameters)) {
     this->neighbors = std::move(neighbors);
@@ -516,6 +532,7 @@ void SearchResult::TrimResults(std::deque<indexes::Neighbor> &neighbors,
 // Determine the range of neighbors to serialize in the response.
 SerializationRange SearchResult::GetSerializationRange(
     const SearchParameters &parameters) const {
+  CHECK(!ShouldReturnNoResults(parameters));
   const size_t start_index =
       is_offsetted ? 0 : query::CalcStartIndex(neighbors, parameters);
   const size_t end_index =

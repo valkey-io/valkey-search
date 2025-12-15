@@ -147,13 +147,6 @@ struct SearchResult {
   // True if neighbors were offset using LIMIT first_index.
   bool is_offsetted;
 
-  // Simple constructor for use cases where no trimming is needed.
-  SearchResult(size_t total_count, std::deque<indexes::Neighbor> neighbors)
-      : total_count(total_count),
-        neighbors(std::move(neighbors)),
-        is_limited_with_buffer(false),
-        is_offsetted(false) {}
-
   // Constructor with automatic trimming based on query requirements
   SearchResult(size_t total_count, std::deque<indexes::Neighbor> neighbors,
                const SearchParameters& parameters);
@@ -199,6 +192,9 @@ CalcBestMatchingPrefilteredKeys(
     const SearchParameters& parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
     indexes::VectorBase* vector_index);
+
+// Check if no results should be returned based on limit parameters
+bool ShouldReturnNoResults(const SearchParameters& parameters);
 
 // Helper functions to calculate start/end index with vector/non-vector
 // awareness

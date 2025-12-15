@@ -324,8 +324,10 @@ absl::Status String::Register(ValkeyModuleCtx *ctx) {
 }
 
 absl::Status String::FromString(std::string_view value) {
-  default_ = value.data();
-  SetValueOrLog(default_, WARNING);
+  if (value.data()) {
+    default_ = value.data();
+    SetValueOrLog(default_, WARNING);
+  }
   return absl::OkStatus();
 }
 

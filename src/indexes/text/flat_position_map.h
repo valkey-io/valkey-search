@@ -94,7 +94,6 @@ class FlatPositionMap {
 
  private:
   char* data_;
-
 };
 
 // Iterator for FlatPositionMap
@@ -109,20 +108,21 @@ class PositionIterator {
   uint64_t GetFieldMask() const;
 
  private:
-  const char* flat_map_;              // Pointer to start of serialized data
-  const char* current_start_ptr_;     // Start of current position entry
-  const char* current_end_ptr_;       // End of current position entry
-  const char* data_start_;            // Start of position/field data (after header+partition map)
-  Position cumulative_position_;      // Absolute position (sum of all deltas)
-  uint32_t num_partitions_;           // Number of partition boundaries
-  size_t header_size_;                // Size of variable-length header
-  uint64_t current_field_mask_;       // Bit mask of fields at current position
+  const char* flat_map_;           // Pointer to start of serialized data
+  const char* current_start_ptr_;  // Start of current position entry
+  const char* current_end_ptr_;    // End of current position entry
+  const char*
+      data_start_;  // Start of position/field data (after header+partition map)
+  Position cumulative_position_;  // Absolute position (sum of all deltas)
+  uint32_t num_partitions_;       // Number of partition boundaries
+  size_t header_size_;            // Size of variable-length header
+  uint64_t current_field_mask_;   // Bit mask of fields at current position
 
   // Private static helper functions for decoding and navigation
   static uint32_t ReadVarUint(const char* ptr, uint8_t num_bytes);
   static uint32_t FindPartitionForTarget(const char* partition_map,
-                                          uint32_t num_partitions,
-                                          Position target);
+                                         uint32_t num_partitions,
+                                         Position target);
 };
 
 }  // namespace valkey_search::indexes::text

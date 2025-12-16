@@ -436,6 +436,13 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
     def test_answers(self, answers):
         global client, data_set
         global correct_answers, failed_tests, passed_tests
+
+        # RESET GLOBAL COUNTERS AT START OF EACH TEST
+        correct_answers = 0
+        wrong_answers = 0
+        failed_tests = {}
+        passed_tests = {}
+
         print("Running test_answers with answers file:", answers)
         with gzip.open(os.getenv("ROOT_DIR") + "/integration/compatibility/" + answers, "rb") as answer_file:
             answers = pickle.load(answer_file)

@@ -64,7 +64,8 @@ class ValkeySearch {
     }
   }
 
-  // Generic cleanup scheduler that respects search result background cleanup setting
+  // Generic cleanup scheduler that respects search result background cleanup
+  // setting
   void ScheduleSearchResultCleanup(absl::AnyInvocable<void()> cleanup_task) {
     if (options::GetSearchResultBackgroundCleanup().GetValue()) {
       ScheduleUtilityTask(std::move(cleanup_task));

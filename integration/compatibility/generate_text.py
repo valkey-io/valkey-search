@@ -1,19 +1,16 @@
-import pytest, traceback, valkey, time, struct
-import sys, os
-import pickle
-import gzip
+import pytest
 import random
 from . import data_sets
-from .data_sets import *
-from valkey.exceptions import ConnectionError
-from .generate import ClientRSystem, SYSTEM_R_ADDRESS, BaseCompatibilityTest
-from .text_query_builder import TextQueryBuilder, ControlledTextQueryBuilder, QueryGenerationConfig
+from .data_sets import load_data
+from .generate import BaseCompatibilityTest
+from .text_query_builder import TextQueryBuilder, QueryGenerationConfig
+
 
 @pytest.mark.parametrize("dialect", [2])
 @pytest.mark.parametrize("key_type", ["json", "hash"])
 class TestTextSearchCompatibility(BaseCompatibilityTest):
-    TEXT_QUERY_TEST_SEED = 111
-    MAX_QUERIES=100
+    TEXT_QUERY_TEST_SEED = 3948
+    MAX_QUERIES = 1000
     ANSWER_FILE_NAME = "text-search-answers.pickle.gz"
 
     def setup_data(self, data_set_name, key_type):
@@ -22,15 +19,29 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
         self.key_type = key_type
         load_data(self.client, data_set_name, key_type, data_source='text')
 
-    def setup_method(self):
-        super().setup_method()
-        random.seed(self.TEXT_QUERY_TEST_SEED)
+    def _create_base_config(self, **overrides):
+        """Create a QueryGenerationConfig with all features disabled by default."""
+        defaults = {
+            'allow_exact_match': False,
+            'allow_prefix': False,
+            'allow_suffix': False,
+            'allow_phrase': False,
+            'allow_tag': False,
+            'allow_numeric': False,
+            'allow_and': False,
+            'allow_or': False,
+            'allow_field_match': False,
+            'allow_groups': False,
+            'max_terms': 1,
+            'max_depth': 0,
+        }
+        defaults.update(overrides)
+        return QueryGenerationConfig(**defaults)
 
-    def generate_and_execute_queries(self, data_set_name, key_type, dialect, max_queries,
-        config: QueryGenerationConfig):
-        """Common query generation and execution logic.
-        """
+    def _run_test(self, config, data_set_name="mixed content", key_type=None, dialect=None):
+        """Helper to run a test with given config."""
         self.setup_data(data_set_name, key_type)
+        rng = random.Random(self.TEXT_QUERY_TEST_SEED)
 
         # Extract vocab and field values from the dataset
         vocab = data_sets.extract_vocab_from_text_data(data_set_name, key_type)
@@ -38,7 +49,7 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
         numeric_ranges = data_sets.extract_numeric_ranges_from_text_data(data_set_name, key_type)
 
         # Initialize QueryBuilder
-        builder = ControlledTextQueryBuilder(
+        builder = TextQueryBuilder(
             vocab=vocab,
             text_fields=data_sets.TEXT_SCHEMA['text'],
             tag_values=tag_values,
@@ -50,12 +61,13 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
         seen = set()
         query_count = 0
         attempts = 0
-        max_attempts = max_queries * 20
+        max_attempts = self.MAX_QUERIES * 20
         
-        while query_count < max_queries and attempts < max_attempts:
+        while query_count < self.MAX_QUERIES and attempts < max_attempts:
             attempts += 1
             try:
-                q = builder.generate(seed=random.randint(1, 1_000_000))
+                per_query_seed = rng.randint(1, 1_000_000)
+                q = builder.generate(seed=per_query_seed)
                 q_str = builder.render(q)
                 
                 if q_str not in seen:
@@ -66,304 +78,145 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
                 continue
         
         print(f"Generated {query_count} unique queries from {attempts} attempts")
-    
-    # base term types
+
+    # Base term types
 
     def test_text_search_exact_match(self, key_type, dialect):
-        config_exact_word = QueryGenerationConfig(
-            allow_exact_match=True,
-            allow_prefix=False,
-            allow_suffix=False,
-            allow_phrase=False,
-            allow_tag=False,
-            allow_numeric=False,
-            allow_and=False,
-            allow_or=False,
-            allow_field_match=False,
-            max_terms=1,
-            max_depth=0
-        )
-        self.generate_and_execute_queries(
-            data_set_name="single words",
-            key_type=key_type,
-            dialect=dialect,
-            max_queries=self.MAX_QUERIES,
-            config=config_exact_word
-        )
+        config = self._create_base_config(allow_exact_match=True)
+        self._run_test(config, "single words", key_type, dialect)
 
     def test_text_search_prefix(self, key_type, dialect):
-        config_prefix = QueryGenerationConfig(
-            allow_exact_match=False,
-            allow_prefix=True,
-            allow_suffix=False,
-            allow_phrase=False,
-            allow_tag=False,
-            allow_numeric=False,
-            allow_and=False,
-            allow_or=False,
-            allow_field_match=False,
-            max_terms=1,
-            max_depth=0
-        )
-        self.generate_and_execute_queries(
-            data_set_name="single words",
-            key_type=key_type,
-            dialect=dialect,
-            max_queries=self.MAX_QUERIES,
-            config=config_prefix
-        )
+        config = self._create_base_config(allow_prefix=True)
+        self._run_test(config, "single words", key_type, dialect)
 
     def test_text_search_suffix(self, key_type, dialect):
-        config_suffix = QueryGenerationConfig(
-            allow_exact_match=False,
-            allow_prefix=False,
-            allow_suffix=True,
-            allow_phrase=False,
-            allow_tag=False,
-            allow_numeric=False,
-            allow_and=False,
-            allow_or=False,
-            allow_field_match=False,
-            max_terms=1,
-            max_depth=0
-        )
-        self.generate_and_execute_queries(
-            data_set_name="single words",
-            key_type=key_type,
-            dialect=dialect,
-            max_queries=self.MAX_QUERIES,
-            config=config_suffix
-        )
-    
-    def test_text_phrase(self, key_type, dialect):
-        config_phrase = QueryGenerationConfig(
-            allow_exact_match=False,
-            allow_prefix=False,
-            allow_suffix=False,
-            allow_phrase=False,
-            allow_tag=False,
-            allow_numeric=False,
-            allow_and=False,
-            allow_or=False,
-            allow_field_match=True,
-            max_terms=3,
-            max_depth=0,
-            max_phrase_words=3,
-            prob_use_field=1,
-        )
-        self.generate_and_execute_queries(
-            data_set_name="mixed content",
-            key_type=key_type,
-            dialect=dialect,
-            max_queries=self.MAX_QUERIES,
-            config=config_phrase
-        )
+        config = self._create_base_config(allow_suffix=True)
+        self._run_test(config, "single words", key_type, dialect)
 
     def test_tag(self, key_type, dialect):
-        config_tag = QueryGenerationConfig(
-            allow_exact_match=False,
-            allow_prefix=False,
-            allow_suffix=False,
-            allow_phrase=False,
-            allow_tag=True,
-            allow_numeric=False,
-            allow_and=True,
-            allow_or=False,
-            allow_field_match=False,
-            max_terms=1,
-            max_depth=0
-        )
-        self.generate_and_execute_queries(
-            data_set_name="mixed content",
-            key_type=key_type,
-            dialect=dialect,
-            max_queries=self.MAX_QUERIES,
-            config=config_tag
-        )
+        config = self._create_base_config(allow_tag=True, allow_and=True)
+        self._run_test(config, "mixed content", key_type, dialect)
 
     def test_numeric(self, key_type, dialect):
-        config_numeric = QueryGenerationConfig(
-            allow_exact_match=False,
-            allow_prefix=False,
-            allow_suffix=False,
-            allow_phrase=False,
-            allow_tag=False,
-            allow_numeric=True,
-            allow_and=True,
-            allow_or=False,
-            allow_field_match=False,
-            max_terms=1,
-            max_depth=0
-        )
-        self.generate_and_execute_queries(
-            data_set_name="mixed content",
-            key_type=key_type,
-            dialect=dialect,
-            max_queries=self.MAX_QUERIES,
-            config=config_numeric
-        )
-    
-    # operators
-    
-    def test_text_search_exact_and(self, key_type, dialect):
-        config_exact_and = QueryGenerationConfig(
-            allow_exact_match=True,
-            allow_prefix=False,
-            allow_suffix=False,
-            allow_phrase=False,
-            allow_tag=False,
-            allow_numeric=False,
-            allow_and=True,
-            allow_or=False,
-            allow_field_match=False,
-            max_terms=3,
-            max_depth=0
-        )
-        self.generate_and_execute_queries(
-            data_set_name="mixed content",
-            key_type=key_type,
-            dialect=dialect,
-            max_queries=self.MAX_QUERIES,
-            config=config_exact_and
-        )
+        config = self._create_base_config(allow_numeric=True, allow_and=True)
+        self._run_test(config, "mixed content", key_type, dialect)
 
-    def test_text_search_exact_or(self, key_type, dialect):
-        config_exact_or = QueryGenerationConfig(
-            allow_exact_match=True,
-            allow_prefix=False,
-            allow_suffix=False,
-            allow_phrase=False,
-            allow_tag=False,
-            allow_numeric=False,
-            allow_and=False,
-            allow_or=True,
-            allow_field_match=False,
-            max_terms=3,
-            max_depth=0
-        )
-        self.generate_and_execute_queries(
-            data_set_name="mixed content",
-            key_type=key_type,
-            dialect=dialect,
-            max_queries=self.MAX_QUERIES,
-            config=config_exact_or
-        )
+    # Phrases
 
-    def test_text_search_exact_and_or(self, key_type, dialect):
-        config_exact_and_or = QueryGenerationConfig(
-            allow_exact_match=True,
-            allow_prefix=False,
-            allow_suffix=False,
-            allow_phrase=False,
-            allow_tag=False,
-            allow_numeric=False,
-            allow_and=True,
-            allow_or=True,
-            allow_field_match=False,
-            max_terms=3,
-            max_depth=0
-        )
-        self.generate_and_execute_queries(
-            data_set_name="mixed content",
-            key_type=key_type,
-            dialect=dialect,
-            max_queries=self.MAX_QUERIES,
-            config=config_exact_and_or
-        )
-    
-    # field matching
-    def test_text_search_field_match(self, key_type, dialect):
-        config_field_match = QueryGenerationConfig(
-            allow_exact_match=True,
-            allow_prefix=False,
-            allow_suffix=False,
-            allow_phrase=False,
-            allow_tag=False,
-            allow_numeric=False,
-            allow_and=False,
-            allow_or=False,
+    def test_text_phrase(self, key_type, dialect):
+        config = self._create_base_config(
+            allow_phrase=True,
             allow_field_match=True,
             max_terms=3,
-            max_depth=0
+            max_phrase_words=3,
+            prob_use_field=1.0
         )
-        self.generate_and_execute_queries(
-            data_set_name="mixed content",
-            key_type=key_type,
-            dialect=dialect,
-            max_queries=self.MAX_QUERIES,
-            config=config_field_match
-        )
+        self._run_test(config, "mixed content", key_type, dialect)
     
-    # groups
-    def test_text_search_group_depth_1(self, key_type, dialect):
-        config_group_depth_1 = QueryGenerationConfig(
+    def test_text_phrase_with_slop(self, key_type, dialect):
+        config = self._create_base_config(
+            allow_phrase=True,
+            allow_field_match=True,
+            max_terms=3,
+            max_phrase_words=3,
+            force_phrase_slop=True
+        )
+        self._run_test(config, "mixed content", key_type, dialect)
+
+    def test_text_phrase_with_inorder(self, key_type, dialect):
+        config = self._create_base_config(
+            allow_phrase=True,
+            allow_field_match=True,
+            max_terms=3,
+            max_phrase_words=3,
+            force_phrase_inorder=True
+        )
+        self._run_test(config, "mixed content", key_type, dialect)
+    
+    # Operators
+
+    def test_text_search_exact_and(self, key_type, dialect):
+        config = self._create_base_config(
             allow_exact_match=True,
-            allow_prefix=False,
-            allow_suffix=False,
-            allow_phrase=False,
-            allow_tag=False,
-            allow_numeric=False,
+            allow_and=True,
+            max_terms=3
+        )
+        self._run_test(config, "mixed content", key_type, dialect)
+
+    def test_text_search_exact_or(self, key_type, dialect):
+        config = self._create_base_config(
+            allow_exact_match=True,
+            allow_or=True,
+            max_terms=3
+        )
+        self._run_test(config, "mixed content", key_type, dialect)
+
+    def test_text_search_exact_and_or(self, key_type, dialect):
+        config = self._create_base_config(
+            allow_exact_match=True,
             allow_and=True,
             allow_or=True,
-            allow_field_match=False,
+            max_terms=3
+        )
+        self._run_test(config, "mixed content", key_type, dialect)
+    
+    # Field matching
+
+    def test_text_search_field_match(self, key_type, dialect):
+        config = self._create_base_config(
+            allow_exact_match=True,
+            allow_field_match=True,
+            max_terms=3
+        )
+        self._run_test(config, "mixed content", key_type, dialect)
+    
+    # Groups
+
+    def test_text_search_group_depth_1(self, key_type, dialect):
+        config = self._create_base_config(
+            allow_exact_match=True,
+            allow_and=True,
+            allow_or=True,
+            allow_groups=True,
             max_terms=4,
             min_terms=2,
             max_depth=1,
             prob_use_group=0.5
         )
-        self.generate_and_execute_queries(
-            data_set_name="mixed content",
-            key_type=key_type,
-            dialect=dialect,
-            max_queries=self.MAX_QUERIES,
-            config=config_group_depth_1
-        )
+        self._run_test(config, "mixed content", key_type, dialect)
     
     def test_text_search_group_depth_2(self, key_type, dialect):
-        config_group_depth_2 = QueryGenerationConfig(
+        config = self._create_base_config(
             allow_exact_match=True,
-            allow_prefix=False,
-            allow_suffix=False,
-            allow_phrase=False,
-            allow_tag=False,
-            allow_numeric=False,
             allow_and=True,
             allow_or=True,
-            allow_field_match=False,
+            allow_groups=True,
             max_terms=5,
             min_terms=3,
             max_depth=2,
             prob_use_group=0.6
         )
-        self.generate_and_execute_queries(
-            data_set_name="mixed content",
-            key_type=key_type,
-            dialect=dialect,
-            max_queries=self.MAX_QUERIES,
-            config=config_group_depth_2
-        )
+        self._run_test(config, "mixed content", key_type, dialect)
 
-    # # mixed
-    # def test_text_search_mixed_terms(self, key_type, dialect):
-    #     config_mixed_terms = QueryGenerationConfig(
-    #         allow_exact_match=True,
-    #         allow_prefix=True,
-    #         allow_suffix=True,
-    #         allow_phrase=False,
-    #         allow_tag=False,
-    #         allow_numeric=False,
-    #         allow_and=True,
-    #         allow_or=True,
-    #         allow_field_match=True,
-    #         max_depth=1,
-    #         max_terms=3,
-    #         min_terms=2,
-    #         prob_use_field=0.3
-    #     )
-    #     self.generate_and_execute_queries(
-    #         data_set_name="mixed content",
-    #         key_type=key_type,
-    #         dialect=dialect,
-    #         max_queries=self.MAX_QUERIES,
-    #         config=config_mixed_terms
-    #     )
+    # Mixed
+
+    def test_text_search_mixed(self, key_type, dialect):
+        config = QueryGenerationConfig(
+            allow_exact_match=True,
+            allow_prefix=True,
+            allow_suffix=True,
+            allow_phrase=True,
+            allow_phrase_slop=True,
+            force_phrase_inorder=True,
+            allow_tag=True,
+            allow_numeric=True,
+            allow_and=True,
+            allow_or=True,
+            allow_field_match=True,
+            allow_groups=True,
+            max_terms=3,
+            max_phrase_words=3,
+            max_depth=2,
+            prob_use_group=0.4
+        )
+        self._run_test(config, "mixed content", key_type, dialect)

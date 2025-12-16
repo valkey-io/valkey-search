@@ -40,7 +40,6 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
         query_count = 0
         attempts = 0
         max_attempts = self.MAX_QUERIES * 20
-
         while query_count < self.MAX_QUERIES and attempts < max_attempts:
             attempts += 1
             
@@ -81,8 +80,8 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
                 continue
 
         print(f"Generated {query_count} unique queries from {attempts} attempts")
-    
-    # base term types
+
+    # Base term types
 
     # ========================================================================
     # Base term types

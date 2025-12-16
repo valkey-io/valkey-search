@@ -34,8 +34,8 @@ config::Number& GetWriterThreadCount();
 /// number of utility threads
 config::Number& GetUtilityThreadCount();
 
-/// Return the configuration entry for neighbor background cleanup
-const config::Boolean& GetNeighborBackgroundCleanup();
+/// Return the configuration entry for search result background cleanup
+const config::Boolean& GetSearchResultBackgroundCleanup();
 
 /// Return the max time in seconds that the worker thread pool is
 /// suspended after fork started

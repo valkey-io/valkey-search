@@ -64,14 +64,13 @@ class ValkeySearch {
     }
   }
 
-  // Specific helper for neighbor cleanup
-  void ScheduleNeighborCleanup(std::deque<indexes::Neighbor> neighbors) {
-    if (options::GetNeighborBackgroundCleanup().GetValue()) {
-      ScheduleUtilityTask([neighbors = std::move(neighbors)]() mutable {
-        // neighbors destructor runs automatically when lambda completes
-      });
+  // Generic cleanup scheduler that respects search result background cleanup setting
+  void ScheduleSearchResultCleanup(absl::AnyInvocable<void()> cleanup_task) {
+    if (options::GetSearchResultBackgroundCleanup().GetValue()) {
+      ScheduleUtilityTask(std::move(cleanup_task));
+    } else {
+      cleanup_task();
     }
-    // If disabled, neighbors destructor runs synchronously here
   }
 
   void Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const;

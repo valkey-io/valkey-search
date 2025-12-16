@@ -93,7 +93,7 @@ class TestAggregateCompatibility:
         self.answers.append(answer)
 
     def checkvec(self, dialect, *orig_cmd, knn=10000, score_as="", query_vector=[0] * VECTOR_DIM):
-        '''Temporary change until query parser is redone.'''
+        '''Check vector queries only.'''
         cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]
         new_cmd = []
         did_one = False
@@ -113,28 +113,47 @@ class TestAggregateCompatibility:
             str(dialect),
         ]
         self.execute_command(new_cmd)
-    def check(self, *orig_cmd):
-        '''Non-vector command. Doesn't have support for '*' yet. '''
+    def check(self, dialect, *orig_cmd):
+        '''Check Non-vector queries. Doesn't have support for '*' yet. '''
         cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]
-        self.execute_command(cmd)
+        for query in ["@n1:[-inf inf]", "@t1:{aaaaaaa*}", "-@n1:[-inf inf]", "-@t1:{aaaaaa*}"]:
+            new_cmd = []
+            did_one = False
+            for c in cmd:
+                if c.strip() == "*" and not did_one:
+                    ''' substitute '''
+                    new_cmd += [query]
+                    did_one = True
+                else:
+                    new_cmd += [c]
+            new_cmd += [
+                "DIALECT",
+                str(dialect),
+            ]
+            self.execute_command(new_cmd)
+
+    def checkall(self, dialect, *orig_cmd, **kwargs):
+        '''Non-vector commands. Doesn't have support for '*' yet. '''
+        self.checkvec(self, dialect, orig_cmd, kwargs)
+        self.check(self, dialect, orig_cmd)
 
     '''        
     def test_bad_numeric_data(self, key_type, dialect):
         self.setup_data("bad numbers", key_type)
-        self.check(f"ft.search {key_type}_idx1",  "@n1:[-inf inf]")
-        self.check(f"ft.search {key_type}_idx1", "-@n1:[-inf inf]")
-        self.check(f"ft.search {key_type}_idx1",  "@n2:[-inf inf]")
-        self.check(f"ft.search {key_type}_idx1", "-@n2:[-inf inf]")
+        self.check(dialect, f"ft.search {key_type}_idx1",  "@n1:[-inf inf]")
+        self.check(dialect, f"ft.search {key_type}_idx1", "-@n1:[-inf inf]")
+        self.check(dialect, f"ft.search {key_type}_idx1",  "@n2:[-inf inf]")
+        self.check(dialect, f"ft.search {key_type}_idx1", "-@n2:[-inf inf]")
 
     def test_search_reverse(self, key_type, dialect):
         self.setup_data("reverse vector numbers", key_type)
-        self.checkvec(dialect, f"ft.search {key_type}_idx1 *")
-        self.checkvec(dialect, f"ft.search {key_type}_idx1 * limit 0 5")
+        self.checkall(dialect, f"ft.search {key_type}_idx1 *")
+        self.checkall(dialect, f"ft.search {key_type}_idx1 * limit 0 5")
 
     def test_search(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
-        self.checkvec(dialect, f"ft.search {key_type}_idx1 *")
-        self.checkvec(dialect, f"ft.search {key_type}_idx1 * limit 0 5")
+        self.checkall(dialect, f"ft.search {key_type}_idx1 *")
+        self.checkall(dialect, f"ft.search {key_type}_idx1 * limit 0 5")
     '''
     @pytest.mark.parametrize("algo", ["flat", "hnsw"])
     @pytest.mark.parametrize("metric", ["l2", "ip", "cosine"])
@@ -149,15 +168,15 @@ class TestAggregateCompatibility:
                     self.checkvec(dialect, f"ft.search {key_type}_idx1 *", query_vector=[x, y, z])
     def test_aggregate_sortby(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
-        self.checkvec(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key @n2 sortby 1 @n2")
-        self.checkvec(dialect, f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 1 @n2")
-        self.checkvec(dialect, 
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key @n2 sortby 1 @n2")
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 1 @n2")
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @n2 asc"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @n2 desc"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @__key desc"
         )
         self.checkvec(dialect, 
@@ -169,77 +188,77 @@ class TestAggregateCompatibility:
 
     def test_aggregate_groupby(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
-        self.checkvec(dialect, f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @n1")
-        self.checkvec(dialect, f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1")
-        self.checkvec(dialect, 
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @n1")
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1")
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce count 0 as count"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce count 0 as count"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce COUNT 0 as count"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce CoUnT 0 as count"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce sum 1 @n1 as sum"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce sum 1 @n1 as sum"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce sum 1 @n2 as sum"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce avg 1 @n1 as avg"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce avg 1 @n1 as avg"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce avg 1 @n2 as avg"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce min 1 @n1 as min"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce min 1 @n2 as min"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce min 1 @n1 as min"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce min 1 @n2 as min"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce stddev 1 @n1 as nstddev"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce stddev 1 @n1 as nstddev"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce stddev 1 @n2 as nstddev"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n1 as nmax"
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce max 1 @n1 as nmax"
         )
-        self.checkvec(dialect, f'ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n2 as nmax')
+        self.check(dialect, f'ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n2 as nmax')
     def test_aggregate_limit(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
-        self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2")
-        self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key asc limit 1 4 ")
-        self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 1 4")
+        self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2")
+        self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key asc limit 1 4 ")
+        self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 1 4")
 
     def test_aggregate_short_limit(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 limit 0 5")
-        self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc")
-        self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 0 5")
+        self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc")
+        self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 0 5")
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key asc limit 1 4", knn=4)
 
     def test_aggregate_load(self, key_type, dialect):
@@ -253,7 +272,7 @@ class TestAggregateCompatibility:
         relops = ["<", "<=", "==", "!=", ">=", ">"]
         logops = ["||", "&&"] if dialect == 2 else []
         for op in dyadic + relops + logops:
-            self.checkvec(dialect, 
+            self.check(dialect, 
                 f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 apply @n1{op}@n2 as nn"
             )
     def test_aggregate_numeric_dyadic_operators_sortable_numbers(self, key_type, dialect):
@@ -262,7 +281,7 @@ class TestAggregateCompatibility:
         relops = ["<", "<=", "==", "!=", ">=", ">"]
         logops = ["||", "&&"] if dialect == 2 else []
         for op in dyadic + relops + logops:
-            self.checkvec(dialect, 
+            self.check(dialect, 
                 f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 apply @n1{op}@n2 as nn"
             )
 
@@ -273,7 +292,7 @@ class TestAggregateCompatibility:
         logops = ["||", "&&"] if dialect == 2 else []
         for op1 in dyadic+relops+logops:
             for op2 in dyadic+relops+logops:
-                self.checkvec(dialect, 
+                self.check(dialect, 
                     f"ft.aggregate {key_type}_idx1  * load 4 @__key @n1 @n2 @n3 apply @n1{op1}@n2{op2}@n3 as nn apply (@n1{op1}@n2) as nn1"
                 )
 
@@ -281,7 +300,7 @@ class TestAggregateCompatibility:
         self.setup_data("hard numbers", key_type)
         function = ["log", "abs", "ceil", "floor", "log2", "exp", "sqrt"]
         for f in function:
-            self.checkvec(dialect, 
+            self.check(dialect, 
                 f"ft.aggregate {key_type}_idx1  * load 2 @__key @n1 apply {f}(@n1) as nn"
             )
 
@@ -290,7 +309,7 @@ class TestAggregateCompatibility:
         self.setup_data(dataset, key_type)
 
         # String apply function "contains"
-        self.checkvec(dialect, 
+        self.check(dialect, 
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
@@ -303,7 +322,7 @@ class TestAggregateCompatibility:
             "as",
             "apply_result",
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
@@ -316,7 +335,7 @@ class TestAggregateCompatibility:
             "as",
             "apply_result",
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
@@ -329,7 +348,7 @@ class TestAggregateCompatibility:
             "as",
             "apply_result",
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
@@ -342,7 +361,7 @@ class TestAggregateCompatibility:
             "as",
             "apply_result",
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
@@ -355,7 +374,7 @@ class TestAggregateCompatibility:
             "as",
             "apply_result",
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
@@ -368,7 +387,7 @@ class TestAggregateCompatibility:
             "as",
             "apply_result",
         )
-        self.checkvec(dialect, 
+        self.check(dialect, 
             "ft.aggregate",
             f"{key_type}_idx1",
             "*",
@@ -387,7 +406,7 @@ class TestAggregateCompatibility:
         self.setup_data(dataset, key_type)
         for offset in [0, 1, 2, 100, -1, -2, -3, -1000]:
             for len in [0, 1, 2, 100, -1, -2, -3, -1000]:
-                self.checkvec(dialect, 
+                self.check(dialect, 
                     "ft.aggregate",
                     f"{key_type}_idx1",
                     "*",
@@ -410,7 +429,7 @@ class TestAggregateCompatibility:
         for lop in values:
             for rop in values:
                 for op in dyadic+relops+logops:
-                    self.checkvec(dialect, 
+                    self.check(dialect, 
                         "ft.aggregate",
                         f"{key_type}_idx1",
                         "*",

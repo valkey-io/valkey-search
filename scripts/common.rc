@@ -209,7 +209,7 @@ function setup_json_module() {
   fi
 
   # Clone and build it
-  VALKEY_JSON_VERSION="${VALKEY_JSON_VERSION:=unstable}"
+  VALKEY_JSON_VERSION="${VALKEY_JSON_VERSION:=1.0}"
   export VALKEY_JSON_HOME=$(get_third_party_build_dir)/valkey-json
   export VALKEY_JSON_BUILD_DIR=${VALKEY_JSON_HOME}/.build-release
 

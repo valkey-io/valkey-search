@@ -1402,6 +1402,60 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
             result = client.execute_command("FT.SEARCH", "idx", 'apple (yellow green orange one | yellow green orange one) purple (ten | ten) one', "INORDER")
             assert result[0] == 0
 
+    def test_fuzzy_search(self):
+        """
+            Test fuzzy search examples
+        """
+        client: Valkey = self.server.get_new_client()
+        # Create index with text fields
+        client.execute_command("FT.CREATE", "idx1", "ON", "HASH", "SCHEMA",
+                            "content", "TEXT", "NOSTEM")
+        client.execute_command("FT.CREATE", "idx2", "ON", "HASH", "SCHEMA",
+                    "content", "TEXT")
+        client.execute_command("FT.CREATE", "idx3", "ON", "HASH", "SCHEMA",
+                    "content", "TEXT", "NOSTEM", "content2", "TEXT", "NOSTEM")
+
+        client.execute_command("HSET", "doc:1", "content", "I am going to a race")
+        client.execute_command("HSET", "doc:2", "content", "Carrie needs to take care")
+        client.execute_command("HSET", "doc:3", "content", "who is driving?")
+        client.execute_command("HSET", "doc:4", "content", "Driver drove the car?")
+
+        # result = client.execute_command("FT.SEARCH", "idx1", '%car%')
+        # assert (result[0], set(result[1::2])) == (2, {b"doc:2", b"doc:4"})
+
+        # # Should be Case insenstive
+        # result = client.execute_command("FT.SEARCH", "idx1", '%CAR%')
+        # assert (result[0], set(result[1::2])) == (2, {b"doc:2", b"doc:4"})
+
+        # transposition
+        client.execute_command("HSET", "doc:12", "content", "antidisestablishmentarianism")
+        result = client.execute_command("FT.SEARCH", "idx1", '%crA%')
+        assert (result[0], set(result[1::2])) == (1, {b"doc:4"})
+
+        result = client.execute_command("FT.SEARCH", "idx1", '%%drive%%')
+        assert (result[0], set(result[1::2])) == (1, {b"doc:4"})
+
+        # NOSTEM case - not working
+        # result = client.execute_command("FT.SEARCH", "idx2", '%%drive%%', "INORDER")
+        # assert (result[0], set(result[1::2])) == (2, {b"doc:3", b"doc:4"}) 
+
+        # Add a document with a word that requires high edit distance
+        client.execute_command("HSET", "doc:5", "content", "abcdefghij")
+        
+        result = client.execute_command("FT.SEARCH", "idx1", '%%%%%%%%%%z%%%%%%%%%%')
+        assert result[0] == 5
+
+        # Test : Transposition (Damerau-Levenshtein)
+        client.execute_command("HSET", "doc:6", "content", "abdc")
+        result = client.execute_command("FT.SEARCH", "idx1", '%abcd%')
+        assert (result[0], set(result[1::2])) == (1, {b"doc:6"})
+
+        # Known crash
+        # client.execute_command("HSET", "doc:5", "content", "I am going to a race", "content2", "Driver drove the car?")
+        # result = client.execute_command("FT.SEARCH", "idx1", '%%drive%%', "return", "1", "content2")
+        # print(result)
+        # assert (result[0], set(result[1::2])) == (1, {b"doc:4"})
+
 class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
     """
     Tests that require debug mode enabled for memory statistics validation.

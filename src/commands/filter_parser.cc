@@ -490,7 +490,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
       logical_operator, std::move(children), options_.slop, options_.inorder);
 };
 
-static const uint32_t FUZZY_MAX_DISTANCE = 3;
+static const uint32_t FUZZY_MAX_DISTANCE = 10;
 
 // Handles backslash escaping for both quoted and unquoted text
 // Escape Syntax:
@@ -664,7 +664,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
                                                   std::move(token),
                                                   leading_percent_count),
           break_on_query_syntax};
-      return absl::InvalidArgumentError("Unsupported query operation");
+      return fuzzy;
     } else {
       return absl::InvalidArgumentError("Invalid fuzzy '%' markers");
     }

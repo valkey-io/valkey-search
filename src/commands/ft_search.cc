@@ -169,6 +169,8 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   if (IsNonVectorQuery()) {
     query::ProcessNonVectorNeighborsForReply(
         ctx, index_schema->GetAttributeDataType(), neighbors, *this);
+    // Adjust total count based on neighbors removed during processing
+    // due to filtering or missing attributes.
     search_result.total_count -= (original_size - neighbors.size());
     SerializeNonVectorNeighbors(ctx, search_result, *this);
     return;
@@ -181,6 +183,8 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   }
   query::ProcessNeighborsForReply(ctx, index_schema->GetAttributeDataType(),
                                   neighbors, *this, identifier.value());
+  // Adjust total count based on neighbors removed during processing
+  // due to filtering or missing attributes.
   search_result.total_count -= (original_size - neighbors.size());
   SerializeNeighbors(ctx, search_result, *this);
 }

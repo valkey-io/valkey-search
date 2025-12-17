@@ -324,10 +324,11 @@ absl::Status String::Register(ValkeyModuleCtx *ctx) {
 }
 
 absl::Status String::FromString(std::string_view value) {
-  if (value.data()) {
-    default_ = value.data();
-    SetValueOrLog(default_, WARNING);
+  if (value.data() == nullptr) {
+    return absl::InvalidArgumentError("Invalid string value: null");
   }
+  default_ = value.data();
+  SetValueOrLog(default_, WARNING);
   return absl::OkStatus();
 }
 

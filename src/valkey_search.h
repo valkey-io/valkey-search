@@ -21,6 +21,7 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/server.h"
 #include "src/index_schema.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/utils.h"
@@ -47,6 +48,32 @@ class ValkeySearch {
   vmsdk::ThreadPool *GetWriterThreadPool() const {
     return writer_thread_pool_.get();
   }
+  vmsdk::ThreadPool *GetUtilityThreadPool() const {
+    return utility_thread_pool_.get();
+  }
+
+  // Generic background task scheduling
+  // This is meant for low priority tasks that can be deferred.
+  void ScheduleUtilityTask(absl::AnyInvocable<void()> task) {
+    if (utility_thread_pool_) {
+      utility_thread_pool_->Schedule(std::move(task),
+                                     vmsdk::ThreadPool::Priority::kLow);
+    } else {
+      // Execute synchronously if no pool available.
+      task();
+    }
+  }
+
+  // Generic cleanup scheduler that respects search result background cleanup
+  // setting
+  void ScheduleSearchResultCleanup(absl::AnyInvocable<void()> cleanup_task) {
+    if (options::GetSearchResultBackgroundCleanup().GetValue()) {
+      ScheduleUtilityTask(std::move(cleanup_task));
+    } else {
+      cleanup_task();
+    }
+  }
+
   void Info(ValkeyModuleInfoCtx *ctx, bool for_crash_report) const;
 
   IndexSchema::Stats::ResultCnt<uint64_t> AccumulateIndexSchemaResults(
@@ -110,6 +137,7 @@ class ValkeySearch {
  protected:
   std::unique_ptr<vmsdk::ThreadPool> reader_thread_pool_;
   std::unique_ptr<vmsdk::ThreadPool> writer_thread_pool_;
+  std::unique_ptr<vmsdk::ThreadPool> utility_thread_pool_;
 
  private:
   absl::Status Startup(ValkeyModuleCtx *ctx);

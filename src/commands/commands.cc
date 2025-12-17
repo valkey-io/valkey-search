@@ -59,7 +59,8 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 
 void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
   auto *result = static_cast<Result *>(privdata);
-  delete result;
+  ValkeySearch::Instance().ScheduleSearchResultCleanup(
+      [result]() { delete result; });
 }
 
 }  // namespace async
@@ -112,6 +113,10 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
         return absl::OkStatus();
       }
       parameters->SendReply(ctx, search_result);
+      ValkeySearch::Instance().ScheduleSearchResultCleanup(
+          [neighbors = std::move(search_result.neighbors)]() mutable {
+            // neighbors destructor runs automatically when lambda completes
+          });
       return absl::OkStatus();
     }
 

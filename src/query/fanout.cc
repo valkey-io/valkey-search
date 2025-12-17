@@ -58,6 +58,8 @@ struct NeighborComparator {
     }
     // Secondary sort: by key for consistent ordering when distances are equal.
     // Primarily used in non vector queries without scores (distance = 0).
+    // The full string compare is required because for external keys there is no
+    // guarantee of the stability of the InternedStringPtr across invokations.
     return a.external_id.get()->Str() > b.external_id.get()->Str();
   }
 };

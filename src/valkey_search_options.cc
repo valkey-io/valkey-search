@@ -110,6 +110,20 @@ static auto writer_threads_count =
             })
         .Build();
 
+/// Register the "--utility-threads" flag. Controls the utility thread pool
+constexpr absl::string_view kUtilityThreadsConfig{"utility-threads"};
+static auto utility_threads_count =
+    config::NumberBuilder(kUtilityThreadsConfig,  // name
+                          1,                      // default size (1 thread)
+                          1,                      // min size
+                          kMaxThreadsCount)       // max size
+        .WithModifyCallback(                      // set an "On-Modify" callback
+            [](auto new_value) {
+              UpdateThreadPoolCount(
+                  ValkeySearch::Instance().GetUtilityThreadPool(), new_value);
+            })
+        .Build();
+
 /// Register the "--max-worker-suspension-secs" flag.
 /// Controls the resumption of the worker thread pool:
 ///   - If max-worker-suspension-secs > 0, resume the workers either when the
@@ -187,6 +201,13 @@ constexpr absl::string_view kPreferConsistentResults{
 static config::Boolean prefer_consistent_results(kPreferConsistentResults,
                                                  false);
 
+/// Enable search result background cleanup
+/// If set to true, search result cleanup will be scheduled on background thread
+constexpr absl::string_view kSearchResultBackgroundCleanup{
+    "search-result-background-cleanup"};
+static config::Boolean search_result_background_cleanup(
+    kSearchResultBackgroundCleanup, true);
+
 /// Configure the weight for high priority tasks in thread pools (0-100)
 /// Low priority weight = 100 - high_priority_weight
 constexpr absl::string_view kHighPriorityWeight{"high-priority-weight"};
@@ -194,7 +215,7 @@ static auto high_priority_weight =
     config::NumberBuilder(kHighPriorityWeight, 100, 0,
                           100)  // Default 100%, range 0-100
         .WithModifyCallback([](auto new_value) {
-          // Update both reader and writer thread pools
+          // Update reader and writer thread pools only
           auto reader_pool = ValkeySearch::Instance().GetReaderThreadPool();
           auto writer_pool = ValkeySearch::Instance().GetWriterThreadPool();
           if (reader_pool) {
@@ -270,6 +291,9 @@ static auto thread_pool_wait_time_samples =
           if (auto writer_pool = instance.GetWriterThreadPool()) {
             writer_pool->ResizeSampleQueue(new_size);
           }
+          if (auto utility_pool = instance.GetUtilityThreadPool()) {
+            utility_pool->ResizeSampleQueue(new_size);
+          }
         })
         .Build();
 
@@ -285,6 +309,10 @@ vmsdk::config::Number& GetReaderThreadCount() {
 
 vmsdk::config::Number& GetWriterThreadCount() {
   return dynamic_cast<vmsdk::config::Number&>(*writer_threads_count);
+}
+
+vmsdk::config::Number& GetUtilityThreadCount() {
+  return dynamic_cast<vmsdk::config::Number&>(*utility_threads_count);
 }
 
 vmsdk::config::Number& GetMaxWorkerSuspensionSecs() {
@@ -319,6 +347,10 @@ const vmsdk::config::Boolean& GetPreferPartialResults() {
 
 const vmsdk::config::Boolean& GetPreferConsistentResults() {
   return static_cast<vmsdk::config::Boolean&>(prefer_consistent_results);
+}
+
+const vmsdk::config::Boolean& GetSearchResultBackgroundCleanup() {
+  return static_cast<vmsdk::config::Boolean&>(search_result_background_cleanup);
 }
 
 vmsdk::config::Number& GetHighPriorityWeight() {

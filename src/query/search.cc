@@ -475,19 +475,11 @@ SearchResult::SearchResult(size_t total_count,
     this->neighbors.clear();
     return;
   }
+  this->neighbors = std::move(neighbors);
   // Check if the command needs all results (e.g. for sorting). Trim otherwise.
-  if (RetainAllNeighbors(parameters)) {
-    this->neighbors = std::move(neighbors);
-  } else {
-    this->neighbors = std::move(neighbors);
+  if (!parameters.RequiresCompleteResults()) {
     TrimResults(this->neighbors, parameters);
   }
-}
-
-// Determine if we need full results or if we can optimize with trimming via
-// LIMIT offset & count.
-bool SearchResult::RetainAllNeighbors(const SearchParameters &parameters) {
-  return parameters.RequiresCompleteResults();
 }
 
 // Apply limiting in background thread if possible.

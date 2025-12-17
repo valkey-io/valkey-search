@@ -234,22 +234,20 @@ class Index:
         result = client.execute_command(*query)
         print("Result is ", result)
         count = result[0]
-        dict_result = {}
+        array_result = []
         if self.type == KeyDataType.HASH:
-            for row in range(1, len(result)-1, 2):
-                key = result[row]
-                fields = result[row+1][0::2]
-                values = result[row+1][1::2]
-                print("Key", key, "Fields:", fields, " Values:", values)
-                dict_result[key] = {fields[i]:values[i] for i in range(len(fields))}
+            for row in result[1:]:
+                print("Doing row:", row)
+                d = {row[i].decode():row[i+1] for i in range(0, len(row), 2)}
+                array_result += [d]
         else:
             for row in range(1, len(result)-1, 2):
                 key = result[row]
                 assert result[row+1][0] == b"$"
                 value = json.loads(result[row+1][1])
-                dict_result[key] = value
-        print("Final result", dict_result)
-        return dict_result
+                array_result += value
+        print("Final result", array_result)
+        return array_result
 
     def has_field(self, name: str) -> bool:
         return any(f.name == name for f in self.fields)

@@ -165,10 +165,31 @@ def create_bulk_data_cluster(index_client: Valkey, data_client):
         rating = 3.0 + (i % 3)  # Ratings 3.0, 4.0, 5.0
         data_client.execute_command("HSET", f"bulk_product:{i}", "price", str(price), "category", category, "rating", str(rating))
 
+def validate_buffer_multiplier_config(client: Valkey):
+    """
+        Test search result buffer multiplier configuration validation.
+    """
+    import pytest
+    # Test valid positive values
+    assert client.execute_command("CONFIG SET search.search-result-buffer-multiplier 2.5") == b"OK"
+    assert client.execute_command("CONFIG SET search.search-result-buffer-multiplier 1.2") == b"OK"
+    # Test that values outside range are rejected
+    with pytest.raises(ResponseError, match=r"Buffer multiplier must be between 1.0 and 1000.0"):
+        client.execute_command("CONFIG SET search.search-result-buffer-multiplier -1.0")
+    with pytest.raises(ResponseError, match=r"Buffer multiplier must be between 1.0 and 1000.0"):
+        client.execute_command("CONFIG SET search.search-result-buffer-multiplier 0.5")
+    with pytest.raises(ResponseError, match=r"Buffer multiplier must be between 1.0 and 1000.0"):
+        client.execute_command("CONFIG SET search.search-result-buffer-multiplier 1001.0")
+    # Test that invalid strings are rejected
+    with pytest.raises(ResponseError, match=r"Buffer multiplier must be a valid number"):
+        client.execute_command("CONFIG SET search.search-result-buffer-multiplier invalid")
+
 def validate_bulk_limit_queries(client: Valkey):
     """
         Test bulk operations with various LIMIT and OFFSET combinations to validate background limit changes.
     """
+    validate_buffer_multiplier_config(client)
+    assert client.execute_command("CONFIG SET search.search-result-buffer-multiplier 1.2") == b"OK"
     # Test various limit/offset combinations
     test_cases = [
         (0, 100),    # First 100 results

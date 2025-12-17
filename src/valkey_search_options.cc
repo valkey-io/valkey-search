@@ -6,6 +6,7 @@
  */
 #include "valkey_search_options.h"
 
+#include "absl/strings/numbers.h"
 #include "valkey_search.h"
 #include "vmsdk/src/concurrency.h"
 #include "vmsdk/src/module_config.h"
@@ -296,6 +297,42 @@ static auto thread_pool_wait_time_samples =
           }
         })
         .Build();
+
+/// Register the "search-result-buffer-multiplier" flag
+constexpr absl::string_view kSearchResultBufferMultiplierConfig{
+    "search-result-buffer-multiplier"};
+constexpr absl::string_view kDefaultSearchResultBufferMultiplier{"1.5"};
+constexpr double kMinimumSearchResultBufferMultiplier{1.0};
+constexpr double kMaximumSearchResultBufferMultiplier{1000.0};
+static double search_result_buffer_multiplier{1.5};
+static auto search_result_buffer_multiplier_config =
+    config::StringBuilder(kSearchResultBufferMultiplierConfig,
+                          kDefaultSearchResultBufferMultiplier)
+        .WithValidationCallback([](const std::string& value) -> absl::Status {
+          double parsed_value;
+          if (!absl::SimpleAtod(value, &parsed_value)) {
+            return absl::InvalidArgumentError(
+                "Buffer multiplier must be a valid number");
+          }
+          if (parsed_value < kMinimumSearchResultBufferMultiplier ||
+              parsed_value > kMaximumSearchResultBufferMultiplier) {
+            return absl::InvalidArgumentError(absl::StrFormat(
+                "Buffer multiplier must be between %.1f and %.1f",
+                kMinimumSearchResultBufferMultiplier,
+                kMaximumSearchResultBufferMultiplier));
+          }
+          return absl::OkStatus();
+        })
+        .WithModifyCallback([](const std::string& value) {
+          double parsed_value;
+          CHECK(absl::SimpleAtod(value, &parsed_value));
+          search_result_buffer_multiplier = parsed_value;
+        })
+        .Build();
+
+double GetSearchResultBufferMultiplier() {
+  return search_result_buffer_multiplier;
+}
 
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 

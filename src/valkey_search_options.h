@@ -78,5 +78,8 @@ config::Number& GetLocalFanoutQueueWaitThreshold();
 /// Return the sample queue size for thread pool wait time tracking
 config::Number& GetThreadPoolWaitTimeSamples();
 
+/// Return the search result buffer multiplier value
+double GetSearchResultBufferMultiplier();
+
 }  // namespace options
 }  // namespace valkey_search

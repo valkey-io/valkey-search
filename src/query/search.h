@@ -158,6 +158,12 @@ struct SearchResult {
   bool RetainAllNeighbors(const SearchParameters& parameters);
   void TrimResults(std::deque<indexes::Neighbor>& neighbors,
                    const SearchParameters& parameters);
+  // Helper functions to calculate start/end index with vector/non-vector
+  // awareness
+  size_t CalcStartIndex(const std::deque<indexes::Neighbor>& neighbors,
+                        const SearchParameters& parameters) const;
+  size_t CalcEndIndex(const std::deque<indexes::Neighbor>& neighbors,
+                      const SearchParameters& parameters) const;
 };
 
 // Callback to be called when the search is done.
@@ -195,13 +201,6 @@ CalcBestMatchingPrefilteredKeys(
 
 // Check if no results should be returned based on limit parameters
 bool ShouldReturnNoResults(const SearchParameters& parameters);
-
-// Helper functions to calculate start/end index with vector/non-vector
-// awareness
-size_t CalcStartIndex(const std::deque<indexes::Neighbor>& neighbors,
-                      const SearchParameters& parameters);
-size_t CalcEndIndex(const std::deque<indexes::Neighbor>& neighbors,
-                    const SearchParameters& parameters);
 
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

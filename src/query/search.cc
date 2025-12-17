@@ -437,31 +437,6 @@ bool ShouldReturnNoResults(const SearchParameters &parameters) {
          parameters.limit.number == 0;
 }
 
-// Helper functions to calculate start/end index with vector/non-vector
-// awareness
-size_t CalcStartIndex(const std::deque<indexes::Neighbor> &neighbors,
-                      const SearchParameters &parameters) {
-  if (!parameters.IsNonVectorQuery()) {
-    CHECK_GT(parameters.k, parameters.limit.first_index);
-  }
-  if (neighbors.size() <= parameters.limit.first_index) {
-    return neighbors.size();
-  }
-  return parameters.limit.first_index;
-}
-
-size_t CalcEndIndex(const std::deque<indexes::Neighbor> &neighbors,
-                    const SearchParameters &parameters) {
-  if (parameters.IsNonVectorQuery()) {
-    return std::min(static_cast<size_t>(parameters.limit.number),
-                    neighbors.size());
-  }
-  // Vector query
-  return std::min(
-      static_cast<size_t>(parameters.k),
-      std::min(static_cast<size_t>(parameters.limit.number), neighbors.size()));
-}
-
 SearchResult::SearchResult(size_t total_count,
                            std::deque<indexes::Neighbor> neighbors,
                            const SearchParameters &parameters)
@@ -478,6 +453,33 @@ SearchResult::SearchResult(size_t total_count,
   if (!parameters.RequiresCompleteResults()) {
     TrimResults(this->neighbors, parameters);
   }
+}
+
+// Helper functions to calculate start/end index with vector/non-vector
+// awareness
+size_t SearchResult::CalcStartIndex(
+    const std::deque<indexes::Neighbor> &neighbors,
+    const SearchParameters &parameters) const {
+  if (!parameters.IsNonVectorQuery()) {
+    CHECK_GT(parameters.k, parameters.limit.first_index);
+  }
+  if (neighbors.size() <= parameters.limit.first_index) {
+    return neighbors.size();
+  }
+  return parameters.limit.first_index;
+}
+
+size_t SearchResult::CalcEndIndex(
+    const std::deque<indexes::Neighbor> &neighbors,
+    const SearchParameters &parameters) const {
+  if (parameters.IsNonVectorQuery()) {
+    return std::min(static_cast<size_t>(parameters.limit.number),
+                    neighbors.size());
+  }
+  // Vector query
+  return std::min(
+      static_cast<size_t>(parameters.k),
+      std::min(static_cast<size_t>(parameters.limit.number), neighbors.size()));
 }
 
 // Apply limiting in background thread if possible.
@@ -524,10 +526,9 @@ SerializationRange SearchResult::GetSerializationRange(
     const SearchParameters &parameters) const {
   CHECK(!ShouldReturnNoResults(parameters));
   const size_t start_index =
-      is_offsetted ? 0 : query::CalcStartIndex(neighbors, parameters);
-  const size_t end_index =
-      std::min(start_index + query::CalcEndIndex(neighbors, parameters),
-               neighbors.size());
+      is_offsetted ? 0 : CalcStartIndex(neighbors, parameters);
+  const size_t end_index = std::min(
+      start_index + CalcEndIndex(neighbors, parameters), neighbors.size());
   return {start_index, end_index};
 }
 

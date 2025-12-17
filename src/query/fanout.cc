@@ -305,10 +305,10 @@ absl::Status PerformSearchFanoutAsync(
         [tracker](absl::StatusOr<std::vector<indexes::Neighbor>> &neighbors,
                   std::unique_ptr<SearchParameters> parameters) {
           if (neighbors.ok()) {
-            // For pure full-text queries with content, check for in-flight key
+            // For queries with text predicates, check for in-flight key
             // conflicts before adding results.
             if (!parameters->no_content &&
-                query::IsPureFullTextQuery(*parameters)) {
+                query::QueryHasTextPredicate(*parameters)) {
               auto neighbor_keys =
                   query::CollectNeighborKeys(neighbors.value());
               if (parameters->index_schema->HasAnyConflictingInFlightKeys(

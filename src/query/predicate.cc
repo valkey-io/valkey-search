@@ -455,30 +455,4 @@ EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   return EvaluationResult(true, std::move(or_proximity_iterator));
 }
 
-bool HasTextPredicate(const Predicate* predicate) {
-  if (predicate == nullptr) {
-    return false;
-  }
-  switch (predicate->GetType()) {
-    case PredicateType::kText:
-      return true;
-    case PredicateType::kNegate: {
-      const auto* negate = dynamic_cast<const NegatePredicate*>(predicate);
-      return HasTextPredicate(negate->GetPredicate());
-    }
-    case PredicateType::kComposedAnd:
-    case PredicateType::kComposedOr: {
-      const auto* composed = dynamic_cast<const ComposedPredicate*>(predicate);
-      for (const auto& child : composed->GetChildren()) {
-        if (HasTextPredicate(child.get())) {
-          return true;
-        }
-      }
-      return false;
-    }
-    default:
-      return false;
-  }
-}
-
 }  // namespace valkey_search::query

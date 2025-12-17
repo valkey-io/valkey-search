@@ -167,8 +167,7 @@ CalcBestMatchingPrefilteredKeys(
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
     indexes::VectorBase* vector_index, size_t qualified_entries);
 
-// Check if a query is a pure full-text query (has text predicate, no vector)
-bool IsPureFullTextQuery(const SearchParameters& parameters);
+bool QueryHasTextPredicate(const SearchParameters& parameters);
 
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

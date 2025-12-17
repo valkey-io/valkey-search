@@ -239,10 +239,10 @@ query::SearchResponseCallback Service::MakeSearchCallback(
       RecordSearchMetrics(true, std::move(latency_sample));
       return;
     }
-    // For pure full-text queries with content, check for in-flight key
-    // conflicts. Skip if no_content since we only return key names without
+    // For queries with text predicates, check for in-flight key conflicts.
+    // Skip if no_content since we only return key names without
     // fetching/evaluating data.
-    if (!parameters->no_content && query::IsPureFullTextQuery(*parameters)) {
+    if (!parameters->no_content && query::QueryHasTextPredicate(*parameters)) {
       auto neighbor_keys = query::CollectNeighborKeys(neighbors.value());
       if (parameters->index_schema->HasAnyConflictingInFlightKeys(
               neighbor_keys)) {

@@ -181,11 +181,11 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
           .parameters = std::move(upcast_parameters),
       });
 
-      // For pure full-text queries with content, check for in-flight key
-      // conflicts. Skip if no_content since we only return key names without
+      // For queries with text predicates, check for in-flight key conflicts.
+      // Skip if no_content since we only return key names without
       // fetching/evaluating data.
       if (!result->parameters->no_content &&
-          query::IsPureFullTextQuery(*result->parameters)) {
+          query::QueryHasTextPredicate(*result->parameters)) {
         auto neighbor_keys =
             query::CollectNeighborKeys(result->neighbors.value());
         if (result->parameters->index_schema->HasAnyConflictingInFlightKeys(

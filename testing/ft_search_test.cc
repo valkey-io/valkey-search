@@ -469,7 +469,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
   auto &params = GetParam();
   bool use_thread_pool = std::get<1>(params);
   if (use_thread_pool) {
-    InitThreadPools(5, std::nullopt);
+    InitThreadPools(5, std::nullopt, 1);
   }
   bool use_fanout = std::get<0>(params);
   if (use_fanout) {

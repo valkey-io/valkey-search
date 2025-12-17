@@ -270,7 +270,8 @@ class MockIndexSchema : public IndexSchema {
 class TestableValkeySearch : public ValkeySearch {
  public:
   void InitThreadPools(std::optional<size_t> readers,
-                       std::optional<size_t> writers);
+                       std::optional<size_t> writers,
+                       std::optional<size_t> utility);
 
   vmsdk::ThreadPool* GetWriterThreadPool() const {
     return writer_thread_pool_.get();
@@ -299,9 +300,10 @@ class TestableMetadataManager : public coordinator::MetadataManager {
 };
 
 inline void InitThreadPools(std::optional<size_t> readers,
-                            std::optional<size_t> writers) {
+                            std::optional<size_t> writers,
+                            std::optional<size_t> utility) {
   ((TestableValkeySearch*)&ValkeySearch::Instance())
-      ->InitThreadPools(readers, writers);
+      ->InitThreadPools(readers, writers, utility);
 }
 
 absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateIndexSchema(

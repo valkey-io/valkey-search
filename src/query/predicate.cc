@@ -17,6 +17,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
 #include "src/indexes/text/text_index.h"
@@ -201,15 +202,42 @@ FuzzyPredicate::FuzzyPredicate(
       distance_(distance) {}
 
 EvaluationResult FuzzyPredicate::Evaluate(Evaluator& evaluator) const {
+  VMSDK_LOG(WARNING, nullptr)
+      << "In FuzzyPredicate::Evaluate(eval), the type of eval is "
+      << evaluator.IsPrefilterEvaluator();
   return evaluator.EvaluateText(*this, false);
 }
 
 EvaluationResult FuzzyPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
     const InternedStringPtr& target_key, bool require_positions) const {
-  // TODO: Implement fuzzy evaluation
-  CHECK(false) << "Fuzzy Search - Not implemented";
-  return EvaluationResult(false);
+  uint64_t field_mask = field_mask_;
+  // Get all KeyIterators for words within edit distance
+  auto key_iters = indexes::text::
+      FuzzySearch<indexes::text::InvasivePtr<indexes::text::Postings>>::Search(
+          text_index.GetPrefix(), term_, distance_);
+
+  // Filter to only include KeyIterators that match target_key and field_mask
+  std::vector<indexes::text::Postings::KeyIterator> filtered_key_iterators;
+  for (auto& key_iter : key_iters) {
+    if (key_iter.SkipForwardKey(target_key) &&
+        key_iter.ContainsFields(field_mask)) {
+      filtered_key_iterators.emplace_back(std::move(key_iter));
+    }
+  }
+
+  VMSDK_LOG(WARNING, nullptr)
+      << "In FuzzyPredicate::Evaluate , key iter size is "
+      << filtered_key_iterators.size();
+
+  if (filtered_key_iterators.empty()) {
+    return EvaluationResult(false);
+  }
+
+  auto iterator = std::make_unique<indexes::text::TermIterator>(
+      std::move(filtered_key_iterators), field_mask, nullptr,
+      require_positions);
+  return BuildTextEvaluationResult(std::move(iterator), require_positions);
 }
 
 // TODO: Remove proximity evaluator

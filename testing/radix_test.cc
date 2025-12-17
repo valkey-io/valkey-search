@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/radix_tree.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
@@ -613,6 +614,73 @@ TEST_F(RadixTreeTest, WordIteratorPrefixPartialMatch) {
 
   // Test "ca" prefix - should only match can/cat
   VerifyIterator("ca", {{"can", 2}, {"cat", 1}});
+}
+
+TEST_F(RadixTreeTest, PathIteratorBasic) {
+  AddWords({{"cat", 1}, {"car", 2}, {"dog", 3}});
+
+  // Test root iterator - root should have children
+  auto iter = prefix_tree_.GetPathIterator("");
+  EXPECT_FALSE(iter.Done());
+  EXPECT_TRUE(iter.CanDescend());
+
+  // Descend from root - should get first child
+  auto child_iter = iter.DescendNew();
+  EXPECT_FALSE(child_iter.Done());
+
+  // Should be able to get path (edge label)
+  auto path = child_iter.GetPath();
+  EXPECT_FALSE(path.empty());
+}
+
+TEST_F(RadixTreeTest, PathIteratorSingleWord) {
+  AddWords({{"application", 1}});
+  prefix_tree_.DebugPrintTree("Single Word Tree");
+
+  auto iter = prefix_tree_.GetPathIterator("");
+
+  std::string word;
+  while (!iter.Done()) {
+    word += std::string(iter.GetPath());
+    if (iter.CanDescend()) {
+      iter = iter.DescendNew();
+    } else {
+      break;
+    }
+  }
+
+  EXPECT_EQ(word, "application");
+  EXPECT_TRUE(iter.IsWord());
+}
+
+TEST_F(RadixTreeTest, PathIteratorTraversal) {
+  AddWords({{"cat", 1}, {"car", 2}, {"can", 3}});
+  prefix_tree_.DebugPrintTree("Traversal Test");
+
+  auto iter = prefix_tree_.GetPathIterator("");
+
+  std::vector<std::string> found_words;
+  std::function<void(decltype(iter), std::string)> traverse;
+  traverse = [&](auto it, std::string accumulated) {
+    while (!it.Done()) {
+      std::string word = accumulated + std::string(it.GetPath());
+      if (it.IsWord()) {
+        found_words.push_back(word);
+      }
+      if (it.CanDescend()) {
+        traverse(it.DescendNew(), word);
+      }
+      it.Next();
+    }
+  };
+
+  traverse(iter, "");
+
+  EXPECT_EQ(found_words.size(), 3);
+  std::sort(found_words.begin(), found_words.end());
+  EXPECT_EQ(found_words[0], "can");
+  EXPECT_EQ(found_words[1], "car");
+  EXPECT_EQ(found_words[2], "cat");
 }
 
 }  // namespace

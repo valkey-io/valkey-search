@@ -12,6 +12,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/lexer.h"
 
 namespace valkey_search::indexes {
@@ -211,7 +212,16 @@ std::unique_ptr<indexes::text::TextIterator> InfixPredicate::BuildTextIterator(
 
 std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
     const void* fetcher_ptr) const {
-  CHECK(false) << "Unsupported TextPredicate type";
+  const auto* fetcher =
+      static_cast<const indexes::Text::EntriesFetcher*>(fetcher_ptr);
+  auto key_iterators = indexes::text::
+      FuzzySearch<indexes::text::InvasivePtr<indexes::text::Postings>>::Search(
+          fetcher->text_index_->GetPrefix(), GetTextString(), GetDistance());
+  // We do not perform positional checks on the initial background search.
+  bool require_positions = false;
+  return std::make_unique<indexes::text::TermIterator>(
+      std::move(key_iterators), fetcher->field_mask_, fetcher->untracked_keys_,
+      require_positions);
 }
 
 // Size apis for estimation

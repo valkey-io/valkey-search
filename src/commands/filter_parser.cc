@@ -72,6 +72,23 @@ vmsdk::config::Number& GetQueryStringTermsCount() {
   return dynamic_cast<vmsdk::config::Number&>(*query_terms_count);
 }
 
+/// Register the "fuzzy-max-distance" flag. Controls the maximum edit distance
+/// for fuzzy search queries.
+constexpr absl::string_view kFuzzyMaxDistanceConfig{"fuzzy-max-distance"};
+constexpr uint32_t kDefaultFuzzyMaxDistance{3};
+constexpr uint32_t kMinimumFuzzyMaxDistance{1};
+constexpr uint32_t kMaximumFuzzyMaxDistance{50};
+static auto fuzzy_max_distance =
+    config::NumberBuilder(kFuzzyMaxDistanceConfig, kDefaultFuzzyMaxDistance,
+                          kMinimumFuzzyMaxDistance, kMaximumFuzzyMaxDistance)
+        .WithValidationCallback(CHECK_RANGE(kMinimumFuzzyMaxDistance,
+                                            kMaximumFuzzyMaxDistance,
+                                            kFuzzyMaxDistanceConfig))
+        .Build();
+
+vmsdk::config::Number& GetFuzzyMaxDistance() {
+  return dynamic_cast<vmsdk::config::Number&>(*fuzzy_max_distance);
+}
 }  // namespace options
 
 namespace {
@@ -490,8 +507,6 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
       logical_operator, std::move(children), options_.slop, options_.inorder);
 };
 
-static const uint32_t FUZZY_MAX_DISTANCE = 10;
-
 // Handles backslash escaping for both quoted and unquoted text
 // Escape Syntax:
 // \\ -> \
@@ -618,7 +633,8 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
         // Leading percent
         while (Match('%', false)) {
           leading_percent_count++;
-          if (leading_percent_count > FUZZY_MAX_DISTANCE) break;
+          if (leading_percent_count > options::GetFuzzyMaxDistance().GetValue())
+            break;
         }
         continue;
       } else {
@@ -655,7 +671,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
   // Build predicate directly based on detected pattern
   if (leading_percent_count > 0) {
     if (trailing_percent_count == leading_percent_count &&
-        leading_percent_count <= FUZZY_MAX_DISTANCE) {
+        leading_percent_count <= options::GetFuzzyMaxDistance().GetValue()) {
       if (token.empty()) return absl::InvalidArgumentError("Empty fuzzy token");
       VMSDK_RETURN_IF_ERROR(SetupTextFieldConfiguration(
           field_mask, min_stem_size, field_or_default, false));

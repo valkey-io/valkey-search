@@ -30,7 +30,6 @@ constexpr uint8_t kTwoBitMask = 0x03;           // Mask for lower 2 bits
 constexpr uint8_t kSixBitMask = 0x3F;           // Mask for 6-bit values
 constexpr uint8_t kTerminatorByte = 0x00;       // Terminator byte
 constexpr uint8_t kBitsPerValue = 6;            // 6 bits per encoded value
-constexpr uint8_t kByteMask = 0xFF;             // Single byte mask
 constexpr uint8_t kPartitionDeltaBytes = 4;  // Bytes per partition delta entry
 
 // Type conversion helpers
@@ -66,11 +65,17 @@ FlatPositionMap& FlatPositionMap::operator=(FlatPositionMap&& other) noexcept {
 //=============================================================================
 
 // Header: bit-packed byte + variable-length num_positions + variable-length
-// num_partitions Byte layout: [0]=scheme, [1-2]=encoding, [3-4]=pos_bytes,
-// [5-6]=part_bytes, [7]=unused
+// num_partitions
+// Bit field layout: [0]=header_scheme (1 bit), [1-2]=encoding_scheme (2 bits),
+// [3-4]=pos_bytes (2 bits), [5-6]=part_bytes (2 bits), [7]=unused (1 bit)
 struct Header {
-  uint8_t header_scheme = 0, encoding_scheme = 0, pos_bytes = 0, part_bytes = 0;
-  uint32_t num_positions = 0, num_partitions = 0;
+  unsigned int header_scheme : 1;    // Bit 0: Header selection (0 or 1)
+  unsigned int encoding_scheme : 2;  // Bits 1-2: Encoding scheme (0 to 3)
+  unsigned int pos_bytes : 2;        // Bits 3-4: Position bytes count (0 to 3)
+  unsigned int part_bytes : 2;       // Bits 5-6: Partition bytes count (0 to 3)
+  unsigned int unused : 1;           // Bit 7: Reserved
+  uint32_t num_positions = 0;
+  uint32_t num_partitions = 0;
 
   static uint8_t BytesNeeded(uint32_t value) {
     return value <= 0xFF ? 1 : value <= 0xFFFF ? 2 : value <= 0xFFFFFF ? 3 : 4;
@@ -78,21 +83,32 @@ struct Header {
 
   // Constructor for serialization
   Header(uint32_t num_pos, uint32_t num_part)
-      : pos_bytes(BytesNeeded(num_pos) - 1),
+      : header_scheme(0),
+        encoding_scheme(0),
+        pos_bytes(BytesNeeded(num_pos) - 1),
         part_bytes(BytesNeeded(num_part) - 1),
+        unused(0),
         num_positions(num_pos),
         num_partitions(num_part) {}
 
   // Default constructor for deserialization
-  Header() = default;
+  Header()
+      : header_scheme(0),
+        encoding_scheme(0),
+        pos_bytes(0),
+        part_bytes(0),
+        unused(0) {}
 
   size_t pack(char* p) const {
     char* start = p;
+    // Pack bit fields into single byte
     *p++ = C((header_scheme & 1) | ((encoding_scheme & 3) << 1) |
              ((pos_bytes & 3) << 3) | ((part_bytes & 3) << 5));
-    for (uint8_t i = 0; i <= pos_bytes; ++i) *p++ = C(num_positions >> (i * 8));
-    for (uint8_t i = 0; i <= part_bytes; ++i)
-      *p++ = C(num_partitions >> (i * 8));
+    // Write num_positions and num_partitions (little-endian)
+    std::memcpy(p, &num_positions, pos_bytes + 1);
+    p += pos_bytes + 1;
+    std::memcpy(p, &num_partitions, part_bytes + 1);
+    p += part_bytes + 1;
     return p - start;
   }
 
@@ -103,15 +119,18 @@ struct Header {
     }
     const char* start = p;
     uint8_t b = U8(*p++);
+
     Header h;
-    h.header_scheme = U8(b & 1);
-    h.encoding_scheme = U8((b >> 1) & 3);
-    h.pos_bytes = U8((b >> 3) & 3);
-    h.part_bytes = U8((b >> 5) & 3);
-    for (uint8_t i = 0; i <= h.pos_bytes; ++i)
-      h.num_positions |= U32(U8(*p++)) << (i * 8);
-    for (uint8_t i = 0; i <= h.part_bytes; ++i)
-      h.num_partitions |= U32(U8(*p++)) << (i * 8);
+    // Unpack bit fields from single byte
+    h.header_scheme = b & 1;
+    h.encoding_scheme = (b >> 1) & 3;
+    h.pos_bytes = (b >> 3) & 3;
+    h.part_bytes = (b >> 5) & 3;
+    // Read num_positions and num_partitions (little-endian)
+    std::memcpy(&h.num_positions, p, h.pos_bytes + 1);
+    p += h.pos_bytes + 1;
+    std::memcpy(&h.num_partitions, p, h.part_bytes + 1);
+    p += h.part_bytes + 1;
     header_size = p - start;
     return h;
   }

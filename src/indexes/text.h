@@ -10,6 +10,13 @@
 
 #include <memory>
 
+namespace valkey_search::indexes::text {
+// Inline capacity for word expansion key iterators
+constexpr size_t kWordExpansionInlineCapacity = 200;
+// Inline capacity for proximity terms
+constexpr size_t kProximityTermsInlineCapacity = 64;
+}  // namespace valkey_search::indexes::text
+
 #include "absl/base/thread_annotations.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
@@ -63,6 +70,7 @@ class Text : public IndexBase {
       const override {
     absl::MutexLock lock(&index_mutex_);
     // TODO: Implement proper key tracking
+    return absl::OkStatus();
   }
 
   size_t GetUnTrackedKeyCount() const override {
@@ -80,6 +88,7 @@ class Text : public IndexBase {
       const override {
     absl::MutexLock lock(&index_mutex_);
     // TODO
+    return absl::OkStatus();
   }
 
   size_t GetTrackedKeyCount() const override;

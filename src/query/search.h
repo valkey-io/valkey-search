@@ -158,12 +158,6 @@ struct SearchResult {
   bool RetainAllNeighbors(const SearchParameters& parameters);
   void TrimResults(std::deque<indexes::Neighbor>& neighbors,
                    const SearchParameters& parameters);
-  // Helper functions to calculate start/end index with vector/non-vector
-  // awareness
-  size_t CalcStartIndex(const std::deque<indexes::Neighbor>& neighbors,
-                        const SearchParameters& parameters) const;
-  size_t CalcEndIndex(const std::deque<indexes::Neighbor>& neighbors,
-                      const SearchParameters& parameters) const;
 };
 
 // Callback to be called when the search is done.

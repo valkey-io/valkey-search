@@ -464,11 +464,10 @@ void SearchResult::TrimResults(std::deque<indexes::Neighbor> &neighbors,
       range.end_index * options::GetSearchResultBufferMultiplier());
   // In standalone mode, we can optimize by trimming from front first.
   // Note: We cannot trim from the front in a Cluster Mode setting because
-  // each shard X results and we need to trim the OFFSET on the aggregated
-  // results. Thus, we can only trim from the end in searches for individual
-  // nodes.
-  // In cluster mode, the offset based trimming is applied after merging all
-  // results from shards at the coordinator level.
+  // each shard produces X results and we need to trim the OFFSET on the
+  // aggregated results. Thus, we can only trim from the end in searches for
+  // individual nodes. In cluster mode, the offset based trimming is applied
+  // after merging all results from shards at the coordinator level.
   if (!ValkeySearch::Instance().IsCluster()) {
     this->is_offsetted = true;
     // Trim from front (apply offset)
@@ -505,7 +504,8 @@ SerializationRange SearchResult::GetSerializationRange(
     if (parameters.IsVectorQuery()) {
       CHECK_GT(parameters.k, parameters.limit.first_index);
     }
-    start_index = std::min(neighbors.size(), parameters.limit.first_index);
+    start_index = std::min(neighbors.size(),
+                           static_cast<size_t>(parameters.limit.first_index));
   }
   // Determine end_index logic
   size_t limit_count = static_cast<size_t>(parameters.limit.number);

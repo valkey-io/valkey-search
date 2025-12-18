@@ -1426,12 +1426,12 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # client.execute_command("HSET", "doc:4", "content", "Driver drove the car?") // fails as ? is not ignored
         client.execute_command("HSET", "doc:4", "content", "Driver drove the car!")
 
-        # result = client.execute_command("FT.SEARCH", "idx1", '%car%')
-        # assert (result[0], set(result[1::2])) == (2, {b"doc:2", b"doc:4"})
+        result = client.execute_command("FT.SEARCH", "idx1", '%car%')
+        assert (result[0], set(result[1::2])) == (2, {b"doc:2", b"doc:4"})
 
-        # # Should be Case insenstive
-        # result = client.execute_command("FT.SEARCH", "idx1", '%CAR%')
-        # assert (result[0], set(result[1::2])) == (2, {b"doc:2", b"doc:4"})
+        # Should be Case insensitive
+        result = client.execute_command("FT.SEARCH", "idx1", '%CAR%')
+        assert (result[0], set(result[1::2])) == (2, {b"doc:2", b"doc:4"})
 
         # Transposition (Damerau-Levenshtein)
         result = client.execute_command("FT.SEARCH", "idx1", '%crA%')

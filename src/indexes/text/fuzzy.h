@@ -79,9 +79,14 @@ struct FuzzySearch {
     while (!iter.Done()) {
       absl::string_view path = iter.GetPath();
       VMSDK_LOG(WARNING, nullptr)
-          << "  path='" << path << "' iter.IsWord()=" << iter.IsWord()
+          << "  path='" << path << "' path.empty()=" << path.empty()
+          << " path.length()=" << path.length()
+          << " iter.IsWord()=" << iter.IsWord()
           << " iter.CanDescend()=" << iter.CanDescend();
       std::string new_word = word;
+      // Minimum edit distance in the current DP row after processing the path.
+      // Used for pruning: if min_dist > max_distance, skip entire subtree.
+      size_t min_dist;
 
       // SAVE STATE: Each sibling must start with same parent state
       auto saved_prev_prev = prev_prev;
@@ -94,7 +99,7 @@ struct FuzzySearch {
         char lower_ch = std::tolower(static_cast<unsigned char>(ch));
 
         curr[0] = new_word.length();
-        size_t min_dist = curr[0];
+        min_dist = curr[0];
 
         // DP matrix (example: "car" vs pattern "cra"):
         //       ""  "c"  "cr"  "cra"
@@ -144,7 +149,6 @@ struct FuzzySearch {
       // Pruning: skip subtree if minimum distance exceeds target edit distance.
       // Since distance can only increase with more characters, if we're already
       // too far, no word in this subtree can match.
-      size_t min_dist = *std::min_element(prev.begin(), prev.end());
       bool should_prune = (min_dist > max_distance);
       VMSDK_LOG(WARNING, nullptr) << "  should_prune='" << should_prune;
       if (should_prune) {

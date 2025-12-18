@@ -25,7 +25,7 @@ namespace async {
 
 struct Result {
   cancel::Token cancellation_token;
-  absl::StatusOr<std::deque<indexes::Neighbor>> neighbors;
+  absl::StatusOr<query::SearchResult> search_result;
   std::unique_ptr<QueryCommand> parameters;
 };
 
@@ -48,13 +48,12 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
         ctx, "Search operation cancelled due to timeout");
   }
 
-  if (!res->neighbors.ok()) {
+  if (!res->search_result.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
     return ValkeyModule_ReplyWithError(
-        ctx, res->neighbors.status().message().data());
+        ctx, res->search_result.status().message().data());
   }
-
-  res->parameters->SendReply(ctx, res->neighbors.value());
+  res->parameters->SendReply(ctx, res->search_result.value());
   return VALKEYMODULE_OK;
 }
 
@@ -104,7 +103,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
     if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
                            inside_multi_exec)) {
       VMSDK_ASSIGN_OR_RETURN(
-          auto neighbors,
+          auto search_result,
           query::Search(*parameters, query::SearchMode::kLocal));
       if (!parameters->enable_partial_results &&
           parameters->cancellation_token->IsCancelled()) {
@@ -113,9 +112,9 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
         ++Metrics::GetStats().query_failed_requests_cnt;
         return absl::OkStatus();
       }
-      parameters->SendReply(ctx, neighbors);
+      parameters->SendReply(ctx, search_result);
       ValkeySearch::Instance().ScheduleSearchResultCleanup(
-          [neighbors = std::move(neighbors)]() mutable {
+          [neighbors = std::move(search_result.neighbors)]() mutable {
             // neighbors destructor runs automatically when lambda completes
           });
       return absl::OkStatus();
@@ -130,7 +129,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
           dynamic_cast<QueryCommand *>(parameters.release()));
       CHECK(upcast_parameters != nullptr);
       auto result = std::make_unique<async::Result>(async::Result{
-          .neighbors = std::move(neighbors),
+          .search_result = std::move(neighbors),
           .parameters = std::move(upcast_parameters),
       });
       blocked_client.SetReplyPrivateData(result.release());

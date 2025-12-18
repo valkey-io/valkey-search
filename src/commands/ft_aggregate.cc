@@ -315,12 +315,24 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
+// TODO: Implement the correct logic to detect if the FT.AGGREGATE query has a
+// clause (e.g. sorting) that requires all neighbors to be returned for the
+// correct search result.
+bool AggregateParameters::RequiresCompleteResults() const {
+  for (const auto &stage : stages_) {
+    if (dynamic_cast<const SortBy *>(stage.get()) != nullptr) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,
-                                    std::deque<indexes::Neighbor> &neighbors) {
-  auto result = SendReplyInner(ctx, neighbors, *this);
-  if (!result.ok()) {
+                                    query::SearchResult &result) {
+  auto status = SendReplyInner(ctx, result.neighbors, *this);
+  if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
-    ValkeyModule_ReplyWithError(ctx, result.message().data());
+    ValkeyModule_ReplyWithError(ctx, status.message().data());
   }
 }
 

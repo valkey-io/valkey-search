@@ -1089,6 +1089,17 @@ INSTANTIATE_TEST_SUITE_P(
                 "}\n",
         },
         {
+            .test_name = "fuzzy_ignored_in_exact_phrase",
+            .filter = "@text_field1:\" Advanced Neural %%%word%%%\"",
+            .create_success = true,
+            .expected_tree_structure =
+                "AND(slop=0, inorder=true){\n"
+                "  TEXT-TERM(\"advanced\", field_mask=1)\n"
+                "  TEXT-TERM(\"neural\", field_mask=1)\n"
+                "  TEXT-TERM(\"word\", field_mask=1)\n"
+                "}\n",
+        },
+        {
             .test_name = "invalid_fuzzy1",
             .filter = "Hello, how are you% doing",
             .create_success = false,
@@ -1109,6 +1120,18 @@ INSTANTIATE_TEST_SUITE_P(
         {
             .test_name = "invalid_fuzzy4",
             .filter = "Hello, how are %%%you%%%doing%%%",
+            .create_success = false,
+            .create_expected_error_message = "Invalid fuzzy '%' markers",
+        },
+        {
+            .test_name = "invalid_fuzzy5",
+            .filter = "Hello, how are %%%  %%%",
+            .create_success = false,
+            .create_expected_error_message = "Invalid fuzzy '%' markers",
+        },
+        {
+            .test_name = "invalid_fuzzy6",
+            .filter = "Hello, how are %%%*%%%",
             .create_success = false,
             .create_expected_error_message = "Invalid fuzzy '%' markers",
         },

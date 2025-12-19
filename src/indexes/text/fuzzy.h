@@ -8,7 +8,6 @@
 #define _VALKEY_SEARCH_INDEXES_TEXT_FUZZY_H_
 
 #include <algorithm>
-#include <cctype>
 #include <string>
 #include <vector>
 
@@ -94,9 +93,8 @@ struct FuzzySearch {
       char saved_prev_char = prev_char;
 
       // Process each character in the path
-      for (char ch : path) {
-        new_word += ch;
-        char lower_ch = std::tolower(static_cast<unsigned char>(ch));
+      for (char tree_ch : path) {
+        new_word += tree_ch;
 
         curr[0] = new_word.length();
         min_dist = curr[0];
@@ -119,9 +117,8 @@ struct FuzzySearch {
         //   prev_prev[i-2] + cost  // Transposition (from 2 back diagonal)
         // )
         for (size_t i = 1; i <= pattern.length(); ++i) {
-          char lower_pat =
-              std::tolower(static_cast<unsigned char>(pattern[i - 1]));
-          size_t cost = (lower_ch == lower_pat) ? 0 : 1;
+          char pattern_ch = pattern[i - 1];
+          size_t cost = (tree_ch == pattern_ch) ? 0 : 1;
 
           curr[i] = std::min({
               prev[i] + 1,        // Deletion
@@ -130,11 +127,8 @@ struct FuzzySearch {
           });
 
           // Damerau-Levenshtein: transposition
-          if (i > 1 && new_word.length() > 1 &&
-              lower_ch ==
-                  std::tolower(static_cast<unsigned char>(pattern[i - 2])) &&
-              lower_pat ==
-                  std::tolower(static_cast<unsigned char>(prev_char))) {
+          if (i > 1 && new_word.length() > 1 && tree_ch == pattern[i - 2] &&
+              pattern_ch == prev_char) {
             curr[i] = std::min(curr[i], prev_prev[i - 2] + cost);
           }
 
@@ -144,13 +138,13 @@ struct FuzzySearch {
         // prev_prev
         prev_prev.swap(prev);
         prev.swap(curr);
-        prev_char = ch;
+        prev_char = tree_ch;
       }
       // Pruning: skip subtree if minimum distance exceeds target edit distance.
       // Since distance can only increase with more characters, if we're already
       // too far, no word in this subtree can match.
       bool should_prune = (min_dist > max_distance);
-      VMSDK_LOG(WARNING, nullptr) << "  should_prune='" << should_prune;
+      VMSDK_LOG(WARNING, nullptr) << "  should_prune=" << should_prune;
       if (should_prune) {
         // Restore state for next sibling (each sibling starts from same parent
         // state)
@@ -169,7 +163,9 @@ struct FuzzySearch {
             << " new_word='" << new_word
             << "' distance=" << prev[pattern.length()];
 
-        // Check if the child is a word
+        // Check if the node has a word and edit distance is within the limit
+        // Here we have the edit distance stored in prev row as we did the swap
+        // in loop before
         if (child_iter.IsWord() && prev[pattern.length()] <= max_distance) {
           VMSDK_LOG(WARNING, nullptr) << "     ADDING RESULT: " << new_word;
           key_iterators.emplace_back(child_iter.GetTarget()->GetKeyIterator());

@@ -25,6 +25,9 @@
 
 namespace vmsdk {
 
+// Used by MemoryPool Capture Machinery
+void (*malloc_hook)() = []() {};
+
 // SystemAllocTracker tracks memory allocations to the system allocator, so that
 // subsequent free calls can be redirected to the appropriate allocator.
 class SystemAllocTracker {
@@ -150,6 +153,7 @@ size_t AlignSize(size_t size, int alignment = 16) {
 }
 
 void* __wrap_malloc(size_t size) noexcept {
+  (*vmsdk::malloc_hook)();
   if (!vmsdk::IsUsingValkeyAlloc()) {
     auto ptr =
         vmsdk::PerformAndTrackMalloc(size, __real_malloc, empty_usable_size);
@@ -180,6 +184,7 @@ void __wrap_free(void* ptr) noexcept {
 }
 // NOLINTNEXTLINE
 void* __wrap_calloc(size_t __nmemb, size_t size) noexcept {
+  (*vmsdk::malloc_hook)();
   if (!vmsdk::IsUsingValkeyAlloc()) {
     auto ptr = vmsdk::PerformAndTrackCalloc(__nmemb, size, __real_calloc,
                                             empty_usable_size);
@@ -210,6 +215,7 @@ void* __wrap_realloc(void* ptr, size_t size) noexcept {
 }
 // NOLINTNEXTLINE
 void* __wrap_aligned_alloc(size_t __alignment, size_t __size) noexcept {
+  (*vmsdk::malloc_hook)();
   if (!vmsdk::IsUsingValkeyAlloc()) {
     auto ptr = vmsdk::PerformAndTrackAlignedAlloc(
         __alignment, __size, __real_aligned_alloc, empty_usable_size);

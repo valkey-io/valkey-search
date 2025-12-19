@@ -16,6 +16,11 @@
 #include "absl/status/status.h"
 #include "vmsdk/src/command_parser.h"
 
+// See vmsdk/src/memory_allocation_overrides.cc
+namespace vmsdk {
+extern void (*malloc_hook)();
+};
+
 namespace valkey_search {
 
 class MemoryPool : public std::pmr::memory_resource {
@@ -26,7 +31,37 @@ class MemoryPool : public std::pmr::memory_resource {
   size_t GetInUse() const { return inuse_; }
   size_t GetFreed() const { return freed_; }
 
+  //
+  // Interface to other modules
+  //
+  //
+  // Debugging infrastructure for MemoryPool
+  //
+  // If this is in the callstack, then non-Pooled allocations are
+  // conditionally captured and made visible via the FT._DEBUG command
+  //
+  class EnableCapture {
+   public:
+    EnableCapture() {
+      vmsdk::malloc_hook = &Capture;
+      CaptureEnabled = CaptureRequested;
+    }
+    ~EnableCapture() { CaptureEnabled = false; }
+  };
+
+  inline static void Capture() {
+    if (CaptureEnabled) {
+      DoCapture();
+    }
+  }
+
+  static absl::Status DebugCmd(ValkeyModuleCtx* ctx, vmsdk::ArgsIterator& itr);
+
  private:
+  static bool thread_local CaptureEnabled;
+  static bool CaptureRequested;
+  static void DoCapture();
+
   void* do_allocate(size_t bytes,
                     size_t alignment = alignof(std::max_align_t)) override;
 
@@ -66,21 +101,6 @@ using PooledInlinedVector = absl::InlinedVector<T, N, MemoryPoolAllocator<T>>;
 template <typename K, typename V>
 using PoolFlatHashMap =
     absl::flat_hash_map<K, V, MemoryPoolAllocator<std::pair<K, V>>>;
-
-//
-// Debugging infrastructure for MemoryPool
-//
-// If this is in the callstack, then non-Pooled allocations are
-// conditionally captured and made visible via the FT._DEBUG command
-//
-class EnableMemoryPoolDebugging {
- public:
-  EnableMemoryPoolDebugging();
-  ~EnableMemoryPoolDebugging();
-};
-
-absl::Status MemoryPoolDebug(ValkeyModuleCtx* ctx, vmsdk::ArgsIterator& itr);
-void MemoryPoolMallocCapture();
 
 }  // namespace valkey_search
 

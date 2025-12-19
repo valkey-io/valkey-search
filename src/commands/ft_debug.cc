@@ -149,7 +149,7 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
       {"FT_DEBUG SHOW_METADATA",
        "list internal metadata manager table namespace"},
       {"FT_DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
-      {"FT_DEBUG MEMORY_POOL_DEBUG [ ENABLE | DISABLE | SHOW ]",
+      {"FT_DEBUG MEMORY_POOL_DEBUG [ ENABLE | DISABLE | RESET | DUMP ]",
        "Controls debugging of pool allocations"}};
   ValkeyModule_ReplySetArrayLength(ctx, 2 * help_text.size());
   for (auto &pair : help_text) {
@@ -197,7 +197,7 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   } else if (keyword == "SHOW_INDEXSCHEMAS") {
     return valkey_search::SchemaManager::Instance().ShowIndexSchemas(ctx, itr);
   } else if (keyword == "MEMORY_POOL_DEBUG") {
-    return MemoryPoolDebug(ctx, itr);
+    return MemoryPool::DebugCmd(ctx, itr);
   } else if (keyword == "HELP") {
     return HelpCmd(ctx, itr);
   } else {

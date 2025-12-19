@@ -8,8 +8,63 @@
 #include "src/utils/memory_pool.h"
 
 #include <absl/log/check.h>
+#include <execinfo.h>
+
+#include <functional>
+
+// clang-format off
+// We put this at the end since it will otherwise mangle the malloc symbols in
+// the dependencies.
+#include "vmsdk/src/memory_allocation_overrides.h"
+
+// RawSystemAllocator implements an allocator that will not go through
+// the SystemAllocTracker, for use by the SystemAllocTracker to prevent
+// infinite recursion when tracking pointers.
+template <typename T>
+struct RawSystemAllocator {
+  // NOLINTNEXTLINE
+  typedef T value_type;
+
+  RawSystemAllocator() = default;
+  template <typename U>
+  constexpr RawSystemAllocator(const RawSystemAllocator<U>&) noexcept {}
+  // NOLINTNEXTLINE
+  T* allocate(std::size_t n) {
+    return static_cast<T*>(__real_malloc(n * sizeof(T)));
+  }
+  // NOLINTNEXTLINE
+  void deallocate(T* p, std::size_t) {
+    __real_free(p);
+  }
+};
+
+struct Backtrace {
+  absl::InlinedVector<void *, 128> stack_;
+  
+  void Capture() {
+    stack_.resize(128);
+    int size = backtrace(stack_.data(), stack_.size());
+    stack_.resize(size);
+  }
+  bool operator==(const Backtrace& other) const {
+    return stack_ == other.stack_;
+  }
+};
+template <>
+struct std::hash<Backtrace> {
+  size_t operator()(const Backtrace& backtrace) const {
+    size_t hash = 0;
+    for (const auto& ptr : backtrace.stack_) {
+      hash ^= std::hash<void*>{}(ptr) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    }
+    return hash;
+  }
+};
 
 namespace valkey_search {
+
+bool thread_local MemoryPool::CaptureEnabled = false;
+bool MemoryPool::CaptureRequested = false;
 
 void MemoryPool::NewChunk(size_t chunk_size) {
   auto this_chunk_size = std::max(chunk_size, chunk_size_);
@@ -64,30 +119,61 @@ MemoryPool::~MemoryPool() {
   CHECK(allocated_ == 0);
 }
 
-//
-// Debugging infrastructure for MemoryPools.
-//
-bool thread_local MemoryPoolDebuggingEnabled = false;
-
-EnableMemoryPoolDebugging::EnableMemoryPoolDebugging() {
-  CHECK(!MemoryPoolDebuggingEnabled);
-  MemoryPoolDebuggingEnabled = true;
-}
-
-EnableMemoryPoolDebugging::~EnableMemoryPoolDebugging() {
-  CHECK(MemoryPoolDebuggingEnabled);
-  MemoryPoolDebuggingEnabled = false;
-}
-
-class Backtrace {};
-
 static absl::Mutex pool_debug_mutex;
-// static absl::flat_hash_map<class K, class V>
+static absl::flat_hash_map<Backtrace, size_t, std::hash<Backtrace>, std::equal_to<Backtrace>, RawSystemAllocator<std::pair<const Backtrace, size_t>>> backtraces;
 
 //
 // This is called out of the malloc chain.
 // If pool debugging is enabled, then it captures the current call stack
 //
-void MemoryPoolDebugCapture() {}
+void MemoryPool::DoCapture() {
+  Backtrace backtrace;
+  backtrace.Capture();
+  absl::MutexLock lock(&pool_debug_mutex);
+  auto itr = backtraces.find(backtrace);
+  if (itr == backtraces.end()) {
+    backtraces.emplace(std::move(backtrace), 1);
+    return;
+  } else {
+    itr->second++;
+  }
+}
 
-}  // namespace valkey_search
+absl::Status MemoryPool::DebugCmd(ValkeyModuleCtx* ctx, vmsdk::ArgsIterator& itr) {
+  std::string keyword;
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, keyword));
+  keyword = absl::AsciiStrToUpper(keyword);
+  if (keyword == "ENABLE") {
+    CaptureRequested = true;
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+  } else if (keyword == "DISABLE") {
+    CaptureRequested = false;
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+  } else if (keyword == "RESET") {
+    absl::MutexLock lock(&pool_debug_mutex);
+    backtraces.clear();
+  } else if (keyword == "DUMP") {
+    absl::MutexLock lock(&pool_debug_mutex);
+    std::multimap<size_t, const Backtrace *> sorted;
+    for (auto& [backtrace, count] : backtraces) {
+      sorted.insert(std::make_pair<size_t, const Backtrace *>(backtrace.stack_.size(), &backtrace));
+    }
+    ValkeyModule_ReplyWithArray(ctx, backtraces.size());
+    for (const auto& [count, backtrace] : sorted) {
+      char **symbols = backtrace_symbols(backtrace->stack_.data(), backtrace->stack_.size());
+      ValkeyModule_ReplyWithArray(ctx, backtrace->stack_.size() + 1);
+      ValkeyModule_ReplyWithLongLong(ctx, count);
+      for (int i = 0; i < backtrace->stack_.size(); i++) {
+        ValkeyModule_ReplyWithSimpleString(ctx, symbols[i]);
+      }
+      free(symbols);
+    }
+  } else {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Unknown subcommand: ", keyword));
+  }
+  return absl::OkStatus();
+}
+
+
+}

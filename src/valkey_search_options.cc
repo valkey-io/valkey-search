@@ -411,5 +411,14 @@ vmsdk::config::Number& GetThreadPoolWaitTimeSamples() {
   return dynamic_cast<vmsdk::config::Number&>(*thread_pool_wait_time_samples);
 }
 
+size_t GetQueryPoolChunkSize() {
+  static auto query_pool_chunk_size =
+      vmsdk::config::NumberBuilder("query-pool-chunk-size", 1 << 16, 1 << 10,
+                                   1 << 30)
+          .Build();
+  return dynamic_cast<vmsdk::config::Number&>(*query_pool_chunk_size)
+      .GetValue();
+}
+
 }  // namespace options
 }  // namespace valkey_search

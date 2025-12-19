@@ -14,8 +14,8 @@
 namespace valkey_search {
 
 TEST(MemoryPoolTest, Basic) {
-  for (auto push : {1, 10, 20}) {
-    MemoryPool pool(2);
+  for (auto push : {10, 20, 30}) {
+    MemoryPool pool(17);
     {
       PooledVector<char> buffer(&pool);
       std::cerr << "Doing size " << push << std::endl;

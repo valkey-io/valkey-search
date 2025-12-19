@@ -98,8 +98,11 @@ using PooledVector = std::vector<T, MemoryPoolAllocator<T>>;
 template <typename T, size_t N>
 using PooledInlinedVector = absl::InlinedVector<T, N, MemoryPoolAllocator<T>>;
 
+using PooledString =
+    std::basic_string<char, std::char_traits<char>, MemoryPoolAllocator<char>>;
+
 template <typename K, typename V>
-using PoolFlatHashMap =
+using PooledFlatHashMap =
     absl::flat_hash_map<K, V, MemoryPoolAllocator<std::pair<K, V>>>;
 
 }  // namespace valkey_search

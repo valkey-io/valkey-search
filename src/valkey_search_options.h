@@ -81,5 +81,8 @@ config::Number& GetThreadPoolWaitTimeSamples();
 /// Return the search result buffer multiplier value
 double GetSearchResultBufferMultiplier();
 
+/// Return the configuration entry for search result buffer size
+size_t GetQueryPoolChunkSize();
+
 }  // namespace options
 }  // namespace valkey_search

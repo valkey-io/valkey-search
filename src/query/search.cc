@@ -490,7 +490,6 @@ void SearchResult::TrimResults(std::deque<indexes::Neighbor> &neighbors,
   // Apply limiting with buffer
   this->is_limited_with_buffer = true;
   neighbors.erase(neighbors.begin() + max_needed, neighbors.end());
-  return;
 }
 
 // Determine the range of neighbors to serialize in the response.
@@ -545,5 +544,13 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
       vmsdk::ThreadPool::Priority::kHigh);
   return absl::OkStatus();
 }
+
+SearchParameters::SearchParameters(uint64_t timeout,
+                                   grpc::CallbackServerContext *context,
+                                   uint32_t db_num)
+    : query_pool(options::GetQueryPoolChunkSize()),  // Must be first
+      cancellation_token(cancel::Make(timeout, context)),
+      timeout_ms(timeout),
+      db_num_(db_num) {}
 
 }  // namespace valkey_search::query

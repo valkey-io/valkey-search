@@ -66,8 +66,8 @@ namespace valkey_search {
 bool thread_local MemoryPool::CaptureEnabled = false;
 bool MemoryPool::CaptureRequested = false;
 
-void MemoryPool::NewChunk(size_t chunk_size) {
-  auto this_chunk_size = std::max(chunk_size, chunk_size_);
+void MemoryPool::NewChunk(size_t data_size) {
+  auto this_chunk_size = std::max(data_size, chunk_size_);
   auto chunk =
       reinterpret_cast<Chunk*>(new char[this_chunk_size + sizeof(Chunk)]);
   chunk->size_ = this_chunk_size;
@@ -76,7 +76,11 @@ void MemoryPool::NewChunk(size_t chunk_size) {
   chunks_.emplace_back(chunk);
 }
 
-MemoryPool::MemoryPool(size_t chunk_size) : chunk_size_(chunk_size) {
+MemoryPool::MemoryPool(size_t chunk_size) {
+  // Externally chunks are sized to fit efficiently into slabs, so our
+  // internal chunk size gets reduced accordingly.
+  CHECK(chunk_size > sizeof(Chunk));
+  chunk_size_ = chunk_size - sizeof(Chunk);
   NewChunk(0);
 }
 
@@ -102,6 +106,10 @@ void* MemoryPool::do_allocate(size_t bytes, size_t alignment) {
 }
 
 void MemoryPool::do_deallocate(void* p, size_t bytes, size_t alignment) {
+  //
+  // Note, because of the way things get destructed, we might get called to deallocate
+  // after the pool itself has been destroyed. So be care here....
+  //
   alignment = std::max(alignment, 16ul);
   bytes = (bytes + alignment - 1) & ~(alignment - 1);
   CHECK(inuse_ >= bytes);
@@ -109,7 +117,6 @@ void MemoryPool::do_deallocate(void* p, size_t bytes, size_t alignment) {
 }
 
 MemoryPool::~MemoryPool() {
-  CHECK(inuse_ == 0);
   while (!chunks_.empty()) {
     auto chunk = chunks_.back();
     allocated_ -= chunk->size_;

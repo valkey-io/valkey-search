@@ -19,10 +19,53 @@ TEXT_SCHEMA = {
 }
 
 TEXT_FIELD_VALUES = {
-    'title': ['apple', 'banana', 'orange', 'grape', 'cherry', 'mango'],
-    'body': ['apple', 'banana', 'orange', 'grape', 'cherry', 'mango'],
-    'color': ['red', 'yellow', 'green', 'purple'],
+    'title': [
+        # fruits
+        'apple', 'banana', 'orange', 'grape', 'cherry', 'mango',
+        # other foods
+        'pear', 'peach', 'plum', 'melon', 'kiwi', 'lemon',
+        # objects
+        'table', 'chair', 'desk', 'lamp', 'window', 'door',
+        # abstract / misc
+        'music', 'movie', 'book', 'story', 'game', 'puzzle',
+        # adjectives
+        'quick', 'bright', 'silent', 'heavy', 'smooth', 'sharp'
+    ],
+
+    'body': [
+        # fruits
+        'apple', 'banana', 'orange', 'grape', 'cherry', 'mango',
+        # animals
+        'dog', 'cat', 'horse', 'tiger', 'eagle', 'shark',
+        # places
+        'city', 'village', 'forest', 'desert', 'ocean', 'river',
+        # actions
+        'run', 'jump', 'swim', 'drive', 'fly', 'build',
+        # descriptors
+        'fast', 'slow', 'loud', 'quiet', 'warm', 'cold'
+    ],
+
+    'color': [
+        'red',
+        'yellow',
+        'green',
+        'purple',
+        'blue',
+        'black',
+        'white',
+        'orange',
+        'pink',
+        'brown'
+    ],
+
     'price': (0, 50)
+}
+
+TEXT_SMALL_FIELD_VALUES = {
+    'title': ['apple', 'banana', 'orange', 'grape', 'cherry'],
+    'body': ['dog', 'cat', 'horse', 'city', 'forest'],
+    'color': ['red', 'yellow', 'green', 'purple', 'blue'],
+    'price': (0, 10)
 }
 
 
@@ -317,6 +360,8 @@ def compute_data_sets():
                 ]
     return data
 
+# TODO: stopwords, punctuation, numbers in text field (with periods, float, +/-)
+# TODO: special case with lexers (random lexical chars, prove lexical analyzer work correct) (isolation)
 def compute_text_data_sets(schema, field_values, seed=123):
     """Generate random documents from field value pools.
     
@@ -364,16 +409,21 @@ def compute_text_data_sets(schema, field_values, seed=123):
     for field in text_fields:
         if field in field_values:
             vocab[field] = field_values[field]
+    
+    small_vocab = {}
+    for field in text_fields:
+        if field in TEXT_SMALL_FIELD_VALUES:
+            small_vocab[field] = TEXT_SMALL_FIELD_VALUES[field]
 
     # Helper to generate a document
-    def generate_doc(doc_id, num_words_per_text_field):
+    def generate_doc(doc_id, vocab=vocab):
         fields = {}
-        # Text fields
+        # Text fields - generate random length 1-5 for title and body
         for field in text_fields:
             if field in vocab:
-                num_words = num_words_per_text_field
-                words = random.sample(vocab[field], min(num_words, len(vocab[field])))
-                fields[field] = " ".join(words) if num_words > 1 else words[0]
+                num_words = random.randint(1, 5)
+                words = random.choices(vocab[field], k=num_words)
+                fields[field] = " ".join(words)
         # Tag fields
         for field in tag_fields:
             if field in field_values:
@@ -385,33 +435,33 @@ def compute_text_data_sets(schema, field_values, seed=123):
                 fields[field] = random.randint(min_val, max_val)
         return fields
     
-    # Generate data for each category
-    categories = [
-        ("single words", 1, NUM_KEYS),
-        ("phrase pairs", 2, NUM_KEYS),
-        ("triple phrases", 3, NUM_KEYS),
-        ("mixed content", None, NUM_KEYS),  # None means random 1-3
-    ]
+    # Generate single "pure text" category
+    data["pure text"] = {}
+    data["pure text small"] = {}
     
-    for category_name, num_words, count in categories:
-        data[category_name] = {}
+    for key_type in ["hash", "json"]:
+        # Set create commands
+        if key_type == "hash":
+            data["pure text"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(hash_schema)]
+            data["pure text small"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(hash_schema)]
+        else:
+            data["pure text"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(json_schema)]
+            data["pure text small"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(json_schema)]
         
-        for key_type in ["hash", "json"]:
-            # Set create commands
-            if key_type == "hash":
-                data[category_name][CREATES_KEY(key_type)] = [create_cmds[key_type].format(hash_schema)]
-            else:
-                data[category_name][CREATES_KEY(key_type)] = [create_cmds[key_type].format(json_schema)]
-            
-            # Generate documents
-            docs = []
-            for i in range(count):
-                doc_id = i
-                words_to_use = num_words if num_words else random.randint(1, 3)
-                fields = generate_doc(doc_id, words_to_use)
-                docs.append((f"{key_type}:{doc_id:02d}", fields))
-            
-            data[category_name][SETS_KEY(key_type)] = docs
+        # Generate documents
+        docs = []
+        for i in range(NUM_KEYS):
+            fields = generate_doc(i)
+            docs.append((f"{key_type}:{i:02d}", fields))
+        
+        data["pure text"][SETS_KEY(key_type)] = docs
+
+        # Generate documents for "pure text small" with limited vocab
+        docs_small = []
+        for i in range(NUM_KEYS):
+            fields = generate_doc(i, small_vocab)
+            docs_small.append((f"{key_type}:{i:02d}", fields))
+        data["pure text small"][SETS_KEY(key_type)] = docs_small
     
     return data
 
@@ -419,14 +469,20 @@ def compute_text_data_sets(schema, field_values, seed=123):
 def load_data(client, data_set, key_type, data_source=None):
     # Auto-detect data source based on data_set name
     if data_source is None:
-        text_datasets = ["single words", "phrase pairs", "triple phrases", "mixed content"]
+        text_datasets = ["pure text", "pure text small"]
         data_source = "text" if data_set in text_datasets else "vector"
 
     match data_source:
         case "vector":
             data = compute_data_sets()
         case "text":
-            data = compute_text_data_sets(TEXT_SCHEMA, TEXT_FIELD_VALUES)
+            match data_set:
+                case "pure text":
+                    data = compute_text_data_sets(TEXT_SCHEMA, TEXT_FIELD_VALUES)
+                case "pure text small":
+                    data = compute_text_data_sets(TEXT_SCHEMA, TEXT_SMALL_FIELD_VALUES)
+                case _:
+                    raise ValueError(f"Unknown text data source: {data_source}")
         case _:
             raise ValueError(f"Unknown data source: {data_source}")
     load_list = data[data_set][SETS_KEY(key_type)]

@@ -10,6 +10,7 @@
 
 #include "src/coordinator/metadata_manager.h"
 #include "src/schema_manager.h"
+#include "src/utils/memory_pool.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
@@ -148,7 +149,8 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
       {"FT_DEBUG SHOW_METADATA",
        "list internal metadata manager table namespace"},
       {"FT_DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
-  };
+      {"FT_DEBUG MEMORY_POOL_DEBUG [ ENABLE | DISABLE | SHOW ]",
+       "Controls debugging of pool allocations"}};
   ValkeyModule_ReplySetArrayLength(ctx, 2 * help_text.size());
   for (auto &pair : help_text) {
     ValkeyModule_ReplyWithCString(ctx, pair.first.data());
@@ -194,6 +196,8 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
         ctx, itr);
   } else if (keyword == "SHOW_INDEXSCHEMAS") {
     return valkey_search::SchemaManager::Instance().ShowIndexSchemas(ctx, itr);
+  } else if (keyword == "MEMORY_POOL_DEBUG") {
+    return MemoryPoolDebug(ctx, itr);
   } else if (keyword == "HELP") {
     return HelpCmd(ctx, itr);
   } else {

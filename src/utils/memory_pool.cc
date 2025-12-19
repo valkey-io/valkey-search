@@ -63,4 +63,31 @@ MemoryPool::~MemoryPool() {
   }
   CHECK(allocated_ == 0);
 }
+
+//
+// Debugging infrastructure for MemoryPools.
+//
+bool thread_local MemoryPoolDebuggingEnabled = false;
+
+EnableMemoryPoolDebugging::EnableMemoryPoolDebugging() {
+  CHECK(!MemoryPoolDebuggingEnabled);
+  MemoryPoolDebuggingEnabled = true;
+}
+
+EnableMemoryPoolDebugging::~EnableMemoryPoolDebugging() {
+  CHECK(MemoryPoolDebuggingEnabled);
+  MemoryPoolDebuggingEnabled = false;
+}
+
+class Backtrace {};
+
+static absl::Mutex pool_debug_mutex;
+// static absl::flat_hash_map<class K, class V>
+
+//
+// This is called out of the malloc chain.
+// If pool debugging is enabled, then it captures the current call stack
+//
+void MemoryPoolDebugCapture() {}
+
 }  // namespace valkey_search

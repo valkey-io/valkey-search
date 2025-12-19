@@ -13,6 +13,8 @@
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/inlined_vector.h"
+#include "absl/status/status.h"
+#include "vmsdk/src/command_parser.h"
 
 namespace valkey_search {
 
@@ -64,6 +66,21 @@ using PooledInlinedVector = absl::InlinedVector<T, N, MemoryPoolAllocator<T>>;
 template <typename K, typename V>
 using PoolFlatHashMap =
     absl::flat_hash_map<K, V, MemoryPoolAllocator<std::pair<K, V>>>;
+
+//
+// Debugging infrastructure for MemoryPool
+//
+// If this is in the callstack, then non-Pooled allocations are
+// conditionally captured and made visible via the FT._DEBUG command
+//
+class EnableMemoryPoolDebugging {
+ public:
+  EnableMemoryPoolDebugging();
+  ~EnableMemoryPoolDebugging();
+};
+
+absl::Status MemoryPoolDebug(ValkeyModuleCtx* ctx, vmsdk::ArgsIterator& itr);
+void MemoryPoolMallocCapture();
 
 }  // namespace valkey_search
 

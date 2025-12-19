@@ -41,10 +41,8 @@ class NumericTerm(BaseTerm):
 
 
 @dataclass
-class PhraseTerm(BaseTerm):
+class ExactPhraseTerm(BaseTerm):
     words: List[str]
-    slop: Optional[int] = None
-    inorder: bool = False
 
 
 @dataclass
@@ -80,6 +78,8 @@ class Expression:
 @dataclass
 class Query:
     expr: Expression
+    slop: Optional[int] = None
+    inorder: bool = False
 
 
 # =========================
@@ -92,32 +92,30 @@ class QueryGenerationConfig:
     
     # Term types to include
     allow_exact_match: bool = True      # Regular word terms
-    allow_prefix: bool = True           # word*
-    allow_suffix: bool = True           # *word
-    allow_phrase: bool = True           # "word1 word2"
-    allow_tag: bool = True              # @field:{value}
-    allow_numeric: bool = True          # @field:[min max]
+    allow_prefix: bool = False          # word*
+    allow_suffix: bool = False          # *word
+    allow_exact_phrase: bool = False          # "word1 word2"
+    allow_tag: bool = False             # @field:{value}
+    allow_numeric: bool = False         # @field:[min max]
     
     # Operators
-    allow_and: bool = True              # Multiple terms in same clause
-    allow_or: bool = True               # Multiple clauses (|)
+    allow_and: bool = False             # Multiple terms in same clause
+    allow_or: bool = False              # Multiple clauses (|)
     allow_not: bool = False             # -term (negation)
     allow_optional: bool = False        # ~term (optional)
     
     # Field matching
-    allow_field_match: bool = True      # @field:term
+    allow_field_match: bool = False      # @field:term
     force_field_match: bool = False     # Always use @field:term
     
     # Grouping
-    allow_groups: bool = True           # (...)
+    allow_groups: bool = False          # (...)
     max_depth: int = 2                  # Max nesting depth
     
-    # Phrase options
-    max_phrase_words: int = 3
-    allow_phrase_slop: bool = True
-    allow_phrase_inorder: bool = True
-    force_phrase_inorder: bool = False
-    force_phrase_slop: bool = False
+    allow_slop: bool = False
+    allow_inorder: bool = False
+    force_inorder: bool = False
+    force_slop: bool = False
     
     # Query complexity
     max_terms: int = 3
@@ -214,6 +212,9 @@ class TextQueryBuilder:
     
     def _count_terms_primary(self, primary: Primary) -> int:
         if isinstance(primary, Term):
+            # Count phrase words individually
+            if isinstance(primary.base, ExactPhraseTerm):
+                return len(primary.base.words)
             return 1
         elif isinstance(primary, Group):
             return self._count_terms_expr(primary.expr)
@@ -225,7 +226,15 @@ class TextQueryBuilder:
     
     def render(self, query: Query) -> str:
         """Convert Query AST to query string."""
-        return self._render_expression(query.expr)
+        base_query = self._render_expression(query.expr)
+    
+        # Apply slop and inorder if present
+        if query.slop is not None:
+            base_query += f" SLOP {query.slop}"
+        if query.inorder:
+            base_query += " INORDER"
+        
+        return base_query
     
     def _render_base_term(self, base: BaseTerm) -> str:
         if isinstance(base, WordTerm):
@@ -243,24 +252,16 @@ class TextQueryBuilder:
         if isinstance(base, NumericTerm):
             return f"@{base.field}:[{base.min_value} {base.max_value}]"
         
-        if isinstance(base, PhraseTerm):
-            phrase = " ".join(base.words)
-            parts = [f"\"{phrase}\""]
-            
-            if base.slop is not None:
-                parts.append(f"SLOP {base.slop}")
-            
-            if base.inorder or base.slop is None:
-                parts.append("INORDER")
-            
-            return " ".join(parts)
+        if isinstance(base, ExactPhraseTerm):
+            exact_phrase = " ".join(base.words)
+            return f"\"{exact_phrase}\""
         
         raise TypeError(f"Unknown BaseTerm type: {type(base)}")
     
     def _render_primary(self, primary: Primary) -> str:
         if isinstance(primary, Term):
             base_str = self._render_base_term(primary.base)
-            if isinstance(primary.base, (WordTerm, PrefixTerm, SuffixTerm, PhraseTerm)):
+            if isinstance(primary.base, (WordTerm, PrefixTerm, SuffixTerm, ExactPhraseTerm)):
                 if primary.field is not None:
                     return f"@{primary.field}:{base_str}"
             elif isinstance(primary.base, (TagTerm, NumericTerm)):
@@ -301,7 +302,7 @@ class TextQueryBuilder:
             return True
         
         if isinstance(primary, Term):
-            if isinstance(primary.base, (WordTerm, PrefixTerm, SuffixTerm, PhraseTerm)):
+            if isinstance(primary.base, (WordTerm, PrefixTerm, SuffixTerm, ExactPhraseTerm)):
                 if primary.field is not None:
                     return True
             elif isinstance(primary.base, (TagTerm, NumericTerm)):
@@ -325,8 +326,8 @@ class TextQueryBuilder:
             types.append("prefix")
         if self.config.allow_suffix:
             types.append("suffix")
-        if self.config.allow_phrase:
-            types.append("phrase")
+        if self.config.allow_exact_phrase:
+            types.append("exact_phrase")
         if self.config.allow_tag and self.tag_values:
             types.append("tag")
         if self.config.allow_numeric and self.numeric_ranges:
@@ -362,31 +363,21 @@ class TextQueryBuilder:
         hi = random.randint(lo + 1, max_val)
         return NumericTerm(min_value=lo, max_value=hi, field=field)
     
-    def _generate_phrase_term(self) -> PhraseTerm:
+    def _generate_exact_phrase_term(self, budget: TermBudget) -> ExactPhraseTerm:
         """Generate phrase term respecting config."""
-        length = random.randint(1, self.config.max_phrase_words)
+         # Limit phrase length by remaining budget
+        max_length = budget.remaining
+        if max_length < 1:
+            max_length = 1
+        
+        length = random.randint(1, max_length)
         if length <= len(self.vocab):
             words = random.sample(self.vocab, length)
         else:
             words = [random.choice(self.vocab) for _ in range(length)]
-
-        # Handle slop
-        slop = None
-        if self.config.force_phrase_slop:
-            slop = random.choice([1, 2])
-        elif self.config.allow_phrase_slop and random.random() < 0.3:
-            slop = random.choice([1, 2])
-        
-        # Handle inorder
-        inorder = False
-        if self.config.force_phrase_inorder:
-            inorder = True
-        elif self.config.allow_phrase_inorder and random.random() < 0.3:
-            inorder = True
-        
-        return PhraseTerm(words=words, slop=slop, inorder=inorder)
+        return ExactPhraseTerm(words=words)
     
-    def _generate_base_term(self) -> BaseTerm:
+    def _generate_base_term(self, budget: TermBudget) -> BaseTerm:
         """Generate a base term respecting config constraints."""
         allowed_types = self._get_allowed_term_types()
         kind = random.choice(allowed_types)
@@ -401,8 +392,8 @@ class TextQueryBuilder:
             return self._generate_tag_term()
         if kind == "numeric":
             return self._generate_numeric_term()
-        if kind == "phrase":
-            return self._generate_phrase_term()
+        if kind == "exact_phrase":
+            return self._generate_exact_phrase_term(budget)
         
         return self._generate_word_term()
     
@@ -410,13 +401,26 @@ class TextQueryBuilder:
         """Generate term respecting field matching config."""
         if not budget.can_add_term():
             raise RuntimeError("No term budget left to generate a Term")
-        budget.consume_term()
         
-        base = self._generate_base_term()
+        base = self._generate_base_term(budget)
+
+        # Consume budget based on term type
+        if isinstance(base, ExactPhraseTerm):
+            # Phrases consume budget equal to number of words
+            words_count = len(base.words)
+            for _ in range(words_count):
+                if not budget.can_add_term():
+                    raise RuntimeError("No term budget left for phrase words")
+                budget.consume_term()
+        else:
+            budget.consume_term()
         
         # Determine if we should use field matching
         field = None
-        if isinstance(base, (WordTerm, PrefixTerm, SuffixTerm, PhraseTerm)):
+        if isinstance(base, (WordTerm, PrefixTerm, SuffixTerm, ExactPhraseTerm)):
+            # CHANGE: Always use field matching for ExactPhraseTerm to avoid cross-field bug
+            # if isinstance(base, ExactPhraseTerm):
+            #     field = random.choice(self.text_fields)
             if self.config.force_field_match:
                 field = random.choice(self.text_fields)
             elif self.config.allow_field_match and random.random() < self.config.prob_use_field:
@@ -453,11 +457,16 @@ class TextQueryBuilder:
         return UnaryClause(op=op, primary=primary)
     
     def _generate_clause(self, budget: TermBudget, max_depth: int) -> Clause:
-        """Generate clause respecting AND config."""
+        """Generate clause respecting AND config and min_terms."""
         parts: List[UnaryClause] = []
         parts.append(self._generate_unary_clause(budget, max_depth))
         
         if self.config.allow_and:
+            # First, ensure we meet min_terms requirement
+            while len(parts) < self.config.min_terms and budget.can_add_term():
+                parts.append(self._generate_unary_clause(budget, max_depth))
+            
+            # Then add more based on probability
             while budget.can_add_term() and random.random() < self.config.prob_add_and_term:
                 parts.append(self._generate_unary_clause(budget, max_depth))
         
@@ -496,30 +505,25 @@ class TextQueryBuilder:
         
         budget = TermBudget(max_terms=self.config.max_terms)
         expr = self._generate_expression(budget, self.config.max_depth)
-        query = Query(expr=expr)
+
+        # Handle slop at query level
+        slop = None
+        if self.config.force_slop:
+            slop = random.choice([1, 2])
+        elif self.config.allow_slop and random.random() < 0.3:
+            slop = random.choice([1, 2])
+        
+        # Handle inorder at query level
+        inorder = False
+        if self.config.force_inorder:
+            inorder = True
+        elif self.config.allow_inorder and random.random() < 0.3:
+            inorder = True
+
+        query = Query(expr=expr, slop=slop, inorder=inorder)
         
         # Sanity checks
         total_terms = self.count_terms(query)
         assert self.config.min_terms <= total_terms <= self.config.max_terms, \
             f"Term count {total_terms} out of bounds [{self.config.min_terms}, {self.config.max_terms}]"
-        self._check_phrase_lengths(query)
-        
         return query
-    
-    def _check_phrase_lengths(self, query: Query) -> None:
-        """Verify that all PhraseTerm nodes obey the max_phrase_words constraint."""
-        def visit_primary(primary: Primary):
-            if isinstance(primary, Term):
-                if isinstance(primary.base, PhraseTerm):
-                    if len(primary.base.words) > self.config.max_phrase_words:
-                        raise AssertionError(
-                            f"Phrase with {len(primary.base.words)} words exceeds max {self.config.max_phrase_words}"
-                        )
-            elif isinstance(primary, Group):
-                for clause in primary.expr.clauses:
-                    for unary in clause.parts:
-                        visit_primary(unary.primary)
-        
-        for clause in query.expr.clauses:
-            for unary in clause.parts:
-                visit_primary(unary.primary)

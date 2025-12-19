@@ -50,6 +50,8 @@ class BaseCompatibilityTest:
             sys.exit(1)
         print("Started Generate-search server")
         cls.answers = []
+        # add reply count to check redis non-empty answer
+        cls.replied_count = 0
         cls.client = ClientRSystem()
         while True:
             try:
@@ -88,7 +90,10 @@ class BaseCompatibilityTest:
             print("Cmd:", *cmd)
             answer["result"] = self.client.execute_command(*cmd)
             answer["exception"] = False
-            print(f"replied: {answer['result']}")
+            if answer["result"] != [0]:
+                self.__class__.replied_count += 1  # ADD THIS LINE
+            print(f"replied: {answer['result']} (count: {self.__class__.replied_count})")
+            # print(f"replied: {answer['result']}")
         except Exception as exc:
             print(f"Got exception for Error: '{exc}', Cmd:{cmd}")
             answer["result"] = {}

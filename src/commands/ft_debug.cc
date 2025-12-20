@@ -8,13 +8,15 @@
 #include <absl/base/no_destructor.h>
 #include <absl/strings/ascii.h>
 
+#include <ranges>
+
 #include "src/coordinator/metadata_manager.h"
 #include "src/schema_manager.h"
-#include "src/utils/memory_pool.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
+#include "vmsdk/src/malloc_capture.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 
@@ -134,6 +136,35 @@ absl::Status ControlledCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   return absl::OkStatus();
 }
 
+static absl::Status MallocCaptureCmd(ValkeyModuleCtx *ctx,
+                                     vmsdk::ArgsIterator &itr) {
+  std::string keyword;
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, keyword));
+  keyword = absl::AsciiStrToUpper(keyword);
+  if (keyword == "ENABLE") {
+    vmsdk::malloc_capture::Control(true);
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+  } else if (keyword == "DISABLE") {
+    vmsdk::malloc_capture::Control(true);
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+  } else if (keyword == "GET") {
+    auto output = vmsdk::malloc_capture::GetCaptures();
+    ValkeyModule_ReplyWithArray(ctx, output.size());
+    for (const auto &[count, backtrace] : output | std::views::reverse) {
+      ValkeyModule_ReplyWithLongLong(ctx, count);
+      auto symbols = backtrace.Symbolize();
+      ValkeyModule_ReplyWithArray(ctx, symbols.size());
+      for (const auto &symbol : symbols) {
+        ValkeyModule_ReplyWithCString(ctx, symbol.data());
+      }
+    }
+  } else {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unknown subcommand: ", keyword));
+  }
+  return absl::OkStatus();
+}
+
 absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
   static std::vector<std::pair<std::string, std::string>> help_text{
@@ -149,8 +180,8 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
       {"FT_DEBUG SHOW_METADATA",
        "list internal metadata manager table namespace"},
       {"FT_DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
-      {"FT_DEBUG MEMORY_POOL_DEBUG [ ENABLE | DISABLE | RESET | DUMP ]",
-       "Controls debugging of pool allocations"}};
+      {"FT_DEBUG MALLOC_CAPTURE [ ENABLE | DISABLE | GET ]",
+       "Controls capturing of malloc allocations"}};
   ValkeyModule_ReplySetArrayLength(ctx, 2 * help_text.size());
   for (auto &pair : help_text) {
     ValkeyModule_ReplyWithCString(ctx, pair.first.data());
@@ -196,8 +227,8 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
         ctx, itr);
   } else if (keyword == "SHOW_INDEXSCHEMAS") {
     return valkey_search::SchemaManager::Instance().ShowIndexSchemas(ctx, itr);
-  } else if (keyword == "MEMORY_POOL_DEBUG") {
-    return MemoryPool::DebugCmd(ctx, itr);
+  } else if (keyword == "MALLOC_CAPTURE") {
+    return MallocCaptureCmd(ctx, itr);
   } else if (keyword == "HELP") {
     return HelpCmd(ctx, itr);
   } else {

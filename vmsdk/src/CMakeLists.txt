@@ -32,6 +32,8 @@ set(VMSDKLIB_SRCS
     ${CMAKE_CURRENT_LIST_DIR}/memory_allocation_overrides.h
     ${CMAKE_CURRENT_LIST_DIR}/memory_allocation.cc
     ${CMAKE_CURRENT_LIST_DIR}/memory_allocation.h
+    ${CMAKE_CURRENT_LIST_DIR}/malloc_capture.cc
+    ${CMAKE_CURRENT_LIST_DIR}/malloc_capture.h
     ${CMAKE_CURRENT_LIST_DIR}/type_conversions.h
     ${CMAKE_CURRENT_LIST_DIR}/managed_pointers.h
     ${CMAKE_CURRENT_LIST_DIR}/blocked_client.cc

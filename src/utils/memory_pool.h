@@ -18,7 +18,7 @@
 
 // See vmsdk/src/memory_allocation_overrides.cc
 namespace vmsdk {
-extern void (*malloc_hook)();
+extern void (*malloc_hook)(size_t);
 };
 
 namespace valkey_search {
@@ -49,7 +49,7 @@ class MemoryPool : public std::pmr::memory_resource {
     ~EnableCapture() { CaptureEnabled = false; }
   };
 
-  inline static void Capture() {
+  inline static void Capture(size_t) {
     if (CaptureEnabled) {
       DoCapture();
     }

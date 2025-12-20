@@ -7,6 +7,9 @@
 
 #include "vmsdk/src/utils.h"
 
+#include <cxxabi.h>
+#include <execinfo.h>
+
 #include <iomanip>
 #include <string>
 #include <utility>
@@ -347,6 +350,39 @@ std::string StringToHex(std::string_view s) {
     }
     result += hex_chars[(c >> 4) & 0xF];
     result += hex_chars[c & 0xF];
+  }
+  return result;
+}
+
+void Backtrace::Capture() {
+  stack_.resize(kMaxBacktraceDepth);
+  int size = backtrace(stack_.data(), stack_.size());
+  stack_.resize(size);
+}
+
+std::vector<std::string> Backtrace::Symbolize() const {
+  std::vector<std::string> result;
+  result.reserve(stack_.size());
+  char **symbols = backtrace_symbols(stack_.data(), stack_.size());
+  if (symbols) {
+    for (int i = 0; i < stack_.size(); ++i) {
+      int status;
+      std::unique_ptr<char> sym(
+          abi::__cxa_demangle(symbols[i], nullptr, nullptr, &status));
+      switch (status) {
+        case 0:
+          result.emplace_back(sym.get());
+          break;
+        case -2:
+          result.emplace_back(symbols[i]);
+          break;
+        default:
+          CHECK(false) << "backtrace_symbols failed: Code: " << status
+                       << " Symbol:" << sym.get();
+          break;
+      }
+    }
+    free(symbols);
   }
   return result;
 }

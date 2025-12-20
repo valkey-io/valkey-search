@@ -35,6 +35,7 @@ class ExactPhraseTerm(BaseTerm):
     """Represents an exact phrase match with multiple words."""
     words: List[str]
 
+# renders
 
 # ============================================================================
 # Term Renderer
@@ -61,6 +62,7 @@ class TermRenderer:
             return '"' + " ".join(term.words) + '"'
         raise TypeError(f"Unknown term type: {type(term)}")
 
+renderer = TermRenderer()
 
 # ============================================================================
 # Shape Rendering (for complex queries)
@@ -92,6 +94,8 @@ def render_shape(
                 raise ValueError(f"Unknown shape operator: {op}")
     raise ValueError(f"Unknown shape: {shape}")
 
+def OR(left: str, right: str) -> str:
+    return f"{left} | {right}"
 
 # ============================================================================
 # Shape Generators
@@ -126,6 +130,9 @@ def sample_shape(depth: int, rng: random.Random):
     
     return (op, left, right)
 
+def render_shape(shape, vocab, rng) -> str:
+    if shape == "A":
+        return renderer.render(gen_atom(vocab, rng))
 
 # ============================================================================
 # Term Generators
@@ -135,12 +142,19 @@ def gen_atom(vocab: List[str], rng: random.Random) -> WordTerm:
     """Generate a single word term (used internally by shape rendering)."""
     return WordTerm(rng.choice(vocab))
 
+        if op == "G":
+            inner = render_shape(shape[1], vocab, rng)
+            return f"({inner})"
 
 def gen_word(vocab: List[str], rng: random.Random) -> List[WordTerm]:
     """Generate 1-3 word terms."""
     count = rng.randint(1, 3)
     return [WordTerm(rng.choice(vocab)) for _ in range(count)]
 
+        if op == "OR":
+            left = render_shape(shape[1], vocab, rng)
+            right = render_shape(shape[2], vocab, rng)
+            return f"({left} | {right})" # 👈 ADD PARENS
 
 def gen_prefix(vocab: List[str], rng: random.Random) -> List[PrefixTerm]:
     """Generate 1-2 prefix terms."""
@@ -152,6 +166,10 @@ def gen_prefix(vocab: List[str], rng: random.Random) -> List[PrefixTerm]:
         result.append(PrefixTerm(word[:prefix_len] + "*"))
     return result
 
+def sample_shape_upto(depth: int, rng: random.Random):
+    """Generate a shape with depth <= given depth."""
+    if depth == 0:
+        return "A"
 
 def gen_suffix(vocab: List[str], rng: random.Random) -> List[SuffixTerm]:
     """Generate 1-2 suffix terms."""
@@ -163,6 +181,7 @@ def gen_suffix(vocab: List[str], rng: random.Random) -> List[SuffixTerm]:
         result.append(SuffixTerm("*" + word[-suffix_len:]))
     return result
 
+    op = rng.choice(["G", "AND", "OR"])
 
 def gen_exact_phrase(vocab: List[str], rng: random.Random) -> ExactPhraseTerm:
     """Generate one exact phrase with 2-3 words."""
@@ -173,6 +192,9 @@ def gen_exact_phrase(vocab: List[str], rng: random.Random) -> ExactPhraseTerm:
         words = [rng.choice(vocab) for _ in range(length)]
     return ExactPhraseTerm(words)
 
+def sample_shape_exact(depth: int, rng: random.Random):
+    if depth == 0:
+        return "A"
 
 # ============================================================================
 # Complex Query Generators
@@ -183,6 +205,8 @@ def gen_depth1(vocab: List[str], rng: random.Random) -> str:
     shape = sample_shape(1, rng)
     return render_shape(shape, vocab, rng)
 
+def gen_atom(vocab: List[str], rng: random.Random) -> WordTerm:
+    return WordTerm(rng.choice(vocab))
 
 def gen_depth2(vocab: List[str], rng: random.Random) -> str:
     """Generate a depth-2 grouped query."""

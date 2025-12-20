@@ -38,29 +38,6 @@ struct RawSystemAllocator {
   }
 };
 
-struct Backtrace {
-  absl::InlinedVector<void *, 128> stack_;
-  
-  void Capture() {
-    stack_.resize(128);
-    int size = backtrace(stack_.data(), stack_.size());
-    stack_.resize(size);
-  }
-  bool operator==(const Backtrace& other) const {
-    return stack_ == other.stack_;
-  }
-};
-template <>
-struct std::hash<Backtrace> {
-  size_t operator()(const Backtrace& backtrace) const {
-    size_t hash = 0;
-    for (const auto& ptr : backtrace.stack_) {
-      hash ^= std::hash<void*>{}(ptr) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
-    }
-    return hash;
-  }
-};
-
 namespace valkey_search {
 
 bool thread_local MemoryPool::CaptureEnabled = false;
@@ -127,14 +104,14 @@ MemoryPool::~MemoryPool() {
 }
 
 static absl::Mutex pool_debug_mutex;
-static absl::flat_hash_map<Backtrace, size_t, std::hash<Backtrace>, std::equal_to<Backtrace>, RawSystemAllocator<std::pair<const Backtrace, size_t>>> backtraces;
+static absl::flat_hash_map<vmsdk::Backtrace, size_t, std::hash<vmsdk::Backtrace>, std::equal_to<vmsdk::Backtrace>, RawSystemAllocator<std::pair<const vmsdk::Backtrace, size_t>>> backtraces;
 
 //
 // This is called out of the malloc chain.
 // If pool debugging is enabled, then it captures the current call stack
 //
 void MemoryPool::DoCapture() {
-  Backtrace backtrace;
+  vmsdk::Backtrace backtrace;
   backtrace.Capture();
   absl::MutexLock lock(&pool_debug_mutex);
   auto itr = backtraces.find(backtrace);
@@ -161,19 +138,18 @@ absl::Status MemoryPool::DebugCmd(ValkeyModuleCtx* ctx, vmsdk::ArgsIterator& itr
     backtraces.clear();
   } else if (keyword == "DUMP") {
     absl::MutexLock lock(&pool_debug_mutex);
-    std::multimap<size_t, const Backtrace *> sorted;
+    std::multimap<size_t, const vmsdk::Backtrace *> sorted;
     for (auto& [backtrace, count] : backtraces) {
-      sorted.insert(std::make_pair<size_t, const Backtrace *>(backtrace.stack_.size(), &backtrace));
+      sorted.insert(std::make_pair<size_t, const vmsdk::Backtrace *>(backtrace.stack_.size(), &backtrace));
     }
     ValkeyModule_ReplyWithArray(ctx, backtraces.size());
     for (const auto& [count, backtrace] : sorted) {
-      char **symbols = backtrace_symbols(backtrace->stack_.data(), backtrace->stack_.size());
+      auto symbols = backtrace->Symbolize();
       ValkeyModule_ReplyWithArray(ctx, backtrace->stack_.size() + 1);
       ValkeyModule_ReplyWithLongLong(ctx, count);
       for (int i = 0; i < backtrace->stack_.size(); i++) {
-        ValkeyModule_ReplyWithSimpleString(ctx, symbols[i]);
+        ValkeyModule_ReplyWithSimpleString(ctx, symbols[i].data());
       }
-      free(symbols);
     }
   } else {
     return absl::InvalidArgumentError(absl::StrCat(

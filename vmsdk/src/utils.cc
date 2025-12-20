@@ -364,23 +364,23 @@ std::vector<std::string> Backtrace::Symbolize() const {
   std::vector<std::string> result;
   result.reserve(stack_.size());
   char **symbols = backtrace_symbols(stack_.data(), stack_.size());
-  if (symbols) {
-    for (int i = 0; i < stack_.size(); ++i) {
-      int status;
-      std::unique_ptr<char> sym(
-          abi::__cxa_demangle(symbols[i], nullptr, nullptr, &status));
-      switch (status) {
-        case 0:
-          result.emplace_back(sym.get());
-          break;
-        case -2:
-          result.emplace_back(symbols[i]);
-          break;
-        default:
-          CHECK(false) << "backtrace_symbols failed: Code: " << status
-                       << " Symbol:" << sym.get();
-          break;
-      }
+  if (!symbols) {
+    return {{"backtrace_symbols failed"}};
+  }
+  for (size_t i = 1; i < stack_.size(); ++i) {  // 1 to skip the "Capture" call.
+    int status;
+    std::unique_ptr<char> sym(
+        abi::__cxa_demangle(symbols[i], nullptr, nullptr, &status));
+    switch (status) {
+      case 0:
+        result.emplace_back(sym.get());
+        break;
+      case -2:
+        result.emplace_back(symbols[i]);
+        break;
+      default:
+        CHECK(false) << "demangle failed(" << status << ") Sym:" << sym.get();
+        break;
     }
     free(symbols);
   }

@@ -73,7 +73,7 @@ void DoCapture(size_t size) {
   }
 }
 
-void MallocCaptureControl(bool enable) {
+void Control(bool enable) {
   if (enable) {
     malloc_hook = DoCapture;
     CaptureRequested = true;
@@ -81,6 +81,18 @@ void MallocCaptureControl(bool enable) {
     malloc_hook = [](size_t){};
     CaptureRequested = false;
   }
+}
+
+std::multimap<size_t, Backtrace> GetCaptures() {
+  absl::MutexLock lock(&pool_debug_mutex);
+  std::multimap<size_t, Backtrace> result;
+  for (auto& [backtrace, count] : backtraces) {
+    result.emplace(count, std::move(backtrace));
+    if (result.size() > 20) {
+      result.erase(result.begin());
+    }
+  }
+  return result;
 }
 
 }

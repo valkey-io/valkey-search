@@ -148,7 +148,6 @@ set(UTILS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/utils/intrusive_list_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/intrusive_ref_count_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/lru_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/utils/memory_pool_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/patricia_tree_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/segment_tree_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/string_interning_test.cc)

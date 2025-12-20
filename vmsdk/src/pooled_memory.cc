@@ -5,14 +5,13 @@
  *
  */
 
-#include "src/utils/memory_pool.h"
+#include "vmsdk/src/pooled_memory.h"
 
 #include <absl/log/check.h>
-#include <execinfo.h>
 
-namespace valkey_search {
+namespace vmsdk {
 
-void MemoryPool::NewChunk(size_t data_size) {
+void PooledMemory::NewChunk(size_t data_size) {
   auto this_chunk_size = std::max(data_size, chunk_size_);
   auto chunk =
       reinterpret_cast<Chunk*>(new char[this_chunk_size + sizeof(Chunk)]);
@@ -22,7 +21,7 @@ void MemoryPool::NewChunk(size_t data_size) {
   chunks_.emplace_back(chunk);
 }
 
-MemoryPool::MemoryPool(size_t chunk_size) {
+PooledMemory::PooledMemory(size_t chunk_size) {
   // Externally chunks are sized to fit efficiently into slabs, so our
   // internal chunk size gets reduced accordingly.
   CHECK(chunk_size > sizeof(Chunk));
@@ -36,7 +35,7 @@ size_t ComputeBytes(size_t bytes, size_t alignment) {
   return (bytes + 15ul) & ~(15ul);
 }
 
-void* MemoryPool::do_allocate(size_t bytes, size_t alignment) {
+void* PooledMemory::do_allocate(size_t bytes, size_t alignment) {
   CHECK(!chunks_.empty());
   size_t this_bytes = ComputeBytes(bytes, alignment);
   Chunk* chunk = chunks_.back();
@@ -51,7 +50,7 @@ void* MemoryPool::do_allocate(size_t bytes, size_t alignment) {
   return p;
 }
 
-void MemoryPool::do_deallocate(void* p, size_t bytes, size_t alignment) {
+void PooledMemory::do_deallocate(void* p, size_t bytes, size_t alignment) {
   //
   // Note, because of the way things get destructed, we might get called to
   // deallocate after the pool itself has been destroyed. So be care here....
@@ -62,7 +61,7 @@ void MemoryPool::do_deallocate(void* p, size_t bytes, size_t alignment) {
   inuse_ -= bytes;
 }
 
-MemoryPool::~MemoryPool() {
+PooledMemory::~PooledMemory() {
   while (!chunks_.empty()) {
     auto chunk = chunks_.back();
     allocated_ -= chunk->size_;
@@ -72,4 +71,4 @@ MemoryPool::~MemoryPool() {
   CHECK(allocated_ == 0);
 }
 
-}  // namespace valkey_search
+}  // namespace vmsdk

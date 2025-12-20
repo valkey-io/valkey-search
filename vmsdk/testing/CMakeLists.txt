@@ -84,10 +84,13 @@ target_link_libraries(config_test PUBLIC valkey_module)
 target_link_libraries(config_test PUBLIC vmsdk_testing_infra)
 finalize_test_flags(config_test)
 
-set(SRCS_CLUSTER_MAP_TEST ${CMAKE_CURRENT_LIST_DIR}/cluster_map_test.cc)
-add_executable(cluster_map_test ${SRCS_CLUSTER_MAP_TEST})
-target_include_directories(cluster_map_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(cluster_map_test PUBLIC vmsdklib)
-target_link_libraries(cluster_map_test PUBLIC vmsdk_testing_infra)
-target_link_libraries(cluster_map_test PUBLIC valkey_module)
-finalize_test_flags(cluster_map_test)
+set(SRCS_VMSDK_TESTS
+    ${CMAKE_CURRENT_LIST_DIR}/cluster_map_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/pooled_memory_test.cc
+    )
+add_executable(vmsdk_tests ${SRCS_VMSDK_TESTS})
+target_include_directories(vmsdk_tests PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(vmsdk_tests PUBLIC vmsdklib)
+target_link_libraries(vmsdk_tests PUBLIC vmsdk_testing_infra)
+target_link_libraries(vmsdk_tests PUBLIC valkey_module)
+finalize_test_flags(vmsdk_tests)

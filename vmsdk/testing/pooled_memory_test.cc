@@ -5,7 +5,7 @@
  *
  */
 
-#include "src/utils/memory_pool.h"
+#include "vmsdk/src/pooled_memory.h"
 
 #include <vector>
 
@@ -15,14 +15,10 @@ namespace valkey_search {
 
 TEST(MemoryPoolTest, Basic) {
   for (auto push : {10, 20, 30}) {
-    MemoryPool pool(17);
+    vmsdk::PooledMemory pool(17);
     {
-      PooledVector<char> buffer(&pool);
-      std::cerr << "Doing size " << push << std::endl;
+      vmsdk::PooledVector<char> buffer(&pool);
       for (int i = 0; i < push; ++i) {
-        if (i != 0)
-          std::cerr << "Before push " << i << " Start now at "
-                    << (void *)buffer.data() << std::endl;
         buffer.push_back('a');
       }
       ASSERT_GE(pool.GetInUse(), buffer.capacity());

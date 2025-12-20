@@ -20,9 +20,7 @@ set(SRCS_ALLOCATOR
     ${CMAKE_CURRENT_LIST_DIR}/allocator.cc
     ${CMAKE_CURRENT_LIST_DIR}/allocator.h
     ${CMAKE_CURRENT_LIST_DIR}/cancel.h
-    ${CMAKE_CURRENT_LIST_DIR}/cancel.cc
-    ${CMAKE_CURRENT_LIST_DIR}/memory_pool.h
-    ${CMAKE_CURRENT_LIST_DIR}/memory_pool.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/cancel.cc)
 
 valkey_search_add_static_library(allocator "${SRCS_ALLOCATOR}")
 target_include_directories(allocator PUBLIC ${CMAKE_CURRENT_LIST_DIR})

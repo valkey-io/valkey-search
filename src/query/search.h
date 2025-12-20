@@ -28,10 +28,10 @@
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
 #include "src/utils/cancel.h"
-#include "src/utils/memory_pool.h"
 #include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/pooled_memory.h"
 #include "vmsdk/src/thread_pool.h"
 
 namespace valkey_search::query {
@@ -73,7 +73,7 @@ struct SearchParameters {
   //
   // This must be first (first constructed, last destructed)
   //
-  mutable valkey_search::MemoryPool query_pool;
+  mutable vmsdk::PooledMemory query_pool;
   mutable cancel::Token cancellation_token;
   virtual ~SearchParameters() = default;
   uint32_t db_num{0};
@@ -93,7 +93,7 @@ struct SearchParameters {
   uint64_t timeout_ms;
   bool no_content{false};
   FilterParseResults filter_parse_results;
-  PooledVector<ReturnAttribute> return_attributes{&query_pool};
+  vmsdk::PooledVector<ReturnAttribute> return_attributes{&query_pool};
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint;
   struct ParseTimeVariables {

@@ -5,23 +5,21 @@
  *
  */
 
-#ifndef VALKEYSEARCH_SRC_UTILS_MEMPOOL_H_
-#define VALKEYSEARCH_SRC_UTILS_MEMPOOL_H_
+#ifndef VALKEYSEARCH_SRC_POOLED_MEMORY_H_
+#define VALKEYSEARCH_SRC_POOLED_MEMORY_H_
 
 #include <memory_resource>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/inlined_vector.h"
-#include "absl/status/status.h"
-#include "vmsdk/src/command_parser.h"
 
-namespace valkey_search {
+namespace vmsdk {
 
-class MemoryPool : public std::pmr::memory_resource {
+class PooledMemory : public std::pmr::memory_resource {
  public:
-  MemoryPool(size_t chunk_size);
-  ~MemoryPool() override;
+  PooledMemory(size_t chunk_size);
+  ~PooledMemory() override;
   size_t GetAllocated() const { return allocated_; }
   size_t GetInUse() const { return inuse_; }
   size_t GetFreed() const { return freed_; }
@@ -52,24 +50,24 @@ class MemoryPool : public std::pmr::memory_resource {
 };
 
 template <typename T>
-using MemoryPoolAllocator = std::pmr::polymorphic_allocator<T>;
+using PooledMemoryAllocator = std::pmr::polymorphic_allocator<T>;
 
 //
 // Define convenience container types
 //
 template <typename T>
-using PooledVector = std::vector<T, MemoryPoolAllocator<T>>;
+using PooledVector = std::vector<T, PooledMemoryAllocator<T>>;
 
 template <typename T, size_t N>
-using PooledInlinedVector = absl::InlinedVector<T, N, MemoryPoolAllocator<T>>;
+using PooledInlinedVector = absl::InlinedVector<T, N, PooledMemoryAllocator<T>>;
 
-using PooledString =
-    std::basic_string<char, std::char_traits<char>, MemoryPoolAllocator<char>>;
+using PooledString = std::basic_string<char, std::char_traits<char>,
+                                       PooledMemoryAllocator<char>>;
 
 template <typename K, typename V>
 using PooledFlatHashMap =
-    absl::flat_hash_map<K, V, MemoryPoolAllocator<std::pair<K, V>>>;
+    absl::flat_hash_map<K, V, PooledMemoryAllocator<std::pair<K, V>>>;
 
-}  // namespace valkey_search
+}  // namespace vmsdk
 
 #endif

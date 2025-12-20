@@ -462,11 +462,6 @@ def compute_text_data_sets(dataset_name, seed=123):
     for field in text_fields:
         if field in field_values:
             vocab[field] = field_values[field]
-    
-    small_vocab = {}
-    for field in text_fields:
-        if field in TEXT_SMALL_FIELD_VALUES:
-            small_vocab[field] = TEXT_SMALL_FIELD_VALUES[field]
 
     # Helper to generate a document
     def generate_doc(doc_id):

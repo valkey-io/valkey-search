@@ -1,529 +1,170 @@
-from __future__ import annotations
 from dataclasses import dataclass
-from typing import List, Optional, Union
+from typing import List, Union
 import random
 
-
-# =========================
-# AST NODE DEFINITIONS
-# =========================
-
 class BaseTerm:
-    """Abstract base for term payloads."""
     pass
 
-
-@dataclass
+@dataclass(frozen=True)
 class WordTerm(BaseTerm):
     value: str
 
 
-@dataclass
+@dataclass(frozen=True)
 class PrefixTerm(BaseTerm):
-    prefix: str
+    value: str   # e.g. "app*"
 
 
-@dataclass
+@dataclass(frozen=True)
 class SuffixTerm(BaseTerm):
-    suffix: str
+    value: str   # e.g. "*ple"
 
 
-@dataclass
-class TagTerm(BaseTerm):
-    tag_expr: str
-
-
-@dataclass
-class NumericTerm(BaseTerm):
-    min_value: float
-    max_value: float
-    field: str = "price"
-
-
-@dataclass
+@dataclass(frozen=True)
 class ExactPhraseTerm(BaseTerm):
-    words: List[str]
+    words: List[str]   # ["apple", "banana"]
 
+# renders
 
-@dataclass
-class Term:
-    field: Optional[str]
-    base: BaseTerm
+class TermRenderer:
+    def render(self, term: Union[BaseTerm, List[BaseTerm]]) -> str:
+        if isinstance(term, list):
+            return " ".join(self._render_single(t) for t in term)
+        return self._render_single(term)
+    
+    def _render_single(self, term: BaseTerm) -> str:
+        if isinstance(term, WordTerm):
+            return term.value
+        if isinstance(term, PrefixTerm):
+            return term.value
+        if isinstance(term, SuffixTerm):
+            return term.value
+        if isinstance(term, ExactPhraseTerm):
+            return '"' + " ".join(term.words) + '"'
+        raise TypeError(f"Unknown term type: {type(term)}")
 
+renderer = TermRenderer()
 
-@dataclass
-class Group:
-    expr: "Expression"
+def AND(*parts: Union[BaseTerm, str]) -> str:
+    terms = [p for p in parts if isinstance(p, BaseTerm)]
+    return renderer.render(terms)
 
+def OR(left: str, right: str) -> str:
+    return f"{left} | {right}"
 
-Primary = Union[Term, Group]
+def GROUP(expr: str) -> str:
+    return f"({expr})"
 
+def render_shape(shape, vocab, rng) -> str:
+    if shape == "A":
+        return renderer.render(gen_atom(vocab, rng))
 
-@dataclass
-class UnaryClause:
-    op: str
-    primary: Primary
+    if isinstance(shape, tuple):
+        op = shape[0]
 
+        if op == "G":
+            inner = render_shape(shape[1], vocab, rng)
+            return f"({inner})"
 
-@dataclass
-class Clause:
-    parts: List[UnaryClause]
+        if op == "AND":
+            left = render_shape(shape[1], vocab, rng)
+            right = render_shape(shape[2], vocab, rng)
+            return f"({left} {right})"   # 👈 ADD PARENS
 
+        if op == "OR":
+            left = render_shape(shape[1], vocab, rng)
+            right = render_shape(shape[2], vocab, rng)
+            return f"({left} | {right})" # 👈 ADD PARENS
 
-@dataclass
-class Expression:
-    clauses: List[Clause]
+    raise ValueError(f"Unknown shape: {shape}")
 
+def sample_shape_upto(depth: int, rng: random.Random):
+    """Generate a shape with depth <= given depth."""
+    if depth == 0:
+        return "A"
 
-@dataclass
-class Query:
-    expr: Expression
-    slop: Optional[int] = None
-    inorder: bool = False
+    # Optionally stop early
+    if rng.random() < 0.3:
+        return "A"
 
+    op = rng.choice(["G", "AND", "OR"])
 
-# =========================
-# CONFIGURATION
-# =========================
+    if op == "G":
+        return ("G", sample_shape_upto(depth - 1, rng))
 
-@dataclass
-class QueryGenerationConfig:
-    """Configuration for controlling query generation features."""
-    
-    # Term types to include
-    allow_exact_match: bool = True      # Regular word terms
-    allow_prefix: bool = False          # word*
-    allow_suffix: bool = False          # *word
-    allow_exact_phrase: bool = False          # "word1 word2"
-    allow_tag: bool = False             # @field:{value}
-    allow_numeric: bool = False         # @field:[min max]
-    
-    # Operators
-    allow_and: bool = False             # Multiple terms in same clause
-    allow_or: bool = False              # Multiple clauses (|)
-    allow_not: bool = False             # -term (negation)
-    allow_optional: bool = False        # ~term (optional)
-    
-    # Field matching
-    allow_field_match: bool = False      # @field:term
-    force_field_match: bool = False     # Always use @field:term
-    
-    # Grouping
-    allow_groups: bool = False          # (...)
-    max_depth: int = 2                  # Max nesting depth
-    
-    allow_slop: bool = False
-    allow_inorder: bool = False
-    force_inorder: bool = False
-    force_slop: bool = False
-    
-    # Query complexity
-    max_terms: int = 3
-    min_terms: int = 1
-    
-    # Probabilities (0.0 to 1.0)
-    prob_add_and_term: float = 0.5      # Probability of adding another AND term
-    prob_add_or_clause: float = 0.3     # Probability of adding another OR clause
-    prob_use_group: float = 0.3         # Probability of creating a group
-    prob_use_field: float = 0.5         # Probability of specifying field
+    return (
+        op,
+        sample_shape_upto(depth - 1, rng),
+        sample_shape_upto(depth - 1, rng),
+    )
 
+def sample_shape_exact(depth: int, rng: random.Random):
+    if depth == 0:
+        return "A"
 
-# =========================
-# TERM BUDGET TRACKER
-# =========================
+    if depth == 1:
+        op = rng.choice(["AND", "OR"])
+    else:
+        op = rng.choice(["G", "AND", "OR"])
 
-class TermBudget:
-    """Tracks remaining term slots during query generation."""
-    
-    def __init__(self, max_terms: int):
-        self.max_terms = max_terms
-        self.used = 0
+    if op == "G":
+        return ("G", sample_shape_exact(depth - 1, rng))
 
-    @property
-    def remaining(self) -> int:
-        return self.max_terms - self.used
+    if rng.random() < 0.5:
+        left = sample_shape_exact(depth - 1, rng)
+        right = sample_shape_upto(depth - 1, rng)
+    else:
+        left = sample_shape_upto(depth - 1, rng)
+        right = sample_shape_exact(depth - 1, rng)
 
-    def can_add_term(self) -> bool:
-        return self.remaining > 0
+    return (op, left, right)
 
-    def consume_term(self) -> None:
-        if not self.can_add_term():
-            raise RuntimeError("Term budget exceeded")
-        self.used += 1
+# generators
 
+def gen_atom(vocab: List[str], rng: random.Random) -> WordTerm:
+    return WordTerm(rng.choice(vocab))
 
-# =========================
-# QUERY BUILDER CLASS
-# =========================
+def gen_word(vocab: List[str]) -> WordTerm:
+    count = random.randint(1, 3)
+    return [WordTerm(random.choice(vocab)) for _ in range(count)]
 
-class TextQueryBuilder:
-    """
-    Main class for building, rendering, and generating RediSearch queries.
-    
-    Query Structure:
-     └── Expression (OR level)
-          ├── Clause (AND level)
-          │    ├── UnaryClause
-          │    │     └── Primary
-          │    │           ├── Term (with BaseTerm variants)
-          │    │           └── Group
-          │    └── ...
-          └── ...
-    """
-    
-    def __init__(self,
-                 vocab: List[str],
-                 text_fields: List[str],
-                 tag_values: dict,
-                 numeric_ranges: dict,
-                 config: Optional[QueryGenerationConfig] = None):
-        """
-        Initialize TextQueryBuilder with schema configuration.
-        
-        Args:
-            vocab: List of words to use in queries
-            text_fields: List of TEXT field names
-            tag_values: Dict of {field: [values]} for TAG fields
-            numeric_ranges: Dict of {field: (min, max)} for NUMERIC fields
-            config: Configuration for controlling query generation
-        """
-        self.vocab = vocab
-        self.text_fields = text_fields
-        self.tag_values = tag_values
-        self.numeric_ranges = numeric_ranges
-        self.config = config or QueryGenerationConfig()
-    
-    # =========================
-    # TERM COUNTING
-    # =========================
-    
-    def count_terms(self, query: Query) -> int:
-        """Count total number of terms in a query."""
-        return self._count_terms_expr(query.expr)
-    
-    def _count_terms_expr(self, expr: Expression) -> int:
-        return sum(self._count_terms_clause(c) for c in expr.clauses)
-    
-    def _count_terms_clause(self, clause: Clause) -> int:
-        return sum(self._count_terms_unary(u) for u in clause.parts)
-    
-    def _count_terms_unary(self, unary: UnaryClause) -> int:
-        return self._count_terms_primary(unary.primary)
-    
-    def _count_terms_primary(self, primary: Primary) -> int:
-        if isinstance(primary, Term):
-            # Count phrase words individually
-            if isinstance(primary.base, ExactPhraseTerm):
-                return len(primary.base.words)
-            return 1
-        elif isinstance(primary, Group):
-            return self._count_terms_expr(primary.expr)
-        return 0
-    
-    # =========================
-    # RENDERING
-    # =========================
-    
-    def render(self, query: Query) -> str:
-        """Convert Query AST to query string."""
-        base_query = self._render_expression(query.expr)
-    
-        # Apply slop and inorder if present
-        if query.slop is not None:
-            base_query += f" SLOP {query.slop}"
-        if query.inorder:
-            base_query += " INORDER"
-        
-        return base_query
-    
-    def _render_base_term(self, base: BaseTerm) -> str:
-        if isinstance(base, WordTerm):
-            return base.value
-        
-        if isinstance(base, PrefixTerm):
-            return base.prefix
-        
-        if isinstance(base, SuffixTerm):
-            return base.suffix
-        
-        if isinstance(base, TagTerm):
-            return base.tag_expr
-        
-        if isinstance(base, NumericTerm):
-            return f"@{base.field}:[{base.min_value} {base.max_value}]"
-        
-        if isinstance(base, ExactPhraseTerm):
-            exact_phrase = " ".join(base.words)
-            return f"\"{exact_phrase}\""
-        
-        raise TypeError(f"Unknown BaseTerm type: {type(base)}")
-    
-    def _render_primary(self, primary: Primary) -> str:
-        if isinstance(primary, Term):
-            base_str = self._render_base_term(primary.base)
-            if isinstance(primary.base, (WordTerm, PrefixTerm, SuffixTerm, ExactPhraseTerm)):
-                if primary.field is not None:
-                    return f"@{primary.field}:{base_str}"
-            elif isinstance(primary.base, (TagTerm, NumericTerm)):
-                return f"({base_str})"
-            return base_str
-        elif isinstance(primary, Group):
-            return f"({self._render_expression(primary.expr)})"
-        else:
-            raise TypeError(f"Unknown Primary type: {type(primary)}")
-    
-    def _render_unary(self, unary: UnaryClause) -> str:
-        return f"{unary.op}{self._render_primary(unary.primary)}".strip()
-    
-    def _render_clause(self, clause: Clause) -> str:
-        """Render a clause, reordering to avoid parentheses at first position."""
-        if not clause.parts:
-            return ""
-        
-        # Separate terms that will be wrapped vs not wrapped
-        wrapped_terms = []
-        unwrapped_terms = []
-        
-        for unary in clause.parts:
-            will_be_wrapped = self._will_term_be_wrapped(unary.primary)
-            if will_be_wrapped:
-                wrapped_terms.append(unary)
-            else:
-                unwrapped_terms.append(unary)
-        
-        # Reorder: unwrapped terms first, then wrapped terms
-        reordered = unwrapped_terms + wrapped_terms
-        
-        return " ".join(self._render_unary(u) for u in reordered)
+def gen_prefix(vocab: List[str]) -> PrefixTerm:
+    count = random.randint(1, 2)
+    result = []
+    for _ in range(count):
+        w = random.choice(vocab)
+        n = min(len(w), 3)
+        result.append(PrefixTerm(w[:n] + "*"))
+    return result
 
-    def _will_term_be_wrapped(self, primary: Primary) -> bool:
-        """Check if a primary will be wrapped in parentheses when rendered."""
-        if isinstance(primary, Group):
-            return True
-        
-        if isinstance(primary, Term):
-            if isinstance(primary.base, (WordTerm, PrefixTerm, SuffixTerm, ExactPhraseTerm)):
-                if primary.field is not None:
-                    return True
-            elif isinstance(primary.base, (TagTerm, NumericTerm)):
-                return True
-        
-        return False
-    
-    def _render_expression(self, expr: Expression) -> str:
-        return " | ".join(self._render_clause(c) for c in expr.clauses)
-    
-    # =========================
-    # TERM GENERATION
-    # =========================
-    
-    def _get_allowed_term_types(self) -> List[str]:
-        """Get list of allowed term types based on config."""
-        types = []
-        if self.config.allow_exact_match:
-            types.append("word")
-        if self.config.allow_prefix:
-            types.append("prefix")
-        if self.config.allow_suffix:
-            types.append("suffix")
-        if self.config.allow_exact_phrase:
-            types.append("exact_phrase")
-        if self.config.allow_tag and self.tag_values:
-            types.append("tag")
-        if self.config.allow_numeric and self.numeric_ranges:
-            types.append("numeric")
-        
-        if not types:
-            raise ValueError("At least one term type must be allowed")
-        
-        return types
-    
-    def _generate_word_term(self) -> WordTerm:
-        return WordTerm(value=random.choice(self.vocab))
-    
-    def _generate_prefix_term(self) -> PrefixTerm:
-        word = random.choice(self.vocab)
-        prefix = word[:3] + "*"
-        return PrefixTerm(prefix=prefix)
-    
-    def _generate_suffix_term(self) -> SuffixTerm:
-        word = random.choice(self.vocab)
-        suffix = "*" + word[-3:]
-        return SuffixTerm(suffix=suffix)
-    
-    def _generate_tag_term(self) -> TagTerm:
-        field = random.choice(list(self.tag_values.keys()))
-        value = random.choice(self.tag_values[field])
-        return TagTerm(tag_expr=f"@{field}:{{{value}}}")
-    
-    def _generate_numeric_term(self) -> NumericTerm:
-        field = random.choice(list(self.numeric_ranges.keys()))
-        min_val, max_val = self.numeric_ranges[field]
-        lo = random.randint(min_val, max_val - 1)
-        hi = random.randint(lo + 1, max_val)
-        return NumericTerm(min_value=lo, max_value=hi, field=field)
-    
-    def _generate_exact_phrase_term(self, budget: TermBudget) -> ExactPhraseTerm:
-        """Generate phrase term respecting config."""
-         # Limit phrase length by remaining budget
-        max_length = budget.remaining
-        if max_length < 1:
-            max_length = 1
-        
-        length = random.randint(1, max_length)
-        if length <= len(self.vocab):
-            words = random.sample(self.vocab, length)
-        else:
-            words = [random.choice(self.vocab) for _ in range(length)]
-        return ExactPhraseTerm(words=words)
-    
-    def _generate_base_term(self, budget: TermBudget) -> BaseTerm:
-        """Generate a base term respecting config constraints."""
-        allowed_types = self._get_allowed_term_types()
-        kind = random.choice(allowed_types)
-        
-        if kind == "word":
-            return self._generate_word_term()
-        if kind == "prefix":
-            return self._generate_prefix_term()
-        if kind == "suffix":
-            return self._generate_suffix_term()
-        if kind == "tag":
-            return self._generate_tag_term()
-        if kind == "numeric":
-            return self._generate_numeric_term()
-        if kind == "exact_phrase":
-            return self._generate_exact_phrase_term(budget)
-        
-        return self._generate_word_term()
-    
-    def _generate_term(self, budget: TermBudget) -> Term:
-        """Generate term respecting field matching config."""
-        if not budget.can_add_term():
-            raise RuntimeError("No term budget left to generate a Term")
-        
-        base = self._generate_base_term(budget)
+def gen_suffix(vocab: List[str]) -> SuffixTerm:
+    """Generate 1-2 suffix terms."""
+    count = random.randint(1, 2)
+    result = []
+    for _ in range(count):
+        w = random.choice(vocab)
+        n = min(len(w), 3)
+        result.append(SuffixTerm("*" + w[-n:]))
+    return result
 
-        # Consume budget based on term type
-        if isinstance(base, ExactPhraseTerm):
-            # Phrases consume budget equal to number of words
-            words_count = len(base.words)
-            for _ in range(words_count):
-                if not budget.can_add_term():
-                    raise RuntimeError("No term budget left for phrase words")
-                budget.consume_term()
-        else:
-            budget.consume_term()
-        
-        # Determine if we should use field matching
-        field = None
-        if isinstance(base, (WordTerm, PrefixTerm, SuffixTerm, ExactPhraseTerm)):
-            # CHANGE: Always use field matching for ExactPhraseTerm to avoid cross-field bug
-            # if isinstance(base, ExactPhraseTerm):
-            #     field = random.choice(self.text_fields)
-            if self.config.force_field_match:
-                field = random.choice(self.text_fields)
-            elif self.config.allow_field_match and random.random() < self.config.prob_use_field:
-                field = random.choice(self.text_fields)
-        
-        return Term(field=field, base=base)
-    
-    def _generate_primary(self, budget: TermBudget, max_depth: int) -> Primary:
-        """Generate primary respecting grouping config."""
-        if not budget.can_add_term():
-            raise RuntimeError("No term budget left to generate a Primary")
-        
-        can_group = (self.config.allow_groups and 
-                     budget.remaining >= 2 and 
-                     max_depth > 0)
-        
-        if can_group and random.random() < self.config.prob_use_group:
-            expr = self._generate_expression(budget, max_depth - 1)
-            return Group(expr=expr)
-        else:
-            return self._generate_term(budget)
-    
-    def _generate_unary_clause(self, budget: TermBudget, max_depth: int) -> UnaryClause:
-        """Generate unary clause with optional NOT/OPTIONAL operators."""
-        primary = self._generate_primary(budget, max_depth)
-        
-        # Determine operator
-        op = ""
-        if self.config.allow_not and random.random() < 0.2:
-            op = "-"
-        elif self.config.allow_optional and random.random() < 0.2:
-            op = "~"
-        
-        return UnaryClause(op=op, primary=primary)
-    
-    def _generate_clause(self, budget: TermBudget, max_depth: int) -> Clause:
-        """Generate clause respecting AND config and min_terms."""
-        parts: List[UnaryClause] = []
-        parts.append(self._generate_unary_clause(budget, max_depth))
-        
-        if self.config.allow_and:
-            # First, ensure we meet min_terms requirement
-            while len(parts) < self.config.min_terms and budget.can_add_term():
-                parts.append(self._generate_unary_clause(budget, max_depth))
-            
-            # Then add more based on probability
-            while budget.can_add_term() and random.random() < self.config.prob_add_and_term:
-                parts.append(self._generate_unary_clause(budget, max_depth))
-        
-        return Clause(parts=parts)
-    
-    def _generate_expression(self, budget: TermBudget, max_depth: int) -> Expression:
-        """Generate expression respecting OR config."""
-        clauses: List[Clause] = []
-        clauses.append(self._generate_clause(budget, max_depth))
-        
-        if self.config.allow_or:
-            while budget.can_add_term() and random.random() < self.config.prob_add_or_clause:
-                clauses.append(self._generate_clause(budget, max_depth))
-        
-        return Expression(clauses=clauses)
-    
-    # =========================
-    # PUBLIC API
-    # =========================
-    
-    def generate(self, seed: Optional[int] = None) -> Query:
-        """
-        Generate a random Query AST using config settings.
-        
-        Args:
-            seed: Random seed for reproducibility
-            
-        Returns:
-            Query object
-        """
-        if self.config.max_terms <= 0:
-            raise ValueError("max_terms must be >= 1")
-        
-        if seed is not None:
-            random.seed(seed)
-        
-        budget = TermBudget(max_terms=self.config.max_terms)
-        expr = self._generate_expression(budget, self.config.max_depth)
+def gen_exact_phrase(vocab: List[str], length: int = 2) -> ExactPhraseTerm:
+    """Generate one exact phrase with 2-3 words."""
+    length = random.randint(2, 3)
+    if length <= len(vocab):
+        words = random.sample(vocab, length)
+    else:
+        words = [random.choice(vocab) for _ in range(length)]
+    return ExactPhraseTerm(words)
 
-        # Handle slop at query level
-        slop = None
-        if self.config.force_slop:
-            slop = random.choice([1, 2])
-        elif self.config.allow_slop and random.random() < 0.3:
-            slop = random.choice([1, 2])
-        
-        # Handle inorder at query level
-        inorder = False
-        if self.config.force_inorder:
-            inorder = True
-        elif self.config.allow_inorder and random.random() < 0.3:
-            inorder = True
+def gen_group_query(vocab, rng: random.Random, depth: int) -> str:
+    shape = sample_shape_exact(depth, rng)
+    return render_shape(shape, vocab, rng)
 
-        query = Query(expr=expr, slop=slop, inorder=inorder)
-        
-        # Sanity checks
-        total_terms = self.count_terms(query)
-        assert self.config.min_terms <= total_terms <= self.config.max_terms, \
-            f"Term count {total_terms} out of bounds [{self.config.min_terms}, {self.config.max_terms}]"
-        return query
+def gen_depth1(vocab, rng):
+    return gen_group_query(vocab, rng, depth=1)
+
+def gen_depth2(vocab, rng):
+    return gen_group_query(vocab, rng, depth=2)
+
+def gen_depth3(vocab, rng):
+    return gen_group_query(vocab, rng, depth=3)

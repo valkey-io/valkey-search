@@ -142,18 +142,20 @@ static absl::Status MallocCaptureCmd(ValkeyModuleCtx *ctx,
   VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, keyword));
   keyword = absl::AsciiStrToUpper(keyword);
   if (keyword == "ENABLE") {
+    VMSDK_LOG(WARNING, ctx) << "Malloc Capture Enabled";
     vmsdk::malloc_capture::Control(true);
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");
   } else if (keyword == "DISABLE") {
+    VMSDK_LOG(WARNING, ctx) << "Malloc Capture Disabled";
     vmsdk::malloc_capture::Control(true);
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");
   } else if (keyword == "GET") {
     auto output = vmsdk::malloc_capture::GetCaptures();
     ValkeyModule_ReplyWithArray(ctx, output.size());
     for (const auto &[count, backtrace] : output | std::views::reverse) {
-      ValkeyModule_ReplyWithLongLong(ctx, count);
       auto symbols = backtrace.Symbolize();
-      ValkeyModule_ReplyWithArray(ctx, symbols.size());
+      ValkeyModule_ReplyWithArray(ctx, symbols.size() + 1);
+      ValkeyModule_ReplyWithLongLong(ctx, count);
       for (const auto &symbol : symbols) {
         ValkeyModule_ReplyWithCString(ctx, symbol.data());
       }

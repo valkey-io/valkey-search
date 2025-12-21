@@ -9,6 +9,7 @@
 
 #include "fanout.h"
 #include "ft_create_parser.h"
+#include "malloc_capture.h"
 #include "src/acl.h"
 #include "src/commands/ft_search.h"
 #include "src/coordinator/metadata_manager.h"
@@ -53,6 +54,7 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return ValkeyModule_ReplyWithError(
         ctx, res->search_result.status().message().data());
   }
+  vmsdk::malloc_capture::Enable enable_capture;
   res->parameters->SendReply(ctx, res->search_result.value());
   return VALKEYMODULE_OK;
 }
@@ -113,6 +115,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
         ++Metrics::GetStats().query_failed_requests_cnt;
         return absl::OkStatus();
       }
+      vmsdk::malloc_capture::Enable enable_capture;
       parameters->SendReply(ctx, search_result);
       ValkeySearch::Instance().ScheduleSearchResultCleanup(
           [neighbors = std::move(search_result.neighbors)]() mutable {

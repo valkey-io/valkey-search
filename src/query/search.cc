@@ -22,6 +22,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
+#include "malloc_capture.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
@@ -522,6 +523,7 @@ SerializationRange SearchResult::GetSerializationRange(
 
 absl::StatusOr<SearchResult> Search(const SearchParameters &parameters,
                                     SearchMode search_mode) {
+  vmsdk::malloc_capture::Enable enable_capture;
   auto result =
       MaybeAddIndexedContent(DoSearch(parameters, search_mode), parameters);
   if (!result.ok()) {

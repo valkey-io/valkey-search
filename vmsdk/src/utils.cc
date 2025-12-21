@@ -7,7 +7,6 @@
 
 #include "vmsdk/src/utils.h"
 
-#include <cxxabi.h>
 #include <execinfo.h>
 
 #include <iomanip>
@@ -367,23 +366,10 @@ std::vector<std::string> Backtrace::Symbolize() const {
   if (!symbols) {
     return {{"backtrace_symbols failed"}};
   }
-  for (size_t i = 1; i < stack_.size(); ++i) {  // 1 to skip the "Capture" call.
-    int status;
-    std::unique_ptr<char> sym(
-        abi::__cxa_demangle(symbols[i], nullptr, nullptr, &status));
-    switch (status) {
-      case 0:
-        result.emplace_back(sym.get());
-        break;
-      case -2:
-        result.emplace_back(symbols[i]);
-        break;
-      default:
-        CHECK(false) << "demangle failed(" << status << ") Sym:" << sym.get();
-        break;
-    }
-    free(symbols);
+  for (size_t i = 1; i < stack_.size(); ++i) {
+    result.push_back(symbols[i]);
   }
+  free(symbols);
   return result;
 }
 

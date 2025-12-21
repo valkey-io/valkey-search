@@ -16,9 +16,22 @@ namespace vmsdk {
 
 namespace malloc_capture {
 
-struct MarkStack {
-  MarkStack();
-  ~MarkStack();
+// Make a stack allocation of this to enable malloc capture.
+struct Enable {
+  Enable();
+  ~Enable();
+
+ private:
+  bool previous_;
+};
+
+// Exempt these calls from malloc capture
+struct Disable {
+  Disable();
+  ~Disable();
+
+ private:
+  bool previous_;
 };
 
 void Control(bool enable);

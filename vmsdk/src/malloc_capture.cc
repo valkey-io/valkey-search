@@ -46,24 +46,39 @@ extern void (*malloc_hook)(size_t);
 
 namespace malloc_capture {
 
-static bool thread_local PerformCapture = false;
+bool thread_local PerformCapture = false;
 bool CaptureRequested = false;
 
-MarkStack::MarkStack() {
+Enable::Enable() : previous_(PerformCapture) {
   PerformCapture = CaptureRequested;
 }
 
-MarkStack::~MarkStack() {
+Enable::~Enable() {
+  PerformCapture = previous_;
+}
+
+Disable::Disable() : previous_(PerformCapture) {
   PerformCapture = false;
 }
 
-static absl::Mutex pool_debug_mutex;
+Disable::~Disable() {
+  PerformCapture = previous_;
+}
+
+static absl::Mutex pool_capture_mutex{};
 static absl::flat_hash_map<vmsdk::Backtrace, size_t, std::hash<vmsdk::Backtrace>, std::equal_to<vmsdk::Backtrace>, RawSystemAllocator<std::pair<const vmsdk::Backtrace, size_t>>> backtraces;
 
+//
+// Danger Will Robinson:
+// This is called from malloc, so NO normal allocations are allowed here
+//
 void DoCapture(size_t size) {
+  if (!PerformCapture) {
+    return;
+  }
   vmsdk::Backtrace backtrace;
   backtrace.Capture();
-  absl::MutexLock lock(&pool_debug_mutex);
+  absl::MutexLock lock(&pool_capture_mutex);
   auto itr = backtraces.find(backtrace);
   if (itr == backtraces.end()) {
     backtraces.emplace(std::move(backtrace), 1);
@@ -84,10 +99,11 @@ void Control(bool enable) {
 }
 
 std::multimap<size_t, Backtrace> GetCaptures() {
-  absl::MutexLock lock(&pool_debug_mutex);
+  Disable disable;
+  absl::MutexLock lock(&pool_capture_mutex);
   std::multimap<size_t, Backtrace> result;
   for (auto& [backtrace, count] : backtraces) {
-    result.emplace(count, std::move(backtrace));
+    result.emplace(count, backtrace);
     if (result.size() > 20) {
       result.erase(result.begin());
     }

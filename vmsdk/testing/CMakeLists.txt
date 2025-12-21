@@ -88,9 +88,9 @@ set(SRCS_VMSDK_TESTS
     ${CMAKE_CURRENT_LIST_DIR}/cluster_map_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/pooled_memory_test.cc
     )
-add_executable(vmsdk_tests ${SRCS_VMSDK_TESTS})
-target_include_directories(vmsdk_tests PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(vmsdk_tests PUBLIC vmsdklib)
-target_link_libraries(vmsdk_tests PUBLIC vmsdk_testing_infra)
-target_link_libraries(vmsdk_tests PUBLIC valkey_module)
-finalize_test_flags(vmsdk_tests)
+add_executable(vmsdk_test ${SRCS_VMSDK_TESTS})
+target_include_directories(vmsdk_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(vmsdk_test PUBLIC vmsdklib)
+target_link_libraries(vmsdk_test PUBLIC vmsdk_testing_infra)
+target_link_libraries(vmsdk_test PUBLIC valkey_module)
+finalize_test_flags(vmsdk_test)

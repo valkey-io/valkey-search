@@ -7,17 +7,22 @@
 
 #include "vmsdk/src/pooled_memory.h"
 
+#include <absl/container/flat_hash_set.h>
+
+#include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "gtest/gtest.h"
 
-namespace valkey_search {
+namespace vmsdk {
 
-TEST(MemoryPoolTest, Basic) {
+TEST(MemoryPoolTest, Vector) {
   for (auto push : {10, 20, 30}) {
     vmsdk::PooledMemory pool(17);
     {
-      vmsdk::PooledVector<char> buffer(&pool);
+      ASSERT_EQ(pool.GetInUse(), 0);
+      std::pmr::vector<char> buffer(&pool);
       for (int i = 0; i < push; ++i) {
         buffer.push_back('a');
       }
@@ -25,9 +30,46 @@ TEST(MemoryPoolTest, Basic) {
       for (int i = 0; i < push; ++i) {
         ASSERT_EQ(buffer[i], 'a');
       }
+      ASSERT_GT(pool.GetInUse(), 0);
     }
     ASSERT_EQ(pool.GetInUse(), 0);
   }
 }
 
-}  // namespace valkey_search
+TEST(MemoryPoolTest, String) {
+  for (auto push : {100, 200, 300}) {
+    vmsdk::PooledMemory pool(17);
+    {
+      std::pmr::string buffer(&pool);
+      for (int i = 0; i < push; ++i) {
+        buffer.push_back('a');
+      }
+      ASSERT_GE(pool.GetInUse(), buffer.capacity());
+      for (int i = 0; i < push; ++i) {
+        ASSERT_EQ(buffer[i], 'a');
+      }
+      ASSERT_GT(pool.GetInUse(), 0);
+    }
+    ASSERT_EQ(pool.GetInUse(), 0);
+  }
+}
+
+TEST(MemoryPoolTest, HashSet) {
+  for (auto push : {10, 20, 30}) {
+    vmsdk::PooledMemory pool(17);
+    {
+      std::pmr::unordered_set<int> buffer(&pool);
+      for (int i = 0; i < push; ++i) {
+        buffer.insert(i);
+      }
+      ASSERT_GE(pool.GetInUse(), buffer.size());
+      for (int i = 0; i < push; ++i) {
+        ASSERT_TRUE(buffer.find(i) != buffer.end());
+      }
+      ASSERT_GT(pool.GetInUse(), 0);
+    }
+    ASSERT_EQ(pool.GetInUse(), 0);
+  }
+}
+
+}  // namespace vmsdk

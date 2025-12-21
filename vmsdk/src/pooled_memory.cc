@@ -9,7 +9,18 @@
 
 #include <absl/log/check.h>
 
+#include "vmsdk/src/info.h"
+
 namespace vmsdk {
+
+// Current stat
+DEV_INTEGER_COUNTER(PooledMemoryStats, pooled_memory_active);
+// Historic stat, updated on pool destruction
+DEV_INTEGER_COUNTER(PooledMemoryStats, pooled_memory_total_mallocs);
+DEV_INTEGER_COUNTER(PooledMemoryStats, pooled_memory_total_chunks);
+DEV_INTEGER_COUNTER(PooledMemoryStats, pooled_memory_total_bytes);
+DEV_INTEGER_COUNTER(PooledMemoryStats, pooled_memory_total_max_inuse);
+DEV_INTEGER_COUNTER(PooledMemoryStats, pooled_memory_total_pools);
 
 void PooledMemory::NewChunk(size_t data_size) {
   auto this_chunk_size = std::max(data_size, chunk_size_);
@@ -27,6 +38,7 @@ PooledMemory::PooledMemory(size_t chunk_size) {
   CHECK(chunk_size > sizeof(Chunk));
   chunk_size_ = chunk_size - sizeof(Chunk);
   NewChunk(0);
+  pooled_memory_active.Increment();
 }
 
 size_t ComputeBytes(size_t bytes, size_t alignment) {
@@ -47,6 +59,8 @@ void* PooledMemory::do_allocate(size_t bytes, size_t alignment) {
   void* p = chunk->data_ + chunk->leftoff_;
   chunk->leftoff_ += this_bytes;
   inuse_ += this_bytes;
+  mallocs_++;
+  max_inuse_ = std::max(max_inuse_, inuse_);
   return p;
 }
 
@@ -62,6 +76,13 @@ void PooledMemory::do_deallocate(void* p, size_t bytes, size_t alignment) {
 }
 
 PooledMemory::~PooledMemory() {
+  pooled_memory_active.Decrement();
+
+  pooled_memory_total_chunks.Increment(chunks_.size());
+  pooled_memory_total_mallocs.Increment(mallocs_);
+  pooled_memory_total_pools.Increment();
+  pooled_memory_total_bytes.Increment(inuse_);
+  pooled_memory_total_max_inuse.Increment(max_inuse_);
   while (!chunks_.empty()) {
     auto chunk = chunks_.back();
     allocated_ -= chunk->size_;

@@ -93,7 +93,7 @@ struct SearchParameters {
   uint64_t timeout_ms;
   bool no_content{false};
   FilterParseResults filter_parse_results;
-  vmsdk::PooledVector<ReturnAttribute> return_attributes{&query_pool};
+  std::pmr::vector<ReturnAttribute> return_attributes{&query_pool};
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint;
   struct ParseTimeVariables {

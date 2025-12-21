@@ -53,7 +53,7 @@ struct FuzzySearch {
                                 << " iter.CanDescend()=" << iter.CanDescend();
     if (!iter.Done()) {
       VMSDK_LOG(WARNING, nullptr)
-          << "Root iter.GetPath()='" << iter.GetPath() << "'";
+          << "Root iter.GetPath()='" << iter.GetPath() << "' and iter.GetChildEdge() is '" << iter.GetChildEdge() << "'";
     }
 
     SearchRecursive(iter, pattern, max_distance, "", '\0', prev_prev, prev,
@@ -66,7 +66,7 @@ struct FuzzySearch {
       typename RadixTree<Target>::PathIterator iter, absl::string_view pattern,
       size_t max_distance,
       std::string word,  // Current word being built
-      char prev_char,    // Previous character (for transposition detection)
+      char prev_tree_ch,    // Previous character (for transposition detection)
       absl::InlinedVector<size_t, 32>&
           prev_prev,  // Row i-2 of DP matrix (for transposition)
       absl::InlinedVector<size_t, 32>&
@@ -76,24 +76,24 @@ struct FuzzySearch {
       std::vector<indexes::text::Postings::KeyIterator>& key_iterators) {
     // Iterate over siblings at current tree level
     while (!iter.Done()) {
-      absl::string_view path = iter.GetPath();
+      absl::string_view edge = iter.GetChildEdge();
       VMSDK_LOG(WARNING, nullptr)
-          << "  path='" << path << "' path.empty()=" << path.empty()
-          << " path.length()=" << path.length()
+          << "  edge='" << edge << "' edge.empty()=" << edge.empty()
+          << " edge.length()=" << edge.length()
           << " iter.IsWord()=" << iter.IsWord()
           << " iter.CanDescend()=" << iter.CanDescend();
       std::string new_word = word;
-      // Minimum edit distance in the current DP row after processing the path.
+      // Minimum edit distance in the current DP row after processing the edge.
       // Used for pruning: if min_dist > max_distance, skip entire subtree.
       size_t min_dist;
 
       // SAVE STATE: Each sibling must start with same parent state
       auto saved_prev_prev = prev_prev;
       auto saved_prev = prev;
-      char saved_prev_char = prev_char;
+      char saved_prev_tree_ch = prev_tree_ch;
 
-      // Process each character in the path
-      for (char tree_ch : path) {
+      // Process each character in the edge
+      for (char tree_ch : edge) {
         new_word += tree_ch;
 
         curr[0] = new_word.length();
@@ -128,7 +128,7 @@ struct FuzzySearch {
 
           // Damerau-Levenshtein: transposition
           if (i > 1 && new_word.length() > 1 && tree_ch == pattern[i - 2] &&
-              pattern_ch == prev_char) {
+              pattern_ch == prev_tree_ch) {
             curr[i] = std::min(curr[i], prev_prev[i - 2] + cost);
           }
 
@@ -138,7 +138,7 @@ struct FuzzySearch {
         // prev_prev
         prev_prev.swap(prev);
         prev.swap(curr);
-        prev_char = tree_ch;
+        prev_tree_ch = tree_ch;
       }
       // Pruning: skip subtree if minimum distance exceeds target edit distance.
       // Since distance can only increase with more characters, if we're already
@@ -150,12 +150,12 @@ struct FuzzySearch {
         // state)
         prev_prev = saved_prev_prev;
         prev = saved_prev;
-        prev_char = saved_prev_char;
-        iter.Next();
+        prev_tree_ch = saved_prev_tree_ch;
+        iter.NextSibling();
         continue;
       }
 
-      // Descend to the child node that this path leads to
+      // Descend to the child node at the end of this edge
       if (iter.CanDescend()) {
         auto child_iter = iter.DescendNew();
         VMSDK_LOG(WARNING, nullptr)
@@ -164,17 +164,17 @@ struct FuzzySearch {
             << "' distance=" << prev[pattern.length()];
 
         // Check if the node has a word and edit distance is within the limit
-        // Here we have the edit distance stored in prev row as we did the swap
-        // in loop before
+        // The edit distance is in prev row now as we did the row swap
+        // in loop above
         if (child_iter.IsWord() && prev[pattern.length()] <= max_distance) {
           VMSDK_LOG(WARNING, nullptr) << "     ADDING RESULT: " << new_word;
           key_iterators.emplace_back(child_iter.GetTarget()->GetKeyIterator());
         }
 
-        // Recursively explore children of the child
+        // Recurse into child's subtree
         if (child_iter.CanDescend()) {
           SearchRecursive(child_iter, pattern, max_distance, new_word,
-                          prev_char, prev_prev, prev, curr, key_iterators);
+                          prev_tree_ch, prev_prev, prev, curr, key_iterators);
         }
       }
 
@@ -182,9 +182,9 @@ struct FuzzySearch {
       // state)
       prev_prev = saved_prev_prev;
       prev = saved_prev;
-      prev_char = saved_prev_char;
+      prev_tree_ch = saved_prev_tree_ch;
 
-      iter.Next();
+      iter.NextSibling();
     }
   }
 };

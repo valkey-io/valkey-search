@@ -321,7 +321,7 @@ struct RadixTree {
     bool IsWord() const;
 
     // Advance to the next character at this level of the RadixTree
-    void Next();
+    void NextSibling();
 
     // Seek to the char that's greater than or equal
     // returns true if target char is present, false otherwise
@@ -335,7 +335,10 @@ struct RadixTree {
     PathIterator DescendNew() const;
 
     // get current Path. If IsWord is true, then there's a word here....
-    absl::string_view GetPath();
+    absl::string_view GetPath() const;
+
+    // Get the edge label for the current child being iterated
+    absl::string_view GetChildEdge();
 
     // Get the target for this word, will assert if !IsWord()
     const Target& GetTarget() const;
@@ -826,7 +829,7 @@ bool RadixTree<Target>::PathIterator::IsWord() const {
 }
 
 template <typename Target>
-void RadixTree<Target>::PathIterator::Next() {
+void RadixTree<Target>::PathIterator::NextSibling() {
   std::visit(
       overloaded{[&](std::monostate&) { exhausted_ = true; },
                  [](std::map<Byte, std::unique_ptr<Node>>::const_iterator& it) {
@@ -880,7 +883,7 @@ RadixTree<Target>::PathIterator::DescendNew() const {
 }
 
 template <typename Target>
-absl::string_view RadixTree<Target>::PathIterator::GetPath() {
+absl::string_view RadixTree<Target>::PathIterator::GetChildEdge() {
   // For branch nodes, iter_ contains the map iterator
   if (std::holds_alternative<MapIterator>(iter_)) {
     auto& it = std::get<MapIterator>(iter_);
@@ -899,6 +902,12 @@ absl::string_view RadixTree<Target>::PathIterator::GetPath() {
   // For leaf nodes, return empty
   return "";
 }
+
+template <typename Target>
+absl::string_view RadixTree<Target>::PathIterator::GetPath() const {
+  return path_;
+}
+
 
 template <typename Target>
 const Target& RadixTree<Target>::PathIterator::GetTarget() const {
